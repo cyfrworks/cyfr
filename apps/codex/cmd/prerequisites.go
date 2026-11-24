@@ -417,13 +417,12 @@ func awaitDockerDesktop(ctx context.Context, system string, out io.Writer) (bool
 	return false, nil
 }
 
-// withDockerGroup is cyfr up's and cyfr setup's first step, in a terminal
-// older than the account's docker group: the same subcommand, through sg,
-// so no person has to refresh the terminal and every step of its run
-// reaches Docker. It runs nothing when Docker already answers this account,
+// withDockerGroup is cyfr up's first step, in a terminal older than the
+// account's docker group: cyfr up again, through sg, so no person has to
+// refresh the terminal and every step of its run reaches Docker. It runs nothing when Docker already answers this account,
 // a rootless Docker included, or when there is no sg to run it with, and
 // answers true when that run did the work.
-func withDockerGroup(ctx context.Context, subcommand string, args []string, out, errOut io.Writer) (bool, error) {
+func withDockerGroup(ctx context.Context, args []string, out, errOut io.Writer) (bool, error) {
 	if !machine.supported() || machine.reachable(ctx) {
 		return false, nil
 	}
@@ -434,7 +433,7 @@ func withDockerGroup(ctx context.Context, subcommand string, args []string, out,
 	if err != nil {
 		return false, err
 	}
-	return continueWithGroup(ctx, subcommand, args, account.Username, out, errOut)
+	return continueWithGroup(ctx, "up", args, account.Username, out, errOut)
 }
 
 // loginAgain is said where only a new login gives this account the docker

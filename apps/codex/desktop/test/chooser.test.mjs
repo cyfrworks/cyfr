@@ -569,9 +569,3 @@ test("a setup done says so, and offers Open CYFR", async () => {
   assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started.")
   assert.equal($("go").hidden, false, "Open CYFR is offered")
 })
-
-test("the chooser names setup's steps as the setup pages do", () => {
-  const pages = readFileSync(new URL("../../internal/setup/assets/setup.js", import.meta.url), "utf8")
-  const names = (src, pattern) => JSON.parse(JSON.stringify(vm.runInNewContext(`(${pattern.exec(src)[1]})`)))
-  assert.deepEqual(names(script, /const steps=(\{[^}]*\})/), names(pages, /const stepNames = (\{[^}]*\})/))
-})

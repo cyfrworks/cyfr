@@ -288,7 +288,9 @@ defmodule Opus.Programs.DefinitionTest do
         assert {:error, {:invalid_argument, message}} =
                  Definition.validate_row(row(%{"mark" => mark}))
 
-        assert message =~ "config.mark must be mcp"
+        assert message ==
+                 "config.mark must be mcp (CYFR speaks MCP to it) or driven " <>
+                   "(a person or a crew member runs it)"
       end
 
       for transport <- ["stdio", "pipe", "http"] do

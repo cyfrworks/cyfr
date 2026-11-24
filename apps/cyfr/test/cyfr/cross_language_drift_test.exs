@@ -677,6 +677,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)},
       {"tests/locus-runtime-image/namespace_test.py", ~w(exchange)}
     ],
+    "setup-folders.json" => [
+      {"apps/codex/cmd/setup_test.go", ~w(systems taken refused)},
+      {"apps/codex/desktop/test/policy.test.mjs", ~w(systems taken refused)}
+    ],
     "sign_in.json" => [
       {"apps/codex/desktop/test/main.test.mjs", ~w(home requests)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(home max_fragment_bytes requests)},

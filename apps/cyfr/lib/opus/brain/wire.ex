@@ -26,6 +26,19 @@ defmodule Opus.Brain.Wire do
   @max_id_bytes 256
   @max_list 1_000
   @tool_name_bytes 1..128
+  # What every harness carries of a tool whole (`carried?/1`): Claude Code
+  # keeps a description's first 16,384 characters, counted as JavaScript
+  # counts them, in UTF-16 code units; its stub takes a tool as one
+  # argument of at most 131,071 bytes; and its driver takes the stub's
+  # answer members, `result` and `error`, out of every call's arguments.
+  @max_description 16_384
+  @max_stub_argument 131_071
+  @uncarried ~w(result error)
+  # A list's tools that every harness carries take, as the stub's
+  # arguments, each a JSON string in one array, at most three quarters of
+  # a line: the rest is for what a line carries beside them, a start's
+  # instructions and the set Claude Code's driver wraps them in.
+  @max_tools_bytes 786_432
 
   @config %{
     "model" => :string,
@@ -189,6 +202,152 @@ defmodule Opus.Brain.Wire do
   @spec tool_name?(term()) :: boolean()
   def tool_name?(name), do: is_binary(name) and byte_size(name) in @tool_name_bytes
 
+  @doc "The most UTF-16 code units a tool's description may hold."
+  @spec max_description() :: pos_integer()
+  def max_description, do: @max_description
+
+  @doc "The most bytes a tool may take as the stub's argument (`stub_argument/1`)."
+  @spec max_stub_argument() :: pos_integer()
+  def max_stub_argument, do: @max_stub_argument
+
+  @doc "The properties no tool's parameters name: a harness takes them out of every call."
+  @spec uncarried() :: [String.t()]
+  def uncarried, do: @uncarried
+
+  @doc "The most bytes a list of carried tools takes as the stub's arguments (`tools_bytes/1`)."
+  @spec max_tools_bytes() :: pos_integer()
+  def max_tools_bytes, do: @max_tools_bytes
+
+  @doc """
+  Whether `tool` is one every harness carries whole: a tool a line
+  carries, `{name, description, parameters}` with a name of 1 to 128
+  bytes, whose description is at most `max_description/0` UTF-16 code
+  units, whose parameters name none of `uncarried/0`
+  (`named_properties/1`), and
+  that is at most `max_stub_argument/0` bytes as the stub's argument. A
+  line may carry a tool past these, which a driver refuses; the turn
+  hands an outside server's tool only when it is carried
+  (`Aqua.Loop.Request`).
+  """
+  @spec carried?(term()) :: boolean()
+  def carried?(tool),
+    do:
+      tool?(tool) and utf16_units(tool["description"]) <= @max_description and
+        carried_properties?(tool["parameters"]) and
+        byte_size(stub_argument(tool)) <= @max_stub_argument
+
+  @doc """
+  The argument names a tool's `parameters` name at their top: those its
+  `properties` declare, when an object, and those its `required` lists,
+  when a list, since a schema may require one it does not declare, there
+  or through what composes the top: each schema of `allOf`, `anyOf` and
+  `oneOf`, `then` and `else`, and a `$ref` into the same document (`#`
+  and a JSON pointer), each schema read once. A call carries each of these
+  as an argument of that name. A schema that names nothing and takes any
+  property names none.
+  """
+  @spec named_properties(map()) :: [String.t()]
+  def named_properties(parameters) when is_map(parameters),
+    do: parameters |> named(parameters, MapSet.new()) |> elem(0) |> Enum.uniq()
+
+  @composing ~w(allOf anyOf oneOf)
+
+  defp named(schema, root, seen) when is_map(schema) do
+    if MapSet.member?(seen, schema) do
+      {[], seen}
+    else
+      seen = MapSet.put(seen, schema)
+      own = declared(schema) ++ required(schema)
+
+      Enum.reduce(composed(schema, root), {own, seen}, fn part, {names, seen} ->
+        {more, seen} = named(part, root, seen)
+        {names ++ more, seen}
+      end)
+    end
+  end
+
+  defp named(_schema, _root, seen), do: {[], seen}
+
+  defp declared(%{"properties" => %{} = properties}), do: Map.keys(properties)
+  defp declared(_schema), do: []
+
+  defp required(%{"required" => required}) when is_list(required),
+    do: Enum.filter(required, &is_binary/1)
+
+  defp required(_schema), do: []
+
+  defp composed(schema, root) do
+    listed =
+      for key <- @composing,
+          %{^key => parts} when is_list(parts) <- [schema],
+          part <- parts,
+          do: part
+
+    branches = for key <- ~w(then else), %{^key => part} <- [schema], do: part
+
+    referenced =
+      case schema do
+        %{"$ref" => "#" <> pointer} -> [pointed(root, pointer)]
+        _ -> []
+      end
+
+    listed ++ branches ++ referenced
+  end
+
+  # The schema a same-document JSON pointer names (`#` the whole), nil
+  # for one naming nothing.
+  defp pointed(root, ""), do: root
+
+  defp pointed(root, "/" <> pointer) do
+    pointer
+    |> String.split("/")
+    |> Enum.map(&(&1 |> String.replace("~1", "/") |> String.replace("~0", "~")))
+    |> Enum.reduce_while(root, fn
+      segment, %{} = node -> {:cont, Map.get(node, segment)}
+      segment, node when is_list(node) -> {:cont, list_at(node, segment)}
+      _segment, _leaf -> {:halt, nil}
+    end)
+  end
+
+  defp pointed(_root, _pointer), do: nil
+
+  defp list_at(list, segment) do
+    case Integer.parse(segment) do
+      {index, ""} when index >= 0 -> Enum.at(list, index)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The stub's argument for `tool`, as the driver writes it (Go's
+  `brainwire.Marshal`): `{description, inputSchema, name}`, its strings
+  with U+2028 and U+2029 escaped, its schema the line's own bytes.
+  """
+  @spec stub_argument(map()) :: String.t()
+  def stub_argument(%{"name" => name, "description" => description, "parameters" => parameters}) do
+    IO.iodata_to_binary([
+      ~s({"description":),
+      Jason.encode_to_iodata!(description, escape: :javascript_safe),
+      ~s(,"inputSchema":),
+      Jason.encode_to_iodata!(parameters),
+      ~s(,"name":),
+      Jason.encode_to_iodata!(name, escape: :javascript_safe),
+      "}"
+    ])
+  end
+
+  @doc """
+  The bytes `tools` take as the stub's arguments, each a JSON string in
+  one array, as Claude Code's driver sets them.
+  """
+  @spec tools_bytes([map()]) :: non_neg_integer()
+  def tools_bytes(tools) when is_list(tools) do
+    tools
+    |> Enum.map(&stub_argument/1)
+    |> Jason.encode_to_iodata!(escape: :javascript_safe)
+    |> IO.iodata_length()
+  end
+
   @doc "Whether `event` is one of the program's own lines (`native/0`)."
   @spec native?(message()) :: boolean()
   def native?(%{"t" => t}), do: t in @native
@@ -257,7 +416,9 @@ defmodule Opus.Brain.Wire do
   defp of_type?(:ids, value), do: list?(value, &id?/1)
   defp of_type?(:strings, value), do: list?(value, &is_binary/1)
   defp of_type?(:content, value), do: list?(value, &block?/1)
+
   defp of_type?(:tools, value), do: list?(value, &tool?/1)
+
   defp of_type?(:models, value), do: list?(value, &model?/1)
   defp of_type?(:choices, value), do: list?(value, &choice?/1)
   defp of_type?(:model_counts, value), do: list?(value, &model_counts?/1)
@@ -299,6 +460,16 @@ defmodule Opus.Brain.Wire do
        do: tool_name?(name) and is_binary(description) and is_map(parameters)
 
   defp tool?(_tool), do: false
+
+  defp carried_properties?(parameters),
+    do: not Enum.any?(@uncarried, &(&1 in named_properties(parameters)))
+
+  defp utf16_units(text) do
+    case :unicode.characters_to_binary(text, :utf8, :utf16) do
+      units when is_binary(units) -> div(byte_size(units), 2)
+      _not_utf8 -> @max_description + 1
+    end
+  end
 
   # A model: its id, the name a person reads and the efforts it takes.
   defp model?(%{"id" => id, "name" => name, "efforts" => efforts} = model)

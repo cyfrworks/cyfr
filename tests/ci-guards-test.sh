@@ -1163,8 +1163,8 @@ while IFS='|' read -r kind old new want; do
   if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
 a case in two groups|            cases: [bind, restore-identity]\n|            cases: [bind, restore-identity]\n          - group: d\n            title: bind again\n            images: [app]\n            cases: [bind]\n|the case bind is in 2 groups, not one: c, d
-a case in no group|            cases: [interrupt, restore, restore-person, setup, scan]\n|            cases: [interrupt, restore-person, setup, scan]\n|the case restore is in 0 groups, not one: none
-a case no step runs|            cases: [interrupt, restore, restore-person, setup, scan]\n|            cases: [interrupt, restore, restore-person, setup, scan, planted]\n|group a lists the case planted, which no step runs
+a case in no group|            cases: [interrupt, restore, restore-person, scan]\n|            cases: [interrupt, restore-person, scan]\n|the case restore is in 0 groups, not one: none
+a case no step runs|            cases: [interrupt, restore, restore-person, scan]\n|            cases: [interrupt, restore, restore-person, scan, planted]\n|group a lists the case planted, which no step runs
 a job without a producer|    needs: [locus-image, app-image]\n|    needs: app-image\n|group both runs the images locus, app, and its job app-image-locus-suites needs app-image
 CASES
 
@@ -1497,8 +1497,10 @@ CASES
 # layer-cache.yml's writer and release.yml's publishing jobs; test.yml and
 # release.yml write no layer cache, neither a cache-to of their own nor
 # .github/actions/image-build with write other than 'false'; and
-# layer-cache.yml runs on a push to main and on a schedule, nothing else.
-# Each error is a line.
+# layer-cache.yml runs on a push to main and on a schedule, nothing else,
+# its first step reads main's head and every later step runs only when the
+# run's commit is that head, so no rerun of an older commit writes. Each
+# error is a line.
 cache_boundary() {
   python3 -I - "$1" <<'PY'
 import glob, os, sys, yaml
@@ -1529,6 +1531,14 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml")) + glob.glob(os.
         if not (isinstance(on, dict) and set(on) == {"push", "schedule"} and on["push"] == {"branches": ["main"]}
                 and isinstance(on["schedule"], list) and on["schedule"]):
             print(f"layer-cache.yml runs on {on}, not a push to main and a schedule alone")
+        for job, body in (doc.get("jobs") or {}).items():
+            steps = body.get("steps") or []
+            first = str(steps[0].get("run", "")) if steps and steps[0].get("id") == "main" else ""
+            if "git ls-remote" not in first or '[ "$head" = "$GITHUB_SHA" ]' not in first:
+                print(f"layer-cache.yml {job}: its first step does not compare the run's commit with main's head")
+            for step in steps[1:]:
+                if "steps.main.outputs.head == 'true'" not in str(step.get("if", "")):
+                    print(f"layer-cache.yml {job}: '{step.get('name', step.get('uses', 'a step'))}' runs off main's head")
 PY
 }
 label="workflows: only the layer cache's writer and release's publishing write a package, and only the writer writes the cache"
@@ -1545,6 +1555,8 @@ done <<'CASES'
 a Test job that writes a package|test.yml|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|test.yml image: the job asks for packages: write
 a release build that writes a cache|release.yml|jobs:\n  images:\n    steps:\n      - name: Build\n        with:\n          cache-to: type=registry,ref=example/cache:app\n|release.yml images: 'Build' writes a layer cache
 a writer a pull request starts|layer-cache.yml|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 0 * * *'\n  pull_request:\njobs: {}\n|layer-cache.yml runs on {'push': {'branches': ['main']}, 'schedule': [{'cron': '7 0 * * *'}], 'pull_request': None}, not a push to main and a schedule alone
+a write off main's head|layer-cache.yml|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 * * * *'\njobs:\n  write:\n    steps:\n      - id: main\n        run: git ls-remote origin; [ "$head" = "$GITHUB_SHA" ]\n      - name: Write the layer cache\n        uses: ./.github/actions/image-build\n|layer-cache.yml write: 'Write the layer cache' runs off main's head
+a layer cache that never reads main's head|layer-cache.yml|on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '7 * * * *'\njobs:\n  write:\n    steps:\n      - name: Write the layer cache\n        uses: ./.github/actions/image-build\n|layer-cache.yml write: its first step does not compare the run's commit with main's head
 a .yaml workflow that writes a package|plant.yaml|jobs:\n  image:\n    permissions:\n      packages: write\n    steps: []\n|plant.yaml image: the job asks for packages: write
 CASES
 
@@ -1560,9 +1572,7 @@ CASES
 PREFIX_SPECS=(
   'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-'
   'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
-  'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-'
   'tests/setup-proof/app.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-app-'
-  'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-'
   'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-'
   'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
   'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-'

@@ -16,13 +16,13 @@ import (
 
 var updateLogo = flag.Bool("update-logo", false, "write assets/logo.png from the shipped logo")
 
-// logoSize is the side of the pages' logo, in pixels.
+// logoSize is the side of the app's icon, in pixels.
 const logoSize = 512
 
-// shippedLogo is the logo Prism serves, which the pages' copy is made from.
+// shippedLogo is the logo Prism serves, which the icon is made from.
 var shippedLogo = filepath.Join("..", "..", "..", "cyfr", "priv", "static", "images", "logo.png")
 
-// The pages' logo is the shipped logo scaled to 512 pixels, pixel for
+// The app's icon is the shipped logo scaled to 512 pixels, pixel for
 // pixel; `go test ./internal/setup -run TestLogo -update-logo` writes it
 // again from the shipped one.
 func TestLogoIsTheShippedLogoScaled(t *testing.T) {
@@ -45,7 +45,7 @@ func TestLogoIsTheShippedLogoScaled(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data, err := assets.ReadFile("assets/logo.png")
+	data, err := os.ReadFile(filepath.Join("assets", "logo.png"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,12 +54,12 @@ func TestLogoIsTheShippedLogoScaled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if b := got.Bounds(); b.Dx() != logoSize || b.Dy() != logoSize {
-		t.Fatalf("the pages' logo is %dx%d, want %dx%d", b.Dx(), b.Dy(), logoSize, logoSize)
+		t.Fatalf("the icon is %dx%d, want %dx%d", b.Dx(), b.Dy(), logoSize, logoSize)
 	}
 	for y := range logoSize {
 		for x := range logoSize {
 			if g, w := color.NRGBAModel.Convert(got.At(x, y)), want.NRGBAAt(x, y); g != w {
-				t.Fatalf("the pages' logo differs from the shipped logo scaled at (%d, %d): %v, want %v; run the test with -update-logo", x, y, g, w)
+				t.Fatalf("the icon differs from the shipped logo scaled at (%d, %d): %v, want %v; run the test with -update-logo", x, y, g, w)
 			}
 		}
 	}

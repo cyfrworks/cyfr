@@ -61,6 +61,7 @@ defmodule Aqua.ProgramTest do
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Cyfr.Test.ScriptedWorker
+  alias Cyfr.Test.HTTPStub
   alias Cyfr.Test.StoreRefusal
 
   @root :crypto.strong_rand_bytes(32)
@@ -1110,7 +1111,7 @@ defmodule Aqua.ProgramTest do
                    %{
                      "type" => "text",
                      "text" =>
-                       "The file tool.bin (application/octet-stream) is attached, and this brain " <>
+                       "The file tool.bin (application/octet-stream) is attached, and this model " <>
                          "cannot read it."
                    }
                  ])
@@ -4947,6 +4948,15 @@ defmodule Aqua.ProgramTest do
     test "a granted outside tool the turn's list leaves out is refused to a program, as its " <>
            "turn narrows it",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      # Its server stands and lists nothing, so the grant names it.
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "github",
+          url: "https://127.0.0.1:9/mcp"
+        })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop("github", ctx.athanor_id) end)
       grant_tool!(ctx, "github:search")
       turn = accept!(ctx, thread, row, "search for it")
       loop = run(ctx, turn)
@@ -4964,7 +4974,7 @@ defmodule Aqua.ProgramTest do
       denied = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, "ask-1"))
 
       assert {denied.dispatch_state, denied.outcome, denied.error} ==
-               {"closed", "denied", "github__search is not one of the tools this work has"}
+               {"closed", "denied", "github:search is not one of the tools this work has"}
 
       [_post, told] = inputs(ctx, turn)
       say(fake, row, accepted(told))
@@ -5561,6 +5571,148 @@ defmodule Aqua.ProgramTest do
       assert outcome(ctx, thread, turn) == expected(:refusal, ctx)
       assert admitted_once!(ctx, turn) == delivered(:refusal)
     end
+
+    # A tool of the person's own server, on in the list and granted, is
+    # handed to the turn and its ask is the server's call, made once with
+    # its arguments through the gate, its answer the ask's result.
+    @tag harness: :api
+    test "a server's tool, on the model's harness", %{ctx: ctx, thread: thread} do
+      stub = HTTPStub.open()
+      served!(ctx, stub, "gh", [search_tool()])
+      unasked!(ctx)
+      offer!(ctx, ["gh:search"])
+
+      turn =
+        api_turn!(ctx, thread, "search for it", [
+          asking([{"ask-1", "gh__search", %{"q" => "cyfr"}}]),
+          answer("Found it.")
+        ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:server, ctx)
+      assert model_rounds(ctx, turn) == 2
+      assert handed_search() in chat_tools()
+      assert_received {:called, "/gh", %{"name" => "search", "arguments" => %{"q" => "cyfr"}}}
+      refute_received {:called, _path, _call}
+      assert server_calls(ctx, turn) == [{"gh:search", "tool_server", "completed"}]
+      assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: "gh:search")
+    end
+
+    @tag harness: :program
+    test "a server's tool, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      stub = HTTPStub.open()
+      served!(ctx, stub, "gh", [search_tool()])
+      unasked!(ctx)
+      offer!(ctx, ["gh:search"])
+      turn = accept!(ctx, thread, row, "search for it")
+      loop = run(ctx, turn)
+      %{start: start, work: work} = started!(fake, row)
+      assert handed_search() in start["tools"]
+      assert handed_search() in work["tools"]
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-1", "gh__search", %{"q" => "cyfr"}))
+      found = sent()
+      say(fake, row, %{"t" => "accepted", "id" => found["id"]})
+      say(fake, row, said(turn, "msg_1", "Found it."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:server, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:server)
+      assert_received {:called, "/gh", %{"name" => "search", "arguments" => %{"q" => "cyfr"}}}
+      refute_received {:called, _path, _call}
+      assert server_calls(ctx, turn) == [{"gh:search", "tool_server", "completed"}]
+      assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: "gh:search")
+    end
+
+    # An entry that is off, that its server no longer lists or whose
+    # server's configuration moved since the grant is not handed, and an
+    # ask of it is refused as unhanded, its server never called.
+    @tag harness: :api
+    test "a server's tools not handed, on the model's harness", %{ctx: ctx, thread: thread} do
+      unhanded!(ctx)
+
+      turn =
+        api_turn!(ctx, thread, "search for it", [
+          asking(for {id, name} <- unhanded_asks(), do: {id, name, %{"q" => "cyfr"}}),
+          answer("None of them.")
+        ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:unhanded, ctx)
+      assert not_handed(ctx, turn) == unhanded_reasons()
+      assert undecided?(ctx)
+      refute Enum.any?(chat_tools(), &String.contains?(&1["name"], "__"))
+      refute_received {:called, _path, _call}
+    end
+
+    @tag harness: :program
+    test "a server's tools not handed, on a program",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      unhanded!(ctx)
+      turn = accept!(ctx, thread, row, "search for it")
+      loop = run(ctx, turn)
+      %{start: start} = started!(fake, row)
+      refute Enum.any?(start["tools"], &String.contains?(&1["name"], "__"))
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      for {id, name} <- unhanded_asks() do
+        say(fake, row, ask(turn, id, name, %{"q" => "cyfr"}))
+        refused = sent()
+        say(fake, row, %{"t" => "accepted", "id" => refused["id"]})
+      end
+
+      say(fake, row, said(turn, "msg_1", "None of them."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:unhanded, ctx)
+      assert not_handed(ctx, turn) == unhanded_reasons()
+      assert undecided?(ctx)
+      refute_received {:called, _path, _call}
+    end
+
+    # A name that would spell no one key, or a definition some harness
+    # would not carry whole, is handed to no harness, each saying why, and
+    # nothing of the turn is refused for it: the start and the work stand.
+    @tag harness: :api
+    test "names and definitions no harness carries, on the model's harness",
+         %{ctx: ctx, thread: thread} do
+      uncarried!(ctx)
+      turn = api_turn!(ctx, thread, "search for it", [answer("Hi.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert not_handed(ctx, turn) == uncarried_reasons()
+
+      assert for(%{"name" => name} <- chat_tools(), String.contains?(name, "__"), do: name) ==
+               ["gh__search"]
+    end
+
+    @tag harness: :program
+    test "names and definitions no harness carries, on a program",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      uncarried!(ctx)
+      turn = accept!(ctx, thread, row, "search for it")
+      loop = run(ctx, turn)
+      %{start: start, work: work} = started!(fake, row)
+
+      for tools <- [start["tools"], work["tools"]] do
+        assert for(%{"name" => name} <- tools, String.contains?(name, "__"), do: name) ==
+                 ["gh__search"]
+      end
+
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert not_handed(ctx, turn) == uncarried_reasons()
+    end
   end
 
   describe "an external tool's ask" do
@@ -5592,7 +5744,7 @@ defmodule Aqua.ProgramTest do
 
       assert {denied.tool, denied.action, denied.dispatch_state, denied.outcome, denied.error} ==
                {"github:search", nil, "closed", "denied",
-                "github__search is not one of the tools this work has"}
+                "github:search is not one of the tools this work has"}
 
       say(fake, row, accepted(told))
 
@@ -5605,7 +5757,7 @@ defmodule Aqua.ProgramTest do
                "t" => "answer",
                "id" => answered.id,
                "ask" => "ask-2",
-               "content" => "github__search is not one of the tools this work has",
+               "content" => "github:search is not one of the tools this work has",
                "is_error" => true
              }
 
@@ -5617,8 +5769,499 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  describe "a person's own servers" do
+    # Each athanor's server is its own: a turn is handed what its own
+    # server of that name lists and its call reaches that server alone.
+    test "two athanors with a server of one name: each turn is handed its own and reaches " <>
+           "only its own",
+         %{ctx: ctx, thread: thread} do
+      served!(ctx, HTTPStub.open(), "gh", [search_tool("Search my code")], path: "/mine")
+      offer!(ctx, ["gh:search"])
+      {theirs, their_thread} = second_athanor!()
+      served!(theirs, HTTPStub.open(), "gh", [search_tool("Search their code")], path: "/theirs")
+      offer!(theirs, ["gh:search"])
+
+      for {ctx, thread, words, path, other} <- [
+            {ctx, thread, "Search my code", "/mine", "/theirs"},
+            {theirs, their_thread, "Search their code", "/theirs", "/mine"}
+          ] do
+        turn =
+          api_turn!(ctx, thread, "search for it", [
+            asking([{"ask-1", "gh__search", %{"q" => "cyfr"}}]),
+            answer("Found it.")
+          ])
+
+        assert :completed = Task.await(run(ctx, turn), 60_000)
+        assert handed_search(words) in chat_tools()
+        assert_received {:called, ^path, %{"name" => "search"}}
+        refute_received {:called, ^other, _call}
+        stop_supervised!(ScriptedWorker)
+      end
+    end
+
+    # A grant given before Aqua's consent took its list's servers names
+    # none of them: the turn's start refuses it, as it refuses a grant
+    # whose tools are not the list's, and asks the model nothing.
+    test "a grant whose tool servers are not those its list names refuses the turn's start",
+         %{ctx: ctx, thread: thread} do
+      served!(ctx, HTTPStub.open(), "gh", [search_tool()])
+      offer!(ctx, ["gh:search"])
+      serverless_grant!(ctx)
+      turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+    end
+
+    # A grant of the list's server whose patterns are not exactly the
+    # list's tools, wider or another tool, is one to give again.
+    test "a grant whose patterns for a server are not exactly the list's tools of it refuses " <>
+           "the turn's start",
+         %{ctx: ctx, thread: thread} do
+      served!(ctx, HTTPStub.open(), "gh", [search_tool()])
+      offer!(ctx, ["gh:search"])
+
+      for patterns <- [["*"], ["other"]] do
+        hand_granted!(ctx, fn servers ->
+          Enum.map(servers, &Map.put(&1, "tool_patterns", patterns))
+        end)
+
+        turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
+        assert {:failed, _} = Task.await(run(ctx, turn), 60_000), inspect(patterns)
+        assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+        assert model_rounds(ctx, turn) == 0
+        stop_supervised!(ScriptedWorker)
+      end
+    end
+
+    # What a grant gives a server's tools is what the server exposed when
+    # it was given: exposure widened or narrowed since, its digest the same,
+    # the turn's start asks for the grant again, never handing a tool the
+    # person was not shown.
+    test "an exposure widened or narrowed since the grant refuses the turn's start",
+         %{ctx: ctx, thread: thread} do
+      served!(ctx, HTTPStub.open(), "gh", [search_tool()],
+        config: %{"tool_patterns" => ["other"]}
+      )
+
+      offer!(ctx, ["gh:search"])
+
+      for exposed <- [["other", "search"], ["other"]] do
+        {:ok, _} =
+          Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+            config_json: Jason.encode!(%{"tool_patterns" => exposed})
+          })
+
+        turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
+        assert {:failed, _} = Task.await(run(ctx, turn), 60_000), inspect(exposed)
+        assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+        assert model_rounds(ctx, turn) == 0
+        stop_supervised!(ScriptedWorker)
+
+        # Given again for what the server exposes now, as the sheet showed it.
+        consent_again!(ctx)
+      end
+    end
+
+    # A reissue writes what it compared: a server's endpoint changed
+    # between its two preparations (a narrowed grant prepares twice) is
+    # never written under the moved digest.
+    test "a credential-only reissue of a narrowed grant whose server moved between its " <>
+           "preparations asks for the whole consent and changes nothing",
+         %{ctx: ctx} do
+      stub = HTTPStub.open()
+      served!(ctx, stub, "gh", [search_tool()])
+      route!(stub, "/gh-moved", [search_tool()])
+      offer!(ctx, ["gh:search"])
+      narrowed!(ctx)
+
+      {:ok, %{profile_id: profile_id}} =
+        Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      {:ok, before, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: Prima.AgentRef.soul_ref()})
+
+      after_read!(self(), &(&1[:source] == "mcp_servers"), fn ->
+        {:ok, _} =
+          Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+            url: "http://127.0.0.1:#{stub.port}/gh-moved"
+          })
+      end)
+
+      assert Sanctum.Consent.Commit.grant(ctx, %{
+               profile_id: profile_id,
+               bindings: [],
+               expected_consent_revision: plan.expected_consent_revision
+             }) == {:error, :grant_requires_full_commit}
+
+      assert {:ok, ^before, _refs} =
+               Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+    end
+
+    # A server's definitions are handed under the digest of the revision
+    # they were read from: one read from a revision the grant does not
+    # cover is not handed, whatever the server's row says by the time the
+    # turn compares.
+    test "a server's definitions read from a revision the grant does not cover are not handed",
+         %{ctx: ctx} do
+      stub = HTTPStub.open()
+      {:ok, hold} = Agent.start_link(fn -> false end)
+      served!(ctx, stub, "gh", [search_tool("Revision A's search")], path: "/a")
+      route!(stub, "/b", [search_tool("Revision B's search")])
+      served!(ctx, stub, "slow", [%{search_tool() | "name" => "probe"}], hold: hold)
+      offer!(ctx, ["gh:search", "slow:probe"])
+      actor = Sanctum.Context.actor(ctx)
+
+      # gh serves revision B, and slow is read again, its answer held.
+      {:ok, _} =
+        Arca.McpServerStorage.update(actor, "gh", %{url: "http://127.0.0.1:#{stub.port}/b"})
+
+      :ok = Emissary.External.ServerSupervisor.stop("slow", ctx.athanor_id)
+      Agent.update(hold, fn _ -> true end)
+      {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+      offered = Aqua.Offered.resolve(["gh:search", "slow:probe"], {:ok, false})
+      handing = Task.async(fn -> Aqua.Loop.Turn.tools(ctx, offered, authority) end)
+      assert_receive {:holding, slow}, 10_000
+
+      # Revision A again, the grant's, before the turn compares.
+      {:ok, _} =
+        Arca.McpServerStorage.update(actor, "gh", %{url: "http://127.0.0.1:#{stub.port}/a"})
+
+      send(slow, :go)
+
+      {tools, unhanded} = Task.await(handing, 30_000)
+      refute Enum.any?(tools, &(&1["name"] == "gh__search"))
+      assert unhanded == %{"gh:search" => :ungranted}
+    end
+
+    # Re-issuing Aqua's grant for a credential carries what the old grant
+    # held and nothing more: a grant given before its consent took the
+    # list's servers names none, and a reissue that would add one asks for
+    # the whole consent, whose preview shows it.
+    test "a credential-only reissue of a grant that names fewer servers than its list asks " <>
+           "for the whole consent and changes nothing",
+         %{ctx: ctx} do
+      served!(ctx, HTTPStub.open(), "gh", [search_tool()])
+      offer!(ctx, ["gh:search"])
+      serverless_grant!(ctx)
+
+      {:ok, %{profile_id: profile_id}} =
+        Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      {:ok, before, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: Prima.AgentRef.soul_ref()})
+
+      assert Sanctum.Consent.Commit.grant(ctx, %{
+               profile_id: profile_id,
+               bindings: [],
+               expected_consent_revision: plan.expected_consent_revision
+             }) == {:error, :grant_requires_full_commit}
+
+      assert {:ok, ^before, _refs} =
+               Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # The brain's row, the turn and its decision
+
+  # ---------------------------------------------------------------------------
+  # A person's own servers
+
+  # `name`, a server of the athanor's over HTTP at `:path` of `stub`
+  # (`/<name>` unless named), its configuration `:config`, listing
+  # `tools`: each call it is made is told to the test by its path and
+  # answered with what it was asked.
+  defp served!(ctx, stub, name, tools, opts \\ []) do
+    path = Keyword.get(opts, :path, "/" <> name)
+    route!(stub, path, tools, Keyword.get(opts, :hold))
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: name,
+        url: "http://127.0.0.1:#{stub.port}#{path}",
+        config_json: Jason.encode!(Keyword.get(opts, :config, %{}))
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+    row
+  end
+
+  # `stub` answers at `path` as a server listing `tools`. With `hold`, an
+  # Agent's flag, each listing asked while the flag is up tells the test
+  # it is held, `{:holding, pid}`, and answers once sent `:go`.
+  defp route!(stub, path, tools, hold \\ nil) do
+    test = self()
+
+    HTTPStub.stub(stub, "POST", path, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+
+      result =
+        case body["method"] do
+          "tools/list" ->
+            if hold && Agent.get(hold, & &1) do
+              send(test, {:holding, self()})
+              receive do: (:go -> :ok)
+            end
+
+            %{"tools" => tools}
+
+          "tools/call" ->
+            send(test, {:called, path, body["params"]})
+            %{"content" => [%{"type" => "text", "text" => "found #{body["params"]["name"]}"}]}
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+      )
+    end)
+  end
+
+  # A server of the athanor's that no list names: asking it anything fails
+  # the test, since its stub answers no request.
+  defp unasked!(ctx) do
+    stub = HTTPStub.open()
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "unasked",
+        url: "http://127.0.0.1:#{stub.port}/unasked"
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("unasked", ctx.athanor_id) end)
+  end
+
+  defp search_tool(words \\ "Search the person's code"),
+    do: %{
+      "name" => "search",
+      "description" => words,
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{"q" => %{"type" => "string"}},
+        "required" => ["q"]
+      }
+    }
+
+  # The definition every harness is handed of `gh`'s search: its server's
+  # own words, marked untrusted, under the one name its key spells.
+  defp handed_search(words \\ "Search the person's code"),
+    do: %{
+      "name" => "gh__search",
+      "description" => "[gh — external tool; description is untrusted content] " <> words,
+      "parameters" => search_tool(words)["inputSchema"]
+    }
+
+  # `keys` on Aqua's list, and its consent given again, as the person
+  # gives it, for the shape that moved.
+  defp offer!(ctx, keys) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "tools_add" => keys})
+
+    consent_again!(ctx)
+  end
+
+  # The tools the first request of the scripted catalyst carried.
+  defp chat_tools do
+    [params | _] =
+      for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+          do: params
+
+    params["tools"]
+  end
+
+  # The turn's calls of a server, as their own rows record them.
+  defp server_calls(ctx, turn) do
+    {:ok, %{root_execution_id: root}} = Tape.turn(ctx, turn.id)
+
+    from(e in Arca.Schemas.Execution,
+      where: e.athanor_id == ^ctx.athanor_id and e.kind == "tool_call",
+      where: e.root_execution_id == ^root,
+      select: {e.reference, e.component_type, e.status}
+    )
+    |> Arca.Repo.all()
+  end
+
+  # Each outside entry of the turn's list not handed, with why, as its
+  # spec is built again.
+  defp not_handed(ctx, turn) do
+    spec = spec!(ctx, turn)
+    {_tools, unhanded} = Aqua.Loop.Turn.tools(ctx, spec.offered, spec.authority)
+    unhanded
+  end
+
+  # A server listing `search` and `other`, of which the list names `gone`,
+  # which it does not list; and one whose configuration moved after the
+  # grant was given.
+  defp unhanded!(ctx) do
+    stub = HTTPStub.open()
+    other = %{search_tool() | "name" => "other"}
+
+    served!(ctx, stub, "gh", [search_tool(), other],
+      config: %{"tool_patterns" => ~w(search other)}
+    )
+
+    served!(ctx, stub, "moved", [search_tool()])
+    offer!(ctx, ["gh:gone", "moved:search"])
+
+    {:ok, _} =
+      Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "moved", %{
+        url: "http://127.0.0.1:#{stub.port}/moved?v=2"
+      })
+  end
+
+  defp unhanded_asks,
+    do: [
+      {"ask-1", "gh__other"},
+      {"ask-2", "gh__gone"},
+      {"ask-3", "moved__search"},
+      {"ask-4", "gh__gone.x"}
+    ]
+
+  # An unhanded ask's tool as the person's list shows it: the key its name
+  # spells, or, for a name that spells none, the name as it was asked.
+  defp shown(name) do
+    case Aqua.Loop.Binding.host_name(name) do
+      {:ok, key} -> key
+      :error -> name
+    end
+  end
+
+  defp unhanded_reasons, do: %{"gh:gone" => :unlisted, "moved:search" => :ungranted}
+
+  # The gate decided none of the unhanded asks: each was refused before it.
+  defp undecided?(ctx) do
+    for {_id, name} <- unhanded_asks() do
+      Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: shown(name))
+    end == List.duplicate({:ok, []}, length(unhanded_asks()))
+  end
+
+  @long_tool String.duplicate("t", 61)
+
+  # Servers and tools of names that spell no one key, and definitions some
+  # harness would not carry whole, beside `gh:search`.
+  defp uncarried!(ctx) do
+    stub = HTTPStub.open()
+    tool = &%{search_tool() | "name" => &1}
+    property = &put_in(tool.(&1), ["inputSchema", "properties", &2], %{"type" => "string"})
+    padded = put_in(tool.("big"), ["inputSchema", "description"], String.duplicate("y", 131_072))
+
+    served!(ctx, stub, "gh", [
+      search_tool(),
+      tool.("_hidden"),
+      tool.("resources"),
+      tool.(@long_tool),
+      property.("result_tool", "result"),
+      property.("error_tool", "error"),
+      property.("act", "action"),
+      property.("threaded", "thread_id"),
+      %{tool.("wordy") | "description" => String.duplicate("x", 16_384)},
+      padded,
+      %{tool.("bare_result") | "inputSchema" => %{"type" => "object", "required" => ["result"]}},
+      %{tool.("bare_action") | "inputSchema" => %{"type" => "object", "required" => ["action"]}},
+      %{
+        tool.("composed_action")
+        | "inputSchema" => %{"type" => "object", "allOf" => [%{"required" => ["action"]}]}
+      }
+    ])
+
+    for {name, path} <- [{"a__b", "/ab"}, {"ends_", "/ends"}, {"mcp", "/mcp"}],
+        do: served!(ctx, stub, name, [search_tool()], path: path)
+
+    offer!(ctx, Map.keys(uncarried_reasons()) ++ ["gh:search"])
+  end
+
+  defp uncarried_reasons,
+    do: %{
+      "gh:_hidden" => :name,
+      "gh:resources" => :name,
+      ("gh:" <> @long_tool) => :name,
+      "a__b:search" => :name,
+      "ends_:search" => :name,
+      "mcp:search" => :name,
+      "gh:result_tool" => :uncarried,
+      "gh:error_tool" => :uncarried,
+      "gh:act" => :uncarried,
+      "gh:threaded" => :uncarried,
+      "gh:wordy" => :uncarried,
+      "gh:big" => :uncarried,
+      "gh:bare_result" => :uncarried,
+      "gh:bare_action" => :uncarried,
+      "gh:composed_action" => :uncarried
+    }
+
+  # Another person's athanor, ready for a turn, with a thread of theirs.
+  defp second_athanor! do
+    user = test_user()
+    own = Sanctum.Test.People.athanor!(user.user_id)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(own)
+    ctx = ready_athanor!(own.id, user.user_id)
+    {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+    runner_stand_in!(ctx, thread)
+    {ctx, thread}
+  end
+
+  # Aqua's grant as one given before its consent took the list's servers
+  # would hold it: its policy names no tool server.
+  defp serverless_grant!(ctx), do: hand_granted!(ctx, fn _servers -> nil end)
+
+  # Aqua's consent given again narrowed: one of the tools it grants of
+  # CYFR's own left out, so its head holds a narrowing a reissue keeps.
+  defp narrowed!(ctx) do
+    soul = Prima.AgentRef.soul_ref()
+    {:ok, %{profile_id: profile_id}} = Opus.authority_for(ctx, :default, soul)
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+    tools = Jason.decode!(head.resolved_policy)["nodes"][soul]["edges"]["@ingress"]["tools"]
+
+    decisions = %{
+      ref: soul,
+      selections: [],
+      subset: %{soul => %{"tools" => tl(Enum.sort(tools))}}
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: soul})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # Aqua's grant with its tool servers as `edit` makes them, as a grant
+  # given another way would hold them; nil names none.
+  defp hand_granted!(ctx, edit) do
+    {:ok, %{profile_id: profile_id}} =
+      Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+
+    policy =
+      head.resolved_policy
+      |> Jason.decode!()
+      |> update_in(["nodes", Prima.AgentRef.soul_ref(), "edges", "@ingress"], fn edge ->
+        case edit.(edge["tool_servers"] || []) do
+          nil -> Map.delete(edge, "tool_servers")
+          servers -> Map.put(edge, "tool_servers", servers)
+        end
+      end)
+
+    {:ok, json} = Prima.JCS.encode(policy)
+
+    Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id,
+      resolved_policy: json,
+      blob_digest: Prima.Digest.sha256(json)
+    )
+  end
 
   # `tool` granted to Aqua, as its setup grants it, and the consent given
   # again for the shape that moved.
@@ -6491,6 +7134,29 @@ defmodule Aqua.ProgramTest do
       usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
     }
 
+  defp expected(:server, _ctx),
+    do: %{
+      shown: [{"text", "person", "search for it"}, {"text", "aqua", "Found it."}],
+      asks: [
+        {"gh:search", nil, true, "closed", "ok", nil,
+         ~s({\n  "content": [\n    {\n      "text": "found search",\n      "type": "text"\n    }\n  ]\n})}
+      ],
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+
+  defp expected(:unhanded, _ctx),
+    do: %{
+      shown: [{"text", "person", "search for it"}, {"text", "aqua", "None of them."}],
+      asks:
+        for {_id, name} <- unhanded_asks() do
+          refusal = "#{shown(name)} is not one of the tools this work has"
+          {shown(name), nil, false, "closed", "denied", refusal, refusal}
+        end,
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+
   defp expected(:stop, _ctx),
     do: %{
       shown: [{"text", "person", "work on it"}, {"turn_aborted", "aqua", "stopped"}],
@@ -6570,7 +7236,7 @@ defmodule Aqua.ProgramTest do
 
   # The deliveries of a row whose asks were answered: the post, then each
   # ask's answer, each the result row the table compares.
-  defp delivered(row) when row in [:asks, :launch] do
+  defp delivered(row) when row in [:asks, :launch, :server] do
     %{shown: [{"text", "person", post} | _], asks: asks} = expected(row, nil)
 
     [{"post", "ok", "text", post}] ++

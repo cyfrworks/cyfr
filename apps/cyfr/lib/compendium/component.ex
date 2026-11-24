@@ -168,13 +168,17 @@ defmodule Compendium.Component do
             refused
 
           {:error, reason} ->
-            {:error, "Failed to resolve component #{reference}: #{Refusals.render(reason)}"}
+            {:error, "#{named(name, version)} could not be read: #{Refusals.render(reason)}"}
         end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # A component as a person names it: its name and the version asked for.
+  defp named(name, nil), do: "#{name} (latest)"
+  defp named(name, version), do: "#{name} #{version}"
 
   # Parse a component reference — canonical (`type:namespace.name:version`)
   # or the flexible short forms (`c:local.tool`) — into

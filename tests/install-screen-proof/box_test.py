@@ -56,5 +56,23 @@ def test_stored():
         db.close()
 
 
+def test_lacks():
+    with tempfile.TemporaryDirectory() as d:
+        status = os.path.join(d, "status")
+        for name, text, want in [
+            ("the group absent", "Name:\tCYFR\nGroups:\t4 24 27 1000 \n", 0),
+            ("no group at all", "Name:\tCYFR\nGroups:\t\n", 0),
+            ("the group present", "Name:\tCYFR\nGroups:\t4 24 988 1000 \n", 1),
+            ("no Groups line", "Name:\tCYFR\nUid:\t1000\n", 2),
+        ]:
+            with open(status, "w") as f:
+                f.write(text)
+            said = box("lacks", status, "988")
+            check(f"lacks: {name}", said.returncode == want, f"exit {said.returncode}: {said.stdout}{said.stderr}")
+        said = box("lacks", os.path.join(d, "gone", "status"), "988")
+        check("lacks: a status file that cannot be read is no answer", said.returncode == 2, f"exit {said.returncode}: {said.stderr}")
+
+
 test_stored()
+test_lacks()
 sys.exit(1 if FAILED else 0)

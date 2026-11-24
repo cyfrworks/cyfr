@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// A program's terminal on the Programs page: the vendored xterm.js drawing
-// what the program writes, inside CYFR's own frame. The terminal acts on
-// nothing the program writes: it writes no clipboard (OSC 52 is swallowed,
-// and no clipboard addon is loaded), sets no title (OSC 0, 1 and 2 are
-// swallowed and no title listener is attached), sounds no bell (no bell
-// listener is attached), and opens an address only when the person clicks
-// it, an http or https one alone, in a new tab that cannot reach this page.
+// A program's terminal, on each page that shows one (the Programs page and
+// the Aqua page, through PrismWeb.TerminalComponent): the vendored xterm.js
+// drawing what the program writes, inside CYFR's own frame. The terminal
+// acts on nothing the program writes: it writes no clipboard (OSC 52 is
+// swallowed, and no clipboard addon is loaded), sets no title (OSC 0, 1
+// and 2 are swallowed and no title listener is attached), sounds no bell
+// (no bell listener is attached), and opens an address only when the
+// person clicks it, an http or https one alone, in a new tab that cannot
+// reach this page.
 // It stores nothing and logs nothing: what passes is handed to the server
 // as the person types it and drawn as the server hands it on.
 //

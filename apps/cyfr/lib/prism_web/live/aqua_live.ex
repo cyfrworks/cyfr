@@ -778,10 +778,11 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
-  # The sentence for a consent that no longer answers, named by its source.
+  # The sentence for a consent that no longer answers, named by its source;
+  # each action it lacks by the words the action is declared with.
   defp consent_warning(ref, {:drifted, missing}) do
-    shown = missing |> Enum.take(4) |> Enum.join(", ")
-    rest = if length(missing) > 4, do: ", …", else: ""
+    shown = missing |> Enum.take(4) |> Enum.map_join(", ", &action_words/1)
+    rest = if length(missing) > 4, do: " and #{length(missing) - 4} more", else: ""
 
     count =
       case missing do
@@ -794,8 +795,15 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp consent_warning(ref, :stale) do
-    "What #{short_ref(ref)} uses changed since this athanor consented — a capability, a " <>
-      "brain or a component it calls — so it cannot run until you consent again."
+    "What #{short_ref(ref)} uses changed since this athanor consented — a capability, the " <>
+      "model it runs on or a component it calls — so it cannot run until you consent again."
+  end
+
+  defp action_words(name) do
+    case String.split(name, ".", parts: 2) do
+      [tool, action] -> Aqua.action_title(tool, action)
+      [_undotted] -> name
+    end
   end
 
   @doc """
@@ -822,7 +830,7 @@ defmodule PrismWeb.AquaLive do
     assigns = assign(assigns, :stale, stale)
 
     ~H"""
-    <%!-- A capability, a brain or a component a source calls moves the
+    <%!-- A capability, the model or a component a source calls moves the
           shape it was consented against, so recovery is per source. --%>
     <div
       :for={{ref, state} <- @stale}

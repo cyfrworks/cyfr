@@ -61,7 +61,7 @@ func TestDesktopServeEndsWhenAWriteToMainFails(t *testing.T) {
 	outR.Close()
 	listen, address := ownListener()
 	ended := make(chan error, 1)
-	go func() { ended <- runDesktopServe(context.Background(), listen, inR, outW) }()
+	go func() { ended <- runDesktopServe(context.Background(), listen, "", inR, outW) }()
 	select {
 	case err := <-ended:
 		if err == nil || !strings.Contains(err.Error(), "could not be written") {
@@ -87,7 +87,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	outR, outW := io.Pipe()
 	ended := make(chan error, 1)
 	listen, address := ownListener()
-	go func() { ended <- runDesktopServe(context.Background(), listen, inR, outW); outW.Close() }()
+	go func() { ended <- runDesktopServe(context.Background(), listen, "", inR, outW); outW.Close() }()
 	lines := bufio.NewScanner(outR)
 	read := func() map[string]any {
 		t.Helper()
@@ -119,7 +119,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 		t.Fatalf("the chooser is not served (%v)", err)
 	}
 	resp.Body.Close()
-	if err := runDesktopServe(context.Background(), listen, strings.NewReader(""), io.Discard); err == nil ||
+	if err := runDesktopServe(context.Background(), listen, "", strings.NewReader(""), io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "close the app using port 7340") {
 		t.Fatalf("a second cyfr took the port: %v", err)
 	}
@@ -267,5 +267,24 @@ func TestTheScreenWritesTheSharedListOnlyHoldingItsListener(t *testing.T) {
 	if raw, err := os.ReadFile(record); err != nil || !strings.Contains(string(raw), `"http://localhost:4000": {
       "project": "/home/ada/cyfr"`) {
 		t.Fatalf("the screen holding its listener did not select its CYFR: %s (%v)", raw, err)
+	}
+}
+
+// desktop-serve's setup suggests the folder cyfr setup opened the app in,
+// and ~/cyfr when the app was opened without one; a folder that is not an
+// absolute path is refused before anything is served.
+func TestDesktopServeSuggestsTheFolderItIsGiven(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	given := filepath.Join(t.TempDir(), "setup-here")
+	for folder, want := range map[string]string{given: given, "": filepath.Join(home, "cyfr")} {
+		if got := newDesktopService(t.Context(), t.TempDir(), folder, func(desktop.Message) {}).Folder; got != want {
+			t.Errorf("given %q, the setup suggests %q, want %q", folder, got, want)
+		}
+	}
+	err := desktopServeCmd.RunE(desktopServeCmd, []string{"setup-here"})
+	if err == nil || err.Error() != `the folder to suggest is "setup-here", not an absolute path` {
+		t.Errorf("desktop-serve with a relative folder answered %v", err)
 	}
 }

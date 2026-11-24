@@ -6,8 +6,8 @@
 # unless all six verification workflows passed and the tag names the
 # version apps/prima/mix.exs declares, can neither be cancelled nor let a
 # failure pass, builds both images for both platforms with the scan reading
-# the loaded image and each image's upgrade layer refreshed on the UTC date
-# (APT_REFRESH, read by both Dockerfiles), boots each loaded image on its
+# the loaded image and each image's upgrade layer keyed on the archive's
+# key (scripts/apt-key.sh, APT_REFRESH in both Dockerfiles), boots each loaded image on its
 # platform's runner before its digest is uploaded, merges each image's two digests
 # by exact name, attests the merge's printed digest and hands it to the
 # CLI release, which pins the scaffold's compose to the merged digests,
@@ -63,6 +63,9 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE = os.path.join(ROOT, ".github", "workflows", "release.yml")
 TEST = os.path.join(ROOT, ".github", "workflows", "test.yml")
+WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+ACTIONS = os.path.join(ROOT, ".github", "actions")
+IMAGE_BUILD = "./.github/actions/image-build"
 GORELEASER = os.path.join(ROOT, "apps", "codex", ".goreleaser.yml")
 COMPOSE = os.path.join(ROOT, "docker-compose.yml")
 MIX_EXS = os.path.join("apps", "prima", "mix.exs")
@@ -156,11 +159,19 @@ LOAD = "type=docker,name="
 # (scripts/ci/image-boots.sh), before its digest is uploaded.
 BOOT_RUN = 'scripts/ci/image-boots.sh "$IMAGE" "$LOADED"'
 # The upgrade layer's cache key: one build argument, the output of a step
-# that writes the UTC date on every run, so each image's upgrade refreshes
-# daily (Dockerfile and Dockerfile.locus read it as ARG APT_REFRESH).
+# that writes the archive's key (scripts/apt-key.sh) on every run, so each
+# image's upgrade is built on what Debian's archive holds (Dockerfile and
+# Dockerfile.locus read it as ARG APT_REFRESH).
+APT_KEY_READ = "apt_key=$(scripts/apt-key.sh)"
 APT_ARG = re.compile(r"^APT_REFRESH=\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$")
 OUTPUT_LINE = re.compile(r'^echo "[\w-]+=[^"]*" >> "\$GITHUB_OUTPUT"$')
-APT_UPGRADE = re.compile(r"^RUN .*\$\{APT_REFRESH\}.*apt-get upgrade", re.MULTILINE)
+# The layer's RUN, continued lines and all, runs the key's guard on
+# APT_REFRESH before it upgrades.
+APT_UPGRADE = re.compile(
+    r"^RUN --mount=type=bind,source=scripts/apt-key\.sh,target=(\S+) \\\n"
+    r"\s+bash \1 --update \"\$\{APT_REFRESH\}\" && apt-get upgrade",
+    re.MULTILINE,
+)
 # The switch to the containerd image store. It restarts the daemon, so it
 # precedes buildx's builder and every build.
 STORE_SWITCH = "sudo scripts/ci/containerd-image-store.sh"
@@ -438,7 +449,7 @@ def check_apt_refresh(job, inputs):
     if not match:
         return f"the build's build-args are {args!r}, not APT_REFRESH from a step's output"
     step_id, output = match.groups()
-    dated = f'echo "{output}=$(date -u +%F)" >> "$GITHUB_OUTPUT"'
+    written = f'echo "{output}=$apt_key" >> "$GITHUB_OUTPUT"'
     steps = job.get("steps", [])
     at = step_index(job, lambda s: s.get("id") == step_id)
     build = step_index(job, lambda s: "docker/build-push-action" in str(s.get("uses")))
@@ -449,19 +460,20 @@ def check_apt_refresh(job, inputs):
         return f"the step {step_id} that writes APT_REFRESH runs only if {step['if']}"
     if at > build:
         return f"the step {step_id} that writes APT_REFRESH runs after the build"
-    # Every line before the dated one writes an output and nothing else, so
-    # nothing in the step can end it before the date is written.
+    # The key is read and written on two lines together, and every line
+    # before them writes an output and nothing else, so nothing in the step
+    # can end it before the key is written.
     lines = [line.strip() for line in str(step.get("run", "")).splitlines() if line.strip()]
-    if dated not in lines:
-        return f"the step {step_id} does not write {output} as the UTC date"
-    at_date = lines.index(dated)
-    for line in lines[:at_date]:
+    if APT_KEY_READ not in lines or lines[lines.index(APT_KEY_READ) + 1 :][:1] != [written]:
+        return f"the step {step_id} does not write {output} as the archive's key"
+    at_key = lines.index(APT_KEY_READ)
+    for line in lines[:at_key]:
         if not OUTPUT_LINE.match(line):
-            return f"the step {step_id} runs {line!r} before it writes the date"
-    # A later write of the same output would replace the date.
-    for line in lines[at_date + 1 :]:
+            return f"the step {step_id} runs {line!r} before it writes the key"
+    # A later write of the same output would replace the key.
+    for line in lines[at_key + 2 :]:
         if re.search(rf"(?<![\w-]){re.escape(output)}=", line):
-            return f"the step {step_id} writes {output} again after the date: {line!r}"
+            return f"the step {step_id} writes {output} again after the key: {line!r}"
     return None
 
 
@@ -472,11 +484,63 @@ def check_apt_layers(dockerfiles):
     for path, text in dockerfiles.items():
         layer = APT_UPGRADE.search(text)
         if layer is None:
-            return f"{path} has no apt-get upgrade layer that reads ${{APT_REFRESH}}"
+            return f"{path} has no apt-get upgrade layer that guards ${{APT_REFRESH}} with scripts/apt-key.sh"
         stage = [m.end() for m in re.finditer(r"^FROM\b.*$", text[: layer.start()], re.MULTILINE)]
         if not stage or not re.search(r"^ARG APT_REFRESH\b", text[stage[-1] : layer.start()], re.MULTILINE):
             return f"{path}'s apt-get upgrade layer does not read an ARG APT_REFRESH of its own stage"
     return None
+
+
+# Every image build in CI but release.yml's (check_build holds that one) is
+# made through the one action, .github/actions/image-build, whose build
+# reads APT_REFRESH from the archive's key as release.yml's does: no step
+# of another workflow or composite action uses build-push-action or
+# bake-action or runs a build of its own.
+BUILD_ACTIONS = ("docker/build-push-action", "docker/bake-action")
+BUILD_RUN = re.compile(r"\b(docker\s+(buildx\s+)?build|docker\s+image\s+build|buildx\s+bake)\b")
+
+
+def check_ci_builds(workflows, actions):
+    for name, doc in sorted(workflows.items()):
+        if name == "release.yml":
+            continue
+        for job_name, job in (doc.get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                where = f"{name} {job_name}: '{step.get('name', step.get('uses', 'a step'))}'"
+                if any(a in str(step.get("uses", "")) for a in BUILD_ACTIONS) or BUILD_RUN.search(str(step.get("run", ""))):
+                    return f"{where} builds an image other than through {IMAGE_BUILD}"
+    for name, doc in sorted(actions.items()):
+        steps = (doc.get("runs") or {}).get("steps") or []
+        for step in steps:
+            builds = any(a in str(step.get("uses", "")) for a in BUILD_ACTIONS) or BUILD_RUN.search(str(step.get("run", "")))
+            if name != "image-build" and builds:
+                return f"the {name} action's '{step.get('name', 'a step')}' builds an image other than through {IMAGE_BUILD}"
+    image_build = actions.get("image-build")
+    if image_build is None:
+        return f"there is no {IMAGE_BUILD} action"
+    job = {"steps": (image_build.get("runs") or {}).get("steps") or []}
+    builds = steps_using(job, "docker/build-push-action")
+    if len(builds) != 1 or any(BUILD_RUN.search(str(s.get("run", ""))) for s in job["steps"]):
+        return f"{IMAGE_BUILD} does not build once, through build-push-action"
+    reason = check_apt_refresh(job, builds[0].get("with") or {})
+    return f"{IMAGE_BUILD}: {reason}" if reason else None
+
+
+def ci_build_sources():
+    import yaml
+
+    workflows, actions = {}, {}
+    for entry in sorted(os.listdir(WORKFLOWS)):
+        if entry.endswith((".yml", ".yaml")):
+            with open(os.path.join(WORKFLOWS, entry)) as f:
+                workflows[entry] = yaml.safe_load(f) or {}
+    for entry in sorted(os.listdir(ACTIONS)):
+        for file in ("action.yml", "action.yaml"):
+            path = os.path.join(ACTIONS, entry, file)
+            if os.path.exists(path):
+                with open(path) as f:
+                    actions[entry] = yaml.safe_load(f) or {}
+    return workflows, actions
 
 
 def arg_above_stage(text):
@@ -2390,7 +2454,7 @@ def no_apt_refresh(wf):
 
 def apt_refresh_fixed(wf):
     step = step_named(wf, "images", "Extract metadata")
-    step["run"] = step["run"].replace("$(date -u +%F)", "2026-10-15")
+    step["run"] = step["run"].replace("$(scripts/apt-key.sh)", "2026-10-15")
 
 
 def apt_refresh_skipped(wf):
@@ -2406,7 +2470,7 @@ def apt_refresh_after_build(wf):
 
 def apt_refresh_exits_first(wf):
     step = step_named(wf, "images", "Extract metadata")
-    step["run"] = step["run"].replace('echo "apt-refresh=', 'exit 0\necho "apt-refresh=', 1)
+    step["run"] = step["run"].replace("apt_key=", "exit 0\napt_key=", 1)
 
 
 def apt_refresh_overwritten(wf):
@@ -3032,7 +3096,7 @@ MUTANTS = [
     ("the loaded image named under the registry", loaded_under_registry),
     ("no max-mode provenance on the build", no_provenance),
     ("no APT_REFRESH build argument", no_apt_refresh),
-    ("an APT_REFRESH that is not the date", apt_refresh_fixed),
+    ("an APT_REFRESH that is not the archive's key", apt_refresh_fixed),
     ("an APT_REFRESH written for one image only", apt_refresh_for_locus_only),
     ("an APT_REFRESH step with an if:", apt_refresh_skipped),
     ("an APT_REFRESH step after the build", apt_refresh_after_build),
@@ -3113,6 +3177,56 @@ MUTANTS = [
     ("a RELEASE_MANIFEST_DIR that is not the manifest's", manifest_dir_elsewhere),
 ]
 
+# Mutants of CI's image builds, each refused by check_ci_builds.
+def locus_built_plainly(workflows, actions):
+    step = next(s for s in workflows["test.yml"]["jobs"]["locus-image"]["steps"] if s.get("uses") == IMAGE_BUILD)
+    step.pop("uses")
+    step.pop("with")
+    step["run"] = "docker build -f Dockerfile.locus -t cyfr-locus:ci ."
+
+
+def app_built_by_build_push(workflows, actions):
+    step = next(s for s in workflows["test.yml"]["jobs"]["app-image"]["steps"] if s.get("uses") == IMAGE_BUILD)
+    step["uses"] = "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
+    step["with"] = {"context": ".", "file": "Dockerfile", "load": True, "tags": "cyfr:push"}
+
+
+def arm64_built_by_buildx(workflows, actions):
+    step = next(s for s in workflows["locus-arm64.yml"]["jobs"]["pinned-programs"]["steps"] if s.get("uses") == IMAGE_BUILD)
+    step.pop("uses")
+    step.pop("with")
+    step["run"] = "docker buildx build --load -f Dockerfile.locus -t cyfr-locus:ci ."
+
+
+def image_build_dated(workflows, actions):
+    step = next(s for s in actions["image-build"]["runs"]["steps"] if s.get("id") == "apt-key")
+    step["run"] = step["run"].replace("$(scripts/apt-key.sh)", "$(date -u +%F)")
+
+
+def image_build_without_key(workflows, actions):
+    build = next(s for s in actions["image-build"]["runs"]["steps"] if "build-push-action" in str(s.get("uses")))
+    del build["with"]["build-args"]
+
+
+def image_build_twice(workflows, actions):
+    steps = actions["image-build"]["runs"]["steps"]
+    steps.append({"name": "Build again", "shell": "bash", "run": "docker build -f Dockerfile ."})
+
+
+def another_action_builds(workflows, actions):
+    actions["planted"] = {"runs": {"using": "composite", "steps": [{"uses": "docker/build-push-action@v7"}]}}
+
+
+CI_BUILD_MUTANTS = [
+    ("Test's Locus image made with a plain docker build", locus_built_plainly),
+    ("Test's app image made with build-push-action", app_built_by_build_push),
+    ("the arm64 Locus image made with docker buildx build", arm64_built_by_buildx),
+    ("the action's key the UTC date", image_build_dated),
+    ("the action's build without APT_REFRESH", image_build_without_key),
+    ("the action building a second time with no key", image_build_twice),
+    ("another action that builds an image", another_action_builds),
+]
+
 # Mutants of test.yml's static job, each refused by check_static.
 TEST_MUTANTS = [
     ("no switch to the containerd image store", no_store_switch("static")),
@@ -3146,6 +3260,11 @@ def graph_mode():
     if reason is not None:
         print(f"FAIL: {reason}")
         return 1
+    ci_workflows, ci_actions = ci_build_sources()
+    reason = check_ci_builds(ci_workflows, ci_actions)
+    if reason is not None:
+        print(f"FAIL: {reason}")
+        return 1
     with open(GORELEASER) as f:
         goreleaser = yaml.safe_load(f)
     reason = check_goreleaser(goreleaser) or check_ignored(CHECKOUT_WRITES)
@@ -3174,6 +3293,13 @@ def graph_mode():
             failures.append(f"a mutant changed nothing: test.yml, {name}")
         elif check_static(wf) is None:
             failures.append(f"a mutant of test.yml was accepted: {name}")
+    for name, mutate in CI_BUILD_MUTANTS:
+        mutated = copy.deepcopy((ci_workflows, ci_actions))
+        mutate(*mutated)
+        if mutated == (ci_workflows, ci_actions):
+            failures.append(f"a mutant changed nothing: CI's image builds, {name}")
+        elif check_ci_builds(*mutated) is None:
+            failures.append(f"a mutant of CI's image builds was accepted: {name}")
     for name, mutate in GORELEASER_MUTANTS:
         config = copy.deepcopy(goreleaser)
         mutate(config)
@@ -3186,6 +3312,7 @@ def graph_mode():
         for name, mutant in [
             ("no ARG APT_REFRESH", text.replace("\nARG APT_REFRESH", "\n# ARG APT_REFRESH")),
             ("an upgrade that does not read it", text.replace("${APT_REFRESH}", "refresh")),
+            ("an upgrade without the key's guard", text.replace("--update", "--of")),
             ("the ARG above the upgrade stage's FROM", arg_above_stage(text)),
         ]:
             if mutant == text:
@@ -3237,9 +3364,9 @@ def graph_mode():
         f"{helper_versions} versions, its tag on a HEAD that declares the version, its proof, its tag of the proved commit "
         f"and its pushes pass, under {range_locale()}; "
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
-        f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
+        f"test.yml, {len(CI_BUILD_MUTANTS)} of CI's image builds, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
         f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh, {len(RELEASE_NOTE_MUTANTS)} of "
-        f"release-note.sh and {3 * len(files)} of the Dockerfiles, "
+        f"release-note.sh and {4 * len(files)} of the Dockerfiles, "
         f"{vectors} manifest vectors, {scaffold_refused} versions, {forms} scaffold argument forms and "
         f"{planted} planted composes refused; {versions} versions held to the rule, which "
         f"{len(RULE_MUTANTS)} other rules and {file_mutants} mutants of the vector file fail; "

@@ -99,12 +99,25 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # Seed the discovery cache with three external tools: one covered by the
     # edge's grant (issues.*), one on the same server outside the patterns,
-    # and one on an ungranted server. Only the first may be discovered.
-    Arca.Cache.put(Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx)), [
-      %{"name" => "ghserver:issues.list", "description" => "granted", "inputSchema" => %{}},
-      %{"name" => "ghserver:repo_get", "description" => "outside patterns", "inputSchema" => %{}},
-      %{"name" => "othersrv:anything", "description" => "no grant", "inputSchema" => %{}}
-    ])
+    # and one on an ungranted server. Only the first may be discovered. The
+    # listing is kept under the athanor's epoch (`Arca.Cache.Epoch`).
+    actor = Sanctum.Context.actor(ctx)
+    epoch = Arca.Cache.Epoch.current(Arca.Cache.Keys.external_tools_epoch(actor))
+
+    Arca.Cache.Epoch.put(
+      Arca.Cache.Keys.external_tools(actor),
+      epoch,
+      [
+        %{"name" => "ghserver:issues.list", "description" => "granted", "inputSchema" => %{}},
+        %{
+          "name" => "ghserver:repo_get",
+          "description" => "outside patterns",
+          "inputSchema" => %{}
+        },
+        %{"name" => "othersrv:anything", "description" => "no grant", "inputSchema" => %{}}
+      ],
+      60_000
+    )
 
     on_exit(fn -> Arca.Cache.delete_match({:external_tools, :_}) end)
 

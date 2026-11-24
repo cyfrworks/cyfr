@@ -2783,7 +2783,8 @@ runtime_case() {
 
 if [ "${COMPOSE_PROOF_SKIP_BUILD:-}" != 1 ]; then
   step "building the app image from this tree as the publication job does"
-  docker build -f "$ROOT/Dockerfile" --build-arg "APT_REFRESH=$(date -u +%F)" -t "$IMAGE" "$ROOT" \
+  apt_key=$("$ROOT/scripts/apt-key.sh") || fail "Debian's archive could not be read for the build's key"
+  docker build -f "$ROOT/Dockerfile" --build-arg "APT_REFRESH=$apt_key" -t "$IMAGE" "$ROOT" \
     >"$WORK/build.log" 2>&1 || {
     tail -n 60 "$WORK/build.log" >&2
     fail "the app image did not build"

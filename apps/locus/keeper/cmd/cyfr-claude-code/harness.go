@@ -112,7 +112,7 @@ func initializeLine(system string) []byte {
 
 // stubTool is one tool as the stub's argument.
 func stubTool(t brainwire.Tool) (string, error) {
-	line, err := brainwire.Marshal(map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
+	line, err := brainwire.StubArgument(t)
 	return string(line), err
 }
 

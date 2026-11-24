@@ -121,7 +121,8 @@ container starts:
   Debian's Chromium headless shell, built for this machine, and under a
   row whose hosts admit no public host (the stack's own service name
   alone) the browser's driver says hello and its first window shows a
-  page. A `node` and a `cyfr-stub` put in a kept folder's .local/bin,
+  page, and a page of Chinese, Japanese and Korean words draws their
+  glyphs, not the missing-glyph box. A `node` and a `cyfr-stub` put in a kept folder's .local/bin,
   where a person's installs go: a shell there finds that `node` first and
   CYFR's own stub, and npm installs there. The home holds the browser's
   profile well within its 2 GiB bound.
@@ -1374,8 +1375,8 @@ def elf_machine(stack, path):
 
 
 def in_image(stack, c):
-    """The browser is in the image and starts with no public host; what a person installs comes first on a kept
-    program's PATH, and never in place of CYFR's own executables."""
+    """The browser is in the image and starts with no public host, and draws Chinese, Japanese and Korean; what a
+    person installs comes first on a kept program's PATH, and never in place of CYFR's own executables."""
     machine = imagesuite.read_output(stack.exec("uname -m"), "the box's machine").strip()
     expect(elf_machine(stack, CHROMIUM) == ELF_MACHINE.get(machine),
            f"the image holds Debian's Chromium headless shell, built for this box's {machine}", CHROMIUM)
@@ -1389,6 +1390,9 @@ def in_image(stack, c):
     print(f"measure: the browser's first start said hello in {time.monotonic() - started:.1f} s", flush=True)
     shown = ok(b.put_html(1, "thr_first", PROBE_PAGE), "the first window shows a page")
     expect(shown["title"] == "Probe page", "the first window answers the page's title", shown)
+    drawn = ok(b.put_html(2, "thr_first", CJK_PAGE, "cjk"), "a page of Chinese, Japanese and Korean words is shown")
+    expect(drawn["title"] == 'cjk {"chinese":true,"japanese":true,"korean":true}',
+           "a page draws the glyphs of Chinese, Japanese and Korean, not the missing-glyph box", drawn)
     b.close()
     eventually(lambda: not stack.under_uid(int(home_uid(stack, OFFLINE_HOME))),
                "the offline browser's processes to end with its session")
@@ -1411,6 +1415,20 @@ def in_image(stack, c):
            found)
     c.close(OWNER, tool.session)
     eventually(lambda: not stack.under_uid(uid), "the folder's processes to end")
+
+
+# A page that draws two words of each of Chinese (Han), Japanese (kana) and Korean (Hangul) and a pair of a code point
+# no font has, and titles itself with whether each script's two words drew differently from each other and from that
+# pair: a script with no font draws each of its characters as the same missing-glyph box.
+CJK_PAGE = r"""<title>cjk</title><script>
+const draw = text => { const c = document.createElement('canvas'); c.width = 160; c.height = 48;
+  const x = c.getContext('2d'); x.font = '32px sans-serif'; x.textBaseline = 'top'; x.fillText(text, 0, 0); return c.toDataURL() };
+const missing = draw('\u{10FFFD}\u{10FFFD}');
+const words = {chinese: ['\u6c49\u5b57', '\u4e2d\u6587'], japanese: ['\u3072\u3089', '\u30ab\u30ca'],
+  korean: ['\ud55c\uae00', '\uae00\uc790']};
+document.title = 'cjk ' + JSON.stringify(Object.fromEntries(Object.entries(words).map(([script, [a, b]]) => {
+  const one = draw(a), other = draw(b); return [script, one !== other && one !== missing && other !== missing] })));
+</script>"""
 
 
 # A page that sets a cookie that lasts a day, as a site's sign-in does, and one that titles itself with the cookies
