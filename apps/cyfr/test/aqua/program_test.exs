@@ -1110,7 +1110,7 @@ defmodule Aqua.ProgramTest do
                    %{
                      "type" => "text",
                      "text" =>
-                       "The file tool.bin (application/octet-stream) is attached, and this brain " <>
+                       "The file tool.bin (application/octet-stream) is attached, and this model " <>
                          "cannot read it."
                    }
                  ])

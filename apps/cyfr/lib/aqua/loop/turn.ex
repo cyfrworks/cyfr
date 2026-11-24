@@ -131,7 +131,7 @@ defmodule Aqua.Loop.Turn do
              catalyst,
              asked(asks?, ctx, brain_authority, catalyst, model, turn)
            ),
-         :ok <- if(asks?, do: brain_options(brain_options, capabilities), else: :ok) do
+         :ok <- if(asks?, do: brain_options(agent, brain_options, capabilities), else: :ok) do
       spec = %__MODULE__{
         ctx: ctx,
         guest: Context.enter_guest(ctx),
@@ -197,15 +197,21 @@ defmodule Aqua.Loop.Turn do
   # The options the agent's file and a crew request set must be ones the
   # brain declares, each of its kind; a turn that sets another is refused
   # before it sends anything.
-  defp brain_options(options, _capabilities) when options == %{}, do: :ok
+  defp brain_options(_agent, options, _capabilities) when options == %{}, do: :ok
 
-  defp brain_options(options, capabilities) do
+  defp brain_options(agent, options, capabilities) do
     case Prima.Model.check_chat_request(
            %{"options" => options},
            Map.get(capabilities, :options) || []
          ) do
-      :ok -> :ok
-      {:error, {:invalid, member}} -> {:error, "the brain does not take #{member} as it was set"}
+      :ok ->
+        :ok
+
+      {:error, {:invalid, "options." <> option}} ->
+        {:error, "#{title(agent)}'s model does not take the option #{option} as it is set"}
+
+      {:error, {:invalid, member}} ->
+        {:error, "#{title(agent)}'s model does not take #{member} as it is set"}
     end
   end
 
@@ -787,7 +793,7 @@ defmodule Aqua.Loop.Turn do
       true ->
         %{
           "type" => "text",
-          "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."
+          "text" => "The file #{name} (#{media}) is attached, and this model cannot read it."
         }
     end
   end
