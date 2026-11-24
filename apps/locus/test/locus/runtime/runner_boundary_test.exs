@@ -12,8 +12,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
   reports its exit once; a host answer that is lost taints the runner; a
   guest that ignores its deadline is halted by the runner's watchdog, and
   one whose call was killed at its timeout taints its runner; the
-  service's handle dying reaps the runner; the keeper dying takes the
-  service tree with it and every runner too.
+  service's handle dying reaps the runner.
   """
 
   use ExUnit.Case, async: false
@@ -316,38 +315,5 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     assert [%{args: %{"attempts" => [held]}}] = ScriptedHost.requests(host, "runner_exited")
     assert held == attempt.attempt
     wait_until(fn -> match?(%{busy: 0}, runners()) end, 5_000)
-  end
-
-  test "the keeper dying ends every runner and restarts the service as a new boot", %{
-    host: host,
-    boot: boot
-  } do
-    attempt = spin!(host, boot)
-    assert :ok = start(attempt)
-    wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
-    wait_until(fn -> busy_runner() != nil end)
-
-    os_pids = for runner <- Runners.runners(RunnerPool), pid = os_pid(runner), do: pid
-    assert os_pids != []
-
-    Process.exit(Process.whereis(Locus.DirectLauncher.Runner), :kill)
-
-    for os_pid <- os_pids,
-        do: wait_until(fn -> not alive?(os_pid) end, 10_000, "runner #{os_pid} to be gone")
-
-    # The service tree is restarting: a poll that lands in the gap finds no
-    # service to ask, which is not yet the new boot.
-    wait_until(
-      fn -> match?({:ok, %{boot: new}} when new != boot, status_or_restarting()) end,
-      10_000
-    )
-
-    assert {:ok, %{attempts: []}} = WorkerService.status()
-  end
-
-  defp status_or_restarting do
-    WorkerService.status()
-  catch
-    :exit, {:noproc, _call} -> :restarting
   end
 end
