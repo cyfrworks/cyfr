@@ -4,7 +4,7 @@
 defmodule PrismWeb.SetupLive do
   @moduledoc """
   `/setup`: the page the setup link opens (`<CYFR address>/setup#<token>`,
-  which `cyfr init` prints and `cyfr setup`'s done screen opens). It sets
+  which `cyfr init` prints and the CYFR app opens on macOS and Windows). It sets
   the CYFR up by admitting its first person, who administers it.
 
   It is sessionless. The token travels in the address's fragment, which

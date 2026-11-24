@@ -117,7 +117,8 @@ type Service struct {
 	// Shell adapts a selected CYFR's shell configuration; nil leaves it.
 	Shell func(*shell.Config)
 	// Folder is where CYFR is set up on this computer until the person
-	// picks another (FolderPicked): ~/cyfr.
+	// picks another (FolderPicked): the folder cyfr setup opened the app
+	// in, ~/cyfr otherwise.
 	Folder string
 	// Docker asks whether Docker answers this account on this computer;
 	// nil asks nothing.

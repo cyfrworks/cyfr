@@ -1,0 +1,59 @@
+{
+  "description": "The folders cyfr setup hands the CYFR app as --setup-project, per system (Go's GOOS). taken are forms the system calls absolute (filepath.IsAbs), which filepath.Abs can answer for a working directory and the app suggests as they are; refused are forms the app refuses, each relative or holding a . or .. after its volume, which filepath.Abs never answers. On Windows a volume is a drive's letter and a colon, or a network share's two backslashes, server and share (\\\\?\\ and \\\\.\\ among them), and absolute is a volume followed by a backslash, or a share alone. Read by cmd/setup_test.go on its own system and by the app's policy test on all three.",
+  "systems": {
+    "linux": {
+      "taken": [
+        "/home/ana/setup-here",
+        "/home/ana/setup here",
+        "/",
+        "/home/ana/a.b/..c"
+      ],
+      "refused": [
+        "",
+        "setup-here",
+        "./setup-here",
+        "~/setup-here",
+        "/home/ana/../bob",
+        "/home/ana/./setup-here"
+      ]
+    },
+    "darwin": {
+      "taken": [
+        "/Users/ana/setup-here",
+        "/Users/ana/setup here",
+        "/"
+      ],
+      "refused": [
+        "",
+        "setup-here",
+        "./setup-here",
+        "~/setup-here",
+        "/home/ana/../bob",
+        "/home/ana/./setup-here"
+      ]
+    },
+    "windows": {
+      "taken": [
+        "C:\\Users\\ana\\setup-here",
+        "C:\\Users\\ana\\setup here",
+        "C:\\",
+        "D:\\cyfr",
+        "\\\\server\\share\\cyfr",
+        "\\\\server\\share",
+        "\\\\?\\C:\\Users\\ana\\setup-here",
+        "\\\\.\\C:\\Users\\ana\\setup-here"
+      ],
+      "refused": [
+        "",
+        "setup-here",
+        "C:setup-here",
+        "C:",
+        "\\Users\\ana",
+        "/Users/ana",
+        "C:\\Users\\..\\bob",
+        "C:\\Users\\.\\ana",
+        "\\\\server\\share\\..\\other"
+      ]
+    }
+  }
+}

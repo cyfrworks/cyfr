@@ -91,6 +91,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
     assert profile.status == "revoked"
+    assert profile.revoked_by == "removal"
 
     # Consents are insert-only history — the revoked status is the gate.
     assert Arca.Repo.get(Arca.Schemas.Consent, consent.id)

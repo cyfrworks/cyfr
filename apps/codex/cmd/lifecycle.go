@@ -413,7 +413,7 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
-Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
+Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the seccomp profile the Locus services run under), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
 On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. CYFR never asks for, reads or keeps a password: when sudo will ask, init first says it asks for the password you log in to this machine with, and sudo asks in its own prompt before any command runs, so a refused password changes nothing. An account outside the sudo and admin groups is told so before anything is asked, with the commands as one sudo line for whoever administers the machine, and nothing is changed; answered 1 at the screen question, it is told before anything is written, in words alone, that whoever administers the machine can add it to the sudo group. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
 
@@ -551,8 +551,8 @@ func sshTunnel(port int) string {
 }
 
 // initProject is cyfr init in the working directory; step, when set, is
-// told each step it begins (the initStep* names), as the setup pages show
-// them.
+// told each step it begins (the initStep* names), as the app's setup
+// screen shows them.
 func initProject(ctx context.Context, o initOptions, step func(name string), out, errOut io.Writer) error {
 	releaseBuild := version.Version != "dev" && version.Version != ""
 
@@ -966,7 +966,7 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 		if !access.HasComposeFile(".") {
 			return fmt.Errorf("There is no CYFR in this directory, so nothing was started: it holds no compose file (%s). Run 'cyfr up' in CYFR's directory, the one that holds its docker-compose.yml, or 'cyfr init' here to make one", strings.Join(access.ComposeMainFiles, ", "))
 		}
-		if continued, err := withDockerGroup(ctx, "up", continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
+		if continued, err := withDockerGroup(ctx, continuationArgs(cmd), cmd.OutOrStdout(), cmd.ErrOrStderr()); continued || err != nil {
 			return err
 		}
 		return runUp(ctx, cmd.OutOrStdout())

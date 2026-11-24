@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,10 @@ import (
 //	read   asks CYFR's `files` and replies quoting the answer's `result` or `error`
 //	own    runs its own Bash after asking, shows its result, then replies
 //	rate   ends with an errored message of the rate limit and an errored result
+//	overloaded, refusing, limited  end as 2.1.323 ended a 529, a refusal the
+//	       model kept to after its one retry, and a 429 after a rejected
+//	       limit (measured): an errored message, typed as the
+//	       harness types it, and an errored result with its status
 //	late   replies, then writes a later result naming no line, as a background end
 //	uncounted  replies with a result that reports no model's usage
 //	partial    replies with a result one of whose models' counts does not read
@@ -38,8 +43,27 @@ import (
 //	subagent  streams and says words of a subagent's, runs its tool, then replies
 //	around replies in one message of text, a call of CYFR's, and text
 //	handed replies with the initialize request it was started with, as JSON
+//	theirs calls `theirs` of each server of the person's own it still holds,
+//	       each asked as that server's, then replies naming them
+//	arrived calls a tool named with CYFR's prefix that is a server's named
+//	       by FAKE_LATE_SERVER (JSON, `mcp_server` as the ask names it),
+//	       as one that started after its listing, then replies with the
+//	       driver's whole answer
+//	unended makes the same call, allowed, and ends its turn with no result
+//	       for it
 //	noise  writes a line that is no JSON, one of no type the driver
 //	       reads and an event that does not read, then replies
+//
+// The person's own servers are those `$HOME/.claude.json` names under
+// `mcpServers`, held unless it was started with `--strict-mcp-config`, as
+// 2.1.323 was measured to hold them: `mcp_status` lists
+// them, and a server `mcp_set_servers` names replaces one of theirs of
+// the same name for the process's life. Each ask of an MCP tool names its
+// server, `mcp_server`, by name and source, and its call, `tool_use_id`.
+// FAKE_STATUS answers `mcp_status` with an error (`error`) or a success
+// that lists no servers (`unlisted`). FAKE_SILENT leaves `initialize`
+// (`initialize`), every `mcp_set_servers` (`tools`), or every one after
+// the first (`later tools`) unanswered.
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -63,6 +87,29 @@ func fakeClaude() int {
 		if !strings.Contains(strings.Join(args, " "), a) {
 			fmt.Fprintln(os.Stderr, "fake-claude: missing", a)
 			return 2
+		}
+	}
+	// theirs are the person's own servers it holds, by name; dynamic is the
+	// one server the driver set, CYFR's. Both are read by a turn and set by
+	// the driver's lines, under serversMu.
+	theirs := map[string]bool{}
+	var dynamic string
+	var serversMu sync.Mutex
+	held := func() (string, []string) {
+		serversMu.Lock()
+		defer serversMu.Unlock()
+		return dynamic, sortedKeys(theirs)
+	}
+	if !strings.Contains(strings.Join(args, " "), "--strict-mcp-config") {
+		var config struct {
+			MCPServers map[string]any `json:"mcpServers"`
+		}
+		home, _ := os.UserHomeDir()
+		if raw, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
+			_ = json.Unmarshal(raw, &config)
+		}
+		for name := range config.MCPServers {
+			theirs[name] = true
 		}
 	}
 	fmt.Fprintln(os.Stderr, stderrCanary)
@@ -98,16 +145,32 @@ func fakeClaude() int {
 	wholes := map[string]map[string]any{}
 	var answersMu sync.Mutex
 	asked := 0
-	ask := func(tool string, input map[string]any) map[string]any {
+	askOf := func(tool string, input map[string]any, server map[string]any, use ...string) map[string]any {
 		answersMu.Lock()
 		asked++
 		id := fmt.Sprintf("ask-%d", asked)
 		ch := make(chan map[string]any, 1)
 		answers[id] = ch
 		answersMu.Unlock()
-		write(map[string]any{"type": "control_request", "request_id": id, "request": map[string]any{
-			"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": fmt.Sprintf("toolu_%d", asked)}})
+		request := map[string]any{"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": fmt.Sprintf("toolu_%d", asked)}
+		if len(use) > 0 {
+			request["tool_use_id"] = use[0]
+		}
+		if server != nil {
+			request["mcp_server"] = server
+		}
+		write(map[string]any{"type": "control_request", "request_id": id, "request": request})
 		return <-ch
+	}
+	ask := func(tool string, input map[string]any) map[string]any { return askOf(tool, input, nil) }
+	// cyfrs is CYFR's tool of that name, under the server the driver set.
+	cyfrs := func(name string) string {
+		server, _ := held()
+		return "mcp__" + server + "__" + name
+	}
+	askCYFR := func(name string, input map[string]any) map[string]any {
+		server, _ := held()
+		return askOf(cyfrs(name), input, map[string]any{"name": server, "source": "dynamic"})
 	}
 	turns := 0
 	// Each result's usage as Claude Code 2.1.323 reports it: the main
@@ -139,6 +202,8 @@ func fakeClaude() int {
 	reply = func(uuids []string, text string) { replyWith(uuids, text, modelUsage) }
 	// What initialize asked, for `handed`.
 	var initialized []byte
+	// sets counts the driver's `mcp_set_servers`.
+	sets := 0
 	// The posts each turn is begun from; a turn that waits for the next
 	// post takes it here.
 	work := make(chan [2]string, 16)
@@ -151,8 +216,8 @@ func fakeClaude() int {
 		case strings.Contains(words, "read"):
 			input := map[string]any{"action": "read", "path": "notes.txt", "count": json.Number("12345678901234567890")}
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_tool", "content": []any{
-				map[string]any{"type": "tool_use", "id": "toolu_read", "name": toolPrefix + "files", "input": input}}}})
-			decision := ask(toolPrefix+"files", input)
+				map[string]any{"type": "tool_use", "id": "toolu_read", "name": cyfrs("files"), "input": input}}}})
+			decision := askCYFR("files", input)
 			updated, _ := decision["updatedInput"].(map[string]any)
 			if result, ok := updated["result"].(string); ok {
 				reply(uuids, "The file says: "+result)
@@ -166,6 +231,28 @@ func fakeClaude() int {
 			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
 				map[string]any{"type": "tool_result", "tool_use_id": "toolu_own", "content": "FOLDER-CANARY " + fmt.Sprint(decision["behavior"])}}}})
 			reply(uuids, "ran it")
+		case strings.Contains(words, "overloaded"), strings.Contains(words, "refusing"), strings.Contains(words, "limited"), strings.Contains(words, "poisoned"):
+			kind, status, stop := "server_error", any(529), "stop_sequence"
+			said := "API Error: HARNESS-WORDS"
+			switch {
+			case strings.Contains(words, "refusing"):
+				kind, status, stop = "invalid_request", nil, "refusal"
+			case strings.Contains(words, "poisoned"):
+				// As 2.1.323 ended every turn of a session whose history the
+				// API refused (2.1.323, measured): the request's 400 and its words.
+				kind, status = "unknown", 400
+				said = "API Error: 400 messages.3.content.0: diagnostics.previous_message_id: String should match pattern '^msg_' (starts with `msg_`) HARNESS-WORDS"
+			case strings.Contains(words, "limited"):
+				// Its shape as T3 Code reads it from a subscription's session
+				// (ClaudeAdapterV2.ts, isClaudeBlockedAssistantRateLimit): a
+				// key's session sends none, as 2.1.323 sent none on one.
+				write(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1795518975}})
+				kind, status = "rate_limit", 429
+			}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": kind, "message": map[string]any{"id": "msg_err", "stop_reason": stop, "content": []any{
+				map[string]any{"type": "text", "text": said}}}})
+			write(map[string]any{"type": "result", "subtype": "success", "is_error": true, "api_error_status": status, "terminal_reason": "api_error", "stop_reason": stop,
+				"num_turns": 1, "uuid": "result-err", "user_message_uuids": uuids, "result": said, "usage": map[string]any{}})
 		case strings.Contains(words, "rate"):
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": "rate_limit", "message": map[string]any{"id": "msg_err", "content": []any{
 				map[string]any{"type": "text", "text": "API Error: please run /login HARNESS-WORDS"}}}})
@@ -231,10 +318,45 @@ func fakeClaude() int {
 		case strings.Contains(words, "around"):
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_around", "content": []any{
 				map[string]any{"type": "text", "text": "before the call, "},
-				map[string]any{"type": "tool_use", "id": "toolu_around", "name": toolPrefix + "files", "input": map[string]any{}},
+				map[string]any{"type": "tool_use", "id": "toolu_around", "name": cyfrs("files"), "input": map[string]any{}},
 				map[string]any{"type": "text", "text": "after it"}}}})
 			write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": "result-around",
 				"user_message_uuids": uuids, "model_usage_since_last_result": modelUsage})
+		case strings.Contains(words, "theirs"):
+			var ran []string
+			_, own := held()
+			for _, name := range own {
+				tool := "mcp__" + name + "__theirs"
+				use := "toolu_theirs_" + name
+				write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_" + use, "content": []any{
+					map[string]any{"type": "tool_use", "id": use, "name": tool, "input": map[string]any{}}}}})
+				decision := askOf(tool, map[string]any{}, map[string]any{"name": name, "source": "user"}, use)
+				updated, _ := decision["updatedInput"].(map[string]any)
+				write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
+					map[string]any{"type": "tool_result", "tool_use_id": use, "content": "their server ran"}}}})
+				ran = append(ran, fmt.Sprintf("%s:%v:%d", tool, decision["behavior"], len(updated)))
+			}
+			server, _ := held()
+			reply(uuids, "their servers ran: "+strings.Join(ran, " ")+" beside "+server)
+		case strings.Contains(words, "arrived"):
+			var server map[string]any
+			_ = json.Unmarshal([]byte(os.Getenv("FAKE_LATE_SERVER")), &server)
+			tool, input := cyfrs("late"), map[string]any{"query": "theirs"}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_late", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_late", "name": tool, "input": input}}}})
+			decision := askOf(tool, input, server, "toolu_late")
+			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "toolu_late", "content": "their late server ran"}}}})
+			answer, _ := json.Marshal(decision)
+			reply(uuids, string(answer))
+		case strings.Contains(words, "unended"):
+			var server map[string]any
+			_ = json.Unmarshal([]byte(os.Getenv("FAKE_LATE_SERVER")), &server)
+			tool, input := cyfrs("late"), map[string]any{"query": "theirs"}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_unended", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_late", "name": tool, "input": input}}}})
+			askOf(tool, input, server, "toolu_late")
+			reply(uuids, "ended with the call unanswered")
 		case strings.Contains(words, "handed"):
 			reply(uuids, string(initialized))
 		case strings.Contains(words, "noise"):
@@ -268,6 +390,9 @@ func fakeClaude() int {
 				id := message["request_id"]
 				switch request["subtype"] {
 				case "initialize":
+					if os.Getenv("FAKE_SILENT") == "initialize" {
+						break
+					}
 					initialized, _ = json.Marshal(request)
 					answer := map[string]any{
 						"models": []any{
@@ -279,10 +404,40 @@ func fakeClaude() int {
 						answer["account"] = json.RawMessage(account)
 					}
 					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": answer}})
+				case "mcp_status":
+					listed := []any{}
+					server, own := held()
+					for _, name := range own {
+						listed = append(listed, map[string]any{"name": name, "status": "pending", "scope": "user", "source": "user"})
+					}
+					if server != "" {
+						listed = append(listed, map[string]any{"name": server, "status": "connected", "scope": "dynamic", "source": "dynamic"})
+					}
+					answer := map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{"mcpServers": listed}}
+					switch os.Getenv("FAKE_STATUS") {
+					case "error":
+						answer = map[string]any{"subtype": "error", "request_id": id, "error": "no status"}
+					case "unlisted":
+						answer["response"] = map[string]any{}
+					}
+					write(map[string]any{"type": "control_response", "response": answer})
 				case "mcp_set_servers":
+					sets++
+					if silent := os.Getenv("FAKE_SILENT"); silent == "tools" || (silent == "later tools" && sets > 1) {
+						break
+					}
+					servers, _ := request["servers"].(map[string]any)
+					serversMu.Lock()
+					dynamic = ""
+					for name := range servers {
+						dynamic = name
+						delete(theirs, name)
+					}
+					set := dynamic
+					serversMu.Unlock()
 					errors := map[string]any{}
 					if os.Getenv("FAKE_TOOLS_FAIL") != "" {
-						errors["cyfr"] = "failed to start"
+						errors[set] = "failed to start"
 					}
 					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{"errors": errors}}})
 				}
@@ -322,4 +477,13 @@ func fakeClaude() int {
 			return 0
 		}
 	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -348,7 +348,8 @@ defmodule Compendium.ConsentSetupPlanTest do
     grant!(ctx, ref, [])
     assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, ref)
 
-    {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, ref)
+    {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+    revoke!(ctx, profile_id)
     {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
 
     assert plan.consent ==

@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
+	"unicode"
 	"unicode/utf16"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
@@ -26,28 +28,45 @@ import (
 // `appendSystemPrompt`, so the harness keeps its own prompt. These shapes
 // were read from Claude Code 2.1.318 and held on 2.1.323, the version a
 // brain row pins, in the live probe.
+//
+// The MCP servers a person set up in Claude Code itself (its user, local
+// and project configuration, a plugin's) stay beside CYFR's, as Codex's
+// stay beside its: they are the program's own, which CYFR neither decides
+// nor removes, hides or switches off. Claude Code starts them as it
+// starts, apart from the turn: one that fails to start, or wants a
+// sign-in, is left failed, and one that never answers is given up at
+// Claude Code's own connect timeout, 30 s (`MCP_TIMEOUT`), while the start
+// and the turn go on (2.1.323). Their calls are the program's own tools,
+// allowed like the rest, never CYFR's asks: none passes CYFR's gate, the
+// Aqua page's list or a member's access, which decide only what CYFR hands
+// the harness. A member's access (Default mode alone today) is Claude
+// Code's own setting over what it does with its own tools, and the driver
+// allows every call of theirs as it allows the rest: what a person's server
+// does when called is that server's, which no access covers, a read-only
+// one included were one offered.
 
 // baseArgv is what every session starts with: stream-json both ways,
-// partial messages for streaming, no MCP server but the ones the driver
-// sets, and every permission ask of the harness's put to the driver.
+// partial messages for streaming, and every permission ask of the
+// harness's put to the driver.
 var baseArgv = []string{
 	"-p",
 	"--input-format", "stream-json",
 	"--output-format", "stream-json",
 	"--verbose",
 	"--include-partial-messages",
-	"--strict-mcp-config",
 	"--permission-prompt-tool", "stdio",
 }
 
 const (
+	// stubServer is the name CYFR's server takes unless a server of the
+	// person's own holds it (serverFor).
 	stubServer = "cyfr"
-	toolPrefix = "mcp__cyfr__"
 	// stubBinary is CYFR's stub by its absolute path in the image
 	// (Dockerfile.locus), never by name: npx puts a project's own package
 	// binaries ahead of the PATH it inherits, so a name could run another.
 	stubBinary = "/opt/cyfr/bin/cyfr-stub"
 	initID     = "cyfr-initialize"
+	statusID   = "cyfr-status"
 	toolsID    = "cyfr-tools"
 	// maxToolArgBytes bounds one tool as the stub's argument: the kernel's
 	// bound on one argument, with its NUL (MAX_ARG_STRLEN).
@@ -110,18 +129,89 @@ func initializeLine(system string) []byte {
 	return controlRequest(initID, request)
 }
 
+// statusLine asks the harness for its MCP servers, the person's own among
+// them, which it names as soon as it has read its configuration, before
+// any has started.
+func statusLine() []byte {
+	return controlRequest(statusID, map[string]any{"subtype": "mcp_status"})
+}
+
+// listedServers are the servers' names a `mcp_status` answer lists, and
+// whether it lists them: `mcpServers` a list, empty when there are none.
+// An answer that lists none, or names a server without a name, says
+// nothing of the person's servers, so no name can be chosen beside them.
+func listedServers(response json.RawMessage) ([]string, bool) {
+	var status struct {
+		Servers *[]struct {
+			Name string `json:"name"`
+		} `json:"mcpServers"`
+	}
+	if json.Unmarshal(response, &status) != nil || status.Servers == nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(*status.Servers))
+	for _, s := range *status.Servers {
+		if s.Name == "" {
+			return nil, false
+		}
+		names = append(names, s.Name)
+	}
+	return names, true
+}
+
+// serverFor is the name CYFR's server takes beside the servers the harness
+// lists: `cyfr`, or else the first of `cyfr-2`, `cyfr-3`… that no listed
+// server takes. Claude Code names a tool `mcp__<server>__<tool>`, each
+// character of the server's name that is not a letter, a digit, `_` or
+// `-` written `_`, and a server the driver sets replaces one of the
+// person's of the same name, and a tool of the same whole name, for the
+// life of the process (2.1.323). A listed server takes a name when its
+// tools' prefix, `mcp__<its name so written>__`, begins with that name's,
+// `mcp__<name>__`: then a tool of theirs could be spelled as one of
+// CYFR's. So neither shadows the other: no server of theirs is named as
+// CYFR's, and no tool of theirs begins with CYFR's prefix.
+func serverFor(listed []string) string {
+	taken := func(name string) bool {
+		for _, other := range listed {
+			if strings.HasPrefix(toolPrefix(toolNamePart(other)), toolPrefix(name)) {
+				return true
+			}
+		}
+		return false
+	}
+	name := stubServer
+	for n := 2; taken(name); n++ {
+		name = fmt.Sprintf("%s-%d", stubServer, n)
+	}
+	return name
+}
+
+// toolNamePart is a server's name as Claude Code writes it in its tools'.
+func toolNamePart(server string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r < 128 && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return r
+		}
+		return '_'
+	}, server)
+}
+
+// toolPrefix begins the name of each tool of CYFR's server `server`.
+func toolPrefix(server string) string { return "mcp__" + server + "__" }
+
 // stubTool is one tool as the stub's argument.
 func stubTool(t brainwire.Tool) (string, error) {
 	line, err := brainwire.StubArgument(t)
 	return string(line), err
 }
 
-// setToolsLine sets CYFR's tools: the stub with each as one argument, or
-// no server when there are none.
-func setToolsLine(id string, args []string) []byte {
+// setToolsLine sets CYFR's tools: the stub `server` with each as one
+// argument, or no server when there are none. It sets only the servers the
+// driver sets; the person's own are untouched.
+func setToolsLine(id, server string, args []string) []byte {
 	servers := map[string]any{}
 	if len(args) > 0 {
-		servers[stubServer] = map[string]any{"type": "stdio", "command": stubBinary, "args": args}
+		servers[server] = map[string]any{"type": "stdio", "command": stubBinary, "args": args}
 	}
 	return controlRequest(id, map[string]any{"subtype": "mcp_set_servers", "servers": servers})
 }
@@ -251,6 +341,60 @@ func errorKind(err string) string {
 	return "provider_error"
 }
 
+// answerWait bounds the harness's answer to a start (its `initialize` and
+// its `mcp_status`) and to a work's `mcp_set_servers`, the answers the
+// driver holds a command for, as listingWait bounds a listing's: 2.1.323
+// answers each within a second (measured), and a start's first fetch of
+// the program is a listing's. A var, so a test can shorten it.
+var answerWait = listingWait
+
+// toolsLateSentence refuses a work whose tools the harness did not start
+// within answerWait.
+func toolsLateSentence() string {
+	return fmt.Sprintf("Claude Code did not start CYFR's tools within %d seconds, so the work was not begun; send it again.", int(answerWait/time.Second))
+}
+
+// unsendableSentence is the driver's words for a turn whose request the
+// API refused for a message of the session's own history: a previous
+// message id it does not take (Claude Code 2.1.323 ended every later turn
+// of such a session so, its request's 400). Nothing the person sent was
+// invalid, and the session cannot go on, so the driver removes it
+// (result): the next message starts a fresh session from the thread's
+// posts.
+const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this session could not go on; nothing you sent was refused. Your next message starts a fresh one from this thread's posts."
+
+// unsendableWords are the API's words, in a failed result's `result`, for
+// that refusal; they are read there alone, never in what the model said.
+const unsendableWords = "diagnostics.previous_message_id"
+
+// refusalSentence is the driver's words for a turn the model refused to
+// answer and kept to (a result whose stop is `refusal`, 2.1.323): no
+// request of the person's was invalid, so it is said as what it is.
+const refusalSentence = "Claude Code's model declined to answer this; rephrase the request, or choose another model."
+
+// limitSentence says a rate limit, and when it lifts when the harness said
+// (rejectedUntil).
+func limitSentence(resets int64) string {
+	return "Claude Code reported a rate limit; " + brainwire.UntilWords(resets) + "."
+}
+
+// rejectedUntil is when a limit lifts by a `rate_limit_event`'s
+// `rate_limit_info`, in the shape T3 Code reads from a subscription's
+// session (ClaudeAdapterV2.ts: `status`, and `resetsAt` in Unix seconds; a
+// key's session sends none, as 2.1.323 sent none on one): its reset while
+// its status is `rejected`, or 0, a limit not reached or one that does not
+// read.
+func rejectedUntil(info json.RawMessage) int64 {
+	var limit struct {
+		Status string  `json:"status"`
+		Resets float64 `json:"resetsAt"`
+	}
+	if json.Unmarshal(info, &limit) != nil || limit.Status != "rejected" || limit.Resets <= 0 {
+		return 0
+	}
+	return int64(limit.Resets)
+}
+
 // errorSentence is the driver's own words for an error of the harness's:
 // the harness's words (a sign-in prompt among them) never leave the box.
 // An account's error says only what the type tells: the account or key
@@ -261,7 +405,7 @@ func errorSentence(kind string) string {
 	case "authentication":
 		return "The account or key Claude Code used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
-		return "Claude Code reported a rate limit; ask again later."
+		return limitSentence(0)
 	case "overloaded":
 		return "Claude Code reported its provider overloaded; ask again later."
 	case "invalid_request":
@@ -291,6 +435,10 @@ type harnessLine struct {
 	RequestID       string          `json:"request_id"`
 	Request         json.RawMessage `json:"request"`
 	Response        json.RawMessage `json:"response"`
+	APIErrorStatus  *int            `json:"api_error_status"`
+	StopReason      string          `json:"stop_reason"`
+	Result          json.RawMessage `json:"result"`
+	RateLimitInfo   json.RawMessage `json:"rate_limit_info"`
 }
 
 // main is a line of the main session, not of a subagent's.

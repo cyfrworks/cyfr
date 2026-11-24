@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -326,6 +327,79 @@ func TestAPostWhoseSteerIsRefusedStartsATurn(t *testing.T) {
 	answered := fmt.Sprint(idles[0]["answered"]) + fmt.Sprint(idles[1]["answered"])
 	if answered != "[stp_first][stp_second]" && answered != "[stp_second][stp_first]" {
 		t.Fatalf("each post is answered by a turn of its own: %v", idles)
+	}
+}
+
+// A steer Codex answers with an error other than a refusal of the request
+// (-32600: "no active turn to steer", "expected active turn id … but
+// found …", "thread not found: …" and a malformed input, as Codex 0.169.0
+// answers each, measured) may have been taken: the post is refused
+// as of a delivery not known, and is never written again as a turn of its
+// own, so nothing is said twice.
+func TestAPostWhoseSteerMayHaveBeenTakenIsNeverWrittenAgain(t *testing.T) {
+	t.Setenv("FAKE_STEER_UNKNOWN", "1")
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_first", "trn_1", "slow")
+	s.expect("text")
+	s.send(map[string]any{"t": "post", "id": "stp_second", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "hello"}}})
+	var refused map[string]any
+	for e := s.next(); e["t"] != "idle"; e = s.next() {
+		if e["t"] == "refused" {
+			refused = e
+		}
+		if e["t"] == "accepted" {
+			t.Fatalf("a post whose delivery is not known is not accepted: %v", e)
+		}
+	}
+	if refused["id"] != "stp_second" || refused["reason"] != steerUnknownSentence {
+		t.Fatalf("the post is refused as of a delivery not known: %v", refused)
+	}
+	if strings.Contains(s.output(), "Hello from the fake") {
+		t.Fatal("the post was written again as a turn of its own")
+	}
+}
+
+// A usage limit's error says when it lifts, by the reset of the limit
+// Codex reported reached (`account/rateLimits/updated`, which names no
+// thread, before the failed turn, as 0.169.0 sent it), in UTC; a limit
+// not reached names no time.
+func TestAUsageLimitSaysWhenItLifts(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "limited")
+	var errs []map[string]any
+	for e := s.next(); e["t"] != "idle"; e = s.next() {
+		if e["t"] == "error" {
+			errs = append(errs, e)
+		}
+	}
+	want := "OpenAI Codex reported a usage or rate limit; it lifts at 11:16 UTC on 24 November 2026."
+	if len(errs) != 1 || errs[0]["type"] != "rate_limited" || errs[0]["message"] != want {
+		t.Fatalf("one error, a rate limit's, saying when it lifts: %v", errs)
+	}
+}
+
+// A close during a native turn asks Codex to stop it in its own way,
+// `turn/interrupt` naming the turn, before its input closes, so its
+// rollout keeps the turn as interrupted (0.169.0 answers one at once and
+// ends the turn so, measured).
+func TestACloseDuringATurnInterruptsItFirst(t *testing.T) {
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_first", "trn_1", "slow")
+	s.expect("text")
+	s.end()
+	rollouts, _ := filepath.Glob(filepath.Join(s.home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+session+".jsonl"))
+	if len(rollouts) != 1 {
+		t.Fatalf("the thread has its rollout: %v", rollouts)
+	}
+	kept, _ := os.ReadFile(rollouts[0])
+	if !regexp.MustCompile(`\{"turnId":"[^"]+","type":"fake_interrupted"\}`).Match(kept) {
+		t.Fatalf("the close asked Codex to interrupt the turn under way: %s", kept)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -101,6 +102,10 @@ type Driver interface {
 	Ended() error
 	// Close closes the harness, if one runs.
 	Close()
+	// Deadline is when an answer the driver waits on from its harness is
+	// overdue, or nil when it waits on none; Expired handles its passing.
+	Deadline() <-chan time.Time
+	Expired() error
 }
 
 // Serve speaks the wire on in and c's output until in ends, the harness
@@ -130,6 +135,8 @@ func Serve(c *Conn, d Driver, in io.Reader, stop <-chan os.Signal) int {
 			err = d.Line(line)
 		case <-exited:
 			err = d.Ended()
+		case <-d.Deadline():
+			err = d.Expired()
 		case <-stop:
 			d.Close()
 			return 0

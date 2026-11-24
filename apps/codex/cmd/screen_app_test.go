@@ -7,8 +7,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -84,11 +86,15 @@ func (a *appSide) send(line string) {
 	}
 }
 
+// confirmed stands in for the compositor's word on a hide: every one is
+// confirmed.
+func confirmed() func() error { return func() error { return nil } }
+
 // The app's hide returns at once, whether or not main reads what it is
 // told: a lock never waits on main.
 func TestScreenApp_HideWaitsOnNothing(t *testing.T) {
 	_, unread := io.Pipe()
-	a := &screenApp{to: desktop.NewWriter(unread, nil), home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+	a := &screenApp{to: desktop.NewWriter(unread, nil), home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}, hiding: confirmed}
 	hidden := make(chan struct{})
 	go func() {
 		for range 3 {
@@ -157,7 +163,7 @@ func TestScreenApp_AWriteToMainThatFailsEndsTheShow(t *testing.T) {
 	t.Cleanup(func() { held.Close() })
 	read, write := io.Pipe()
 	read.Close()
-	a, err := newScreenApp(stay, write, desktop.Local{Shell: shell.Config{Address: "http://localhost:4000", Directory: "http://localhost:4000"}})
+	a, err := newScreenApp(stay, write, desktop.Local{Shell: shell.Config{Address: "http://localhost:4000", Directory: "http://localhost:4000"}}, confirmed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +186,7 @@ func TestScreenApp_AWriteToMainThatFailsEndsTheShow(t *testing.T) {
 func TestScreenApp_ReadyIsTheFirstMessage(t *testing.T) {
 	sink := &lineSink{}
 	a := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(sink, nil),
-		home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+		home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}, hiding: confirmed}
 	a.hide()
 	a.hide()
 	if err := a.show(func(string) { a.hide() }); err != nil {
@@ -231,7 +237,7 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sink := &lineSink{}
 			a := &screenApp{in: strings.NewReader(strings.Join(c.lines, "\n")), to: desktop.NewWriter(sink, nil),
-				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}}
+				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}, hiding: confirmed}
 			var locks []string
 			// The shell's lock hides, every time, through the app (Restart).
 			err := a.show(func(why string) { locks = append(locks, why); a.hide() })
@@ -254,7 +260,7 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	home := desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}
 	in, answer := io.Pipe()
 	sink := &lineSink{}
-	a := &screenApp{in: in, to: desktop.NewWriter(sink, nil), home: home}
+	a := &screenApp{in: in, to: desktop.NewWriter(sink, nil), home: home, hiding: confirmed}
 	shown := make(chan error, 1)
 	go func() { shown <- a.show(func(string) { a.hide() }) }()
 	sink.said(t, 2)
@@ -274,7 +280,7 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	}
 
 	early := &lineSink{}
-	b := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(early, nil), home: home}
+	b := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(early, nil), home: home, hiding: confirmed}
 	b.end()
 	b.hide()
 	if err := b.show(func(string) { b.hide() }); err != nil {
@@ -282,6 +288,101 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	}
 	if said := early.said(t, 1); len(said) != 0 {
 		t.Fatalf("a shell ending before it showed anything said %v", said)
+	}
+}
+
+// A hide is the compositor's to confirm, never main's: what is shown is
+// marked as the hide begins, before main is told anything; one confirmed
+// ends nothing; one not confirmed, or unconfirmable, ends the app from
+// outside with why, at most once whatever more hides fail, and the shell's
+// last hide (ending) is held to it the same way. Before ready there is
+// nothing to hide and nothing is marked. Each hide still returns at once.
+func TestScreenApp_AHideNotConfirmedEndsTheApp(t *testing.T) {
+	home := desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}
+	type hide struct {
+		told int // what main had been told as the hide began
+		gone chan error
+	}
+	setUp := func() (*screenApp, *lineSink, chan hide, chan error) {
+		sink := &lineSink{}
+		hides, ended := make(chan hide, 8), make(chan error, 8)
+		a := &screenApp{to: desktop.NewWriter(sink, nil), home: home, endApp: func(why error) { ended <- why }}
+		a.hiding = func() func() error {
+			// Anything main was told before the mark reaches the sink well
+			// within this.
+			time.Sleep(100 * time.Millisecond) // sleep-ok: lets a message queued before the mark be written
+			h := hide{told: len(sink.said(t, 0)), gone: make(chan error, 1)}
+			hides <- h
+			return func() error { return <-h.gone }
+		}
+		return a, sink, hides, ended
+	}
+	nextHide := func(hides chan hide) hide {
+		t.Helper()
+		select {
+		case h := <-hides:
+			return h
+		case <-time.After(5 * time.Second):
+			t.Fatal("a hide marked nothing")
+			return hide{}
+		}
+	}
+	noEnd := func(ended chan error) {
+		t.Helper()
+		select {
+		case why := <-ended:
+			t.Fatalf("the app was ended: %v", why)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	a, sink, hides, ended := setUp()
+	a.hide()
+	select {
+	case <-hides:
+		t.Fatal("a hide before ready marked what is shown")
+	default:
+	}
+	a.mu.Lock()
+	a.ready = true
+	a.mu.Unlock()
+	sink.said(t, 0)
+
+	a.hide()
+	h := nextHide(hides)
+	if h.told != 0 {
+		t.Fatalf("main had been told %d messages as the hide began, want none", h.told)
+	}
+	h.gone <- nil
+	noEnd(ended)
+
+	a.hide()
+	h = nextHide(hides)
+	stuck := errors.New("the compositor still shows 1 of the 1 windows shown then after 2s")
+	h.gone <- stuck
+	select {
+	case why := <-ended:
+		if why != stuck {
+			t.Fatalf("the app was ended saying %v", why)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hide not confirmed ended nothing")
+	}
+	a.hide()
+	nextHide(hides).gone <- errors.New("the compositor's list of windows cannot be read")
+	noEnd(ended)
+
+	b, _, bHides, bEnded := setUp()
+	b.mu.Lock()
+	b.ready = true
+	b.mu.Unlock()
+	b.end()
+	b.hide()
+	nextHide(bHides).gone <- stuck
+	select {
+	case <-bEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the shell's last hide, not confirmed, ended nothing")
 	}
 }
 
@@ -313,7 +414,7 @@ func TestScreenApp_NothingFollowsEnding(t *testing.T) {
 			}
 			sink := &lineSink{}
 			a := &screenApp{in: strings.NewReader(strings.Join(lines, "\n")), to: desktop.NewWriter(sink, nil),
-				home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+				home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}, hiding: confirmed}
 			// The lock main's message makes is the shell's last.
 			if err := a.show(func(string) { a.end(); a.hide() }); err != nil {
 				t.Fatal(err)
@@ -326,5 +427,43 @@ func TestScreenApp_NothingFollowsEnding(t *testing.T) {
 				t.Fatalf("the shell said %v, want %v", said, want)
 			}
 		})
+	}
+}
+
+// TestScreenAppFinishHelper is the process of
+// TestScreenApp_TheLastHideOutlivesNoProcess: it ends the shell with a
+// last hide whose confirmation comes late and fails, then the process
+// ends at once.
+func TestScreenAppFinishHelper(t *testing.T) {
+	dir := os.Getenv("CYFR_SCREEN_FINISH_DIR")
+	if dir == "" {
+		t.Skip("run by TestScreenApp_TheLastHideOutlivesNoProcess")
+	}
+	a := &screenApp{to: desktop.NewWriter(&lineSink{}, nil), home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"},
+		hiding: func() func() error {
+			return func() error {
+				time.Sleep(300 * time.Millisecond) // sleep-ok: a confirmation that comes late
+				return errors.New("the compositor still shows 1 of the 1 windows")
+			}
+		},
+		endApp: func(why error) { _ = os.WriteFile(filepath.Join(dir, "ended"), []byte(why.Error()), 0o600) }}
+	a.mu.Lock()
+	a.ready = true
+	a.mu.Unlock()
+	a.finish(func(string) { a.hide() })
+	os.Exit(0)
+}
+
+// The shell's last hide is confirmed or carried out before the shell
+// returns: a process that ends right after it leaves none undone.
+func TestScreenApp_TheLastHideOutlivesNoProcess(t *testing.T) {
+	dir := t.TempDir()
+	helper := exec.Command(os.Args[0], "-test.run=^TestScreenAppFinishHelper$")
+	helper.Env = append(os.Environ(), "CYFR_SCREEN_FINISH_DIR="+dir)
+	if out, err := helper.CombinedOutput(); err != nil {
+		t.Fatalf("the helper: %v\n%s", err, out)
+	}
+	if why, err := os.ReadFile(filepath.Join(dir, "ended")); err != nil || !strings.Contains(string(why), "still shows") {
+		t.Fatalf("the process ended before its last hide was carried out: %q (%v)", why, err)
 	}
 }

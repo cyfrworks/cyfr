@@ -11,3 +11,4 @@ services:
   locus-builds:
     security_opt: !override
       - no-new-privileges:true
+      - seccomp=./keeper.seccomp.json

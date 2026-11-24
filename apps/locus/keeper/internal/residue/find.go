@@ -24,9 +24,6 @@ const (
 	maxVisited = 200_000
 )
 
-// SysvipcDir is where the kernel lists System V IPC objects.
-const SysvipcDir = "/proc/sysvipc"
-
 // Found is what a uid has left behind.
 type Found struct {
 	// Paths are the outermost entries the uid owns on the writable mounts;
@@ -35,30 +32,29 @@ type Found struct {
 	// Truncated is set when a walk stopped at one of its bounds, so entries
 	// of the uid may remain beyond Paths.
 	Truncated bool
-	// IPC are the System V IPC objects the uid owns or created.
-	IPC []IPC
-	// Queues are the names of the POSIX message queues the uid owns.
+	// Queues are the names of the POSIX message queues the uid owns in
+	// the mqueue mount.
 	Queues []string
 }
 
 // Empty reports whether nothing of the uid remains.
 func (f Found) Empty() bool {
-	return len(f.Paths) == 0 && !f.Truncated && len(f.IPC) == 0 && len(f.Queues) == 0
+	return len(f.Paths) == 0 && !f.Truncated && len(f.Queues) == 0
 }
 
-// Find reports what uid has left under roots and in the System V IPC tables
-// listed under sysvipcDir. It reads with the calling process's permissions
+// Find reports what uid has left under roots and in their mqueue mount. It
+// reads with the calling process's permissions
 // and never follows a symbolic link or leaves the mount it walks; a
 // directory it cannot open is not searched, and a pooled uid cannot search
 // it either.
-func Find(roots Roots, sysvipcDir string, uid int) (Found, error) {
-	return FindExcept(roots, sysvipcDir, uid, "")
+func Find(roots Roots, uid int) (Found, error) {
+	return FindExcept(roots, uid, "")
 }
 
 // FindExcept is Find with the entry at except neither reported nor
 // searched: a kept home's own path, when its uid is scrubbed, since the home
 // is its uid's for the home's life.
-func FindExcept(roots Roots, sysvipcDir string, uid int, except string) (Found, error) {
+func FindExcept(roots Roots, uid int, except string) (Found, error) {
 	var found Found
 	w := &walker{uid: uid, found: &found, except: except}
 	for _, dir := range roots.Dirs {
@@ -66,11 +62,6 @@ func FindExcept(roots Roots, sysvipcDir string, uid int, except string) (Found, 
 			return Found{}, err
 		}
 	}
-	ipc, err := FindIPC(sysvipcDir, uid)
-	if err != nil {
-		return Found{}, err
-	}
-	found.IPC = ipc
 	if roots.Queues != "" {
 		queues, err := FindQueues(roots.Queues, uid)
 		if err != nil {
@@ -79,27 +70,6 @@ func FindExcept(roots Roots, sysvipcDir string, uid int, except string) (Found, 
 		found.Queues = queues
 	}
 	return found, nil
-}
-
-// FindIPC lists the System V IPC objects uid owns or created. A kernel
-// without System V IPC has no tables and no objects.
-func FindIPC(sysvipcDir string, uid int) ([]IPC, error) {
-	var out []IPC
-	for _, kind := range IPCKinds {
-		data, err := os.ReadFile(filepath.Join(sysvipcDir, kind))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		objs, err := ParseSysvipc(kind, data, uid)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, objs...)
-	}
-	return out, nil
 }
 
 // FindQueues lists the message queues in the mqueue mount dir owned by uid.

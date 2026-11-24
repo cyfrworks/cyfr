@@ -759,8 +759,8 @@ func TestAccessCommandsAreTheContractsSurface(t *testing.T) {
 	if subcommand(accessCmd, "status") == nil {
 		t.Errorf("cyfr access status is missing")
 	}
-	if setup := subcommand(rootCmd, "setup"); setup == nil || setup.HasSubCommands() || setup.Flags().Lookup("port") == nil || setup.Flags().Lookup("no-pull") == nil {
-		t.Errorf("cyfr setup is not the one command with --port and --no-pull")
+	if setup := subcommand(rootCmd, "setup"); setup == nil || setup.HasSubCommands() || setup.Flags().Lookup("port") != nil || setup.Flags().Lookup("no-pull") != nil || setup.Flags().Lookup("no-open") != nil {
+		t.Errorf("cyfr setup is not the one command without --port, --no-pull or --no-open")
 	}
 	internal := subcommand(rootCmd, "internal")
 	if internal == nil || !internal.Hidden || subcommand(internal, "docker-run") == nil || !subcommand(internal, "docker-run").DisableFlagParsing {

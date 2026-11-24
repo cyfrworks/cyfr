@@ -35,7 +35,7 @@ type Config struct {
 	// keeps no homes.
 	Kept *home.Kept
 	// Guard is the socket of the island's egress guard's control (package
-	// guard), empty for a keeper whose spawns name no hosts.
+	// guard): given exactly when some pool is routed.
 	Guard string
 }
 
@@ -53,7 +53,7 @@ func (p *poolFlags) Set(value string) error {
 }
 
 // Usage is the command line `serve` accepts.
-const Usage = "cyfr-locus serve --pool <name>:<first>-<last>[:netns] [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]"
+const Usage = "cyfr-locus serve --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]"
 
 // ParseArgs parses the arguments after `serve`. Pools may repeat but must
 // have distinct names and disjoint ranges.
@@ -62,7 +62,7 @@ func ParseArgs(args []string) (Config, error) {
 	fs.SetOutput(io.Discard)
 	var cfg Config
 	var pools poolFlags
-	fs.Var(&pools, "pool", "a uid pool, <name>:<first>-<last>, isolated with :netns")
+	fs.Var(&pools, "pool", "a uid pool and its spaces' reach, <name>:<first>-<last>:<relay|routed>")
 	fs.StringVar(&cfg.HomeRoot, "home-root", "", "directory holding the spawned processes' homes")
 	fs.StringVar(&cfg.ClientUser, "client-user", "", "user the client command runs as")
 	var kept string
@@ -113,6 +113,14 @@ func ParseArgs(args []string) (Config, error) {
 	if cfg.Guard != "" && (!filepath.IsAbs(cfg.Guard) || filepath.Clean(cfg.Guard) != cfg.Guard) {
 		return Config{}, errors.New("--guard must be a clean absolute path")
 	}
+	switch routed := cfg.Routed(); {
+	case routed && cfg.Guard == "":
+		return Config{}, errors.New("a routed pool's spaces leave through their island's guard: --guard is required")
+	case !routed && cfg.Guard != "":
+		return Config{}, errors.New("--guard is given and no pool is routed")
+	case !routed && cfg.Kept != nil:
+		return Config{}, errors.New("--kept-homes is given and no pool is routed: a program's session leaves through its island's guard")
+	}
 	if cfg.ClientUser == "" {
 		return Config{}, errors.New("--client-user is required")
 	}
@@ -122,11 +130,10 @@ func ParseArgs(args []string) (Config, error) {
 	return cfg, nil
 }
 
-// Isolating reports whether some pool is isolated, so the keeper must be
-// able to clone a user and network namespace before it serves.
-func (c Config) Isolating() bool {
+// Routed reports whether some pool is routed.
+func (c Config) Routed() bool {
 	for _, spec := range c.Pools {
-		if spec.Isolated {
+		if spec.Routed() {
 			return true
 		}
 	}

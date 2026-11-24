@@ -761,9 +761,9 @@ defmodule Aqua.CrewTest do
   # brain is not set up, its own state. A post to a member on it is refused
   # with the brain's sentence, Aqua's own turn says it as a line pointing
   # at the Aqua page and never as a profile to grant, and the brain reads a
-  # key to enter where it is said. A boot's walk that gives the brain a
-  # baseline again, with no key, leaves it said the same way. Its key
-  # entered again, the crew answers.
+  # key to enter where it is said. A boot's walk mints nothing over the
+  # person's revocation, and the brain is said the same way after it. Its
+  # key entered again, the person's own consent, the crew answers.
   test "a brain whose own grant the person took back reads a key to enter, said where the " <>
          "brain is said, and set up again the crew answers",
        %{ctx: ctx, room: room} do
@@ -783,10 +783,11 @@ defmodule Aqua.CrewTest do
              })
 
     for {walk?, count} <- [{false, 1}, {true, 2}] do
-      # A boot's walk gives the brain a baseline again, with no key.
+      # A boot's walk leaves the grant the person revoked as it is.
       if walk? do
-        {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
-        assert @model in minted
+        {:ok, %{minted: minted, skipped: skipped}} = Sanctum.Consent.Bootstrap.run(ctx)
+        refute @model in minted
+        assert {@model, :revoked} in skipped
       end
 
       assert {:error, {:crew_unready, "planner", :no_key} = refusal} =

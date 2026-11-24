@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package stage prepares and executes one spawned process in a session of
-// its own. A stage sharing the keeper's namespaces starts as the allocated
-// uid and gid with no supplementary groups. An isolated stage keeps the
-// keeper's ids until the keeper maps its namespace; after reading its Spec
-// from fd 3 it becomes the allocated ids and drops its capabilities. The
-// stage creates the home, applies the limits, builds the environment from
-// nothing, and executes the command with stdio on fds 0-2, its control
-// channel on fd 3 when requested, and its relay on fd 4 when isolated.
+// Package stage prepares and executes one spawned process in a session and
+// a space of its own: a user, network and IPC namespace the keeper cloned
+// it into. The stage keeps the keeper's ids until the keeper maps its
+// namespace; after reading its Spec from fd 3 it becomes the allocated ids,
+// makes a routed space's loopback and name sockets and hands them up, and
+// drops its capabilities. The stage creates the home, applies the limits,
+// builds the environment from nothing, and executes the command with stdio
+// on fds 0-2, its control channel on fd 3 when requested, and a relay
+// space's relay on fd 4.
 package stage
 
 import (
@@ -22,6 +23,7 @@ import (
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
+	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
@@ -51,6 +53,10 @@ type Spec struct {
 	// Control says the keeper handed the control channel's socket on
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
+	// Reach is the space's (package pool): ReachRelay, whose relay the
+	// keeper handed on RelayFD, or ReachRouted, whose route socket the
+	// keeper handed on RouteFD.
+	Reach string `json:"reach"`
 	// Cgroup is the memory-bounded group the keeper moved this process
 	// into before it sent the spec, as cgroup.Own reads /proc/self/cgroup:
 	// a spawn's bound by the spawn's name. The stage executes the command
@@ -75,6 +81,9 @@ func (s Spec) Validate() error {
 		}
 	} else if err := home.Validate(s.HomeRoot, s.Home, s.UID); err != nil {
 		return err
+	}
+	if s.Reach != pool.ReachRelay && s.Reach != pool.ReachRouted {
+		return errors.New("reach must be relay or routed")
 	}
 	if err := protocol.ValidateCommand(s.Argv, s.Env); err != nil {
 		return err

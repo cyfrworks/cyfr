@@ -38,10 +38,29 @@ import (
 // ending in place of locked and proposes nothing, and the shell says
 // nothing after it: main closes at once and ends, opening no window for
 // a shell that is going.
+//
+// A hide is never taken on main's word: main's thread can be stuck (a
+// toolkit call that never returns), and with it what it would say. It is
+// confirmed by the compositor's own list of the windows it shows
+// (wayland.Windows): every window shown as the hide began has closed
+// there within screenHideWithin. One not confirmed, or a list that cannot
+// say, is carried out from outside: the app is ended (end), and its
+// launcher starts it again, locked.
 type screenApp struct {
 	in   io.Reader
 	to   *desktop.Writer
 	home desktop.Message
+
+	// hiding marks what the screen shows as a hide begins and returns the
+	// wait for it to be gone: nil once it is, why not otherwise.
+	hiding func() (gone func() error)
+	// endApp ends the app from outside, saying why (endScreenApp), at most
+	// once (ended): this process ends with the app it ended, whose child
+	// it is.
+	endApp func(why error)
+	ended  sync.Once
+	// awaited counts the hides whose confirmation is awaited (last).
+	awaited sync.WaitGroup
 
 	// gone is closed at the first message to main that could not be
 	// written: the app has gone, and show ends.
@@ -61,14 +80,14 @@ type screenApp struct {
 // newScreenApp is the app as the browser of the CYFR l, set up in the
 // screen's folder, reading main's messages from in and writing its own to
 // out, which nothing else writes to.
-func newScreenApp(in io.Reader, out io.Writer, l desktop.Local) (*screenApp, error) {
+func newScreenApp(in io.Reader, out io.Writer, l desktop.Local, hiding func() func() error, endApp func(error)) (*screenApp, error) {
 	found, ok := account.ServiceOf(l.Shell.Address, l.Shell.Directory)
 	if !ok {
 		return nil, fmt.Errorf("The CYFR here names %s as its account service. The app takes an https address, "+
 			"or a plain http one only at a CYFR's own address on this computer", l.Shell.Directory)
 	}
 	gone := make(chan struct{})
-	return &screenApp{in: in, to: desktop.NewWriter(out, func() { close(gone) }), gone: gone,
+	return &screenApp{in: in, to: desktop.NewWriter(out, func() { close(gone) }), gone: gone, hiding: hiding, endApp: endApp,
 		home: desktop.Message{Type: desktop.TypeHome, Home: l.Shell.Address, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver}}, nil
 }
 
@@ -94,21 +113,42 @@ func (a *screenApp) propose() {
 
 // hide hides what is on the screen and shows a fresh lock page
 // (shell.Config.Restart): it tells main locked, then proposes home again,
-// and returns at once, waiting on nothing. Before ready main shows nothing
-// of the shell's yet, and the page ready names is the lock page. Once the
-// shell is ending it tells main ending instead, once, and nothing more.
+// and returns at once, waiting on nothing; the hide's confirmation is
+// awaited apart, and a hide not confirmed ends the app (screenApp).
+// Before ready main shows nothing of the shell's yet, and the page ready
+// names is the lock page. Once the shell is ending it tells main ending
+// instead, once, and nothing more.
 func (a *screenApp) hide() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.ready || a.over {
 		return
 	}
+	// What is shown is marked before main is told, so a window main opens
+	// for the lock page is none of it.
+	gone := a.hiding()
+	a.awaited.Add(1)
+	go func() {
+		defer a.awaited.Done()
+		if err := gone(); err != nil {
+			a.ended.Do(func() { a.endApp(err) })
+		}
+	}()
 	if a.last {
 		a.say(desktop.Message{Type: desktop.TypeEnding})
 		return
 	}
 	a.say(desktop.Message{Type: desktop.TypeLocked})
 	a.propose()
+}
+
+// finish is the shell's last lock, through lock (shell.Shell.Lock), whose
+// hide says ending: it returns once every hide begun has been confirmed or
+// carried out, so the process that returns from it leaves none undone.
+func (a *screenApp) finish(lock func(why string)) {
+	a.end()
+	lock("")
+	a.awaited.Wait()
 }
 
 // end makes the next hide the shell's last.

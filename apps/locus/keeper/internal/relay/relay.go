@@ -2,7 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package relay carries one spawned process's stdio, its control channel
-// when it has one and its relay when it is isolated, between its pipes and
+// when it has one and its relay when it is a relay space, between its pipes and
 // sockets and the client. `cyfr-locus relay` runs as the client's user,
 // holding the parent ends of the backend's pipes; it connects to the
 // client's attach socket, presents the spawn's token and then frames the
@@ -46,7 +46,7 @@ func (w *frameWriter) send(out []byte, stream byte, payload []byte) error {
 
 // Spec is what the keeper hands a relay over its spec pipe: the attach
 // target, whether the spawn has a control channel on ControlFD, and
-// whether it has a relay on RelayFD, as every spawn of an isolated pool
+// whether it has a relay on RelayFD, as every spawn of a relay pool
 // does.
 type Spec struct {
 	Path    string `json:"path"`

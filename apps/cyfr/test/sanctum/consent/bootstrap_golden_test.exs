@@ -40,7 +40,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_golden_#{:rand.uniform(1_000_000)}")
+    test_dir = Path.join(System.tmp_dir!(), "cyfr_golden_#{System.unique_integer([:positive])}")
     seed_dir = Path.join(test_dir, "seed")
     bundle_dir = Path.join(seed_dir, "components")
     copy_bundle!(bundle_dir)

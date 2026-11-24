@@ -4,85 +4,130 @@
 package guard
 
 import (
-	"net/netip"
+	"bytes"
+	"encoding/json"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestParseRequest(t *testing.T) {
-	good := []string{
-		`{"v":1,"type":"admit","uid":40001,"addresses":["1.2.3.4","2606:4700::1111"]}`,
-		`{"v":1,"type":"clear","uid":20001}`,
+// vectors is testdata/control.json, the control's one vector file, which
+// the keeper's side (client_linux_test.go) and the guard's side
+// (server_linux_test.go) both read.
+type vectors struct {
+	Comment  string          `json:"comment"`
+	Hello    json.RawMessage `json:"hello"`
+	Requests []struct {
+		Descriptors int             `json:"descriptors"`
+		Message     json.RawMessage `json:"message"`
+	} `json:"requests"`
+	Refused []struct {
+		Why         string          `json:"why"`
+		Descriptors int             `json:"descriptors"`
+		Message     json.RawMessage `json:"message"`
+	} `json:"refused"`
+	Answers []struct {
+		Asked   string          `json:"asked"`
+		SpawnID string          `json:"spawn_id"`
+		Message json.RawMessage `json:"message"`
+	} `json:"answers"`
+	NotAnswers []struct {
+		Why     string          `json:"why"`
+		Asked   string          `json:"asked"`
+		SpawnID string          `json:"spawn_id"`
+		Message json.RawMessage `json:"message"`
+	} `json:"not_answers"`
+}
+
+func loadVectors(t *testing.T) vectors {
+	t.Helper()
+	data, err := os.ReadFile("testdata/control.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, line := range good {
-		if _, err := ParseRequest([]byte(line)); err != nil {
-			t.Errorf("%s: %v", line, err)
+	var v vectors
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Requests) == 0 || len(v.Refused) == 0 || len(v.Answers) == 0 || len(v.NotAnswers) == 0 {
+		t.Fatal("a section of the vectors is empty")
+	}
+	return v
+}
+
+// sameJSON reports whether two encodings hold the same value.
+func sameJSON(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var x, y any
+	if err := json.Unmarshal(a, &x); err != nil {
+		t.Fatalf("%s: %v", a, err)
+	}
+	if err := json.Unmarshal(b, &y); err != nil {
+		t.Fatalf("%s: %v", b, err)
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+func TestTheGuardTakesEveryRequestOfTheVectorsAndRefusesTheRest(t *testing.T) {
+	v := loadVectors(t)
+	for _, r := range v.Requests {
+		m, err := ParseRequest(r.Message, r.Descriptors)
+		if err != nil {
+			t.Errorf("%s: %v", r.Message, err)
+			continue
+		}
+		out, err := Encode(m)
+		if err != nil || !sameJSON(t, out, r.Message) {
+			t.Errorf("%s encodes again as %s (%v)", r.Message, out, err)
 		}
 	}
-	bad := map[string]string{
-		"another version":       `{"v":2,"type":"clear","uid":20001}`,
-		"an unknown type":       `{"v":1,"type":"open","uid":20001}`,
-		"an unknown member":     `{"v":1,"type":"clear","uid":20001,"extra":1}`,
-		"no uid":                `{"v":1,"type":"clear"}`,
-		"uid zero":              `{"v":1,"type":"clear","uid":0}`,
-		"uid of no one":         `{"v":1,"type":"clear","uid":4294967295}`,
-		"an admit of nothing":   `{"v":1,"type":"admit","uid":40001,"addresses":[]}`,
-		"an admit, no list":     `{"v":1,"type":"admit","uid":40001}`,
-		"a clear with a list":   `{"v":1,"type":"clear","uid":40001,"addresses":["1.2.3.4"]}`,
-		"a hostname":            `{"v":1,"type":"admit","uid":40001,"addresses":["example.com"]}`,
-		"a CIDR":                `{"v":1,"type":"admit","uid":40001,"addresses":["1.2.3.0/24"]}`,
-		"a zone":                `{"v":1,"type":"admit","uid":40001,"addresses":["fe80::1%eth0"]}`,
-		"a mapped address":      `{"v":1,"type":"admit","uid":40001,"addresses":["::ffff:1.2.3.4"]}`,
-		"a non-canonical form":  `{"v":1,"type":"admit","uid":40001,"addresses":["2606:4700:0::1111"]}`,
-		"a request with netns":  `{"v":1,"type":"clear","uid":40001,"netns":"net:[1]"}`,
-		"trailing data":         `{"v":1,"type":"clear","uid":40001} {}`,
-		"not an object":         `[1]`,
-		"a guard's own message": `{"v":1,"type":"admitted","uid":40001}`,
-	}
-	for why, line := range bad {
-		if _, err := ParseRequest([]byte(line)); err == nil {
-			t.Errorf("%s was accepted: %s", why, line)
+	for _, r := range v.Refused {
+		if _, err := ParseRequest(r.Message, r.Descriptors); err == nil {
+			t.Errorf("%s was accepted: %s", r.Why, r.Message)
 		}
 	}
 	many := make([]string, MaxAddresses+1)
 	for i := range many {
 		many[i] = `"10.0.` + strconv.Itoa(i/256) + `.` + strconv.Itoa(i%256) + `"`
 	}
-	line := `{"v":1,"type":"admit","uid":40001,"addresses":[` + strings.Join(many, ",") + `]}`
-	if _, err := ParseRequest([]byte(line)); err == nil {
+	packet := `{"v":2,"type":"admit","spawn_id":"00112233445566778899aabbccddeeff","reach":"hosts","addresses":[` + strings.Join(many, ",") + `]}`
+	if _, err := ParseRequest([]byte(packet), AdmitDescriptors); err == nil {
 		t.Error("an admit of more than MaxAddresses was accepted")
 	}
-	if len(line) > MaxLineBytes {
-		t.Errorf("an admit of MaxAddresses does not fit a line: %d bytes", len(line))
+	if len(packet) > MaxMessageBytes {
+		t.Errorf("an admit of MaxAddresses does not fit a message: %d bytes", len(packet))
 	}
 }
 
-func TestParseRanges(t *testing.T) {
-	got, err := ParseRanges("20001-20032,40001-49999")
-	if err != nil || !reflect.DeepEqual(got, []Range{{20001, 20032}, {40001, 49999}}) {
-		t.Fatalf("got %v, %v", got, err)
-	}
-	if !Holds(got, 40001) || !Holds(got, 20032) || Holds(got, 30001) || Holds(got, 0) {
-		t.Fatal("Holds answers wrong")
-	}
-	for _, bad := range []string{"", "20001", "20032-20001", "0-5", "a-b", "1-2,", "1-2-3"} {
-		if _, err := ParseRanges(bad); err == nil {
-			t.Errorf("%q was accepted", bad)
+func TestTheKeeperTakesEveryAnswerOfTheVectorsAndNoOther(t *testing.T) {
+	v := loadVectors(t)
+	for _, a := range v.Answers {
+		if _, err := ParseAnswer(a.Message, a.Asked, a.SpawnID); err != nil {
+			t.Errorf("%s to a %s: %v", a.Message, a.Asked, err)
 		}
 	}
+	for _, a := range v.NotAnswers {
+		if _, err := ParseAnswer(a.Message, a.Asked, a.SpawnID); err == nil {
+			t.Errorf("%s was taken: %s", a.Why, a.Message)
+		}
+	}
+	hello, err := Decode(v.Hello)
+	if err != nil || hello.Type != TypeHello || hello.Netns == "" {
+		t.Errorf("the hello %s: %+v %v", v.Hello, hello, err)
+	}
 }
 
-func TestClientAdmitsUnmappedAddresses(t *testing.T) {
-	addrs := []netip.Addr{netip.MustParseAddr("::ffff:1.2.3.4"), netip.MustParseAddr("2606:4700::1111")}
-	text := make([]string, len(addrs))
-	for i, a := range addrs {
-		text[i] = a.Unmap().WithZone("").String()
+func TestParseRange(t *testing.T) {
+	if p, err := ParseRange("10.213.0.0/16"); err != nil || p.String() != "10.213.0.0/16" {
+		t.Fatalf("%v %v", p, err)
 	}
-	for _, a := range text {
-		if _, err := CanonicalAddress(a); err != nil {
-			t.Errorf("%s: %v", a, err)
+	for _, bad := range []string{"", "10.213.0.0/24", "10.213.1.0/16", "10.213.0.0", "fd00::/16", "10.213.000.0/16"} {
+		if _, err := ParseRange(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
 		}
 	}
 }

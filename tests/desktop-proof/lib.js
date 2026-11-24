@@ -30,6 +30,7 @@ import path from "node:path"
 import {BrowserWindow, app, net, powerMonitor, session} from "electron"
 
 import {startApp} from "../../apps/codex/desktop/src/app.js"
+import {js} from "./act.mjs"
 import {MARKER, scrub, scrubbed} from "./scrub.mjs"
 
 export const FIXTURE = process.env.CYFR_DESKTOP_PROOF_FIXTURE
@@ -99,7 +100,7 @@ export async function waitFor(check, what, ms = STEP_MS) {
 export const literal = (value) => JSON.stringify(value).replace(/[<>\/\u2028\u2029]/g,
   (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
 
-export const js = (wc, code) => wc.executeJavaScript(code, true)
+export {js}
 export const text = (wc) => js(wc, "document.body ? document.body.innerText : ''")
 
 // ---- the app's windows, as the person sees them ----

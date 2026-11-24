@@ -256,25 +256,25 @@ func TestHomeRequestBounds(t *testing.T) {
 		line string
 		ok   bool
 	}{
-		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":1}`, true},
-		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":4294967294}`, true},
-		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":4294967295}`, false},
-		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":1,"pool":"backends"}`, false},
-		{`{"v":3,"type":"home_retire","id":"1",` + home + `,"uid":1,"home_mode":"kept"}`, false},
-		{`{"v":3,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/../k","uid":1}`, false},
-		{`{"v":3,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/k/","uid":1}`, false},
-		{`{"v":3,"type":"home_retire","id":"1",` + longPath + `,"uid":1}`, false},
-		{`{"v":3,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
-		{`{"v":3,"type":"home_make",` + home + `,"uid":1}`, false},
-		{`{"v":3,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
-		{`{"v":3,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":1}`, true},
+		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":4294967294}`, true},
+		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":4294967295}`, false},
+		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":1,"pool":"backends"}`, false},
+		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":1,"home_mode":"kept"}`, false},
+		{`{"v":4,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/../k","uid":1}`, false},
+		{`{"v":4,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/k/","uid":1}`, false},
+		{`{"v":4,"type":"home_retire","id":"1",` + longPath + `,"uid":1}`, false},
+		{`{"v":4,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
+		{`{"v":4,"type":"home_make",` + home + `,"uid":1}`, false},
+		{`{"v":4,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
+		{`{"v":4,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":3,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":4,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -549,7 +549,6 @@ func TestSpawnRequiresMemoryBound(t *testing.T) {
 					message["memory_bytes"] = c.value
 				}
 				if pool == "runner" {
-					message["isolation"] = IsolationNetns
 					message["control"] = true
 				}
 				line, err := json.Marshal(message)
@@ -630,7 +629,6 @@ func TestSpawnRequiresCPUQuota(t *testing.T) {
 					message["cpu_quota"] = c.value
 				}
 				if pool == "runner" {
-					message["isolation"] = IsolationNetns
 					message["control"] = true
 				}
 				line, err := json.Marshal(message)
@@ -661,8 +659,8 @@ func TestSpawnRequiresCPUQuota(t *testing.T) {
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":3,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":3,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
+		`{"v":4,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":4,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
 		`[]`,
 		``,
 	} {
@@ -681,7 +679,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":3,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":4,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")
@@ -750,31 +748,5 @@ func TestLineReaderSplitsAndDiscardsOversizeLines(t *testing.T) {
 	}
 	if _, _, err := lr.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("end: %v", err)
-	}
-}
-
-// Every runner spawn of the vectors asks for its namespace and no spawn of
-// another pool does; the keeper reads the one value there is.
-func TestSharedRunnerSpawnsAskForIsolation(t *testing.T) {
-	runners := 0
-	for _, raw := range loadVectors(t).ValidRequests {
-		req, err := ParseRequest(raw)
-		if err != nil {
-			t.Fatalf("%s: refused: %v", raw, err)
-		}
-		if req.Type != TypeSpawn {
-			continue
-		}
-		switch {
-		case req.Pool == "runner" && req.Isolation != IsolationNetns:
-			t.Errorf("runner spawn %s does not ask for %s", req.ID, IsolationNetns)
-		case req.Pool != "runner" && req.Isolation != "":
-			t.Errorf("spawn %s of pool %s asks for isolation", req.ID, req.Pool)
-		case req.Pool == "runner":
-			runners++
-		}
-	}
-	if runners == 0 {
-		t.Fatal("no runner spawn among the vectors")
 	}
 }

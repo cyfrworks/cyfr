@@ -1163,8 +1163,8 @@ while IFS='|' read -r kind old new want; do
   if [ "$code" -eq 0 ] && grep -qxF -- "$want" "$scratch/out"; then pass "$label"; else fail "$label"; fi
 done <<'CASES'
 a case in two groups|            cases: [bind, restore-identity]\n|            cases: [bind, restore-identity]\n          - group: d\n            title: bind again\n            images: [app]\n            cases: [bind]\n|the case bind is in 2 groups, not one: c, d
-a case in no group|            cases: [interrupt, restore, restore-person, setup, scan]\n|            cases: [interrupt, restore-person, setup, scan]\n|the case restore is in 0 groups, not one: none
-a case no step runs|            cases: [interrupt, restore, restore-person, setup, scan]\n|            cases: [interrupt, restore, restore-person, setup, scan, planted]\n|group a lists the case planted, which no step runs
+a case in no group|            cases: [interrupt, restore, restore-person, scan]\n|            cases: [interrupt, restore-person, scan]\n|the case restore is in 0 groups, not one: none
+a case no step runs|            cases: [interrupt, restore, restore-person, scan]\n|            cases: [interrupt, restore, restore-person, scan, planted]\n|group a lists the case planted, which no step runs
 a job without a producer|    needs: [locus-image, app-image]\n|    needs: app-image\n|group both runs the images locus, app, and its job app-image-locus-suites needs app-image
 CASES
 
@@ -1572,9 +1572,7 @@ CASES
 PREFIX_SPECS=(
   'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-'
   'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
-  'tests/setup-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-'
   'tests/setup-proof/app.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-app-'
-  'tests/setup-proof/cleanup-test.sh:CONTAINER="${PROOF_RUN_PREFIX:-}cyfr-setup-cleanup-test-'
   'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-'
   'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
   'tests/identity-proof/front.sh:name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-'
