@@ -294,7 +294,9 @@ defmodule Aqua.PromptTest do
       [opening, context] =
         String.split(
           Prompt.compose(ctx, mark: @mark, agent: member("planner"), authority: nil).text,
-          @context, parts: 2)
+          @context,
+          parts: 2
+        )
 
       assert opening == @briefing
       assert context =~ "\n## Scrolls\n\nProcedures this athanor has learned."
@@ -475,12 +477,16 @@ defmodule Aqua.PromptTest do
       [first, _] =
         String.split(
           Prompt.compose(home, mark: @mark, agent: agent(), authority: nil).text,
-          "Current date:", parts: 2)
+          "Current date:",
+          parts: 2
+        )
 
       [again, _] =
         String.split(
           Prompt.compose(home, mark: @mark, agent: agent(), authority: nil).text,
-          "Current date:", parts: 2)
+          "Current date:",
+          parts: 2
+        )
 
       assert first == again
       # The stable prefix reaches past the notes — the clock is after them.
@@ -510,7 +516,9 @@ defmodule Aqua.PromptTest do
       [_, notes] =
         String.split(
           Prompt.compose(home, mark: @mark, agent: agent(), authority: nil).text,
-          "## Notes", parts: 2)
+          "## Notes",
+          parts: 2
+        )
 
       assert notes =~ "- note-001 — line 1\n"
       assert notes =~ "- note-#{String.pad_leading(Integer.to_string(limit), 3, "0")} — "
