@@ -91,7 +91,7 @@ function askerOf(event, contents) {
  * reports what happens, one line a step, for whoever started the app.
  */
 export function startApp({cyfr, accountRoad = process.platform === "darwin" || process.platform === "win32",
-  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`)}) {
+  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`), endSelf = () => process.kill(process.pid, "SIGKILL")}) {
   ownOutput()
   // Every switch but the few the app takes (policy.js SWITCHES) is
   // refused: the engine would open a debugging port, lift the sandbox or
@@ -197,7 +197,26 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       if (child && child.exitCode === null) child.kill()
       message(`CYFR stopped: ${effect.end}. Quit the app and open it again.`)
     }
-    if (effect.quit) {
+    if (effect.quit && screen) {
+      // The one end of the screen's app, which every road that ends it
+      // reaches (states.js: stopped, quit). On the box's screen the app
+      // does not quit, it ends, and in this
+      // turn: its end is what lets its launcher start it again, locked,
+      // and the toolkit's teardown of the window just closed runs in the
+      // loop's next turns, where it can hang the main thread (Gtk loading
+      // an icon through glycin) before anything of main's runs again, an
+      // exit of the engine's included. So once cyfr is told, the process
+      // ends itself by the kernel. Nothing of the screen's session is on
+      // disk (accountRoad is never the screen's), and cyfr ends with its
+      // pipe.
+      if (child && child.exitCode === null) {
+        send("shutdown")
+        child.stdin.end()
+      }
+      quitting = true
+      say("ended: the app's process ends itself, without the toolkit's teardown")
+      endSelf()
+    } else if (effect.quit) {
       ending(() => {
         if (child && child.exitCode === null) {
           send("shutdown")

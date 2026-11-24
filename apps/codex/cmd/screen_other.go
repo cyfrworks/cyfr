@@ -18,3 +18,6 @@ func screenClocks() (boot, monotonic time.Duration, err error) {
 
 // screenChild is the child as it is: the screen runs on Linux alone.
 func screenChild(c *exec.Cmd) *exec.Cmd { return c }
+
+// screenExec starts nothing: the screen runs on Linux alone.
+func screenExec([]string) error { return errors.New("the screen runs on Linux alone") }

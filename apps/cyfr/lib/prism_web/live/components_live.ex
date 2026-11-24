@@ -359,7 +359,7 @@ defmodule PrismWeb.ComponentsLive do
          socket
          |> collapse()
          |> fetch_components()
-         |> put_flash(:info, "Deleted #{ref}")}
+         |> put_flash(:info, "Deleted #{named(ref)}")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to remove: " <> error_message(reason))}
@@ -373,7 +373,7 @@ defmodule PrismWeb.ComponentsLive do
          socket
          |> collapse()
          |> fetch_components()
-         |> put_flash(:info, "Reset #{ref} to the shipped version")}
+         |> put_flash(:info, "Reset #{named(ref)} to the shipped version")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to reset: " <> error_message(reason))}
@@ -530,7 +530,7 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:progress_id, nil)
      |> assign(:progress_log, [])
      |> fetch_components()
-     |> put_flash(:info, "Pulled #{ref}")}
+     |> put_flash(:info, "Pulled #{named(ref)}")}
   end
 
   def handle_info({:pull_complete, ref, {:error, reason}}, socket) do
@@ -543,7 +543,7 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:error, reason}))
      |> assign(:progress_id, nil)
      |> assign(:progress_log, [])
-     |> put_flash(:error, "Failed to pull #{ref}: #{error_message(reason)}")}
+     |> put_flash(:error, "Failed to pull #{named(ref)}: #{error_message(reason)}")}
   end
 
   def handle_info({:push_complete, _ref, {:ok, result}}, socket) do
@@ -626,7 +626,7 @@ defmodule PrismWeb.ComponentsLive do
       {:noreply,
        socket
        |> assign(:loading, false)
-       |> put_flash(:warning, "Component #{ref} not found")}
+       |> put_flash(:warning, "Component #{named(ref)} not found")}
     end
   end
 
@@ -976,8 +976,7 @@ defmodule PrismWeb.ComponentsLive do
   defp type_label("catalyst"), do: "Catalysts"
   defp type_label("reagent"), do: "Reagents"
   defp type_label("formula"), do: "Formulas"
-  defp type_label("tincture"), do: "Tinctures"
-  defp type_label(type), do: String.capitalize(type)
+  defp type_label("tincture"), do: "Apps"
 
   defp type_badge_color("catalyst"), do: "bg-purple-900 text-purple-300"
   defp type_badge_color("reagent"), do: "bg-blue-900 text-blue-300"
@@ -1006,6 +1005,17 @@ defmodule PrismWeb.ComponentsLive do
     Prima.ComponentPath.normalize_publisher(
       comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
     )
+  end
+
+  # A component as a sentence names it for a person: its name, with its
+  # version when the reference names one, never its kind or publisher.
+  # The reference stays the listing's and the controls' value.
+  defp named(ref) when is_binary(ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %{name: name, version: nil}} -> name
+      {:ok, %{name: name, version: version}} -> "#{name} #{version}"
+      {:error, _} -> ref
+    end
   end
 
   # Extract just the name (no namespace) from a ref:
@@ -1300,7 +1310,7 @@ defmodule PrismWeb.ComponentsLive do
             phx-value-type={type}
             class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == type, do: type_badge_color(type), else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
           >
-            {String.capitalize(type)}s
+            {type_label(type)}
           </button>
         </div>
         <.button variant="secondary" phx-click="register" disabled={@registering}>
@@ -1534,7 +1544,7 @@ defmodule PrismWeb.ComponentsLive do
                                             class="text-xs px-2 py-0.5"
                                             phx-click="push"
                                             phx-value-ref={ver_ref}
-                                            data-confirm={"Push #{ver_ref} to registry?"}
+                                            data-confirm={"Push #{named(ver_ref)} to registry?"}
                                           >
                                             Push
                                           </.button>
@@ -1546,7 +1556,7 @@ defmodule PrismWeb.ComponentsLive do
                                             class="text-xs px-2 py-0.5 text-amber-400 hover:text-amber-300"
                                             phx-click="reset"
                                             phx-value-ref={ver_ref}
-                                            data-confirm={"Reset #{ver_ref} to the shipped version? Any edits will be lost."}
+                                            data-confirm={"Reset #{named(ver_ref)} to the shipped version? Any edits will be lost."}
                                           >
                                             Reset
                                           </.button>
@@ -1558,7 +1568,7 @@ defmodule PrismWeb.ComponentsLive do
                                             class="text-xs px-2 py-0.5 text-red-400 hover:text-red-300"
                                             phx-click="remove"
                                             phx-value-ref={ver_ref}
-                                            data-confirm={"Remove #{ver_ref}?"}
+                                            data-confirm={"Remove #{named(ver_ref)}?"}
                                           >
                                             Remove
                                           </.button>

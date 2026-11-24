@@ -934,7 +934,9 @@ defmodule PrismWeb.ShellCanvasTest do
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
       html = render(view)
 
-      assert html =~ ~r/data-canvas-place="full".*role="toolbar" aria-label="Tincture controls"/s
+      assert html =~ ~r/data-canvas-place="full".*role="toolbar" aria-label="App controls"/s
+      assert html =~ ~s(aria-label="Close app")
+      refute html =~ ~r/aria-label="[^"]*[Tt]incture/
     end
 
     test "a layout published by another session of the same person is read again here; another person's is not",

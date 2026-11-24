@@ -623,15 +623,15 @@ describe("the line desktop 0.2.0", () => {
   })
 })
 
-// 0.3.4: a feed's widget with no reading names its feed and how to bind one,
+// 0.3.5: a feed's widget with no reading names its feed and how to bind one,
 // the threads are Aqua's daily and workspace threads and shared ones, and
 // the threads widget's Archived button lists the archived ones instead.
-const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.4/", import.meta.url)
+const V3 = new URL("../../../../../seed/components/tinctures/local/line/0.3.5/", import.meta.url)
 // A daily thread's title: the ISO date `n` days from today, in UTC, the
 // stand-in's person's zone.
 const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
-describe("the line desktop 0.3.4", () => {
+describe("the line desktop 0.3.5", () => {
   test("a tap on an app's button that opens nothing says why under it, the shipped canvas's words, for four seconds from the last answer; an open says nothing", async () => {
     const p = desk({version: V3})
     await flush()
@@ -710,6 +710,13 @@ describe("the line desktop 0.3.4", () => {
     p.tap((b) => b.dataset.key === "th-th_work")
     p.tap((b) => b.dataset.key === "th-th_family")
     assert.deepEqual(p.pages, [["aqua", "th_today"], ["aqua", "th_work"], ["chat", "th_family"]])
+  })
+
+  test("All threads opens the list of threads, with no thread named", async () => {
+    const p = desk({version: V3, width: 1440})
+    await flush()
+    p.tap((b) => b.dataset.key === "all-threads")
+    assert.deepEqual(p.pages, [["threads"]])
   })
 
   test("the newest daily thread reads Yesterday a day back, and its date further back", async () => {

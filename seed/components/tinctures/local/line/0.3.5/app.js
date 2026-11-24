@@ -562,7 +562,7 @@
       return {
         meta: all.length ? `${list.length} of ${all.length}` : "",
         tools: `<button class="btn sm${S.archived ? " primary" : ""}" data-act="archived" data-key="archived" aria-pressed="${S.archived}">Archived</button>`
-          + `<button class="btn sm" data-act="page" data-page="chat" data-key="all-threads">All threads</button>`,
+          + `<button class="btn sm" data-act="page" data-page="threads" data-key="all-threads">All threads</button>`,
         body: list.length === 0 ? `<p class="empty">${S.archived ? "No archived threads." : "No threads yet."}</p>` : `<ul class="rows">${list.map((t) => {
           const people = Array.isArray(t.people) ? t.people.length : 0;
           const aqua = isAqua(t);
