@@ -656,16 +656,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_async(:brain_options, {:exit, _reason}, socket), do: {:noreply, socket}
 
-  # What the servers offer, as the latest ask read it. An ask that
-  # crashed leaves what was shown; with nothing shown yet, each server
-  # reads as one that did not answer, with Ask again.
-  def handle_async(:offerings, {:ok, offerings}, socket),
-    do: {:noreply, assign(socket, :offerings, offerings)}
-
-  def handle_async(:offerings, {:exit, _reason}, socket),
+  # What the servers offer, as the latest ask read it, in the focus it
+  # was asked in. An ask that crashed leaves what was shown until the next
+  # write of the list asks again.
+  def handle_async(:offerings, {:ok, {tag, offerings}}, socket),
     do:
-      {:noreply,
-       assign(socket, :offerings, socket.assigns.offerings || %{listings: [], unhanded: %{}})}
+      CyfrWeb.ContextGuard.deliver(
+        socket,
+        tag,
+        &{:noreply, assign(&1, :offerings, offerings)}
+      )
+
+  def handle_async(:offerings, {:exit, _reason}, socket), do: {:noreply, socket}
 
   # ============================================================================
   # The roster
@@ -773,7 +775,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp ask_offerings(%{assigns: %{soul: %{"tools" => tools}}} = socket) do
     %{context: ctx, servers: servers} = socket.assigns
     asked = for %{name: name, enabled: true} <- servers || [], do: name
-    start_async(socket, :offerings, fn -> Aqua.offerings(ctx, tools, asked) end)
+    tag = CyfrWeb.ContextGuard.capture(socket)
+    start_async(socket, :offerings, fn -> {tag, Aqua.offerings(ctx, tools, asked)} end)
   end
 
   defp ask_offerings(socket), do: socket
