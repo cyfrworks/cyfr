@@ -1857,6 +1857,52 @@ test("a route set after its CYFR was left loads nothing into the view the depart
   await turns()
   assert.equal(late, 0)
   assert.ok(!world.loads.some(({url}) => url.startsWith(HOME)))
+
+  // So for an account window: once a lock ended its sign-in, a late route
+  // loads nothing of the account service.
+  await started(true)
+  let accountRouted
+  world.settingProxy = (partition) => partition === accountStore(HOME, ACCOUNT) ? new Promise((resolve) => { accountRouted = resolve }) : Promise.resolve()
+  const second = child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
+  await settled()
+  child.say({type: "opened", home: HOME, attempt: second})
+  await turns()
+  const page = content()
+  page.webContents.url = HOME + "/login"
+  const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  assert.ok(navigate(page, `${ACCOUNT}/account/sign#${fragment(request)}`).prevented)
+  await turns()
+  const account = live().find((w) => w.webContents.session.partition === accountStore(HOME, ACCOUNT))
+  assert.ok(account && accountRouted)
+  assert.ok(navigate(page, HOME + "/company-login").prevented, "a lock")
+  assert.ok(account.destroyed)
+  let lateAccount = 0
+  account.webContents.loadURL = () => { lateAccount++; return Promise.resolve() }
+  accountRouted()
+  await turns()
+  assert.equal(lateAccount, 0)
+  assert.ok(!world.loads.some(({url}) => url.startsWith(ACCOUNT)))
+})
+
+// A route that could not be set leaves its store's unknown: what that
+// store shows next has its route set afresh, none included.
+test("a store whose route could not be set has it set afresh for the chooser it shows next", async () => {
+  const ROUTE = "socks5://127.0.0.1:1055"
+  const OTHER_ROUTE = "socks5://127.0.0.1:1056"
+  await started(false)
+  const store = content().webContents.session.partition
+  world.settingProxy = (_partition, config) => config.proxyRules === OTHER_ROUTE ? Promise.reject(new Error("proxy refused")) : Promise.resolve()
+  child.proposes(HOME, {proxy: ROUTE})
+  await turns()
+  child.proposes(PORT_B, {proxy: OTHER_ROUTE})
+  await turns()
+  assert.deepEqual(world.proxies, [
+    [store, {mode: "fixed_servers", proxyRules: ROUTE}],
+    [store, {mode: "fixed_servers", proxyRules: OTHER_ROUTE}],
+    [store, {mode: "system"}]
+  ])
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=words&notice=unrouted&retry=" + encodeURIComponent(PORT_B))
+  assert.equal(content().webContents.session.partition, store)
 })
 
 // The run token is main's, taken from ready's address: the chooser is
