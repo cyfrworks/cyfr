@@ -590,9 +590,9 @@ test("a second launch with --quit ends the app as a quit does, from every state;
     assert.equal(next.state.name, "ended", name)
     assert.deepEqual(next.do.at(-1), {quit: true}, name)
   }
-  const SCREEN_PAGE = "http://127.0.0.1:7340/"
   let s = initial(false, "/home/ana/cyfr")
-  for (const e of [{type: "ready", url: SCREEN_PAGE}, home(), taken, openedAt(HOME)]) s = step(s, e).state
+  for (const e of [ready, home(), taken, openedAt(HOME)]) s = step(s, e).state
+  assert.equal(s.name, "open", "the box's screen opened")
   assert.deepEqual(step(s, asked), {state: s, do: [{show: true}]}, "the box's screen")
 })
 
