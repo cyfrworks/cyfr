@@ -610,7 +610,8 @@ func TestEveryLockOnABoxIsOneStep(t *testing.T) {
 
 // This box is the CYFR its folder names at each reading, never the entry
 // made or admitted last: its folder at A, then B, then A again, the rail
-// shows A as This box and Forget, the box unlocked, keeps A and forgets B.
+// shows A as This box and Forget, the box unlocked at a CYFR elsewhere,
+// keeps A and forgets B.
 // A list that cannot be read still shows This box; a folder that cannot be
 // read protects every entry set up in it.
 func TestThisBoxIsWhatItsFolderNamesNow(t *testing.T) {
@@ -630,6 +631,16 @@ func TestThisBoxIsWhatItsFolderNamesNow(t *testing.T) {
 	if rail := b.rail(t, 0).CYFRs; rail[0] != (RailCYFR{Home: localAddress, Box: true, Folder: boxFolder, Open: true}) {
 		t.Fatalf("after A, B, A the rail shows %+v", rail)
 	}
+	// Unlocked at another CYFR, so that This box is none of the CYFR open.
+	const work = "https://work.example.com"
+	b.Leave(3)
+	b.next(t)
+	b.next(t)
+	sel := b.connect(t, "/bootstrap/connect", map[string]string{"address": work})
+	b.next(t)
+	b.ready(work)
+	answered(t, sel)
+	b.opened(t, work)
 	open.Store(true)
 	b.Forget(localAddress)
 	b.quiet(t)
