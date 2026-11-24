@@ -63,7 +63,7 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			attempt, _ := o["attempt"].(float64)
 			id, _ := o["id"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), ID: uint64(id), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
-				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Road: str(o, "road")}
+				Rail: str(o, "rail"), Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Road: str(o, "road")}
 			read, write := io.Pipe()
 			t.Cleanup(func() { read.Close() })
 			if err := NewWriter(write, nil).Queue(m); err != nil {
@@ -99,7 +99,8 @@ func TestCyfrReadsEachMessageFromMain(t *testing.T) {
 			_ = json.Unmarshal(c.Message, &o)
 			attempt, _ := o["attempt"].(float64)
 			id, _ := o["id"].(float64)
-			if m.Type != o["type"] || m.Home != str(o, "home") || m.Attempt != uint64(attempt) || m.ID != uint64(id) {
+			ok, _ := o["ok"].(bool)
+			if m.Type != o["type"] || m.Home != str(o, "home") || m.Attempt != uint64(attempt) || m.ID != uint64(id) || m.OK != ok {
 				t.Fatalf("read %+v from %s", m, c.Message)
 			}
 			path, has := o["path"]

@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+
+	"github.com/cyfr/codex/internal/account"
 )
 
 // Version is the one version of the messages: every message carries it,
@@ -226,6 +228,12 @@ func ReadFromMain(line []byte) (Message, error) {
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" || f == "path" && !absolute(s) {
 			return Message{}, refuse("fields")
+		}
+		// The CYFR a forget names is an origin in its one spelling.
+		if f == "home" && typ == TypeForget {
+			if !account.IsHome(s) {
+				return Message{}, refuse("fields")
+			}
 		}
 		switch f {
 		case "home":

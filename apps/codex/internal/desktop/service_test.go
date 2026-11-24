@@ -48,6 +48,7 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 	a.directory.Store(account.DefaultDirectory)
 	a.Service = &Service{
 		Token:       "the-run-token",
+		ReadToken:   "the-read-token",
 		Homes:       shell.Homes(filepath.Join(dir, "homes.json")),
 		Record:      filepath.Join(dir, "holder.json"),
 		Client:      client,
@@ -930,7 +931,7 @@ func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 			var running atomic.Bool
 			running.Store(true)
 			a := rememberLocal(t, t.TempDir(), tc.directory, &running)
-			before := a.record(t)
+			_, before := a.last(t)
 			shown := a.post(t, "/bootstrap/state", map[string]string{})
 			if shown != (answer{Home: localAddress}) {
 				t.Fatalf("the chooser shows %+v", shown)
@@ -954,8 +955,11 @@ func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 			if n := a.discovered.Load(); n != 0 {
 				t.Fatalf("%d sign-in pages were read", n)
 			}
-			if got := a.record(t); got != before {
-				t.Fatalf("the record became %s", got)
+			// Opening it records only its account service's origin among the
+			// stores a Forget erases; the entry is otherwise as it was.
+			before.Ceremonies = []string{tc.origin}
+			if last, got := a.last(t); last != localAddress || !reflect.DeepEqual(got, before) {
+				t.Fatalf("the list holds %s last, its entry %+v", last, got)
 			}
 			if got := a.post(t, "/bootstrap/state", map[string]string{}); got != want {
 				t.Fatalf("the chooser of the open CYFR shows %+v", got)
