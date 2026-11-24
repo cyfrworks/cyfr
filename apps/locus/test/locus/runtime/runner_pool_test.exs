@@ -882,7 +882,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
          %{keeper: keeper} do
       pool = start_pool!(keeper, pool_size: 1)
       serve!(pool)
-      wait_until(fn -> counts(pool).fresh == 1 end)
+      # Attached, not still spawning, so the refusals below never meet it.
+      wait_until(fn -> match?([%{state: :fresh}], Runners.runners(pool)) end)
 
       # The runner spawned behind the one taken is refused, and so is each
       # try after it, until the pool's wait is seconds long.
