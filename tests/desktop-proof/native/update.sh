@@ -253,7 +253,7 @@ public static class U {
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
 }
 "@
-        $h = [U]::FindWindow($null, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
+        $h = [U]::FindWindow([NullString]::Value, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
         [void][U]::MoveWindow($h, 0, 0, 1000, 700, $true); Start-Sleep -Milliseconds 500
         [void][U]::SetForegroundWindow($h); $r = New-Object U+R; [void][U]::GetClientRect($h, [ref]$r)
         $p = New-Object U+P; $p.X = 36; $p.Y = $r.B - 45; [void][U]::ClientToScreen($h, [ref]$p)
