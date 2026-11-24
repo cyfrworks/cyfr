@@ -10,7 +10,8 @@ name: Mac distribution
 # notarised under the team's account and stapled, then checked
 # (apps/codex/desktop/scripts/mac-sign.mjs), installed on the runner and
 # smoked (tests/desktop-proof/native/mac.sh), so a profile that does not
-# authorise the app's entitlements is seen at its launch. The cyfr inside
+# authorise the app's entitlements is seen at its launch, and its app and
+# cyfr read as built for the architecture (installed-machine.sh). The cyfr inside
 # is built as the release builds the archives' (GoReleaser, its ldflags and
 # its binary check). Release calls it with the tag's version: the
 # installed cyfr must then be the tag's, and each DMG is uploaded for the
@@ -118,6 +119,11 @@ jobs:
 
       - name: Install and smoke the app
         run: bash tests/desktop-proof/native/mac.sh "$DMG"
+
+      # Read from each file's header: an Intel app passes a smoke on Apple
+      # silicon under Rosetta.
+      - name: The installed app is built for its architecture
+        run: bash tests/desktop-proof/native/installed-machine.sh "$ARCH" /Applications/CYFR.app/Contents/MacOS/CYFR /Applications/CYFR.app/Contents/Resources/cyfr
 
       - name: The installed cyfr is the release's
         if: inputs.version != ''

@@ -20,8 +20,11 @@
 # Mac DMGs signed and notarised by desktop-mac.yml, which alone receives
 # the Apple inputs, each by its name), hands all six to the CLI release by
 # exact name, which checks them and the Homebrew cask it writes from the
-# DMGs' bytes before GoReleaser sums and attaches them, lets neither the
-# merge nor that release go without them, and grants each job only what
+# DMGs' bytes before GoReleaser sums and attaches them, lets no job that
+# publishes (the images' merge, the release and its tap, the provenance)
+# go without the installers job's check of the six and the cask, reads
+# each installed executable's architecture, keeps the tap moving forward
+# only and its token out of git's arguments, and grants each job only what
 # it needs and each secret only where it is read. The build, and the
 # publication test in test.yml's static job, first switch the runner's
 # Docker daemon to the containerd image store, which alone can load an
@@ -245,12 +248,12 @@ MANIFEST_DIR_ENV = {"RELEASE_MANIFEST_DIR": "${{ runner.temp }}/release"}
 CASK_SCRIPT = os.path.join(ROOT, "scripts", "ci", "homebrew-cask.sh")
 CASK_URL_BASE = "https://github.com/cyfrworks/cyfr/releases/download/#{version}"
 CASK_RUN = """set -euo pipefail
-mkdir -p "$RUNNER_TEMP/cask"
-bash scripts/ci/homebrew-cask.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/packages" '%s' > "$RUNNER_TEMP/cask/cyfr.rb"
+mkdir -p "$RUNNER_TEMP/checked/cask"
+bash scripts/ci/homebrew-cask.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/checked/packages" '%s' > "$RUNNER_TEMP/checked/cask/cyfr.rb"
 """ % CASK_URL_BASE
 INSTALLERS_RUN = (
-    'python3 -I tests/ci-release-graph.py --installers "$RUNNER_TEMP/packages" '
-    '--version "$GITHUB_REF_NAME" --cask "$RUNNER_TEMP/cask/cyfr.rb"'
+    'python3 -I tests/ci-release-graph.py --installers "$RUNNER_TEMP/checked/packages" '
+    '--version "$GITHUB_REF_NAME" --cask "$RUNNER_TEMP/checked/cask/cyfr.rb"'
 )
 # The CYFR app's Linux package: a job of its own, held to exactly these
 # steps in this order, so that what is published is what was installed and
@@ -274,6 +277,7 @@ node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$GITHUB_REF_NA
 """),
     ("run", 'bash tests/desktop-proof/native/linux.sh "$RUNNER_TEMP/package/cyfr-desktop_${GITHUB_REF_NAME}_linux_${ARCH}.deb"'),
     ("run", 'bash tests/desktop-proof/native/installed-version.sh /usr/bin/cyfr "$GITHUB_REF_NAME"'),
+    ("run", 'bash tests/desktop-proof/native/installed-machine.sh "$ARCH" /opt/cyfr/CYFR /usr/bin/cyfr'),
     ("actions/upload-artifact", {
         "name": "cyfr-desktop-linux-${{ matrix.arch }}",
         "path": "${{ runner.temp }}/package/cyfr-desktop_${{ github.ref_name }}_linux_${{ matrix.arch }}.deb",
@@ -293,8 +297,14 @@ def installer_name(version, system, arch):
     return f"cyfr-desktop_{version}_{system}_{arch}.{INSTALLER_KINDS[system]}"
 
 
-PACKAGE_DOWNLOADS = {f"cyfr-desktop-{s}-{a}": "${{ runner.temp }}/packages" for s, a in INSTALLERS}
-PACKAGES_DIR_ENV = {"RELEASE_PACKAGES_DIR": "${{ runner.temp }}/packages"}
+PACKAGE_DOWNLOADS = {f"cyfr-desktop-{s}-{a}": "${{ runner.temp }}/checked/packages" for s, a in INSTALLERS}
+# The one check before anything is published: the installers job, which
+# downloads the six, writes the cask from the DMGs, checks both and hands
+# them on as one artifact, which the CLI release downloads alone.
+INSTALLERS_JOB = "installers"
+CHECKED = "checked-installers"
+CHECKED_DOWNLOAD = {CHECKED: "${{ runner.temp }}/checked"}
+PACKAGES_DIR_ENV = {"RELEASE_PACKAGES_DIR": "${{ runner.temp }}/checked/packages"}
 PACKAGE_GLOBS = ["{{ .Env.RELEASE_PACKAGES_DIR }}/" + installer_name("{{ .Version }}", s, a) for s, a in INSTALLERS]
 # The release's written note, the annotated tag's message beneath its
 # subject (scripts/release.sh writes it from --notes): the version job
@@ -884,14 +894,14 @@ def check_release_manifest(wf, merge, release):
     downloads = [i for i, s in enumerate(steps) if str(s.get("uses", "")).split("@")[0] == "actions/download-artifact"]
     got = {steps[i].get("with", {}).get("name"): steps[i].get("with", {}).get("path") for i in downloads}
     if (
-        len(downloads) != len(MERGED_DOWNLOADS) + len(PACKAGE_DOWNLOADS)
-        or got != {**MERGED_DOWNLOADS, **PACKAGE_DOWNLOADS}
+        len(downloads) != len(MERGED_DOWNLOADS) + len(CHECKED_DOWNLOAD)
+        or got != {**MERGED_DOWNLOADS, **CHECKED_DOWNLOAD}
         or any(
             set(steps[i]) - {"name", "uses", "with"} or set(steps[i].get("with", {})) != {"name", "path"}
             for i in downloads
         )
     ):
-        return "the CLI release does not download the two merged digests and the six installers by exact name"
+        return "the CLI release does not download the two merged digests and the checked installers by exact name"
 
     def only(predicate, what):
         at = [i for i, s in enumerate(steps) if predicate(s)]
@@ -904,25 +914,22 @@ def check_release_manifest(wf, merge, release):
         (lambda s: "--manifest" in str(s.get("run", "")), "validate release.json"),
         (lambda s: "sign-blob" in str(s.get("run", "")), "sign release.json"),
         (lambda s: "release-note.sh" in str(s.get("run", "")), "write the release note"),
-        (lambda s: "homebrew-cask.sh" in str(s.get("run", "")), "write the Homebrew cask"),
-        (lambda s: "--installers" in str(s.get("run", "")), "check the installers and the cask"),
         (lambda s: str(s.get("uses", "")).split("@")[0] == "goreleaser/goreleaser-action", "run GoReleaser"),
     ]:
         at, reason = only(predicate, what)
         if reason:
             return reason
         order.append(at)
-    scaffold, manifest, validate, sign, note, cask, installers, goreleaser = order
+    scaffold, manifest, validate, sign, note, goreleaser = order
     lines = run_lines(steps[manifest])
     if SCHEMA_READ not in lines or SCHEMA_ARG not in lines or not any(SCHEMA_KEY in line for line in lines):
         return "the CLI release's manifest does not carry the schema fingerprint its merged cyfr image answers"
     for at, want in [
         (scaffold, SCAFFOLD_RUN), (validate, VALIDATE_RUN), (sign, SIGN_RUN), (note, NOTE_WRITE_RUN),
-        (cask, CASK_RUN), (installers, INSTALLERS_RUN),
     ]:
         if run_lines(steps[at]) != run_lines({"run": want}):
             return f"the CLI release runs {steps[at].get('run')!r}, not {want!r}"
-    for at in (scaffold, manifest, validate, sign, note, cask, installers):
+    for at in (scaffold, manifest, validate, sign, note):
         if set(steps[at]) - {"name", "run"}:
             extra = sorted(set(steps[at]) - {"name", "run"})
             return f"the CLI release's step {steps[at].get('name')!r} carries {extra}"
@@ -931,9 +938,8 @@ def check_release_manifest(wf, merge, release):
         return "cosign is not installed before the manifest is signed"
     if [max(downloads)] + order != sorted([max(downloads)] + order):
         return (
-            "the CLI release does not download the digests and installers, build the scaffold, write, validate "
-            "and sign release.json, write the release note, write the cask, check the installers and the cask, "
-            "then run GoReleaser, in that order"
+            "the CLI release does not download the digests and the checked installers, build the scaffold, "
+            "write, validate and sign release.json, write the release note, then run GoReleaser, in that order"
         )
     if steps[goreleaser].get("with", {}).get("workdir") != "apps/codex":
         return "GoReleaser does not run in apps/codex"
@@ -954,9 +960,8 @@ def check_linux_package(wf, merge, release):
         return f"no {PACKAGE_JOB} job builds the CYFR app's Linux package"
     if TAG_JOB not in needs_of(job):
         return "the Linux package does not need the tag check"
-    for name in (merge, release):
-        if PACKAGE_JOB not in needs_of(jobs[name]):
-            return f"{name} does not need the Linux package"
+    if PACKAGE_JOB not in needs_of(jobs.get(INSTALLERS_JOB, {})):
+        return "the installers' check does not need the Linux package"
     if job.get("permissions") != {"contents": "read"}:
         return f"the Linux package's permissions are {job.get('permissions')}, not contents read alone"
     if "secrets." in json.dumps(job) or "github.token" in json.dumps(job):
@@ -1030,6 +1035,7 @@ MAC_STEPS = [
     {"working-directory": "apps/codex/desktop", "env": APPLE_PASSED,
      "run": 'node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$VERSION" --arch "$ARCH" --distribution'},
     {"run": 'bash tests/desktop-proof/native/mac.sh "$DMG"'},
+    {"run": 'bash tests/desktop-proof/native/installed-machine.sh "$ARCH" /Applications/CYFR.app/Contents/MacOS/CYFR /Applications/CYFR.app/Contents/Resources/cyfr'},
     {"if": "inputs.version != ''",
      "run": 'bash tests/desktop-proof/native/installed-version.sh /Applications/CYFR.app/Contents/Resources/cyfr "$VERSION"'},
     {"if": "inputs.version != '' || inputs.upload == true", "uses": "actions/upload-artifact", "with": {
@@ -1073,9 +1079,8 @@ def check_mac_package(wf, mac, merge, release):
             return f"the Mac package's {key} is {got!r}, not {want!r}"
     if set(job) != set(MAC_CALL):
         return f"the Mac package's job carries {sorted(set(job) - set(MAC_CALL))}"
-    for name in (merge, release):
-        if MAC_JOB not in needs_of(jobs[name]):
-            return f"{name} does not need the Mac package"
+    if MAC_JOB not in needs_of(jobs.get(INSTALLERS_JOB, {})):
+        return "the installers' check does not need the Mac package"
     on = mac.get("on", mac.get(True))
     if not isinstance(on, dict) or sorted(on) != ["workflow_call", "workflow_dispatch"]:
         return f"desktop-mac.yml starts on {sorted(on) if isinstance(on, dict) else on!r}, not a dispatch and a call alone"
@@ -1168,6 +1173,7 @@ node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr.exe" --version "$GITHUB_RE
     {"shell": "pwsh", "run": "pwsh -NoProfile -File " + WINDOWS_MSI % "install"},
     {"run": 'bash tests/desktop-proof/native/smoke.sh "$APP"'},
     {"run": 'bash tests/desktop-proof/native/installed-version.sh "$CYFR" "$GITHUB_REF_NAME"'},
+    {"run": 'bash tests/desktop-proof/native/installed-machine.sh "$ARCH" "$APP" "$CYFR"'},
     {"shell": "pwsh", "run": "pwsh -NoProfile -File " + WINDOWS_MSI % "remove"},
     {"uses": "actions/upload-artifact", "with": {
         "name": "cyfr-desktop-windows-${{ matrix.arch }}",
@@ -1176,7 +1182,7 @@ node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr.exe" --version "$GITHUB_RE
         "retention-days": 1,
     }},
 ]
-PACKAGE_JOBS = {PACKAGE_JOB, MAC_JOB, WINDOWS_CYFR_JOB, WINDOWS_JOB}
+PACKAGE_JOBS = {PACKAGE_JOB, MAC_JOB, WINDOWS_CYFR_JOB, WINDOWS_JOB, "installers"}
 
 
 def check_job(jobs, name, want, steps_want, goreleaser, what):
@@ -1212,9 +1218,59 @@ def check_windows_package(wf, merge, release):
     )
     if reason:
         return reason
-    for name in (merge, release):
-        if WINDOWS_JOB not in needs_of(jobs[name]):
-            return f"{name} does not need the Windows package"
+    if WINDOWS_JOB not in needs_of(jobs.get(INSTALLERS_JOB, {})):
+        return "the installers' check does not need the Windows package"
+    return None
+
+
+INSTALLERS_CHECK = {
+    "needs": [TAG_JOB, PACKAGE_JOB, MAC_JOB, WINDOWS_JOB] + CHECKS,
+    "if": "github.repository == 'cyfrworks/cyfr'",
+    "permissions": {"contents": "read"},
+    "runs-on": "ubuntu-latest",
+}
+INSTALLERS_STEPS = (
+    [{"uses": "actions/checkout", "with": {"persist-credentials": False}}]
+    + [{"uses": "actions/download-artifact", "with": {"name": n, "path": p}} for n, p in PACKAGE_DOWNLOADS.items()]
+    + [
+        {"run": CASK_RUN},
+        {"run": INSTALLERS_RUN},
+        {"uses": "actions/upload-artifact", "with": {
+            "name": CHECKED,
+            "path": "${{ runner.temp }}/checked",
+            "if-no-files-found": "error",
+            "retention-days": 1,
+        }},
+    ]
+)
+# A job publishes when it may write to the repository, the registry or an
+# attestation, or calls a workflow that may; the image builds alone push,
+# by digest only, what no tag names before the merge.
+PUBLISHING = {"contents", "packages", "id-token", "attestations"}
+
+
+def check_installers_job(wf):
+    jobs = wf["jobs"]
+    goreleaser = next(s for s in jobs[release_jobs(wf)[0]]["steps"] if str(s.get("uses", "")).startswith("goreleaser/goreleaser-action"))
+    reason = check_job(jobs, INSTALLERS_JOB, INSTALLERS_CHECK, INSTALLERS_STEPS, goreleaser, "the installers' check")
+    if reason:
+        return reason
+
+    def ancestors(j, seen=None):
+        seen = set() if seen is None else seen
+        for n in needs_of(jobs[j]):
+            if n not in seen:
+                seen.add(n)
+                ancestors(n, seen)
+        return seen
+
+    build = next(j for j, job in jobs.items() if steps_using(job, "docker/build-push-action"))
+    for j, job in jobs.items():
+        granted = job.get("permissions") or {}
+        writes = isinstance(granted, dict) and any(granted.get(k) == "write" for k in PUBLISHING)
+        if writes and j != build:
+            if INSTALLERS_JOB not in ancestors(j):
+                return f"{j} publishes without the installers' check"
     return None
 
 
@@ -1266,25 +1322,50 @@ def check_trigger(wf):
 
 # Executions of the Homebrew step's script, by (script, tag).
 _HOMEBREW_RUNS = {}
+# The tap's token in the stubbed runs: no git call's arguments may hold it.
+TAP_TOKEN = "tap-secret-0451"
+# A git that records each call and plays a tap: its clone holds a cask at
+# TAP_AT (none when empty), a fetch brings one at TAP_AFTER, the first
+# PUSH_FAILS pushes fail, and the staged cask always differs.
+GIT_STUB = r"""#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_CALLS"
+while [ "$1" = -c ]; do shift 2; done
+dir=.
+if [ "$1" = -C ]; then dir=$2; shift 2; fi
+cask() { mkdir -p "$1/Casks"; printf 'cask "cyfr" do\n  version "%s"\nend\n' "$2" > "$1/Casks/cyfr.rb"; }
+case "$1" in
+  clone) eval "dest=\${$#}"; mkdir -p "$dest"; [ -z "$TAP_AT" ] || cask "$dest" "$TAP_AT" ;;
+  fetch) [ -z "$TAP_AFTER" ] || cask "$dir" "$TAP_AFTER" ;;
+  push)
+    n=$(( $(cat "$GIT_CALLS.pushes" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GIT_CALLS.pushes"
+    [ "$n" -gt "${PUSH_FAILS:-0}" ] || exit 1 ;;
+  diff) exit 1 ;;
+esac
+exit 0
+"""
 
 
-def run_homebrew_step(script, tag):
+def run_homebrew_step(script, tag, tap_at="", tap_after="", push_fails=0):
     """The step's script run as the runner runs it, with the cask the release
-    wrote in $RUNNER_TEMP/cask, with a git on PATH that records each call and
-    answers 0 (a tap already up to date). Returns (status, git calls, output)."""
-    key = (script, tag)
+    checked in $RUNNER_TEMP/checked/cask and GIT_STUB on PATH. Returns
+    (status, git calls, output)."""
+    key = (script, tag, tap_at, tap_after, push_fails)
     if key not in _HOMEBREW_RUNS:
         work = tempfile.mkdtemp(prefix="homebrew-", dir=scratch())
-        casks = os.path.join(work, "runner", "cask")
+        casks = os.path.join(work, "runner", "checked", "cask")
         os.makedirs(casks)
         with open(os.path.join(casks, "cyfr.rb"), "w") as f:
-            f.write('cask "cyfr" do\nend\n')
+            f.write('cask "cyfr" do\n  version "%s"\nend\n' % tag)
         stubs = os.path.join(work, "bin")
         os.makedirs(stubs)
         calls = os.path.join(work, "git.calls")
         with open(os.path.join(stubs, "git"), "w") as f:
-            f.write('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$GIT_CALLS"\nexit 0\n')
+            f.write(GIT_STUB)
         os.chmod(os.path.join(stubs, "git"), 0o755)
+        # The retries' pauses, which the stubbed runs do not wait out.
+        with open(os.path.join(stubs, "sleep"), "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(stubs, "sleep"), 0o755)
         os.makedirs(os.path.join(work, "tmp"))
         path = os.path.join(work, "step.sh")
         with open(path, "w") as f:
@@ -1294,10 +1375,13 @@ def run_homebrew_step(script, tag):
             "LC_ALL": range_locale(),
             "TAG": tag,
             "RUNNER_TEMP": os.path.join(work, "runner"),
-            "HOMEBREW_TAP_TOKEN": "token",
+            "HOMEBREW_TAP_TOKEN": TAP_TOKEN,
             "GITHUB_STEP_SUMMARY": os.path.join(work, "summary"),
             "TMPDIR": os.path.join(work, "tmp"),
             "GIT_CALLS": calls,
+            "TAP_AT": tap_at,
+            "TAP_AFTER": tap_after,
+            "PUSH_FAILS": str(push_fails),
         }
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", path],
@@ -1315,9 +1399,25 @@ def run_homebrew_step(script, tag):
     return _HOMEBREW_RUNS[key]
 
 
+# The tap only moves forward: (the tap's version at the clone, its version
+# after a fetch, pushes that fail, this release) and whether it pushes.
+TAP_CASES = [
+    ("", "", 0, "1.2.3", 1),
+    ("1.2.2", "", 0, "1.2.3", 1),
+    ("1.2.4", "", 0, "1.2.3", 0),
+    ("1.9.9", "", 0, "1.10.0", 1),
+    ("1.10.0", "", 0, "1.9.9", 0),
+    ("1.2.2", "1.2.4", 1, "1.2.3", 1),
+    ("1.2.2", "", 1, "1.2.3", 2),
+]
+
+
 def check_homebrew(wf, release):
     """The Homebrew step, run on each accepted version: a pre-release exits
-    0 with a notice before any git call, and a release reaches git clone."""
+    0 with a notice before any git call, and a release reaches git clone;
+    then on TAP_CASES: a tap that names a newer release is left as it is,
+    with a notice and exit 0, at the clone and after a retry's fetch, and
+    no git call carries the token."""
     steps = [s for s in wf["jobs"][release].get("steps", []) if s.get("name") == HOMEBREW]
     if len(steps) != 1:
         return f"the CLI release does not run {HOMEBREW!r} once"
@@ -1335,8 +1435,19 @@ def check_homebrew(wf, release):
                 return f"the Homebrew step on the pre-release {tag} exits {status} after the git calls {calls[:2]}, not 0 before any"
             if "::notice::" not in output:
                 return f"the Homebrew step skips the pre-release {tag} without a notice: {output.strip()[-300:]}"
-        elif not calls or not calls[0].startswith("clone "):
+        elif not calls or " clone " not in f" {calls[0]} ":
             return f"the Homebrew step on the release {tag} does not reach git clone: exit {status}, git {calls[:2]}: {output.strip()[-300:]}"
+    for tap_at, tap_after, push_fails, tag, pushes in TAP_CASES:
+        status, calls, output = run_homebrew_step(script, tag, tap_at, tap_after, push_fails)
+        what = f"the Homebrew step for {tag} on a tap at {tap_at or 'nothing'}" + (
+            f", {push_fails} push failing and a fetch bringing {tap_after}" if push_fails else "")
+        made = sum(1 for c in calls if " push " in f" {c} ")
+        if status != 0 or made != pushes:
+            return f"{what} exits {status} after {made} pushes, not 0 after {pushes}: {output.strip()[-300:]}"
+        if pushes == 0 and "::notice::" not in output:
+            return f"{what} leaves the tap without a notice"
+        if any(TAP_TOKEN in c for c in calls):
+            return f"{what} hands git the token in its arguments"
     return None
 
 
@@ -1682,6 +1793,24 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def ruby_refuses(cask):
+    """Why Ruby does not read the cask as Ruby (ruby -c), or None."""
+    ruby = shutil.which("ruby")
+    if ruby is None:
+        return "ruby is not on PATH, so the cask cannot be read as Ruby"
+    with tempfile.NamedTemporaryFile("w", suffix=".rb", delete=False) as f:
+        f.write(cask)
+        path = f.name
+    try:
+        result = subprocess.run([ruby, "-c", path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    finally:
+        os.remove(path)
+    said = result.stdout.decode(errors="replace").strip()
+    if result.returncode != 0 or said != "Syntax OK":
+        return f"Ruby does not read the cask: {said[-300:]}"
+    return None
+
+
 def check_installers(folder, version, cask):
     """The folder GoReleaser sums and attaches holds exactly the six
     installers at VERSION, each a non-empty regular file, and the cask names
@@ -1700,6 +1829,17 @@ def check_installers(folder, version, cask):
         path = os.path.join(folder, name)
         if os.path.islink(path) or not os.path.isfile(path) or os.path.getsize(path) == 0:
             return f"{name} is not a non-empty file"
+    # Each installer is its own build: two of the same bytes are one
+    # architecture's or one system's package under two names.
+    by_digest = {}
+    for name in want:
+        by_digest.setdefault(file_sha256(os.path.join(folder, name)), []).append(name)
+    for names in by_digest.values():
+        if len(names) > 1:
+            return f"{' and '.join(names)} are the same bytes"
+    reason = ruby_refuses(cask)
+    if reason:
+        return reason
     lines = [line.strip() for line in cask.split("\n") if line.strip()]
     if not lines or lines[0] != CASK_FIXED[0] or lines[-1] != "end":
         return "the cask is not one cask \"cyfr\" block"
@@ -1746,6 +1886,8 @@ CASK_TEXT_MUTANTS = [
     ("a second app", lambda c: c.replace('  app "CYFR.app"', '  app "CYFR.app"\n  app "Other.app"')),
     ("one sha256 for both", lambda c: re.sub(r"sha256 arm:.*?\n\s*intel:.*?\n", 'sha256 "%s"\n' % ("0" * 64), c, count=1, flags=re.DOTALL)),
     ("no end", lambda c: c[: c.rindex("end")]),
+    ("an unterminated string", lambda c: c.replace('desc "App and CLI for the CYFR sandboxed runtime"', 'desc "unfinished')),
+    ("a string closed by another quote", lambda c: c.replace('name "CYFR"', "name \"CYFR'")),
 ]
 
 
@@ -1811,6 +1953,9 @@ def cask_failures(version):
         ("a seventh file", lambda d: open(os.path.join(d, "cyfr_%s_darwin_arm64.tar.gz" % version), "w").close()),
         ("an MSI missing", lambda d: os.remove(os.path.join(d, installer_name(version, "windows", "arm64")))),
         ("an empty DEB", lambda d: open(os.path.join(d, installer_name(version, "linux", "amd64")), "w").close()),
+        ("two installers of the same bytes",
+         lambda d: shutil.copyfile(os.path.join(d, installer_name(version, "windows", "amd64")),
+                                   os.path.join(d, installer_name(version, "windows", "arm64")))),
         ("a DMG changed after the cask was written",
          lambda d: open(os.path.join(d, installer_name(version, "darwin", "arm64")), "a").write("x")),
     ]:
@@ -1830,6 +1975,59 @@ def cask_failures(version):
     if usage.returncode != 64:
         failures.append(f"the installers mode exits {usage.returncode} without --cask, not 64")
     return failures, cases
+
+
+# tests/desktop-proof/native/installed-machine.sh against headers of each
+# system's executables for each architecture: an amd64 app or cyfr in an
+# arm64 package, which emulation runs, is refused, as is any file it cannot
+# read as one architecture's.
+INSTALLED_MACHINE = os.path.join(ROOT, "tests", "desktop-proof", "native", "installed-machine.sh")
+MACHINES = {"amd64": {"elf": 0x3E, "macho": 0x01000007, "pe": 0x8664}, "arm64": {"elf": 0xB7, "macho": 0x0100000C, "pe": 0xAA64}}
+
+
+def executable_header(kind, arch):
+    machine = MACHINES[arch][kind]
+    if kind == "elf":
+        return b"\x7fELF\x02\x01\x01" + bytes(11) + machine.to_bytes(2, "little") + bytes(44)
+    if kind == "macho":
+        return b"\xcf\xfa\xed\xfe" + machine.to_bytes(4, "little") + bytes(24)
+    return b"MZ" + bytes(0x3A) + (0x40).to_bytes(4, "little") + b"PE\x00\x00" + machine.to_bytes(2, "little") + bytes(18)
+
+
+def installed_machine_failures():
+    failures = []
+    work = tempfile.mkdtemp(prefix="machine-", dir=scratch())
+
+    def made(name, data):
+        path = os.path.join(work, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    files = {(kind, arch): made(f"{kind}-{arch}", executable_header(kind, arch)) for kind in ("elf", "macho", "pe") for arch in MACHINES}
+    universal = made("universal", b"\xca\xfe\xba\xbe" + bytes(28))
+    script = made("script", b"#!/bin/sh\necho cyfr version 1.2.3\n")
+    no_pe = made("mz-alone", b"MZ" + bytes(0x3A) + (0x40).to_bytes(4, "little") + b"XX\x00\x00" + bytes(20))
+    cases = []
+    for kind in ("elf", "macho", "pe"):
+        cases.append((f"the {kind} app and cyfr of arm64", "arm64", [files[(kind, "arm64")], files[(kind, "arm64")]], 0))
+        cases.append((f"the {kind} app and cyfr of amd64", "amd64", [files[(kind, "amd64")], files[(kind, "amd64")]], 0))
+        cases.append((f"an amd64 {kind} app in the arm64 package", "arm64", [files[(kind, "amd64")], files[(kind, "arm64")]], 1))
+        cases.append((f"an amd64 {kind} cyfr in the arm64 package", "arm64", [files[(kind, "arm64")], files[(kind, "amd64")]], 1))
+        cases.append((f"an arm64 {kind} app in the amd64 package", "amd64", [files[(kind, "arm64")]], 1))
+    cases += [
+        ("a universal Mach-O", "arm64", [universal], 1),
+        ("a script", "arm64", [script], 1),
+        ("an MZ file with no PE header", "amd64", [no_pe], 1),
+        ("a file that is not there", "arm64", [os.path.join(work, "missing")], 1),
+        ("no file", "arm64", [], 64),
+        ("another architecture's name", "x86_64", [files[("elf", "amd64")]], 64),
+    ]
+    for name, arch, paths, want in cases:
+        result = subprocess.run(["bash", INSTALLED_MACHINE, arch, *paths], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        if result.returncode != want:
+            failures.append(f"installed-machine.sh exits {result.returncode} for {name}, not {want}")
+    return failures, len(cases)
 
 
 # tests/desktop-proof/native/installed-version.sh against a cyfr that
@@ -2842,6 +3040,11 @@ REHEARSAL_RUN = "bash tests/ci-release-rehearsal.sh"
 
 def check_rehearsal(codex_ci, release_wf):
     job = (codex_ci.get("jobs") or {}).get("release-rehearsal") or {}
+    # The job's own conditions as well as its steps': no if and no
+    # continue-on-error.
+    extra = set(job) - {"name", "runs-on", "timeout-minutes", "steps"}
+    if extra:
+        return f"codex-ci.yml's release-rehearsal carries {sorted(extra)}"
     steps = job.get("steps", [])
     runs = [s for s in steps if str(s.get("run", "")).strip() == REHEARSAL_RUN]
     if len(runs) != 1 or set(runs[0]) - {"name", "run"}:
@@ -2892,6 +3095,7 @@ def check_shape(wf, mac=None):
         or check_linux_package(wf, merge, release)
         or check_mac_package(wf, mac, merge, release)
         or check_windows_package(wf, merge, release)
+        or check_installers_job(wf)
         or check_secrets(wf, release)
         or check_tag(wf, build, release)
         or check_merged_digest(wf, merge)
@@ -3528,13 +3732,6 @@ def package_replace(action, old, new):
     return mutate
 
 
-def package_need_dropped(job):
-    def mutate(wf):
-        wf["jobs"][job]["needs"].remove(PACKAGE_JOB)
-
-    return mutate
-
-
 def package_arm64_emulated(wf):
     wf["jobs"][PACKAGE_JOB]["strategy"]["matrix"]["include"][1]["runner"] = "ubuntu-24.04"
 
@@ -3561,27 +3758,40 @@ def package_cached(wf):
     wf["jobs"][PACKAGE_JOB]["steps"].insert(3, {"uses": "actions/cache@x", "with": {"path": "~/.cache/electron", "key": "electron"}})
 
 
+def installers_steps(wf):
+    return wf["jobs"][INSTALLERS_JOB]["steps"]
+
+
+def installers_step(wf, predicate):
+    return next(s for s in installers_steps(wf) if predicate(s))
+
+
 def packages_by_pattern(wf):
-    steps = [s for s in release_steps(wf) if not str(s.get("with", {}).get("name", "")).startswith("cyfr-desktop-")]
-    at = next(i for i, s in enumerate(steps) if is_scaffold(s))
-    steps.insert(at, {"uses": "actions/download-artifact@x",
-                      "with": {"pattern": "cyfr-desktop-*", "path": "${{ runner.temp }}/packages"}})
-    wf["jobs"]["release"]["steps"] = steps
+    steps = [s for s in installers_steps(wf) if not str(s.get("with", {}).get("name", "")).startswith("cyfr-desktop-")]
+    steps.insert(1, {"uses": "actions/download-artifact@x",
+                     "with": {"pattern": "cyfr-desktop-*", "path": "${{ runner.temp }}/checked/packages"}})
+    wf["jobs"][INSTALLERS_JOB]["steps"] = steps
 
 
 def one_package_download(wf):
-    release_steps(wf).remove(release_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-arm64"))
+    installers_steps(wf).remove(installers_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-arm64"))
 
 
 def package_into_the_checkout(wf):
-    release_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-amd64")["with"]["path"] = "apps/codex/packages"
+    installers_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-amd64")["with"]["path"] = "apps/codex/packages"
 
 
-def packages_after_goreleaser(wf):
-    steps = release_steps(wf)
-    moved = release_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-arm64")
+def packages_after_check(wf):
+    steps = installers_steps(wf)
+    moved = installers_step(wf, lambda s: s.get("with", {}).get("name") == "cyfr-desktop-linux-arm64")
     steps.remove(moved)
-    steps.insert(steps.index(release_step(wf, is_goreleaser)) + 1, moved)
+    steps.insert(steps.index(installers_step(wf, lambda s: "--installers" in str(s.get("run", "")))) + 1, moved)
+
+
+def packages_fetched_again(wf):
+    steps = release_steps(wf)
+    steps.insert(steps.index(release_step(wf, is_goreleaser)), {"uses": "actions/download-artifact@x",
+                 "with": {"name": "cyfr-desktop-linux-amd64", "path": "${{ runner.temp }}/checked/packages"}})
 
 
 def no_packages_dir_env(wf):
@@ -3665,7 +3875,7 @@ def another_secret_read(wf):
 
 def download_dropped(name):
     def mutate(wf):
-        release_steps(wf).remove(release_step(wf, lambda s: s.get("with", {}).get("name") == name))
+        installers_steps(wf).remove(installers_step(wf, lambda s: s.get("with", {}).get("name") == name))
 
     return mutate
 
@@ -3679,8 +3889,7 @@ def windows_matrix(change):
 
 PACKAGE_JOB_MUTANTS = [
     ("no Mac package job", lambda wf: wf["jobs"].pop(MAC_JOB)),
-    ("the merge without the Mac package", needs_dropped("merge", MAC_JOB)),
-    ("the CLI release without the Mac package", needs_dropped("release", MAC_JOB)),
+    ("the installers' check without the Mac package", needs_dropped(INSTALLERS_JOB, MAC_JOB)),
     ("the tag check dropped from the Mac package's needs", needs_dropped(MAC_JOB, TAG_JOB)),
     ("a check dropped from the Mac package's needs", needs_dropped(MAC_JOB, "keeper-ci")),
     ("the Mac package run always()", lambda wf: wf["jobs"][MAC_JOB].update({"if": "always()"})),
@@ -3696,8 +3905,7 @@ PACKAGE_JOB_MUTANTS = [
     ("contents: write on the Mac package", lambda wf: wf["jobs"][MAC_JOB]["permissions"].update(contents="write")),
     ("no Windows package job", lambda wf: wf["jobs"].pop(WINDOWS_JOB)),
     ("no Windows cyfr job", lambda wf: wf["jobs"].pop(WINDOWS_CYFR_JOB)),
-    ("the merge without the Windows package", needs_dropped("merge", WINDOWS_JOB)),
-    ("the CLI release without the Windows package", needs_dropped("release", WINDOWS_JOB)),
+    ("the installers' check without the Windows package", needs_dropped(INSTALLERS_JOB, WINDOWS_JOB)),
     ("the Windows package without its cyfr", needs_dropped(WINDOWS_JOB, WINDOWS_CYFR_JOB)),
     ("the tag check dropped from the Windows package's needs", needs_dropped(WINDOWS_JOB, TAG_JOB)),
     ("the tag check dropped from the Windows cyfr's needs", needs_dropped(WINDOWS_CYFR_JOB, TAG_JOB)),
@@ -3721,17 +3929,38 @@ PACKAGE_JOB_MUTANTS = [
     ("the Windows cyfr's Go from a cache", change_step(WINDOWS_CYFR_JOB, "actions/setup-go", lambda s: s["with"].pop("cache"))),
     ("a DMG not downloaded", download_dropped("cyfr-desktop-darwin-amd64")),
     ("an MSI not downloaded", download_dropped("cyfr-desktop-windows-arm64")),
-    ("no cask written", remove_step("release", "homebrew-cask.sh")),
-    ("no check of the installers and the cask", remove_step("release", "--installers")),
-    ("the installers' check allowed to fail", change_step("release", "--installers", lambda s: s.update({"continue-on-error": True}))),
-    ("the installers' check with an if:", change_step("release", "--installers", lambda s: s.update({"if": "!contains(github.ref_name, '-')"}))),
-    ("the installers' check after GoReleaser", move_step_first("release", "goreleaser-action", "--installers")),
-    ("the cask written after its check", move_step_first("release", "--installers", "homebrew-cask.sh")),
+    ("no cask written", remove_step(INSTALLERS_JOB, "homebrew-cask.sh")),
+    ("no check of the installers and the cask", remove_step(INSTALLERS_JOB, "--installers")),
+    ("the installers' check allowed to fail", change_step(INSTALLERS_JOB, "--installers", lambda s: s.update({"continue-on-error": True}))),
+    ("the installers' check with an if:", change_step(INSTALLERS_JOB, "--installers", lambda s: s.update({"if": "!contains(github.ref_name, '-')"}))),
+    ("the checked set handed on before the check", move_step_first(INSTALLERS_JOB, "upload-artifact", "--installers")),
+    ("the cask written after its check", move_step_first(INSTALLERS_JOB, "--installers", "homebrew-cask.sh")),
     ("the cask written for another folder of DMGs",
-     replace_in_step("release", "homebrew-cask.sh", '"$RUNNER_TEMP/packages"', '"$RUNNER_TEMP/other"')),
-    ("the cask naming another download folder", replace_in_step("release", "homebrew-cask.sh", "releases/download", "releases/latest/download")),
-    ("the installers checked in another folder", replace_in_step("release", "--installers", '--installers "$RUNNER_TEMP/packages"', '--installers "$RUNNER_TEMP/other"')),
-    ("the tap fed a cask from dist", homebrew_replace('CASK_SRC="$RUNNER_TEMP/cask/cyfr.rb"', 'CASK_SRC="apps/codex/dist/homebrew/Casks/cyfr.rb"')),
+     replace_in_step(INSTALLERS_JOB, "homebrew-cask.sh", '"$RUNNER_TEMP/checked/packages"', '"$RUNNER_TEMP/other"')),
+    ("the cask naming another download folder", replace_in_step(INSTALLERS_JOB, "homebrew-cask.sh", "releases/download", "releases/latest/download")),
+    ("the installers checked in another folder",
+     replace_in_step(INSTALLERS_JOB, "--installers", '--installers "$RUNNER_TEMP/checked/packages"', '--installers "$RUNNER_TEMP/other"')),
+    ("the checked set handed on by another name", change_step(INSTALLERS_JOB, "upload-artifact", lambda s: s["with"].update(name="installers"))),
+    ("the installers' check job allowed to fail", lambda wf: wf["jobs"][INSTALLERS_JOB].update({"continue-on-error": True})),
+    ("the installers' check job switched off", lambda wf: wf["jobs"][INSTALLERS_JOB].update({"if": "false"})),
+    ("the Windows package switched off", lambda wf: wf["jobs"][WINDOWS_JOB].update({"if": "false"})),
+    ("the merge without the installers' check", needs_dropped("merge", INSTALLERS_JOB)),
+    ("the merge needing the packages and not their check",
+     lambda wf: wf["jobs"]["merge"].update(needs=["images", PACKAGE_JOB, MAC_JOB, WINDOWS_JOB])),
+    ("a new publishing job without the check", lambda wf: wf["jobs"].update(notes={
+        "needs": ["version"] + CHECKS, "if": "github.repository == 'cyfrworks/cyfr'", "timeout-minutes": 5,
+        "permissions": {"contents": "write"}, "runs-on": "ubuntu-latest", "steps": [{"run": "gh release create x"}]})),
+    ("the Linux package's architecture unchecked", remove_step(PACKAGE_JOB, "installed-machine.sh")),
+    ("the Windows package's architecture unchecked", remove_step(WINDOWS_JOB, "installed-machine.sh")),
+    ("the Windows package checked for amd64 alone", replace_in_step(WINDOWS_JOB, "installed-machine.sh", '"$ARCH"', "amd64")),
+    ("the Windows package's app unread", replace_in_step(WINDOWS_JOB, "installed-machine.sh", ' "$APP"', "")),
+    ("the tap replaced by an older release", homebrew_replace("if newer_in_tap; then keep_newer; fi\nstage\n", "stage\n")),
+    ("a retry that does not read the tap again", homebrew_replace("git -C \"$workdir\" reset --hard origin/main\n  if newer_in_tap; then keep_newer; fi\n", "git -C \"$workdir\" reset --hard origin/main\n")),
+    ("the tap's version compared as text", homebrew_replace("| sort -V |", "| sort |")),
+    ("the token in the clone's URL", homebrew_replace(
+        'tap_git clone --depth 1 https://github.com/cyfrworks/homebrew-cyfr.git "$workdir"',
+        'git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/cyfrworks/homebrew-cyfr.git" "$workdir"')),
+    ("the tap fed a cask from dist", homebrew_replace('CASK_SRC="$RUNNER_TEMP/checked/cask/cyfr.rb"', 'CASK_SRC="apps/codex/dist/homebrew/Casks/cyfr.rb"')),
 ]
 
 
@@ -3792,6 +4021,10 @@ MAC_MUTANTS = [
     ("the package built unsigned", mac_change("--distribution", lambda s: s.update(run=s["run"].replace(" --distribution", "")))),
     ("the package's signing allowed to fail", mac_change("--distribution", lambda s: s.update({"continue-on-error": True}))),
     ("the package not smoked", mac_removed("mac.sh")),
+    ("the package's architecture unchecked", mac_removed("installed-machine.sh")),
+    ("the package's architecture checked on a call alone", mac_change("installed-machine.sh", lambda s: s.update({"if": "inputs.version != ''"}))),
+    ("the job switched off", lambda m: m["jobs"]["mac"].update({"if": "false"})),
+    ("the job allowed to fail", lambda m: m["jobs"]["mac"].update({"continue-on-error": True})),
     ("the installed cyfr unchecked", mac_removed("installed-version.sh")),
     ("the installed cyfr checked on a dispatch alone", mac_change("installed-version.sh", lambda s: s.update({"if": "inputs.upload == true"}))),
     ("the package uploaded only when a dispatch asks", mac_change("upload-artifact", lambda s: s.update({"if": "inputs.upload == true"}))),
@@ -3839,8 +4072,7 @@ GORELEASER_MUTANTS = [
 MUTANTS = [
     ("no Linux package job", lambda wf: wf["jobs"].pop(PACKAGE_JOB)),
     ("the Linux package needing the merge that needs it", lambda wf: wf["jobs"][PACKAGE_JOB]["needs"].append("merge")),
-    ("the merge without the Linux package", package_need_dropped("merge")),
-    ("the CLI release without the Linux package", package_need_dropped("release")),
+    ("the installers' check without the Linux package", needs_dropped(INSTALLERS_JOB, PACKAGE_JOB)),
     ("the tag check dropped from the Linux package's needs", tag_need_dropped(PACKAGE_JOB)),
     ("a check dropped from the Linux package's needs", lambda wf: wf["jobs"][PACKAGE_JOB]["needs"].remove("codex-ci")),
     ("contents: write on the Linux package", lambda wf: wf["jobs"][PACKAGE_JOB]["permissions"].update(contents="write")),
@@ -3867,7 +4099,8 @@ MUTANTS = [
     ("the packages downloaded by pattern", packages_by_pattern),
     ("one package downloaded", one_package_download),
     ("a package downloaded into the checkout", package_into_the_checkout),
-    ("a package downloaded after GoReleaser", packages_after_goreleaser),
+    ("a package downloaded after the check", packages_after_check),
+    ("the CLI release fetching a package again", packages_fetched_again),
     ("no RELEASE_PACKAGES_DIR on GoReleaser", no_packages_dir_env),
     ("a check dropped from the build's needs", drop_need),
     ("the merge runs always()", merge_always),
@@ -4102,6 +4335,8 @@ def graph_mode():
         ("no rehearsal", lambda c: c["jobs"].pop("release-rehearsal")),
         ("the rehearsal allowed to fail", lambda c: next(s for s in c["jobs"]["release-rehearsal"]["steps"] if "run" in s).update({"continue-on-error": True})),
         ("another GoReleaser", lambda c: next(s for s in c["jobs"]["release-rehearsal"]["steps"] if "goreleaser" in str(s.get("uses"))).update({"with": {"version": "latest", "install-only": True}})),
+        ("the rehearsal job switched off", lambda c: c["jobs"]["release-rehearsal"].update({"if": False})),
+        ("the rehearsal job allowed to fail", lambda c: c["jobs"]["release-rehearsal"].update({"continue-on-error": True})),
     ]:
         changed = copy.deepcopy(codex_ci)
         mutate(changed)
@@ -4169,9 +4404,18 @@ def graph_mode():
     helper, helper_versions = release_helper_failures()
     failures += helper
     failures += release_note_failures()
-    found, cask_cases = cask_failures(version)
-    failures += found
+    # The cask's cases read it as Ruby, as the release's check does on its
+    # runner. GitHub's runners carry Ruby, so there its absence fails;
+    # elsewhere the cases are said not to have run.
+    cask_cases = 0
+    if shutil.which("ruby") is None and os.environ.get("GITHUB_ACTIONS") != "true":
+        print("NOT RUN: the cask's and the installers' cases, which read the cask as Ruby: no ruby on PATH")
+    else:
+        found, cask_cases = cask_failures(version)
+        failures += found
     found, installed_cases = installed_version_failures()
+    failures += found
+    found, machine_cases = installed_machine_failures()
     failures += found
     modes = 0
     if not scaffold:
@@ -4197,7 +4441,8 @@ def graph_mode():
         f"{planted} planted composes refused; {versions} versions held to the rule, which "
         f"{len(RULE_MUTANTS)} other rules and {file_mutants} mutants of the vector file fail; "
         f"{modes} manifest-mode cases, {cask_cases} cases of the cask and the installers and "
-        f"{installed_cases} of the installed cyfr's version checked"
+        f"{installed_cases} of the installed cyfr's version and {machine_cases} of the installed executables' "
+        f"architecture checked"
     )
     return 0
 

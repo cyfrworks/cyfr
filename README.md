@@ -52,11 +52,13 @@ There are two ways to use CYFR; pick the one that fits.
 
 Each release carries the CYFR app for macOS, Windows and Linux, on Intel and AMD (amd64) and on Arm (arm64), with its own `cyfr` inside. Every file is listed in the release's signed `checksums.txt` ([Verifying Releases](#verifying-releases)).
 
-- **macOS** (Apple silicon or Intel): `brew install --cask cyfrworks/cyfr/cyfr` installs CYFR in Applications and puts its `cyfr` on your `PATH`; `brew upgrade --cask cyfr` takes the next release, and `brew uninstall --cask cyfr` removes both. Or download `cyfr-desktop_<version>_darwin_arm64.dmg` (Apple silicon) or `cyfr-desktop_<version>_darwin_amd64.dmg` (Intel) from the [release](https://github.com/cyfrworks/cyfr/releases), open it and drag CYFR to Applications. It is signed by CYFR Works Inc. and notarised by Apple. Dragging the app puts no `cyfr` on your `PATH`; for that, run once in Terminal:
+- **macOS** (Apple silicon or Intel): `brew install --cask cyfrworks/cyfr/cyfr` installs CYFR in Applications and puts its `cyfr` on your `PATH`; `brew upgrade --cask cyfr` takes the next release, and `brew uninstall --cask cyfr` removes both. Or download `cyfr-desktop_<version>_darwin_arm64.dmg` (Apple silicon) or `cyfr-desktop_<version>_darwin_amd64.dmg` (Intel) from the [release](https://github.com/cyfrworks/cyfr/releases), open it and drag CYFR to Applications. It is signed by CYFR Works Inc. and notarised by Apple, so the first time you open it, whether Homebrew or your browser downloaded it, macOS asks once whether to open an app downloaded from the internet: choose **Open**. Dragging the app puts no `cyfr` on your `PATH`; for that, run once in Terminal:
 
   ```bash
-  sudo mkdir -p /usr/local/bin && sudo ln -sf /Applications/CYFR.app/Contents/Resources/cyfr /usr/local/bin/cyfr
+  sudo mkdir -p /usr/local/bin && sudo ln -s /Applications/CYFR.app/Contents/Resources/cyfr /usr/local/bin/cyfr
   ```
+
+  It links the app's `cyfr` as `/usr/local/bin/cyfr` and never replaces a file already there: when another `cyfr` holds that name, such as the one the install script put there, `ln` says `File exists` and changes nothing. `ls -l /usr/local/bin/cyfr` shows what it is; to use the app's instead, remove that one (`sudo rm /usr/local/bin/cyfr`) and run the command again.
 
 - **Windows**: download `cyfr-desktop_<version>_windows_amd64.msi` (Intel and AMD) or `cyfr-desktop_<version>_windows_arm64.msi` (Arm) from the [release](https://github.com/cyfrworks/cyfr/releases) and open it. It installs CYFR for your account alone, with no administrator, and puts its `cyfr` on your `PATH` for every terminal opened afterwards; **Installed apps** in Settings removes it. The installer is not signed yet, so Windows may say **Windows protected your PC**: choose **More info**, then **Run anyway**. A work computer's policy may refuse it.
 - **Linux** (Ubuntu): download `cyfr-desktop_<version>_linux_amd64.deb` or `cyfr-desktop_<version>_linux_arm64.deb` and install it with `sudo apt install ./<file>`, which links its `cyfr` as `/usr/bin/cyfr`.

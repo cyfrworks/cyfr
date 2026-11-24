@@ -277,10 +277,16 @@ same worktree refuses, naming the run that holds it.
   Homebrew cask the release writes from the DMGs
   (`tests/desktop-proof/native/brew-tap.sh`), and Codex CI's
   `release-rehearsal` runs the release's GoReleaser on stand-ins for the
-  six (`tests/ci-release-rehearsal.sh`). A tag whose installer fails, or
-  whose installers or cask the release job's check refuses, publishes no
-  release, no checksums, no cask and no image tag; the images job may
-  already have pushed the images by digest, which no tag names.
+  six (`tests/ci-release-rehearsal.sh`). Release's `installers` job is
+  the one check before anything is published: it takes the six, writes
+  the cask from the DMGs, checks them together and hands that set on to
+  the merge of the images and the CLI release, which both need it, and
+  the job that installs each package reads its app and `cyfr` as built
+  for its architecture (`tests/desktop-proof/native/installed-machine.sh`).
+  A tag whose installer fails, or whose installers or cask that check
+  refuses, publishes no release, no checksums, no cask and no image tag;
+  the images job may already have pushed the images by digest, which no
+  tag names.
 
   On Linux the same job runs `tests/desktop-proof/screen/app.sh` on the
   package: the app as the box's screen (`--screen-project`) under Ubuntu

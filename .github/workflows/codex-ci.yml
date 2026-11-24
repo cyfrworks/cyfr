@@ -441,6 +441,18 @@ jobs:
         if: runner.os == 'Windows'
         run: bash tests/desktop-proof/native/smoke.sh "$APP"
 
+      # Read from each file's header, the way release.yml reads the
+      # installers it publishes: an amd64 app passes the smoke on an arm64
+      # runner under emulation.
+      - name: The installed app is built for this architecture
+        run: |
+          case "$RUNNER_OS" in
+            Linux) set -- /opt/cyfr/CYFR /usr/bin/cyfr ;;
+            macOS) set -- /Applications/CYFR.app/Contents/MacOS/CYFR /Applications/CYFR.app/Contents/Resources/cyfr ;;
+            Windows) set -- "$APP" "$CYFR" ;;
+          esac
+          bash tests/desktop-proof/native/installed-machine.sh ${{ matrix.arch }} "$@"
+
       - name: Uninstall the app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
