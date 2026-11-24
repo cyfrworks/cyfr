@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 4, a driver's side, for
-// every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex):
+// Package brainwire is the brain wire, version 5, a driver's side, for
+// every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex, cmd/cyfr-acp):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
 // from the holder on standard input, events go to it on standard output,
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	Version      = 4
+	Version      = 5
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -138,6 +138,7 @@ var Events = map[string]Spec{
 		map[string]fieldType{"session": tID, "fresh": tBoolean, "held": tIDs, "account": tAccount}},
 	"gone":     {[]string{"t"}, nil, map[string]fieldType{}},
 	"accepted": {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
+	"later":    {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"refused": {[]string{"t", "id", "reason"}, []string{"account"},
 		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},
 	"text": {[]string{"t", "gen", "message", "delta"}, []string{"work"},

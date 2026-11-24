@@ -116,6 +116,9 @@ func (d *driver) Deadline() <-chan time.Time { return nil }
 // Expired is never called, with no deadline.
 func (d *driver) Expired() error { return nil }
 
+// Inbox is none: Codex's calls of CYFR's tools come on its own output.
+func (d *driver) Inbox() <-chan func() error { return nil }
+
 func (d *driver) running() bool { return d.h != nil && d.starting == nil && d.session != "" }
 
 // nextID is a request id of the driver's: unique to the process, so no
