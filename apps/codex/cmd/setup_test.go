@@ -4,9 +4,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +24,7 @@ func standInApp(t *testing.T, display bool) string {
 	record := filepath.Join(t.TempDir(), "started")
 	t.Setenv(fakeRecord, record)
 	was, wasDisplay := installedApp, hasDisplay
-	installedApp = func() string { return app }
+	installedApp = func() (string, error) { return app, nil }
 	hasDisplay = func() bool { return display }
 	t.Cleanup(func() { installedApp, hasDisplay = was, wasDisplay })
 	return record
@@ -38,7 +40,7 @@ func TestSetupOpensTheAppWithTheWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cyfr setup answered %v\n%s", err, out)
 	}
-	if want := "Opened the CYFR app, with " + dir + " to set CYFR up in under Or set up CYFR on this computer. An app that was open already is shown as it was.\n"; out != want {
+	if want := "Opening the CYFR app for " + dir + ".\n"; out != want {
 		t.Errorf("cyfr setup printed %q, want %q", out, want)
 	}
 	var started []byte
@@ -76,7 +78,7 @@ func TestSetupRefusesWithoutTheAppOrADisplay(t *testing.T) {
 			record := standInApp(t, c.display)
 			if !c.app {
 				missing := filepath.Join(t.TempDir(), "CYFR")
-				installedApp = func() string { return missing }
+				installedApp = func() (string, error) { return missing, nil }
 			}
 			t.Chdir(t.TempDir())
 			out, err := runCommand(t, t.Context(), "setup")
@@ -90,18 +92,48 @@ func TestSetupRefusesWithoutTheAppOrADisplay(t *testing.T) {
 	}
 }
 
-// The installed app is where each system's installer puts it.
-func TestInstalledAppIsTheInstallersPath(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", `C:\Users\ada\AppData\Local`)
-	got := installedApp()
-	want := map[string]string{
-		"darwin":  "/Applications/CYFR.app/Contents/MacOS/CYFR",
-		"windows": filepath.Join(`C:\Users\ada\AppData\Local`, "Programs", "cyfr-desktop", "CYFR.exe"),
-	}[runtime.GOOS]
-	if want == "" {
-		want = "/opt/cyfr/CYFR"
+// setupFolders is tests/fixtures/setup-folders.json: per system, the
+// folder forms the app takes and those it refuses.
+type setupFolders struct {
+	Systems map[string]struct {
+		Taken   []string `json:"taken"`
+		Refused []string `json:"refused"`
+	} `json:"systems"`
+}
+
+// The folders the app takes are those this system calls absolute, and the
+// ones it refuses are relative or hold a . or .. after their volume, which
+// filepath.Abs never answers: the launcher hands over only forms the app
+// takes (the app's policy test reads the same file).
+func TestSetupFolderFormsAreTheSystems(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "setup-folders.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got != want {
-		t.Errorf("the installed app is %q, want %q", got, want)
+	var all setupFolders
+	if err := json.Unmarshal(raw, &all); err != nil {
+		t.Fatal(err)
+	}
+	forms, ok := all.Systems[runtime.GOOS]
+	if !ok || len(forms.Taken) == 0 || len(forms.Refused) == 0 {
+		t.Fatalf("setup-folders.json has no forms for %s", runtime.GOOS)
+	}
+	unresolved := func(dir string) bool {
+		rest := dir[len(filepath.VolumeName(dir)):]
+		return !slices.ContainsFunc(strings.FieldsFunc(rest, func(r rune) bool { return os.IsPathSeparator(uint8(r)) }),
+			func(s string) bool { return s == "." || s == ".." })
+	}
+	for _, dir := range forms.Taken {
+		if !filepath.IsAbs(dir) || !unresolved(dir) {
+			t.Errorf("%q is taken, but this system does not call it absolute with nothing to resolve", dir)
+		}
+	}
+	for _, dir := range forms.Refused {
+		if filepath.IsAbs(dir) && unresolved(dir) {
+			t.Errorf("%q is refused, but this system calls it absolute with nothing to resolve", dir)
+		}
+	}
+	if here, err := filepath.Abs("."); err != nil || !filepath.IsAbs(here) || !unresolved(here) {
+		t.Errorf("the working directory is %q (%v), not a form the app takes", here, err)
 	}
 }

@@ -284,10 +284,30 @@ guest_reboot() {
 # process.
 SETUP_APP="^/opt/cyfr/CYFR --setup-project=/home/proof/setup-here\$"
 
-# Whether the account holds the docker group and the app's main process
-# does not: the app's setup reaches Docker only through sg.
-STALE_GROUP='gid=$(getent group docker | cut -d: -f3) && pid=$(pgrep -u proof -f -- "'"$SETUP_APP"'") &&
-  id -nG proof | tr " " "\n" | grep -qx docker && ! sed -n "s/^Groups:\t*//p" /proc/$pid/status | tr " " "\n" | grep -qx "$gid"'
+# Whether the account holds the docker group and the app's main process,
+# read from its status file by root, does not (box.py lacks, which is no
+# answer when that file or its Groups line was not read): the app's setup
+# reaches Docker only through sg.
+STALE_GROUP="gid=\$(getent group docker | cut -d: -f3) && pid=\$(pgrep -o -u proof -f -- '$SETUP_APP') &&
+  id -nG proof | tr ' ' '\\n' | grep -qx docker && python3 -I /root/box.py lacks /proc/\$pid/status \"\$gid\""
+
+# The device's first person's page, as only the end of the app's setup
+# shows it (it opens the CYFR it set up there): its setup with the chip's
+# PIN, or, where the app's account may not use the chip, its passphrase.
+DEVICE_SETUP=("Your name, yours for life" "This device has no chip it can use")
+
+# device_setup_shown SECONDS: whether the display shows the device's first
+# person's page within SECONDS.
+device_setup_shown() {
+  local closes text
+  budget "$1" || return 1
+  closes=$((SECONDS + BUDGET))
+  while :; do
+    for text in "${DEVICE_SETUP[@]}"; do screen_read shows "$text" && return 0; done
+    [ "$SECONDS" -lt "$closes" ] || return 1
+    sleep 2
+  done
+}
 
 # setup_in_the_app_before_the_group: from tty1's terminal, which predates
 # the account's docker group, cyfr setup in ~/setup-here opens the
@@ -312,20 +332,17 @@ setup_in_the_app_before_the_group() {
   pane_type 'cd ~/setup-here && HOME=/home/proof/setup-home WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 dbus-run-session -- labwc -s "cyfr setup"; echo "setup exit status $?"' ||
     fail "setup: the line was not typed"
   screen_shows "Connect to a CYFR" 180 || { guest_screenshot setup-app-stuck.png || true; fail "the CYFR app did not show its first screen on tty1 within 180 s (setup-app-stuck.png)"; }
-  check "cyfr setup says it opened the CYFR app for ~/setup-here" pane_wait '^Opened the CYFR app, with /home/proof/setup-here to set CYFR up in under Or set up CYFR on this computer\.' 10
-  check "the app's process lacks the docker group the account has" guest_ssh "$STALE_GROUP"
+  check "cyfr setup says it is opening the CYFR app for ~/setup-here" pane_wait '^Opening the CYFR app for /home/proof/setup-here\.$' 10
+  check "the app's process lacks the docker group the account has" guest_root "$STALE_GROUP"
   screen_press "Or set up CYFR on this computer" || fail "Or set up CYFR on this computer was not on the display ($GUEST_DIR/screen-press.txt)"
   check "the setup screen suggests the folder cyfr setup was run in" screen_shows "/home/proof/setup-here" 30
   screen_shows "Set up and start" 120 || { guest_screenshot setup-app-stuck.png || true; fail "Set up and start was not offered within 120 s: Docker did not answer the app's setup (setup-app-stuck.png)"; }
   guest_screenshot setup-app-ready.png || fail "the setup screen was not captured"
   screen_press "Set up and start" || fail "Set up and start was not on the display ($GUEST_DIR/screen-press.txt)"
-  # Done, the app leaves its setup screen for the CYFR it set up, at its
-  # first person's page, the device's pages on Linux, which this journey
-  # leaves unanswered; a setup that fails stays on its screen, saying why.
-  # The screen's heading wraps, so its one line that stays throughout is
-  # what is waited out.
-  screen_shows_not "Docker answers on this computer." 960 || { guest_screenshot setup-app-stuck.png || true; fail "the app's setup did not leave its screen within 960 s (setup-app-stuck.png)"; }
-  check "the app's setup opens the CYFR it set up at its first person's page" screen_shows "Set up CYFR" 30
+  # Done, the app opens the CYFR it set up at its first person's page, the
+  # device's pages on Linux, which this journey leaves unanswered; nothing
+  # of it is on the setup screen, and a setup that fails stays there.
+  check "the app's setup opens the CYFR it set up at its first person's page" device_setup_shown 960
   guest_screenshot setup-app-done.png || fail "the setup's end was not captured"
   check "CYFR answers at http://localhost:4000, from ~/setup-here's stack" guest_root \
     "curl -s -o /dev/null --max-time 5 http://localhost:4000/ && [ \"\$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cyfr)\" = /home/proof/setup-here ]"

@@ -269,16 +269,14 @@ test("only --screen-project makes the app a screen, and only for a project it na
   for (const platform of ["darwin", "win32"]) assert.equal(screenProject(true, "/home/ana/cyfr", platform), null, platform)
 })
 
-test("--setup-project names the folder to suggest explicitly, on every system", () => {
+test("--setup-project takes every folder form cyfr setup can hand it, and refuses the rest, on every system", () => {
+  const systems = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/setup-folders.json", import.meta.url))).systems
+  assert.deepEqual(Object.keys(systems).sort(), ["darwin", "linux", "windows"])
   assert.equal(setupProject(false, "", "linux"), "", "no switch, ~/cyfr")
-  assert.equal(setupProject(true, "/home/ana/setup-here", "linux"), "/home/ana/setup-here")
-  assert.equal(setupProject(true, "/Users/ana/setup here", "darwin"), "/Users/ana/setup here")
-  assert.equal(setupProject(true, "C:\\Users\\ana\\setup-here", "win32"), "C:\\Users\\ana\\setup-here")
-  for (const value of ["", "setup-here", "./setup-here", "~/setup-here", "/home/ana/../bob", "/home/ana/./setup-here"]) {
-    assert.equal(setupProject(true, value, "linux"), null, `--setup-project=${value}`)
-  }
-  for (const value of ["/Users/ana", "setup-here", "C:setup-here", "C:\\Users\\..\\bob", "C:\\Users/./ana"]) {
-    assert.equal(setupProject(true, value, "win32"), null, `--setup-project=${value} on Windows`)
+  for (const [system, forms] of Object.entries(systems)) {
+    const platform = system === "windows" ? "win32" : system
+    for (const folder of forms.taken) assert.equal(setupProject(true, folder, platform), folder, `${system}: ${folder}`)
+    for (const folder of forms.refused) assert.equal(setupProject(true, folder, platform), null, `${system}: ${JSON.stringify(folder)}`)
   }
 })
 

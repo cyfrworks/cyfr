@@ -233,13 +233,18 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project"]
 
 /**
- * Whether `value` names a folder explicitly on `platform`: an absolute
- * path (a drive's on Windows) with no "." or ".." in it to resolve.
+ * Whether `value` names a folder explicitly on `platform`, as the system
+ * calls a path absolute with nothing after its volume to resolve: on
+ * Windows a drive's letter, a colon and a separator, or a network share's
+ * two backslashes, server and share (\\?\ and \\.\ among them),
+ * elsewhere a "/". Each form is in tests/fixtures/setup-folders.json.
  */
 function explicitFolder(value, platform) {
-  const windows = platform === "win32"
-  if (!(windows ? /^[A-Za-z]:\\/.test(value) : value.startsWith("/"))) return false
-  return !value.split(windows ? /[\\/]/ : "/").some((p) => p === "." || p === "..")
+  const volume = platform === "win32"
+    ? /^(?:[A-Za-z]:(?=[\\/])|\\\\[^\\/]+[\\/][^\\/]+(?=[\\/]|$))/.exec(value)
+    : /^(?=\/)/.exec(value)
+  if (!volume) return false
+  return !value.slice(volume[0].length).split(platform === "win32" ? /[\\/]/ : "/").some((p) => p === "." || p === "..")
 }
 
 /**

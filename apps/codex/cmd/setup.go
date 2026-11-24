@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 
 	"github.com/spf13/cobra"
 )
@@ -27,10 +26,12 @@ var setupCmd = &cobra.Command{
 
 cyfr setup needs the CYFR app installed: on Linux the cyfr-desktop package (/opt/cyfr/CYFR), on macOS CYFR.app in /Applications, on Windows the CYFR installer's install for this account. It refuses without it, and on a Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set, which has no display for the app.
 
-Exit status 1: the app was not opened, the message saying why.`,
+Exit status 1: the app was not started, the message saying why.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dir, err := os.Getwd()
+		// The app takes the folder as the system spells an absolute path
+		// (tests/fixtures/setup-folders.json).
+		dir, err := filepath.Abs(".")
 		if err != nil {
 			return fmt.Errorf("cyfr setup cannot read the current directory (%v)", err)
 		}
@@ -38,24 +39,9 @@ Exit status 1: the app was not opened, the message saying why.`,
 	},
 }
 
-// installedApp is where the CYFR app's installer puts its executable on
-// this system: the cyfr-desktop package's on Linux, CYFR.app's in
-// /Applications on macOS, and on Windows the per-user MSI's, under the
-// account's LocalAppData, in the folder its package's name names
-// (apps/codex/desktop/scripts/build.mjs). A test stands in for it.
-var installedApp = func() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "/Applications/CYFR.app/Contents/MacOS/CYFR"
-	case "windows":
-		local := os.Getenv("LOCALAPPDATA")
-		if local == "" {
-			return ""
-		}
-		return filepath.Join(local, "Programs", "cyfr-desktop", "CYFR.exe")
-	}
-	return "/opt/cyfr/CYFR"
-}
+// installedApp is where the CYFR app is installed on this system
+// (installedAppPath, one per system). A test stands in for it.
+var installedApp = installedAppPath
 
 // errNoApp and errNoDisplay are cyfr setup's refusals.
 var (
@@ -67,8 +53,11 @@ var (
 // the folder it suggests, without waiting for it. The app, not this
 // process, sets CYFR up there; a second app shows the first instead.
 func runSetup(dir string, out io.Writer) error {
-	app := installedApp()
-	if info, err := os.Stat(app); app == "" || err != nil || info.IsDir() {
+	app, err := installedApp()
+	if err != nil {
+		return fmt.Errorf("cyfr setup cannot tell where the CYFR app is installed (%v). Run cyfr init at a terminal", err)
+	}
+	if info, err := os.Stat(app); err != nil || info.IsDir() {
 		return errNoApp
 	}
 	if !hasDisplay() {
@@ -78,6 +67,6 @@ func runSetup(dir string, out io.Writer) error {
 	if err := opened.Start(); err != nil {
 		return fmt.Errorf("cyfr setup could not open the CYFR app (%v). Run cyfr init at a terminal", err)
 	}
-	fmt.Fprintf(out, "Opened the CYFR app, with %s to set CYFR up in under Or set up CYFR on this computer. An app that was open already is shown as it was.\n", dir)
+	fmt.Fprintf(out, "Opening the CYFR app for %s.\n", dir)
 	return nil
 }
