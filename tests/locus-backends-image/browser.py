@@ -1009,6 +1009,15 @@ def blank_hints(hints):
             and {k: full.get(k) for k in ("Chromium", "HeadlessChrome")} == {"Chromium": "", "HeadlessChrome": ""})
 
 
+def named_hints(hints, page):
+    """Whether `hints` are the shell's own high-entropy client hints as a page of the same browser reads them: its
+    page's full versions, without HeadlessChrome, Chromium's as the full version, and an architecture and bitness."""
+    hints = hints if isinstance(hints, dict) else {}
+    full = {b.get("brand"): b.get("version") for b in page}
+    return (hints.get("fullVersionList") == page and hints.get("uaFullVersion") == full.get("Chromium")
+            and hints.get("architecture") != "" and hints.get("bitness") != "")
+
+
 def request_headers(text, marker):
     """The User-Agent, Sec-CH-UA and Accept-Language headers of each request a Chrome network log shows sent with
     `marker` in its path."""
@@ -1102,14 +1111,12 @@ def browser_kind(stack, c, uid):
             expect(isinstance(reading, dict) and reading.get("agent") == agent,
                    f"the {surface} of the page in {win} reads navigator.userAgent as the shell's own, Chrome in place of "
                    "HeadlessChrome", [surface, reading, agent])
-            # A shared worker is never attached (person.go), and no switch of Chrome's names its brands.
+            expect(reading.get("brandNames") == names, f"the {surface} of the page in {win} reads the page's "
+                   "brands, without HeadlessChrome", [surface, reading, names])
             if surface == "shared":
-                expect(reading.get("brandNames") == names + ["HeadlessChrome"] and blank_hints(reading.get("hints")),
-                       f"the shared worker of the page in {win} reads Chrome's own brands, HeadlessChrome among them, "
-                       "and blank high-entropy hints, its full versions among them", [surface, reading, names])
-            else:
-                expect(reading.get("brandNames") == names, f"the {surface} of the page in {win} reads the page's "
-                       "brands, without HeadlessChrome", [surface, reading, names])
+                expect(named_hints(reading.get("hints"), seen_by_page["fullVersionList"]),
+                       f"the shared worker of the page in {win} reads the shell's own high-entropy hints, without "
+                       "HeadlessChrome", [surface, reading, seen_by_page["fullVersionList"]])
             # A shared worker is never held at its start (person.go): its navigator reads Chrome's own language.
             asked = {k: v for k, v in wanted.items() if surface != "shared" or k not in ("language", "languages")}
             expect(isinstance(reading, dict) and {k: reading.get(k) for k in asked} == asked,
@@ -1131,13 +1138,11 @@ def browser_kind(stack, c, uid):
                    f"the public request of the {surface} of the page in {win} sends the shell's own User-Agent, Chrome "
                    "in place of HeadlessChrome", [surface, marked, agent])
             if surface == "shared":
-                expect(offline or all("sec-ch-ua" not in request for request in marked),
-                       f"the public request of the shared worker of the page in {win} sends no Sec-CH-UA",
-                       [surface, marked])
-            else:
-                expect(offline or all("HeadlessChrome" not in request.get("sec-ch-ua", "") for request in marked),
-                       f"the public request of the {surface} of the page in {win} sends no HeadlessChrome in Sec-CH-UA",
-                       [surface, marked])
+                print(f"measure: the public request of the shared worker of the page in {win} sends Sec-CH-UA "
+                      f"{[request.get('sec-ch-ua') for request in marked]!r}", flush=True)
+            expect(offline or all("HeadlessChrome" not in request.get("sec-ch-ua", "") for request in marked),
+                   f"the public request of the {surface} of the page in {win} sends no HeadlessChrome in Sec-CH-UA",
+                   [surface, marked])
         xframe = seen_by_page["xframe"]
         marked = [] if offline else request_headers(text, f"?kind-xframe-{seen_by_page['token']}")
         expect(isinstance(xframe, dict) and xframe.get("agent") == agent and xframe.get("brandNames") == names
@@ -1153,20 +1158,17 @@ def browser_kind(stack, c, uid):
                f"the public request from {win} carries the person's language as its Accept-Language", sent)
     names = [b["brand"] for b in read["thr_kind_first"]["brands"]]
     marked = [] if offline else request_headers(text, f"?kind-popup-{popup.get('token')}")
-    # Chrome attaches no window a page opens to its opener's session, so the driver never names one (agent.go).
     expect(popup.get("agent") == agent and (offline or (marked and all(request.get("user-agent") == agent
                                                                       for request in marked))),
            "a window a page opened on a click reads navigator.userAgent as the shell's own, Chrome in place of "
            "HeadlessChrome, and its public request sends it", [popup, marked, agent])
-    expect(popup.get("brandNames") == names + ["HeadlessChrome"] and blank_hints(popup.get("hints"))
-           and (offline or all("HeadlessChrome" in request.get("sec-ch-ua", "") for request in marked)),
-           "a window a page opened reads Chrome's own brands, HeadlessChrome among them, and blank high-entropy hints, "
-           "and its public request sends HeadlessChrome in Sec-CH-UA", [popup, marked, names])
-    # What the shared worker and the window a page opened read of their brands and hints is asserted above.
-    checked = {win: dict(seen_by_page, shared={k: v for k, v in seen_by_page["shared"].items()
-                                               if k not in ("brandNames", "hints")})
-               for win, seen_by_page in read.items()}
-    expect("headless" not in json.dumps([checked, sent]).lower(),
+    first = read["thr_kind_first"]["fullVersionList"]
+    expect(popup.get("brandNames") == names and named_hints(popup.get("hints"), first)
+           and (offline or all("HeadlessChrome" not in request.get("sec-ch-ua", "") for request in marked)),
+           "a window a page opened reads the page's brands and the shell's own high-entropy hints, without "
+           "HeadlessChrome, and its public request sends no HeadlessChrome in Sec-CH-UA", [popup, marked, names])
+    checked = read
+    expect("headless" not in json.dumps([checked, popup, sent]).lower(),
            "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
            "window or a later one", [checked, sent])
     unheld_service_worker(stack.image, agent)
