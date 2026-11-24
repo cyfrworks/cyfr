@@ -142,13 +142,31 @@ defmodule PrismWeb.AquaLiveTest do
     refute has_element?(view, ~s([phx-value-key="browser.turn_on"]))
     assert has_element?(view, ~s([phx-value-key="browser.turn_off"]))
 
+    # The group's header says what a turn would have: Aqua's browser is not
+    # added, and where to add it.
+    browser = "#aqua-group-family-browser"
+    assert has_element?(view, browser <> " summary", "not added yet")
+
+    assert has_element?(
+             view,
+             browser <> ~s( a[href*="programs?add=browser&"]),
+             "Add it"
+           )
+
+    # Off, the group has none of its entries on; on again, all of them.
     view |> element(switch) |> render_click()
     assert {:ok, false} = Aqua.BrowserSetting.allowed?(ctx)
     assert has_element?(view, switch <> ~s([aria-checked="false"]), "Off")
 
+    settled(
+      fn -> Enum.all?(entries(view, browser), fn {_key, on} -> not on end) end,
+      "none of the browser's entries on"
+    )
+
     view |> element(switch) |> render_click()
     assert {:ok, true} = Aqua.BrowserSetting.allowed?(ctx)
     assert has_element?(view, switch <> ~s([aria-checked="true"]))
+    settled(fn -> Enum.all?(entries(view, browser), &elem(&1, 1)) end, "all of them on")
   end
 
   # Seat the soul on a crew member of its own that names `ref`, and put it
@@ -4318,6 +4336,13 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-may-use button[phx-click=open_consent]", "Grant again")
       assert length(texts(view, ~s(#aqua-card-aqua [data-test="aqua-grant"]))) == 1
 
+      # What holds until then, beside it, held in view as the block scrolls.
+      assert has_element?(
+               view,
+               ~s(#aqua-may-use [data-test="aqua-grant-held"] [data-test="aqua-grant-meanwhile"]),
+               "Aqua and its crew members take no turn"
+             )
+
       assert {:ok, :stale} =
                ctx
                |> Opus.authority_for(:default, Prima.AgentRef.soul_ref())
@@ -4437,6 +4462,38 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # A switch pressed takes no other press while its write is under way,
+    # and the answer to the press already shows the write: a second press
+    # means what the person sees then, never the state before the first.
+    test "a pressed switch shows its write in the answer to the press, and takes no press meanwhile",
+         %{conn: conn, ctx: ctx} do
+      offering_server!(ctx, "docs", ["search", "fetch"])
+      switch = "#aqua-group-server-docs-switch"
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      settled(
+        fn -> has_element?(view, "#aqua-group-server-docs[data-state=answered]") end,
+        "docs"
+      )
+
+      assert has_element?(view, switch <> "[phx-disable-with]")
+
+      assert has_element?(
+               view,
+               entry_box("#aqua-group-server-docs", "docs:search") <> "[phx-disable-with]"
+             )
+
+      answered =
+        view
+        |> element(switch)
+        |> render_click()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(switch <> ~s([aria-checked="true"][phx-value-on="false"]))
+
+      assert Enum.count(answered) == 1
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # A server turned off is asked nothing and offers nothing to switch on:
     # what the list names of it stays, to be switched off, while another
     # server is still being asked.
@@ -4463,6 +4520,12 @@ defmodule PrismWeb.AquaLiveTest do
       send(view.pid, {:refresh, :agents})
       settled(fn -> has_element?(view, docs <> ~s([data-state="off"])) end, "turned off")
       assert entries(view, docs) == [{"docs:search", true}]
+
+      assert has_element?(
+               view,
+               docs <> " summary",
+               "turned off, 1 entry kept on for when it is back"
+             )
 
       :ok = Agent.update(hold, fn _ -> false end)
       for {:holding, "held", stub} <- drain_holding(), do: send(stub, :go)

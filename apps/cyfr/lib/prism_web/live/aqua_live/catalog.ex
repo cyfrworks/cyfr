@@ -337,8 +337,8 @@ defmodule PrismWeb.AquaLive.Catalog do
 
   def not_handed(:name, _server),
     do:
-      "Not handed: its name, with its server's, does not make one name every model can call. " <>
-        "A name of letters, digits, _ and - with no __, 64 characters at most in all, can."
+      "Not handed: this name comes from its server, and no model can be offered a tool " <>
+        "named so. Leave it off; only the server can rename it."
 
   def not_handed(:uncarried, _server),
     do:

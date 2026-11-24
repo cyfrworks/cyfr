@@ -453,6 +453,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # The person's browser setting, set through the gate as the person:
   # turning it on or off on this page is their own act, which asks
   # nothing more.
+  # The Browser group's switch is the setting and the group's keys
+  # together, so a group switched off has none of its entries on.
   def handle_event("browser_set", %{"on" => on}, socket) when on in ["true", "false"] do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       ctx = socket.assigns.context
@@ -460,7 +462,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
       case PrismWeb.Ops.call_tool(ctx, action, %{}) do
         {:ok, _set} ->
-          {:noreply, assign(socket, :browser, browser_status(ctx))}
+          socket = assign(socket, :browser, browser_status(ctx))
+
+          case shown_group(socket, "family-browser") do
+            %{keys: [_ | _] = keys} -> write_tools(socket, "aqua", on, keys)
+            _no_keys -> {:noreply, socket}
+          end
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, Sanctum.Refusals.render(reason))}
@@ -833,18 +840,34 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp judge(socket), do: socket
 
   # The soul's list with `keys` added or taken off, as the person chose.
+  # The list as written is read back into the reply to the press, so the
+  # switch shows the write before it takes another press; the section is
+  # read again after.
   defp write_tools(socket, name, on, keys) do
+    ctx = socket.assigns.context
     edit = if on == "true", do: "tools_add", else: "tools_remove"
 
-    case call_aqua(socket.assigns.context, %{"action" => "update", "name" => name, edit => keys}) do
+    case call_aqua(ctx, %{"action" => "update", "name" => name, edit => keys}) do
       {:ok, _} ->
         send(self(), {:refresh, :agents})
-        {:noreply, socket}
+        {:noreply, written(socket, ctx)}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
     end
   end
+
+  defp written(%{assigns: %{soul: %{"name" => soul} = stored}} = socket, ctx) do
+    case call_aqua(ctx, %{"action" => "get", "name" => soul}) do
+      {:ok, %{tools: tools}} when is_list(tools) ->
+        assign(socket, :soul, Map.put(stored, "tools", tools))
+
+      _unread ->
+        socket
+    end
+  end
+
+  defp written(socket, _ctx), do: socket
 
   # Every key the page lists for this athanor and can set.
   defp shown_keys(assigns) do
@@ -2525,8 +2548,21 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </p>
       </div>
 
-      <div :if={grant_state?(@grant)} class="flex flex-wrap items-center gap-2 text-[11px]">
+      <%!-- Held at the top of the block while the person scrolls it, so a
+            switch pressed far down still shows what it asks. --%>
+      <div
+        :if={grant_state?(@grant)}
+        data-test="aqua-grant-held"
+        class="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 bg-gray-900 px-1 py-2 text-[11px]"
+      >
         <.grant_line state={@grant} />
+        <span
+          :if={@grant in [:consent_absent, :consent_stale]}
+          data-test="aqua-grant-meanwhile"
+          class="text-gray-300"
+        >
+          Until you grant it, Aqua and its crew members take no turn: a message sent meanwhile is not answered.
+        </span>
       </div>
 
       <div class="space-y-1.5">
@@ -2593,7 +2629,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   tools={@tools}
                   target={@myself}
                   agent={@agent["name"]}
-                  switch={%{on: @browser[:on] == true, event: "browser_set"}}
+                  switch={
+                    %{
+                      setting: @browser[:on] == true,
+                      event: "browser_set",
+                      missing: browser_missing(@browser),
+                      link: browser_link(@athanor, @browser)
+                    }
+                  }
                 >
                   <.browser_setting athanor={@athanor} browser={@browser} />
                 </.group>
@@ -2643,7 +2686,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       |> assign(:summary, summary_words(assigns.group, assigns.tools, assigns.switch))
       |> assign(
         :not_handed,
-        Enum.count(assigns.group.entries, &(&1.why not in [nil, :unlistable, :per_thread]))
+        Enum.count(
+          assigns.group.entries,
+          &(&1.why not in [nil, :unlistable, :per_thread] and &1.key in assigns.tools)
+        )
       )
       |> assign(:server, server_of(assigns.group))
 
@@ -2662,7 +2708,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       >
         <summary class={[
           "flex min-h-11 cursor-pointer list-none items-center gap-2 py-2 pl-3 hover:bg-gray-800/40 [&::-webkit-details-marker]:hidden",
-          if(@group.state == :silent, do: "pr-44", else: "pr-24")
+          if(@group.state == :silent or @switch[:link], do: "pr-44", else: "pr-24")
         ]}>
           <span
             aria-hidden="true"
@@ -2674,7 +2720,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             <span class="text-xs font-medium text-gray-200">{@group.title}</span>
             <span class={[
               "ml-1 text-[11px] tabular-nums",
-              if(@group.state in [:silent, :gone, :unread],
+              if(@group.state in [:silent, :gone, :unread] or @switch[:missing],
                 do: "text-amber-300",
                 else: "text-gray-500"
               )
@@ -2717,6 +2763,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   phx-value-name={@agent}
                   phx-value-key={entry.key}
                   phx-value-on={to_string(entry.key not in @tools)}
+                  phx-disable-with=""
                   class={[
                     "rounded bg-gray-900 border-gray-600",
                     (entry.description || entry.why) && "mt-0.5"
@@ -2737,13 +2784,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   </span>
                   <span
                     :if={entry.description}
-                    class="block truncate text-[11px] text-gray-500"
-                    title={entry.description}
+                    class="block break-words text-[11px] text-gray-500"
                   >
                     {entry.description}
                   </span>
+                  <%!-- Why a turn would not hand it, said of an entry that is on,
+                        or of one the list can never hold. --%>
                   <span
-                    :if={entry.why}
+                    :if={entry.why == :unlistable or (entry.why && entry.key in @tools)}
                     data-test="aqua-not-handed"
                     data-reason={entry.why}
                     class="block text-[11px] text-amber-300"
@@ -2757,6 +2805,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </div>
       </details>
       <div class="absolute right-2 top-0 flex h-11 items-center gap-1">
+        <.link
+          :if={@switch[:link]}
+          navigate={@switch.link.to}
+          class="rounded px-2 py-1 text-[11px] text-blue-400 hover:bg-gray-800 hover:text-blue-300"
+        >
+          {@switch.link.label}
+        </.link>
         <button
           :if={@group.state == :silent}
           type="button"
@@ -2775,11 +2830,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           data-test={@switch && @switch.event == "browser_set" && "aqua-browser-switch"}
           disabled={is_nil(@switch) and (@group.keys == [] or @group.state == :asking)}
           phx-click={if @switch, do: @switch.event, else: "group_toggle"}
+          phx-disable-with="Saving…"
           phx-value-group={@group.id}
           phx-value-on={to_string(@on != :on)}
           phx-target={@target}
           class={[
-            "min-w-12 shrink-0 rounded px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50",
+            "min-w-12 shrink-0 rounded px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 [&.phx-click-loading]:animate-pulse",
             case @on do
               :on -> "bg-emerald-700 text-white hover:bg-emerald-600"
               :some -> "bg-emerald-900/60 text-emerald-100 hover:bg-emerald-800"
@@ -2794,8 +2850,37 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     """
   end
 
-  defp switch_state(_group, _tools, %{on: on}), do: if(on, do: :on, else: :off)
+  # The browser's switch reads what a turn would have: on only while the
+  # setting is on and every one of its keys is, off only while neither is.
+  defp switch_state(group, tools, %{setting: setting}) do
+    keys = Catalog.switch(group.keys, tools)
+
+    cond do
+      group.keys == [] -> if setting, do: :on, else: :off
+      setting and keys == :on -> :on
+      not setting and keys == :off -> :off
+      true -> :some
+    end
+  end
+
   defp switch_state(group, tools, nil), do: Catalog.switch(group.keys, tools)
+
+  # What of Aqua's browser is missing for a turn to use it, said on the
+  # Browser group's header, and where to put it right.
+  defp browser_missing(%{browser: "not_added"}), do: "not added yet"
+  defp browser_missing(%{browser: "disabled"}), do: "turned off in Programs"
+  defp browser_missing(%{browser: "not_browser"}), do: "its name is another program's"
+  defp browser_missing(_ready), do: nil
+
+  defp browser_link(nil, _browser), do: nil
+
+  defp browser_link(athanor, %{browser: "not_added"}),
+    do: %{label: "Add it", to: PrismWeb.Focus.path(athanor, "/programs?add=browser&from=aqua")}
+
+  defp browser_link(athanor, %{browser: state}) when state in ["disabled", "not_browser"],
+    do: %{label: "Programs", to: PrismWeb.Focus.path(athanor, "/programs")}
+
+  defp browser_link(_athanor, _ready), do: nil
 
   defp aria_checked(:on), do: "true"
   defp aria_checked(:off), do: "false"
@@ -2811,12 +2896,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # How much of a group is on, or what it is when it switches no entries
   # of its own.
   defp summary_words(%{id: "search"}, _tools, _switch), do: "the provider's own web search"
+  defp summary_words(_group, _tools, %{missing: missing}) when is_binary(missing), do: missing
   defp summary_words(_group, _tools, %{event: "browser_set"}), do: "Aqua's own Chrome"
 
   defp summary_words(%{state: state, entries: entries}, tools, _switch)
        when state in [:asking, :silent, :off, :gone, :unread] do
-    on = Enum.count(entries, &(&1.key in tools))
-    if on > 0, do: "#{server_state(state)} · #{on} on", else: server_state(state)
+    case Enum.count(entries, &(&1.key in tools)) do
+      0 -> server_state(state)
+      on -> server_state(state) <> kept(state, on)
+    end
   end
 
   defp summary_words(%{entries: []}, _tools, _switch), do: nil
@@ -2829,6 +2917,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp server_state(:off), do: "turned off"
   defp server_state(:gone), do: "no longer here"
   defp server_state(:unread), do: "cannot be read now"
+
+  # What of a server that is not answering stays on, in the same reading.
+  defp kept(:off, on), do: ", #{entries_word(on)} kept on for when it is back"
+  defp kept(:gone, on), do: ", #{entries_word(on)} still on, to switch off"
+  defp kept(_state, on), do: ", #{entries_word(on)} on for when it answers"
+
+  defp entries_word(1), do: "1 entry"
+  defp entries_word(n), do: "#{n} entries"
 
   # What a server's state means, inside its group; the state itself is
   # said on the group's summary.
