@@ -53,12 +53,23 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   re-read it (`{:refresh, :agents}`), since the chips and the removal
   verbs come off that read.
 
-  Beside the soul's tools stands the person's browser setting, read and
-  written through the `browser` tool as the person: the browser's own
-  actions follow it, so the capability list leaves them out. While
-  either of Aqua's browsers, the person's or the second for work kept
-  apart, is not added, the section offers to add it on the Programs
-  page, where its definition is confirmed as any program's is.
+  The soul's card holds what Aqua and every crew member may use, one
+  block in groups (`PrismWeb.AquaLive.Catalog.groups/5`): each of CYFR's
+  tool families, Search, Scrolls (`ScrollsComponent`, rendered inside its
+  group) and each MCP server of the athanor. An entry's switch adds or
+  takes off its one key, and a group's adds or takes off its keys in one
+  `update`, each decided on the list as it is at the write. The page
+  renders the block from what CYFR holds and asks nobody for it: the
+  servers' names come from their rows (`mcp_servers.list`), and what each
+  offers comes after the render (`Aqua.offerings/3`), asked again after
+  every write of the list and on Ask again, so a reason a turn would give
+  follows the list as it stands. Aqua's grant, which any switch moves, is
+  said once at the block's top. The Browser group's switch is the
+  person's browser setting, read and written through the `browser` tool
+  as the person: the browser's own actions follow it, so the group leaves
+  them out. While either of Aqua's browsers, the person's or the second
+  for work kept apart, is not added, the group offers to add it on the
+  Programs page, where its definition is confirmed as any program's is.
   """
 
   use PrismWeb, :live_component
@@ -89,6 +100,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:crew, [])
      |> assign(:refused, [])
      |> assign(:tool_actions, nil)
+     |> assign(:titles, %{})
+     |> assign(:servers, [])
+     |> assign(:offerings, nil)
      |> assign(:browser, nil)
      |> assign(:model_status, %{})
      |> assign(:brain_options, %{})
@@ -402,6 +416,43 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # A group's switch: every key it switches on the list, or off when the
+  # list holds them all, in one `update`, decided on the list as it is
+  # now, never the copy this page loaded.
+  def handle_event("group_toggle", %{"group" => id}, socket) when is_binary(id) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
+
+      result =
+        with %{keys: [_ | _] = keys} <- shown_group(socket, id),
+             {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => "aqua"}) do
+          tools = agent.tools || []
+
+          edit =
+            if Catalog.switch(keys, tools) == :on,
+              do: %{"tools_remove" => keys},
+              else: %{"tools_add" => keys -- tools}
+
+          call_aqua(ctx, Map.merge(%{"action" => "update", "name" => "aqua"}, edit))
+        else
+          _no_such_group -> {:ok, :nothing}
+        end
+
+      case result do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, socket}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+      end
+    end)
+  end
+
+  # Ask every MCP server that is on again what it offers.
+  def handle_event("offerings_again", _params, socket),
+    do: {:noreply, ask_offerings(socket)}
+
   # The person's browser setting, set through the gate as the person:
   # turning it on or off on this page is their own act, which asks
   # nothing more.
@@ -601,6 +652,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_async(:brain_options, {:exit, _reason}, socket), do: {:noreply, socket}
 
+  # What the servers offer, as the latest ask read it; an ask that did
+  # not end leaves what was shown, said as asked again on Ask again.
+  def handle_async(:offerings, {:ok, offerings}, socket),
+    do: {:noreply, assign(socket, :offerings, offerings)}
+
+  def handle_async(:offerings, {:exit, _reason}, socket),
+    do:
+      {:noreply,
+       assign(socket, :offerings, socket.assigns.offerings || %{listings: [], unhanded: %{}})}
+
   # ============================================================================
   # The roster
   # ============================================================================
@@ -682,6 +743,51 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> load_brain_options(agents, status)
     |> ensure_tool_actions_loaded()
     |> assign(:browser, browser_status(ctx))
+    |> assign(:servers, mcp_servers(ctx))
+    |> ask_offerings()
+  end
+
+  # The athanor's MCP servers as their rows stand, asking none of them: a
+  # program a person or a brain drives offers no tools.
+  defp mcp_servers(ctx) do
+    case PrismWeb.Ops.call_tool(ctx, "mcp_servers/list", %{}) do
+      {:ok, %{servers: servers}} ->
+        for %{name: name, mark: mark} = server <- servers,
+            mark != "driven",
+            do: %{name: name, enabled: server.enabled == true}
+
+      {:error, _unread} ->
+        []
+    end
+  end
+
+  # What each MCP server that is on offers, asked after the render and
+  # again after every write of the list; a later ask's answer replaces an
+  # earlier one's, whichever ends first.
+  defp ask_offerings(%{assigns: %{soul: %{"tools" => tools}}} = socket) do
+    %{context: ctx, servers: servers} = socket.assigns
+    asked = for %{name: name, enabled: true} <- servers, do: name
+    start_async(socket, :offerings, fn -> Aqua.offerings(ctx, tools, asked) end)
+  end
+
+  defp ask_offerings(socket), do: socket
+
+  # The groups the block shows now: CYFR's own, then the servers'.
+  defp shown_groups(assigns) do
+    tools = (assigns.soul && assigns.soul["tools"]) || []
+
+    Catalog.groups(
+      assigns.tool_actions || [],
+      assigns.titles,
+      assigns.servers,
+      assigns.offerings,
+      tools
+    )
+  end
+
+  defp shown_group(socket, id) do
+    {own, servers} = shown_groups(socket.assigns)
+    Enum.find(own ++ servers, &(&1.id == id))
   end
 
   # The browser setting, whether each of Aqua's browsers is added and
@@ -998,7 +1104,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     if socket.assigns[:tool_actions] do
       socket
     else
-      assign(socket, :tool_actions, without_setting(Catalog.enumerate_tool_actions()))
+      socket
+      |> assign(:tool_actions, without_setting(Catalog.enumerate_tool_actions()))
+      |> assign(:titles, Catalog.family_titles())
     end
   end
 
@@ -1503,35 +1611,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # How many of a kind's rows the soul's tools name.
-  defp count_in_list(tools, rows),
-    do: Enum.count(rows, fn {t, a} -> "#{t}.#{a}" in tools end)
-
-  # Kind sections in fixed display order, with their visual treatment:
-  # read = calm green, write = near-neutral slate, execute = amber,
-  # destructive = red.
-  # Tuple: {atom_kind, label, pill-classes, summary-strip-classes}.
-  defp kind_sections do
-    [
-      {:read, "Read", "bg-emerald-900/60 text-emerald-200", "bg-emerald-900/10"},
-      {:write, "Write", "bg-slate-700/70 text-slate-200", "bg-slate-800/20"},
-      {:execute, "Execute", "bg-amber-900/60 text-amber-200", "bg-amber-900/10"},
-      {:destructive, "Destructive", "bg-red-900/60 text-red-200", "bg-red-900/10"}
-    ]
-  end
-
-  # Flatten `[{tool, [{action, kind}]}]` to `[{tool, action}]` for a given kind.
-  defp rows_for_kind(tool_actions, target_kind) do
-    Enum.flat_map(tool_actions, fn {tool, actions} ->
-      actions
-      |> Enum.flat_map(fn
-        {action, ^target_kind} -> [{tool, action}]
-        _ -> []
-      end)
-    end)
-    |> Enum.sort()
-  end
-
   # ============================================================================
   # Render
   # ============================================================================
@@ -1607,6 +1686,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         standing={standing(Map.get(@model_status, @soul["name"]), @soul, @known)}
         terminal={panel_terminal(@terminal, @soul["name"])}
         browser={@browser}
+        groups={shown_groups(assigns)}
+        context={@context}
+        provenance={@provenance}
         crew={@crew}
         known={@known}
       />
@@ -1785,6 +1867,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :editor, :map, default: nil
   attr :terminal, :any, default: nil
   attr :browser, :map, default: nil
+  attr :groups, :any, default: {[], []}
+  attr :context, :any, default: nil
+  attr :provenance, :map, default: %{}
   attr :crew, :list, default: []
   attr :known, :map, default: %{}
   attr :listings, :map, default: %{}
@@ -2025,9 +2110,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </span>
         <span :if={@standing == :installed} class="text-gray-400">Installed</span>
         <%!-- The crew's grant, which a member holds none of its own of
-             and which names no brain: its every state on Aqua's card. A
-             brain's own grant damaged or unread is said the same way. --%>
-        <.grant_line state={elem(@model_status, 0)} />
+             and which names no brain, is said on Aqua's card once, at
+             the top of what Aqua may use. A member's brain's own grant
+             damaged or unread is said here the same way. --%>
+        <.grant_line :if={not @is_soul} state={elem(@model_status, 0)} />
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
@@ -2302,75 +2388,371 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         Offered Aqua's tools on every job.
       </p>
 
-      <div :if={@is_soul}>
-        <div class="flex items-center justify-between mb-1">
-          <p class="block text-[10px] uppercase tracking-wider text-gray-500">
-            Capabilities
-            <span class="normal-case text-gray-600">
-              — the tools Aqua and every crew member are offered.
-            </span>
-          </p>
+      <.may_use
+        :if={@is_soul}
+        myself={@myself}
+        agent={@agent}
+        groups={@groups}
+        tools={@tools}
+        browser={@browser}
+        athanor={@athanor}
+        grant={@model_status && elem(@model_status, 0)}
+        context={@context}
+        provenance={@provenance}
+      />
+    </div>
+    """
+  end
+
+  attr :myself, :any, required: true
+  attr :agent, :map, required: true
+  attr :groups, :any, required: true
+  attr :tools, :list, required: true
+  attr :browser, :map, default: nil
+  attr :athanor, :any, default: nil
+  attr :grant, :atom, default: nil
+  attr :context, :any, required: true
+  attr :provenance, :map, default: %{}
+
+  # What Aqua and every crew member may use: the grant any switch moves,
+  # said once, then CYFR's own groups, then the MCP servers'.
+  defp may_use(assigns) do
+    {own, servers} = assigns.groups
+    assigns = assign(assigns, own: own, servers: servers)
+
+    ~H"""
+    <section
+      id="aqua-may-use"
+      aria-labelledby="aqua-may-use-title"
+      class="space-y-3 border-t border-gray-800 pt-3"
+    >
+      <div>
+        <h4 id="aqua-may-use-title" class="text-sm font-medium text-gray-200">
+          What Aqua may use
+        </h4>
+        <p class="mt-0.5 text-[11px] text-gray-500">
+          Aqua and every crew member are offered what is on here, whichever brain runs them.
+        </p>
+      </div>
+
+      <div :if={grant_state?(@grant)} class="flex flex-wrap items-center gap-2 text-[11px]">
+        <.grant_line state={@grant} />
+      </div>
+
+      <div class="space-y-1.5">
+        <h5 class="text-xs font-medium text-gray-300">Your MCP servers</h5>
+        <p
+          :if={@servers == []}
+          data-test="aqua-no-servers"
+          class="rounded border border-dashed border-gray-800 px-3 py-2 text-[11px] text-gray-500"
+        >
+          No MCP server here yet. One you add on
+          <.link
+            :if={@athanor}
+            navigate={PrismWeb.Focus.path(@athanor, "/programs")}
+            class="text-blue-400 hover:underline"
+          >
+            Programs
+          </.link>
+          shows here with its tools, resources and prompts, off until you switch them on.
+        </p>
+        <div :if={@servers != []} class="rounded border border-gray-800 divide-y divide-gray-800/60">
+          <.group
+            :for={group <- @servers}
+            group={group}
+            tools={@tools}
+            target={@myself}
+            agent={@agent["name"]}
+            athanor={@athanor}
+          />
         </div>
-
-        <div class="border border-gray-800 rounded divide-y divide-gray-800/60 max-h-[28rem] overflow-y-auto">
-          <%= for {kind, kind_label, kind_chip, kind_strip} <- kind_sections() do %>
-            <% rows = rows_for_kind(@tool_actions, kind) %>
-            <%= if rows != [] do %>
-              <details class="group" open={kind == :write}>
-                <summary class={[
-                  "flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-gray-800/40",
-                  kind_strip
-                ]}>
-                  <span class={[
-                    "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider",
-                    kind_chip
-                  ]}>
-                    {kind_label}
-                  </span>
-                  <span class="ml-auto text-[10px] text-gray-600">
-                    {count_in_list(@tools, rows)}/{length(rows)}
-                  </span>
-                </summary>
-
-                <%= for {tool, action} <- rows do %>
-                  <% key = "#{tool}.#{action}" %>
-                  <div class="px-3 py-1 flex items-center gap-2 bg-gray-950/40">
-                    <label class="flex items-center gap-1.5 flex-1 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={key in @tools}
-                        phx-click="editor_toggle_capability"
-                        phx-target={@myself}
-                        phx-value-name={@agent["name"]}
-                        phx-value-key={key}
-                        class="rounded bg-gray-900 border-gray-600"
-                      />
-                      <span class="text-[11px] text-gray-400">
-                        {Aqua.action_title(tool, action)}
-                      </span>
-                    </label>
-                  </div>
-                <% end %>
-              </details>
+      </div>
+      <div class="space-y-1.5">
+        <h5 class="text-xs font-medium text-gray-300">CYFR's own</h5>
+        <div class="rounded border border-gray-800 divide-y divide-gray-800/60">
+          <%= for group <- @own do %>
+            <%= cond do %>
+              <% group.id == "scrolls" -> %>
+                <.live_component
+                  module={PrismWeb.AquaLive.ScrollsComponent}
+                  id="aqua-scrolls-section"
+                  context={@context}
+                  provenance={@provenance}
+                  group={group}
+                  tools={@tools}
+                  target={@myself}
+                />
+              <% group.id == "family-browser" and @browser != nil -> %>
+                <.group
+                  group={group}
+                  tools={@tools}
+                  target={@myself}
+                  agent={@agent["name"]}
+                  switch={%{on: @browser[:on] == true, event: "browser_set"}}
+                >
+                  <.browser_setting athanor={@athanor} browser={@browser} />
+                </.group>
+              <% true -> %>
+                <.group group={group} tools={@tools} target={@myself} agent={@agent["name"]} />
             <% end %>
           <% end %>
         </div>
-        <label class="flex items-center gap-2 mt-2 text-[11px] text-gray-400 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={"native_search" in @tools}
-            phx-click="editor_toggle_capability"
-            phx-target={@myself}
-            phx-value-name={@agent["name"]}
-            phx-value-key="native_search"
-            class="rounded bg-gray-900 border-gray-600"
-          /> Native search (model-side web grounding) — runs inside the provider
-        </label>
-        <.browser_setting :if={@browser} myself={@myself} athanor={@athanor} browser={@browser} />
+      </div>
+    </section>
+    """
+  end
+
+  defp grant_state?(state), do: state in @grant_states
+
+  @doc """
+  One group of what Aqua may use (`PrismWeb.AquaLive.Catalog.group/0`): a
+  disclosure whose summary names the group and how much of it is on, the
+  group's switch beside it, which adds or takes off its keys in one
+  update (or, given `switch`, sends that switch's own event), and its
+  entries, each with its own switch, its kind and why a turn would not
+  hand it. A server's group says its state once: asked, silent with Ask
+  again, turned off, or no longer here. The person's open or closed
+  stays theirs across the page's updates.
+  """
+  attr :group, :map, required: true
+  attr :tools, :list, required: true
+  attr :target, :any, required: true
+  attr :agent, :string, default: "aqua"
+  attr :details_id, :string, default: nil
+  attr :open, :boolean, default: false
+  attr :switch, :map, default: nil
+  attr :athanor, :any, default: nil
+  slot :inner_block
+
+  def group(assigns) do
+    assigns =
+      assigns
+      |> assign(:on, switch_state(assigns.group, assigns.tools, assigns.switch))
+      |> assign(:summary, summary_words(assigns.group, assigns.tools, assigns.switch))
+      |> assign(:not_handed, Enum.count(assigns.group.entries, & &1.why))
+      |> assign(:server, server_of(assigns.group))
+
+    ~H"""
+    <div
+      id={"aqua-group-" <> @group.id}
+      data-test="aqua-group"
+      data-state={@group.state}
+      class="relative"
+    >
+      <details
+        id={@details_id || "aqua-group-#{@group.id}-entries"}
+        open={@open}
+        phx-mounted={JS.ignore_attributes(["open"])}
+        class="group/entries"
+      >
+        <summary class={[
+          "flex min-h-11 cursor-pointer list-none items-center gap-2 py-2 pl-3 hover:bg-gray-800/40 [&::-webkit-details-marker]:hidden",
+          if(@group.state == :silent, do: "pr-44", else: "pr-24")
+        ]}>
+          <span
+            aria-hidden="true"
+            class="text-gray-500 transition-transform group-open/entries:rotate-90"
+          >
+            ›
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="text-xs font-medium text-gray-200">{@group.title}</span>
+            <span class={[
+              "ml-1 text-[11px] tabular-nums",
+              if(@group.state in [:silent, :gone], do: "text-amber-300", else: "text-gray-500")
+            ]}>
+              {@summary}
+            </span>
+            <span :if={@not_handed > 0} class="ml-1 text-[11px] text-amber-300 tabular-nums">
+              {@not_handed} not handed
+            </span>
+          </span>
+        </summary>
+        <div class="space-y-1 pb-2">
+          <p
+            :if={state_words(@group)}
+            data-test="aqua-group-state"
+            class="px-3 text-[11px] text-gray-500"
+          >
+            {state_words(@group)}
+            <.link
+              :if={@group.state == :off and @athanor}
+              navigate={PrismWeb.Focus.path(@athanor, "/programs")}
+              class="text-blue-400 hover:underline"
+            >
+              Programs
+            </.link>
+          </p>
+          {render_slot(@inner_block)}
+          <ul :if={@group.entries != []} class="divide-y divide-gray-800/40">
+            <li :for={entry <- @group.entries} data-key={entry.key} class="px-3">
+              <label class={[
+                "flex min-h-11 cursor-pointer gap-2 py-1.5 sm:min-h-0",
+                if(entry.description || entry.why, do: "items-start", else: "items-center")
+              ]}>
+                <input
+                  type="checkbox"
+                  checked={entry.key in @tools}
+                  phx-click="editor_toggle_capability"
+                  phx-target={@target}
+                  phx-value-name={@agent}
+                  phx-value-key={entry.key}
+                  class={[
+                    "rounded bg-gray-900 border-gray-600",
+                    (entry.description || entry.why) && "mt-0.5"
+                  ]}
+                />
+                <span class="min-w-0 flex-1">
+                  <span class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span
+                      data-test="aqua-entry-name"
+                      class={[
+                        "text-[11px] text-gray-300 break-all",
+                        entry.kind == :tool && "font-mono"
+                      ]}
+                    >
+                      {entry.name}
+                    </span>
+                    <.kind_tag kind={entry.kind} />
+                  </span>
+                  <span
+                    :if={entry.description}
+                    class="block truncate text-[11px] text-gray-500"
+                    title={entry.description}
+                  >
+                    {entry.description}
+                  </span>
+                  <span
+                    :if={entry.why}
+                    data-test="aqua-not-handed"
+                    data-reason={entry.why}
+                    class="block text-[11px] text-amber-300"
+                  >
+                    {Catalog.not_handed(entry.why, @server)}
+                  </span>
+                </span>
+              </label>
+            </li>
+          </ul>
+        </div>
+      </details>
+      <div class="absolute right-2 top-0 flex h-11 items-center gap-1">
+        <button
+          :if={@group.state == :silent}
+          type="button"
+          phx-click="offerings_again"
+          phx-target={@target}
+          class="rounded px-2 py-1 text-[11px] text-blue-400 hover:bg-gray-800 hover:text-blue-300"
+        >
+          Ask again
+        </button>
+        <button
+          id={"aqua-group-" <> @group.id <> "-switch"}
+          type="button"
+          role="switch"
+          aria-checked={aria_checked(@on)}
+          aria-label={@group.title <> ": all of it"}
+          data-test={@switch && @switch.event == "browser_set" && "aqua-browser-switch"}
+          disabled={is_nil(@switch) and (@group.keys == [] or @group.state == :asking)}
+          phx-click={if @switch, do: @switch.event, else: "group_toggle"}
+          phx-value-group={@group.id}
+          phx-value-on={@switch && to_string(not @switch.on)}
+          phx-target={@target}
+          class={[
+            "min-w-12 shrink-0 rounded px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50",
+            case @on do
+              :on -> "bg-emerald-700 text-white hover:bg-emerald-600"
+              :some -> "bg-emerald-900/60 text-emerald-100 hover:bg-emerald-800"
+              :off -> "bg-gray-800 text-gray-300 hover:bg-gray-700"
+            end
+          ]}
+        >
+          {switch_words(@on)}
+        </button>
       </div>
     </div>
     """
   end
+
+  defp switch_state(_group, _tools, %{on: on}), do: if(on, do: :on, else: :off)
+  defp switch_state(group, tools, nil), do: Catalog.switch(group.keys, tools)
+
+  defp aria_checked(:on), do: "true"
+  defp aria_checked(:off), do: "false"
+  defp aria_checked(:some), do: "mixed"
+
+  defp switch_words(:on), do: "On"
+  defp switch_words(:off), do: "Off"
+  defp switch_words(:some), do: "Some"
+
+  defp server_of(%{id: "server-" <> name}), do: name
+  defp server_of(_own), do: nil
+
+  # How much of a group is on, or what it is when it switches no entries
+  # of its own.
+  defp summary_words(%{id: "search"}, _tools, _switch), do: "the provider's own web search"
+  defp summary_words(_group, _tools, %{event: "browser_set"}), do: "Aqua's own Chrome"
+
+  defp summary_words(%{state: state, entries: entries}, tools, _switch)
+       when state in [:asking, :silent, :off, :gone] do
+    on = Enum.count(entries, &(&1.key in tools))
+    if on > 0, do: "#{server_state(state)} · #{on} on", else: server_state(state)
+  end
+
+  defp summary_words(%{entries: []}, _tools, _switch), do: nil
+
+  defp summary_words(%{entries: entries}, tools, _switch),
+    do: "#{Enum.count(entries, &(&1.key in tools))} of #{length(entries)} on"
+
+  defp server_state(:asking), do: "asking what it offers…"
+  defp server_state(:silent), do: "did not answer"
+  defp server_state(:off), do: "turned off"
+  defp server_state(:gone), do: "no longer here"
+
+  # What a server's state means, inside its group; the state itself is
+  # said on the group's summary.
+  defp state_words(%{state: :silent}),
+    do:
+      "What it offers is not shown until it answers. What is on stays on until you switch it off."
+
+  defp state_words(%{state: :off}),
+    do: "It is not asked, and nothing of it is handed. Turn it on in"
+
+  defp state_words(%{state: :gone, title: name}),
+    do: "There is no MCP server named #{name} here now. Switch off what the list still names."
+
+  defp state_words(%{id: "search"}),
+    do:
+      "Search that the model's provider runs itself, inside its own service, where the " <>
+        "provider offers it."
+
+  defp state_words(_group), do: nil
+
+  attr :kind, :atom, required: true
+
+  # An entry's kind, as a turn's policy reads it.
+  defp kind_tag(%{kind: kind} = assigns) when kind in [:read, :write, :execute, :destructive] do
+    ~H"""
+    <span class={[
+      "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
+      case @kind do
+        :read -> "bg-emerald-900/60 text-emerald-200"
+        :write -> "bg-slate-700/70 text-slate-200"
+        :execute -> "bg-amber-900/60 text-amber-200"
+        :destructive -> "bg-red-900/60 text-red-200"
+      end
+    ]}>
+      {kind_label(@kind)}
+    </span>
+    """
+  end
+
+  defp kind_tag(assigns), do: ~H""
+
+  defp kind_label(:read), do: "Read"
+  defp kind_label(:write), do: "Write"
+  defp kind_label(:execute), do: "Execute"
+  defp kind_label(:destructive), do: "Destructive"
 
   # The terminal in the panel where its Sign in was pressed.
   defp panel_terminal(%{panel: panel} = terminal, panel), do: terminal
@@ -2464,43 +2846,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     """
   end
 
-  attr :myself, :any, required: true
   attr :athanor, :any, default: nil
   attr :browser, :map, required: true
 
-  # The person's browser setting, and adding Aqua's browser while it is
-  # not added.
+  # What the person's browser setting, the Browser group's switch, means,
+  # and adding Aqua's browser while it is not added.
   defp browser_setting(assigns) do
     ~H"""
-    <div
-      id="aqua-browser"
-      data-test="aqua-browser"
-      class="mt-3 border border-gray-800 rounded p-3 space-y-2"
-    >
-      <div class="flex items-center justify-between gap-3">
-        <p class="text-[11px] text-gray-400">
-          <span class="text-gray-200">Browser</span>
-          — Aqua has a Chrome of its own that is yours alone, with a window for each thread. While this is on, Aqua opens, reads and acts on sites in it without asking. Off, Aqua cannot use it and its windows close; your sign-ins in it stay.
-        </p>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={to_string(@browser[:on] == true)}
-          data-test="aqua-browser-switch"
-          phx-click="browser_set"
-          phx-value-on={to_string(@browser[:on] != true)}
-          phx-target={@myself}
-          class={[
-            "shrink-0 rounded px-3 py-1 text-xs font-medium",
-            if(@browser[:on] == true,
-              do: "bg-emerald-700 text-white hover:bg-emerald-600",
-              else: "bg-gray-800 text-gray-300 hover:bg-gray-700"
-            )
-          ]}
-        >
-          {if @browser[:on] == true, do: "On", else: "Off"}
-        </button>
-      </div>
+    <div id="aqua-browser" data-test="aqua-browser" class="space-y-2 px-3">
+      <p class="text-[11px] text-gray-400">
+        Aqua has a Chrome of its own that is yours alone, with a window for each thread. While this is on, Aqua opens, reads and acts on sites in it without asking. Off, Aqua cannot use it and its windows close; your sign-ins in it stay.
+      </p>
       <p class="text-[11px] text-gray-500">
         Aqua is told never to send, submit, buy or publish on a site without your word; that is its instruction, not a lock. A site you sign in to in this Chrome is open to Aqua too.
       </p>

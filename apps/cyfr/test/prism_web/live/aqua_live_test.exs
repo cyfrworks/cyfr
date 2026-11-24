@@ -994,14 +994,16 @@ defmodule PrismWeb.AquaLiveTest do
                "Aqua does not use this scroll"
     end
 
-    test "the scrolls disclosure opens when a scroll exists, and one is written, edited and deleted here",
+    test "the Scrolls group opens while a scroll is written, and one is written, edited and " <>
+           "deleted here",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"skills" => [shipped | _]}} =
         Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_list"})
 
-      # The server ships a scroll, so the disclosure is open from the start.
+      # The server ships a scroll, listed in the Scrolls group, which opens
+      # on the person's press like every group of what Aqua may use.
       {view, html} = mount_athanor(conn, "/aqua")
-      assert has_element?(view, "#aqua-scrolls[open]")
+      refute has_element?(view, "#aqua-scrolls[open]")
       assert html =~ shipped["name"]
 
       # A shipped, unedited scroll offers no removal verb; edited, it
@@ -1052,6 +1054,7 @@ defmodule PrismWeb.AquaLiveTest do
                Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => shipped["name"]})
 
       view |> with_target("#aqua-scrolls-section") |> render_click("skill_new", %{})
+      assert has_element?(view, "#aqua-scrolls[open]")
 
       view
       |> form("#aqua-scroll-editor", %{
@@ -1061,7 +1064,6 @@ defmodule PrismWeb.AquaLiveTest do
       })
       |> render_submit()
 
-      assert has_element?(view, "#aqua-scrolls[open]")
       html = render(view)
       assert html =~ "pdf-forms"
       assert html =~ "Fill PDF forms"
@@ -3348,8 +3350,8 @@ defmodule PrismWeb.AquaLiveTest do
     end
 
     # A box ticked offers the soul the tool, and every crew member with
-    # it; cleared, it takes it off. The provider's own search is a box of
-    # its own on the same list.
+    # it; cleared, it takes it off. The provider's own search is the
+    # Search group's switch on the same list.
     test "a checkbox offers the soul a tool and takes it off again; a crew member holds none",
          %{conn: conn, ctx: ctx} do
       :ok = member!(ctx, "explorer")
@@ -3358,31 +3360,31 @@ defmodule PrismWeb.AquaLiveTest do
       refute "storage.write" in before["tools"]
       assert "native_search" in before["tools"]
 
-      for {key, during} <- [
-            {"storage.write", Enum.sort(["storage.write" | before["tools"]])},
-            {"native_search", before["tools"] -- ["native_search"]}
+      for {key, during, box, on} <- [
+            {"storage.write", Enum.sort(["storage.write" | before["tools"]]),
+             ~s(#aqua-card-aqua input[phx-click=editor_toggle_capability][phx-value-key="storage.write"]),
+             "[checked]"},
+            {"native_search", before["tools"] -- ["native_search"],
+             "#aqua-card-aqua #aqua-group-search-switch", ~s([aria-checked="true"])}
           ] do
-        box =
-          ~s(#aqua-card-aqua input[phx-click=editor_toggle_capability][phx-value-key="#{key}"])
-
         ticked? = key in before["tools"]
-        assert has_element?(view, box <> "[checked]") == ticked?
+        assert has_element?(view, box <> on) == ticked?
 
         view |> element(box) |> render_click()
         assert {:ok, %{before | "tools" => during}} == get_agent(ctx, "aqua")
         assert {:ok, %{"tools" => ^during}} = get_agent(ctx, "explorer")
 
         settled(
-          fn -> has_element?(view, box <> "[checked]") == not ticked? end,
-          "#{key}'s box after the first click"
+          fn -> has_element?(view, box <> on) == not ticked? end,
+          "#{key}'s switch after the first click"
         )
 
         view |> element(box) |> render_click()
         assert {:ok, before} == get_agent(ctx, "aqua")
 
         settled(
-          fn -> has_element?(view, box <> "[checked]") == ticked? end,
-          "#{key}'s box after the second click"
+          fn -> has_element?(view, box <> on) == ticked? end,
+          "#{key}'s switch after the second click"
         )
       end
 
@@ -4014,7 +4016,9 @@ defmodule PrismWeb.AquaLiveTest do
     # A person reads what an action does, never the operation's id.
     test "a permission shows its action's declared title", %{conn: conn} do
       {view, _html} = mount_athanor(conn, "/aqua")
-      row = "#aqua-card-aqua label:has([phx-value-key='aqua.skill_create'])"
+
+      row =
+        "#aqua-card-aqua label:has([phx-value-key='aqua.skill_create']) [data-test=aqua-entry-name]"
 
       labels =
         view
@@ -4160,6 +4164,264 @@ defmodule PrismWeb.AquaLiveTest do
       want = Enum.sort(["vault.get", "vault.list" | shipped])
       assert {:ok, %{"tools" => ^want}} = get_agent(ctx, "aqua")
     end
+  end
+
+  describe "what Aqua may use" do
+    setup %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+      {:ok, conn: conn, ctx: ctx}
+    end
+
+    # Each MCP server of the athanor is a group of its own: its tools, then
+    # its resources and its prompts, off until the person switches them on
+    # there, one entry or the whole group in one update; an entry that
+    # cannot be handed says why, and a server that does not answer says so
+    # once, its entries already on the list still there to switch off.
+    test "each MCP server is a group of its own, its offerings off until switched on there",
+         %{conn: conn, ctx: ctx} do
+      # Aqua as setup leaves it: shipped, its grant given for the list it
+      # ships with, which every switch here moves past.
+      shipped_and_granted!(ctx)
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-may-use [data-test="aqua-no-servers"] a[href$="/programs"]),
+               "Programs"
+             )
+
+      Cyfr.Test.Sandbox.end_views()
+
+      offering_server!(ctx, "docs", ~w(search fetch two__parts))
+      offering_server!(ctx, "quiet", [], silent: true)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "tools_add" => ["quiet:ask"]
+        })
+
+      {:ok, %{"tools" => before}} = get_agent(ctx, "aqua")
+      docs = "#aqua-group-server-docs"
+      quiet = "#aqua-group-server-quiet"
+
+      # Each server's name stands before it answers.
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert has_element?(view, docs, "docs")
+      assert has_element?(view, quiet, "quiet")
+      render_async(view, 5_000)
+
+      assert entries(view, docs) == [
+               {"docs:fetch", false},
+               {"docs:search", false},
+               {"docs:two__parts", false},
+               {"docs:@resources", false},
+               {"docs:@prompts", false}
+             ]
+
+      assert has_element?(view, docs <> ~s( [data-key="docs:@resources"]), "Resources")
+      assert has_element?(view, docs <> ~s( [data-key="docs:@prompts"]), "Prompts")
+      assert has_element?(view, docs <> ~s(-switch[aria-checked="false"]))
+
+      assert has_element?(view, quiet <> ~s([data-state="silent"]), "quiet did not answer")
+      assert has_element?(view, quiet <> " button[phx-click=offerings_again]", "Ask again")
+      assert entries(view, quiet) == [{"quiet:ask", true}]
+
+      # One entry switched on writes the one list, and one whose name no
+      # model can be given says why once the page has asked again.
+      view |> element(entry_box(docs, "docs:two__parts")) |> render_click()
+      assert {:ok, %{"tools" => with_one}} = get_agent(ctx, "aqua")
+      assert with_one == Enum.sort(["docs:two__parts" | before])
+
+      settled(
+        fn ->
+          render_async(view, 5_000)
+
+          has_element?(
+            view,
+            docs <>
+              ~s( [data-key="docs:two__parts"] [data-test="aqua-not-handed"][data-reason="name"])
+          )
+        end,
+        "the reason a turn would give"
+      )
+
+      assert has_element?(view, docs <> ~s(-switch[aria-checked="mixed"]))
+
+      # The group's switch adds the rest in one update, then takes them all
+      # off in one more.
+      everything = ~w(docs:@prompts docs:@resources docs:fetch docs:search docs:two__parts)
+      updates = aqua_updates(ctx)
+      view |> element(docs <> "-switch") |> render_click()
+      assert {:ok, %{"tools" => all_on}} = get_agent(ctx, "aqua")
+      assert all_on == Enum.sort(everything ++ before)
+      settled(fn -> aqua_updates(ctx) == updates + 1 end, "one update")
+
+      settled(
+        fn -> has_element?(view, docs <> ~s(-switch[aria-checked="true"])) end,
+        "the group on"
+      )
+
+      view |> element(docs <> "-switch") |> render_click()
+      assert {:ok, %{"tools" => ^before}} = get_agent(ctx, "aqua")
+      settled(fn -> aqua_updates(ctx) == updates + 2 end, "one more update")
+
+      # The silent server's entry is still switched off from its group.
+      view |> element(entry_box(quiet, "quiet:ask")) |> render_click()
+      assert {:ok, %{"tools" => without}} = get_agent(ctx, "aqua")
+      assert without == before -- ["quiet:ask"]
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Aqua on a ready brain, its grant given: a switch moves what Aqua may
+    # use past it, so the block says once that it is to give again, as
+    # the next turn's start refuses until it is.
+    test "a switch puts what Aqua may use past its grant, said once at the top of the block",
+         %{conn: conn, ctx: ctx} do
+      soul_on_open!(ctx)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      refute has_element?(view, ~s(#aqua-card-aqua [data-test="aqua-grant"]))
+
+      view |> element("#aqua-group-search-switch") |> render_click()
+
+      settled(
+        fn ->
+          has_element?(
+            view,
+            ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_stale"]),
+            "What Aqua and its crew members may use changed since you granted it."
+          )
+        end,
+        "the grant asked again"
+      )
+
+      assert has_element?(view, "#aqua-may-use button[phx-click=open_consent]", "Grant again")
+      assert length(texts(view, ~s(#aqua-card-aqua [data-test="aqua-grant"]))) == 1
+
+      assert {:ok, :stale} =
+               ctx
+               |> Opus.authority_for(:default, Prima.AgentRef.soul_ref())
+               |> elem(1)
+               |> Aqua.ConsentStatus.classify_refusal()
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # `name`, an MCP server of the athanor's over HTTP that declares tools,
+  # resources and prompts and lists `tools` by name. Silent, it answers
+  # nothing, and its client gives up on it after half a second.
+  defp offering_server!(ctx, name, tools, opts \\ []) do
+    stub = Cyfr.Test.HTTPStub.open()
+    silent? = Keyword.get(opts, :silent, false)
+
+    Cyfr.Test.HTTPStub.stub(stub, "POST", "/" <> name, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+
+      if silent? do
+        # Past the client's half second, so it never reads this.
+        receive do: (:never -> :ok), after: (2_000 -> :ok)
+        Plug.Conn.resp(conn, 503, "")
+      else
+        result =
+          case body["method"] do
+            "server/discover" ->
+              %{"capabilities" => %{"tools" => %{}, "resources" => %{}, "prompts" => %{}}}
+
+            "tools/list" ->
+              %{
+                "tools" =>
+                  for(
+                    tool <- tools,
+                    do: %{
+                      "name" => tool,
+                      "description" => "The #{tool} of #{name}.",
+                      "inputSchema" => %{"type" => "object"}
+                    }
+                  )
+              }
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end
+    end)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: name,
+        url: "http://127.0.0.1:#{stub.port}/#{name}",
+        config_json: Jason.encode!(if(silent?, do: %{"timeout_ms" => 500}, else: %{}))
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+  end
+
+  # Each entry of a group, by its key, in the page's order, with whether
+  # its switch is on.
+  defp entries(view, group) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(group <> " [data-key]")
+    |> Enum.map(fn entry ->
+      [key] = LazyHTML.attribute(entry, "data-key")
+      on = entry |> LazyHTML.query("input[type=checkbox][checked]") |> Enum.count()
+      {key, on == 1}
+    end)
+  end
+
+  defp entry_box(group, key),
+    do: group <> ~s( [data-key="#{key}"] input[phx-click=editor_toggle_capability])
+
+  # The person's writes of an agent file through the `aqua` tool so far.
+  defp aqua_updates(ctx) do
+    {:ok, decisions} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), limit: 500)
+    Enum.count(decisions, &(&1.tool == "aqua" and &1.action == "update"))
+  end
+
+  # Aqua as it ships, its grant and every shipped source's given, as a
+  # person's setup leaves them.
+  defp shipped_and_granted!(ctx) do
+    Cyfr.Test.SeedBundle.lay!(~w(files http))
+    :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
+    :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), Compendium.AquaPath.soul_file())
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+  end
+
+  # Aqua as it ships, seated on a crew member of its own on the brain
+  # `open`, with its one model, which needs nothing of the person, and the
+  # crew's grant given.
+  defp soul_on_open!(ctx) do
+    shipped_and_granted!(ctx)
+    open_brain!(ctx)
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "create",
+        "name" => "brain",
+        "title" => "Brain",
+        "catalyst_ref" => "catalyst:local.open",
+        "model" => "open-1"
+      })
+
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "member" => "brain"})
+
+    grant!(ctx, Prima.AgentRef.soul_ref(), %{})
   end
 
   # A section re-reads itself on a message the write sends after it

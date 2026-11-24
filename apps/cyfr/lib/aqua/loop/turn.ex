@@ -705,7 +705,7 @@ defmodule Aqua.Loop.Turn do
           String.t() | nil
         ) :: {[Request.tool()], %{String.t() => Request.unhanded()}}
   def tools(%Context{} = ctx, offered, %Authority{} = authority, reading \\ nil, mark \\ nil) do
-    {external, unhanded} = external_tools(ctx, offered, authority, reading)
+    {external, unhanded} = external_tools(ctx, offered, granted_by(authority), reading)
 
     {tools, refused} =
       Request.tools(offered,
@@ -717,14 +717,90 @@ defmodule Aqua.Loop.Turn do
     {tools, Map.merge(unhanded, refused)}
   end
 
-  # The outside entries the turn may hand, as the person's servers list
-  # them now, and why each other is not.
-  defp external_tools(ctx, offered, authority, reading) do
-    case for({key, "offered"} <- offered, String.contains?(key, ":"), do: key) do
-      [] -> {[], %{}}
-      keys -> listed(keys, reading || read(ctx, keys), authority)
+  @typedoc """
+  What the Aqua page shows of the person's MCP servers: the listing of
+  each server asked that answered (`t:Sanctum.Proxy.server_listing/0`),
+  and each outside entry of the soul's list not handed with why.
+  """
+  @type offerings :: %{
+          listings: [Sanctum.Proxy.server_listing()],
+          unhanded: %{String.t() => Request.unhanded()}
+        }
+
+  @doc """
+  What the Aqua page shows of the person's MCP servers (`Aqua.offerings/3`):
+  the listings of `ctx`'s athanor's servers named `servers` that answer,
+  read once now as a turn's start reads the list's (`Sanctum.Proxy`'s
+  `list_external_tools/2`: only a server whose row is enabled is asked,
+  one not running is started, and one silent past the listing's bound is
+  absent), and each outside entry of `tools`, the soul's list, not handed
+  with the reason a turn would give once the crew's grant is given again
+  for the list as it stands: `tools/5`'s rules from this one reading, an
+  entry the grant already names judged under it, so a server changed
+  since the grant reads as a grant to give again, and every other entry
+  by its name, its carry and the list's line alone. It writes nothing and
+  changes no grant.
+  """
+  @spec offerings(Context.t(), [String.t()], [String.t()]) :: offerings()
+  def offerings(%Context{} = ctx, tools, servers) when is_list(tools) and is_list(servers) do
+    reading =
+      if servers == [], do: [], else: Sanctum.Proxy.impl!().list_external_tools(ctx, servers)
+
+    offered = Aqua.Offered.resolve(tools, Aqua.BrowserSetting.allowed?(ctx))
+
+    {external, unlisted} = external_tools(ctx, offered, as_given_again(ctx), reading)
+    {_handed, refused} = Request.tools(offered, external: external)
+
+    %{listings: reading, unhanded: Map.merge(unlisted, refused)}
+  end
+
+  # Whether a turn would find an outside entry granted once the crew's
+  # grant is given again for the list as it stands: an entry the grant
+  # names (its server, a pattern matching its name) is granted as the gate
+  # decides it, under the digest of the server's revision it was read
+  # from, so a server changed since asks for the grant again; one it does
+  # not name, or with no grant to read, is what giving it again covers.
+  defp as_given_again(ctx) do
+    case Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref()) do
+      {:ok, authority} ->
+        fn server, digest, remote ->
+          not names?(authority, server, remote) or
+            Transition.external_tool_granted?(authority, digest, remote)
+        end
+
+      {:error, _to_give} ->
+        fn _server, _digest, _remote -> true end
     end
   end
+
+  defp names?(%Authority{resources: %{tool_servers: servers}}, server, remote)
+       when is_list(servers),
+       do:
+         Enum.any?(
+           servers,
+           &(&1.server_name == server and
+               Enum.any?(&1.tool_patterns, fn pattern ->
+                 Prima.ToolPattern.matches?(pattern, remote)
+               end))
+         )
+
+  defp names?(_authority, _server, _remote), do: false
+
+  # The outside entries the turn may hand, as the person's servers list
+  # them now, and why each other is not.
+  defp external_tools(ctx, offered, granted?, reading) do
+    case for({key, "offered"} <- offered, String.contains?(key, ":"), do: key) do
+      [] -> {[], %{}}
+      keys -> listed(keys, reading || read(ctx, keys), granted?)
+    end
+  end
+
+  # Whether the grant covers a server's tool under the digest of the
+  # revision it was read from, as the gate decides its call.
+  defp granted_by(authority),
+    do: fn _server, digest, remote ->
+      Transition.external_tool_granted?(authority, digest, remote)
+    end
 
   # Only the servers the list names are asked.
   defp read(ctx, keys) do
@@ -734,7 +810,7 @@ defmodule Aqua.Loop.Turn do
 
   # Each definition is judged under the digest of the revision it was read
   # from.
-  defp listed(keys, reading, authority) do
+  defp listed(keys, reading, granted?) do
     listing =
       for %{server_digest: digest, tools: tools} <- reading,
           tool <- tools,
@@ -742,11 +818,11 @@ defmodule Aqua.Loop.Turn do
           do: {tool["name"], {digest, tool}}
 
     Enum.reduce(keys, {[], %{}}, fn key, {handed, unhanded} ->
-      [_server, remote] = String.split(key, ":", parts: 2)
+      [server, remote] = String.split(key, ":", parts: 2)
 
       case listing do
         %{^key => {digest, tool}} ->
-          if Transition.external_tool_granted?(authority, digest, remote),
+          if granted?.(server, digest, remote),
             do: {[external(key, tool) | handed], unhanded},
             else: {handed, Map.put(unhanded, key, :ungranted)}
 

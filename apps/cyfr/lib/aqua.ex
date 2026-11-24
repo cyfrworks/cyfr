@@ -124,6 +124,15 @@ defmodule Aqua do
     end
   end
 
+  @doc """
+  What the person's MCP servers named `servers` offer now, and why each
+  outside entry of `tools`, the soul's list, is not handed, as a turn
+  would say: the Aqua page's one read of them. See
+  `Aqua.Loop.Turn.offerings/3`.
+  """
+  @spec offerings(Context.t(), [String.t()], [String.t()]) :: Aqua.Loop.Turn.offerings()
+  defdelegate offerings(ctx, tools, servers), to: Aqua.Loop.Turn
+
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::
           {:ok, [{String.t(), :stale | {:drifted, [String.t()]}}]}

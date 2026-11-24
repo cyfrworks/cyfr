@@ -26,6 +26,7 @@ defmodule Aqua.FacadeTest do
     models: 1,
     models: 2,
     note_pinned?: 1,
+    offerings: 3,
     pin_max_bytes: 0,
     pinned_note_page: 1,
     program_listing: 2,
