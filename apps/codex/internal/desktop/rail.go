@@ -51,8 +51,12 @@ func (s *Service) RailURL() string { return shell.Origin + "/rail/#read=" + s.Re
 // folder it is set up in when it is one on this computer, whether it is
 // the one open, and whether it is being forgotten and whether its last
 // erase failed (Retry forgets again).
+//
+// On a box's screen (Service.Box) the first is This box: the entry its
+// folder's reading made last, its address "" where none was made yet.
 type RailCYFR struct {
 	Home       string `json:"cyfr"`
+	Box        bool   `json:"box,omitempty"`
 	Folder     string `json:"folder,omitempty"`
 	Open       bool   `json:"open,omitempty"`
 	Forgetting bool   `json:"forgetting,omitempty"`
@@ -62,10 +66,14 @@ type RailCYFR struct {
 // railList is the rail's answer: the list in its order, and the change it
 // shows, from 1, which the rail's next read names as seen (none, 0, is
 // answered at once).
+//
+// On a box's screen Locked says no CYFR's device is unlocked, while which
+// the rail offers no Forget (Service.Forget refuses it).
 type railList struct {
-	CYFRs []RailCYFR `json:"cyfrs"`
-	Seq   uint64     `json:"seq"`
-	Error string     `json:"error,omitempty"`
+	CYFRs  []RailCYFR `json:"cyfrs"`
+	Locked bool       `json:"locked,omitempty"`
+	Seq    uint64     `json:"seq"`
+	Error  string     `json:"error,omitempty"`
 }
 
 // rail serves the rail's page and its one read. A read carries the read
@@ -145,18 +153,33 @@ func (s *Service) railNow() railList {
 	list, err := s.Homes.Load()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := railList{CYFRs: []RailCYFR{}, Seq: s.listed + 1}
+	out := railList{CYFRs: []RailCYFR{}, Seq: s.listed + 1, Locked: s.Box != "" && s.boxLocked()}
 	if err != nil {
 		out.Error = "This computer's list of CYFRs could not be read (" + err.Error() + ")."
 		return out
 	}
+	box := s.boxHome(list)
 	for home, rec := range list.Homes {
+		if box != "" && home == box {
+			continue
+		}
 		out.CYFRs = append(out.CYFRs, RailCYFR{Home: home, Folder: rec.Project, Open: s.pages != nil && s.committed.Home == home,
 			Forgetting: rec.Forgetting, Failed: s.unerased[home]})
 	}
 	slices.SortFunc(out.CYFRs, func(a, b RailCYFR) int { return strings.Compare(a.Home, b.Home) })
+	if s.Box != "" {
+		out.CYFRs = append([]RailCYFR{{Home: box, Box: true, Folder: s.Box, Open: box != "" && s.pages != nil && s.committed.Home == box}}, out.CYFRs...)
+	}
 	return out
 }
+
+// boxLocked is whether no CYFR's device is unlocked on a box's screen,
+// under s.mu.
+func (s *Service) boxLocked() bool { return s.sh == nil || !unlocked(s.sh) }
+
+// unlocked is whether sh's device is unlocked (shell.Shell.Unlocked), which
+// a test stands in for: none of them reaches a CYFR that opens a channel.
+var unlocked = (*shell.Shell).Unlocked
 
 // changed says the list changed to every rail reading it, under s.mu.
 func (s *Service) changed() {
@@ -176,7 +199,11 @@ type erasing struct {
 // (shell.Homes.Forgetting), so nothing opens it from here, and main is
 // asked to erase its content storage and each ceremony's storage the
 // entry recorded; once every one is erased the entry is removed. A CYFR
-// open, or one the list does not hold, is not forgotten. Forget again
+// open, and one the list does not hold, are not forgotten. On a box's
+// screen This box's (boxHome) never is, and none is while the box is
+// locked (boxLocked), but the CYFR a departure from an unlocked device
+// just left (leftUnlocked), that once, and one being forgotten already.
+// Forget again
 // (Retry, or the next start's resume) asks for every erase again.
 func (s *Service) Forget(home string) {
 	s.mu.Lock()
@@ -184,6 +211,22 @@ func (s *Service) Forget(home string) {
 	s.mu.Unlock()
 	if open {
 		return
+	}
+	if s.Box != "" {
+		list, err := s.Homes.Load()
+		s.mu.Lock()
+		left := s.leftUnlocked == home
+		s.leftUnlocked = ""
+		// One being forgotten already was decided: its Retry, or its resume
+		// at the next start, goes on whether locked or not.
+		refused := err != nil || home == s.boxHome(list) || s.boxLocked() && !left && !list.Homes[home].Forgetting
+		if refused {
+			s.changed()
+		}
+		s.mu.Unlock()
+		if refused {
+			return
+		}
 	}
 	rec, held, err := s.Homes.Forgetting(home)
 	s.mu.Lock()

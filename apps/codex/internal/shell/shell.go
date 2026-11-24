@@ -84,6 +84,10 @@ type Config struct {
 	// Restart hides what is on the screen and shows a fresh lock page, as
 	// every lock begins: it returns at once, waiting on nothing.
 	Restart func()
+	// Opened is told each time the channel opens, the device unlocked
+	// (Unlocked is then true), the shell held: it returns at once, waiting
+	// on nothing. nil tells nothing.
+	Opened func()
 	// Unwatched is set for a device that locks itself (a box's screen): why
 	// it may not be unlocked now, or "" while what would lock it is known
 	// to work. While it says why, nothing unlocks and the pages show that.
@@ -420,6 +424,9 @@ func New(cfg Config) (*Shell, error) {
 	}
 	if cfg.Restart == nil {
 		cfg.Restart = func() {}
+	}
+	if cfg.Opened == nil {
+		cfg.Opened = func() {}
 	}
 	if cfg.Unwatched == nil {
 		cfg.Unwatched = func() string { return "" }
@@ -1735,6 +1742,7 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	}
 	s.key, s.ch = key, ch
 	s.open.Store(true)
+	s.cfg.Opened()
 	s.scheduleRenewal(began)
 	go s.watch(ch, began)
 	return nil

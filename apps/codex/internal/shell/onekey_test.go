@@ -112,3 +112,25 @@ func TestAShellThatMayNotMakeTheKeyMakesNone(t *testing.T) {
 	b = newBox(t, home, dir)
 	setUpAndOpen(t, home, b)
 }
+
+// Opened is told at each unlock, the channel open by then, and at nothing
+// else: neither the setup's pages nor a lock.
+func TestOpenedIsToldAtEachUnlock(t *testing.T) {
+	home := newFakeHome(t)
+	var b *box
+	opened, open := 0, []bool{}
+	b = newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) {
+		c.Opened = func() { opened++; open = append(open, b.shell.Unlocked()) }
+	})
+	p := b.setUp("alice")
+	if opened != 0 {
+		t.Fatalf("Opened was told %d times before an unlock", opened)
+	}
+	ticketOf(t, b.post("/saved", nil), home)
+	b.post("/lock", nil)
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	b.post("/lock", nil)
+	if opened != 2 || !open[0] || !open[1] {
+		t.Fatalf("Opened was told %d times, unlocked each time: %v", opened, open)
+	}
+}
