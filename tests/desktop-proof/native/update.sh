@@ -22,7 +22,8 @@
 #   opened       the app at A opens: the chooser answers on 127.0.0.1:7340
 #   unverified   cyfr update --version U refuses, saying the app did not
 #                verify, before anything closes: the same app still runs,
-#                and its cyfr answers A
+#                and its cyfr answers A; on Linux the update service's
+#                refusal, said once, with no sudo run
 #   update       cyfr update --version B, by the app's own cyfr in a folder
 #                that holds no CYFR, ends 0 saying the app is release B; on
 #                Linux through the app's update service, with a sudo on
@@ -254,9 +255,14 @@ run() {
   # In a folder of its own that holds no CYFR, so the update stops after
   # the program.
   mkdir -p "$LOGS/empty"
-  out=$(cd "$LOGS/empty" && "$CARRIED" update --version "$U" --yes 2>&1)
+  if [ "$OS" = linux ]; then
+    out=$(cd "$LOGS/empty" && PATH="$LOGS/nosudo:$PATH" "$CARRIED" update --version "$U" --yes 2>&1)
+  else
+    out=$(cd "$LOGS/empty" && "$CARRIED" update --version "$U" --yes 2>&1)
+  fi
   status=$?
-  if [ "$status" != 0 ] && grep -qF "The CYFR app of release $U did not verify" <<<"$out" &&
+  if [ "$status" != 0 ] && [ "$(grep -cF "The CYFR app of release $U did not verify" <<<"$out")" = 1 ] &&
+    { [ "$OS" != linux ] || { grep -qF "Asking CYFR's update service" <<<"$out" && [ ! -s "$LOGS/sudo-runs" ]; }; } &&
     alive "$before" && answers && [ "$(release_of)" = "$A" ]; then
     pass unverified "refused, the app at $A still running and answering"
   else
@@ -326,7 +332,7 @@ while True:
 service_checks() {
   local said outsider=cyfr-proof-outsider
   said="$(ask "$(id -un)" "$B") / $(ask "$(id -un)" "$A")"
-  if [ "$said" = "refused installs only a release newer than the installed CYFR app's $B, and $B is not / refused installs only a release newer than the installed CYFR app's $B, and $A is not" ]; then
+  if [ "$said" = "refused CYFR's update service installs only a release newer than the installed CYFR app's $B, and $B is not; nothing was changed / refused CYFR's update service installs only a release newer than the installed CYFR app's $B, and $A is not; nothing was changed" ]; then
     pass forward "the same release and an older one refused"
   else
     fail forward "the service answered: $said"

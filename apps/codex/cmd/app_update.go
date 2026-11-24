@@ -134,7 +134,7 @@ func fetchInstaller(ctx context.Context, out io.Writer, target, goos, goarch str
 	}
 	switch {
 	case errors.Is(err, release.ErrUnverified):
-		return nil, fmt.Errorf("The CYFR app of release %s did not verify (%v); nothing was changed and CYFR runs as it did", target, err)
+		return nil, fmt.Errorf("The CYFR app of release %s did not verify (%w); nothing was changed and CYFR runs as it did", target, err)
 	case err != nil:
 		return nil, fmt.Errorf("cyfr update could not download the CYFR app of release %s (%v); nothing was changed and CYFR runs as it did. Run 'cyfr update' again", target, err)
 	}

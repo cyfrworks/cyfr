@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cyfr/codex/internal/release"
 )
 
 // serviceStandIn is the update service as root answers it, on one end of a
@@ -239,14 +241,25 @@ func TestTheUpdateServiceFinishesWhenTheCallerLeaves(t *testing.T) {
 	}
 }
 
-// A release root cannot fetch itself is refused, saying why, and nothing
-// runs: the caller takes the sudo road.
+// A release that does not verify is refused with fetchInstaller's own
+// sentence, and one root cannot download is answered unreachable, which
+// the caller takes the sudo road for; nothing runs either way.
 func TestTheUpdateServiceRefusesWhatItCannotFetch(t *testing.T) {
-	f := newServiceStandIn(t, "1.0.0")
-	f.fetchErr = errors.New("cyfr update could not download the CYFR app of release 1.1.0 (dial tcp: lookup github.com: no such host)")
-	said := f.ask("1.1.0\ngo\n")
-	if !strings.Contains(said, serviceMark+answerRefused+" could not fetch release 1.1.0 itself (cyfr update could not download") || len(f.ran) != 0 {
-		t.Errorf("an unfetchable release was answered %q and ran %q", said, f.ran)
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("The CYFR app of release 1.1.0 did not verify (%w); nothing was changed and CYFR runs as it did", release.ErrUnverified),
+			serviceMark + answerRefused + " The CYFR app of release 1.1.0 did not verify ("},
+		{errors.New("cyfr update could not download the CYFR app of release 1.1.0 (dial tcp: lookup github.com: no such host)"),
+			serviceMark + answerUnreachable + " could not download release 1.1.0 itself (cyfr update could not download"},
+	} {
+		f := newServiceStandIn(t, "1.0.0")
+		f.fetchErr = c.err
+		said := f.ask("1.1.0\ngo\n")
+		if !strings.Contains(said, c.want) || len(f.ran) != 0 {
+			t.Errorf("%v was answered %q and ran %q, want %q", c.err, said, f.ran, c.want)
+		}
 	}
 }
 
@@ -313,24 +326,32 @@ func TestTheUpdateServiceUnitsAreTheCodes(t *testing.T) {
 	}
 }
 
-// The road takes the sudo road where the service does not take the
-// update, saying why before anything closes, and asks for a password
-// there as it always has.
+// The road takes the sudo road only where the service cannot be used,
+// saying why before anything closes, and asks for a password there as it
+// always has: no service, an account outside the sudo group, a release
+// root cannot download, and an older release, which the service is never
+// asked for.
 func TestTheServiceRoadTakesTheSudoRoadSayingWhy(t *testing.T) {
-	refusing := newServiceStandIn(t, "1.1.0")
+	unreachable := newServiceStandIn(t, "1.0.0")
+	unreachable.fetchErr = errors.New("cyfr update could not download the CYFR app of release 1.1.0 (proxyconnect tcp: no route)")
 	for _, c := range []struct {
-		name string
-		dial func() (net.Conn, error)
-		says string
+		name   string
+		dial   func() (net.Conn, error)
+		target string
+		says   string
 	}{
 		{"no service", func() (net.Conn, error) {
 			return nil, &net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ENOENT)}
-		}, "CYFR's update service is not on this machine (dial unix: connect: no such file or directory), so the update goes through sudo instead.\n"},
+		}, "1.1.0", "CYFR's update service is not on this machine (dial unix: connect: no such file or directory), so the update goes through sudo instead.\n"},
 		{"an account outside the sudo group", func() (net.Conn, error) {
 			return nil, &net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.EACCES)}
-		}, "CYFR's update service serves the sudo group's accounts alone, so the update goes through sudo instead.\n"},
-		{"a refusal", refusing.dial,
-			"CYFR's update service installs only a release newer than the installed CYFR app's 1.1.0, and 1.1.0 is not, so the update goes through sudo instead.\n"},
+		}, "1.1.0", "CYFR's update service serves the sudo group's accounts alone, so the update goes through sudo instead.\n"},
+		{"a release root cannot download", unreachable.dial, "1.1.0",
+			"CYFR's update service could not download release 1.1.0 itself (cyfr update could not download the CYFR app of release 1.1.0 (proxyconnect tcp: no route)), so the update goes through sudo instead.\n"},
+		{"an older release", func() (net.Conn, error) {
+			t.Error("the service was asked for an older release")
+			return nil, errors.New("asked")
+		}, "0.9.0", "CYFR's update service installs only a release newer than the installed app's, and 0.9.0 is not, so the update goes through sudo instead.\n"},
 	} {
 		m := standInMachine(t)
 		saved, savedSum := dialAppUpdate, appPackageSum
@@ -340,13 +361,52 @@ func TestTheServiceRoadTakesTheSudoRoadSayingWhy(t *testing.T) {
 		}
 		var out bytes.Buffer
 		r := &serviceRoad{}
-		_, err := r.fetch(context.Background(), &out, "1.0.0", "1.1.0")
+		_, err := r.fetch(context.Background(), &out, "1.0.0", c.target)
 		dialAppUpdate, appPackageSum = saved, savedSum
 		if !strings.Contains(out.String(), c.says) || !r.sudo || err == nil {
 			t.Errorf("%s: said %q (%v), took the sudo road %v", c.name, out.String(), err, r.sudo)
 		}
 		if _, err := r.elevate(&out, "cyfr update"); err != nil || m.authenticated != 1 {
 			t.Errorf("%s: the sudo road's elevation answered %v, asked %d times", c.name, err, m.authenticated)
+		}
+	}
+}
+
+// The service's refusal of the release is the update's answer: said once,
+// with no sudo asked and the release not downloaded again by another road.
+func TestAServiceRefusalIsTheUpdatesAnswer(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		own      string
+		fetchErr error
+		says     string
+	}{
+		{"a release that does not verify", "1.0.0",
+			fmt.Errorf("The CYFR app of release 1.1.0 did not verify (%w); nothing was changed and CYFR runs as it did", release.ErrUnverified),
+			"The CYFR app of release 1.1.0 did not verify (release not verified); nothing was changed and CYFR runs as it did"},
+		{"a release the installed app is already past", "1.2.0", nil,
+			"CYFR's update service installs only a release newer than the installed CYFR app's 1.2.0, and 1.1.0 is not; nothing was changed"},
+	} {
+		m := standInMachine(t)
+		f := newServiceStandIn(t, c.own)
+		f.fetchErr = c.fetchErr
+		fetched := 0
+		saved, savedSum := dialAppUpdate, appPackageSum
+		dialAppUpdate = f.dial
+		appPackageSum = func(context.Context, string, string, string) (string, error) {
+			fetched++
+			return "", errors.New("the release is not read in this test")
+		}
+		var out bytes.Buffer
+		r := &serviceRoad{}
+		_, err := r.fetch(context.Background(), &out, "1.0.0", "1.1.0")
+		dialAppUpdate, appPackageSum = saved, savedSum
+		f.served()
+		if err == nil || err.Error() != c.says {
+			t.Errorf("%s: answered %v, want %q", c.name, err, c.says)
+		}
+		if r.sudo || fetched != 0 || m.authenticated != 0 || strings.Contains(out.String(), "sudo") {
+			t.Errorf("%s: took the sudo road %v, downloaded again %d times, asked a password %d times: %q", c.name, r.sudo, fetched, m.authenticated, out.String())
 		}
 	}
 }

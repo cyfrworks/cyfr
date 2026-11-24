@@ -37,7 +37,10 @@ import (
 // from the caller: it refuses a release that is not strictly newer than
 // its own, the installed package's, fetches the release's installer
 // itself and verifies it against the release's signed checksums, as cyfr
-// update does (fetchInstaller), and answers verified. Once the caller has
+// update does (fetchInstaller), refusing one that does not verify, and
+// answers verified. A refusal is the update's answer; a release root
+// cannot download is answered unreachable, which the caller takes the
+// sudo road for. Once the caller has
 // closed the app it sends go, and root installs the file it fetched with
 // apt, stopping the box's screen for the install where it runs and
 // starting it again whatever apt answered. A caller gone before go
@@ -68,8 +71,9 @@ const (
 
 // The service's answers, after serviceMark.
 const (
-	answerVerified  = "verified"
-	answerRefused   = "refused"
+	answerVerified    = "verified"
+	answerRefused     = "refused"
+	answerUnreachable = "unreachable"
 	answerInstalled = "installed"
 	answerFailed    = "failed"
 )
@@ -156,15 +160,19 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 	case err != nil:
 		return
 	case !release.IsVersion(target):
-		answer(answerRefused, fmt.Sprintf("refused %q, which is not a release version", target))
+		answer(answerRefused, fmt.Sprintf("CYFR's update service refused %q, which is not a release version; nothing was changed", target))
 		return
 	case !release.IsNewer(target, own):
-		answer(answerRefused, fmt.Sprintf("installs only a release newer than the installed CYFR app's %s, and %s is not", own, target))
+		answer(answerRefused, fmt.Sprintf("CYFR's update service installs only a release newer than the installed CYFR app's %s, and %s is not; nothing was changed", own, target))
 		return
 	}
 	s, err := host.fetch(ctx, out, target)
-	if err != nil {
-		answer(answerRefused, fmt.Sprintf("could not fetch release %s itself (%v)", target, err))
+	switch {
+	case errors.Is(err, release.ErrUnverified):
+		answer(answerRefused, err.Error())
+		return
+	case err != nil:
+		answer(answerUnreachable, fmt.Sprintf("could not download release %s itself (%v)", target, err))
 		return
 	}
 	defer s.remove()
@@ -178,12 +186,12 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 	// caller sent reaches apt.
 	deb := filepath.Join(s.dir, appPackage+".deb")
 	if err := os.Rename(s.file, deb); err != nil {
-		answer(answerFailed, fmt.Sprintf("could not keep the installer it verified (%v); nothing was replaced", err))
+		answer(answerFailed, fmt.Sprintf("CYFR's update service could not keep the installer it verified (%v); nothing was replaced", err))
 		return
 	}
 	screen, err := host.screenRuns()
 	if err != nil {
-		answer(answerFailed, fmt.Sprintf("could not tell whether this machine's screen runs (%v); nothing was replaced", err))
+		answer(answerFailed, fmt.Sprintf("CYFR's update service could not tell whether this machine's screen runs (%v); nothing was replaced", err))
 		return
 	}
 	if screen {
@@ -191,7 +199,7 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 		if err := host.run(out, systemctlProgram, "stop", screenName); err != nil {
 			// A stop that failed may have stopped it: it is started again.
 			_ = host.run(out, systemctlProgram, "start", screenName)
-			answer(answerFailed, fmt.Sprintf("the screen could not be stopped (%v); nothing was replaced", err))
+			answer(answerFailed, fmt.Sprintf("The screen could not be stopped (%v); nothing was replaced", err))
 			return
 		}
 	}
@@ -214,9 +222,11 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 var dialAppUpdate = func() (net.Conn, error) { return net.Dial("unix", appUpdateSocket) }
 
 // serviceRoad updates the cyfr-desktop package through the update service,
-// and takes the DEB's sudo road (debRoad) where the service is absent,
-// refuses this account, or refuses the request, saying so, before
-// anything closes.
+// and takes the DEB's sudo road (debRoad), saying why, before anything
+// closes, only where the service cannot be used: absent, refusing this
+// account, unable to download the release, or ending without an answer,
+// and for a release that is not newer than the installed app, which the
+// service never installs. Its refusal of the release is the update's.
 type serviceRoad struct {
 	// sudo is whether this update took the sudo road.
 	sudo bool
@@ -231,6 +241,9 @@ func (r *serviceRoad) tookSudo(ctx context.Context, out io.Writer, before, targe
 }
 
 func (r *serviceRoad) fetch(ctx context.Context, out io.Writer, before, target string) (*staged, error) {
+	if !release.IsNewer(target, before) {
+		return r.tookSudo(ctx, out, before, target, fmt.Sprintf("installs only a release newer than the installed app's, and %s is not", target))
+	}
 	conn, err := dialAppUpdate()
 	switch {
 	case errors.Is(err, syscall.EACCES):
@@ -248,9 +261,12 @@ func (r *serviceRoad) fetch(ctx context.Context, out io.Writer, before, target s
 	switch {
 	case err == nil && what == answerVerified:
 		return served, nil
-	case err == nil:
+	case err == nil && what == answerUnreachable:
 		served.remove()
 		return r.tookSudo(ctx, out, before, target, said)
+	case err == nil:
+		served.remove()
+		return nil, errors.New(said)
 	default:
 		served.remove()
 		return r.tookSudo(ctx, out, before, target, fmt.Sprintf("ended without an answer (%v)", err))
@@ -300,7 +316,7 @@ func (r *serviceRoad) replace(out io.Writer, s *staged, older bool) error {
 	case err != nil:
 		return fmt.Errorf("CYFR's update service ended without saying whether it installed the CYFR app (%v)", err)
 	case what != answerInstalled:
-		return fmt.Errorf("CYFR's update service %s", said)
+		return errors.New(said)
 	}
 	return nil
 }
