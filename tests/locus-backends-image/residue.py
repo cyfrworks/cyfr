@@ -180,8 +180,8 @@ def main():
                     "--tmpfs", f"{HOME_ROOT}:mode=1733",
                     "--tmpfs", f"{RUN_DIR}:uid={RELEASE_UID},gid={RELEASE_UID},mode=0700",
                     "--entrypoint", "cyfr-locus"]
-        command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}", "--home-root", HOME_ROOT, "--client-user",
-                   RELEASE_USER, "--", RELEASE_BIN, "start"]
+        command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}:{ROLE['reach']}", "--home-root", HOME_ROOT,
+                   "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", RELEASE_USER, "--", RELEASE_BIN, "start"]
         for n, (flags, refusal) in enumerate([
             (["--ipc", "none"], r"the root filesystem is writable"),
             (["--read-only", "--ipc", "none", "--tmpfs", "/tmp:mode=1777"], r"mount /tmp .* is writable by pooled uids"),
