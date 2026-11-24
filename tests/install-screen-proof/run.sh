@@ -91,10 +91,10 @@
 #   scripts/heavy-check.sh -t 3600 -- tests/install-screen-proof/run.sh
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, go, python3,
-# timeout, flock, getent, and the guest's network: Ubuntu's archive,
-# GitHub's releases and ghcr.io; and this tree's apps/codex/desktop
-# node_modules (npm ci --ignore-scripts there). Stdout is framed
-# `_START=<pid>` first and `_EXIT=<pid> <status>` last
+# timeout, flock, getent, npm and npm's registry, which the run installs
+# the CYFR app's build packages from (lib.sh candidate_app_build), and the
+# guest's network: Ubuntu's archive, GitHub's releases and ghcr.io. Stdout
+# is framed `_START=<pid>` first and `_EXIT=<pid> <status>` last
 # (scripts/await-task.sh). Exits 0 when every check passed; 1 when one
 # failed or the run broke; 64 on usage or a refused prefix; 69 without a
 # prerequisite; 130, 143 and 129 on INT, TERM and HUP.
