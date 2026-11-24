@@ -21,8 +21,12 @@
 #               runs it (x-locus-role's capabilities, options, the keeper's
 #               seccomp profile and the AppArmor profile cyfr-locus, which
 #               scripts/ci/apparmor-profile.sh loads, and tmpfs mounts) with
-#               a fresh builds key, healthy by the image's own HEALTHCHECK
-#               (the builds wire's health operation)
+#               a fresh builds key, behind its island's egress guard as
+#               compose starts it (locus-builds-guard: the same image as
+#               cyfr-guard, NET_ADMIN alone, on a network of the script's
+#               own, its control on a volume the service reads), healthy by
+#               the image's own HEALTHCHECK (the builds wire's health
+#               operation) once the guard is healthy by its own
 #
 # The container is the script's own and is removed however it ends; on a
 # failure its log's last lines are printed. Exit status: 0 healthy, 1 not
@@ -37,7 +41,9 @@ kind=$1
 image=$2
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 name="${PROOF_RUN_PREFIX:-}image-boots-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+trap 'docker rm -f "$name" "$name-guard" >/dev/null 2>&1 || true
+docker volume rm "$name-control" >/dev/null 2>&1 || true
+docker network rm "$name-net" >/dev/null 2>&1 || true' EXIT
 
 case "$kind" in
   cyfr)
@@ -46,7 +52,32 @@ case "$kind" in
       "$image" >/dev/null
     ;;
   cyfr-locus)
-    docker run --detach --name "$name" --init \
+    # The builds island's guard, as compose starts locus-builds-guard: the
+    # builder listens in its network namespace and its keeper refuses to
+    # start until the guard makes a route.
+    docker network create "$name-net" >/dev/null
+    docker volume create "$name-control" >/dev/null
+    gateway="$(docker network inspect "$name-net" --format '{{(index .IPAM.Config 0).Gateway}}')"
+    docker run --detach --name "$name-guard" --init --cap-drop ALL --cap-add NET_ADMIN \
+      --security-opt no-new-privileges:true --read-only --ipc none \
+      --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.icmp_ratelimit=0 \
+      --tmpfs /run/cyfr-guard:mode=0755,size=1m \
+      -e "CYFR_GUARD_CONTROL_PLANE=$gateway" -e CYFR_PRIVATE_EGRESS_TARGETS= \
+      -e CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock \
+      -v "$name-control:/run/cyfr-guard-control" --network "$name-net" \
+      --health-cmd "cyfr-guard check" --health-interval 2s --health-timeout 3s --health-retries 3 \
+      --entrypoint cyfr-guard "$image" >/dev/null
+    closes=$((SECONDS + 60))
+    until [ "$(docker inspect --format '{{.State.Health.Status}}' "$name-guard")" = healthy ]; do
+      [ "$(docker inspect --format '{{.State.Status}}' "$name-guard")" = running ] && [ "$SECONDS" -lt "$closes" ] || {
+        echo "::error::$image ($kind)'s egress guard was not healthy within 60 s" >&2
+        docker logs --tail 40 "$name-guard" >&2 2>&1 || true
+        exit 1
+      }
+      sleep 1
+    done
+    docker run --detach --name "$name" --init --network "container:$name-guard" \
+      -v "$name-control:/run/cyfr-guard-control:ro" \
       --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add KILL \
       --security-opt no-new-privileges:true --security-opt writable-cgroups=true \
       --security-opt "seccomp=$root/apps/locus/keeper/seccomp/keeper.json" \
