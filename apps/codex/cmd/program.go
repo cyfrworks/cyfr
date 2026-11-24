@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,7 +27,7 @@ var (
 	latestRelease = release.Latest
 	fetchBinary   = release.FetchBinary
 	caskInstalled = func() bool {
-		if _, err := exec.LookPath("brew"); err != nil {
+		if brewProgram() == "" {
 			return false
 		}
 		// --cask avoids the same-name formula->cask ambiguity.
@@ -421,9 +422,28 @@ func brew(out io.Writer, within time.Duration, args ...string) error {
 // the update refreshes the tap once, itself, before it checks the cask's
 // sum, and nothing refreshes it between that check and the upgrade.
 func brewCommand(args ...string) *exec.Cmd {
-	c := exec.Command("brew", args...)
+	c := exec.Command(cmp.Or(brewProgram(), "brew"), args...)
 	c.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
 	return c
+}
+
+// brewPlaces are the brew programs Homebrew installs, on Apple silicon and
+// on Intel Macs, a variable so tests stand in for them.
+var brewPlaces = []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"}
+
+// brewProgram is this account's brew: PATH's, else Homebrew's own in one
+// of its two prefixes, since an app opened from the Finder, and the cyfr
+// it starts, have a PATH that holds neither; "" where there is none.
+func brewProgram() string {
+	if found, err := exec.LookPath("brew"); err == nil {
+		return found
+	}
+	for _, place := range brewPlaces {
+		if info, err := os.Stat(place); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return place
+		}
+	}
+	return ""
 }
 
 // brewReadWithin bounds a brew call that only reads.

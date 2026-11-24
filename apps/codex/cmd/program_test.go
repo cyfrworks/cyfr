@@ -431,6 +431,30 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 	return dir
 }
 
+// A cask install is told, and brew run, where PATH holds no brew, as in an
+// app opened from the Finder and the cyfr it starts: Homebrew's own brew
+// in its prefix is the one asked.
+func TestACaskInstallIsFoundWherePATHHoldsNoBrew(t *testing.T) {
+	dir := fakeBrew(t, "0.9.0", "0.10.0")
+	saved := brewPlaces
+	t.Cleanup(func() { brewPlaces = saved })
+	brewPlaces = []string{filepath.Join(t.TempDir(), "brew"), filepath.Join(dir, "brew")}
+	t.Setenv("PATH", t.TempDir())
+	if !caskInstalled() {
+		t.Fatal("the cask install is not found with brew off PATH")
+	}
+	if got, err := caskBinary(); err != nil || got != filepath.Join(dir, "bin", release.BinaryName(runtime.GOOS)) {
+		t.Fatalf("the cask's cyfr is %q (%v)", got, err)
+	}
+	if log := read(t, filepath.Join(dir, "log")); log != "list --cask cyfr\n--prefix\n" {
+		t.Fatalf("brew was run as %q", log)
+	}
+	brewPlaces = nil
+	if caskInstalled() {
+		t.Fatal("a cask install is found with no brew anywhere")
+	}
+}
+
 // A Homebrew cask install updates through brew and hands the update to
 // the cyfr brew links into its prefix, once brew reports the release
 // installed; brew left on another release hands nothing over. A --version
