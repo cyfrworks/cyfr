@@ -84,14 +84,14 @@ func fetchesTheApp(t *testing.T, release string, body []byte, err error) *int {
 	t.Cleanup(func() { version.Version, appPackageSum, fetchAppPackage = savedVersion, savedSum, savedFetch })
 	version.Version = release
 	named := sha256.Sum256([]byte("the app"))
-	appPackageSum = func(_ context.Context, v, arch string) (string, error) {
+	appPackageSum = func(_ context.Context, v, _, arch string) (string, error) {
 		if v != release || arch != "amd64" {
 			t.Errorf("read the sum of the app of %s for %s", v, arch)
 		}
 		return hex.EncodeToString(named[:]), nil
 	}
 	fetched := new(int)
-	fetchAppPackage = func(_ context.Context, v, arch, want string) ([]byte, error) {
+	fetchAppPackage = func(_ context.Context, v, _, arch, want string) ([]byte, error) {
 		*fetched++
 		if v != release || arch != "amd64" || want != hex.EncodeToString(named[:]) {
 			t.Errorf("fetched the app of %s for %s, its sum %s", v, arch, want)
@@ -186,11 +186,11 @@ func TestScreenOnRunsOnArm64(t *testing.T) {
 	version.Version = "0.6.0"
 	named := sha256.Sum256([]byte("the app"))
 	var asked []string
-	appPackageSum = func(_ context.Context, v, arch string) (string, error) {
+	appPackageSum = func(_ context.Context, v, _, arch string) (string, error) {
 		asked = append(asked, "sum "+v+" "+arch)
 		return hex.EncodeToString(named[:]), nil
 	}
-	fetchAppPackage = func(_ context.Context, v, arch, want string) ([]byte, error) {
+	fetchAppPackage = func(_ context.Context, v, _, arch, want string) ([]byte, error) {
 		asked = append(asked, "fetch "+v+" "+arch)
 		return []byte("the app"), nil
 	}
@@ -227,7 +227,7 @@ func TestScreenOnInstallsOnlyAVerifiedApp(t *testing.T) {
 			s.installed, s.app = nil, ""
 			fetched := fetchesTheApp(t, c.release, []byte("the app"), c.err)
 			if c.sumErr != nil {
-				appPackageSum = func(context.Context, string, string) (string, error) { return "", c.sumErr }
+				appPackageSum = func(context.Context, string, string, string) (string, error) { return "", c.sumErr }
 			}
 			askInput = strings.NewReader("yes\n")
 			before := listing(t, ".")

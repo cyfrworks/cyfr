@@ -284,7 +284,7 @@ func screenAppSum(ctx context.Context) (string, error) {
 	if !release.IsVersion(version.Version) {
 		return "", fmt.Errorf("This cyfr is a development build (%s), so there is no release of the CYFR app to download for it, and this machine has none installed at it. Install the CYFR app's package built with this cyfr, then run `cyfr screen on` again", version.Version)
 	}
-	sum, err := appPackageSum(ctx, version.Version, machine.arch())
+	sum, err := appPackageSum(ctx, version.Version, "linux", machine.arch())
 	if err != nil {
 		return "", fmt.Errorf("The signed checksums of release %s could not be read for the CYFR app, so nothing was installed (%v). Run `cyfr screen on` again", version.Version, err)
 	}
@@ -315,7 +315,7 @@ func screenFetchApp(ctx context.Context, out io.Writer, sum string) (fetchedApp,
 		}
 	}
 	fmt.Fprintf(out, "Downloading the CYFR app, release %s for %s, and checking it against the release's signed checksums.\n", version.Version, machine.arch())
-	data, err := fetchAppPackage(ctx, version.Version, machine.arch(), sum)
+	data, err := fetchAppPackage(ctx, version.Version, "linux", machine.arch(), sum)
 	if err != nil {
 		return app, fmt.Errorf("The CYFR app could not be downloaded, so nothing was installed (%v). Run `cyfr screen on` again", err)
 	}
