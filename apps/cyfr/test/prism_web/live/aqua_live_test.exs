@@ -4537,6 +4537,10 @@ defmodule PrismWeb.AquaLiveTest do
       t == "models" ->
         say(fake, row, listed(line["id"], @listing, row))
 
+      # A start's scrolls, each kept to the model's harness's way.
+      t == "scroll" ->
+        say(fake, row, %{"t" => "yielded", "id" => line["id"]})
+
       t == "start" ->
         send(self(), {:driver_start, line})
 
