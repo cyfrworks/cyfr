@@ -1051,3 +1051,16 @@ test("on the box's screen a home's setup token is dropped as it arrives, so no s
     assert.ok(!JSON.stringify(after).includes(TOKEN), `${end}: no token`)
   }
 })
+
+// A lock while a CYFR reached by its route is proposed holds that route
+// with the proposal: its opened crossing the lock, and the locked naming
+// it, keep main to that CYFR and to its route, which the fresh store then
+// carries.
+test("a proposal crossed by a lock keeps its route when main keeps to it", () => {
+  const proxy = "socks5://127.0.0.1:1055"
+  const proposal = home()
+  proposal.message.proxy = proxy
+  let s = initial(false, "/fixture/cyfr")
+  for (const e of [ready, proposal, {type: "lost"}, openedAt(), locked(HOME), {type: "forgot", cleared: true}]) s = step(s, e).state
+  assert.deepEqual({name: s.name, home: s.home, proxy: s.proxy}, {name: "open", home: HOME, proxy})
+})

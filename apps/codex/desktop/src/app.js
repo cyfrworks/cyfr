@@ -210,7 +210,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.rail) openRail(effect.rail.url)
     if (effect.menu) rowMenu(effect.menu.home)
     if (effect.root) openHome(effect.root.home, effect.root.path, effect.root.setup)
-    if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession())
+    if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession(), false, accountRoad ? "" : kept(state).proxy)
     if (effect.back) back(chooserAddress(effect.back, effect))
     if (effect.prepare) prepare(effect.prepare)
     if (effect.end) {
@@ -414,8 +414,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // kept one (openHome), its account window's (openAccount) and, on the
   // six-word road and the box's screen, the content's store showing when
   // cyfr proposes it, which goes on to the device's pages and then that
-  // CYFR's (prepare). The rail's store and a chooser opened afresh load no
-  // CYFR's pages, and are never given a route. A store given none keeps
+  // CYFR's (prepare), and the chooser opened afresh while main keeps to a
+  // CYFR, after a lock, which goes on the same way (chooser). The rail's
+  // store and any other chooser load no CYFR's pages, and are never given
+  // a route. A store given none keeps
   // the system's settings, as a browser does, and one given a route goes
   // back to them when opened for a CYFR with none. A route that cannot be
   // set loads nothing (failed) and is not remembered: the next opening

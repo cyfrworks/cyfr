@@ -2255,6 +2255,37 @@ test("on the box's screen a route that cannot be set shows the chooser with the 
   assert.equal(rail()?.webContents.url, RAIL, "the rail, with the list, beside it")
 })
 
+// A lock makes the box's window and its store afresh, and the chooser
+// shown in that store goes on to the device's pages and then to the CYFR
+// main keeps to: a CYFR reached over the tailnet gets its route on that
+// fresh store before it loads anything, as its first opening did, so it
+// opens again after each lock.
+test("on the box's screen, after a lock, the fresh store that goes on to the CYFR kept to carries its route before it loads anything", ON_LINUX, async () => {
+  const ROUTE = {mode: "fixed_servers", proxyRules: "socks5://127.0.0.1:1055"}
+  await screenStarted()
+  const attempt = child.proposes(HOME, {proxy: ROUTE.proxyRules})
+  await turns()
+  child.say({type: "opened", home: HOME, attempt})
+  await turns()
+  const before = content().webContents.session.partition
+  let release
+  world.settingProxy = () => new Promise((resolve) => { release = resolve })
+  await saysLocked()
+  const [fresh, route] = world.proxies.at(-1) ?? []
+  assert.notEqual(fresh, before, "a fresh store")
+  assert.deepEqual(route, ROUTE, "the route, on the fresh store")
+  assert.equal(content(), undefined, "nothing loads before it is set")
+  release()
+  await turns()
+  const after = content()
+  assert.equal(after.webContents.session.partition, fresh)
+  assert.equal(after.webContents.url, SCREEN_CHOOSER)
+  assert.equal(navigate(after, SHELL_PAGE).prevented, false)
+  await after.webContents.loadURL(SHELL_PAGE)
+  assert.equal(navigate(after, HOME + "/").prevented, false, "and on to the CYFR, through that route")
+  assert.equal(world.proxies.filter(([partition]) => partition === fresh).length, 1, "set once")
+})
+
 test("the box's screen asked by a launch of --quit is shown and goes on: its service is stopped instead", ON_LINUX, async () => {
   await screenStarted()
   const focused = frame().focused

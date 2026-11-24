@@ -329,12 +329,12 @@ function sentToSignIn(s, e) {
 // A lock from state s: the content closes at once. cyfr is told, unless
 // it said locked itself (`heard`, its message): that is then the barrier
 // passed and the device's session ended, which is forgotten. A lock while
-// a CYFR is proposed holds on to that proposal: cyfr may have committed it
-// as the lock began, its opened crossing the lock, and its locked then
-// names it, which main keeps to (settle) as cyfr does.
+// a CYFR is proposed holds on to that proposal, its route included: cyfr
+// may have committed it as the lock began, its opened crossing the lock,
+// and its locked then names it, which main keeps to (settle) as cyfr does.
 function lock(s, why, notice, heard = null) {
   const [t, answer] = unpicked(s)
-  const before = s.name === "proposed" ? {home: s.home, account: s.account, accountRoad: s.accountRoad} : kept(s)
+  const before = s.name === "proposed" ? {home: s.home, account: s.account, proxy: s.proxy ?? "", accountRoad: s.accountRoad} : kept(s)
   const next = {...t, name: "locking", before, notices: adding(s.notices, notice), barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, heard ? {forget: true} : {send: {type: "lock"}}]}
