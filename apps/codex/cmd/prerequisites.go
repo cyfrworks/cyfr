@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
-	"github.com/cyfr/codex/internal/release"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -50,8 +49,8 @@ type machineSeams struct {
 	installed func(pkg string) bool
 	// appRelease is the release of the CYFR app this machine holds, as the
 	// app's own cyfr answers it within 10 s, on Linux only where dpkg holds
-	// its package installed for this machine's architecture; "" for any
-	// answer that is not a release, and for none.
+	// its package installed for this machine's architecture; "" where it
+	// answers no version, and where it answers nothing.
 	appRelease func() string
 	// running is whether the Docker service runs.
 	running func() bool
@@ -128,7 +127,7 @@ var machine = machineSeams{
 		said, err := cmd.Output()
 		first, _, _ := strings.Cut(string(said), "\n")
 		answered, ok := strings.CutPrefix(strings.TrimRight(first, "\r"), "cyfr version ")
-		if err != nil || !ok || !release.IsVersion(answered) {
+		if err != nil || !ok || answered == "" {
 			return ""
 		}
 		return answered
