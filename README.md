@@ -42,11 +42,26 @@ CYFR exposes two surfaces over the same runtime:
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
 - **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Tailscale Serve or Caddy) and installable as a PWA: your desktop and the apps over it, your own **Aqua** — your friendly assistant — in a panel beside it, the chat of the shared threads you talk in with other people, the settings behind a gear, your athanor's Aqua page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, programs, tinctures.
 
-The **CYFR app** shows Prism in a window of its own on Linux, macOS and Windows, connected to a CYFR that runs elsewhere, with no Docker on your computer: **Connect to a CYFR**, then sign in with your passkey (macOS and Windows) or with the computer's own key under its PIN or passphrase ([devices guide](devices-guide.md#the-cyfr-app)). Its packages (DEB, DMG and MSI) are not yet signed or published with a release. Its first screen also sets CYFR up on the computer itself, with Docker: it says what Docker needs and shows each step ([devices guide](devices-guide.md#the-cyfr-app)).
+The **CYFR app** shows Prism in a window of its own on Linux, macOS and Windows, connected to a CYFR that runs elsewhere, with no Docker on your computer: **Connect to a CYFR**, then sign in with your passkey (macOS and Windows) or with the computer's own key under its PIN or passphrase ([devices guide](devices-guide.md#the-cyfr-app)). Each release carries it for every system ([Install the CYFR app](#install-the-cyfr-app)). Its first screen also sets CYFR up on the computer itself, with Docker: it says what Docker needs and shows each step ([devices guide](devices-guide.md#the-cyfr-app)).
 
 ## Quick Start
 
 There are two ways to use CYFR; pick the one that fits.
+
+### Install the CYFR app
+
+Each release carries the CYFR app for macOS, Windows and Linux, on Intel and AMD (amd64) and on Arm (arm64), with its own `cyfr` inside. Every file is listed in the release's signed `checksums.txt` ([Verifying Releases](#verifying-releases)).
+
+- **macOS** (Apple silicon or Intel): `brew install --cask cyfrworks/cyfr/cyfr` installs CYFR in Applications and puts its `cyfr` on your `PATH`; `brew upgrade --cask cyfr` takes the next release, and `brew uninstall --cask cyfr` removes both. Or download `cyfr-desktop_<version>_darwin_arm64.dmg` (Apple silicon) or `cyfr-desktop_<version>_darwin_amd64.dmg` (Intel) from the [release](https://github.com/cyfrworks/cyfr/releases), open it and drag CYFR to Applications. It is signed by CYFR Works Inc. and notarised by Apple, so the first time you open it, whether Homebrew or your browser downloaded it, macOS asks once whether to open an app downloaded from the internet: choose **Open**. Dragging the app puts no `cyfr` on your `PATH`; for that, run once in Terminal:
+
+  ```bash
+  sudo mkdir -p /usr/local/bin && sudo ln -s /Applications/CYFR.app/Contents/Resources/cyfr /usr/local/bin/cyfr
+  ```
+
+  It links the app's `cyfr` as `/usr/local/bin/cyfr` and never replaces a file already there: when another `cyfr` holds that name, such as the one the install script put there, `ln` says `File exists` and changes nothing. `ls -l /usr/local/bin/cyfr` shows what it is; to use the app's instead, remove that one (`sudo rm /usr/local/bin/cyfr`) and run the command again.
+
+- **Windows**: download `cyfr-desktop_<version>_windows_amd64.msi` (Intel and AMD) or `cyfr-desktop_<version>_windows_arm64.msi` (Arm) from the [release](https://github.com/cyfrworks/cyfr/releases) and open it. It installs CYFR for your account alone, with no administrator, and puts its `cyfr` on your `PATH` for every terminal opened afterwards; **Installed apps** in Settings removes it. The installer is not signed yet, so Windows may say **Windows protected your PC**: choose **More info**, then **Run anyway**. A work computer's policy may refuse it.
+- **Linux** (Ubuntu): download `cyfr-desktop_<version>_linux_amd64.deb` or `cyfr-desktop_<version>_linux_arm64.deb` and install it with `sudo apt install ./<file>`, which links its `cyfr` as `/usr/bin/cyfr`.
 
 ### Deploy it for end users
 
@@ -58,7 +73,7 @@ Run CYFR locally and drive it with the `cyfr` CLI.
 
 On **Ubuntu 26.04 LTS**, at a terminal, nothing needs installing by hand. The install script offers to install cosign, which verifies the release, with `sudo apt-get install -y cosign`, and puts `cyfr` in `~/.local/bin`, or `/usr/local/bin` if you can write it. From `~/.local/bin` it links `cyfr` into `/usr/local/bin` with `sudo ln -sf` when `~/.local/bin` is not on your `PATH`, so `cyfr` works in the same terminal. When your account cannot reach Docker, `cyfr init` shows the commands that install what is missing (`docker.io`, `docker-compose-v2` and `apparmor`, the running service and your membership of the `docker` group), asks `Install these requirements?`, and runs them through one `sudo`. CYFR never asks for, reads or keeps a password: when `sudo` will ask, CYFR first says `Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.`, and `sudo` asks in its own prompt before any command runs, so a refused password changes nothing. An account outside the `sudo` and `admin` groups is told so before anything is asked, with the commands as one `sudo` line for whoever administers the machine, and nothing is changed. Members of the `docker` group control Docker, which is root's power over the machine. Joining the group takes effect in a new login, so `cyfr init` and `cyfr up` run themselves through `sg docker` in a terminal older than it. Ubuntu's universe archive must be enabled (`sudo add-apt-repository universe`).
 
-On other systems, install Docker first. The install script and Homebrew cask install the `cyfr` CLI only, and Docker must be running before `cyfr init` / `cyfr up`:
+On other systems, install Docker first. The install script installs the `cyfr` CLI only, and the Homebrew cask the CYFR app with its `cyfr`; Docker must be running before `cyfr init` / `cyfr up`:
 
 - macOS / Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/). At a terminal, while Docker does not answer, `cyfr init` offers to open that page and says what the installer's prompt will be (on a Mac, its login password or Touch ID; on Windows, whether to allow the app to make changes to your device), or, with Docker Desktop installed, says to start it; it then waits, writing nothing, until Docker answers, and goes on. Answered no, it opens and writes nothing.
 - Linux: your distribution's Docker packages, or Docker's convenience script for a quick dev install: `curl -fsSL https://get.docker.com | sh`. Then, **if you are not running as root**, add yourself to the `docker` group so the CLI can reach the daemon without `sudo`:
@@ -79,9 +94,9 @@ On other systems, install Docker first. The install script and Homebrew cask ins
 # archive's checksum alone.
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 
-# Or via Homebrew (macOS), which installs the newest release that is not a pre-release
-brew tap cyfrworks/cyfr
-brew install --cask cyfr
+# Or via Homebrew (macOS): the CYFR app with its cyfr, at the newest release
+# that is not a pre-release
+brew install --cask cyfrworks/cyfr/cyfr
 
 # Initialize a project reached from this machine; on Ubuntu 26.04 LTS it
 # first installs Docker if the machine lacks it; it prints this CYFR's
@@ -414,7 +429,7 @@ Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `
 # Install the CLI (on Ubuntu 26.04 LTS the installer offers to install
 # cosign to verify it; elsewhere it installs the CLI only):
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
-#   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
+#   …or, on a Mac, the CYFR app with its cyfr:  brew install --cask cyfrworks/cyfr/cyfr
 
 mkdir my-cyfr && cd my-cyfr
 cyfr init        # installs Docker on Ubuntu 26.04 LTS if missing, downloads compose + Caddyfile, writes .env and its keys
@@ -1292,9 +1307,11 @@ PATH it refuses. Two knobs adjust the policy:
   recommended; for airgapped/bootstrap edge cases).
 
 A release signs and attests its `checksums.txt`, which holds the SHA-256 of
-each download, the CYFR app's Linux package among them. To verify manually,
+each download, the CYFR app's six installers among them. To verify manually,
 verify `checksums.txt`, by its attestation or its signature, and then the
-download against it:
+download against it (on a Mac `shasum -a 256 --check --strict` in place of
+`sha256sum --check --strict`; on Windows compare `Get-FileHash <file>` with
+the file's line):
 
 ```bash
 # GitHub Attestation of the checksums (just needs gh CLI)

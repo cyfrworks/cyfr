@@ -3,17 +3,22 @@
 
 name: Mac distribution
 
-# The CYFR app's Mac package as a person downloads it, built with the
+# The CYFR app's Mac packages as a person downloads them, for Apple silicon
+# and for Intel, each built on a runner of its architecture with the
 # repository's Apple inputs: signed with the Developer ID identity, the
 # provisioning profile that authorises its WebAuthn group embedded,
 # notarised under the team's account and stapled, then checked
 # (apps/codex/desktop/scripts/mac-sign.mjs), installed on the runner and
-# smoked (tests/desktop-proof/native/smoke.sh), so a profile that does not
-# authorise the app's entitlements is seen at its launch. It runs when
-# dispatched by hand or called by another workflow, never on a push; it
-# publishes nothing, and keeps the DMG for a day only when a dispatch asks.
-# A pull request's run rehearses the same signing with no Apple input
-# (codex-ci.yml's desktop-native).
+# smoked (tests/desktop-proof/native/mac.sh), so a profile that does not
+# authorise the app's entitlements is seen at its launch, and its app and
+# cyfr read as built for the architecture (installed-machine.sh). The cyfr inside
+# is built as the release builds the archives' (GoReleaser, its ldflags and
+# its binary check). Release calls it with the tag's version: the
+# installed cyfr must then be the tag's, and each DMG is uploaded for the
+# release to sum, sign and attach. A dispatch by hand builds at a snapshot
+# version and keeps the DMGs for a day only when asked. It never runs on a
+# push and publishes nothing itself. A pull request's run rehearses the
+# same signing with no Apple input (codex-ci.yml's desktop-native).
 
 on:
   workflow_dispatch:
@@ -43,8 +48,13 @@ permissions:
 
 jobs:
   mac:
-    name: CYFR app (macOS arm64, signed)
-    runs-on: macos-latest
+    name: CYFR app (macOS ${{ matrix.arch }}, signed)
+    strategy:
+      matrix:
+        include:
+          - {arch: arm64, runner: macos-latest}
+          - {arch: amd64, runner: macos-15-intel}
+    runs-on: ${{ matrix.runner }}
     # Electron's download, the build and Apple's notary, which answers in
     # minutes and sometimes in more: the build bounds the app's packing,
     # signing and notarising at 50 minutes and the DMG's notarising at 27,
@@ -53,23 +63,41 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      ARCH: ${{ matrix.arch }}
+      VERSION: ${{ inputs.version || '0.0.0-candidate' }}
+      DMG: apps/codex/desktop/dist/cyfr-desktop_${{ inputs.version || '0.0.0-candidate' }}_darwin_${{ matrix.arch }}.dmg
+    # No cache, read or written: a published package is built from its
+    # sources and their pins.
     steps:
+      # GoReleaser reads the version from the tag, which needs the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: apps/codex/go.mod
-          cache-dependency-path: apps/codex/go.sum
+          cache: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: apps/codex/desktop/package-lock.json
+          package-manager-cache: false
 
-      - name: Build cyfr for this runner
-        working-directory: apps/codex
-        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr/cyfr" .
+      # GoReleaser copies the binary only into a folder that exists.
+      - name: Make the folder cyfr is built into
+        run: mkdir -p "$RUNNER_TEMP/cyfr"
+
+      # At the tag a release names; a dispatch builds a snapshot, as an
+      # untagged commit has no release version.
+      - name: Build cyfr as the release builds it
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: 'v2.18.3'
+          args: build --single-target --clean ${{ inputs.version == '' && '--snapshot ' || '' }}--output ${{ runner.temp }}/cyfr/cyfr
+          workdir: apps/codex
 
       - name: The app's build tools
         working-directory: apps/codex/desktop
@@ -79,7 +107,6 @@ jobs:
       - name: Build, sign, notarise and check the package
         working-directory: apps/codex/desktop
         env:
-          VERSION: ${{ inputs.version || '0.0.0-candidate' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -88,26 +115,26 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
-        run: |
-          node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$VERSION" --arch arm64 --distribution
-          echo "DMG=apps/codex/desktop/dist/cyfr-desktop_${VERSION}_darwin_arm64.dmg" >> "$GITHUB_ENV"
+        run: node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version "$VERSION" --arch "$ARCH" --distribution
 
-      - name: Install the app
-        run: |
-          set -euo pipefail
-          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/cyfr-dmg" "$DMG"
-          cp -R "$RUNNER_TEMP/cyfr-dmg/CYFR.app" /Applications/
-          hdiutil detach "$RUNNER_TEMP/cyfr-dmg"
+      - name: Install and smoke the app
+        run: bash tests/desktop-proof/native/mac.sh "$DMG"
 
-      - name: Smoke the installed app
-        run: bash tests/desktop-proof/native/smoke.sh /Applications/CYFR.app/Contents/MacOS/CYFR
+      # Read from each file's header: an Intel app passes a smoke on Apple
+      # silicon under Rosetta.
+      - name: The installed app is built for its architecture
+        run: bash tests/desktop-proof/native/installed-machine.sh "$ARCH" /Applications/CYFR.app/Contents/MacOS/CYFR /Applications/CYFR.app/Contents/Resources/cyfr
 
-      # inputs.upload is a dispatch's alone: a call never uploads.
-      - name: Keep the DMG for a day
-        if: inputs.upload == true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - name: The installed cyfr is the release's
+        if: inputs.version != ''
+        run: bash tests/desktop-proof/native/installed-version.sh /Applications/CYFR.app/Contents/Resources/cyfr "$VERSION"
+
+      # A call always uploads, for the release; a dispatch only when asked.
+      - name: Upload the package
+        if: inputs.version != '' || inputs.upload == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: cyfr-desktop-darwin-arm64
+          name: cyfr-desktop-darwin-${{ matrix.arch }}
           path: ${{ env.DMG }}
-          retention-days: 1
           if-no-files-found: error
+          retention-days: 1
