@@ -201,10 +201,33 @@ test("as the app starts on the passkey road the CYFR remembered connects by itse
   assert.equal($("road").hidden, true, "and no way on shows meanwhile")
 })
 
-test("on the six-word road a CYFR remembered waits for Connect", async () => {
-  const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, OPEN)
-  assert.deepEqual(went.asked, [])
-  assert.deepEqual([$("choose").hidden, $("address").value], [false, HOME])
+// The CYFR selected last, a folder's too, is pressed once by itself on
+// either road: on the six-word road its press goes on to the device's
+// pages, which ask for the PIN or the six words.
+test("on the six-word road the CYFR selected last is pressed by itself, and goes on to the device's pages", async () => {
+  const {went} = await chooser("", {cyfr: HOME, resume: HOME}, OPEN)
+  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]], "a press of the CYFR kept")
+  assert.deepEqual(went.byItself, ["/"])
+})
+
+// A last that fails opens nothing else: the chooser says why, beside the
+// rail's list, and Try again presses that same CYFR once more; a Connect
+// the person makes is theirs.
+test("a CYFR selected last that does not open says why, and Try again presses it again", async () => {
+  for (const hash of ["#road=words", ROAD]) {
+    const NOT_RUNNING = "The CYFR in /home/ada/cyfr is not running."
+    const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, {error: NOT_RUNNING}, hash)
+    assert.equal($("notice").textContent, NOT_RUNNING, hash)
+    assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], `${hash}: Connect and Try again`)
+    assert.deepEqual([went.byItself, went.pressed], [[], []], `${hash}: nothing else opens`)
+    $("reopen").onclick()
+    await settled()
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}], ["/bootstrap/connect", {address: HOME, kept: true}]], hash)
+    $("connect").fire("submit")
+    await settled()
+    assert.equal($("reopen").hidden, true, `${hash}: the person's Connect hides Try again`)
+    assert.deepEqual(went.asked.at(-1), ["/bootstrap/connect", {address: HOME}], hash)
+  }
 })
 
 test("a Connect the person makes on the passkey road leaves the opening to main", async () => {

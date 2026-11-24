@@ -955,9 +955,9 @@ func sameEntry(a, b shell.ClientRecord) bool {
 }
 
 // The folder remembered opens on one press: its address is in the
-// chooser's field, and Connect opens it with the account service its own
-// settings name, reading no sign-in page and asking nothing, cyfr.run or
-// not.
+// chooser's field and the one the chooser presses by itself (Resume), and
+// that press opens it with the account service its own settings name,
+// reading no sign-in page and asking nothing, cyfr.run or not.
 func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 	for _, tc := range []struct{ name, directory, origin string }{
 		{"cyfr.run", account.DefaultDirectory, account.DefaultDirectory},
@@ -970,7 +970,7 @@ func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 			a := rememberLocal(t, t.TempDir(), tc.directory, &running)
 			_, before := a.last(t)
 			shown := a.post(t, "/bootstrap/state", map[string]string{})
-			if shown != (answer{Home: localAddress}) {
+			if shown != (answer{Home: localAddress, Resume: localAddress}) {
 				t.Fatalf("the chooser shows %+v", shown)
 			}
 			done := a.connect(t, "/bootstrap/connect", map[string]string{"address": shown.Home})
@@ -1014,7 +1014,7 @@ func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 func TestALocalCYFROnItsTailnetNamesItsRoute(t *testing.T) {
 	const home = "https://box.tail9f3a3c.ts.net"
 	a := newApp(t, t.TempDir(), offline())
-	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
+	seed(t, a.Homes, home, shell.ClientRecord{Project: localFolder})
 	a.Local = func(string) (Local, error) {
 		return Local{Shell: shell.Config{Address: home, Client: offline(), Directory: account.DefaultDirectory},
 			Proxy:   "socks5://127.0.0.1:1055",
@@ -1131,14 +1131,18 @@ func TestOnlyTheRememberedFolderOpensOverPlainHTTP(t *testing.T) {
 	b.quiet(t)
 }
 
-// A folder that cannot be read says so on the chooser, and Connect to a
-// CYFR elsewhere still goes on.
+// A folder that cannot be read says so at its press, and Connect to a
+// CYFR elsewhere still goes on; the chooser's list asks no folder.
 func TestAFolderThatCannotBeReadLeavesConnect(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
 	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
-	a.Local = func(string) (Local, error) { return Local{}, errors.New("no .env") }
-	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Error != "The app cannot read the CYFR in /home/ada/cyfr (no .env)." {
-		t.Fatalf("the chooser shows %+v", got)
+	read := 0
+	a.Local = func(string) (Local, error) { read++; return Local{}, errors.New("no .env") }
+	if got := a.post(t, "/bootstrap/state", map[string]string{}); got != (answer{Home: localAddress, Resume: localAddress}) || read != 0 {
+		t.Fatalf("the chooser shows %+v, the folder read %d times", got, read)
+	}
+	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress, "kept": "true"}); got.Error != "The app cannot read the CYFR in /home/ada/cyfr (no .env)." {
+		t.Fatalf("the press answered %+v", got)
 	}
 	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
 	if m := a.next(t); m.Type != TypeHome || m.Home != "https://cyfr.example.com" {
@@ -1168,8 +1172,8 @@ func TestTheChooserOffersTheCYFROpenNotTheLastBefore(t *testing.T) {
 	}
 }
 
-// Connect takes the folder's address in every spelling of it and opens it
-// in its one.
+// Connect takes a folder's address, as the list keeps it, in every
+// spelling of it and opens it in its one.
 func TestConnectTakesEverySpellingOfTheFoldersAddress(t *testing.T) {
 	for _, tc := range []struct{ home, typed string }{
 		{"http://localhost", "http://localhost"},
@@ -1179,7 +1183,7 @@ func TestConnectTakesEverySpellingOfTheFoldersAddress(t *testing.T) {
 		{localAddress, "http://localhost:4000/"},
 	} {
 		a := newApp(t, t.TempDir(), offline())
-		seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
+		seed(t, a.Homes, tc.home, shell.ClientRecord{Project: localFolder})
 		a.Local = func(string) (Local, error) {
 			return Local{Shell: shell.Config{Address: tc.home, Client: offline(), Directory: account.DefaultDirectory},
 				Answers: func(context.Context) error { return nil }}, nil
@@ -1198,8 +1202,9 @@ func TestConnectTakesEverySpellingOfTheFoldersAddress(t *testing.T) {
 	}
 }
 
-// The folder is read as Connect is pressed: an address shown from an
-// earlier reading opens nothing, and the chooser says the one it has now.
+// The folder is read as its row is pressed: a folder that names another
+// address now opens nothing, adds nothing, and the chooser says the one it
+// has now, which only a new entry opens.
 func TestAnAddressFromAnEarlierReadingOpensNothing(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
 	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
@@ -1211,8 +1216,11 @@ func TestAnAddressFromAnEarlierReadingOpensNothing(t *testing.T) {
 	shown := a.post(t, "/bootstrap/state", map[string]string{}).Home
 	now = "http://localhost:4200"
 	got := a.post(t, "/bootstrap/connect", map[string]string{"address": shown})
-	if got.Next != "" || got.Error != "The CYFR in /home/ada/cyfr is at http://localhost:4200. Connect to that address." {
+	if got.Next != "" || got.Error != "The CYFR in /home/ada/cyfr is at http://localhost:4200 now, not http://localhost:4000. Connect to http://localhost:4200 to add it." {
 		t.Fatalf("answered %+v", got)
+	}
+	if _, held := held(t, a.Homes, "http://localhost:4200"); held {
+		t.Fatal("the new address was added")
 	}
 	a.quiet(t)
 }
@@ -1382,31 +1390,92 @@ func TestConnectOfAnOpenCYFRTakesItsOwnAddressAlone(t *testing.T) {
 	a.quiet(t)
 }
 
-// A folder remembered never resumes at launch: the chooser has its address
-// and nothing to connect by itself. A CYFR elsewhere chosen after it is the
-// one selected last, which the next launch resumes.
-func TestAFolderNeverResumes(t *testing.T) {
+// The folder selected last is the one the chooser presses by itself at
+// launch (Resume), as any CYFR selected last is, and the press opens it,
+// asking the folder alone whether its CYFR answers; the next launch offers
+// it again.
+func TestTheLastFolderOpensAtLaunch(t *testing.T) {
 	var running atomic.Bool
 	running.Store(true)
 	dir := t.TempDir()
-	want := answer{Home: localAddress}
 	first := rememberLocal(t, dir, account.DefaultDirectory, &running)
-	if got := first.post(t, "/bootstrap/state", map[string]string{}); got != want {
-		t.Fatalf("a launch shows %+v", got)
+	shown := first.post(t, "/bootstrap/state", map[string]string{})
+	if shown != (answer{Home: localAddress, Resume: localAddress}) {
+		t.Fatalf("a launch shows %+v", shown)
 	}
-	const elsewhere = "https://second.example.com"
-	done := first.connect(t, "/bootstrap/connect", map[string]string{"address": elsewhere})
-	first.next(t)
-	first.ready(elsewhere)
-	answered(t, done)
-	first.opened(t, elsewhere)
+	done := first.connect(t, "/bootstrap/connect", map[string]string{"address": shown.Resume, "kept": "true"})
+	if m := first.next(t); m != (Message{Type: TypeHome, Home: localAddress, Account: account.DefaultDirectory, Attempt: 1}) {
+		t.Fatalf("main heard %+v", m)
+	}
+	first.ready(localAddress)
+	if got := answered(t, done); got.Next != "/" {
+		t.Fatalf("the press answered %+v", got)
+	}
+	if n := first.discovered.Load(); n != 0 {
+		t.Fatalf("the folder's CYFR was asked as one elsewhere %d times", n)
+	}
+	first.opened(t, localAddress)
 	first.End()
 	again := newApp(t, dir, offline())
 	again.Local = first.Local
-	if got := again.post(t, "/bootstrap/state", map[string]string{}); got != (answer{Home: elsewhere, Resume: elsewhere}) {
-		t.Fatalf("the launch after another CYFR was chosen shows %+v", got)
+	if got := again.post(t, "/bootstrap/state", map[string]string{}); got != (answer{Home: localAddress, Resume: localAddress}) {
+		t.Fatalf("the next launch shows %+v", got)
 	}
 	again.quiet(t)
+}
+
+// A CYFR elsewhere selected last beside a folder stays one elsewhere: the
+// launch offers it, and its press asks it, reading no folder.
+func TestTheLastElsewhereBesideAFolderStaysElsewhere(t *testing.T) {
+	const elsewhere = "https://second.example.com"
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	seed(t, a.Homes, elsewhere, shell.ClientRecord{Directory: account.DefaultDirectory})
+	read := a.Local
+	reads := 0
+	a.Local = func(project string) (Local, error) { reads++; return read(project) }
+	shown := a.post(t, "/bootstrap/state", map[string]string{})
+	if shown != (answer{Home: elsewhere, Resume: elsewhere}) {
+		t.Fatalf("a launch shows %+v", shown)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": shown.Resume, "kept": "true"})
+	if m := a.next(t); m.Type != TypeHome || m.Home != elsewhere || m.Proxy != "" || m.Setup != "" {
+		t.Fatalf("main heard %+v", m)
+	}
+	a.ready(elsewhere)
+	answered(t, done)
+	if reads != 0 || a.discovered.Load() != 1 {
+		t.Fatalf("the folder was read %d times, the CYFR elsewhere asked %d", reads, a.discovered.Load())
+	}
+}
+
+// A last that fails opens neither: a folder whose CYFR does not answer says
+// why and opens nothing, nothing asks its address as a CYFR elsewhere, and
+// the CYFR elsewhere beside it is not opened in its place; the list keeps
+// both, the folder still the one selected last.
+func TestALastThatFailsOpensNeither(t *testing.T) {
+	const elsewhere = "https://second.example.com"
+	var running atomic.Bool
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	seed(t, a.Homes, elsewhere, shell.ClientRecord{Directory: account.DefaultDirectory})
+	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
+	before := a.record(t)
+	shown := a.post(t, "/bootstrap/state", map[string]string{})
+	if shown.Resume != localAddress {
+		t.Fatalf("a launch shows %+v", shown)
+	}
+	got := a.post(t, "/bootstrap/connect", map[string]string{"address": shown.Resume, "kept": "true"})
+	if got.Next != "" || got.Error != "The CYFR in "+localFolder+" is not running." {
+		t.Fatalf("the press answered %+v", got)
+	}
+	if n := a.discovered.Load(); n != 0 {
+		t.Fatalf("%d CYFRs were asked as ones elsewhere", n)
+	}
+	if after := a.record(t); after != before {
+		t.Fatalf("the list changed from %s to %s", before, after)
+	}
+	a.quiet(t)
 }
 
 // cancellable is a Connect to address whose chooser gives up when the test
@@ -1549,7 +1618,8 @@ func TestALockWaitsOnNoProposalOrOpenedMainHasNotRead(t *testing.T) {
 }
 
 // Everything begun for a folder's CYFR ends as the app lets go of it: a
-// reading the app made and did not select at once, the CYFR selected as
+// reading the app made and did not select at once (a press whose CYFR did
+// not answer), the CYFR selected as
 // the app leaves it (main's leave) or ends, and none before.
 func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 	for name, letGo := range map[string]func(a *app){
@@ -1587,7 +1657,9 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 					hide()
 				}
 			}
-			a.post(t, "/bootstrap/state", map[string]string{})
+			running.Store(false)
+			a.post(t, "/bootstrap/connect", map[string]string{"address": localAddress, "kept": "true"})
+			running.Store(true)
 			a.openedFolder(t)
 			mu.Lock()
 			unselected, selected := works[:len(works)-1], works[len(works)-1]
@@ -2296,8 +2368,8 @@ func TestAnOpenFromBeforeALockOpensNothing(t *testing.T) {
 }
 
 // What a person set up is remembered as the setup ends: the app started
-// again, by a route's relaunch or otherwise, offers it, its address in the
-// field, one press, and opens nothing by itself.
+// again offers it, its address in the field, as the CYFR selected last,
+// which the chooser presses by itself once.
 func TestTheFolderSetUpIsOfferedAfterTheAppStartsAgain(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(t, dir, nil)
@@ -2313,8 +2385,7 @@ func TestTheFolderSetUpIsOfferedAfterTheAppStartsAgain(t *testing.T) {
 	if s := a.setupAfter(t, started.Setup.Seq); !s.Done {
 		t.Fatalf("the setup ended %+v", s)
 	}
-	// Open proposes it on its route, which main starts again on before
-	// any home-ready, ending this cyfr.
+	// Open proposes it with its route; this cyfr ends before main answers.
 	opening := a.connect(t, "/bootstrap/open", map[string]string{"run": "1"})
 	if m := a.next(t); m.Type != TypeHome || m.Proxy == "" {
 		t.Fatalf("Open proposed %+v", m)
@@ -2323,7 +2394,7 @@ func TestTheFolderSetUpIsOfferedAfterTheAppStartsAgain(t *testing.T) {
 	answered(t, opening)
 	next := newApp(t, dir, nil)
 	next.Local = local
-	if shown := next.post(t, "/bootstrap/state", map[string]string{}); shown.Home != "http://box.example.test:4000" || shown.Resume != "" {
+	if shown := next.post(t, "/bootstrap/state", map[string]string{}); shown.Home != "http://box.example.test:4000" || shown.Resume != "http://box.example.test:4000" {
 		t.Fatalf("the app started again shows %+v", shown)
 	}
 	next.quiet(t)

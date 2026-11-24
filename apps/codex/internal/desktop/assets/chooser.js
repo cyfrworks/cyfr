@@ -25,8 +25,9 @@ if(stay){$("open").textContent=a.cyfr;$("passkey").hidden=$("either").hidden=!pa
 else if(a.next)location.replace(a.next)}
 function connected(a){if(!(passkey&&a.next))show(a)}
 function onward(at,to){say("Connecting\u2026");post("/bootstrap/connect",{address:at}).then(a=>a.next?location.assign(to):say(a.error))}
-function connect(address,kept){say("Connecting\u2026");post("/bootstrap/connect",kept?{address,kept}:{address}).then(connected)}
-post("/bootstrap/state",{}).then(a=>{epoch=a.epoch||0;if(a.cyfr)$("address").value=a.cyfr;folder(a);const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.cyfr||"");show(a,told);if(a.setup)progress(a.setup);else if(main.connect){$("address").value=main.connect;connect(main.connect,true)}else if(main.way==="setup")here();else if(passkey&&a.resume&&!told)connect(a.resume,true)});
+function reopen(at){$("address").value=at;$("reopen").hidden=true;say("Connecting\u2026");post("/bootstrap/connect",{address:at,kept:true}).then(a=>{if(a.error){$("reopen").hidden=false;$("reopen").onclick=()=>reopen(at)}connected(a)})}
+function connect(address,kept){$("reopen").hidden=true;say("Connecting\u2026");post("/bootstrap/connect",kept?{address,kept}:{address}).then(connected)}
+post("/bootstrap/state",{}).then(a=>{epoch=a.epoch||0;if(a.cyfr)$("address").value=a.cyfr;folder(a);const told=main.told.map(n=>notices[n]).filter(Boolean).join(" ").replace("{CYFR}",a.cyfr||"");show(a,told);if(a.setup)progress(a.setup);else if(main.connect){$("address").value=main.connect;connect(main.connect,true)}else if(main.way==="setup")here();else if(a.resume&&!told)reopen(a.resume)});
 $("connect").addEventListener("submit",e=>{e.preventDefault();connect($("address").value)});
 function here(){say("");$("choose").hidden=true;$("setup").hidden=false;check()}
 $("here").addEventListener("click",here);

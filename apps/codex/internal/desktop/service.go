@@ -471,8 +471,8 @@ type request struct {
 // directory for a CYFR, or go to the device's pages.
 //
 // Once a CYFR is open, Next is the device's pages. Resume, before any
-// Connect of this run, is the remembered CYFR elsewhere, which a chooser
-// on the passkey road connects by itself; a folder's is never Resume.
+// Connect of this run, is the CYFR selected last, elsewhere or a folder's,
+// which the chooser presses by itself once.
 // Folder is where CYFR would be set up on this computer, after
 // Picks of main's answers to a pick, Found whether a CYFR is set up there
 // already, and Docker whether Docker answers there.
@@ -533,7 +533,6 @@ func (s *Service) shown() answer {
 	if err != nil {
 		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
 	}
-	c := list.Homes[list.Last]
 	s.mu.Lock()
 	open, began, home := s.pages != nil, s.began, s.committed.Home
 	folder, picks := s.folderNow()
@@ -542,23 +541,11 @@ func (s *Service) shown() answer {
 	if open {
 		return s.opened(home)
 	}
-	a := answer{Folder: folder, Picks: picks, Setup: setting}
-	if c.Project == "" {
-		a.Home = list.Last
-	}
-	if !began && c.Project == "" {
+	// The last selected, a folder's too, is pressed by the chooser once in
+	// a run; the list's read asks no folder, network or Docker anything.
+	a := answer{Folder: folder, Picks: picks, Setup: setting, Home: list.Last}
+	if !began {
 		a.Resume = list.Last
-	}
-	if c.Project != "" && s.Local != nil {
-		// A folder's CYFR fills the field and is never Resume: one press
-		// opens it.
-		l, err := s.Local(c.Project)
-		defer l.end()
-		if err != nil {
-			a.Error = fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)
-		} else {
-			a.Home = l.Shell.Address
-		}
 	}
 	return a
 }
@@ -597,17 +584,10 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 		}
 		from = row
 	}
-	project, l, remembered := s.remembered()
-	defer l.end()
-	if remembered && l.Shell.Address == home {
-		return s.openLocal(run, epoch, project, &l, from)
+	if a, folder := s.folderRow(run, epoch, home, from); folder {
+		return a
 	}
 	if !ok {
-		if remembered && home != "" {
-			// The folder's address changed since the chooser showed it, or
-			// another of this computer's was typed.
-			return answer{Error: fmt.Sprintf("The CYFR in %s is at %s. Connect to that address.", project, l.Shell.Address)}
-		}
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
 	}
 	discover := s.Discover
@@ -710,16 +690,35 @@ func (s *Service) live(epoch uint64) bool {
 	return s.epoch == epoch
 }
 
-// remembered is the folder of the CYFR selected last and the CYFR there,
-// when it is a folder's the app can read.
-func (s *Service) remembered() (string, Local, bool) {
+// folderRow opens the CYFR of the folder the list keeps at home, whatever
+// press, retry or start asked: that folder alone is read, and opened only
+// while its reading still names home. A folder that cannot be read, or
+// names another address now, is said; nothing starts Docker, and nothing
+// connects to home as a CYFR elsewhere. false where the list keeps no
+// folder at home.
+func (s *Service) folderRow(run context.Context, epoch uint64, home string, from shell.Row) (answer, bool) {
 	list, err := s.Homes.Load()
-	c := list.Homes[list.Last]
-	if err != nil || c.Project == "" || s.Local == nil {
-		return "", Local{}, false
+	if err != nil {
+		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}, true
+	}
+	c, held := list.Homes[home]
+	if !held || c.Project == "" {
+		return answer{}, false
+	}
+	if s.Local == nil {
+		return answer{Error: "This app reads no folder on this computer, so it cannot open the CYFR in " + c.Project + "."}, true
 	}
 	l, err := s.Local(c.Project)
-	return c.Project, l, err == nil
+	// This holds the reading until the service takes it as it opens.
+	defer l.end()
+	switch {
+	case err != nil:
+		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)}, true
+	case l.Shell.Address != home:
+		return answer{Error: fmt.Sprintf("The CYFR in %s is at %s now, not %s. Connect to %s to add it.",
+			c.Project, l.Shell.Address, home, l.Shell.Address)}, true
+	}
+	return s.openLocal(run, epoch, c.Project, &l, from), true
 }
 
 // openLocal selects the CYFR l, set up in project on this computer, with
