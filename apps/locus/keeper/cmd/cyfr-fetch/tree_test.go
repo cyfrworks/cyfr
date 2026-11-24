@@ -259,3 +259,72 @@ func TestTheCommandRunsAnInstalledTreesEntry(t *testing.T) {
 		t.Fatalf("the tree's entry runs in its place: %q %v %s", out, err, stderr.String())
 	}
 }
+
+// Every folder and file made counts against the bound, the folders one
+// name implies among them; a name given twice, a folder's too, is refused.
+func TestATreesBoundsCountWhatItMakes(t *testing.T) {
+	for label, c := range map[string]struct {
+		archive []byte
+		limit   int
+	}{
+		"one name implying its folders": {tarGz(t, dir("dist-package/"), file("dist-package/a/b/c/d/cursor-agent", script)), 4},
+		"a folder named twice":          {tree(t, dir("dist-package/")), maxEntries},
+		"a nested folder named twice":   {tree(t, dir("dist-package/lib/"), dir("dist-package/lib/")), maxEntries},
+	} {
+		o := serveFiles(t, map[string][]byte{"/cli.tar.gz": c.archive})
+		home := t.TempDir()
+		f := o.fetcher(io.Discard)
+		f.maxEntries = c.limit
+		p := o.pinnedTree("/cli.tar.gz", c.archive)
+		if strings.HasPrefix(label, "one name") {
+			p.entry = "a/b/c/d/cursor-agent"
+		}
+		if _, err := f.install(home, p); err == nil || !strings.Contains(err.Error(), "nothing was installed") {
+			t.Fatalf("%s: refused expected, got %v", label, err)
+		}
+		if n := names(t, folder(home, sum(c.archive))); len(n) != 0 {
+			t.Fatalf("%s: nothing stays: %v", label, n)
+		}
+	}
+}
+
+// Sizes are added with no overflow: a sum past the bound, however reached,
+// and a negative size are refused.
+func TestATreesSizesAddWithoutOverflow(t *testing.T) {
+	const most = int64(^uint64(0) >> 1)
+	for _, c := range []struct {
+		total, size, bound int64
+		ok                 bool
+	}{
+		{2, 3, 10, true}, {5, 5, 10, true}, {5, 6, 10, false},
+		{1, most, most, false}, {most - 1, 2, most, false}, {0, -1, 10, false},
+	} {
+		if got, ok := added(c.total, c.size, c.bound); ok != c.ok || (ok && got != c.total+c.size) {
+			t.Fatalf("added(%d, %d, %d) = %d %v", c.total, c.size, c.bound, got, ok)
+		}
+	}
+}
+
+// What a run interrupted after its rename left beside the installed tree,
+// its download and its staging, is swept by the next run, which finds the
+// tree there and fetches nothing.
+func TestARunInterruptedAfterItsInstallLeavesNothingForLong(t *testing.T) {
+	archive := tree(t)
+	o := serveFiles(t, map[string][]byte{"/cli.tar.gz": archive})
+	home := t.TempDir()
+	p := o.pinnedTree("/cli.tar.gz", archive)
+	if _, err := o.fetcher(io.Discard).install(home, p); err != nil {
+		t.Fatal(err)
+	}
+	version := folder(home, p.sum)
+	if err := os.WriteFile(filepath.Join(version, tempPrefix+"0123456789abcdef"), archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustMkdir(t, filepath.Join(version, tempPrefix+"tree-interrupted", "node_modules"))
+	if _, err := o.fetcher(io.Discard).install(home, p); err != nil {
+		t.Fatalf("the installed tree runs: %v", err)
+	}
+	if n := names(t, version); len(n) != 1 || n[0] != "agy" || o.hits.Load() != 1 {
+		t.Fatalf("the download and the staging are gone, and nothing was fetched again: %v %d", n, o.hits.Load())
+	}
+}

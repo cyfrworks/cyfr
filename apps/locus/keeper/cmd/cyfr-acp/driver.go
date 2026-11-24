@@ -646,7 +646,16 @@ func (d *driver) update(params json.RawMessage) error {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
-		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
+		if json.Unmarshal(u.Content, &block) != nil {
+			return nil
+		}
+		if block.Type != "text" {
+			// A chunk that is not text is no text of the turn's, and yet
+			// something the turn said.
+			d.output++
+			return d.release()
+		}
+		if block.Text == "" {
 			return nil
 		}
 		if d.p.failure != nil && d.output == 0 {

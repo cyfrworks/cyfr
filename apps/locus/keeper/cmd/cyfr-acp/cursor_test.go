@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
@@ -207,6 +208,7 @@ func TestCursorsFailedTurnIsAnErrorOnlyWhenItIsAllTheTurnSaid(t *testing.T) {
 		"callfirst":    "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh",
 		"failthen":     "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh and more",
 		"lookalike":    "\n\nError: a plain sentence of the model's",
+		"imagefirst":   "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh",
 	} {
 		t.Run(words, func(t *testing.T) {
 			got := turn(t, words)
@@ -403,4 +405,206 @@ func TestCursorEndsAtItsTerminate(t *testing.T) {
 	if countOf(s.home, "term") != 1 {
 		t.Fatalf("the terminate ended it: %v", cursorLog(s.home))
 	}
+}
+
+// A call of CYFR's is something the turn did: a failure chunk after it is
+// the turn's answer, not Cursor's failure.
+func TestCursorsTurnThatCalledCYFRIsNoFailure(t *testing.T) {
+	s := startCursor(t, "")
+	freshCursor(s)
+	postText(s, "stp_1", "trn_1", "askfirst")
+	ask := s.expect("ask")
+	s.send(map[string]any{"t": "answer", "id": "ans_1", "ask": ask["ask"], "content": "x", "is_error": false})
+	got := s.until("idle")
+	if len(ofType(got, "error")) != 0 || got[len(got)-1]["stop"] != "end_turn" ||
+		saidOf(got) != "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh" {
+		t.Fatalf("the turn ends as it ended, its words its answer: %v", got)
+	}
+}
+
+// Cursor's configuration folder is reached from the program's folder alone,
+// following no link: one CURSOR_CONFIG_DIR or XDG_CONFIG_HOME names
+// through a link, or outside the program's folder, is refused, and its
+// sessions stay; one inside it is where the forget removes them.
+func TestCursorsConfiguredFolderIsReachedFromItsOwnFolderAlone(t *testing.T) {
+	outside := t.TempDir()
+	for label, c := range map[string]struct {
+		variable string
+		value    func(home string) string
+		words    string
+	}{
+		"CURSOR_CONFIG_DIR through a link": {"CURSOR_CONFIG_DIR", func(home string) string { return linkedOut(t, home, outside, "cfg") }, "is a link"},
+		"CURSOR_CONFIG_DIR outside":        {"CURSOR_CONFIG_DIR", func(string) string { return outside }, "outside the program's own folder"},
+		"XDG_CONFIG_HOME through a link":   {"XDG_CONFIG_HOME", func(home string) string { return linkedOut(t, home, outside, "xdg") }, "is a link"},
+		"XDG_CONFIG_HOME outside":          {"XDG_CONFIG_HOME", func(string) string { return outside }, "outside the program's own folder"},
+	} {
+		t.Run(label, func(t *testing.T) {
+			home := t.TempDir()
+			value := c.value(home)
+			s := startCursor(t, home)
+			t.Setenv(c.variable, value)
+			session := freshCursor(s)
+			s.end()
+			f := startCursor(t, home)
+			t.Setenv(c.variable, value)
+			f.expect("hello")
+			f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
+			if e := f.next(); e["t"] != "refused" || !strings.Contains(fmt.Sprint(e["reason"]), c.words) {
+				t.Fatalf("the forget is refused, saying why: %v", e)
+			}
+			found := 0
+			_ = filepath.WalkDir(outside, func(path string, _ os.DirEntry, _ error) error {
+				if strings.HasSuffix(path, string(filepath.Separator)+filepath.Join(session, "store.db")) {
+					found++
+				}
+				return nil
+			})
+			if found != 1 {
+				t.Fatalf("the session outside stays: %d", found)
+			}
+		})
+	}
+	t.Run("inside", func(t *testing.T) {
+		home := t.TempDir()
+		s := startCursor(t, home)
+		t.Setenv("CURSOR_CONFIG_DIR", filepath.Join(home, "cfg"))
+		session := freshCursor(s)
+		s.end()
+		f := startCursor(t, home)
+		t.Setenv("CURSOR_CONFIG_DIR", filepath.Join(home, "cfg"))
+		f.expect("hello")
+		f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
+		if e := f.next(); e["t"] != "forgot" {
+			t.Fatalf("a folder inside the program's own is where the forget removes the session: %v", e)
+		}
+		if _, err := os.Lstat(filepath.Join(home, "cfg", "acp-sessions", session)); !os.IsNotExist(err) {
+			t.Fatalf("the session's folder is gone: %v", err)
+		}
+	})
+}
+
+// linkedOut is a link in home named `name` to a folder of its own in
+// outside, as a configuration folder reached through a link would be.
+func linkedOut(t *testing.T, home, outside, name string) string {
+	t.Helper()
+	target := filepath.Join(outside, name)
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, name)); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(home, name)
+}
+
+// A record of the server's name is read only when it is a regular file of
+// the user's own, reached through no link, within its bound, holding a
+// name the driver gives; anything else is no record, and the name is
+// listed for again, the start never held by it. A record is written anew,
+// never through a name another file shares.
+func TestCursorsServerRecordIsReadCarefullyAndWrittenWhole(t *testing.T) {
+	for label, plant := range map[string]func(t *testing.T, record string){
+		"a fifo": func(t *testing.T, record string) {
+			if err := syscall.Mkfifo(record, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a file past its bound": func(t *testing.T, record string) {
+			if err := os.WriteFile(record, []byte("cyfr-2"+strings.Repeat(" ", 1<<20)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a name the driver never gives": func(t *testing.T, record string) {
+			if err := os.WriteFile(record, []byte("cyfr-1"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a link": func(t *testing.T, record string) {
+			target := record + "-target"
+			if err := os.WriteFile(target, []byte("cyfr-2"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, record); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a folder": func(t *testing.T, record string) {
+			if err := os.Mkdir(record, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a file another name shares": func(t *testing.T, record string) {
+			shared := filepath.Join(filepath.Dir(record), "..", "shared")
+			if err := os.WriteFile(shared, []byte("cyfr-1"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(shared, record); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(label, func(t *testing.T) {
+			s := startCursor(t, "")
+			session := freshCursor(s)
+			s.end()
+			record := filepath.Join(s.home, ".cache", "cyfr-acp", "servers", session)
+			if err := os.RemoveAll(record); err != nil {
+				t.Fatal(err)
+			}
+			plant(t, record)
+			r := startCursor(t, s.home)
+			if e := resumed(r, session, filesTool); e["t"] != "started" {
+				t.Fatalf("the session goes on: %v", e)
+			}
+			r.end()
+			if countOf(s.home, "list") != 2 {
+				t.Fatalf("the name is listed for again: %v", cursorLog(s.home))
+			}
+			if shared, err := os.ReadFile(filepath.Join(s.home, ".cache", "cyfr-acp", "shared")); err == nil && string(shared) != "cyfr-1" {
+				t.Fatalf("a file another name shares is never written: %q", shared)
+			}
+			if label != "a folder" {
+				if held, err := os.ReadFile(record); err != nil || string(held) != "cyfr" {
+					t.Fatalf("the record is written anew: %q %v", held, err)
+				}
+			}
+		})
+	}
+}
+
+// Antigravity's and OpenCode's forgets look at no record of Cursor's: a
+// file where one would sit changes nothing of theirs.
+func TestOtherProgramsForgetsLookAtNoServerRecord(t *testing.T) {
+	plant := func(t *testing.T, home string) {
+		if err := os.MkdirAll(filepath.Join(home, ".cache", "cyfr-acp"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, ".cache", "cyfr-acp", "servers"), []byte("an unrelated file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("Antigravity", func(t *testing.T) {
+		s := startDriver(t)
+		session := startFresh(s, map[string]any{})
+		s.end()
+		plant(t, s.home)
+		f := startDriverWith(t, antigravity, s.home)
+		f.expect("hello")
+		f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
+		if e := f.next(); e["t"] != "forgot" {
+			t.Fatalf("the forget stands: %v", e)
+		}
+	})
+	t.Run("OpenCode", func(t *testing.T) {
+		s := startOpenCode(t, "")
+		session := freshOpenCode(s, map[string]any{})
+		s.end()
+		plant(t, s.home)
+		f := startOpenCode(t, s.home)
+		f.expect("hello")
+		f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
+		if e := f.next(); e["t"] != "forgot" {
+			t.Fatalf("the forget stands: %v", e)
+		}
+	})
 }

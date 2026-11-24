@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -93,8 +94,9 @@ type profile struct {
 	// sessionFiles are the files that hold one session's content, each a
 	// way down from the home, or from the folder the program is told to
 	// keep its files in, which internal/homepath walks following no link;
-	// every one a forget removes.
-	sessionFiles func(home, session string) []homepath.Path
+	// every one a forget removes. An error says, in the driver's words, why
+	// they are not reached, and nothing is removed.
+	sessionFiles func(home, session string) ([]homepath.Path, error)
 	// deletes says a forget rests on the program's own session/delete,
 	// proved by its load's not-found answer after it (forget.go), the
 	// session being in a store of the program's own that holds more than
@@ -228,14 +230,14 @@ var antigravity = &profile{
 		ok := json.Unmarshal(rawInput, &input) == nil && input.ServerName != "" && input.ToolName != ""
 		return input.ServerName, input.ToolName, ok
 	},
-	sessionFiles: func(home, session string) []homepath.Path {
+	sessionFiles: func(home, session string) ([]homepath.Path, error) {
 		return []homepath.Path{
 			geminiPath(home, "antigravity-cli", "brain", session),
 			geminiPath(home, "antigravity-cli", agySessionDatabases, session+".db"),
 			geminiPath(home, "antigravity-cli", agySessionDatabases, session+".db-wal"),
 			geminiPath(home, "antigravity-cli", agySessionDatabases, session+".db-shm"),
 			geminiPath(home, "antigravity-cli", "annotations", session+".pbtxt"),
-		}
+		}, nil
 	},
 	// Each session's title request is a model call of the program's own
 	// whose counts no prompt's answer carries.
@@ -315,8 +317,8 @@ var opencode = &profile{
 	stubKinds:  map[string]bool{},
 	mcpCall:    func(json.RawMessage) (string, string, bool) { return "", "", false },
 	namesTools: true,
-	sessionFiles: func(string, string) []homepath.Path {
-		return nil
+	sessionFiles: func(string, string) ([]homepath.Path, error) {
+		return nil, nil
 	},
 	deletes: true,
 	// Its title request and a sub-agent's work are not in a prompt's usage.
@@ -457,8 +459,12 @@ var cursor = &profile{
 		ok := json.Unmarshal(rawInput, &input) == nil && input.Server != "" && input.Tool != ""
 		return input.Server, input.Tool, ok
 	},
-	sessionFiles: func(home, session string) []homepath.Path {
-		return []homepath.Path{cursorPath(home, "acp-sessions", session)}
+	sessionFiles: func(home, session string) ([]homepath.Path, error) {
+		folder, err := cursorPath(home, "acp-sessions", session)
+		if err != nil {
+			return nil, err
+		}
+		return []homepath.Path{folder}, nil
 	},
 	forgetLoads: true,
 	// Its prompts carry no usage: the accounting is never read.
@@ -473,16 +479,31 @@ var cursor = &profile{
 
 // cursorPath is a way down Cursor's configuration folder, where it keeps
 // its sessions: CURSOR_CONFIG_DIR when it is set, else XDG_CONFIG_HOME's
-// `cursor`, else the home's `.cursor`.
-func cursorPath(home string, steps ...string) homepath.Path {
+// `cursor`, else the home's `.cursor`, as Cursor finds it. The way is
+// walked from the home, each step by its name and following no link, so a
+// configured folder reached through a link is refused there, and one that
+// is not inside the home is refused here: the driver reaches nothing of
+// the person's beyond the program's own folder.
+func cursorPath(home string, steps ...string) (homepath.Path, error) {
+	folder := filepath.Join(home, ".cursor")
 	if dir := os.Getenv("CURSOR_CONFIG_DIR"); strings.TrimSpace(dir) != "" {
-		return homepath.Path{Root: dir, Rel: filepath.Join(steps...)}
+		folder = dir
+	} else if dir := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(dir) != "" {
+		folder = filepath.Join(dir, "cursor")
 	}
-	if dir := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(dir) != "" {
-		return homepath.Path{Root: dir, Rel: filepath.Join(append([]string{"cursor"}, steps...)...)}
+	if !filepath.IsAbs(folder) {
+		folder = filepath.Join(home, folder)
 	}
-	return homepath.Path{Root: home, Rel: filepath.Join(append([]string{".cursor"}, steps...)...)}
+	rel, err := filepath.Rel(filepath.Clean(home), filepath.Clean(folder))
+	if err != nil || !filepath.IsLocal(rel) && rel != "." {
+		return homepath.Path{}, errCursorOutside
+	}
+	return homepath.Path{Root: home, Rel: filepath.Join(append([]string{rel}, steps...)...)}, nil
 }
+
+// errCursorOutside refuses a forget whose sessions Cursor keeps outside
+// the program's folder.
+var errCursorOutside = errors.New("Cursor keeps its sessions in a folder CURSOR_CONFIG_DIR or XDG_CONFIG_HOME names outside the program's own folder, which CYFR does not reach, so nothing was removed")
 
 // cursorNone is what `agent mcp list` prints when no server is configured.
 const cursorNone = "No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)"

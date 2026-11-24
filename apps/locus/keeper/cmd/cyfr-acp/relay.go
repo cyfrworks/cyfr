@@ -8,8 +8,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/homepath"
@@ -93,27 +96,61 @@ func (d *driver) personsServers() ([]string, error) {
 	}
 }
 
-// relayName is the form of every name serverFor gives.
-var relayName = regexp.MustCompile(`^cyfr(-[1-9][0-9]{0,8})?$`)
+// relayName is the form of every name serverFor gives: `cyfr`, or `cyfr-N`
+// for N from 2.
+var relayName = regexp.MustCompile(`^cyfr(-([2-9]|[1-9][0-9]{1,8}))?$`)
+
+// recordCap bounds what is read of a record: a name and no more.
+const recordCap = 64
 
 func serverPath(home, session string) homepath.Path {
 	return homepath.Path{Root: home, Rel: driverFolder + "/servers/" + session}
 }
 
 // keptServer is the name CYFR's server took when the session was made, or
-// "" where none is kept.
+// "" where none is kept. The record is opened without waiting, so a fifo
+// there holds nothing, and read only when it is a regular file of this
+// user's own, reached through no link, within its bound: anything else, or
+// a name the driver never gives, is no record, and the name is listed for
+// again.
 func keptServer(home, session string) string {
-	held, err := homepath.ReadFile(serverPath(home, session))
-	if err != nil || !relayName.Match(held) {
+	f, err := homepath.OpenFile(serverPath(home, session), os.O_RDONLY|syscall.O_NONBLOCK, 0, false)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	held, err := io.ReadAll(io.LimitReader(f, recordCap+1))
+	if err != nil || len(held) > recordCap || !relayName.Match(held) {
 		return ""
 	}
 	return string(held)
 }
 
-// recordServer keeps the name CYFR's server takes in the session. One that
-// cannot be written is as a lost one: the next start lists again.
+// recordServer keeps the name CYFR's server takes in the session: a new
+// file, written whole and renamed into place, so no file another name
+// shares is ever written. One that cannot be written is as a lost one: the
+// next start lists again.
 func recordServer(home, session, name string) {
-	if keptServer(home, session) != name {
-		_ = homepath.WriteFile(serverPath(home, session), []byte(name))
+	if keptServer(home, session) == name {
+		return
+	}
+	dir, err := homepath.Walk(home, driverFolder+"/servers", true)
+	if err != nil {
+		return
+	}
+	defer dir.Close()
+	f, temp, err := dir.CreateTemp(".record-")
+	if err != nil {
+		return
+	}
+	_, err = f.WriteString(name)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil || dir.Rename(temp, session) != nil {
+		_ = dir.Remove(temp)
 	}
 }

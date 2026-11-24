@@ -45,7 +45,9 @@
 // entry, a regular file of any name, which is the program; any other URL's
 // download is the program itself. A program larger than 1 GiB is refused.
 // The program is written 0755 under a temporary name in the version folder
-// and renamed into place, so the folder only ever holds it whole.
+// and renamed into place, so the folder only ever holds it whole. What an
+// interrupted run left beside an installed program, its download or a
+// tree's staging, is removed under the lock by the next run.
 //
 // With --tree the URL's path must end in .tar.gz or .tgz, and the archive,
 // once its checksum matched, is unpacked whole into a temporary folder of
@@ -57,9 +59,11 @@
 // folder is refused, as is every link, inside the tree or out, a hard
 // link, a device and every other entry that is no folder or regular file.
 // A file is written 0700 when its archive mode lets anyone run it, else
-// 0600, and every folder 0700; a name given twice is refused. The tree may
-// hold at most 1 GiB of files in at most 100,000 entries, and ENTRY must be
-// a regular executable file in it; anything else installs nothing. The
+// 0600, and every folder 0700; a name given twice, a folder's too, is
+// refused. The tree may hold at most 1 GiB of files in at most 100,000
+// entries, each folder or file made counting once, the folders a name
+// implies among them, and ENTRY must be a regular executable file in it;
+// anything else installs nothing. The
 // installed tree is run by ENTRY only once each folder on its way, and
 // ENTRY itself, is no link.
 //
@@ -267,6 +271,7 @@ func (f fetcher) install(home string, p program) (string, error) {
 	if ok, err := installed(dir, p, shown); err != nil {
 		return "", err
 	} else if ok {
+		leftovers(dir)
 		return path, nil
 	}
 	// The lock makes the sweep below safe: every temporary file in the
@@ -392,6 +397,27 @@ func within(dir *homepath.Dir, steps []string, create bool, in func(*homepath.Di
 		defer at.Close()
 	}
 	return in(at)
+}
+
+// leftovers sweeps, under the folder's lock, what a run interrupted after
+// its install left beside the installed program (its download, a tree's
+// staging), so nothing of a download outlives its install. It is run only
+// when the folder holds such a name; one that cannot be removed is left to
+// the next run, and the installed program runs all the same.
+func leftovers(dir *homepath.Dir) {
+	names, err := dir.Names()
+	if err != nil {
+		return
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, tempPrefix) {
+			if syscall.Flock(int(dir.Fd()), syscall.LOCK_EX) == nil {
+				_ = sweep(dir)
+				_ = syscall.Flock(int(dir.Fd()), syscall.LOCK_UN)
+			}
+			return
+		}
+	}
 }
 
 // sweep removes the temporary files an interrupted run left in dir.
@@ -558,16 +584,26 @@ func (f fetcher) extractTree(dir *homepath.Dir, archive string, p program) (stri
 	tr := tar.NewReader(gz)
 	top := ""
 	var total int64
-	for entries := 0; ; entries++ {
+	// made are the ways down the tree made so far, each once: every one
+	// counts against the entry bound, the folders a header's name implies
+	// among them; named are the ways the headers gave, each at most once.
+	made, named := map[string]bool{}, map[string]bool{}
+	count := func(way string) bool {
+		if !made[way] {
+			if len(made) >= f.maxEntries {
+				return false
+			}
+			made[way] = true
+		}
+		return true
+	}
+	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return "", refused("does not read as a tar archive")
-		}
-		if entries >= f.maxEntries {
-			return "", refused(fmt.Sprintf("holds more than %d entries", f.maxEntries))
 		}
 		steps, ok := treeSteps(header.Name)
 		switch {
@@ -579,6 +615,16 @@ func (f fetcher) extractTree(dir *homepath.Dir, archive string, p program) (stri
 			return "", refused("holds more than one top folder")
 		}
 		rel := steps[1:]
+		way := strings.Join(rel, "/")
+		if named[way] {
+			return "", refused(fmt.Sprintf("names %q twice", header.Name))
+		}
+		named[way] = true
+		for i := 0; i <= len(rel); i++ {
+			if !count(strings.Join(rel[:i], "/")) {
+				return "", refused(fmt.Sprintf("holds more than %d entries", f.maxEntries))
+			}
+		}
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if within(root, rel, true, func(*homepath.Dir) error { return nil }) != nil {
@@ -588,7 +634,7 @@ func (f fetcher) extractTree(dir *homepath.Dir, archive string, p program) (stri
 			if len(rel) == 0 {
 				return "", refused("holds a file where its top folder should be")
 			}
-			if total += header.Size; total > f.maxProgram {
+			if total, ok = added(total, header.Size, f.maxProgram); !ok {
 				return "", refused(fmt.Sprintf("holds files larger than %d bytes", f.maxProgram))
 			}
 			if err := writeEntry(root, rel, header, tr); err != nil {
@@ -608,11 +654,20 @@ func (f fetcher) extractTree(dir *homepath.Dir, archive string, p program) (stri
 	return name, nil
 }
 
+// added is total with size added, or not ok when size is negative or the
+// sum would pass bound, overflow among it.
+func added(total, size, bound int64) (int64, bool) {
+	if size < 0 || size > bound-total {
+		return total, false
+	}
+	return total + size, true
+}
+
 // treeSteps are an archive entry's name as steps down, or not ok when it
 // is absolute or holds an empty step, `.` or `..`; a folder's last `/` is
 // no step.
 func treeSteps(name string) ([]string, bool) {
-	if strings.HasPrefix(name, "/") {
+	if strings.HasPrefix(name, "/") || !filepath.IsLocal(strings.TrimSuffix(name, "/")) {
 		return nil, false
 	}
 	steps := strings.Split(strings.TrimSuffix(name, "/"), "/")

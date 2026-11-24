@@ -44,6 +44,8 @@ import (
 //	thoughtfirst  thinks, then the failure
 //	callfirst   runs a tool of its own, then the failure
 //	failthen    writes the failure, then a word more
+//	askfirst    calls CYFR's `files`, then writes the failure
+//	imagefirst  writes an image chunk, then the failure
 //	lookalike   writes a chunk of nearly the failure's form
 //	call        calls CYFR's `files` as Cursor does, after its permission question
 //	theirs      calls a person's server `notes`, its tool `echo`
@@ -94,7 +96,14 @@ func fakeCursor() int {
 			os.Exit(143)
 		}()
 	}
-	sessions := cursorPath(home, "acp-sessions").String()
+	// Its configuration folder, as Cursor finds it, through any link.
+	config := filepath.Join(home, ".cursor")
+	if dir := os.Getenv("CURSOR_CONFIG_DIR"); strings.TrimSpace(dir) != "" {
+		config = dir
+	} else if dir := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(dir) != "" {
+		config = filepath.Join(dir, "cursor")
+	}
+	sessions := filepath.Join(config, "acp-sessions")
 
 	out := bufio.NewWriter(os.Stdout)
 	var mu sync.Mutex
@@ -220,6 +229,13 @@ func fakeCursor() int {
 		case words == "failthen":
 			chunk(failure)
 			chunk(" and more")
+		case words == "askfirst":
+			var result toolsock.Result
+			_ = toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(`{"path":"a"}`)}, &result)
+			chunk(failure)
+		case words == "imagefirst":
+			update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}})
+			chunk(failure)
 		case words == "lookalike":
 			chunk("\n\nError: a plain sentence of the model's")
 		case words == "call" || words == "theirs":

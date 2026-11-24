@@ -28,13 +28,21 @@ import (
 // absent, and the program's load, in a process of the driver's own, must
 // answer that it lacks the session or that it is signed out, which leaves
 // the proof standing; a load that finds the session, or fails another way,
-// is a forget that failed. Its records of instructions and of its server's name
-// are removed either way.
+// is a forget that failed. Its record of instructions is removed either
+// way, and a profile that keeps its server's name removes that record once
+// the session is gone.
 
 // sessionFiles are every file of the session the forget removes, each a
-// way down internal/homepath walks following no link.
-func (d *driver) sessionFiles(session string) []homepath.Path {
-	return append(d.p.sessionFiles(d.home, session), instructionsPath(d.home, session), serverPath(d.home, session))
+// way down internal/homepath walks following no link: the profile's, and
+// the driver's record of the instructions handed. The record of a profile
+// that keeps its server's name is the profile's own, removed after the
+// session (removeSession).
+func (d *driver) sessionFiles(session string) ([]homepath.Path, error) {
+	files, err := d.p.sessionFiles(d.home, session)
+	if err != nil {
+		return nil, err
+	}
+	return append(files, instructionsPath(d.home, session)), nil
 }
 
 var (
@@ -80,7 +88,14 @@ func (d *driver) removeSession(session string) error {
 		}
 		err = d.loadsNone(o, session, true)
 		o.close()
-		return err
+		if err != nil {
+			return err
+		}
+	}
+	if d.p.namesOnce {
+		// The session is gone; its server's name is no reason to say it is
+		// not, and one left is never read for another session.
+		_ = homepath.Remove(serverPath(d.home, session))
 	}
 	return nil
 }
@@ -125,7 +140,10 @@ func (d *driver) loadsNone(o *oneOff, session string, filesProved bool) error {
 // looked at and none is reached through a link, and looks at each again:
 // it answers why one may remain, or nil once every one is absent.
 func (d *driver) removeFiles(session string) error {
-	files := d.sessionFiles(session)
+	files, err := d.sessionFiles(session)
+	if err != nil {
+		return err
+	}
 	var there []homepath.Path
 	for _, f := range files {
 		ok, err := present(f)
