@@ -581,6 +581,7 @@ defmodule PrismWeb.CanvasLiveTest do
              app = by_key(view, {:app, "main", "tincture:local.notes-canvas"})
 
     assert render(view) =~ ~s(id="tincture_state_#{app.id}")
+    assert render(view) =~ "This app is not declared to open here, so it is not opened."
     assert Enum.map(rows(), & &1.name) == ["markets"]
   end
 

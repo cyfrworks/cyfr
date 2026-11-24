@@ -839,7 +839,7 @@ async function stepTwoCanvases(page, name, viewport) {
   const startLeft = await canvasFrame(page, start.id);
 
   note("two_canvases", name,
-    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.4" &&
+    ids.includes("start") && ids.includes("markets") && startVersions.working === "0.6.5" &&
       marketsVersions.working === "0.1.0" && validationReady.length === 1 && marketsReady.length === 1 &&
       startLeft && startLeft.state === "frozen",
     {
@@ -1014,7 +1014,7 @@ async function stepAppOverCanvas(page, name) {
   const place = '[data-canvas-place="full"][data-canvas-shown="true"]';
   const area = await boxesOn(page, {
     top_bar: "#chrome-top", frames: "#canvas-frames", shelf: "#canvas-shelf", full: place,
-    capsule: `${place} [role="toolbar"][aria-label="Tincture controls"]`,
+    capsule: `${place} [role="toolbar"][aria-label="App controls"]`,
   });
   const b = (area && area.boxes) || {};
   const fills = !!(b.top_bar && b.frames && b.shelf && b.full) &&
