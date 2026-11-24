@@ -74,8 +74,8 @@ const (
 	answerVerified    = "verified"
 	answerRefused     = "refused"
 	answerUnreachable = "unreachable"
-	answerInstalled = "installed"
-	answerFailed    = "failed"
+	answerInstalled   = "installed"
+	answerFailed      = "failed"
 )
 
 // appUpdateService runs the service when args are its unit's ExecStart,
