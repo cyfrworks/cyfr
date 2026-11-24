@@ -4,10 +4,10 @@
 defmodule Locus.DiagnosticsTest do
   @moduledoc """
   Whatever a build writes, the lines kept of it encode on the wire: valid
-  UTF-8, each within the line bound with its `stage: ` prefix, all within
-  the log bound, each charged as its whole encoded progress line; the
-  build's own lines stop at a budget behind one line saying so, and the
-  builder's keep a reserve past it.
+  UTF-8, each within the line bound with its `stage: ` prefix as a client
+  keeps it, all within the log bound, each charged as its whole encoded
+  progress line; the build's own lines stop at a budget behind one line
+  saying so, and the builder's keep a reserve past it.
   """
 
   use ExUnit.Case, async: true
@@ -15,28 +15,21 @@ defmodule Locus.DiagnosticsTest do
   alias Prima.BuilderProtocol
   alias Locus.Diagnostics
 
-  # What each admitted line spells, read back from its progress line, and
-  # the terminal line its diagnostics make.
+  # What each admitted line spells, read back from its progress line.
   defp read!(admitted) do
-    for {progress, diagnostic} <- admitted do
+    for progress <- admitted do
       assert {:ok, {:progress, stage, message}} = BuilderProtocol.read_line(progress)
-      assert Jason.decode!(diagnostic) == Diagnostics.line(stage, message)
       {stage, message}
     end
   end
 
+  # The log a client keeps of the admitted lines: each as a person reads it.
   defp encodes!(admitted) do
-    diagnostics = Enum.map(admitted, &elem(&1, 1))
-
-    assert {:ok, line} =
-             BuilderProtocol.encode_refusal({:failed, {:status, 1}}, {:encoded, diagnostics})
-
-    assert {:ok, {:refusal, _refusal, lines}} = BuilderProtocol.read_line(line)
-    lines
+    for {stage, message} <- read!(admitted), do: BuilderProtocol.diagnostic(stage, message)
   end
 
   # The bytes the admitted lines cost on the wire, each with its newline.
-  defp charged(admitted), do: Enum.reduce(admitted, 0, &(byte_size(elem(&1, 0)) + 1 + &2))
+  defp charged(admitted), do: Enum.reduce(admitted, 0, &(byte_size(&1) + 1 + &2))
 
   defp cost(stage, message) do
     {:ok, line} = BuilderProtocol.encode_progress(stage, message)
@@ -46,16 +39,11 @@ defmodule Locus.DiagnosticsTest do
   test "a line is its stage and its message, and an empty message is no line" do
     budget = Diagnostics.budget()
 
-    assert [{progress, diagnostic}] =
-             Diagnostics.admit(budget, :output, "Compiling vector v0.1.0")
-
+    assert [progress] = Diagnostics.admit(budget, :output, "Compiling vector v0.1.0")
     assert {:ok, ^progress} = BuilderProtocol.encode_progress(:output, "Compiling vector v0.1.0")
-    assert diagnostic == ~s("output: Compiling vector v0.1.0")
+    assert encodes!([progress]) == ["output: Compiling vector v0.1.0"]
 
     assert Diagnostics.admit(budget, :output, "") == []
-
-    assert Diagnostics.line(:compiling, "Compiling reagent (rust)...") ==
-             "compiling: Compiling reagent (rust)..."
   end
 
   test "bytes that are not UTF-8 are replaced, so the line encodes" do
@@ -171,20 +159,20 @@ defmodule Locus.DiagnosticsTest do
 
     cut = Diagnostics.sentence(String.duplicate("é", max))
     assert byte_size(cut) == max and String.valid?(cut)
-    assert {:ok, _} = BuilderProtocol.encode_refusal({:malformed, cut}, [])
+    assert {:ok, _} = BuilderProtocol.encode_refusal({:malformed, cut})
 
-    assert {:ok, _} = BuilderProtocol.encode_refusal({:unavailable, Diagnostics.sentence("")}, [])
+    assert {:ok, _} = BuilderProtocol.encode_refusal({:unavailable, Diagnostics.sentence("")})
     assert String.valid?(Diagnostics.sentence(<<0xFF, 0xFE>>))
   end
 
-  defp cut?({progress, _diagnostic}), do: progress =~ "the rest of it is not kept"
+  defp cut?(progress), do: progress =~ "the rest of it is not kept"
 
   # The build's share of the log ends where the cut line says it did.
   defp reserve do
     budget = Diagnostics.budget()
     long = String.duplicate("x", 60_000)
 
-    [{progress, _}] =
+    [progress] =
       Stream.repeatedly(fn -> Diagnostics.admit(budget, :output, long) end)
       |> Enum.find(fn [one] -> cut?(one) end)
 

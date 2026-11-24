@@ -415,5 +415,17 @@ class MeasuredBuild(unittest.TestCase):
         self.fails(self.spawn(edit), "the build's place is free")
 
 
+class Brief(unittest.TestCase):
+    def test_a_result_carrying_its_files_shows_each_by_its_size(self):
+        _progress, answer = stack.read_answer([
+            {"type": "output", "seq": 1, "path": "index.html", "bytes": "aGk="},
+            {"type": "result", "language": "javascript", "target_type": "tincture",
+             "outputs": [{"path": "index.html", "size": 2,
+                          "digest": "sha256:8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"}]},
+        ])
+        shown = json.loads(memory.brief(answer))
+        self.assertEqual(shown["files"], {"index.html": "2 bytes"})
+
+
 if __name__ == "__main__":
     unittest.main()

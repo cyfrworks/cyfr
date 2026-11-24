@@ -49,6 +49,24 @@ defmodule Prima.LocusRoles do
   from, outside every pool and every user of the image; every other role
   has none (`nil`). The root is the release user's group's, mode 1773.
 
+  A role's `memory` is what its service holds of its own: the bounds of
+  what it counts (`Locus.Output`), `unread` (the backends role's alone,
+  `nil` for the others) and `answering`, and the figures of what it holds
+  uncounted that an image suite's allowance reads. The runtime names one
+  transport read of a pinned fetch (`fetch_read_bytes`), the larger read a
+  fetch takes when its count has room for it and the receive queue behind
+  it (`fetch_read_ahead_bytes`), the most of a fetch's head the HTTP
+  client reads (`fetch_head_bytes`) and the freed segments its VM keeps
+  for reuse (`freed_segments_bytes`); every other role names none of them
+  (`nil`). The release's `memory` holds what every
+  role's service shares: the bytes of resident memory one byte it holds
+  costs at most (`byte_cost`), one read of a held keeper connection
+  (`keeper_read_bytes`) and the copies of it held at once
+  (`keeper_read_copies`), and the kernel's queues beside the service, a
+  relay connection's (`relay_queue_bytes`) and a TCP connection's send
+  queue (`socket_queue_bytes`). What each is, its cap and how many there
+  can be at once, is `Locus.Output`'s table ("What each role holds").
+
   A role whose `isolation` is `nil` spawns into its container's own
   namespaces, so every spawn of the island shares the island's network
   namespace and the container's one IPC namespace (compose's
@@ -92,7 +110,14 @@ defmodule Prima.LocusRoles do
           edge_ip_range: String.t(),
           edge_address: String.t(),
           edge_caddy_address: String.t(),
-          edge_tailscale_address: String.t()
+          edge_tailscale_address: String.t(),
+          memory: %{
+            byte_cost: float(),
+            keeper_read_bytes: pos_integer(),
+            keeper_read_copies: pos_integer(),
+            relay_queue_bytes: pos_integer(),
+            socket_queue_bytes: pos_integer()
+          }
         }
 
   @typedoc "One role's facts."
@@ -111,7 +136,15 @@ defmodule Prima.LocusRoles do
           guard: String.t() | nil,
           kept_root: String.t() | nil,
           kept_volume: String.t() | nil,
-          kept_uids: Range.t() | nil
+          kept_uids: Range.t() | nil,
+          memory: %{
+            unread: pos_integer() | nil,
+            answering: pos_integer(),
+            fetch_read_bytes: pos_integer() | nil,
+            fetch_read_ahead_bytes: pos_integer() | nil,
+            fetch_head_bytes: pos_integer() | nil,
+            freed_segments_bytes: pos_integer() | nil
+          }
         }
 
   @release %{
@@ -131,7 +164,14 @@ defmodule Prima.LocusRoles do
     edge_ip_range: "172.16.234.128/25",
     edge_address: "172.16.234.2",
     edge_caddy_address: "172.16.234.3",
-    edge_tailscale_address: "172.16.234.4"
+    edge_tailscale_address: "172.16.234.4",
+    memory: %{
+      byte_cost: 2.8,
+      keeper_read_bytes: 65_541,
+      keeper_read_copies: 3,
+      relay_queue_bytes: 233_167,
+      socket_queue_bytes: 4_194_304
+    }
   }
 
   @roles [
@@ -150,7 +190,15 @@ defmodule Prima.LocusRoles do
       guard: nil,
       kept_root: nil,
       kept_volume: nil,
-      kept_uids: nil
+      kept_uids: nil,
+      memory: %{
+        unread: nil,
+        answering: 16_777_216,
+        fetch_read_bytes: 65_536,
+        fetch_read_ahead_bytes: 262_144,
+        fetch_head_bytes: 262_144,
+        freed_segments_bytes: 69_905_080
+      }
     },
     %{
       name: :builds,
@@ -167,7 +215,15 @@ defmodule Prima.LocusRoles do
       guard: "locus-builds-guard",
       kept_root: nil,
       kept_volume: nil,
-      kept_uids: nil
+      kept_uids: nil,
+      memory: %{
+        unread: nil,
+        answering: 8_388_608,
+        fetch_read_bytes: nil,
+        fetch_read_ahead_bytes: nil,
+        fetch_head_bytes: nil,
+        freed_segments_bytes: nil
+      }
     },
     %{
       name: :backends,
@@ -184,7 +240,15 @@ defmodule Prima.LocusRoles do
       guard: "locus-backends-guard",
       kept_root: "/var/lib/locus/kept",
       kept_volume: "homes",
-      kept_uids: 40_001..49_999
+      kept_uids: 40_001..49_999,
+      memory: %{
+        unread: 67_108_864,
+        answering: 27_262_976,
+        fetch_read_bytes: nil,
+        fetch_read_ahead_bytes: nil,
+        fetch_head_bytes: nil,
+        freed_segments_bytes: nil
+      }
     }
   ]
 

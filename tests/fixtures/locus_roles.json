@@ -1,5 +1,5 @@
 {
-  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none). A role whose programs keep their folders names their root, the compose volume mounted there and the uid range the keeper's --kept-homes flag draws from (kept_root, kept_volume, kept_first_uid, kept_last_uid); every other role names none (null).",
+  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none). A role whose programs keep their folders names their root, the compose volume mounted there and the uid range the keeper's --kept-homes flag draws from (kept_root, kept_volume, kept_first_uid, kept_last_uid); every other role names none (null). Each role's memory and the release's are what a role's service holds of its own (Prima.LocusRoles, Locus.Output's table): a role's counted bounds (unread, null for a role that keeps none, and answering) and the runtime's uncounted figures (one pinned fetch's transport read, the larger read a fetch takes with its count's room, the most of a fetch's head the HTTP client reads, the freed segments its VM keeps; null for every other role), and the release's factor of resident bytes to a byte held, one held keeper read and its copies, and the kernel's queues of a relay connection and of a TCP connection's sends, from which each image suite computes its allowance.",
   "release": {
     "user": "locus",
     "uid": 10001,
@@ -17,7 +17,14 @@
     "edge_ip_range": "172.16.234.128/25",
     "edge_address": "172.16.234.2",
     "edge_caddy_address": "172.16.234.3",
-    "edge_tailscale_address": "172.16.234.4"
+    "edge_tailscale_address": "172.16.234.4",
+    "memory": {
+      "byte_cost": 2.8,
+      "keeper_read_bytes": 65541,
+      "keeper_read_copies": 3,
+      "relay_queue_bytes": 233167,
+      "socket_queue_bytes": 4194304
+    }
   },
   "roles": [
     {
@@ -37,7 +44,15 @@
       "kept_root": null,
       "kept_volume": null,
       "kept_first_uid": null,
-      "kept_last_uid": null
+      "kept_last_uid": null,
+      "memory": {
+        "unread": null,
+        "answering": 16777216,
+        "fetch_read_bytes": 65536,
+        "fetch_read_ahead_bytes": 262144,
+        "fetch_head_bytes": 262144,
+        "freed_segments_bytes": 69905080
+      }
     },
     {
       "name": "builds",
@@ -56,7 +71,15 @@
       "kept_root": null,
       "kept_volume": null,
       "kept_first_uid": null,
-      "kept_last_uid": null
+      "kept_last_uid": null,
+      "memory": {
+        "unread": null,
+        "answering": 8388608,
+        "fetch_read_bytes": null,
+        "fetch_read_ahead_bytes": null,
+        "fetch_head_bytes": null,
+        "freed_segments_bytes": null
+      }
     },
     {
       "name": "backends",
@@ -75,7 +98,15 @@
       "kept_root": "/var/lib/locus/kept",
       "kept_volume": "homes",
       "kept_first_uid": 40001,
-      "kept_last_uid": 49999
+      "kept_last_uid": 49999,
+      "memory": {
+        "unread": 67108864,
+        "answering": 27262976,
+        "fetch_read_bytes": null,
+        "fetch_read_ahead_bytes": null,
+        "fetch_head_bytes": null,
+        "freed_segments_bytes": null
+      }
     }
   ]
 }

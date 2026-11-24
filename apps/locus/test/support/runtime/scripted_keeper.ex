@@ -182,6 +182,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     do: GenServer.call(runner, {:relay_in, IO.iodata_to_binary(data)})
 
   @impl Locus.Runtime.Keeper
+  def taken(%{runner: runner}), do: GenServer.cast(runner, :taken)
+
+  @doc "How many times runner `spawn`'s process said it took bytes the runner wrote (`c:Locus.Runtime.Keeper.taken/1`)."
+  @spec takings(map()) :: non_neg_integer()
+  def takings(%{runner: runner}), do: GenServer.call(runner, :takings)
+
+  @impl Locus.Runtime.Keeper
   def close_relay(%{runner: runner}), do: GenServer.call(runner, :relay_close)
 
   @impl Locus.Runtime.Keeper
@@ -541,7 +548,8 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
            relay_inbox: "",
            relay_closed: false,
            ended: false,
-           write_refusal: nil
+           write_refusal: nil,
+           takings: 0
          })}
 
     @impl true
@@ -561,6 +569,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
 
     def handle_call(:read, _from, state), do: {:reply, state.inbox, state}
+    def handle_call(:takings, _from, state), do: {:reply, state.takings, state}
 
     def handle_call({:relay_in, data}, _from, state),
       do: {:reply, :ok, %{state | relay_inbox: state.relay_inbox <> data}}
@@ -585,6 +594,9 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
 
     def handle_call({:exit, status}, _from, state), do: {:reply, :ok, ended(state, status)}
+
+    @impl true
+    def handle_cast(:taken, state), do: {:noreply, %{state | takings: state.takings + 1}}
 
     @impl true
     def handle_info({:released, _grace_ms}, state), do: {:noreply, ended(state, 137)}

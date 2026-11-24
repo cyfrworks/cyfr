@@ -225,10 +225,12 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       log =
         capture_log(fn ->
+          # The memory killed every process, so the relay ends: the end
+          # follows the connection's.
           reply(keeper, at_bound)
-          assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
           :gen_tcp.close(relay)
           assert_receive {RunnerProcess, ^handle, :closed}, 5_000
+          assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
         end)
 
       assert log =~ "runner runner_1 was ended at its memory bound of 536870912 bytes"
@@ -318,6 +320,9 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           memory: "cap"
         })
 
+        # The memory killed every process, so the relay ends, and the end
+        # follows the connection's.
+        :gen_tcp.close(relay)
         assert_receive {RunnerPool, ^pid, {:gone, _reason}}, 5_000
       end)
 
@@ -326,7 +331,6 @@ defmodule Locus.Runtime.KeeperMemoryTest do
                next_request(keeper)
 
       assert RunnerPool.status(pool).runners.tainted == 1
-      :gen_tcp.close(relay)
       reply(keeper, %{v: 3, type: "released", spawn_id: spawn_id})
       wait_until(fn -> RunnerPool.status(pool).runners.tainted == 0 end)
       refute Enum.any?(Runners.runners(pool), &(&1.id == runner))

@@ -538,12 +538,10 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			if sp.group != nil && !s.endInOrder(sp.id, uid, sp.group, sp.leader, deadline) {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}
+			// The relay ends as a pooled spawn's does (retire): at its
+			// reader's taking the last byte or closing, never cut here.
 			if sp.relay != nil {
-				select {
-				case <-sp.relay.done:
-				case <-time.After(time.Second):
-					s.signalChild(sp.relay, unix.SIGKILL)
-				}
+				<-sp.relay.done
 			}
 			// The uid's full retirement, which kills every process of it at
 			// once, runs once it is retiring and no spawn of it is still

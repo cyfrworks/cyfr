@@ -17,14 +17,33 @@ defmodule Locus.BuilderEnvTest do
 
   # A build as the service runs one: its place made, the request prepared,
   # then its plan run in the place, which is dropped however the build ends.
+  # Its output lines are read as a client reads them, and a result answers
+  # the files they carried.
   defp build(request, opts \\ []) do
     {:ok, place} = Builder.place(%{athanor_id: "ath_builder"})
+    {:ok, lines} = Agent.start_link(fn -> [] end)
+    on_line = fn line -> Agent.update(lines, &[line | &1]) end
 
     try do
-      with {:ok, plan} <- Builder.prepare(request), do: Builder.run(plan, [place: place] ++ opts)
+      with {:ok, plan} <- Builder.prepare(request),
+           {:ok, result} <- Builder.run(plan, opts ++ [place: place, on_line: on_line]) do
+        {:ok, %{result | outputs: received(Agent.get(lines, &Enum.reverse/1), result)}}
+      end
     after
       Builder.drop(place)
     end
+  end
+
+  defp received(lines, result) do
+    outputs =
+      Enum.reduce(lines, Prima.BuilderProtocol.outputs(), fn line, outputs ->
+        assert {:ok, {:output, chunk}} = Prima.BuilderProtocol.read_line(line)
+        assert {:ok, outputs} = Prima.BuilderProtocol.output(outputs, chunk)
+        outputs
+      end)
+
+    assert {:ok, files} = Prima.BuilderProtocol.outputs(outputs, result)
+    files
   end
 
   defp tincture(package) do

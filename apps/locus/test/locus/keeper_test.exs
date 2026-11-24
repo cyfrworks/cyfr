@@ -9,11 +9,12 @@ defmodule Locus.KeeperTest do
   reported released; the deadline, a stdout bound, a cancel and the
   caller's death release the spawn with no grace; a relay connection
   that arrives after the client has read the exit and release reports
-  still delivers its output; a spawn refused before the keeper made it
-  and a lost channel answer at once, one refused after the keeper made it
-  once the keeper reports it released; a spawn ended at its bound is the
-  wire's `memory` refusal and a bound that cannot be enforced its
-  `unavailable`, naming the option the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
+  still delivers its output, and one that arrives after a cancel is closed
+  as it attaches, the run ending at the release; a spawn refused before
+  the keeper made it and a lost channel answer at once, one refused after
+  the keeper made it once the keeper reports it released; a spawn ended
+  at its bound is the wire's `memory` refusal and a bound that cannot be
+  enforced its `unavailable`, naming the option the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
   its handle, and its owner hears the relay attached, its stdout and
   stderr apart and its exit, then its release, the last; stdin goes as
   frames of the codec's bound; `signal`, `release` with a grace and
@@ -70,6 +71,17 @@ defmodule Locus.KeeperTest do
   # An instant a test's assign waits until for an answer that comes at once.
   defp soon, do: System.monotonic_time(:millisecond) + 5_000
 
+  # The owner's word for an event carrying a spawn's bytes, which a session
+  # or a runner's process says once it has taken them: the client reads the
+  # spawn's next bytes only then.
+  defp took(handle, {stream, _bytes}) when stream in [:stdout, :stderr, :control, :relay],
+    do: :ok = Keeper.taken(handle)
+
+  defp took(_handle, _event), do: :ok
+
+  # A run's deadline, `ms` from now.
+  defp within(ms), do: System.monotonic_time(:millisecond) + ms
+
   defp run(name, script, opts \\ []) do
     lines = Agent.start_link(fn -> [] end) |> elem(1)
 
@@ -83,14 +95,21 @@ defmodule Locus.KeeperTest do
         },
         [
           place: place!(name, "build"),
-          timeout_ms: Keyword.get(opts, :timeout_ms, 10_000),
+          deadline: within(Keyword.get(opts, :timeout_ms, 10_000)),
           max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
+          on_stdout: {[], fn piece, taken -> {:ok, [taken, piece]} end},
           on_output: fn line -> Agent.update(lines, &[line | &1]) end
         ] ++ Keyword.take(opts, [:memory_bytes])
       )
 
-    {result, Agent.get(lines, &Enum.reverse/1)}
+    {stdout(result), Agent.get(lines, &Enum.reverse/1)}
   end
+
+  # A run's stdout as the fold above took it, whole.
+  defp stdout({:ok, %{exit: exit, taken: taken}}),
+    do: {:ok, %{exit: exit, stdout: IO.iodata_to_binary(taken)}}
+
+  defp stdout(result), do: result
 
   describe "against the fake keeper" do
     setup do
@@ -209,7 +228,7 @@ defmodule Locus.KeeperTest do
       assert {{:error, {:unavailable, sentence}}, []} = run(name, "true")
       assert sentence =~ "writable-cgroups=true"
       assert sentence =~ "Docker Engine 28"
-      assert {:ok, _} = Prima.BuilderProtocol.encode_refusal({:unavailable, sentence}, [])
+      assert {:ok, _} = Prima.BuilderProtocol.encode_refusal({:unavailable, sentence})
     end
 
     test "a cancelled run releases the spawn with no grace and answers cancelled", %{
@@ -225,6 +244,24 @@ defmodule Locus.KeeperTest do
       assert_receive {:answer, {{:error, :cancelled}, _lines}}, 10_000
       assert [_] = awaited_releases(fake, 0)
       wait_until(fn -> FakeKeeper.exits(fake) != [] end, 5_000, "the released command to end")
+    end
+
+    test "a run cancelled before its relay attaches closes the relay's connection as it attaches, and ends at the release",
+         %{name: name, fake: fake} do
+      test = self()
+      :ok = FakeKeeper.mode(fake, {:dial_after_release, test})
+      runner = spawn_link(fn -> send(test, {:answer, run(name, "exec sleep 30")}) end)
+      wait_until(fn -> requests(fake, "spawn") != [] end, 5_000, "the spawn to be asked for")
+
+      :ok = Locus.Executor.cancel(runner)
+
+      assert_receive {:fake_relay, ended, open_ms}, 10_000
+
+      assert {ended, open_ms < 1_000} == {:closed, true},
+             "the late relay's connection was #{ended} after #{open_ms} ms"
+
+      assert_receive {:answer, {{:error, :cancelled}, _lines}}, 10_000
+      assert FakeKeeper.sent(fake) == [:dial, :exited, :released]
     end
 
     test "a run past its deadline releases the spawn with no grace", %{name: name, fake: fake} do
@@ -259,6 +296,102 @@ defmodule Locus.KeeperTest do
 
       wait_until(fn -> releases(fake, 0) != [] end, 5_000)
       wait_until(fn -> FakeKeeper.exits(fake) != [] end, 5_000, "the released command to end")
+    end
+
+    test "a run reads its next frame only once its taker took the last, so the relay waits behind it",
+         %{name: name, fake: fake} do
+      test = self()
+      bytes = :crypto.strong_rand_bytes(16 * 1_048_576)
+      :ok = FakeKeeper.mode(fake, {:stdout, bytes, test})
+
+      # The first piece is held until the test says go; every later one is
+      # taken at once.
+      take = fn piece, taken ->
+        if taken == [] do
+          send(test, {:taking, self()})
+          receive do: (:go -> :ok)
+        end
+
+        {:ok, [taken, piece]}
+      end
+
+      runner =
+        Task.async(fn ->
+          Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+            place: place!(name, "build"),
+            deadline: within(60_000),
+            max_stdout_bytes: byte_size(bytes),
+            on_stdout: {[], take}
+          )
+        end)
+
+      assert_receive {:taking, taker}, 10_000
+
+      # While the taker holds the first piece the relay is held where it
+      # stands: what it could write is what the sockets hold and one read.
+      {kind, sent} = quiet()
+      assert kind == :sending, "the relay is blocked in a write"
+
+      assert sent <= 4 * 1_048_576,
+             "the relay wrote #{sent} bytes past a reader that took one frame"
+
+      send(taker, :go)
+      assert {:ok, %{exit: {:status, 0}, taken: taken}} = Task.await(runner, 30_000)
+      assert IO.iodata_to_binary(taken) == bytes
+      assert_received {:fake_relay, :ended, _sent}
+    end
+
+    test "a run whose taker is slower than its deadline closes its connection there, which cuts the relay",
+         %{name: name, fake: fake} do
+      test = self()
+      :ok = FakeKeeper.mode(fake, {:stdout, :binary.copy(<<1>>, 8 * 1_048_576), test})
+
+      take = fn piece, taken ->
+        # sleep-ok: a taker slower than the run's deadline is the case.
+        Process.sleep(1_500)
+        {:ok, [taken, piece]}
+      end
+
+      result =
+        Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+          place: place!(name, "build"),
+          deadline: within(1_000),
+          max_stdout_bytes: 16 * 1_048_576,
+          on_stdout: {[], take}
+        )
+
+      # The run answers only after cyfr-locus's word, which follows the
+      # relay's end, which the reader's close made.
+      assert result == {:error, :timeout}
+      assert_received {:fake_relay, :cut, _sent}
+      assert FakeKeeper.sent(fake) |> Enum.take(-1) == [:released]
+    end
+
+    test "a reader that dies closes its connection by dying, which cuts the relay",
+         %{name: name, fake: fake} do
+      test = self()
+      :ok = FakeKeeper.mode(fake, {:stdout, :binary.copy(<<1>>, 8 * 1_048_576), test})
+
+      reader =
+        spawn(fn ->
+          Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+            place: place!(name, "build"),
+            deadline: within(60_000),
+            max_stdout_bytes: 16 * 1_048_576,
+            on_stdout:
+              {[],
+               fn _piece, _taken ->
+                 send(test, :taking)
+                 receive do: (:never -> :ok)
+               end}
+          )
+        end)
+
+      assert_receive :taking, 10_000
+      Process.exit(reader, :kill)
+
+      assert_receive {:fake_relay, :cut, _sent}, 10_000
+      wait_until(fn -> releases(fake, 0) != [] end, 5_000, "the dead reader's spawn released")
     end
 
     test "a relay that dials once the client has read the exit and release reports still delivers its output",
@@ -499,8 +632,16 @@ defmodule Locus.KeeperTest do
 
       assert_receive {Keeper, _ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
 
-      # The assign, sent before the relay attaches, is held.
-      assert :ok = Locus.Runtime.Keeper.Channel.send(channel, p.assign)
+      # The assign, sent before the relay attaches, is held, and answered
+      # once the attached connection has written it.
+      sending = Task.async(fn -> Locus.Runtime.Keeper.Channel.send(channel, p.assign) end)
+
+      wait_until(
+        fn ->
+          Enum.any?(:sys.get_state(c.client).requests, fn {_ref, entry} -> entry.pending != [] end)
+        end,
+        5_000
+      )
 
       for process <- [c.client, adapter],
           do: assert(clean?(p, :sys.get_status(process)), "#{inspect(process)} shows the assign")
@@ -514,6 +655,7 @@ defmodule Locus.KeeperTest do
 
       :ok = :gen_tcp.send(relay, Prima.KeeperProtocol.attach_frame(token))
       assert_receive {Keeper, _ref, :attached}, 5_000
+      assert :ok = Task.await(sending)
       hex = Base.encode16(p.key, case: :lower)
       :ok = :gen_tcp.send(relay, [<<4, 4_000::32>>, ~s({"keys":{"call":"#{hex}")])
 
@@ -579,7 +721,7 @@ defmodule Locus.KeeperTest do
           :no_such_keeper_client,
           %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
           place: "pl-gone",
-          timeout_ms: 1_000,
+          deadline: within(1_000),
           max_stdout_bytes: 1_000
         )
 
@@ -612,7 +754,7 @@ defmodule Locus.KeeperTest do
         Task.async(fn ->
           Keeper.run(c.name, %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
             place: "pl-crash",
-            timeout_ms: 10_000,
+            deadline: within(10_000),
             max_stdout_bytes: 1_000
           )
         end)
@@ -694,14 +836,20 @@ defmodule Locus.KeeperTest do
       {handle, relay}
     end
 
-    # Every event of `ref` until a second passes with none, in order.
-    defp heard(ref, acc \\ []) do
+    # Every event of `handle` until a second passes with none, in order,
+    # each of the runner's bytes taken as its owner takes them.
+    defp heard(%{ref: ref} = handle, acc \\ []) do
       receive do
-        {Keeper, ^ref, event} -> heard(ref, [event | acc])
+        {Keeper, ^ref, event} ->
+          took(handle, event)
+          heard(handle, [event | acc])
       after
         1_000 -> Enum.reverse(acc)
       end
     end
+
+    # The process writing to `handle`'s connection: its writer.
+    defp writer!(c, %{ref: ref}), do: :sys.get_state(c.client).requests[ref].writer
 
     defp queued_at_least(pid, n) do
       wait_until(fn -> elem(Process.info(pid, :message_queue_len), 1) >= n end, 5_000)
@@ -747,28 +895,29 @@ defmodule Locus.KeeperTest do
     # already carried reaches the owner.
     test "a runner's last control frame reaches its owner before the close a failed write finds" do
       c = plain_client!()
-      {%{ref: ref} = handle, relay} = attached_runner!(c)
+      {handle, relay} = attached_runner!(c)
 
       # The service writes to the runner while the runner, having written
-      # its last control line, closes its end; the client hears all three
-      # only after the write.
+      # its last control line, closes its end; the client hears the line
+      # only after the write, and the close once the line is taken, since
+      # it reads a held connection one read at a time.
       :ok = :sys.suspend(c.client)
       writer = Task.async(fn -> Keeper.send_control(handle, ~s({"type":"cancel_child"}\n)) end)
       queued_at_least(c.client, 1)
       last = ~s({"type":"complete"}\n)
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
       :ok = :gen_tcp.close(relay)
-      queued_at_least(c.client, 3)
+      queued_at_least(c.client, 2)
       :ok = :sys.resume(c.client)
 
       assert {:error, _reason} = Task.await(writer)
-      assert heard(ref) == [{:control, last}, :control_closed, :relay_closed]
+      assert heard(handle) == [{:control, last}, :control_closed, :relay_closed]
     end
 
     @tag timeout: 60_000
     test "a runner's control frame received while a write waits out its bound reaches its owner first" do
       c = plain_client!()
-      {%{ref: ref} = handle, relay} = attached_runner!(c)
+      {handle, relay} = attached_runner!(c)
       chunk = :binary.copy("x", KeeperProtocol.max_frame_bytes())
 
       writer =
@@ -779,12 +928,558 @@ defmodule Locus.KeeperTest do
 
       # Once a write waits on the full connection, the runner writes its
       # last line, which the client receives while it waits.
-      wait_until(fn -> writing?(c.client) end, 5_000)
+      wait_until(fn -> writing?(writer!(c, handle)) end, 5_000)
       last = ~s({"type":"complete"}\n)
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
 
       assert {:error, :timeout} = Task.await(writer, 15_000)
-      assert heard(ref) == [{:control, last}, :control_closed, :relay_closed]
+      assert heard(handle) == [{:control, last}, :control_closed, :relay_closed]
+      :gen_tcp.close(relay)
+    end
+
+    # The keeper reports a spawn released once its relay has ended, so what
+    # the relay wrote before it is all on the connection: it reaches the
+    # owner, in the wire's order and without its word, before the release.
+    test "a runner's last frames reach its owner before its release, though it took nothing" do
+      c = plain_client!()
+      {%{ref: ref}, relay} = attached_runner!(c)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "first"))
+      assert_receive {Keeper, ^ref, {:control, "first"}}, 5_000
+
+      # The owner does not take the first: the last waits on the socket
+      # when the relay ends and the keeper reports the end.
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "last"))
+      :ok = :gen_tcp.close(relay)
+      id = String.duplicate("cd", 16)
+      exit = %{v: 3, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil}
+      released = %{v: 3, type: "released", spawn_id: id}
+      :ok = :socket.send(c.peer, [Jason.encode!(exit), ?\n, Jason.encode!(released), ?\n])
+
+      assert until_released(ref) ==
+               [
+                 {:control, "last"},
+                 :control_closed,
+                 :relay_closed,
+                 {:exited, {:status, 0}, nil},
+                 :released
+               ]
+    end
+  end
+
+  describe "a held connection" do
+    # A program spawned for the test and attached on a client whose
+    # channel's far end the test holds, the test its relay: its handle and
+    # the relay's end. A task answers the spawn on the channel, since the
+    # spawn is answered only once cyfr-locus reports it spawned.
+    defp attached_program!(c) do
+      id = "pl-" <> Integer.to_string(System.unique_integer([:positive]))
+      placed!(c, id)
+      peer = c.peer
+
+      answering =
+        Task.async(fn ->
+          %{"id" => request_id, "attach" => %{"token" => token}} = request(peer)
+          spawn_id = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+          spawned = %{v: 3, type: "spawned", id: request_id, spawn_id: spawn_id, uid: 1, pid: 1}
+          :ok = :socket.send(peer, [Jason.encode!(spawned), ?\n])
+          token
+        end)
+
+      assert {:ok, %{ref: ref} = handle} =
+               Keeper.spawn(c.name, %{
+                 argv: ["/bin/cat"],
+                 env: %{},
+                 place: id,
+                 pool: "backends",
+                 memory_bytes: 268_435_456,
+                 cpu_quota: 100_000
+               })
+
+      token = Task.await(answering)
+
+      {:ok, relay} =
+        :gen_tcp.connect({:local, Path.join(c.attach_dir, "attach.sock")}, 0, [
+          :binary,
+          active: false
+        ])
+
+      :ok = :gen_tcp.send(relay, KeeperProtocol.attach_frame(token))
+      assert_receive {Keeper, ^ref, :attached}, 5_000
+      {handle, relay}
+    end
+
+    # The process writing to `handle`'s connection: its writer, or none
+    # where the client writes itself.
+    defp writer_of(c, %{ref: ref}), do: Map.get(:sys.get_state(c.client).requests[ref], :writer)
+
+    defp held_writing?(nil), do: false
+    defp held_writing?(pid), do: writing?(pid)
+
+    # The stdout bytes `handle`'s owner is told, taking each piece, until
+    # `bytes` have come.
+    defp take_stdout(%{ref: ref} = handle, bytes, acc \\ []) do
+      if IO.iodata_length(acc) >= bytes do
+        IO.iodata_to_binary(acc)
+      else
+        assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
+        :ok = Keeper.taken(handle)
+        take_stdout(handle, bytes, [acc, piece])
+      end
+    end
+
+    # The stdout pieces already told to the owner, read from its mailbox
+    # without its word: their bytes and how many.
+    defp told(ref, {bytes, count} \\ {0, 0}) do
+      receive do
+        {Keeper, ^ref, {:stdout, piece}} -> told(ref, {bytes + byte_size(piece), count + 1})
+      after
+        0 -> {bytes, count}
+      end
+    end
+
+    @tag timeout: 60_000
+    test "is read one read at a time: what its relay writes past the read waits until the owner took every frame of it" do
+      c = plain_client!()
+      {%{ref: ref} = handle, relay} = attached_program!(c)
+      payload = :binary.copy("x", KeeperProtocol.max_frame_bytes())
+      frames = 64
+      frame = KeeperProtocol.frames(:stdout, payload)
+      sending = Task.async(fn -> for _ <- 1..frames, do: :ok = :gen_tcp.send(relay, frame) end)
+
+      # The owner takes nothing: it is told at most one read, and the relay
+      # waits behind the socket.
+      assert_receive {Keeper, ^ref, {:stdout, first}}, 5_000
+      assert Task.yield(sending, 1_000) == nil
+      {more, pieces} = told(ref)
+      held = byte_size(first) + more
+      assert held <= KeeperProtocol.max_frame_bytes() + 5
+
+      # Taking each frame it is told, the owner is told every byte, in order,
+      # and the relay ends its writes.
+      for _ <- 0..pieces, do: :ok = Keeper.taken(handle)
+      rest = take_stdout(handle, frames * byte_size(payload) - held)
+      assert rest == :binary.copy("x", frames * byte_size(payload) - held)
+      Task.await(sending)
+      :gen_tcp.close(relay)
+    end
+
+    @tag timeout: 60_000
+    test "a relay that stops reading its input holds its writer and the callers waiting on it, never the client or another spawn" do
+      c = plain_client!()
+      {stuck, _stuck_relay} = attached_program!(c)
+      {%{ref: other_ref} = other, other_relay} = attached_program!(c)
+
+      # The stuck program's relay reads nothing: its writes wait on its
+      # full connection, the second behind the first.
+      big = :binary.copy("x", 4 * 1_048_576)
+
+      waiting =
+        Task.async(fn ->
+          first = Keeper.send(stuck, big)
+          _second = Keeper.send(stuck, big)
+          first
+        end)
+
+      wait_until(fn -> writing?(c.client) or held_writing?(writer_of(c, stuck)) end, 5_000)
+
+      # Meanwhile the client answers, writes to another spawn and tells its
+      # owner what it wrote.
+      assert %{requests: %{}} = :sys.get_state(c.client, 1_000)
+      assert :ok = Keeper.send(other, "hello")
+      expected = IO.iodata_to_binary(KeeperProtocol.frames(:stdin, "hello"))
+      assert {:ok, ^expected} = :gen_tcp.recv(other_relay, byte_size(expected), 1_000)
+      :ok = :gen_tcp.send(other_relay, KeeperProtocol.frames(:stdout, "out"))
+      assert_receive {Keeper, ^other_ref, {:stdout, "out"}}, 1_000
+      assert Task.yield(waiting, 0) == nil
+
+      # The stuck write waits out its bound alone, refused.
+      assert {:error, :stdin_closed} = Task.await(waiting, 15_000)
+      :gen_tcp.close(other_relay)
+    end
+
+    @tag timeout: 60_000
+    test "a write is answered once written, what waits to be written is its callers', and the writer ends with its connection" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      big = :binary.copy("x", 1_048_576)
+
+      # The relay reads nothing yet: the first write waits on the connection
+      # and the second behind it, each with its caller, unanswered.
+      first = Task.async(fn -> Keeper.send(handle, big) end)
+      wait_until(fn -> held_writing?(writer) end, 5_000)
+      second = Task.async(fn -> Keeper.send(handle, "after") end)
+
+      wait_until(
+        fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, 1} end,
+        5_000
+      )
+
+      assert Task.yield(first, 200) == nil
+      assert Task.yield(second, 0) == nil
+      assert Process.info(c.client, :message_queue_len) == {:message_queue_len, 0}
+
+      # The relay reads: each is answered, in order, once its bytes are
+      # written.
+      expected =
+        IO.iodata_to_binary([
+          KeeperProtocol.frames(:stdin, big),
+          KeeperProtocol.frames(:stdin, "after")
+        ])
+
+      assert {:ok, ^expected} = :gen_tcp.recv(relay, byte_size(expected), 5_000)
+      assert Task.await(first) == :ok
+      assert Task.await(second) == :ok
+
+      # Two writes wait again; the relay goes: both are answered at once,
+      # within the write bound, and the writer ends with its connection.
+      first = Task.async(fn -> Keeper.send(handle, :binary.copy(big, 4)) end)
+      wait_until(fn -> held_writing?(writer) end, 5_000)
+      second = Task.async(fn -> Keeper.send(handle, "after") end)
+
+      wait_until(
+        fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, 1} end,
+        5_000
+      )
+
+      started = System.monotonic_time(:millisecond)
+      :ok = :gen_tcp.close(relay)
+      assert {:error, :stdin_closed} = Task.await(first, 5_000)
+      assert {:error, :stdin_closed} = Task.await(second, 5_000)
+      assert System.monotonic_time(:millisecond) - started < 4_000
+      wait_until(fn -> not Process.alive?(writer) end, 5_000)
+
+      # A write to the connection that is gone is answered at once.
+      assert {:error, _gone} = Keeper.send(handle, "late")
+    end
+
+    # Every event of `ref`, in order, until and with the first that `last?`
+    # holds for (its `:released`).
+    defp until_released(ref, last? \\ &(&1 == :released), acc \\ []) do
+      receive do
+        {Keeper, ^ref, event} ->
+          if last?.(event),
+            do: Enum.reverse([event | acc]),
+            else: until_released(ref, last?, [event | acc])
+      after
+        5_000 -> flunk("no last event after #{inspect(Enum.reverse(acc))}")
+      end
+    end
+
+    defp channel_reply(c, reply), do: :ok = :socket.send(c.peer, [Jason.encode!(reply), ?\n])
+
+    test "a spawn's frames after its leader's exit reach its owner before the exit" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "one"))
+      assert_receive {Keeper, ^ref, {:stdout, "one"}}, 5_000
+
+      # The leader exits while the owner holds its first frame untaken and
+      # the relay still carries the last: that waits for the owner's word as
+      # any read does, and the exit waits behind it.
+      channel_reply(c, %{v: 3, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "two"))
+      :ok = :gen_tcp.close(relay)
+      refute_receive {Keeper, ^ref, _event}, 500
+
+      :ok = Keeper.taken(handle)
+      assert_receive {Keeper, ^ref, {:stdout, "two"}}, 5_000
+      :ok = Keeper.taken(handle)
+      assert until_released(ref, &match?({:exited, _, _, _}, &1)) == [{:exited, 0, nil, nil}]
+
+      channel_reply(c, %{v: 3, type: "released", spawn_id: id})
+      assert until_released(ref) == [:released]
+    end
+
+    # The relay sends `frames` frames of the largest payload from a task of
+    # its own: the task, the payload and their bytes together.
+    defp flooding(relay, frames) do
+      payload = :binary.copy("y", KeeperProtocol.max_frame_bytes())
+      frame = KeeperProtocol.frames(:stdout, payload)
+      sending = Task.async(fn -> Enum.map(1..frames, fn _ -> :gen_tcp.send(relay, frame) end) end)
+      {sending, frames * byte_size(payload)}
+    end
+
+    # Takes each stdout piece `handle`'s owner is told until the relay's
+    # task has sent every frame and its socket has handed the kernel every
+    # byte, as a relay's writes have once it ends: the bytes it took.
+    defp take_while_sending(%{ref: ref} = handle, sending, relay, bytes) do
+      :ok = Keeper.taken(handle)
+
+      sending =
+        case sending && Task.yield(sending, 0) do
+          {:ok, sent} ->
+            assert Enum.all?(sent, &(&1 == :ok))
+            nil
+
+          _sending_or_sent ->
+            sending
+        end
+
+      if sending == nil and :erlang.port_info(relay, :queue_size) == {:queue_size, 0} do
+        bytes
+      else
+        assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
+        take_while_sending(handle, sending, relay, bytes + byte_size(piece))
+      end
+    end
+
+    @tag timeout: 60_000
+    test "from the release on, the connection is read on the owner's word until the relay ends, and what it left at once" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      {sending, total} = flooding(relay, 16)
+      assert_receive {Keeper, ^ref, {:stdout, first}}, 5_000
+      assert Task.yield(sending, 500) == nil
+
+      # The release is asked while the relay still writes: the owner, which
+      # took nothing, is told nothing more, and the relay waits behind it.
+      :ok = Keeper.release(c.name, handle, 0)
+      assert %{"type" => "release", "spawn_id" => ^id} = request(c.peer)
+      refute_receive {Keeper, ^ref, {:stdout, _piece}}, 1_000
+      assert Task.yield(sending, 0) == nil
+
+      # Taking each piece it is told, the owner lets the relay write the
+      # rest; the relay ends and the keeper reports its end.
+      taken = take_while_sending(handle, sending, relay, byte_size(first))
+      :ok = :gen_tcp.close(relay)
+
+      channel_reply(c, %{
+        v: 3,
+        type: "exited",
+        spawn_id: id,
+        code: nil,
+        signal: "SIGKILL",
+        memory: nil
+      })
+
+      channel_reply(c, %{v: 3, type: "released", spawn_id: id})
+
+      # What the relay left is handed over at once, without the owner's
+      # word: at most the table's figure for it, the relay's socket queue
+      # and one read.
+      told = until_released(ref)
+      left = IO.iodata_length(for {:stdout, piece} <- told, do: piece)
+      memory = Prima.LocusRoles.release().memory
+      assert taken + left == total
+      assert left <= memory.relay_queue_bytes + memory.keeper_read_bytes
+      assert Enum.take(told, -2) == [{:exited, nil, "SIGKILL", nil}, :released]
+    end
+
+    @tag timeout: 60_000
+    test "an owner that takes nothing for the drain's bound once its spawn's end began loses what its connection had not read, the connection closed" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      owing_from = System.monotonic_time(:millisecond)
+      {sending, _total} = flooding(relay, 16)
+      assert_receive {Keeper, ^ref, {:stdout, _first}}, 5_000
+
+      # The release is asked and the owner takes nothing: its connection is
+      # closed once it has owed its word for the bound, which fails the
+      # relay's writes, and the log says so.
+      log =
+        capture_log(fn ->
+          :ok = Keeper.release(c.name, handle, 0)
+          assert %{"type" => "release", "spawn_id" => ^id} = request(c.peer)
+          sent = Task.await(sending, 15_000)
+          closed_after = System.monotonic_time(:millisecond) - owing_from
+          assert Enum.any?(sent, &match?({:error, _closed}, &1))
+          assert closed_after >= 5_000
+        end)
+
+      assert log =~ "took nothing of what it was told for 5000 ms after its end began"
+
+      # The owner was told the one read it owes for and nothing past it;
+      # the spawn's end follows at the keeper's word.
+      assert told(ref) == {0, 0}
+
+      channel_reply(c, %{
+        v: 3,
+        type: "exited",
+        spawn_id: id,
+        code: nil,
+        signal: "SIGKILL",
+        memory: nil
+      })
+
+      channel_reply(c, %{v: 3, type: "released", spawn_id: id})
+      assert until_released(ref) == [{:exited, nil, "SIGKILL", nil}, :released]
+    end
+
+    test "a write whose caller is gone before its writer begins it is not written" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      :erlang.suspend_process(writer)
+      caller = spawn(fn -> Keeper.send(handle, "hello") end)
+
+      wait_until(
+        fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, 1} end,
+        5_000
+      )
+
+      monitor = Process.monitor(caller)
+      Process.exit(caller, :kill)
+      assert_receive {:DOWN, ^monitor, _, _, _}, 5_000
+      :erlang.resume_process(writer)
+      assert {:error, :timeout} = :gen_tcp.recv(relay, 0, 500)
+    end
+
+    test "a write past the four that wait for a connection is refused at once" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      :erlang.suspend_process(writer)
+
+      # Each write reaches the writer before the next is made, so they wait
+      # in the order made.
+      waiting =
+        for n <- 1..4 do
+          task = Task.async(fn -> Keeper.send(handle, "w#{n}") end)
+
+          wait_until(
+            fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, n} end,
+            5_000
+          )
+
+          task
+        end
+
+      assert {:error, :stdin_closed} = Keeper.send(handle, "past")
+      :erlang.resume_process(writer)
+      assert Enum.map(waiting, &Task.await/1) == [:ok, :ok, :ok, :ok]
+
+      expected = IO.iodata_to_binary(for n <- 1..4, do: KeeperProtocol.frames(:stdin, "w#{n}"))
+      assert {:ok, ^expected} = :gen_tcp.recv(relay, byte_size(expected), 5_000)
+      assert {:error, :timeout} = :gen_tcp.recv(relay, 0, 200)
+    end
+
+    # The smallest legal frames, as many as one read holds: the owner is
+    # told them as one message, so what it holds is the read's bytes and
+    # not a message for each frame.
+    test "one read of the smallest frames reaches its owner as one message a stream, within the table's figure for a read" do
+      c = plain_client!()
+      {%{ref: ref}, relay} = attached_program!(c)
+      memory = Prima.LocusRoles.release().memory
+      row = memory.keeper_read_bytes * memory.keeper_read_copies
+      out = IO.iodata_to_binary(KeeperProtocol.frames(:stdout, "x"))
+      err = IO.iodata_to_binary(KeeperProtocol.frames(:stderr, "e"))
+      read = :binary.copy(out <> err, div(60_000, byte_size(out) * 2))
+      :erlang.garbage_collect()
+      {:memory, before} = Process.info(self(), :memory)
+      :ok = :gen_tcp.send(relay, read)
+
+      wait_until(fn -> Process.info(self(), :message_queue_len) |> elem(1) >= 2 end, 5_000)
+      :erlang.garbage_collect()
+      {:memory, held} = Process.info(self(), :memory)
+      assert held - before <= row, "the owner holds #{held - before} bytes, the row #{row}"
+
+      {:messages, messages} = Process.info(self(), :messages)
+      told = for {Keeper, ^ref, event} <- messages, do: event
+      stdout = for {:stdout, piece} <- told, do: piece
+      stderr = for {:stderr, piece} <- told, do: piece
+      assert IO.iodata_to_binary(stdout) == :binary.copy("x", div(byte_size(read), 12))
+      assert IO.iodata_to_binary(stderr) == :binary.copy("e", div(byte_size(read), 12))
+      assert length(told) <= 2 * 2
+    end
+
+    test "a writer ends with its client's normal stop" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      monitor = Process.monitor(writer)
+      GenServer.stop(c.client, :normal)
+      assert_receive {:DOWN, ^monitor, :process, ^writer, _reason}, 5_000
+      :gen_tcp.close(relay)
+    end
+
+    test "a caller waiting on a writer that dies is answered at once" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      :erlang.suspend_process(writer)
+      waiting = Task.async(fn -> Keeper.send(handle, "hello") end)
+
+      wait_until(
+        fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, 1} end,
+        5_000
+      )
+
+      Process.exit(writer, :kill)
+      assert {:ok, {:error, _closed}} = Task.yield(waiting, 1_000)
+      :gen_tcp.close(relay)
+    end
+
+    test "a write before the relay attaches is answered once the attached connection wrote it, or refused at the spawn's end" do
+      c = plain_client!()
+
+      for attaches? <- [true, false] do
+        id = "pre-" <> Integer.to_string(System.unique_integer([:positive]))
+        placed!(c, id)
+        peer = c.peer
+
+        answering =
+          Task.async(fn ->
+            %{"id" => request_id, "attach" => %{"token" => token}} = request(peer)
+            spawn_id = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+            :ok =
+              :socket.send(peer, [
+                Jason.encode!(%{
+                  v: 3,
+                  type: "spawned",
+                  id: request_id,
+                  spawn_id: spawn_id,
+                  uid: 1,
+                  pid: 1
+                }),
+                ?\n
+              ])
+
+            {token, spawn_id}
+          end)
+
+        {:ok, %{ref: ref} = handle} =
+          Keeper.spawn(c.name, %{
+            argv: ["/bin/cat"],
+            env: %{},
+            place: id,
+            pool: "backends",
+            memory_bytes: 268_435_456,
+            cpu_quota: 100_000
+          })
+
+        {token, spawn_id} = Task.await(answering)
+        writing = Task.async(fn -> Keeper.send(handle, "hello") end)
+        assert Task.yield(writing, 300) == nil
+
+        if attaches? do
+          {:ok, relay} =
+            :gen_tcp.connect({:local, Path.join(c.attach_dir, "attach.sock")}, 0, [
+              :binary,
+              active: false
+            ])
+
+          :ok = :gen_tcp.send(relay, KeeperProtocol.attach_frame(token))
+          assert_receive {Keeper, ^ref, :attached}, 5_000
+          expected = IO.iodata_to_binary(KeeperProtocol.frames(:stdin, "hello"))
+          assert {:ok, ^expected} = :gen_tcp.recv(relay, byte_size(expected), 5_000)
+          assert Task.await(writing) == :ok
+          :gen_tcp.close(relay)
+        else
+          channel_reply(c, %{v: 3, type: "released", spawn_id: spawn_id})
+          assert {:error, :stdin_closed} = Task.await(writing)
+        end
+      end
+    end
+
+    test "a writer ends with the client" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      monitor = Process.monitor(writer)
+      Process.exit(c.client, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^writer, _reason}, 5_000
       :gen_tcp.close(relay)
     end
   end
@@ -808,10 +1503,14 @@ defmodule Locus.KeeperTest do
 
     # The events of `handle` until its release, the last, in order, with
     # stdout and stderr each joined where they arrived in pieces.
-    defp events_until_released(%{ref: ref}, acc \\ []) do
+    defp events_until_released(%{ref: ref} = handle, acc \\ []) do
       receive do
-        {Keeper, ^ref, :released} -> joined(Enum.reverse([:released | acc]))
-        {Keeper, ^ref, event} -> events_until_released(%{ref: ref}, [event | acc])
+        {Keeper, ^ref, :released} ->
+          joined(Enum.reverse([:released | acc]))
+
+        {Keeper, ^ref, event} ->
+          took(handle, event)
+          events_until_released(handle, [event | acc])
       after
         10_000 -> flunk("no release; heard #{length(acc)} events")
       end
@@ -913,6 +1612,7 @@ defmodule Locus.KeeperTest do
     test "signal signals the spawn and is the vectors' request", %{name: name, fake: fake} do
       assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
       assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+      :ok = Keeper.taken(handle)
 
       assert {:error, :unencodable} = Keeper.signal(handle, "SIGSTOP")
       assert :ok = Keeper.signal(handle, "SIGTERM")
@@ -930,6 +1630,7 @@ defmodule Locus.KeeperTest do
          %{name: name, fake: fake} do
       assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
       assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+      :ok = Keeper.taken(handle)
 
       assert :ok = Keeper.resize(handle, 50, 132)
 
@@ -952,6 +1653,7 @@ defmodule Locus.KeeperTest do
       script = ~s(trap 'echo term; exit 0' TERM; echo ready; while :; do sleep 0.1; done)
       assert {:ok, handle} = spawn_live(name, script)
       assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+      :ok = Keeper.taken(handle)
 
       assert :ok = Keeper.release(name, handle, 2_000)
       events = events_until_released(handle)
@@ -970,6 +1672,7 @@ defmodule Locus.KeeperTest do
       script = ~s(trap 'echo term; sleep 0.5' TERM; echo ready; while :; do sleep 0.1; done)
       assert {:ok, handle} = spawn_live(name, script)
       assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+      :ok = Keeper.taken(handle)
 
       assert :ok = Keeper.release(name, handle, 1_500)
       events = events_until_released(handle)
@@ -980,6 +1683,7 @@ defmodule Locus.KeeperTest do
     test "release with no grace kills the spawn", %{name: name, fake: fake} do
       assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
       assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+      :ok = Keeper.taken(handle)
 
       :ok = Keeper.release(name, handle, 0)
 
@@ -1759,6 +2463,16 @@ defmodule Locus.KeeperTest do
 
       for text <- ["", "/k", "k:1-2", "/:1-2", "/k/:1-2", "/k:2-1", "/k:0-2", "/k:1-x", nil],
           do: assert(:error = Keeper.parse_kept_homes(text), inspect(text))
+    end
+  end
+
+  # The fake relay's last word once it says nothing more for a while: what
+  # it was doing, and the bytes it had written.
+  defp quiet(last \\ {:none, 0}) do
+    receive do
+      {:fake_relay, kind, sent} -> quiet({kind, sent})
+    after
+      500 -> last
     end
   end
 end
