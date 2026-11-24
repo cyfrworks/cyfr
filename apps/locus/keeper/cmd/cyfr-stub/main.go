@@ -2,10 +2,9 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Command cyfr-stub is the MCP stdio server through which a harness that
-// CYFR drives (Claude Code, under its brain driver cyfr-claude-code) sees
-// CYFR's tools. It runs nothing and holds nothing: CYFR runs every call
-// through its gate before the stub is asked, and the call's input carries
-// the answer.
+// CYFR drives sees CYFR's tools. It runs nothing itself: CYFR runs every
+// call through its gate, and the stub answers what CYFR answered. It has
+// two modes.
 //
 //	cyfr-stub <tool>…
 //
@@ -13,15 +12,28 @@
 // "inputSchema"?}`; `tools/list` answers them in order. A `tools/call`
 // answers the `result` member of the call's arguments as its text content,
 // or the `error` member with `isError`, and nothing else: the harness asks
-// its driver before it calls a tool of the stub's, the driver holds the
-// ask while CYFR runs the call, and its allow puts CYFR's answer into the
-// call's input (`updatedInput`). A call with neither member did not pass
-// that ask, and is answered as an error naming that.
+// its driver before it calls a tool of the stub's (Claude Code under
+// cyfr-claude-code), the driver holds the ask while CYFR runs the call,
+// and its allow puts CYFR's answer into the call's input (`updatedInput`).
+// A call with neither member did not pass that ask, and is answered as an
+// error naming that. One tool per argument, since an argument is bounded
+// by the kernel (MAX_ARG_STRLEN, 128 KiB) and a tool list is not.
 //
-// One tool per argument, since an argument is bounded by the kernel
-// (MAX_ARG_STRLEN, 128 KiB) and a tool list is not. The stub speaks
-// newline-delimited JSON-RPC 2.0 on standard input and output, writes
-// nothing else to its output, and exits when its input closes.
+//	cyfr-stub --socket <name>
+//
+// The tools are the brain driver's, asked of its socket, the abstract Unix
+// socket <name> (production passes the toolsock package's Name). Each
+// `tools/list` asks the socket for its list, so a session's later listing
+// shows the tools the session holds then; a `tools/call` passes the call's
+// name and arguments whole to the socket, and answers its result as text
+// content, with `isError` when the result is an error. The socket answers a
+// call once CYFR has, with no clock, so each call is answered in its own
+// goroutine and calls overlap. A socket the stub cannot reach is answered
+// as an error naming that CYFR's tools are not reachable.
+//
+// Either way the stub speaks newline-delimited JSON-RPC 2.0 on standard
+// input and output, writes nothing else to its output, and exits when its
+// input closes and every call it holds is answered.
 package main
 
 import (
@@ -31,6 +43,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 // maxLineBytes bounds one message from the harness: a call's input with
@@ -40,6 +53,10 @@ const maxLineBytes = 16 << 20
 // ungated is the answer to a call that did not pass the driver's ask.
 const ungated = "This call did not pass CYFR's gate, so CYFR did not run it. Ask again; CYFR answers a call only through its own ask."
 
+// unreachable answers a request in socket mode when the driver's socket
+// cannot be reached: the words the model reads.
+const unreachable = "CYFR's tools are not reachable from this session right now, so CYFR has no answer to this request."
+
 // tool is one tool as `tools/list` answers it.
 type tool struct {
 	Name        string          `json:"name"`
@@ -48,6 +65,17 @@ type tool struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--socket" {
+		if len(os.Args) != 3 || os.Args[2] == "" {
+			fmt.Fprintln(os.Stderr, "cyfr-stub: usage: cyfr-stub --socket NAME")
+			os.Exit(2)
+		}
+		if err := serveSource(os.Stdin, os.Stdout, socket(os.Args[2])); err != nil {
+			fmt.Fprintln(os.Stderr, "cyfr-stub:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	tools, err := parseTools(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cyfr-stub:", err)
@@ -131,28 +159,70 @@ type callResult struct {
 	IsError bool      `json:"isError,omitempty"`
 }
 
-// serve answers the harness's messages from in on out until in closes.
+// source is where a stub's tools come from: the arguments it was given,
+// or the driver's socket.
+type source interface {
+	// list answers `tools/list`.
+	list() (any, *rpcError)
+	// call answers a `tools/call`.
+	call(params json.RawMessage) (callResult, *rpcError)
+	// holds is true when a call waits on another process for its answer,
+	// so each call is answered in its own goroutine.
+	holds() bool
+}
+
+// given is the argument mode's source.
+type given []tool
+
+func (g given) list() (any, *rpcError) {
+	return struct {
+		Tools []tool `json:"tools"`
+	}{g}, nil
+}
+
+func (g given) call(params json.RawMessage) (callResult, *rpcError) { return call(params, g) }
+
+func (given) holds() bool { return false }
+
+// serve answers the harness's messages from in on out until in closes,
+// with the tools it was given.
 func serve(in io.Reader, out io.Writer, tools []tool) error {
+	return serveSource(in, out, given(tools))
+}
+
+// serveSource answers the harness's messages from in on out from src until
+// in closes and every call in flight is answered.
+func serveSource(in io.Reader, out io.Writer, src source) error {
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 64<<10), maxLineBytes)
-	writer := bufio.NewWriter(out)
+	writer := &replies{w: bufio.NewWriter(out)}
+	var calls sync.WaitGroup
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		answer, ok := answer(line, tools)
-		if !ok {
+		var req request
+		if err := json.Unmarshal(line, &req); err != nil {
+			if err := writer.write(response{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{Code: -32700, Message: "parse error"}}); err != nil {
+				return err
+			}
 			continue
 		}
-		encoded, err := json.Marshal(answer)
-		if err != nil {
-			return err
+		if len(req.ID) == 0 || string(req.ID) == "null" {
+			continue
 		}
-		if _, err := writer.Write(append(encoded, '\n')); err != nil {
-			return err
+		// req's members are copies, not views of the scanner's buffer,
+		// so a call's goroutine may outlive this line.
+		if req.Method == "tools/call" && src.holds() {
+			calls.Add(1)
+			go func() {
+				defer calls.Done()
+				_ = writer.write(respond(req, src))
+			}()
+			continue
 		}
-		if err := writer.Flush(); err != nil {
+		if err := writer.write(respond(req, src)); err != nil {
 			return err
 		}
 	}
@@ -162,19 +232,43 @@ func serve(in io.Reader, out io.Writer, tools []tool) error {
 		}
 		return err
 	}
-	return nil
+	calls.Wait()
+	return writer.failed()
 }
 
-// answer is the response to one message, and false for a notification,
-// which is answered with nothing.
-func answer(line []byte, tools []tool) (response, bool) {
-	var req request
-	if err := json.Unmarshal(line, &req); err != nil {
-		return response{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{Code: -32700, Message: "parse error"}}, true
+// replies writes one response a line, one at a time, keeping the first
+// error: every later write fails with it.
+type replies struct {
+	mu  sync.Mutex
+	w   *bufio.Writer
+	err error
+}
+
+func (r *replies) write(reply response) error {
+	encoded, err := json.Marshal(reply)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
 	}
-	if len(req.ID) == 0 || string(req.ID) == "null" {
-		return response{}, false
+	if err == nil {
+		_, err = r.w.Write(append(encoded, '\n'))
 	}
+	if err == nil {
+		err = r.w.Flush()
+	}
+	r.err = err
+	return err
+}
+
+func (r *replies) failed() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
+// respond is the response to one request.
+func respond(req request, src source) response {
 	reply := response{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
 	case "initialize":
@@ -182,11 +276,9 @@ func answer(line []byte, tools []tool) (response, bool) {
 	case "ping":
 		reply.Result = struct{}{}
 	case "tools/list":
-		reply.Result = struct {
-			Tools []tool `json:"tools"`
-		}{tools}
+		reply.Result, reply.Error = src.list()
 	case "tools/call":
-		result, err := call(req.Params, tools)
+		result, err := src.call(req.Params)
 		if err != nil {
 			reply.Error = err
 		} else {
@@ -195,7 +287,7 @@ func answer(line []byte, tools []tool) (response, bool) {
 	default:
 		reply.Error = &rpcError{Code: -32601, Message: "method not found"}
 	}
-	return reply, true
+	return reply
 }
 
 // initialized answers `initialize` in the protocol version the harness

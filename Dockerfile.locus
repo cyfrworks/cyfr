@@ -68,8 +68,8 @@
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser and the
-# brain drivers cyfr-claude-code and cyfr-codex: static Go binaries, pinned
+# ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser, cyfr-fetch
+# and the brain drivers cyfr-claude-code, cyfr-codex and cyfr-acp: static Go binaries, pinned
 # to the Go release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS keeper
 WORKDIR /src
@@ -80,7 +80,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-stub ./cmd/cyfr-stub \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-browser ./cmd/cyfr-browser \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-claude-code ./cmd/cyfr-claude-code \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-codex ./cmd/cyfr-codex
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-codex ./cmd/cyfr-codex \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-acp ./cmd/cyfr-acp \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-fetch ./cmd/cyfr-fetch
 
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
@@ -314,6 +316,16 @@ COPY --from=keeper /out/cyfr-claude-code /opt/cyfr/bin/cyfr-claude-code
 # OpenAI Codex's driver, as a brain of CYFR's, the same way: it starts the
 # harness's app-server in the row's kept home and speaks its protocol.
 COPY --from=keeper /out/cyfr-codex /opt/cyfr/bin/cyfr-codex
+# The one driver of programs that speak the Agent Client Protocol, linked
+# under one name a program, the name it runs under picking its program
+# (cyfr-antigravity). Its harness reaches CYFR's tools through the stub in
+# socket mode, on a socket inside the session's own space.
+COPY --from=keeper /out/cyfr-acp /opt/cyfr/bin/cyfr-acp
+RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity
+# The pinned, checksummed fetch of a program that is not on npm into the
+# row's own folder, before it runs it (Antigravity's row): the image
+# carries no program.
+COPY --from=keeper /out/cyfr-fetch /opt/cyfr/bin/cyfr-fetch
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,

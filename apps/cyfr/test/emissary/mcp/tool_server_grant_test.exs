@@ -39,7 +39,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     {:ok, ctx: ctx, digest: digest}
   end
 
-  defp authority_with_server(digest, server \\ "ghserver") do
+  defp authority_with_server(digest, server \\ "ghserver", patterns \\ ["issues.*"]) do
     node = "formula:local.mcp-consumer"
 
     graph = %{
@@ -62,7 +62,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
                 %{
                   "server_digest" => digest,
                   "server_name" => server,
-                  "tool_patterns" => ["issues.*"],
+                  "tool_patterns" => patterns,
                   "record" => %{"address" => "https://127.0.0.1:1/mcp", "headers" => []}
                 }
               ]
@@ -459,6 +459,93 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
       edit(ctx, granted)
       assert authorized?(ctx, auth)
+    end
+  end
+
+  # A server's resources and prompts are its reserved names, granted only
+  # by naming them: a grant given as `*` before they existed, or naming its
+  # tools alone, covers neither, and one naming `@resources` reads any of
+  # its resources, its prompts still refused.
+  describe "a server's resources and prompts" do
+    setup %{ctx: ctx} do
+      stub = Cyfr.Test.HTTPStub.open()
+
+      Cyfr.Test.HTTPStub.stub(stub, "POST", "/docs", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        result =
+          case body["method"] do
+            "server/discover" ->
+              %{"capabilities" => %{"resources" => %{}, "prompts" => %{}}}
+
+            "resources/read" ->
+              %{"contents" => [%{"uri" => body["params"]["uri"], "text" => "read"}]}
+
+            "prompts/get" ->
+              %{"messages" => []}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end)
+
+      {:ok, server} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "docs",
+          url: "http://127.0.0.1:#{stub.port}/docs"
+        })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id) end)
+      {:ok, docs} = Sanctum.ToolServerDigest.from_server(server)
+      {:ok, docs: docs}
+    end
+
+    defp offered(ctx, auth, name, args),
+      do:
+        Sanctum.Gate.call_in_chain(name, guest(ctx), args, auth,
+          lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+        )
+
+    @read %{"method" => "read", "uri" => "file:///any"}
+    @get %{"method" => "get", "name" => "greet"}
+
+    test "a grant given as * or naming tools alone is refused a read and a get",
+         %{ctx: ctx, docs: docs} do
+      for patterns <- [["*"], ["search"]],
+          {name, args} <- [{"docs:@resources", @read}, {"docs:@prompts", @get}] do
+        auth = authority_with_server(docs, "docs", patterns)
+
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  reason: {:invoke_denied, :tool_server_not_granted}
+                }} =
+                 offered(ctx, auth, name, args),
+               inspect({patterns, name})
+      end
+    end
+
+    test "a grant naming @resources reads any of the server's resources, and no prompt",
+         %{ctx: ctx, docs: docs} do
+      auth = authority_with_server(docs, "docs", ["@resources"])
+
+      for uri <- ["file:///any", "https://elsewhere.example/doc"] do
+        assert {:ok, %{"contents" => [%{"uri" => ^uri, "text" => "read"}]}} =
+                 offered(ctx, auth, "docs:@resources", %{@read | "uri" => uri})
+      end
+
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:invoke_denied, :tool_server_not_granted}
+              }} =
+               offered(ctx, auth, "docs:@prompts", @get)
     end
   end
 

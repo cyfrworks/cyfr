@@ -32,17 +32,28 @@ defmodule Locus.Application do
   `Locus.Runtime.Keeper.direct_keeper/0`), which no other build compiles:
   no setting of a release reaches it.
 
-  The tree restarts `:rest_for_one`, in dependency order: the build
+  The tree starts, in dependency order: the build
   slots, the one client of cyfr-locus (`Locus.Keeper`) when this node was
   started by it, whatever roles it serves (a runtime node's attaches its
   runners' relays in the runtime's attach directory), the count of the
   output each role it serves holds (`Locus.Output`), and no other role's,
   the runtime (`Locus.Runtime.children/1`) when it is served, the builds service's
   listener when builds are served, and the backends service's children
-  (`Locus.Backends.children/0`) when backends are. When cyfr-locus's
-  channel is lost its client stops, everything started after it stops
-  with it, and a client that cannot come back ends the application, and
-  with it the release.
+  (`Locus.Backends.children/0`) when backends are.
+
+  Nothing in it is restarted (`tree_options/0`, the options of every
+  supervisor of a service node's): a child's exit, for any reason, ends
+  the tree, and with it the application and the release. The client,
+  the build slots and the runner pool hold the account of what cyfr-locus
+  holds for this node, and every other role's process holds a part of it
+  or a connection that does; one started again would begin with an empty
+  account while cyfr-locus, which sees no close (the client reads a
+  duplicate of fd 3, and the node still holds fd 3 itself), still held
+  every spawn of the first, so every session, runner and build those
+  spawns served would be lost without their uids, places or memory given
+  back. The node's end is what cyfr-locus reads as its client gone: it
+  retires every spawn it holds, and the node started after it begins
+  with a true account.
   """
 
   use Application
@@ -70,16 +81,21 @@ defmodule Locus.Application do
     keeper? = Locus.Keeper.channel_inherited?()
     :ok = release_logging(roles)
 
-    # The nonces each service has seen, owned by the application so a
-    # listener restart forgets none within the header window.
+    # The nonces each service has seen, made before the tree so each
+    # listener finds its table from its first request.
     :ok = Locus.BuilderService.init_nonces()
     :ok = Locus.Backends.init_nonces()
 
-    Supervisor.start_link(children(roles, keeper?),
-      strategy: :rest_for_one,
-      name: Locus.Supervisor
-    )
+    Supervisor.start_link(children(roles, keeper?), [name: Locus.Supervisor] ++ tree_options())
   end
+
+  @doc """
+  The options every supervisor of a service node's is started with beside
+  its name, `Locus.Supervisor` and the runtime's (`Locus.Runtime`): none
+  restarts a child, so a child's exit ends the node.
+  """
+  @spec tree_options() :: [Supervisor.init_option()]
+  def tree_options, do: [strategy: :one_for_one, max_restarts: 0]
 
   @typedoc "Which roles a service node serves."
   @type roles :: %{runtime: boolean(), builds: boolean(), backends: boolean()}

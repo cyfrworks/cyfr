@@ -2233,14 +2233,18 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp row(%{row: %{"kind" => "tool_servers"}} = assigns) do
-    assigns = assign(assigns, :changes, server_changes(assigns.head, assigns.row["values"]))
+    assigns =
+      assign(assigns,
+        changes: server_changes(assigns.head, assigns.row["values"]),
+        grants: server_grants(assigns.row["values"]["tool_patterns"] || [])
+      )
 
     ~H"""
     <div class="consent-sheet__row" data-row="tool_servers" data-node={@row["node"]}>
       <.node_line row={@row} />
       <span class="font-medium">{@row["values"]["name"]}</span>
       <span class="font-mono text-xs text-gray-400">{@row["values"]["digest"]}</span>
-      <div>Its tools matching: {list_label(@row["values"]["tool_patterns"], "none")}</div>
+      <div :for={line <- @grants} data-test="server-grants">{line}</div>
       <div :for={line <- record_lines(@row["values"]["record"])} data-test="server-record">
         {line}
       </div>
@@ -2884,6 +2888,19 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp field_map_label(_fields, none), do: none
+
+  # What a server's grant gives, a line each: its tools by pattern, then
+  # its resources and its prompts, which only naming them grants
+  # (`Prima.ToolPattern.reserved?/1`), so a `*` covers neither.
+  defp server_grants(patterns) do
+    tools = Enum.reject(patterns, &Prima.ToolPattern.reserved?/1)
+    star = if "*" in tools, do: " (neither its resources nor its prompts)", else: ""
+
+    ["Its tools matching: " <> list_label(tools, "none") <> star] ++
+      for {name, line} <- [{"@resources", "Its resources"}, {"@prompts", "Its prompts"}],
+          name in patterns,
+          do: line
+  end
 
   defp list_label([], none), do: none
   defp list_label(values, _none) when is_list(values), do: Enum.join(values, ", ")
