@@ -544,13 +544,15 @@ defmodule Aqua.Crew do
   defp within_bound(scrolls, operation) do
     bytes = scrolls |> Enum.map(&byte_size(&1["body"])) |> Enum.sum()
 
-    if bytes <= Compendium.skill_max_bytes(),
+    %{bytes: most} = Compendium.skill_bound()
+
+    if bytes <= most,
       do: :ok,
       else:
         {:error,
          {:invalid_argument,
           "#{operation}: the scrolls named hold #{bytes} bytes together, more than the " <>
-            "#{Compendium.skill_max_bytes()} one job carries"}}
+            "#{most} one job carries"}}
   end
 
   defp with_scrolls(payload, []), do: payload

@@ -270,7 +270,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                 id={"aqua-scroll-too-large-" <> skill.name}
                 class="text-[11px] text-amber-400"
               >
-                Aqua does not use this scroll: a scroll holds at most {Compendium.skill_max_bytes()} bytes and its description at most {Compendium.skill_max_description()} characters. Edit it shorter.
+                Aqua does not use this scroll: a scroll holds at most {Compendium.skill_bound().bytes} bytes and its description at most {Compendium.skill_bound().description} characters. Edit it shorter.
               </p>
             </li>
           </ul>

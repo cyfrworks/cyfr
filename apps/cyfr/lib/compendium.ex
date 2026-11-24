@@ -644,16 +644,12 @@ defmodule Compendium do
   @spec skill(Context.t(), term()) :: {:ok, AquaSkills.scroll()} | {:error, term()}
   defdelegate skill(ctx, name), to: AquaSkills
 
-  @doc "The most bytes a scroll's manifest holds (`Compendium.AquaSkills.max_bytes/0`)."
-  @spec skill_max_bytes() :: pos_integer()
-  defdelegate skill_max_bytes(), to: AquaSkills, as: :max_bytes
-
   @doc """
-  The most characters a scroll's description holds
-  (`Compendium.AquaSkills.max_description/0`).
+  A scroll's bound (`Compendium.AquaSkills`): the most bytes its manifest
+  holds and the most characters its description holds.
   """
-  @spec skill_max_description() :: pos_integer()
-  defdelegate skill_max_description(), to: AquaSkills, as: :max_description
+  @spec skill_bound() :: %{bytes: pos_integer(), description: pos_integer()}
+  def skill_bound, do: %{bytes: AquaSkills.max_bytes(), description: AquaSkills.max_description()}
 
   @doc "The most skills a prompt lists (`Compendium.AquaSkills.index_limit/0`)."
   @spec skills_index_limit() :: pos_integer()
