@@ -169,7 +169,9 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     assert html =~ "Previous app (←)"
     assert html =~ "Next app (→)"
     assert html =~ ~s(aria-label="App 1 of 2")
-    refute html =~ ~r/[Tt]incture( \d| not|s installed|s registered)|this tincture|Refresh tinctures|(Previous|Next) tincture/
+
+    refute html =~
+             ~r/[Tt]incture( \d| not|s installed|s registered)|this tincture|Refresh tinctures|(Previous|Next) tincture/
 
     flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
     assert flash =~ "on this app&#39;s owner profile."
