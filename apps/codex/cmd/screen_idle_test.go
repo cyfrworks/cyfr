@@ -936,3 +936,25 @@ func TestScreenShell_WritesTheSharedListOnlyHoldingItsListener(t *testing.T) {
 		t.Fatalf("a screen without its listener wrote the list (%v)", err)
 	}
 }
+
+// The screen's own end (SIGTERM, SIGINT or SIGHUP, its context's end) is
+// its last lock too: it hides, says ending and returns.
+func TestScreenShell_ItsOwnEndSaysEnding(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	screenPrograms(t, quietScreen())
+	app, in, out := newAppSide(t)
+	listen, address := ownListener()
+	ctx, cancel := context.WithCancel(context.Background())
+	ended := make(chan error, 1)
+	go func() { ended <- runScreenShell(ctx, listen, in, out) }()
+	s := &runningScreen{t: t, app: app, address: address}
+	s.openBox(app.next("ready"))
+	cancel()
+	app.until("ending")
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the screen's own end did not end it")
+	}
+}

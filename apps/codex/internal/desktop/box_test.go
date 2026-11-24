@@ -203,13 +203,17 @@ func TestThisBoxOpensWhatItsFolderNamesNow(t *testing.T) {
 	var open atomic.Bool
 	open.Store(true)
 	unlockedAs(t, &open)
-	b.Forget(moved)
-	b.quiet(t)
-	if _, ok := held(t, b.Homes, moved); !ok {
-		t.Fatal("This box's entry was forgotten")
-	}
 	b.Forget(localAddress)
 	b.erases(t, 2)
+	// Not even as the CYFR a departure from its unlocked device just left.
+	b.Leave(2)
+	b.next(t)
+	b.next(t)
+	b.Forget(moved)
+	b.quiet(t)
+	if rec, ok := held(t, b.Homes, moved); !ok || rec.Forgetting {
+		t.Fatalf("This box's entry was forgotten: %+v", rec)
+	}
 }
 
 // After a CYFR was selected, a box's start offers it, not This box.
@@ -313,6 +317,7 @@ func TestABoxForgetsOnlyWhileUnlocked(t *testing.T) {
 	b.quiet(t)
 	b.Forget(other)
 	b.erases(t, 1)
+	seen = b.rail(t, 0).Seq
 	b.Lock("Locked.")
 	b.next(t)
 	if list := b.rail(t, seen); list.Seq == seen {
