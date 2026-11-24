@@ -844,5 +844,165 @@
         "event": 7
       }
     ]
+  },
+  "person": {
+    "comment": "What the driver is started with of its person (the driver's --person, Opus.Browser.Frame.start_args/1): their language and time zone exactly as their own browser reported them to CYFR, a JSON object of locale and time_zone. A language is a well-formed tag: a primary subtag of 2 or 3 letters, then subtags of 1 to 8 letters and digits joined by hyphens, a one-character subtag never last, at most 35 bytes. A zone is one the zone database has. Each field at most once, a string, never null, no other field. Neither stored is no argument, and Chrome's own en-US and UTC. Each accepted person is started with argv; Chrome is given switches and its process the TZ tz; its pages read languages as navigator.languages and send accept_language. Each refused person, and each refused value of --person, starts nothing, on either side.",
+    "accept": [
+      {
+        "name": "a language and a time zone",
+        "person": {
+          "locale": "ja-JP",
+          "time_zone": "Asia/Tokyo"
+        },
+        "argv": [
+          "--person",
+          "{\"locale\":\"ja-JP\",\"time_zone\":\"Asia/Tokyo\"}"
+        ],
+        "switches": [
+          "--lang=ja-JP",
+          "--accept-lang=ja-JP"
+        ],
+        "tz": "Asia/Tokyo",
+        "accept_language": "ja-JP",
+        "languages": [
+          "ja-JP"
+        ]
+      },
+      {
+        "name": "a tag with a script and a region",
+        "person": {
+          "locale": "zh-Hant-TW"
+        },
+        "argv": [
+          "--person",
+          "{\"locale\":\"zh-Hant-TW\"}"
+        ],
+        "switches": [
+          "--lang=zh-Hant-TW",
+          "--accept-lang=zh-Hant-TW"
+        ],
+        "tz": "",
+        "accept_language": "zh-Hant-TW",
+        "languages": [
+          "zh-Hant-TW"
+        ]
+      },
+      {
+        "name": "a time zone alone",
+        "person": {
+          "time_zone": "America/Argentina/Buenos_Aires"
+        },
+        "argv": [
+          "--person",
+          "{\"time_zone\":\"America/Argentina/Buenos_Aires\"}"
+        ],
+        "switches": [],
+        "tz": "America/Argentina/Buenos_Aires",
+        "accept_language": "",
+        "languages": []
+      },
+      {
+        "name": "neither: Chrome's own",
+        "person": {},
+        "argv": [],
+        "switches": [],
+        "tz": "",
+        "accept_language": "",
+        "languages": []
+      }
+    ],
+    "refuse": [
+      {
+        "name": "a language out of its grammar",
+        "person": {
+          "locale": "de_DE"
+        }
+      },
+      {
+        "name": "an empty language",
+        "person": {
+          "locale": ""
+        }
+      },
+      {
+        "name": "a primary subtag of four letters",
+        "person": {
+          "locale": "abcd-EF"
+        }
+      },
+      {
+        "name": "a primary subtag of one letter",
+        "person": {
+          "locale": "j"
+        }
+      },
+      {
+        "name": "a one-character subtag last",
+        "person": {
+          "locale": "ja-x"
+        }
+      },
+      {
+        "name": "a tag past 35 bytes",
+        "person": {
+          "locale": "ja-abcdefgh-abcdefgh-abcdefgh-abcdefgh"
+        }
+      },
+      {
+        "name": "a null language",
+        "person": {
+          "locale": null
+        }
+      },
+      {
+        "name": "a zone no database has",
+        "person": {
+          "time_zone": "Mars/Olympus_Mons"
+        }
+      },
+      {
+        "name": "a zone that climbs out",
+        "person": {
+          "time_zone": "../etc/passwd"
+        }
+      },
+      {
+        "name": "a zone of four parts",
+        "person": {
+          "time_zone": "A/B/C/D"
+        }
+      },
+      {
+        "name": "a key besides the two",
+        "person": {
+          "locale": "ja",
+          "mode": "dark"
+        }
+      },
+      {
+        "name": "a value that is no string",
+        "person": {
+          "time_zone": 5
+        }
+      }
+    ],
+    "refuse_values": [
+      {
+        "name": "a field twice",
+        "value": "{\"locale\":\"ja-JP\",\"locale\":\"en-US\"}"
+      },
+      {
+        "name": "something after the object",
+        "value": "{\"locale\":\"ja-JP\"} {}"
+      },
+      {
+        "name": "no object",
+        "value": "[\"ja-JP\"]"
+      },
+      {
+        "name": "a field of another case",
+        "value": "{\"Locale\":\"ja-JP\"}"
+      }
+    ]
   }
 }

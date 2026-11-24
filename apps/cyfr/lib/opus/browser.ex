@@ -50,7 +50,10 @@ defmodule Opus.Browser do
   use the browser at all is the person's browser setting, which the
   tool's provider reads before it calls here (`Aqua.BrowserSetting`) and
   hands to `act/4` as a check, which the holder reads again before it
-  starts the browser (below).
+  starts the browser (below). The check's yes carries what the browser is
+  started with of its person, their language and time zone as they are
+  stored (`Aqua.BrowserSetting.start/1`): Opus reads no preference, and
+  a change the person makes reaches the browser at its next start.
 
   ## Its life
 
@@ -280,6 +283,21 @@ defmodule Opus.Browser do
     end
   end
 
+  @typedoc """
+  The check a caller hands with a request that may start the browser: the
+  person's browser setting read now, `{:ok, person}` for yes with what the
+  browser is started with of its person, anything else for no.
+  """
+  @type start :: (-> {:ok, Frame.person()} | term())
+
+  @doc "Whether `tag` is a language the browser may read pages in (`Opus.Browser.Frame.language?/1`)."
+  @spec language?(term()) :: boolean()
+  defdelegate language?(tag), to: Frame
+
+  @doc "Whether `zone` is a time zone the browser may read pages in (`Opus.Browser.Frame.zone?/1`)."
+  @spec zone?(term()) :: boolean()
+  defdelegate zone?(zone), to: Frame
+
   @doc """
   Run `op` (`ops/0`) with `args` in the window of the caller's thread:
   the caller is a turn as `Opus.Programs.turn/2` names one, proved here.
@@ -291,15 +309,17 @@ defmodule Opus.Browser do
   session ended under the request), `:turned_off` (`stop/2` meanwhile),
   `:too_large`, or a start's refusal.
 
-  `allowed?` answers, when it is called, whether the person's browser
-  setting lets Aqua use the browser now. The holder calls it before it
-  starts the browser for this request, after it is registered; with it
-  `false` the request is answered `:turned_off` and nothing starts.
+  `start` answers, when it is called, whether the person's browser
+  setting lets Aqua use the browser now, `{:ok, person}` with what the
+  browser is started with of its person (`t:Opus.Browser.Frame.person/0`)
+  or anything else for no. The holder calls it before it starts the
+  browser for this request, after it is registered; with a no the
+  request is answered `:turned_off` and nothing starts.
   """
-  @spec act(Programs.caller(), String.t(), map(), (-> boolean())) ::
+  @spec act(Programs.caller(), String.t(), map(), start()) ::
           {:ok, map()} | {:error, term()}
-  def act({:turn, _ctx, lineage} = caller, op, args, allowed?)
-      when op in @ops and is_map(args) and is_function(allowed?, 0) do
+  def act({:turn, _ctx, lineage} = caller, op, args, start)
+      when op in @ops and is_map(args) and is_function(start, 0) do
     with {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
          window when is_binary(window) <- Map.get(lineage, "thread_id"),
          {:ok, chrome} <- chrome(athanor_id, window),
@@ -309,8 +329,8 @@ defmodule Opus.Browser do
       # alone, so no debug log, status or crash report prints them.
       GenServer.call(
         pid,
-        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), allowed?,
-         nil, nil},
+        {:act, caller, turn_id, window, op, Programs.Output.new(Jason.encode!(args)), start, nil,
+         nil},
         @start_ms + @request_ms + @answer_margin_ms
       )
     else
@@ -345,13 +365,13 @@ defmodule Opus.Browser do
   before anything starts or is written; otherwise answered as `act/4`
   answers.
   """
-  @spec put(Programs.caller(), put(), (-> boolean())) :: {:ok, map()} | {:error, term()}
+  @spec put(Programs.caller(), put(), start()) :: {:ok, map()} | {:error, term()}
   def put(
         {:turn, _ctx, lineage} = caller,
         %{root: root, entry: entry, files: [_ | _] = files} = put,
-        allowed?
+        start
       )
-      when is_binary(root) and is_binary(entry) and is_function(allowed?, 0) do
+      when is_binary(root) and is_binary(entry) and is_function(start, 0) do
     with :ok <- within_bound(files),
          {:ok, {athanor_id, user_id, turn_id}} <- turn(caller),
          window when is_binary(window) <- Map.get(lineage, "thread_id"),
@@ -371,7 +391,7 @@ defmodule Opus.Browser do
       GenServer.call(
         pid,
         {:act, caller, turn_id, window, "page", Programs.Output.new(Jason.encode!(manifest)),
-         allowed?, parts, Map.get(put, :tincture)},
+         start, parts, Map.get(put, :tincture)},
         @start_ms + @request_ms + @answer_margin_ms
       )
     else
@@ -413,7 +433,7 @@ defmodule Opus.Browser do
   viewer: the context a browser's session has on the console's admission
   path (`auth_method: :oidc`, origin `interactive`, no frame; it is
   `CyfrWeb.ContextGuard`'s), whose person the session owner proves. The
-  browser starts when none runs, after `allowed?` (as `act/4`'s) says it
+  browser starts when none runs, after `start` (as `act/4`'s) says it
   may, and the window's images are scaled to fit `size`. Answers the
   watch, whose messages carry its reference (moduledoc), or `:not_owned`
   for any other caller, which starts nothing: a key, a frame, a paired
@@ -425,21 +445,21 @@ defmodule Opus.Browser do
           Sanctum.Context.t(),
           String.t(),
           %{width: pos_integer(), height: pos_integer()},
-          (-> boolean())
+          start()
         ) ::
           {:ok, watch()} | {:error, term()}
   def watch(
         %Sanctum.Context{auth_method: :oidc, origin: :interactive, frame: nil} = ctx,
         window,
         %{width: width, height: height},
-        allowed?
+        start
       )
       when is_binary(window) and window != "" and width in 16..4096 and height in 16..4096 and
-             is_function(allowed?, 0) do
+             is_function(start, 0) do
     with {:ok, {athanor_id, user_id}} <- person_of(ctx),
          {:ok, chrome} <- chrome(athanor_id, window),
          {:ok, pid} <- holder(athanor_id, user_id, chrome) do
-      ask(pid, window, %{width: width, height: height}, allowed?)
+      ask(pid, window, %{width: width, height: height}, start)
     end
   end
 
@@ -449,14 +469,14 @@ defmodule Opus.Browser do
   # admits nothing past it. A caller whose wait ran out withdraws the ask,
   # which reaches the holder after it, so a watch it was not told of is
   # ended as soon as it was admitted.
-  defp ask(pid, window, size, allowed?) do
+  defp ask(pid, window, size, start) do
     ask = make_ref()
     deadline = now() + @watch_ms
 
     try do
       GenServer.call(
         pid,
-        {:watch, self(), ask, deadline, window, size, allowed?},
+        {:watch, self(), ask, deadline, window, size, start},
         @watch_ms + @answer_margin_ms
       )
     catch
@@ -783,8 +803,7 @@ defmodule Opus.Browser do
 
   @impl true
   def handle_call(
-        {:act, caller, turn_id, window, op, %Programs.Output{} = args, allowed?, upload,
-         tincture},
+        {:act, caller, turn_id, window, op, %Programs.Output{} = args, start, upload, tincture},
         from,
         state
       ) do
@@ -816,7 +835,7 @@ defmodule Opus.Browser do
         {:noreply, %{state | queued: state.queued ++ [request]}}
 
       true ->
-        {:noreply, start_session(%{state | queued: [request]}, allowed?)}
+        {:noreply, start_session(%{state | queued: [request]}, start)}
     end
   end
 
@@ -881,7 +900,7 @@ defmodule Opus.Browser do
   def handle_call({:wanted_input, ref, cast}, _from, state),
     do: {:reply, watching?(state, ref, cast), state}
 
-  def handle_call({:watch, viewer, ask, deadline, window, size, allowed?}, _from, state) do
+  def handle_call({:watch, viewer, ask, deadline, window, size, start}, _from, state) do
     cond do
       # Its caller has stopped waiting: nothing is admitted for it.
       now() > deadline ->
@@ -920,7 +939,7 @@ defmodule Opus.Browser do
 
         state = %{state | watches: Map.put(state.watches, ref, watch), last_act: now()}
         tell(watch, :watching)
-        {:reply, {:ok, {self(), ref}}, state |> cast(ref, allowed?) |> idle()}
+        {:reply, {:ok, {self(), ref}}, state |> cast(ref, start) |> idle()}
     end
   end
 
@@ -1160,7 +1179,7 @@ defmodule Opus.Browser do
     MapSet.union(state.windows, MapSet.new(on_the_way))
   end
 
-  defp start_session(state, allowed?) do
+  defp start_session(state, start) do
     %{athanor_id: athanor_id, browser: browser, chrome: chrome} = state
     Process.send_after(self(), :hello_expired, @start_ms)
     holder = self()
@@ -1171,15 +1190,21 @@ defmodule Opus.Browser do
     # anything starts: one `stop/2` did not find reads it off.
     task =
       Task.async(fn ->
-        with :ok <- if(allowed?.(), do: :ok, else: {:error, :turned_off}),
+        with {:ok, person} <- started_as(start.()),
+             {:ok, args} <- Frame.start_args(person),
              {:ok, row} <- athanor_id |> row(chrome) |> of_chrome(chrome),
              :ok <- close_running(browser, row.id) do
-          Programs.start(browser, row.id, %{rows: @rows, cols: @cols, args: [], held_by: holder})
+          Programs.start(browser, row.id, %{rows: @rows, cols: @cols, args: args, held_by: holder})
         end
       end)
 
     %{state | phase: :starting, starting: task}
   end
+
+  # The check's answer: a yes with the person the browser starts with, or
+  # any other answer for no.
+  defp started_as({:ok, %{} = person}), do: {:ok, person}
+  defp started_as(_no), do: {:error, :turned_off}
 
   defp started({:ok, session}, %{stopping: true} = state),
     do: {:stop, :normal, close_session(%{state | session: session})}
@@ -1676,9 +1701,9 @@ defmodule Opus.Browser do
   defp tell(watch, message), do: send(watch.viewer, {__MODULE__, {self(), watch.ref}, message})
 
   # Ask the driver for the watch's cast, starting the browser first when
-  # none runs (`allowed?` as an action's): only a new watch may find none,
-  # and only it is handed `allowed?`.
-  defp cast(state, ref, allowed?) do
+  # none runs (`start` as an action's): only a new watch may find none,
+  # and only it is handed `start`.
+  defp cast(state, ref, start) do
     watch = state.watches[ref]
 
     request = %{
@@ -1693,7 +1718,7 @@ defmodule Opus.Browser do
     case state.phase do
       :ready -> send_request(state, request)
       :starting -> %{state | queued: state.queued ++ [request]}
-      :idle when is_function(allowed?, 0) -> start_session(%{state | queued: [request]}, allowed?)
+      :idle when is_function(start, 0) -> start_session(%{state | queued: [request]}, start)
     end
   end
 

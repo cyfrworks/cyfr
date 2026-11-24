@@ -165,12 +165,13 @@ defmodule PrismWeb.ToolSeamTest do
     # (docs/plans/prism-desktop.md): no agent writes them, so there is no
     # tool for them.
     {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Compendium.put_desktop_prefs"},
-    # The person's own time zone, as their browser reports it when the
-    # shell connects, a preference of the same kind: written to the
-    # session's own person under their own session when it differs, held
-    # to the zone database, and read only to name their day (`Aqua.Day`).
-    # No agent has a reason to write it.
-    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Aqua.put_time_zone"}
+    # The person's own time zone and language, as their browser reports
+    # them when the shell connects, preferences of the same kind: written
+    # to the session's own person under their own session when they
+    # differ, held to CYFR's one definition of each, and read to name
+    # their day (`Aqua.Day`) and for the pages Aqua's browser shows
+    # (`Aqua.Reading`). No agent has a reason to write them.
+    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Aqua.put_reading"}
   ]
 
   # The namespaces whose state the console must not change behind the tool

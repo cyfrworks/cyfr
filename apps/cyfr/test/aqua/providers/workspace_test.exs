@@ -823,14 +823,14 @@ defmodule Aqua.Providers.WorkspaceTest do
     test "a report delivered after midnight lands on the new day's daily thread",
          %{ctx: ctx, daily: daily} do
       script!([reply("Working."), reply("Your report arrived.")])
-      :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+      :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @west})
       workspace = open!(ctx, daily)
       turn = turn!(ctx, workspace.id)
       {:ok, _} = Tape.report_workspace(ctx, turn, "done", %{summary: "Done."})
       stop!(ctx, turn)
       {:ok, before} = Aqua.Day.current(ctx)
 
-      :ok = Aqua.Day.put_zone(ctx.user_id, @east)
+      :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @east})
       {:ok, after_midnight} = Aqua.Day.current(ctx)
       assert after_midnight.id != before.id
 
@@ -957,7 +957,7 @@ defmodule Aqua.Providers.WorkspaceTest do
     # across midnight.
     test "a report tried again after midnight discards what a try that died copied, behind 200 more recently active daily threads",
          %{ctx: ctx, daily: daily} do
-      :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+      :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @west})
       record = charted!(ctx, daily)
       id = Crew.report_id(record)
       {:ok, earlier} = Aqua.Day.current(ctx)
@@ -984,7 +984,7 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       {200, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, rows)
 
-      :ok = Aqua.Day.put_zone(ctx.user_id, @east)
+      :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @east})
       {:ok, today} = Aqua.Day.current(ctx)
       assert today.id != earlier.id
 

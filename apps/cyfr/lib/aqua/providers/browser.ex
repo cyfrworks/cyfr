@@ -357,7 +357,7 @@ defmodule Aqua.Providers.Browser do
          {:ok, _work} <- workspace(ctx, thread),
          {:ok, _watch} <-
            Opus.Browser.watch(ctx, thread, %{width: width, height: height}, fn ->
-             Aqua.BrowserSetting.allowed?(ctx) == {:ok, true}
+             Aqua.BrowserSetting.start(ctx)
            end)
            |> watcher() do
       {:ok, %{watching: thread}}
@@ -371,9 +371,7 @@ defmodule Aqua.Providers.Browser do
          {:ok, _turn} <- Opus.Browser.turn(caller) |> refused(),
          {:ok, put} <- put(ctx, args),
          {:ok, answer} <-
-           Opus.Browser.put(caller, put, fn ->
-             Aqua.BrowserSetting.allowed?(ctx) == {:ok, true}
-           end)
+           Opus.Browser.put(caller, put, fn -> Aqua.BrowserSetting.start(ctx) end)
            |> refused() do
       {:ok, %{url: answer["url"], title: answer["title"]}}
     end
@@ -386,7 +384,7 @@ defmodule Aqua.Providers.Browser do
          {:ok, _turn} <- Opus.Browser.turn(caller) |> refused(),
          {:ok, answer} <-
            Opus.Browser.act(caller, action, Map.take(args, @driver_args[action]), fn ->
-             Aqua.BrowserSetting.allowed?(ctx) == {:ok, true}
+             Aqua.BrowserSetting.start(ctx)
            end)
            |> refused() do
       answered(action, ctx, caller, args, answer)

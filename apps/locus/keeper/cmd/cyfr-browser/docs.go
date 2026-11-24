@@ -5,7 +5,10 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // A request for a file of a window's put is answered from the put of the
 // document that made it, as Chrome names that document, and from no other.
@@ -27,17 +30,38 @@ import "fmt"
 // while the window has one put it can belong to: while no show's entry has
 // been answered without its commit being taken (loading), the show's end
 // counting for none, since Chrome reports the entry's load beside its
-// commit and not after it. Otherwise it
-// waits for that commit or the show's end, and is then answered from the
-// put that stands. Two cases follow, and neither reaches another window's
-// files: a keepalive request of a page whose put was replaced is answered
-// from the put that stands, to a page that is gone; and a worker's request
-// made while a show loads waits for that show's commit or end.
+// commit and not after it. Otherwise it waits for that commit or the
+// show's end, and is then answered from the put that stands. Two cases
+// follow, and neither reaches another window's files: a keepalive request
+// of a page whose put was replaced is answered from the put that stands,
+// to a page that is gone; and a worker's request made while a show loads
+// waits for that show's commit or end.
 //
-// A request waits only for what names it: its loader's report, its
-// frame's attachment, or a show's commit or end. At most maxWaiting wait
-// in a window; one past that is refused, which the driver's log says once
-// for the window.
+// A page's call goes up when it is made with the reserved origin, by its
+// Origin header, which Chrome sets as the caller acts (a sandboxed frame's
+// is null) and no script can set; names a document, its loader; that
+// document is its frame's document now; and that document's put is the
+// window's. Anything else is refused: its fetch fails as a network error,
+// and the host never hears of it. A call carries a person's action, so it
+// is stricter than a file, and it waits for one thing only: its own
+// report, when its pause came first. Chrome sends a document's report from
+// the page's process after that document's commit and its frames'
+// attachments, on the same session, and each session's events are taken
+// in the order Chrome sent them (the image's Chromium 156 showed it over
+// 900 navigations within one put, by link, reload and form, each new
+// document and its frame calling as they started): so when a call's report
+// is taken, its document's commit and its frame's attachment have been,
+// and one not yet known is refused, not waited for.
+//
+// A file's request waits only for what names it: its loader's report, its
+// frame's attachment, or a show's commit or end. A report is kept until its
+// request pauses, whatever became of its document's put, so a pause that
+// comes late is refused, not held; at most maxReports are kept, the oldest
+// forgotten first. At most maxWaiting wait in a window; one past that is
+// refused, which the driver's log says once for the window. A request
+// whose report was forgotten past maxReports waits for a report that will
+// not come, a call's among them: it holds one of the maxWaiting places
+// until its session ends.
 const (
 	maxWaiting = 256
 	// maxReports bounds the reports kept for requests not yet paused.
@@ -59,32 +83,43 @@ type documents struct {
 	// by network id, the oldest first in order.
 	reports map[string]string
 	order   []string
-	waiting []fileRequest
+	waiting []waiter
 	// full says the driver's log has said the window's bound was reached.
 	full bool
 }
 
-// fileRequest is a paused request for a file of a put: a GET or a HEAD
-// that is not the main frame's navigation, by its session and id, with its
-// decoded path, its network id and the frame Chrome names. navigation says
-// it is a frame's navigation; named, that its loader is known.
-type fileRequest struct {
+// waiter is a paused request of a window's pages: for a file of a put, a
+// GET or a HEAD that is not the main frame's navigation, or a call, by its
+// session and id, with its decoded path, its network id and the frame
+// Chrome names. navigation says it is a frame's navigation; named, that
+// its loader is known.
+type waiter struct {
 	session, request, path string
 	head, navigation       bool
 	network, frame, loader string
 	named                  bool
+	call                   *callArgs
 }
 
-// answered is a request whose put is known: nil answers it nothing.
+// callArgs is what a call carries: its op, and its pause, which its
+// body is read from.
+type callArgs struct {
+	op     string
+	paused pausedRequest
+}
+
+// answered is a request whose put is known, nil answering it nothing, and
+// for a call the window's generation when that became known.
 type answered struct {
-	r fileRequest
-	p *put
+	r   waiter
+	p   *put
+	gen int64
 }
 
 func (d *documents) init() {
 	if d.puts == nil {
-		d.puts, d.owners, d.current, d.frames, d.reports = map[string]*put{}, map[string]string{}, map[string]string{},
-			map[string]string{}, map[string]string{}
+		d.puts, d.owners, d.current, d.frames, d.reports = map[string]*put{}, map[string]string{},
+			map[string]string{}, map[string]string{}, map[string]string{}
 	}
 }
 
@@ -136,9 +171,12 @@ func (w *window) putOf(loader string) (*put, bool) {
 
 // place answers the put r is answered from, and false while what names
 // r's document has not come.
-func (w *window) place(r *fileRequest) (*put, bool) {
+func (w *window) place(r *waiter) (*put, bool) {
 	d := &w.docs
 	d.init()
+	if r.call != nil {
+		return w.placeCall(r)
+	}
 	if r.navigation {
 		owner, ok := d.owners[r.frame]
 		if !ok {
@@ -167,13 +205,47 @@ func (w *window) place(r *fileRequest) (*put, bool) {
 	return w.usable(w.put), true
 }
 
+// placeCall answers the put call r goes up for, nil for none, and false
+// while its report has not come.
+func (w *window) placeCall(r *waiter) (*put, bool) {
+	d := &w.docs
+	if r.network == "" || header(r.call.paused.Request.Headers, "Origin") != reservedOrigin {
+		return nil, true
+	}
+	if !r.named {
+		loader, ok := d.reports[r.network]
+		if !ok {
+			return nil, false
+		}
+		delete(d.reports, r.network)
+		r.loader, r.named = loader, true
+	}
+	if r.loader == "" || d.current[r.frame] != r.loader {
+		return nil, true
+	}
+	if p, ok := w.putOf(r.loader); ok && p != nil && p == w.put {
+		return p, true
+	}
+	return nil, true
+}
+
+// header is the value of the header name in headers, by any case.
+func header(headers map[string]string, name string) string {
+	for key, value := range headers {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
+}
+
 // settle takes every waiting request whose put is now known.
 func (w *window) settle() []answered {
 	var done []answered
 	kept := w.docs.waiting[:0]
 	for _, r := range w.docs.waiting {
 		if p, ok := w.place(&r); ok {
-			done = append(done, answered{r, p})
+			done = append(done, answered{r, p, w.gen})
 		} else {
 			kept = append(kept, r)
 		}
@@ -183,8 +255,9 @@ func (w *window) settle() []answered {
 	return done
 }
 
-// prune forgets the documents of puts that can no longer be answered, and
-// the reports of their requests, after a commit or a show's end.
+// prune forgets the documents of puts that can no longer be answered,
+// after a commit or a show's end; their requests' reports stay until the
+// requests pause.
 func (w *window) prune() {
 	d := &w.docs
 	d.init()
@@ -204,12 +277,6 @@ func (w *window) prune() {
 			delete(d.current, frame)
 		}
 	}
-	for network, loader := range d.reports {
-		if p, ok := w.putOf(loader); loader != "" && ok && p == nil {
-			delete(d.reports, network)
-		}
-	}
-	w.compactReports()
 }
 
 // compactReports keeps the order of the reports to those still held.
@@ -246,7 +313,7 @@ func (b *browser) reported(w *window, network, loader string) {
 	}
 	done := w.settle()
 	w.mu.Unlock()
-	b.answerFiles(done)
+	b.answerAll(w, done)
 }
 
 // frameAttached takes frame's attachment to parent, whose document now is
@@ -257,7 +324,7 @@ func (b *browser) frameAttached(w *window, frame, parent string) {
 	w.docs.owners[frame] = w.docs.current[parent]
 	done := w.settle()
 	w.mu.Unlock()
-	b.answerFiles(done)
+	b.answerAll(w, done)
 }
 
 // frameCommitted takes the document frame, a frame inside w's main frame,
@@ -269,26 +336,36 @@ func (b *browser) frameCommitted(w *window, frame, loader string) {
 	w.docs.frames[loader] = frame
 	done := w.settle()
 	w.mu.Unlock()
-	b.answerFiles(done)
+	b.answerAll(w, done)
 }
 
-// frameGone forgets a frame that left its document.
+// frameGone forgets a frame that left its document, and its documents,
+// which then belong to no put.
 func (b *browser) frameGone(w *window, frame string) {
 	w.mu.Lock()
-	w.docs.init()
-	delete(w.docs.owners, frame)
-	delete(w.docs.current, frame)
+	d := &w.docs
+	d.init()
+	delete(d.owners, frame)
+	delete(d.current, frame)
+	for loader, in := range d.frames {
+		if in == frame {
+			delete(d.frames, loader)
+		}
+	}
+	done := w.settle()
 	w.mu.Unlock()
+	b.answerAll(w, done)
 }
 
-// file answers r from the put of its document, or holds it until that is
+// hold answers r from the put of its document, or holds it until that is
 // known, within the window's bound.
-func (b *browser) file(w *window, r fileRequest) {
+func (b *browser) hold(w *window, r waiter) {
 	w.mu.Lock()
 	p, ok := w.place(&r)
 	if ok {
+		gen := w.gen
 		w.mu.Unlock()
-		go b.answerFile(r, p)
+		b.answerAll(w, []answered{{r, p, gen}})
 		return
 	}
 	if len(w.docs.waiting) >= maxWaiting {
@@ -313,7 +390,7 @@ func (b *browser) sessionEnded(w *window, session string) {
 	kept := w.docs.waiting[:0]
 	for _, r := range w.docs.waiting {
 		if r.session == session {
-			gone = append(gone, answered{r, nil})
+			gone = append(gone, answered{r, nil, 0})
 		} else {
 			kept = append(kept, r)
 		}
@@ -321,18 +398,47 @@ func (b *browser) sessionEnded(w *window, session string) {
 	clear(w.docs.waiting[len(kept):])
 	w.docs.waiting = kept
 	w.mu.Unlock()
-	b.answerFiles(gone)
+	b.answerAll(w, gone)
 }
 
-// answerFiles answers requests whose put is known, one after another on
-// one goroutine, so that at most one answer's body is encoded at a time.
-func (b *browser) answerFiles(done []answered) {
-	if len(done) == 0 {
+// answerAll answers requests whose put is known: each call here, in the
+// order its document's events came, so that an end that follows it finds
+// it held (calls.take); the files one after another on one goroutine, so
+// that at most one file's body is encoded at a time.
+func (b *browser) answerAll(w *window, done []answered) {
+	var files []answered
+	for _, a := range done {
+		if a.r.call != nil {
+			b.deliver(w, a)
+		} else {
+			files = append(files, a)
+		}
+	}
+	if len(files) == 0 {
 		return
 	}
 	go func() {
-		for _, a := range done {
+		for _, a := range files {
 			b.answerFile(a.r, a.p)
 		}
 	}()
+}
+
+// deliver passes call a up for its put, or refuses it with no put.
+func (b *browser) deliver(w *window, a answered) {
+	r := a.r
+	if a.p == nil {
+		go b.failPaused(r.session, r.request)
+		return
+	}
+	body, read := b.postBody(r.session, r.call.paused)
+	switch {
+	case !read:
+		go b.failPaused(r.session, r.request)
+	case len(body) > maxCallBody:
+		go b.answerPaused(r.session, r.request, 413, nil, nil)
+	default:
+		b.pages <- pageEvent{call: &heldCall{win: w, gen: a.gen, put: a.p.id, session: r.session, request: r.request,
+			frame: r.frame, op: r.call.op, body: body}}
+	}
 }
