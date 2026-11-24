@@ -1086,7 +1086,7 @@ defmodule PrismWeb.ProgramsLive do
                 MCP: CYFR offers its tools, named &lt;name&gt;:&lt;tool&gt;
               </option>
               <option value="driven" selected={@prefill["mark"] == "driven"}>
-                driven: a person or a brain runs it, such as a coding harness
+                driven: a person or a crew member runs it, such as a coding harness
               </option>
             </select>
           </div>

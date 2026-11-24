@@ -455,10 +455,8 @@ defmodule Opus.Programs do
   `:not_standing` (or `:unavailable`) for a caller who does not stand,
   `:not_found` for a caller who is neither, `:not_found`,
   `:not_a_program` or `:disabled` for the row, `:invalid_size` or
-  `:invalid_args` for the rest, `{:command_failed, word}` for a row whose
-  sessions kept failing until it changes (`word` its command's first word,
-  `Opus.Programs.Definition.command_word/1`), and as `hold/2` and the
-  session route refuse.
+  `:invalid_args` for the rest, and as `hold/2` and the session route
+  refuse.
   """
   @spec start(caller(), String.t(), %{
           required(:rows) => pos_integer(),
@@ -500,27 +498,11 @@ defmodule Opus.Programs do
         cols: cols
       ]
 
-      principal |> started(spec, deadline, _again? = true) |> failed_command(row)
+      started(principal, spec, deadline, _again? = true)
     end
   catch
     :exit, _ -> {:error, :backends_unavailable}
   end
-
-  # A row whose sessions kept ending in a crash is not started again until
-  # it changes (`program_failed`, `Locus.Backends.Owners`), so trying again
-  # is no use: what the person changes is its command, named by the word
-  # it runs (`Opus.Programs.Definition.command_word/1`).
-  defp failed_command({:error, {:refused, :program_failed, _boot}}, row) do
-    command =
-      case Jason.decode(row.config_json || "{}") do
-        {:ok, %{"command" => command}} -> command
-        _unreadable -> nil
-      end
-
-    {:error, {:command_failed, Opus.Programs.Definition.command_word(command)}}
-  end
-
-  defp failed_command(answer, _row), do: answer
 
   # One try of a start is one id and one lifetime. One of a boot the
   # service no longer runs is refused before anything of it runs, and is

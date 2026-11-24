@@ -50,13 +50,6 @@ defmodule Opus.Programs.DefinitionTest do
     assert Definition.program_name() == "program"
   end
 
-  test "what a command runs is its first word, never an argument or an assignment" do
-    assert Definition.command_word("npx -y @anthropic-ai/claude --key sk-1") == "npx"
-    assert Definition.command_word("  TOKEN=sk-1 A_B=2 cyfr-codex app-server") == "cyfr-codex"
-    assert Definition.command_word("TOKEN=sk-1") == nil
-    assert Definition.command_word(nil) == nil
-  end
-
   test "a command is a non-empty string that names no vault entry" do
     assert refused(config(%{"command" => "  "})) =~ "needs a command"
     assert refused(config(%{"command" => nil})) =~ "command"
@@ -295,7 +288,9 @@ defmodule Opus.Programs.DefinitionTest do
         assert {:error, {:invalid_argument, message}} =
                  Definition.validate_row(row(%{"mark" => mark}))
 
-        assert message =~ "config.mark must be mcp"
+        assert message ==
+                 "config.mark must be mcp (CYFR speaks MCP to it) or driven " <>
+                   "(a person or a crew member runs it)"
       end
 
       for transport <- ["stdio", "pipe", "http"] do

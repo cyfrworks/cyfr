@@ -51,6 +51,22 @@ defmodule PrismWeb.AquaLiveConsentStatusTest do
     refute html =~ "Consent status unavailable"
   end
 
+  test "a drift past four actions names four and counts the rest" do
+    missing = ~w(notes.keep notes.pin notes.list notes.read notes.forget notes.search)
+
+    html =
+      render_component(&AquaLive.consent_status/1,
+        stale_consents: {:ok, [{"agent:local.aqua", {:drifted, missing}}]}
+      )
+
+    shown =
+      missing
+      |> Enum.take(4)
+      |> Enum.map_join(", ", &apply(Aqua, :action_title, String.split(&1, ".")))
+
+    assert html =~ "(#{shown} and 2 more)"
+  end
+
   test "nothing stale renders nothing" do
     html = render_component(&AquaLive.consent_status/1, stale_consents: {:ok, []})
 

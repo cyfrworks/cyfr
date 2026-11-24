@@ -418,10 +418,6 @@ defmodule Prima.RefusalTest do
   @program_rows [
     {{:crew_unready, "Aqua", :signed_out}, :setup_required,
      "Aqua's program is signed out. Sign it in, or choose another, on the Aqua page."},
-    {{:command_failed, "cyfr-codex"}, :setup_required,
-     "its command (cyfr-codex) could not be run. Change it on the Programs page."},
-    {{:command_failed, nil}, :setup_required,
-     "its command could not be run. Change it on the Programs page."},
     {{:program_full, "Aqua"}, :rate_limited,
      "Aqua could not start: this CYFR has no room for another running program. Stop work in " <>
        "another thread or wait for it to end, then send your message again."},

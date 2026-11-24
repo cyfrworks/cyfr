@@ -782,7 +782,7 @@ defmodule PrismWeb.AquaLive do
   # each action it lacks by the words the action is declared with.
   defp consent_warning(ref, {:drifted, missing}) do
     shown = missing |> Enum.take(4) |> Enum.map_join(", ", &action_words/1)
-    rest = if length(missing) > 4, do: ", …", else: ""
+    rest = if length(missing) > 4, do: " and #{length(missing) - 4} more", else: ""
 
     count =
       case missing do
