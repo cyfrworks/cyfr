@@ -25,6 +25,9 @@ const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_
 const HOME = signIn["home"]
 const ACCOUNT = "https://accounts.example.com"
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
+const RUN_TOKEN = "dG9rZW4"
+// The chooser's address as main loads it: its words, and no run token.
+const CHOOSER_AT = "http://127.0.0.1:7340/bootstrap/#"
 const RAIL = "http://127.0.0.1:7340/rail/#read=cmFpbHRva2Vu"
 // The rail's width, at the window's left.
 const RAIL_WIDTH = 72
@@ -258,7 +261,8 @@ function fromPartition(partition) {
     const ses = new EventEmitter()
     Object.assign(ses, {
       partition,
-      webRequest: {onHeadersReceived(handler) { ses.received = handler }},
+      webRequest: {onHeadersReceived(handler) { ses.received = handler },
+        onBeforeSendHeaders(handler) { ses.sending = handler }, onBeforeRedirect(handler) { ses.redirecting = handler }},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
       jar: [...(world.disk.get(partition) ?? [])],
@@ -490,7 +494,7 @@ async function departsFor(home) {
   await settled()
   child.say({type: "left", id: leaves().at(-1).id})
   await turns()
-  assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(home))
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(home))
 }
 
 test("an interrupted Connect, through main: a proposal a lock ended gives way to the next, a committed one to none", async () => {
@@ -514,10 +518,10 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
 test("the road is main's word, in the chooser's address, and cyfr is started with no flag", async () => {
   await started(true)
   assert.deepEqual(world.spawned, [["desktop-serve"]])
-  assert.equal(content().webContents.url, READY + "&road=passkey")
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey")
   await started(false)
   assert.deepEqual(world.spawned, [["desktop-serve"]])
-  assert.equal(content().webContents.url, READY)
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=words")
 })
 
 test("the computer's lock and sleep leave everything as it was", async () => {
@@ -804,7 +808,7 @@ test("a press on the rail at the chooser shows the chooser at once: connecting t
     const before = content()
     assert.ok(press(url).prevented, url)
     assert.ok(before.destroyed, `${url}: its view replaced`)
-    assert.equal(content().webContents.url, READY + "&road=passkey" + then, url)
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey" + then, url)
     assert.doesNotMatch(content().webContents.session.partition, /^persist:/, url)
   }
   at("http://127.0.0.1:7340/rail/select?cyfr=" + encodeURIComponent(PORT_B), "&connect=" + encodeURIComponent(PORT_B))
@@ -863,7 +867,7 @@ test("a departure closes every page of the CYFR at once, then has cyfr leave, an
       child.say({type: "left", id: 1})
       await turns()
     }
-    assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B), last)
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(PORT_B), last)
     assert.doesNotMatch(content().webContents.session.partition, /^persist:/, last)
     assert.deepEqual(world.cleared, [], `${last}: nothing of the CYFR left is forgotten`)
     assert.ok(!child.killed, last)
@@ -882,7 +886,7 @@ test("a left of another id, a locked, and a second left change nothing of a depa
   child.say({type: "left", id: 1})
   await turns()
   const chooser = content()
-  assert.equal(chooser.webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B))
+  assert.equal(chooser.webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(PORT_B))
   const views = world.windows.length
   child.say({type: "left", id: 1})
   await turns()
@@ -921,7 +925,7 @@ test("a departure cyfr does not answer in time ends that cyfr and starts a fresh
     assert.deepEqual(child.heard, [], "nothing answered to them")
     child.say({type: "ready", url: READY, rail: RAIL_2})
     await turns()
-    assert.equal(content().webContents.url, READY + "&road=passkey&notice=unleft", "no connect: it resumes none")
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&notice=unleft", "no connect: it resumes none")
     assert.equal(rail().webContents.url, RAIL_2, "the rail of the fresh one")
     assert.equal(world.frames.length, 1, "in the same window")
     assert.deepEqual(world.cleared, [])
@@ -1015,7 +1019,7 @@ test("Forget of the CYFR open leaves it first: forget is sent only once cyfr lef
   child.say({type: "left", id: 1})
   await turns()
   assert.deepEqual(forgets(), [{version: VERSION, type: "forget", home: HOME}])
-  assert.equal(content().webContents.url, READY + "&road=passkey")
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey")
   assert.deepEqual(world.cleared, [])
 })
 
@@ -1057,7 +1061,7 @@ test("a teardown begun under a cyfr that has ended releases nothing of the fresh
     assert.equal(content(), undefined, "the old run's teardown released nothing")
     held.slice(before).forEach((end) => end())
     await turns(6)
-    assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B), "the fresh run's own teardown does")
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(PORT_B), "the fresh run's own teardown does")
   } finally {
     mock.timers.reset()
   }
@@ -1418,7 +1422,7 @@ test("a CYFR's page that did not load gives way to the chooser: in its own view 
     assert.equal(world.windows.length, windows, "nothing opened from inside it either")
     await settled()
     const chooser = content()
-    assert.equal(chooser.webContents.url, READY + (road ? "&road=passkey" : "") + "&notice=unanswered")
+    assert.equal(chooser.webContents.url, CHOOSER_AT + (road ? "road=passkey" : "road=words") + "&notice=unanswered")
     if (road) {
       assert.ok(page.destroyed && chooser !== page, "no kept store holds the chooser: a view of its own")
       assert.doesNotMatch(chooser.webContents.session.partition, /^persist:/)
@@ -1660,6 +1664,42 @@ test("a CYFR's route is set on its own stores before anything of it loads, and o
   assert.ok(!world.proxies.some(([partition]) => partition === RAIL_SESSION), "the rail's store keeps the system's settings")
   assert.equal(world.relaunched, null)
   assert.equal(world.exited, undefined)
+})
+
+// The run token is main's, taken from ready's address: the chooser is
+// loaded without it, and it goes, as its header, on a POST to the chooser's
+// addresses that the chooser's own top document in the content's view
+// makes, and on no other request; one a page named itself loses it.
+test("main adds the run token to the chooser's own requests alone", async () => {
+  await started(true)
+  const chooser = content()
+  assert.doesNotMatch(chooser.webContents.url, /token/, "the chooser's address holds none")
+  const ses = chooser.webContents.session
+  const top = chooser.webContents.mainFrame
+  const bare = {"Content-Type": "application/json"}
+  let id = 0
+  const sent = (over = {}) => {
+    let headers
+    ses.sending({id: ++id, method: "POST", url: "http://127.0.0.1:7340/bootstrap/connect", webContents: chooser.webContents,
+      frame: top, requestHeaders: bare, ...over}, (r) => { headers = r.requestHeaders })
+    return headers
+  }
+  assert.deepEqual(sent(), {...bare, "Cyfr-Run": RUN_TOKEN}, "the chooser's own")
+  ses.redirecting({id: id + 1})
+  const other = {processId: top.processId, routingId: top.routingId + 100, url: top.url}
+  for (const [why, over] of [
+    ["a redirect's target", {}],
+    ["a frame's", {frame: other}],
+    ["a document that is not the chooser's", {frame: {processId: top.processId, routingId: top.routingId, url: "http://127.0.0.1:7340/"}}],
+    ["another view's", {webContents: rail().webContents}],
+    ["a window's of the same store", {webContents: {mainFrame: top}}],
+    ["to another address", {url: HOME + "/bootstrap/connect"}],
+    ["to the device's pages", {url: "http://127.0.0.1:7340/devices/approve"}],
+    ["a GET", {method: "GET"}],
+    ["a frame's that named the header itself", {frame: other, requestHeaders: {...bare, "cyfr-run": RUN_TOKEN}}]
+  ]) {
+    assert.deepEqual(sent(over), bare, why)
+  }
 })
 
 test("cyfr's own locked naming a CYFR main never kept to leaves it keeping to none", async () => {
@@ -2001,7 +2041,7 @@ test("on macOS and Windows a CYFR no one is set up at opens at its setup page, t
       await settled()
       child.say({type: "ready", url: READY, rail: RAIL})
       await settled()
-      assert.equal(content().webContents.url, READY + "&road=passkey", system)
+      assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey", system)
       const attempt = child.proposes(HOME, {setup: TOKEN})
       await settled()
       await settled()

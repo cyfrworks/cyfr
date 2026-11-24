@@ -20,8 +20,9 @@ import (
 )
 
 type processVectors struct {
-	Version  int `json:"version"`
-	GoToMain []struct {
+	Version   int    `json:"version"`
+	RunHeader string `json:"run_header"`
+	GoToMain  []struct {
 		Name    string         `json:"name"`
 		Message map[string]any `json:"message"`
 	} `json:"go_to_main"`
@@ -49,6 +50,9 @@ func readProcessVectors(t *testing.T) processVectors {
 	}
 	if v.Version != Version {
 		t.Fatalf("the vectors are version %d; cyfr speaks %d", v.Version, Version)
+	}
+	if v.RunHeader != RunHeader {
+		t.Fatalf("the vectors name the run header %q; cyfr reads %q", v.RunHeader, RunHeader)
 	}
 	return v
 }

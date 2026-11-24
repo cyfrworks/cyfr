@@ -1,7 +1,7 @@
-const s=sessionStorage,f=new URLSearchParams(location.hash.slice(1)),$=i=>document.getElementById(i);
-const token=f.get("token")||s.getItem("token")||"",was=history.state||{},reloaded=(performance.getEntriesByType("navigation")[0]||{}).type==="reload";
-const main=f.get("token")?{road:f.get("road"),told:(f.get("notice")||"").split(","),connect:f.get("connect")||"",way:f.get("way")||""}:{road:was.road,told:reloaded&&was.told||[]},passkey=main.road==="passkey";
-s.setItem("token",token);history.replaceState(main,"",location.pathname);
+const f=new URLSearchParams(location.hash.slice(1)),$=i=>document.getElementById(i);
+const was=history.state||{},reloaded=(performance.getEntriesByType("navigation")[0]||{}).type==="reload";
+const main=f.has("road")?{road:f.get("road"),told:(f.get("notice")||"").split(","),connect:f.get("connect")||"",way:f.get("way")||""}:{road:was.road,told:reloaded&&was.told||[]},passkey=main.road==="passkey";
+history.replaceState(main,"",location.pathname);
 const notices={company:"This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet.",unanswered:"The CYFR at {CYFR} did not answer.",unforgotten:"The app locked, and could not clear the sign-in it kept on this computer. To clear it, forget this CYFR on this computer from its menu on the left.",unleft:"The CYFR you left did not let go in time, so the app started again and opened nothing. Choose a CYFR on the left to open it."};
 let asked=null,picks=0,started=false,epoch=0,run=0,found=false,busy=false;
 const steps={files:"Getting CYFR's files",settings:"Writing its settings",images:"Downloading CYFR",start:"Starting CYFR"};
@@ -18,7 +18,7 @@ if(p.error||p.done)say(p.error?p.error+".":"CYFR is set up in "+p.folder+" and s
 if(running)post("/bootstrap/setup",{seen:p.seq}).then(a=>a.setup?progress(a.setup):say(a.error));else if(p.done&&started){started=false;opening()}}
 function begin(){started=true;say("");post("/bootstrap/start",{picks,run}).then(a=>{folder(a);if(a.setup)progress(a.setup);if(a.error)say(a.error)})}
 function opening(){$("go").hidden=true;say("Opening CYFR\u2026");post("/bootstrap/open",{picks,run}).then(a=>{if(a.next){if(!passkey)location.replace(a.next);return}say(a.error||"CYFR did not open.");$("go").hidden=false})}
-function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token,epoch},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
+function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({epoch},b))}).then(r=>{return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("named").textContent=a.cyfr;$("service").textContent=a.confirm}
 if(stay){$("open").textContent=a.cyfr;$("passkey").hidden=$("either").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.cyfr,"/bootstrap/signin");$("again").onclick=()=>onward(a.cyfr,"/bootstrap/again");$("words").onclick=()=>location.assign(a.next)}

@@ -15,6 +15,11 @@ export const VERSION = 2
 
 export const MAX_LINE = 64 * 1024
 
+// The header of the chooser's requests that carries the run token, which
+// main adds to those of the chooser's own top document alone (app.js
+// runHeader) and cyfr reads nowhere else (internal/desktop RunHeader).
+export const RUN_HEADER = "Cyfr-Run"
+
 const FIELDS = {
   ready: {required: ["url"], optional: ["rail"]},
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "setup"]},

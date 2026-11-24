@@ -99,10 +99,19 @@ func (a *localApp) post(path, kind, body string) *httptest.ResponseRecorder {
 
 // pressed is a POST as the device's own pages send one.
 func pressed(h http.Handler, path, kind, body string) *httptest.ResponseRecorder {
+	return chosen(h, "", path, kind, body)
+}
+
+// chosen is a POST as the chooser's page sends one, main's run header on
+// it carrying token (none where that is empty).
+func chosen(h http.Handler, token, path, kind, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, shell.Origin+path, strings.NewReader(body))
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
 	r.Header.Set("Content-Type", kind)
+	if token != "" {
+		r.Header.Set(desktop.RunHeader, token)
+	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -123,13 +132,9 @@ type chooserAnswer struct {
 
 func (a *localApp) chooser(path string, fields map[string]string) chooserAnswer {
 	a.t.Helper()
-	body := map[string]string{"token": a.Token}
-	for k, v := range fields {
-		body[k] = v
-	}
-	raw, _ := json.Marshal(body)
+	raw, _ := json.Marshal(fields)
 	var got chooserAnswer
-	if w := a.post(path, "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+	if w := chosen(a, a.Token, path, "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
 		a.t.Errorf("%s answered %d %s", path, w.Code, w.Body)
 	}
 	return got

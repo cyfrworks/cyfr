@@ -27,8 +27,8 @@ import path from "node:path"
 
 import {BaseWindow, BrowserWindow, Menu, WebContentsView, app, dialog, session, shell} from "electron"
 
-import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {LOCALHOST_IS_IPV4, accountLoad, accountPartition, documentHeaders, grants, homePartition, printed, readHop, relyingParty,
+import {RUN_HEADER, lines, readFromCyfr, toCyfr} from "./process.js"
+import {LOCALHOST_IS_IPV4, LOOPBACK, accountLoad, accountPartition, documentHeaders, grants, homePartition, printed, readHop, relyingParty,
   screenProject, setupProject, unlistedSwitch} from "./policy.js"
 import {ABORTED, DEPARTURE_MS, initial, kept, step} from "./states.js"
 
@@ -298,9 +298,14 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // The chooser's address: cyfr's own, with the road this app offers,
   // which is main's alone to say, what main has to tell, and where it goes
   // on: connecting to a CYFR the rail selected, or setting up.
+  // The chooser's address, as main alone loads it (no page reaches it,
+  // policy.js chooserPath): cyfr's own, with the road this app offers,
+  // what main has to tell, and where it goes on. The run token in ready's
+  // address is main's to keep (runToken), and none of the chooser's.
   const chooserAddress = (notices, {connect = "", way = ""} = {}) => screen ? state.readyURL
-    : state.readyURL + (accountRoad ? "&road=passkey" : "") + (notices.length ? `&notice=${notices.join(",")}` : "") +
+    : `${LOOPBACK}/bootstrap/#road=${accountRoad ? "passkey" : "words"}` + (notices.length ? `&notice=${notices.join(",")}` : "") +
       (connect ? `&connect=${encodeURIComponent(connect)}` : "") + (way ? `&way=${way}` : "")
+  const runToken = () => new URLSearchParams(state.readyURL.split("#")[1] ?? "").get("token") ?? ""
 
   const discard = (ses) => Promise.resolve(ses?.clearStorageData()).then(() => true, () => true)
 
@@ -418,7 +423,38 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function freshSession() {
     const ses = session.fromPartition(`cyfr-${process.pid}-${++generation}`)
     guard(ses, "content")
+    runHeader(ses)
     return ses
+  }
+
+  // The run token goes, as RUN_HEADER, on a request of ses only when it is
+  // a POST to the chooser's addresses made by the chooser's own top
+  // document in the content's view, and is no redirect's: a frame's,
+  // another view's or window's, one to another address and a redirect's
+  // target go without it, and one a page named itself loses it.
+  function runHeader(ses) {
+    const redirected = new Set()
+    ses.webRequest.onBeforeRedirect((details) => redirected.add(details.id))
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const headers = Object.fromEntries(Object.entries(details.requestHeaders ?? {})
+        .filter(([name]) => name.toLowerCase() !== RUN_HEADER.toLowerCase()))
+      if (!redirected.has(details.id) && chooserRequest(details)) headers[RUN_HEADER] = runToken()
+      callback({requestHeaders: headers})
+    })
+  }
+  function chooserRequest({method, url, webContents, frame}) {
+    const top = webContents?.mainFrame
+    const at = (address, path) => {
+      try {
+        const u = new URL(address)
+        return u.origin === LOOPBACK && path(u.pathname)
+      } catch {
+        return false
+      }
+    }
+    return method === "POST" && !!content && webContents === content.webContents && !!frame && !!top &&
+      frame.processId === top.processId && frame.routingId === top.routingId &&
+      at(frame.url, (p) => p === "/bootstrap/") && at(url, (p) => p.startsWith("/bootstrap/"))
   }
 
   // The app's one window, made once: the rail at its left (none on the

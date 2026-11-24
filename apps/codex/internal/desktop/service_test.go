@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -100,13 +101,16 @@ func (a *app) setupGone(t *testing.T) {
 	}
 }
 
-// request is a request as the chooser's page sends it, changed by edit:
-// in the epoch now unless body names one, its numbers as numbers and kept
-// as a bool.
+// request is a request as the chooser's page sends it, main's RunHeader
+// added (body's "token" in its place, none where that is empty), changed by
+// edit: in the epoch now unless body names one, its numbers as numbers and
+// kept as a bool.
 func (a *app) request(ctx context.Context, path string, body map[string]string, edit func(*http.Request)) *httptest.ResponseRecorder {
-	if _, ok := body["token"]; !ok {
-		body["token"] = a.Token
+	token, named := body["token"]
+	if !named {
+		token = a.Token
 	}
+	delete(body, "token")
 	sent := map[string]any{}
 	for k, v := range body {
 		sent[k] = v
@@ -127,6 +131,9 @@ func (a *app) request(ctx context.Context, path string, body map[string]string, 
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
 	r.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		r.Header.Set(RunHeader, token)
+	}
 	if edit != nil {
 		edit(r)
 	}
@@ -216,7 +223,34 @@ func answered(t *testing.T, ch <-chan answer) answer {
 	return answer{}
 }
 
-// Only the chooser's own page, carrying the run token main gave it, is
+// Only the chooser's own page, its requests carrying the run token main
+// adds as their header, is answered; anything else reads no CYFR, and a
+// token in a request's body, where a page would hold it, is refused with
+// the request.
+func TestTheChoosersTokenIsMainsHeaderAlone(t *testing.T) {
+	a := newApp(t, t.TempDir(), nil)
+	inBody := func(r *http.Request) {
+		r.Body = io.NopCloser(strings.NewReader(fmt.Sprintf(`{"token":%q,"address":"cyfr.example.com"}`, a.Token)))
+	}
+	for name, c := range map[string]struct {
+		edit func(*http.Request)
+		code int
+	}{
+		"the token in the body beside the header": {inBody, http.StatusBadRequest},
+		"the token in the body alone":             {func(r *http.Request) { inBody(r); r.Header.Del(RunHeader) }, http.StatusBadRequest},
+		"the token in the address":                {func(r *http.Request) { r.Header.Del(RunHeader); r.URL.RawQuery = "token=" + a.Token }, http.StatusForbidden},
+	} {
+		for _, path := range []string{"/bootstrap/state", "/bootstrap/connect", "/bootstrap/approve", "/bootstrap/docker",
+			"/bootstrap/start", "/bootstrap/setup", "/bootstrap/open", "/bootstrap/folder"} {
+			if w := a.request(context.Background(), path, map[string]string{}, c.edit); w.Code != c.code {
+				t.Errorf("%s at %s answered %d, want %d: %s", name, path, w.Code, c.code, w.Body)
+			}
+		}
+	}
+	a.quiet(t)
+}
+
+// Only the chooser's own page, carrying the run token main adds, is
 // answered; anything else reads no CYFR.
 func TestTheChooserAnswersOnlyItsOwnPage(t *testing.T) {
 	a := newApp(t, t.TempDir(), nil)
@@ -661,6 +695,7 @@ func TestAConnectStillArrivingWhenTheLockLandsPublishesNothing(t *testing.T) {
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(RunHeader, a.Token)
 	w := httptest.NewRecorder()
 	served := make(chan struct{})
 	go func() { a.ServeHTTP(w, r); close(served) }()
@@ -669,7 +704,7 @@ func TestAConnectStillArrivingWhenTheLockLandsPublishesNothing(t *testing.T) {
 	if m := a.next(t); m.Type != TypeLocked {
 		t.Fatalf("main heard %+v", m)
 	}
-	_, _ = io.WriteString(pw, `{"token":"the-run-token","address":"cyfr.example.com"}`)
+	_, _ = io.WriteString(pw, `{"address":"cyfr.example.com"}`)
 	pw.Close()
 	<-served
 	var got answer
@@ -1584,11 +1619,12 @@ func TestTheAppEndsWhatAFolderBeganAsItLetsGo(t *testing.T) {
 // the picks it has seen answered, its request edited by edit.
 func (a *app) awaitFolder(ctx context.Context, picks uint64, edit func(*http.Request)) <-chan *httptest.ResponseRecorder {
 	out := make(chan *httptest.ResponseRecorder, 1)
-	raw, _ := json.Marshal(map[string]any{"token": a.Token, "picks": picks})
+	raw, _ := json.Marshal(map[string]any{"picks": picks})
 	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+"/bootstrap/folder", strings.NewReader(string(raw)))
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(RunHeader, a.Token)
 	if edit != nil {
 		edit(r)
 	}
@@ -1717,9 +1753,9 @@ func TestOnlyTheChoosersPageWaitsForAPick(t *testing.T) {
 	a := newApp(t, t.TempDir(), nil)
 	for name, edit := range map[string]func(*http.Request){
 		"another origin": func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") },
-		"another token":  func(r *http.Request) { r.Body = io.NopCloser(strings.NewReader(`{"token":"a-guess","picks":0}`)) },
+		"another token":  func(r *http.Request) { r.Header.Set(RunHeader, "a-guess") },
 		"a folder named": func(r *http.Request) {
-			r.Body = io.NopCloser(strings.NewReader(`{"token":"the-run-token","folder":"/x"}`))
+			r.Body = io.NopCloser(strings.NewReader(`{"folder":"/x"}`))
 		},
 	} {
 		select {
@@ -1841,11 +1877,12 @@ func TestTheServicesEndEndsTheChoosersWaitsAndLeavesASetupRunning(t *testing.T) 
 	pick := a.awaitFolder(context.Background(), 0, nil)
 	step := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		raw, _ := json.Marshal(map[string]any{"token": a.Token, "seen": started.Setup.Seq})
+		raw, _ := json.Marshal(map[string]any{"seen": started.Setup.Seq})
 		r := httptest.NewRequest(http.MethodPost, "http://"+shell.Listen+"/bootstrap/setup", strings.NewReader(string(raw)))
 		r.Host = shell.Listen
 		r.Header.Set("Origin", shell.Origin)
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set(RunHeader, a.Token)
 		w := httptest.NewRecorder()
 		a.ServeHTTP(w, r)
 		step <- w
@@ -1888,16 +1925,17 @@ func TestARequestThatLostTheRaceWithTheEndAnswersAtOnce(t *testing.T) {
 	t.Cleanup(func() { d.ends <- nil })
 	a.End()
 	for _, c := range []struct{ path, body string }{
-		{"/bootstrap/folder", `{"token":"` + a.Token + `","picks":0}`},
-		{"/bootstrap/setup", `{"token":"` + a.Token + `","seen":` + strconv.FormatUint(started.Setup.Seq, 10) + `}`},
+		{"/bootstrap/folder", `{"picks":0}`},
+		{"/bootstrap/setup", `{"seen":` + strconv.FormatUint(started.Setup.Seq, 10) + `}`},
 		// A request that acts is refused there too, and begins nothing.
-		{"/bootstrap/start", `{"token":"` + a.Token + `","run":1}`},
+		{"/bootstrap/start", `{"run":1}`},
 	} {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+c.path, strings.NewReader(c.body))
 		r.Host = shell.Listen
 		r.Header.Set("Origin", shell.Origin)
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set(RunHeader, a.Token)
 		w := httptest.NewRecorder()
 		// Past ServeHTTP's check, as a request is that paused there.
 		a.bootstrap(w, r)
@@ -1917,11 +1955,12 @@ func (a *app) setupAfter(t *testing.T, seen uint64) SetupState {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	raw, _ := json.Marshal(map[string]any{"token": a.Token, "seen": seen})
+	raw, _ := json.Marshal(map[string]any{"seen": seen})
 	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "http://"+shell.Listen+"/bootstrap/setup", strings.NewReader(string(raw)))
 	r.Host = shell.Listen
 	r.Header.Set("Origin", shell.Origin)
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(RunHeader, a.Token)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, r)
 	var got answer
@@ -2008,13 +2047,14 @@ func TestALockEndsTheWaitForASetupsStep(t *testing.T) {
 	d := driveSetup(a)
 	started := a.post(t, "/bootstrap/start", map[string]string{})
 	<-d.ctxs
-	raw, _ := json.Marshal(map[string]any{"token": a.Token, "seen": started.Setup.Seq})
+	raw, _ := json.Marshal(map[string]any{"seen": started.Setup.Seq})
 	waited := make(chan answer, 1)
 	go func() {
 		r := httptest.NewRequest(http.MethodPost, "http://"+shell.Listen+"/bootstrap/setup", strings.NewReader(string(raw)))
 		r.Host = shell.Listen
 		r.Header.Set("Origin", shell.Origin)
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set(RunHeader, a.Token)
 		w := httptest.NewRecorder()
 		a.ServeHTTP(w, r)
 		var got answer

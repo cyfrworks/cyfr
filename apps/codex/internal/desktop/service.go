@@ -93,7 +93,8 @@ func (l *Local) take() *Local {
 // chooser alike. Main opens a CYFR committed at its root, and lets go of
 // one by leave.
 type Service struct {
-	// Token is the run token the chooser's requests carry.
+	// Token is the run token: main alone holds it, and adds it to the
+	// chooser's own requests as their RunHeader.
 	Token string
 	// ReadToken is the rail's: it reads the list of CYFRs (rail.go) and
 	// authorizes nothing else.
@@ -198,8 +199,16 @@ func NewToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// ReadyURL is the chooser's address main opens first, the token in its
-// fragment, which no request carries.
+// RunHeader is the header that carries the run token on the chooser's
+// requests, which main adds to those of the chooser's own top document
+// alone (desktop/src/app.js): the page holds the token nowhere, and a
+// request that names it in its body is refused as one with an unknown
+// field.
+const RunHeader = "Cyfr-Run"
+
+// ReadyURL is ready's address of the chooser, the run token in its
+// fragment, which no request carries: main takes the token from it and
+// opens the chooser without it.
 func (s *Service) ReadyURL() string { return shell.Origin + "/bootstrap/#token=" + s.Token }
 
 // ServeHTTP serves the chooser under /bootstrap/ and, once a CYFR is
@@ -283,7 +292,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "JSON is expected", http.StatusBadRequest)
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(RunHeader)), []byte(s.Token)) != 1 {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
@@ -435,13 +444,12 @@ func (s *Service) finish() {
 	}
 }
 
-// request is a chooser's request: the token, and the address typed, the
+// request is a chooser's request: the address typed, the
 // directory approved, or the picks it has seen answered. Epoch is the time
 // since a lock the page was shown in, Picks the pick its folder is, and Run
 // the setup it shows (none 0): a request that acts says what the page
 // showed, and is refused where that is no longer so.
 type request struct {
-	Token   string `json:"token"`
 	Epoch   uint64 `json:"epoch,omitempty"`
 	Run     uint64 `json:"run,omitempty"`
 	Address string `json:"address,omitempty"`
