@@ -140,7 +140,7 @@ test("cyfr's own locked is the device's session ending: forgotten, with nothing 
     }
   }
   assert.equal(run([...open, locked(HOME), forgot]).s.name, "open")
-  assert.equal(run([...open, locked(), forgot]).s.name, "chooser", "Connect to another CYFR: a locked naming none")
+  assert.equal(run([...open, locked(), forgot]).s.name, "chooser", "a locked naming none")
 })
 
 test("the lock is a barrier: what cyfr sent before its locked is dropped, and its locked says what main keeps to", () => {

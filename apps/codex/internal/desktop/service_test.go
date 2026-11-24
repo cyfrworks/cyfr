@@ -770,12 +770,11 @@ func TestARememberedCYFRResumesOnce(t *testing.T) {
 	}
 }
 
-// Main's leave (Connect to another CYFR, sent once main cleared what it
-// kept) lets go of the CYFR open, locked and named in no locked, answered
-// left with its id once it let go, for a
-// Connect to the next, which is then the one remembered. No page of cyfr's
-// can do it.
-func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
+// Main's leave (a departure: a press on the rail for another CYFR) lets go
+// of the CYFR open, locked and named in no locked, answered left with its
+// id once it let go, for a Connect to the next, which is then the one
+// remembered. No page of cyfr's can do it.
+func TestALeaveLetsGoOfTheCYFROpen(t *testing.T) {
 	const first, second = "https://cyfr.example.com", "https://bob.example.com"
 	open := func(a *app, home string) {
 		t.Helper()
