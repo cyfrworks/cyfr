@@ -1262,19 +1262,22 @@ jobs:
   # amd64 and native arm64: this tree's app package, built here, installed
   # in a client container with no Docker, and every tracked
   # tests/desktop-proof/*/run.sh run against a CYFR and an account
-  # directory from this run's app image of the same architecture.
+  # directory from this run's app image of the same architecture; then the
+  # setup proof and the box's screen with two CYFRs. On Ubuntu 26.04, the
+  # box's own, whose AppArmor holds the profile the box's screen needs
+  # (tests/desktop-proof/screen/app.sh).
   desktop-home:
     name: CYFR app against a real CYFR (Linux ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    # Electron's download, the package, two homes and the proofs.
-    timeout-minutes: 45
+    # Electron's download, the package, two homes, the proofs and the box.
+    timeout-minutes: 60
     needs: [app-image, app-image-arm64]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {arch: amd64, runner: ubuntu-latest, artifact: app-image}
-          - {arch: arm64, runner: ubuntu-24.04-arm, artifact: app-image-arm64}
+          - {arch: amd64, runner: ubuntu-26.04, artifact: app-image}
+          - {arch: arm64, runner: ubuntu-26.04-arm, artifact: app-image-arm64}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -1313,6 +1316,17 @@ jobs:
         env:
           SETUP_PROOF_OUT: ${{ runner.temp }}/desktop-proof/setup-here
         run: bash tests/setup-proof/app.sh "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb" cyfr:push
+      # The box's screen with This box and a CYFR elsewhere, both answering
+      # (tests/desktop-proof/box/box.sh), last: the package is installed on
+      # this disposable runner first, which loads its AppArmor profile.
+      - name: The box's screen with two CYFRs
+        env:
+          PROOF_OUT: ${{ runner.temp }}/desktop-proof
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends "$PWD/apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb"
+          bash tests/desktop-proof/box/box.sh "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb" cyfr:push
       # What each proof recorded: its rows, its log and the app's output.
       # No secret is in them: a proof records headings and notices, never a
       # page's text, every line and the app's output are scrubbed of what an
