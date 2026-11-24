@@ -59,6 +59,7 @@ func testMachine(system string) machineSeams {
 		dockerHere:     func(context.Context) (bool, error) { return true, nil },
 		installed:      func(string) bool { return false },
 		appRelease:     func() string { return "" },
+		appPresent:     func() bool { return false },
 		running:        func() bool { return false },
 		groups:         func(context.Context, string) []string { return nil },
 		displayManager: func() bool { return false },

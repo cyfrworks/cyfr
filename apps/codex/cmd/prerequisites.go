@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/release"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -42,11 +43,15 @@ type machineSeams struct {
 	// dockerHere is whether the Docker this process reaches runs its
 	// containers on this computer.
 	dockerHere func(ctx context.Context) (bool, error)
+	// appPresent is whether the CYFR app is installed here, whole or left
+	// part way (installedAppPresent).
+	appPresent func() bool
 	// installed is whether dpkg holds the package installed.
 	installed func(pkg string) bool
-	// appRelease is the release of the CYFR app this machine holds: dpkg
-	// holds its package installed for this machine's architecture, and the
-	// app's own cyfr answers its release; "" otherwise.
+	// appRelease is the release of the CYFR app this machine holds, as the
+	// app's own cyfr answers it within 10 s, on Linux only where dpkg holds
+	// its package installed for this machine's architecture; "" for any
+	// answer that is not a release, and for none.
 	appRelease func() string
 	// running is whether the Docker service runs.
 	running func() bool
@@ -99,23 +104,31 @@ var machine = machineSeams{
 	dockerHere: func(ctx context.Context) (bool, error) {
 		return access.DockerIsHere(ctx, dockerProgram{})
 	},
+	appPresent: installedAppPresent,
 	installed: func(pkg string) bool {
 		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", pkg).Output()
 		return err == nil && string(out) == "installed"
 	},
 	appRelease: func() string {
-		out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage).Output()
-		if err != nil || string(out) != "installed "+runtime.GOARCH {
+		if runtime.GOOS == "linux" {
+			out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage).Output()
+			if err != nil || string(out) != "installed "+runtime.GOARCH {
+				return ""
+			}
+		}
+		path, err := appCyfr()
+		if err != nil {
 			return ""
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, appCyfr, "--version")
+		cmd := exec.CommandContext(ctx, path, "--version")
 		cmd.Env = append(os.Environ(), "CYFR_NO_UPDATE_CHECK=1")
+		cmd.WaitDelay = time.Second
 		said, err := cmd.Output()
 		first, _, _ := strings.Cut(string(said), "\n")
-		answered, ok := strings.CutPrefix(first, "cyfr version ")
-		if err != nil || !ok {
+		answered, ok := strings.CutPrefix(strings.TrimRight(first, "\r"), "cyfr version ")
+		if err != nil || !ok || !release.IsVersion(answered) {
 			return ""
 		}
 		return answered

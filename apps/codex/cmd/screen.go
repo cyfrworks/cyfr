@@ -44,10 +44,10 @@ const (
 	screenAppFile = screenDir + "/" + appPackage + ".deb"
 )
 
-// appCyfr is the cyfr inside the CYFR app's package, the one that runs the
-// screen's shell (desktop/scripts/build.mjs); a variable so tests stand in
-// for it.
-var appCyfr = "/opt/cyfr/resources/cyfr"
+// appCyfr is the cyfr inside the installed CYFR app (installedAppCyfr),
+// the one that runs the screen's shell; a variable so tests stand in for
+// it.
+var appCyfr = installedAppCyfr
 
 // appProgram is the CYFR app's own program in its package.
 const appProgram = "/opt/cyfr/CYFR"
@@ -372,13 +372,15 @@ func screenCommands(dir, account, app string) []string {
 // a subshell whose exit removes it on every way out, the copy, the check
 // or apt failing, an interrupt, or apt done, so nothing staged outlives
 // it; it runs before anything of the screen is installed, so a failure
-// leaves no part of the screen behind.
-func stageApp(path, sum string) string {
+// leaves no part of the screen behind. options are apt-get install's own,
+// before the package (cyfr update's).
+func stageApp(path, sum string, options ...string) string {
 	deb := "\"$d/" + appPackage + ".deb\""
+	install := strings.Join(append([]string{"apt-get", "install", "-y"}, options...), " ")
 	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 \"$d\"" +
 		" && install -m 0644 " + shellQuote([]string{path}) + " " + deb +
 		" && echo '" + sum + "  '" + deb + " | sha256sum --check --strict --quiet" +
-		" && apt-get install -y " + deb + " )"
+		" && " + install + " " + deb + " )"
 }
 
 // screenOffCommands give this machine's screen back to its login prompt,
@@ -596,18 +598,17 @@ func endScreenApp(program string, ln net.Listener, why error) {
 
 // releaseApart is what the screen's page says where the app's cyfr, which
 // runs this shell (release ours), is another release than the one the
-// folder's compose file is set to, read there and not from a container:
-// `cyfr update` moves the folder and the program that ran it, never the
-// app. The instruction is the one installPackage gives, which brings the
-// app to the folder's release whether the cyfr on PATH is the package's
-// own, whose `cyfr screen on` finds its own release installed, or one of
-// its own. "" where they agree, or where either is no release.
+// folder's compose file is set to, read there and not from a container.
+// The instruction is cyfr update of exactly the folder's release in the
+// folder, which brings the installed app there through the system's
+// package tool and leaves a folder already at it as it is. "" where they
+// agree, or where either is no release.
 func releaseApart(dir, ours string) string {
 	set := folderRelease(dir)
 	if !release.IsVersion(ours) || set == "" || set == ours {
 		return ""
 	}
-	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR in %s is set to release %s, so the screen may not work as it should. To bring the app to release %s, %s.", ours, dir, set, set, installPackage(appPackage, set))
+	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR in %s is set to release %s, so the screen may not work as it should. To bring the app to release %s, run 'cyfr update --version %s' in %s.", ours, dir, set, set, set, dir)
 }
 
 // folderRelease is the release the compose file in dir runs CYFR at

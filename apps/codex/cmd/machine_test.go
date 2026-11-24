@@ -91,6 +91,7 @@ func standInMachine(t *testing.T) *standIn {
 	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
 	machine.appRelease = func() string { return s.app }
+	machine.appPresent = func() bool { return slices.Contains(s.installed, appPackage) }
 	machine.running = func() bool { return s.running }
 	machine.displayManager = func() bool { return s.displayManager }
 	machine.system = func() string { return s.system }

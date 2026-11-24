@@ -28,6 +28,7 @@ import (
 // and an sh on PATH that record any run.
 type programScenario struct {
 	t       *testing.T
+	machine *standIn
 	self    string
 	ran     string
 	lookups int
@@ -50,9 +51,11 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 	if err := errors.Join(os.WriteFile(s.self, []byte("old cyfr"), 0755), os.Chmod(s.self, 0755)); err != nil {
 		t.Fatal(err)
 	}
-	// The stand-in machine, at no terminal, its PATH one folder holding
-	// only a curl and an sh that record any run.
-	standInMachine(t)
+	// The stand-in machine, at no terminal, with no CYFR app installed,
+	// its PATH one folder holding only a curl and an sh that record any
+	// run.
+	s.machine = standInMachine(t)
+	s.machine.installed, s.machine.app = nil, ""
 	askTerminal = func() bool { return false }
 	for _, name := range []string{"curl", "sh"} {
 		standInLink(t, filepath.Join(os.Getenv("PATH"), name))
@@ -442,24 +445,24 @@ func standInDpkg(t *testing.T, owned map[string]string, failing bool) {
 	}
 }
 
-// A cyfr the package records name as a package's is never rewritten,
-// reached by its own path or by a link, whether or not the app beside it
-// is whole, and the refusal names the second command exactly: that
-// program by its own path, with --version where it was asked. A file named
-// like the app's code beside a cyfr no package installed decides nothing.
+// A cyfr the package records name as another package's is never
+// rewritten, reached by its own path or by a link, and the refusal names
+// the second command exactly: that program by its own path, with
+// --version where it was asked. The app's own cyfr is the app's road's
+// (TestUpdateBringsTheInstalledAppByItsRoad).
 func TestUpdateLeavesAPackagesProgramToThePackage(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		byLink  bool
 		options updateOptions
 	}{
-		{"its own path, the app's code gone", false, updateOptions{}},
+		{"its own path", false, updateOptions{}},
 		{"a link to it, the newest release", true, updateOptions{}},
 		{"a link to it, an exact release", true, updateOptions{version: "1.2.0"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newProgramScenario(t, "1.0.0", "1.1.0")
-			standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
+			standInDpkg(t, map[string]string{s.self: "cyfr-other"}, false)
 			if c.byLink {
 				link := filepath.Join(t.TempDir(), "cyfr")
 				if err := os.Symlink(s.self, link); err != nil {
@@ -467,12 +470,12 @@ func TestUpdateLeavesAPackagesProgramToThePackage(t *testing.T) {
 				}
 				selfExecutable = func() (string, error) { return link, nil }
 			}
-			target, again := "1.1.0", s.self+" update"
+			again := s.self + " update"
 			if c.options.version != "" {
-				target, again = c.options.version, again+" --version "+c.options.version
+				again += " --version " + c.options.version
 			}
 			_, err := s.run(c.options)
-			want := "This cyfr, " + s.self + ", belongs to the package cyfr-desktop, so nothing was changed: install the package cyfr-desktop of release " + target + " from " + releasesPage + "/tag/" + target + ", then run '" + again + "' to update CYFR here"
+			want := "This cyfr, " + s.self + ", belongs to the package cyfr-other, which cyfr update does not change; nothing was changed. Update it with the system's package tool, then run '" + again + "'"
 			if err == nil || err.Error() != want {
 				t.Errorf("cyfr update answered %v, want %q", err, want)
 			}
@@ -522,38 +525,6 @@ func TestUpdateAsksThePackageRecordsAlone(t *testing.T) {
 				t.Errorf("cyfr update answered %v, fetched %v, the program holds %q", err, s.fetched, read(t, s.self))
 			}
 		})
-	}
-}
-
-// The two steps the package's refusal names: with the newer package
-// installed, cyfr update run again finds the program current and goes on
-// to the stack in the directory.
-func TestUpdateAgainFromTheNewerPackageGoesOnToTheStack(t *testing.T) {
-	s := newProgramScenario(t, "1.0.0", "1.1.0")
-	standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
-	savedManifest := fetchManifest
-	t.Cleanup(func() { fetchManifest = savedManifest })
-	reached := errors.New("the stack's update began")
-	var asked []string
-	fetchManifest = func(_ context.Context, v string) (*release.Manifest, error) {
-		asked = append(asked, v)
-		return nil, reached
-	}
-	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "then run '"+s.self+" update' to update CYFR here") || len(asked) != 0 {
-		t.Fatalf("the first cyfr update answered %v and asked the stack's releases %v", err, asked)
-	}
-	// The newer package installed.
-	version.Version = "1.1.0"
-	out, err := s.run(updateOptions{})
-	if err == nil || !strings.Contains(err.Error(), reached.Error()) || !slices.Equal(asked, []string{"1.1.0"}) ||
-		!strings.Contains(out, "cyfr 1.1.0 is the newest release.") {
-		t.Fatalf("cyfr update again answered %v, asking %v:\n%s", err, asked, out)
-	}
-	if len(s.fetched) != 0 || len(s.handed) != 0 || read(t, s.self) != "old cyfr" {
-		t.Errorf("the package's cyfr was fetched %v, handed over %v or changed", s.fetched, s.handed)
 	}
 }
 

@@ -348,8 +348,9 @@ func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
 			}
 			saved := appCyfr
 			t.Cleanup(func() { appCyfr = saved })
-			appCyfr = filepath.Join(t.TempDir(), "cyfr")
-			if err := os.WriteFile(appCyfr, []byte("#!/bin/sh\n"+c.app+"\n"), 0o700); err != nil {
+			cyfr := filepath.Join(t.TempDir(), "cyfr")
+			appCyfr = func() (string, error) { return cyfr, nil }
+			if err := os.WriteFile(cyfr, []byte("#!/bin/sh\n"+c.app+"\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if got := realMachine.appRelease(); got != c.want {
@@ -831,10 +832,9 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 }
 
 // The screen's page says where the app's cyfr, which runs the shell, is
-// another release than the one the folder is set to, with the instruction
-// `cyfr update` gives a package's own cyfr (installPackage), which brings
-// the app there whichever cyfr is on PATH; it says nothing where they
-// agree or where either is no release.
+// another release than the one the folder is set to, with the cyfr update
+// in the folder that brings the app to the folder's release; it says
+// nothing where they agree or where either is no release.
 func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	dir := t.TempDir()
 	compose := func(tag string) {
@@ -845,7 +845,7 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	}
 	for _, c := range []struct{ folder, ours, want string }{
 		{"0.6.0@sha256:" + strings.Repeat("a", 64), "0.6.0", ""},
-		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR in " + dir + " is set to release 0.6.1, so the screen may not work as it should. To bring the app to release 0.6.1, install the package cyfr-desktop of release 0.6.1 from " + releasesPage + "/tag/0.6.1."},
+		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR in " + dir + " is set to release 0.6.1, so the screen may not work as it should. To bring the app to release 0.6.1, run 'cyfr update --version 0.6.1' in " + dir + "."},
 		{"latest", "0.6.0", ""},
 		{"0.6.1", "dev", ""},
 	} {
