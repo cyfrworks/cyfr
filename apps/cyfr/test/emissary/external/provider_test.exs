@@ -801,7 +801,7 @@ defmodule Emissary.External.ProviderTest do
       assert warning ==
                "The command expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env name: " <>
                  "the value is placed on the command line, where every process " <>
-                 "on the backends service, other athanors' programs included, can read it; the " <>
+                 "of the program's own session can read it; the " <>
                  "safe route is to let the program read it from its environment."
 
       assert {:ok, %{warnings: []}} =

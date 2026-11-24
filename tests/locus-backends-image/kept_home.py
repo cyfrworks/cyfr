@@ -119,22 +119,23 @@ def main():
         # ————— a home of its own, under a uid of its own —————
         a = whoami(c, OWNER, key="a", home_id=SHARED)
         expect(a["home"] == f"{KEPT_ROOT}/{SHARED}" and a["home_mode"] == "700" and a["cwd"] == a["home"]
-               and a["tmpdir"] == f"{a['home']}/tmp", "a kept program runs in its row's home, 0700, as HOME", a)
+               and a["tmpdir"] == "/tmp", "a kept program runs in its row's home, 0700, as HOME, its TMPDIR its space's own", a)
         expect(KEPT_FIRST <= a["uid"] <= KEPT_LAST and not POOL_FIRST <= a["uid"] <= POOL_LAST
                and a["gid"] == a["uid"], "it runs under a uid of the kept range, never a pool uid", a)
         expect(c.hello()[1]["pool"]["free"] == pool["free"], "a kept session takes no uid of the pool")
         sh(c, OWNER, 'echo kept-value > "$HOME/kept.txt"', key="a", home_id=SHARED)
 
         b = whoami(c, OWNER, key="b", home_id=SHARED)
-        expect(b["uid"] == a["uid"] and b["home"] == a["home"] and b["pid"] != a["pid"],
-               "a second session of the entry shares its home and uid in a process of its own", [a, b])
+        expect(b["uid"] == a["uid"] and b["home"] == a["home"] and b["pidns"] != a["pidns"],
+               "a second session of the entry shares its home and uid in a space of its own", [a, b])
+        first = stack.outside(a)
         seen = sh(c, OWNER, 'cat "$HOME/kept.txt"', key="b", home_id=SHARED)
         expect(seen["stdout"] == "kept-value\n", "the second session sees what the first wrote", seen)
         expect(c.program(OWNER, "probe")["sessions"] == 2, "the program runs two sessions")
 
         status, closed = c.close(OWNER, c.mcp(OWNER, "probe", key="a", home_id=SHARED).session)
         expect((status, closed) == (200, {"version": VERSION, "status": "closed"}), "a session is closed", closed)
-        eventually(lambda: not any(p["pid"] == a["pid"] for p in stack.processes()), "the closed session's process to end")
+        eventually(lambda: not any(p["pid"] == first["pid"] for p in stack.processes()), "the closed session's process to end")
         expect(whoami(c, OWNER, key="b", home_id=SHARED)["pid"] == b["pid"],
                "closing one session leaves the other running under the shared uid")
         c.close(OWNER, c.mcp(OWNER, "probe", key="b", home_id=SHARED).session)
@@ -143,7 +144,10 @@ def main():
 
         again = whoami(c, OWNER, key="a", home_id=SHARED)
         kept = sh(c, OWNER, 'cat "$HOME/kept.txt"', key="a", home_id=SHARED)
-        expect(again["uid"] == a["uid"] and again["pid"] != a["pid"] and kept["stdout"] == "kept-value\n"
+        # A pid namespace's number may be the ended one's again: the
+        # container's numbering tells the two processes apart.
+        later = stack.outside(again)
+        expect(again["uid"] == a["uid"] and later and later["pid"] != first["pid"] and kept["stdout"] == "kept-value\n"
                and c.mcp(OWNER, "probe", key="a", home_id=SHARED).resumed is False,
                "a kept home survives retirement: the next session finds what the last wrote, under the same uid",
                [again, kept])
@@ -152,7 +156,8 @@ def main():
         for path in [a["home"], f"{a['home']}/kept.txt", KEPT_ROOT]:
             status, answer = c.call(NEIGHBOUR, "probe__read_path", {"path": path})
             text = answer["result"]["content"][0]["text"]
-            expect('"ok":false' in text and "EACCES" in text, f"a pooled uid cannot read {path}", text)
+            # A pooled program's space holds no kept homes' root at all.
+            expect('"ok":false' in text and "ENOENT" in text, f"a pooled uid finds no {path} in its space", text)
         read = stack.exec(f"cat {a['home']}/kept.txt", user=RELEASE_USER)
         expect(read.returncode != 0 and "Permission denied" in read.stderr,
                f"the release's user, {RELEASE_USER}, cannot read a home", [read.returncode, read.stdout, read.stderr])
@@ -176,7 +181,8 @@ def main():
                          f'ls "{other}" 2>&1; echo "rc=$?"; touch "{other}/profile/Default/Cookies" 2>&1; echo "rc=$?"',
                          key=key, home_id=home)
             out = crossed["stdout"]
-            expect(out.count("Permission denied") == 4 and "rc=0" not in out and "-cookie" not in out
+            # Another row's home is not in a row's space at all.
+            expect(out.count("No such file or directory") == 4 and "rc=0" not in out and "-cookie" not in out
                    and "-store" not in out,
                    f"the {key} row neither reads, lists nor writes the other's cookies and storage", out)
         mine = sh(c, OWNER, 'cat "$HOME/profile/Default/Cookies"', key="apart", home_id=APART)

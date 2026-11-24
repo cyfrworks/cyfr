@@ -150,6 +150,22 @@ die() {
   exit 1
 }
 
+# apparmor: every Locus container runs under this checkout's AppArmor
+# profile, by the name its file name holds, which carries its content
+# (cyfr's package apparmor) and which compose is given
+# (CYFR_LOCUS_APPARMOR); Docker refuses to apply a profile the host has not
+# loaded. Where AppArmor is on and the kernel's list of loaded policy does
+# not hold that name, the loop refuses before anything starts, naming the
+# one command that loads it.
+APPARMOR_DIR="$ROOT/apps/codex/internal/apparmor"
+APPARMOR_NAME="$(cat "$APPARMOR_DIR/name" 2>/dev/null)"
+apparmor() {
+  local policies=/sys/kernel/security/apparmor/policy/profiles
+  [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ] && [ -d "$policies" ] || return 0
+  grep -qsx -- "$APPARMOR_NAME" "$policies"/*/name ||
+    die "Locus runs under the AppArmor profile $APPARMOR_NAME, which this machine has not loaded, so nothing was started. Run \`sed 's/cyfr-locus-000000000000/$APPARMOR_NAME/g' $APPARMOR_DIR/cyfr-locus | sudo sh -c 'cat > /etc/apparmor.d/$APPARMOR_NAME && apparmor_parser -r -W /etc/apparmor.d/$APPARMOR_NAME'\`, then run scripts/dev-stack.sh again."
+}
+
 # slot_env K: slot K's values, as compose reads them.
 slot_env() {
   local k="$1"
@@ -177,7 +193,7 @@ remembered() {
 # environment, and the project, the image and the slot's values from this
 # script alone.
 compose() {
-  env "${SLOT_ENV[@]}" DEV_STACK_PROJECT="$PROJECT" DEV_STACK_IMAGE="$IMAGE" \
+  env "${SLOT_ENV[@]}" DEV_STACK_PROJECT="$PROJECT" DEV_STACK_IMAGE="$IMAGE" CYFR_LOCUS_APPARMOR="$APPARMOR_NAME" \
     docker compose --env-file /dev/null -p "$PROJECT" --profile locus-builds \
     -f docker-compose.yml -f docker-compose.dev.yml "$@"
 }
@@ -676,6 +692,7 @@ cat "$f"' 2>/dev/null)" || STACK_ID=""
 run() {
   command -v docker >/dev/null || die "docker is not on PATH."
   command -v python3 >/dev/null || die "python3 is not on PATH."
+  apparmor
   lock
   private
   local left

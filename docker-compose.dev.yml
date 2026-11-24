@@ -65,6 +65,8 @@ services:
       - no-new-privileges:true
       - writable-cgroups=true
       - seccomp=./apps/locus/keeper/seccomp/keeper.json
+      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
+      - systempaths=unconfined
 
   locus-backends:
     image: ${DEV_STACK_IMAGE}
@@ -74,6 +76,8 @@ services:
       - no-new-privileges:true
       - writable-cgroups=true
       - seccomp=./apps/locus/keeper/seccomp/keeper.json
+      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
+      - systempaths=unconfined
 
   # The mix boot reaches the backends service at the guard's fixed address
   # on the island's network, as the shipped cyfr service reaches it on that
@@ -100,6 +104,8 @@ services:
       - no-new-privileges:true
       - writable-cgroups=true
       - seccomp=./apps/locus/keeper/seccomp/keeper.json
+      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
+      - systempaths=unconfined
 
   # The builds island as the backends island: the mix boot reaches the
   # builder at its guard's fixed address, and the guard refuses the

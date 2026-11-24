@@ -389,9 +389,10 @@ func TestAKeptUIDIsRetiringUntilEveryProcessOfItIsGone(t *testing.T) {
 	}
 }
 
-// A kept uid whose retirement cannot finish (something it left outside its
+// A kept uid whose retirement cannot finish (something of it outside its
 // home that it cannot remove) is quarantined: no home_make and no spawn
-// takes it, until the sweeper's retry finds nothing left.
+// takes it, until the sweeper's retry finds nothing left. A space sees no
+// writable place outside its home, so the test leaves the entry itself.
 func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
@@ -406,8 +407,9 @@ func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 	if err := os.Chmod(pinned, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	spawned, rc := k.spawnKept(t, "left", `echo x > `+pinned+`/left; echo wrote; sleep 600`, path, uid)
-	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "wrote\n") })
+	leaveOwned(t, filepath.Join(pinned, "left"), uid)
+	spawned, rc := k.spawnKept(t, "left", `echo started; sleep 600`, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "started\n") })
 	// The uid can no longer remove what it left there.
 	if err := os.Chmod(pinned, 0o555); err != nil {
 		t.Fatal(err)

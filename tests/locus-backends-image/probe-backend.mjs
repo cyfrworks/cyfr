@@ -65,6 +65,9 @@ const handlers = {
       gid: process.getgid(),
       groups: process.getgroups(),
       pid: process.pid,
+      // The space's own pid namespace: the container numbers its
+      // processes apart, and finds this one by it (harness.py, outside).
+      pidns: fs.readlinkSync("/proc/self/ns/pid"),
       home,
       home_mode: (fs.statSync(home).mode & 0o7777).toString(8),
       marker,

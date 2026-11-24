@@ -11,10 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -49,6 +47,9 @@ const (
 	// namespace and name sockets up over it and waits there for the word
 	// that the guard admitted its route. The command never holds it.
 	RouteFD = 6
+	// TerminalFD is a pty spawn's socket to the keeper: the space's first
+	// process hands its terminal's master up over it.
+	TerminalFD = 7
 )
 
 // CommandControlFD and CommandRelayFD are the descriptors the executed
@@ -69,8 +70,9 @@ const ExitFailed = 127
 // that this host gives a spawn its space: it reads a Probe instead of a
 // Spec, becomes the probe's uid and gid, for a routed probe brings its
 // loopback up and binds its name sockets as a routed spawn's stage does,
-// drops every capability set, installs the space's filter and exits 0
-// without executing anything.
+// clones the space's first process, which builds the space's files, pivots
+// into them, drops every capability set and installs the space's filter,
+// does the same itself, and exits 0 without executing anything.
 const ProbeArg = "probe"
 
 // Probe is what the keeper hands a probing stage over its spec pipe.
@@ -84,12 +86,12 @@ type Probe struct {
 	Route bool `json:"route"`
 }
 
-// Main runs `cyfr-locus stage`. It does not return on success.
+// Main runs `cyfr-locus stage`, and ends as the command ended.
 //
 // The stage is the keeper's binary in its stage mode, cloned into a user,
 // network and IPC namespace of its own and holding, inside that namespace
-// only, SETUID, SETGID, SETPCAP, NET_ADMIN and NET_BIND_SERVICE as ambient
-// capabilities and nothing outside it. It is blocked reading its spec from
+// only, SETUID, SETGID, SETPCAP, SYS_ADMIN, NET_ADMIN and NET_BIND_SERVICE
+// as ambient capabilities and nothing outside it. It is blocked reading its spec from
 // an inherited pipe until the keeper, from the parent side, has written
 // its setgroups (deny), gid_map and uid_map, each mapping the pooled id to
 // itself, and placed it in its cgroup: a process inside a new user
@@ -100,18 +102,34 @@ type Probe struct {
 // namespace and both sockets to the keeper over RouteFD, keeping none of
 // them, and waits there for the keeper's word that the guard made its
 // route (route_linux.go); a relay space's loopback stays down. Every stage
-// then drops every set, bounding, inheritable, permitted, effective and
-// ambient, sets no_new_privs, installs the space's seccomp filter
-// (seccomp_linux.go) and executes the command, which then holds no
-// capability anywhere, can make no namespace or mount of its own and
-// reaches only what its space's reach gives it: a relay space's relay on
-// fd 4, or a routed space's route. A filter that cannot be installed
-// refuses the spawn before anything executes.
+// then makes a scratch home, clones the space's first process into a pid,
+// mount and cgroup namespace (space_linux.go), drops every set of its own,
+// bounding, inheritable, permitted, effective and ambient, installs the
+// space's seccomp filter (seccomp_linux.go), passes the keeper's signals
+// down and ends as the command ended. The space's first process builds the
+// space's files and drops every set in turn, and the space's init executes
+// the command, which then holds no capability anywhere, can make no
+// namespace or mount of its own, sees only its space's processes and files
+// and reaches only what its space's reach gives it: a relay space's relay
+// on fd 4, or a routed space's route. A step that fails refuses the spawn
+// before anything executes.
 func Main() int {
 	// Capabilities and no_new_privs belong to a thread, and execve takes
 	// the credentials of the thread that calls it: the drop, the check and
 	// the exec all happen on this one.
 	runtime.LockOSThread()
+	// A space's first process and its init keep their descriptors where
+	// the stage placed them.
+	if len(os.Args) > 2 {
+		switch os.Args[2] {
+		case FirstArg, FirstProbeArg:
+			return First(os.Args[2] == FirstProbeArg)
+		case InitArg:
+			return Init()
+		case WaitArg:
+			return Wait()
+		}
+	}
 	// The status pipe moves above the command's descriptors, close-on-exec,
 	// so fd 4 is free for the relay and the pipe still closes on exec.
 	status := os.NewFile(StatusFD, "status")
@@ -126,29 +144,27 @@ func Main() int {
 		fmt.Fprintf(status, format, args...)
 		return ExitFailed
 	}
-	if len(os.Args) > 2 && os.Args[2] == ProbeArg {
-		if err := probe(); err != nil {
-			return fail("%v", err)
+	if len(os.Args) > 2 {
+		switch os.Args[2] {
+		case ProbeArg:
+			if err := probe(status); err != nil {
+				return fail("%v", err)
+			}
+			return 0
 		}
-		return 0
 	}
 
-	// The spec file is closed by hand: fd 3 is reused for the control
-	// channel below, and a finalizer must not close it later.
+	// The spec file is closed by hand: fd 3 is free once it is read, and a
+	// finalizer must not close it later.
 	specFile := os.NewFile(SpecFD, "spec")
-	data, err := io.ReadAll(io.LimitReader(specFile, 2*protocol.MaxLineBytes))
+	data, err := io.ReadAll(io.LimitReader(specFile, MaxSpecBytes))
 	_ = specFile.Close()
 	if err != nil {
 		return fail("spec: %v", err)
 	}
-	var spec Spec
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&spec); err != nil {
-		return fail("spec: undecodable")
-	}
-	if err := spec.Validate(); err != nil {
-		return fail("spec: %v", err)
+	spec, err := decodeSpec(data)
+	if err != nil {
+		return fail("%v", err)
 	}
 	if err := ownNamespace(spec.UID, spec.GID); err != nil {
 		return fail("namespace: %v", err)
@@ -161,67 +177,46 @@ func Main() int {
 			return fail("route: %v", err)
 		}
 	}
-	if err := dropCapabilities(); err != nil {
-		return fail("capabilities: %v", err)
-	}
-	if err := checkCredentials(spec.UID, spec.GID); err != nil {
-		return fail("credentials: %v", err)
-	}
-	if err := installSpaceFilter(); err != nil {
-		return fail("seccomp: %v", err)
-	}
 	if err := checkCgroup(spec); err != nil {
 		return fail("cgroup: %v", err)
 	}
-
 	syscall.Umask(0o077)
 	if err := makeHome(spec); err != nil {
 		return fail("home: %v", err)
 	}
-	if err := setLimits(spec.Limits); err != nil {
-		return fail("rlimits: %v", err)
-	}
-	if err := os.Chdir(spec.Home); err != nil {
-		return fail("home: %v", err)
-	}
-	path, err := spec.LookPath(spec.Argv[0])
-	if err != nil {
-		return fail("exec: %v", err)
-	}
-	// Every descriptor above the command's is marked close-on-exec; the
-	// control channel's socket is first moved to the command's fd 3 and a
-	// relay space's relay to its fd 4 (Dup3 with no flags leaves the new
-	// descriptor open across exec), so they are the only descriptors above
-	// 2 the command inherits.
-	keep := SpecFD
-	if spec.Control {
-		if err := unix.Dup3(ControlFD, CommandControlFD, 0); err != nil {
-			return fail("control channel: %v", err)
-		}
-		keep = CommandControlFD + 1
-	}
-	if spec.Reach == pool.ReachRelay {
-		if err := checkSocket(RelayFD); err != nil {
-			return fail("relay: %v", err)
-		}
-		if err := unix.Dup3(RelayFD, CommandRelayFD, 0); err != nil {
-			return fail("relay: %v", err)
-		}
-		keep = CommandRelayFD + 1
-	}
-	if err := closeOnExecFrom(keep); err != nil {
+	if err := closeOnExecFrom(TerminalFD + 1); err != nil {
 		return fail("descriptors: %v", err)
 	}
-	err = syscall.Exec(path, spec.Argv, spec.Environ())
-	return fail("exec %s: %v", path, err)
+	err = enter(data, spec.Home, spec.Control, spec.Reach == pool.ReachRelay, spec.Terminal, spec.UID, spec.GID, status)
+	return fail("%v", err)
+}
+
+// MaxSpecBytes bounds the spec a stage reads.
+const MaxSpecBytes = 2 * protocol.MaxLineBytes
+
+// decodeSpec decodes and validates a stage's spec.
+func decodeSpec(data []byte) (Spec, error) {
+	var spec Spec
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&spec); err != nil {
+		return Spec{}, errors.New("spec: undecodable")
+	}
+	if err := spec.Validate(); err != nil {
+		return Spec{}, fmt.Errorf("spec: %w", err)
+	}
+	return spec, nil
 }
 
 // probe is the stage's start-time proof for the keeper: the namespace the
 // keeper cloned it into maps the probe's ids, the stage becomes them, a
 // routed probe brings its loopback up and binds its two name sockets, and
-// the stage drops every capability set, passes the check a spawn's stage
-// makes before it executes the command and installs the space's filter.
-func probe() error {
+// the stage clones the space's first process, which builds the space's
+// files and drops every capability set, drops every set of its own, passes
+// the check a spawn's stage makes before it executes the command, installs
+// the space's filter and ends as the first process ended. It returns only
+// when a step fails.
+func probe(status *os.File) error {
 	specFile := os.NewFile(SpecFD, "spec")
 	data, err := io.ReadAll(io.LimitReader(specFile, 4096))
 	_ = specFile.Close()
@@ -253,13 +248,7 @@ func probe() error {
 		_ = unix.Close(udp)
 		_ = unix.Close(tcp)
 	}
-	if err := dropCapabilities(); err != nil {
-		return fmt.Errorf("capabilities: %w", err)
-	}
-	if err := checkCredentials(p.UID, p.GID); err != nil {
-		return err
-	}
-	return installSpaceFilter()
+	return enter(nil, "", false, false, false, p.UID, p.GID, status)
 }
 
 // ownNamespace refuses to go on unless the stage runs in a user namespace
@@ -383,24 +372,13 @@ func checkSocket(fd int) error {
 	return nil
 }
 
-// makeHome makes a scratch home and its tmp directory, which must not
-// exist yet; a kept home must exist, be the uid's and 0700, and its tmp
-// directory is made again when it is gone.
+// makeHome makes a scratch home, which must not exist yet; a kept home
+// must exist and be the uid's and 0700.
 func makeHome(spec Spec) error {
-	tmp := filepath.Join(spec.Home, "tmp")
 	if spec.Kept {
-		if err := home.CheckKeptHome(spec.Home, spec.UID); err != nil {
-			return err
-		}
-		if err := os.Mkdir(tmp, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			return err
-		}
-		return nil
+		return home.CheckKeptHome(spec.Home, spec.UID)
 	}
-	if err := os.Mkdir(spec.Home, 0o700); err != nil {
-		return err
-	}
-	return os.Mkdir(tmp, 0o700)
+	return os.Mkdir(spec.Home, 0o700)
 }
 
 // checkCgroup refuses to continue unless the process is in the memory-bounded

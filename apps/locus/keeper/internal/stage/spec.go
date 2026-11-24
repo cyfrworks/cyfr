@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package stage prepares and executes one spawned process in a session and
-// a space of its own: a user, network and IPC namespace the keeper cloned
-// it into. The stage keeps the keeper's ids until the keeper maps its
+// Package stage prepares and executes one spawned process in a space of its
+// own: a user, network and IPC namespace the keeper cloned the stage into,
+// and a pid, mount and cgroup namespace the stage clones the space's first
+// process into. The stage keeps the keeper's ids until the keeper maps its
 // namespace; after reading its Spec from fd 3 it becomes the allocated ids,
 // makes a routed space's loopback and name sockets and hands them up, and
-// drops its capabilities. The stage creates the home, applies the limits,
-// builds the environment from nothing, and executes the command with stdio
-// on fds 0-2, its control channel on fd 3 when requested, and a relay
-// space's relay on fd 4.
+// creates the home. The space's first process builds the space's files and
+// drops every capability, and the space's init applies the limits, builds
+// the environment from nothing and executes the command with stdio on fds
+// 0-2, its control channel on fd 3 when requested, and a relay space's
+// relay on fd 4 (space_linux.go).
 package stage
 
 import (
@@ -53,6 +55,10 @@ type Spec struct {
 	// Control says the keeper handed the control channel's socket on
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
+	// Terminal says the keeper handed a socket on TerminalFD: the space's
+	// first process opens a terminal of the space's own, makes its slave the
+	// command's stdin, stdout and stderr, and hands its master up there.
+	Terminal bool `json:"terminal"`
 	// Reach is the space's (package pool): ReachRelay, whose relay the
 	// keeper handed on RelayFD, or ReachRouted, whose route socket the
 	// keeper handed on RouteFD.
@@ -115,7 +121,7 @@ func (s Spec) SearchPath() string {
 }
 
 // Environ is the complete environment of the spawned process: HOME, USER,
-// LOGNAME, TMPDIR (inside the home) and PATH (SearchPath), then the spec's
+// LOGNAME, TMPDIR (the space's own /tmp) and PATH (SearchPath), then the spec's
 // own variables, sorted by name. A kept program is also given npm's prefix
 // and XDG_BIN_HOME in the home's .local, so what it installs lands on its
 // PATH, unless its own variables name them. Nothing is inherited.
@@ -124,7 +130,7 @@ func (s Spec) Environ() []string {
 		"HOME=" + s.Home,
 		"LOGNAME=" + s.User,
 		"PATH=" + s.SearchPath(),
-		"TMPDIR=" + filepath.Join(s.Home, "tmp"),
+		"TMPDIR=/tmp",
 		"USER=" + s.User,
 	}
 	own := make(map[string]string, len(s.Env)+2)

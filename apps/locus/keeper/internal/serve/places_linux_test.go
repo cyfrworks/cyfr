@@ -348,7 +348,7 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	}
 	k.s.handle(parsed(t, `{"v":4,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
 	k.expect(t, protocol.NewPlaced("pl"))
-	k.s.handleSpawn(keptRequest(t, k.attach, "pl", "exec "+k.s.self+" hold 4 60", path, uid, nil))
+	k.s.handleSpawn(keptRequest(t, k.attach, "pl", "exec "+k.helper+" hold 4 60", path, uid, nil))
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("spawn: %v", spawned)
@@ -536,6 +536,18 @@ func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
 
 // removalRefused makes every removal of a group fail busy, as one a process
 // still holds fails, until the function it answers is called.
+// leaveOwned writes a file at path owned by uid, as something the uid
+// left behind.
+func leaveOwned(t *testing.T, path string, uid int) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(path, uid, uid); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func removalRefused(t *testing.T) (allow func()) {
 	var refused atomic.Bool
 	refused.Store(true)
@@ -738,8 +750,11 @@ func TestAQuarantinedUIDWhoseGroupStaysIsNotReturnedBySweep(t *testing.T) {
 	if err := os.Chmod(pinned, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	spawnID, uid, rc := k.spawn(t, "left", `echo x > `+pinned+`/left; echo wrote; sleep 600`, map[string]string{}, false)
-	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "wrote\n") })
+	spawnID, uid, rc := k.spawn(t, "left", `echo started; sleep 600`, map[string]string{}, false)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "started\n") })
+	// A space sees no writable place outside its home: the test leaves the
+	// uid's entry there itself.
+	leaveOwned(t, filepath.Join(pinned, "left"), uid)
 	// The uid can no longer remove what it left there.
 	if err := os.Chmod(pinned, 0o555); err != nil {
 		t.Fatal(err)

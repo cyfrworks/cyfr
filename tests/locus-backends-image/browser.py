@@ -1850,7 +1850,8 @@ def main():
         for path in [profile, f"{profile}/Default/Cookies", f"{KEPT_ROOT}/{BROWSER_HOME}"]:
             status, answer = other.call("read_path", {"path": path})
             read = answer["result"]["content"][0]["text"]
-            expect('"ok":false' in read and "EACCES" in read, f"a program in another kept home cannot read {path}", read)
+            # Another kept home is not in the program's space at all.
+            expect('"ok":false' in read and "ENOENT" in read, f"a program in another kept home finds no {path}", read)
         listening = tcp_listeners(stack)
         expect(any(port == PORT for port, _ in listening), "the TCP tables show the service's own listener", listening)
         expect(not [port for port, owner in listening if owner == uid],

@@ -118,7 +118,8 @@ mkdir "$own/inner" 2>/dev/null && echo nested
 cat /proc/self/cgroup`
 	spawnID, uid, rc := k.spawnBounded(t, "42", script, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
-	group := "0::/" + cgroup.Name(uid) + "/bound\n"
+	// The space's cgroup namespace has the spawn's group at its root.
+	group := "0::/\n"
 	want := group + fmt.Sprintf("max=67108864 swap=0 group=1 cpu=%d %d\n", protocol.CPUPeriod, protocol.CPUPeriod) + group
 	if got := string(rc.got[frame.StreamStdout]); got != want {
 		t.Fatalf("the spawn saw\n%s\nwant\n%s", got, want)
@@ -138,10 +139,10 @@ func TestASpawnPastItsBoundIsKilledWholeAndReportedSoWhileASiblingCompletes(t *t
 	// The sibling holds 8 MiB under a bound of 64; the hostile spawn forks
 	// eight holders of 16 MiB under a bound of 64, none of them large, and
 	// a daemon in a session of its own that ignores SIGTERM.
-	sibling := fmt.Sprintf("exec %s hold 8 4", k.s.self)
+	sibling := fmt.Sprintf("exec %s hold 8 4", k.helper)
 	hostile := fmt.Sprintf(`setsid sh -c "trap '' TERM; exec sleep 1000" </dev/null >/dev/null 2>&1 &
 for i in 1 2 3 4 5 6 7 8; do %s hold 16 60 & done
-wait`, k.s.self)
+wait`, k.helper)
 
 	siblingID, siblingUID, siblingConn := k.spawnBounded(t, "43", sibling, map[string]string{}, false, 64<<20)
 	hostileID, hostileUID, hostileConn := k.spawnBounded(t, "44", hostile, map[string]string{}, false, 64<<20)
@@ -179,7 +180,7 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 
 	// A uid's next spawn gets a fresh group: nothing the counters of the
 	// spawn killed at its bound held reaches a later report.
-	spawnID, killed, _ := k.spawnBounded(t, "46", fmt.Sprintf("exec %s hold 128 60", k.s.self), map[string]string{}, false, 32<<20)
+	spawnID, killed, _ := k.spawnBounded(t, "46", fmt.Sprintf("exec %s hold 128 60", k.helper), map[string]string{}, false, 32<<20)
 	if e := k.replies(t, spawnID)[spawnID]; e["signal"] != "SIGKILL" || e["memory"] != protocol.MemoryCap {
 		t.Fatalf("a spawn past its bound exited %v", e)
 	}
@@ -382,7 +383,7 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 	// Faulted in cold, as a program's code is: active on any kernel.
 	code := uncached("code")
 	program := measured(strings.Repeat("b", 32), testPoolLast,
-		"exec "+k.s.self+" mapped "+code+" 60", "file_mapped", 56*mib)
+		"exec "+k.helper+" mapped "+code+" 60", "file_mapped", 56*mib)
 	if program >= 24*mib {
 		t.Errorf("a session whose program maps 64 MiB of code from a file uses %.0f bytes", program)
 	}
@@ -443,7 +444,7 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 			if c.failedBefore {
 				k.failAtItsBound(t, group, c.bound)
 			}
-			leader, _ := k.runIn(t, group, "exec "+k.s.self+" hold 128 60")
+			leader, _ := k.runIn(t, group, "exec "+k.helper+" hold 128 60")
 			k.awaitExit(t, leader)
 			got := "neither"
 			if end := k.s.memoryEnd(&spawn{id: "above", group: group}); end != nil {
@@ -685,7 +686,7 @@ func endedSpawn(t *testing.T, kept bool, script string) (*keeper, *spawn, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	leader, dir := k.runIn(t, group, strings.ReplaceAll(script, "exe ", k.s.self+" "))
+	leader, dir := k.runIn(t, group, strings.ReplaceAll(script, "exe ", k.helper+" "))
 	k.awaitExit(t, leader)
 	sp.group, sp.leader = group, leader
 	k.s.mu.Lock()
