@@ -366,6 +366,196 @@ func TestAnAskIsHeldAndAnsweredThroughTheStubsInput(t *testing.T) {
 	}
 }
 
+// startDriverHolding is a driver whose harness's folder holds the
+// person's own MCP servers by these names, as Claude Code's own
+// configuration names them (`~/.claude.json`).
+func startDriverHolding(t *testing.T, names ...string) *wireSession {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	servers := map[string]any{}
+	for _, name := range names {
+		servers[name] = map[string]any{"type": "stdio", "command": "their-server"}
+	}
+	config, _ := json.Marshal(map[string]any{"mcpServers": servers})
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startDriverIn(t, home)
+}
+
+// theirsRan posts `theirs`, under which the harness calls each server of
+// the person's own it holds, and answers what it said and the own tools
+// the wire showed; no call of theirs is CYFR's ask.
+func theirsRan(t *testing.T, s *wireSession, id string) (string, []string) {
+	t.Helper()
+	postText(s, id, "theirs")
+	var said string
+	var own []string
+	// Read one event at a time: an ask held for CYFR would keep the turn
+	// from its idle.
+	for e := s.next(); e["t"] != "idle"; e = s.next() {
+		switch e["t"] {
+		case "ask":
+			t.Fatalf("a call of a server of the person's own is the program's, never CYFR's ask: %v", e)
+		case "own":
+			own = append(own, fmt.Sprintf("%v:%v", e["name"], e["phase"]))
+		case "said":
+			said = e["text"].(string)
+		}
+	}
+	return said, own
+}
+
+// A server the person set up in Claude Code itself stays beside CYFR's:
+// the harness holds it, its call is allowed with the model's own input
+// and shown as the program's own tool by name, and CYFR's tool is still
+// CYFR's ask. Servers whose tools Claude Code names `mcp__cyfr__…`
+// (`cyfr__extra`, `cyfr_`) are theirs all the same.
+func TestAServerOfThePersonsOwnStaysBesideCYFRsAndItsCallIsTheProgramsOwn(t *testing.T) {
+	s := startDriverHolding(t, "mine", "cyfr__extra", "cyfr_")
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{filesTool})
+	said, own := theirsRan(t, s, "stp_theirs")
+	if want := "their servers ran: mcp__cyfr___theirs:allow:0 mcp__cyfr__extra__theirs:allow:0 mcp__mine__theirs:allow:0 beside cyfr-2"; said != want {
+		t.Fatalf("each server of the person's own runs, allowed with its own input, beside CYFR's:\n%q\nnot\n%q", want, said)
+	}
+	if want := "[mcp__cyfr___theirs:start mcp__cyfr___theirs:end mcp__cyfr__extra__theirs:start mcp__cyfr__extra__theirs:end mcp__mine__theirs:start mcp__mine__theirs:end]"; fmt.Sprint(own) != want {
+		t.Fatalf("each call of theirs is shown as the program's own tool by name: %v", own)
+	}
+	postText(s, "stp_read", "read it")
+	var ask map[string]any
+	for _, e := range s.until("ask") {
+		ask = e
+	}
+	if ask["name"] != "files" {
+		t.Fatalf("CYFR's tool is still CYFR's ask, by its own name: %v", ask)
+	}
+}
+
+// A server of the person's own named `cyfr` keeps its name and its tools:
+// CYFR's server takes the first name of `cyfr`, `cyfr-2`, `cyfr-3`… that
+// none of theirs is or begins with followed by `_`, since Claude Code
+// lets a server the driver sets replace one of theirs of that name.
+func TestAServerOfThePersonsNamedCyfrKeepsItsNameAndCYFRsTakesAnother(t *testing.T) {
+	s := startDriverHolding(t, "cyfr", "cyfr-2__extra")
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{filesTool})
+	said, _ := theirsRan(t, s, "stp_theirs")
+	if want := "their servers ran: mcp__cyfr__theirs:allow:0 mcp__cyfr-2__extra__theirs:allow:0 beside cyfr-3"; said != want {
+		t.Fatalf("the person's servers keep their names and CYFR's takes another:\n%q\nnot\n%q", want, said)
+	}
+	postText(s, "stp_read", "read it")
+	var ask map[string]any
+	for _, e := range s.until("ask") {
+		ask = e
+	}
+	if ask["name"] != "files" {
+		t.Fatalf("CYFR's tool under its other name is CYFR's ask, by its own name: %v", ask)
+	}
+	s.send(map[string]any{"t": "answer", "id": "stp_answer", "ask": ask["ask"], "content": "three lines", "is_error": false})
+	s.expect("accepted")
+	s.until("idle")
+}
+
+// A start whose harness does not list its MCP servers, its status read
+// refused or answered with no list, ends before anything is set: no name
+// for CYFR's server is known not to replace one of the person's, and a
+// server of theirs named `cyfr` would be replaced for the process's life.
+// It proves the driver's exit, with no `started`, and its reason on its
+// own standard error, which the box keeps; what the person reads of a
+// start that failed is the holder's.
+func TestAStartWhoseServersAreNotListedEndsBeforeAnythingIsSet(t *testing.T) {
+	for _, status := range []string{"error", "unlisted"} {
+		t.Run(status, func(t *testing.T) {
+			t.Setenv("FAKE_STATUS", status)
+			s := startDriverHolding(t, "cyfr")
+			s.expect("hello")
+			s.send(map[string]any{"t": "start", "gen": 3, "config": map[string]any{}, "system": "be brief"})
+			select {
+			case code := <-s.done:
+				if code != 1 || strings.Contains(s.output(), `"started"`) {
+					t.Fatalf("the start ends the driver with 1 and no started: %d %s", code, s.output())
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("a start with no listing of the servers went on")
+			}
+			if !strings.Contains(s.stderr.String(), "Claude Code did not list its MCP servers") {
+				t.Fatalf("the driver says why on its standard error: %q", s.stderr.String())
+			}
+		})
+	}
+}
+
+// A tool named with CYFR's prefix whose server is not CYFR's as the harness
+// names it, by name or by source (one of the person's that started after
+// the listing), is the harness's own: no ask reaches CYFR, the call is
+// allowed with the model's own input untouched, and it is shown as the
+// harness's own tool, start and end, from its permission.
+func TestALateServerNamedAsCYFRsIsTheProgramsOwnByItsPermission(t *testing.T) {
+	for name, server := range map[string]string{
+		"another server": `{"name": "cyfr__late", "source": "user"}`,
+		"another source": `{"name": "cyfr", "source": "user"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("FAKE_LATE_SERVER", server)
+			s := startDriver(t)
+			startFresh(s, map[string]any{})
+			work(s, "stp_work", []any{filesTool})
+			postText(s, "stp_late", "arrived")
+			var said string
+			var own []string
+			// One event at a time: an ask held for CYFR would keep the turn
+			// from its idle.
+			for e := s.next(); e["t"] != "idle"; e = s.next() {
+				switch e["t"] {
+				case "ask":
+					t.Fatalf("a call of a server that is not CYFR's never reaches CYFR: %v", e)
+				case "own":
+					own = append(own, fmt.Sprintf("%v:%v", e["name"], e["phase"]))
+				case "said":
+					said = e["text"].(string)
+				}
+			}
+			if want := `{"behavior":"allow","updatedInput":{"query":"theirs"}}`; said != want {
+				t.Fatalf("the call is allowed with the model's own input untouched:\n%s\nnot\n%s", want, said)
+			}
+			if want := "[mcp__cyfr__late:start mcp__cyfr__late:end]"; fmt.Sprint(own) != want {
+				t.Fatalf("the call is shown as the harness's own tool, start and end: %v", own)
+			}
+		})
+	}
+}
+
+// A call of the harness's own that its turn ended without a result for is
+// done with that turn: the driver forgets it, as Aqua settles every own
+// tool still running at the turn's idle, so a later turn's call under the
+// same id is shown starting and ending on its own.
+func TestAnOwnCallItsTurnEndedWithoutIsForgottenWithTheTurn(t *testing.T) {
+	t.Setenv("FAKE_LATE_SERVER", `{"name": "cyfr__late", "source": "user"}`)
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{filesTool})
+	owns := func(post, words string) []string {
+		postText(s, post, words)
+		var own []string
+		for e := s.next(); e["t"] != "idle"; e = s.next() {
+			if e["t"] == "own" {
+				own = append(own, fmt.Sprintf("%v:%v", e["name"], e["phase"]))
+			}
+		}
+		return own
+	}
+	if got := owns("stp_unended", "unended"); fmt.Sprint(got) != "[mcp__cyfr__late:start]" {
+		t.Fatalf("the call is shown started, its turn ending with no result for it: %v", got)
+	}
+	if got := owns("stp_again", "arrived"); fmt.Sprint(got) != "[mcp__cyfr__late:start mcp__cyfr__late:end]" {
+		t.Fatalf("the next turn's call under the same id is shown started and ended on its own: %v", got)
+	}
+}
+
 func TestAnErrorAnswerIsTheToolsError(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
