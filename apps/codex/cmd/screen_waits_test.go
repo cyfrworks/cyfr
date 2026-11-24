@@ -281,7 +281,7 @@ func (h *hungScreen) posted(path string, fields url.Values) string {
 const onlyThatPage = "Only the page this device's PIN or passphrase was typed on can do that."
 
 // mainLocks is main's lock, as the app sends it when it lost its page.
-const mainLocks = `{"version":1,"type":"lock"}`
+const mainLocks = `{"version":2,"type":"lock"}`
 
 // Where only a new login gives the screen's setup's work the docker group,
 // the screen's page says so in place of "CYFR is starting", which is for a

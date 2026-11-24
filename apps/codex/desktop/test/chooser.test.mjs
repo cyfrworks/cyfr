@@ -270,7 +270,7 @@ const CHOOSER = LOOPBACK + "/bootstrap/"
 const at = (url, showing, over = {}) => ({type: "navigate", window: "content", url, target: "top", asker: "top", showing, by: showing, ...over})
 const open = [{type: "ready", url: CHOOSER + "#token=t"},
   {type: "home", message: {type: "home", home: HOME, account: ACCOUNT, attempt: 1}},
-  {type: "taken", taken: true}, {type: "opened", home: HOME}]
+  {type: "taken", taken: true}, {type: "opened", home: HOME, message: {type: "opened", home: HOME, attempt: 1}}]
 const locked = {type: "locked", message: {type: "locked", home: HOME, account: ACCOUNT}}
 
 // Every notice, by name: its words, and what main observed that makes it
@@ -559,11 +559,10 @@ test("a folder set up already offers Open CYFR on the setup screen, and none is 
   }
 })
 
-test("a setup done whose folder the app could not remember says so, beside that it is set up", async () => {
-  const unrecorded = "This app still remembers https://cyfr.example.com: to open this one later, choose /home/ada/cyfr under Or set up CYFR on this computer, then press Open CYFR."
-  const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6, unrecorded}}
+test("a setup done says so, and offers Open CYFR", async () => {
+  const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 6}}
   const {$} = await chooser("", {folder: "/home/ada/cyfr", ...done}, {}, "#token=t", {})
-  assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started. " + unrecorded)
+  assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started.")
   assert.equal($("go").hidden, false, "Open CYFR is offered")
 })
 

@@ -21,7 +21,10 @@
 //              locked has arrived (`barrier`) and what the lock forgets
 //              is forgotten (`forgotten`); main then keeps to the CYFR it
 //              kept to before the lock if locked names that same one, and
-//              to none otherwise
+//              to none otherwise. A departure (Connect to another CYFR)
+//              waits instead for cyfr's left answering its leave's id
+//              (`departing`): no locked, and no left of another id, ends
+//              it
 //   ended      cyfr is gone, the app quits or starts again on another
 //              route; nothing opens again
 //
@@ -142,7 +145,7 @@ import {absolute} from "./process.js"
 /** The state main starts in. */
 export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
   return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
-    notices: [], picks: 0, picking: 0, pickFor: null}
+    notices: [], picks: 0, picking: 0, pickFor: null, leaves: 0}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -288,7 +291,7 @@ function settle(s) {
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
-    picks: s.picks, picking: 0, pickFor: null}
+    picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves}
   if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
   const taken = step(next, {type: "home", message: s.wanted})
   return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
@@ -328,16 +331,23 @@ export function step(s, e) {
     }
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
-      if (s.name !== "proposed" || e.home !== s.home) return ending(s, {end: "it opened a CYFR this app was not keeping to"})
+      if (s.name !== "proposed" || e.home !== s.home || e.message.attempt !== s.attempt) {
+        return ending(s, {end: "it opened a CYFR this app was not keeping to"})
+      }
       // A CYFR that opens at the device's pages (home's road) loads none
       // of its own: the chooser goes to those pages, on either road.
       return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
     case "locked": {
       const m = e.message
       if (s.name === "starting") return same(s)
+      // The lock a leave makes says it too: the departure waits for left.
+      if (s.name === "locking" && s.departing) return same(s)
       if (s.name === "locking") return settle({...s, barrier: true, keep: m})
       return lock(s, "the device locked", "", m)
     }
+    case "left":
+      if (s.name !== "locking" || !s.departing || e.message.id !== s.departing) return same(s)
+      return settle({...s, departing: 0, barrier: true, keep: {}})
     case "ending":
       return step(s, {type: "gone", why: "the screen shell is ending"})
     case "gone":
@@ -348,9 +358,12 @@ export function step(s, e) {
       if (s.name !== "locking") return same(s)
       const notices = e.cleared ? s.notices : adding(s.notices, s.leaving ? "uncleared" : "unforgotten")
       if (!s.leaving) return settle({...s, forgotten: true, notices})
-      // cyfr answers what it is sent now with a locked of its own.
-      return same({...s, leaving: false, forgotten: true, notices: e.cleared ? [] : notices},
-        [{send: {type: e.cleared ? "leave" : "lock"}}])
+      // cyfr answers a lock with a locked of its own, and a leave, numbered
+      // as this run's next departure, with a left naming that number.
+      if (!e.cleared) return same({...s, leaving: false, forgotten: true, notices}, [{send: {type: "lock"}}])
+      const id = s.leaves + 1
+      return same({...s, leaving: false, forgotten: true, notices: [], leaves: id, departing: id},
+        [{send: {type: "leave", fields: {id}}}])
     }
     case "lost":
       if (!s.screen) return same(s, e.window === "child" ? [] : [{reload: true}])
