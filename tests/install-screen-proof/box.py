@@ -37,6 +37,10 @@
 #   box.py visits RECORD SINCE PORT TEXT
 #       prints each request target the screen asked of PORT at or after
 #       SINCE that holds TEXT, one per line
+#   box.py lacks STATUS GID
+#       exits 0 when STATUS, a process's /proc status file, was read and its
+#       Groups line lists no GID; 1 when it lists GID; 2 when the file or
+#       its Groups line could not be read, which is no answer
 #   box.py confirmation DATABASE REF
 #       prints, as JSON, the state and confirming client of the pending
 #       confirmation REF in CYFR's SQLite database DATABASE
@@ -304,6 +308,22 @@ def stored(folder):
     return count
 
 
+def lacks(status, gid):
+    """Whether the process whose status file is STATUS lacks the group GID:
+    0 when its Groups line was read without GID, 1 with it, 2 unread."""
+    try:
+        with open(status) as f:
+            groups = next((line.split(":", 1)[1].split() for line in f if line.startswith("Groups:")), None)
+    except OSError as e:
+        print(f"{status} was not read: {e}", file=sys.stderr)
+        return 2
+    if groups is None:
+        print(f"{status} has no Groups line", file=sys.stderr)
+        return 2
+    print(" ".join(groups))
+    return 1 if gid in groups else 0
+
+
 def main(argv):
     if len(argv) == 3 and argv[1] == "observe":
         observe(argv[2])
@@ -327,10 +347,12 @@ def main(argv):
         print(" ".join(str(p) for p in renderers()))
     elif len(argv) == 3 and argv[1] == "stored":
         print(stored(argv[2]))
+    elif len(argv) == 4 and argv[1] == "lacks":
+        return lacks(argv[2], argv[3])
     else:
         print("usage: box.py observe RECORD | header RECORD SINCE FILE | visits RECORD SINCE PORT TEXT | key RECORD FILE"
               " | canvas KEYFILE DIR | framed RECORD"
-              " | confirmation DATABASE REF | athanors DATABASE | renderers | stored DIR", file=sys.stderr)
+              " | confirmation DATABASE REF | athanors DATABASE | renderers | stored DIR | lacks STATUS GID", file=sys.stderr)
         return 64
     return 0
 

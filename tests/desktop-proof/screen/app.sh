@@ -17,10 +17,17 @@
 #   lost closes the window that was shown, timed from the loss, and a new
 #   one shows the shell's page (the app sits under the shell's watches);
 #   the keyboard killed locks the screen in the same way and is shown
-#   again; cyfr killed ends the app, exit 0, saying why, and the launcher's
+#   again; a lock the app cannot answer (its main stopped) is not
+#   confirmed by labwc's list within 2 s, so cyfr ends the app from
+#   outside, saying why in the system's log, its window closes then, and
+#   the launcher's next start is locked; cyfr killed ends the app by its own SIGKILL (exit 137 to the
+#   launcher), saying why and that it ended itself, and the launcher's
 #   next start is locked again; the app killed ends its cyfr within 5 s,
 #   and the next start is locked too, with one screen shell running; a
 #   --screen-project that names no project explicitly is refused.
+# Before the app starts, Gtk's image loader can start: glycin runs each
+# loader under bwrap, and a loader that cannot start makes Gtk abort the
+# app whenever it asks for an icon.
 # Windows are told apart by labwc's own list of them (toplevels.py), and
 # the keyboard is seen on the output's picture, not as a process.
 #
@@ -29,8 +36,11 @@
 # (tests/install-screen-proof); this smoke has no CYFR.
 #
 # Usage: bash tests/desktop-proof/screen/app.sh DEB
-# DEB is the cyfr-desktop package of this machine's architecture. It needs
-# Docker and Ubuntu's archive, and binds no port of this machine.
+# DEB is the cyfr-desktop package of this machine's architecture, which
+# this machine has installed (tests/desktop-proof/native/linux.sh), so its
+# AppArmor profile is loaded: this changes nothing of this machine's. It
+# needs Ubuntu 26.04, Docker and Ubuntu's archive; it binds no port of
+# this machine.
 set -uo pipefail
 
 # ---- inside the container, as root ----
@@ -87,16 +97,52 @@ if [ "${1:-}" = --session ]; then
       sleep 0.2 # sleep-ok: polls a condition, bounded
     done
   }
-  starts() { grep -c '^CYFR: ready$' "$OUT/app.log" 2>/dev/null || echo 0; }
+  # grep -c prints 0 and fails on a log with no such line, and prints
+  # nothing on no log.
+  starts() { local n; n=$(grep -c '^CYFR: ready$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
   started() { [ "$(starts)" -ge "$1" ]; }
   window() { wlrctl toplevel find title:CYFR; }
   shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell$'; }
+  # The Nth start is locked, with one screen shell: it is ready, its window
+  # shows and one screen shell runs. Every start is locked: the page ready
+  # names is the shell's own, drawn locked (cmd/screen_app.go).
+  one_shell() { [ "$(shells)" = 1 ]; }
+  locked_start() { within 60 started "$1" && within 30 window && within 30 one_shell; }
   # The windows labwc shows now, by its handles, and whether one closed.
   shown() { awk '$1 == "open" { w[$2] = 1 } $1 == "closed" { delete w[$2] } END { for (h in w) print h }' "$OUT/toplevels"; }
   closedAt() { awk -v h="$1" '$1 == "closed" && $2 == h { print $3; exit }' "$OUT/toplevels"; }
   closed() { [ -n "$(closedAt "$1")" ]; }
+  # What the screen's account runs and what labwc shows, for a row whose
+  # end did not come: each process with its state and where it waits.
+  held() {
+    echo "processes: $(ps -u proof -o pid=,ppid=,stat=,wchan:24=,args= | cut -c 1-200 | tr '\n' '|')"
+    echo "windows shown: $(shown | tr '\n' ' ')$(wlrctl toplevel find title:CYFR >/dev/null 2>&1 && echo '(one titled CYFR)')"
+  }
+  # cyfr killed, the Nth time: the app says cyfr ended and that it ends
+  # itself, and ends by its own SIGKILL (app.js: the screen's app does not
+  # quit), which the launcher sees as 137; its next start shows the locked
+  # screen. An end that has not come 3 s after the kill is held: what holds
+  # it is read then, while it still does, and printed beside the verdict.
+  cyfr_killed() {
+    local n=$1 why itself end
+    pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$'
+    rm -f "$OUT/held"
+    within 3 sh -c "[ \$(grep -c '^ended' $OUT/launches) -ge $n ]" || held >"$OUT/held"
+    if within 30 sh -c "[ \$(grep -c '^ended' $OUT/launches) -ge $n ]" && within 60 started $((n + 1)) && within 30 window; then
+      why=$(grep '^CYFR: cyfr ended: ' "$OUT/app.log" | sed -n "${n}p" | cut -c 7-)
+      itself=$(grep "^CYFR: ended: the app's process ends itself" "$OUT/app.log" | sed -n "${n}p" | cut -c 7-)
+      end=$(grep '^ended' "$OUT/launches" | sed -n "${n}p")
+      if [ "$end" = "ended 137" ] && [ -n "$why" ] && [ -n "$itself" ]; then
+        verdict PASS "cyfr killed ($n) ends the app ($end; it said: $why; $itself), and the next start shows the locked screen again"
+      else
+        verdict FAIL "cyfr killed ($n) ended the app as $end, saying ${why:-nothing}${itself:+; $itself}: it must end 137 by itself, saying cyfr ended and that it ends itself: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ') $(held | tr '\n' ' ')"
+      fi
+    else
+      verdict FAIL "cyfr killed ($n) did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ') $(held | tr '\n' ' ')"
+    fi
+    [ ! -s "$OUT/held" ] || echo "HELD cyfr killed ($n): the end had not come 3 s after the kill: $(tr '\n' ' ' <"$OUT/held")" >>"$OUT/verdict"
+  }
   newer() { awk -v h="$1" '$1 == "open" && $2 > h { found = 1 } END { exit !found }' "$OUT/toplevels"; }
-  lines() { grep -c "$1" "$OUT/app.log" 2>/dev/null || echo 0; }
   # A lock the shell made: the window shown closes within HIDE_MS of SINCE
   # (this machine's clock), and a newer window shows the shell's page,
   # painted. The hide waits on nothing (shell.Shell.Lock): measured, 6 to
@@ -151,11 +197,18 @@ PY
   wlr-randr --output HEADLESS-1 --custom-mode 1600x900 >>"$OUT/randr.log" 2>&1 ||
     { verdict FAIL "the output's size was not set: $(tr '\n' ' ' <"$OUT/randr.log")"; finish; }
 
+  # glycin's own test of its sandbox (glycin/src/sandbox.rs).
+  if bwrap --unshare-all --die-with-parent --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 /usr/bin/true >"$OUT/bwrap.log" 2>&1; then
+    verdict PASS "Gtk's image loader can start: bwrap runs glycin's test of its sandbox"
+  else
+    verdict FAIL "Gtk's image loader cannot start, so Gtk aborts the app on an icon: bwrap said $(tr '\n' ' ' <"$OUT/bwrap.log")"
+  fi
+
   python3 -I /fixture/toplevels.py >"$OUT/toplevels" 2>"$OUT/toplevels.err" &
 
   # The stand-in for the screen's launcher: the app again whenever it ends.
   (while [ ! -e "$OUT/stop" ]; do
-    /opt/cyfr/CYFR --screen-project="$PROJECT" >>"$OUT/app.log" 2>&1
+    /opt/cyfr/resources/cyfr screen app "$PROJECT" >>"$OUT/app.log" 2>&1
     echo "ended $?" >>"$OUT/launches"
     sleep 1 # sleep-ok: the launcher's pause between starts
   done) &
@@ -197,26 +250,54 @@ PY
     verdict FAIL "the keyboard killed: the window shown (${was:-none}) $(closed "${was:-none}" && echo "closed after $(cat "$OUT/took") ms, the bound $HIDE_MS" || echo 'did not close'), the keyboard $(keyboard && echo shown || echo 'not shown'), $(pgrep -c -u proof -x wvkbd-mobintl) running: $(grep -a 'keyboard' "$OUT/app.log" | tail -n 3 | tr '\n' ' ')"
   fi
 
-  pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$'
-  if within 30 grep -q '^ended' "$OUT/launches" && within 60 started 2 && within 30 window; then
-    why=$(grep -m 1 '^CYFR: cyfr ended: ' "$OUT/app.log" | cut -c 7-)
-    first=$(grep -m 1 '^ended' "$OUT/launches")
-    if [ "$first" = "ended 0" ] && [ -n "$why" ]; then
-      verdict PASS "cyfr killed ends the app ($first; it said: $why), and the next start shows the locked screen again"
-    else
-      verdict FAIL "cyfr killed ended the app as $first, saying ${why:-nothing}: it must end 0 saying cyfr ended: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
-    fi
-  else
-    verdict FAIL "cyfr killed did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
-  fi
+  cyfr_killed 1
 
   shell=$(pgrep -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$')
   pkill -KILL -u proof -o -f -- '^/opt/cyfr/CYFR --screen-project='
-  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && within 60 started 3 && within 30 window && within 30 sh -c '[ "$(pgrep -u proof -c -f -- "^/opt/cyfr/resources/cyfr screen shell\$")" = 1 ]'; then
+  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && locked_start 3; then
     verdict PASS "the app killed ends its cyfr within 5 s, and the next start is locked, with one screen shell"
   else
     verdict FAIL "after the app was killed: its cyfr $(kill -0 "$shell" 2>/dev/null && echo 'still runs' || echo ended), $(shells) screen shells, $(starts) starts"
   fi
+
+  # A lock the app cannot answer: its main process stopped, as a main
+  # thread stuck in a toolkit call is, its window still shown. The hide is
+  # the compositor's to confirm, never the app's (cmd/screen_app.go): not
+  # confirmed within 2 s, cyfr ends the app from outside, then says why in
+  # the system's log, and the window closes then; the launcher starts the
+  # app again, locked, as the app killed's row asks (locked_start). Its own
+  # are that window's close and its time, the launcher's 137, this run's
+  # line in the log and a fresh start; it cannot tell what a person's eye
+  # would of the frozen frame, nor a PIN page, which needs a CYFR that
+  # answers (tests/install-screen-proof).
+  deaf_app() {
+    local n=$1 was main before logged took gap end said
+    within 30 sh -c 'pgrep -u proof -x swayidle >/dev/null'
+    within 30 window
+    was=$(shown | head -n 1)
+    main=$(pgrep -u proof -o -f -- "$app")
+    before=$(starts)
+    logged=$(grep -a -c "The lock's hide was not confirmed within 2s" /run/syslog.txt 2>/dev/null)
+    kill -STOP "$main"
+    since=$(date +%s.%N)
+    pkill -u proof -x swayidle
+    if [ -n "$was" ] && within 20 closed "$was" && locked_start $((before + 1)); then
+      took=$(python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$(closedAt "$was")" "$since")
+      gap=$(python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$(awk -v h="$was" '$1 == "open" && $2 > h { print $3; exit }' "$OUT/toplevels")" "$(closedAt "$was")")
+      end=$(grep '^ended' "$OUT/launches" | tail -n 1)
+      said=$(grep -a -o "The lock's hide was not confirmed within 2s.*" /run/syslog.txt 2>/dev/null | sed -n "$((${logged:-0} + 1))p")
+      if [ "$took" -lt $((HIDE_MS + 1000)) ] && [ "$end" = "ended 137" ] && [ -n "$said" ]; then
+        verdict PASS "an app deaf to the lock ($n, its main stopped) is ended from outside: its window closed $took ms after the lock, the next start's window opened $gap ms after that, locked, with one screen shell, the launcher saw $end, and cyfr said in the system's log, in this run: $said"
+        echo "deaf app's lock ($n) to window closed: $took ms; closed to the next window: $gap ms" >>"$OUT/timing"
+      else
+        verdict FAIL "an app deaf to the lock ($n): its window closed $took ms after the lock (bound $((HIDE_MS + 1000)) ms), the launcher saw ${end:-nothing}, the system's log says in this run ${said:-nothing}: $(held | tr '\n' ' ')"
+      fi
+    else
+      verdict FAIL "an app deaf to the lock ($n, its main stopped) was not ended, or its next start is not locked with one screen shell: the window shown (${was:-none}) $(closed "${was:-none}" && echo closed || echo 'still shows'), $(starts) starts: $(held | tr '\n' ' ')"
+      kill -CONT "$main" 2>/dev/null
+    fi
+  }
+  deaf_app 1
 
   touch "$OUT/stop"
   pkill -f -- "$app" 2>/dev/null
@@ -257,17 +338,45 @@ chmod 755 "$WORK" "$WORK/fixture"
 chmod 644 "$WORK"/fixture/*
 
 # The engine's sandbox makes namespaces of its own inside the container, as
-# in tests/desktop-proof/home.sh's client.
+# in tests/desktop-proof/home.sh's client, and so does glycin's bwrap.
+# Docker's AppArmor profile refuses bwrap's mounts ("Failed to make /
+# slave"), so the container runs unconfined, and the app and bwrap each
+# run under their own profile as on the box: the package's, which the
+# package's install on this machine loaded, and for bwrap the host's,
+# which Ubuntu 26.04 holds and 24.04 does not. Unconfined without the
+# package's, the host's kernel refuses the engine's namespaces
+# (apparmor_restrict_unprivileged_userns). The loaded profiles' names are
+# read where any account may read them; nothing is loaded or removed.
+dpkg-deb --fsys-tarfile "$DEB" | tar -xO ./opt/cyfr/resources/apparmor-profile >"$WORK/apparmor-profile" ||
+  { echo "screen app: the package holds no AppArmor profile" >&2; exit 1; }
+profile=$(sed -n 's/^profile "\([^"]*\)".*/\1/p' "$WORK/apparmor-profile")
+# grep reads to the end: under pipefail, grep -q's early exit would fail
+# the pipe by cat's SIGPIPE.
+cat /sys/kernel/security/apparmor/policy/profiles/*/name 2>/dev/null | grep -xF -- "$profile" >/dev/null ||
+  { echo "FAIL the package's AppArmor profile $profile is not loaded on this machine: install the package here first (tests/desktop-proof/native/linux.sh)"; exit 1; }
 docker run -d --init --name "$BOX" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
-  --security-opt seccomp=unconfined --shm-size 512m \
+  --security-opt seccomp=unconfined --security-opt apparmor=unconfined --shm-size 512m \
   -v "$WORK/fixture:/fixture:ro" "$IMAGE" sleep infinity >/dev/null || exit 1
 docker exec "$BOX" bash /fixture/app.sh --inside >"$WORK/prepare.log" 2>&1 ||
   { tail -n 30 "$WORK/prepare.log"; echo "FAIL prepare: the package, labwc, wvkbd or swayidle was not installed"; exit 1; }
 docker exec -d -u proof "$BOX" python3 -s /fixture/login1.py || exit 1
+# The system's log, as journald takes it on the box: what is sent to
+# /dev/log, kept whole.
+docker exec -d "$BOX" python3 -I -c 'import os, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind("/dev/log")
+os.chmod("/dev/log", 0o666)
+with open("/run/syslog.txt", "ab", 0) as f:
+    while True:
+        f.write(s.recv(65536) + b"\n")' || exit 1
 
 said=$(docker exec -u proof -e HOME=/home/proof "$BOX" bash /fixture/app.sh --case)
 echo "$said"
+# The app's output whole, on a pass too, so a red elsewhere can be told
+# from what a green run says; the GPU's render node lines say nothing.
+echo "==== the app's output"
+docker exec "$BOX" sh -c 'grep -v drm_render_node /tmp/screen-app/app.log | cut -c 1-400; echo "launches: $(tr "\n" " " </tmp/screen-app/launches)"' 2>&1
 if ! grep -qx DONE <<<"$said" || grep -q '^FAIL ' <<<"$said"; then
-  docker exec "$BOX" sh -c 'tail -n 25 /tmp/screen-app/app.log /tmp/screen-app/labwc.log /tmp/screen-app/launches' 2>/dev/null
+  docker exec "$BOX" sh -c 'tail -n 25 /tmp/screen-app/labwc.log' 2>/dev/null
   exit 1
 fi

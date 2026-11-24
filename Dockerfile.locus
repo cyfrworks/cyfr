@@ -135,10 +135,12 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # Debian publishes a fixed package before the base image is rebuilt around
 # it, so take what the archive has at build time: the image scans in
 # test.yml and release.yml fail on a fixable HIGH or CRITICAL.
-# APT_REFRESH busts the build cache for this layer so the upgrade is not
-# served stale from a cached layer: CI passes the UTC date (YYYY-MM-DD), so
-# the layer refreshes once a day and is shared within it; a local build may
-# leave it.
+# APT_REFRESH is the archive's key (scripts/apt-key.sh), which CI reads
+# when its build starts: the layer is reused while the archive holds what
+# it held, and built again on the archive's packages as soon as one moves,
+# a published fix among them. The script, mounted for this layer alone,
+# holds apt's lists to that key, so no layer is cached under a key its
+# lists were not. A local build may leave it at 0, unchecked.
 #
 # Aqua's browser is Debian's Chromium (cyfr-browser, below), its headless
 # shell, upgraded with the rest at each build, with a font for the pages
@@ -154,7 +156,8 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # dependency stays met. No later layer and nothing at run time calls apt,
 # and one that did would have to install mesa-libgallium first.
 ARG APT_REFRESH=0
-RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
+RUN --mount=type=bind,source=scripts/apt-key.sh,target=/tmp/apt-key.sh \
+    bash /tmp/apt-key.sh --update "${APT_REFRESH}" && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
     openssl \
     libncurses6 \
@@ -164,7 +167,7 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     build-essential \
     iptables \
     procps \
-    && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
+    && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
     && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-browser \
     && apt-get install -y --no-install-recommends chromium-headless-shell \
     && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-browser - > /tmp/browser-brought \

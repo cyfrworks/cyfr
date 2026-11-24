@@ -1537,7 +1537,7 @@ defmodule Opus.ProgramsTest do
                      2_000
 
       assert {:error, {:invalid_argument, sentence}} = Servers.ensure_started(row, ctx)
-      assert sentence =~ "is a driven program: a person or a brain runs it, not MCP"
+      assert sentence =~ "is a driven program: a person or a crew member runs it, not MCP"
       Programs.release(owner)
       assert_released(row, 1)
     end

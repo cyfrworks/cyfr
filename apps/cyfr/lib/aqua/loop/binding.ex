@@ -8,8 +8,9 @@ defmodule Aqua.Loop.Binding do
   A model names a tool as `"<tool>.<action>"`; the binding answers what
   that is — a hand (`Aqua.Hands`, run as a child of the pinned authority
   on a local catalyst), a catalog action (dispatched in-chain through the
-  one gate), an external server's tool (`server__tool` on the wire,
-  `server:tool` in the catalog), the `ui` event, or an application
+  one gate), an outside server's tool (`server__tool` to a model, a
+  name of `outside_name/1`'s grammar alone, `server:tool` in the soul's
+  list), the `ui` event, or an application
   launch — with the canonical operation every policy decision is made
   on: a `files` call inside the storage boundary is the storage
   operation of the same effect, an `execution.run` of a wrapped catalyst
@@ -50,13 +51,55 @@ defmodule Aqua.Loop.Binding do
   @ui_tool "ui"
   @max_result_bytes 256_000
 
-  @doc "The wire spelling of a catalog tool name: `server:tool` becomes `server__tool`."
-  @spec model_name(String.t()) :: String.t()
-  def model_name(tool) when is_binary(tool), do: String.replace(tool, ":", "__")
+  # An outside tool's name to a model, `<server>__<tool>`: each part
+  # letters, digits, `_` and `-`, neither holding `__`, the server's not
+  # ending in `_` and the tool's not beginning with one, so the name holds
+  # exactly one `__` and splits there into one key. The server is not
+  # `mcp`, whose names Codex keeps for its own, and the tool is neither
+  # `resources` nor `prompts`, the spellings of a server's resources and
+  # prompts. The whole name is at most 64 characters, the least an API
+  # provider CYFR runs documents.
+  @server ~r/\A(?!mcp\z)[A-Za-z0-9_-]*[A-Za-z0-9-]\z/
+  @tool ~r/\A(?!(?:resources|prompts)\z)[A-Za-z0-9-][A-Za-z0-9_-]*\z/
+  @max_outside_name 64
 
-  @doc "The catalog spelling of a model-visible tool name."
-  @spec host_name(String.t()) :: String.t()
-  def host_name(name) when is_binary(name), do: String.replace(name, "__", ":")
+  @doc """
+  The name a model is handed an outside server's tool by, for its key
+  `server:tool`: `server__tool`, when both names are of that grammar and
+  the whole is at most 64 characters, so that one name spells one key on
+  every turn and thread; `:error` for any other key.
+  """
+  @spec outside_name(String.t()) :: {:ok, String.t()} | :error
+  def outside_name(key) when is_binary(key) do
+    with [server, tool] <- String.split(key, ":", parts: 2),
+         name = server <> "__" <> tool,
+         true <- outside?(server, tool, name) do
+      {:ok, name}
+    else
+      _ -> :error
+    end
+  end
+
+  @doc """
+  The key `server:tool` a handed outside name (`outside_name/1`) spells;
+  `:error` for a name of no other grammar, which is never an outside
+  tool's.
+  """
+  @spec host_name(String.t()) :: {:ok, String.t()} | :error
+  def host_name(name) when is_binary(name) do
+    with [server, tool] <- String.split(name, "__", parts: 2),
+         true <- outside?(server, tool, name) do
+      {:ok, server <> ":" <> tool}
+    else
+      _ -> :error
+    end
+  end
+
+  defp outside?(server, tool, name),
+    do:
+      String.length(name) <= @max_outside_name and not String.contains?(server, "__") and
+        not String.contains?(tool, "__") and Regex.match?(@server, server) and
+        Regex.match?(@tool, tool)
 
   @doc """
   Resolve one model call. `opts`: `:tool_call_id`. Answers the call with
@@ -79,34 +122,33 @@ defmodule Aqua.Loop.Binding do
         name == @ui_tool ->
           {:ok, %Call{kind: :ui, tool: @ui_tool, action: str(args, "action"), args: args}}
 
-        String.contains?(name, "__") ->
-          {:ok,
-           %Call{
-             kind: :external,
-             tool: host_name(name),
-             action: nil,
-             args: args,
-             target: host_name(name)
-           }}
-
         true ->
-          case String.split(name, ".", parts: 2) do
-            [tool, action] ->
-              resolve_action(tool, action, args)
-
-            [tool] ->
-              # The model names the tool and carries the action in its
-              # arguments, as every catalog tool's schema declares.
-              case Map.pop(args, "action") do
-                {action, rest} when is_binary(action) -> resolve_action(tool, action, rest)
-                _ -> {:error, "unknown tool: #{name}"}
-              end
-          end
+          resolve_named(name, args)
       end
 
     case result do
       {:ok, call} -> {:ok, %{call | model_name: name, tool_call_id: tool_call_id}}
       error -> error
+    end
+  end
+
+  # An outside server's tool by the one name that spells its key
+  # (`host_name/1`); any other name is CYFR's own tool, its action named
+  # after a dot or carried in its arguments, as every catalog tool's
+  # schema declares.
+  defp resolve_named(name, args) do
+    case host_name(name) do
+      {:ok, key} -> {:ok, %Call{kind: :external, tool: key, action: nil, args: args, target: key}}
+      :error -> resolve_own(name, String.split(name, ".", parts: 2), args)
+    end
+  end
+
+  defp resolve_own(_name, [tool, action], args), do: resolve_action(tool, action, args)
+
+  defp resolve_own(name, [tool], args) do
+    case Map.pop(args, "action") do
+      {action, rest} when is_binary(action) -> resolve_action(tool, action, rest)
+      _ -> {:error, "unknown tool: #{name}"}
     end
   end
 

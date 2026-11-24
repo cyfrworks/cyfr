@@ -157,7 +157,7 @@ defmodule Aqua.Providers.Workspace do
         )
       ],
       description:
-        "Workspace threads: open one for a piece of real work from the daily thread, which shows a post pointing at it, or send a further ask to one already open; the work goes on there and its report comes back to the daily thread when it is done or needs the person. report, from a turn of a workspace thread, says it is done, with what worked and what did not, or that it needs something from the person. list names the workspace threads at work, waiting on the person or with posts not yet seen.",
+        "Workspace threads: open one for a piece of real work from the daily thread, which shows a post pointing at it, or send a further ask to one already open; the work goes on there and its report comes back to the daily thread when it is done or needs the person. report, from a turn of a workspace thread, says it is done, with what worked and what did not, or that it needs something from the person. list names the workspace threads not archived, each with its state and how many of its posts the person has not seen.",
       title: "Workspace threads"
     )
   end
@@ -468,14 +468,11 @@ defmodule Aqua.Providers.Workspace do
         }
 
   @doc """
-  The person's workspace threads a view lists, the latest activity first:
-  each one not archived that is `open` or `needs_you`, and each one whose
-  work ended (`done`, `stopped`, `error`) with posts the person has not
-  seen; one they have seen leaves the list by itself and is found from
-  the daily thread, and one archived is found in their list's Archived
-  filter.
-  `waits_on_you` is whether it needs the person: Aqua reported it needs
-  them.
+  The person's workspace threads not archived, the latest activity first,
+  whatever their state and whatever the person has read: one stays
+  listed until it is archived, and one archived is found in their list
+  of threads (`Aqua.threads/2`). `waits_on_you` is whether it needs the
+  person: Aqua reported it needs them.
   """
   @spec records(Context.t()) :: {:ok, [entry()]} | {:error, term()}
   def records(%Context{} = ctx) do
@@ -491,14 +488,8 @@ defmodule Aqua.Providers.Workspace do
           end
         end)
         |> case do
-          {:ok, records} ->
-            {:ok,
-             records
-             |> Enum.filter(&(&1.state in ["open", "needs_you"] or &1.unread > 0))
-             |> Enum.sort_by(& &1.last_activity, {:desc, DateTime})}
-
-          refused ->
-            refused
+          {:ok, records} -> {:ok, Enum.sort_by(records, & &1.last_activity, {:desc, DateTime})}
+          refused -> refused
         end
 
       {:error, _} ->

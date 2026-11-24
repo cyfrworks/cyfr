@@ -4,7 +4,8 @@
 name: Locus image on arm64
 
 # The Locus image built and proved natively on arm64 in a pull request that
-# changes what the image carries: Dockerfile.locus, the keeper and the
+# changes what the image carries: Dockerfile.locus and the archive key's
+# guard its upgrade layer runs (scripts/apt-key.sh), the keeper and the
 # drivers it builds (apps/locus/keeper), the browser suite that proves
 # them and this build's own definition. test.yml builds and proves the image on amd64 in every
 # run, and release.yml again on both architectures before it publishes;
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - 'Dockerfile.locus'
+      - 'scripts/apt-key.sh'
       - 'apps/locus/keeper/**'
       - 'tests/locus-backends-image/browser.py'
       - '.github/actions/image-build/**'

@@ -189,6 +189,18 @@ has_window() {
         "try { if ((Get-Process -Id $1 -ErrorAction Stop).MainWindowHandle.ToInt64() -ne 0) { exit 0 } } catch { }; exit 1" ;;
   esac
 }
+# The windows X lists, each with its name, its process and whether it is
+# on the screen, and the app's processes below OSPID, so a startup that
+# shows no window says what the screen held (Linux).
+windows_listed() {
+  local shown w
+  [ "$OS" = linux ] || return 0
+  shown=$(xdotool search --onlyvisible --all --name '' 2>/dev/null)
+  for w in $(xdotool search --all --name '' 2>/dev/null); do
+    echo "  window $w '$(xdotool getwindowname "$w" 2>/dev/null)' pid $(xdotool getwindowpid "$w" 2>/dev/null || echo none)$(grep -qx "$w" <<<"$shown" && echo ', on the screen')"
+  done
+  descendants "$1" | cut -c 1-160 | sed 's/^/  process /'
+}
 said() { grep -qF -- "$2" "$RUN/$1.log" 2>/dev/null; }
 # NAME's log was read and does not say it: grep's 2 is a log it did not read.
 unsaid() {
@@ -322,6 +334,7 @@ if ready first "$FIRST"; then
     pass startup "ready, $CHOOSER answers 200 and the app's window is on the screen"
   else
     fail startup "ready, and no window of the app was on the screen within 30 s"
+    windows_listed "$FIRST_OS"
   fi
 
   case "$OS" in

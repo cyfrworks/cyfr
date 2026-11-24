@@ -7,6 +7,8 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -18,3 +20,12 @@ func screenClocks() (boot, monotonic time.Duration, err error) {
 
 // screenChild is the child as it is: the screen runs on Linux alone.
 func screenChild(c *exec.Cmd) *exec.Cmd { return c }
+
+// screenExec starts nothing: the screen runs on Linux alone.
+func screenExec([]string) error { return errors.New("the screen runs on Linux alone") }
+
+// screenEndParent ends nothing: the screen runs on Linux alone.
+func screenEndParent(string, func()) error { return errors.New("the screen runs on Linux alone") }
+
+// screenSay says line on this process's standard error.
+func screenSay(line string) { fmt.Fprintln(os.Stderr, line) }

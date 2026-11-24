@@ -1232,7 +1232,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       refute Enum.any?(rows(ctx, daily.id), &(&1.kind == "report"))
     end
 
-    test "the setting keeps a workspace thread at work and archives a finished one, every pointer kept, and the panel's list leaves it out",
+    test "the setting keeps a workspace thread at work and archives a finished one, every pointer kept, and the person's list marks it archived",
          %{ctx: ctx, daily: daily} do
       working = open!(ctx, daily, %{"title" => "Working"})
       finished = open!(ctx, daily, %{"title" => "Finished"})
@@ -1257,13 +1257,14 @@ defmodule Aqua.Providers.WorkspaceTest do
       pointed = for %{kind: "pointer", workspace_id: id} <- rows(ctx, daily.id), do: id
       assert Enum.sort(pointed) == Enum.sort([working.id, finished.id])
 
-      {:ok, listed} = Aqua.workspaces(ctx)
-      refute finished.id in Enum.map(listed, & &1.id)
+      {:ok, listed} = Aqua.threads(ctx, title: nil)
+      assert %{archived: true, state: "done"} = Enum.find(listed, &(&1.id == finished.id))
+      assert %{archived: false, state: "open"} = Enum.find(listed, &(&1.id == working.id))
     end
   end
 
   describe "the records a view reads" do
-    test "a workspace thread is listed while at work or waiting, and a finished one until its posts are seen",
+    test "a workspace thread is listed whatever its state, a finished one after its posts are seen too",
          %{ctx: ctx, daily: daily} do
       working = open!(ctx, daily, %{"title" => "Working"})
       finished = open!(ctx, daily, %{"title" => "Finished"})
@@ -1278,7 +1279,7 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       {:ok, _} = Tape.report_workspace(ctx, turn, "done", %{summary: "Done."})
 
-      {:ok, listed} = Aqua.workspaces(ctx)
+      {:ok, listed} = Workspace.records(ctx)
       assert listed |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([working.id, finished.id])
       done = Enum.find(listed, &(&1.id == finished.id))
       assert %{state: "done", unread: 1, waits_on_you: false, title: "Finished"} = done
@@ -1286,21 +1287,23 @@ defmodule Aqua.Providers.WorkspaceTest do
       [last | _] = Enum.reverse(rows(ctx, finished.id))
       :ok = Aqua.mark_read(ctx, finished.id, last.seq)
 
-      {:ok, listed} = Aqua.workspaces(ctx)
-      assert Enum.map(listed, & &1.id) == [working.id]
+      {:ok, listed} = Workspace.records(ctx)
+      assert listed |> Enum.map(& &1.id) |> Enum.sort() == Enum.sort([working.id, finished.id])
+      assert %{state: "done", unread: 0} = Enum.find(listed, &(&1.id == finished.id))
 
       assert {:ok, %{id: id, state: "done", opened_from: from}} = Aqua.workspace(ctx, finished.id)
       assert id == finished.id and is_binary(from)
       assert {:error, :not_found} = Aqua.workspace(ctx, daily.id)
 
-      assert {:ok, %{count: 1, workspaces: [%{workspace: listed_id}]}} =
+      assert {:ok, %{count: 2, workspaces: tool_listed}} =
                Workspace.handle("workspace", ctx, %{"action" => "list"})
 
-      assert listed_id == working.id
+      assert tool_listed |> Enum.map(& &1.workspace) |> Enum.sort() ==
+               Enum.sort([working.id, finished.id])
     end
 
     test "one that needs the person stays listed as waiting on them, read or not; one stopped " <>
-           "or in error leaves once its posts are seen",
+           "or in error stays once its posts are seen",
          %{ctx: ctx, daily: daily} do
       waiting = open!(ctx, daily, %{"title" => "Waiting"})
       stopped = open!(ctx, daily, %{"title" => "Stopped"})
@@ -1330,7 +1333,7 @@ defmodule Aqua.Providers.WorkspaceTest do
       {:ok, current} = Tape.turn(ctx, failing.id)
       {:ok, _} = Tape.finish(ctx, current, "failed", %{error: "the build broke"})
 
-      {:ok, listed} = Aqua.workspaces(ctx)
+      {:ok, listed} = Workspace.records(ctx)
       by_id = Map.new(listed, &{&1.id, &1})
 
       assert %{state: "needs_you", waits_on_you: true, unread: 1} = by_id[waiting.id]
@@ -1342,10 +1345,13 @@ defmodule Aqua.Providers.WorkspaceTest do
         :ok = Aqua.mark_read(ctx, workspace.id, last.seq)
       end
 
-      {:ok, listed} = Aqua.workspaces(ctx)
+      {:ok, listed} = Workspace.records(ctx)
+      by_id = Map.new(listed, &{&1.id, &1})
 
-      assert [%{id: id, state: "needs_you", waits_on_you: true, unread: 0}] = listed
-      assert id == waiting.id
+      assert map_size(by_id) == 3
+      assert %{state: "needs_you", waits_on_you: true, unread: 0} = by_id[waiting.id]
+      assert %{state: "stopped", waits_on_you: false, unread: 0} = by_id[stopped.id]
+      assert %{state: "error", waits_on_you: false, unread: 0} = by_id[broken.id]
     end
   end
 

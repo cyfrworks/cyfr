@@ -540,8 +540,7 @@ defmodule PrismWeb.LoginLive do
             <p class="text-sm text-gray-300 leading-relaxed">
               Its first person sets it up, and administers it, by opening the setup link that
               <code class="font-mono text-white">cyfr init</code>
-              or <code class="font-mono text-white">cyfr setup</code>
-              printed.
+              printed, or by pressing Open CYFR in the CYFR app that set it up.
             </p>
           </div>
 

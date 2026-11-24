@@ -101,7 +101,6 @@ func TestHyperlink_OnlyOnATerminalThatShowsIt(t *testing.T) {
 		"no terminal":       hyperlinkFor(address, false, "linux", env(nil)),
 		"a buffer":          hyperlink(&bytes.Buffer{}, address),
 		"a file":            hyperlink(tempFile(t), address),
-		"a file, synced":    hyperlink(&syncWriter{w: tempFile(t)}, address),
 	} {
 		if got != address {
 			t.Errorf("%s: %q, want the address as it is", name, got)

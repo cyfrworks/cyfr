@@ -1131,6 +1131,49 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
+  # A room's view reads its crew threads as a request lands, before the
+  # delivery made the member's thread: the delivery tells it again.
+  test "a delivered request is heard again on its room, whose pane then lists the member's " <>
+         "thread and opens it from the request's card",
+       %{ctx: ctx, room: room} do
+    script!([reply("Plan: read, then write.")])
+
+    assert {:ok, %{admitted: :request, message_id: request_id}} =
+             Runner.send_message(ctx, room.id, "@planner plan the move")
+
+    assert_receive %ThreadEvent{kind: :request, data: %{id: ^request_id, status: "pending"}}
+
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Test.init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
+
+    {:ok, pane, _html} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}
+      )
+
+    refute has_element?(pane, ~s([id$="-crew"]))
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    room_id = room.id
+
+    assert_receive %ThreadEvent{kind: :request, thread_id: ^room_id, data: %{id: ^request_id}},
+                   5_000
+
+    wait_until(fn -> has_element?(pane, ~s([id$="-crew-#{child.id}"])) end)
+
+    assert has_element?(
+             pane,
+             ~s([id$="-m-#{request_id}"] button[phx-click="open_thread"][phx-value-id="#{child.id}"])
+           )
+
+    await_status(ctx, delivered_turn(ctx, child, request_id), "completed")
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   # CYFR's words for a member on a model's brain, with nothing of a folder,
   # and the line a brain that searches adds (`Aqua.Prompt.crew_briefing/2`).
   @briefing "## Crew member\n\nYou are a crew member of this athanor's Aqua. A job arrives " <>
@@ -1413,7 +1456,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
     assert %{outcome: "failed", content: content} = reply
-    assert content =~ "options.effort"
+    assert content =~ "model does not take the option effort as it is set"
   end
 
   test "a request from another sender queues as its own turn while the same sender steers, and one reply answers every request it steered",
@@ -2170,7 +2213,7 @@ defmodule Aqua.CrewTest do
         ] do
       assert %{
                "type" => "text",
-               "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."
+               "text" => "The file #{name} (#{media}) is attached, and this model cannot read it."
              } in blocks
     end
 

@@ -29,7 +29,7 @@ import {BaseWindow, BrowserWindow, Menu, WebContentsView, app, dialog, session, 
 
 import {lines, readFromCyfr, toCyfr} from "./process.js"
 import {LOCALHOST_IS_IPV4, accountLoad, accountPartition, documentHeaders, grants, homePartition, printed, readHop, relyingParty,
-  screenProject, unlistedSwitch} from "./policy.js"
+  screenProject, setupProject, unlistedSwitch} from "./policy.js"
 import {ABORTED, DEPARTURE_MS, initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
@@ -103,7 +103,7 @@ function askerOf(event, contents) {
  * reports what happens, one line a step, for whoever started the app.
  */
 export function startApp({cyfr, accountRoad = process.platform === "darwin" || process.platform === "win32",
-  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`)}) {
+  touchIdGroup = "", say = (line) => print(`CYFR: ${line}`), endSelf = () => process.kill(process.pid, "SIGKILL")}) {
   ownOutput()
   // Every switch but the few the app takes (policy.js SWITCHES) is
   // refused: the engine would open a debugging port, lift the sandbox or
@@ -121,6 +121,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     process.platform)
   if (screen === null) {
     say("refused: --screen-project names no project: give its absolute path, on Linux")
+    app.exit(2)
+    return
+  }
+  // The folder cyfr setup opened the app in, which the chooser suggests
+  // in place of ~/cyfr (cmd/setup.go).
+  const setup = setupProject(app.commandLine.hasSwitch("setup-project"), app.commandLine.getSwitchValue("setup-project"),
+    process.platform)
+  if (setup === null) {
+    say("refused: --setup-project names no folder: give its absolute path")
     app.exit(2)
     return
   }
@@ -205,7 +214,26 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       closeFrame()
       message(`CYFR stopped: ${effect.end}. Quit the app and open it again.`)
     }
-    if (effect.quit) {
+    if (effect.quit && screen) {
+      // The one end of the screen's app, which every road that ends it
+      // reaches (states.js: stopped, quit). On the box's screen the app
+      // does not quit, it ends, and in this
+      // turn: its end is what lets its launcher start it again, locked,
+      // and the toolkit's teardown of the window just closed runs in the
+      // loop's next turns, where it can hang the main thread (Gtk loading
+      // an icon through glycin) before anything of main's runs again, an
+      // exit of the engine's included. So once cyfr is told, the process
+      // ends itself by the kernel. Nothing of the screen's session is on
+      // disk (accountRoad is never the screen's), and cyfr ends with its
+      // pipe.
+      if (child && child.exitCode === null) {
+        send("shutdown")
+        child.stdin.end()
+      }
+      quitting = true
+      say("ended: the app's process ends itself, without the toolkit's teardown")
+      endSelf()
+    } else if (effect.quit) {
       ending(() => {
         if (child && child.exitCode === null) {
           send("shutdown")
@@ -759,7 +787,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function startCyfr() {
     const mine = screen
       ? spawn(cyfr, ["screen", "shell"], {cwd: screen, stdio: ["pipe", "pipe", "pipe"]})
-      : spawn(cyfr, ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
+      : spawn(cyfr, setup ? ["desktop-serve", setup] : ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
     child = mine
     const heard = (event) => {
       if (child === mine) on(event)

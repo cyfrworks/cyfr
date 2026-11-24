@@ -545,6 +545,149 @@ defmodule Emissary.External.ProxyTest do
     end
   end
 
+  describe "a call reaches the server revision the gate admitted" do
+    # Two starts of one name under two configurations: the first's process
+    # stands when the second starts. The second's call is refused as a
+    # server whose configuration moved, and never sent to the other's.
+    test "a start that finds another configuration's process standing refuses it, and the " <>
+           "call is refused, reaching neither revision",
+         %{ctx: ctx} do
+      admitted = HTTPStub.open()
+      standing = HTTPStub.open()
+
+      {:ok, row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "revised",
+          url: "http://127.0.0.1:#{admitted.port}/mcp"
+        })
+
+      other = %{row | url: "http://127.0.0.1:#{standing.port}/mcp"}
+
+      start_supervised!(
+        {Emissary.External.Server, Emissary.External.Servers.server_config(other, ctx)}
+      )
+
+      target = %{server: row, server_name: "revised", remote_tool: "probe"}
+
+      assert Proxy.dispatch(target, ctx, %{"q" => 1}, :external) ==
+               {:error, :tool_server_not_granted}
+    end
+  end
+
+  describe "a server's configuration" do
+    # The 27-bit hash the supervisor once compared by calls two of every
+    # few thousand configurations alike: a pair found here, one standing,
+    # the other's start is never handed its process.
+    test "two configurations a short hash calls alike are two: a start of one is never " <>
+           "handed the other's process",
+         %{ctx: ctx} do
+      {:ok, row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "hashed",
+          url: "http://127.0.0.1:9/p0"
+        })
+
+      config =
+        &Emissary.External.Servers.server_config(%{row | url: "http://127.0.0.1:9/p#{&1}"}, ctx)
+
+      short = fn c ->
+        :erlang.phash2(
+          {c[:id], c[:transport], c[:epoch], c[:url], c[:headers] || %{}, c[:command],
+           c[:env] || %{}, c[:timeout_ms], c[:home_id]}
+        )
+      end
+
+      {first, second} =
+        Enum.reduce_while(1..1_000_000, %{}, fn n, seen ->
+          hash = short.(config.(n))
+
+          case seen do
+            %{^hash => m} -> {:halt, {m, n}}
+            _ -> {:cont, Map.put(seen, hash, n)}
+          end
+        end)
+
+      start_supervised!({Emissary.External.Server, config.(first)})
+
+      assert Emissary.External.ServerSupervisor.ensure_started(config.(second)) ==
+               {:error, :configuration_moved}
+    end
+  end
+
+  describe "the listing's cache" do
+    # A server changed its tools while a listing that began before was
+    # still reading another server: that listing is never kept over the
+    # change, so the next listing reads the servers again.
+    test "a listing is never written back over an invalidation that came after its read began",
+         %{ctx: ctx} do
+      stub = HTTPStub.open()
+      test = self()
+      {:ok, tools} = Agent.start_link(fn -> [%{"name" => "search", "inputSchema" => %{}}] end)
+
+      answer = fn conn, body, result ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end
+
+      HTTPStub.stub(stub, "POST", "/gh", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        answer.(conn, Jason.decode!(raw), %{"tools" => Agent.get(tools, & &1)})
+      end)
+
+      HTTPStub.stub(stub, "POST", "/slow", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test, {:holding, self()})
+
+        receive do
+          :go -> answer.(conn, Jason.decode!(raw), %{"tools" => [%{"name" => "probe"}]})
+        end
+      end)
+
+      for name <- ["gh", "slow"] do
+        {:ok, _} =
+          Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+            cap: 0,
+            name: name,
+            url: "http://127.0.0.1:#{stub.port}/#{name}"
+          })
+
+        on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+      end
+
+      # The athanor's listing as another test may have left it is dropped,
+      # and the one this test leaves is dropped after it.
+      on_exit(fn -> Proxy.invalidate_external_tools_cache(ctx) end)
+      :ok = Proxy.invalidate_external_tools_cache(ctx)
+      listing = Task.async(fn -> Proxy.list_external_tools(ctx) end)
+      assert_receive {:holding, slow}, 10_000
+
+      Prima.Test.Wait.wait_until(
+        fn -> Registry.lookup(Emissary.External.ServerRegistry, {"gh", ctx.athanor_id}) != [] end,
+        10_000,
+        "gh's process to start"
+      )
+
+      assert {:ok, [%{"name" => "search"}]} =
+               Emissary.External.Server.get_tools("gh", ctx.athanor_id)
+
+      # gh lists nothing now: it is started again, and the listing's
+      # cache dropped, as a refresh does.
+      Agent.update(tools, fn _ -> [] end)
+      :ok = Emissary.External.ServerSupervisor.stop("gh", ctx.athanor_id)
+      :ok = Proxy.invalidate_external_tools_cache(ctx)
+      send(slow, :go)
+
+      assert "gh:search" in Enum.map(Task.await(listing, 30_000), & &1["name"])
+      refute "gh:search" in Enum.map(Proxy.list_external_tools(ctx), & &1["name"])
+    end
+  end
+
   describe "list_external_tools/1" do
     test "returns empty list when no servers configured", %{ctx: ctx} do
       assert [] = Proxy.list_external_tools(ctx)

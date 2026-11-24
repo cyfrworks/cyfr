@@ -210,6 +210,19 @@ jobs:
           go test ./internal/shell/ -race -count=1 -v -run '^TestDeviceDirKeepsAnExistingFolderPrivate$' 2>&1 | tee "$RUNNER_TEMP/device-folder-test.log"
           grep -q -- "--- PASS: TestDeviceDirKeepsAnExistingFolderPrivate " "$RUNNER_TEMP/device-folder-test.log" || { echo "::error::the device folder's access test did not run and pass"; exit 1; }
 
+      # cyfr setup on Windows: the installed app where Windows answers the
+      # account's local application folder, never where LOCALAPPDATA says,
+      # and the folder forms the app takes, which this system calls
+      # absolute. Each must run and pass here.
+      - name: go test (cyfr setup's app and folders on Windows ran and passed)
+        shell: bash
+        env:
+          SETUP_TESTS: TestInstalledAppPathIsTheSystems TestSetupFolderFormsAreTheSystems
+        run: |
+          set -euo pipefail
+          go test ./cmd/ -race -count=1 -v -run "^(${SETUP_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/setup-tests.log"
+          for t in $SETUP_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/setup-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
+
       # cyfr restore's durable write, where a directory handle cannot be
       # flushed: the rename is written through and the write answers no
       # error. It must run and pass here.
@@ -304,8 +317,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: Linux amd64, os: ubuntu-24.04, arch: amd64, exe: ''}
-          - {name: Linux arm64, os: ubuntu-24.04-arm, arch: arm64, exe: ''}
+          # Ubuntu 26.04, the box's own, whose AppArmor holds the profile
+          # bwrap runs Gtk's image loaders under (the screen step).
+          - {name: Linux amd64, os: ubuntu-26.04, arch: amd64, exe: ''}
+          - {name: Linux arm64, os: ubuntu-26.04-arm, arch: arm64, exe: ''}
           - {name: macOS arm64, os: macos-latest, arch: arm64, exe: ''}
           - {name: Windows amd64, os: windows-latest, arch: amd64, exe: .exe}
     defaults:

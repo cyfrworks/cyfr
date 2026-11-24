@@ -66,6 +66,11 @@ defmodule Sanctum.Proxy do
   # lookup.
   @key {__MODULE__, :impl}
 
+  # The arguments a proxied call never carries to its server: the action
+  # the gate routed on and the lineage the host stamps for its own
+  # records, which name internal executions, attempts, threads and calls.
+  @host_stamped ~w(action parent_execution_id root_execution_id attempt thread_id call_id parent_call_id)
+
   @typedoc "The plane a proxied call is made from."
   @type plane :: :in_chain | :external
 
@@ -134,6 +139,43 @@ defmodule Sanctum.Proxy do
 
   @doc "The proxied tools of the caller's athanor, named `server:tool`."
   @callback list_external_tools(Context.t()) :: [map()]
+
+  @typedoc """
+  One server's listing: its tools, named `server:tool`, and the consent
+  digest of the configuration they were read from (nil when it has none),
+  so a definition is judged under the revision it came from.
+  """
+  @type server_listing :: %{
+          server_name: String.t(),
+          server_digest: String.t() | nil,
+          tools: [map()]
+        }
+
+  @doc """
+  The listings of the caller's athanor's servers named `server_names`
+  that answer, read now, starting and asking no other server: what a turn
+  may hand (`Aqua.Loop.Turn`).
+  """
+  @callback list_external_tools(Context.t(), server_names :: [String.t()]) :: [server_listing()]
+
+  @doc """
+  The tool patterns each of the caller's athanor's servers named
+  `server_names` exposes now, as its configuration names them, read from
+  its row and starting no server; a server the athanor does not hold is
+  absent. What a consent narrows a grant's patterns by, and what a turn's
+  start holds the grant to (`Aqua.Loop`).
+  """
+  @callback tool_patterns(Context.t(), server_names :: [String.t()]) ::
+              {:ok, %{String.t() => [String.t()]}} | {:error, term()}
+
+  @doc """
+  The argument names a proxied call's `c:dispatch/5` never carries to its
+  server: the action the gate routed on and the lineage the host stamps.
+  A third-party server is told none of them, so a tool whose parameters
+  name one is never handed to a model (`Aqua.Loop.Request`).
+  """
+  @spec host_stamped() :: [String.t()]
+  def host_stamped, do: @host_stamped
 
   @doc """
   Install the port's implementation. Called once by `Cyfr.Application` at

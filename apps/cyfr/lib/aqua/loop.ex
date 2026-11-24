@@ -632,19 +632,64 @@ defmodule Aqua.Loop do
 
   # The tools the turn pinned must be those of the release the loaded
   # grant names for its source, Aqua's, as the tree and the brains stand
-  # once the file is pinned: Aqua's file edited past its grant is refused,
-  # never run under the old grant, whichever member's turn it is. A crew
-  # member's own file is in no grant, so its edit refuses nothing here.
-  defp consented_release(ctx, %{activation: activation}, %{agent: agent}) do
+  # once the file is pinned, and the grant's tool servers exactly those
+  # its outside entries (`server:tool`) name, each with exactly the tools
+  # named of it that the server exposes now as its patterns, narrowed as
+  # consent narrows them (`Sanctum.Consent.Commit`): a server's exposure
+  # is no part of its digest, so one widened or narrowed since the grant
+  # asks for it again. Aqua's file edited past its
+  # grant is refused, never run under the old grant, whichever member's
+  # turn it is. A crew member's own file is in no grant, so its edit
+  # refuses nothing here.
+  defp consented_release(ctx, %{activation: activation} = authority, %{agent: agent}) do
     with {:ok, row} <- Compendium.crew_grant_row(ctx),
          consented when is_binary(consented) <- Map.get(activation, @grant),
          true <- consented == row.release_digest,
-         true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"] do
+         true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"],
+         {:ok, listed} <- listed_servers(ctx, agent.tools),
+         true <- granted_servers(authority) == listed do
       :ok
     else
       {:error, reason} when reason != :not_found -> {:error, reason}
       _moved -> {:error, :agent_changed}
     end
+  end
+
+  defp granted_servers(%{resources: %{tool_servers: servers}}) when is_list(servers),
+    do: servers |> Enum.map(&{&1.server_name, Enum.sort(&1.tool_patterns)}) |> Enum.sort()
+
+  defp granted_servers(_none), do: []
+
+  # Each server the list names, with the tools named of it that its
+  # configuration exposes now, as Sanctum's port reads it
+  # (`Sanctum.Proxy`'s `tool_patterns/2`); a server the athanor no longer
+  # holds exposes none.
+  defp listed_servers(ctx, tools) do
+    pairs =
+      for key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool}
+
+    if pairs == [], do: {:ok, []}, else: exposed_servers(ctx, pairs)
+  end
+
+  defp exposed_servers(ctx, pairs) do
+    servers = pairs |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+
+    with {:ok, exposing} <- Sanctum.Proxy.impl!().tool_patterns(ctx, servers) do
+      {:ok,
+       pairs
+       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+       |> Enum.map(fn {server, tools} ->
+         {server, exposed(Map.get(exposing, server, []), tools)}
+       end)
+       |> Enum.sort()}
+    end
+  end
+
+  defp exposed(patterns, tools) do
+    tools
+    |> Enum.filter(fn tool -> Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool)) end)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   # ---------------------------------------------------------------------------
@@ -1195,6 +1240,8 @@ defmodule Aqua.Loop do
   # An ask names a tool its harness was handed, by the whole name it asked
   # by, or it is refused before anything else reads it: before it resolves,
   # so an unhanded ask that would not resolve is refused as unhanded too.
+  # The refusal names the tool as the person's list does, by the key an
+  # outside name spells (`Binding.host_name/1`), any other as it was asked.
   defp decide(_state, %{step: step} = item, {runnable, state, setup} = acc) do
     name = Map.get(item, :asked)
 
@@ -1203,7 +1250,7 @@ defmodule Aqua.Loop do
         state,
         step,
         resolved(item),
-        {:error, {:denied, "#{name} is not one of the tools this work has"}}
+        {:error, {:denied, "#{listed_as(name)} is not one of the tools this work has"}}
       )
 
       {runnable, state, setup}
@@ -1237,6 +1284,13 @@ defmodule Aqua.Loop do
   end
 
   defp decide_handed(_state, item, acc), do: decide_open(item, acc)
+
+  defp listed_as(name) do
+    case Binding.host_name(name) do
+      {:ok, key} -> key
+      :error -> name
+    end
+  end
 
   defp resolved(%{call: {:ok, %Call{} = call}}), do: call
   defp resolved(_item), do: nil

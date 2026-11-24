@@ -26,6 +26,7 @@ import (
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/cyfr/codex/internal/version"
+	"github.com/cyfr/codex/internal/wayland"
 	"github.com/spf13/cobra"
 )
 
@@ -47,6 +48,9 @@ const (
 // screen's shell (desktop/scripts/build.mjs); a variable so tests stand in
 // for it.
 var appCyfr = "/opt/cyfr/resources/cyfr"
+
+// appProgram is the CYFR app's own program in its package.
+const appProgram = "/opt/cyfr/CYFR"
 
 // appPackageSum and fetchAppPackage are release.PackageChecksum and
 // release.FetchPackage, variables so tests stand in for the release.
@@ -105,8 +109,38 @@ var screenShellCmd = &cobra.Command{
 	},
 }
 
+var screenAppCmd = &cobra.Command{
+	Use:    "app DIR",
+	Short:  "Start the CYFR app as this machine's screen for the project in DIR, on the route its CYFR takes (the screen's launcher runs it)",
+	Hidden: true,
+	Args:   cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		return screenExec(screenAppArgs(args[0]))
+	},
+}
+
+// screenAppArgs is the CYFR app's command line as this machine's screen
+// for the project in dir, which becomes the app's process (screenExec):
+// --screen-project, and the engine's route to the folder's CYFR where it
+// takes one (localRoute), read at each start, since the engine takes a
+// route only as it starts: the app never starts itself again on the route
+// its shell names (desktop/src/states.js), its launcher does, through
+// this. A folder that cannot be read starts the app on none; its shell,
+// reading the same folder, fails before it shows anything, so the screen
+// stays dark: the reason goes to the app's error stream (the journal),
+// the app ends itself once, and the launcher tries again a second later.
+func screenAppArgs(dir string) []string {
+	args := []string{appProgram, "--screen-project=" + dir}
+	if read, err := readFolder(dir); err == nil {
+		if proxy, resolver := localRoute(read.Mode); proxy != "" {
+			args = append(args, "--proxy-server="+proxy, "--host-resolver-rules="+resolver)
+		}
+	}
+	return args
+}
+
 func init() {
-	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd)
+	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd, screenAppCmd)
 	rootCmd.AddCommand(screenCmd)
 }
 
@@ -448,7 +482,14 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()
-	browser, err := newScreenApp(in, out, local)
+	// The compositor's own list of windows confirms each hide (screenApp).
+	windows := wayland.ListWindows(ctx)
+	defer windows.Close()
+	hiding := func() func() error {
+		return windows.Mark(screenHideWithin).Closed
+	}
+	var ln net.Listener
+	browser, err := newScreenApp(in, out, local, hiding, func(why error) { endScreenApp(appProgram, ln, why) })
 	if err != nil {
 		return err
 	}
@@ -522,10 +563,35 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	case err := <-moved:
 		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
 	}
-	// The last lock hides as the screen's end, after which nothing shows.
-	browser.end()
-	sh.Lock("")
+	// The last lock hides as the screen's end, after which nothing shows,
+	// and is confirmed or carried out before this returns.
+	browser.finish(sh.Lock)
 	return ended
+}
+
+// screenHideWithin is how long a hide has to be confirmed by the
+// compositor (screenApp): a hide takes 6 to 727 ms from its cause on the
+// screen step (tests/desktop-proof/screen/app.sh), and 2 s is that step's
+// bound too.
+const screenHideWithin = 2 * time.Second
+
+// endScreenApp carries out a hide the compositor did not confirm, why
+// saying what it said instead. Where this process's parent is program, the
+// installed app, it closes the shell's listener, so the app's next start,
+// whose cyfr takes it, finds it free, ends the app by the kernel
+// (screenEndParent), and only then says why (screenSay): before, the
+// saying could wait on the stuck app, the reader of this process's
+// standard error. Its own lock goes on meanwhile: the proofs to CYFR,
+// the channel's close and the key's erase hold the shell, which this
+// process's end waits for; the app's end ends its pipe, and so the shell
+// (runScreenShell). Where the parent is not the app, nothing is ended,
+// and that is said.
+func endScreenApp(program string, ln net.Listener, why error) {
+	if err := screenEndParent(program, func() { ln.Close() }); err != nil {
+		fmt.Fprintf(os.Stderr, "The lock's hide was not confirmed within %v (%v), and the CYFR app was not ended: %v.\n", screenHideWithin, why, err)
+		return
+	}
+	screenSay(fmt.Sprintf("The lock's hide was not confirmed within %v (%v), so the CYFR app was ended from outside, and its launcher starts it again, locked.", screenHideWithin, why))
 }
 
 // releaseApart is what the screen's page says where the app's cyfr, which

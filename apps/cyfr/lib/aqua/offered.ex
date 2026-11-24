@@ -12,8 +12,9 @@ defmodule Aqua.Offered do
   entry names one action (the list has no wildcard), so the list a
   person reads is the set: an action a catalogued tool does not have is
   dropped; `native_search`, an outside server's `server:tool` and a tool
-  nobody catalogues pass through as written (the request offers no such
-  tool).
+  nobody catalogues pass through as written (the request offers no
+  uncatalogued tool, and an outside one as its server lists it,
+  `Aqua.Loop.Turn.tools/3`).
 
   ## The browser follows the person's setting
 

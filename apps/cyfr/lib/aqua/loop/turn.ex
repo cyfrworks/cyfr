@@ -34,6 +34,7 @@ defmodule Aqua.Loop.Turn do
   alias Aqua.Loop.Request
   alias Aqua.Tape
   alias Prima.Authority
+  alias Prima.Authority.Transition
   alias Sanctum.Context
 
   @default_deadline_ms 15 * 60 * 1000
@@ -131,7 +132,7 @@ defmodule Aqua.Loop.Turn do
              catalyst,
              asked(asks?, ctx, brain_authority, catalyst, model, turn)
            ),
-         :ok <- if(asks?, do: brain_options(brain_options, capabilities), else: :ok) do
+         :ok <- if(asks?, do: brain_options(agent, brain_options, capabilities), else: :ok) do
       spec = %__MODULE__{
         ctx: ctx,
         guest: Context.enter_guest(ctx),
@@ -148,11 +149,7 @@ defmodule Aqua.Loop.Turn do
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(brain_authority, catalyst),
-        tools:
-          Request.tool_definitions(offered,
-            external: external_tools(offered),
-            accounts: launch_accounts(ctx, offered)
-          ),
+        tools: ctx |> tools(offered, authority) |> elem(0),
         deadline_ms: deadline_ms(authority, brain_timeout_ms(brain_authority, catalyst)),
         options: options,
         brain_options: brain_options,
@@ -197,15 +194,21 @@ defmodule Aqua.Loop.Turn do
   # The options the agent's file and a crew request set must be ones the
   # brain declares, each of its kind; a turn that sets another is refused
   # before it sends anything.
-  defp brain_options(options, _capabilities) when options == %{}, do: :ok
+  defp brain_options(_agent, options, _capabilities) when options == %{}, do: :ok
 
-  defp brain_options(options, capabilities) do
+  defp brain_options(agent, options, capabilities) do
     case Prima.Model.check_chat_request(
            %{"options" => options},
            Map.get(capabilities, :options) || []
          ) do
-      :ok -> :ok
-      {:error, {:invalid, member}} -> {:error, "the brain does not take #{member} as it was set"}
+      :ok ->
+        :ok
+
+      {:error, {:invalid, "options." <> option}} ->
+        {:error, "#{title(agent)}'s model does not take the option #{option} as it is set"}
+
+      {:error, {:invalid, member}} ->
+        {:error, "#{title(agent)}'s model does not take #{member} as it is set"}
     end
   end
 
@@ -672,19 +675,67 @@ defmodule Aqua.Loop.Turn do
       else: nil
   end
 
-  # An outside server's tools the member is offered (`server:tool`), as
-  # the catalog knows them.
-  defp external_tools(offered) do
-    for {key, "offered"} <- offered,
-        String.contains?(key, ":"),
-        {:ok, definition} <- [Sanctum.Catalog.get_tool(key)] do
-      %{
-        name: key,
-        description: definition["description"],
-        input_schema: definition["inputSchema"]
-      }
+  @doc """
+  The tools a turn of `offered` is handed under `authority`, its pinned
+  grant, and each of its outside entries (`server:tool`) not handed with
+  why (`t:Aqua.Loop.Request.unhanded/0`). An outside entry is handed as
+  the person's own servers list it now, read under `ctx`, the turn's own
+  context, asking only the servers its entries name (`Sanctum.Proxy`'s
+  `list_external_tools/2`), when the grant
+  covers it under the digest of the server's revision it was read from,
+  as the gate decides its call (`Prima.Authority.Transition.external_tool_granted?/3`), and every
+  harness carries it (`Aqua.Loop.Request.tools/2`). A turn offered none
+  reads no server.
+  """
+  @spec tools(Context.t(), Aqua.Offered.t(), Authority.t()) ::
+          {[Request.tool()], %{String.t() => Request.unhanded()}}
+  def tools(%Context{} = ctx, offered, %Authority{} = authority) do
+    {external, unhanded} = external_tools(ctx, offered, authority)
+
+    {tools, refused} =
+      Request.tools(offered, external: external, accounts: launch_accounts(ctx, offered))
+
+    {tools, Map.merge(unhanded, refused)}
+  end
+
+  # The outside entries the turn may hand, as the person's servers list
+  # them now, and why each other is not.
+  defp external_tools(ctx, offered, authority) do
+    case for({key, "offered"} <- offered, String.contains?(key, ":"), do: key) do
+      [] -> {[], %{}}
+      keys -> listed(ctx, keys, authority)
     end
   end
+
+  # Only the servers the list names are asked, and each definition is
+  # judged under the digest of the revision it was read from.
+  defp listed(ctx, keys, authority) do
+    servers = keys |> Enum.map(&hd(String.split(&1, ":", parts: 2))) |> Enum.uniq()
+
+    listing =
+      for %{server_digest: digest, tools: tools} <-
+            Sanctum.Proxy.impl!().list_external_tools(ctx, servers),
+          tool <- tools,
+          into: %{},
+          do: {tool["name"], {digest, tool}}
+
+    Enum.reduce(keys, {[], %{}}, fn key, {handed, unhanded} ->
+      [_server, remote] = String.split(key, ":", parts: 2)
+
+      case listing do
+        %{^key => {digest, tool}} ->
+          if Transition.external_tool_granted?(authority, digest, remote),
+            do: {[external(key, tool) | handed], unhanded},
+            else: {handed, Map.put(unhanded, key, :ungranted)}
+
+        _ ->
+          {handed, Map.put(unhanded, key, :unlisted)}
+      end
+    end)
+  end
+
+  defp external(key, tool),
+    do: %{name: key, description: tool["description"], input_schema: tool["inputSchema"]}
 
   # The turn's active time: the agent's own consented timeout (the node
   # the authority's cursor stands on, `Authority.limits/1`), the default
@@ -787,7 +838,7 @@ defmodule Aqua.Loop.Turn do
       true ->
         %{
           "type" => "text",
-          "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."
+          "text" => "The file #{name} (#{media}) is attached, and this model cannot read it."
         }
     end
   end

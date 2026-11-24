@@ -68,7 +68,7 @@ func newLocalApp(t *testing.T, project string) *localApp {
 	// A folder's stand-in says no one is set up there until a test says
 	// otherwise: its home carries the folder's setup token.
 	a := &localApp{t: t, sent: make(chan desktop.Message, 16), setup: testToken}
-	a.Service = newDesktopService(t.Context(), t.TempDir(), func(m desktop.Message) { a.sent <- m })
+	a.Service = newDesktopService(t.Context(), t.TempDir(), "", func(m desktop.Message) { a.sent <- m })
 	a.Shell = func(c *shell.Config) {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }

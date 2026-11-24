@@ -27,25 +27,35 @@ func init() {
 
 // desktopServeCmd is the cyfr the CYFR app's main process starts and
 // talks to over its stdin and stdout (internal/desktop): no person runs
-// it, and nothing but those messages is written to its stdout.
+// it, and nothing but those messages is written to its stdout. FOLDER is
+// the folder its setup suggests, the one cyfr setup opened the app in
+// (--setup-project); ~/cyfr without it.
 var desktopServeCmd = &cobra.Command{
-	Use:    "desktop-serve",
+	Use:    "desktop-serve [FOLDER]",
 	Short:  "Serve the CYFR app's pages to its main process",
 	Hidden: true,
-	Args:   cobra.NoArgs,
+	Args:   cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDesktopServe(cmd.Context(), shell.ListenLoopback, os.Stdin, os.Stdout)
+		folder := ""
+		if len(args) == 1 {
+			folder = args[0]
+			if !filepath.IsAbs(folder) {
+				return fmt.Errorf("the folder to suggest is %q, not an absolute path", folder)
+			}
+		}
+		return runDesktopServe(cmd.Context(), shell.ListenLoopback, folder, os.Stdin, os.Stdout)
 	},
 }
 
 // runDesktopServe takes the shell's listener through listen, for this
-// process alone, says ready to main with the chooser's address, then
+// process alone, with folder suggested for a setup (newDesktopService),
+// says ready to main with the chooser's address, then
 // serves until main sends
 // shutdown, its pipe ends, a message to it cannot be written, or it sends
 // a line that is not its message.
 // Every end locks the device first, saying nothing to main
 // (desktop.Service.End): an end signs nobody out.
-func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), in io.Reader, out io.Writer) error {
+func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), folder string, in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := shell.DeviceDir()
 	if err != nil {
@@ -58,7 +68,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 	// A write to main that fails ends the service: the app is gone.
 	gone := make(chan struct{})
 	to := desktop.NewWriter(out, func() { close(gone) })
-	svc := newDesktopService(ctx, dir, func(m desktop.Message) { _ = to.Queue(m) })
+	svc := newDesktopService(ctx, dir, folder, func(m desktop.Message) { _ = to.Queue(m) })
 	hs := &http.Server{Handler: svc, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()
@@ -95,10 +105,14 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 }
 
 // newDesktopService is what desktop-serve serves over this user's device
-// folder until ctx ends, saying to main through tell, which waits on nothing.
-func newDesktopService(ctx context.Context, device string, tell func(desktop.Message)) *desktop.Service {
+// folder until ctx ends, saying to main through tell, which waits on
+// nothing; its setup suggests folder, or ~/cyfr when that is "".
+func newDesktopService(ctx context.Context, device, folder string, tell func(desktop.Message)) *desktop.Service {
 	host, _ := os.Hostname()
-	home, _ := os.UserHomeDir()
+	if folder == "" {
+		home, _ := os.UserHomeDir()
+		folder = filepath.Join(home, "cyfr")
+	}
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
 		ReadToken:   desktop.NewToken(),
@@ -107,7 +121,7 @@ func newDesktopService(ctx context.Context, device string, tell func(desktop.Mes
 		Client:      &http.Client{},
 		DisplayName: host,
 		Tell:        tell,
-		Folder:      filepath.Join(home, "cyfr"),
+		Folder:      folder,
 		Docker: func(ctx context.Context) desktop.DockerAnswer {
 			return dockerCheck(ctx, shell.NewWork(ctx))
 		},

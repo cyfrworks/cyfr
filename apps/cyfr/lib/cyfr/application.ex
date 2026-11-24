@@ -1067,8 +1067,8 @@ defmodule Cyfr.Application do
   end
 
   # A CYFR with no person yet is set up by its first person, its
-  # administrator: through the setup link `cyfr init` and `cyfr setup`
-  # print. Said at boot, under `mix phx.server` and in releases alike,
+  # administrator: through the setup link `cyfr init` prints, or Open CYFR
+  # in the CYFR app that set it up. Said at boot, under `mix phx.server` and in releases alike,
   # after `not_set_up_marker/0`, which `cyfr up` reads from the log; never
   # with the token. The sandboxed test boot, which holds no database
   # connection here, skips it, and a store that cannot answer says
@@ -1101,7 +1101,8 @@ defmodule Cyfr.Application do
         "set it up: `cyfr init` writes one into .env."
     else
       "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
-        "the setup link `cyfr init` or `cyfr setup` printed (#{Sanctum.origin()}/setup#…)."
+        "the setup link `cyfr init` printed (#{Sanctum.origin()}/setup#…), or presses Open CYFR " <>
+        "in the CYFR app that set it up."
     end
   end
 

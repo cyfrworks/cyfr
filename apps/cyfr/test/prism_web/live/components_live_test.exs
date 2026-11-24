@@ -642,7 +642,7 @@ defmodule PrismWeb.ComponentsLiveTest do
     assert has_element?(
              view,
              ~s([data-test="setup-plan-refused"]),
-             "Failed to resolve component reagent:local.shelf-tool:1.0.0: " <>
+             "shelf-tool 1.0.0 could not be read: " <>
                "The store could not answer — retry shortly"
            )
 

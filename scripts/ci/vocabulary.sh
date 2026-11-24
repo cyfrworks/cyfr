@@ -214,9 +214,8 @@ assert_spelling docker-entrypoint.sh '/app/seed/aqua'
 assert_spelling apps/codex/cmd/lifecycle.go '"data"'
 assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
 assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
-# The prose surfaces (README.md, the six guides, the setup pages, the
-# CYFR app's chooser and
-# the access vector's words and refusal templates, which `cyfr`
+# The prose surfaces (README.md, the six guides, the CYFR app's chooser
+# and the access vector's words and refusal templates, which `cyfr`
 # prints) name the installation CYFR and the assistant Aqua, and
 # carry none of the concept words home, hub, cell, door or glass
 # where a person reads them: an always-on CYFR, a cluster and its
@@ -230,9 +229,9 @@ assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
 # (delimited by a run of backticks, closed by a run of the same
 # length) is not prose: an identifier, event name, wire field or
 # command is spelled as the code spells it (`door.*`, a program's
-# `home`), so the check skips code spans. In the setup pages a
+# `home`), so the check skips code spans. In the chooser's files a
 # backtick delimits a JavaScript template literal, whose text a
-# person reads, so it is scanned with only its ${...} placeholders
+# person reads, so they are scanned with only ${...} placeholders
 # taken out; a refusal template is likewise read with its `{slot}`
 # placeholders taken out, since a slot is a payload key. The other
 # exceptions, exact, all of the word home:
@@ -266,7 +265,7 @@ def found(where, text, markdown=True):
     return bad
 files = ["README.md", "devices-guide.md", "identity-guide.md", "configuration-guide.md",
          "integration-guide.md", "component-guide.md", "tincture-guide.md"]
-files += subprocess.run(["git", "ls-files", "apps/codex/internal/setup/assets", "apps/codex/internal/desktop/assets"],
+files += subprocess.run(["git", "ls-files", "apps/codex/internal/desktop/assets"],
                         capture_output=True, text=True, check=True).stdout.split()
 bad = False
 for path in files:

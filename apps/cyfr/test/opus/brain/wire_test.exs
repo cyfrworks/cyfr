@@ -6,8 +6,9 @@ defmodule Opus.Brain.WireTest do
   The brain wire, the holder's side (`Opus.Brain.Wire`), against the
   vectors every driver reads too (`tests/fixtures/brain_wire.json`):
   every message's members and their types, the bounds and vocabularies,
-  each example and `read` line read as it says, and each `refuse` line
-  refused for its reason.
+  each example and `read` line read as it says, each `refuse` line
+  refused for its reason, and each tool and list of `tools` measured and
+  carried, or not, as it says.
   """
   use ExUnit.Case, async: true
 
@@ -109,6 +110,55 @@ defmodule Opus.Brain.WireTest do
              "work" => "w",
              "content" => [%{"type" => "text", "text" => big}]
            }) == {:error, :too_large}
+  end
+
+  test "each tool and list the vectors measure takes their bytes and is carried as they say",
+       %{vectors: v} do
+    tools = v["tools"]
+    assert tools["max_description"] == Wire.max_description()
+    assert tools["max_stub_argument"] == Wire.max_stub_argument()
+    assert tools["max_tools_bytes"] == Wire.max_tools_bytes()
+    assert tools["uncarried"] == Wire.uncarried()
+
+    for %{"name" => name} = vector <- tools["cases"] do
+      tool = built(vector)
+      assert byte_size(Wire.stub_argument(tool)) == vector["stub_argument_bytes"], name
+      assert Wire.tools_bytes([tool]) == vector["tools_bytes"], name
+      assert Wire.carried?(tool) == vector["carried"], name
+
+      if names = vector["names"],
+        do: assert(Enum.sort(Wire.named_properties(tool["parameters"])) == Enum.sort(names), name)
+    end
+
+    for %{"name" => name, "pads" => pads} = list <- tools["lists"] do
+      listed = Enum.map(pads, &built(%{"tool" => bare(), "pad" => &1}))
+      assert Enum.all?(listed, &Wire.carried?/1), name
+      assert Wire.tools_bytes(listed) == list["tools_bytes"], name
+      assert list["tools_bytes"] <= Wire.max_tools_bytes() == list["fits"], name
+    end
+  end
+
+  defp bare, do: %{"name" => "t", "description" => "", "parameters" => %{}}
+
+  # A vector's tool: its `tool`, its description `[text, times]` that text
+  # so many times, and `pad` letters y as its parameters' description.
+  defp built(vector) do
+    tool =
+      case vector do
+        %{"description" => [text, times]} ->
+          Map.put(vector["tool"], "description", String.duplicate(text, times))
+
+        _ ->
+          vector["tool"]
+      end
+
+    case vector do
+      %{"pad" => pad} when pad > 0 ->
+        put_in(tool, ["parameters", "description"], String.duplicate("y", pad))
+
+      _ ->
+        tool
+    end
   end
 
   test "the program's own lines are the native events", %{vectors: v} do

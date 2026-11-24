@@ -179,6 +179,19 @@ defmodule PrismWeb.WorkspaceLiveTest do
     pane
   end
 
+  # The JS commands an element's binding carries, as LiveView's client reads
+  # them.
+  defp commands(view, selector, binding) do
+    [encoded] =
+      view
+      |> element(selector)
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.attribute(binding)
+
+    Jason.decode!(encoded)
+  end
+
   # A state the store's rule wrote, as the writers S5 holds to it do, then
   # announced as they announce it: the view reads it again.
   defp move!(workspace, state) do
@@ -411,6 +424,95 @@ defmodule PrismWeb.WorkspaceLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "the layer's toggle opens the thread's menu by JS commands; a press away and Escape " <>
+         "close it, Escape giving focus back to the toggle; its Delete leaves for the desktop",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    {workspace, _chart, _ref} = charted!(me, daily)
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+    pane = on_thread!(child!(view, "workspace-pane"), workspace.id)
+
+    toggle = "#workspace-menu-toggle"
+
+    assert has_element?(
+             view,
+             ~s(#{toggle}[aria-controls="workspace-pane-menu"][aria-expanded="false"]) <>
+               ~s([aria-label="This thread's menu"])
+           )
+
+    assert commands(view, toggle, "phx-click") == [
+             ["remove_attr", %{"attr" => "hidden", "to" => "#workspace-pane-menu"}],
+             ["set_attr", %{"attr" => ["aria-expanded", "true"]}],
+             ["set_attr", %{"attr" => ["inert", ""]}],
+             ["focus_first", %{"to" => "#workspace-pane-menu"}]
+           ]
+
+    menu = "#workspace-pane-menu"
+    assert has_element?(pane, ~s(#{menu}[hidden][phx-key="Escape"]))
+
+    closed = [
+      ["remove_attr", %{"attr" => "inert", "to" => toggle}],
+      ["set_attr", %{"attr" => ["aria-expanded", "false"], "to" => toggle}],
+      ["set_attr", %{"attr" => ["hidden", ""], "to" => menu}]
+    ]
+
+    assert commands(pane, menu, "phx-click-away") == closed
+
+    assert commands(pane, menu, "phx-window-keydown") ==
+             [
+               ["remove_attr", %{"attr" => "inert", "to" => toggle}],
+               ["focus", %{"to" => toggle <> ~s([aria-expanded="true"])}]
+               | tl(closed)
+             ]
+
+    pane |> element("#workspace-pane-delete") |> render_click()
+    assert_redirect(view, PrismWeb.DesktopLive.path(route(mine)))
+    assert {:error, :not_found} = Threads.get(actor(me), workspace.id)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "with nothing attached or linked, a finished thread's last answer is its result, and " <>
+         "an unfinished one has nothing made yet",
+       %{conn: conn, mine: mine, me: me, daily: daily} do
+    workspace = open!(me, daily, "Plain answer")
+    turn = work!(me, workspace)
+    answer = Prima.UUID7.generate_id("msg")
+
+    for {id, words} <- [
+          {Prima.UUID7.generate_id("msg"), "A first thought"},
+          {answer, "The answer is 42."}
+        ] do
+      {:ok, _} = Tape.post(me, turn, %{id: id, content: words, payload: %{"post" => true}})
+    end
+
+    {:ok, _} = Tape.report_workspace(me, turn, "done", %{summary: "Answered."})
+    {:ok, current} = Tape.turn(me, turn.id)
+    {:ok, _} = Tape.finish(me, current, "cancelled", %{error: "stopped"})
+
+    {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
+    on_thread!(child!(view, "workspace-pane"), workspace.id)
+    assert has_element?(view, ~s(#workspace-state[data-state="done"]))
+
+    # A post's words are drawn by the browser from the text it carries.
+    wait_until(fn ->
+      has_element?(
+        view,
+        ~s(#workspace-results #workspace-result-#{answer}[data-raw-content="The answer is 42."])
+      )
+    end)
+
+    refute has_element?(view, ~s(#workspace-results [data-raw-content="A first thought"]))
+    refute has_element?(view, "#workspace-no-results")
+
+    move!(workspace, "open")
+    Aqua.ThreadList.changed(me, workspace.id)
+
+    wait_until(fn -> has_element?(view, "#workspace-no-results", "Nothing made yet.") end)
+    refute has_element?(view, "#workspace-results")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "each state reads as a person reads it, and Stop is offered only while it works or needs them",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     {workspace, _chart, _ref} = charted!(me, daily)
@@ -531,7 +633,8 @@ defmodule PrismWeb.WorkspaceLiveTest do
   test "a crew member's thread under it opens in the layer's pane, which leads back",
        %{conn: conn, mine: mine, me: me, daily: daily} do
     {workspace, _chart, _ref} = charted!(me, daily)
-    {:ok, crew} = Threads.crew_thread(actor(me), workspace.id, "builder")
+    member = Cyfr.Test.SeedBundle.seat_member()
+    {:ok, crew} = Threads.crew_thread(actor(me), workspace.id, member)
 
     {:ok, view, _html} = live(conn, layer_path(mine, workspace.id))
     pane = on_thread!(child!(view, "workspace-pane"), workspace.id)
