@@ -75,6 +75,14 @@ type browser struct {
 	person person
 	// log is the driver's log.
 	log io.Writer
+	// opened is the window each window a page opened belongs to, by its
+	// target, so a window one of those opens belongs there too, and they
+	// close with it (page.go).
+	opened map[string]*window
+	// attachWait bounds the setup of a target an attachment holds, at
+	// which the target is closed or left unnamed as its kind allows
+	// (page.go).
+	attachWait time.Duration
 }
 
 // window is one Chrome page target and its flattened session. Its name is
@@ -104,16 +112,21 @@ type window struct {
 }
 
 func newBrowser() *browser {
-	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64), log: os.Stderr}
+	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64), log: os.Stderr,
+		opened: map[string]*window{}, attachWait: opWait}
 }
 
-// onTarget forgets a window whose target Chrome reports gone, with its put
-// and its calls, and closes one whose page crashed.
+// onTarget sets up a target the browser's attachment reports (page.go),
+// forgets a window whose target Chrome reports gone, with its put and its
+// calls, and closes one whose page crashed.
 func (b *browser) onTarget(method string, params json.RawMessage) {
 	var event struct {
 		TargetID string `json:"targetId"`
 	}
 	switch method {
+	case "Target.attachedToTarget":
+		b.attachedToBrowser(params)
+		return
 	case "Target.targetDestroyed", "Target.detachedFromTarget", "Target.targetCrashed":
 		if json.Unmarshal(params, &event) != nil {
 			return
@@ -122,10 +135,12 @@ func (b *browser) onTarget(method string, params json.RawMessage) {
 		return
 	}
 	b.mu.Lock()
+	delete(b.opened, event.TargetID)
 	for name, w := range b.windows {
 		if made(w) && w.target == event.TargetID {
 			delete(b.windows, name)
 			go b.replace(w, nil)
+			go b.closeOpened(w)
 		}
 	}
 	b.mu.Unlock()
@@ -308,6 +323,7 @@ func (b *browser) forget(ctx context.Context, name string, w *window) {
 	}
 	b.mu.Unlock()
 	b.replace(w, nil)
+	b.closeOpened(w)
 	_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": w.target}, nil)
 }
 
@@ -394,7 +410,8 @@ func (b *browser) attach(ctx context.Context, w *window, target string) error {
 	return nil
 }
 
-// closeWindow closes window name's target: whether there was one.
+// closeWindow closes window name's target, the windows opened from it first
+// (page.go): whether there was one.
 func (b *browser) closeWindow(ctx context.Context, name string) bool {
 	b.mu.Lock()
 	w := b.windows[name]
@@ -412,6 +429,7 @@ func (b *browser) closeWindow(ctx context.Context, name string) bool {
 		return false
 	}
 	b.replace(w, nil)
+	b.closeOpened(w)
 	_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": w.target}, nil)
 	return true
 }
