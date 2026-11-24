@@ -51,4 +51,13 @@ func TestAgentTakesOutHeadlessChromeAlone(t *testing.T) {
 	if _, err := agentOf("Mozilla/5.0", hints{}); err == nil {
 		t.Fatal("hints naming no brand made an agent")
 	}
+	// What Chrome is started by is a name: a blank one, one with a control
+	// character or past printable ASCII, and one without the product token
+	// make no agent.
+	for _, userAgent := range []string{"", "   \t ", "Mozilla/5.0 HeadlessChrome/156\n", "Mozilla/5.0 HeadlessChrome/156\x00",
+		"Mozilla/5.0 HeadlessChrome/156 \u00e9", "Mozilla/5.0 (X11; Linux x86_64) Chrome/156.0.8078.79 Safari/537.36"} {
+		if agent, err := agentOf(userAgent, own); err == nil {
+			t.Fatalf("the User-Agent %q made the agent %v", userAgent, agent)
+		}
+	}
 }
