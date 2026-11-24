@@ -976,8 +976,7 @@ defmodule PrismWeb.ComponentsLive do
   defp type_label("catalyst"), do: "Catalysts"
   defp type_label("reagent"), do: "Reagents"
   defp type_label("formula"), do: "Formulas"
-  defp type_label("tincture"), do: "Tinctures"
-  defp type_label(type), do: String.capitalize(type)
+  defp type_label("tincture"), do: "Apps"
 
   defp type_badge_color("catalyst"), do: "bg-purple-900 text-purple-300"
   defp type_badge_color("reagent"), do: "bg-blue-900 text-blue-300"
@@ -1300,7 +1299,7 @@ defmodule PrismWeb.ComponentsLive do
             phx-value-type={type}
             class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == type, do: type_badge_color(type), else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
           >
-            {String.capitalize(type)}s
+            {type_label(type)}
           </button>
         </div>
         <.button variant="secondary" phx-click="register" disabled={@registering}>

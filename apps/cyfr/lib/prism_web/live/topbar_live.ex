@@ -19,15 +19,17 @@ defmodule PrismWeb.TopbarLive do
   |-------------|------------------------|-------------------------|
   | Health      | system/status          | (loaded on mount)       |
   | Activity    | mcp_log/list           | bus:requests + tinctures + schedule_runs + feed_runs |
-  | Executions  | execution/list         | bus:executions        |
+  | Executions  | execution/list         | bus:executions + threads |
   | Rate        | mcp_log/stats          | bus:requests          |
   | Schedules   | schedule/list          | bus:schedule_runs     |
   | Builds      | telemetry-only         | bus:builds            |
-  | Tinctures   | telemetry-only         | bus:tinctures         |
+  | Apps        | telemetry-only         | bus:tinctures         |
   | User        | the session            |                         |
 
-  Builds and Tinctures hide entirely when there's nothing to show, so the
-  bar stays compact in normal operation. `lite` shows none of them.
+  A turn's root announces no execution, so Executions is read again when
+  the person's list of threads (`Cyfr.Bus.threads/2`) tells a post or a
+  turn's end. Builds and Apps hide entirely when there's nothing to show,
+  so the bar stays compact in normal operation. `lite` shows none of them.
   """
 
   use PrismWeb, :live_view
@@ -105,6 +107,8 @@ defmodule PrismWeb.TopbarLive do
         ] do
       Bus.subscribe(actor, topic)
     end
+
+    if is_binary(ctx.user_id), do: Bus.subscribe(actor, Bus.threads(actor, ctx.user_id))
   end
 
   # How many people wait at the door — an operator's number, nobody else's.
@@ -158,6 +162,10 @@ defmodule PrismWeb.TopbarLive do
   def handle_info(%Bus.Tinctures{}, socket), do: {:noreply, socket}
 
   def handle_info(%Bus.Execution{}, socket) do
+    {:noreply, refresh(socket, [:executions])}
+  end
+
+  def handle_info(%Bus.ThreadListed{}, socket) do
     {:noreply, refresh(socket, [:executions])}
   end
 
@@ -577,11 +585,11 @@ defmodule PrismWeb.TopbarLive do
             name="tinctures"
             open={@open_popover == "tinctures"}
             label={@tincture_text}
-            title={"Tinctures run recently: #{@tincture_text}"}
+            title={"Apps run recently: #{@tincture_text}"}
             icon="palette"
           >
             <:popover>
-              <h4 class="text-xs font-medium text-gray-400 mb-2">Recent tincture invokes</h4>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Recent app calls</h4>
               <ul class="space-y-1 text-sm">
                 <%= for t <- @recent_tinctures do %>
                   <li class="flex items-center gap-2">

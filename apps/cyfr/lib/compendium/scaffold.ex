@@ -385,7 +385,7 @@ defmodule Compendium.Scaffold do
       type: "tincture",
       version: version,
       publisher: Compendium.ComponentPath.default_publisher(),
-      description: "TODO: Describe your tincture",
+      description: "An app made in CYFR.",
       tincture: tincture,
       dependencies: %{
         static: []

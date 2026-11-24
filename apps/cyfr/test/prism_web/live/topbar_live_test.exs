@@ -198,6 +198,90 @@ defmodule PrismWeb.TopbarLiveTest do
     wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the second burst to drain")
   end
 
+  test "the apps run recently are counted and listed as apps", %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    {view, _html} = conn |> log_in_user(ops) |> mount_athanor("")
+    bar = topbar(view)
+    actor = Prima.Actor.in_athanor(seated_athanor().id)
+
+    send(
+      bar.pid,
+      Cyfr.Bus.Tinctures.new(actor, :invoke_started, %{
+        request_id: "req_app_1",
+        tincture_ref: "tincture:local.maps"
+      })
+    )
+
+    :sys.get_state(bar.pid)
+    assert attribute(bar, "tinctures", "aria-label") == ["Apps run recently: 1"]
+    render_click(bar, "toggle_popover", %{"name" => "tinctures"})
+    html = render(bar)
+    assert html =~ "Recent app calls"
+    refute html =~ "Recent tincture invokes"
+  end
+
+  test "Running follows Aqua's turn, whose root announces no execution", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+    wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the mount's refresh to drain")
+    assert has_element?(bar, ~s(button[phx-value-name="executions"]), "0 running")
+
+    ctx = %{Sanctum.TestContext.local(:prism) | athanor_id: seated_athanor().id}
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
+
+    {:ok, %{turn: turn}} =
+      Aqua.Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "hello"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    {:ok, %{execution: root}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_topbar_#{System.unique_integer([:positive])}",
+          reference: "agent:local.aqua",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn.id,
+          origin: :interactive
+        },
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    # The turn's post is announced on the person's list of threads.
+    :ok = Aqua.ThreadList.changed(ctx, thread.id)
+
+    wait_until(
+      fn -> has_element?(bar, ~s(button[phx-value-name="executions"]), "1 running") end,
+      5_000,
+      "the turn's root to show running"
+    )
+
+    {1, _, _} =
+      Arca.Execution.mark_failed_if_running(
+        root.id,
+        %{error_message: "ended"},
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
+    :ok = Aqua.ThreadList.changed(ctx, thread.id)
+
+    wait_until(
+      fn -> has_element?(bar, ~s(button[phx-value-name="executions"]), "0 running") end,
+      5_000,
+      "the turn's end to leave nothing running"
+    )
+  end
+
   for {who, kind} <- [{"feed", "feed"}, {"schedule", "schedule"}] do
     test "a #{who}'s fire shows its request in flight", %{conn: conn} do
       user = test_user()

@@ -335,6 +335,17 @@ defmodule Compendium.ScaffoldTest do
       assert get_in(manifest, ["tincture", "entry"]) == "dist/index.html"
     end
 
+    test "a tincture's manifest describes it in a person's words, with nothing left to fill in",
+         %{ctx: ctx} do
+      assert {:ok, _} = Scaffold.create(ctx, "said-dash", "tincture", "0.1.0")
+      base = ["components", "tinctures", "local", "said-dash", "0.1.0"]
+
+      manifest =
+        Jason.decode!(Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json"))
+
+      assert manifest["description"] == "An app made in CYFR."
+    end
+
     test "a tincture's manifest declares no window hints, and holds", %{ctx: ctx} do
       for {name, template} <- [{"plain-dash", "vanilla"}, {"hinted-dash", "react"}] do
         assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template)

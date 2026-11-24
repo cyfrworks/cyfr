@@ -4,9 +4,10 @@
 defmodule Compendium.ShippedDesktopsTest do
   @moduledoc """
   The shipped desktops each ship a new version beside the one before it:
-  the five at 0.3.4 beside 0.2.0, and the shipped canvas at 0.6.4 beside
-  0.6.0. An athanor filled while only the earlier version shipped sees an
-  update once the seed carries the new one, and one filled from the seed
+  line at 0.3.5 and the other four at 0.3.4 beside 0.2.0, and the
+  shipped canvas at 0.6.5 beside 0.6.0. An athanor filled while only the
+  earlier version shipped sees an update once the seed carries the new
+  one, and one filled from the seed
   holds both versions as the components list reads them, the earlier
   marked so.
   """
@@ -17,8 +18,8 @@ defmodule Compendium.ShippedDesktopsTest do
   @repo_desktops Path.expand("../../../../seed/components/tinctures/local", __DIR__)
   # Each desktop, the version before its newest and its newest.
   @shipped [
-    {"canvas", "0.6.0", "0.6.4"},
-    {"line", "0.2.0", "0.3.4"},
+    {"canvas", "0.6.0", "0.6.5"},
+    {"line", "0.2.0", "0.3.5"},
     {"night", "0.2.0", "0.3.4"},
     {"road", "0.2.0", "0.3.4"},
     {"street", "0.2.0", "0.3.4"},

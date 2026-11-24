@@ -86,6 +86,15 @@ defmodule PrismWeb.ComponentsLiveTest do
     {view, render(view)}
   end
 
+  test "the apps are grouped under Apps, a word a person reads", %{conn: conn, ctx: ctx} do
+    {:ok, _} = Compendium.Scaffold.create(ctx, "shelf-app", "tincture", "0.1.0")
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {view, _html} = mount_athanor(conn, "/components")
+
+    assert has_element?(view, "h3", "Apps")
+    refute render(view) =~ ~r/>\s*Tinctures\s*</
+  end
+
   test "a bundled copy wears its badge, offers Reset and no Remove", %{conn: conn} do
     {_view, html} = expanded_html(conn)
 
