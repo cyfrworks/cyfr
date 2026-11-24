@@ -27,9 +27,11 @@
 //     redirect {"from": P, "to": U}  a request for the path P is answered
 //                                with a redirect to U
 //   GET /seen                 every request: method, path, user agent,
-//                             when it came, status, fault, and whether
-//                             and when its client gave up before the
-//                             answer
+//                             the names of the cookies it carried (never
+//                             their values), when it came, status, fault,
+//                             and whether and when its client gave up
+//                             before the answer; an upgrade is marked so,
+//                             with when its connection closed
 //   GET /health               200 once listening, with the TOKEN it was
 //                             started with, so front.sh accepts readiness
 //                             from its own container alone
@@ -54,8 +56,11 @@ const seen = [];
 // The requests hold keeps waiting, each released when the mode changes.
 let held = [];
 
+// The names of the cookies a request carried, never their values.
+const cookieNames = (req) => (req.headers.cookie ?? "").split(";").map((c) => c.split("=")[0].trim()).filter(Boolean);
+
 const front = createTls({ cert: readFileSync(cert), key: readFileSync(key) }, (req, res) => {
-  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, fault: null, aborted: false };
+  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, cookies: cookieNames(req), status: null, fault: null, aborted: false };
   seen.push(account);
   res.on("close", () => {
     if (!res.writableFinished) {
@@ -133,8 +138,10 @@ function pass(req, res, account) {
 // front forwards any request's, then both ways byte for byte. Its status
 // is the one the upstream's answer begins with.
 front.on("upgrade", (req, socket, head) => {
-  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, status: null, fault: null, aborted: false };
+  const account = { at: Date.now(), method: req.method, path: req.url.split("?")[0], host: req.headers.host, agent: req.headers["user-agent"] ?? null, cookies: cookieNames(req), status: null, fault: null, aborted: false };
+  account.upgrade = true;
   seen.push(account);
+  socket.on("close", () => { account.closedAt = Date.now(); });
   if (mode === "down") {
     account.fault = "down";
     socket.destroy();
