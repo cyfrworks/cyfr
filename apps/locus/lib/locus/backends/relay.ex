@@ -199,7 +199,8 @@ defmodule Locus.Backends.Relay do
   stderr kept, which a session names to the role's count.
   """
   @spec held(t()) :: non_neg_integer()
-  def held(%__MODULE__{} = relay), do: relay.bytes + byte_size(relay.stderr)
+  def held(%__MODULE__{bytes: bytes, stderr: stderr}) when is_integer(bytes),
+    do: bytes + byte_size(stderr)
 
   @doc """
   The oldest lines or chunks dropped, each counted as the buffer's own
