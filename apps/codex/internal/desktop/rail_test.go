@@ -177,7 +177,7 @@ func TestForgetErasesEveryStoreThenRemovesTheCYFR(t *testing.T) {
 	if last, _ := a.last(t); last != "" {
 		t.Fatalf("%s is still the CYFR selected last", last)
 	}
-	if _, err := a.Homes.Select(home, "https://cyfr.run/directory", true); err == nil {
+	if _, err := a.Homes.Select(home, "https://cyfr.run/directory", true, shell.Typed); err == nil {
 		t.Fatal("a CYFR being forgotten was selected")
 	}
 	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": home}); got.Error == "" {
@@ -293,5 +293,89 @@ func TestAnInterruptedForgetIsResumedAtTheNextRun(t *testing.T) {
 	}
 	if _, ok := held(t, next.Homes, "https://other.example.com"); !ok {
 		t.Fatal("Forget took another CYFR with it")
+	}
+}
+
+// A press of a row whose CYFR names a changed account service asks the
+// person to approve it; the rail is free meanwhile, so the person can
+// Forget that row before pressing Approve. The approval updates the row it
+// began from, and finds none: it adds nothing.
+func TestAnApprovalBegunFromARowForgottenMeanwhileAddsNothing(t *testing.T) {
+	const home = "https://work.example.com"
+	const changed = "https://account.example.com/directory"
+	a := newApp(t, t.TempDir(), offline())
+	seed(t, a.Homes, home, shell.ClientRecord{Directory: account.DefaultDirectory})
+	a.directory.Store(changed)
+	asked := a.post(t, "/bootstrap/connect", map[string]string{"address": home, "kept": "true"})
+	if asked.Confirm != changed {
+		t.Fatalf("kept press answered %+v, wanted approval for %s", asked, changed)
+	}
+	a.Forget(home)
+	for _, id := range a.erases(t, 1) {
+		a.Erased(id, true)
+	}
+	if _, ok := held(t, a.Homes, home); ok {
+		t.Fatal("Forget did not remove the row")
+	}
+	approval := a.connect(t, "/bootstrap/approve", map[string]string{"cyfr": home, "directory": changed})
+	select {
+	case m := <-a.sent:
+		if m.Type != TypeHome || m.Home != home {
+			t.Fatalf("unexpected message %+v", m)
+		}
+		a.ready(home)
+		a.opened(t, home)
+		got := answered(t, approval)
+		if _, ok := held(t, a.Homes, home); ok {
+			t.Fatalf("approval from the kept press added the forgotten CYFR again: %+v", got)
+		}
+	case got := <-approval:
+		if got.Error == "" {
+			t.Fatalf("approval answered %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("approval neither proposed nor answered")
+	}
+}
+
+// A press of a folder's row whose Forget ends while the folder is asked
+// whether its CYFR answers adds the folder's CYFR again on no road.
+func TestAFolderPressForgottenDuringItsCheckAddsNothing(t *testing.T) {
+	const home = "http://localhost:4100"
+	a := newApp(t, t.TempDir(), offline())
+	seed(t, a.Homes, home, shell.ClientRecord{Project: localFolder})
+	a.Local = func(string) (Local, error) {
+		return Local{
+			Shell: shell.Config{Address: home, Client: offline(), Directory: account.DefaultDirectory},
+			Answers: func(context.Context) error {
+				rec, held, err := a.Homes.Forgetting(home)
+				if err != nil {
+					return err
+				}
+				if held {
+					return a.Homes.Forgotten(home, rec.Generation)
+				}
+				return nil
+			},
+		}, nil
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": home, "kept": "true"})
+	select {
+	case m := <-a.sent:
+		if m.Type != TypeHome || m.Home != home {
+			t.Fatalf("unexpected message %+v", m)
+		}
+		a.ready(home)
+		a.opened(t, home)
+		got := answered(t, done)
+		if _, ok := held(t, a.Homes, home); ok {
+			t.Fatalf("the kept press put the forgotten folder back on the rail: %+v", got)
+		}
+	case got := <-done:
+		if got.Error == "" {
+			t.Fatalf("the kept press answered %+v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the kept press neither proposed nor answered")
 	}
 }

@@ -48,7 +48,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
 
 	// Selecting writes nothing; nor does a refused first hello's forget.
-	sel, err := f.Select(a, "https://cyfr.run", true)
+	sel, err := f.Select(a, "https://cyfr.run", true, Typed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 
 	// Another CYFR, admitted before it was opened: added by its admission,
 	// and selected last once opened; the first keeps its client.
-	other, _ := f.Select(b, "https://accounts.example.com", true)
+	other, _ := f.Select(b, "https://accounts.example.com", true, Typed)
 	admit(t, other, "pcl_b", `{"b":1}`)
 	if err := other.Commit(""); err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 
 	// The same CYFR again, under a directory approved now: its client
 	// stays and the directory is the new one.
-	again, _ := f.Select(a, "https://accounts.example.com", true)
+	again, _ := f.Select(a, "https://accounts.example.com", true, Typed)
 	if c, _ := again.Load(); c.ClientID != "pcl_a" || c.Directory != "https://accounts.example.com" {
 		t.Fatalf("a new directory for the same CYFR dropped its client: %+v", c)
 	}
@@ -101,7 +101,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 
 	// A folder's CYFR: the address is that folder's, never a CYFR
 	// elsewhere's, and never another folder's.
-	here, err := f.SelectLocal(box, "/home/ada/cyfr")
+	here, err := f.SelectLocal(box, "/home/ada/cyfr", Typed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,13 +111,13 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	if l := listOf(t, f); !sameRecord(l.Homes[box], ClientRecord{Project: "/home/ada/cyfr", Generation: 4}) || l.Last != box {
 		t.Fatalf("the folder's CYFR is %+v", l)
 	}
-	if _, err := f.Select(box, "https://cyfr.run", true); err == nil || !strings.Contains(err.Error(), "/home/ada/cyfr") {
+	if _, err := f.Select(box, "https://cyfr.run", true, Typed); err == nil || !strings.Contains(err.Error(), "/home/ada/cyfr") {
 		t.Fatalf("a folder's entry was taken as a CYFR elsewhere: %v", err)
 	}
-	if _, err := f.SelectLocal(box, "/home/ada/other"); err == nil {
+	if _, err := f.SelectLocal(box, "/home/ada/other", Typed); err == nil {
 		t.Fatal("another folder took a folder's address")
 	}
-	if _, err := f.SelectLocal(a, "/home/ada/cyfr"); err == nil {
+	if _, err := f.SelectLocal(a, "/home/ada/cyfr", Typed); err == nil {
 		t.Fatal("a folder took a CYFR elsewhere's address")
 	}
 }
@@ -127,7 +127,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 func TestAWriterOfAnEntryGoneWritesNothing(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	sel, _ := f.Select(a, "https://cyfr.run", true)
+	sel, _ := f.Select(a, "https://cyfr.run", true, Typed)
 	if err := sel.Commit(""); err != nil {
 		t.Fatal(err)
 	}
@@ -155,12 +155,12 @@ func removeAt(t *testing.T, f Homes, home string) {
 func TestALateRenewalLeavesANewerAdmission(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	first, _ := f.Select(a, "https://cyfr.run", true)
+	first, _ := f.Select(a, "https://cyfr.run", true, Typed)
 	if err := first.Commit(""); err != nil {
 		t.Fatal(err)
 	}
-	old, _ := f.Select(a, "https://cyfr.run", true)
-	replacement, _ := f.Select(a, "https://cyfr.run", true)
+	old, _ := f.Select(a, "https://cyfr.run", true, Typed)
+	replacement, _ := f.Select(a, "https://cyfr.run", true, Typed)
 	admit(t, replacement, "pcl_new", `{"client":"new"}`)
 	if err := old.Update(func(c *ClientRecord) bool { c.Certificate = json.RawMessage(`{"client":"old"}`); return true }); err != nil {
 		t.Fatal(err)
@@ -182,8 +182,8 @@ func TestALateRenewalLeavesANewerAdmission(t *testing.T) {
 func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	pending, _ := f.Select(a, "https://cyfr.run", true)
-	added, _ := f.Select(a, "https://cyfr.run", true)
+	pending, _ := f.Select(a, "https://cyfr.run", true, Typed)
+	added, _ := f.Select(a, "https://cyfr.run", true, Typed)
 	if err := added.Commit(""); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 		t.Fatalf("a late writer recreated the entry: %+v", l)
 	}
 	// A selection begun after, of the same address, adds it.
-	again, _ := f.Select(a, "https://cyfr.run", true)
+	again, _ := f.Select(a, "https://cyfr.run", true, Typed)
 	if err := again.Commit(""); err != nil {
 		t.Fatal(err)
 	}
@@ -205,27 +205,75 @@ func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 	}
 }
 
-// A selection that adds none (a press of a row, or of the last one opened)
-// commits nothing once the list no longer holds its CYFR, as when a Forget
-// ended between the press and the commit; one the list holds commits as
-// any other.
-func TestASelectionThatAddsNoneAddsNoCYFR(t *testing.T) {
+// A selection begun from a row (a press of one, or of the last one opened)
+// updates that row alone: it is refused once the list no longer holds the
+// same entry, whether a Forget ended before it began, between its start
+// and its commit, or before an admission it writes, and it adds none on any
+// of them; one the list still holds commits as any other.
+func TestASelectionBegunFromARowAddsNoCYFR(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	unheld, _ := f.Select(a, "https://cyfr.run", true)
-	unheld.AddsNone()
-	if err := unheld.Commit(""); err == nil {
-		t.Fatal("a selection that adds none added a CYFR")
+	if _, err := f.Row(a); !IsUnkept(err) {
+		t.Fatalf("a row the list does not hold was taken: %v", err)
 	}
-	if l := listOf(t, f); len(l.Homes) != 0 || l.Last != "" {
-		t.Fatalf("the list is %+v", l)
+	keep := func() Row {
+		sel, _ := f.Select(a, "https://cyfr.run", true, Typed)
+		if err := sel.Commit(""); err != nil {
+			t.Fatal(err)
+		}
+		row, err := f.Row(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row
 	}
-	added, _ := f.Select(a, "https://cyfr.run", true)
-	if err := added.Commit(""); err != nil {
+	forget := func() {
+		rec, _, _ := f.Forgetting(a)
+		if err := f.Forgotten(a, rec.Generation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unheld := func(road string) {
+		t.Helper()
+		if l := listOf(t, f); len(l.Homes) != 0 || l.Last != "" {
+			t.Fatalf("%s added the CYFR forgotten: %+v", road, l)
+		}
+	}
+
+	row := keep()
+	forget()
+	if _, err := f.Select(a, "https://cyfr.run", true, row); !IsUnkept(err) {
+		t.Fatalf("a row forgotten before its selection began was selected: %v", err)
+	}
+	if _, err := f.SelectLocal(a, "/home/ada/cyfr", row); !IsUnkept(err) {
+		t.Fatalf("a row forgotten before its folder's selection began was selected: %v", err)
+	}
+	unheld("a selection of a row forgotten")
+
+	sel, err := f.Select(a, "https://cyfr.run", true, keep())
+	if err != nil {
 		t.Fatal(err)
 	}
-	kept, _ := f.Select(a, "https://cyfr.run", true)
-	kept.AddsNone()
+	forget()
+	if err := sel.Commit(""); err == nil {
+		t.Fatal("a commit of a row forgotten meanwhile was taken")
+	}
+	unheld("a commit")
+
+	sel, _ = f.Select(a, "https://cyfr.run", true, keep())
+	forget()
+	if err := sel.Update(func(r *ClientRecord) bool {
+		r.ClientID, r.Certificate = "pcl_a", json.RawMessage(`{"a": 1}`)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unheld("an admission")
+
+	kept, err := f.Select(a, "https://cyfr.run", true, keep())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := kept.Commit(""); err != nil {
 		t.Fatalf("a CYFR the list holds was refused: %v", err)
 	}
@@ -258,7 +306,7 @@ func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 			if _, err := f.Load(); err == nil {
 				t.Fatal("read")
 			}
-			sel, _ := f.Select("https://b.example.com", "https://cyfr.run", true)
+			sel, _ := f.Select("https://b.example.com", "https://cyfr.run", true, Typed)
 			if sel != nil {
 				t.Fatal("a selection over a list it cannot read")
 			}
@@ -268,7 +316,7 @@ func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 			}
 			// Nor does a selection begun before the file went bad write it.
 			sound := Homes(filepath.Join(t.TempDir(), "homes.json"))
-			early, err := sound.Select("https://b.example.com", "https://cyfr.run", true)
+			early, err := sound.Select("https://b.example.com", "https://cyfr.run", true, Typed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,12 +338,12 @@ func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 func TestAnApprovalEndingAndARenewalBothStand(t *testing.T) {
 	const a = "https://cyfr.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	first, _ := f.Select(a, "https://accounts.example.com", true)
+	first, _ := f.Select(a, "https://accounts.example.com", true, Typed)
 	if err := first.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	admit(t, first, "pcl_1", `{"n":1}`)
-	sel, err := f.Select(a, "https://accounts.example.com", false)
+	sel, err := f.Select(a, "https://accounts.example.com", false, Typed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +368,7 @@ func TestAFailedWriteIsWrittenByItsRetry(t *testing.T) {
 	const home = "https://a.example.com"
 	dir := t.TempDir()
 	f := Homes(filepath.Join(dir, "homes.json"))
-	sel, err := f.Select(home, "https://cyfr.run", true)
+	sel, err := f.Select(home, "https://cyfr.run", true, Typed)
 	if err != nil {
 		t.Fatal(err)
 	}

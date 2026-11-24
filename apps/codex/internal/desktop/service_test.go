@@ -2548,7 +2548,7 @@ func TestACancelledSelectionCommitsNothing(t *testing.T) {
 	f := shell.Homes(filepath.Join(dir, "homes.json"))
 	seed(t, f, first, shell.ClientRecord{Directory: account.DefaultDirectory})
 	for range 64 {
-		sel, err := f.Select(next, account.DefaultDirectory, true)
+		sel, err := f.Select(next, account.DefaultDirectory, true, shell.Typed)
 		if err != nil {
 			t.Fatal(err)
 		}

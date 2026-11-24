@@ -228,26 +228,64 @@ type Selection struct {
 	// selection (or is cyfr.run), rather than taken from an approval the
 	// entry held, which may have ended since.
 	approved bool
-	// addsNone is a selection of a CYFR the list held as it was pressed
-	// (AddsNone): committed once the list holds it no more, it adds none.
-	addsNone bool
 }
 
-// AddsNone makes s a selection that adds no entry: its commit is refused
-// once the list no longer holds its CYFR, as when a Forget ended between
-// the press and the commit.
-func (s *Selection) AddsNone() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.addsNone = true
+// Row is how a selection began: from an entry of the list a person
+// pressed, as the list held it then (its count, from Row), or from an
+// address a person typed (Typed). A selection begun from a row is bound to
+// that entry from the press on, so its every write, the commit's and an
+// admission's, is refused once the list no longer holds that same entry,
+// whatever ended it meanwhile: it updates its row and never adds one. Only
+// a selection begun from an address adds an entry.
+type Row uint64
+
+// Typed is the beginning of a selection of an address a person typed.
+const Typed Row = 0
+
+// Row is the entry at home as a person pressed it: refused where the list
+// holds none there, or holds one being forgotten.
+func (f Homes) Row(home string) (Row, error) {
+	l, err := f.Load()
+	if err != nil {
+		return Typed, err
+	}
+	switch rec, held := l.Homes[home]; {
+	case !held:
+		return Typed, errUnkept
+	case rec.Forgetting:
+		return Typed, errForgetting(home)
+	default:
+		return Row(rec.Generation), nil
+	}
+}
+
+// errUnkept refuses a selection begun from a row the list holds no more.
+var errUnkept = errors.New("this computer no longer keeps it")
+
+// IsUnkept is whether err refused a row the list holds no more.
+func IsUnkept(err error) bool { return errors.Is(err, errUnkept) }
+
+// begin is the count a selection begun from from, at home in l, is bound
+// to: the row's own, refused where the list's entry there is another now.
+func (l *HomeList) begin(home string, from Row) (uint64, error) {
+	at := l.at(home)
+	if from != Typed && at != uint64(from) {
+		return 0, errUnkept
+	}
+	return at, nil
 }
 
 // Select begins selecting home, a remote CYFR's origin, with directory the
-// account service for it, approved in this selection or not; it writes
-// nothing. An address the list holds as a folder's CYFR is refused: a
-// folder's entry never becomes one elsewhere.
-func (f Homes) Select(home, directory string, approved bool) (*Selection, error) {
+// account service for it, approved in this selection or not, from a row or
+// an address typed (Row); it writes nothing. An address the list holds as
+// a folder's CYFR is refused: a folder's entry never becomes one
+// elsewhere.
+func (f Homes) Select(home, directory string, approved bool, from Row) (*Selection, error) {
 	l, err := f.Load()
+	if err != nil {
+		return nil, err
+	}
+	bound, err := l.begin(home, from)
 	if err != nil {
 		return nil, err
 	}
@@ -259,16 +297,20 @@ func (f Homes) Select(home, directory string, approved bool) (*Selection, error)
 		return nil, fmt.Errorf("this computer lists %s as the CYFR in %s, not as one elsewhere", home, rec.Project)
 	}
 	rec.Directory = directory
-	return &Selection{file: f, home: home, rec: rec, approved: approved, bound: l.at(home)}, nil
+	return &Selection{file: f, home: home, rec: rec, approved: approved, bound: bound}, nil
 }
 
 // SelectLocal begins selecting the CYFR at home set up in project, a local
-// project's absolute directory. Its account service is that project's own
-// setting, so the entry keeps no approval of one; it writes nothing. An
-// address the list holds as a CYFR elsewhere, or as another folder's, is
-// refused.
-func (f Homes) SelectLocal(home, project string) (*Selection, error) {
+// project's absolute directory, from a row or an address (Row). Its
+// account service is that project's own setting, so the entry keeps no
+// approval of one; it writes nothing. An address the list holds as a CYFR
+// elsewhere, or as another folder's, is refused.
+func (f Homes) SelectLocal(home, project string, from Row) (*Selection, error) {
 	l, err := f.Load()
+	if err != nil {
+		return nil, err
+	}
+	bound, err := l.begin(home, from)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +324,7 @@ func (f Homes) SelectLocal(home, project string) (*Selection, error) {
 		return nil, fmt.Errorf("this computer lists %s as the CYFR in %s, not as the one in %s", home, rec.Project, project)
 	}
 	rec.Project, rec.Directory = project, ""
-	return &Selection{file: f, home: home, rec: rec, approved: true, bound: l.at(home)}, nil
+	return &Selection{file: f, home: home, rec: rec, approved: true, bound: bound}, nil
 }
 
 // Entry is the selection of whatever the list holds at home, as it holds
@@ -381,9 +423,6 @@ func (s *Selection) Commit(ceremony string) error {
 			if s.approved && cur.Project == "" {
 				cur.Directory = s.rec.Directory
 			}
-		case s.addsNone:
-			refused = fmt.Errorf("this computer no longer keeps %s", s.home)
-			return false
 		default:
 			rec := ClientRecord{Project: s.rec.Project, ClientID: s.rec.ClientID, Certificate: s.rec.Certificate}
 			if s.approved {

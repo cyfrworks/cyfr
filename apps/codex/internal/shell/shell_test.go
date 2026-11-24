@@ -1427,7 +1427,7 @@ func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
 	home.setupUsed = true
 	home.mu.Unlock()
 	file := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	box, err := file.SelectLocal("http://localhost:4000", "/home/ada/cyfr")
+	box, err := file.SelectLocal("http://localhost:4000", "/home/ada/cyfr", Typed)
 	if err == nil {
 		err = box.Commit("")
 	}
@@ -1436,7 +1436,7 @@ func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
 	}
 	admit(t, box, "pcl_box", `{"box":1}`)
 	before, _ := os.ReadFile(string(file))
-	sel, err := file.Select(home.address(), home.accounts.URL(), true)
+	sel, err := file.Select(home.address(), home.accounts.URL(), true, Typed)
 	if err != nil {
 		t.Fatal(err)
 	}
