@@ -441,8 +441,10 @@ func TestAKeptCloseAsksEveryProcessLeftToEnd(t *testing.T) {
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
+	// The child starts the grandchild once it is asked, then lets the asks
+	// that repeat pass while it ends, so one grandchild is ever asked.
 	script := `cat > child.sh <<'X'
-trap 'sh grand.sh & sleep 0.5; exit 0' TERM
+trap 'sh grand.sh & trap "" TERM; sleep 0.5; exit 0' TERM
 while :; do sleep 0.05; done
 X
 cat > grand.sh <<'X'
