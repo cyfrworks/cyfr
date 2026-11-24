@@ -611,11 +611,15 @@ def test_names(image, canary):
 
 def test_no_bound_no_build(stack):
     stack.up(writable_cgroups=False)
-    options = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]["SecurityOpt"]
-    expect(options[0] == "no-new-privileges:true" and len(options) == 2 and options[1].startswith("seccomp=")
+    host = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]
+    options = host["SecurityOpt"]
+    # Docker reports `systempaths=unconfined` as empty masked and read-only
+    # paths, never among the security options.
+    expect(options[0] == "no-new-privileges:true" and len(options) == 3 and options[1].startswith("seccomp=")
+           and options[2] == "apparmor=cyfr-locus" and host["MaskedPaths"] == [] and host["ReadonlyPaths"] == []
            and not any("writable-cgroups" in o for o in options),
-           "the service is started without the writable-cgroups=true option, under the keeper's seccomp profile",
-           [o[:60] for o in options])
+           "the service is started without the writable-cgroups=true option, under the keeper's seccomp and AppArmor "
+           "profiles with its system paths unmasked", [o[:60] for o in options])
     expect(all(toolchain["available"] for toolchain in stack.health["toolchains"].values()),
            "it starts and answers health as the shipped service does", stack.health)
 

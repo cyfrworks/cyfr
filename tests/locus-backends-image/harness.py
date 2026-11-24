@@ -1102,6 +1102,10 @@ class Stack(imagesuite.Stack):
             if option.startswith("seccomp="):
                 option = f"seccomp={os.path.join(self.project_dir, 'keeper.seccomp.json')}"
             args += ["--security-opt", option]
+        # Docker reports `systempaths=unconfined` as empty lists of masked
+        # and read-only paths, never among the security options.
+        if host.get("MaskedPaths") == [] and host.get("ReadonlyPaths") == []:
+            args += ["--security-opt", "systempaths=unconfined"]
         for name, value in (host.get("Sysctls") or {}).items():
             args += ["--sysctl", f"{name}={value}"]
         if host.get("ReadonlyRootfs"):

@@ -144,7 +144,10 @@ def main():
 
         again = whoami(c, OWNER, key="a", home_id=SHARED)
         kept = sh(c, OWNER, 'cat "$HOME/kept.txt"', key="a", home_id=SHARED)
-        expect(again["uid"] == a["uid"] and again["pidns"] != a["pidns"] and kept["stdout"] == "kept-value\n"
+        # A pid namespace's number may be the ended one's again: the
+        # container's numbering tells the two processes apart.
+        later = stack.outside(again)
+        expect(again["uid"] == a["uid"] and later and later["pid"] != first["pid"] and kept["stdout"] == "kept-value\n"
                and c.mcp(OWNER, "probe", key="a", home_id=SHARED).resumed is False,
                "a kept home survives retirement: the next session finds what the last wrote, under the same uid",
                [again, kept])

@@ -149,10 +149,13 @@ def bounds_each_program(stack):
            "the program's status counts the crash, names the kill and runs nothing", crashed)
     initialized = client.initializations
     again = c.tool(HOG, "probe__whoami")
-    expect(again["pidns"] != hog["pidns"] and client.initializations == initialized + 1 and client.resumed is False,
-           "the next call starts the program again in a new space, initialized afresh", again)
+    # A pid namespace's number may be the ended one's again: the container's
+    # numbering tells the two processes apart.
+    restarted = stack.outside(again)
+    expect(restarted and restarted["pid"] != hogged["pid"] and client.initializations == initialized + 1
+           and client.resumed is False, "the next call starts the program again under a new process, initialized afresh", again)
     expect(c.program(HOG)["status"] == "running", "the program runs again")
-    expect(cgroup_limit(stack, stack.outside(again)["pid"])[1] == str(BOUND), "the restarted process is bounded again")
+    expect(cgroup_limit(stack, restarted["pid"])[1] == str(BOUND), "the restarted process is bounded again")
     leftover = [p for p in stack.under_uid(hog["uid"]) if hog["uid"] != again["uid"] or p["pid"] == hogged["pid"]]
     expect(not leftover, "nothing of the killed process's uid outlives it but what the restart started", leftover)
 
