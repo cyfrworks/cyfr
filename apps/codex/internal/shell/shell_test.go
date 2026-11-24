@@ -1429,7 +1429,7 @@ func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
 	file := Homes(filepath.Join(t.TempDir(), "homes.json"))
 	box, err := file.SelectLocal("http://localhost:4000", "/home/ada/cyfr")
 	if err == nil {
-		err = box.Commit()
+		err = box.Commit("")
 	}
 	if err != nil {
 		t.Fatal(err)

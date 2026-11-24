@@ -31,7 +31,8 @@ const MaxLine = 64 << 10
 // The messages cyfr sends the app's main process.
 const (
 	// Ready names the first page: the chooser, its run token in the
-	// fragment.
+	// fragment; and, for the CYFR app, the rail's page, its read token in
+	// the fragment, which reads the list of CYFRs and changes nothing.
 	TypeReady = "ready"
 	// Home names the CYFR selected, the account service approved for it and
 	// how to reach it, as a numbered attempt; main answers the attempt it
@@ -53,6 +54,10 @@ const (
 	// CYFR committed, every session of the device's there ended: it is the
 	// one answer that ends a departure, and a locked is none.
 	TypeLeft = "left"
+	// Erase asks main to clear, idempotently, what it keeps for home: its
+	// content storage, or with account the ceremony's storage of that
+	// account service at it. main answers erased with the same id.
+	TypeErase = "erase"
 )
 
 // The messages the app's main process sends cyfr.
@@ -75,37 +80,49 @@ const (
 	// for each pick and none otherwise; the page that asked never names a
 	// folder.
 	TypeFolderPicked = "folder-picked"
+	// Forget is the person's confirmed Forget of the CYFR at home on this
+	// computer, which main sends only once it left that CYFR: cyfr marks it
+	// being forgotten and asks main to erase each of its stores (erase).
+	TypeForget = "forget"
+	// Erased answers erase of the same id: ok once that store is empty.
+	TypeErased = "erased"
 )
 
 // fields is each message's fields beyond version and type, those that may
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
-	TypeReady:        {required: []string{"url"}},
+	TypeReady:        {required: []string{"url"}, optional: []string{"rail"}},
 	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "road"}},
 	TypeOpened:       {required: []string{"home", "attempt"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypeEnding:       {},
 	TypeLeft:         {required: []string{"id"}},
+	TypeErase:        {required: []string{"id", "home"}, optional: []string{"account"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
 	TypeHomeFailed:   {required: []string{"home", "attempt"}},
 	TypeLock:         {},
 	TypeLeave:        {required: []string{"id"}},
 	TypeShutdown:     {},
 	TypeFolderPicked: {required: []string{"path", "epoch", "pick"}},
+	TypeForget:       {required: []string{"home"}},
+	TypeErased:       {required: []string{"id", "ok"}},
 }
 
-var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked}
+var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked, TypeForget, TypeErased}
 
 // Message is one message in either direction. Path is a folder-picked
 // answer's folder, nil when none was picked. Attempt is a proposal's
 // number, from 1, and ID a departure's (leave and left), from 1.
 type Message struct {
-	Type     string
-	URL      string
-	Home     string
-	Account  string
-	Attempt  uint64
-	ID       uint64
+	Type    string
+	URL     string
+	Home    string
+	Account string
+	Attempt uint64
+	ID      uint64
+	// Rail is ready's address of the rail's page; OK is erased's answer.
+	Rail     string
+	OK       bool
 	Proxy    string
 	Resolver string
 	// Road is RoadDevice where the CYFR opens at the device's pages on
@@ -199,6 +216,13 @@ func ReadFromMain(line []byte) (Message, error) {
 			}
 			continue
 		}
+		if f == "ok" {
+			if string(raw) != "true" && string(raw) != "false" {
+				return Message{}, refuse("fields")
+			}
+			msg.OK = string(raw) == "true"
+			continue
+		}
 		var s string
 		if json.Unmarshal(raw, &s) != nil || s == "" || f == "path" && !absolute(s) {
 			return Message{}, refuse("fields")
@@ -219,7 +243,7 @@ func (m Message) object() (map[string]any, error) {
 	if !ok || slices.Contains(fromMain, m.Type) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
-	values := map[string]string{"url": m.URL, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
+	values := map[string]string{"url": m.URL, "rail": m.Rail, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
 		"resolver": m.Resolver, "road": m.Road}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {

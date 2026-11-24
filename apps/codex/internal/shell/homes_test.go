@@ -57,7 +57,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	if _, err := os.Stat(string(f)); !os.IsNotExist(err) {
 		t.Fatalf("a selection neither opened nor admitted wrote the list (%v)", err)
 	}
-	if err := sel.Commit(); err != nil {
+	if err := sel.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	admit(t, sel, "pcl_a", `{"a":1}`)
@@ -70,7 +70,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	// and selected last once opened; the first keeps its client.
 	other, _ := f.Select(b, "https://accounts.example.com", true)
 	admit(t, other, "pcl_b", `{"b":1}`)
-	if err := other.Commit(); err != nil {
+	if err := other.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	l := listOf(t, f)
@@ -85,7 +85,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	if c, _ := again.Load(); c.ClientID != "pcl_a" || c.Directory != "https://accounts.example.com" {
 		t.Fatalf("a new directory for the same CYFR dropped its client: %+v", c)
 	}
-	if err := again.Commit(); err != nil {
+	if err := again.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	if l := listOf(t, f); l.Homes[a].ClientID != "pcl_a" || l.Homes[a].Directory != "https://accounts.example.com" || l.Last != a {
@@ -104,7 +104,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := here.Commit(); err != nil {
+	if err := here.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	if l := listOf(t, f); !sameRecord(l.Homes[box], ClientRecord{Project: "/home/ada/cyfr", Generation: 4}) || l.Last != box {
@@ -127,13 +127,13 @@ func TestAWriterOfAnEntryGoneWritesNothing(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
 	sel, _ := f.Select(a, "https://cyfr.run", true)
-	if err := sel.Commit(); err != nil {
+	if err := sel.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	admit(t, sel, "pcl_a", `{"a":1}`)
 	removeAt(t, f, a)
 	admit(t, sel, "pcl_a", `{"a":2}`)
-	if err := sel.Commit(); err == nil {
+	if err := sel.Commit(""); err == nil {
 		t.Fatal("a selection of an entry gone committed")
 	}
 	if l := listOf(t, f); len(l.Homes) != 0 || l.Last != "" {
@@ -155,7 +155,7 @@ func TestALateRenewalLeavesANewerAdmission(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
 	first, _ := f.Select(a, "https://cyfr.run", true)
-	if err := first.Commit(); err != nil {
+	if err := first.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	old, _ := f.Select(a, "https://cyfr.run", true)
@@ -183,12 +183,12 @@ func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
 	pending, _ := f.Select(a, "https://cyfr.run", true)
 	added, _ := f.Select(a, "https://cyfr.run", true)
-	if err := added.Commit(); err != nil {
+	if err := added.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	removeAt(t, f, a)
 	admit(t, pending, "pcl_late", `{"client":"late"}`)
-	if err := pending.Commit(); err == nil {
+	if err := pending.Commit(""); err == nil {
 		t.Fatal("a selection of an address that came and went committed")
 	}
 	if l := listOf(t, f); len(l.Homes) != 0 || l.Last != "" {
@@ -196,7 +196,7 @@ func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 	}
 	// A selection begun after, of the same address, adds it.
 	again, _ := f.Select(a, "https://cyfr.run", true)
-	if err := again.Commit(); err != nil {
+	if err := again.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	if l := listOf(t, f); l.Last != a || len(l.Gone) != 0 {
@@ -245,7 +245,7 @@ func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 			if err := os.WriteFile(string(sound), []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := early.Commit(); err == nil {
+			if err := early.Commit(""); err == nil {
 				t.Fatal("a commit over a file that is not a list went on")
 			}
 			if after, _ := os.ReadFile(string(sound)); string(after) != raw {
@@ -261,7 +261,7 @@ func TestAnApprovalEndingAndARenewalBothStand(t *testing.T) {
 	const a = "https://cyfr.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
 	first, _ := f.Select(a, "https://accounts.example.com", true)
-	if err := first.Commit(); err != nil {
+	if err := first.Commit(""); err != nil {
 		t.Fatal(err)
 	}
 	admit(t, first, "pcl_1", `{"n":1}`)

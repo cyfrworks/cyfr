@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/cyfr/codex/internal/account"
@@ -52,13 +53,24 @@ func DeviceFolder() (string, error) {
 // client that CYFR admitted this device's key as, with the certificate it
 // connects under there. Generation is the list's count of changes
 // (HomeList.Generations) when this entry came to be or its admission last
-// changed: a writer bound to another writes nothing.
+// changed: a writer bound to another writes nothing. Ceremonies are the
+// account services' origins the app was let keep a ceremony's storage for
+// at this CYFR, every one of which a Forget erases; Forgetting marks an
+// entry being forgotten, which nothing opens, adds again or renews until
+// it is gone.
 type ClientRecord struct {
 	Project     string          `json:"project,omitempty"`
 	Directory   string          `json:"directory,omitempty"`
 	ClientID    string          `json:"client_id,omitempty"`
 	Certificate json.RawMessage `json:"certificate,omitempty"`
 	Generation  uint64          `json:"generation"`
+	Ceremonies  []string        `json:"ceremonies,omitempty"`
+	Forgetting  bool            `json:"forgetting,omitempty"`
+}
+
+// errForgetting refuses a selection of an entry being forgotten.
+func errForgetting(home string) error {
+	return fmt.Errorf("%s is being forgotten on this computer", home)
 }
 
 // ClientStore keeps this device's ClientRecord at one CYFR. Update reads
@@ -228,7 +240,10 @@ func (f Homes) Select(home, directory string, approved bool) (*Selection, error)
 		return nil, err
 	}
 	rec, held := l.Homes[home]
-	if held && rec.Project != "" {
+	switch {
+	case held && rec.Forgetting:
+		return nil, errForgetting(home)
+	case held && rec.Project != "":
 		return nil, fmt.Errorf("this computer lists %s as the CYFR in %s, not as one elsewhere", home, rec.Project)
 	}
 	rec.Directory = directory
@@ -247,6 +262,8 @@ func (f Homes) SelectLocal(home, project string) (*Selection, error) {
 	}
 	rec, held := l.Homes[home]
 	switch {
+	case held && rec.Forgetting:
+		return nil, errForgetting(home)
 	case held && rec.Project == "":
 		return nil, fmt.Errorf("this computer lists %s as a CYFR elsewhere, not as the one in %s", home, project)
 	case held && rec.Project != project:
@@ -289,6 +306,8 @@ func (s *Selection) Update(change func(*ClientRecord) bool) error {
 		}
 		cur, held := l.Homes[s.home]
 		switch {
+		case held && cur.Forgetting:
+			return false
 		case held:
 			before := cur
 			if !change(&cur) {
@@ -314,10 +333,12 @@ func (s *Selection) Update(change func(*ClientRecord) bool) error {
 // Commit writes the selection once the app opened it: its entry is added
 // where the list holds none at its address, or kept, with the account
 // service's address written only when this selection approved it (one it
-// took from the entry stays as the entry holds it now, ended or not), and
-// it is the CYFR selected last. An address whose entry came, went or was
-// admitted anew since the selection read it refuses it.
-func (s *Selection) Commit() error {
+// took from the entry stays as the entry holds it now, ended or not),
+// ceremony, an account service's origin, among those a Forget erases
+// ("" adds none), and it is the CYFR selected last. An address whose
+// entry came, went or was admitted anew since the selection read it, or
+// whose entry is being forgotten, refuses it.
+func (s *Selection) Commit(ceremony string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var refused error
@@ -328,19 +349,25 @@ func (s *Selection) Commit() error {
 		}
 		cur, held := l.Homes[s.home]
 		switch {
+		case held && cur.Forgetting:
+			refused = errForgetting(s.home)
+			return false
 		case held:
 			if s.approved && cur.Project == "" {
 				cur.Directory = s.rec.Directory
 			}
-			l.Homes[s.home] = cur
 		default:
 			rec := ClientRecord{Project: s.rec.Project, ClientID: s.rec.ClientID, Certificate: s.rec.Certificate}
 			if s.approved {
 				rec.Directory = s.rec.Directory
 			}
-			s.rec.Generation = l.add(s.home, rec).Generation
-			s.bound = s.rec.Generation
+			cur = l.add(s.home, rec)
+			s.rec.Generation, s.bound = cur.Generation, cur.Generation
 		}
+		if ceremony != "" && !slices.Contains(cur.Ceremonies, ceremony) {
+			cur.Ceremonies = append(cur.Ceremonies, ceremony)
+		}
+		l.Homes[s.home] = cur
 		l.Last = s.home
 		return true
 	})
@@ -358,6 +385,41 @@ func (f Homes) EndApproval(home, keep string) error {
 		}
 		c.Directory = ""
 		l.Homes[home] = c
+		return true
+	})
+}
+
+// Forgetting marks the entry at home as being forgotten, and no longer the
+// CYFR selected last: from here nothing opens it, adds it again or renews
+// it, until Forgotten removes it. It answers the entry as it stands, and
+// false where the list holds none at home.
+func (f Homes) Forgetting(home string) (ClientRecord, bool, error) {
+	var rec ClientRecord
+	var held bool
+	err := f.Update(func(l *HomeList) bool {
+		rec, held = l.Homes[home]
+		if !held {
+			return false
+		}
+		rec.Forgetting = true
+		l.Homes[home] = rec
+		if l.Last == home {
+			l.Last = ""
+		}
+		return true
+	})
+	return rec, held && err == nil, err
+}
+
+// Forgotten removes the entry at home, numbered generation, once every
+// store a Forget erases is erased; another entry there is left.
+func (f Homes) Forgotten(home string, generation uint64) error {
+	return f.Update(func(l *HomeList) bool {
+		rec, held := l.Homes[home]
+		if !held || rec.Generation != generation || !rec.Forgetting {
+			return false
+		}
+		l.remove(home)
 		return true
 	})
 }

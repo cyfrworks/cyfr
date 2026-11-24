@@ -95,6 +95,9 @@ func (l *Local) take() *Local {
 type Service struct {
 	// Token is the run token the chooser's requests carry.
 	Token string
+	// ReadToken is the rail's: it reads the list of CYFRs (rail.go) and
+	// authorizes nothing else.
+	ReadToken string
 	// Homes is this user's list of CYFRs.
 	Homes shell.Homes
 	// Record is this user's device key's record.
@@ -170,6 +173,14 @@ type Service struct {
 	// woken is closed and replaced at each pick answered, each step of a
 	// setup and each lock, which a chooser waiting for one wakes on.
 	woken chan struct{}
+	// listed counts the list's changes the rail is shown (changed).
+	listed uint64
+	// erases is each erase asked of main and not yet answered, by its id,
+	// the last given eraseID; unerased names each CYFR whose Forget an
+	// erase failed for.
+	erases   map[uint64]erasing
+	eraseID  uint64
+	unerased map[string]bool
 }
 
 type selection struct {
@@ -203,6 +214,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/bootstrap/") {
 		s.bootstrap(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/rail/") {
+		s.rail(w, r)
 		return
 	}
 	s.mu.Lock()
@@ -775,7 +790,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if run.Err() != nil {
 		return answer{Error: "The app did not get ready to open " + home + ". Connect again."}
 	}
-	if err := sel.Commit(); err != nil {
+	if err := sel.Commit(proposal.Account); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	var work *shell.Work
@@ -786,6 +801,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	s.sh, s.pages = sh, &shell.Server{Shell: sh, Work: work}
 	s.Tell(Message{Type: TypeOpened, Home: home, Attempt: proposal.Attempt})
 	s.committed = proposal
+	s.changed()
 	return s.opened(home)
 }
 
@@ -984,11 +1000,14 @@ func (s *Service) remember(folder string) error {
 		sel, err = s.Homes.SelectLocal(l.Shell.Address, folder)
 	}
 	if err == nil {
-		err = sel.Commit()
+		err = sel.Commit("")
 	}
 	if err != nil {
 		return fmt.Errorf("CYFR is set up in %s, but this computer could not remember it (%v)", folder, err)
 	}
+	s.mu.Lock()
+	s.changed()
+	s.mu.Unlock()
 	return nil
 }
 
@@ -1085,6 +1104,7 @@ func (s *Service) lock(why string, leave bool) {
 	sh, here, letGo := s.sh, s.here, leave || s.ended
 	if leave {
 		s.sh, s.pages, s.here, s.committed = nil, nil, nil, Message{}
+		s.changed()
 	}
 	s.epoch++
 	if s.stop != nil {
@@ -1127,6 +1147,7 @@ func (s *Service) sayLocked() {
 // which end it (End); a line that is not one of main's messages ends it
 // with its refusal.
 func (s *Service) Run(in io.Reader) error {
+	s.resumeForgets()
 	lines := bufio.NewScanner(in)
 	lines.Buffer(make([]byte, 0, 4096), MaxLine+1)
 	for lines.Scan() {
@@ -1149,6 +1170,10 @@ func (s *Service) Run(in io.Reader) error {
 			return nil
 		case TypeFolderPicked:
 			s.FolderPicked(m)
+		case TypeForget:
+			s.Forget(m.Home)
+		case TypeErased:
+			s.Erased(m.ID, m.OK)
 		}
 	}
 	s.End()

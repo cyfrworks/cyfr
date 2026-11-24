@@ -579,7 +579,7 @@ func screenClaim(listen func() (net.Listener, error), dir, home string) (net.Lis
 		entry, err = shell.Homes(filepath.Join(device, "homes.json")).SelectLocal(home, dir)
 	}
 	if err == nil {
-		err = entry.Commit()
+		err = entry.Commit("")
 	}
 	if err != nil {
 		ln.Close()

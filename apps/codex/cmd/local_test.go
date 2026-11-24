@@ -83,7 +83,7 @@ func newLocalApp(t *testing.T, project string) *localApp {
 	l.Work.End()
 	sel, err := a.Homes.SelectLocal(home, project)
 	if err == nil {
-		err = sel.Commit()
+		err = sel.Commit("")
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -954,7 +954,7 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 	device := t.TempDir()
 	clients, err := shell.Homes(filepath.Join(device, "homes.json")).SelectLocal(local.Shell.Address, s.project)
 	if err == nil {
-		err = clients.Commit()
+		err = clients.Commit("")
 	}
 	if err != nil {
 		t.Fatal(err)
