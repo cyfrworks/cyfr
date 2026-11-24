@@ -394,7 +394,9 @@ printf '#!/bin/sh\n[ "$1 $2 $3" = "--search -- %s" ]\n' "$dests/bin/owned" > "$d
 chmod +x "$dests/records/dpkg-query"
 printf 'owned' > "$dests/bin/owned"
 
-for dest in to-app to-cask to-link-to-app; do
+ln -s "$dests/CYFR.app/Contents/Resources" "$dests/to-resources"
+ln -s "../CYFR.app/Contents" "$dests/bin/to-contents"
+for dest in to-app to-cask to-link-to-app ../to-resources/cyfr to-contents/Resources/cyfr to-contents/Resources/absent; do
     run_case "a link into an installer's cyfr ($dest) is refused" fail \
         "refuse_installers_cyfr '$dests/bin/$dest'" \
         "which its own installer updates. Run 'cyfr update' to update it, or set CYFR_INSTALL_DIR to another folder."

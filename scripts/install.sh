@@ -418,15 +418,20 @@ resolve_install_dir() {
     fi
 }
 
-# The path $1 leads to through every link, as far as 40 of them.
+# The path $1 leads to through every link, its folders' and its own, as
+# far as 40 of them: each folder is read where it really is (cd -P), so a
+# link to a folder is followed as cp follows it.
 resolve_path() {
     p="$1"
     n=0
-    while [ -L "$p" ] && [ "$n" -lt 40 ]; do
+    while [ "$n" -lt 40 ]; do
+        d="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || break
+        p="$d/$(basename "$p")"
+        [ -L "$p" ] || break
         t="$(readlink "$p")"
         case "$t" in
             /*) p="$t" ;;
-            *) p="$(dirname "$p")/$t" ;;
+            *) p="$d/$t" ;;
         esac
         n=$((n + 1))
     done
@@ -435,13 +440,13 @@ resolve_path() {
 
 # A cyfr the CYFR app carries, Homebrew's cask installed or a package of
 # the system's owns is its own installer's to replace: one at $1, or a
-# link at $1 that leads to one, is refused before anything is downloaded,
+# link at $1 or among its folders that leads to one or into an app's
+# folder, is refused before anything is downloaded,
 # since copying over a link writes into what it leads to, and a cyfr
 # rewritten inside an app breaks the app's signature. cyfr update brings
 # each to a release through its installer.
 refuse_installers_cyfr() {
     dest="$1"
-    [ -e "$dest" ] || [ -L "$dest" ] || return 0
     real="$(resolve_path "$dest")"
     case "$real" in
         *.app/Contents/*|*/Caskroom/*|/opt/cyfr/*|*/cyfr-desktop/resources/*)
