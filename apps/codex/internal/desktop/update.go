@@ -97,12 +97,16 @@ const maxRecordShown = 256 << 10
 // the work that makes it (generation counts each, so an offer worked out
 // for a CYFR left meanwhile is dropped); the offer whose yes started a
 // run, at most once each; whether that run, this cyfr's child, still
-// runs; why a yes started nothing; whether the record was shown; and the
-// changes the page is shown.
+// runs; why a yes started nothing; whether the record was shown; whether
+// the window closed, after which no offer is worked out until a page
+// reads from its start: a read of the page closing, woken by its close,
+// works out none for the next window to find; and the changes the page is
+// shown.
 type updating struct {
 	offer      *UpdatePlan
 	offers     uint64
 	working    bool
+	closed     bool
 	generation uint64
 	started    uint64
 	running    bool
@@ -177,6 +181,11 @@ func (s *Service) updatePage(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), chooserBound)
 	defer cancel()
+	if req.Seen == 0 {
+		s.mu.Lock()
+		s.update.closed = false
+		s.mu.Unlock()
+	}
 	for {
 		s.mu.Lock()
 		if s.ended {
@@ -205,7 +214,7 @@ func (s *Service) updatePage(w http.ResponseWriter, r *http.Request) {
 // for this computer's own CYFR, its change; it is not bounded by the read
 // that began it.
 func (s *Service) workOffer() {
-	if s.update.offer != nil || s.update.working || s.Offer == nil {
+	if s.update.offer != nil || s.update.working || s.update.closed || s.Offer == nil {
 		return
 	}
 	s.update.working = true
@@ -395,6 +404,7 @@ func (s *Service) UpdateClosed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.update.refused = ""
+	s.update.closed = true
 	if s.update.shown && !s.update.running && (s.UpdateRuns == nil || !s.UpdateRuns(s.recordProjectNow())) {
 		_ = os.Remove(s.UpdateRecord)
 		s.update.shown = false

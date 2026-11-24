@@ -255,6 +255,34 @@ func TestAnOfferIsDroppedAtALockAndAtASelection(t *testing.T) {
 	}
 }
 
+// Once the window closed, no offer is worked out until a page reads from
+// its start: the read of the page closing, woken by its close, works out
+// none, so the next window's offer is worked out as it opens.
+func TestAClosedWindowsLastReadWorksOutNoOffer(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	u := newUpdating(t, a, appPlan)
+	first := a.shown(t, offeredAs(1))
+	a.UpdateClosed()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	a.readUpdate(ctx, a.ReadToken, first.Seq)
+	// The work begins in the read's own hold, before it answers.
+	a.mu.Lock()
+	working, held := a.update.working, a.update.offer != nil
+	a.mu.Unlock()
+	if working || held {
+		t.Fatalf("the closing page's read worked out an offer (working %v, held %v)", working, held)
+	}
+	if got := a.shown(t, offeredAs(2)); got.Offer == nil {
+		t.Fatal("the next window's first read worked out no offer")
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.asked) != 2 {
+		t.Fatalf("offers worked out: %d", len(u.asked))
+	}
+}
+
 // A record waiting is said at ready; the page shows it once, summed up,
 // and the window's close removes it. One the page never showed, and one
 // whose update still runs, stays.
