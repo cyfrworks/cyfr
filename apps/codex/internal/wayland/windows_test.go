@@ -314,12 +314,12 @@ func TestWindows_ThatCannotBeRead(t *testing.T) {
 	}
 }
 
-// deafCompositor lists the windows' manager, then opens and closes windows
-// at the list and reads nothing more: each closed window's destroy fills
-// its socket, until the list's reader waits on a write. stalled is closed
-// once the compositor's own writes no longer go through, as the reader no
-// longer reads: it waits on that write.
-func deafCompositor(t *testing.T) (socket string, stalled <-chan struct{}) {
+// deafCompositor lists the windows' manager and reads nothing more. With
+// windows, it then opens and closes windows at the list: each closed
+// window's destroy fills its socket, until the list's reader waits on a
+// write; stalled is closed once the compositor's own writes no longer go
+// through, as the reader no longer reads: it waits on that write.
+func deafCompositor(t *testing.T, windows bool) (socket string, stalled <-chan struct{}) {
 	t.Helper()
 	socket = filepath.Join(t.TempDir(), "wayland-0")
 	ln, err := net.Listen("unix", socket)
@@ -352,7 +352,7 @@ func deafCompositor(t *testing.T) (socket string, stalled <-chan struct{}) {
 		_, _ = conn.Write(Words(windowsBound, 12<<16|CallbackDone, 1))
 		// Windows opened and closed, each closed one's destroy asked of a
 		// compositor that reads no more.
-		for h := uint32(a); ; h++ {
+		for h := uint32(a); windows; h++ {
 			_ = conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 			if _, err := conn.Write(append(Words(windowsManager, 12<<16|managerToplevel, h), Words(h, 8<<16|handleClosed)...)); err != nil {
 				break
@@ -368,7 +368,7 @@ func deafCompositor(t *testing.T) (socket string, stalled <-chan struct{}) {
 // socket full of the list's requests, the list is marked at once all the
 // same, and gives up within its bound, which confirms nothing.
 func TestWindows_ACompositorThatDoesNotReadHoldsNothing(t *testing.T) {
-	socket, _ := deafCompositor(t)
+	socket, _ := deafCompositor(t, true)
 	t.Setenv("WAYLAND_DISPLAY", socket)
 	w := ListWindows(t.Context())
 	defer w.Close()
@@ -390,9 +390,10 @@ func TestWindows_ACompositorThatDoesNotReadHoldsNothing(t *testing.T) {
 }
 
 // A hide's round trip that waits its turn behind a slow write still ends
-// at the hide's deadline: the turn and the write are on its road.
+// at the hide's deadline, and so does one whose own write is slow: the
+// turn and the write are on its road.
 func TestWindows_AHideQueuedBehindASlowWriteEndsAtItsDeadline(t *testing.T) {
-	socket, stalled := deafCompositor(t)
+	socket, stalled := deafCompositor(t, true)
 	t.Setenv("WAYLAND_DISPLAY", socket)
 	w := ListWindows(t.Context())
 	defer w.Close()
@@ -444,5 +445,31 @@ func TestWindows_OverlappingHidesNumberTheirRoundTripsInOrder(t *testing.T) {
 			}
 			t.Fatalf("an overlapping hide was not confirmed: %v", err)
 		}
+	}
+}
+
+func TestWindows_AHideWhoseWriteIsSlowEndsAtItsDeadline(t *testing.T) {
+	socket, _ := deafCompositor(t, false)
+	t.Setenv("WAYLAND_DISPLAY", socket)
+	w := ListWindows(t.Context())
+	defer w.Close()
+	// The socket filled to the brim, in a turn of the list's own, which the
+	// compositor never reads: the next write waits on it.
+	w.turn <- struct{}{}
+	for {
+		_ = w.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+		if err := w.conn.Send(Display, DisplaySync, Words(firstSync)); err != nil {
+			break
+		}
+	}
+	<-w.turn
+	const within = 300 * time.Millisecond
+	mark := w.Mark(within)
+	err := mark.Closed()
+	if late := time.Since(mark.deadline); late > 150*time.Millisecond {
+		t.Fatalf("a hide whose write is slow ended %v after its deadline (%v)", late, err)
+	}
+	if err == nil {
+		t.Fatal("a hide was confirmed by a compositor that does not read")
 	}
 }
