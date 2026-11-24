@@ -60,11 +60,13 @@ type starting struct {
 
 type configStep struct{ category, value, words string }
 
-// prompt is one session/prompt the driver wrote: its request id, and the
-// post it carried.
+// prompt is one session/prompt the driver wrote: its request id, the post
+// it carried, and the instructions it led with, recorded as handed only
+// once the program answered it (instructions.go).
 type prompt struct {
-	id   int
-	post string
+	id     int
+	post   string
+	handed string
 }
 
 // nativeTurn is a native turn under way: the work of its first post, its
@@ -98,8 +100,9 @@ type driver struct {
 	harnessCommand []string
 	c              *brainwire.Conn
 	home           string
-	// socketName is the tool socket's name, and stub CYFR's MCP server.
-	socketName, stub string
+	// socketName is the tool socket's name, stub CYFR's MCP server, and
+	// server the name it takes in this start's session (relay.go).
+	socketName, stub, server string
 	// answerWait and listWait are the driver's bounds (the constants).
 	answerWait, listWait time.Duration
 
@@ -252,6 +255,11 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if err != nil {
 		return &brainwire.Fatal{Status: 1, Reason: "the driver has no working folder: " + err.Error()}
 	}
+	servers, err := d.personsServers()
+	if err != nil {
+		return &brainwire.Fatal{Status: 1, Reason: d.p.title + " did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own: " + err.Error()}
+	}
+	d.server = serverFor(servers)
 	if err := d.listen(); err != nil {
 		return &brainwire.Fatal{Status: 1, Reason: "CYFR's tool socket could not be bound: " + err.Error()}
 	}
@@ -277,7 +285,7 @@ func (d *driver) ask(s *starting, stage, method string, params any) error {
 // same at every start, and the instructions where the program takes them.
 func (d *driver) sessionParams(session string) map[string]any {
 	params := map[string]any{"cwd": d.cwd, "mcpServers": []any{map[string]any{
-		"name": relayServer, "command": d.stub, "args": []string{"--socket", d.socketName}, "env": []any{},
+		"name": d.server, "command": d.stub, "args": []string{"--socket", d.socketName}, "env": []any{},
 	}}}
 	if session != "" {
 		params["sessionId"] = session
@@ -363,11 +371,8 @@ func (d *driver) writePrompt(id string, blocks []brainwire.Block) (*prompt, stri
 	if err != nil {
 		return nil, "", err
 	}
-	if handing != "" {
-		recordHanded(d.home, d.session, handing)
-		d.handing = ""
-	}
-	p := &prompt{id: d.requests, post: id}
+	d.handing = ""
+	p := &prompt{id: d.requests, post: id, handed: handing}
 	d.prompts[key] = p
 	d.turn.open = append(d.turn.open, p)
 	d.turn.posts = append(d.turn.posts, id)
@@ -471,9 +476,9 @@ func (d *driver) startStep(s *starting, m rpc) error {
 			switch {
 			case m.Error.Code == d.p.signedOut:
 				return d.startedSignedOut(s)
-			case s.stage == stageSession && s.resume && d.p.resumeNotFound(m.Error):
+			case s.stage == stageSession && s.resume && d.p.resumeNotFound(m.Error, s.session):
 				return d.ask(s, stageLoad, "session/load", d.sessionParams(s.session))
-			case s.stage == stageLoad && d.p.loadNotFound(m.Error):
+			case s.stage == stageLoad && d.p.loadNotFound(m.Error, s.session):
 				// The folder holds no such session: nothing ran.
 				d.starting = nil
 				d.Close()
@@ -666,6 +671,15 @@ func (d *driver) said() error {
 // one of its turn is open was steered into, and the turn goes on; the last
 // one's answer ends the native turn.
 func (d *driver) answered(p *prompt, m rpc) error {
+	if p.handed != "" {
+		// Taken when the program answered the prompt; otherwise the next
+		// prompt hands them again.
+		if m.Error == nil {
+			recordHanded(d.home, d.session, p.handed)
+		} else {
+			d.handing = p.handed
+		}
+	}
 	t := d.turn
 	if t == nil {
 		return nil
@@ -829,6 +843,7 @@ func (d *driver) Close() {
 		d.h = nil
 	}
 	d.closeSocket()
+	d.server = ""
 	d.starting = nil
 	d.session = ""
 	d.signedOut = false

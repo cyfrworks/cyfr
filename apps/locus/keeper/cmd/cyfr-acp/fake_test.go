@@ -82,16 +82,28 @@ import (
 //	execute   calls CYFR's `files` from inside its own tool `execute`
 //	retry     says it retries its provider twice, then replies
 //
+//	executes  calls CYFR's `files` three times from inside one `execute`
+//
 // FAKE_DELETE_FAIL refuses a delete, FAKE_DELETE_KEEPS answers one {} and
-// keeps the session, FAKE_STEER_NO_TURN answers every steer
-// `promptRequired`, and FAKE_CONFIRM_LATE answers a steer only after the
-// turn's prompt.
+// keeps the session, FAKE_NOTFOUND_OTHER answers a load with the not-found
+// of another session, FAKE_STEER_NO_TURN answers every steer
+// `promptRequired`, FAKE_CONFIRM_LATE answers a steer only after the
+// turn's prompt, and FAKE_SILENT_SELECT and FAKE_SILENT_CLOSE never answer
+// a model's selection or a close.
+//
+// Either way, run with its program's own words for its MCP servers
+// (Antigravity's `mcp list`, OpenCode's `debug config --standalone`) it
+// prints the servers FAKE_SERVERS names, a comma between each, as the
+// program prints them, and FAKE_SERVERS_FAIL prints what is no listing.
 const fakeEnv = "CYFR_FAKE_ACP"
 
 const stderrCanary = "FAKE-STDERR-CANARY Antigravity writes this to its stderr"
 
 func fakeACP() int {
 	args := os.Args[1:]
+	if words := " " + strings.Join(args, " "); strings.HasSuffix(words, " mcp list") || strings.HasSuffix(words, " debug config --standalone") {
+		return fakeServers(strings.HasSuffix(words, " debug config --standalone"))
+	}
 	if len(args) == 0 || args[len(args)-1] != "acp" {
 		fmt.Fprintln(os.Stderr, "fake-acp: not started as acp:", args)
 		return 2
@@ -235,7 +247,7 @@ func fakeACP() int {
 		for _, s := range servers {
 			entry, _ := s.(map[string]any)
 			argv, _ := entry["args"].([]any)
-			if entry["name"] == "cyfr" && len(argv) == 2 {
+			if len(argv) == 2 && argv[0] == "--socket" {
 				state.socket = fmt.Sprint(argv[1])
 			}
 		}
@@ -299,6 +311,20 @@ func fakeACP() int {
 
 	runTurn := func(words string, params map[string]any) {
 		switch {
+		case oc && strings.Contains(words, "executes"):
+			// Three calls of CYFR's, one after another, inside one execute.
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_execs", "name": "execute", "title": "execute", "status": "in_progress",
+				"kind": "other", "rawInput": map[string]any{"code": "for (const n of [1, 2, 3]) await tools.cyfr.files({n})"}})
+			answers := []string{}
+			for n := 1; n <= 3; n++ {
+				var result toolsock.Result
+				if toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(fmt.Sprintf(`{"n":%d}`, n))}, &result) != nil {
+					result.Text = "unreachable"
+				}
+				answers = append(answers, result.Text)
+			}
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call_execs", "status": "completed"})
+			reply("answered " + strings.Join(answers, ","))
 		case oc && strings.Contains(words, "execute"):
 			// OpenCode calls an MCP server's tool only from JavaScript inside
 			// its own tool `execute`, which it shows with its code.
@@ -611,6 +637,8 @@ func fakeACP() int {
 			case m.Method == "session/load":
 				id := str("sessionId")
 				switch {
+				case os.Getenv("FAKE_NOTFOUND_OTHER") != "":
+					notFound(m.ID, "ses_"+strings.Repeat("z", 26))
 				case os.Getenv("FAKE_LOAD_OTHER") != "":
 					failWith(m.ID, -32603, "Internal error")
 				case !exists(id):
@@ -626,6 +654,8 @@ func fakeACP() int {
 					update(map[string]any{"sessionUpdate": "session_info_update", "title": "a title"})
 					listSoon(m.Params)
 				}
+			case m.Method == "session/set_config_option" && os.Getenv("FAKE_SILENT_SELECT") != "" && str("configId") == "model":
+			case m.Method == "session/close" && os.Getenv("FAKE_SILENT_CLOSE") != "":
 			case m.Method == "session/set_config_option":
 				id, value := str("configId"), str("value")
 				state.Lock()
@@ -766,4 +796,38 @@ func geminiHome(home string) string {
 		return dir
 	}
 	return filepath.Join(home, ".gemini")
+}
+
+// fakeServers prints the servers FAKE_SERVERS names as the program lists
+// its own: OpenCode's configuration documents (`debug config`), or
+// Antigravity's table (`mcp list`).
+func fakeServers(openCode bool) int {
+	if os.Getenv("FAKE_SERVERS_FAIL") != "" {
+		fmt.Println("something that is no listing")
+		return 0
+	}
+	var names []string
+	if listed := os.Getenv("FAKE_SERVERS"); listed != "" {
+		names = strings.Split(listed, ",")
+	}
+	if openCode {
+		servers := map[string]any{}
+		for _, n := range names {
+			servers[n] = map[string]any{"type": "local", "command": []string{"x"}, "environment": map[string]any{"TOKEN": "***"}}
+		}
+		docs := []any{map[string]any{"type": "document", "path": "/home/x/.config/opencode/opencode.json", "info": map[string]any{"mcp": map[string]any{"servers": servers}}},
+			map[string]any{"type": "directory", "path": "/home/x/.config/opencode"}}
+		line, _ := json.MarshalIndent(docs, "", "  ")
+		fmt.Println(string(line))
+		return 0
+	}
+	if len(names) == 0 {
+		fmt.Println("No MCP servers configured.")
+		return 0
+	}
+	fmt.Println("NAME  TYPE   STATUS   COMMAND/URL")
+	for _, n := range names {
+		fmt.Printf("%s  stdio  enabled  node /x\n", n)
+	}
+	return 0
 }

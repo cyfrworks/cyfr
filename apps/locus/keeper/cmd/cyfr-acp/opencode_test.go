@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
@@ -262,5 +263,142 @@ func TestOpenCodeRetryNoticesAreNotWork(t *testing.T) {
 	}
 	if strings.Contains(s.output(), "RETRY-CANARY") || saidOf(got) != "reached it" {
 		t.Fatalf("nothing of a retry notice reaches the wire: %v", got)
+	}
+}
+
+// CYFR's server takes no name of a server of the person's own, as the
+// program itself lists them: `cyfr`, or else the first of `cyfr-2`,
+// `cyfr-3`… that no listed server takes, a name another begins with as a
+// tool prefix (`cyfr_x`) among them; a program that does not list them
+// starts nothing.
+func TestTheRelayTakesNoNameOfThePersonsServers(t *testing.T) {
+	for _, p := range []*profile{opencode, antigravity} {
+		for listed, want := range map[string]string{"": "cyfr", "cyfr,mine": "cyfr-2", "cyfr,cyfr-2": "cyfr-3", "mine,cyfr_x": "cyfr-2"} {
+			t.Run(p.title+"/"+listed, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				t.Setenv("GEMINI_HOME", "")
+				t.Setenv(fakeEnv, "1")
+				if p == opencode {
+					t.Setenv("FAKE_OPENCODE", "1")
+				}
+				t.Setenv("FAKE_SERVERS", listed)
+				s := startDriverWith(t, p, home)
+				s.expect("hello")
+				s.send(startCommand("", map[string]any{}, filesTool))
+				s.expect("started")
+				servers := sessionGiven(s, "stp_params")["session"].(map[string]any)["mcpServers"].([]any)
+				if len(servers) != 1 || servers[0].(map[string]any)["name"] != want {
+					t.Fatalf("CYFR's server is named %s beside %q: %v", want, listed, servers)
+				}
+			})
+		}
+		t.Run(p.title+"/unlisted", func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("GEMINI_HOME", "")
+			t.Setenv(fakeEnv, "1")
+			if p == opencode {
+				t.Setenv("FAKE_OPENCODE", "1")
+			}
+			t.Setenv("FAKE_SERVERS_FAIL", "1")
+			s := startDriverWith(t, p, home)
+			s.expect("hello")
+			s.send(startCommand("", map[string]any{}, filesTool))
+			if status := s.exit(); status == 0 || !strings.Contains(s.stderr.String(), "did not list its MCP servers") {
+				t.Fatalf("a start with the person's servers unknown ends, saying why: %d %s", status, s.stderr.String())
+			}
+		})
+	}
+}
+
+// Each request of a listing has a bound of its own: a selection the
+// program never answers ends the efforts' reading, and a close it never
+// answers still leaves the listing session deleted.
+func TestAListingBoundsEachRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("FAKE_OPENCODE", "1")
+	t.Setenv("FAKE_SILENT_SELECT", "1")
+	t.Setenv("FAKE_SILENT_CLOSE", "1")
+	s := startDriverWith(t, opencode, home, func(d *driver) { d.answerWait = 500 * time.Millisecond })
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "mdl_1"})
+	listing := s.expect("models")
+	if fmt.Sprint(listing["models"]) != "[map[efforts:[] id:opencode/big-pickle name:Opencode/big-pickle] map[efforts:[] id:probe/think name:Probe/think]]" {
+		t.Fatalf("the models are listed, their efforts unread: %v", listing)
+	}
+	if store := strings.TrimSpace(openCodeStore(home)); store != "" {
+		t.Fatalf("the listing session is deleted though its close was never answered: %q", store)
+	}
+}
+
+// The record that a session has its instructions is written once the
+// program answered the prompt that carried them: a program that ended
+// before it did is handed them again in the session's next prompt.
+func TestInstructionsAreRecordedOnceTheProgramTookThem(t *testing.T) {
+	s := startOpenCode(t, "")
+	session := freshOpenCode(s, map[string]any{})
+	s.send(map[string]any{"t": "post", "id": "stp_die", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "die"}}})
+	s.expect("accepted")
+	s.exit()
+	r := startOpenCode(t, s.home)
+	if e := resumed(r, session, filesTool); e["t"] != "started" {
+		t.Fatalf("the session goes on: %v", e)
+	}
+	blocks := sessionGiven(r, "stp_params")["prompt"].(map[string]any)["prompt"].([]any)
+	if len(blocks) != 2 || blocks[0].(map[string]any)["text"] != replacingWords+"be brief" {
+		t.Fatalf("the instructions the program never took lead the next prompt: %v", blocks)
+	}
+	again := sessionGiven(r, "stp_params_2")["prompt"].(map[string]any)["prompt"].([]any)
+	if len(again) != 1 {
+		t.Fatalf("taken, they lead no later prompt: %v", again)
+	}
+}
+
+// A forget is confirmed only by the not-found of the session asked about,
+// and only an id of OpenCode's own form, `ses_` and 26 letters and digits,
+// names one.
+func TestOpenCodeForgetNeedsItsOwnSessionsNotFound(t *testing.T) {
+	t.Setenv("FAKE_DELETE_KEEPS", "1")
+	t.Setenv("FAKE_NOTFOUND_OTHER", "1")
+	s := startOpenCode(t, "")
+	s.expect("hello")
+	for _, id := range []string{"ses_" + strings.Repeat("a", 26), "ses_" + strings.Repeat("a", 25), "ses_" + strings.Repeat("a", 27), "ses_" + strings.Repeat("a", 25) + "-"} {
+		s.send(map[string]any{"t": "forget", "id": "obx_1", "session": id})
+		if e := s.expect("refused"); e["id"] != "obx_1" {
+			t.Fatalf("%s: no forget without its own not-found, nor of an id of another form: %v", id, e)
+		}
+	}
+}
+
+// Nothing of CYFR's calls is kept to match where the program never shows
+// one in a form the driver can match: after each answer, none is held.
+func TestOpenCodeHoldsNothingOfItsCallsAfterEach(t *testing.T) {
+	s := startOpenCode(t, "")
+	freshOpenCode(s, map[string]any{})
+	postText(s, "stp_1", "trn_1", "executes")
+	for n := 0; n < 3; n++ {
+		got := s.until("ask")
+		s.send(map[string]any{"t": "answer", "id": fmt.Sprintf("ans_%d", n), "ask": got[len(got)-1]["ask"], "content": "x", "is_error": false})
+		s.expect("accepted")
+		if sizes := inLoop(s, held); sizes[1] != 0 || sizes[2] != 0 {
+			t.Fatalf("call %d: nothing of an answered call is held: %v", n+1, sizes)
+		}
+	}
+	s.until("idle")
+}
+
+// A provider's refusal of the credential OpenCode holds for it says so, and
+// says to connect that provider again on the program's terminal.
+func TestOpenCodeProvidersRefusalNamesItsReconnection(t *testing.T) {
+	s := startOpenCode(t, "")
+	freshOpenCode(s, map[string]any{})
+	postText(s, "stp_1", "trn_1", "rpcerr:-32000:Authentication required: provider authentication required")
+	errs := ofType(s.until("idle"), "error")
+	if len(errs) != 1 || errs[0]["type"] != "authentication" ||
+		errs[0]["message"] != "OpenCode's provider refused the credential OpenCode holds for it; connect that provider again in OpenCode, on the program's terminal opened with the words `auth login`." {
+		t.Fatalf("the provider's refusal and its fix: %v", errs)
 	}
 }

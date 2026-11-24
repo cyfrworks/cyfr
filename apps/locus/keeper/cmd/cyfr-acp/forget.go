@@ -82,7 +82,7 @@ func (d *driver) deleteIn(o *oneOff, session string) error {
 		cwd = d.home
 	}
 	answer, err = o.call("session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}})
-	if err != nil || answer.Error == nil || !d.p.loadNotFound(answer.Error) {
+	if err != nil || answer.Error == nil || !d.p.loadNotFound(answer.Error, session) {
 		return errors.New(d.p.title + " did not show the session gone after deleting it, so it may still be there")
 	}
 	return nil

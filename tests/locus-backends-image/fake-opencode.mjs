@@ -8,6 +8,9 @@
 // store of its own in its HOME, the kept folder, as OpenCode keeps them in
 // its one database.
 //
+// - Run with `debug config --standalone` it prints its configuration
+//   documents as OpenCode does, the person's own server `cyfr` under
+//   `mcp.servers` in the home's, its secret value masked.
 // - It refuses to start without the one argument a session takes, `acp`.
 // - `initialize` answers OpenCode's protocol 1, its version and
 //   capabilities (load, resume, close, delete and list of a session) and
@@ -26,8 +29,8 @@
 // - A prompt is a turn, by the words of its last text block: `hello` runs
 //   its own `read` and replies naming the session, the request that opened
 //   it in this process, its config, the tools its servers offered, the
-//   prompt's text blocks with the first's opening words, and how many
-//   prompts the session held before; `read` calls CYFR's `files` from
+//   prompt's text blocks whole, in order, as the session keeps them, and
+//   how many prompts the session held before; `read` calls CYFR's `files` from
 //   inside its own tool `execute`, as OpenCode calls every MCP tool, and
 //   replies with the answer; `slow` streams a first part and waits for a
 //   steer. A second prompt while one runs is refused -32603; the steer is
@@ -46,6 +49,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+if (process.argv.slice(2).join(' ') === 'debug config --standalone') {
+  process.stdout.write(JSON.stringify([
+    { type: 'document', path: `${process.env.HOME}/.config/opencode/opencode.json`,
+      info: { mcp: { servers: { cyfr: { type: 'local', command: ['node', 'theirs.mjs'], environment: { TOKEN: '***' } } } } } },
+    { type: 'directory', path: `${process.env.HOME}/.config/opencode` },
+  ], null, 2) + '\n');
+  process.exit(0);
+}
 if (process.argv.slice(2).join(' ') !== 'acp') {
   process.stderr.write(`fake-opencode: started with ${process.argv.slice(2).join(' ')}, not acp\n`);
   process.exit(2);
@@ -168,7 +179,7 @@ async function turn(words, texts, earlier) {
     fs.readFileSync(path.join(home, 'notes.md'), 'utf8');
     end();
     reply(`Hello from the fake OpenCode: session ${session.id}, opened by ${openedBy}, model ${current.model}, effort ${current.effort}, mode ${current.mode}, `
-      + `tools ${offered().join(',')}, blocks ${texts.length}, first "${texts[0].slice(0, 40)}", earlier ${earlier}.`);
+      + `tools ${offered().join(',')}, earlier ${earlier}, texts ${JSON.stringify(session.history[session.history.length - 1].texts)}.`);
   } else if (words.includes('read')) {
     const server = [...servers.entries()].find(([, s]) => s.tools.some((t) => t.name === 'files'));
     if (!server) return reply('No files tool was offered.');
@@ -246,7 +257,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const texts = textsOf(p.prompt);
       const words = texts[texts.length - 1] ?? '';
       const earlier = session.history.length;
-      session.history.push({ user: words, agent: '' });
+      session.history.push({ user: words, texts, agent: '' });
       save();
       active = message.id;
       turns = turns.then(() => turn(words, texts, earlier));

@@ -25,7 +25,7 @@
 //
 // CYFR's tools reach the program through CYFR's own MCP server, the stub
 // (`cyfr-stub --socket <name>`), named in every session the driver makes or
-// goes on with. The stub asks the driver's tool socket (internal/toolsock)
+// goes on with, under a name no server of the person's has (relay.go). The stub asks the driver's tool socket (internal/toolsock)
 // for the start's tools and passes each call to it; the driver shows each
 // call as an `ask`, holds it, and its `answer` is the call's result, so
 // every call of CYFR's tools passes CYFR's gate whatever the program's own

@@ -335,6 +335,9 @@ func errorKind(p *profile, e *rpcError) string {
 func errorSentence(p *profile, kind string) string {
 	switch kind {
 	case "authentication":
+		if p.refusedSentence != "" {
+			return p.refusedSentence
+		}
 		return p.title + "'s sign-in was refused; sign it in again on the program's terminal."
 	case "rate_limited":
 		return p.title + " reported a usage or rate limit; " + brainwire.UntilWords(0) + "."

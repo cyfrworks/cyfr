@@ -43,9 +43,16 @@ type profile struct {
 	// when it has no sign-in.
 	signedOut int
 	// resumeNotFound and loadNotFound are the program's own answers for a
-	// session its folder lacks: a resume that says so is followed by a
-	// load, and only the load's answer reads as `gone`.
-	resumeNotFound, loadNotFound func(e *rpcError) bool
+	// session its folder lacks, each naming the session asked about, whole:
+	// a resume that says so is followed by a load, and only the load's
+	// answer reads as `gone`.
+	resumeNotFound, loadNotFound func(e *rpcError, session string) bool
+	// serverList are the words after the row's command with which the
+	// program lists its MCP servers, the person's own, and serverNames
+	// reads their names from what it prints, or says it listed none it can
+	// read. CYFR's server takes a name none of them has (relay.go).
+	serverList  []string
+	serverNames func(out []byte) ([]string, bool)
 	// appends reads initialize's agentCapabilities: whether the program
 	// takes instructions for one process in a place of its own, which
 	// instructionsMeta builds as a session's `_meta`. Otherwise the
@@ -55,7 +62,9 @@ type profile struct {
 	// callArguments are the argument objects a tool_call's rawInput may
 	// show a call with: a call of CYFR's is matched to one of them by the
 	// arguments its socket call carries (driver.go's ownUpdate), and to
-	// nothing the program names or titles.
+	// nothing the program names or titles. Nil where the program never
+	// shows a call of CYFR's as a tool call of its own: then nothing of a
+	// socket call is kept to match.
 	callArguments func(rawInput json.RawMessage) []json.RawMessage
 	// stubKinds are the ACP kinds the program gives a call that reaches a
 	// stub server, CYFR's among them, read from the update's kind field: a
@@ -91,8 +100,10 @@ type profile struct {
 	// namesTools says a tool_call's `name` is the program's own name of the
 	// tool, shown for its call where it is a bounded plain name.
 	namesTools bool
-	// signedOutSentence refuses a post and a listing while signed out.
-	signedOutSentence string
+	// signedOutSentence refuses a post and a listing while signed out, and
+	// refusedSentence, where it is set, says a prompt's authentication
+	// error in the program's own terms.
+	signedOutSentence, refusedSentence string
 	// access is the choices the driver lists, each with its native mode.
 	access []brainwire.Access[nativeAccess]
 }
@@ -118,9 +129,6 @@ const (
 // profiles are the programs the driver runs as, by the name it runs under.
 var profiles = map[string]*profile{antigravity.name: antigravity, opencode.name: opencode}
 
-// relayServer is the name CYFR's server takes in every session.
-const relayServer = "cyfr"
-
 // antigravity is Antigravity's standalone CLI, `agy acp`, as probed at
 // 1.5.16. A session's files are its brain folder, its database and its
 // annotations, each named by the session's id. Each session's title and
@@ -137,12 +145,19 @@ var antigravity = &profile{
 	signedOut:  -32000,
 	// Seen in Antigravity 1.5.16: "Failed to read session <id>; retry, or
 	// load it with session/load" (-32603) for a resume, and "Session not
-	// found: <id>" (-32002) for a load. Only the load's code is read as
+	// found: <id>" (-32002) for a load. Only the load's answer is read as
 	// gone: -32603 is the program's code for any internal failure.
-	resumeNotFound: func(e *rpcError) bool {
-		return e.Code == -32603 && strings.HasPrefix(e.Message, "Failed to read session")
+	resumeNotFound: func(e *rpcError, session string) bool {
+		return e.Code == -32603 && e.Message == "Failed to read session "+session+"; retry, or load it with session/load"
 	},
-	loadNotFound: func(e *rpcError) bool { return e.Code == -32002 },
+	loadNotFound: func(e *rpcError, session string) bool {
+		return e.Code == -32002 && e.Message == "Session not found: "+session
+	},
+	// Seen in Antigravity 1.5.16: `agy mcp list` prints "No MCP servers
+	// configured." or a table whose first column, under NAME, is each
+	// server's name.
+	serverList:  []string{"mcp", "list"},
+	serverNames: agyServers,
 	appends: func(capabilities json.RawMessage) bool {
 		var c struct {
 			Meta struct {
@@ -264,7 +279,13 @@ var opencode = &profile{
 	// parameter's, so its words are read too.
 	resumeNotFound: openCodeNotFound,
 	loadNotFound:   openCodeNotFound,
-	callArguments:  func(json.RawMessage) []json.RawMessage { return nil },
+	// Seen in OpenCode 2.4.1: `mcp list` and its server's MCP listing name
+	// no server its configuration holds; `debug config --standalone`
+	// prints each configuration document it reads, the folder's and the
+	// home's, each server under `mcp.servers` by name, every secret value
+	// masked, and leaves no server of its own running.
+	serverList:  []string{"debug", "config", "--standalone"},
+	serverNames: openCodeServers,
 	// No call reaches a stub server but through `execute`, a tool of its
 	// own: every call it shows is its own, shown while it runs.
 	stubKinds:  map[string]bool{},
@@ -281,16 +302,61 @@ var opencode = &profile{
 	counts: map[string][]string{"input_tokens": {"inputTokens"}, "output_tokens": {"outputTokens", "thoughtTokens"},
 		"cache_read_tokens": {"cachedReadTokens"}, "cache_write_tokens": {}},
 	selectEfforts:     true,
-	signedOutSentence: "OpenCode refused its provider's sign-in; connect the provider again on the program's terminal, opened with the words `auth login`.",
+	signedOutSentence: "OpenCode has no provider it can use; connect one on the program's terminal, opened with the words `auth login`.",
+	// A provider's 401 is that provider refusing the credential OpenCode
+	// holds for it.
+	refusedSentence: "OpenCode's provider refused the credential OpenCode holds for it; connect that provider again in OpenCode, on the program's terminal opened with the words `auth login`.",
 	access: []brainwire.Access[nativeAccess]{
 		{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"}, Native: nativeAccess{mode: "build"}},
 	},
 }
 
-// openCodeSession is the form of OpenCode's session ids, `ses_` and 26
-// letters and digits as 2.4.1 names them, bounded a little wider.
-var openCodeSession = regexp.MustCompile(`^ses_[0-9A-Za-z]{20,40}$`)
+// openCodeSession is the form of OpenCode's session ids: `ses_` and 26
+// letters and digits, as every id 2.4.1 named in its probe is.
+var openCodeSession = regexp.MustCompile(`^ses_[0-9A-Za-z]{26}$`)
 
-func openCodeNotFound(e *rpcError) bool {
-	return e.Code == -32602 && strings.HasPrefix(e.Message, "Invalid params: session not found")
+func openCodeNotFound(e *rpcError, session string) bool {
+	return e.Code == -32602 && e.Message == "Invalid params: session not found: "+session
+}
+
+// openCodeServers are the servers' names under `mcp.servers` in each
+// configuration document `debug config` prints.
+func openCodeServers(out []byte) ([]string, bool) {
+	var sources []struct {
+		Type string `json:"type"`
+		Info struct {
+			MCP struct {
+				Servers map[string]json.RawMessage `json:"servers"`
+			} `json:"mcp"`
+		} `json:"info"`
+	}
+	if json.Unmarshal(out, &sources) != nil || sources == nil {
+		return nil, false
+	}
+	names := []string{}
+	for _, s := range sources {
+		for name := range s.Info.MCP.Servers {
+			names = append(names, name)
+		}
+	}
+	return names, true
+}
+
+// agyServers are the names in the first column of `agy mcp list`'s table.
+func agyServers(out []byte) ([]string, bool) {
+	text := strings.TrimSpace(string(out))
+	if text == "No MCP servers configured." {
+		return []string{}, true
+	}
+	lines := strings.Split(text, "\n")
+	if fields := strings.Fields(lines[0]); len(fields) == 0 || fields[0] != "NAME" {
+		return nil, false
+	}
+	names := []string{}
+	for _, line := range lines[1:] {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			names = append(names, fields[0])
+		}
+	}
+	return names, true
 }

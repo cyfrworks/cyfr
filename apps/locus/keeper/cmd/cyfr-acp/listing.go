@@ -55,9 +55,10 @@ func reached(err error, what string) error {
 // program's or the system's words, since a refusal carries them to the
 // wire.
 type oneOff struct {
-	p        *brainwire.Process
-	n        int
-	deadline <-chan time.Time
+	p *brainwire.Process
+	n int
+	// wait bounds each request's answer, each its own.
+	wait time.Duration
 }
 
 func (d *driver) openOneOff() (*oneOff, error) {
@@ -65,7 +66,7 @@ func (d *driver) openOneOff() (*oneOff, error) {
 	if err != nil {
 		return nil, err
 	}
-	o := &oneOff{p: p, deadline: time.After(d.answerWait)}
+	o := &oneOff{p: p, wait: d.answerWait}
 	answer, err := o.call("initialize", initializeParams())
 	if err == nil {
 		var init initialized
@@ -84,10 +85,11 @@ func (d *driver) openOneOff() (*oneOff, error) {
 	return o, nil
 }
 
-// call writes one request and reads to its answer; the program's requests
-// meanwhile are answered as a session's are, and its notifications are no
-// one's.
+// call writes one request and reads to its answer, within a bound of its
+// own; the program's requests meanwhile are answered as a session's are,
+// and its notifications are no one's.
 func (o *oneOff) call(method string, params any) (rpc, error) {
+	deadline := time.After(o.wait)
 	o.n++
 	if err := o.p.Write(request(o.n, method, params)); err != nil {
 		return rpc{}, errors.New("it ended before it was asked")
@@ -112,7 +114,7 @@ func (o *oneOff) call(method string, params any) (rpc, error) {
 			}
 		case <-o.p.Done:
 			return rpc{}, errors.New("it ended before it answered")
-		case <-o.deadline:
+		case <-deadline:
 			return rpc{}, errors.New("it did not answer in time")
 		}
 	}

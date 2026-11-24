@@ -22,9 +22,11 @@ exactly its members.
   with those efforts, the one access the driver honours and that the
   program is signed in.
 - A start makes a session of OpenCode's own id form with CYFR's server,
-  its model and effort set as the session's config options, and `started`
-  names it once the stub has listed the start's tools; the start's
-  instructions lead the session's first prompt; a post is a prompt,
+  named `cyfr-2` since the program lists a server of the person's own
+  named `cyfr`, its model and effort set as the session's config options,
+  and `started` names it once the stub has listed the start's tools; the
+  session keeps the start's instructions whole and then the job, in that
+  order, in its first prompt; a post is a prompt,
   streamed as `text` and said whole, the program's own tool shown by its
   name, its usage the prompt's under the session's model with its output
   and thoughts together, `partial`, and its `idle` naming the post; the
@@ -76,6 +78,10 @@ OWNER = owner_of("brain-opencode")
 HOME = "mcp_brain-opencode"
 FAKE = "fake-opencode.mjs"
 PROGRAM = {"name": "brain", "command": f"cyfr-opencode node /probe/{FAKE}", "env": {}, "home": "kept"}
+# The person's own server `cyfr`, as fake-opencode.mjs lists it, so CYFR's
+# takes the next name.
+RELAY = "cyfr-2"
+PREAMBLE = "Your current instructions, in place of any given earlier in this session:\n"
 CANARIES = ("FAKE-STDERR-CANARY", "FAKE-FOLDER-CANARY", "FAKE-SIGNIN-CANARY")
 FILES = {
     "name": "files",
@@ -210,10 +216,11 @@ def main():
         streamed = "".join(e["delta"] for e in turn if e["t"] == "text")
         said = [e["text"] for e in turn if e["t"] == "said"]
         expect(said and streamed == said[0]
-               and f"session {first}, opened by new, model probe/think, effort medium, mode build, tools tools.cyfr.files, "
-                   'blocks 2, first "Your current instructions, in place of a", earlier 0.' in said[0],
+               and f"session {first}, opened by new, model probe/think, effort medium, mode build, tools tools.{RELAY}.files, "
+                   f"earlier 0, texts {json.dumps([PREAMBLE + SYSTEM, 'say hello'], separators=(',', ':'))}." in said[0],
                "the reply streams and is said whole; the session runs the start's model and effort, the build mode, "
-               "CYFR's tools through its server, and the instructions lead the first prompt", said)
+               "CYFR's tools through its server under a name the person's own server does not have, and the session "
+               "keeps the instructions whole and then the job, in that order", said)
         expect([(e["name"], e["phase"]) for e in turn if e["t"] == "own"] == [("read", "start"), ("read", "end")],
                "the program's own tool is shown by its name", turn)
         usage = [e for e in turn if e["t"] == "usage"]
@@ -261,7 +268,7 @@ def main():
         d.send({"t": "post", "id": "stp_post_5", "work": WORK, "content": [{"type": "text", "text": "say hello"}]})
         later = d.until("idle")
         expect(later[0] == {"t": "accepted", "id": "stp_post_5"} and later[-1]["answered"] == ["stp_post_5"]
-               and "blocks 1," in [e["text"] for e in later if e["t"] == "said"][0],
+               and 'texts ["say hello"].' in [e["text"] for e in later if e["t"] == "said"][0],
                "the later post, written again after the idle, is the session's next prompt, its instructions not "
                "handed again", later)
 
@@ -297,8 +304,8 @@ def main():
         expect(resumed == {"t": "started", "session": first, "fresh": False, "held": [], "account": "signed_in"},
                "the resumed session is the same, and held names none", resumed)
         said = [e["text"] for e in fresh_turn(d, "trn_brain_2", "stp_post_7", "say hello") if e["t"] == "said"]
-        expect(said and f"session {first}, opened by resume, model probe/plain, effort default, mode build, tools tools.cyfr.files, "
-                        'blocks 1, first "say hello", earlier 6.' in said[0],
+        expect(said and f"session {first}, opened by resume, model probe/plain, effort default, mode build, tools tools.{RELAY}.files, "
+                        'earlier 6, texts ["say hello"].' in said[0],
                "the new process holds the session's history, with the new model and the start's tools, its "
                "instructions not handed again", said)
 

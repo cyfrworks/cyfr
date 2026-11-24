@@ -96,9 +96,11 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawM
 				return err
 			}
 		}
-		for _, raw := range d.p.callArguments(rawInput) {
-			if v, ok := decoded(raw); ok {
-				call.arguments = append(call.arguments, v)
+		if d.p.callArguments != nil {
+			for _, raw := range d.p.callArguments(rawInput) {
+				if v, ok := decoded(raw); ok {
+					call.arguments = append(call.arguments, v)
+				}
 			}
 		}
 		d.own[callID] = call
@@ -132,6 +134,10 @@ func (c *ownCall) shows(arguments any) bool {
 // its arguments; with none, it waits for an update first seen after it,
 // and with more than one it is matched to none.
 func (d *driver) claim(arguments json.RawMessage) {
+	if d.p.callArguments == nil {
+		// The program never shows a call of CYFR's in a form to match.
+		return
+	}
 	v, ok := decoded(arguments)
 	if !ok {
 		return
