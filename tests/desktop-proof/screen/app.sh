@@ -9,11 +9,17 @@
 # loop standing in for the screen's launcher, which starts the app again
 # whenever it ends. The project folder names a CYFR on this computer that
 # does not run: no page of the screen waits on it, and every page is the
-# screen shell's own. Each check prints one PASS or FAIL line:
+# app's own: the rail, with This box and one CYFR elsewhere the list keeps
+# (other.example, which does not answer either), and the screen shell's
+# page of This box. Each check prints one PASS or FAIL line:
 #
 #   the app runs the screen shell in that folder and shows its page,
 #   with the keyboard shown below it as the window appears; the page is
-#   painted, and the window covers the output above the keyboard; a watch
+#   painted, the rail at its left, and the window covers the output above
+#   the keyboard; the CYFR elsewhere pressed on the rail leaves This box,
+#   the window shown closing within the lock's bound, confirmed by labwc's
+#   list as a lock is, and the chooser shows in a fresh one, ending no app;
+#   This box pressed then opens its page again, ending no app; a watch
 #   lost closes the window that was shown, timed from the loss, and a new
 #   one shows the shell's page (the app sits under the shell's watches);
 #   the keyboard killed locks the screen in the same way and is shown
@@ -55,6 +61,12 @@ if [ "${1:-}" = --inside ]; then
   printf 'services: {}\n' >/home/proof/cyfr/docker-compose.yml
   printf 'CYFR_ACCESS=local\nCYFR_PORT=4321\n' >/home/proof/cyfr/.env
   chown proof /home/proof/cyfr/docker-compose.yml /home/proof/cyfr/.env
+  # The list keeps one CYFR elsewhere beside This box, whose entry the
+  # screen's first start makes.
+  install -d -o proof -m 700 /home/proof/.cyfr /home/proof/.cyfr/device
+  printf '{"version":1,"homes":{"https://other.example":{"directory":"https://cyfr.run","generation":1}},"generations":1}\n' >/home/proof/.cyfr/device/homes.json
+  chown proof /home/proof/.cyfr/device/homes.json
+  chmod 600 /home/proof/.cyfr/device/homes.json
   install -m 0644 /fixture/login1.conf /etc/dbus-1/system.d/cyfr-proof-login1.conf
   mkdir -p /run/dbus
   dbus-daemon --system --fork --nopidfile
@@ -104,8 +116,9 @@ if [ "${1:-}" = --session ]; then
   window() { wlrctl toplevel find title:CYFR; }
   shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell$'; }
   # The Nth start is locked, with one screen shell: it is ready, its window
-  # shows and one screen shell runs. Every start is locked: the page ready
-  # names is the shell's own, drawn locked (cmd/screen_app.go).
+  # shows and one screen shell runs. Every start is locked: whatever the
+  # chooser opens first, This box or the last one, is a shell's page drawn
+  # locked (internal/desktop.Service).
   one_shell() { [ "$(shells)" = 1 ]; }
   locked_start() { within 60 started "$1" && within 30 window && within 30 one_shell; }
   # The windows labwc shows now, by its handles, and whether one closed.
@@ -156,8 +169,9 @@ if [ "${1:-}" = --session ]; then
     python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$at" "$since" >"$OUT/took"
     [ "$(cat "$OUT/took")" -lt "$HIDE_MS" ] && within 30 newer "$was" && within 30 painted
   }
-  # The output's picture: the page's background (#0b1418) at both top
-  # corners, so the window covers the output's whole width, and more than
+  # The output's picture: the rail's background (#071013) at the top left
+  # corner and the page's (#0b1418) at the top right, so the window covers
+  # the output's whole width with the rail beside the page, and more than
   # one colour above the keyboard, so the page is painted. Whether the
   # window has a frame the screen's labwc does not show (no decorations):
   # the app's tests hold it.
@@ -170,8 +184,8 @@ w, h = map(int, head[1].split())
 if (w, h) != (1600, 900):
     sys.exit(1)
 px = lambda x, y: tuple(rest[(y * w + x) * 3:(y * w + x) * 3 + 3])
-page = (11, 20, 24)
-corners = px(4, 4) == page and px(w - 5, 4) == page
+page, rail = (11, 20, 24), (7, 16, 19)
+corners = px(4, 4) == rail and px(w - 5, 4) == page
 colours = {px(x, y) for y in range(0, h // 2, 7) for x in range(0, w, 7)}
 sys.exit(0 if corners and len(colours) > 2 else 1)
 PY
@@ -221,9 +235,41 @@ PY
   fi
   if within 10 keyboard; then verdict PASS "the keyboard is shown below the window as it appears"; else verdict FAIL "no keyboard shown as the window appeared"; fi
   if within 30 painted; then
-    verdict PASS "the page is painted, and the window covers the output"
+    verdict PASS "the page is painted, the rail at its left, and the window covers the output"
   else
-    verdict FAIL "the page is not painted, or the window does not cover the output"
+    verdict FAIL "the page is not painted, the rail is not at its left, or the window does not cover the output"
+  fi
+
+  # A press on the rail at X Y of the output (1600x900), which tap.py
+  # takes on its 1280x720 scale. This box is the rail's first row, the CYFR
+  # elsewhere its second.
+  press() { TAP_AT="$OUT/pressed" python3 -I /fixture/tap.py $(($1 * 1280 / 1600)) $(($2 * 720 / 900)) 2>>"$OUT/tap.log"; }
+  proposals() { local n; n=$(grep -c '^CYFR: home: http://localhost:4321$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
+  BOX_AT="36 66" OTHER_AT="36 142"
+  departures() { local n; n=$(grep -c '^CYFR: left: the person chose another$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
+  ends() { local n; n=$(grep -c '^ended' "$OUT/launches" 2>/dev/null); echo "${n:-0}"; }
+  # A departure on the box (switched): the CYFR elsewhere pressed while This
+  # box shows, the window shown closes within HIDE_MS of the press,
+  # confirmed by labwc's list as a lock's hide is (cmd/screen_app.go), and a
+  # newer one shows; This box pressed opens it again in a fresh window, with
+  # no departure (nothing was open); neither ends the app.
+  switched() {
+    local was before ended opened
+    was=$(shown | head -n 1) before=$(departures) ended=$(ends)
+    press $OTHER_AT
+    within 20 sh -c "[ \$(grep -c '^CYFR: left: the person chose another\$' $OUT/app.log) -gt $before ]" || { echo "no departure" >"$OUT/why"; return 1; }
+    hidden "$was" "$(cat "$OUT/pressed")" || { echo "the window shown ($was) did not close within $HIDE_MS ms of the press (took $(cat "$OUT/took" 2>/dev/null))" >"$OUT/why"; return 1; }
+    opened=$(proposals)
+    press $BOX_AT
+    within 30 sh -c "[ \$(grep -c '^CYFR: home: http://localhost:4321\$' $OUT/app.log) -gt $opened ]" || { echo "This box was not proposed" >"$OUT/why"; return 1; }
+    [ "$(ends)" = "$ended" ] || { echo "the app ended" >"$OUT/why"; return 1; }
+  }
+  within 30 sh -c "[ \$(grep -c '^CYFR: home: http://localhost:4321\$' $OUT/app.log) -ge 1 ]"
+  if switched; then
+    verdict PASS "the CYFR elsewhere pressed on the rail leaves This box: the window shown closed $(cat "$OUT/took") ms after the press, confirmed by labwc's list, a fresh one shows; This box pressed opens it again; no app ended"
+    echo "switch to window closed: $(cat "$OUT/took") ms" >>"$OUT/timing"
+  else
+    verdict FAIL "a switch on the rail: $(cat "$OUT/why" 2>/dev/null): $(tail -n 5 "$OUT/app.log" | tr '\n' ' ') $(held | tr '\n' ' ')"
   fi
 
   # A watch lost: the shell hides what is on the screen, so the window shown
@@ -333,7 +379,7 @@ trap 'exit 143' TERM
 
 mkdir "$WORK/fixture" || exit 1
 cp "$DEB" "$WORK/fixture/app.deb" &&
-  cp "$HERE/app.sh" "$HERE/toplevels.py" "$HERE/login1.py" "$HERE/login1.conf" "$ROOT/apps/codex/cmd/screen/rc.xml" "$ROOT/apps/codex/cmd/screen/menu.xml" "$WORK/fixture/" || exit 1
+  cp "$HERE/app.sh" "$HERE/toplevels.py" "$HERE/tap.py" "$HERE/login1.py" "$HERE/login1.conf" "$ROOT/apps/codex/cmd/screen/rc.xml" "$ROOT/apps/codex/cmd/screen/menu.xml" "$WORK/fixture/" || exit 1
 chmod 755 "$WORK" "$WORK/fixture"
 chmod 644 "$WORK"/fixture/*
 

@@ -279,7 +279,9 @@ same worktree refuses, naming the run that holds it.
   package: the app as the box's screen (`--screen-project`) under Ubuntu
   26.04's labwc in a container, beside the screen's keyboard and watches,
   with no CYFR: its page painted in one frameless window that covers the
-  output, a watch lost hiding it, `cyfr` or the app killed and started
+  output, the list of CYFRs at its left, a switch on that list closing
+  the window as a lock does, a watch lost hiding it, `cyfr` or the app
+  killed and started
   again locked, a project not named explicitly refused. It needs Docker
   and binds no port of the machine.
 
