@@ -266,12 +266,11 @@ async function connectPhase() {
   // way to the chooser, and its way on opens Prism with the device unlocked
   // all along.
   await judged("unanswered",
-    "a page of the CYFR that did not load gives way to the chooser in a view of its own in the same store, naming the CYFR, the device's session as it was",
+    "a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR, the device's session as it was",
     async () => {
       const {cookie, ...detail} = await unansweredLoad(w)
       return [toldUnanswered({cookie, ...detail}, false), detail]
     })
-  w = await contentAt(atBootstrap, "the chooser")
   await judged("opened_again",
     "the chooser's way on shows the device's unlocked page, and Open CYFR there opens Prism with no passphrase asked",
     async () => {
