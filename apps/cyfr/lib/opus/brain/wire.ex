@@ -3,12 +3,12 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 4, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 5, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
-  which `cmd/cyfr-claude-code` and `cmd/cyfr-codex` share) to the same
-  lines; its `comment` is the protocol's statement.
+  which `cmd/cyfr-claude-code`, `cmd/cyfr-codex` and `cmd/cyfr-acp` share)
+  to the same lines; its `comment` is the protocol's statement.
 
   A line is read strictly: one object, at most `max_line_bytes/0` bytes,
   its `t` a message of its direction, its members exactly that message's,
@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 4
+  @version 5
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -87,6 +87,7 @@ defmodule Opus.Brain.Wire do
        %{"session" => :id, "fresh" => :boolean, "held" => :ids, "account" => :account}},
     "gone" => {~w(t), [], %{}},
     "accepted" => {~w(t id), [], %{"id" => :id}},
+    "later" => {~w(t id), [], %{"id" => :id}},
     "refused" =>
       {~w(t id reason), ~w(account),
        %{"id" => :id, "reason" => :string, "account" => :signed_out}},

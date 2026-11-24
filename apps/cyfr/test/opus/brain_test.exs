@@ -422,6 +422,39 @@ defmodule Opus.BrainTest do
       assert :ok = Brain.write(brain, binding, post(binding, "stp_second"))
     end
 
+    test "a post answered later is answered: an ask's answer is written straight after it",
+         %{fake: fake, row: row, binding: binding} do
+      brain = started!(fake, row, binding)
+      assert :ok = Brain.write(brain, binding, post(binding))
+      assert %{"t" => "post", "id" => "stp_post"} = sent()
+
+      say(fake, row, %{
+        "t" => "ask",
+        "gen" => 0,
+        "work" => binding.turn_id,
+        "ask" => "ask-1",
+        "name" => "files",
+        "arguments" => %{}
+      })
+
+      assert {"boot-one", [{seq, %{"t" => "ask"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+      say(fake, row, %{"t" => "later", "id" => "stp_post"})
+      assert {"boot-one", [{seq, %{"t" => "later", "id" => "stp_post"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+
+      answer = %{
+        "t" => "answer",
+        "id" => "stp_answer",
+        "ask" => "ask-1",
+        "content" => "done",
+        "is_error" => false
+      }
+
+      assert :ok = Brain.write(brain, binding, answer)
+      assert %{"t" => "answer", "id" => "stp_answer"} = sent()
+    end
+
     test "hands a batch whole and reads past it only once told", %{
       fake: fake,
       row: row,
@@ -911,6 +944,24 @@ defmodule Opus.BrainTest do
         say(fake, row, unquote(line))
         assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
       end
+    end
+
+    test "a later that answers no post ends it, as an unknown answer does", %{
+      fake: fake,
+      row: row,
+      binding: binding,
+      brain: {_pid, ref} = brain
+    } do
+      work = %{"t" => "work", "id" => "stp_work", "work" => binding.turn_id, "tools" => []}
+      assert :ok = Brain.write(brain, binding, work)
+      assert %{"t" => "work"} = sent()
+      say(fake, row, %{"t" => "later", "id" => "stp_work"})
+      assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
+    end
+
+    test "a later while no command is out ends it", %{fake: fake, row: row, brain: {_pid, ref}} do
+      say(fake, row, %{"t" => "later", "id" => "stp_post"})
+      assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
     end
 
     test "a line lost unread ends it", %{fake: fake, row: row, brain: {_pid, ref}} do
