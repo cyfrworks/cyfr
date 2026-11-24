@@ -304,8 +304,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: Linux amd64, os: ubuntu-24.04, arch: amd64, exe: ''}
-          - {name: Linux arm64, os: ubuntu-24.04-arm, arch: arm64, exe: ''}
+          # Ubuntu 26.04, the box's own, whose AppArmor holds the profile
+          # bwrap runs Gtk's image loaders under (the screen step).
+          - {name: Linux amd64, os: ubuntu-26.04, arch: amd64, exe: ''}
+          - {name: Linux arm64, os: ubuntu-26.04-arm, arch: arm64, exe: ''}
           - {name: macOS arm64, os: macos-latest, arch: arm64, exe: ''}
           - {name: Windows amd64, os: windows-latest, arch: amd64, exe: .exe}
     defaults:

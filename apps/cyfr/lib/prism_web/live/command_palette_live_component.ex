@@ -5,7 +5,11 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   @moduledoc """
   The command palette (⌘⇧K, the topbar's search icon, the drawer's
   Search… row) — fuzzy-search across the mode's pages and, in `dev`, recent
-  activity, components and tinctures.
+  activity, components and tinctures. A typed search also lists the
+  person's threads whose title holds it (`Aqua.threads/2`'s `title:`,
+  over every thread of theirs), each opened on the desktop by its key
+  `threads` (`?shell=threads&ref=<id>`): a shared thread in the chat, one
+  of the athanor in Aqua's panel.
 
   Stateless modal LiveComponent rendered from the app layout. The companion
   JS hook (`assets/js/hooks/command_palette.js`) listens for the keyboard
@@ -39,6 +43,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
      |> assign(:all_items, [])
      |> assign(:components?, false)
      |> assign(:components, [])
+     |> assign(:threads, [])
      |> assign(:loading, false)}
   end
 
@@ -66,7 +71,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # finds one by its name however many are installed.
   def handle_event("search", %{"value" => query}, socket) when is_binary(query) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      {:noreply, socket |> assign(:query, query) |> find_components() |> refilter()}
+      {:noreply,
+       socket |> assign(:query, query) |> find_components() |> find_threads() |> refilter()}
     end)
   end
 
@@ -87,6 +93,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     |> assign(:items, [])
     |> assign(:all_items, [])
     |> assign(:components, [])
+    |> assign(:threads, [])
   end
 
   # ============================================================================
@@ -119,12 +126,41 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     |> assign(:all_items, items)
     |> assign(:components?, not is_nil(ctx) and Prism.Labels.dev?(mode))
     |> find_components()
+    |> find_threads()
     |> refilter()
   end
 
   defp refilter(socket) do
-    %{all_items: items, query: query, components: components} = socket.assigns
-    assign(socket, :items, filter_items(items, query) ++ components)
+    %{all_items: items, query: query, components: components, threads: threads} =
+      socket.assigns
+
+    assign(socket, :items, filter_items(items, query) ++ threads ++ components)
+  end
+
+  # The person's threads whose title holds what is typed, read under the
+  # palette's context; nothing before anything is typed.
+  defp find_threads(socket) do
+    ctx = socket.assigns[:context]
+
+    with %Sanctum.Context{} <- ctx,
+         typed when typed != "" <- String.trim(socket.assigns.query),
+         {:ok, threads} <- Aqua.threads(ctx, title: typed) do
+      assign(socket, :threads, Enum.map(threads, &thread_item/1))
+    else
+      _none -> assign(socket, :threads, [])
+    end
+  end
+
+  # A thread opens on the desktop by the shell's key `threads`.
+  defp thread_item(thread) do
+    %{
+      kind: :thread,
+      label: thread.title || "A shared thread",
+      hint: if(thread.kind == :shared, do: "shared", else: to_string(thread.kind)),
+      to: "/?" <> URI.encode_query(shell: "threads", ref: thread.id),
+      icon: "document",
+      keywords: String.downcase(thread.title || "")
+    }
   end
 
   defp find_components(%{assigns: %{components?: false}} = socket),
@@ -241,7 +277,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         hint: id,
         to: "/",
         icon: "palette",
-        keywords: "open tincture #{id}"
+        keywords: "open app #{id}"
       }
     ]
   end
@@ -280,7 +316,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           %{
             kind: :component,
             label: ref,
-            hint: comp[:component_type] || "",
+            hint: type_word(comp[:component_type]),
             to: "/components/#{URI.encode(ref)}",
             icon: "cube",
             keywords: ("component " <> ref) |> String.downcase()
@@ -309,11 +345,11 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         %{
           kind: :tincture,
           label: t.title || "#{t.publisher}.#{t.name}",
-          hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "tincture"),
+          hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "app"),
           to: tincture_path(t),
           icon: "palette",
           keywords:
-            ["tincture", t.publisher, t.name, t.title]
+            ["app", t.publisher, t.name, t.title]
             |> Enum.filter(& &1)
             |> Enum.join(" ")
             |> String.downcase()
@@ -348,11 +384,18 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   defp short(nil), do: ""
   defp short(s), do: truncate(s, 16)
 
+  # A component's kind as the person reads it: an app is an app; another
+  # kind keeps CYFR's own word for it.
+  defp type_word("tincture"), do: "app"
+  defp type_word(type) when is_binary(type), do: type
+  defp type_word(_none), do: ""
+
   defp kind_label(:nav), do: "Page"
   defp kind_label(:action), do: "Action"
   defp kind_label(:recent_request), do: "Request"
   defp kind_label(:component), do: "Component"
-  defp kind_label(:tincture), do: "Tincture"
+  defp kind_label(:tincture), do: "App"
+  defp kind_label(:thread), do: "Thread"
 
   # ============================================================================
   # Render

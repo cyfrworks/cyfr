@@ -80,6 +80,11 @@ defmodule Arca.ThreadStorage do
   # `page_result`) is none.
   @post_kinds ~w(text error system opening pointer report)
 
+  # The most posts one search answers, and how many rows it reads at a
+  # time while it looks for them.
+  @search_max 20
+  @search_batch 200
+
   # ---------------------------------------------------------------------------
   # Threads
   # ---------------------------------------------------------------------------
@@ -114,8 +119,14 @@ defmodule Arca.ThreadStorage do
   @doc """
   The athanor's threads, most recently active first. `opts`: `:limit`
   (200 by default), `:kind` (one of `Arca.Schemas.Thread.kinds/0`, or a
-  list of them; every kind when absent) and `:archived` (`true` for the
-  archived ones alone, `false` for the others; both when absent).
+  list of them; every kind when absent), `:archived` (`true` for the
+  archived ones alone, `false` for the others; both when absent) and
+  `:title`, text a thread's title holds: a plain substring match made by
+  the store's own query, with its order and limit, over every thread of
+  the athanor, ASCII letters folded to lower case on both sides and every
+  other character matched as itself, so both adapters answer the same
+  threads and no character of the text is a pattern (a daily thread's
+  title is its date). `nil` matches every title.
   """
   @spec list(Prima.Actor.t(), keyword()) :: [map()] | {:error, :no_athanor | :database_error}
   def list(actor, opts \\ [])
@@ -126,16 +137,10 @@ defmodule Arca.ThreadStorage do
       limit = Keyword.get(opts, :limit, 200)
 
       query =
-        from(c in Thread,
-          order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
-          limit: ^limit
-        )
-
-      query =
         case Keyword.get(opts, :kind) do
-          nil -> query
-          kinds when is_list(kinds) -> from(c in query, where: c.kind in ^kinds)
-          kind -> from(c in query, where: c.kind == ^kind)
+          nil -> Thread
+          kinds when is_list(kinds) -> from(c in Thread, where: c.kind in ^kinds)
+          kind -> from(c in Thread, where: c.kind == ^kind)
         end
 
       query =
@@ -145,7 +150,16 @@ defmodule Arca.ThreadStorage do
           false -> from(c in query, where: is_nil(c.archived_at))
         end
 
-      query
+      query =
+        case Keyword.get(opts, :title) do
+          nil -> query
+          title when is_binary(title) -> from(c in query, where: ^titled(title))
+        end
+
+      from(c in query,
+        order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
+        limit: ^limit
+      )
       |> QueryHelpers.where_tenant(actor)
       |> Repo.all()
     end)
@@ -153,6 +167,30 @@ defmodule Arca.ThreadStorage do
   end
 
   def list(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
+
+  # A title holding `text`, matched by the store: ASCII letters folded to
+  # lower case on both sides, by SQLite's `lower/1`, which folds ASCII
+  # alone, and by PostgreSQL's under the "C" collation, which does the
+  # same, and `%`, `_` and `\\` escaped so no character is a pattern.
+  defp titled(text) do
+    pattern =
+      text
+      |> String.downcase(:ascii)
+      |> String.replace("\\", "\\\\")
+      |> String.replace("%", "\\%")
+      |> String.replace("_", "\\_")
+
+    title_like("%" <> pattern <> "%")
+  end
+
+  if Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) ==
+       Ecto.Adapters.Postgres do
+    defp title_like(pattern),
+      do: dynamic([c], fragment(~s|lower(? COLLATE "C") LIKE ? ESCAPE '\\'|, c.title, ^pattern))
+  else
+    defp title_like(pattern),
+      do: dynamic([c], fragment("lower(?) LIKE ? ESCAPE '\\'", c.title, ^pattern))
+  end
 
   @doc "One thread of the context's athanor."
   @spec get(Prima.Actor.t(), String.t()) ::
@@ -1496,11 +1534,6 @@ defmodule Arca.ThreadStorage do
   end
 
   def messages(%Prima.Actor{}, _thread_id, _opts), do: {:error, :no_athanor}
-
-  # The most posts one search answers, and how many rows it reads at a
-  # time while it looks for them.
-  @search_max 20
-  @search_batch 200
 
   @doc """
   The posts of the athanor's daily and workspace threads whose text holds

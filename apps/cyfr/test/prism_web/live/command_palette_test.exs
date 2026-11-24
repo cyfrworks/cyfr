@@ -87,15 +87,47 @@ defmodule PrismWeb.CommandPaletteTest do
     refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))
   end
 
+  test "an app is named an app: its hint, its kind and the word that finds it", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-word", "1.0.0",
+      manifest: %{
+        "name" => "palette-word",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<!doctype html><title>palette-word</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "app"})
+
+    item = ~s(#command-palette [phx-value-to="/?publisher=local&tincture_name=palette-word"])
+    assert has_element?(view, item, "App")
+    assert view |> element(item) |> render() =~ ~r{>\s*app\s*</span>}
+    refute view |> element(item) |> render() =~ ~r{>\s*tincture\s*<}i
+
+    html = view |> element("#command-palette input") |> render_keyup(%{"value" => "tincture"})
+    refute html =~ "palette-word"
+  end
+
   # A component row as the registry writes one, `inserted_at` naming how new
   # it is.
-  defp component_row!(ctx, name, inserted_at, description \\ nil) do
+  defp component_row!(ctx, name, inserted_at, description \\ nil, type \\ "catalyst") do
     {:ok, _} =
       Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "cmp_#{name}",
         name: name,
         version: "0.1.0",
-        component_type: "catalyst",
+        component_type: type,
         description: description || name,
         tags: "[]",
         digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
@@ -164,6 +196,36 @@ defmodule PrismWeb.CommandPaletteTest do
     refute has_element?(view, ~s(#command-palette [phx-value-to*="catalyst:local.http"]))
   end
 
+  test "an installed component's row in Dev mode names an app an app, another kind by its own word",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    component_row!(ctx, "hinted-app", at, nil, "tincture")
+    component_row!(ctx, "hinted-cat", DateTime.add(at, 1))
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "hinted"})
+
+    app = ~s(#command-palette [phx-value-to="/components/tincture:local.hinted-app:0.1.0"])
+    cat = ~s(#command-palette [phx-value-to="/components/catalyst:local.hinted-cat:0.1.0"])
+    assert view |> element(app) |> render() =~ ~r{>\s*app\s*</span>}
+    refute view |> element(app) |> render() =~ ~r{>\s*tincture\s*</span>}
+    assert view |> element(cat) |> render() =~ ~r{>\s*catalyst\s*</span>}
+  end
+
   test "a desktop is offered as the chooser of desktops, by the shell's key", %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -196,5 +258,61 @@ defmodule PrismWeb.CommandPaletteTest do
              |> render_click()
 
     assert to == "/a/#{route}/?shell=desktops"
+  end
+
+  # A workspace thread of `athanor_id` titled `title`, as the store writes one.
+  defp thread!(athanor_id, title) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("thread")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.Thread, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          kind: "workspace",
+          workspace_state: "done",
+          title: title,
+          created_by: Prima.Author.system(),
+          last_message_at: now,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  test "a typed title lists the person's thread, which opens through the desktop's threads key, and another athanor's never",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    other = test_user()
+    theirs = Sanctum.Test.People.athanor!(other.user_id)
+
+    mine = thread!(athanor.id, "Moon Report")
+    not_mine = thread!(theirs.id, "Moon Report too")
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "mOOn rep"})
+
+    assert has_element?(
+             view,
+             ~s(#command-palette button[phx-value-to="/?shell=threads&ref=#{mine}"]),
+             "Moon Report"
+           )
+
+    refute has_element?(view, ~s(#command-palette [phx-value-to*="#{not_mine}"]))
+
+    route = Sanctum.Tenancy.Athanors.route_slug(athanor)
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view
+             |> element(~s(#command-palette button[phx-value-to="/?shell=threads&ref=#{mine}"]))
+             |> render_click()
+
+    assert to == "/a/#{route}/?shell=threads&ref=#{mine}"
   end
 end

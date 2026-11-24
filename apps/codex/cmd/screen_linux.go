@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -30,4 +31,10 @@ func screenClocks() (boot, monotonic time.Duration, err error) {
 func screenChild(c *exec.Cmd) *exec.Cmd {
 	c.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	return c
+}
+
+// screenExec becomes the program args name, with args, in this process: the
+// launcher's own child, whose end the launcher sees as the app's.
+func screenExec(args []string) error {
+	return syscall.Exec(args[0], args, os.Environ())
 }
