@@ -1731,8 +1731,8 @@ defmodule Cyfr.StackShapeTest do
         "include:\n  - sidecar.yml\nservices:\n  #{runtime.service}:\n"},
        unread.(runtime_overlay, :runtime)},
       {"the runtime's last overlay naming a routed entrypoint",
-       {runtime_last_overlay, "      - seccomp=./keeper.seccomp.json\n",
-        "      - seccomp=./keeper.seccomp.json\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\n"},
+       {runtime_last_overlay, "      - systempaths=unconfined\n",
+        "      - systempaths=unconfined\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\n"},
        [{runtime_last_overlay, :entrypoint, :runtime}]},
       # Every value an overlay gives is read: one the test does not expect
       # is drift, whatever key carries it.
