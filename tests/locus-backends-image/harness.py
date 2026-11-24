@@ -136,6 +136,11 @@ def pool_user(uid):
     return f"{ROLE['user_prefix']}{uid - POOL_FIRST + 1:02d}"
 
 
+def ending(why):
+    """A brain driver's last line when it ends of itself, as Go writes it: its `ending`, naming `why`."""
+    return json.dumps({"t": "ending", "why": why}, separators=(",", ":"))
+
+
 def expect(condition, message, detail=None):
     if not condition:
         text = detail if isinstance(detail, str) else json.dumps(detail, indent=2, default=str)

@@ -45,7 +45,8 @@ defmodule Opus.Programs.Terminal do
       (its answer says so, or it could not be read for a minute);
     * `:restarted`: the service it ran on started again (a read refused
       for a stale boot, or the box syncing the owner again once the
-      session stood), which a turn's session meets as `:exited`;
+      session stood), after which a turn's session stays to answer its
+      last output and its ending, as after `:exited`;
     * `:closed`: `close/2` was accepted, carried out by this process
       whether or not the caller still waits, and the box said the place
       is back;
