@@ -126,7 +126,7 @@ defmodule Aqua.PromptTest do
       composed = fn seconds ->
         Prompt.compose(ctx,
           agent: agent(),
-          program?: true,
+          own_tools?: true,
           authority: nil,
           requests: [
             %{
@@ -235,7 +235,7 @@ defmodule Aqua.PromptTest do
     end
 
     test "a member on a program's brain is told its own tools work in its folder", %{ctx: ctx} do
-      assert opening(ctx, agent: member("coder"), program?: true, authority: nil) ==
+      assert opening(ctx, agent: member("coder"), own_tools?: true, authority: nil) ==
                @briefing <> @program
     end
 
@@ -252,7 +252,7 @@ defmodule Aqua.PromptTest do
     # Aqua's prompt is in two parts: its file's, then CYFR's, for the brain
     # of the member it runs on.
     test "the soul opens with its own prompt, then CYFR's part for its brain", %{ctx: ctx} do
-      assert opening(ctx, agent: agent(), program?: true, search?: true, authority: nil) ==
+      assert opening(ctx, agent: agent(), own_tools?: true, search?: true, authority: nil) ==
                "You are Aqua.\n\n---\n\n" <> @part_one <> @program <> @search
 
       assert opening(ctx, agent: agent(), authority: nil) ==

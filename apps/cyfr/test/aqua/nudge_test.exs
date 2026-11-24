@@ -593,7 +593,7 @@ defmodule Aqua.NudgeTest do
     script!([reply("It waits on you."), reply("It still waits on you.")])
     wait = waiting!(ctx, "Moon report", "needs_you")
 
-    :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+    :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @west})
     first = Aqua.Day.today(ctx)
     assert {:error, :not_found} = Threads.day(actor(ctx), first)
 
@@ -603,7 +603,7 @@ defmodule Aqua.NudgeTest do
     assert post.client_id == Nudge.client_id(wait_of(wait))
     await_status(ctx, post.turn_id, "completed")
 
-    :ok = Aqua.Day.put_zone(ctx.user_id, @east)
+    :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @east})
     second = Aqua.Day.today(ctx)
     refute second == first
     assert tick(ctx) == %{"reminded:opened" => 1}
@@ -613,7 +613,7 @@ defmodule Aqua.NudgeTest do
     await_status(ctx, again.turn_id, "completed")
     assert ids(posts(ctx, west.id)) == [post.id]
 
-    :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+    :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @west})
     assert tick(ctx) == %{}
     assert Enum.sort(ids(all_posts(ctx))) == Enum.sort([post.id, again.id])
   end
@@ -623,7 +623,7 @@ defmodule Aqua.NudgeTest do
        %{ctx: ctx} do
     script!([reply("One waits on you."), reply("The other too.")])
     waits = [waiting!(ctx, "First wait"), waiting!(ctx, "Second wait")]
-    :ok = Aqua.Day.put_zone(ctx.user_id, @west)
+    :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @west})
     {:ok, west} = Aqua.Day.current(ctx)
 
     # The tick's first post waits at the earlier date's runner while the
@@ -633,7 +633,7 @@ defmodule Aqua.NudgeTest do
     first_id = await_send!(holder)
     [second] = Enum.reject(waits, &(&1.id == first_id))
 
-    :ok = Aqua.Day.put_zone(ctx.user_id, @east)
+    :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => @east})
     {:ok, east} = Aqua.Day.current(ctx)
     refute west.id == east.id
     :sys.resume(holder)

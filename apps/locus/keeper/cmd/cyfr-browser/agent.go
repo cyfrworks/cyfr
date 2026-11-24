@@ -185,7 +185,8 @@ func ownAgent(ctx context.Context, c *cdp, userAgent string) (map[string]any, er
 
 // name tells the target of session, of kind (a target type), to name
 // itself by the browser's agent: a worker through its network, every
-// other target through its emulation, which its navigator reads too.
+// other target through its emulation, which its navigator reads too; and
+// every target its person's locale (person.go).
 func (b *browser) name(ctx context.Context, session, kind string) error {
 	if b.agent == nil {
 		return nil
@@ -194,5 +195,8 @@ func (b *browser) name(ctx context.Context, session, kind string) error {
 	if strings.HasSuffix(kind, "worker") {
 		method = "Network.setUserAgentOverride"
 	}
-	return b.c.call(ctx, session, method, b.agent, nil)
+	if err := b.c.call(ctx, session, method, b.agent, nil); err != nil {
+		return err
+	}
+	return b.person.placeIn(ctx, b.c, session)
 }

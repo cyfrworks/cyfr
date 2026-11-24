@@ -179,7 +179,7 @@ defmodule Aqua.ScheduleTurnsTest do
     thread
   end
 
-  defp zone!(ctx, zone), do: :ok = Aqua.Day.put_zone(ctx.user_id, zone)
+  defp zone!(ctx, zone), do: :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => zone})
 
   # Every thread of the athanor, by id.
   defp threads(ctx), do: ctx |> actor() |> Threads.list() |> Enum.map(& &1.id) |> Enum.sort()
@@ -741,7 +741,8 @@ defmodule Aqua.ScheduleTurnsTest do
       assert ScheduleTurns.drain() == %{claimed.id => :sent}
 
       turn = await_status(ctx, turn_of(ctx, claimed).id, "failed")
-      assert %{error: "the model could not be reached", root_execution_id: root} = turn
+      error = "The model could not be reached: the model could not be reached"
+      assert %{error: ^error, root_execution_id: root} = turn
       assert is_binary(root)
 
       ended = ended!(ctx, claimed, "failed")
@@ -755,7 +756,7 @@ defmodule Aqua.ScheduleTurnsTest do
                  ended_at: ended.ended_at
              }
 
-      said = "Last run failed: the model could not be reached"
+      said = "Last run failed: " <> error
       assert %{run_count: 0, last_error: ^said, kind: kind} = row!(ctx, id)
       occurrence_id = claimed.id
       assert_receive {:failed, measurements, %{occurrence_id: ^occurrence_id} = meta}, 5_000
@@ -844,7 +845,11 @@ defmodule Aqua.ScheduleTurnsTest do
         {ScriptedWorker,
          ref: [@model, app],
          script: [
-           call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}),
+           call("r1", "execution", %{
+             "action" => "run",
+             "reference" => app <> ":1.0.0",
+             "input" => %{}
+           }),
            %{"answered" => true},
            reply("ran it")
          ]}
@@ -892,7 +897,11 @@ defmodule Aqua.ScheduleTurnsTest do
         {ScriptedWorker,
          ref: [@model, app],
          script: [
-           call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}),
+           call("r1", "execution", %{
+             "action" => "run",
+             "reference" => app <> ":1.0.0",
+             "input" => %{}
+           }),
            reply("It is not granted.")
          ]}
       )

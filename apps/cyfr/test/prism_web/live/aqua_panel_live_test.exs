@@ -1587,7 +1587,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   test "the button follows the person's day forwards: a thread made after the load is counted, and after midnight the new day's",
        %{conn: conn, me: me} do
-    :ok = Aqua.put_time_zone(me.user_id, @west)
+    :ok = Aqua.put_reading(me.user_id, %{"time_zone" => @west})
     panel = child!(desktop!(conn), "aqua-panel")
     _ = render(panel)
 
@@ -1603,7 +1603,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # Midnight, as the person's day reads it: the next day's thread is
     # today's, and the day before's count leaves the button.
-    :ok = Aqua.put_time_zone(me.user_id, @east)
+    :ok = Aqua.put_reading(me.user_id, %{"time_zone" => @east})
     next = today!(me)
     assert Date.after?(next.day, today.day)
     fire!(me, next, "Morning brief")
@@ -1620,7 +1620,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   test "the button follows the person's day backwards: after a change of zone to an earlier date it counts that day's thread",
        %{conn: conn, me: me} do
-    :ok = Aqua.put_time_zone(me.user_id, @east)
+    :ok = Aqua.put_reading(me.user_id, %{"time_zone" => @east})
     view = desktop!(conn)
     panel = child!(view, "aqua-panel")
     _ = render(panel)
@@ -1638,7 +1638,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # The zone moves west, to an earlier date, and one post is delivered
     # to the day that is now current.
-    :ok = Aqua.put_time_zone(me.user_id, @west)
+    :ok = Aqua.put_reading(me.user_id, %{"time_zone" => @west})
     west = today!(me)
     assert Date.before?(west.day, east.day)
     fire!(me, west, "Weekly")
