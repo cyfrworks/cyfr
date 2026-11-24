@@ -19,7 +19,9 @@ defmodule PrismWeb.WorkspaceLive do
   `Aqua.steps/3`'s, worded by Aqua (`Aqua.Steps`), read again as the
   thread's events arrive; the results are the posts of Aqua's that hold a
   picture, a file or a link, which the pane reads and tells this page
-  (`{:results, …}`, `{:result, …}`), drawn as the pane draws a post. The
+  (`{:results, …}`, `{:result, …}`), drawn as the pane draws a post, and
+  with none of them a finished thread's result is Aqua's last answer
+  there (`{:answer, …}`). The
   pane reads a thread's newest posts only, as many as it shows: when its
   read filled that window, the results say they are what the latest posts
   hold, as the thread shows them, and no earlier result is listed
@@ -31,6 +33,13 @@ defmodule PrismWeb.WorkspaceLive do
   (`Aqua.at_work/2`), read with the steps and again every few seconds,
   since a crew member's steps happen in its own thread. Stop, while the
   thread is working or needs the person, stops all of its work.
+
+  The row's toggle opens the pane's menu (`<pane>-menu`) by JS commands
+  alone; the pane, told the toggle's id (`"menu_toggle"`), closes it on a
+  press away and on Escape. While the menu is open the toggle stands
+  expanded and out of reach (`inert`), so a press on it is a press away,
+  which closes it. The menu's Delete of this thread leaves the page for
+  the desktop, as the pane tells it (`{:deleted, id}`).
 
   Every read is the person's own: the page's context is focused on the
   athanor in its address, which only its person may focus
@@ -47,6 +56,7 @@ defmodule PrismWeb.WorkspaceLive do
   on_mount PrismWeb.SystemLayer.Hook
 
   alias Cyfr.Bus.{ThreadEvent, ThreadListed}
+  alias Phoenix.LiveView.JS
   alias PrismWeb.{SystemLayer, ThreadPaneLive}
 
   # The thread's events after which its steps are read again.
@@ -81,8 +91,10 @@ defmodule PrismWeb.WorkspaceLive do
       |> assign(:steps, [])
       |> assign(:at_work, [])
       |> assign(:results, [])
+      |> assign(:answer, nil)
       |> assign(:window, nil)
       |> assign(:pane, nil)
+      |> assign(:thread_id, id)
 
     case Aqua.workspace(ctx, id) do
       {:ok, work} ->
@@ -148,6 +160,7 @@ defmodule PrismWeb.WorkspaceLive do
     |> assign(:page_title, "Workspace thread")
     |> assign(:steps, [])
     |> assign(:results, [])
+    |> assign(:answer, nil)
     |> assign(:window, nil)
     |> assign(:pane, nil)
   end
@@ -228,6 +241,17 @@ defmodule PrismWeb.WorkspaceLive do
     results = [result | Enum.reject(socket.assigns.results, &(&1.id == result.id))]
     {:noreply, assign(socket, :results, Enum.sort_by(results, & &1.seq, :desc))}
   end
+
+  # Aqua's newest answer on the thread, as the pane read it.
+  def handle_info({:pane, _pane, {:answer, id, answer}}, %{assigns: %{work: %{id: id}}} = socket),
+    do: {:noreply, assign(socket, :answer, answer)}
+
+  # The person deleted this thread from the pane's menu: the page leaves
+  # for the desktop, whether or not the list's removal came first.
+  def handle_info({:pane, _pane, {:deleted, id}}, %{assigns: %{thread_id: id}} = socket),
+    do:
+      {:noreply,
+       push_navigate(socket, to: PrismWeb.DesktopLive.path(socket.assigns.athanor_route))}
 
   # The pane asked for a thread: this one, or a crew member's thread under
   # it, which the pane shows and leads back from; another workspace thread
@@ -327,6 +351,24 @@ defmodule PrismWeb.WorkspaceLive do
         >
           Stop
         </button>
+        <:menu>
+          <button
+            id="workspace-menu-toggle"
+            type="button"
+            aria-controls="workspace-pane-menu"
+            aria-expanded="false"
+            aria-label="This thread's menu"
+            title="This thread's menu"
+            phx-click={open_menu()}
+            class="shrink-0 rounded-md px-2 py-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="3" cy="8" r="1.4" />
+              <circle cx="8" cy="8" r="1.4" />
+              <circle cx="13" cy="8" r="1.4" />
+            </svg>
+          </button>
+        </:menu>
       </.close_row>
 
       <%!-- In the hand, the thread's posts and the steps and results are two
@@ -421,12 +463,20 @@ defmodule PrismWeb.WorkspaceLive do
             <p :if={@window} id="workspace-results-window" class="mb-2 text-xs text-gray-500">
               What the latest {@window} posts hold, as the thread shows them.
             </p>
-            <p :if={@results == []} id="workspace-no-results" class="text-sm text-gray-500">
+            <p
+              :if={made(@results, @answer, @work.state) == []}
+              id="workspace-no-results"
+              class="text-sm text-gray-500"
+            >
               {if @window, do: "Nothing in them.", else: "Nothing made yet."}
             </p>
-            <div :if={@results != []} id="workspace-results" class="space-y-3">
+            <div
+              :if={made(@results, @answer, @work.state) != []}
+              id="workspace-results"
+              class="space-y-3"
+            >
               <ThreadPaneLive.message_bubble
-                :for={result <- @results}
+                :for={result <- made(@results, @answer, @work.state)}
                 id={"workspace-result-" <> result.id}
                 role="assistant"
                 content={result.content}
@@ -455,7 +505,8 @@ defmodule PrismWeb.WorkspaceLive do
             session: %{
               "athanor_id" => @context.athanor_id,
               "thread_id" => @work.id,
-              "ui_mode" => @ui_mode
+              "ui_mode" => @ui_mode,
+              "menu_toggle" => "workspace-menu-toggle"
             }
           )}
         </aside>
@@ -473,14 +524,16 @@ defmodule PrismWeb.WorkspaceLive do
 
   attr :athanor_route, :any, required: true
   slot :inner_block
+  slot :menu
 
-  # The layer's own row: the thread's name and state, and the close that
-  # returns to the desktop.
+  # The layer's own row: the thread's name and state, its menu's toggle,
+  # and the close that returns to the desktop.
   defp close_row(assigns) do
     ~H"""
     <div class="flex h-10 shrink-0 items-center gap-2 border-b border-gray-800/60 pl-4 pr-2">
       {render_slot(@inner_block)}
       <span class="flex-1"></span>
+      {render_slot(@menu)}
       <.link
         id="workspace-close"
         navigate={PrismWeb.DesktopLive.path(@athanor_route)}
@@ -493,6 +546,20 @@ defmodule PrismWeb.WorkspaceLive do
     </div>
     """
   end
+
+  # The pane's menu opened from the row's toggle: the toggle expanded and
+  # out of reach while it is open, and focus in the menu.
+  defp open_menu do
+    JS.remove_attribute("hidden", to: "#workspace-pane-menu")
+    |> JS.set_attribute({"aria-expanded", "true"})
+    |> JS.set_attribute({"inert", ""})
+    |> JS.focus_first(to: "#workspace-pane-menu")
+  end
+
+  # What the thread made: the posts that hold a picture, a file or a link;
+  # with none, a finished thread's last answer.
+  defp made([], %{} = answer, "done"), do: [answer]
+  defp made(results, _answer, _state), do: results
 
   # An agent at work as a person reads its name: the soul is Aqua.
   defp agent_name(name), do: if(Prima.AgentRef.soul?(name), do: "Aqua", else: name)

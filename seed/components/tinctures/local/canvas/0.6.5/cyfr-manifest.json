@@ -1,9 +1,9 @@
 {
   "name": "canvas",
   "type": "tincture",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "publisher": "local",
-  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs, each failure with who started it and Retry where a schedule or a feed started it, your apps, and your schedules with the week ahead, each one paused or resumed with a tap; hide a section and show it again; and the first steps, each hidden with a tap and offered again from Getting started.",
+  "description": "Your canvas: the day in one sentence, what needs your attention grouped by cause with a grant where one fixes it, your recent runs, each failure with who started it and Retry where a schedule or a feed started it, your apps, and your schedules with the week ahead, each one paused or resumed with a tap; hide a section and show it again; and the first steps, each hidden with a tap and offered again from Getting started, Aqua's setup until a model is connected.",
   "tags": ["canvas", "system"],
   "category": "utility",
   "tincture": {
@@ -14,7 +14,7 @@
       "tool": "vite"
     },
     "desktop": {
-      "data": ["runs.changes", "schedules.changes", "schedule_runs.changes"],
+      "data": ["runs.changes", "schedules.changes", "schedule_runs.changes", "system.changes"],
       "controls": [
         {
           "id": "pause-schedule",

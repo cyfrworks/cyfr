@@ -14,6 +14,8 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
   import Ecto.Query
 
+  import Prima.Test.Wait
+
   alias Sanctum.Test.ConsentFixtures
 
   @tincture "visibility-dash"
@@ -125,6 +127,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
     flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
     assert flash =~ "can&#39;t be read right now"
+    assert flash =~ "This app&#39;s visibility"
   end
 
   test "a public profile row that cannot be decoded reads unavailable", %{conn: conn, ctx: ctx} do
@@ -144,10 +147,51 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     assert toggle_disabled?(html)
   end
 
+  # What a person reads of an app on the desktop says app, never tincture.
+  test "the desktop's picker and its notices say app", %{conn: conn, ctx: ctx} do
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "visibility-two", "1.0.0",
+      manifest: %{
+        "name" => "visibility-two",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<html><body>two</body></html>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+
+    {view, html} = mount_desktop(conn)
+
+    assert html =~ ~s(title="Refresh apps")
+    assert html =~ ~s(aria-label="Refresh apps")
+    assert html =~ "Previous app (←)"
+    assert html =~ "Next app (→)"
+    assert html =~ ~s(aria-label="App 1 of 2")
+
+    refute html =~
+             ~r/[Tt]incture( \d| not|s installed|s registered)|this tincture|Refresh tinctures|(Previous|Next) tincture/
+
+    flash = render_click(view, "toggle_visibility", %{"tincture" => "iframe_#{@tincture}"})
+    assert flash =~ "on this app&#39;s owner profile."
+
+    flash = render_click(view, "open_report", %{"tincture" => "iframe_none"})
+    assert flash =~ "App not found; refresh and try again."
+
+    assert render_click(view, "refresh_tinctures", %{}) =~ "Refreshing apps…"
+
+    wait_until(
+      fn -> render(view) =~ "Apps registered and refreshed" end,
+      10_000,
+      "the refresh"
+    )
+  end
+
   # `config/test.exs` configures a registry that is not cyfr.run.
   test "a tincture's report goes to the registry's moderators, never cyfr.run's", %{conn: conn} do
     {view, html} = mount_desktop(conn)
-    assert html =~ "Report this tincture to the registry&#39;s moderators"
+    assert html =~ "Report this app to the registry&#39;s moderators"
 
     render_click(view, "open_report", %{"tincture" => "iframe_#{@tincture}"})
     html = render(view)

@@ -19,15 +19,17 @@ defmodule PrismWeb.TopbarLive do
   |-------------|------------------------|-------------------------|
   | Health      | system/status          | (loaded on mount)       |
   | Activity    | mcp_log/list           | bus:requests + tinctures + schedule_runs + feed_runs |
-  | Executions  | execution/list         | bus:executions        |
+  | Executions  | execution/list         | bus:executions + threads |
   | Rate        | mcp_log/stats          | bus:requests          |
   | Schedules   | schedule/list          | bus:schedule_runs     |
   | Builds      | telemetry-only         | bus:builds            |
-  | Tinctures   | telemetry-only         | bus:tinctures         |
+  | Apps        | telemetry-only         | bus:tinctures         |
   | User        | the session            |                         |
 
-  Builds and Tinctures hide entirely when there's nothing to show, so the
-  bar stays compact in normal operation. `lite` shows none of them.
+  A turn's root announces no execution, so Executions is read again when
+  the person's list of threads (`Cyfr.Bus.threads/2`) tells a post or a
+  turn's end. Builds and Apps hide entirely when there's nothing to show,
+  so the bar stays compact in normal operation. `lite` shows none of them.
   """
 
   use PrismWeb, :live_view
@@ -105,6 +107,8 @@ defmodule PrismWeb.TopbarLive do
         ] do
       Bus.subscribe(actor, topic)
     end
+
+    if is_binary(ctx.user_id), do: Bus.subscribe(actor, Bus.threads(actor, ctx.user_id))
   end
 
   # How many people wait at the door — an operator's number, nobody else's.
@@ -161,6 +165,10 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, refresh(socket, [:executions])}
   end
 
+  def handle_info(%Bus.ThreadListed{}, socket) do
+    {:noreply, refresh(socket, [:executions])}
+  end
+
   def handle_info(%Bus.ScheduleRun{kind: :fired}, socket) do
     {:noreply, refresh(socket, [:schedules, :requests])}
   end
@@ -211,6 +219,17 @@ defmodule PrismWeb.TopbarLive do
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
+  end
+
+  # A recent app call's row names the app as a person does, by its name;
+  # a call that names no app shows its request.
+  defp app_name(call) do
+    ref = call.tincture_ref || call.reference
+
+    case is_binary(ref) && Prima.ComponentRef.parse(ref) do
+      {:ok, %{name: name}} -> name
+      _unnamed -> ref || call.request_id
+    end
   end
 
   defp drain_offer_messages do
@@ -427,7 +446,7 @@ defmodule PrismWeb.TopbarLive do
   defp source_class("schedule"), do: "bg-amber-900/30 text-amber-300"
   defp source_class(_), do: "bg-blue-900/30 text-blue-300"
 
-  defp source_label("tincture"), do: "Tincture"
+  defp source_label("tincture"), do: "App"
   defp source_label("schedule"), do: "Cron"
   defp source_label(_), do: "MCP"
 
@@ -577,17 +596,17 @@ defmodule PrismWeb.TopbarLive do
             name="tinctures"
             open={@open_popover == "tinctures"}
             label={@tincture_text}
-            title={"Tinctures run recently: #{@tincture_text}"}
+            title={"Apps run recently: #{@tincture_text}"}
             icon="palette"
           >
             <:popover>
-              <h4 class="text-xs font-medium text-gray-400 mb-2">Recent tincture invokes</h4>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Recent app calls</h4>
               <ul class="space-y-1 text-sm">
                 <%= for t <- @recent_tinctures do %>
                   <li class="flex items-center gap-2">
                     <.status_indicator status={t.status} />
                     <span class="text-gray-300 font-mono text-xs truncate">
-                      {t.tincture_ref || t.reference || t.request_id}
+                      {app_name(t)}
                     </span>
                   </li>
                 <% end %>
