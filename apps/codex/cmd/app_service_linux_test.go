@@ -64,11 +64,17 @@ func newServiceStandIn(t *testing.T, own string) *serviceStandIn {
 // off the test's goroutine, so it answers its failure.
 func buildDeb(t *testing.T, file, name, version string) error {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "DEBIAN"), 0o755); err != nil {
+	// dpkg-deb refuses a control folder narrower than 0755, whatever the
+	// umask made of it.
+	control := filepath.Join(root, "DEBIAN")
+	if err := os.MkdirAll(control, 0o755); err != nil {
 		return err
 	}
-	control := fmt.Sprintf("Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: CYFR\nDescription: a stand-in\n", name, version)
-	if err := os.WriteFile(filepath.Join(root, "DEBIAN", "control"), []byte(control), 0o644); err != nil {
+	if err := os.Chmod(control, 0o755); err != nil {
+		return err
+	}
+	fields := fmt.Sprintf("Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: CYFR\nDescription: a stand-in\n", name, version)
+	if err := os.WriteFile(filepath.Join(control, "control"), []byte(fields), 0o644); err != nil {
 		return err
 	}
 	c := exec.Command(dpkgDebProgram, "--root-owner-group", "--build", root, file)
