@@ -297,7 +297,9 @@ def main():
         expect(restored.returncode == 0, "the rule restored where it stood, the check passes again",
                restored.stdout + restored.stderr)
         unjumped = stack.guard_exec(f"iptables -D CYFR_GUARD_ROUTES -i {kept_iface} -j {chain} && cyfr-guard check")
-        expect(unjumped.returncode != 0 and "jumps to routes are not the routes the guard recorded" in unjumped.stderr,
+        # The route's reply jump still names its interface, so the check
+        # finds the change in the route's own record.
+        expect(unjumped.returncode != 0 and f"route {kept_iface} is not installed as the guard recorded it" in unjumped.stderr,
                "a route's jump removed behind the guard's back fails its health check", unjumped.stdout + unjumped.stderr)
         rejumped = stack.guard_exec(f"iptables -A CYFR_GUARD_ROUTES -i {kept_iface} -j {chain} && cyfr-guard check")
         expect(rejumped.returncode == 0, "the jump restored, the check passes again", rejumped.stdout + rejumped.stderr)
