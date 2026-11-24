@@ -56,6 +56,9 @@ import (
 // file is empty is refused in Codex's words for it. An injection
 // (`thread/inject_items`) is kept in the thread's rollout, and refused
 // while FAKE_INJECT_FAIL is set or a turn runs.
+// A steer is refused as Codex refuses one it did not take (-32600) while
+// FAKE_STEER_REFUSE is set, and with an error of another code (-32603)
+// while FAKE_STEER_UNKNOWN is.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -443,6 +446,12 @@ func fakeCodex() int {
 				thread.Unlock()
 				if os.Getenv("FAKE_STEER_REFUSE") != "" || active == "" || str("expectedTurnId") != active {
 					fail(-32600, "no active turn to steer")
+					continue
+				}
+				if os.Getenv("FAKE_STEER_UNKNOWN") != "" {
+					// An error of another code: whether Codex took the input
+					// is not said.
+					fail(-32603, "internal error")
 					continue
 				}
 				ok(map[string]any{"turnId": active})

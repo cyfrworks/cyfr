@@ -240,9 +240,15 @@ type rpc struct {
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 }
+
+// invalidRequest is the code Codex refuses a request with before it acts
+// on it (0.169.0: a steer of no active turn, of another turn, of a thread
+// it does not hold, or of an input that does not read).
+const invalidRequest = -32600
 
 // item is a thread item, as far as the driver reads one.
 type item struct {
@@ -366,6 +372,12 @@ const instructionsSentence = "OpenAI Codex did not take its changed instructions
 // unrecordedSentence refuses a post whose changed instructions the folder
 // cannot record: the stale record would hide the change after them.
 const unrecordedSentence = "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written."
+
+// steerUnknownSentence refuses a post Codex may have taken into the turn
+// under way: its steer was answered with an error that is no refusal of
+// the request, so the post is not written again, and a later start's
+// `held` says whether the thread holds it.
+const steerUnknownSentence = "OpenAI Codex answered the message sent during its turn with an error, so whether it took it is not known; it is not sent again."
 
 // unreadAccountSentence refuses a post while Codex's account read failed:
 // no sign-out.

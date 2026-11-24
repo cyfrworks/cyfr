@@ -374,8 +374,14 @@ func (d *driver) response(id string, m rpc) error {
 			d.waiting = nil
 			return d.c.Accept(w.id)
 		}
-		// The turn it named ended meanwhile: the post was not taken, and
-		// starts a turn of its own.
+		// Codex refuses a request it did not take as invalid (-32600): the
+		// turn it named ended meanwhile, or another runs, and the post
+		// starts a turn of its own. Any other error leaves whether it took
+		// the post unknown, and it is not written again.
+		if m.Error.Code != invalidRequest {
+			d.waiting = nil
+			return d.c.Refuse(w.id, steerUnknownSentence)
+		}
 		w.kind = "turn"
 		w.request = d.nextID("turn")
 		return d.h.Write(turnStart(w.request, d.session, w.input, w.uuid, d.config))

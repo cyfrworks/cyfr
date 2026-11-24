@@ -329,6 +329,37 @@ func TestAPostWhoseSteerIsRefusedStartsATurn(t *testing.T) {
 	}
 }
 
+// A steer Codex answers with an error other than a refusal of the request
+// (-32600: "no active turn to steer", "expected active turn id … but
+// found …", "thread not found: …" and a malformed input, as Codex 0.169.0
+// answers each, aq-drivers cx-m1) may have been taken: the post is refused
+// as of a delivery not known, and is never written again as a turn of its
+// own, so nothing is said twice.
+func TestAPostWhoseSteerMayHaveBeenTakenIsNeverWrittenAgain(t *testing.T) {
+	t.Setenv("FAKE_STEER_UNKNOWN", "1")
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_first", "trn_1", "slow")
+	s.expect("text")
+	s.send(map[string]any{"t": "post", "id": "stp_second", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "hello"}}})
+	var refused map[string]any
+	for e := s.next(); e["t"] != "idle"; e = s.next() {
+		if e["t"] == "refused" {
+			refused = e
+		}
+		if e["t"] == "accepted" {
+			t.Fatalf("a post whose delivery is not known is not accepted: %v", e)
+		}
+	}
+	if refused["id"] != "stp_second" || refused["reason"] != steerUnknownSentence {
+		t.Fatalf("the post is refused as of a delivery not known: %v", refused)
+	}
+	if strings.Contains(s.output(), "Hello from the fake") {
+		t.Fatal("the post was written again as a turn of its own")
+	}
+}
+
 func TestAnAskIsHeldAndAnsweredByItsRequestsID(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
