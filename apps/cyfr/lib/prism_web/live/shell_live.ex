@@ -124,6 +124,15 @@ defmodule PrismWeb.ShellLive do
   and the canvas is decided anew. The page key `aqua_setup` opens Aqua's
   setup, the Aqua page at `?setup=1`, as the overlay over the desktop.
 
+  The key `threads` opens the person's threads, from a desktop's
+  `settings` and from a desktop address with `?shell=threads&ref=<id>`
+  (the palette's threads), handed here as `shell_key`: without a `ref`,
+  Aqua's panel on All threads; with one, a shared thread the person sits
+  in opens in the chat, decided by the list of their seats
+  (`Sanctum.SharedThreads.listed/1`), and any other id in Aqua's
+  panel, which reads it under the person's own athanor. The panel asks
+  for a shared thread its list holds the same way (`{:open_chat, ref}`).
+
   A canvas frame is a page like any tincture's: its messages over the
   port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
   as `frame_verb`. Its handshake hands it its bearer and its `canvas`
@@ -598,7 +607,7 @@ defmodule PrismWeb.ShellLive do
           send(lv, {:deliver, tag, :tinctures_refreshed})
         end)
 
-        {:noreply, put_flash(socket, :info, "Refreshing tinctures…")}
+        {:noreply, put_flash(socket, :info, "Refreshing apps…")}
     end
   end
 
@@ -638,10 +647,10 @@ defmodule PrismWeb.ShellLive do
 
             false ->
               "Publish through the consent walk: profile.publish on this " <>
-                "tincture's owner profile."
+                "app's owner profile."
 
             :unknown ->
-              "This tincture's visibility can't be read right now. Try again shortly."
+              "This app's visibility can't be read right now. Try again shortly."
           end
 
         {:noreply, put_flash(socket, :info, message)}
@@ -656,7 +665,7 @@ defmodule PrismWeb.ShellLive do
   def handle_event("open_report", %{"tincture" => tincture_id}, socket) do
     case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Tincture not found; refresh and try again.")}
+        {:noreply, put_flash(socket, :error, "App not found; refresh and try again.")}
 
       tincture ->
         ref =
@@ -769,9 +778,14 @@ defmodule PrismWeb.ShellLive do
 
   # The chooser of desktops, opened by its key from the shelf or from a
   # desktop address (`?shell=desktops`, the palette's), as a desktop's
-  # `settings` opens it.
+  # `settings` opens it; and the person's threads, by the key `threads`
+  # from a desktop address (`?shell=threads&ref=<id>`, the palette's), as
+  # the `settings` of `threads` opens them.
   def handle_event("shell_key", %{"key" => "desktops"}, socket),
     do: {:noreply, open_chooser(socket)}
+
+  def handle_event("shell_key", %{"key" => "threads"} = params, socket),
+    do: {:noreply, settings(socket, "threads", params["ref"])}
 
   def handle_event("choose_desktop", %{"ref" => ref}, socket) when is_binary(ref),
     do: {:noreply, choose_desktop(socket, ref)}
@@ -1643,6 +1657,28 @@ defmodule PrismWeb.ShellLive do
 
   # The shell's chooser of desktops, over the canvas.
   defp settings(socket, "desktops", _ref), do: open_chooser(socket)
+
+  # The person's threads: without a `ref` Aqua's panel on All threads;
+  # with one, a shared thread the person sits in opens in the chat, read
+  # under their seat, and any other id in the panel, which reads it under
+  # their own athanor and opens on today's thread when it names none of
+  # theirs.
+  defp settings(%{assigns: %{aqua_panel: pid}} = socket, "threads", nil) when is_pid(pid) do
+    send(pid, :threads)
+    socket
+  end
+
+  defp settings(socket, "threads", ref) when is_binary(ref) do
+    case Sanctum.SharedThreads.listed(socket.assigns.context.user_id) do
+      {:ok, shared} ->
+        if Enum.any?(shared, &(&1.id == ref)),
+          do: settings(socket, "chat", ref),
+          else: settings(socket, "aqua", ref)
+
+      {:error, _unread} ->
+        settings(socket, "aqua", ref)
+    end
+  end
 
   # Aqua's setup, a section of the Aqua page at its own address, opened as
   # the overlay over the desktop like any of Prism's pages.
@@ -3392,6 +3428,11 @@ defmodule PrismWeb.ShellLive do
   def handle_info({:aqua_panel, pid}, socket) when is_pid(pid),
     do: {:noreply, assign(socket, :aqua_panel, pid)}
 
+  # Aqua's panel asks for a shared thread its list of threads holds: the
+  # chat opens at it, read under the person's own seat.
+  def handle_info({:open_chat, ref}, socket) when is_binary(ref),
+    do: {:noreply, settings(socket, "chat", ref)}
+
   def handle_info({:deliver, tag, message}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
 
@@ -3529,7 +3570,7 @@ defmodule PrismWeb.ShellLive do
     {:noreply,
      socket
      |> load_tinctures()
-     |> put_flash(:info, "Tinctures registered and refreshed")}
+     |> put_flash(:info, "Apps registered and refreshed")}
   end
 
   # An archived athanor must let go of already-mounted shells — every
@@ -4125,7 +4166,7 @@ defmodule PrismWeb.ShellLive do
           phx-click="open_report"
           phx-value-tincture={@tincture.id}
           class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-red-400 hover:border-red-900"
-          title="Report this tincture to the registry's moderators"
+          title="Report this app to the registry's moderators"
         >
           Report
         </button>
@@ -4147,7 +4188,7 @@ defmodule PrismWeb.ShellLive do
           phx-click="focus_tincture"
           phx-value-index={i}
           class="flex h-6 min-w-6 items-center justify-center px-0.5"
-          aria-label={"Tincture #{i + 1} of #{length(@tinctures)}"}
+          aria-label={"App #{i + 1} of #{length(@tinctures)}"}
         >
           <span class={[
             "block rounded-full transition-all duration-300",
@@ -4172,7 +4213,7 @@ defmodule PrismWeb.ShellLive do
       phx-value-index={@focused_index - 1}
       disabled={@focused_index == 0}
       class="absolute left-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-      title="Previous tincture (←)"
+      title="Previous app (←)"
     >
       <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
@@ -4183,7 +4224,7 @@ defmodule PrismWeb.ShellLive do
       phx-value-index={@focused_index + 1}
       disabled={@focused_index >= @count - 1}
       class="absolute right-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-      title="Next tincture (→)"
+      title="Next app (→)"
     >
       <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
@@ -4197,8 +4238,8 @@ defmodule PrismWeb.ShellLive do
     <button
       phx-click="refresh_tinctures"
       class="absolute right-6 top-6 z-10 rounded-lg p-2 text-text-muted transition-colors hover:bg-surface-raised hover:text-text-secondary"
-      title="Refresh tinctures"
-      aria-label="Refresh tinctures"
+      title="Refresh apps"
+      aria-label="Refresh apps"
     >
       <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path
@@ -4215,7 +4256,7 @@ defmodule PrismWeb.ShellLive do
     ~H"""
     <div class="flex h-full flex-col items-center justify-center gap-3 text-text-muted">
       <.icon name="grid" class="w-12 h-12 opacity-20" />
-      <p class="text-sm">No tinctures installed</p>
+      <p class="text-sm">No apps installed</p>
       <p class="text-xs text-text-muted/70">
         Run <code class="font-mono">cyfr build compile &lt;path&gt;</code> to add one.
       </p>
