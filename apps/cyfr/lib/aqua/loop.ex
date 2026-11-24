@@ -536,7 +536,10 @@ defmodule Aqua.Loop do
                fire_of(turn)
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
-           :ok <- consented_release(ctx, claim.authority, snapshot),
+           # The list's servers read once for the turn: what its start holds
+           # the grant to and what it hands are of that one reading.
+           reading = servers_read(ctx, snapshot.agent.tools),
+           :ok <- consented_release(ctx, claim.authority, snapshot, reading),
            # A server's line that no longer stands as its turn first starts
            # asks no model: the turn ends with nothing run. A store that
            # cannot say ends it as any store failure after the claim does.
@@ -568,7 +571,7 @@ defmodule Aqua.Loop do
                  recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
                })
              ),
-           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority) do
+           {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority, reading: reading) do
         {:ok,
          %State{
            facts: Aqua.Harness.facts(spec),
@@ -641,13 +644,22 @@ defmodule Aqua.Loop do
   # grant is refused, never run under the old grant, whichever member's
   # turn it is. A crew member's own file is in no grant, so its edit
   # refuses nothing here.
-  defp consented_release(ctx, %{activation: activation} = authority, %{agent: agent}) do
+  # The grant's servers and the list's, each server's patterns and entries
+  # narrowed by what the turn's one reading says the server exposes now
+  # (`servers_read/2`), are exactly alike. Consent narrowed the grant by
+  # what each server exposed when it was given, so a server exposing more
+  # than then, a capability it declares since among it, asks for the grant
+  # again; one exposing less, or not answering, narrows both alike and
+  # costs no consent: the turn starts without what it would offer, and the
+  # grant covers that again once the server offers it.
+  defp consented_release(ctx, %{activation: activation} = authority, %{agent: agent}, reading) do
+    exposing = Map.new(reading, &{&1.server_name, &1.tool_patterns})
+
     with {:ok, row} <- Compendium.crew_grant_row(ctx),
          consented when is_binary(consented) <- Map.get(activation, @grant),
          true <- consented == row.release_digest,
          true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"],
-         {:ok, listed} <- listed_servers(ctx, agent.tools),
-         true <- granted_servers(authority) == listed do
+         true <- granted_servers(authority, exposing) == listed_servers(agent.tools, exposing) do
       :ok
     else
       {:error, reason} when reason != :not_found -> {:error, reason}
@@ -655,35 +667,39 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp granted_servers(%{resources: %{tool_servers: servers}}) when is_list(servers),
-    do: servers |> Enum.map(&{&1.server_name, Enum.sort(&1.tool_patterns)}) |> Enum.sort()
-
-  defp granted_servers(_none), do: []
-
-  # Each server the list names, with the tools named of it that its
-  # configuration exposes now, as Sanctum's port reads it
-  # (`Sanctum.Proxy`'s `tool_patterns/2`); a server the athanor no longer
-  # holds exposes none.
-  defp listed_servers(ctx, tools) do
-    pairs =
-      for key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool}
-
-    if pairs == [], do: {:ok, []}, else: exposed_servers(ctx, pairs)
+  defp granted_servers(%{resources: %{tool_servers: servers}}, exposing) when is_list(servers) do
+    servers
+    |> Enum.map(
+      &{&1.server_name, exposed(Map.get(exposing, &1.server_name, []), &1.tool_patterns)}
+    )
+    |> Enum.sort()
   end
 
-  defp exposed_servers(ctx, pairs) do
-    servers = pairs |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+  defp granted_servers(_none, _exposing), do: []
 
-    with {:ok, exposing} <- Sanctum.Proxy.impl!().tool_patterns(ctx, servers) do
-      {:ok,
-       pairs
-       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-       |> Enum.map(fn {server, tools} ->
-         {server, exposed(Map.get(exposing, server, []), tools)}
-       end)
-       |> Enum.sort()}
+  defp listed_servers(tools, exposing) do
+    tools
+    |> outside_entries()
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.map(fn {server, tools} -> {server, exposed(Map.get(exposing, server, []), tools)} end)
+    |> Enum.sort()
+  end
+
+  # The list's servers as Sanctum's port reads them now, asking only those
+  # its entries name (`Sanctum.Proxy`'s `list_external_tools/2`): each that
+  # answers with what it exposes and offers, read once for the turn. A
+  # server that does not answer, or that the athanor no longer holds, is
+  # absent and exposes nothing.
+  defp servers_read(ctx, tools) do
+    case tools |> outside_entries() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() do
+      [] -> []
+      servers -> Sanctum.Proxy.impl!().list_external_tools(ctx, servers)
     end
   end
+
+  defp outside_entries(tools),
+    do:
+      for(key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool})
 
   defp exposed(patterns, tools) do
     tools

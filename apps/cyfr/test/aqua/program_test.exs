@@ -5880,32 +5880,33 @@ defmodule Aqua.ProgramTest do
     end
 
     # What a grant gives a server's tools is what the server exposed when
-    # it was given: exposure widened or narrowed since, its digest the same,
-    # the turn's start asks for the grant again, never handing a tool the
-    # person was not shown.
-    test "an exposure widened or narrowed since the grant refuses the turn's start",
+    # it was given: exposure widened since, its digest the same, the turn's
+    # start asks for the grant again, never handing a tool the person was
+    # not shown; narrowed since, it narrows the grant alike, and the turn
+    # starts without the tool, asking nothing.
+    test "an exposure widened since the grant refuses the turn's start, and one narrowed " <>
+           "asks nothing",
          %{ctx: ctx, thread: thread} do
       served!(ctx, HTTPStub.open(), "gh", [search_tool()],
         config: %{"tool_patterns" => ["other"]}
       )
 
       offer!(ctx, ["gh:search"])
+      expose!(ctx, ["other", "search"])
+      turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+      stop_supervised!(ScriptedWorker)
 
-      for exposed <- [["other", "search"], ["other"]] do
-        {:ok, _} =
-          Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
-            config_json: Jason.encode!(%{"tool_patterns" => exposed})
-          })
-
-        turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
-        assert {:failed, _} = Task.await(run(ctx, turn), 60_000), inspect(exposed)
-        assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
-        assert model_rounds(ctx, turn) == 0
-        stop_supervised!(ScriptedWorker)
-
-        # Given again for what the server exposes now, as the sheet showed it.
-        consent_again!(ctx)
-      end
+      # Given again for what the server exposes now, as the sheet showed it,
+      # then narrowed.
+      consent_again!(ctx)
+      expose!(ctx, ["other"])
+      turn = api_turn!(ctx, thread, "search for it", [answer("Not that one.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert model_rounds(ctx, turn) == 1
+      assert not_handed(ctx, turn) == %{"gh:search" => :unlisted}
     end
 
     # What a grant gives a server's resources is what the server declared
@@ -5914,7 +5915,7 @@ defmodule Aqua.ProgramTest do
     test "a server that declares its resources after the grant refuses the turn's start",
          %{ctx: ctx, thread: thread} do
       {:ok, offers} = Agent.start_link(fn -> ["tools"] end)
-      offering!(ctx, fn -> Agent.get(offers, & &1) end)
+      offering!(ctx, offers: fn -> Agent.get(offers, & &1) end)
       offer!(ctx, ["docs:@resources"])
 
       # Not declared: the grant names none of them, the start stands and
@@ -5932,6 +5933,46 @@ defmodule Aqua.ProgramTest do
       assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
       assert model_rounds(ctx, turn) == 0
       refute_received {:offered, _path, "resources/" <> _, _params}
+    end
+
+    # A server that does not answer at a turn's start costs the person no
+    # prompt: the turn starts without what it would offer, said where a
+    # missing server's tools are said, and the grant given stands, so its
+    # resources are offered again, nothing asked, once it answers.
+    test "a server silent at a turn's start: the turn starts without its offerings and asks " <>
+           "nothing, and they are offered again once it answers",
+         %{ctx: ctx, thread: thread} do
+      {:ok, silent} = Agent.start_link(fn -> false end)
+      offering!(ctx, silent: silent)
+
+      # Granted while it answered; silent now, its next connect its first.
+      Agent.update(silent, fn _ -> true end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+      turn = api_turn!(ctx, thread, "read them", [answer("It does not answer.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert model_rounds(ctx, turn) == 1
+      assert handed_offerings(chat_tools()) == []
+
+      assert not_handed(ctx, turn) == %{
+               "docs:@resources" => :unlisted,
+               "docs:@prompts" => :unlisted
+             }
+
+      stop_supervised!(ScriptedWorker)
+
+      # Answering again, at the next turn's first connect.
+      Agent.update(silent, fn _ -> false end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+
+      turn =
+        api_turn!(ctx, thread, "read them", [
+          asking([{"ask-1", "docs__resources", %{"method" => "list"}}]),
+          answer("Read them.")
+        ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert handed_offerings(chat_tools()) == ["docs__prompts", "docs__resources"]
+      assert offered_reads() == [{"resources/list", %{}}, {"resources/templates/list", %{}}]
     end
 
     # A reissue writes what it compared: a server's endpoint changed
@@ -6097,6 +6138,14 @@ defmodule Aqua.ProgramTest do
     end)
   end
 
+  # `gh`'s configuration exposing `patterns`.
+  defp expose!(ctx, patterns) do
+    {:ok, _} =
+      Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+        config_json: Jason.encode!(%{"tool_patterns" => patterns})
+      })
+  end
+
   # A server of the athanor's that no list names: asking it anything fails
   # the test, since its stub answers no request.
   defp unasked!(ctx) do
@@ -6112,16 +6161,19 @@ defmodule Aqua.ProgramTest do
     on_exit(fn -> Emissary.External.ServerSupervisor.stop("unasked", ctx.athanor_id) end)
   end
 
-  # `docs`, a server of the athanor's over HTTP, declaring `offers.()`
-  # (resources and prompts unless given) through `server/discover`, its tools
-  # `search` when it offers tools; each request it is made is told to the
-  # test as `{:offered, path, method, params}` and each read answered as
-  # `offering_answer/2` answers it. On Aqua's list with no other server's
-  # entry, and granted, unless `offers` is given.
-  defp offering!(ctx, offers \\ nil) do
+  # `docs`, a server of the athanor's over HTTP, declaring `:offers` (a
+  # function; resources and prompts unless given) through `server/discover`,
+  # its tools `search` when it offers tools; each request it is made is told
+  # to the test as `{:offered, path, method, params}` and each read answered
+  # as `offering_answer/2` answers it. While `:silent`, an Agent's flag, is
+  # up it answers nothing, and its client gives up on it after half a
+  # second. On Aqua's list with no other server's entry, and granted, unless
+  # `:offers` is given.
+  defp offering!(ctx, opts \\ []) do
     stub = HTTPStub.open()
     test = self()
-    declared = offers || fn -> ["resources", "prompts"] end
+    declared = Keyword.get(opts, :offers, fn -> ["resources", "prompts"] end)
+    silent = Keyword.get(opts, :silent)
 
     HTTPStub.stub(stub, "POST", "/docs", fn conn ->
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
@@ -6129,31 +6181,38 @@ defmodule Aqua.ProgramTest do
       params = Map.delete(body["params"] || %{}, "_meta")
       send(test, {:offered, "/docs", body["method"], params})
 
-      result =
-        case body["method"] do
-          "server/discover" -> %{"capabilities" => Map.new(declared.(), &{&1, %{}})}
-          "tools/list" -> %{"tools" => [search_tool()]}
-          method -> offering_answer(method, params)
-        end
+      if silent && Agent.get(silent, & &1) do
+        # Past the client's half second, so it never reads this.
+        receive do: (:never -> :ok), after: (2_000 -> :ok)
+        Plug.Conn.resp(conn, 503, "")
+      else
+        result =
+          case body["method"] do
+            "server/discover" -> %{"capabilities" => Map.new(declared.(), &{&1, %{}})}
+            "tools/list" -> %{"tools" => [search_tool()]}
+            method -> offering_answer(method, params)
+          end
 
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
-      )
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end
     end)
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
         name: "docs",
-        url: "http://127.0.0.1:#{stub.port}/docs"
+        url: "http://127.0.0.1:#{stub.port}/docs",
+        config_json: Jason.encode!(if(silent, do: %{"timeout_ms" => 500}, else: %{}))
       })
 
     on_exit(fn -> Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id) end)
 
-    if offers == nil do
+    unless Keyword.has_key?(opts, :offers) do
       unasked!(ctx)
       offer!(ctx, ["docs:@resources", "docs:@prompts"])
     end

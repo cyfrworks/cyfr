@@ -802,11 +802,12 @@ defmodule Emissary.External.ProxyTest do
       {:ok, digest} = Sanctum.ToolServerDigest.from_server(row)
       assert [%{server_digest: ^digest}] = Enum.filter(listings, &(&1.server_name == "docs"))
 
-      assert {:ok, %{"docs" => docs, "plain" => plain}} =
-               Proxy.tool_patterns(ctx, ["docs", "plain"])
-
-      assert Enum.sort(docs) == ["*", "@prompts", "@resources"]
-      assert plain == ["*"]
+      assert for(
+               %{server_name: name, tool_patterns: exposed} <- listings,
+               into: %{},
+               do: {name, Enum.sort(exposed)}
+             ) ==
+               %{"docs" => ["*", "@prompts", "@resources"], "plain" => ["*"]}
 
       # The athanor-wide listing is its tools alone. It is kept for a while
       # under the athanor every test here shares: the one another test left

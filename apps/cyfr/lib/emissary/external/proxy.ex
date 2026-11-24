@@ -88,43 +88,12 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  @doc """
-  What each named server of the caller's athanor exposes now
-  (`exposure/2`): the tool patterns its configuration names, from its row,
-  and the reserved name of each offering it declares, read from the
-  process serving that row, started when none runs. A server that does not
-  answer declares nothing.
-  """
-  @impl Sanctum.Proxy
-  @spec tool_patterns(Context.t(), [String.t()]) ::
-          {:ok, %{String.t() => [String.t()]}} | {:error, term()}
-  def tool_patterns(%Context{} = ctx, server_names) when is_list(server_names) do
-    with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
-      named = Enum.filter(servers, &(&1.name in server_names))
-
-      exposing =
-        named
-        |> Task.async_stream(&exposure(&1, declared_or_none(&1, ctx)),
-          max_concurrency: 10,
-          timeout: 15_000,
-          on_timeout: :kill_task
-        )
-        |> Enum.zip(named)
-        |> Map.new(fn
-          {{:ok, exposed}, server} -> {server.name, exposed}
-          {{:exit, _reason}, server} -> {server.name, exposure(server, [])}
-        end)
-
-      {:ok, exposing}
-    end
-  end
-
   # What a server exposes now: the tool patterns its configuration names,
   # which select among its tools alone, and the reserved name of each
   # offering in `declared`, which only naming it matches
   # (`Prima.ToolPattern`). The one answer of what a server exposes: a call's
-  # resolution (`reachable/5`), a consent candidate and a turn's start
-  # (`tool_patterns/2`) read it.
+  # resolution (`reachable/5`), a consent candidate and a turn's listing
+  # (`list_external_tools/2`), which its start holds the grant to, read it.
   defp exposure(server, declared) do
     reserved = for {name, offering} <- @reserved, offering in declared, do: name
     own_patterns(server) ++ reserved
@@ -146,20 +115,15 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  defp declared_or_none(server, ctx) do
-    case declared(server, ctx) do
-      {:ok, declared} -> declared
-      {:error, _reason} -> []
-    end
-  end
-
   @doc """
   Each of the caller's athanor's servers named `server_names` that
   answers, with its tools as `list_external_tools/1` shapes them, then a
   definition of CYFR's own for each of its reserved names it declares
-  (`server:@resources`, `server:@prompts`), and the consent digest of the
-  configuration they were read from, read now and kept nowhere: no other
-  server is started or asked.
+  (`server:@resources`, `server:@prompts`), what it exposes
+  (`exposure/2`) and the consent digest of the configuration they were
+  read from, read now and kept nowhere: no other server is started or
+  asked. Each is read in a task of its own, ten at a time, and one that
+  has not answered within 15 s is not waited for (`read_servers/2`).
   """
   @impl Sanctum.Proxy
   @spec list_external_tools(Context.t(), [String.t()]) :: [Sanctum.Proxy.server_listing()]
@@ -167,7 +131,13 @@ defmodule Emissary.External.Proxy do
     for {server, digest, %{tools: tools, declared: declared}} <-
           read_servers(ctx, &(&1.name in server_names)) do
       reserved = for offering <- declared, do: reserved_entry(server, offering)
-      %{server_name: server.name, server_digest: digest, tools: shaped(server, tools) ++ reserved}
+
+      %{
+        server_name: server.name,
+        server_digest: digest,
+        tool_patterns: exposure(server, declared),
+        tools: shaped(server, tools) ++ reserved
+      }
     end
   end
 

@@ -111,9 +111,9 @@ defmodule Sanctum.Proxy do
   @doc """
   Resolve `name` as a proxied `server:tool` a caller on `plane` may call:
   the server present in the caller's athanor and enabled, the tool one
-  it exposes (`c:tool_patterns/2`: its patterns select a tool, and a
-  reserved name, `@resources` or `@prompts`, is exposed while the server
-  declares that offering), and the plane one the server is reachable from.
+  it exposes (its patterns select a tool, and a reserved name, `@resources`
+  or `@prompts`, is exposed while the server declares that offering), and
+  the plane one the server is reachable from.
   `opts[:server]` is the server row the caller already judged, which the
   target then names; without it the row is read once.
   """
@@ -148,34 +148,27 @@ defmodule Sanctum.Proxy do
   @typedoc """
   One server's listing: its tools, named `server:tool`, then a definition
   of each of its reserved names it declares (`server:@resources`,
-  `server:@prompts`), and the consent digest of the configuration they were
-  read from (nil when it has none), so a definition is judged under the
-  revision it came from.
+  `server:@prompts`), the tool patterns it exposes as they were read (those
+  its configuration names and the reserved name of each offering it
+  declares, which only naming it matches: `Prima.ToolPattern`), and the
+  consent digest of the configuration they were read from (nil when it has
+  none), so a definition is judged under the revision it came from.
   """
   @type server_listing :: %{
           server_name: String.t(),
           server_digest: String.t() | nil,
+          tool_patterns: [String.t()],
           tools: [map()]
         }
 
   @doc """
   The listings of the caller's athanor's servers named `server_names`
   that answer, read now, starting and asking no other server: what a turn
-  may hand (`Aqua.Loop.Turn`).
+  hands (`Aqua.Loop.Turn`) and what its start holds the grant to, each
+  narrowed by the servers' exposure as one reading (`Aqua.Loop`). A server
+  that does not answer is absent.
   """
   @callback list_external_tools(Context.t(), server_names :: [String.t()]) :: [server_listing()]
-
-  @doc """
-  The tool patterns each of the caller's athanor's servers named
-  `server_names` exposes now: those its configuration names, read from its
-  row, and the reserved name of each of its resources and prompts it
-  declares, read from the server, which is started when it is not; one that
-  does not answer declares none, and a server the athanor does not hold is
-  absent. What a consent narrows a grant's patterns by, and what a turn's
-  start holds the grant to (`Aqua.Loop`).
-  """
-  @callback tool_patterns(Context.t(), server_names :: [String.t()]) ::
-              {:ok, %{String.t() => [String.t()]}} | {:error, term()}
 
   @doc """
   The argument names a proxied call's `c:dispatch/5` never carries to its

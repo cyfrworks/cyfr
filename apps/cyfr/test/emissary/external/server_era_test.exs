@@ -652,10 +652,11 @@ defmodule Emissary.External.ServerEraTest do
         refute_received {:asked, "tools/list", _named}
 
         if unquote(era) == :modern do
-          # Never initialized, and a read names its subject as the revision
-          # asks.
+          # Never initialized, and a read and a get name their subjects as
+          # the revision asks.
           refute_received {:asked, "initialize", _named}
           assert_received {:asked, "resources/read", ["file:///a"]}
+          assert_received {:asked, "prompts/get", ["greet"]}
         end
       end
     end
