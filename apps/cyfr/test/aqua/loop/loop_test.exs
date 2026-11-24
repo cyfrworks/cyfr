@@ -1477,7 +1477,11 @@ defmodule Aqua.LoopTest do
                  tool_result(
                    "c1",
                    "files",
-                   Jason.encode!(%{"written" => "data/x.md"}, pretty: true),
+                   Aqua.Reader.outside(
+                     Aqua.Reader.mark(thread.id),
+                     "files",
+                     Jason.encode!(%{"written" => "data/x.md"}, pretty: true)
+                   ),
                    false
                  ),
                  tool_result("c2", "notes", "a newer message arrived", false)
@@ -1749,7 +1753,12 @@ defmodule Aqua.LoopTest do
             "type" => "tool_result",
             "tool_call_id" => "c1",
             "name" => "files",
-            "content" => Jason.encode!(%{"written" => "data/note.md"}, pretty: true),
+            "content" =>
+              Aqua.Reader.outside(
+                Aqua.Reader.mark(thread.id),
+                "files",
+                Jason.encode!(%{"written" => "data/note.md"}, pretty: true)
+              ),
             "is_error" => false
           }
         ]
@@ -1789,7 +1798,12 @@ defmodule Aqua.LoopTest do
                        "type" => "tool_result",
                        "tool_call_id" => "c2",
                        "name" => "files",
-                       "content" => Jason.encode!(%{"entries" => []}, pretty: true),
+                       "content" =>
+                         Aqua.Reader.outside(
+                           Aqua.Reader.mark(thread.id),
+                           "files",
+                           Jason.encode!(%{"entries" => []}, pretty: true)
+                         ),
                        "is_error" => false
                      }
                    ]

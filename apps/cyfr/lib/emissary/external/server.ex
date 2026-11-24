@@ -331,6 +331,10 @@ defmodule Emissary.External.Server do
       :home_id,
       :server_info,
       :error,
+      # What a call is answered with while the server is in error: the
+      # last failure, the server's own words tagged as its own
+      # (`server_error/1`), masked as `error` is.
+      :failure,
       :last_init_attempt,
       # Which era this peer speaks. Determined once per connection and
       # cached: it is a property of the server, not of a request, and
@@ -479,7 +483,7 @@ defmodule Emissary.External.Server do
 
     cond do
       state.status != :ready ->
-        {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
+        {:reply, {:error, not_ready(state)}, state}
 
       offering not in state.offers ->
         {:reply, undeclared(state, offering), state}
@@ -496,13 +500,20 @@ defmodule Emissary.External.Server do
             start_program_call(state, from, call, offering)
 
           {:error, reason, state} ->
-            {:reply, {:error, mask_credentials(failure_sentence(reason), state)}, state}
+            {:reply, {:error, failure(reason, state)}, state}
         end
 
       true ->
         start_call(state, from, call)
     end
   end
+
+  # Why a call is not run while the server is in error, in the server's
+  # own words where its last failure was its (`server_error/1`).
+  defp not_ready(%{failure: {:outside_error, words}} = state),
+    do: {:outside_error, "Server #{state.name} is not ready: #{words}"}
+
+  defp not_ready(state), do: "Server #{state.name} is not ready: #{state.error}"
 
   # A program's call starts on the session it opened only when the process
   # behind that session declared the call's offering.
@@ -761,7 +772,13 @@ defmodule Emissary.External.Server do
           state
 
         _moved_or_gone ->
-          %{state | status: :error, error: "the server's configuration changed", grant: nil}
+          %{
+            state
+            | status: :error,
+              error: "the server's configuration changed",
+              failure: nil,
+              grant: nil
+          }
       end
 
     GenServer.reply(
@@ -946,7 +963,7 @@ defmodule Emissary.External.Server do
         {:ok, result}
 
       {:ok, %Message{type: :error, error: error}} ->
-        {:error, upstream_message(error)}
+        {:error, server_error(error)}
 
       {:legacy, _state} ->
         {:error, "#{state.name} changed protocol era mid-connection"}
@@ -1281,7 +1298,7 @@ defmodule Emissary.External.Server do
             {:ok, result, state}
 
           {:ok, %Message{type: :error, error: error}} ->
-            {:error, upstream_message(error), state}
+            {:error, server_error(error), state}
 
           nil when running ->
             await(state, session, id, deadline)
@@ -1527,7 +1544,12 @@ defmodule Emissary.External.Server do
   # log gets the masked term (`log_reason/2`); the credential is never the
   # diagnostic part.
   defp fail_initialize(state, reason) do
-    state = %{state | status: :error, error: mask_credentials(failure_sentence(reason), state)}
+    state = %{
+      state
+      | status: :error,
+        error: mask_credentials(failure_sentence(reason), state),
+        failure: failure(reason, state)
+    }
 
     Logger.error(
       "[Emissary.External.Server] Failed to initialize #{state.name}: " <>
@@ -1537,14 +1559,28 @@ defmodule Emissary.External.Server do
     {:error, state.error, state}
   end
 
+  defp failure_sentence({:outside_error, words}), do: words
   defp failure_sentence(reason) when is_binary(reason), do: reason
   defp failure_sentence(%{__exception__: true} = exception), do: Exception.message(exception)
   defp failure_sentence(reason), do: Refusals.render(reason)
 
-  # An upstream JSON-RPC error's own message; one without a message is
-  # named as such rather than spelled.
-  defp upstream_message(%{"message" => message}) when is_binary(message), do: message
-  defp upstream_message(_error), do: "the server answered an error with no message"
+  # What a caller is answered for a failure, masked as `state.error` is:
+  # the server's own words still tagged as its own, any other reason its
+  # sentence.
+  defp failure({:outside_error, words}, state),
+    do: {:outside_error, mask_credentials(words, state)}
+
+  defp failure(reason, state), do: mask_credentials(failure_sentence(reason), state)
+
+  # The one reading of a server's JSON-RPC error: its own words, tagged as
+  # its own (`Prima.Refusal.outside?/1`), wherever it answered one, so a
+  # model reads them as outside data. One without a message is named as
+  # such rather than spelled. Nothing else makes a reason of a server's
+  # message.
+  defp server_error(%{"message" => message}) when is_binary(message),
+    do: {:outside_error, message}
+
+  defp server_error(_error), do: {:outside_error, "the server answered an error with no message"}
 
   # Try the current protocol first; fall back to the handshake only when the
   # answer says the peer cannot speak it.
@@ -1590,7 +1626,7 @@ defmodule Emissary.External.Server do
     case http_post(state, Message.encode_request(request_id, "server/discover", %{})) do
       {:ok, %Message{type: :response, result: result}} -> {:ok, declared(result), state}
       {:ok, %Message{type: :error, error: %{"code" => -32_601}}} -> {:legacy, state}
-      {:ok, %Message{type: :error, error: error}} -> {:error, upstream_message(error)}
+      {:ok, %Message{type: :error, error: error}} -> {:error, server_error(error)}
       {:legacy, state} -> {:legacy, state}
       {:error, reason} -> {:error, reason}
     end
@@ -1651,7 +1687,7 @@ defmodule Emissary.External.Server do
         with {:ok, state} <- keep_session(state, resp_headers), do: {:ok, result, state}
 
       {{:ok, %Message{type: :error, error: error}}, _resp_headers} ->
-        {:error, upstream_message(error)}
+        {:error, server_error(error)}
 
       {{:error, reason}, _resp_headers} ->
         {:error, reason}
@@ -1723,7 +1759,7 @@ defmodule Emissary.External.Server do
 
     case http_post(state, Message.encode_request(request_id, "tools/list", params)) do
       {:ok, %Message{type: :response, result: result}} -> {:ok, result, state}
-      {:ok, %Message{type: :error, error: error}} -> {:error, upstream_message(error)}
+      {:ok, %Message{type: :error, error: error}} -> {:error, server_error(error)}
       {:legacy, state} -> {:legacy, state}
       {:error, reason} -> {:error, reason}
     end

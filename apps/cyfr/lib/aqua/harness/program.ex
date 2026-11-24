@@ -524,8 +524,16 @@ defmodule Aqua.Harness.Program do
     }
   end
 
+  # Every line the program is handed is delivered (`Aqua.Reader.deliver/2`):
+  # every text in it read without the thread's mark, the engine's frames and
+  # rule then given it. The one place a line passes before it leaves.
   defp write(%{brain: brain, work: work}, command),
-    do: Opus.Brain.write(brain, bound(work), command)
+    do:
+      Opus.Brain.write(
+        brain,
+        bound(work),
+        Reader.deliver(command, Reader.mark(work.turn.thread_id))
+      )
 
   # The harness starts, resuming the thread's native session if it keeps
   # one, with the posts whose delivery its transcript says. A read that
@@ -1216,7 +1224,7 @@ defmodule Aqua.Harness.Program do
           "t" => "answer",
           "id" => step.id,
           "ask" => call && Tape.payload(call)["tool_call_id"],
-          "content" => row.content || "",
+          "content" => Reader.result(row, Reader.token()),
           "is_error" => ask.outcome != "ok"
         }
 
@@ -1457,7 +1465,7 @@ defmodule Aqua.Harness.Program do
         "thread so far is above, with what your calls in this work answered; they are not " <>
         "run again. Go on with the last message, or say where it stands."
 
-  defp notice_text(_work, _answer, row), do: Reader.late_answer(row)
+  defp notice_text(_work, _answer, row), do: Reader.late_answer(row, Reader.token())
 
   defp prompt_context(%{work: work}, "fresh") do
     with {:ok, answers} <- answers(work),

@@ -232,6 +232,18 @@ defmodule Opus.Programs.Definition do
           "#3dee9f26e298156db673f6ce2a0f5dfed5b30006e04ceb9809c68070e7b717587b33a3da0f8bc2eda45af81a50bc8b14c82b28ae5832bcfe3e7fd49397117b31 " <>
           "arm64=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-arm/cli_linux_arm64.tar.gz" <>
           "#23c193151499a4986fd5fa0d8132665cc8ffbad6cc0b3ff4fd53a2cb68abb76b149a992b836d53063443cd89add335f14d8134fb02abdcecbf6e1eaef6c53d33"
+    },
+    # OpenCode's npm package fetches every Linux build of it; `cyfr-fetch`
+    # fetches the one release archive for the machine instead.
+    %{
+      name: "opencode",
+      title: "OpenCode",
+      command:
+        "cyfr-opencode cyfr-fetch opencode 2.4.1 " <>
+          "amd64=https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-x64.tar.gz" <>
+          "#c691f7840dd3429952c6508b0bad427f1e8611f2038b339c4ba3a78dfadcbca27eeb492e76d30d06733e3a37a8eea944e90ccff960b5f5a5d3aa43674873b2b9 " <>
+          "arm64=https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-arm64.tar.gz" <>
+          "#2b72b08a1a2f8a8784d6c272b551578ff98bc6c67ff44c137e70aaeceece50a9dce2810c084405ecfcb61b7b7e8754d1f0450e7030107741ccda6655d25e5582"
     }
   ]
 

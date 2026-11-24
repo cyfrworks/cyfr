@@ -300,6 +300,28 @@ class Stack(imagesuite.Stack):
                 out.append({"pid": int(pid), "uid": int(uid), "runner": runner, "home": home})
         return out
 
+    def runner_left(self, runner):
+        """What is left of a runner (`runner_processes`' entry): its VM by
+        pid, and every process whose command line names its home or whose
+        environment's HOME is it, as every child the runner started
+        inherited. Its uid is no measure: the pool hands a freed uid to a
+        fresh runner as soon as it is free."""
+        script = r"""
+          for d in /proc/[0-9]*; do
+            [ -r "$d/cmdline" ] || continue
+            home="$(tr '\0' '\n' < "$d/environ" 2>/dev/null | sed -n 's/^HOME=//p')"
+            cmd="$(tr '\0\n|' '   ' < "$d/cmdline" 2>/dev/null)"
+            printf '%s|%s|%s\n' "${d#/proc/}" "$home" "$cmd"
+          done"""
+        left = []
+        for line in listing(self.observe(script), "the runner's processes").splitlines():
+            if line.count("|") < 2:
+                continue
+            pid, home, cmd = line.split("|", 2)
+            if pid.isdigit() and (int(pid) == runner.get("pid") or home == runner["home"] or runner["home"] in cmd):
+                left.append({"pid": int(pid), "home": home, "cmd": cmd.strip()})
+        return left
+
     def runner_process(self, runner_id):
         return next((p for p in self.runner_processes() if p["runner"] == runner_id), None)
 

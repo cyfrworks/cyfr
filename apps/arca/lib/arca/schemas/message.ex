@@ -31,6 +31,10 @@ defmodule Arca.Schemas.Message do
   does: a `text` row sent by `system` on a daily thread, its payload's
   `waits_since` the wait it names (`Aqua.Nudge`).
 
+  A call's result, a `tool_result` or a `page_result`, is `proposed`
+  when it proposes what the person saves, a scroll a turn's call answered
+  in place of writing it, which the thread shows them as a card.
+
   A `nudge` is the server's line to a quiet workspace thread's Aqua
   (`Aqua.Nudge`), sent by `system` and written in the server's voice:
   the ask to say where its work stands. It is no post: it counts as
@@ -62,7 +66,7 @@ defmodule Arca.Schemas.Message do
   # (`Arca.TurnStorage.end_call/4`).
   @kinds ~w(text error system tool_call tool_result compaction turn_aborted
              opening pointer report page_call page_result nudge)
-  @statuses ~w(pending error expired answered)
+  @statuses ~w(pending error expired answered proposed)
 
   @doc """
   A reply's `outcome` vocabulary, the `messages_outcome_known`
