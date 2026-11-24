@@ -57,6 +57,8 @@ function reset({relaunch = false} = {}) {
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
+  world.endedSelf = []
+  world.trace = []
   world.menus = []
   world.spawnedIn = []
 }
@@ -202,6 +204,18 @@ function cyfr() {
     kill() { child.killed = true }
   })
   child.heard = []
+  // What main tells cyfr and its input's end, in the order main does them,
+  // beside what it says (world.trace): heard reads them a turn later.
+  const write = child.stdin.write.bind(child.stdin)
+  const end = child.stdin.end.bind(child.stdin)
+  child.stdin.write = (chunk, ...rest) => {
+    for (const line of String(chunk).split("\n").filter(Boolean)) world.trace.push(`told ${JSON.parse(line).type}`)
+    return write(chunk, ...rest)
+  }
+  child.stdin.end = (...rest) => {
+    world.trace.push("input ended")
+    return end(...rest)
+  }
   child.stdin.setEncoding("utf8")
   child.stdin.on("data", (chunk) => {
     for (const line of chunk.split("\n").filter(Boolean)) child.heard.push(JSON.parse(line))
@@ -1255,9 +1269,12 @@ async function hopped() {
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
   const account = live().find((w) => w.webContents.url === hop)
+  // The page's own navigation to the answer, as the engine raises it:
+  // did-start-navigation first, then will-navigate.
   const answer = () => {
     const back = {url: ANSWER, isMainFrame: true, initiator: account.webContents.mainFrame, prevented: false,
       preventDefault() { this.prevented = true }}
+    account.webContents.emit("did-start-navigation", {url: ANSWER, isMainFrame: true, isSameDocument: false})
     account.webContents.emit("will-navigate", back)
     assert.ok(back.prevented, "the account window does not load the return")
   }
@@ -1282,6 +1299,51 @@ test("an account window whose page is lost or failed to load ends the ceremony, 
     await settled()
     assert.ok(account.destroyed, `${end}: the ceremony ended`)
     assert.ok(!page.destroyed && page.webContents.url === HOME + "/login", end)
+  }
+})
+
+// Each way the account window's top frame reaches a page, as the pinned
+// engine reports it (measured on Electron 45.4.1 by a probe of the
+// recheck): the events it raises, in order, for a navigation to `url`.
+const ENGINE = {
+  "a history move": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a move within the page's history": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: true}],
+    ["did-navigate-in-page", {}, url, true]],
+  "a reload by main": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a reload by the page": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}],
+    ["will-frame-navigate", pageNavigation(w, url)], ["will-navigate", pageNavigation(w, url)]],
+  "a redirect": (w, url) => [["will-redirect", pageNavigation(w, url)]],
+}
+function pageNavigation(w, url) {
+  return {url, isMainFrame: true, initiator: w.webContents.mainFrame, prevented: false, preventDefault() { this.prevented = true }}
+}
+
+test("every way the account window reaches a page that takes a request is read by the one reader, and a refused one ends the ceremony", async () => {
+  const current = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const refused = {
+    "no request": `${ACCOUNT}/account/new`,
+    "an expired request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, expires_at: Date.now() - 1})}`,
+    "another CYFR's request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, audience: "https://bob.example", return: "https://bob.example/login"})}`,
+  }
+  for (const [how, events] of Object.entries(ENGINE)) {
+    for (const [why, url] of Object.entries(refused)) {
+      const {page} = await hopped()
+      const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+      for (const [name, ...args] of events(account, url)) account.webContents.emit(name, ...args)
+      await settled()
+      assert.ok(account.destroyed, `${how}, ${why}: the ceremony ended`)
+      assert.equal(page.webContents.url, HOME + "/login", `${how}, ${why}: nothing was delivered`)
+    }
+  }
+  // Its own page, as the reader reads it, stays: a reload of it by main or
+  // by the page, and a move within it.
+  for (const how of ["a reload by main", "a reload by the page", "a move within the page's history"]) {
+    await hopped()
+    const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+    const own = `${ACCOUNT}/account/new#name=&request=${fragment(current)}`
+    for (const [name, ...args] of ENGINE[how](account, own)) account.webContents.emit(name, ...args)
+    await settled()
+    assert.ok(!account.destroyed, `${how} of a page the reader reads: the ceremony goes on`)
   }
 })
 
@@ -1455,7 +1517,9 @@ test("Docker's page, linked from the chooser, opens in the person's browser and 
   assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
 })
 
-test("on macOS and Windows a CYFR just set up opens at the device's pages: main loads none of its own", async () => {
+const TOKEN = "cd".repeat(32)
+
+test("on macOS and Windows a CYFR no one is set up at opens at its setup page, the token in the fragment alone", async () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform"), argv = process.argv
   for (const system of ["darwin", "win32"]) {
     Object.defineProperty(process, "platform", {...platform, value: system})
@@ -1465,22 +1529,21 @@ test("on macOS and Windows a CYFR just set up opens at the device's pages: main 
     try {
       reset()
       // The road is the system's, as the app is started on it.
-      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: () => {}})
+      const said = []
+      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: (line) => said.push(line)})
       await settled()
       child.say({type: "ready", url: READY})
       await settled()
       assert.equal(content().webContents.url, READY + "&road=passkey", system)
-      const attempt = child.proposes(HOME, {road: "device"})
+      const attempt = child.proposes(HOME, {setup: TOKEN})
       await settled()
       await settled()
       assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === attempt), system)
       child.say({type: "opened", home: HOME, attempt: child.attempts})
       await settled()
       await settled()
-      assert.deepEqual(world.loads, [], `${system}: main loaded no page of the CYFR's`)
-      assert.ok(!navigate(content(), "http://127.0.0.1:7340/").prevented, `${system}: the chooser goes on to the device's pages`)
-      await give(content())
-      assert.equal(content().webContents.url, HOME + "/", `${system}: where the device's pages give the CYFR`)
+      assert.deepEqual(world.loads.map((l) => l.url), [`${HOME}/setup#${TOKEN}`], `${system}: the CYFR's setup page`)
+      assert.ok(!said.some((line) => line.includes(TOKEN)), `${system}: no line the app printed carries the token`)
     } finally {
       Object.defineProperty(process, "platform", platform)
       process.argv = argv
@@ -1496,6 +1559,18 @@ const SCREEN = "/home/ana/cyfr"
 const ON_LINUX = {skip: process.platform !== "linux" && "the box's screen runs on Linux alone"}
 const SHELL_PAGE = "http://127.0.0.1:7340/"
 
+// The screen's end by the kernel, recorded: the turn it came in, and what
+// main had done by then: quit or exited, and what it had told cyfr and
+// said, in order, since the test last cleared world.trace.
+const endSelf = () => { world.endedSelf.push({quit: world.quit, exited: world.exited, trace: [...world.trace]}) }
+const sayTraced = (said) => (line) => {
+  said.push(line)
+  world.trace.push(`said ${line}`)
+}
+// What the screen's one end has done by the instant it ends: cyfr told to
+// shut down, its input ended, then the sentence.
+const ENDS = ["told shutdown", "input ended", "said ended: the app's process ends itself, without the toolkit's teardown"]
+
 // The app started as the box's screen for SCREEN (or `project`), on
 // whatever road the platform would give, its shell said ready.
 async function screenStarted(project = SCREEN) {
@@ -1504,7 +1579,7 @@ async function screenStarted(project = SCREEN) {
   world.exited = undefined
   const said = []
   try {
-    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: (line) => said.push(line)})
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: sayTraced(said), endSelf})
     await settled()
     if (world.exited === undefined) {
       child.say({type: "ready", url: SHELL_PAGE})
@@ -1544,14 +1619,14 @@ test("only an explicit project makes the app a screen; another switch value is r
 test("the screen's first page is the shell's own: a chooser there ends the app", ON_LINUX, async () => {
   reset()
   world.screen = SCREEN
-  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}})
+  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}, endSelf})
   world.screen = undefined
   await settled()
   child.say({type: "ready", url: READY})
   await settled()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(content(), undefined)
-  assert.ok(world.quit, "the app quits")
+  assert.equal(world.endedSelf.length, 1, "the app ends itself")
   assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is shut down")
 })
 
@@ -1570,7 +1645,7 @@ test("a lock on the screen hides the page at once and shows the shell's page aga
   assert.notEqual(after.webContents.session, session)
 })
 
-test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end quits with no message", ON_LINUX, async () => {
+test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end ends the app with no message", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
@@ -1586,9 +1661,78 @@ test("on the screen a lost page locks, a failed load shows the shell's page, and
   await settled()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(live().length, 0, "no message window")
-  assert.ok(world.quit, "the app quits, to be started again locked")
+  assert.equal(world.endedSelf.length, 1, "the app ends itself, to be started again locked")
 })
 
+
+test("on the screen cyfr's end ends the app's process in its own turn, after its sentence, with no quit and no exit of the engine's", ON_LINUX, async () => {
+  const said = await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  const quits = []
+  world.app.on("before-quit", () => quits.push("before-quit"))
+  world.exited = undefined
+  world.trace = []
+  // The turn the line from cyfr is read in, and nothing after it: the
+  // toolkit's teardown would run in a later one.
+  child.emit("exit", 0, null)
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: it exited (0)", ...ENDS]}],
+    "ended in that turn, cyfr told and its input ended before the sentence, no quit or exit asked")
+  assert.deepEqual(quits, [])
+  assert.ok(said.length > 0)
+})
+
+test("on the screen the shell's ending ends the app's process once cyfr is told", ON_LINUX, async () => {
+  const said = await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  world.trace = []
+  child.say({type: "ending"})
+  await settled()
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: the screen shell is ending", ...ENDS]}],
+    "cyfr told and its input ended before the sentence")
+  assert.ok(said.length > 0)
+})
+
+// Every road by which the screen's app ends is its one end: cyfr told and
+// its input ended, the sentence, then the process's own end, in the turn
+// the cause came in; none reaches the engine's quit, exit or relaunch. A
+// route other than the one the app started on is its launcher's to start
+// it on (cmd/screen.go, cyfr screen app), never the app's own.
+test("on the screen every end of the app is its one end, and none is the engine's quit, exit or relaunch", ON_LINUX, async () => {
+  const roads = {
+    "cyfr's exit": [() => child.emit("exit", 1, null), "cyfr ended: it exited (1)"],
+    "the shell's ending": [() => child.say({type: "ending"}), "cyfr ended: the screen shell is ending"],
+    "the system's quit": [() => world.app.quit(), null],
+    "the content window closed": [() => content().emit("closed"), null],
+    "a route the app was not started on": [() => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
+      "cyfr ended: it named a route the app was not started on, which the screen's launcher starts it on"],
+    "a CYFR this app does not open": [() => child.say({type: "home", home: "not an address", account: ACCOUNT, attempt: 9}),
+      "cyfr ended: it named a CYFR this app does not open"],
+    "a CYFR it was not keeping to opened": [() => child.say({type: "opened", home: "https://other.example", attempt: 1}),
+      "cyfr ended: it opened a CYFR this app was not keeping to"]
+  }
+  for (const [road, [cause, sentence]] of Object.entries(roads)) {
+    await screenStarted()
+    world.exited = undefined
+    world.trace = []
+    cause()
+    await settled()
+    await settled()
+    assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: [...(sentence ? [`said ${sentence}`] : []), ...ENDS]}], road)
+    assert.equal(world.relaunched, null, road)
+  }
+  // Its first page not the shell's own, the same.
+  reset()
+  world.screen = SCREEN
+  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: sayTraced([]), endSelf})
+  world.screen = undefined
+  await settled()
+  world.trace = []
+  child.say({type: "ready", url: READY})
+  await settled()
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: its first page was not the chooser", ...ENDS]}])
+})
 
 test("on the screen a failed load of the shell's own page locks, and so does a confirmation lost or failed", ON_LINUX, async () => {
   await screenStarted()

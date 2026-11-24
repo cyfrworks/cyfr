@@ -13,9 +13,10 @@
 // desktop, moves the page the same way to a workspace thread's layer. And the desktop's own
 // address with `?publisher=&tincture_name=` (the palette's and Aqua's focus
 // on a tincture, PrismWeb.DesktopLive) is handed to the shell as
-// `focus_named`, and with `?shell=desktops` (the palette's desktops) as the
-// shell's key `shell_key`, each read when the hook mounts and after each
-// move of the page.
+// `focus_named`, and with `?shell=desktops` (the palette's desktops) or
+// `?shell=threads&ref=<id>` (the palette's threads, the ref optional) as
+// the shell's key `shell_key`, each read when the hook mounts and after
+// each move of the page.
 //
 // After each move of the page it tells the shell whether a Dashboard page is
 // now drawn over the desktop (`page_shown`, `desktop` true on the desktop's
@@ -59,11 +60,24 @@ function desktopUrl(href, origin) {
   return url.origin === origin && DESKTOP.test(url.pathname) ? url : null
 }
 
-// The shell's key a desktop address names, or null: only the chooser of
-// desktops is opened from an address.
+// The keys an address may name: the chooser of desktops and the person's
+// threads.
+const SHELL_KEYS = new Set(["desktops", "threads"])
+
+// The shell's key a desktop address names, or null.
 export function shellKeyOf(href, origin) {
   const url = desktopUrl(href, origin)
-  return url && url.searchParams.get("shell") === "desktops" ? "desktops" : null
+  const key = url && url.searchParams.get("shell")
+  return SHELL_KEYS.has(key) ? key : null
+}
+
+// What the shell is handed for a desktop address, or null: its key, and
+// for the person's threads the thread `ref` names, when it names one.
+function shellAsk(href, origin) {
+  const key = shellKeyOf(href, origin)
+  if (!key) return null
+  const ref = key === "threads" ? desktopUrl(href, origin).searchParams.get("ref") : null
+  return ref ? {key, ref} : {key}
 }
 
 // The tincture a desktop address asks the picker to show, or null.
@@ -84,8 +98,8 @@ const ShellPage = {
     const focus = (href) => {
       const asked = focusOf(href, window.location.origin)
       if (asked) this.pushEvent("focus_named", asked)
-      const key = shellKeyOf(href, window.location.origin)
-      if (key) this.pushEvent("shell_key", {key})
+      const ask = shellAsk(href, window.location.origin)
+      if (ask) this.pushEvent("shell_key", ask)
     }
 
     const shown = (href) => {

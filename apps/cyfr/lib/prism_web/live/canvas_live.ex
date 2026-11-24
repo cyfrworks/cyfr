@@ -552,7 +552,7 @@ defmodule PrismWeb.CanvasLive do
     <div
       class="absolute right-4 top-4 z-30 flex items-center rounded-full border border-white/10 bg-black/55 shadow-lg backdrop-blur-md"
       role="toolbar"
-      aria-label="Tincture controls"
+      aria-label="App controls"
     >
       <button
         type="button"
@@ -579,7 +579,7 @@ defmodule PrismWeb.CanvasLive do
         phx-click="close_active_tincture"
         class="flex h-8 w-10 items-center justify-center rounded-r-full text-text-secondary transition-colors hover:bg-white/5 hover:text-text-primary"
         title="Close (Esc)"
-        aria-label="Close tincture"
+        aria-label="Close app"
       >
         <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -964,17 +964,17 @@ defmodule PrismWeb.CanvasLive do
   defp percent(hundredths), do: :erlang.float_to_binary(hundredths / 100, decimals: 2) <> "%"
 
   defp refusal_sentence(:unavailable),
-    do: "This tincture can't be opened right now. Try again shortly."
+    do: "This app can't be opened right now. Try again shortly."
 
   defp refusal_sentence(:undeclared),
-    do: "This tincture is not declared to open here, so it is not opened."
+    do: "This app is not declared to open here, so it is not opened."
 
   defp refusal_sentence(:unregistered),
-    do: "This tincture's version is not registered. Refresh the tinctures and try again."
+    do: "This app's version is not registered. Refresh the apps and try again."
 
   defp refusal_sentence(:ungranted),
-    do: "This tincture asks for what you have not granted it yet, so it is not opened."
+    do: "This app asks for what you have not granted it yet, so it is not opened."
 
   defp refusal_sentence(:refused),
-    do: "Your session can no longer open this tincture. Sign in again."
+    do: "Your session can no longer open this app. Sign in again."
 end

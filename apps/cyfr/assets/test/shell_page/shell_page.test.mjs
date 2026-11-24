@@ -100,6 +100,26 @@ describe("a desktop address naming the chooser of desktops", () => {
   })
 })
 
+describe("a desktop address naming the person's threads", () => {
+  test("is handed to the shell as its key, with the thread it names", () => {
+    at("/a/@alice/?shell=threads&ref=thread_1")
+    const {pushed} = mount()
+    assert.deepEqual(pushed, [{event: "shell_key", payload: {key: "threads", ref: "thread_1"}}])
+  })
+
+  test("is handed to the shell without a ref when it names none, and when the page moves to it", () => {
+    const {pushed} = mount()
+    windowListeners["phx:page-loading-stop"]({detail: {kind: "patch", to: ORIGIN + "/?shell=threads"}})
+    assert.deepEqual(pushed, [{event: "shell_key", payload: {key: "threads"}}])
+  })
+
+  test("hands a ref with no other key", () => {
+    at("/?shell=desktops&ref=thread_1")
+    const {pushed} = mount()
+    assert.deepEqual(pushed, [{event: "shell_key", payload: {key: "desktops"}}])
+  })
+})
+
 describe("shellKeyOf", () => {
   test("reads the chooser's key on the desktop's addresses alone", () => {
     for (const path of ["/", "/a", "/a/@alice", "/a/@alice/"]) {

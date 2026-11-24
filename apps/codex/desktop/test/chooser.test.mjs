@@ -500,18 +500,22 @@ test("after a lock the chooser shows the setup's progress again, and once it is 
   }
 })
 
-test("on the passkey road too the CYFR set up opens at the device's pages, and every request says the time its page was shown in", async () => {
+test("the CYFR set up opens at the device's pages on the six-word road, through main on the passkey road, and every request says the time its page was shown in", async () => {
   const done = {setup: {run: 1, folder: "/home/ada/cyfr", steps: ["files", "settings", "images", "start"], done: true, seq: 2}}
-  const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
-  const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1, epoch: 4}, {}, ROAD, {docker: [{docker: {ready: true}}], setup})
-  $("here").fire("click")
-  await settled()
-  $("start").fire("click")
-  await settled()
-  assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {picks: 1, run: 0})
-  assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {picks: 1, run: 1}])
-  assert.deepEqual(went.byItself, ["/"], "the device's pages, where the first person is made")
-  assert.deepEqual(went.epochs, [0, 4, 4, 4, 4], "the state asked first, then each request in the time it answered")
+  for (const [road, byItself] of [["#token=t", ["/"]], [ROAD, []]]) {
+    const setup = {"/bootstrap/start": [running([], 1)], "/bootstrap/setup": [done], "/bootstrap/open": [{cyfr: "http://localhost:4000", next: "/"}]}
+    const {$, went} = await chooser("", {folder: "/home/ada/cyfr", picks: 1, epoch: 4}, {}, road, {docker: [{docker: {ready: true}}], setup})
+    $("here").fire("click")
+    await settled()
+    $("start").fire("click")
+    await settled()
+    assert.deepEqual(went.asked.find(([p]) => p === "/bootstrap/start")[1], {picks: 1, run: 0}, road)
+    assert.deepEqual(went.asked.at(-1), ["/bootstrap/open", {picks: 1, run: 1}], road)
+    // The device's pages make the first person on the six-word road; on
+    // the passkey road main opens the CYFR's setup page itself.
+    assert.deepEqual(went.byItself, byItself, road)
+    assert.deepEqual(went.epochs, [0, 4, 4, 4, 4], "the state asked first, then each request in the time it answered")
+  }
 })
 
 test("a Start refused because the folder changed shows the folder now and its sentence, and the next press is for it", async () => {

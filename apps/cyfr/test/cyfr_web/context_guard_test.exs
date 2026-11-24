@@ -679,7 +679,7 @@ defmodule CyfrWeb.ContextGuardTest do
       assert {:ok, ctx} = Caller.establish(token)
       assert {:ok, _still_stands} = Caller.revalidate_session(ctx)
 
-      refute html =~ "Failed to pull #{reference}"
+      refute html =~ "Failed to pull review-result 1.0.0"
       assert html =~ "Your session could not be checked just now."
     end
 

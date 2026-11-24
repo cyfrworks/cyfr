@@ -59,7 +59,10 @@ defmodule Aqua.Crew do
       whoever sent the request: it opens a turn whose reply address is
       the request, steers the member's turn when the steer rule admits it
       (`Aqua.Runner.steer?/2`), or waits as a turn of its own. The brain
-      options it sets ride on the turn it opens.
+      options it sets ride on the turn it opens. Delivered, the request
+      is announced on its room again (`Cyfr.Bus.ThreadEvent` `:request`):
+      a view of the room that read its crew threads when the request
+      landed, before the member's thread was made, reads them again.
     * A reply lands on the request's room, sent by the member and
       addressed to the request's sender, and answers every request the
       record names. To the soul it opens or steers the soul's turn; to
@@ -805,6 +808,7 @@ defmodule Aqua.Crew do
       )
       |> tap(&unlanded(&1, ctx, child.id, id))
       |> delivered("applied", fn reason -> failed(ctx, record, request, reason, held) end)
+      |> tap(&announce_delivered(&1, ctx, request))
     else
       {:error, reason} ->
         _ = Aqua.Attachments.discard(ctx, child.id, id)
@@ -814,6 +818,13 @@ defmodule Aqua.Crew do
           else: {:wait, reason}
     end
   end
+
+  # The request delivered, told to its room again now that the member's
+  # thread stands; a request answered failed instead is told by its reply.
+  defp announce_delivered({:ok, "applied"}, ctx, request),
+    do: Tape.announce(ctx, request.thread_id, :request, request)
+
+  defp announce_delivered(_answer, _ctx, _request), do: :ok
 
   # A request's file that is gone, or whose thread went with it, is one
   # the member is not given: the person reads that it is no longer kept.

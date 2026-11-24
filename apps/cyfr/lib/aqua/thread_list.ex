@@ -3,18 +3,23 @@
 
 defmodule Aqua.ThreadList do
   @moduledoc """
-  One person's list of threads as a canvas reads it, the `threads.changes`
-  stream (`Aqua.Providers.Thread.streams/0`), and the writers'
-  announcements of its person's own threads on their `Cyfr.Bus.threads/2`
-  topic (`Cyfr.Bus.ThreadListed`).
+  One person's list of threads: as a view reads it (`threads/2`, Aqua's
+  panel and the command palette), as a canvas reads it, the
+  `threads.changes` stream (`Aqua.Providers.Thread.streams/0`), and the
+  writers' announcements of its person's own threads on their
+  `Cyfr.Bus.threads/2` topic (`Cyfr.Bus.ThreadListed`).
 
-  The list is the athanor's daily and workspace threads (`daily`,
+  The list is one query, which the view's list and the stream's refresh
+  both read: the athanor's daily and workspace threads (`daily`,
   `workspace`; a crew member's child thread is the room's, never listed),
   each as `Cyfr.Providers.Threads` derives its item, an archived one
   among them, which a canvas shows behind its Archived filter, and the
   active shared threads the person sits in (`shared`, as
   `Sanctum.SharedThreads.listed/1` names them); a shared thread's
-  `unread` counts the messages unread to the person.
+  `unread` counts the messages unread to the person. A title asked for
+  is matched as `thread.search` folds text (`Arca.ThreadStorage.list/2`'s
+  `:title`), over every thread of the athanor before the list's window,
+  and a shared thread's title the same way.
 
   `changed/2` follows the writes that move a listed thread's row as the
   list shows it: its creation, a message accepted into it, a turn's end,
@@ -33,32 +38,123 @@ defmodule Aqua.ThreadList do
 
   @listed Listing.listed_kinds()
 
+  @typedoc """
+  A thread as a view lists it: its kind, its title (a daily thread's is
+  its date), a workspace thread's `state` (nil for the others), its last
+  activity, whether it waits on the person, how many of its posts they
+  have not seen and whether it is archived.
+  """
+  @type entry :: %{
+          id: String.t(),
+          kind: :daily | :workspace | :shared,
+          title: String.t() | nil,
+          state: String.t() | nil,
+          last_activity: DateTime.t(),
+          waits_on_you: boolean(),
+          unread: non_neg_integer(),
+          archived: boolean()
+        }
+
+  # The most characters of a title asked for that a search reads; the
+  # rest is dropped where the text enters.
+  @title_max 100
+
+  @doc """
+  The caller's list of threads as a view reads it, the latest activity
+  first. `title:` is text a thread's title holds, its first
+  #{@title_max} characters, matched by the store over every thread of
+  theirs, the oldest included, ASCII letters folded to lower case and
+  every other character as itself (`Arca.ThreadStorage.list/2`'s
+  `:title`); nil lists the windows the refresh reads. `kind: :workspace`
+  and `archived: false` ask for those threads as such, before the
+  window: the unarchived workspace threads are the latest of their own,
+  whatever other threads are newer.
+  """
+  @spec threads(Context.t(), keyword()) :: {:ok, [entry()]} | {:error, term()}
+  def threads(%Context{} = ctx, opts) when is_list(opts) do
+    with {:ok, listed} <- read(ctx, opts) do
+      {:ok, Enum.map(listed, &entry/1)}
+    end
+  end
+
   @doc """
   The refresh of `threads.changes`: the caller's athanor's daily and
   workspace threads, the latest of those not archived and the latest of
   those archived, as many of each as `Arca.ThreadStorage.list/2` reads by
-  default (so an older one is found by search, not here), and the active
-  shared threads the caller sits in, the latest activity first, each as
-  its live payload reads. The subject is the caller's own id, which the
-  gate binds.
+  default (so an older one is found by its title, not here), and the
+  active shared threads the caller sits in, the latest activity first,
+  each as its live payload reads. The subject is the caller's own id,
+  which the gate binds.
   """
   @spec listed(Context.t(), String.t()) :: {:ok, [ThreadListed.t()]} | {:error, term()}
-  def listed(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, _subject)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
-    actor = Context.actor(ctx)
-
-    with active when is_list(active) <- Threads.list(actor, kind: @listed, archived: false),
-         archived when is_list(archived) <- Threads.list(actor, kind: @listed, archived: true),
-         threads = active ++ archived,
-         {:ok, person} <- Listing.person(actor),
-         {:ok, shared} <- Sanctum.SharedThreads.listed(user_id),
-         {:ok, items} <- items(actor, Users.public_name(person), threads) do
-      items = items ++ Enum.map(shared, &ThreadListed.new(actor, :shared, &1))
-      {:ok, Enum.sort_by(items, & &1.last_activity, {:desc, DateTime})}
+  def listed(%Context{} = ctx, _subject) do
+    with {:ok, listed} <- read(ctx, []) do
+      {:ok, Enum.map(listed, fn {item, _state} -> item end)}
     end
   end
 
-  def listed(%Context{}, _subject), do: {:error, :no_athanor}
+  # The one query: each thread as its live payload reads, with a
+  # workspace thread's state beside it.
+  defp read(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, opts)
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
+    actor = Context.actor(ctx)
+    title = opts |> Keyword.get(:title) |> bounded()
+    kind = Keyword.get(opts, :kind)
+    kinds = if kind == :workspace, do: ["workspace"], else: @listed
+    windows = if Keyword.get(opts, :archived) == false, do: [false], else: [false, true]
+    query = [kind: kinds, title: title]
+
+    with {:ok, threads} <- windows(actor, windows, query),
+         {:ok, person} <- Listing.person(actor),
+         {:ok, shared} <- shared(user_id, kind),
+         {:ok, items} <- items(actor, Users.public_name(person), threads) do
+      shared =
+        for listing <- shared,
+            titled?(listing.title, title),
+            do: {ThreadListed.new(actor, :shared, listing), nil}
+
+      {:ok, Enum.sort_by(items ++ shared, &elem(&1, 0).last_activity, {:desc, DateTime})}
+    end
+  end
+
+  defp read(%Context{}, _opts), do: {:error, :no_athanor}
+
+  defp windows(actor, windows, query) do
+    Enum.reduce_while(windows, {:ok, []}, fn archived, {:ok, acc} ->
+      case Threads.list(actor, [archived: archived] ++ query) do
+        rows when is_list(rows) -> {:cont, {:ok, acc ++ rows}}
+        {:error, _} = unread -> {:halt, unread}
+      end
+    end)
+  end
+
+  defp shared(_user_id, :workspace), do: {:ok, []}
+  defp shared(user_id, _kind), do: Sanctum.SharedThreads.listed(user_id)
+
+  defp bounded(nil), do: nil
+  defp bounded(title) when is_binary(title), do: String.slice(title, 0, @title_max)
+
+  # A shared thread's title, folded as the store folds a title: ASCII
+  # letters to lower case, every other character as itself. A pair has
+  # none, and matches only when no title is asked for.
+  defp titled?(_title, nil), do: true
+  defp titled?(nil, _asked), do: false
+
+  defp titled?(title, asked),
+    do: String.contains?(String.downcase(title, :ascii), String.downcase(asked, :ascii))
+
+  defp entry({%ThreadListed{} = item, state}) do
+    %{
+      id: item.id,
+      kind: item.kind,
+      title: item.title,
+      state: state,
+      last_activity: item.last_activity,
+      waits_on_you: item.waits_on_you,
+      unread: item.unread,
+      archived: item.archived == true
+    }
+  end
 
   @doc """
   Move the person's read mark of `thread_id` to `seq`, forward only
@@ -86,9 +182,12 @@ defmodule Aqua.ThreadList do
   defp items(actor, name, threads) do
     Enum.reduce_while(threads, {:ok, []}, fn thread, {:ok, acc} ->
       case Listing.item(actor, name, thread) do
-        {:ok, item} -> {:cont, {:ok, [item | acc]}}
+        {:ok, item} -> {:cont, {:ok, [{item, state(thread)} | acc]}}
         {:error, _} = unread -> {:halt, unread}
       end
     end)
   end
+
+  defp state(%{kind: "workspace", workspace_state: state}), do: state
+  defp state(_thread), do: nil
 end

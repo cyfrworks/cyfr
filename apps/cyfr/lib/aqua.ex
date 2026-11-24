@@ -206,13 +206,15 @@ defmodule Aqua do
   defdelegate mark_read(ctx, thread_id, seq), to: Aqua.ThreadList
 
   @doc """
-  The person's workspace threads a view lists, the latest activity
-  first: each at work or waiting on them, and each whose work ended with
-  posts they have not seen (`Aqua.Providers.Workspace.records/1`).
+  The person's list of threads, the latest activity first: their
+  athanor's daily and workspace threads, archived ones marked, and the
+  shared threads they sit in, each with a workspace thread's state;
+  `title:` narrows it to the threads whose title holds that text, folded
+  as a search folds it, over every thread of theirs
+  (`Aqua.ThreadList.threads/2`).
   """
-  @spec workspaces(Context.t()) ::
-          {:ok, [Aqua.Providers.Workspace.entry()]} | {:error, term()}
-  defdelegate workspaces(ctx), to: Aqua.Providers.Workspace, as: :records
+  @spec threads(Context.t(), keyword()) :: {:ok, [Aqua.ThreadList.entry()]} | {:error, term()}
+  defdelegate threads(ctx, opts), to: Aqua.ThreadList
 
   @doc """
   One workspace thread as a view reads it, with the daily thread's post it
