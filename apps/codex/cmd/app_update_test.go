@@ -440,15 +440,33 @@ func TestUpdateStopsBeforeTheStackWhenTheAppDoesNotComeBack(t *testing.T) {
 	}{
 		{"a desktop", false, "The CYFR app is release 1.1.0, but the CYFR app could not be opened again (refused): open CYFR, then run 'cyfr update' again to update CYFR here; your CYFR was not touched"},
 		{"the box", true, "The CYFR app is release 1.1.0, but the screen could not be started again (refused): start it with 'sudo systemctl start cyfr-screen', then run 'cyfr update' again to update CYFR here; your CYFR was not touched"},
+		{"a session with no display", false, "The CYFR app is release 1.1.0, but the CYFR app was closed and cannot be opened from a session with no display: open CYFR on this computer's desktop, then run 'cyfr update' again to update CYFR here; your CYFR was not touched"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
 			a.theAppsOwn()
 			a.road.ran, a.road.box = true, c.box
 			refused := errors.New("refused")
-			if c.box {
+			switch {
+			case c.box:
 				a.boxStandIn(nil, refused)
-			} else {
+			case c.name == "a session with no display":
+				// The real reopen, in a session with no display (main_test.go):
+				// the app it would start leaves a mark.
+				savedApp, savedDisplay := installedApp, hasDisplay
+				t.Cleanup(func() { installedApp, hasDisplay = savedApp, savedDisplay })
+				hasDisplay = func() bool { return false }
+				mark := filepath.Join(t.TempDir(), "opened")
+				app := filepath.Join(t.TempDir(), "CYFR")
+				writeFile(t, app, "#!/bin/sh\ntouch '"+mark+"'\n")
+				installedApp = func() (string, error) { return app, nil }
+				reopenApp = startInstalledApp
+				t.Cleanup(func() {
+					if _, err := os.Stat(mark); err == nil {
+						t.Error("the app was started in a session with no display")
+					}
+				})
+			default:
 				reopenApp = func() error {
 					a.log = append(a.log, "reopen")
 					return refused

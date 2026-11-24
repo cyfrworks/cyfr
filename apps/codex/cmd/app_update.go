@@ -233,7 +233,10 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 			reopen = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start cyfr-screen'", err)
 		}
 	} else if ran {
-		if err := reopenApp(); err != nil {
+		switch err := reopenApp(); {
+		case errors.Is(err, errNoDisplayToReopen):
+			reopen = "the CYFR app was closed and cannot be opened from a session with no display: open CYFR on this computer's desktop"
+		case err != nil:
 			reopen = fmt.Sprintf("the CYFR app could not be opened again (%v): open CYFR", err)
 		}
 	}
@@ -340,9 +343,19 @@ func askAppToQuit() (bool, error) {
 	}
 }
 
+// errNoDisplayToReopen is startInstalledApp's refusal in a session with no
+// display, a terminal reached over SSH among them: the app started there
+// ends at once (Missing X server or $DISPLAY), though --quit from there
+// reaches and ends the app of the account's desktop.
+var errNoDisplayToReopen = errors.New("this session has no display")
+
 // startInstalledApp opens the installed app, not waiting for it, as
-// cyfr setup opens it.
+// cyfr setup opens it; in a session with no display it opens nothing
+// (errNoDisplayToReopen).
 func startInstalledApp() error {
+	if !hasDisplay() {
+		return errNoDisplayToReopen
+	}
 	app, err := installedApp()
 	if err != nil {
 		return err
