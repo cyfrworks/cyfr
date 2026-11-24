@@ -41,13 +41,30 @@ defmodule PrismWeb.AquaLiveConsentStatusTest do
     assert html =~ ~s(id="aqua-consent-drift-agent:local.aqua")
 
     assert html =~
-             "What uses-remote uses changed since this athanor consented — a capability, a " <>
-               "brain or a component it calls — so it cannot run until you consent again."
+             "What uses-remote uses changed since this athanor consented — a capability, the " <>
+               "model it runs on or a component it calls — so it cannot run until you consent again."
 
     refute html =~ "install"
-    assert html =~ "notes.keep"
+    assert html =~ "(#{Aqua.action_title("notes", "keep")})"
+    refute html =~ "notes.keep"
     assert [_, _] = Regex.scan(~r/Re-consent/, html)
     refute html =~ "Consent status unavailable"
+  end
+
+  test "a drift past four actions names four and counts the rest" do
+    missing = ~w(notes.keep notes.pin notes.list notes.read notes.forget notes.search)
+
+    html =
+      render_component(&AquaLive.consent_status/1,
+        stale_consents: {:ok, [{"agent:local.aqua", {:drifted, missing}}]}
+      )
+
+    shown =
+      missing
+      |> Enum.take(4)
+      |> Enum.map_join(", ", &apply(Aqua, :action_title, String.split(&1, ".")))
+
+    assert html =~ "(#{shown} and 2 more)"
   end
 
   test "nothing stale renders nothing" do

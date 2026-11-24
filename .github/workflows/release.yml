@@ -150,15 +150,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # APT_REFRESH is the UTC date, so each image's upgrade layer is that
-      # day's.
+      # APT_REFRESH is the archive's key (scripts/apt-key.sh), as every
+      # image build's is: each image's upgrade layer is built on what
+      # Debian's archive holds, and the layer's guard holds apt's lists to
+      # it. An archive that cannot be read fails this step.
       - name: Extract metadata
         id: meta
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
           echo "arch=${PLATFORM#linux/}" >> "$GITHUB_OUTPUT"
-          echo "apt-refresh=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          apt_key=$(scripts/apt-key.sh)
+          echo "apt-refresh=$apt_key" >> "$GITHUB_OUTPUT"
 
       # No layer cache, read or written: a published image is built from its
       # sources alone.

@@ -1854,7 +1854,7 @@ defmodule Aqua.LoopTest do
           image.("sun.png", "SUN"),
           text.(""),
           text.("The attached file notes.txt:\n\ntwo stars"),
-          text.("The file art.bmp (image/bmp) is attached, and this brain cannot read it.")
+          text.("The file art.bmp (image/bmp) is attached, and this model cannot read it.")
         ]
       }
     ]

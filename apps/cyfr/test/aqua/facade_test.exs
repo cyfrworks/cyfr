@@ -44,10 +44,10 @@ defmodule Aqua.FacadeTest do
     stream_texts: 1,
     strip_attachment_name: 1,
     thread_state: 2,
+    threads: 2,
     today: 1,
     virtual_tool_catalog: 0,
-    workspace: 2,
-    workspaces: 1
+    workspace: 2
   ]
 
   test "the root answers exactly its roster" do
@@ -85,6 +85,27 @@ defmodule Aqua.FacadeTest do
   test "the virtual catalog is Prima's" do
     assert Aqua.virtual_tool_catalog() == Sanctum.VirtualTools.action_kinds()
     assert Aqua.virtual_tool_catalog() == Aqua.Hands.list_for_panel()
+  end
+
+  test "Aqua's own actions read as what each does" do
+    {:ok, {_module, %{operations: operations}}} = Map.fetch(Sanctum.Catalog.operations(), "aqua")
+    titles = Map.new(operations, &{&1.action, Aqua.action_title("aqua", &1.action)})
+
+    assert titles == %{
+             "list" => "List Aqua, its crew and its guides",
+             "get" => "Read Aqua, a crew member or a guide",
+             "create" => "Add a crew member",
+             "update" => "Change Aqua or a crew member",
+             "delete" => "Remove a crew member",
+             "reset" => "Restore Aqua's shipped files",
+             "status" => "Where each of Aqua's files came from",
+             "skill_list" => "List scrolls",
+             "skill_get" => "Read a scroll",
+             "skill_create" => "Write a new scroll",
+             "skill_update" => "Change a scroll",
+             "skill_delete" => "Remove a scroll",
+             "skill_reset" => "Restore a shipped scroll"
+           }
   end
 
   test "a permission reads by the words its action is declared with, never its id" do
