@@ -49,15 +49,20 @@ defmodule PrismWeb.ThreadPaneLive do
   names them, the soul as Aqua, a crew member by its name. A schedule's
   fire is written in the server's voice and drawn as that schedule's,
   under its name, never as the person's line. A request to a crew member
-  says who asked whom and whether it is answered, with the replies to it
-  beneath it; a reply whose request is not on screen stands on its own.
-  A room lists its crew members' threads; a member's thread names its
-  member, leads back to its room and, while it stands, can be archived
-  (`thread.archive`). The pane opens neither: it asks its host to open
-  the thread, `{:open_thread, id}`. Any thread it shows is deleted from
-  its menu (`thread.delete`), a room with its crew threads, once the
-  person says yes to what goes and what stays; the host leaves a thread
-  the person's list announces removed.
+  says who asked whom and how it stands: pending, then the outcome of the
+  reply that resolved it, its own or another request's (`Arca.Schemas.Message`'s
+  `resolved_by`), the same live and read again; the replies to it stand
+  beneath it, and once its member's thread stands it opens that thread.
+  A reply whose request is not on screen stands on its own. A room lists
+  the threads of the crew members its roster holds (`Aqua.roster/1`): a
+  member taken out of the crew keeps its thread, which the list leaves
+  out. A member's thread names its member, leads back to its room and,
+  while it stands, can be archived (`thread.archive`). The pane opens
+  none of them: it asks its host to open the thread, `{:open_thread,
+  id}`. Any thread it shows is deleted from its menu (`thread.delete`), a
+  room with its crew threads, once the person says yes to what goes and
+  what stays, and the deletion is told to the host, `{:deleted, id}`; the
+  host leaves a thread the person's list announces removed.
 
   The pane sits beside the shared thread the chat overlay shows, when it
   shows one (`PrismWeb.RoomFeed`, the session's `room_feed` and `room`):
@@ -85,8 +90,11 @@ defmodule PrismWeb.ThreadPaneLive do
   posts that hold a picture, a file or a link, `{:results, thread_id,
   results, window}` when a thread opens and `{:result, thread_id, result}`
   as each one lands, each `%{id, seq, content, attachments, links}` from
-  the rows the pane reads under its own context. The pane reads a thread's
-  newest posts only, `@window` of them, and has no way to earlier ones:
+  the rows the pane reads under its own context; and Aqua's newest answer,
+  its soul's last post in the same shape (nil for none), `{:answer,
+  thread_id, answer}` when a thread opens and as each one lands. The
+  pane reads a thread's newest posts only, `@window` of them, and has no
+  way to earlier ones:
   `window` is that number when the read filled it, so earlier posts and
   what they hold may exist and are shown nowhere here, and nil when the
   pane holds the whole thread.
@@ -98,8 +106,12 @@ defmodule PrismWeb.ThreadPaneLive do
 
   The panel's own header names Aqua and the thread, so the pane draws no
   name or thread label of its own, and its model override, soul or crew
-  member and token counts sit in a menu (`<dom>-menu`, which the panel's
-  header opens). Its status line appears only while it has something to
+  member and token counts sit in a menu (`<dom>-menu`), which its host
+  opens: the panel's header through the panel's hook, which also closes
+  it. A host that names its own toggle of the menu (the session's
+  `"menu_toggle"`, its DOM id) has the menu close on a press away from
+  it and on Escape, by JS commands alone, Escape giving focus back to the
+  toggle. Its status line appears only while it has something to
   say (still being prepared, no assistant, messages queued, a turn being
   asked).
   """
@@ -139,7 +151,12 @@ defmodule PrismWeb.ThreadPaneLive do
   def mount(_params, session, socket) do
     ctx = socket.assigns.context
     # Every DOM id here carries the pane's own.
-    socket = socket |> assign(:dom, socket.id) |> beside(session) |> open(ctx, session)
+    socket =
+      socket
+      |> assign(:dom, socket.id)
+      |> assign(:menu_toggle, session["menu_toggle"])
+      |> beside(session)
+      |> open(ctx, session)
 
     if connected?(socket) do
       thread = socket.assigns.thread
@@ -324,13 +341,16 @@ defmodule PrismWeb.ThreadPaneLive do
             {:error, _} -> []
           end
 
-        {shown, requests} = file_replies(rows)
+        {shown, requests} = file_replies(rows, ctx)
 
         tell_host(
           socket,
           {:results, thread.id, rows |> Enum.map(&result/1) |> Enum.reject(&is_nil/1),
            if(length(rows) >= @window, do: @window)}
         )
+
+        answer = rows |> Enum.filter(&answer?/1) |> Enum.max_by(& &1.seq, fn -> nil end)
+        tell_host(socket, {:answer, thread.id, answer && post(answer)})
 
         socket
         |> hold_cards(rows)
@@ -346,21 +366,27 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # A request is shown with the replies to it beneath it, and kept by id
-  # so a reply heard later files under it too; a reply whose request is
-  # not among the rows shown stands on its own.
-  defp file_replies(rows) do
+  # A request is shown with the replies to it beneath it and the outcome
+  # of the reply that resolved it, and kept by id so a reply heard later
+  # files under it too; a reply whose request is not among the rows shown
+  # stands on its own.
+  defp file_replies(rows, ctx) do
     asked = for row <- rows, crew(row) == :request, into: MapSet.new(), do: row.id
 
     {nested, shown} =
       Enum.split_with(rows, &(crew(&1) == :reply and MapSet.member?(asked, &1.reply_to)))
 
     replies = Enum.group_by(nested, & &1.reply_to)
+    by_id = Map.new(rows, &{&1.id, &1})
 
     shown =
       Enum.map(shown, fn row ->
         if crew(row) == :request,
-          do: Map.put(row, :replies, Map.get(replies, row.id, [])),
+          do:
+            Map.merge(row, %{
+              replies: Map.get(replies, row.id, []),
+              outcome: resolved(row, by_id, ctx)
+            }),
           else: row
       end)
 
@@ -379,6 +405,24 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp hold_card(socket, _row), do: socket
+
+  # The outcome of the reply that resolved a request, read among the rows
+  # shown or, past them, by its id; nil while it is pending, or when that
+  # reply cannot be read.
+  defp resolved(%{status: "answered", resolved_by: id}, rows, ctx) when is_binary(id) do
+    case Map.fetch(rows, id) do
+      {:ok, reply} ->
+        reply.outcome
+
+      :error ->
+        case Threads.get_message(Sanctum.Context.actor(ctx), id) do
+          {:ok, reply} -> reply.outcome
+          {:error, _unread} -> nil
+        end
+    end
+  end
+
+  defp resolved(_request, _rows, _ctx), do: nil
 
   # The workspace thread as it is now, under the pane's own context: one
   # that cannot be found is gone, and one that cannot be read right now
@@ -436,21 +480,29 @@ defmodule PrismWeb.ThreadPaneLive do
   # What the thread made: a post of Aqua's that holds a picture, a file or
   # a link, as a host draws it; nil for any other row.
   defp result(%{author: @agent_author} = row) do
-    payload = Threads.payload(row)
-    attachments = attachments(row)
-    links = payload["links"] || []
-
-    if attachments != [] or links != [],
-      do: %{
-        id: row.id,
-        seq: row.seq,
-        content: row.content,
-        attachments: attachments,
-        links: links
-      }
+    post = post(row)
+    if post.attachments != [] or post.links != [], do: post
   end
 
   defp result(_row), do: nil
+
+  # A post of Aqua's as a host draws it.
+  defp post(row) do
+    %{
+      id: row.id,
+      seq: row.seq,
+      content: row.content,
+      attachments: attachments(row),
+      links: Threads.payload(row)["links"] || []
+    }
+  end
+
+  # An answer of Aqua's: a post its soul wrote, neither a request to a
+  # crew member nor a reply from one.
+  defp answer?(%{kind: "text", author: @agent_author, sent_by: sent_by} = row),
+    do: Prima.AgentRef.soul?(sent_by) and is_nil(crew(row))
+
+  defp answer?(_row), do: false
 
   # A room's crew threads, or a crew thread's room.
   defp relatives(socket, %{kind: "crew", parent_id: room_id}),
@@ -469,6 +521,18 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp read_children(socket), do: socket
+
+  # The crew threads of the members the roster holds; a member taken out
+  # of the crew keeps its thread, unlisted.
+  defp standing(children, roster) do
+    names = MapSet.new(roster, & &1["name"])
+    Enum.filter(children, &MapSet.member?(names, &1.agent))
+  end
+
+  # The thread a request's member works it in: its newest under this room,
+  # the one a delivery makes or finds standing.
+  defp member_thread(children, %{addressee: member}),
+    do: children |> Enum.filter(&(&1.agent == member)) |> List.last()
 
   # The person has seen the rows the pane shows: the thread's read mark
   # moves to `seq`, forward only, and a row at or behind the mark it holds
@@ -656,7 +720,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # question. The tool refuses a thread whose turn still runs, so work the
   # pane sees running is the person's stop first (`thread.stop`). The
   # removal reaches every screen as the person's list announces it, and
-  # each host leaves the thread there, this one included.
+  # each host leaves the thread there, this one included; this host is
+  # also told that the deletion was its person's own here.
   def handle_event("delete", _params, %{assigns: %{thread: %{id: id}}} = socket) do
     stopped =
       if socket.assigns.running,
@@ -665,6 +730,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     with {:ok, _} <- stopped,
          {:ok, _} <- PrismWeb.Ops.call_tool(socket, "thread/delete", %{"thread" => id}) do
+      tell_host(socket, {:deleted, id})
       {:noreply, socket}
     else
       {:error, reason} ->
@@ -897,6 +963,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # as its steps, never as a post.
   defp handle_thread_event(socket, :message, row) do
     if result = result(row), do: tell_host(socket, {:result, row.thread_id, result})
+    if answer?(row), do: tell_host(socket, {:answer, row.thread_id, post(row)})
 
     socket
     |> hold_card(row)
@@ -905,9 +972,23 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:turn_replied, socket.assigns.turn_replied or replied?(row, socket))
   end
 
+  # A request heard again once it is delivered keeps what a reply already
+  # left it, and the room reads its crew threads again, the member's now
+  # among them.
   defp handle_thread_event(socket, :request, row) do
-    replies = get_in(socket.assigns.requests, [row.id, :replies]) || []
-    socket |> put_request(Map.put(row, :replies, replies)) |> read_children()
+    request =
+      case socket.assigns.requests[row.id] do
+        %{status: "pending", replies: replies} ->
+          Map.merge(row, %{replies: replies, outcome: nil})
+
+        %{} = resolved ->
+          resolved
+
+        nil ->
+          Map.merge(row, %{replies: [], outcome: nil})
+      end
+
+    socket |> read_children() |> put_request(request)
   end
 
   # A reply answers every request its payload names, as its write did, and
@@ -1068,11 +1149,12 @@ defmodule PrismWeb.ThreadPaneLive do
     |> upsert_message(request)
   end
 
-  # A request already answered stays as its first reply left it.
+  # A request takes the outcome of the first reply that resolves it, and
+  # stays as that reply left it.
   defp answered_by(request, reply) do
     request =
       if request.status == "pending",
-        do: %{request | status: "answered", resolved_by: reply.id},
+        do: %{request | status: "answered", resolved_by: reply.id, outcome: reply.outcome},
         else: request
 
     if request.id == reply.reply_to,
@@ -1713,12 +1795,16 @@ defmodule PrismWeb.ThreadPaneLive do
       </header>
 
       <%!-- The thread's menu: the model override, the soul or crew member and
-            the thread's usage. The panel's hook shows and hides it from the
-            panel's header, so its `hidden` is the browser's to keep. --%>
+            the thread's usage. Its host's toggle shows it, so its `hidden`
+            is the browser's to keep; the panel's hook closes it, and for a
+            host that names its toggle a press away and Escape do. --%>
       <div
         id={@dom <> "-menu"}
         hidden
         phx-mounted={JS.ignore_attributes(["hidden"])}
+        phx-click-away={@menu_toggle && close_menu(@dom, @menu_toggle)}
+        phx-window-keydown={@menu_toggle && close_menu(@dom, @menu_toggle, :focus)}
+        phx-key={@menu_toggle && "Escape"}
         role="group"
         aria-label="This thread"
         class="aqua-panel-menu"
@@ -1810,14 +1896,14 @@ defmodule PrismWeb.ThreadPaneLive do
       </div>
 
       <nav
-        :if={@children != []}
+        :if={(listed = standing(@children, @roster)) != []}
         id={@dom <> "-crew"}
         aria-label="Crew threads"
         class="flex flex-wrap items-center gap-1.5 border-b border-gray-800 px-4 py-1.5 text-xs text-gray-500"
       >
         <span>Crew</span>
         <button
-          :for={child <- @children}
+          :for={child <- listed}
           id={@dom <> "-crew-" <> child.id}
           type="button"
           phx-click="open_thread"
@@ -1966,11 +2052,21 @@ defmodule PrismWeb.ThreadPaneLive do
                     id={@dom <> "-msg-" <> msg.id}
                     role={role_of(msg)}
                     content={msg.content}
-                    author={"#{speaker(msg, @members, @context)} asked #{msg.addressee} · #{msg.status}"}
+                    author={"#{speaker(msg, @members, @context)} asked #{msg.addressee} · #{request_state(msg)}"}
                     attachments={attachments(msg)}
                     attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                     links={Threads.payload(msg)["links"] || []}
                   />
+                  <button
+                    :if={child = member_thread(@children, msg)}
+                    id={@dom <> "-msg-" <> msg.id <> "-open"}
+                    type="button"
+                    phx-click="open_thread"
+                    phx-value-id={child.id}
+                    class="min-h-6 px-1 text-xs text-blue-400 hover:text-blue-300"
+                  >
+                    Open {msg.addressee}'s thread
+                  </button>
                   <.reply
                     :for={reply <- msg.replies}
                     id={@dom <> "-reply-" <> reply.id}
@@ -2479,7 +2575,7 @@ defmodule PrismWeb.ThreadPaneLive do
         id={@dom <> "-msg-" <> @reply.id}
         role="assistant"
         content={@reply.content}
-        author={"#{agent_name(@reply.sent_by)} · #{@reply.outcome}"}
+        author={"#{agent_name(@reply.sent_by)} · #{outcome_words(@reply.outcome)}"}
         attachments={attachments(@reply)}
         attachment_href={&attachment_path(@athanor_route, @reply.id, &1)}
         links={@payload["links"] || []}
@@ -2557,6 +2653,32 @@ defmodule PrismWeb.ThreadPaneLive do
        do: :request
 
   defp crew(_row), do: nil
+
+  # How a request stands as a person reads it: pending, then the outcome
+  # of the reply that resolved it; answered, when that reply cannot be
+  # read.
+  defp request_state(%{outcome: outcome}) when is_binary(outcome), do: outcome_words(outcome)
+  defp request_state(%{status: "answered"}), do: "answered"
+  defp request_state(_pending), do: "pending"
+
+  # A crew job's outcome (`Prima.OutboxRecord.reply_outcomes/0`) as a
+  # person reads it.
+  defp outcome_words("uncertain"), do: "outcome unknown"
+  defp outcome_words(outcome), do: outcome
+
+  # The menu closed for a host that names its toggle `toggle`: the toggle
+  # back in reach and no longer expanded, and, on Escape, focus on it
+  # again. The focus names the toggle while it still reads expanded, so
+  # an Escape while the menu is closed moves nothing.
+  defp close_menu(dom, toggle, focus \\ nil) do
+    toggle = "#" <> toggle
+    js = JS.remove_attribute("inert", to: toggle)
+    js = if focus, do: JS.focus(js, to: toggle <> ~s([aria-expanded="true"])), else: js
+
+    js
+    |> JS.set_attribute({"aria-expanded", "false"}, to: toggle)
+    |> JS.set_attribute({"hidden", ""}, to: "#" <> dom <> "-menu")
+  end
 
   # What the menu's Delete asks before anything goes: what a delete
   # removes (`Arca.ThreadStorage.delete/3`) and what it leaves, the crew

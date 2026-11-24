@@ -2489,7 +2489,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     row
   end
 
-  defp reply!(here, room, request, child, text, answers \\ []) do
+  defp reply!(here, room, request, child, text, answers \\ [], outcome \\ "done") do
     answers = [request.id | answers]
 
     {:ok, %{message: row}} =
@@ -2499,7 +2499,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           sent_by: request.addressee,
           addressee: "person",
           reply_to: request.id,
-          outcome: "done",
+          outcome: outcome,
           content: text,
           payload: %{"from_thread" => child.id, "answers" => answers}
         },
@@ -2507,6 +2507,19 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       })
 
     row
+  end
+
+  # A crew member standing in the athanor's roster, as the person makes one.
+  defp member!(here, name) do
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(here),
+        Compendium.AquaPath.crew_file(name),
+        "---\ntitle: #{name}\ndescription: Builds.\n" <>
+          "catalyst_ref: catalyst:local.claude\nmodel: claude-sonnet-5-5\n---\n"
+      )
+
+    {:ok, _} = Compendium.AgentIndex.sync(here)
   end
 
   describe "the archive" do
@@ -2555,6 +2568,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     test "a crew member's thread has no Archive row in the menu: its strip retires it",
          %{conn: conn, here: here, thread: room} do
+      member!(here, "explorer")
       {:ok, explorer} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
       {_panel, pane} = panel_pane(conn, room)
       assert has_element?(pane, ~s([id$="-menu"] button[phx-click="archive"]))
@@ -2666,6 +2680,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           origin: :interactive
         })
 
+      member!(here, "explorer")
       {:ok, child} = Threads.crew_thread(actor, room.id, "explorer")
       {:ok, view, _} = live(conn, PrismWeb.WorkspaceLive.address(route(athanor), room.id))
       pane = on_thread!(child!(view, "workspace-pane"), room.id)
@@ -2842,7 +2857,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane = open_pane(conn, athanor, room)
       asked = ~s([id$="-m-#{request.id}"])
 
-      assert has_element?(pane, asked, "You asked explorer · answered")
+      assert has_element?(pane, asked, "You asked explorer · done")
       assert has_element?(pane, asked, "Build the site")
       assert has_element?(pane, ~s(#{asked} [id$="-reply-#{reply.id}"]), "explorer · done")
       refute has_element?(pane, ~s([id$="-m-#{reply.id}"]))
@@ -2945,8 +2960,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       reply = reply!(here, room, first, child, "Built and tested", [second.id])
       render(pane)
 
-      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked explorer · answered")
-      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked explorer · answered")
+      assert has_element?(pane, ~s([id$="-m-#{first.id}"]), "You asked explorer · done")
+      assert has_element?(pane, ~s([id$="-m-#{second.id}"]), "You asked explorer · done")
 
       assert has_element?(
                pane,
@@ -2963,6 +2978,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     test "a room lists its crew threads, and a crew thread leads back to its room and retires through thread.archive",
          %{conn: conn, here: here, thread: room} do
       actor = Sanctum.Context.actor(here)
+      for name <- ["explorer", "reviewer"], do: member!(here, name)
       {:ok, explorer} = Threads.crew_thread(actor, room.id, "explorer")
       {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
       {:ok, _} = Threads.retire(actor, reviewer.id)
@@ -3008,6 +3024,90 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane |> element(~s(#{strip} button[phx-click="open_thread"])) |> render_click()
       on_thread!(pane, room.id)
       assert has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "explorer · archived")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a request reads the outcome of the reply that resolved it, its own or another " <>
+           "request's, as the reply lands and as the thread opens again",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+
+      for {outcome, words} <- [
+            {"failed", "failed"},
+            {"cancelled", "cancelled"},
+            {"uncertain", "outcome unknown"}
+          ] do
+        first = request!(here, room, "explorer", "Build the #{outcome} site")
+        second = request!(here, room, "explorer", "And test the #{outcome} site")
+        live = open_pane(conn, athanor, room)
+        assert has_element?(live, ~s([id$="-m-#{first.id}"]), "You asked explorer · pending")
+
+        reply = reply!(here, room, first, child, "It ended #{outcome}", [second.id], outcome)
+        render(live)
+        opened = open_pane(conn, athanor, room)
+
+        for pane <- [live, opened] do
+          for request <- [first, second] do
+            assert has_element?(
+                     pane,
+                     ~s([id$="-m-#{request.id}"]),
+                     "You asked explorer · #{words}"
+                   )
+          end
+
+          assert has_element?(
+                   pane,
+                   ~s([id$="-m-#{first.id}"] [id$="-reply-#{reply.id}"]),
+                   "explorer · #{words}"
+                 )
+        end
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a request's card opens its member's thread", %{conn: conn, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      request = request!(here, room, "explorer", "Build the site")
+      {_panel, pane} = panel_pane(conn, room)
+
+      open =
+        ~s([id$="-m-#{request.id}"] button[phx-click="open_thread"][phx-value-id="#{child.id}"])
+
+      assert has_element?(pane, open, "Open explorer's thread")
+      pane |> element(open) |> render_click()
+      on_thread!(pane, child.id)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a room lists the threads of its standing crew members alone; a member taken out " <>
+           "of the crew keeps its thread",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      actor = Sanctum.Context.actor(here)
+      for name <- ["explorer", "reviewer"], do: member!(here, name)
+      {:ok, explorer} = Threads.crew_thread(actor, room.id, "explorer")
+      {:ok, reviewer} = Threads.crew_thread(actor, room.id, "reviewer")
+      :ok = Arca.delete(actor, Compendium.AquaPath.crew_file("reviewer"))
+      {:ok, _} = Compendium.AgentIndex.sync(here)
+
+      pane = open_pane(conn, athanor, room)
+      assert has_element?(pane, ~s([id$="-crew-#{explorer.id}"]), "explorer")
+      refute has_element?(pane, ~s([id$="-crew-#{reviewer.id}"]))
+      assert {:ok, %{id: id}} = Threads.get(actor, reviewer.id)
+      assert id == reviewer.id
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "the pane in Aqua's panel leaves its menu to the panel's hook: no press away or " <>
+           "Escape of its own closes it",
+         %{conn: conn, thread: room} do
+      {_panel, pane} = panel_pane(conn, room)
+      assert has_element?(pane, "#aqua-panel-pane-menu[hidden]")
+      refute has_element?(pane, "#aqua-panel-pane-menu[phx-click-away]")
+      refute has_element?(pane, "#aqua-panel-pane-menu[phx-window-keydown]")
 
       Cyfr.Test.Sandbox.end_views()
     end
