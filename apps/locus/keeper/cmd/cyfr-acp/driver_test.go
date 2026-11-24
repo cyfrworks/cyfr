@@ -55,7 +55,7 @@ func (l *lockedBuffer) String() string {
 // message mid-turn and no instructions for one process.
 var steerless = func() *profile {
 	p := *antigravity
-	p.name, p.title, p.steers = "cyfr-steerless", "Steerless", false
+	p.name, p.title, p.steer = "cyfr-steerless", "Steerless", steerLater
 	p.appends = nil
 	return &p
 }()

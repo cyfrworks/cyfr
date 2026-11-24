@@ -67,18 +67,54 @@ import (
 // turn's call reached the socket; FAKE_BAD_SESSION answers session/new with
 // no session id it could name; FAKE_HOLD keeps running after its input ends, until a
 // TERM. Each cancel and TERM is logged in `$HOME/fake-acp.log`.
+//
+// FAKE_OPENCODE makes it OpenCode's ACP server instead, as `opencode acp`
+// 2.4.1 was probed: its initialize, `ses_` session ids kept in one store of
+// its own (`$HOME/.local/share/opencode/fake.db`, a line an id), a resume
+// answered without the session's id, -32602 "Invalid params: session not
+// found" for a resume and a load of a session it lacks, session/delete
+// answered {} whether it had the session or not, the model's efforts
+// offered only once it is selected, a second prompt mid-turn refused and a
+// steer taken by `_session/steering` (`injected`, or `promptRequired` when
+// no turn runs), usage with no cache writes and its output without its
+// thoughts, and each tool call named. Its turns add:
+//
+//	execute   calls CYFR's `files` from inside its own tool `execute`
+//	retry     says it retries its provider twice, then replies
+//
+//	executes  calls CYFR's `files` three times from inside one `execute`
+//
+// FAKE_DELETE_FAIL refuses a delete, FAKE_DELETE_KEEPS answers one {} and
+// keeps the session, FAKE_NOTFOUND_OTHER answers a load with the not-found
+// of another session, FAKE_STEER_NO_TURN answers every steer
+// `promptRequired`, FAKE_CONFIRM_LATE answers a steer only after the
+// turn's prompt, and FAKE_SILENT_SELECT and FAKE_SILENT_CLOSE never answer
+// a model's selection or a close.
+//
+// Either way, run with its program's own words for its MCP servers
+// (Antigravity's `mcp list`, OpenCode's `debug config --standalone`) it
+// prints the servers FAKE_SERVERS names, a comma between each, as the
+// program prints them, and FAKE_SERVERS_FAIL prints what is no listing.
 const fakeEnv = "CYFR_FAKE_ACP"
 
 const stderrCanary = "FAKE-STDERR-CANARY Antigravity writes this to its stderr"
 
 func fakeACP() int {
 	args := os.Args[1:]
+	if words := " " + strings.Join(args, " "); strings.HasSuffix(words, " mcp list") || strings.HasSuffix(words, " debug config --standalone") {
+		return fakeServers(strings.HasSuffix(words, " debug config --standalone"))
+	}
 	if len(args) == 0 || args[len(args)-1] != "acp" {
 		fmt.Fprintln(os.Stderr, "fake-acp: not started as acp:", args)
 		return 2
 	}
 	fmt.Fprintln(os.Stderr, stderrCanary)
 	home := os.Getenv("HOME")
+	oc := os.Getenv("FAKE_OPENCODE") != ""
+	store := filepath.Join(home, ".local", "share", "opencode", "fake.db")
+	if oc {
+		_ = os.MkdirAll(filepath.Dir(store), 0o700)
+	}
 	cli := filepath.Join(geminiHome(home), "antigravity-cli")
 	for _, dir := range []string{"brain", agySessionDatabases, "annotations"} {
 		_ = os.MkdirAll(filepath.Join(cli, dir), 0o700)
@@ -140,6 +176,9 @@ func fakeACP() int {
 		unconfirmed     json.RawMessage
 	}
 	state.current = map[string]string{"model": "fake-neon", "thought_level": "high", "mode": "default"}
+	if oc {
+		state.current = map[string]string{"model": "opencode/big-pickle", "effort": "default", "mode": "build"}
+	}
 	if mode := os.Getenv("FAKE_MODE"); mode != "" {
 		state.current["mode"] = mode
 	}
@@ -150,6 +189,9 @@ func fakeACP() int {
 		update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 	}
 	usage := map[string]any{"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 30, "cachedWriteTokens": 0, "thoughtTokens": 5, "totalTokens": 150}
+	if oc {
+		usage = map[string]any{"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 30, "thoughtTokens": 5, "totalTokens": 155}
+	}
 	// finish answers the prompt open now: a steer has moved it to the later.
 	finish := func(result map[string]any) {
 		state.Lock()
@@ -174,10 +216,23 @@ func fakeACP() int {
 			}
 			return map[string]any{"id": id, "name": name, "category": id, "type": "select", "currentValue": state.current[id], "options": choices}
 		}
+		if oc {
+			model := option("model", "Model", "opencode/big-pickle", "probe/think")
+			mode := option("mode", "Session Mode", "build", "plan")
+			if state.current["model"] != "probe/think" {
+				return []any{model, mode}
+			}
+			effort := option("effort", "Effort", "low", "high", "default")
+			effort["category"] = "thought_level"
+			return []any{model, effort, mode}
+		}
 		return []any{option("model", "Model", "fake-neon", "fake-flash"), option("thought_level", "Thinking Level", "low", "medium", "high", "xhigh"),
 			option("mode", "Mode", "default", "accept-edits", "auto", "plan")}
 	}
 	sessionResult := func() map[string]any {
+		if oc {
+			return map[string]any{"sessionId": state.session, "configOptions": options()}
+		}
 		available := []any{}
 		for _, id := range []string{"fake-neon-high", "fake-neon-xhigh", "fake-neon-low", "fake-flash"} {
 			available = append(available, map[string]any{"modelId": id, "name": id})
@@ -192,7 +247,7 @@ func fakeACP() int {
 		for _, s := range servers {
 			entry, _ := s.(map[string]any)
 			argv, _ := entry["args"].([]any)
-			if entry["name"] == "cyfr" && len(argv) == 2 {
+			if len(argv) == 2 && argv[0] == "--socket" {
 				state.socket = fmt.Sprint(argv[1])
 			}
 		}
@@ -213,7 +268,8 @@ func fakeACP() int {
 			}
 		}()
 	}
-	files := func(id string) {
+	var files func(id string)
+	files = func(id string) {
 		_ = os.MkdirAll(filepath.Join(cli, "brain", id, ".system_generated", "logs"), 0o700)
 		_ = os.WriteFile(filepath.Join(cli, "brain", id, ".system_generated", "logs", "transcript.jsonl"), []byte("FAKE-TRANSCRIPT\n"), 0o600)
 		_ = os.WriteFile(filepath.Join(cli, agySessionDatabases, id+".db"), []byte("FAKE-DB"), 0o600)
@@ -222,13 +278,75 @@ func fakeACP() int {
 		fmt.Fprintln(index, id)
 		index.Close()
 	}
+	stored := func() []string {
+		held, _ := os.ReadFile(store)
+		return strings.Fields(string(held))
+	}
 	exists := func(id string) bool {
+		if oc {
+			for _, held := range stored() {
+				if held == id {
+					return true
+				}
+			}
+			return false
+		}
 		_, err := os.Stat(filepath.Join(cli, agySessionDatabases, id+".db"))
 		return err == nil
+	}
+	if oc {
+		files = func(id string) {
+			f, _ := os.OpenFile(store, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			fmt.Fprintln(f, id)
+			f.Close()
+		}
+	}
+	notFound := func(id json.RawMessage, session string) {
+		if oc {
+			failWith(id, -32602, "Invalid params: session not found: "+session)
+			return
+		}
+		failWith(id, -32002, "Session not found: "+session)
 	}
 
 	runTurn := func(words string, params map[string]any) {
 		switch {
+		case oc && strings.Contains(words, "executes"):
+			// Three calls of CYFR's, one after another, inside one execute.
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_execs", "name": "execute", "title": "execute", "status": "in_progress",
+				"kind": "other", "rawInput": map[string]any{"code": "for (const n of [1, 2, 3]) await tools.cyfr.files({n})"}})
+			answers := []string{}
+			for n := 1; n <= 3; n++ {
+				var result toolsock.Result
+				if toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(fmt.Sprintf(`{"n":%d}`, n))}, &result) != nil {
+					result.Text = "unreachable"
+				}
+				answers = append(answers, result.Text)
+			}
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call_execs", "status": "completed"})
+			reply("answered " + strings.Join(answers, ","))
+		case oc && strings.Contains(words, "execute"):
+			// OpenCode calls an MCP server's tool only from JavaScript inside
+			// its own tool `execute`, which it shows with its code.
+			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_exec", "name": "execute", "title": "execute", "status": "pending",
+				"kind": "other", "rawInput": map[string]any{}}
+			update(call)
+			call["sessionUpdate"], call["status"] = "tool_call_update", "in_progress"
+			call["rawInput"] = map[string]any{"code": "return await tools.cyfr.files({path: 'notes.txt'})"}
+			update(call)
+			var result toolsock.Result
+			if err := toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(`{"path":"notes.txt"}`)}, &result); err != nil {
+				result.Text = "unreachable"
+			}
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call_exec", "status": "completed"})
+			reply(fmt.Sprintf("the tool answered %q, error %v", result.Text, result.IsError))
+		case oc && strings.Contains(words, "retry"):
+			for attempt := 2; attempt <= 3; attempt++ {
+				update(map[string]any{"sessionUpdate": "session_info_update", "_meta": map[string]any{"opencode/retry": nil}})
+				update(map[string]any{"sessionUpdate": "session_info_update", "_meta": map[string]any{"opencode/retry": map[string]any{"attempt": attempt,
+					"error": map[string]any{"type": "provider.transport", "message": "RETRY-CANARY Can't reach the provider"}}}})
+			}
+			reply("reached it")
 		case strings.Contains(words, "slow"):
 			chunk("Starting. ")
 			select {
@@ -446,6 +564,18 @@ func fakeACP() int {
 				if ch != nil {
 					ch <- json.RawMessage(line)
 				}
+			case m.Method == "initialize" && oc:
+				version := "2.4.1"
+				if v := os.Getenv("FAKE_VERSION"); v != "" {
+					version = v
+				}
+				answer(m.ID, map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true,
+					"mcpCapabilities":     map[string]any{"http": true, "sse": false},
+					"promptCapabilities":  map[string]any{"embeddedContext": true, "image": true},
+					"sessionCapabilities": map[string]any{"close": map[string]any{}, "delete": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}}},
+					"authMethods": []any{map[string]any{"id": "opencode-login", "name": "Login with opencode"}},
+					"_meta":       map[string]any{"steering": map[string]any{"supported": true}},
+					"agentInfo":   map[string]any{"name": "OpenCode", "version": version}})
 			case m.Method == "initialize":
 				version := "1.5.16"
 				if v := os.Getenv("FAKE_VERSION"); v != "" {
@@ -470,6 +600,9 @@ func fakeACP() int {
 				}
 				state.Lock()
 				state.session = brainwire.NewUUID()
+				if oc {
+					state.session = "ses_" + strings.ReplaceAll(brainwire.NewUUID(), "-", "")[:26]
+				}
 				state.opened = m.Params
 				state.Unlock()
 				files(state.session)
@@ -486,22 +619,30 @@ func fakeACP() int {
 				switch {
 				case os.Getenv("FAKE_RESUME_OTHER") != "":
 					failWith(m.ID, -32603, "Internal error")
+				case oc && !exists(id):
+					notFound(m.ID, id)
 				case !exists(id) || os.Getenv("FAKE_RESUME_MISSING") != "":
 					failWith(m.ID, -32603, "Failed to read session "+id+"; retry, or load it with session/load")
 				default:
 					state.Lock()
 					state.session, state.opened = id, m.Params
 					state.Unlock()
-					answer(m.ID, sessionResult())
+					result := sessionResult()
+					if oc {
+						delete(result, "sessionId")
+					}
+					answer(m.ID, result)
 					listSoon(m.Params)
 				}
 			case m.Method == "session/load":
 				id := str("sessionId")
 				switch {
+				case os.Getenv("FAKE_NOTFOUND_OTHER") != "":
+					notFound(m.ID, "ses_"+strings.Repeat("z", 26))
 				case os.Getenv("FAKE_LOAD_OTHER") != "":
 					failWith(m.ID, -32603, "Internal error")
 				case !exists(id):
-					failWith(m.ID, -32002, "Session not found: "+id)
+					notFound(m.ID, id)
 				default:
 					state.Lock()
 					state.session, state.opened = id, m.Params
@@ -513,6 +654,8 @@ func fakeACP() int {
 					update(map[string]any{"sessionUpdate": "session_info_update", "title": "a title"})
 					listSoon(m.Params)
 				}
+			case m.Method == "session/set_config_option" && os.Getenv("FAKE_SILENT_SELECT") != "" && str("configId") == "model":
+			case m.Method == "session/close" && os.Getenv("FAKE_SILENT_CLOSE") != "":
 			case m.Method == "session/set_config_option":
 				id, value := str("configId"), str("value")
 				state.Lock()
@@ -520,6 +663,62 @@ func fakeACP() int {
 				state.current[id] = value
 				state.Unlock()
 				answer(m.ID, map[string]any{"configOptions": options()})
+			case m.Method == "session/delete" && oc:
+				id := str("sessionId")
+				switch {
+				case os.Getenv("FAKE_DELETE_FAIL") != "":
+					failWith(m.ID, -32603, "HARNESS-WORDS Internal error: the store is locked")
+				case os.Getenv("FAKE_DELETE_KEEPS") != "":
+					answer(m.ID, map[string]any{})
+				default:
+					kept := []string{}
+					for _, held := range stored() {
+						if held != id {
+							kept = append(kept, held)
+						}
+					}
+					_ = os.WriteFile(store, []byte(strings.Join(kept, "\n")+"\n"), 0o600)
+					logLine("delete " + id)
+					answer(m.ID, map[string]any{})
+				}
+			case m.Method == "_session/steering" && oc:
+				words := ""
+				prompt, _ := m.Params["prompt"].([]any)
+				for _, b := range prompt {
+					if block, _ := b.(map[string]any); block["type"] == "text" {
+						words = fmt.Sprint(block["text"])
+					}
+				}
+				state.Lock()
+				running := state.active != nil
+				steered := state.steered
+				state.Unlock()
+				switch {
+				case os.Getenv("FAKE_STEER_FAIL") != "":
+					failWith(m.ID, -32603, "HARNESS-WORDS the steer was not taken")
+				case !running || os.Getenv("FAKE_STEER_NO_TURN") != "":
+					answer(m.ID, map[string]any{"outcome": "promptRequired", "reason": "noRunningTurn"})
+				case os.Getenv("FAKE_CONFIRM_LATE") != "":
+					// The steer is taken, and said so only once the turn's
+					// prompt has been answered.
+					id := m.ID
+					steered <- words
+					go func() {
+						for {
+							state.Lock()
+							done := state.active == nil
+							state.Unlock()
+							if done {
+								break
+							}
+							time.Sleep(10 * time.Millisecond) // sleep-ok: the stand-in's own wait for its turn's end, read by a bounded poll
+						}
+						answer(id, map[string]any{"outcome": "injected"})
+					}()
+				default:
+					answer(m.ID, map[string]any{"outcome": "injected"})
+					steered <- words
+				}
 			case m.Method == "session/prompt":
 				words := ""
 				prompt, _ := m.Params["prompt"].([]any)
@@ -533,6 +732,11 @@ func fakeACP() int {
 				}
 				state.Lock()
 				earlier := state.active
+				if earlier != nil && oc {
+					state.Unlock()
+					failWith(m.ID, -32603, "Internal error: Session already has an active ACP prompt: "+state.session)
+					continue
+				}
 				if earlier != nil {
 					if os.Getenv("FAKE_STEER_FAIL") != "" {
 						state.Unlock()
@@ -592,4 +796,38 @@ func geminiHome(home string) string {
 		return dir
 	}
 	return filepath.Join(home, ".gemini")
+}
+
+// fakeServers prints the servers FAKE_SERVERS names as the program lists
+// its own: OpenCode's configuration documents (`debug config`), or
+// Antigravity's table (`mcp list`).
+func fakeServers(openCode bool) int {
+	if os.Getenv("FAKE_SERVERS_FAIL") != "" {
+		fmt.Println("something that is no listing")
+		return 0
+	}
+	var names []string
+	if listed := os.Getenv("FAKE_SERVERS"); listed != "" {
+		names = strings.Split(listed, ",")
+	}
+	if openCode {
+		servers := map[string]any{}
+		for _, n := range names {
+			servers[n] = map[string]any{"type": "local", "command": []string{"x"}, "environment": map[string]any{"TOKEN": "***"}}
+		}
+		docs := []any{map[string]any{"type": "document", "path": "/home/x/.config/opencode/opencode.json", "info": map[string]any{"mcp": map[string]any{"servers": servers}}},
+			map[string]any{"type": "directory", "path": "/home/x/.config/opencode"}}
+		line, _ := json.MarshalIndent(docs, "", "  ")
+		fmt.Println(string(line))
+		return 0
+	}
+	if len(names) == 0 {
+		fmt.Println("No MCP servers configured.")
+		return 0
+	}
+	fmt.Println("NAME  TYPE   STATUS   COMMAND/URL")
+	for _, n := range names {
+		fmt.Printf("%s  stdio  enabled  node /x\n", n)
+	}
+	return 0
 }
