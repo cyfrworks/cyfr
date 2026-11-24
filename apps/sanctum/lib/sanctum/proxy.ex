@@ -159,6 +159,16 @@ defmodule Sanctum.Proxy do
   @callback list_external_tools(Context.t(), server_names :: [String.t()]) :: [server_listing()]
 
   @doc """
+  The tool patterns each of the caller's athanor's servers named
+  `server_names` exposes now, as its configuration names them, read from
+  its row and starting no server; a server the athanor does not hold is
+  absent. What a consent narrows a grant's patterns by, and what a turn's
+  start holds the grant to (`Aqua.Loop`).
+  """
+  @callback tool_patterns(Context.t(), server_names :: [String.t()]) ::
+              {:ok, %{String.t() => [String.t()]}} | {:error, term()}
+
+  @doc """
   The argument names a proxied call's `c:dispatch/5` never carries to its
   server: the action the gate routed on and the lineage the host stamps.
   A third-party server is told none of them, so a tool whose parameters

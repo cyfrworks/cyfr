@@ -75,6 +75,25 @@ defmodule Emissary.External.Proxy do
   end
 
   @doc """
+  The tool patterns each named server of the caller's athanor exposes, as
+  its configuration names them, from its row: no server is started.
+  """
+  @impl Sanctum.Proxy
+  @spec tool_patterns(Context.t(), [String.t()]) ::
+          {:ok, %{String.t() => [String.t()]}} | {:error, term()}
+  def tool_patterns(%Context{} = ctx, server_names) when is_list(server_names) do
+    with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
+      exposing =
+        for server <- servers,
+            server.name in server_names,
+            into: %{},
+            do: {server.name, Sanctum.ToolServerDigest.tool_patterns(server)}
+
+      {:ok, exposing}
+    end
+  end
+
+  @doc """
   Each of the caller's athanor's servers named `server_names` that
   answers, with its tools as `list_external_tools/1` shapes them and the
   consent digest of the configuration they were read from, read now and

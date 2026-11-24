@@ -363,7 +363,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
-        Sanctum.ToolServerDigest Sanctum.VirtualTools
+        Sanctum.VirtualTools
       ),
       reason:
         "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
@@ -387,13 +387,14 @@ defmodule Cyfr.Boundaries do
           "thread open beside it (`Aqua.RoomExcerpt`), a line said aloud into one " <>
           "(`Aqua.Aloud`), and the shared threads on the person's list of threads " <>
           "(`Aqua.ThreadList`). " <>
-          "`Sanctum.Proxy` is the port a turn reads the person's own servers' tools " <>
-          "through, under the turn's context, asking only the servers its list names " <>
-          "(`list_external_tools/2`), and the names " <>
-          "a proxied call never carries to its server (`host_stamped/0`), which no tool " <>
-          "it hands may name; `Sanctum.ToolServerDigest` is the digest a server's grant " <>
-          "binds, so a turn hands a server's tool only while the grant covers the " <>
-          "server as the gate will decide its call (`Aqua.Loop.Turn.tools/3`). " <>
+          "`Sanctum.Proxy` is the port a turn reads the person's own servers through, " <>
+          "under the turn's context and asking only the servers its list names: their " <>
+          "tools with the digest of the revision each was read from " <>
+          "(`list_external_tools/2`), so a turn hands one only while the grant covers " <>
+          "it as the gate will decide its call (`Aqua.Loop.Turn.tools/3`); what each " <>
+          "exposes, which a turn's start holds the grant to (`tool_patterns/2`); and " <>
+          "the names a proxied call never carries to its server (`host_stamped/0`), " <>
+          "which no tool it hands may name. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },

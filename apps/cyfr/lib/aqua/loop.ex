@@ -661,8 +661,9 @@ defmodule Aqua.Loop do
   defp granted_servers(_none), do: []
 
   # Each server the list names, with the tools named of it that its
-  # configuration exposes now; a server the athanor no longer holds
-  # exposes none.
+  # configuration exposes now, as Sanctum's port reads it
+  # (`Sanctum.Proxy`'s `tool_patterns/2`); a server the athanor no longer
+  # holds exposes none.
   defp listed_servers(ctx, tools) do
     pairs =
       for key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool}
@@ -671,9 +672,9 @@ defmodule Aqua.Loop do
   end
 
   defp exposed_servers(ctx, pairs) do
-    with {:ok, rows} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
-      exposing = Map.new(rows, &{&1.name, Sanctum.ToolServerDigest.tool_patterns(&1)})
+    servers = pairs |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
 
+    with {:ok, exposing} <- Sanctum.Proxy.impl!().tool_patterns(ctx, servers) do
       {:ok,
        pairs
        |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
