@@ -1727,7 +1727,8 @@ defmodule Aqua.ProgramTest do
       cli = terminal_row!(ctx)
       say(fake, row, ask(turn, "ask-start", "program", start_args(cli)))
       started = accept_next!(fake, row)
-      session = Jason.decode!(started["content"])["session"]
+      session = started["content"] |> outside_answer(thread, "program") |> Jason.decode!()
+      session = session["session"]
 
       assert [activity!(), activity!()] == [
                [start_entry(:done), ask_start_entry(:running)],
@@ -7599,6 +7600,21 @@ defmodule Aqua.ProgramTest do
     }
   end
 
+  # What an outside answer to the call named `name` holds, its frame in
+  # `thread` taken off (`Aqua.Reader.outside/3`).
+  defp outside_answer(content, thread, name) do
+    mark = Aqua.Reader.mark(thread.id)
+    prefix = "⟦#{mark} outside #{name}⟧\n"
+    suffix = "\n⟦#{mark} end⟧"
+    assert String.starts_with?(content, prefix) and String.ends_with?(content, suffix)
+
+    binary_part(
+      content,
+      byte_size(prefix),
+      byte_size(content) - byte_size(prefix) - byte_size(suffix)
+    )
+  end
+
   # A result as the table compares it: an outside answer by the name its
   # frame gives and what it holds (`Aqua.Reader.outside/3`), a launch's run
   # by what it says of the run, and the rows a listing names by their kind.
@@ -7780,7 +7796,9 @@ defmodule Aqua.ProgramTest do
 
     for %{kind: "input"} = step <- steps do
       {:ok, carried} = Tape.message(ctx, step.message_id)
-      {step.action, step.outcome, carried.kind, as_compared(carried.content)}
+
+      {step.action, step.outcome, carried.kind,
+       as_compared(carried.content, Aqua.Reader.mark(turn.thread_id))}
     end
   end
 

@@ -758,8 +758,18 @@ defmodule Aqua.LoopTest do
       turn_id = turn.id
       agent = Prima.Author.agent()
       system = Prima.Author.system()
-      list_result = Jason.encode!(%{"entries" => []}, pretty: true)
-      write_result = Jason.encode!(%{"written" => "data/x.md"}, pretty: true)
+      # A hand's answer is outside data, in the room's outside frame.
+      mark = Aqua.Reader.mark(room.id)
+
+      list_result =
+        Aqua.Reader.outside(mark, "files", Jason.encode!(%{"entries" => []}, pretty: true))
+
+      write_result =
+        Aqua.Reader.outside(
+          mark,
+          "files",
+          Jason.encode!(%{"written" => "data/x.md"}, pretty: true)
+        )
 
       keep_result =
         Jason.encode!(%{"athanor_id" => ctx.athanor_id, "kept" => "status", "replaced" => false},
@@ -1477,7 +1487,11 @@ defmodule Aqua.LoopTest do
                  tool_result(
                    "c1",
                    "files",
-                   Jason.encode!(%{"written" => "data/x.md"}, pretty: true),
+                   Aqua.Reader.outside(
+                     Aqua.Reader.mark(thread.id),
+                     "files",
+                     Jason.encode!(%{"written" => "data/x.md"}, pretty: true)
+                   ),
                    false
                  ),
                  tool_result("c2", "notes", "a newer message arrived", false)
@@ -1749,7 +1763,12 @@ defmodule Aqua.LoopTest do
             "type" => "tool_result",
             "tool_call_id" => "c1",
             "name" => "files",
-            "content" => Jason.encode!(%{"written" => "data/note.md"}, pretty: true),
+            "content" =>
+              Aqua.Reader.outside(
+                Aqua.Reader.mark(thread.id),
+                "files",
+                Jason.encode!(%{"written" => "data/note.md"}, pretty: true)
+              ),
             "is_error" => false
           }
         ]
@@ -1789,7 +1808,12 @@ defmodule Aqua.LoopTest do
                        "type" => "tool_result",
                        "tool_call_id" => "c2",
                        "name" => "files",
-                       "content" => Jason.encode!(%{"entries" => []}, pretty: true),
+                       "content" =>
+                         Aqua.Reader.outside(
+                           Aqua.Reader.mark(thread.id),
+                           "files",
+                           Jason.encode!(%{"entries" => []}, pretty: true)
+                         ),
                        "is_error" => false
                      }
                    ]

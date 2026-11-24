@@ -455,6 +455,8 @@ type AquaSkillCreateArgs struct {
 	Description string `json:"description"`
 	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)
 	Content string `json:"content"`
+	// skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since
+	Against Field[string] `json:"against,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -532,6 +534,8 @@ type AquaSkillUpdateArgs struct {
 	Description Field[string] `json:"description,omitzero"`
 	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)
 	Content Field[string] `json:"content,omitzero"`
+	// skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since
+	Against Field[string] `json:"against,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -5457,6 +5461,8 @@ type WorkspaceOpenArgs struct {
 	Refs Field[[]string] `json:"refs,omitzero"`
 	// open: files of that daily thread's posts to carry into the workspace thread, each {message_id, stored_name}
 	Attachments Field[[]WorkspaceOpenArgsAttachmentsItem] `json:"attachments,omitzero"`
+	// open: names of this athanor's scrolls the work is to follow, handed over with the ask and read after it
+	Scrolls Field[[]string] `json:"scrolls,omitzero"`
 	// open: keep this work's browser apart from the person's other work
 	Apart Field[bool] `json:"apart,omitzero"`
 }

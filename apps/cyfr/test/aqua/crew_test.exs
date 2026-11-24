@@ -1496,7 +1496,7 @@ defmodule Aqua.CrewTest do
     asked = Enum.filter(steps, &(&1.tool == "crew" and &1.action == "ask"))
 
     assert Enum.map(asked, &{&1.outcome, &1.error}) ==
-             Enum.map(asks, fn {_scrolls, why} -> {"error", why} end)
+             Enum.map(asks, fn {_scrolls, why} -> {"error", "Error: " <> why} end)
 
     refute Enum.any?(rows(ctx, room.id), &(&1.addressee == "planner"))
     assert pending_records(ctx) == []

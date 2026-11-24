@@ -1125,7 +1125,13 @@ defmodule Aqua.TurnReadThreadsTest do
       %{child_execution_id: failed} = step(ctx, reader, "h1")
       listed = result(ctx, reader, "l1")
       control = result(ctx, reader, "s1")
-      %{"executions" => runs} = Jason.decode!(listed.content)
+      # The listing is outside data, in the reading thread's outside frame.
+      mark = Aqua.Reader.mark(reader.thread_id)
+
+      [_frame, listing] =
+        Regex.run(~r/\A⟦#{mark} outside execution⟧\n(.*)\n⟦#{mark} end⟧\z/s, listed.content)
+
+      %{"executions" => runs} = Jason.decode!(listing)
 
       assert [%{"status" => "failed", "error" => ^failure}] =
                Enum.filter(runs, &(&1["execution_id"] == failed))

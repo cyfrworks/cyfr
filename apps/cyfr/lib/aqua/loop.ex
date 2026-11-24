@@ -1781,7 +1781,7 @@ defmodule Aqua.Loop do
           step,
           outcome,
           page_value(call, result),
-          framed(state, call, result, text),
+          framed(state, call, {outcome, result}, text),
           proposed(call, result, %{
             "tool_call_id" => call && call.tool_call_id,
             "name" => call && call.model_name,
@@ -1808,33 +1808,31 @@ defmodule Aqua.Loop do
 
   # A result's text as it was, and as the model reads it: the thread's mark
   # removed (`Aqua.Reader.unmarked/2`), then by what the answer is
-  # (`Aqua.Loop.Policy.answer_of/1`): a scroll as its body and its files'
-  # names in a scroll's frame, an outside answer, and an outside server's
-  # error, in the outside frame. CYFR's own answers, every refusal, skip
-  # and unknown outcome stay unframed. The frame is in the row, so a
-  # resume, a recovery and a reread read what the model read.
-  defp framed(_state, nil, _result, text), do: {text, text}
+  # (`Aqua.Loop.Policy.answer_of/1`) and how the call closed: a scroll read
+  # as its body and its files' names in a scroll's frame, an outside
+  # answer, and an outside server's own error, in the outside frame.
+  # CYFR's own answers, every refusal, skip and unknown outcome stay
+  # unframed. The frame is in the row, so a resume, a recovery and a
+  # reread read what the model read.
+  defp framed(state, nil, _closed, text),
+    do: {text, Reader.unmarked(text, Reader.mark(state.turn.thread_id))}
 
-  defp framed(state, %Call{} = call, result, text) do
+  defp framed(state, %Call{} = call, closed, text) do
     mark = Reader.mark(state.turn.thread_id)
     plain = Reader.unmarked(text, mark)
 
     framed =
-      case {Policy.answer_of(call), result} do
-        {:scroll, {:ok, %{} = answer}} ->
+      case {Policy.answer_of(call), closed} do
+        {:scroll, {"ok", {:ok, %{} = answer}}} ->
           Reader.scroll(mark, scroll_of(answer))
 
-        {:outside, {:ok, _answer}} ->
+        {:outside, {"ok", _answer}} ->
           Reader.outside(mark, call.model_name, plain)
 
-        {:outside, {:ok, _id, _answer}} ->
-          Reader.outside(mark, call.model_name, plain)
-
-        {:outside, {:error, %Prima.Refusal{}}} ->
-          plain
-
-        {:outside, {:error, reason}} when call.kind == :external and not is_binary(reason) ->
-          Reader.outside(mark, call.model_name, plain)
+        {:outside, {"error", {:error, reason}}} ->
+          if server_error?(call, reason),
+            do: Reader.outside(mark, call.model_name, plain),
+            else: plain
 
         _unframed ->
           plain
@@ -1842,6 +1840,12 @@ defmodule Aqua.Loop do
 
     {text, framed}
   end
+
+  # An outside server's own error, which `Binding.render/2` words as the
+  # server's: never a refusal of CYFR's, which names its own sentence.
+  defp server_error?(%Call{kind: :external}, %Prima.Refusal{}), do: false
+  defp server_error?(%Call{kind: :external}, reason), do: not is_binary(reason)
+  defp server_error?(_call, _reason), do: false
 
   defp scroll_of(answer) do
     answer = answer |> Jason.encode!() |> Jason.decode!()
@@ -2146,7 +2150,7 @@ defmodule Aqua.Loop do
             step,
             "ok",
             {:ok, output(result)},
-            framed(state, call, {:ok, id, result}, text),
+            framed(state, call, {"ok", {:ok, result}}, text),
             %{
               "tool_call_id" => call && call.tool_call_id,
               "name" => call && call.model_name,
