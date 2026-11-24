@@ -562,7 +562,8 @@ func TestUpdateThroughHomebrew(t *testing.T) {
 	writeFile(t, linked, "the cask's cyfr")
 	selfExecutable = func() (string, error) { return linked, nil }
 	out, err := s.run(updateOptions{})
-	want := resolvedPath(t, linked)
+	// The update goes on as the cyfr brew links, by the path brew gives.
+	want := linked
 	if err != nil || len(s.handed) != 1 || !slices.Equal(s.handed[0], []string{want, want, "update", "--continue-as", "0.10.0"}) {
 		t.Fatalf("cyfr update through brew answered %v, handovers %v:\n%s", err, s.handed, out)
 	}
