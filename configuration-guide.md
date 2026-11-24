@@ -183,6 +183,7 @@ refused, naming the variable or key and the form it must take.
 | Variable | What it sets |
 |---|---|
 | `CYFR_CPU_LIMIT` | The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in locus-runtime under `LOCUS_RUNTIME_CPU_LIMIT`. |
+| `CYFR_LOCUS_APPARMOR` | The AppArmor profile every Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it. |
 | `LOCUS_BACKENDS_MEMORY_LIMIT` | The locus-backends container's memory limit (default 2G): `LOCUS_BACKENDS_MEMORY_BUDGET` (1792 MiB by default, three program sessions at their default 512 MiB bound), the memory the programs' sessions may hold, plus 256 MiB for the service beside them. |
 | `LOCUS_BUILDS_CPU_LIMIT` | The locus-builds container's CPU limit (default 2). |
 | `LOCUS_BUILDS_MEMORY_LIMIT` | The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit. |

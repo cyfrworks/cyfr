@@ -5,10 +5,13 @@
 # `up(writable_cgroups=False)`): the locus-builds service as a deployment
 # without the `writable-cgroups=true` security option runs it, on a Docker
 # Engine before 28 or from a compose file without the option. The
-# list replaces the shipped one instead of joining it; every other setting
+# list replaces the shipped one instead of joining it, keeping its other
+# entries; every other setting
 # stays the shipped service's.
 services:
   locus-builds:
     security_opt: !override
       - no-new-privileges:true
       - seccomp=./keeper.seccomp.json
+      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
+      - systempaths=unconfined

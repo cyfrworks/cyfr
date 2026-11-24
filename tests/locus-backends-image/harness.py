@@ -974,6 +974,7 @@ class Stack(imagesuite.Stack):
         return {
             **os.environ,
             "BACKENDS_IMAGE": self.image,
+            "CYFR_LOCUS_APPARMOR": imagesuite.APPARMOR,
             "PROBE_DIR": HERE,
             "CANARY_DIR": self.canary_dir,
             "GUARD_TOOLS_DIR": self.guard_tools_dir,
@@ -1102,6 +1103,10 @@ class Stack(imagesuite.Stack):
             if option.startswith("seccomp="):
                 option = f"seccomp={os.path.join(self.project_dir, 'keeper.seccomp.json')}"
             args += ["--security-opt", option]
+        # Docker reports `systempaths=unconfined` as empty lists of masked
+        # and read-only paths, never among the security options.
+        if host.get("MaskedPaths") == [] and host.get("ReadonlyPaths") == []:
+            args += ["--security-opt", "systempaths=unconfined"]
         for name, value in (host.get("Sysctls") or {}).items():
             args += ["--sysctl", f"{name}={value}"]
         if host.get("ReadonlyRootfs"):
@@ -1185,6 +1190,18 @@ class Stack(imagesuite.Stack):
 
     def under_uid(self, uid, target=None):
         return [p for p in self.processes(target) if uid in p["uids"]]
+
+    def outside(self, who, cmd=PROBE, target=None):
+        """The container's entry (processes) for the process of the space `who` (a probe's whoami) whose command line
+        is `cmd`, the probe's own by default, or None: a space numbers its processes apart, so the container finds
+        the space by its pid namespace, which the observer reads."""
+        script = (f"for d in /proc/[0-9]*; do [ \"$(readlink $d/ns/pid 2>/dev/null)\" = '{who['pidns']}' ] && "
+                  f"[ \"$(tr '\\0' ' ' < $d/cmdline 2>/dev/null | sed 's/ $//')\" = '{cmd}' ] && echo ${{d#/proc/}}; done; true")
+        found = run("docker", "exec", "--privileged", "-u", "0", target or self.container, "sh", "-c", script,
+                    check=False).stdout.split()
+        procs = {p["pid"]: p for p in self.processes(target)}
+        matched = [procs[int(pid)] for pid in found if int(pid) in procs]
+        return matched[0] if len(matched) == 1 else None
 
     def pool_processes(self, target=None):
         return [p for p in self.processes(target) if any(POOL_FIRST <= u <= POOL_LAST for u in p["uids"])]

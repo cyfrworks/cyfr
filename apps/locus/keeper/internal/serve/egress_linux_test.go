@@ -250,7 +250,7 @@ func TestARoutedSpaceStartsOnlyAfterItsRouteIsAdmitted(t *testing.T) {
 	marker := filepath.Join(filepath.Dir(k.homes), "ran")
 	k.guard.hold = make(chan struct{})
 	script := `touch ` + marker + `; "$TEST_BINARY" ask 127.0.0.11:53; "$TEST_BINARY" own 3000 mine 0; echo done`
-	req := spawnRequest(t, k.attach, "r1", script, map[string]string{"TEST_BINARY": k.s.self}, false, 64<<20)
+	req := spawnRequest(t, k.attach, "r1", script, map[string]string{"TEST_BINARY": k.helper}, false, 64<<20)
 	done := make(chan struct{})
 	go func() { k.handleSpawn(t, req); close(done) }()
 	deadline := time.Now().Add(10 * time.Second)
@@ -289,11 +289,11 @@ func TestARoutedSpaceStartsOnlyAfterItsRouteIsAdmitted(t *testing.T) {
 func TestEachRoutedSpaceHasItsOwnLoopbackAndHosts(t *testing.T) {
 	fakeResolver(t, map[string][]string{"api.example.com": {"203.0.113.7"}})
 	k := routedKeeper(t)
-	listed := spawnRequest(t, k.attach, "a", `"$TEST_BINARY" own 3000 first 3; echo done`, map[string]string{"TEST_BINARY": k.s.self}, false, 64<<20)
+	listed := spawnRequest(t, k.attach, "a", `"$TEST_BINARY" own 3000 first 3; echo done`, map[string]string{"TEST_BINARY": k.helper}, false, 64<<20)
 	listed.Hosts = []string{"api.example.com"}
 	k.handleSpawn(t, listed)
 	first := k.reply(t)
-	k.handleSpawn(t, spawnRequest(t, k.attach, "b", `"$TEST_BINARY" own 3000 second 0; echo done`, map[string]string{"TEST_BINARY": k.s.self}, false, 64<<20))
+	k.handleSpawn(t, spawnRequest(t, k.attach, "b", `"$TEST_BINARY" own 3000 second 0; echo done`, map[string]string{"TEST_BINARY": k.helper}, false, 64<<20))
 	second := k.reply(t)
 	if first["type"] != protocol.TypeSpawned || second["type"] != protocol.TypeSpawned {
 		t.Fatalf("answered %v and %v", first, second)
