@@ -6,8 +6,8 @@ defmodule Locus.Output do
   The one count of the output a role of a Locus node holds in its own
   memory, to the role's bound (`bounds/0`): what the backends service keeps
   unread for its sessions' readers, and what each service has taken out to
-  answer or send on. One process per role (`server/1`), started by
-  `Locus.Application` before the roles' children.
+  answer or send on. One process per role a node serves (`server/1`),
+  started by `Locus.Application` before the roles' children.
 
   A count is freed only on its holder's word: a `hold/2` naming less, a
   `return/1`, or the holder's death, which is the runtime's word that its
@@ -57,17 +57,21 @@ defmodule Locus.Output do
   Counted:
 
     * **Unread** (backends): 64 MiB over every session's buffered output
+      and the stderr it keeps for its status, running or ended
       (`Locus.Backends.Backend`, "Unread").
     * **Answering**: backends 26 MiB, runtime 16, builds 8, the pool's
       share for what each service holds. The backends role counts each
-      `recv` or `output` answer, and a status's answer at its bound, 1 MiB
-      (`Prima.LocusBackends.max_status_answer_bytes/0`), from before the
-      owners collect it to its write (`Locus.Backends.Service`); the
-      builds role a build's reads and lines; the runtime each host call's
-      answer, fetch head, piece and attached frame it hands a runner,
-      CYFR's refusal of an attached fetch from its first piece, and the
-      answers of its own calls (`take_rate`, its own `egress_pin`,
-      `runner_exited`) at twice what they declare until they are decoded
+      `recv` or `output` answer, and a status's collection and answer at
+      their most, asked without waiting before the owners collect it and
+      held to its write (`Locus.Backends.Service.status_room/1`, 7,359,488
+      bytes for one owner); the builds role a build's reads and lines; the
+      runtime each host call's answer, fetch head, piece and attached
+      frame it hands a runner, CYFR's refusal of an attached fetch from its
+      first piece, the answers of its own calls (`take_rate`, its own
+      `egress_pin`, `runner_exited`) at twice what they declare until they
+      are decoded, and a pinned fetch's larger read where it had room for
+      it, asked without waiting: the read and the receive queue behind it,
+      twice `fetch_read_ahead_bytes`, 524,288 bytes, to the fetch's end
       (`Locus.Runtime.Relay`, `Locus.Runtime.HostClient`).
 
   Not counted, each capped in size and in number:
@@ -75,30 +79,56 @@ defmodule Locus.Output do
     * **A held keeper connection's read**, every role: one read at a
       time, re-armed on its owner's word, of at most 65,541 bytes (a
       frame's 64 KiB payload and its 5-byte header,
-      `Prima.KeeperProtocol`), held at most three times over at once (the
-      socket's data, the frames parsed from it, its owner's join): 196,623
-      bytes a spawn. Spawns at once are at most the role's pool uids
-      (`Prima.LocusRoles`): runtime 8, 1,572,984 bytes; builds 16,
-      3,145,968; backends 32, 6,291,936.
+      `Prima.KeeperProtocol`), handed to the owner as at most one message
+      a stream with that stream's payloads of the read joined, so a read
+      of the smallest frames is held as its bytes and no more, and held at
+      most three times over at once (the socket's data, the frames parsed
+      from it, its owner's join): 196,623 bytes a spawn. Spawns at once:
+      the runtime's and the builds role's are at most their pools' uids,
+      8 and 16 (`Prima.LocusRoles`), 1,572,984 and 3,145,968 bytes; the
+      backends role's, scratch and kept alike, at most its admission
+      limit over the least bound a spawn may have,
+      floor(`LOCUS_BACKENDS_MEMORY_BUDGET` × `LOCUS_BACKENDS_MEMORY_OVERCOMMIT`
+      / 16 MiB) (`Locus.Backends.Owners`, "Admission by memory";
+      `Prima.KeeperProtocol.min_memory_bytes/0`), 112 at the defaults,
+      22,021,776 bytes, and more as the overcommit, which has no ceiling,
+      grows.
     * **A held keeper connection's writes**, every role: its writer
       sends a call's frames one at a time, each send waiting while the
       socket driver's queue is past gen_tcp's high watermark (8,192
       bytes), and answers its caller once the last send returned, so the
       driver queues at most one frame and the watermark, 73,733 bytes, one
-      a spawn: runtime 589,864 bytes, builds 1,179,728, backends
-      2,359,456. What waits to be written beyond it is the callers' own,
-      one call each, within their request's bound.
+      a spawn: runtime 589,864 bytes, builds 1,179,728, backends 8,258,096
+      at the defaults. What waits to be written beyond it is the callers'
+      own, at most four callers' writes a connection, waiting for its
+      relay to attach or in its writer, each within its request's bound; a
+      fifth is refused at once (`Locus.Keeper`).
     * **A relay connection's kernel queue**, every role: the relay's unix
       socket send buffer, 212,992 bytes (Linux's `net.core.wmem_default`),
       one a spawn: runtime 1,703,936 bytes, builds 3,407,872, backends
-      6,815,744.
+      23,855,104 at the defaults.
+    * **A released spawn's last frames**, every role: what its relay left
+      on its held connection, read to the connection's end and handed to
+      the owner without its word before the release, at most the relay's
+      socket queue and one read, 278,533 bytes, one a spawn being
+      released. From its release asked, or its leader's exit reported, the
+      connection is read without the owner's word, so an owner that does
+      not take cannot hold the release: what the spawn's processes write
+      in that time, until cyfr-locus has killed them (the release's grace,
+      or 2 s past the leader's exit), is bounded by that time and not by a
+      count of bytes.
     * **The piece a runtime holder reads ahead of the count**, the
       runtime: each poster, fetch and own call holds the piece its
       connection last handed it while it asks for room, one transport
-      read of at most 64 KiB (`Locus.Runtime.Egress.transport_opts/0`).
-      Holders at once: 64 calls and 16 fetches a runner (the relay's
-      bounds), each fetch with at most one own call at a time, so 96 a
-      runner, 768 over 8 runners: 48 MiB.
+      read of at most 64 KiB (`Locus.Runtime.Egress.transport_opts/1`),
+      or a pinned fetch's larger read, which its room counts. Holders at
+      once: 64 calls and 16 fetches a runner (the relay's bounds), each
+      fetch with at most one own call at a time, so 96 a runner, 768 over
+      8 runners: 48 MiB. A fetch's largest body, 50 MiB
+      (`Prima.Limits.Ceiling`), through one 64 KiB read's receive window
+      (about 45 KiB) comes at about 150 KB/s over a 300 ms round trip, in
+      about 350 s, past a catalyst's default three minutes; through the
+      256 KiB read's (about 192 KiB), at 430 to 560 KB/s, in 93 to 121 s.
     * **An attached fetch's unfinished frame**, the runtime: what is read
       of a frame not yet whole, under one frame, 65,541 bytes
       (`Prima.WorkerAuth.max_frame_bytes/0` and its header), 16 a runner,
@@ -117,19 +147,12 @@ defmodule Locus.Output do
       once: 512 MiB.
     * **A backends session's unfinished line**: at most
       `Prima.LocusBackends.max_line_bytes/0`, 1 MiB, one a running
-      session. Running sessions are at most the pool's 32 uids for scratch
-      programs, and the kept programs' sessions besides, each admitted by
-      its memory reservation (`Locus.Backends.Owners`, "Admission by
-      memory").
-    * **A backends session's stderr tail**: at most
-      `Prima.LocusBackends.stderr_tail_bytes/0` and its slack, 69,632
-      bytes, one a session its owner holds, running or ended, at most
-      `Prima.LocusBackends.max_sessions/0` (16) an owner. Nothing in the
-      service bounds the owners CYFR syncs to it.
+      session; running sessions are the backends role's spawns, 112 at
+      the defaults.
     * **A request body as a listener reads it**, every role: at most the
       route's bound (the runtime's 1 MiB, a backends session's 16 MiB),
       one a connection. Nothing caps a listener's connections but
-      ThousandIsland's default of 16,384 an acceptor.
+      ThousandIsland's default of 16,384 an acceptor, 100 acceptors.
     * **A TCP connection's send queue**, every listener: what the kernel
       holds of an answer once its write returned, at most Linux's default
       `net.ipv4.tcp_wmem` ceiling, 4,194,304 bytes, one a connection.

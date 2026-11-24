@@ -596,24 +596,38 @@ defmodule Locus.Backends.ServiceTest do
       )
     end
 
-    test "a status asks the answering count for its whole bound before any of it is collected, and gives it back once written",
+    # A status names no deadline: it asks the answering count, without
+    # waiting, for the most its collection and its answer can hold, for
+    # each owner it names sixteen programs, each a stderr tail of 65,536
+    # bytes reported as at most three bytes a byte and encoded as at most
+    # six, with a kilobyte for each program's other members, two for the
+    # owner's and one for the answer's.
+    test "a status asks the answering count for the most it can hold, before collecting, without waiting, and gives it back once written",
          ctx do
+      named = [%{athanor: "ath_room", server: "srv_room"}]
+      room = 1 * (16 * (7 * 65_536 + 1_024) + 2_048) + 1_024
+
+      assert %{status: 200} = control(ctx, %{type: :status, owners: named})
+
+      wait_until(fn ->
+        Locus.Output.held(@output) |> Map.take([:answering, :answering_peak, :waiting]) == %{
+          answering: 0,
+          answering_peak: room,
+          waiting: 0
+        }
+      end)
+
+      # With no room now, it is refused at once, and nothing waits.
       bound = Locus.Output.bounds().backends.answering
 
       assert {:ok, full} =
                Locus.Output.reserve(@output, bound, System.monotonic_time(:millisecond) + 5_000)
 
-      status = Task.async(fn -> control(ctx, %{type: :status, owners: []}) end)
-      wait_until(fn -> Locus.Output.held(@output).waiting == 1 end)
+      started = System.monotonic_time(:millisecond)
+      assert_refused(control(ctx, %{type: :status, owners: named}), "unavailable")
+      assert System.monotonic_time(:millisecond) - started < 1_000
+      assert %{waiting: 0} = Locus.Output.held(@output)
       Locus.Output.return(full)
-      assert %{status: 200} = Task.await(status, 10_000)
-
-      wait_until(fn ->
-        Locus.Output.held(@output) |> Map.take([:answering, :waiting]) == %{
-          answering: 0,
-          waiting: 0
-        }
-      end)
     end
 
     test "a hello names no lifetime, and answers this one", ctx do

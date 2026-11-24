@@ -43,8 +43,10 @@ defmodule Locus.Backends.Relay do
   Stderr is never parsed: the last `Prima.LocusBackends.stderr_tail_bytes/0`
   bytes are what a status reports for a scratch program, and
   `stderr_tail_slack_bytes/0` more are kept so a credential split by the
-  cut is masked before the cut is taken (`stderr_tail/2`). Every byte is
-  counted (`stderr_bytes/1`), which is all a kept program's status names.
+  cut is masked before the cut is taken (`stderr_tail/2`), copied to
+  their own size. Every byte is counted (`stderr_bytes/1`), which is all a
+  kept program's status names. What the relay holds, its buffer and the
+  stderr it keeps, is `held/1`.
   """
 
   alias Prima.LocusBackends
@@ -193,12 +195,25 @@ defmodule Locus.Backends.Relay do
   defp bound(relay), do: relay |> drop_oldest() |> bound()
 
   @doc """
+  What the relay holds for its session: the buffer's `bytes` and the
+  stderr kept, which a session names to the role's count.
+  """
+  @spec held(t()) :: non_neg_integer()
+  def held(%__MODULE__{} = relay), do: relay.bytes + byte_size(relay.stderr)
+
+  @doc """
   The oldest lines or chunks dropped, each counted as the buffer's own
-  bound counts it, until the buffer holds at most `bytes`.
+  bound counts it, until the relay holds at most `bytes` (`held/1`); with
+  none left, the stderr kept is cut to its last bytes that fit.
   """
   @spec drop_to(t(), non_neg_integer()) :: t()
-  def drop_to(%__MODULE__{bytes: held} = relay, bytes) when held <= bytes, do: relay
-  def drop_to(%__MODULE__{} = relay, bytes), do: relay |> drop_oldest() |> drop_to(bytes)
+  def drop_to(%__MODULE__{} = relay, bytes) do
+    cond do
+      held(relay) <= bytes -> relay
+      relay.count > 0 -> relay |> drop_oldest() |> drop_to(bytes)
+      true -> %{relay | stderr: last(relay.stderr, max(bytes - relay.bytes, 0))}
+    end
+  end
 
   defp drop_oldest(relay) do
     {{:value, {_seq, data, _cost}}, lines} = :queue.out(relay.lines)
@@ -319,13 +334,16 @@ defmodule Locus.Backends.Relay do
   @doc "Bytes of the process's stderr, of which the tail and its slack are kept."
   @spec stderr(t(), binary()) :: t()
   def stderr(%__MODULE__{} = relay, data) when is_binary(data) do
-    kept = relay.stderr <> data
-    keep = relay.tail_bytes + relay.slack_bytes
-    relay = %{relay | stderr_bytes: relay.stderr_bytes + byte_size(data)}
+    kept = last(relay.stderr <> data, relay.tail_bytes + relay.slack_bytes)
+    %{relay | stderr: kept, stderr_bytes: relay.stderr_bytes + byte_size(data)}
+  end
 
-    if byte_size(kept) > keep,
-      do: %{relay | stderr: binary_part(kept, byte_size(kept) - keep, keep)},
-      else: %{relay | stderr: kept}
+  # The last `keep` bytes of `bytes`, copied to their own size: a part of
+  # a larger binary, or of one an append grew beyond its bytes, would hold
+  # the whole of it alive.
+  defp last(bytes, keep) do
+    size = byte_size(bytes)
+    :binary.copy(binary_part(bytes, max(size - keep, 0), min(size, keep)))
   end
 
   @doc "How many bytes of stderr the process wrote, all a kept program's status names."

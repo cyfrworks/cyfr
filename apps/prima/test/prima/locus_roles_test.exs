@@ -33,7 +33,7 @@ defmodule Prima.LocusRolesTest do
                 user_prefix)
   @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
                           socket_queue_bytes)
-  @role_memory_keys ~w(answering fetch_head_bytes fetch_read_bytes freed_segments_bytes unread)
+  @role_memory_keys ~w(answering fetch_head_bytes fetch_read_ahead_bytes fetch_read_bytes freed_segments_bytes unread)
 
   # The file's spelling of a value of the module: atoms as their names, a
   # map under its keys' names, a uid range as its first and last uid.
@@ -194,7 +194,12 @@ defmodule Prima.LocusRolesTest do
       assert is_integer(memory.answering) and memory.answering > 0, "#{role.name}'s answering"
       assert memory.unread != nil == (role.name == :backends), "#{role.name}'s unread"
 
-      for figure <- [:fetch_read_bytes, :fetch_head_bytes, :freed_segments_bytes] do
+      for figure <- [
+            :fetch_read_bytes,
+            :fetch_read_ahead_bytes,
+            :fetch_head_bytes,
+            :freed_segments_bytes
+          ] do
         assert memory[figure] != nil == (role.name == :runtime), "#{role.name}'s #{figure}"
       end
     end

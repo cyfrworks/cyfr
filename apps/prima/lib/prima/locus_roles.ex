@@ -53,10 +53,12 @@ defmodule Prima.LocusRoles do
   what it counts (`Locus.Output`), `unread` (the backends role's alone,
   `nil` for the others) and `answering`, and the figures of what it holds
   uncounted that an image suite's allowance reads. The runtime names one
-  transport read of a pinned fetch (`fetch_read_bytes`), the most of a
-  fetch's head the HTTP client reads (`fetch_head_bytes`) and the freed
-  segments its VM keeps for reuse (`freed_segments_bytes`); every other
-  role names none of them (`nil`). The release's `memory` holds what every
+  transport read of a pinned fetch (`fetch_read_bytes`), the larger read a
+  fetch takes when its count has room for it and the receive queue behind
+  it (`fetch_read_ahead_bytes`), the most of a fetch's head the HTTP
+  client reads (`fetch_head_bytes`) and the freed segments its VM keeps
+  for reuse (`freed_segments_bytes`); every other role names none of them
+  (`nil`). The release's `memory` holds what every
   role's service shares: the bytes of resident memory one byte it holds
   costs at most (`byte_cost`), one read of a held keeper connection
   (`keeper_read_bytes`) and the copies of it held at once
@@ -139,6 +141,7 @@ defmodule Prima.LocusRoles do
             unread: pos_integer() | nil,
             answering: pos_integer(),
             fetch_read_bytes: pos_integer() | nil,
+            fetch_read_ahead_bytes: pos_integer() | nil,
             fetch_head_bytes: pos_integer() | nil,
             freed_segments_bytes: pos_integer() | nil
           }
@@ -192,6 +195,7 @@ defmodule Prima.LocusRoles do
         unread: nil,
         answering: 16_777_216,
         fetch_read_bytes: 65_536,
+        fetch_read_ahead_bytes: 262_144,
         fetch_head_bytes: 262_144,
         freed_segments_bytes: 69_905_080
       }
@@ -216,6 +220,7 @@ defmodule Prima.LocusRoles do
         unread: nil,
         answering: 8_388_608,
         fetch_read_bytes: nil,
+        fetch_read_ahead_bytes: nil,
         fetch_head_bytes: nil,
         freed_segments_bytes: nil
       }
@@ -240,6 +245,7 @@ defmodule Prima.LocusRoles do
         unread: 67_108_864,
         answering: 27_262_976,
         fetch_read_bytes: nil,
+        fetch_read_ahead_bytes: nil,
         fetch_head_bytes: nil,
         freed_segments_bytes: nil
       }

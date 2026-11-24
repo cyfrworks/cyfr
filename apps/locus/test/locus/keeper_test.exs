@@ -632,8 +632,16 @@ defmodule Locus.KeeperTest do
 
       assert_receive {Keeper, _ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
 
-      # The assign, sent before the relay attaches, is held.
-      assert :ok = Locus.Runtime.Keeper.Channel.send(channel, p.assign)
+      # The assign, sent before the relay attaches, is held, and answered
+      # once the attached connection has written it.
+      sending = Task.async(fn -> Locus.Runtime.Keeper.Channel.send(channel, p.assign) end)
+
+      wait_until(
+        fn ->
+          Enum.any?(:sys.get_state(c.client).requests, fn {_ref, entry} -> entry.pending != [] end)
+        end,
+        5_000
+      )
 
       for process <- [c.client, adapter],
           do: assert(clean?(p, :sys.get_status(process)), "#{inspect(process)} shows the assign")
@@ -647,6 +655,7 @@ defmodule Locus.KeeperTest do
 
       :ok = :gen_tcp.send(relay, Prima.KeeperProtocol.attach_frame(token))
       assert_receive {Keeper, _ref, :attached}, 5_000
+      assert :ok = Task.await(sending)
       hex = Base.encode16(p.key, case: :lower)
       :ok = :gen_tcp.send(relay, [<<4, 4_000::32>>, ~s({"keys":{"call":"#{hex}")])
 
@@ -927,6 +936,34 @@ defmodule Locus.KeeperTest do
       assert heard(handle) == [{:control, last}, :control_closed, :relay_closed]
       :gen_tcp.close(relay)
     end
+
+    # The keeper reports a spawn released once its relay has ended, so what
+    # the relay wrote before it is all on the connection: it reaches the
+    # owner, in the wire's order and without its word, before the release.
+    test "a runner's last frames reach its owner before its release, though it took nothing" do
+      c = plain_client!()
+      {%{ref: ref}, relay} = attached_runner!(c)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "first"))
+      assert_receive {Keeper, ^ref, {:control, "first"}}, 5_000
+
+      # The owner does not take the first: the last waits on the socket
+      # when the relay ends and the keeper reports the end.
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "last"))
+      :ok = :gen_tcp.close(relay)
+      id = String.duplicate("cd", 16)
+      exit = %{v: 3, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil}
+      released = %{v: 3, type: "released", spawn_id: id}
+      :ok = :socket.send(c.peer, [Jason.encode!(exit), ?\n, Jason.encode!(released), ?\n])
+
+      assert until_released(ref) ==
+               [
+                 {:control, "last"},
+                 :control_closed,
+                 :relay_closed,
+                 {:exited, {:status, 0}, nil},
+                 :released
+               ]
+    end
   end
 
   describe "a held connection" do
@@ -1114,6 +1151,243 @@ defmodule Locus.KeeperTest do
 
       # A write to the connection that is gone is answered at once.
       assert {:error, _gone} = Keeper.send(handle, "late")
+    end
+
+    # Every event of `ref`, in order, until and with the first that `last?`
+    # holds for (its `:released`).
+    defp until_released(ref, last? \\ &(&1 == :released), acc \\ []) do
+      receive do
+        {Keeper, ^ref, event} ->
+          if last?.(event),
+            do: Enum.reverse([event | acc]),
+            else: until_released(ref, last?, [event | acc])
+      after
+        5_000 -> flunk("no last event after #{inspect(Enum.reverse(acc))}")
+      end
+    end
+
+    defp channel_reply(c, reply), do: :ok = :socket.send(c.peer, [Jason.encode!(reply), ?\n])
+
+    test "a spawn's frames after its leader's exit reach its owner before the exit" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "one"))
+      assert_receive {Keeper, ^ref, {:stdout, "one"}}, 5_000
+
+      # The leader exits while the owner holds its first frame untaken and
+      # the relay still carries the last.
+      channel_reply(c, %{v: 3, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "two"))
+      :ok = :gen_tcp.close(relay)
+
+      assert until_released(ref, &match?({:exited, _, _, _}, &1)) ==
+               [{:stdout, "two"}, {:exited, 0, nil, nil}]
+
+      :ok = Keeper.taken(handle)
+      channel_reply(c, %{v: 3, type: "released", spawn_id: id})
+      assert until_released(ref) == [:released]
+    end
+
+    @tag timeout: 60_000
+    test "an owner that takes nothing holds no release: from the release on, the connection is read without its word" do
+      c = plain_client!()
+      {%{ref: ref, spawn_id: id} = handle, relay} = attached_program!(c)
+      payload = :binary.copy("y", KeeperProtocol.max_frame_bytes())
+      frames = 16
+      frame = KeeperProtocol.frames(:stdout, payload)
+      sending = Task.async(fn -> for _ <- 1..frames, do: :ok = :gen_tcp.send(relay, frame) end)
+      assert_receive {Keeper, ^ref, {:stdout, _first}}, 5_000
+      assert Task.yield(sending, 500) == nil
+
+      # The release is asked: the relay's writes go through untaken, so it
+      # can end, and its end is the keeper's to report.
+      :ok = Keeper.release(c.name, handle, 0)
+      assert %{"type" => "release", "spawn_id" => ^id} = request(c.peer)
+      Task.await(sending, 10_000)
+      :ok = :gen_tcp.close(relay)
+
+      channel_reply(c, %{
+        v: 3,
+        type: "exited",
+        spawn_id: id,
+        code: nil,
+        signal: "SIGKILL",
+        memory: nil
+      })
+
+      channel_reply(c, %{v: 3, type: "released", spawn_id: id})
+
+      told = until_released(ref)
+      stdout = for {:stdout, piece} <- told, do: piece
+      assert IO.iodata_length(stdout) + byte_size(payload) == frames * byte_size(payload)
+      assert Enum.take(told, -2) == [{:exited, nil, "SIGKILL", nil}, :released]
+    end
+
+    test "a write whose caller is gone before its writer begins it is not written" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      :erlang.suspend_process(writer)
+      caller = spawn(fn -> Keeper.send(handle, "hello") end)
+
+      wait_until(
+        fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, 1} end,
+        5_000
+      )
+
+      monitor = Process.monitor(caller)
+      Process.exit(caller, :kill)
+      assert_receive {:DOWN, ^monitor, _, _, _}, 5_000
+      :erlang.resume_process(writer)
+      assert {:error, :timeout} = :gen_tcp.recv(relay, 0, 500)
+    end
+
+    test "a write past the four that wait for a connection is refused at once" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      :erlang.suspend_process(writer)
+
+      # Each write reaches the writer before the next is made, so they wait
+      # in the order made.
+      waiting =
+        for n <- 1..4 do
+          task = Task.async(fn -> Keeper.send(handle, "w#{n}") end)
+
+          wait_until(
+            fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, n} end,
+            5_000
+          )
+
+          task
+        end
+
+      assert {:error, :stdin_closed} = Keeper.send(handle, "past")
+      :erlang.resume_process(writer)
+      assert Enum.map(waiting, &Task.await/1) == [:ok, :ok, :ok, :ok]
+
+      expected = IO.iodata_to_binary(for n <- 1..4, do: KeeperProtocol.frames(:stdin, "w#{n}"))
+      assert {:ok, ^expected} = :gen_tcp.recv(relay, byte_size(expected), 5_000)
+      assert {:error, :timeout} = :gen_tcp.recv(relay, 0, 200)
+    end
+
+    # The smallest legal frames, as many as one read holds: the owner is
+    # told them as one message, so what it holds is the read's bytes and
+    # not a message for each frame.
+    test "one read of the smallest frames reaches its owner as one message a stream, within the table's figure for a read" do
+      c = plain_client!()
+      {%{ref: ref}, relay} = attached_program!(c)
+      memory = Prima.LocusRoles.release().memory
+      row = memory.keeper_read_bytes * memory.keeper_read_copies
+      out = IO.iodata_to_binary(KeeperProtocol.frames(:stdout, "x"))
+      err = IO.iodata_to_binary(KeeperProtocol.frames(:stderr, "e"))
+      read = :binary.copy(out <> err, div(60_000, byte_size(out) * 2))
+      :erlang.garbage_collect()
+      {:memory, before} = Process.info(self(), :memory)
+      :ok = :gen_tcp.send(relay, read)
+
+      wait_until(fn -> Process.info(self(), :message_queue_len) |> elem(1) >= 2 end, 5_000)
+      :erlang.garbage_collect()
+      {:memory, held} = Process.info(self(), :memory)
+      assert held - before <= row, "the owner holds #{held - before} bytes, the row #{row}"
+
+      {:messages, messages} = Process.info(self(), :messages)
+      told = for {Keeper, ^ref, event} <- messages, do: event
+      stdout = for {:stdout, piece} <- told, do: piece
+      stderr = for {:stderr, piece} <- told, do: piece
+      assert IO.iodata_to_binary(stdout) == :binary.copy("x", div(byte_size(read), 12))
+      assert IO.iodata_to_binary(stderr) == :binary.copy("e", div(byte_size(read), 12))
+      assert length(told) <= 2 * 2
+    end
+
+    test "a writer ends with its client's normal stop" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      monitor = Process.monitor(writer)
+      GenServer.stop(c.client, :normal)
+      assert_receive {:DOWN, ^monitor, :process, ^writer, _reason}, 5_000
+      :gen_tcp.close(relay)
+    end
+
+    test "a caller waiting on a writer that dies is answered at once" do
+      c = plain_client!()
+      {handle, relay} = attached_program!(c)
+      writer = writer_of(c, handle)
+      :erlang.suspend_process(writer)
+      waiting = Task.async(fn -> Keeper.send(handle, "hello") end)
+
+      wait_until(
+        fn -> Process.info(writer, :message_queue_len) == {:message_queue_len, 1} end,
+        5_000
+      )
+
+      Process.exit(writer, :kill)
+      assert {:ok, {:error, _closed}} = Task.yield(waiting, 1_000)
+      :gen_tcp.close(relay)
+    end
+
+    test "a write before the relay attaches is answered once the attached connection wrote it, or refused at the spawn's end" do
+      c = plain_client!()
+
+      for attaches? <- [true, false] do
+        id = "pre-" <> Integer.to_string(System.unique_integer([:positive]))
+        placed!(c, id)
+        peer = c.peer
+
+        answering =
+          Task.async(fn ->
+            %{"id" => request_id, "attach" => %{"token" => token}} = request(peer)
+            spawn_id = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+            :ok =
+              :socket.send(peer, [
+                Jason.encode!(%{
+                  v: 3,
+                  type: "spawned",
+                  id: request_id,
+                  spawn_id: spawn_id,
+                  uid: 1,
+                  pid: 1
+                }),
+                ?\n
+              ])
+
+            {token, spawn_id}
+          end)
+
+        {:ok, %{ref: ref} = handle} =
+          Keeper.spawn(c.name, %{
+            argv: ["/bin/cat"],
+            env: %{},
+            place: id,
+            pool: "backends",
+            memory_bytes: 268_435_456,
+            cpu_quota: 100_000
+          })
+
+        {token, spawn_id} = Task.await(answering)
+        writing = Task.async(fn -> Keeper.send(handle, "hello") end)
+        assert Task.yield(writing, 300) == nil
+
+        if attaches? do
+          {:ok, relay} =
+            :gen_tcp.connect({:local, Path.join(c.attach_dir, "attach.sock")}, 0, [
+              :binary,
+              active: false
+            ])
+
+          :ok = :gen_tcp.send(relay, KeeperProtocol.attach_frame(token))
+          assert_receive {Keeper, ^ref, :attached}, 5_000
+          expected = IO.iodata_to_binary(KeeperProtocol.frames(:stdin, "hello"))
+          assert {:ok, ^expected} = :gen_tcp.recv(relay, byte_size(expected), 5_000)
+          assert Task.await(writing) == :ok
+          :gen_tcp.close(relay)
+        else
+          channel_reply(c, %{v: 3, type: "released", spawn_id: spawn_id})
+          assert {:error, :stdin_closed} = Task.await(writing)
+        end
+      end
     end
 
     test "a writer ends with the client" do

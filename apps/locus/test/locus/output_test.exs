@@ -72,11 +72,6 @@ defmodule Locus.OutputTest do
              runtime: %{unread: nil, answering: 16 * mib},
              builds: %{unread: nil, answering: 8 * mib}
            }
-
-    for role <- [:backends, :runtime, :builds] do
-      assert is_pid(Process.whereis(Output.server(role))),
-             "#{role}'s count runs in the suite's node"
-    end
   end
 
   describe "unread" do

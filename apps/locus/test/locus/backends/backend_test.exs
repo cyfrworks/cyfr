@@ -428,10 +428,13 @@ defmodule Locus.Backends.BackendTest do
     # least, none.
     assert Enum.all?(kept, fn {dropped, _kept} -> dropped > 0 end), inspect(kept)
 
-    # The count names what the sessions buffer, within its bound now that
-    # every session told to drop has dropped, and never passed it by more
-    # than an increment for each session that could be told at once.
-    buffered = Enum.sum(for s <- [reader | floods], do: :sys.get_state(s).relay.bytes)
+    # The count names what the sessions buffer and the stderr they keep,
+    # within its bound now that every session told to drop has dropped,
+    # and never passed it by more than an increment for each session that
+    # could be told at once.
+    buffered =
+      Enum.sum(for s <- [reader | floods], do: Locus.Backends.Relay.held(:sys.get_state(s).relay))
+
     assert held.unread == buffered
     assert held.owed == 0 and held.unread <= bounds.unread, inspect(held)
     assert held.unread_peak <= bounds.unread + 32 * @increment, inspect(held)
@@ -505,6 +508,25 @@ defmodule Locus.Backends.BackendTest do
 
     %{dropped: 64, grant: grant} = Backend.recv(holder, 0, 0)
     :ok = Locus.Output.return(grant)
+  end
+
+  test "the stderr a session keeps for its status is held in the role's count, and cut when it must drop with no line left",
+       %{supervisor: supervisor} do
+    kept = Prima.LocusBackends.stderr_tail_bytes() + Prima.LocusBackends.stderr_tail_slack_bytes()
+    bound = kept + 1_024
+    output = output(%{unread: bound, answering: 26 * 1_048_576})
+    {session, ref} = scripted(supervisor, output)
+    Kernel.send(session, {Scripted, ref, {:stderr, :binary.copy("e", 2 * kept)}})
+    Backend.status(session, 5_000)
+    assert %{unread: ^kept} = Locus.Output.held(output)
+
+    # Another session's line passes the bound: the session holding most has
+    # no line to drop, so it cuts the stderr it keeps.
+    {other, other_ref} = scripted(supervisor, output)
+    Kernel.send(other, {Scripted, other_ref, {:stdout, :binary.copy("x", 2_047) <> "\n"}})
+    Backend.status(other, 5_000)
+    Backend.status(session, 5_000)
+    assert %{unread: ^bound, owed: 0} = Locus.Output.held(output)
   end
 
   test "a process that stops reading its input holds its caller, never its session, which goes on taking its output",

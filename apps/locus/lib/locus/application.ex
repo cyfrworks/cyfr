@@ -35,10 +35,9 @@ defmodule Locus.Application do
   The tree restarts `:rest_for_one`, in dependency order: the build
   slots, the one client of cyfr-locus (`Locus.Keeper`) when this node was
   started by it, whatever roles it serves (a runtime node's attaches its
-  runners' relays in the runtime's attach directory), each role's count of
-  the output it holds (`Locus.Output`, all three on every service node, so
-  a suite that serves a role finds its count), the runtime
-  (`Locus.Runtime.children/1`) when it is served, the builds service's
+  runners' relays in the runtime's attach directory), the count of the
+  output each role it serves holds (`Locus.Output`), and no other role's,
+  the runtime (`Locus.Runtime.children/1`) when it is served, the builds service's
   listener when builds are served, and the backends service's children
   (`Locus.Backends.children/0`) when backends are. When cyfr-locus's
   channel is lost its client stops, everything started after it stops
@@ -195,9 +194,10 @@ defmodule Locus.Application do
 
   defp served(%{runtime: runtime?, builds: builds?, backends: backends?} = roles, children) do
     children ++
-      if(served?(roles),
-        do: Enum.map([:runtime, :builds, :backends], &{Locus.Output, &1}),
-        else: []
+      for(
+        role <- [:runtime, :builds, :backends],
+        Map.fetch!(roles, role),
+        do: {Locus.Output, role}
       ) ++
       if(runtime?, do: Locus.Runtime.children(:service), else: []) ++
       if(builds?, do: [listener()], else: []) ++

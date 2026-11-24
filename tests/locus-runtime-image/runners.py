@@ -324,8 +324,16 @@ def home_scrubbed(stack, runner):
 
 
 def os_cleanup(stack, runner, label):
-    """The three OS facts of a retired runner: uid free, home scrubbed, no process of it."""
-    expect(stack.uid_processes(runner["uid"]) == [], f"{label}: no process of uid {runner['uid']} remains", stack.processes())
+    """The OS facts of a retired runner: no process of it is left, its VM by
+    pid nor anything started in its home, and its home is scrubbed. The pool
+    hands a freed uid to a fresh runner once it is the oldest free one, so
+    its uid's holding no process is what `wait_gone` saw at its retirement,
+    and what is left of it is read here by its own pid and home."""
+    left = [p for p in stack.processes() if p["pid"] == runner.get("pid") or runner["home"] in p["cmd"]]
+    expect(left == [], f"{label}: no process of uid {runner['uid']}'s runner, in {runner['home']}, remains", stack.processes())
+    homes = sorted({h for p in stack.uid_processes(runner["uid"]) for h in re.findall(r"-home (\S+)", p["cmd"])})
+    if homes:
+        print(f"note: uid {runner['uid']} has since been handed to a fresh runner, in {homes}", flush=True)
     expect(home_scrubbed(stack, runner), f"{label}: its home {runner['home']} is scrubbed", stack.homes())
 
 

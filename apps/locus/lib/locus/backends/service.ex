@@ -40,10 +40,11 @@ defmodule Locus.Backends.Service do
      encoded as `encode_answer/2` encodes it, and a status answer past
      `max_status_answer_bytes/0` is refused whole as `status_too_large`.
      A status first asks the backends role's answering count
-     (`Locus.Output`) for that bound, before anything of it is collected,
-     within as long as a `recv` waits (`max_recv_wait_ms/0`), and is
-     refused `unavailable` when no room came by then; the request gives
-     the room back once its answer, or its refusal, is written.
+     (`Locus.Output`) for the most its collection and its answer can hold
+     (`status_room/1`), before anything of it is collected; it names no
+     deadline, so it waits for none, and is refused `unavailable` when
+     the count has no room for it now. The request gives the room back
+     once its answer, or its refusal, is written.
 
   ## A session message, in order
 
@@ -232,13 +233,14 @@ defmodule Locus.Backends.Service do
     end
   end
 
-  # A status's answer is asked for whole, at its bound, before the owners
-  # collect any of it, and held by this request until the answer or its
-  # refusal is written.
-  defp roomed(conn, %{type: :status}, answer) do
-    by = System.monotonic_time(:millisecond) + LocusBackends.max_recv_wait_ms()
+  # A status's room is asked for whole, before the owners collect any of
+  # it, and held by this request until the answer or its refusal is
+  # written. A status carries no deadline: the ask's is now, so it waits
+  # for no room.
+  defp roomed(conn, %{type: :status, owners: owners}, answer) do
+    now = System.monotonic_time(:millisecond)
 
-    case Locus.Output.reserve(output(conn), LocusBackends.max_status_answer_bytes(), by) do
+    case Locus.Output.reserve(output(conn), status_room(length(owners)), now) do
       {:ok, grant} ->
         try do
           answer.()
@@ -252,6 +254,26 @@ defmodule Locus.Backends.Service do
   end
 
   defp roomed(_conn, _message, answer), do: answer.()
+
+  @doc """
+  The most a status naming `owners` owners holds from its collection to
+  its written answer, in bytes. Each owner reports at most
+  `Prima.LocusBackends.max_programs/0` programs, each a scratch program's
+  stderr tail of at most `Prima.LocusBackends.stderr_tail_bytes/0` bytes:
+  a byte of it is reported as at most three (one that is not UTF-8 is
+  U+FFFD) and encoded in the answer as at most six (a control byte's
+  `\\u00XX`), seven between them. Beside its tail a program's name, error
+  and members are held as text and as JSON within 1 KiB, an owner's
+  within 2 KiB (its athanor and server, at most 256 bytes each), and the
+  answer's own members within 1 KiB. One owner, as CYFR names, is
+  7,359,488 bytes; past three the role's answering bound (26 MiB) cannot
+  hold it, and the status is refused `unavailable`.
+  """
+  @spec status_room(non_neg_integer()) :: pos_integer()
+  def status_room(owners) when is_integer(owners) and owners >= 0 do
+    program = 7 * LocusBackends.stderr_tail_bytes() + 1_024
+    owners * (LocusBackends.max_programs() * program + 2_048) + 1_024
+  end
 
   defp known(_conn, {:ok, key}), do: {:ok, key}
   defp known(conn, :error), do: {:refused, closing(conn), :unauthorized}

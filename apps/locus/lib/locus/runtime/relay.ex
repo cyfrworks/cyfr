@@ -1066,14 +1066,41 @@ defmodule Locus.Runtime.Relay do
     end
   end
 
+  # A fetch reads ahead past one 64 KiB read only on its count's room for
+  # the larger read and the receive queue behind it, asked without waiting
+  # and given back at the fetch's end: through one read's window the
+  # largest body a fetch may receive, 50 MiB, takes about 350 s over a
+  # 300 ms round trip, past a catalyst's three minutes, and through the
+  # larger one about 120 (`Prima.LocusRoles`, `fetch_read_ahead_bytes`).
+  # Without room it reads 64 KiB at a time.
+  defp read_ahead do
+    ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
+
+    case reserve(2 * ahead, System.monotonic_time(:millisecond)) do
+      {:ok, grant} -> {ahead, grant}
+      :full -> {Prima.LocusRoles.role!(:runtime).memory.fetch_read_bytes, nil}
+    end
+  end
+
   defp connect(relay, re, bound, request) do
+    {read_bytes, grant} = read_ahead()
+
+    try do
+      connect(relay, re, bound, request, read_bytes)
+    after
+      if grant, do: return(grant)
+    end
+  end
+
+  defp connect(relay, re, bound, request, read_bytes) do
     timeout = max(min(fetch_timeout(bound), bound.deadline - now()), 1)
     max_bytes = bound.limits.max_response_size
 
     with {:ok, pinned} <-
            Egress.connect_options(request.pin, request.uri,
              receive_timeout: timeout,
-             protocols: [:http1]
+             protocols: [:http1],
+             read_bytes: read_bytes
            ) do
       Process.put({__MODULE__, :bytes}, 0)
 

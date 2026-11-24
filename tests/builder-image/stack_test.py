@@ -8,9 +8,9 @@ container is not running, or is restarting, is the one exception, and it is
 read from the call.
 
 An answer's lines are read as the wire's vectors say every reader reads
-them: each stream under `lines.streams` of the vectors `stack.WIRE` holds
-reads to its files and log, to its refusal keeping nothing, or fails by the
-error the vector names.
+them: each stream under `lines.streams` of tests/fixtures/locus_builds.json,
+which `stack.WIRE` holds, reads to its files and log, to its refusal keeping
+nothing, or fails by the error the vector names.
 
 Usage: python3 -I tests/builder-image/stack_test.py
 """

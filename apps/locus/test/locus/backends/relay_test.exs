@@ -18,6 +18,7 @@ defmodule Locus.Backends.RelayTest do
   use ExUnit.Case, async: true
 
   alias Locus.Backends.Relay
+  alias Prima.LocusBackends
 
   defp texts(lines), do: Enum.map(lines, & &1.text)
 
@@ -163,6 +164,14 @@ defmodule Locus.Backends.RelayTest do
     relay = relay |> Relay.stderr("abcdef") |> Relay.stderr("gh")
     assert Relay.stderr_bytes(relay) == 8
     assert byte_size(relay.stderr) == 4
+  end
+
+  test "the stderr kept is a binary of its own size, holding no larger one alive" do
+    piece = :binary.copy("s", LocusBackends.stderr_tail_bytes())
+    relay = Enum.reduce(1..3, Relay.new(), fn _, relay -> Relay.stderr(relay, piece) end)
+    kept = LocusBackends.stderr_tail_bytes() + LocusBackends.stderr_tail_slack_bytes()
+    assert byte_size(relay.stderr) == kept
+    assert :binary.referenced_byte_size(relay.stderr) == kept
   end
 
   test "the stderr tail is masked and cut to its bound" do

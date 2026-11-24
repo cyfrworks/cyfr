@@ -64,10 +64,24 @@ replaced =
 restore_key = {:locus_test_helper, :runtime_restored}
 :persistent_term.erase(restore_key)
 
+# The suite's node serves the runtime alone, so it starts the runtime's
+# count alone (`Locus.Application`). The builds and backends suites serve
+# those roles through listeners and sessions of their own, which find
+# their role's count by its name: both counts run under `Locus.Supervisor`
+# for this suite, as a node serving those roles runs them, and leave it
+# with the restore, so a later suite in this VM finds the node as it
+# started.
+counts = [{Locus.Output, :builds}, {Locus.Output, :backends}]
+
 ExUnit.after_suite(fn _ ->
   unless :persistent_term.get(restore_key, false) do
     :persistent_term.put(restore_key, true)
     Locus.Runtime.Test.Env.restore(replaced)
+
+    for count <- counts do
+      _ = Supervisor.terminate_child(Locus.Supervisor, count)
+      _ = Supervisor.delete_child(Locus.Supervisor, count)
+    end
   end
 end)
 
@@ -78,6 +92,8 @@ case Application.ensure_all_started(:locus) do
   {:ok, []} -> Locus.Runtime.Test.ScriptedHost.restart_service!()
   {:ok, _started} -> :ok
 end
+
+for count <- counts, do: {:ok, _pid} = Supervisor.start_child(Locus.Supervisor, count)
 
 :ok = Locus.Runtime.Test.Engine.start!()
 

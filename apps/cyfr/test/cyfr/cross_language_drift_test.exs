@@ -585,7 +585,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/builder_protocol_test.exs",
        ~w(version domain service label auth_header window_ms routes statuses bounds languages language_for stages component_wasm component_lockfile key_hex request_key_hex backends_key_hex backends_request_key_hex key_text request health_request lines invalid_requests invalid_lines auth_rejected)},
       {"tests/builder-image/stack.py",
-       ~w(version service label auth_header routes statuses key_hex request_key_hex request)}
+       ~w(version service label auth_header routes statuses key_hex request_key_hex request)},
+      {"tests/builder-image/stack_test.py", ~w(bounds lines)}
     ],
     "locus_roles.json" => [
       {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},

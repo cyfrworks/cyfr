@@ -64,13 +64,15 @@ defmodule Locus.Backends.Backend do
 
   ## Unread
 
-  What its relay buffers is held in the backends role's one count of
+  What its relay holds, what it buffers and the stderr it keeps for a
+  status, running or ended, is held in the backends role's one count of
   unread output (`Locus.Output`, the `:output` option): the session names
-  its relay's `bytes` after every change of them, a write buffered, a part
-  line flushed, lines let go by a later `after` and lines dropped. Told
-  to drop, in the answer to its own hold or by `{Locus.Output, :over}`,
-  it drops its oldest, counted in `dropped` as its own bound drops them,
-  and holds again. It waits on no other session.
+  it (`Locus.Backends.Relay.held/1`) after every change of it, a write
+  buffered, a part line flushed, stderr kept, lines let go by a later
+  `after` and lines dropped. Told to drop, in the answer to its own hold
+  or by `{Locus.Output, :over}`, it drops its oldest, counted in
+  `dropped` as its own bound drops them, and with none left cuts the
+  stderr it keeps, and holds again. It waits on no other session.
 
   Each piece of the process's output is taken (`c:Locus.Launcher.taken/1`)
   once it is buffered, and the launcher tells the session no more before:
@@ -512,7 +514,8 @@ defmodule Locus.Backends.Backend do
 
   defp on_event(state, {:stdout, _bytes}), do: state
 
-  defp on_event(state, {:stderr, bytes}), do: %{state | relay: Relay.stderr(state.relay, bytes)}
+  defp on_event(state, {:stderr, bytes}),
+    do: unread(%{state | relay: Relay.stderr(state.relay, bytes)})
 
   # The leader's end; the session ends once nothing of it is left, so every
   # line it wrote is read first.
@@ -624,13 +627,14 @@ defmodule Locus.Backends.Backend do
 
   defp rest(state), do: Relay.flush(state.relay)
 
-  # The relay's bytes named to the count after every change of them, and
+  # What the relay holds named to the count after every change of it, and
   # named again after each drop it is told to make, until it is taken.
-  defp unread(%{relay: %{bytes: bytes}, held: bytes} = state), do: state
-  defp unread(state), do: hold(state)
+  defp unread(state) do
+    if Relay.held(state.relay) == state.held, do: state, else: hold(state)
+  end
 
   defp hold(state) do
-    bytes = state.relay.bytes
+    bytes = Relay.held(state.relay)
 
     case Locus.Output.hold(state.output, bytes) do
       :ok -> %{state | held: bytes}

@@ -1318,6 +1318,18 @@ defmodule Locus.Runtime.RelayCountTest do
 
   defp answering, do: Locus.Output.held(@count).answering
 
+  # The read size of the one TCP socket `worker` reads.
+  defp read_buffer(worker) do
+    [socket] =
+      for port <- Port.list(),
+          Port.info(port, :connected) == {:connected, worker},
+          Port.info(port, :name) == {:name, ~c"tcp_inet"},
+          do: port
+
+    {:ok, [buffer: buffer]} = :inet.getopts(socket, [:buffer])
+    buffer
+  end
+
   # The whole bound but `room`, held by the test: nothing else holds any
   # of it.
   defp fill!(room \\ 0) do
@@ -1496,6 +1508,37 @@ defmodule Locus.Runtime.RelayCountTest do
       assert read_granting(attempt.endpoint, ref, 0) == size
       wait_until(fn -> answering() == baseline end)
       refute holds?(relay, 16_384)
+    end
+
+    # A fetch's largest body, 50 MiB, comes within a catalyst's 3 minutes
+    # over a 300 ms round trip only through a receive window past one
+    # 64 KiB read's (`Prima.LocusRoles`, `fetch_read_ahead_bytes`).
+    test "reads ahead with room for its read and the queue behind it, asked without waiting and given back at its end, and 64 KiB at a time without",
+         %{host: host} do
+      size = 3 * 262_144
+      ahead = Prima.LocusRoles.role!(:runtime).memory.fetch_read_ahead_bytes
+
+      for {room, buffer} <- [{nil, ahead}, {2 * ahead - 1, 65_536}] do
+        {port, _server} = big_upstream!(size)
+
+        attempt =
+          attempt!(host, limits: EdgeFixtures.limits(max_response_size: 2 * size))
+          |> gated!(16_384)
+
+        full = room && fill!(room)
+        baseline = answering()
+        ref = pinned_fetch!(attempt, port, "/big")
+
+        assert_receive {:writing, relay, _base64}, 10_000
+        assert [worker] = holders(relay)
+        assert read_buffer(worker) == buffer
+        if room == nil, do: assert(answering() - baseline >= 2 * ahead)
+
+        send(relay, :go)
+        assert read_granting(attempt.endpoint, ref, 0) == size
+        wait_until(fn -> answering() == baseline end)
+        if full, do: Locus.Output.return(full)
+      end
     end
 
     test "held by a worker killed while it waits is freed", %{host: host} do
