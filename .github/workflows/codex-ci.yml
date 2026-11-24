@@ -33,6 +33,8 @@ on:
       # screen, tests/desktop-proof/screen/app.sh; screen-idle the
       # screen's idle check, tests/desktop-proof/screen/idle.sh.
       - 'tests/desktop-proof/**'
+      # The macOS legs install the cask the release writes.
+      - 'scripts/ci/homebrew-cask.sh'
       # The app bundles the account pages' sign-in reader
       # (apps/codex/desktop/src/policy.js).
       - 'apps/cyfr/assets/account/**'
@@ -53,6 +55,7 @@ on:
       - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
       - 'tests/desktop-proof/**'
+      - 'scripts/ci/homebrew-cask.sh'
       - 'apps/cyfr/assets/account/**'
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'
@@ -307,8 +310,10 @@ jobs:
     # home-free smoke (tests/desktop-proof/native/smoke.sh) run against the
     # installed app with no CYFR server and no signing credentials; on
     # macOS the distribution's signing rehearsed with a self-made identity
-    # (tests/desktop-proof/native/mac-rehearsal.sh), on Windows the MSI's
-    # cyfr on the person's PATH and off it again after the uninstall.
+    # (tests/desktop-proof/native/mac-rehearsal.sh) and the cask the
+    # release writes installed, upgraded and removed through a local tap
+    # (tests/desktop-proof/native/brew-tap.sh), on Windows the MSI's cyfr
+    # on the person's PATH and off it again after the uninstall.
     name: CYFR app (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     # Electron's download and the package's build take most of it.
@@ -377,6 +382,17 @@ jobs:
       - name: The app as the box's screen (Linux)
         if: runner.os == 'Linux'
         run: bash tests/desktop-proof/screen/app.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb
+
+      # The cask the release writes, from this package and a second one,
+      # installed, upgraded and removed through a local tap.
+      - name: Build a second package (macOS)
+        if: runner.os == 'macOS'
+        working-directory: apps/codex/desktop
+        run: node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version 0.0.1-ci --arch ${{ matrix.arch }}
+
+      - name: The Homebrew cask (macOS)
+        if: runner.os == 'macOS'
+        run: bash tests/desktop-proof/native/brew-tap.sh ${{ matrix.arch }} 0.0.0-ci apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg 0.0.1-ci apps/codex/desktop/dist/cyfr-desktop_0.0.1-ci_darwin_${{ matrix.arch }}.dmg
 
       # The scripts release.yml and desktop-mac.yml run on the packages
       # they publish.
