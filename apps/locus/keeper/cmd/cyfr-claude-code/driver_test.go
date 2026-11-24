@@ -464,6 +464,9 @@ func TestAServerOfThePersonsNamedCyfrKeepsItsNameAndCYFRsTakesAnother(t *testing
 // refused or answered with no list, ends before anything is set: no name
 // for CYFR's server is known not to replace one of the person's, and a
 // server of theirs named `cyfr` would be replaced for the process's life.
+// It proves the driver's exit, with no `started`, and its reason on its
+// own standard error, which the box keeps; what the person reads of a
+// start that failed is the holder's.
 func TestAStartWhoseServersAreNotListedEndsBeforeAnythingIsSet(t *testing.T) {
 	for _, status := range []string{"error", "unlisted"} {
 		t.Run(status, func(t *testing.T) {
@@ -523,6 +526,33 @@ func TestALateServerNamedAsCYFRsIsTheProgramsOwnByItsPermission(t *testing.T) {
 				t.Fatalf("the call is shown as the harness's own tool, start and end: %v", own)
 			}
 		})
+	}
+}
+
+// A call of the harness's own that its turn ended without a result for is
+// done with that turn: the driver forgets it, as Aqua settles every own
+// tool still running at the turn's idle, so a later turn's call under the
+// same id is shown starting and ending on its own.
+func TestAnOwnCallItsTurnEndedWithoutIsForgottenWithTheTurn(t *testing.T) {
+	t.Setenv("FAKE_LATE_SERVER", `{"name": "cyfr__late", "source": "user"}`)
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{filesTool})
+	owns := func(post, words string) []string {
+		postText(s, post, words)
+		var own []string
+		for e := s.next(); e["t"] != "idle"; e = s.next() {
+			if e["t"] == "own" {
+				own = append(own, fmt.Sprintf("%v:%v", e["name"], e["phase"]))
+			}
+		}
+		return own
+	}
+	if got := owns("stp_unended", "unended"); fmt.Sprint(got) != "[mcp__cyfr__late:start]" {
+		t.Fatalf("the call is shown started, its turn ending with no result for it: %v", got)
+	}
+	if got := owns("stp_again", "arrived"); fmt.Sprint(got) != "[mcp__cyfr__late:start mcp__cyfr__late:end]" {
+		t.Fatalf("the next turn's call under the same id is shown started and ended on its own: %v", got)
 	}
 }
 

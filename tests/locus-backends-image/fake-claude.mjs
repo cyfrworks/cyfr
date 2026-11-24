@@ -156,10 +156,15 @@ function stopServers(which = servers) {
   which.clear();
 }
 
-// The person's own start with the process, apart from the driver's lines
-// and the turn: nothing waits for them, as Claude Code 2.1.323 waits for
-// none (one that never answers is no part of a set or a turn). One the
-// driver's set replaced is stopped once it has started.
+// The person's own start with the process. `mcp_set_servers` and every
+// turn but `theirs` go on without them, as Claude Code 2.1.323 was measured
+// to answer a set and finish a turn beside a server of the person's that
+// never answers (aq-claude-own, co-new-fail). `theirs` waits for all of
+// them, the fake's own simplification, which no case's server tests: the
+// real program lists and calls the ones that started. A server the
+// driver's set names replaces theirs of that name, as the records measured
+// (co-new-collide); stopping the replaced one once it has started is the
+// fake's own housekeeping, not a measured exit.
 const shadowed = new Set();
 let ownListed = Promise.resolve();
 if (!args.includes('--strict-mcp-config')) {
@@ -260,7 +265,7 @@ async function turn(message) {
     }
     reply(said);
   } else if (words.includes('theirs')) {
-    // The model calls a tool of theirs once it is listed, as when started.
+    // The fake's own wait for every server of theirs (above).
     await ownListed;
     const ran = [];
     for (const name of ownNames) {
