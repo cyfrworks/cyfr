@@ -5639,8 +5639,9 @@ defmodule Aqua.ProgramTest do
       assert outcome(ctx, thread, turn) == expected(:offerings, ctx)
       assert model_rounds(ctx, turn) == 2
       assert handed_offerings(chat_tools()) == ["docs__prompts", "docs__resources"]
-      assert offered_reads() == offering_reads()
-      assert server_calls(ctx, turn) == offering_calls()
+      # The round's four asks run side by side, in no set order.
+      assert Enum.sort(offered_reads()) == Enum.sort(offering_reads())
+      assert Enum.sort(server_calls(ctx, turn)) == offering_calls()
     end
 
     @tag harness: :program
@@ -5670,7 +5671,7 @@ defmodule Aqua.ProgramTest do
       assert outcome(ctx, thread, turn) == expected(:offerings, ctx)
       assert admitted_once!(ctx, turn) == delivered(:offerings)
       assert offered_reads() == offering_reads()
-      assert server_calls(ctx, turn) == offering_calls()
+      assert Enum.sort(server_calls(ctx, turn)) == offering_calls()
     end
 
     # An entry that is off, that its server no longer lists or whose
@@ -6275,12 +6276,13 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  # The turn's calls of `docs`, as their own rows record them, sorted.
   defp offering_calls,
     do: [
-      {"docs:@resources", "tool_server", "completed"},
-      {"docs:@resources", "tool_server", "completed"},
       {"docs:@prompts", "tool_server", "completed"},
-      {"docs:@prompts", "tool_server", "completed"}
+      {"docs:@prompts", "tool_server", "completed"},
+      {"docs:@resources", "tool_server", "completed"},
+      {"docs:@resources", "tool_server", "completed"}
     ]
 
   # The names of a server's reserved entries among `tools` a harness was
