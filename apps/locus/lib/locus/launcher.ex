@@ -35,7 +35,12 @@ defmodule Locus.Launcher do
   `{launcher_module, handle.ref, event}` (`t:event/0`), in order, until
   `:released`, the last, or until `{:error, :channel_lost}`, after which
   the launcher says nothing more of it and nothing here knows it gone. An
-  owner that dies has its process released with no grace.
+  owner that dies has its process released with no grace. The owner
+  answers each event carrying the process's bytes (its stdout, stderr,
+  control or relay bytes) with `c:taken/1` once it has taken them: a
+  launcher that holds the process's output tells it no more bytes until
+  the owner has taken every one it was told, so the process's writes wait
+  behind its owner rather than in memory.
 
   A spec may name an `heir`, `{pid, tag}`: a process told
   `{launcher_module, {:heir, tag}, :released}` once nothing of the process
@@ -204,8 +209,15 @@ defmodule Locus.Launcher do
   @doc "Start `spec` for the calling process, its owner."
   @callback spawn(GenServer.server() | keyword(), spec()) :: {:ok, handle()} | {:error, error()}
 
-  @doc "Write `data` to the process's stdin."
+  @doc """
+  Write `data` to the process's stdin, from any process: answered once
+  the bytes are written, so a process that does not read its stdin holds
+  its caller and no other.
+  """
   @callback send(handle(), iodata()) :: :ok | {:error, error()}
+
+  @doc "The owner's word that it took the last bytes of the process it was told of."
+  @callback taken(handle()) :: :ok
 
   @doc "Send the process the signal `sig` (`SIGTERM`, `SIGKILL`, …)."
   @callback signal(handle(), String.t()) :: :ok | {:error, error()}
