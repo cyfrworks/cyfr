@@ -174,8 +174,10 @@ defmodule Aqua.Crew do
   lineage names (`args["thread_id"]`, `args["root_execution_id"]`), with
   `args["title"]` (what a desktop shows for the job: trimmed, 1 to
   `title_max/0` code points of plain text on one line, and none when
-  absent or blank) and `args["options"]` (the brain's options for the
-  job, merged over the member's own). A member's access is its own, set
+  absent or blank), `args["scrolls"]` (the scrolls the member is to
+  follow, read now and kept in the request, `scrolls/3`) and
+  `args["options"]` (the brain's options for the job, merged over the
+  member's own). A member's access is its own, set
   by the person on its card: options that name it are refused before
   anything is written. Answers the
   request's id; `{:error, :not_addressable}` when the calling turn is not
@@ -188,6 +190,7 @@ defmodule Aqua.Crew do
 
     with :ok <- task(task),
          {:ok, title} <- parse_title(args["title"], "crew.ask"),
+         {:ok, scrolls} <- scrolls(ctx, args["scrolls"], "crew.ask"),
          {:ok, options} <- options(args["options"]),
          {:ok, turn} <- Tape.calling_turn(ctx, args),
          {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
@@ -203,7 +206,7 @@ defmodule Aqua.Crew do
                addressee: member,
                status: "pending",
                content: task,
-               payload: titled(%{"from_turn" => turn.id}, title)
+               payload: %{"from_turn" => turn.id} |> titled(title) |> with_scrolls(scrolls)
              },
              request: %{
                member: member,
@@ -475,6 +478,83 @@ defmodule Aqua.Crew do
 
   defp titled(payload, nil), do: payload
   defp titled(payload, title), do: Map.put(payload, "title", title)
+
+  @doc """
+  The scrolls a job hands over, as the row that hands it keeps them: each
+  of `names` read by name under the caller's actor (`Compendium.skill/2`),
+  its body as written and its other files' names, in the order named. A
+  name is given once, every scroll is one each harness carries
+  (`Compendium.AquaSkills`), and their bodies together are within one
+  scroll's bound, so a job's post fits one line of the brain wire. A name
+  this athanor has no scroll of, another athanor's included, refuses the
+  whole call in a sentence naming it, before anything is written. None
+  named is none.
+  """
+  @spec scrolls(Context.t(), term(), String.t()) ::
+          {:ok, [%{String.t() => String.t() | [String.t()]}]} | {:error, term()}
+  def scrolls(_ctx, nil, _operation), do: {:ok, []}
+
+  def scrolls(%Context{} = ctx, names, operation) when is_list(names) do
+    cond do
+      not Enum.all?(names, &is_binary/1) ->
+        {:error, {:invalid_argument, "#{operation} takes 'scrolls' as the names of scrolls"}}
+
+      Enum.uniq(names) != names ->
+        {:error, {:invalid_argument, "#{operation} names each scroll once"}}
+
+      true ->
+        with {:ok, scrolls} <- read_scrolls(ctx, names, operation),
+             :ok <- within_bound(scrolls, operation),
+             do: {:ok, scrolls}
+    end
+  end
+
+  def scrolls(_ctx, _names, operation),
+    do: {:error, {:invalid_argument, "#{operation} takes 'scrolls' as a list of names"}}
+
+  defp read_scrolls(ctx, names, operation) do
+    names
+    |> Enum.reduce_while({:ok, []}, fn name, {:ok, kept} ->
+      case Compendium.skill(ctx, name) do
+        {:ok, %{carried: true} = scroll} ->
+          {:cont,
+           {:ok,
+            [%{"name" => scroll.name, "body" => scroll.body, "files" => scroll.files} | kept]}}
+
+        {:ok, _past_bound} ->
+          {:halt,
+           {:error,
+            {:invalid_argument, "#{operation}: the scroll '#{name}' is too large for Aqua to use"}}}
+
+        {:error, :not_found} ->
+          {:halt,
+           {:error,
+            {:invalid_argument, "#{operation}: this athanor has no scroll named #{inspect(name)}"}}}
+
+        {:error, _unread} ->
+          {:halt, {:error, {:unavailable, "Scrolls"}}}
+      end
+    end)
+    |> then(fn
+      {:ok, kept} -> {:ok, Enum.reverse(kept)}
+      refused -> refused
+    end)
+  end
+
+  defp within_bound(scrolls, operation) do
+    bytes = scrolls |> Enum.map(&byte_size(&1["body"])) |> Enum.sum()
+
+    if bytes <= Compendium.skill_max_bytes(),
+      do: :ok,
+      else:
+        {:error,
+         {:invalid_argument,
+          "#{operation}: the scrolls named hold #{bytes} bytes together, more than the " <>
+            "#{Compendium.skill_max_bytes()} one job carries"}}
+  end
+
+  defp with_scrolls(payload, []), do: payload
+  defp with_scrolls(payload, scrolls), do: Map.put(payload, "scrolls", scrolls)
 
   # A brain option is a named value of one of the kinds a brain declares
   # (`Prima.Model`); which names and values the member's brain takes is
@@ -1069,16 +1149,22 @@ defmodule Aqua.Crew do
 
   # The delivered row names the request it carries, which the child
   # turn's reply answers, and the soul's turn it came from, whose read
-  # threads the member's turn reads with it; it references the request's
-  # attachments, which stay stored under the request's own row.
+  # threads the member's turn reads with it; it carries the scrolls the
+  # request kept, which the member reads after the job (`Aqua.Reader`); it
+  # references the request's attachments, which stay stored under the
+  # request's own row.
   defp delivered_payload(request) do
+    payload = Tape.payload(request)
+
     from_turn =
-      case Tape.payload(request) do
+      case payload do
         %{"from_turn" => turn_id} when is_binary(turn_id) -> %{"from_turn" => turn_id}
         _ -> %{}
       end
 
-    Map.merge(from_turn, %{"request_id" => request.id, "from_thread" => request.thread_id})
+    from_turn
+    |> Map.merge(%{"request_id" => request.id, "from_thread" => request.thread_id})
+    |> with_scrolls(List.wrap(payload["scrolls"]))
   end
 
   defp reply_text(%{"text" => text, "member" => member}) do

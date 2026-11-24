@@ -287,7 +287,11 @@ defmodule Aqua.SeatTest do
     assert params["model"] == "claude-sonnet-5-5"
 
     [opening, context] = String.split(params["system"], @context, parts: 2)
-    assert opening == seat_prompt() <> "\n\n---\n\n" <> Aqua.Prompt.briefing(false, false)
+
+    assert opening ==
+             seat_prompt() <>
+               "\n\n---\n\n" <> Aqua.Prompt.briefing(false, false, Aqua.Reader.mark(room.id))
+
     refute opening =~ "## Crew member"
     refute params["system"] =~ "folder"
     refute params["system"] =~ "say hello to the fern"
@@ -331,7 +335,7 @@ defmodule Aqua.SeatTest do
     assert [%{input: %{"params" => %{"system" => system}}}] = chats(ctx, holder)
     assert chats(ctx, "aqua") == []
     [opening, _context] = String.split(system, @context, parts: 2)
-    assert opening == Aqua.Prompt.crew_briefing(false, false)
+    assert opening == Aqua.Prompt.crew_briefing(false, false, Aqua.Reader.mark(child.id))
     refute system =~ seat_prompt()
 
     # Its own turn's crew.ask of a member that is ready reaches the

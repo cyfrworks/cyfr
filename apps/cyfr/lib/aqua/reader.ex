@@ -21,6 +21,26 @@ defmodule Aqua.Reader do
   carried it, or when the program it was handed to refused it
   (`Aqua.Tape.refused_posts/2`). A delivery that is uncertain is no
   refusal, since it may have been read.
+
+  ## Frames
+
+  What the athanor hands a model as its procedure, a scroll, and what an
+  outside source returned each read inside a frame of the engine's: an
+  opening line, `⟦<mark> scroll "<name>"⟧` (`scroll/2`) or `⟦<mark>
+  outside <name>⟧` (`outside/3`), the text, then `⟦<mark> end⟧`. The mark
+  is the thread's own (`mark/1`), derived from the server's secret, so
+  it needs no stored state, and the engine removes it from every text it
+  did not write before a model reads it (`unmarked/2`): a row's words
+  here, a result's text before the loop frames it, a scroll's body as it
+  is framed, and what the instructions quote. So only a frame the engine
+  wrote holds the mark, and a text that imitates one reads without it. A
+  call's result is read as written, since the engine framed it as it
+  wrote it. A changed server secret changes every mark, and older frames
+  then read as plain text.
+
+  A job's scrolls are kept as they were read in the row that hands it, a
+  request's or an opening's `scrolls`, and read after the job's words,
+  each in its frame.
   """
 
   alias Aqua.{Attachments, Tape}
@@ -29,13 +49,14 @@ defmodule Aqua.Reader do
   @typedoc """
   Who reads (`me`: an agent by name, `:nobody` where nothing shows a
   reader's own, nil for a summary, to which every agent's words are the
-  assistant's), the turns still open (`open`), the posts whose
-  delivery was refused, whether a person's name goes before their text,
-  the cited posts handed over, the files deleted by row id, and how a
-  person is named.
+  assistant's), the reading thread's mark (`mark/1`), the turns still
+  open (`open`), the posts whose delivery was refused, whether a person's
+  name goes before their text, the cited posts handed over, the files
+  deleted by row id, and how a person is named.
   """
   @type reading :: %{
           me: String.t() | :nobody | nil,
+          mark: String.t(),
           open: [String.t()],
           refused: [String.t()],
           named?: boolean(),
@@ -59,6 +80,7 @@ defmodule Aqua.Reader do
          {:ok, refused} <- Tape.refused_posts(guest, joined.rows ++ joined.cited) do
       reading = %{
         me: if(read == :history, do: turn.agent, else: :nobody),
+        mark: mark(turn.thread_id),
         open: [turn.id | joined.open],
         refused: refused,
         named?: true,
@@ -70,6 +92,62 @@ defmodule Aqua.Reader do
       {:ok, %{rows: joined.rows, reading: reading, read_threads: joined.read_threads}}
     end
   end
+
+  @mark_key "cyfr-thread-mark|"
+
+  @doc """
+  The thread's mark, `cyfr-` and 16 base32 characters: HMAC-SHA256 of the
+  thread's id under a key derived from the server's secret under a label
+  of its own, as the at-rest keyring is
+  (`Cyfr.Application.derive_keyring!/1`). The same thread has the same
+  mark for as long as the secret stands, with nothing stored.
+  """
+  @spec mark(String.t()) :: String.t()
+  def mark(thread_id) when is_binary(thread_id) do
+    key = :crypto.hash(:sha256, @mark_key <> Application.fetch_env!(:sanctum, :secret_key_base))
+    tag = :crypto.mac(:hmac, :sha256, key, thread_id) |> binary_part(0, 10)
+    "cyfr-" <> Base.encode32(tag, padding: false)
+  end
+
+  @doc """
+  `text` without `mark`, removed until none is left, so no removal joins
+  the text around it into the mark again.
+  """
+  @spec unmarked(String.t() | nil, String.t()) :: String.t()
+  def unmarked(nil, _mark), do: ""
+
+  def unmarked(text, mark) when is_binary(text) and is_binary(mark) and mark != "" do
+    if String.contains?(text, mark),
+      do: unmarked(String.replace(text, mark, ""), mark),
+      else: text
+  end
+
+  @doc """
+  A scroll in its frame: its body as written, then its other files'
+  names, read with the reading thread's mark removed from both. The words
+  a scroll a job carries and a scroll a turn reads (`aqua.skill_get`)
+  read in alike.
+  """
+  @spec scroll(String.t(), %{name: String.t(), body: String.t(), files: [String.t()]}) ::
+          String.t()
+  def scroll(mark, %{name: name, body: body, files: files}) do
+    files =
+      case files do
+        [] -> ""
+        names -> "\n\n[The scroll's files: " <> unmarked(Enum.join(names, ", "), mark) <> "]"
+      end
+
+    "⟦#{mark} scroll \"#{unmarked(name, mark)}\"⟧\n" <>
+      unmarked(body, mark) <> files <> "\n⟦#{mark} end⟧"
+  end
+
+  @doc """
+  What an outside source returned to the call named `name`, in its frame,
+  read with the mark removed.
+  """
+  @spec outside(String.t(), String.t(), String.t()) :: String.t()
+  def outside(mark, name, text),
+    do: "⟦#{mark} outside #{unmarked(name, mark)}⟧\n" <> unmarked(text, mark) <> "\n⟦#{mark} end⟧"
 
   @doc """
   By row id, the refs of each row's files the person deleted from Files
@@ -92,10 +170,17 @@ defmodule Aqua.Reader do
       "be read: #{Enum.map_join(refs, ", ", & &1["filename"])}]"
   end
 
-  @doc "A request still waiting on its reply, once a compaction summarized its call away."
-  @spec waiting(Tape.row()) :: String.t()
-  def waiting(row),
-    do: "[Request #{row.id} to #{row.addressee}, still waiting on its reply]\n#{row.content}"
+  @doc """
+  A request still waiting on its reply, once a compaction summarized its
+  call away, read with the mark removed.
+  """
+  @spec waiting(Tape.row(), String.t()) :: String.t()
+  def waiting(row, mark),
+    do:
+      unmarked(
+        "[Request #{row.id} to #{row.addressee}, still waiting on its reply]\n#{row.content}",
+        mark
+      )
 
   @doc """
   A compaction's summary, standing in for the rows before its boundary:
@@ -103,6 +188,10 @@ defmodule Aqua.Reader do
   """
   @spec summary(String.t() | nil) :: String.t()
   def summary(text), do: "[Summary of the thread so far]\n" <> (text || "")
+
+  @doc "A compaction's summary as a turn of the thread whose mark is `mark` reads it."
+  @spec summary(String.t() | nil, String.t()) :: String.t()
+  def summary(text, mark), do: summary(unmarked(text, mark))
 
   @doc "A workspace thread's first ask, as the prompt quotes it."
   @spec asked(String.t()) :: String.t()
@@ -141,20 +230,34 @@ defmodule Aqua.Reader do
   its answer.
   """
   @spec read(Tape.row(), reading()) :: {:own, String.t()} | {:said, String.t()} | :none
-  def read(%{kind: "opening"} = row, reading), do: {:said, opening_text(row, reading)}
-  def read(%{kind: "pointer"} = row, _reading), do: {:said, pointer_text(row)}
-  def read(%{kind: "report"} = row, _reading), do: {:said, report_text(row)}
-  def read(%{kind: "nudge"} = row, _reading), do: {:said, server_text(row)}
+  # A call's result, which the engine wrote and framed as it wrote it.
+  def read(%{kind: "tool_result"} = row, %{me: :nobody}),
+    do: {:said, "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"}
+
+  # Any other row's words, the mark removed from them, then the scrolls
+  # the job it hands carries, each in its frame.
+  def read(row, %{mark: mark} = reading) do
+    case words(row, reading) do
+      {:said, text} -> {:said, unmarked(text, mark) <> frames(row, mark)}
+      {:own, text} -> {:own, unmarked(text, mark)}
+      :none -> :none
+    end
+  end
+
+  defp words(%{kind: "opening"} = row, reading), do: {:said, opening_text(row, reading)}
+  defp words(%{kind: "pointer"} = row, _reading), do: {:said, pointer_text(row)}
+  defp words(%{kind: "report"} = row, _reading), do: {:said, report_text(row)}
+  defp words(%{kind: "nudge"} = row, _reading), do: {:said, server_text(row)}
 
   # A stop, a take-over, a restart and an unknown outcome each leave one;
   # what is true of them all is said, then the row's own words of its cause.
-  def read(%{kind: "turn_aborted"} = row, _reading) do
+  defp words(%{kind: "turn_aborted"} = row, _reading) do
     {:said,
      "[The assistant's work here was interrupted before it finished; tools may have partially " <>
        "executed. " <> (row.content || "") <> "]"}
   end
 
-  def read(%{kind: "text"} = row, %{me: me} = reading) do
+  defp words(%{kind: "text"} = row, %{me: me} = reading) do
     cond do
       # The reader's own post is its call's to show (`thread.post`).
       posted?(row) and own?(row, me) -> :none
@@ -172,13 +275,20 @@ defmodule Aqua.Reader do
     end
   end
 
-  def read(%{kind: kind} = row, %{me: :nobody}) when kind in ~w(error system),
+  defp words(%{kind: kind} = row, %{me: :nobody}) when kind in ~w(error system),
     do: {:said, server_text(row)}
 
-  def read(%{kind: "tool_result"} = row, %{me: :nobody}),
-    do: {:said, "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"}
+  defp words(%{}, _reading), do: :none
 
-  def read(%{}, _reading), do: :none
+  # The scrolls a job carries, kept in the row that hands it: an opening,
+  # a request, and the request's copy delivered into its member's thread.
+  # Its asker never reads its own request (`words/2` answers none).
+  defp frames(row, mark) do
+    for %{"name" => name, "body" => body} = scroll <- List.wrap(Tape.payload(row)["scrolls"]),
+        into: "" do
+      "\n\n" <> scroll(mark, %{name: name, body: body, files: List.wrap(scroll["files"])})
+    end
+  end
 
   # The reading agent's own speech: a row it sent. A row written before
   # rows named their sender is read by its author.
@@ -253,7 +363,7 @@ defmodule Aqua.Reader do
   defp quoted(cited, reading) do
     named_by_agent = agent_text(cited)
 
-    case read(cited, %{reading | me: :nobody, named?: false, refs: %{}}) do
+    case words(cited, %{reading | me: :nobody, named?: false, refs: %{}}) do
       {:said, ^named_by_agent} -> {:said, cited.content}
       said_or_none -> said_or_none
     end

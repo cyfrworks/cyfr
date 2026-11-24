@@ -3146,4 +3146,98 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
   end
+
+  # A scroll a turn proposed waits for the person: the pane draws its
+  # result row as a card under its turn, showing the name, description and
+  # body a save writes, and Save as scroll writes exactly those from the
+  # person's own session, or says why it did not.
+  describe "a scroll a turn proposed" do
+    defp proposed!(here, thread, proposal) do
+      {:ok, row} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_result",
+          content: Jason.encode!(proposal),
+          payload: %{
+            "tool_call_id" => "c1",
+            "name" => "aqua",
+            "is_error" => false,
+            "proposal" => proposal
+          }
+        })
+
+      row
+    end
+
+    defp card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
+
+    test "its card shows what Save as scroll writes, and a save writes exactly that",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      proposal = %{
+        "name" => "fern-care",
+        "description" => "How the fern is kept",
+        "content" => "Water it weekly.\nTurn it monthly.",
+        "against" => "none"
+      }
+
+      row = proposed!(here, thread, proposal)
+      pane = open_pane(conn, athanor, thread)
+
+      assert pane |> element(card(row, "name")) |> render() =~ "fern-care"
+      assert pane |> element(card(row, "description")) |> render() =~ "How the fern is kept"
+
+      assert pane |> element(card(row, "content")) |> render() =~
+               "Water it weekly.\nTurn it monthly."
+
+      assert {:error, {:not_found, "Scroll", "fern-care"}} =
+               Compendium.Providers.Aqua.handle(here, %{
+                 "action" => "skill_get",
+                 "name" => "fern-care"
+               })
+
+      pane |> element(card(row, "save")) |> render_click()
+
+      assert pane |> element(card(row, "saved")) |> render() =~ "Saved as a scroll."
+      refute has_element?(pane, card(row, "save"))
+
+      assert {:ok,
+              %{
+                description: "How the fern is kept",
+                content: "Water it weekly.\nTurn it monthly."
+              }} =
+               Compendium.Providers.Aqua.handle(here, %{
+                 "action" => "skill_get",
+                 "name" => "fern-care"
+               })
+
+      # A change proposed over a scroll that changed since is refused, in
+      # the sentence the card shows, and nothing is written.
+      stale =
+        proposed!(here, thread, %{
+          "name" => "fern-care",
+          "description" => "How the fern stays green",
+          "content" => "Water it weekly.\nTurn it monthly.",
+          "against" => Prima.Digest.sha256("an older manifest")
+        })
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        thread_id: thread.id,
+        athanor_id: athanor.id,
+        kind: :message,
+        data: stale
+      })
+
+      pane |> element(card(stale, "save")) |> render_click()
+
+      assert pane |> element(card(stale, "refused")) |> render() =~
+               "changed since Aqua proposed this"
+
+      assert {:ok, %{description: "How the fern is kept"}} =
+               Compendium.Providers.Aqua.handle(here, %{
+                 "action" => "skill_get",
+                 "name" => "fern-care"
+               })
+    end
+  end
 end

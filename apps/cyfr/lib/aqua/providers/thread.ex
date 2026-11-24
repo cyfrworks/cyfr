@@ -616,6 +616,10 @@ defmodule Aqua.Providers.Thread do
                 "ask: a short title for the job, plain text on one line of at most #{Aqua.Crew.title_max()} characters, that a desktop shows for it; omit for none",
               max: Aqua.Crew.title_max()
             ),
+            Arg.new("scrolls", {:array, Arg.new(nil, :string)},
+              description:
+                "ask: names of this athanor's scrolls the member is to follow, handed over with the job and read after it"
+            ),
             Arg.new("options", {:map, Arg.new(nil, :json)},
               description: "ask: options for the member's brain, those it declares"
             )

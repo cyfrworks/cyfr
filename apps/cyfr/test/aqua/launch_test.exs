@@ -1012,7 +1012,10 @@ defmodule Aqua.LaunchTest do
   defp prompted!(ctx, pins) do
     {:ok, thread} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
-    %{text: text} = Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
+
+    %{text: text} =
+      Aqua.Prompt.compose(ctx, mark: Aqua.Reader.mark("thr_launch"), agent: %{"prompt" => ""})
+
     read!(ctx, turn, [])
     {turn, text}
   end

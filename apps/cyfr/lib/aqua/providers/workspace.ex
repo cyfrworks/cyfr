@@ -12,7 +12,8 @@ defmodule Aqua.Providers.Workspace do
     * `open` opens one, or sends a further ask to one, from a daily
       thread: in one transaction the thread, its opening (the envelope:
       the ask, who asked, the post that asked, the daily thread's posts
-      it refers to, the files it carries, copied into it, whether its
+      it refers to, the files it carries, copied into it, the scrolls it
+      names, read as they are now (`Aqua.Crew.scrolls/3`), whether its
       browser work is kept apart, its title), a
       pointer post on the daily thread and the `workspace_open` record
       whose delivery starts the soul's turn there
@@ -116,6 +117,10 @@ defmodule Aqua.Providers.Workspace do
               description:
                 "open: files of that daily thread's posts to carry into the workspace thread, each {message_id, stored_name}"
             ),
+            Arg.new("scrolls", {:array, Arg.new(nil, :string)},
+              description:
+                "open: names of this athanor's scrolls the work is to follow, handed over with the ask and read after it"
+            ),
             Arg.new("apart", :boolean,
               description: "open: keep this work's browser apart from the person's other work"
             )
@@ -183,6 +188,7 @@ defmodule Aqua.Providers.Workspace do
     with {:ok, ask} <- ask(args["ask"]),
          {:ok, title} <- Aqua.Crew.parse_title(args["title"], "workspace.open"),
          {:ok, apart} <- apart(args["apart"]),
+         {:ok, scrolls} <- Aqua.Crew.scrolls(ctx, args["scrolls"], "workspace.open"),
          {:ok, from} <- opener(ctx, args),
          {:ok, refs} <- refs(ctx, from, args["refs"]),
          {:ok, files} <- files(ctx, from.daily.id, args["attachments"]),
@@ -200,14 +206,18 @@ defmodule Aqua.Providers.Workspace do
             id: opening_id,
             author: from.person,
             content: ask,
-            payload: %{
-              "ask" => ask,
-              "asked_by" => from.person,
-              "from" => %{"thread" => from.daily.id, "message" => from.asked},
-              "refs" => refs,
-              "apart" => apart,
-              "title" => title
-            }
+            payload:
+              scrolled(
+                %{
+                  "ask" => ask,
+                  "asked_by" => from.person,
+                  "from" => %{"thread" => from.daily.id, "message" => from.asked},
+                  "refs" => refs,
+                  "apart" => apart,
+                  "title" => title
+                },
+                scrolls
+              )
           },
           pointer: pointer(from, workspace_id, title, opening_id),
           files: fn thread_id, message_id -> stored(ctx, thread_id, message_id, files) end,
@@ -234,6 +244,12 @@ defmodule Aqua.Providers.Workspace do
       {:error, reason} -> {:error, refusal(reason)}
     end
   end
+
+  # The scrolls the ask names, kept in its opening as they were read
+  # (`Aqua.Crew.scrolls/3`), which the work reads after the ask
+  # (`Aqua.Reader`).
+  defp scrolled(payload, []), do: payload
+  defp scrolled(payload, scrolls), do: Map.put(payload, "scrolls", scrolls)
 
   # Who opens, from the plane the call is on: a turn of the soul in a
   # daily thread, or the person's own session naming a daily thread.

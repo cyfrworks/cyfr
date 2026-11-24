@@ -263,6 +263,15 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                   {skill.description}
                 </span>
               </button>
+              <%!-- A scroll past the bound no harness carries
+                    (`Compendium.AquaSkills`) says why Aqua does not use it. --%>
+              <p
+                :if={Map.get(skill, :carried) == false}
+                id={"aqua-scroll-too-large-" <> skill.name}
+                class="text-[11px] text-amber-400"
+              >
+                Aqua does not use this scroll: a scroll holds at most {Compendium.skill_max_bytes()} bytes and its description at most {Compendium.skill_max_description()} characters. Edit it shorter.
+              </p>
             </li>
           </ul>
           <form

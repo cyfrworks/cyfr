@@ -316,6 +316,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:seen, thread && thread.read_seq)
       |> assign(:any_messages, false)
       |> assign(:cards, %{})
+      |> assign(:proposals, %{})
       |> assign(:works, %{})
       |> reset_live()
 
@@ -341,6 +342,8 @@ defmodule PrismWeb.ThreadPaneLive do
             {:error, _} -> []
           end
 
+        rows = with_proposals(rows, ctx, thread.id)
+
         {shown, requests} = file_replies(rows, ctx)
 
         tell_host(
@@ -363,6 +366,23 @@ defmodule PrismWeb.ThreadPaneLive do
 
       _ ->
         socket
+    end
+  end
+
+  # The scrolls a turn proposed among the posts drawn (`proposal?/1`): the
+  # thread's newest call results are read beside them, and each that
+  # proposes a scroll within the posts' window is drawn in its place.
+  defp with_proposals(rows, ctx, thread_id) do
+    case Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, @window,
+           kinds: ["tool_result"]
+         ) do
+      results when is_list(results) ->
+        from = if length(rows) >= @window, do: rows |> Enum.map(& &1.seq) |> Enum.min(), else: 0
+        proposals = Enum.filter(results, &(proposal?(&1) and &1.seq >= from))
+        Enum.sort_by(rows ++ proposals, & &1.seq)
+
+      {:error, _} ->
+        rows
     end
   end
 
@@ -807,6 +827,38 @@ defmodule PrismWeb.ThreadPaneLive do
 
       _ ->
         {:noreply, socket}
+    end
+  end
+
+  # A scroll a turn proposed, saved from the person's own session through
+  # the action the Scrolls editor saves with: exactly the name, description
+  # and body the card shows, read again from the row, and what the
+  # proposal was made against, which the action holds the write to.
+  def handle_event("save_scroll", %{"id" => id}, socket) do
+    with %{id: thread_id} <- socket.assigns.thread,
+         ctx = socket.assigns.context,
+         {:ok, %{thread_id: ^thread_id} = row} <-
+           Threads.get_message(Sanctum.Context.actor(ctx), id),
+         %{} = proposal <- proposal(row) do
+      status =
+        case call_tool(ctx, "aqua", %{
+               "action" =>
+                 if(proposal["against"] == "none", do: "skill_create", else: "skill_update"),
+               "name" => proposal["name"],
+               "description" => proposal["description"],
+               "content" => proposal["content"],
+               "against" => proposal["against"]
+             }) do
+          {:ok, _saved} -> :saved
+          {:error, reason} -> {:refused, error_message(reason)}
+        end
+
+      {:noreply,
+       socket
+       |> assign(:proposals, Map.put(socket.assigns.proposals, id, status))
+       |> stream_insert(:messages, row)}
+    else
+      _not_a_proposal -> {:noreply, socket}
     end
   end
 
@@ -2099,6 +2151,12 @@ defmodule PrismWeb.ThreadPaneLive do
                     reply={msg}
                     athanor_route={@athanor_route}
                   />
+                <% proposal?(msg) -> %>
+                  <.scroll_proposal
+                    id={@dom <> "-proposal-" <> msg.id}
+                    msg={msg}
+                    status={@proposals[msg.id]}
+                  />
                 <% Map.has_key?(@cards, msg.id) -> %>
                   <.work_card
                     id={@dom <> "-msg-" <> msg.id}
@@ -2398,6 +2456,50 @@ defmodule PrismWeb.ThreadPaneLive do
   defp status?(assigns) do
     assigns.preparing? or assigns.roster == [] or assigns.queued > 0 or
       (assigns.running and assigns.turn_user != nil)
+  end
+
+  attr :id, :string, required: true
+  attr :msg, :map, required: true
+  attr :status, :any, default: nil
+
+  # A scroll a turn proposed: exactly the name, description and body that
+  # Save as scroll writes, and what came of a save.
+  defp scroll_proposal(assigns) do
+    assigns = assign(assigns, :proposal, proposal(assigns.msg))
+
+    ~H"""
+    <div id={@id} class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1 text-xs">
+      <p class="text-gray-400">
+        {if @proposal["against"] == "none",
+          do: "Aqua proposes a new scroll. Nothing is kept until you save it.",
+          else: "Aqua proposes a change to a scroll. Nothing changes until you save it."}
+      </p>
+      <p id={@id <> "-name"} class="font-mono text-gray-200">{@proposal["name"]}</p>
+      <p id={@id <> "-description"} class="text-gray-300">{@proposal["description"]}</p>
+      <pre
+        id={@id <> "-content"}
+        class="whitespace-pre-wrap font-mono text-gray-300 max-h-64 overflow-y-auto"
+      >{@proposal["content"]}</pre>
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <span :if={@status == :saved} id={@id <> "-saved"} class="text-green-400">
+          Saved as a scroll.
+        </span>
+        <span :if={match?({:refused, _}, @status)} id={@id <> "-refused"} class="text-red-300">
+          {elem(@status, 1)}
+        </span>
+        <button
+          :if={@status != :saved}
+          id={@id <> "-save"}
+          type="button"
+          phx-click="save_scroll"
+          phx-value-id={@msg.id}
+          class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white"
+        >
+          Save as scroll
+        </button>
+      </div>
+    </div>
+    """
   end
 
   attr :id, :string, required: true
@@ -2757,10 +2859,24 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The one rule of what the pane draws, as a row lands and when the thread
   # is opened: a post, a line of the server's to the thread's Aqua
-  # (`Aqua.Nudge`), which is drawn as the server's and is no post, and the
-  # line a stopped turn leaves (`turn_aborted`). What a turn writes for
+  # (`Aqua.Nudge`), which is drawn as the server's and is no post, the
+  # line a stopped turn leaves (`turn_aborted`), and a scroll a turn
+  # proposed, drawn as a card under its turn. What else a turn writes for
   # itself, its calls, their results and its compaction, is none.
-  defp drawn?(row), do: row.kind in drawn_kinds()
+  defp drawn?(row), do: row.kind in drawn_kinds() or proposal?(row)
+
+  # A call's result that proposes a scroll (`Aqua.Loop`): the scroll as it
+  # would be stored and what it was made against.
+  defp proposal?(row), do: proposal(row) != nil
+
+  defp proposal(%{kind: "tool_result"} = row) do
+    case Threads.payload(row)["proposal"] do
+      %{"name" => _, "description" => _, "content" => _, "against" => _} = proposal -> proposal
+      _none -> nil
+    end
+  end
+
+  defp proposal(_row), do: nil
 
   defp drawn_kinds, do: Threads.post_kinds() ++ ["nudge", "turn_aborted"]
 

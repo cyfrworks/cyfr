@@ -636,6 +636,25 @@ defmodule Compendium do
           {:ok, %{entries: [AquaSkills.entry()], more: non_neg_integer()}} | {:error, term()}
   defdelegate skills_index(ctx, limit), to: AquaSkills, as: :index
 
+  @doc """
+  One scroll by name, read under the caller's actor
+  (`Compendium.AquaSkills.skill/2`): the one read of a scroll by its name,
+  which `aqua.skill_get` and a job's scrolls make alike.
+  """
+  @spec skill(Context.t(), term()) :: {:ok, AquaSkills.scroll()} | {:error, term()}
+  defdelegate skill(ctx, name), to: AquaSkills
+
+  @doc "The most bytes a scroll's manifest holds (`Compendium.AquaSkills.max_bytes/0`)."
+  @spec skill_max_bytes() :: pos_integer()
+  defdelegate skill_max_bytes(), to: AquaSkills, as: :max_bytes
+
+  @doc """
+  The most characters a scroll's description holds
+  (`Compendium.AquaSkills.max_description/0`).
+  """
+  @spec skill_max_description() :: pos_integer()
+  defdelegate skill_max_description(), to: AquaSkills, as: :max_description
+
   @doc "The most skills a prompt lists (`Compendium.AquaSkills.index_limit/0`)."
   @spec skills_index_limit() :: pos_integer()
   defdelegate skills_index_limit(), to: AquaSkills, as: :index_limit

@@ -35,6 +35,7 @@ defmodule Aqua.Loop.RequestTest do
     Map.merge(
       %{
         me: nil,
+        mark: "cyfr-REQUESTTESTMARK2",
         open: [],
         refused: [],
         named?: false,
