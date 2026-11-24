@@ -2278,6 +2278,59 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "every post answered later is held in the order answered and written in that order " <>
+           "after the idle: a recovery notice held too replaces no post held before it",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _first = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      committed!(ctx, thread, 4)
+
+      steer = steer!(ctx, thread, turn, "and this")
+      steered_post = sent()
+      [_first, steered] = inputs(ctx, turn)
+      say(fake, row, %{"t" => "later", "id" => steered.id})
+
+      # The answer owed meanwhile is written at once and refused: its
+      # notice goes at once too, and is answered later as well.
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      %{"t" => "answer", "id" => answer_id} = sent()
+      say(fake, row, %{"t" => "refused", "id" => answer_id, "reason" => "not now"})
+      notice = sent()
+      [_first, _steered, _answered, noticed] = inputs(ctx, turn)
+      assert %{"t" => "post", "id" => notice_id} = notice
+      assert notice_id == noticed.id
+      say(fake, row, %{"t" => "later", "id" => noticed.id})
+      refute_receive {:session, "send", _wire, _fields}, 500
+
+      # After the idle both are written again, in the order answered, each
+      # once the last is answered; one answered later again waits for the
+      # next idle.
+      say(fake, row, idle(turn, [first.id]))
+      assert sent() == steered_post
+      say(fake, row, %{"t" => "later", "id" => steered.id})
+      assert sent() == notice
+      say(fake, row, accepted(noticed))
+      refute_receive {:session, "send", _wire, _fields}, 500
+      say(fake, row, idle(turn, [noticed.id]))
+      assert sent() == steered_post
+      say(fake, row, accepted(steered))
+      say(fake, row, idle(turn, [steered.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      assert Enum.map(inputs(ctx, turn), &{&1.action, &1.message_id, &1.outcome}) == [
+               {"post", turn.message_id, "ok"},
+               {"post", steer.id, "ok"},
+               {"answer", noticed.message_id, "error"},
+               {"notice", noticed.message_id, "ok"}
+             ]
+
+      refute_received {:session, "send", _wire, _fields}
+    end
+
     test "a driver that ends after later has taken nothing: the post waits, and the next start " <>
            "delivers it as a fresh post, never as one whose delivery is not known",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -2367,6 +2420,68 @@ defmodule Aqua.ProgramTest do
       assert [%{outcome: "ok"}, %{id: id, outcome: "uncertain"}] = inputs(ctx, turn)
       assert id == steered.id
       refute_receive {:session, "send", _wire, _fields}, 500
+    end
+
+    test "a restart while a post answered later is held, its resume answered gone, starts " <>
+           "fresh with the post in its context, written once and never uncertain",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      %{start: first_start} = started!(fake, row)
+      _first = sent()
+      [first] = inputs(ctx, turn)
+      say(fake, row, accepted(first))
+      say(fake, row, %{"t" => "idle", "gen" => 0, "answered" => [first.id], "stop" => "end_turn"})
+      committed!(ctx, thread, 5)
+
+      _steer = steer!(ctx, thread, turn, "and this")
+      _steered_post = sent()
+      [_first, steered] = inputs(ctx, turn)
+      say(fake, row, %{"t" => "later", "id" => steered.id})
+      committed!(ctx, thread, 6)
+
+      attendant = attendant!(ctx, turn)
+      _ = :sys.get_state(attendant)
+      quiet!(loop.pid)
+      :erlang.suspend_process(loop.pid)
+      Process.exit(attendant, :kill)
+      Task.shutdown(loop, :brutal_kill)
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+
+      assert {:ok, [{:adopt, _taken}]} =
+               Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      adopting =
+        Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt) end)
+
+      opened!(fake, row, "boot-two")
+      assert %{"t" => "start", "session" => @session, "pending" => [pending]} = sent()
+      assert pending == steered.id
+      say(fake, row, %{"t" => "gone"})
+
+      # The program holds no session: the fresh start names nothing
+      # pending, and its prompt carries the thread, the held post in it.
+      fresh = sent()
+      assert Map.delete(fresh, "system") == %{Map.delete(first_start, "system") | "gen" => 1}
+      say(fake, row, started([]))
+      _work = accept_next!(fake, row)
+      prompt = sent()
+      assert %{"t" => "post", "context" => [%{"text" => context} | _]} = prompt
+      assert context =~ "and this"
+      refute hd(prompt["content"])["text"] =~ "and this"
+      say(fake, row, %{"t" => "accepted", "id" => prompt["id"]})
+      say(fake, row, %{idle(turn, [prompt["id"]]) | "gen" => 1})
+      assert :completed = Task.await(adopting, 30_000)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
+      refute_received {:session, "send", _wire, _fields}
+
+      # The held post's own step is what a fresh session holds nothing of
+      # (`Arca.TurnStorage.reconcile_brain/3`): its record closes
+      # uncertain, and the post reached the program once, in the context.
+      assert [%{outcome: "ok"}, %{id: id, outcome: "uncertain"}, %{action: "notice"}] =
+               inputs(ctx, turn)
+
+      assert id == steered.id
     end
 
     test "a resume's start names the turn's tools, as a new session's does",
