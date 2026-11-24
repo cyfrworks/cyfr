@@ -1004,8 +1004,14 @@ func TestASteerWhileACallIsOpenCountsTheEarlierPrompt(t *testing.T) {
 	postText(s, "stp_first", "trn_1", "callsteer")
 	s.expect("text")
 	s.send(map[string]any{"t": "post", "id": "stp_steer", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "the steer"}}})
+	// The call reaches the socket and the earlier prompt is answered side by
+	// side, so the ask and the steer's answer come in either order: both are
+	// read before either is judged.
 	before := s.until("ask")
 	ask := before[len(before)-1]
+	if len(ofType(before, "accepted")) == 0 {
+		before = append(before, s.until("accepted")...)
+	}
 	usages := ofType(before, "usage")
 	if accepted := ofType(before, "accepted"); len(accepted) != 1 || accepted[0]["id"] != "stp_steer" || len(usages) != 1 ||
 		!reflect.DeepEqual(usages[0]["models"], []any{map[string]any{"model": "fake-neon", "counts": map[string]any{

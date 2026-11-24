@@ -264,14 +264,16 @@ func fakeACP() int {
 			update(call)
 			reply(fmt.Sprintf("permission %s %s; the tool answered %q, error %v", p.Result.Outcome.Outcome, p.Result.Outcome.OptionID, result.Text, result.IsError))
 		case strings.Contains(words, "callsteer"):
-			// A call of CYFR's opens, and a steer comes while it is open.
-			chunk("Starting. ")
+			// A call of CYFR's opens, and a steer comes while it is open: the
+			// call is open before the text, so a steer sent once the text is
+			// read finds it open.
 			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_2", "name": "mcp_cyfr_files", "status": "in_progress",
 				"kind": "other", "title": "Run mcp_cyfr_files", "rawInput": json.RawMessage(`{"path":"a.txt","toolSummary":"Read a"}`)}
 			update(call)
 			state.Lock()
 			state.callOpen = true
 			state.Unlock()
+			chunk("Starting. ")
 			var steer string
 			select {
 			case steer = <-state.steered:
