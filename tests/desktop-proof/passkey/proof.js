@@ -328,28 +328,31 @@ async function passkeyPhase() {
   // worker serves a stored copy (worker-src 'none').
   out = await signOutOfPrism(w)
   const service = new URL(DIRECTORY).hostname
-  const toService = await toSignIn()
-  await fault(service, "down")
-  const downFrom = (await seen(service)).length
-  let closedByMain = false
-  try {
-    await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
-    await waitFor(async () => (await seen(service)).slice(downFrom).some((r) => r.path === "/account/sign"), "the account page asked for")
-    closedByMain = await waitFor(() => !accountWindow(), "the account window closed by main", 30_000).catch(() => false)
-  } finally {
-    await fault(service, "none")
-  }
-  const asked = (await seen(service)).slice(downFrom).filter((r) => r.path === "/account/sign")
-  const unanswered = asked.length > 0 && asked.every((r) => r.fault === "down" && r.status === null)
-  const stays = content() === toService && toService.webContents.getURL().startsWith(HOME + "/login")
-  await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
-  a = await accountAt(["ask"])
-  const noWorker = await js(a.webContents, `!navigator.serviceWorker.controller`)
-  a.close()
-  await waitFor(() => !accountWindow(), "the account window closed")
-  row("account_unavailable", closedByMain && unanswered && stays && noWorker,
+  await judged("account_unavailable",
     "with the account service unreachable main closes the account window whose page did not load, the sign-in page stays, and once the service answers its Sign in opens the account page, no worker in it",
-    {closedByMain, asked: asked.map((r) => ({status: r.status, fault: r.fault})), stays, noWorker})
+    async () => {
+      const toService = await toSignIn()
+      await fault(service, "down")
+      const downFrom = (await seen(service)).length
+      let closedByMain = false
+      try {
+        await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+        await waitFor(async () => (await seen(service)).slice(downFrom).some((r) => r.path === "/account/sign"), "the account page asked for")
+        closedByMain = await waitFor(() => !accountWindow(), "the account window closed by main", 30_000).catch(() => false)
+      } finally {
+        await fault(service, "none")
+      }
+      const asked = (await seen(service)).slice(downFrom).filter((r) => r.path === "/account/sign")
+      const unanswered = asked.length > 0 && asked.every((r) => r.fault === "down" && r.status === null)
+      const stays = content() === toService && toService.webContents.getURL().startsWith(HOME + "/login")
+      await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+      a = await accountAt(["ask"])
+      const noWorker = await js(a.webContents, `!navigator.serviceWorker.controller`)
+      a.close()
+      await waitFor(() => !accountWindow(), "the account window closed")
+      return [closedByMain && unanswered && stays && noWorker,
+        {closedByMain, asked: asked.map((r) => ({status: r.status, fault: r.fault})), stays, noWorker}]
+    })
   w = content()
 
   // account_window: the account window holds the account service's sign-in
