@@ -52,26 +52,26 @@ var realMachine = machine
 func testMachine(system string) machineSeams {
 	refused := errors.New("a test reached the machine's root step without standing in for the machine")
 	return machineSeams{
-		supported:       func() bool { return false },
-		arch:            func() string { return "amd64" },
-		reachable:       func(context.Context) bool { return true },
-		refusal:         realMachine.refusal, // asks the docker the test puts on PATH
-		dockerHere:      func(context.Context) (bool, error) { return true, nil },
-		installed:       func(string) bool { return false },
-		appRelease:      func() string { return "" },
-		running:         func() bool { return false },
-		groups:          func(context.Context, string) []string { return nil },
-		displayManager:  func() bool { return false },
-		screenService:   func() (bool, bool) { return false, false },
-		system:          func() string { return system },
-		passwordless:    func() bool { return false },
-		terminal:        func() bool { return false },
-		appArmor:        func() bool { return false },
-		appArmorLoaded:  func() (bool, bool) { return false, false },
-		authenticate:    func() error { return refused },
-		apply:           func([]string) error { return refused },
-		applyInput:      func([]string, []byte) error { return refused },
-		forget:          func() {},
+		supported:      func() bool { return false },
+		arch:           func() string { return "amd64" },
+		reachable:      func(context.Context) bool { return true },
+		refusal:        realMachine.refusal, // asks the docker the test puts on PATH
+		dockerHere:     func(context.Context) (bool, error) { return true, nil },
+		installed:      func(string) bool { return false },
+		appRelease:     func() string { return "" },
+		running:        func() bool { return false },
+		groups:         func(context.Context, string) []string { return nil },
+		displayManager: func() bool { return false },
+		screenService:  func() (bool, bool) { return false, false },
+		system:         func() string { return system },
+		passwordless:   func() bool { return false },
+		terminal:       func() bool { return false },
+		appArmor:       func() bool { return false },
+		appArmorLoaded: func() (bool, bool) { return false, false },
+		authenticate:   func() error { return refused },
+		apply:          func([]string) error { return refused },
+		applyInput:     func([]string, []byte) error { return refused },
+		forget:         func() {},
 	}
 }
 
