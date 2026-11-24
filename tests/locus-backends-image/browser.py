@@ -76,27 +76,25 @@ container starts:
   worker made and a shared worker, in the first window and the later one,
   and a window a page opened on a click, read navigator.userAgent as the
   User-Agent the shell gives itself, read by the shell alone, with Chrome
-  in place of HeadlessChrome, and each one's public request sends it; all
-  but the shared worker and the window a page opened read the page's
-  brands and send no HeadlessChrome in Sec-CH-UA. Those two, never
-  attached, read Chrome's own brands, HeadlessChrome among them, and blank
-  high-entropy hints; the shared worker's request sends no Sec-CH-UA, and
-  the window's sends HeadlessChrome in it. Chrome runs by the switch --user-agent
-  naming that User-Agent. No page the driver shows can register a service
-  worker, so the shell alone under that switch, on an origin of its own
-  (agent-probe.mjs, in a container of the image), shows a service worker
-  at its first read reading and sending it, its script's request among
-  them, and reading Chrome's own brands and blank high-entropy hints.
-  Started with its person
-  (the vector file's person, ja-JP and Asia/Tokyo), the page, a frame of
-  it, a dedicated worker, a worker that worker made and a shared worker,
-  in the first window and the later one, read the person's zone and locale
-  in Intl, a Date's offset in the zone and how a date is formatted, all
-  but the shared worker read the person's language as navigator.language
-  and navigator.languages exactly as reported (the shared worker's, which
-  the driver cannot hold at its start, is measured), and each one's public
-  request carries that language as its Accept-Language; an ordinary font
-  and a colour emoji render; a session started with no person reads
+  in place of HeadlessChrome, and each one's public request sends it; each
+  reads the page's brands and the shell's own high-entropy hints without
+  HeadlessChrome, and sends no HeadlessChrome in Sec-CH-UA, the shared
+  worker's request no Sec-CH-UA at all. Chrome runs by the switch
+  --user-agent naming that User-Agent. No page the driver shows can
+  register a service worker, so the shell alone under that switch, on an
+  origin of its own (agent-probe.mjs, in a container of the image), shows
+  a service worker at its first read reading and sending it, its script's
+  request among them, and reading Chrome's own brands and blank
+  high-entropy hints. Started with its person (the vector file's person,
+  ja-JP and Asia/Tokyo), the page, a frame of it, a dedicated worker, a
+  worker that worker made and a shared worker, in the first window and
+  the later one, read the person's zone and locale in Intl, a Date's
+  offset in the zone and how a date is formatted, all but the shared
+  worker read the person's language as navigator.language and
+  navigator.languages exactly as reported (the shared worker's, Chrome's
+  own, is measured), and each one's public request carries that language
+  as its Accept-Language; an ordinary font and a colour emoji render; a
+  session started with no person reads
   Chrome's own en-US and UTC.
 - A browser's start removes the Chrome the driver once fetched into its
   home and leaves the profile as it was.
@@ -939,9 +937,10 @@ const coloured = () => { const c = document.createElement('canvas'); c.width = c
   const p = x.getImageData(0, 0, 48, 48).data;
   for (let i = 0; i < p.length; i += 4) if (p[i + 3] > 0 && (Math.abs(p[i] - p[i + 1]) > 40 || Math.abs(p[i + 1] - p[i + 2]) > 40)) return true;
   return false };
-const d = navigator.userAgentData; const high = d ? await d.getHighEntropyValues(['fullVersionList']) : null;
+const d = navigator.userAgentData; const high = d ? await d.getHighEntropyValues(['architecture', 'bitness',
+  'formFactors', 'fullVersionList', 'uaFullVersion']) : null;
 document.title = 'kind ' + JSON.stringify(Object.assign(eval(READ), {ua: navigator.userAgent, webdriver: navigator.webdriver,
-  brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null, token,
+  brands: d ? d.brands : null, fullVersionList: high ? high.fullVersionList : null, hints: high, token,
   frame, xframe, worker: worker && worker.own, nested: worker && worker.nested, shared,
   dejavu: width('"DejaVu Sans", monospace') !== width('"No Such Face", monospace'), emoji: coloured()}));
 })();</script>"""
@@ -987,13 +986,19 @@ def unheld_service_worker(image, agent):
            "high-entropy hints, its full versions among them", reading)
 
 
-# A page whose click opens a window it writes into, which reads navigator.userAgent, userAgentData's brand names and its
-# high-entropy client hints, sends a public request marked kind-popup-<token> and tells its opener, which titles itself
-# with it.
+# A page whose first click opens a window it writes into, which reads navigator.userAgent, userAgentData's brand names
+# and its high-entropy client hints, sends a public request marked kind-popup-<token> and tells its opener, which titles
+# itself with it; and whose second click opens a window on a public address marked kind-popupnav-<token>, and titles
+# itself "opened" once that window holds a document of another origin, or after eight seconds.
 POPUP_KIND_PAGE = r"""<title>popup</title><body style='margin:0'><div style='width:100vw;height:100vh' onclick='popup()'></div>
-<script>const token = Math.random().toString(36).slice(2);
+<script>const token = Math.random().toString(36).slice(2); let clicks = 0;
 addEventListener('message', e => { document.title = 'popup ' + JSON.stringify(Object.assign(e.data, {token})) });
-function popup() { const w = window.open('', '_blank'); if (!w) { document.title = 'popup {"blocked": true}'; return }
+function navigated(w, since) { let away = false; try { w.location.href } catch (e) { away = true }
+  if (away || Date.now() - since > 8000) document.title = 'opened ' + JSON.stringify({away});
+  else setTimeout(() => navigated(w, since), 50) }
+function popup() { if (++clicks === 2) { navigated(window.open('https://example.com/?kind-popupnav-' + token, '_blank'),
+    Date.now()); return }
+  const w = window.open('', '_blank'); if (!w) { document.title = 'popup {"blocked": true}'; return }
   w.document.write(`<script>fetch('https://example.com/?kind-popup-${token}', {mode: 'no-cors'}).catch(() => {});
     navigator.userAgentData.getHighEntropyValues(['architecture', 'bitness', 'formFactors', 'fullVersionList',
       'uaFullVersion']).then(hints => opener.postMessage({agent: navigator.userAgent,
@@ -1008,6 +1013,17 @@ def blank_hints(hints):
     full = {b.get("brand"): b.get("version") for b in hints.get("fullVersionList") or []}
     return ({k: hints.get(k) for k in BLANK_HINTS} == BLANK_HINTS
             and {k: full.get(k) for k in ("Chromium", "HeadlessChrome")} == {"Chromium": "", "HeadlessChrome": ""})
+
+
+HINTS = ("architecture", "bitness", "formFactors", "fullVersionList", "uaFullVersion")
+
+
+def named_hints(hints, page):
+    """Whether `hints` are the shell's own high-entropy client hints whole, as the page of the same browser reads them
+    (`page`, which holds them all): each of HINTS the same, the full versions without HeadlessChrome."""
+    hints = hints if isinstance(hints, dict) else {}
+    return (all(page.get(k) not in (None, "", []) for k in HINTS) and {k: hints.get(k) for k in HINTS}
+            == {k: page.get(k) for k in HINTS})
 
 
 def request_headers(text, marker):
@@ -1065,6 +1081,9 @@ def browser_kind(stack, c, uid):
     k.send({"t": "input", "id": cast, "evs": [{"k": "mouse", "type": t, "x": 0.5, "y": 0.5, "button": "left",
                                                "clicks": 1, "mods": 0} for t in ("down", "up")]})
     popup = json.loads(titled(k, "thr_kind_popup", "popup ", ids, seen, 30))
+    k.send({"t": "input", "id": cast, "evs": [{"k": "mouse", "type": t, "x": 0.5, "y": 0.5, "button": "left",
+                                               "clicks": 1, "mods": 0} for t in ("down", "up")]})
+    away = json.loads(titled(k, "thr_kind_popup", "opened ", ids, seen, 30))
     k.send({"t": "uncast", "id": cast})
     k.drop_images()
     k.close()
@@ -1103,25 +1122,22 @@ def browser_kind(stack, c, uid):
             expect(isinstance(reading, dict) and reading.get("agent") == agent,
                    f"the {surface} of the page in {win} reads navigator.userAgent as the shell's own, Chrome in place of "
                    "HeadlessChrome", [surface, reading, agent])
-            # A shared worker is never attached (person.go), and no switch of Chrome's names its brands.
+            expect(reading.get("brandNames") == names, f"the {surface} of the page in {win} reads the page's "
+                   "brands, without HeadlessChrome", [surface, reading, names])
             if surface == "shared":
-                expect(reading.get("brandNames") == names + ["HeadlessChrome"] and blank_hints(reading.get("hints")),
-                       f"the shared worker of the page in {win} reads Chrome's own brands, HeadlessChrome among them, "
-                       "and blank high-entropy hints, its full versions among them", [surface, reading, names])
-            else:
-                expect(reading.get("brandNames") == names, f"the {surface} of the page in {win} reads the page's "
-                       "brands, without HeadlessChrome", [surface, reading, names])
-            # A shared worker is never held at its start (person.go): its navigator reads Chrome's own language.
+                expect(named_hints(reading.get("hints"), seen_by_page["hints"]),
+                       f"the shared worker of the page in {win} reads the shell's own high-entropy hints whole, without "
+                       "HeadlessChrome", [surface, reading, seen_by_page["hints"]])
+                expect(reading.get("language") == "en-US" and reading.get("languages") == ["en-US"],
+                       f"the shared worker of the page in {win} reads Chrome's own en-US as navigator.language and "
+                       "navigator.languages, which its locale does not set", [surface, reading])
+            # A shared worker's navigator reads Chrome's own language, held at its start or not (person.go).
             asked = {k: v for k, v in wanted.items() if surface != "shared" or k not in ("language", "languages")}
             expect(isinstance(reading, dict) and {k: reading.get(k) for k in asked} == asked,
                    f"the {surface} of the page in {win} reads " +
                    ("" if surface == "shared" else "the person's language as navigator.language and "
                     "navigator.languages, exactly as reported, ") +
                    "their zone and locale in Intl, a Date's offset and how it formats a date", [surface, reading, asked])
-            if surface == "shared":
-                print(f"measure: the shared worker of the page in {win} reads navigator.language "
-                      f"{reading.get('language')!r} and navigator.languages {reading.get('languages')!r}, Chrome's own: "
-                      "a shared worker is not held at its start", flush=True)
             marked = [] if offline else request_headers(text, f"?kind-{'dedicated' if surface == 'worker' else surface}-"
                                                               f"{seen_by_page['token']}")
             expect(offline or (marked and all(request.get("accept-language") == PERSON["accept_language"]
@@ -1137,8 +1153,8 @@ def browser_kind(stack, c, uid):
                        [surface, marked])
             else:
                 expect(offline or all("HeadlessChrome" not in request.get("sec-ch-ua", "") for request in marked),
-                       f"the public request of the {surface} of the page in {win} sends no HeadlessChrome in Sec-CH-UA",
-                       [surface, marked])
+                       f"the public request of the {surface} of the page in {win} sends no HeadlessChrome in "
+                       "Sec-CH-UA", [surface, marked])
         xframe = seen_by_page["xframe"]
         marked = [] if offline else request_headers(text, f"?kind-xframe-{seen_by_page['token']}")
         expect(isinstance(xframe, dict) and xframe.get("agent") == agent and xframe.get("brandNames") == names
@@ -1154,20 +1170,25 @@ def browser_kind(stack, c, uid):
                f"the public request from {win} carries the person's language as its Accept-Language", sent)
     names = [b["brand"] for b in read["thr_kind_first"]["brands"]]
     marked = [] if offline else request_headers(text, f"?kind-popup-{popup.get('token')}")
-    # Chrome attaches no window a page opens to its opener's session, so the driver never names one (agent.go).
     expect(popup.get("agent") == agent and (offline or (marked and all(request.get("user-agent") == agent
                                                                       for request in marked))),
            "a window a page opened on a click reads navigator.userAgent as the shell's own, Chrome in place of "
            "HeadlessChrome, and its public request sends it", [popup, marked, agent])
-    expect(popup.get("brandNames") == names + ["HeadlessChrome"] and blank_hints(popup.get("hints"))
-           and (offline or all("HeadlessChrome" in request.get("sec-ch-ua", "") for request in marked)),
-           "a window a page opened reads Chrome's own brands, HeadlessChrome among them, and blank high-entropy hints, "
-           "and its public request sends HeadlessChrome in Sec-CH-UA", [popup, marked, names])
-    # What the shared worker and the window a page opened read of their brands and hints is asserted above.
-    checked = {win: dict(seen_by_page, shared={k: v for k, v in seen_by_page["shared"].items()
-                                               if k not in ("brandNames", "hints")})
-               for win, seen_by_page in read.items()}
-    expect("headless" not in json.dumps([checked, sent]).lower(),
+    expect(popup.get("brandNames") == names and named_hints(popup.get("hints"), read["thr_kind_first"]["hints"])
+           and (offline or all(names[0] in request.get("sec-ch-ua", "") and '"Chromium"' in request["sec-ch-ua"]
+                               and "HeadlessChrome" not in request["sec-ch-ua"] for request in marked)),
+           "a window a page opened reads the page's brands and the shell's own high-entropy hints whole, without "
+           "HeadlessChrome, and its public request sends those brands in Sec-CH-UA", [popup, marked, names])
+    # A window opened on an address: its first navigation is the first request it makes.
+    navigation = [] if offline else request_headers(text, f"?kind-popupnav-{popup.get('token')}")
+    expect(away.get("away") is True and (offline or (navigation and all(
+        request.get("user-agent") == agent and names[0] in request.get("sec-ch-ua", "")
+        and '"Chromium"' in request["sec-ch-ua"] and "HeadlessChrome" not in request["sec-ch-ua"]
+        for request in navigation))),
+           "a window a page opened on a public address sends, on its first navigation, the shell's own User-Agent, "
+           "Chrome in place of HeadlessChrome, and the page's brands in Sec-CH-UA", [away, navigation, agent])
+    checked = read
+    expect("headless" not in json.dumps([checked, popup, sent]).lower(),
            "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
            "window or a later one", [checked, sent])
     unheld_service_worker(stack.image, agent)
