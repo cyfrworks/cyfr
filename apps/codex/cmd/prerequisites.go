@@ -71,9 +71,10 @@ type machineSeams struct {
 	authenticate func() error
 	// appArmor is whether the kernel enforces AppArmor profiles.
 	appArmor func() bool
-	// appArmorProfile is the cyfr-locus profile this machine keeps in
-	// /etc/apparmor.d, an error where it has none or it cannot be read.
-	appArmorProfile func() ([]byte, error)
+	// appArmorLoaded is whether the kernel holds a profile named
+	// cyfr-locus, by its own list of loaded policy, and whether that list
+	// is visible here: a container sees no host's.
+	appArmorLoaded func() (loaded, visible bool)
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// applyInput runs the commands as root through one sudo, input on
@@ -164,7 +165,19 @@ var machine = machineSeams{
 		raw, err := os.ReadFile("/sys/module/apparmor/parameters/enabled")
 		return err == nil && strings.TrimSpace(string(raw)) == "Y"
 	},
-	appArmorProfile: func() ([]byte, error) { return os.ReadFile(appArmorTarget) },
+	appArmorLoaded: func() (bool, bool) {
+		entries, err := os.ReadDir(appArmorPolicies)
+		if err != nil {
+			return false, false
+		}
+		for _, e := range entries {
+			name, err := os.ReadFile(filepath.Join(appArmorPolicies, e.Name(), "name"))
+			if err == nil && strings.TrimSpace(string(name)) == "cyfr-locus" {
+				return true, true
+			}
+		}
+		return false, true
+	},
 	authenticate: func() error {
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

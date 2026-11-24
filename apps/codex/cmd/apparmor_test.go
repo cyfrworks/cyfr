@@ -18,10 +18,12 @@ import (
 	"github.com/cyfr/codex/internal/apparmor"
 )
 
-// An older profile a machine may hold, and what cyfr says and runs.
+// A profile a project folder may hold, and what cyfr says and runs.
 const (
 	olderAppArmor   = "abi <abi/4.0>,\nprofile cyfr-locus {}\n"
-	notHeld         = "Locus runs under the AppArmor profile cyfr-locus, and this machine does not hold this cyfr's.\n"
+	noneLoaded      = "Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded.\n"
+	releasesOwn     = "Locus runs under the AppArmor profile cyfr-locus, which this cyfr carries as its release has it.\n"
+	nothingAsks     = "Locus runs under the AppArmor profile cyfr-locus, which nothing here can ask to load as this cyfr has it. Where the machine's is another, the Locus services refuse to start and name the command that loads it:\n  "
 	appArmorRemover = "sudo sh -c 'apparmor_parser -R /etc/apparmor.d/cyfr-locus && rm /etc/apparmor.d/cyfr-locus'"
 	loadCommand     = "cyfr apparmor-profile | sudo sh -c 'cat > /etc/apparmor.d/cyfr-locus && apparmor_parser -r -W /etc/apparmor.d/cyfr-locus'"
 )
@@ -29,51 +31,47 @@ const (
 // notLoaded is the refusal where nothing may ask: the one command, then
 // again.
 func notLoaded(again string) string {
-	return "Locus runs under the AppArmor profile cyfr-locus, which this machine does not hold as this cyfr has it, so nothing was started. " +
+	return "Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded, so nothing was started. " +
 		"Run `" + loadCommand + "`, then run `" + again + "` again"
 }
 
 // appArmorOn makes the machine the tests stand on, its own seams kept, an
-// Ubuntu 26.04 whose kernel enforces AppArmor and whose /etc/apparmor.d
-// holds loaded, none when nil, until t ends.
-func appArmorOn(t *testing.T, loaded []byte) {
+// Ubuntu 26.04 whose kernel enforces AppArmor and holds a profile named
+// cyfr-locus when loaded, until t ends.
+func appArmorOn(t *testing.T, loaded bool) {
 	t.Helper()
 	saved := machine
 	t.Cleanup(func() { machine = saved })
 	machine.system = func() string { return "linux" }
 	machine.supported = func() bool { return true }
 	machine.appArmor = func() bool { return true }
-	machine.appArmorProfile = func() ([]byte, error) {
-		if loaded == nil {
-			return nil, fs.ErrNotExist
-		}
-		return loaded, nil
-	}
+	machine.appArmorLoaded = func() (bool, bool) { return loaded, true }
 }
 
-func ensure(t *testing.T) (string, error) {
+func ensure(t *testing.T, release bool) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	err := ensureAppArmor(context.Background(), &out, "cyfr up")
+	err := ensureAppArmor(context.Background(), &out, "cyfr up", release)
 	return out.String(), err
 }
 
-// Another system, another Linux or a container whose host cyfr cannot see,
-// AppArmor off, and a machine that holds this cyfr's profile ask nothing
-// and change nothing, at a terminal that would answer yes: the keeper's
-// boot proves what is enforced.
+// Another system, another Linux, AppArmor off and a container that sees no
+// host's policy ask nothing and change nothing, at a terminal that would
+// answer yes, even as a release's profile arrives; nor does a start where
+// the kernel holds a cyfr-locus, whatever its bytes: the keeper's boot
+// proves what is enforced.
 func TestAppArmorLeavesAMachineAlone(t *testing.T) {
-	for name, set := range map[string]func(s *standIn){
-		"another system":       func(s *standIn) { s.system = "darwin" },
-		"another Linux":        func(s *standIn) { s.supported = false },
-		"AppArmor off":         func(s *standIn) { s.appArmor = false },
-		"the profile is there": func(s *standIn) { s.profile = apparmor.Profile },
+	for name, set := range map[string]func(s *standIn) bool{
+		"another system":          func(s *standIn) bool { s.system = "darwin"; return true },
+		"another Linux":           func(s *standIn) bool { s.supported = false; return true },
+		"AppArmor off":            func(s *standIn) bool { s.appArmor = false; return true },
+		"a container":             func(s *standIn) bool { s.hidden = true; return true },
+		"a start, a profile held": func(s *standIn) bool { s.loaded = true; return false },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := standInMachine(t)
 			s.appArmor = true
-			set(s)
-			out, err := ensure(t)
+			out, err := ensure(t, set(s))
 			if err != nil || out != "" || s.applied != nil || s.authenticated != 0 {
 				t.Fatalf("err %v, applied %q, sudo asked %d times, out %q", err, s.applied, s.authenticated, out)
 			}
@@ -81,21 +79,28 @@ func TestAppArmorLeavesAMachineAlone(t *testing.T) {
 	}
 }
 
-// At a terminal on Ubuntu 26.04, a machine without this cyfr's profile, or
-// with another one, is shown the two commands, asked once, and they run
-// through one sudo after its own prompt with the profile built into cyfr as
-// their input, whatever a project folder holds; the login is forgotten
-// after.
+// At a terminal on Ubuntu 26.04, a start where the kernel holds no
+// cyfr-locus, and a release's arrival where it holds one, are shown the two
+// commands, asked once, and they run through one sudo after its own prompt
+// with the profile built into cyfr as their input, whatever a project
+// folder or /etc holds; the login is forgotten after.
 func TestAppArmorLoadsThroughOneSudo(t *testing.T) {
-	for name, loaded := range map[string][]byte{"none": nil, "an older one": []byte(olderAppArmor)} {
+	for name, c := range map[string]struct {
+		loaded, release bool
+		said            string
+	}{
+		"a start, none held":        {false, false, noneLoaded},
+		"a release, none held":      {false, true, noneLoaded},
+		"a release, a profile held": {true, true, releasesOwn},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			if err := os.WriteFile("cyfr-locus.apparmor", []byte(olderAppArmor), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			s := standInMachine(t)
-			s.appArmor, s.profile = true, loaded
-			out, err := ensure(t)
+			s.appArmor, s.loaded = true, c.loaded
+			out, err := ensure(t, c.release)
 			if err != nil {
 				t.Fatalf("ensure: %v\n%s", err, out)
 			}
@@ -106,7 +111,7 @@ func TestAppArmorLoadsThroughOneSudo(t *testing.T) {
 			if s.authenticated != 1 || s.forgotten != 1 {
 				t.Errorf("sudo asked %d times and forgot %d times, want once each", s.authenticated, s.forgotten)
 			}
-			shown := notHeld + "These commands load it, as root, the profile built into this cyfr as their input:\n  " + want[0] + "\n  " + want[1] + "\nLoad it? (yes/no) "
+			shown := c.said + "These commands load it, as root, the profile built into this cyfr as their input:\n  " + want[0] + "\n  " + want[1] + "\nLoad it? (yes/no) "
 			if !strings.HasPrefix(out, shown) || !strings.HasSuffix(out, passwordSentence) {
 				t.Errorf("printed:\n%s\nwant it to begin\n%s\nand end with the password sentence", out, shown)
 			}
@@ -119,7 +124,7 @@ func TestAppArmorLoadsThroughOneSudo(t *testing.T) {
 func TestAppArmorSaysALoadThatFailed(t *testing.T) {
 	s := standInMachine(t)
 	s.appArmor, s.applyErr = true, fs.ErrPermission
-	out, err := ensure(t)
+	out, err := ensure(t, false)
 	if want := "Loading the AppArmor profile cyfr-locus failed, so nothing was started. Fix what is shown above, then run `cyfr up` again"; err == nil || err.Error() != want {
 		t.Fatalf("answered %v, want %q\n%s", err, want, out)
 	}
@@ -132,7 +137,7 @@ func TestAppArmorDeclinedLoadsNothing(t *testing.T) {
 		s := standInMachine(t)
 		s.appArmor = true
 		askInput = strings.NewReader("no\n")
-		out, err := ensure(t)
+		out, err := ensure(t, false)
 		if want := "The AppArmor profile cyfr-locus was not loaded, so nothing was started. Run `cyfr up` again when you want to go on"; err == nil || err.Error() != want {
 			t.Fatalf("answered %v, want %q\n%s", err, want, out)
 		}
@@ -143,7 +148,7 @@ func TestAppArmorDeclinedLoadsNothing(t *testing.T) {
 	t.Run("outside the groups", func(t *testing.T) {
 		s := standInMachine(t)
 		s.appArmor, s.administrator = true, nil
-		out, err := ensure(t)
+		out, err := ensure(t, false)
 		if err == nil || err.Error() != "Nothing was changed. Run `cyfr up` again once they have" {
 			t.Fatalf("answered %v\n%s", err, out)
 		}
@@ -156,19 +161,32 @@ func TestAppArmorDeclinedLoadsNothing(t *testing.T) {
 	})
 }
 
-// With no terminal, nothing is asked or run: the refusal is one sentence
-// naming the one command that loads the profile.
+// With no terminal, nothing is asked or run. Where the kernel holds no
+// cyfr-locus the refusal is one sentence naming the one command that loads
+// the profile; as a release arrives where it holds one, cyfr names that
+// command and goes on, the keeper's boot proving the rest.
 func TestAppArmorRefusesWhereItCannotAsk(t *testing.T) {
-	s := standInMachine(t)
-	s.appArmor = true
-	askTerminal = func() bool { return false }
-	out, err := ensure(t)
-	if want := notLoaded("cyfr up"); err == nil || err.Error() != want {
-		t.Fatalf("answered %v, want %q", err, want)
-	}
-	if out != "" || s.applied != nil || s.authenticated != 0 {
-		t.Errorf("applied %q, sudo asked %d times, printed %q", s.applied, s.authenticated, out)
-	}
+	t.Run("none held", func(t *testing.T) {
+		s := standInMachine(t)
+		s.appArmor = true
+		askTerminal = func() bool { return false }
+		out, err := ensure(t, true)
+		if want := notLoaded("cyfr up"); err == nil || err.Error() != want {
+			t.Fatalf("answered %v, want %q", err, want)
+		}
+		if out != "" || s.applied != nil || s.authenticated != 0 {
+			t.Errorf("applied %q, sudo asked %d times, printed %q", s.applied, s.authenticated, out)
+		}
+	})
+	t.Run("a release, a profile held", func(t *testing.T) {
+		s := standInMachine(t)
+		s.appArmor, s.loaded = true, true
+		askTerminal = func() bool { return false }
+		out, err := ensure(t, true)
+		if err != nil || out != nothingAsks+loadCommand+"\n" || s.applied != nil || s.authenticated != 0 {
+			t.Fatalf("answered %v, applied %q, sudo asked %d times, printed %q", err, s.applied, s.authenticated, out)
+		}
+	})
 }
 
 // `cyfr apparmor-profile` prints the profile built into cyfr, whole.
@@ -196,7 +214,7 @@ func TestTheLoadCommandIsTheKeepers(t *testing.T) {
 func TestInitLoadsTheProfileBeforeItPulls(t *testing.T) {
 	newInitProject(t)
 	useFakeEngine(t)
-	appArmorOn(t, nil)
+	appArmorOn(t, false)
 	askTerminal = func() bool { return false }
 	// No docker to pull with: a pull is seen in what init prints.
 	t.Setenv("PATH", t.TempDir())
@@ -217,7 +235,7 @@ func TestInitLoadsTheProfileBeforeItPulls(t *testing.T) {
 // stack.
 func TestUpLoadsTheProfileBeforeAnythingStarts(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	appArmorOn(t, nil)
+	appArmorOn(t, false)
 	askTerminal = func() bool { return false }
 	err := runUp(context.Background(), &bytes.Buffer{})
 	if want := notLoaded("cyfr up"); err == nil || err.Error() != want {
@@ -228,14 +246,18 @@ func TestUpLoadsTheProfileBeforeAnythingStarts(t *testing.T) {
 	}
 }
 
-// cyfr update refuses after the release's files are written and before the
-// release starts, leaving it in place and stopped for cyfr up.
+// cyfr update offers the release's profile where the kernel holds one: a
+// person who declines it is refused after the release's files are written
+// and before the release starts, leaving it in place and stopped for cyfr
+// up.
 func TestUpdateLoadsTheReleasesProfileBeforeItStarts(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	appArmorOn(t, []byte(olderAppArmor))
-	askTerminal = func() bool { return false }
+	appArmorOn(t, true)
+	machine.groups = func(context.Context, string) []string { return []string{"sudo"} }
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("no\n")
 	out, err := s.run(context.Background())
-	want := notLoaded("cyfr up") + "\nRelease 0.9.0 is in place and the stack is left stopped; the snapshot of release 0.8.0 is " + s.snapshotDir()
+	want := "The AppArmor profile cyfr-locus was not loaded, so nothing was started. Run `cyfr up` again when you want to go on" + "\nRelease 0.9.0 is in place and the stack is left stopped; the snapshot of release 0.8.0 is " + s.snapshotDir()
 	if err == nil || err.Error() != want {
 		t.Fatalf("update answered %v, want %q\n%s", err, want, out)
 	}
@@ -248,7 +270,7 @@ func TestUpdateLoadsTheReleasesProfileBeforeItStarts(t *testing.T) {
 // cyfr restore refuses before the start, the restore declared.
 func TestRestoreLoadsTheProfileBeforeItStarts(t *testing.T) {
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
-	appArmorOn(t, nil)
+	appArmorOn(t, false)
 	askTerminal = func() bool { return false }
 	_, err := r.restore(true)
 	want := notLoaded("cyfr up") + "\nEvery part is back and the restore " + testRestored + " is declared, and the stack is left stopped"
@@ -264,7 +286,7 @@ func TestRestoreLoadsTheProfileBeforeItStarts(t *testing.T) {
 // stack.
 func TestAccessLoadsTheProfileBeforeItSwitches(t *testing.T) {
 	s := newAccessProject(t)
-	appArmorOn(t, nil)
+	appArmorOn(t, false)
 	askTerminal = func() bool { return false }
 	err := runAccess(context.Background(), "public", accessOptions{domain: "cyfr.example.com"}, true, &bytes.Buffer{})
 	if want := notLoaded("cyfr access public"); err == nil || err.Error() != want {
@@ -281,7 +303,7 @@ func TestAccessLoadsTheProfileBeforeItSwitches(t *testing.T) {
 func TestUninstallLeavesTheAppArmorProfile(t *testing.T) {
 	s := newUninstallScenario(t)
 	machine.system = func() string { return "linux" }
-	machine.appArmorProfile = func() ([]byte, error) { return apparmor.Profile, nil }
+	machine.appArmorLoaded = func() (bool, bool) { return true, true }
 	out, err := s.run(true)
 	if err != nil {
 		t.Fatalf("cyfr uninstall answered %v\n%s", err, out)

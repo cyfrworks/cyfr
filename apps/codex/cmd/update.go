@@ -456,7 +456,7 @@ func (u *updater) run() error {
 	// The release's profile may differ from the one the machine loaded.
 	// Nothing has started over the database yet, so a refusal leaves the
 	// release in place, stopped, for `cyfr up` to start.
-	if err := ensureAppArmor(u.ctx, u.out, "cyfr up"); err != nil {
+	if err := ensureAppArmor(u.ctx, u.out, "cyfr up", true); err != nil {
 		return fmt.Errorf("%s\nRelease %s is in place and the stack is left stopped; the snapshot of release %s is %s", strings.TrimSuffix(err.Error(), "."), u.version, u.oldRelease, u.snapshot)
 	}
 	if err := u.up(); err != nil {

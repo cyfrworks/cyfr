@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"slices"
 	"testing"
@@ -68,7 +67,7 @@ func testMachine(system string) machineSeams {
 		passwordless:    func() bool { return false },
 		terminal:        func() bool { return false },
 		appArmor:        func() bool { return false },
-		appArmorProfile: func() ([]byte, error) { return nil, fs.ErrNotExist },
+		appArmorLoaded:  func() (bool, bool) { return false, false },
 		authenticate:    func() error { return refused },
 		apply:           func([]string) error { return refused },
 		applyInput:      func([]string, []byte) error { return refused },

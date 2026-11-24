@@ -161,7 +161,7 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			}
 		}
 	}
-	if _, err := machine.appArmorProfile(); err == nil && machine.system() == "linux" {
+	if loaded, _ := machine.appArmorLoaded(); loaded && machine.system() == "linux" {
 		p.appArmor = true
 	}
 	if device, err := shell.DeviceFolder(); err == nil {

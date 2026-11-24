@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +19,10 @@ import (
 // the host loads from there at every boot. It is the machine's, shared by
 // every CYFR on it.
 const appArmorTarget = apparmor.Target
+
+// appArmorPolicies is the kernel's list of the policy it holds loaded, one
+// folder per profile with the profile's name in its name file.
+const appArmorPolicies = "/sys/kernel/security/apparmor/policy/profiles"
 
 // appArmorRemoval is the command that takes the profile off this machine,
 // which no CYFR command runs.
@@ -36,28 +39,40 @@ const loadAppArmor = "cyfr apparmor-profile | sudo sh -c 'cat > " + appArmorTarg
 // file a project's writer could change between the question and the write.
 var appArmorCommands = []string{"cat > " + appArmorTarget, "apparmor_parser -r -W " + appArmorTarget}
 
-// ensureAppArmor gives this machine the AppArmor profile cyfr-locus built
-// into this cyfr before anything of the stack starts: Docker refuses a
-// Locus container whose profile is not loaded. On Ubuntu 26.04 with
-// AppArmor on, where /etc/apparmor.d/cyfr-locus does not hold this cyfr's
-// profile, it shows the two commands, asks, and runs them through one sudo
-// (unlockSudo) with the profile as their input; without a terminal it
-// refuses, naming the one command. A copy on disk only decides whether to
-// ask, never that the profile is enforced: the keeper proves that at its
-// boot, and refuses under any other with the same command. Anywhere else,
-// another system, a container whose host cyfr cannot see, AppArmor off,
-// it does nothing. again is the command the person ran, to run again.
-func ensureAppArmor(ctx context.Context, out io.Writer, again string) error {
+// ensureAppArmor offers this machine the AppArmor profile cyfr-locus built
+// into this cyfr before anything of the stack starts. Which profile is
+// enforced is the keeper's to prove, at its boot, where it refuses under
+// any other and names the one command; cyfr reads no copy on disk. It
+// offers the profile where the kernel holds none named cyfr-locus, which
+// Docker refuses a Locus container without, and, when release is set (init
+// and update, which bring a release's profile), wherever the kernel holds
+// one. On Ubuntu 26.04 with AppArmor on, at a terminal, it shows the two
+// commands, asks, and runs them through one sudo (unlockSudo) with the
+// profile as their input. Without a terminal it refuses where the kernel
+// holds none, naming the one command, and otherwise says that command and
+// goes on. Anywhere else, another system, a container that sees no host's
+// policy, AppArmor off, it does nothing. again is the command the person
+// ran, to run again.
+func ensureAppArmor(ctx context.Context, out io.Writer, again string, release bool) error {
 	if machine.system() != "linux" || !machine.appArmor() || !machine.supported() {
 		return nil
 	}
-	if have, err := machine.appArmorProfile(); err == nil && bytes.Equal(have, apparmor.Profile) {
+	loaded, visible := machine.appArmorLoaded()
+	if !visible || (loaded && !release) {
 		return nil
 	}
 	if !askTerminal() {
-		return fmt.Errorf("Locus runs under the AppArmor profile cyfr-locus, which this machine does not hold as this cyfr has it, so nothing was started. Run `%s`, then run `%s` again", loadAppArmor, again)
+		if loaded {
+			fmt.Fprintf(out, "Locus runs under the AppArmor profile cyfr-locus, which nothing here can ask to load as this cyfr has it. Where the machine's is another, the Locus services refuse to start and name the command that loads it:\n  %s\n", loadAppArmor)
+			return nil
+		}
+		return fmt.Errorf("Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded, so nothing was started. Run `%s`, then run `%s` again", loadAppArmor, again)
 	}
-	fmt.Fprintln(out, "Locus runs under the AppArmor profile cyfr-locus, and this machine does not hold this cyfr's.")
+	if loaded {
+		fmt.Fprintln(out, "Locus runs under the AppArmor profile cyfr-locus, which this cyfr carries as its release has it.")
+	} else {
+		fmt.Fprintln(out, "Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded.")
+	}
 	account, administers, err := administrator()
 	if err != nil {
 		return err
@@ -93,7 +108,7 @@ var appArmorProfileCmd = &cobra.Command{
 
   ` + loadAppArmor + `
 
-cyfr init, update and up run those two steps through one sudo at a terminal on Ubuntu 26.04; the keeper names this command when its boot finds the host's profile is not its release's.`,
+cyfr init and update run those two steps through one sudo at a terminal on Ubuntu 26.04, and up, restore and access do where the machine has loaded none; the keeper names this command when its boot finds the host's profile is not its release's.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		_, err := cmd.OutOrStdout().Write(apparmor.Profile)

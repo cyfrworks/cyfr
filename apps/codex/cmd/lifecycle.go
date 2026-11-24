@@ -670,7 +670,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 
 	// The profile the Locus services run under is loaded once the files
 	// are written, before an image is pulled.
-	if err := ensureAppArmor(ctx, out, "cyfr init"); err != nil {
+	if err := ensureAppArmor(ctx, out, "cyfr init", true); err != nil {
 		return err
 	}
 
@@ -999,7 +999,7 @@ func upWith(ctx context.Context, opened stackEngine, out io.Writer) error {
 		return err
 	}
 	// Before the lock, whose recovery may start the stack.
-	if err := ensureAppArmor(ctx, out, "cyfr up"); err != nil {
+	if err := ensureAppArmor(ctx, out, "cyfr up", false); err != nil {
 		return err
 	}
 	// The start holds the lock an update, a restore and an access change
