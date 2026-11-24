@@ -1325,7 +1325,7 @@ _HOMEBREW_RUNS = {}
 # The tap's token in the stubbed runs: no git call's arguments may hold it.
 TAP_TOKEN = "tap-secret-0451"
 # A git that records each call and plays a tap: its clone holds a cask at
-# TAP_AT (none when empty), a fetch brings one at TAP_AFTER, the first
+# TAP_AT (none when empty), or the text TAP_TEXT, a fetch brings one at TAP_AFTER, the first
 # PUSH_FAILS pushes fail, and the staged cask always differs.
 GIT_STUB = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$GIT_CALLS"
@@ -1334,7 +1334,10 @@ dir=.
 if [ "$1" = -C ]; then dir=$2; shift 2; fi
 cask() { mkdir -p "$1/Casks"; printf 'cask "cyfr" do\n  version "%s"\nend\n' "$2" > "$1/Casks/cyfr.rb"; }
 case "$1" in
-  clone) eval "dest=\${$#}"; mkdir -p "$dest"; [ -z "$TAP_AT" ] || cask "$dest" "$TAP_AT" ;;
+  clone)
+    eval "dest=\${$#}"; mkdir -p "$dest"
+    if [ -n "$TAP_TEXT" ]; then mkdir -p "$dest/Casks"; printf '%s' "$TAP_TEXT" > "$dest/Casks/cyfr.rb"
+    elif [ -n "$TAP_AT" ]; then cask "$dest" "$TAP_AT"; fi ;;
   fetch) [ -z "$TAP_AFTER" ] || cask "$dir" "$TAP_AFTER" ;;
   push)
     n=$(( $(cat "$GIT_CALLS.pushes" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$GIT_CALLS.pushes"
@@ -1345,11 +1348,11 @@ exit 0
 """
 
 
-def run_homebrew_step(script, tag, tap_at="", tap_after="", push_fails=0):
+def run_homebrew_step(script, tag, tap_at="", tap_after="", push_fails=0, tap_text=""):
     """The step's script run as the runner runs it, with the cask the release
     checked in $RUNNER_TEMP/checked/cask and GIT_STUB on PATH. Returns
     (status, git calls, output)."""
-    key = (script, tag, tap_at, tap_after, push_fails)
+    key = (script, tag, tap_at, tap_after, push_fails, tap_text)
     if key not in _HOMEBREW_RUNS:
         work = tempfile.mkdtemp(prefix="homebrew-", dir=scratch())
         casks = os.path.join(work, "runner", "checked", "cask")
@@ -1382,6 +1385,7 @@ def run_homebrew_step(script, tag, tap_at="", tap_after="", push_fails=0):
             "TAP_AT": tap_at,
             "TAP_AFTER": tap_after,
             "PUSH_FAILS": str(push_fails),
+            "TAP_TEXT": tap_text,
         }
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", path],
@@ -1409,6 +1413,13 @@ TAP_CASES = [
     ("1.10.0", "", 0, "1.9.9", 0),
     ("1.2.2", "1.2.4", 1, "1.2.3", 1),
     ("1.2.2", "", 1, "1.2.3", 2),
+]
+# A cask that is there and whose version the step cannot read: the step
+# fails naming the file and pushes nothing.
+TAP_UNREADABLE = [
+    ("one space more before the version", 'cask "cyfr" do\n  version  "1.2.4"\nend\n'),
+    ("no version", 'cask "cyfr" do\nend\n'),
+    ("an empty file", ""),
 ]
 
 
@@ -1448,6 +1459,11 @@ def check_homebrew(wf, release):
             return f"{what} leaves the tap without a notice"
         if any(TAP_TOKEN in c for c in calls):
             return f"{what} hands git the token in its arguments"
+    for name, text in TAP_UNREADABLE:
+        status, calls, output = run_homebrew_step(script, "1.2.3", tap_text=text or "\n")
+        made = sum(1 for c in calls if " push " in f" {c} ")
+        if status == 0 or made or "Casks/cyfr.rb" not in output or "::error::" not in output:
+            return f"the Homebrew step for 1.2.3 on a tap whose cask has {name} exits {status} after {made} pushes: {output.strip()[-300:]}"
     return None
 
 
@@ -1769,20 +1785,37 @@ def manifest_mode(argv):
 
 # --- the installers and the cask, before anything is published ---
 
-# The lines a cask may carry, each stanza by its first word; a hook, a
-# command, an installer of its own or anything else is refused.
-CASK_STANZAS = {"cask", "arch", "version", "sha256", "intel:", "url", "name", "desc", "homepage", "depends_on", "app", "binary", "end"}
-CASK_FIXED = [
-    'cask "cyfr" do',
-    'arch arm: "arm64", intel: "amd64"',
-    'url "%s/cyfr-desktop_#{version}_darwin_#{arch}.dmg"' % CASK_URL_BASE,
-    'name "CYFR"',
-    "depends_on :macos",
-    'app "CYFR.app"',
-    'binary "#{appdir}/CYFR.app/Contents/Resources/cyfr"',
-    "end",
-]
-CASK_SHA256 = re.compile(r'^\s*sha256 arm:\s+"([0-9a-f]{64})",\n\s*intel:\s+"([0-9a-f]{64})"\s*$', re.MULTILINE)
+# The cask this release must publish, whole: what Homebrew has been shown
+# to read (Codex CI's local tap installs, upgrades and removes the cask
+# scripts/ci/homebrew-cask.sh writes, through brew itself), at this
+# release's version and download folder, naming its two DMGs by their
+# digests. The release's check compares the cask with it byte for byte;
+# the graph test compares the script's output with it, so neither can
+# change without the other.
+CASK_TEMPLATE = """cask "cyfr" do
+  arch arm: "arm64", intel: "amd64"
+
+  version "{version}"
+  sha256 arm:   "{arm}",
+         intel: "{intel}"
+
+  url "{base}/cyfr-desktop_#{{version}}_darwin_#{{arch}}.dmg"
+  name "CYFR"
+  desc "App and CLI for the CYFR sandboxed runtime"
+  homepage "https://cyfr.run/"
+
+  depends_on :macos
+
+  app "CYFR.app"
+  binary "#{{appdir}}/CYFR.app/Contents/Resources/cyfr"
+end
+"""
+
+
+def release_cask(folder, version):
+    """The cask this release must publish, from the DMGs in FOLDER."""
+    sums = {arch: file_sha256(os.path.join(folder, installer_name(version, "darwin", arch))) for arch in PACKAGE_ARCHES}
+    return CASK_TEMPLATE.format(version=version, arm=sums["arm64"], intel=sums["amd64"], base=CASK_URL_BASE)
 
 
 def file_sha256(path):
@@ -1793,29 +1826,10 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
-def ruby_refuses(cask):
-    """Why Ruby does not read the cask as Ruby (ruby -c), or None."""
-    ruby = shutil.which("ruby")
-    if ruby is None:
-        return "ruby is not on PATH, so the cask cannot be read as Ruby"
-    with tempfile.NamedTemporaryFile("w", suffix=".rb", delete=False) as f:
-        f.write(cask)
-        path = f.name
-    try:
-        result = subprocess.run([ruby, "-c", path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
-    finally:
-        os.remove(path)
-    said = result.stdout.decode(errors="replace").strip()
-    if result.returncode != 0 or said != "Syntax OK":
-        return f"Ruby does not read the cask: {said[-300:]}"
-    return None
-
-
 def check_installers(folder, version, cask):
     """The folder GoReleaser sums and attaches holds exactly the six
-    installers at VERSION, each a non-empty regular file, and the cask names
-    each DMG at the release's download folder by its own bytes' digest,
-    installing CYFR.app and linking its cyfr, and carries nothing else."""
+    installers at VERSION, each a non-empty file of its own bytes, and the
+    cask is exactly release_cask's text for them."""
     if not SEMVER.fullmatch(version):
         return f"{version!r} is not a {RELEASE_VERSION}"
     want = sorted(installer_name(version, s, a) for s, a in INSTALLERS)
@@ -1837,31 +1851,13 @@ def check_installers(folder, version, cask):
     for names in by_digest.values():
         if len(names) > 1:
             return f"{' and '.join(names)} are the same bytes"
-    reason = ruby_refuses(cask)
-    if reason:
-        return reason
-    lines = [line.strip() for line in cask.split("\n") if line.strip()]
-    if not lines or lines[0] != CASK_FIXED[0] or lines[-1] != "end":
-        return "the cask is not one cask \"cyfr\" block"
-    for line in lines:
-        if line.split(" ", 1)[0] not in CASK_STANZAS:
-            return f"the cask carries {line!r}"
-    for fixed in CASK_FIXED:
-        if lines.count(fixed) != 1:
-            return f"the cask carries {fixed!r} {lines.count(fixed)} times, not once"
-    if [line for line in lines if line.startswith("version ")] != [f'version "{version}"']:
-        return f"the cask's version is not {version}"
-    for word in sorted(CASK_STANZAS - {"cask", "end"}):
-        count = sum(1 for line in lines if line.split(" ", 1)[0] == word)
-        if count != 1:
-            return f"the cask carries {count} {word} stanzas, not one"
-    sums = CASK_SHA256.findall(cask)
-    if len(sums) != 1:
-        return "the cask's sha256 is not one for arm and one for intel"
-    for arch, got_sum in zip(("arm64", "amd64"), sums[0]):
-        dmg = installer_name(version, "darwin", arch)
-        if got_sum != file_sha256(os.path.join(folder, dmg)):
-            return f"the cask's {arch} sha256 {got_sum} is not {dmg}'s"
+    want_cask = release_cask(folder, version)
+    if cask != want_cask:
+        got_lines, want_lines = cask.split("\n"), want_cask.split("\n")
+        at = next((i for i, (g, w) in enumerate(zip(got_lines, want_lines)) if g != w), min(len(got_lines), len(want_lines)))
+        got_line = got_lines[at] if at < len(got_lines) else "(its end)"
+        want_line = want_lines[at] if at < len(want_lines) else "(its end)"
+        return f"the cask is not the one this release must publish: line {at + 1} is {got_line!r}, not {want_line!r}"
     return None
 
 
@@ -1877,6 +1873,9 @@ CASK_SCRIPT_MUTANTS = [
     ("the raw binary", lambda s: s.replace('  binary "#{appdir}/CYFR.app/Contents/Resources/cyfr"', '  binary "cyfr"')),
     ("no app", lambda s: s.replace('  app "CYFR.app"\n', "")),
     ("a missing DMG passed over", lambda s: s.replace('[ -f "$dmg" ] || { echo "$0: no $dmg" >&2; exit 1; }', '[ -f "$dmg" ] || dmg=/dev/null')),
+    # The script and the checker cannot drift apart: the generator's text
+    # changed alone is refused by the comparison with the checker's.
+    ("its text changed alone", lambda s: s.replace('  desc "App and CLI for the CYFR sandboxed runtime"', '  desc "The CYFR app and its CLI"')),
 ]
 CASK_TEXT_MUTANTS = [
     ("a second url", lambda c: c.replace('  name "CYFR"', '  url "https://example.com/cyfr.dmg"\n  name "CYFR"')),
@@ -1888,6 +1887,10 @@ CASK_TEXT_MUTANTS = [
     ("no end", lambda c: c[: c.rindex("end")]),
     ("an unterminated string", lambda c: c.replace('desc "App and CLI for the CYFR sandboxed runtime"', 'desc "unfinished')),
     ("a string closed by another quote", lambda c: c.replace('name "CYFR"', "name \"CYFR'")),
+    ("an unmatched parenthesis", lambda c: c.replace('  depends_on :macos', '  depends_on(:macos')),
+    ("the url before the version it reads", lambda c: c.replace('  arch arm: "arm64", intel: "amd64"\n', '  url "%s/cyfr-desktop_#{version}_darwin_#{arch}.dmg"\n  arch arm: "arm64", intel: "amd64"\n' % CASK_URL_BASE, 1).replace('\n  url "%s/cyfr-desktop_#{version}_darwin_#{arch}.dmg"\n  name' % CASK_URL_BASE, '\n  name', 1)),
+    ("one space more before the version", lambda c: c.replace('  version "', '  version  "', 1)),
+    ("no newline at its end", lambda c: c.rstrip("\n")),
 ]
 
 
@@ -1921,9 +1924,10 @@ def cask_failures(version):
     if status != 0:
         failures.append(f"homebrew-cask.sh exits {status} on the six installers")
         return failures, cases
+    # The generator's cask is the checker's text, byte for byte.
     reason = check_installers(folder, version, cask)
     if reason:
-        failures.append(f"the cask homebrew-cask.sh writes is refused: {reason}")
+        failures.append(f"homebrew-cask.sh's cask is not the checker's: {reason}")
         return failures, cases
     missing = os.path.join(work, "missing")
     shutil.copytree(folder, missing)
@@ -3956,6 +3960,8 @@ PACKAGE_JOB_MUTANTS = [
     ("the Windows package's app unread", replace_in_step(WINDOWS_JOB, "installed-machine.sh", ' "$APP"', "")),
     ("the tap replaced by an older release", homebrew_replace("if newer_in_tap; then keep_newer; fi\nstage\n", "stage\n")),
     ("a retry that does not read the tap again", homebrew_replace("git -C \"$workdir\" reset --hard origin/main\n  if newer_in_tap; then keep_newer; fi\n", "git -C \"$workdir\" reset --hard origin/main\n")),
+    ("an unreadable cask taken as an empty tap",
+     homebrew_replace('[ -e "$tap_cask" ] || return 1', 'grep -qE \'^[[:space:]]*version "\' "$tap_cask" 2>/dev/null || return 1')),
     ("the tap's version compared as text", homebrew_replace("| sort -V |", "| sort |")),
     ("the token in the clone's URL", homebrew_replace(
         'tap_git clone --depth 1 https://github.com/cyfrworks/homebrew-cyfr.git "$workdir"',
@@ -4404,15 +4410,8 @@ def graph_mode():
     helper, helper_versions = release_helper_failures()
     failures += helper
     failures += release_note_failures()
-    # The cask's cases read it as Ruby, as the release's check does on its
-    # runner. GitHub's runners carry Ruby, so there its absence fails;
-    # elsewhere the cases are said not to have run.
-    cask_cases = 0
-    if shutil.which("ruby") is None and os.environ.get("GITHUB_ACTIONS") != "true":
-        print("NOT RUN: the cask's and the installers' cases, which read the cask as Ruby: no ruby on PATH")
-    else:
-        found, cask_cases = cask_failures(version)
-        failures += found
+    found, cask_cases = cask_failures(version)
+    failures += found
     found, installed_cases = installed_version_failures()
     failures += found
     found, machine_cases = installed_machine_failures()

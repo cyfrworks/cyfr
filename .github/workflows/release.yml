@@ -475,8 +475,8 @@ jobs:
   # The one check before anything is published: the six installers, each
   # by exact name from its package job, in one folder, the Homebrew cask
   # written from the DMGs' own bytes, and the folder holding exactly the
-  # six at the tag's version, each its own bytes, with the cask read as
-  # Ruby and naming each DMG by its digest (tests/ci-release-graph.py
+  # six at the tag's version, each its own bytes, and the cask exactly the
+  # text this release must publish for those DMGs (tests/ci-release-graph.py
   # --installers). The merge of the images and the CLI release both need
   # it, and what they publish is the folder it checked, handed on as one
   # artifact, never fetched from the package jobs again.
@@ -801,10 +801,18 @@ jobs:
           git -C "$workdir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # 0 when the tap's cask names a release newer than this one; the
-          # tap holds releases alone, which sort -V orders.
+          # tap holds releases alone, which sort -V orders. Only an absent
+          # cask allows the first write: one that is there and whose version
+          # cannot be read ends the step, and the tap is left as it is.
           newer_in_tap() {
-            held=$(sed -nE 's/^[[:space:]]*version "([^"]+)"[[:space:]]*$/\1/p' "$workdir/Casks/cyfr.rb" 2>/dev/null | head -n 1)
-            [ -n "$held" ] && [ "$held" != "$TAG" ] && [ "$(printf '%s\n%s\n' "$held" "$TAG" | sort -V | tail -n 1)" = "$held" ]
+            tap_cask="$workdir/Casks/cyfr.rb"
+            [ -e "$tap_cask" ] || return 1
+            held=$(sed -nE 's/^[[:space:]]*version "([^"]+)"[[:space:]]*$/\1/p' "$tap_cask" | head -n 1) || held=""
+            if [ -z "$held" ]; then
+              echo "::error::The Homebrew tap's ${tap_cask#"$workdir"/} is there and names no version this step can read; the tap is left as it is."
+              exit 1
+            fi
+            [ "$held" != "$TAG" ] && [ "$(printf '%s\n%s\n' "$held" "$TAG" | sort -V | tail -n 1)" = "$held" ]
           }
           keep_newer() {
             echo "::notice::The Homebrew tap names ${held}, newer than ${TAG}; it is left as it is."
