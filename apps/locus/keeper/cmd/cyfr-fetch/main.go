@@ -18,11 +18,21 @@
 // architecture is the one used; none for it is an error naming the
 // architecture.
 //
-// The program lives at $HOME/.local/share/cyfr/programs/NAME/VERSION/NAME.
-// When that is a regular executable file it is run with no network.
-// Otherwise the command takes an exclusive lock on the version folder
-// (created 0700 as needed), so a second first run waits and then runs what
-// the first installed; removes the temporary files (`.fetch-…`) an
+// The program lives at
+// $HOME/.local/share/cyfr/programs/NAME/VERSION-SHA512/NAME: the version
+// folder is named by the version and the download's whole SHA-512, so a
+// row whose checksum changes names another folder, and its program is
+// fetched and checked anew. The whole hash and not a prefix of it, so the
+// folder names the pin exactly, and a name of at most 193 bytes fits a
+// file name's 255. Every folder from $HOME/.local down to the version
+// folder is made 0700 when missing and must then be a folder of this
+// user's own and no link (checked after it is made, so a link raced in is
+// still seen); one that is not is refused, and nothing is fetched, written
+// or run. The program must be a regular executable file and no link; when
+// it is, it is run with no network, and when it is anything else it is
+// refused. When it is missing the command takes an exclusive lock on the
+// version folder, so a second first run waits and then runs what the
+// first installed; removes the temporary files (`.fetch-…`) an
 // interrupted earlier run left there; says once on standard error what it
 // fetches; and downloads the URL into a temporary file there, hashing it as
 // it writes, within ten minutes, at most 2 GiB, following redirects only to
@@ -32,6 +42,11 @@
 // download is the program itself. A program larger than 1 GiB is refused.
 // The program is written 0755 under a temporary name in the version folder
 // and renamed into place, so the folder only ever holds it whole.
+//
+// The pin proves the download: the bytes fetched were the release its
+// checksum names when they were installed. It proves nothing of the file
+// later: the person's own processes may change it in their folder, and a
+// run starts what is there.
 //
 // The program then replaces the command (execve) with argv[0] NAME, the
 // program's arguments, and the environment unchanged. The command reads
@@ -185,25 +200,40 @@ type fetcher struct {
 // install is the path of p's program in home, fetched there first when it
 // is not installed yet.
 func (f fetcher) install(home string, p program) (string, error) {
-	dir := filepath.Join(home, ".local", "share", "cyfr", "programs", p.name, p.version)
-	path := filepath.Join(dir, p.name)
-	if installed(path) {
-		return path, nil
+	dir, shown := home, "~"
+	for _, step := range []struct{ name, role string }{
+		{".local", "The home folder's .local folder"},
+		{"share", "The .local/share folder"},
+		{"cyfr", "CYFR's data folder"},
+		{"programs", "CYFR's programs folder"},
+		{p.name, "The folder of " + p.name},
+		{p.version + "-" + p.sum, "The folder of " + p.name + " " + p.version},
+	} {
+		dir, shown = filepath.Join(dir, step.name), shown+"/"+step.name
+		if err := ownFolder(dir); err != nil {
+			return "", fmt.Errorf("%s (%s) %w, so nothing was fetched or run", step.role, shown, err)
+		}
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("the folder for %s %s cannot be made: %w", p.name, p.version, err)
+	path := filepath.Join(dir, p.name)
+	if ok, err := installed(path, p, shown); err != nil {
+		return "", err
+	} else if ok {
+		return path, nil
 	}
 	// The lock makes the sweep below safe: every temporary file in the
 	// folder belongs to a run that no longer holds it, and so has died.
-	lock, err := os.Open(dir)
+	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("the folder of %s %s cannot be opened: %w", p.name, p.version, err)
 	}
+	lock := os.NewFile(uintptr(fd), dir)
 	defer lock.Close()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return "", fmt.Errorf("the folder for %s %s cannot be locked: %w", p.name, p.version, err)
+		return "", fmt.Errorf("the folder of %s %s cannot be locked: %w", p.name, p.version, err)
 	}
-	if installed(path) {
+	if ok, err := installed(path, p, shown); err != nil {
+		return "", err
+	} else if ok {
 		return path, nil
 	}
 	if err := sweep(dir); err != nil {
@@ -235,9 +265,39 @@ func (f fetcher) install(home string, p program) (string, error) {
 	return path, nil
 }
 
-func installed(path string) bool {
+// ownFolder makes dir 0700 when it is missing and refuses it unless it is
+// then a folder of this user's own and no link.
+func ownFolder(dir string) error {
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("cannot be made (%w)", errors.Unwrap(err))
+	}
+	// Looked at after the Mkdir, never through a link, so a link put in
+	// its place before or after is seen.
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("cannot be read (%w)", errors.Unwrap(err))
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok || owner.Uid != uint32(os.Getuid()) {
+		return errors.New("is a link or not a folder of this user's own")
+	}
+	return nil
+}
+
+// installed is true when p's program is in place at path, a regular
+// executable file, and false when nothing is there; anything else there is
+// refused. shown is its folder as the person reads it.
+func installed(path string, p program, shown string) (bool, error) {
 	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	case info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0:
+		return true, nil
+	}
+	return false, fmt.Errorf("the installed %s %s (%s/%s) is a link or not an executable file, so it is not run", p.name, p.version, shown, p.name)
 }
 
 // sweep removes the temporary files an interrupted run left in dir.

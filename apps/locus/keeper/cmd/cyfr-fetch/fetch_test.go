@@ -119,8 +119,9 @@ func (o *origin) pinned(path string, body []byte) program {
 	return program{name: "agy", version: "1.5.16", url: o.server.URL + path, sum: sum(body)}
 }
 
-func folder(home string) string {
-	return filepath.Join(home, ".local", "share", "cyfr", "programs", "agy", "1.5.16")
+// folder is the version folder of agy 1.5.16 pinned to the SHA-512 sum.
+func folder(home, sum string) string {
+	return filepath.Join(home, ".local", "share", "cyfr", "programs", "agy", "1.5.16-"+sum)
 }
 
 // names is the folder's entries; none when it does not exist.
@@ -151,7 +152,7 @@ func TestATarballIsFetchedVerifiedAndInstalledOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if path != filepath.Join(folder(home), "agy") {
+	if path != filepath.Join(folder(home, p.sum), "agy") {
 		t.Fatalf("installed at %s", path)
 	}
 	got, err := os.ReadFile(path)
@@ -162,12 +163,12 @@ func TestATarballIsFetchedVerifiedAndInstalledOnce(t *testing.T) {
 	if info.Mode() != 0o755 {
 		t.Fatalf("mode %v", info.Mode())
 	}
-	for dir := folder(home); dir != home; dir = filepath.Dir(dir) {
+	for dir := folder(home, p.sum); dir != home; dir = filepath.Dir(dir) {
 		if info, _ := os.Stat(dir); info.Mode().Perm() != 0o700 {
 			t.Fatalf("%s: mode %v", dir, info.Mode())
 		}
 	}
-	if n := names(t, folder(home)); len(n) != 1 || n[0] != "agy" {
+	if n := names(t, folder(home, p.sum)); len(n) != 1 || n[0] != "agy" {
 		t.Fatalf("the folder holds the program alone: %v", n)
 	}
 	if notice.String() != "cyfr-fetch: fetching agy 1.5.16\n" {
@@ -199,7 +200,7 @@ func TestAPlainDownloadIsTheProgram(t *testing.T) {
 	if string(got) != script || info.Mode() != 0o755 {
 		t.Fatalf("the download as the program: %q %v", got, info.Mode())
 	}
-	if n := names(t, folder(home)); len(n) != 1 {
+	if n := names(t, folder(home, sum(body))); len(n) != 1 {
 		t.Fatalf("no temporary file stays: %v", n)
 	}
 }
@@ -214,7 +215,7 @@ func TestAChecksumMismatchInstallsNothing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "checksum") || !strings.Contains(err.Error(), "nothing was installed") {
 		t.Fatalf("a mismatch: %v", err)
 	}
-	if n := names(t, folder(home)); len(n) != 0 {
+	if n := names(t, folder(home, p.sum)); len(n) != 0 {
 		t.Fatalf("nothing stays: %v", n)
 	}
 }
@@ -231,7 +232,7 @@ func TestATarballOfOtherThanOneRegularFileIsRefused(t *testing.T) {
 		if _, err := o.fetcher(io.Discard).install(home, o.pinned("/cli.tgz", archive)); err == nil {
 			t.Fatalf("%s: refused expected", label)
 		}
-		if n := names(t, folder(home)); len(n) != 0 {
+		if n := names(t, folder(home, sum(archive))); len(n) != 0 {
 			t.Fatalf("%s: nothing stays: %v", label, n)
 		}
 	}
@@ -256,7 +257,7 @@ func TestADownloadOrProgramPastItsBoundIsRefused(t *testing.T) {
 		if _, err := f.install(home, o.pinned(c.path, c.body)); err == nil || !strings.Contains(err.Error(), "larger than") {
 			t.Fatalf("%s: refused expected, got %v", label, err)
 		}
-		if n := names(t, folder(home)); len(n) != 0 {
+		if n := names(t, folder(home, sum(c.body))); len(n) != 0 {
 			t.Fatalf("%s: nothing stays: %v", label, n)
 		}
 	}
@@ -275,16 +276,16 @@ func TestALeftoverTemporaryFileIsRemoved(t *testing.T) {
 	body := []byte(script)
 	o := serveFiles(t, map[string][]byte{"/agy": body})
 	home := t.TempDir()
-	if err := os.MkdirAll(folder(home), 0o700); err != nil {
+	if err := os.MkdirAll(folder(home, sum(body)), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(folder(home), tempPrefix+"interrupted"), []byte("part"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(folder(home, sum(body)), tempPrefix+"interrupted"), []byte("part"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := o.fetcher(io.Discard).install(home, o.pinned("/agy", body)); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if n := names(t, folder(home)); len(n) != 1 || n[0] != "agy" {
+	if n := names(t, folder(home, sum(body))); len(n) != 1 || n[0] != "agy" {
 		t.Fatalf("the leftover is gone: %v", n)
 	}
 }
@@ -295,7 +296,7 @@ func TestASecondFirstRunWaitsForTheFirstsInstall(t *testing.T) {
 	body := []byte(script)
 	o := serveFiles(t, map[string][]byte{"/agy": body})
 	home := t.TempDir()
-	dir := folder(home)
+	dir := folder(home, sum(body))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -420,14 +421,14 @@ func TestBadArgumentsAreRefused(t *testing.T) {
 // the name, the program's arguments follow, the environment unchanged.
 func TestTheCommandRunsAnInstalledProgramInItsPlace(t *testing.T) {
 	home := t.TempDir()
-	if err := os.MkdirAll(folder(home), 0o700); err != nil {
+	if err := os.MkdirAll(folder(home, hash), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	self, err := os.ReadFile("/proc/self/exe")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(folder(home), "agy"), self, 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(folder(home, hash), "agy"), self, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "agy", "1.5.16", runtime.GOARCH+"=https://storage.example.invalid/cli.tar.gz#"+hash,
@@ -451,5 +452,95 @@ func TestTheCommandRunsAnInstalledProgramInItsPlace(t *testing.T) {
 	var exit *exec.ExitError
 	if err := usage.Run(); !errors.As(err, &exit) || exit.ExitCode() != 2 {
 		t.Fatalf("a usage error exits 2: %v", err)
+	}
+}
+
+func TestAChangedChecksumFetchesAnewIntoItsOwnFolder(t *testing.T) {
+	old, renewed := []byte("#!/bin/sh\necho old\n"), []byte("#!/bin/sh\necho new\n")
+	o := serveFiles(t, map[string][]byte{"/old": old, "/new": renewed})
+	home := t.TempDir()
+	first, err := o.fetcher(io.Discard).install(home, o.pinned("/old", old))
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := o.fetcher(io.Discard).install(home, o.pinned("/new", renewed))
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if second != filepath.Join(folder(home, sum(renewed)), "agy") || first == second {
+		t.Fatalf("another checksum, another folder: %s then %s", first, second)
+	}
+	if got, _ := os.ReadFile(second); string(got) != string(renewed) {
+		t.Fatalf("the new pin's bytes run: %q", got)
+	}
+	if got, _ := os.ReadFile(first); string(got) != string(old) {
+		t.Fatalf("the old pin's folder is its own: %q", got)
+	}
+	if hits := o.hits.Load(); hits != 2 {
+		t.Fatalf("the new pin is fetched: %d hits", hits)
+	}
+}
+
+// linked makes the folder at rel below home a link to a folder elsewhere,
+// with every folder above it real, and answers the folder elsewhere.
+func linked(t *testing.T, home, rel string) string {
+	t.Helper()
+	elsewhere := t.TempDir()
+	at := filepath.Join(home, rel)
+	if err := os.MkdirAll(filepath.Dir(at), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, at); err != nil {
+		t.Fatal(err)
+	}
+	return elsewhere
+}
+
+func TestALinkedFolderOfTheInstallIsRefused(t *testing.T) {
+	body := []byte(script)
+	o := serveFiles(t, map[string][]byte{"/agy": body})
+	for _, rel := range []string{
+		".local",
+		filepath.Join(".local", "share", "cyfr", "programs"),
+		filepath.Join(".local", "share", "cyfr", "programs", "agy"),
+		filepath.Join(".local", "share", "cyfr", "programs", "agy", "1.5.16-"+sum(body)),
+	} {
+		t.Run(rel, func(t *testing.T) {
+			home := t.TempDir()
+			elsewhere := linked(t, home, rel)
+			_, err := o.fetcher(io.Discard).install(home, o.pinned("/agy", body))
+			if err == nil || !strings.Contains(err.Error(), "is a link or not a folder of this user's own") {
+				t.Fatalf("refused expected, got %v", err)
+			}
+			if n := names(t, elsewhere); len(n) != 0 {
+				t.Fatalf("nothing is written through the link: %v", n)
+			}
+		})
+	}
+	if hits := o.hits.Load(); hits != 0 {
+		t.Fatalf("a refused install fetches nothing: %d hits", hits)
+	}
+}
+
+func TestAnInstalledProgramThatIsALinkIsRefused(t *testing.T) {
+	body := []byte(script)
+	o := serveFiles(t, map[string][]byte{"/agy": body})
+	home := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), "agy")
+	if err := os.WriteFile(elsewhere, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(folder(home, sum(body)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(folder(home, sum(body)), "agy")); err != nil {
+		t.Fatal(err)
+	}
+	path, err := o.fetcher(io.Discard).install(home, o.pinned("/agy", body))
+	if err == nil || path != "" || !strings.Contains(err.Error(), "is a link or not an executable file") {
+		t.Fatalf("a linked program: refused expected, got %q %v", path, err)
+	}
+	if info, err := os.Lstat(filepath.Join(folder(home, sum(body)), "agy")); err != nil || info.Mode()&os.ModeSymlink == 0 || o.hits.Load() != 0 {
+		t.Fatalf("the link is left as it is and nothing fetched: %v %v", info, err)
 	}
 }
