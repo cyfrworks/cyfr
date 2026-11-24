@@ -45,6 +45,11 @@ func runWithin(within time.Duration, cmd *exec.Cmd) error {
 		return err
 	}
 	if err := joinAndResume(job, cmd.Process.Pid); err != nil {
+		// A join that failed leaves the process suspended and outside the
+		// job, which ending the job does not reach: it is ended itself,
+		// by the handle its start gave, before it is waited for. Suspended
+		// until now, it started nothing.
+		_ = cmd.Process.Kill()
 		_ = windows.TerminateJobObject(job, 1)
 		_ = cmd.Wait()
 		return err
