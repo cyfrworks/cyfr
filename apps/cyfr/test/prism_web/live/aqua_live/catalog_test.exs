@@ -30,7 +30,7 @@ defmodule PrismWeb.AquaLive.CatalogTest do
   end
 
   defp server_groups(servers, offerings, tools) do
-    {_own, groups} = Catalog.groups([], %{}, servers, offerings, tools)
+    {_own, groups} = Catalog.groups([], servers, offerings, tools)
     Map.new(groups, &{&1.title, &1})
   end
 
@@ -99,10 +99,10 @@ defmodule PrismWeb.AquaLive.CatalogTest do
       {"native_search", []}
     ]
 
-    {groups, []} = Catalog.groups(own, %{"files" => "Files", "aqua" => "Aqua"}, [], nil, [])
+    {groups, []} = Catalog.groups(own, [], nil, [])
 
     assert Enum.map(groups, &{&1.id, &1.title}) == [
-             {"family-aqua", "Aqua"},
+             {"family-aqua", Aqua.tool_title("aqua")},
              {"family-files", "Files"},
              {"scrolls", "Scrolls"},
              {"search", "Search"}

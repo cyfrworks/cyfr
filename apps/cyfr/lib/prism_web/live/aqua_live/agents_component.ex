@@ -54,7 +54,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   verbs come off that read.
 
   The soul's card holds what Aqua and every crew member may use, one
-  block in groups (`PrismWeb.AquaLive.Catalog.groups/5`): each of CYFR's
+  block in groups (`PrismWeb.AquaLive.Catalog.groups/4`): each of CYFR's
   tool families, Search, Scrolls (`ScrollsComponent`, rendered inside its
   group) and each MCP server of the athanor. An entry's switch adds or
   takes off its one key, and a group's adds or takes off its keys in one
@@ -100,7 +100,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:crew, [])
      |> assign(:refused, [])
      |> assign(:tool_actions, nil)
-     |> assign(:titles, %{})
      |> assign(:servers, [])
      |> assign(:offerings, nil)
      |> assign(:browser, nil)
@@ -783,13 +782,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp shown_groups(assigns) do
     tools = (assigns.soul && assigns.soul["tools"]) || []
 
-    Catalog.groups(
-      assigns.tool_actions || [],
-      assigns.titles,
-      assigns.servers,
-      assigns.offerings,
-      tools
-    )
+    Catalog.groups(assigns.tool_actions || [], assigns.servers, assigns.offerings, tools)
   end
 
   defp shown_group(socket, id) do
@@ -1111,9 +1104,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     if socket.assigns[:tool_actions] do
       socket
     else
-      socket
-      |> assign(:tool_actions, without_setting(Catalog.enumerate_tool_actions()))
-      |> assign(:titles, Catalog.family_titles())
+      assign(socket, :tool_actions, without_setting(Catalog.enumerate_tool_actions()))
     end
   end
 

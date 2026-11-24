@@ -1064,6 +1064,12 @@ defmodule PrismWeb.AquaLiveTest do
       })
       |> render_submit()
 
+      # The list is read again on the page's own message after the write.
+      settled(
+        fn -> has_element?(view, "#aqua-scrolls-section button[phx-value-name=pdf-forms]") end,
+        "the new scroll listed"
+      )
+
       html = render(view)
       assert html =~ "pdf-forms"
       assert html =~ "Fill PDF forms"

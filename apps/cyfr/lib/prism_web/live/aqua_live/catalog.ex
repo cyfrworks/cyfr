@@ -10,7 +10,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   ## What Aqua may use
 
   One list, the soul's `tools`, shown in groups by what each reaches
-  (`groups/5`): each of CYFR's tool families under its declared title, the
+  (`groups/4`): each of CYFR's tool families under its declared title, the
   browser's among them; Search, the provider's own `native_search`;
   Scrolls, the `aqua.skill_*` keys; and one group for each MCP server of
   the athanor, its tools, then its resources and its prompts, as
@@ -129,38 +129,20 @@ defmodule PrismWeb.AquaLive.Catalog do
         }
 
   @doc """
-  Each of CYFR's tool families by its declared title (the operation
-  table's `title`, a virtual tool's family title), by tool name.
-  """
-  @spec family_titles() :: %{String.t() => String.t()}
-  def family_titles do
-    declared =
-      for %{"name" => name, "title" => title} <- Sanctum.Catalog.list_tools(),
-          into: %{},
-          do: {name, title}
-
-    virtual =
-      for {name, %{title: title}} <- Sanctum.VirtualTools.table(), into: %{}, do: {name, title}
-
-    Map.merge(declared, virtual)
-  end
-
-  @doc """
   The groups of what Aqua may use: CYFR's own, `own` the catalog's
-  `[{tool, [{action, kind}]}]` without the browser's own actions, by
-  title; then one group for each server of `servers` (`%{name, enabled}`,
+  `[{tool, [{action, kind}]}]` without the browser's own actions, each
+  family under its title (`Aqua.tool_title/1`), by title; then one group for each server of `servers` (`%{name, enabled}`,
   the athanor's MCP servers, nil when they cannot be read) and for each
   server the list names that the athanor no longer holds, by name. `offerings` is `Aqua.offerings/3`'s
   answer, nil while it is asked; `tools` the soul's list.
   """
-  @spec groups([{String.t(), list()}], %{String.t() => String.t()}, [map()], map() | nil, [
-          String.t()
-        ]) :: {[group()], [group()]}
-  def groups(own, titles, servers, offerings, tools) do
-    {own_groups(own, titles), server_groups(servers, offerings, tools)}
+  @spec groups([{String.t(), list()}], [map()] | nil, map() | nil, [String.t()]) ::
+          {[group()], [group()]}
+  def groups(own, servers, offerings, tools) do
+    {own_groups(own), server_groups(servers, offerings, tools)}
   end
 
-  defp own_groups(own, titles) do
+  defp own_groups(own) do
     {skills, families} =
       own
       |> Enum.reject(fn {tool, actions} -> tool == "native_search" or actions == [] end)
@@ -173,7 +155,7 @@ defmodule PrismWeb.AquaLive.Catalog do
       families
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
       |> Enum.map(fn {tool, actions} ->
-        own_group("family-" <> tool, Map.get(titles, tool, tool), tool, actions)
+        own_group("family-" <> tool, Aqua.tool_title(tool), tool, actions)
       end)
 
     search = %{

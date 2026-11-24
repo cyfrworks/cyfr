@@ -114,6 +114,24 @@ defmodule Aqua do
     end
   end
 
+  @doc """
+  The words a person reads for the tool family `tool`: the title its
+  operations are declared with (`Prima.Operation`), or a virtual tool's
+  family title; its name while it declares none.
+  """
+  @spec tool_title(String.t()) :: String.t()
+  def tool_title(tool) do
+    declared = Enum.find_value(Sanctum.Catalog.list_tools(), &(&1["name"] == tool && &1["title"]))
+
+    with nil <- declared,
+         %{title: title} <- Sanctum.VirtualTools.table()[tool] do
+      title
+    else
+      title when is_binary(title) -> title
+      _undeclared -> tool
+    end
+  end
+
   defp declared_words(tool, action) do
     case Sanctum.Catalog.operations() do
       %{^tool => {_module, %{operations: operations}}} ->
