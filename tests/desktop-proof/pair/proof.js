@@ -311,12 +311,13 @@ async function selectedPhase() {
   // kill_selecting: killed while B was being selected, the app opens A by
   // itself, the last one opened, signed in as before; B is still listed
   // and still signed in.
-  const w = await prismAt(HOME)
-  const listed = await waitFor(async () => (await rows()).length === 2 ? rows() : null, "both CYFRs on the rail")
-  const [a, b] = [await stillSigned(HOME), await stillSigned(SECOND)]
-  row("kill_selecting", w.webContents.session === contentStore(HOME) && a.same && a.opens && b.same && b.opens &&
-    listed.find((r) => r.cyfr === HOME)?.open,
-  "killed while B was being selected, the app opens A again by itself, and both stay signed in", {a, b, listed})
+  await judged("kill_selecting", "killed while B was being selected, the app opens A again by itself, and both stay signed in", async () => {
+    const w = await prismAt(HOME)
+    const listed = await waitFor(async () => (await rows()).length === 2 ? rows() : null, "both CYFRs on the rail")
+    const [a, b] = [await stillSigned(HOME), await stillSigned(SECOND)]
+    return [w.webContents.session === contentStore(HOME) && a.same && a.opens && b.same && b.opens &&
+      listed.find((r) => r.cyfr === HOME)?.open, {a, b, listed}]
+  })
 
   // Forget B, killed while its store is being erased: the erase is held.
   const bStore = contentStore(SECOND)
@@ -331,13 +332,14 @@ async function resumedPhase() {
   // forget_resumed: the Forget the kill interrupted is finished at this
   // start: B is listed no more and nothing of it is kept, A's and its
   // ceremonies' left as they were.
-  await prismAt(HOME)
-  const gone = await waitFor(async () => (await rows()).some((r) => r.cyfr === SECOND) ? null : rows(), "the rail without B")
-  const [bStore, bCeremony, aStore] = await Promise.all([storageOf(contentStore(SECOND)), storageOf(accountStore(SECOND)), storageOf(contentStore(HOME))])
-  const a = await stillSigned(HOME)
-  row("forget_resumed", bStore.cookies.length === 0 && bStore.local[SECOND] === null && bCeremony.cookies.length === 0 &&
-    holds(aStore, MARK[HOME], A_HOST) && a.same && a.opens && gone.length === 1,
-  "the Forget a kill interrupted is finished at the next start: nothing of B is kept, and A is as it was", {bStore, bCeremony, aStore, a, gone})
+  await judged("forget_resumed", "the Forget a kill interrupted is finished at the next start: nothing of B is kept, and A is as it was", async () => {
+    await prismAt(HOME)
+    const gone = await waitFor(async () => (await rows()).some((r) => r.cyfr === SECOND) ? null : rows(), "the rail without B")
+    const [bStore, bCeremony, aStore] = await Promise.all([storageOf(contentStore(SECOND)), storageOf(accountStore(SECOND)), storageOf(contentStore(HOME))])
+    const a = await stillSigned(HOME)
+    return [bStore.cookies.length === 0 && bStore.local[SECOND] === null && bCeremony.cookies.length === 0 &&
+      holds(aStore, MARK[HOME], A_HOST) && a.same && a.opens && gone.length === 1, {bStore, bCeremony, aStore, a, gone}]
+  })
 
   // unleft: a cyfr that does not let go of A in time is ended and a fresh
   // one started, which opens nothing; A's sign-in is kept.
