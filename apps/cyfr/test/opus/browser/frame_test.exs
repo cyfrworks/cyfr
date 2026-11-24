@@ -21,6 +21,17 @@ defmodule Opus.Browser.FrameTest do
     {:ok, vectors: @vectors |> File.read!() |> Jason.decode!()}
   end
 
+  test "the driver is started with its person as the vectors spell it, and an out-of-grammar one is refused",
+       %{vectors: vectors} do
+    for %{"name" => name, "person" => person, "argv" => argv} <- vectors["person"]["accept"] do
+      assert Frame.start_args(person) == {:ok, argv}, name
+    end
+
+    for %{"name" => name, "person" => person} <- vectors["person"]["refuse"] do
+      assert Frame.start_args(person) == {:error, :invalid_person}, name
+    end
+  end
+
   test "the bounds are the vectors'", %{vectors: vectors} do
     assert Frame.max_to_host() == vectors["max_to_host"]
     assert Frame.max_to_driver() == vectors["max_to_driver"]

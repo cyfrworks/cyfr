@@ -83,11 +83,14 @@ func run(args []string) int {
 	chunk := flags.Int("chunk", defaultChunk, "bytes of response text one res frame carries")
 	keepMS := flags.Int64("keep-ms", defaultKeepMS, "milliseconds an unacknowledged response is kept")
 	netLog := flags.String("net-log", "", "a file Chrome logs its network to")
+	personFlag := flags.String("person", "", "the person's language and time zone, a JSON object of locale and time_zone")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *chrome == "" {
-		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk 1-%d] [--keep-ms MS]\n", maxChunk)
+	who, err := readPerson(*personFlag)
+	if flags.NArg() != 0 || *chunk < 1 || *chunk > maxChunk || *keepMS < 1 || *chrome == "" || err != nil {
+		fmt.Fprintf(os.Stderr, "usage: cyfr-browser [--chrome PATH] [--net-log PATH] [--chunk 1-%d] [--keep-ms MS] "+
+			"[--person '{\"locale\":TAG,\"time_zone\":ZONE}']\n", maxChunk)
 		return 2
 	}
 	// The end is taken before anything is announced: a TERM that comes
@@ -103,6 +106,7 @@ func run(args []string) int {
 	s := newSlot(os.Stdout, *chunk, time.Duration(*keepMS)*time.Millisecond)
 	hello := helloMessage{T: "hello", V: 1, Chunk: *chunk, KeepMS: *keepMS}
 	b := newBrowser()
+	b.person = who
 	home, err := browserHome()
 	if err != nil {
 		hello.Error = "The browser could not start: " + err.Error() + "."
@@ -246,13 +250,18 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
 		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900",
 		"--disable-blink-features=AutomationControlled"}, quiet...)
+	args = append(args, b.person.switches()...)
 	cmd := exec.Command(path, append(args, logging...)...)
 	// Chrome runs in its home with its temporary folder named relative to
 	// it (chromeTemp), so the socket that locks its profile has a short path
 	// whatever the home's.
 	cmd.Dir = home
-	cmd.Env = append(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"),
+	// The person's zone is Chrome's process's TZ, and only Chrome's: the
+	// driver's own environment, which a row of the browser never sets, holds
+	// none (person.go).
+	cmd.Env = append(without(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"), "TZ"),
 		"DBUS_SESSION_BUS_ADDRESS=disabled:", "TMPDIR="+chromeTmp)
+	cmd.Env = append(cmd.Env, b.person.env()...)
 	// Chrome reads its commands on fd 3 and writes its answers on fd 4. Its
 	// standard streams are the null device, so nothing it prints reaches
 	// the terminal. A process group of its own keeps the terminal's hangup

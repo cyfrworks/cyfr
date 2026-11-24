@@ -57,6 +57,31 @@ defmodule Aqua.BrowserSettingTest do
     assert {:ok, false} = BrowserSetting.allowed?(ctx)
   end
 
+  test "its check answers what the browser starts with: the stored language and zone, each absent when none is",
+       %{ctx: ctx, user: user} do
+    # A person who has never opened a screen: Chrome's own.
+    assert {:ok, %{}} == BrowserSetting.start(ctx)
+
+    assert :ok = Aqua.put_reading(ctx.user_id, %{"locale" => "de-DE"})
+    assert {:ok, %{"locale" => "de-DE"}} == BrowserSetting.start(ctx)
+
+    assert :ok = Aqua.put_reading(ctx.user_id, %{"time_zone" => "Asia/Kolkata"})
+
+    assert {:ok, %{"locale" => "de-DE", "time_zone" => "Asia/Kolkata"}} ==
+             BrowserSetting.start(ctx)
+
+    # Stored values out of their grammar, or a zone no database knows, are
+    # none.
+    {:ok, _} = Users.put_prefs(user, %{"locale" => "de_DE", "time_zone" => "Mars/Olympus_Mons"})
+    assert {:ok, %{}} == BrowserSetting.start(ctx)
+
+    assert {:ok, false} = BrowserSetting.put(ctx, false)
+    assert :turned_off == BrowserSetting.start(ctx)
+
+    assert :turned_off ==
+             BrowserSetting.start(%{Sanctum.TestContext.local() | user_id: "usr_nobody_here"})
+  end
+
   test "a person this server does not hold may not use it" do
     stranger = %{Sanctum.TestContext.local() | user_id: "usr_nobody_here"}
     assert {:ok, false} = BrowserSetting.allowed?(stranger)
@@ -84,14 +109,16 @@ defmodule Aqua.BrowserSettingTest do
 
   # Every writer of the preferences takes the one locked read and write
   # (`Sanctum.Tenancy.Users.put_prefs/2`), the zone the daily thread is read
-  # in among them (`Aqua.put_time_zone/2`).
+  # in among them (`Aqua.put_reading/2`).
   test "a zone write and a browser-setting write made in the same instant both land", %{ctx: ctx} do
     for round <- 1..20 do
       on = rem(round, 2) == 0
       zone = if on, do: "Europe/Lisbon", else: "Asia/Tokyo"
 
       writers = [
-        Task.async(fn -> receive(do: (:go -> Aqua.put_time_zone(ctx.user_id, zone))) end),
+        Task.async(fn ->
+          receive(do: (:go -> Aqua.put_reading(ctx.user_id, %{"time_zone" => zone})))
+        end),
         Task.async(fn -> receive(do: (:go -> BrowserSetting.put(ctx, on))) end)
       ]
 
