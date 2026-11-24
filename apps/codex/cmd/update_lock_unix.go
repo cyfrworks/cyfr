@@ -12,10 +12,12 @@ import (
 )
 
 // updateLockPath is the lock one cyfr update at a time holds on this
-// computer, in its shared temporary folder, which every account may write
-// and none may take from another (the sticky bit): an account opens one
-// another made for reading, which is all a lock needs. A variable so
-// tests stand in for it.
+// computer, apt's and /Applications' being the whole computer's, in its
+// shared temporary folder, which every account may write and none may
+// take from another (the sticky bit). The first update makes it readable
+// by every account; every update, root's among them, opens it for reading
+// only, never creating it where it is (openLock), which is all a lock
+// needs. A variable so tests stand in for it.
 var updateLockPath = "/var/tmp/cyfr-update.lock"
 
 // takeLock takes f's lock, refusing at once where another holds it.

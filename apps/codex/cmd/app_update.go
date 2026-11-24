@@ -355,7 +355,7 @@ var errUpdateRuns = errors.New("Another cyfr update is changing CYFR on this com
 // ends, and is not handed over: the program the update goes on as runs
 // the stack's step under the stack's own lock.
 func lockUpdate() (func(), error) {
-	f, err := os.OpenFile(updateLockPath, os.O_RDONLY|os.O_CREATE, 0o644)
+	f, err := openLock(updateLockPath)
 	if err != nil {
 		return nil, fmt.Errorf("cyfr update could not open its lock %s (%v); nothing was changed", updateLockPath, err)
 	}
@@ -370,4 +370,28 @@ func lockUpdate() (func(), error) {
 	}
 	var once sync.Once
 	return func() { once.Do(func() { f.Close() }) }, nil
+}
+
+// openLock opens the lock file at path for reading, which is all a lock
+// needs, and never with O_CREAT where it is there: in a shared sticky
+// folder Linux refuses an O_CREAT open of a file another account owns,
+// to root as well (fs.protected_regular). Where it is not there it is
+// made, readable by every account whatever this one's umask, and opened
+// again; one another update made meanwhile is opened as it is.
+func openLock(path string) (*os.File, error) {
+	f, err := os.Open(path)
+	if !errors.Is(err, fs.ErrNotExist) {
+		return f, err
+	}
+	made, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	switch {
+	case errors.Is(err, fs.ErrExist):
+	case err != nil:
+		return nil, err
+	default:
+		if err := errors.Join(made.Chmod(0o644), made.Close()); err != nil {
+			return nil, err
+		}
+	}
+	return os.Open(path)
 }
