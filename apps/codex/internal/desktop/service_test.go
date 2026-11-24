@@ -69,7 +69,35 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 			c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
 		},
 	}
+	// Registered after dir's own removal, so it runs before it.
+	t.Cleanup(func() { a.setupGone(t) })
 	return a
+}
+
+// setupGone waits, within 10 s, for a setup begun to have ended: its work
+// writes the client record into the test's folder after the stand-in
+// setup returns (remember), and is gone once the state says done or
+// failed, which it sets last. A setup the test left running fails it.
+func (a *app) setupGone(t *testing.T) {
+	t.Helper()
+	bound := time.After(10 * time.Second)
+	for {
+		a.mu.Lock()
+		s := a.setting
+		if s == nil || s.Done || s.Error != "" {
+			a.mu.Unlock()
+			return
+		}
+		woken := a.waitWoken()
+		run := *s
+		a.mu.Unlock()
+		select {
+		case <-woken:
+		case <-bound:
+			t.Errorf("a setup still ran as the test ended: %+v", run)
+			return
+		}
+	}
 }
 
 // request is a request as the chooser's page sends it, changed by edit:
@@ -1783,14 +1811,15 @@ func TestTheChooserAsksDockerAtEachCheck(t *testing.T) {
 // settingUp is a Setup the test drives: each run's steps and end come from
 // the test, and runs counts the runs begun.
 type settingUp struct {
-	runs  atomic.Int32
-	steps chan string
-	ends  chan error
-	ctxs  chan context.Context
+	runs    atomic.Int32
+	steps   chan string
+	stepped chan struct{}
+	ends    chan error
+	ctxs    chan context.Context
 }
 
 func driveSetup(a *app) *settingUp {
-	d := &settingUp{steps: make(chan string), ends: make(chan error), ctxs: make(chan context.Context, 4)}
+	d := &settingUp{steps: make(chan string), stepped: make(chan struct{}), ends: make(chan error), ctxs: make(chan context.Context, 4)}
 	a.Setup = func(ctx context.Context, _ string, step func(string)) error {
 		d.runs.Add(1)
 		d.ctxs <- ctx
@@ -1798,12 +1827,20 @@ func driveSetup(a *app) *settingUp {
 			select {
 			case s := <-d.steps:
 				step(s)
+				d.stepped <- struct{}{}
 			case err := <-d.ends:
 				return err
 			}
 		}
 	}
 	return d
+}
+
+// step has the setup begin its step s, and returns once the service
+// holds it: what the chooser reads next includes it.
+func (d *settingUp) step(s string) {
+	d.steps <- s
+	<-d.stepped
 }
 
 // The service's end ends both of the chooser's unbounded waits, a pick's
@@ -1851,8 +1888,7 @@ func TestTheServicesEndEndsTheChoosersWaitsAndLeavesASetupRunning(t *testing.T) 
 	if setupCtx.Err() != nil {
 		t.Fatal("the service's end stopped the person's setup")
 	}
-	// It ends unrecorded: nothing is written after the test.
-	d.ends <- errors.New("stopped")
+	d.ends <- nil
 }
 
 // A chooser request that passed ServeHTTP's check before End finished
@@ -1865,8 +1901,7 @@ func TestARequestThatLostTheRaceWithTheEndAnswersAtOnce(t *testing.T) {
 	d := driveSetup(a)
 	started := a.post(t, "/bootstrap/start", map[string]string{})
 	<-d.ctxs
-	// It ends unrecorded: nothing is written after the test.
-	t.Cleanup(func() { d.ends <- errors.New("stopped") })
+	t.Cleanup(func() { d.ends <- nil })
 	a.End()
 	for _, c := range []struct{ path, body string }{
 		{"/bootstrap/folder", `{"token":"` + a.Token + `","picks":0}`},
@@ -1927,7 +1962,7 @@ func TestSetUpAndStartRunsOneSetupAtATime(t *testing.T) {
 		t.Fatalf("Set up and start answered %+v", first)
 	}
 	<-d.ctxs
-	d.steps <- "files"
+	d.step("files")
 	if s := a.setupAfter(t, first.Setup.Seq); !slices.Equal(s.Steps, []string{"files"}) || s.Done || s.Error != "" {
 		t.Fatalf("the first step answered %+v", s)
 	}
@@ -1963,12 +1998,12 @@ func TestASetupGoesOnThroughALockAndShowsAgain(t *testing.T) {
 	d := driveSetup(a)
 	a.post(t, "/bootstrap/start", map[string]string{})
 	ctx := <-d.ctxs
-	d.steps <- "files"
+	d.step("files")
 	a.Lock("Locked.")
 	if m := a.next(t); m.Type != TypeLocked {
 		t.Fatalf("main heard %+v", m)
 	}
-	d.steps <- "settings"
+	d.step("settings")
 	shown := a.post(t, "/bootstrap/state", map[string]string{})
 	if shown.Setup == nil || !slices.Equal(shown.Setup.Steps, []string{"files", "settings"}) || shown.Next != "" {
 		t.Fatalf("the chooser after the lock was shown %+v", shown)
@@ -2161,7 +2196,7 @@ func TestASetupsStepIsWaitedForUnbounded(t *testing.T) {
 	next := make(chan SetupState, 1)
 	go func() { next <- a.setupAfter(t, started.Setup.Seq) }()
 	time.Sleep(100 * time.Millisecond) // past the bound, with no step
-	d.steps <- "images"
+	d.step("images")
 	select {
 	case s := <-next:
 		if !slices.Equal(s.Steps, []string{"images"}) {

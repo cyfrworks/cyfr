@@ -66,6 +66,10 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), i
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = hs.Shutdown(sctx)
+		// Shutdown closes only a listener Serve has begun with: one whose
+		// goroutine had not yet run is closed here, by the listener's taker,
+		// so nothing is served on the port once this returns.
+		_ = ln.Close()
 	}()
 	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
 		return err

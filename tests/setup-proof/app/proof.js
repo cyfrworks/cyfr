@@ -57,7 +57,7 @@ setInterval(() => {
   if (now - beat > 1500) lib.log(`main's loop was held ${now - beat} ms`)
   beat = now
 }, 1000).unref()
-// The crashed renderer's process until it is gone, within 60 s: each
+// The lost renderer's process until it is gone, within 60 s: each
 // state it passes through (/proc/PID/stat), so a slow end shows what held it.
 function watchEnd(pid) {
   let last = ""
@@ -154,9 +154,13 @@ lib.run("setup", {
     step(`the progress shown: ${JSON.stringify(first.progress.slice(1))}`)
     // The renderer lost mid-run: on a desktop nothing locks with no CYFR
     // open, so this is the one way a chooser is shown anew during a run.
-    step("the renderer crashed")
-    watchEnd(w.webContents.getOSProcessId())
-    w.webContents.forcefullyCrashRenderer()
+    // It is killed, which dumps no core: a crash's core, where the host
+    // pipes it to systemd-coredump told no limit (GitHub's arm64 runners),
+    // keeps the renderer until its dump is taken, minutes on end.
+    step("the renderer killed")
+    const pid = w.webContents.getOSProcessId()
+    watchEnd(pid)
+    process.kill(pid, "SIGKILL")
     await judged("reshown", "the chooser shown again mid-run shows the setup's progress while its start is held, and once it is released and done offers Open CYFR, opening nothing by itself",
       async () => {
         const c = await contentAt(atBootstrap, "the chooser shown again")
