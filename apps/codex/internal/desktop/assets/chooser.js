@@ -21,7 +21,7 @@ function opening(){$("go").hidden=true;say("Opening CYFR\u2026");post("/bootstra
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token,epoch},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("named").textContent=a.cyfr;$("service").textContent=a.confirm}
-if(stay){$("open").textContent=a.cyfr;$("passkey").hidden=$("either").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.cyfr,a.cyfr+"/login");$("again").onclick=()=>onward(a.cyfr,"/bootstrap/again");$("words").onclick=()=>location.assign(a.next)}
+if(stay){$("open").textContent=a.cyfr;$("passkey").hidden=$("either").hidden=!passkey;$("again").hidden=!passkey||!main.told.includes("unanswered");$("passkey").onclick=()=>onward(a.cyfr,"/bootstrap/signin");$("again").onclick=()=>onward(a.cyfr,"/bootstrap/again");$("words").onclick=()=>location.assign(a.next)}
 else if(a.next)location.replace(a.next)}
 function connected(a){if(!(passkey&&a.next))show(a)}
 function onward(at,to){say("Connecting\u2026");post("/bootstrap/connect",{address:at}).then(a=>a.next?location.assign(to):say(a.error))}

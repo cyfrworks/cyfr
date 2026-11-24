@@ -129,8 +129,9 @@
 //   menu {home}              the row's menu of the CYFR at home, which
 //                            answers forget-confirmed once the person
 //                            chose Forget and confirmed it
-//   root {home}              open the content at that CYFR's root, in its
-//                            own kept storage
+//   root {home, path}        open the content at that CYFR's path, its
+//                            root or its sign-in page, in its own kept
+//                            storage
 //   send {type, fields}      a message to cyfr
 //   chooser {notices}        open the content at the chooser; with
 //                            connect, connecting to that CYFR; with way
@@ -197,9 +198,12 @@ const atRail = (url) => {
 // or a departure runs, or a proposal waits for its commit; and none on
 // the box's screen, which has no rail in this part.
 const railFree = (s) => !s.screen && ["chooser", "open"].includes(s.name)
-// The chooser's Try again: an address main alone answers, never loaded:
-// the CYFR open, at its root.
-const AGAIN = LOOPBACK + "/bootstrap/again"
+// The chooser's Try again and its Sign in with your passkey: addresses
+// main alone answers, never loaded, each the CYFR open in its own kept
+// storage, at its root or at its sign-in page. A CYFR's page never loads
+// in the chooser's view, whose storage is memory's (policy.js
+// contentNavigation): a sign-in there would be lost at the next start.
+const REOPEN = {[LOOPBACK + "/bootstrap/again"]: "/", [LOOPBACK + "/bootstrap/signin"]: "/login"}
 // Its Change…, the same way: a folder of the system's dialog, for the
 // pick the chooser shows, named in its address as the epoch it was shown
 // in and the picks answered before it, which the answer carries back.
@@ -246,11 +250,13 @@ export const ACTS = {
   menu: {window: "rail", by: (_, url) => atRail(url),
     to: (s, e) => railFree(s) && railPress(e.url)?.act === "menu",
     then: (s, e) => ({state: s, allow: false, do: [{menu: {home: railPress(e.url).home}}]})},
-  // Try again, on the chooser of a CYFR whose page did not load, which
-  // comes here only once cyfr answered at the press (bootstrap.go onward).
-  again: {window: "content", by: (_, url) => atChooser(url),
-    to: (s, e) => s.accountRoad && s.name === "open" && e.url === AGAIN,
-    then: (s) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home}}]})},
+  // Try again, on the chooser of a CYFR whose page did not load, and Sign
+  // in with your passkey, on the chooser of a CYFR that asked for a
+  // sign-in: each comes here only once cyfr answered at the press
+  // (bootstrap.go onward), and opens the CYFR open in its own view.
+  reopen: {window: "content", by: (_, url) => atChooser(url),
+    to: (s, e) => s.accountRoad && s.name === "open" && Object.hasOwn(REOPEN, e.url),
+    then: (s, e) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home, path: REOPEN[e.url]}}]})},
   // Change…, the folder CYFR is set up in on this computer, on the
   // chooser: the system's dialog, one at a time. The box's screen has no
   // chooser, and none of its acts.
@@ -262,7 +268,7 @@ export const ACTS = {
   external: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => !s.screen && EXTERNAL.includes(e.url),
     then: (s, e) => ({state: s, allow: false, do: [{external: {url: e.url}}]})},
-  // A way on from the chooser: the passkey's, or this computer's key's.
+  // A way on from the chooser: this computer's key's, the device's pages.
   onward: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => contentNavigation(e, kept(s)) === "allow",
     then: (s) => ({state: {...s, notices: []}, allow: true, do: []})},
@@ -394,7 +400,7 @@ export function step(s, e) {
       }
       // A CYFR that opens at the device's pages (home's road) loads none
       // of its own: the chooser goes to those pages, on either road.
-      return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
+      return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home, path: "/"}}]) : same({...s, name: "open"})
     case "locked": {
       const m = e.message
       if (s.name === "starting") return same(s)

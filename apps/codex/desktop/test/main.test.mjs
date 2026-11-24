@@ -533,7 +533,7 @@ test("a lock closes the content and the ceremony before anything is awaited, and
 
 test("signing out in Prism, and a kept sign-in that is over, show the chooser and forget nothing", async () => {
   for (const [name, showing, url] of [["signed out", HOME + "/threads", HOME + "/login?error=signed_out"],
-    ["over, as the app opens it", "http://127.0.0.1:7340/bootstrap/", HOME + "/login"]]) {
+    ["over, as the app opens it in a view of its own", "", HOME + "/login"]]) {
     await signedIn()
     const page = content()
     page.webContents.url = showing
@@ -545,7 +545,7 @@ test("signing out in Prism, and a kept sign-in that is over, show the chooser an
     const chooser = content()
     assert.match(chooser.webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//, name)
     assert.doesNotMatch(chooser.webContents.url, /notice=/, name)
-    assert.ok(!navigate(chooser, HOME + "/login").prevented, "the chooser's passkey goes on to the sign-in page")
+    assert.ok(navigate(chooser, HOME + "/login").prevented, "no CYFR's page in the chooser's view: its sign-in is main's to open")
     signedNobodyOut()
   }
 })
@@ -638,6 +638,29 @@ test("two CYFRs on two ports of one host each open in a store of their own: A, B
   assert.ok(await opens(PORT_B))
   assert.deepEqual(world.loads, [{url: PORT_B + "/", cookies: ["bea at B"]}], "and at the next start")
   assert.deepEqual(world.cleared, [])
+})
+
+test("Sign in with your passkey, on the chooser of a CYFR that asked for a sign-in, signs in in that CYFR's own store, kept at the next start", async () => {
+  await signedIn()
+  assert.ok(redirected(content(), HOME + "/login?error=signed_out").prevented)
+  await settled()
+  await saysLocked()
+  const chooser = content()
+  assert.doesNotMatch(chooser.webContents.session.partition, /^persist:/, "the chooser is memory's")
+  assert.ok(navigate(chooser, "http://127.0.0.1:7340/bootstrap/signin").prevented, "main's to open, never loaded")
+  await settled()
+  assert.ok(chooser.destroyed)
+  const page = content()
+  assert.equal(page.webContents.url, HOME + "/login")
+  assert.equal(page.webContents.session.partition, contentStore(HOME))
+  // The CYFR's sign-in page signs the person in: its cookie.
+  page.webContents.session.jar = [...page.webContents.session.jar, {name: "_cyfr_key", value: "ada"}]
+  page.webContents.session.cookies.emit("changed")
+  await settled()
+  assert.deepEqual(cookiesOnDisk(HOME), ["ada"], "in the CYFR's own store, written out")
+  await started(true, {relaunch: true})
+  assert.ok(await opens())
+  assert.deepEqual(world.loads.at(-1), {url: HOME + "/", cookies: ["ada"]}, "signed in at the next start")
 })
 
 test("another scheme or host is another store too", async () => {
@@ -1471,6 +1494,8 @@ test("opened and cyfr's locked read in one go leave cyfr running and the chooser
   await saysLocked()
   assert.equal(child.killed, false)
   assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
+  // The chooser goes on to the device's pages, which give the CYFR.
+  await content().webContents.loadURL("http://127.0.0.1:7340/")
   const next = navigate(content(), HOME + "/threads")
   assert.equal(next.prevented, false, "main keeps to the CYFR cyfr committed")
 })

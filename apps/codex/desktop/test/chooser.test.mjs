@@ -22,7 +22,9 @@ assert.ok(script && page, "the chooser's script and page")
 
 const HOME = "https://cyfr.example.com"
 const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet."
-const PASSKEY = HOME + "/login"
+// The passkey's way on: an address main alone answers, opening the CYFR's
+// own view at its sign-in page.
+const PASSKEY = "/bootstrap/signin"
 const UNFORGOTTEN = "The app locked, and could not clear the sign-in it kept on this computer. To clear it, forget this CYFR on this computer from its menu on the left."
 const UNLEFT = "The CYFR you left did not let go in time, so the app started again and opened nothing. Choose a CYFR on the left to open it."
 const OPEN = {cyfr: HOME, next: "/"}

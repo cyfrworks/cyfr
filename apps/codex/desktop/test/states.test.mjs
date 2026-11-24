@@ -42,7 +42,7 @@ const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/
 const accountNavigate = (over) => ({type: "account-navigate", window: "account", target: "top", asker: "top",
   by: ACCOUNT + "/account/sign#x", ...over})
 // The content window's top frame given HOME, as the device's pages open it.
-const given = navigate({})
+const given = navigate({showing: "http://127.0.0.1:7340/"})
 // What main locks for: the company page, on either road, and being sent to
 // sign in, on the passkey road.
 const company = navigate({url: HOME + "/company-login", showing: HOME + "/login"})
@@ -157,7 +157,7 @@ test("the lock is a barrier: what cyfr sent before its locked is dropped, and it
 test("on the passkey road the content sent to the CYFR's sign-in page locks and shows both ways on", () => {
   for (const [name, over] of [
     ["signing out in Prism", {}],
-    ["a kept sign-in that is over, as the app opens it", {url: HOME + "/login", showing: "http://127.0.0.1:7340/bootstrap/"}],
+    ["a kept sign-in that is over, as the app opens it in a view of its own", {url: HOME + "/login", showing: ""}],
     ["one of the CYFR's pages going there", {url: HOME + "/login", redirect: false}]]) {
     const at = {...signedOut, ...over, by: over.showing ?? signedOut.by}
     const r = step(run(open, true).s, at)
@@ -170,7 +170,7 @@ test("on the passkey road the content sent to the CYFR's sign-in page locks and 
 test("the sign-in page as a way on, its own loads, and the six-word road are never sent to sign in", () => {
   const login = HOME + "/login"
   for (const [name, road, over, allow] of [
-    ["the chooser's passkey", true, {url: login, showing: "http://127.0.0.1:7340/bootstrap/", redirect: false}, true],
+    ["the chooser loading the sign-in page, which only main opens", true, {url: login, showing: "http://127.0.0.1:7340/bootstrap/", redirect: false}, false],
     ["the sign-in page loading itself", true, {url: login, showing: login, redirect: false}, true],
     ["the sign-in page's redirect to itself", true, {url: login + "?error=refused", showing: login}, true],
     ["the six-word road", false, {}, true],
@@ -207,7 +207,7 @@ test("each proposal is answered as it comes, and only the last one's opened open
 })
 
 test("main alone opens a CYFR committed at its root, on the passkey road, and the notices are told by then", () => {
-  assert.deepEqual(run(open, true).effects.at(-1), {root: {home: HOME}})
+  assert.deepEqual(run(open, true).effects.at(-1), {root: {home: HOME, path: "/"}})
   assert.ok(!run(open, false).effects.some((e) => e.root))
   const told = run([...open, company, locked()], true)
   assert.deepEqual(told.s.notices, ["company"])
@@ -221,7 +221,7 @@ test("a CYFR that opens at the device's pages loads none of its own on the passk
   assert.ok(!opened.effects.some((e) => e.root), "no root loaded")
   assert.equal(step(opened.s, given).allow, true, "the device's pages give the CYFR")
   const again = run([ready, device, taken, openedAt(HOME), locked(), forgot, home(), taken, openedAt(HOME)], true)
-  assert.deepEqual(again.effects.filter((e) => e.root), [{root: {home: HOME}}], "a home on the passkey road again")
+  assert.deepEqual(again.effects.filter((e) => e.root), [{root: {home: HOME, path: "/"}}], "a home on the passkey road again")
 })
 
 const atWays = "http://127.0.0.1:7340/bootstrap/#road=passkey"
@@ -491,11 +491,23 @@ test("a lock that follows a load's failure has nothing of it to tell", () => {
   assert.deepEqual(effects.filter((e) => e.chooser).at(-1), {chooser: []})
 })
 
-test("Try again is the passkey road's alone, and its address never loads", () => {
+test("Try again and Sign in with your passkey are the passkey road's alone, with a CYFR open, and their addresses never load", () => {
   for (const [events, road] of [[open, false], [proposed, true], [[ready], true]]) {
     const s = run(events, road).s
-    assert.deepEqual(step(s, navigate({url: AGAIN, showing: CHOOSER_DOC})), {state: s, allow: false, do: []})
+    for (const url of [AGAIN, SIGNIN]) assert.deepEqual(step(s, navigate({url, showing: CHOOSER_DOC})), {state: s, allow: false, do: []}, url)
   }
+})
+
+test("the chooser loads no page of the CYFR open: its sign-in is the CYFR's own view's, at its sign-in page", () => {
+  // The lock of being sent to sign in keeps the CYFR open, and the chooser shows.
+  const signIn = navigate({url: HOME + "/login", showing: HOME + "/threads", redirect: true})
+  const {s, effects} = run([...open, signIn, locked(HOME)], true)
+  assert.equal(s.name, "open")
+  assert.deepEqual(effects.at(-1), {chooser: []})
+  for (const url of [HOME + "/login", HOME + "/"]) {
+    assert.deepEqual(step(s, navigate({url, showing: CHOOSER_DOC})), {state: s, allow: false, do: []}, url)
+  }
+  assert.deepEqual(step(s, navigate({url: SIGNIN, showing: CHOOSER_DOC})).do, [{root: {home: HOME, path: "/login"}}])
 })
 
 test("an earlier load call's end leaves the return on its way", () => {
@@ -526,7 +538,7 @@ test("a lock over a chooser that is keeping a notice leaves the notice there", (
 
 test("only a way on taken from the chooser clears what it was keeping", () => {
   const from = (over) => navigate({url: "http://127.0.0.1:7340/", showing: CHOOSER, ...over})
-  for (const [name, way] of [["Use this computer's key", from({})], ["Sign in with your passkey", from({url: HOME + "/login"})]]) {
+  for (const [name, way] of [["Use this computer's key", from({})], ["Sign in with your passkey", from({url: SIGNIN})]]) {
     assert.deepEqual(shownNotices([...companyLock, way, ...deviceLock]), [], name)
   }
   for (const [name, event] of [["a frame's load", from({target: "frame"})], ["a load refused", from({url: "https://evil.example/"})],
@@ -545,6 +557,7 @@ test("a second launch shows the content window, and nothing once ended", () => {
 // follows only a press. An act with no row fails.
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"
 const AGAIN = CHOOSER_DOC + "again"
+const SIGNIN = CHOOSER_DOC + "signin"
 const SIGN_IN = ACCOUNT + "/account/sign#x"
 // The chooser's Change…, naming the epoch it was shown in and the picks
 // answered before it.
@@ -557,9 +570,11 @@ const PRESSES = {
   pick: [
     {name: "Change…", event: navigate({url: PICK, showing: atWays}),
       acted: (r) => r.do.some((e) => e.pick) && r.state.picking > 0}],
-  again: [
+  reopen: [
     {name: "Try again", event: navigate({url: AGAIN, showing: atWays}),
-      acted: (r) => r.do.some((e) => e.root?.home === HOME) && r.state.notices.length === 0}],
+      acted: (r) => r.do.some((e) => e.root?.home === HOME && e.root.path === "/") && r.state.notices.length === 0},
+    {name: "Sign in with your passkey", event: navigate({url: SIGNIN, showing: atWays}),
+      acted: (r) => r.do.some((e) => e.root?.home === HOME && e.root.path === "/login") && r.state.notices.length === 0}],
   select: [
     {name: "a CYFR on the rail", event: selects(BOB), acted: (r) => r.do.some((e) => e.send?.type === "leave")}],
   connect: [
@@ -568,8 +583,6 @@ const PRESSES = {
   menu: [
     {name: "a row's menu on the rail", event: railed("/rail/menu?cyfr=" + encodeURIComponent(BOB)), acted: (r) => r.do.some((e) => e.menu)}],
   onward: [
-    {name: "Sign in with your passkey", event: navigate({url: HOME + "/login", showing: atWays}),
-      acted: (r) => r.state.notices.length === 0},
     {name: "Use this computer's key", event: navigate({url: "http://127.0.0.1:7340/", showing: atWays}),
       acted: (r) => r.state.notices.length === 0}],
   hop: [
@@ -594,7 +607,7 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
     "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
     "the rail": RAIL_DOC, "the rail's path on another port": "http://127.0.0.1:7341/rail/", none: ""}
-  const offers = {external: ["chooser", "the chooser with its road"], pick: ["chooser", "the chooser with its road"], again: ["chooser", "the chooser with its road"], select: ["the rail"], connect: ["the rail"], menu: ["the rail"], onward: ["chooser", "the chooser with its road"],
+  const offers = {external: ["chooser", "the chooser with its road"], pick: ["chooser", "the chooser with its road"], reopen: ["chooser", "the chooser with its road"], select: ["the rail"], connect: ["the rail"], menu: ["the rail"], onward: ["chooser", "the chooser with its road"],
     hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
   for (const [act, rows] of Object.entries(PRESSES)) {
     for (const {name, event, acted} of rows) {
@@ -623,7 +636,7 @@ test("on the box's screen none of the chooser's acts is offered or accepted, fro
   }
   const states = {"the shell's page": screen([]), "a CYFR open": screen([home(), taken, openedAt(HOME)])}
   for (const [where, s] of Object.entries(states)) {
-    for (const act of ["pick", "external", "again", "select", "connect", "menu"]) {
+    for (const act of ["pick", "external", "reopen", "select", "connect", "menu"]) {
       for (const {name, event, acted} of PRESSES[act]) {
         for (const by of [SCREEN_PAGE, CHOOSER_DOC, atWays, RAIL_DOC]) {
           const r = step(s, {...event, by, showing: by})

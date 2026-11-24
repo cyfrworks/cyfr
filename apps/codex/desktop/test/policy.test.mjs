@@ -30,6 +30,10 @@ test("a content window loads the device's pages, then the selected CYFR, and not
   assert.equal(top(home + "/threads?x=1", ready), "allow")
   assert.equal(top(home + "/company-login", ready), "company")
   assert.equal(top(account + "/account/new#x", ready), "block")
+  for (const chooser of [LOOPBACK + "/bootstrap/", LOOPBACK + "/bootstrap/#token=t&road=passkey"]) {
+    assert.equal(top(home + "/login", ready, chooser), "block", "no CYFR's page in the chooser's view, its sign-in neither")
+    assert.equal(top(LOOPBACK + "/", ready, chooser), "allow", "the chooser goes on to the device's pages")
+  }
   for (const elsewhere of ["https://evil.example/", "http://127.0.0.1:7341/", "http://localhost:7340/", "file:///etc/passwd",
     "javascript:alert(1)", "data:text/html,x", home.replace("https", "http") + "/", "not a url"]) {
     assert.equal(top(elsewhere, ready), "block", elsewhere)

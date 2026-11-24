@@ -88,7 +88,12 @@ export function contentNavigation({url, target, asker, showing}, state) {
   if (asker === "frame-inside" || asker === "frame-outside") return "block"
   if (chooserPath(u) || railPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
-  if (!state.home) return "block"
+  // The chooser goes on to the device's pages alone: its view's storage is
+  // memory's, so a CYFR's page there, its sign-in above all, would be lost
+  // at the next start. Main opens the CYFR in its own view (states.js
+  // ACTS reopen).
+  const from = parse(showing)
+  if (!state.home || (from && chooserPath(from))) return "block"
   if (ceremony(u, state)) {
     return u.pathname === "/account/sign" && state.accountRoad && asker === "top" &&
       parse(showing)?.origin === state.home ? "hop" : "block"

@@ -184,7 +184,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.erase) erase(effect.erase)
     if (effect.rail) openRail(effect.rail.url)
     if (effect.menu) rowMenu(effect.menu.home)
-    if (effect.root) openHome(effect.root.home)
+    if (effect.root) openHome(effect.root.home, effect.root.path)
     if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession())
     if (effect.back) back(chooserAddress(effect.back))
     if (effect.relaunch) {
@@ -546,10 +546,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     contents.loadURL(address).catch(() => {})
   }
 
-  // The CYFR at `home`, opened at its root in its own kept storage, which
+  // The CYFR at `home`, opened at `path` in its own kept storage, which
   // is made only now that cyfr committed it.
-  function openHome(home) {
-    openContent(`${home}/`, kept_(homePartition(home)), true)
+  function openHome(home, path) {
+    openContent(home + path, kept_(homePartition(home)), true)
   }
 
   // The chooser shown in place of a CYFR's page that did not load: in the

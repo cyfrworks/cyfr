@@ -27,11 +27,12 @@ import (
 // On the passkey road the script
 // connects the CYFR elsewhere remembered by itself as the app starts,
 // leaves a CYFR just connected to main, which opens it at its root, and
-// asks main by addresses main alone answers to connect to another and,
-// where main says the CYFR's page did not load, to open that CYFR again.
-// That Try again and the passkey's way on each load the open CYFR's page
-// with the kept sign-in, so each goes on (onward) only once a Connect at
-// it, posted at the press, answers with next.
+// asks main by addresses main alone answers to open the CYFR open again:
+// at its sign-in page (the passkey's way on) or, where main says its page
+// did not load, at its root (Try again). Main opens either in that CYFR's
+// own view, with its kept sign-in, never in the chooser's, so each goes on
+// (onward) only once a Connect at it, posted at the press, answers with
+// next.
 // With a CYFR open it goes on to the device's pages by itself only when
 // it has nothing to tell (a notice main put in the address, or one
 // cyfr's answer names): with a notice it stays, as it does on the
