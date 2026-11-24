@@ -94,8 +94,7 @@ func kill(uid int, grace time.Duration) bool {
 	return false
 }
 
-// removeResidue removes the uid's System V IPC objects, its message queues
-// and the spec's paths, each of which must lie below a writable mount, and
+// removeResidue removes the uid's message queues and the spec's paths, each of which must lie below a writable mount, and
 // reports whether all of it is gone. Log lines carry counts, never the names
 // a spawned process chose.
 func removeResidue(log *logx.Logger, spec Spec) bool {
@@ -105,14 +104,6 @@ func removeResidue(log *logx.Logger, spec Spec) bool {
 		return false
 	}
 	clean := true
-	ipc, err := residue.FindIPC(residue.SysvipcDir, spec.UID)
-	if err == nil {
-		err = residue.RemoveIPC(ipc)
-	}
-	if err != nil {
-		log.Error("retire: uid %d: %d System V IPC objects could not be removed", spec.UID, len(ipc))
-		clean = false
-	}
 	if roots.Queues != "" {
 		queues, err := residue.FindQueues(roots.Queues, spec.UID)
 		if err == nil {

@@ -2,10 +2,12 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package residue finds and removes what a pooled uid leaves behind once its
-// processes are gone: the entries it owns on the writable mounts, the System
-// V IPC objects it owns or created, and its POSIX message queues. A uid is
-// lent to the next spawn only when none of these remain, so nothing one
+// processes are gone: the entries it owns on the writable mounts and the
+// POSIX message queues it made through the container's mqueue mount. A uid
+// is lent to the next spawn only when none of these remain, so nothing one
 // holder writes outside its processes reaches the next holder of the uid.
+// Its System V IPC objects, and the queues it opens by name, are its
+// space's own (an IPC namespace of the space's alone) and end with it.
 //
 // Where a pooled uid can write is read from the mount table. CheckMounts
 // refuses a table under which the pool could write anywhere shared except

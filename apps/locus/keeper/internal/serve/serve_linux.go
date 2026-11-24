@@ -971,7 +971,7 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 			if err != nil || c.Total() > 0 {
 				return true
 			}
-			found, err := residue.Find(s.roots, residue.SysvipcDir, uid)
+			found, err := residue.Find(s.roots, uid)
 			return err != nil || !found.Empty()
 		})
 	}
@@ -1427,8 +1427,7 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends
-// its processes and removes its IPC objects, its message queues and the
-// given paths; then the keeper looks for anything else the uid owns on the
+// its processes and removes its message queues and the given paths; then the keeper looks for anything else the uid owns on the
 // writable mounts and retires it again with what it found. It reports
 // whether the uid is clean.
 func (s *server) scrub(acct Account, grace time.Duration, paths []string, except string) bool {
@@ -1439,7 +1438,7 @@ func (s *server) scrub(acct Account, grace time.Duration, paths []string, except
 		if !s.waitClear(acct.UID) {
 			return false
 		}
-		found, err := residue.FindExcept(s.roots, residue.SysvipcDir, acct.UID, except)
+		found, err := residue.FindExcept(s.roots, acct.UID, except)
 		if err != nil {
 			s.log.Error("uid %d: looking for what it left: %v", acct.UID, err)
 			return false
@@ -1448,8 +1447,8 @@ func (s *server) scrub(acct Account, grace time.Duration, paths []string, except
 			return true
 		}
 		if pass == scrubPasses {
-			s.log.Warn("uid %d: %d entries (truncated: %t), %d IPC objects and %d message queues outlived retirement",
-				acct.UID, len(found.Paths), found.Truncated, len(found.IPC), len(found.Queues))
+			s.log.Warn("uid %d: %d entries (truncated: %t) and %d message queues outlived retirement",
+				acct.UID, len(found.Paths), found.Truncated, len(found.Queues))
 			return false
 		}
 		paths, grace = found.Paths, 0

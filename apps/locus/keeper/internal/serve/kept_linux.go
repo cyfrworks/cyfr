@@ -497,8 +497,8 @@ func probeExits(waiting []unix.PollFd, deadline time.Time) {
 
 // retireKept ends a kept spawn once: the processes of its own group, which
 // are everything it started, its leader first (endInOrder); then, when no other spawn holds its uid, the
-// uid's full retirement, every process and IPC object of the uid and what it
-// left on the writable mounts but its home. The uid stays its home's.
+// uid's full retirement, every process of the uid and what it left on the
+// writable mounts and in the mqueue mount but its home. The uid stays its home's.
 func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
 		uid := sp.account.UID
