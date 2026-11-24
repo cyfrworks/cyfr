@@ -9,7 +9,7 @@
 // sg, Compose, the CYFR set up and the app.
 import electron from "electron"
 import {createHash} from "node:crypto"
-import {existsSync, readFileSync, writeFileSync} from "node:fs"
+import {appendFileSync, existsSync, readFileSync, writeFileSync} from "node:fs"
 import path from "node:path"
 
 import * as lib from "../../desktop-proof/lib.js"
@@ -211,6 +211,7 @@ lib.run("setup", {
     const token = await waitFor(() => existsSync(path.join(FOLDER, ".env")) &&
       /^CYFR_SETUP_TOKEN=([0-9a-f]{64})$/m.exec(readFileSync(path.join(FOLDER, ".env"), "utf8"))?.[1], "the folder's setup token")
     writeFileSync(path.join(FIXTURE, "setup-token"), token)
+    appendFileSync(path.join(FIXTURE, "withheld"), `${token}\n`)
     // The row is app.sh's, decided once the app has quit: this launch's
     // part of it (what the person sees) is written for it here.
     const part = await (async () => {

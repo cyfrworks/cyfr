@@ -83,6 +83,7 @@ W=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-proof-setup-XXX
 OUT=${SETUP_PROOF_OUT:-$W/out}
 RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-app-$$"; D="$W/$RUN"; CLIENT="$RUN-client"
 mkdir -p "$W/fixture/out" "$D" "$OUT"
+: >"$W/fixture/withheld"
 # compose_in NAME DIR ARGS: the Compose project NAME in DIR, bounded.
 compose_in() { (cd "$2" && timeout 300 docker compose --project-name "$1" --project-directory "$2" -f docker-compose.yml -f docker-compose.override.yml "${@:3}"); }
 compose() { compose_in "$RUN" "$D" "$@"; }
@@ -223,6 +224,14 @@ work_left() { timeout "$1" docker exec "$CLIENT_ID" sh -c 'n=0; for p in /proc/[
   case "$(tr "\0" " " <$p/cmdline 2>/dev/null)" in *setup-project*) n=$((n+1));; esac; done; echo $n'; }
 # The stack's containers there, read within $1 seconds.
 stack_left() { (cd "$D" && timeout "$1" docker compose --project-name "$RUN" --project-directory "$D" -f docker-compose.yml -f docker-compose.override.yml ps -aq) | wc -l; }
+# The setup token of each folder set up so far, which the one scrub
+# withholds from all the run writes (tests/desktop-proof/scrub.mjs), the
+# app's output too: added before each launch, and by the passkey launch's
+# proof as soon as it reads its folder's.
+withhold() {
+  local e
+  for e in "$W"/*/.env; do [ ! -f "$e" ] || sed -n 's/^CYFR_SETUP_TOKEN=//p' "$e"; done >>"$W/fixture/withheld"
+}
 # One launch, one verdict: it failed if the app's exit status is not 0, past
 # its 600 s limit among them, if its output is still open 15 s after it
 # ended, if its log's scrub failed, or if it did not write that it passed,
@@ -233,12 +242,13 @@ stack_left() { (cd "$D" && timeout "$1" docker compose --project-name "$RUN" --p
 # unread, each pass bounds its readings by the time left, and a pass that
 # ends past the deadline changes nothing.
 launch() {
-  CYFR_PROOF_WITHHELD="$W/fixture/setup-token" node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$OUT/app-$1.log" &
+  withhold
+  CYFR_PROOF_WITHHELD="$W/fixture/withheld" node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$OUT/app-$1.log" &
   local scrub=$! status=0
   SCRUBS="${SCRUBS:-} $scrub"
   timeout 600 docker exec -u "$(id -u):$PG" -w /home/proof -e HOME=/home/proof "$CLIENT_ID" bash -c "
     exec 9>$W/fixture/app-output
-    dbus-run-session -- xvfb-run -a -s '-screen 0 1400x1000x24' bash -c 'exec env -i HOME=/home/proof USER=proof LOGNAME=proof PATH=/opt/wrap:/usr/bin:/bin LANG=C.UTF-8 DISPLAY=\$DISPLAY XAUTHORITY=\$XAUTHORITY DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS CYFR_DESKTOP_PROOF_FIXTURE=$W/fixture CYFR_DESKTOP_PROOF_PHASE=$1 CYFR_PROOF_WITHHELD=$W/fixture/setup-token /opt/cyfr/CYFR' >&9 2>&1" || status=$?
+    dbus-run-session -- xvfb-run -a -s '-screen 0 1400x1000x24' bash -c 'exec env -i HOME=/home/proof USER=proof LOGNAME=proof PATH=/opt/wrap:/usr/bin:/bin LANG=C.UTF-8 DISPLAY=\$DISPLAY XAUTHORITY=\$XAUTHORITY DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS CYFR_DESKTOP_PROOF_FIXTURE=$W/fixture CYFR_DESKTOP_PROOF_PHASE=$1 CYFR_PROOF_WITHHELD=$W/fixture/withheld /opt/cyfr/CYFR' >&9 2>&1" || status=$?
   local deadline=$(( $(date +%s%N) + 15000000000 ))
   grep -E "^(PASS|FAIL)" "$W/fixture/out/setup.txt" 2>/dev/null | sed -n "$(( ${2:-0} + 1 )),\$p" || true
   [ "$status" = 0 ] || failed "$1: the app ended with status $status$( [ "$status" != 124 ] || echo ", at its 600 s limit")"
@@ -322,7 +332,7 @@ for f in sys.argv[2:]:
 print(carrying, setup)
 PY
 )
-kept=$(grep -rlaF -- "$TOKEN" "$OUT" "$W/fixture/out" 2>/dev/null | wc -l)
+kept=$( { grep -rlaF -f "$W/fixture/withheld" "$OUT" "$W/fixture/out" 2>/dev/null || true; } | wc -l)
 files=$(timeout 120 docker exec "$CLIENT_ID" sh -c "find /home/proof /tmp -path '$W' -prune -o -type f -print0 2>/dev/null |
   xargs -0 -r grep -laF -- '$TOKEN' 2>/dev/null; true")
 profile=$(timeout 60 docker exec "$CLIENT_ID" sh -c 'find /home/proof/.config -mindepth 1 2>/dev/null | wc -l')
@@ -330,5 +340,5 @@ if python3 -I -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok
   [ "$requests" = 0 ] && [ "$recorded" -gt 0 ] && [ "$kept" = 0 ] && [ -z "$files" ] && [ "$profile" -gt 0 ]; then
   echo "PASS first_passkey: on the passkey road the CYFR set up opens at its setup page, whose Create your account makes the account with a passkey in the account window, and that account is its first person, in Prism, live; its setup token is in no address or header sent, no printed line, nothing the run keeps and no file of the app's"
 else
-  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), files the run keeps carrying it $kept, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
+  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), files the run keeps carrying a setup token $kept, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
 fi
