@@ -578,6 +578,24 @@ test("a second launch shows the content window, and nothing once ended", () => {
   assert.deepEqual(step(run([...open, {type: "quit"}]).s, {type: "second-instance"}).do, [])
 })
 
+// cyfr update and uninstall ask the app to end with a launch of --quit
+// (cmd/app_update.go askAppToQuit), until a launch finds none running.
+test("a second launch with --quit ends the app as a quit does, from every state; the box's screen is shown, never ended", () => {
+  const asked = {type: "second-instance", quit: true}
+  for (const [name, events] of Object.entries({"starting": [], "the chooser": [ready], "proposed": proposed, "open": open,
+    "after cyfr ended": [...open, {type: "gone", why: "it exited (1)"}]})) {
+    const quit = step(run(events).s, {type: "quit"})
+    const next = step(run(events).s, asked)
+    assert.deepEqual(next, quit, name)
+    assert.equal(next.state.name, "ended", name)
+    assert.deepEqual(next.do.at(-1), {quit: true}, name)
+  }
+  const SCREEN_PAGE = "http://127.0.0.1:7340/"
+  let s = initial(false, "/home/ana/cyfr")
+  for (const e of [{type: "ready", url: SCREEN_PAGE}, home(), taken, openedAt(HOME)]) s = step(s, e).state
+  assert.deepEqual(step(s, asked), {state: s, do: [{show: true}]}, "the box's screen")
+})
+
 // One row or more for each act of ACTS: where it is pressed, and what
 // follows only a press. An act with no row fails.
 const CHOOSER_DOC = "http://127.0.0.1:7340/bootstrap/"

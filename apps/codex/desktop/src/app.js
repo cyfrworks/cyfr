@@ -114,6 +114,23 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     app.exit(2)
     return
   }
+  // cyfr update and cyfr uninstall start the installed app with --quit
+  // (cmd/app_update.go askAppToQuit), which asks the app this account
+  // runs to end, as closing its window does, and ends with 3; with none
+  // running it takes that one's place and ends at once, with 0. It opens
+  // no window and starts no cyfr, so it needs no display. The box's
+  // screen does not end when asked: its service is stopped instead
+  // (states.js, second-instance).
+  if (app.commandLine.hasSwitch("quit")) {
+    if (app.requestSingleInstanceLock({quit: true})) {
+      say("no CYFR app runs for this account")
+      app.exit(0)
+    } else {
+      say("the CYFR app that runs for this account was asked to quit")
+      app.exit(3)
+    }
+    return
+  }
   // The box's screen (cmd/screen_app.go): one frameless, maximized window
   // with no menu, the six-word road's memory-only storage and no chooser,
   // shown by the screen shell cyfr runs in that project's folder.
@@ -951,7 +968,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   // ---- the app ----
 
-  app.on("second-instance", () => on({type: "second-instance"}))
+  app.on("second-instance", (_event, _argv, _directory, asked) => on({type: "second-instance", quit: asked?.quit === true}))
   app.on("web-contents-created", (_event, contents) => {
     contents.on("will-attach-webview", (event) => event.preventDefault())
   })

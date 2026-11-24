@@ -69,6 +69,10 @@ defmodule Locus.Test.FakeKeeper do
     `uid_busy`, as cyfr-locus refuses a kept uid that is retiring,
     quarantined or live under another home
 
+  `hold_releases/2` holds every `release` from then on, in any mode: each
+  is told to the test as `{:release_held, spawn_id}` and carried out only
+  by `carry_releases/1`, as a keeper slow to retire a spawn holds it.
+
   A spawn in any pool but `build` is long-lived: its relay carries stdin
   frames to the command as they arrive and its stdout and stderr, apart,
   as the command writes them, until the command exits. A `signal` request
@@ -197,6 +201,12 @@ defmodule Locus.Test.FakeKeeper do
   def released(fake, spawn_id),
     do: GenServer.call(fake, {:send, %{type: "released", spawn_id: spawn_id}})
 
+  @doc "Holds every later `release`, telling `test` `{:release_held, spawn_id}` of each."
+  def hold_releases(fake, test), do: GenServer.call(fake, {:hold_releases, test})
+
+  @doc "Carries out every `release` held, and holds no later one."
+  def carry_releases(fake), do: GenServer.call(fake, :carry_releases)
+
   @doc "Closes the channel, as cyfr-locus exiting would."
   def close(fake), do: GenServer.call(fake, :close)
 
@@ -216,6 +226,9 @@ defmodule Locus.Test.FakeKeeper do
        command_dirs: [],
        spawns: %{},
        places: %{},
+       # Who is told of a held release, and the releases held, oldest last.
+       release_held: nil,
+       held_releases: [],
        next: 0
      }}
   end
@@ -233,6 +246,19 @@ defmodule Locus.Test.FakeKeeper do
 
   @impl true
   def handle_call({:mode, mode}, _from, state), do: {:reply, :ok, %{state | mode: mode}}
+
+  def handle_call({:hold_releases, test}, _from, state),
+    do: {:reply, :ok, %{state | release_held: test}}
+
+  def handle_call(:carry_releases, _from, state) do
+    state =
+      state.held_releases
+      |> Enum.reverse()
+      |> Enum.reduce(%{state | release_held: nil, held_releases: []}, &handle_request/2)
+
+    {:reply, :ok, state}
+  end
+
   def handle_call(:requests, _from, state), do: {:reply, Enum.reverse(state.requests), state}
   def handle_call(:places, _from, state), do: {:reply, state.places, state}
 
@@ -435,6 +461,12 @@ defmodule Locus.Test.FakeKeeper do
          state
        ),
        do: signal(state, spawn_id, sig)
+
+  defp handle_request(%{"type" => "release", "spawn_id" => spawn_id} = request, state)
+       when is_pid(state.release_held) do
+    send(state.release_held, {:release_held, spawn_id})
+    %{state | held_releases: [request | state.held_releases]}
+  end
 
   defp handle_request(
          %{"type" => "release", "spawn_id" => spawn_id, "grace_ms" => grace_ms},

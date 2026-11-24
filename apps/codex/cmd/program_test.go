@@ -28,6 +28,7 @@ import (
 // and an sh on PATH that record any run.
 type programScenario struct {
 	t       *testing.T
+	machine *standIn
 	self    string
 	ran     string
 	lookups int
@@ -50,9 +51,11 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 	if err := errors.Join(os.WriteFile(s.self, []byte("old cyfr"), 0755), os.Chmod(s.self, 0755)); err != nil {
 		t.Fatal(err)
 	}
-	// The stand-in machine, at no terminal, its PATH one folder holding
-	// only a curl and an sh that record any run.
-	standInMachine(t)
+	// The stand-in machine, at no terminal, with no CYFR app installed,
+	// its PATH one folder holding only a curl and an sh that record any
+	// run.
+	s.machine = standInMachine(t)
+	s.machine.installed, s.machine.app = nil, ""
 	askTerminal = func() bool { return false }
 	for _, name := range []string{"curl", "sh"} {
 		standInLink(t, filepath.Join(os.Getenv("PATH"), name))
@@ -83,6 +86,13 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 		s.handed = append(s.handed, append([]string{path}, args...))
 		return s.handStatus, s.handErr
 	}
+	// No test closes or opens an app of the machine it runs on, nor takes
+	// the machine's own update lock.
+	savedQuit, savedReopen, savedLock := quitApp, reopenApp, updateLockPath
+	t.Cleanup(func() { quitApp, reopenApp, updateLockPath = savedQuit, savedReopen, savedLock })
+	updateLockPath = filepath.Join(t.TempDir(), "update.lock")
+	quitApp = func() (bool, error) { return false, nil }
+	reopenApp = func() error { return errors.New("a test opened the installed app") }
 	return s
 }
 
@@ -396,9 +406,22 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 	if err := errors.Join(
 		os.WriteFile(filepath.Join(dir, "version"), []byte(installed+"\n"), 0644),
 		os.WriteFile(filepath.Join(dir, "upgrade-to"), []byte(upgradeTo+"\n"), 0644),
+		os.WriteFile(filepath.Join(dir, "offers"), []byte(upgradeTo+"\n"), 0644),
+		os.WriteFile(filepath.Join(dir, "sha256"), []byte(caskSum+"\n"), 0644),
 	); err != nil {
 		t.Fatal(err)
 	}
+	// The release's signed checksums name the cask's sum for the Mac's
+	// installer, and the app's own cyfr answers the release brew installed.
+	savedSum, savedRelease := appPackageSum, machine.appRelease
+	t.Cleanup(func() { appPackageSum, machine.appRelease = savedSum, savedRelease })
+	appPackageSum = func(_ context.Context, v, goos, goarch string) (string, error) {
+		if goos != "darwin" || goarch != runtime.GOARCH {
+			return "", fmt.Errorf("the sum of %s's installer for %s/%s was asked", v, goos, goarch)
+		}
+		return caskSum, nil
+	}
+	machine.appRelease = func() string { return strings.TrimSpace(read(t, filepath.Join(dir, "version"))) }
 	standInLink(t, filepath.Join(dir, "brew"))
 	t.Setenv(fakeBrewDir, dir)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -442,24 +465,24 @@ func standInDpkg(t *testing.T, owned map[string]string, failing bool) {
 	}
 }
 
-// A cyfr the package records name as a package's is never rewritten,
-// reached by its own path or by a link, whether or not the app beside it
-// is whole, and the refusal names the second command exactly: that
-// program by its own path, with --version where it was asked. A file named
-// like the app's code beside a cyfr no package installed decides nothing.
+// A cyfr the package records name as another package's is never
+// rewritten, reached by its own path or by a link, and the refusal names
+// the second command exactly: that program by its own path, with
+// --version where it was asked. The app's own cyfr is the app's road's
+// (TestUpdateBringsTheInstalledAppByItsRoad).
 func TestUpdateLeavesAPackagesProgramToThePackage(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		byLink  bool
 		options updateOptions
 	}{
-		{"its own path, the app's code gone", false, updateOptions{}},
+		{"its own path", false, updateOptions{}},
 		{"a link to it, the newest release", true, updateOptions{}},
 		{"a link to it, an exact release", true, updateOptions{version: "1.2.0"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newProgramScenario(t, "1.0.0", "1.1.0")
-			standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
+			standInDpkg(t, map[string]string{s.self: "cyfr-other"}, false)
 			if c.byLink {
 				link := filepath.Join(t.TempDir(), "cyfr")
 				if err := os.Symlink(s.self, link); err != nil {
@@ -467,12 +490,12 @@ func TestUpdateLeavesAPackagesProgramToThePackage(t *testing.T) {
 				}
 				selfExecutable = func() (string, error) { return link, nil }
 			}
-			target, again := "1.1.0", s.self+" update"
+			again := s.self + " update"
 			if c.options.version != "" {
-				target, again = c.options.version, again+" --version "+c.options.version
+				again += " --version " + c.options.version
 			}
 			_, err := s.run(c.options)
-			want := "This cyfr, " + s.self + ", belongs to the package cyfr-desktop, so nothing was changed: install the package cyfr-desktop of release " + target + " from " + releasesPage + "/tag/" + target + ", then run '" + again + "' to update CYFR here"
+			want := "This cyfr, " + s.self + ", belongs to the package cyfr-other, which cyfr update does not change; nothing was changed. Update it with the system's package tool, then run '" + again + "'"
 			if err == nil || err.Error() != want {
 				t.Errorf("cyfr update answered %v, want %q", err, want)
 			}
@@ -525,63 +548,81 @@ func TestUpdateAsksThePackageRecordsAlone(t *testing.T) {
 	}
 }
 
-// The two steps the package's refusal names: with the newer package
-// installed, cyfr update run again finds the program current and goes on
-// to the stack in the directory.
-func TestUpdateAgainFromTheNewerPackageGoesOnToTheStack(t *testing.T) {
-	s := newProgramScenario(t, "1.0.0", "1.1.0")
-	standInDpkg(t, map[string]string{s.self: "cyfr-desktop"}, false)
-	savedManifest := fetchManifest
-	t.Cleanup(func() { fetchManifest = savedManifest })
-	reached := errors.New("the stack's update began")
-	var asked []string
-	fetchManifest = func(_ context.Context, v string) (*release.Manifest, error) {
-		asked = append(asked, v)
-		return nil, reached
-	}
-	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "then run '"+s.self+" update' to update CYFR here") || len(asked) != 0 {
-		t.Fatalf("the first cyfr update answered %v and asked the stack's releases %v", err, asked)
-	}
-	// The newer package installed.
-	version.Version = "1.1.0"
-	out, err := s.run(updateOptions{})
-	if err == nil || !strings.Contains(err.Error(), reached.Error()) || !slices.Equal(asked, []string{"1.1.0"}) ||
-		!strings.Contains(out, "cyfr 1.1.0 is the newest release.") {
-		t.Fatalf("cyfr update again answered %v, asking %v:\n%s", err, asked, out)
-	}
-	if len(s.fetched) != 0 || len(s.handed) != 0 || read(t, s.self) != "old cyfr" {
-		t.Errorf("the package's cyfr was fetched %v, handed over %v or changed", s.fetched, s.handed)
-	}
-}
-
 func TestUpdateThroughHomebrew(t *testing.T) {
 	brewLog := func(dir string) string { return strings.TrimSpace(read(t, filepath.Join(dir, "log"))) }
 	restore := caskInstalled
 	t.Cleanup(func() { caskInstalled = restore })
 
+	// The cask's own cyfr, the one it links into the prefix's bin: brew
+	// replaces it with the app, and the update goes on as it.
 	s := newProgramScenario(t, "0.9.0", "0.10.0")
 	dir := fakeBrew(t, "0.9.0", "0.10.0")
 	caskInstalled = restore
+	linked := filepath.Join(dir, "bin", "cyfr")
+	writeFile(t, linked, "the cask's cyfr")
+	selfExecutable = func() (string, error) { return linked, nil }
 	out, err := s.run(updateOptions{})
-	want := filepath.Join(dir, "bin", "cyfr")
+	// The update goes on as the cyfr brew links, by the path brew gives.
+	want := linked
 	if err != nil || len(s.handed) != 1 || !slices.Equal(s.handed[0], []string{want, want, "update", "--continue-as", "0.10.0"}) {
 		t.Fatalf("cyfr update through brew answered %v, handovers %v:\n%s", err, s.handed, out)
 	}
-	if got := brewLog(dir); got != "list --cask cyfr\nupdate\nupgrade --cask cyfr\nlist --cask --versions cyfr\n--prefix" {
+	if got := brewLog(dir); got != "list --cask cyfr\n--prefix\nupdate\ninfo --cask --json=v2 cyfr\nupgrade --cask cyfr\nlist --cask --versions cyfr\n--prefix" {
 		t.Errorf("brew ran:\n%s", got)
 	}
-	if len(s.fetched) != 0 || read(t, s.self) != "old cyfr" {
-		t.Errorf("a cask install downloaded %v or replaced its program itself", s.fetched)
+	if len(s.fetched) != 0 || read(t, linked) != "the cask's cyfr" {
+		t.Errorf("the cask's cyfr was downloaded %v or replaced by cyfr update itself", s.fetched)
 	}
 
+	// A standalone cyfr beside the cask is never left behind: it is
+	// verified first and replaced once brew has installed the release.
 	s = newProgramScenario(t, "0.9.0", "0.10.0")
-	fakeBrew(t, "0.9.0", "0.9.0")
+	dir = fakeBrew(t, "0.9.0", "0.10.0")
 	caskInstalled = restore
-	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "the cyfr cask is still 0.9.0, not 0.10.0; your CYFR was not touched") || len(s.handed) != 0 {
+	out, err = s.run(updateOptions{})
+	if err != nil {
+		t.Fatalf("cyfr update beside a cask answered %v:\n%s", err, out)
+	}
+	s.installed("0.10.0")
+	if got := brewLog(dir); got != "list --cask cyfr\n--prefix\nupdate\ninfo --cask --json=v2 cyfr\nupgrade --cask cyfr\nlist --cask --versions cyfr" {
+		t.Errorf("brew ran:\n%s", got)
+	}
+	if want := "The CYFR app and this cyfr, " + resolvedPath(t, s.self) + ", are release 0.10.0.\n"; !strings.Contains(out, want) {
+		t.Errorf("the update did not say %q:\n%s", want, out)
+	}
+
+	// A tap that still offers the old release changes nothing.
+	s = newProgramScenario(t, "0.9.0", "0.10.0")
+	dir = fakeBrew(t, "0.9.0", "0.9.0")
+	caskInstalled = restore
+	if _, err := s.run(updateOptions{}); err == nil || !strings.HasPrefix(err.Error(), "Homebrew's tap offers cyfr 0.9.0, not 0.10.0; nothing was changed") || len(s.handed) != 0 {
+		t.Errorf("a tap on the old release answered %v, handovers %v", err, s.handed)
+	}
+	if got := brewLog(dir); got != "list --cask cyfr\n--prefix\nupdate\ninfo --cask --json=v2 cyfr" {
+		t.Errorf("brew ran for a tap on the old release:\n%s", got)
+	}
+
+	// brew that exits cleanly on the old release is not taken for the new.
+	s = newProgramScenario(t, "0.9.0", "0.10.0")
+	dir = fakeBrew(t, "0.9.0", "0.9.0")
+	writeFile(t, filepath.Join(dir, "offers"), "0.10.0\n")
+	caskInstalled = restore
+	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "brew exited cleanly but the cyfr cask is still 0.9.0, not 0.10.0.") ||
+		!strings.Contains(err.Error(), "the CYFR app is release 0.9.0; your CYFR was not touched") || len(s.handed) != 0 || read(t, s.self) != "old cyfr" {
 		t.Errorf("brew left on the old release answered %v, handovers %v", err, s.handed)
+	}
+
+	// A tap whose cask names other bytes than the release's signed
+	// installer changes nothing: brew never upgrades.
+	s = newProgramScenario(t, "0.9.0", "0.10.0")
+	dir = fakeBrew(t, "0.9.0", "0.10.0")
+	caskInstalled = restore
+	writeFile(t, filepath.Join(dir, "sha256"), strings.Repeat("0", 64))
+	if _, err := s.run(updateOptions{}); err == nil || err.Error() != "Homebrew's cyfr cask names other bytes than release 0.10.0's signed installer for this Mac; nothing was changed and CYFR runs as it did" || len(s.handed) != 0 {
+		t.Errorf("a cask of other bytes answered %v, handovers %v", err, s.handed)
+	}
+	if got := brewLog(dir); got != "list --cask cyfr\n--prefix\nupdate\ninfo --cask --json=v2 cyfr" {
+		t.Errorf("brew ran for a cask of other bytes:\n%s", got)
 	}
 
 	s = newProgramScenario(t, "0.9.0", "0.10.0")
@@ -591,8 +632,8 @@ func TestUpdateThroughHomebrew(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "installed by Homebrew") || !strings.Contains(err.Error(), "CYFR_VERSION=0.10.0-rc.1 sh") || len(s.handed) != 0 {
 		t.Errorf("--version beside a cask install answered %v", err)
 	}
-	if got := brewLog(dir); got != "list --cask cyfr" {
-		t.Errorf("brew ran for a refused --version:\n%s", got)
+	if got := brewLog(dir); got != "list --cask cyfr\n--prefix" || read(t, s.self) != "old cyfr" {
+		t.Errorf("brew ran for a refused --version, or the standalone cyfr changed:\n%s", got)
 	}
 
 	s = newProgramScenario(t, "0.9.0", "0.10.0")
@@ -602,6 +643,10 @@ func TestUpdateThroughHomebrew(t *testing.T) {
 		t.Errorf("--version naming the tap's release answered %v, handovers %v", err, s.handed)
 	}
 }
+
+// caskSum is the sha256 the fake brew's cask names and the release's
+// signed checksums name for the Mac's installer.
+const caskSum = "5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e"
 
 // handoverDir is where the handover scenario (TestMain) finds the program
 // file it replaces and writes what the program it hands over to saw.
@@ -679,6 +724,8 @@ func runHandover() int {
 	version.Version = "0.9.0"
 	latestRelease = func(context.Context) (string, error) { return "0.10.0", nil }
 	caskInstalled = func() bool { return false }
+	machine.appPresent = func() bool { return false }
+	updateLockPath = filepath.Join(dir, "update.lock")
 	selfExecutable = func() (string, error) { return filepath.Join(dir, release.BinaryName(runtime.GOOS)), nil }
 	fetchBinary = func(context.Context, string, string, string) ([]byte, error) { return binary, nil }
 	if err := os.WriteFile(filepath.Join(dir, "first.pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {

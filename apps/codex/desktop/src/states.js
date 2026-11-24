@@ -188,6 +188,10 @@ function ending(s, last) {
 // with a start, locked; elsewhere cyfr is killed and a message says why.
 const stopped = (s, why) => ending(s, s.screen ? {say: `cyfr ended: ${why}`, quit: true} : {end: why})
 const same = (s, effects = []) => ({state: s, do: effects})
+// A second launch with --quit (app.js), which ends the app as a quit
+// does; on the box's screen its service is stopped instead, and the app is
+// shown as at any second launch.
+const askedToQuit = (s, e) => e.type === "second-instance" && e.quit === true && !s.screen
 const withdrawn = (s, effects = []) => same(s.returning ? {...s, returning: null} : s, effects)
 const adding = (notices, notice) => !notice || notices.includes(notice) ? notices : [...notices, notice]
 const atChooser = (url) => {
@@ -384,7 +388,7 @@ export function step(s, e) {
 
 function advance(s, e) {
   // Once ended, only quitting does anything: the app goes.
-  if (s.name === "ended") return same(s, e.type === "quit" ? [{quit: true}] : [])
+  if (s.name === "ended") return same(s, e.type === "quit" || askedToQuit(s, e) ? [{quit: true}] : [])
   switch (e.type) {
     // ---- cyfr ----
     case "ready": {
@@ -479,7 +483,7 @@ function advance(s, e) {
     case "quit":
       return ending(s, {quit: true})
     case "second-instance":
-      return same(s, [{show: true}])
+      return askedToQuit(s, e) ? ending(s, {quit: true}) : same(s, [{show: true}])
     // The system's dialog answered pick `id`: the folder, or null.
     case "picked":
       if (!s.picking || e.id !== s.picking) return same(s)

@@ -243,8 +243,9 @@ test("the account window's document frames nothing, keeping its own policies, wh
   }
 })
 
-test("the app takes the screen's project and setup's folder, and refuses every other switch, a route's among them", () => {
-  assert.deepEqual(SWITCHES, ["screen-project", "setup-project"])
+test("the app takes the screen's project, setup's folder and --quit, and refuses every other switch, a route's among them", () => {
+  assert.deepEqual(SWITCHES, ["screen-project", "setup-project", "quit"])
+  assert.equal(unlistedSwitch(["--quit"], "linux"), null)
   assert.equal(unlistedSwitch(["--screen-project=/home/ana/cyfr"], "linux"), null)
   assert.equal(unlistedSwitch(["--setup-project=/home/ana/setup-here"], "linux"), null)
   assert.equal(unlistedSwitch([], "linux"), null)

@@ -6,6 +6,7 @@ name: Codex CI (cyfr CLI)
 # Vet, test, and build the Go CLI on every change. security.yml only runs
 # govulncheck; this gives the CLI a real green-build + test signal at PR time.
 # desktop-native builds, installs and smokes the CYFR app around it.
+# release-rehearsal runs the release's GoReleaser on its six installers.
 # screen-idle holds the device screen's idle lock against the app's engine.
 
 on:
@@ -33,6 +34,10 @@ on:
       # screen, tests/desktop-proof/screen/app.sh; screen-idle the
       # screen's idle check, tests/desktop-proof/screen/idle.sh.
       - 'tests/desktop-proof/**'
+      # The macOS legs install the cask the release writes, and
+      # release-rehearsal runs GoReleaser on .goreleaser.yml.
+      - 'scripts/ci/homebrew-cask.sh'
+      - 'tests/ci-release-rehearsal.sh'
       # The app bundles the account pages' sign-in reader
       # (apps/codex/desktop/src/policy.js).
       - 'apps/cyfr/assets/account/**'
@@ -53,6 +58,8 @@ on:
       - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
       - 'tests/desktop-proof/**'
+      - 'scripts/ci/homebrew-cask.sh'
+      - 'tests/ci-release-rehearsal.sh'
       - 'apps/cyfr/assets/account/**'
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'
@@ -223,6 +230,18 @@ jobs:
           go test ./cmd/ -race -count=1 -v -run "^(${SETUP_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/setup-tests.log"
           for t in $SETUP_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/setup-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
 
+      # cyfr update and uninstall of the installed app on Windows: the MSI's
+      # road, the bundle's cyfr never rewritten alone, the app removed or
+      # named. Each must run and pass here.
+      - name: go test (the app's update and uninstall on Windows ran and passed)
+        shell: bash
+        env:
+          APP_TESTS: TestTheMsiRoadRefusesWhatWindowsInstallerRefuses TestTheMsiRoadStepsAsideForTheInstaller TestUpdateNeverRewritesTheCyfrInsideAnAppsBundle TestUninstallNeverRemovesTheCyfrInsideAnAppsBundle TestUninstallRemovesOrNamesTheInstalledApp
+        run: |
+          set -euo pipefail
+          go test ./cmd/ -race -count=1 -v -run "^(${APP_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/app-tests.log"
+          for t in $APP_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/app-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
+
       # cyfr restore's durable write, where a directory handle cannot be
       # flushed: the rename is written through and the write answers no
       # error. It must run and pass here.
@@ -300,6 +319,34 @@ jobs:
       - name: A page that plays does not hold the lock off
         run: bash tests/desktop-proof/screen/idle.sh
 
+  release-rehearsal:
+    # GoReleaser's release on .goreleaser.yml with stand-ins for the six
+    # installers, the scaffold and the manifest, publishing nothing
+    # (tests/ci-release-rehearsal.sh): the installers are summed by their
+    # digests, and a missing one fails before any upload. The GoReleaser
+    # is release.yml's (tests/ci-release-graph.py holds it so).
+    name: The release's packaging rehearsed
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: 'v2.18.3'
+          install-only: true
+
+      - name: Rehearse the release's packaging
+        run: bash tests/ci-release-rehearsal.sh
+
   desktop-native:
     # The CYFR app, Electron around this module's cyfr, on each platform it
     # ships for: its unit tests, then its package built for this runner
@@ -307,12 +354,17 @@ jobs:
     # home-free smoke (tests/desktop-proof/native/smoke.sh) run against the
     # installed app with no CYFR server and no signing credentials; on
     # macOS the distribution's signing rehearsed with a self-made identity
-    # (tests/desktop-proof/native/mac-rehearsal.sh), on Windows the MSI's
-    # cyfr on the person's PATH and off it again after the uninstall.
+    # (tests/desktop-proof/native/mac-rehearsal.sh) and the cask the
+    # release writes installed, upgraded and removed through a local tap
+    # (tests/desktop-proof/native/brew-tap.sh), on Windows the MSI's cyfr
+    # on the person's PATH and off it again after the uninstall; then the
+    # installed app's update from one release to the next
+    # (tests/desktop-proof/native/update.sh).
     name: CYFR app (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    # Electron's download and the package's build take most of it.
-    timeout-minutes: 30
+    # Electron's download and the packages' builds, three of them with the
+    # update's two releases, take most of it.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -322,7 +374,9 @@ jobs:
           - {name: Linux amd64, os: ubuntu-26.04, arch: amd64, exe: ''}
           - {name: Linux arm64, os: ubuntu-26.04-arm, arch: arm64, exe: ''}
           - {name: macOS arm64, os: macos-latest, arch: arm64, exe: ''}
+          - {name: macOS amd64, os: macos-15-intel, arch: amd64, exe: ''}
           - {name: Windows amd64, os: windows-latest, arch: amd64, exe: .exe}
+          - {name: Windows arm64, os: windows-11-arm, arch: arm64, exe: .exe}
     defaults:
       run:
         shell: bash
@@ -376,47 +430,48 @@ jobs:
         if: runner.os == 'Linux'
         run: bash tests/desktop-proof/screen/app.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb
 
-      - name: Install the app (macOS)
+      # The cask the release writes, from this package and a second one,
+      # installed, upgraded and removed through a local tap.
+      - name: Build a second package (macOS)
         if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/cyfr-dmg" apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg
-          cp -R "$RUNNER_TEMP/cyfr-dmg/CYFR.app" /Applications/
-          hdiutil detach "$RUNNER_TEMP/cyfr-dmg"
-          echo "APP=/Applications/CYFR.app/Contents/MacOS/CYFR" >> "$GITHUB_ENV"
+        working-directory: apps/codex/desktop
+        run: node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr" --version 0.0.1-ci --arch ${{ matrix.arch }}
 
-      # The MSI installs for this account alone, under its local programs
-      # folder, and must find exactly one CYFR.exe there, the name matched
-      # with its case: Windows matches a filter without it, and the bundled
-      # resources\cyfr.exe is another program.
+      - name: The Homebrew cask (macOS)
+        if: runner.os == 'macOS'
+        run: bash tests/desktop-proof/native/brew-tap.sh ${{ matrix.arch }} 0.0.0-ci apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg 0.0.1-ci apps/codex/desktop/dist/cyfr-desktop_0.0.1-ci_darwin_${{ matrix.arch }}.dmg
+
+      # The scripts release.yml and desktop-mac.yml run on the packages
+      # they publish.
+      - name: Install and smoke the app (macOS)
+        if: runner.os == 'macOS'
+        run: bash tests/desktop-proof/native/mac.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg
+
       - name: Install the app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $msi = (Resolve-Path "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi").Path
-          $log = Join-Path $env:RUNNER_TEMP "cyfr-msi.log"
-          $install = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec exited $($install.ExitCode)" }
-          $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq "CYFR.exe" })
-          if ($found.Count -ne 1) { throw "the MSI installed $($found.Count) CYFR.exe under $env:LOCALAPPDATA\Programs" }
-          "APP=$($found[0].FullName)" >> $env:GITHUB_ENV
-          pwsh -NoProfile -File tests/desktop-proof/native/windows-path.ps1 installed $found[0].DirectoryName
-          if ($LASTEXITCODE -ne 0) { throw "the MSI's cyfr is not on PATH" }
+        run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 install apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi
 
-      - name: Smoke the installed app
-        if: runner.os != 'Linux'
+      - name: Smoke the installed app (Windows)
+        if: runner.os == 'Windows'
         run: bash tests/desktop-proof/native/smoke.sh "$APP"
+
+      # Read from each file's header, the way release.yml reads the
+      # installers it publishes: an amd64 app passes the smoke on an arm64
+      # runner under emulation.
+      - name: The installed app is built for this architecture
+        run: |
+          case "$RUNNER_OS" in
+            Linux) set -- /opt/cyfr/CYFR /usr/bin/cyfr ;;
+            macOS) set -- /Applications/CYFR.app/Contents/MacOS/CYFR /Applications/CYFR.app/Contents/Resources/cyfr ;;
+            Windows) set -- "$APP" "$CYFR" ;;
+          esac
+          bash tests/desktop-proof/native/installed-machine.sh ${{ matrix.arch }} "$@"
 
       - name: Uninstall the app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $msi = (Resolve-Path "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi").Path
-          $log = Join-Path $env:RUNNER_TEMP "cyfr-msi-remove.log"
-          $remove = Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
-          if ($remove.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec /x exited $($remove.ExitCode)" }
-          pwsh -NoProfile -File tests/desktop-proof/native/windows-path.ps1 removed (Split-Path $env:APP)
-          if ($LASTEXITCODE -ne 0) { throw "the MSI's cyfr stayed on PATH" }
+        run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 remove apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi
 
       # A second build, signed for distribution with an identity and
       # profile of the rehearsal's own making: no Apple input is in a pull
@@ -424,3 +479,16 @@ jobs:
       - name: Rehearse the Mac distribution
         if: runner.os == 'macOS'
         run: bash tests/desktop-proof/native/mac-rehearsal.sh "$RUNNER_TEMP/cyfr/cyfr" ${{ matrix.arch }}
+
+      # The installed app updated from release A to B by its own cyfr, as a
+      # person runs cyfr update (tests/desktop-proof/native/update.sh); last,
+      # as it leaves B installed.
+      - name: The app's update from one release to the next
+        run: |
+          set -euo pipefail
+          bash tests/desktop-proof/native/update.sh build "$RUNNER_TEMP/update-proof" ${{ matrix.arch }}
+          if [ "$RUNNER_OS" = Linux ]; then
+            dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
+          else
+            bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
+          fi

@@ -93,10 +93,10 @@ defmodule Emissary.External.ServerTest do
             {fake, {Process.monitor(fake), {caller, make_ref()}, Process.monitor(caller)}}
           end)
 
-        %{state | status: :ready, in_flight: in_flight}
+        %{state | status: :ready, offers: [:tools], in_flight: in_flight}
       end)
 
-      assert {:error, message} = GenServer.call(pid, {:call_tool, "anything", %{}}, 1_000)
+      assert {:error, message} = Server.call_tool(pid, "anything", %{})
       assert message =~ "busy (#{cap} calls in flight)"
       assert message =~ "retry"
 
@@ -458,6 +458,7 @@ defmodule Emissary.External.ServerTest do
 
         result =
           case request["method"] do
+            "server/discover" -> %{"capabilities" => %{"tools" => %{}}}
             "tools/list" -> %{"tools" => [%{"name" => "echo", "inputSchema" => %{}}]}
             "tools/call" -> %{"echo" => text.(Map.new(conn.req_headers))}
           end
@@ -980,15 +981,16 @@ defmodule Emissary.External.ServerTest do
           "inputSchema" => %{"type" => "object", "description" => auth}
         }
 
+        result =
+          if request["method"] == "server/discover",
+            do: %{"capabilities" => %{"tools" => %{}}},
+            else: %{"tools" => [tool]}
+
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
           200,
-          Jason.encode!(%{
-            "jsonrpc" => "2.0",
-            "id" => request["id"],
-            "result" => %{"tools" => [tool]}
-          })
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => request["id"], "result" => result})
         )
       end)
 
@@ -1120,7 +1122,9 @@ defmodule Emissary.External.ServerTest do
       url: url
     } do
       answering(stub, fn request, auth, _modern? ->
-        {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => auth}}
+        if request["method"] == "server/discover",
+          do: {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => tools_declared()}},
+          else: {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => auth}}
       end)
 
       pid = connect_with(name, ctx, url, "listed-key")
@@ -1143,7 +1147,7 @@ defmodule Emissary.External.ServerTest do
     } do
       answering(stub, fn request, auth, modern? ->
         case request["method"] do
-          "tools/list" when modern? ->
+          "server/discover" when modern? ->
             {:status, 400, "Bad Request"}
 
           "initialize" ->
@@ -1177,7 +1181,7 @@ defmodule Emissary.External.ServerTest do
     } do
       answering(stub, fn request, auth, modern? ->
         case request["method"] do
-          "tools/list" when modern? ->
+          "server/discover" when modern? ->
             {:status, 400, "Bad Request"}
 
           "initialize" ->
@@ -1287,6 +1291,9 @@ defmodule Emissary.External.ServerTest do
     } do
       answering(stub, fn request, auth, _modern? ->
         case request["method"] do
+          "server/discover" ->
+            {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => tools_declared()}}
+
           "tools/list" ->
             {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => %{"tools" => []}}}
 
@@ -1421,6 +1428,9 @@ defmodule Emissary.External.ServerTest do
     end
   end
 
+  # A current peer's discovery stating that it offers tools.
+  defp tools_declared, do: %{"capabilities" => %{"tools" => %{}}}
+
   # An upstream answering each request through `fun`, which reads the
   # request, the Authorization header it was sent and whether the request
   # is the current era's probe (`params._meta`).
@@ -1462,9 +1472,9 @@ defmodule Emissary.External.ServerTest do
   end
 
   # An upstream that refuses the connect with an error quoting the
-  # Authorization header it was sent: at `tools/list` for a current peer,
-  # and at `initialize` for one that answers the current probe as a legacy
-  # peer does.
+  # Authorization header it was sent: at `server/discover` for a current
+  # peer, and at `initialize` for one that answers the current probe as a
+  # legacy peer does.
   defp echo_upstream(stub, era) do
     HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -1472,7 +1482,7 @@ defmodule Emissary.External.ServerTest do
       [auth] = Plug.Conn.get_req_header(conn, "authorization")
 
       case {era, request["method"]} do
-        {:legacy, "tools/list"} ->
+        {:legacy, "server/discover"} ->
           Plug.Conn.resp(conn, 400, "Bad Request")
 
         _echoed ->

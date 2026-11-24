@@ -12,11 +12,14 @@ defmodule Emissary.External.Server do
 
   Uses Streamable HTTP (JSON-RPC 2.0 over HTTP POST) as defined by the
   MCP spec. Each request gets a fresh HTTP request — no persistent
-  connection. Connecting is a stateless `tools/list` probe under the current
-  protocol revision, falling back to the legacy initialize → initialized
-  handshake for third-party servers still on the older revision (see
-  `connect/1`). Every request's timeout bounds its wall time, however the
-  peer trickles its reply. A legacy peer that issues an `Mcp-Session-Id` at
+  connection. Connecting is a stateless `server/discover` probe under the
+  current protocol revision, which states what the server offers, falling
+  back to the legacy initialize → initialized handshake for third-party
+  servers still on the older revision (see `connect/1`), whose `initialize`
+  answer states it. A server is asked `tools/list` only when it declares
+  tools, so one that offers only resources or prompts connects. Every
+  request's timeout bounds its wall time, however the peer trickles its
+  reply. A legacy peer that issues an `Mcp-Session-Id` at
   `initialize` gets it back on every later request until the next connect,
   and the id is kept and masked as the resolved credential headers are. A
   configured `mcp-session-id` header wins over an issued id, which is then
@@ -28,6 +31,12 @@ defmodule Emissary.External.Server do
   handshake limit of its first request, fails the connect. A reply whose
   content type is `text/event-stream` is read as an event stream, its last
   event the answer; any other is read as JSON.
+
+  A server's resources and prompts, when it declares them, are read as a
+  tool is called (`offering/2`), in a detached task: `resources/list` with
+  `resources/templates/list` and `prompts/list`, each paged and bounded as
+  `tools/list` is, `resources/read` and `prompts/get`. An offering the
+  server did not declare is never asked of it.
 
   A connect checks every `vault:` header template against this server's
   URL from the entries' metadata (`Sanctum.Vault.destination_matches?/3`)
@@ -53,7 +62,8 @@ defmodule Emissary.External.Server do
   program started
   afresh (`resumed: false`) is initialized at the legacy protocol revision
   (`Prima.MCP.Protocol.legacy_version/0`) and told
-  `notifications/initialized`; then it is asked `tools/list`, every page
+  `notifications/initialized`, its answer stating what it offers; then,
+  when it declares tools, it is asked `tools/list`, every page
   of it as an HTTP listing is, and its tools are this server's by the names
   it lists, which the proxy offers as `<row name>:<tool>`. Every request is
   one JSON-RPC line `send` writes; a reader process waits on `recv` and
@@ -205,10 +215,44 @@ defmodule Emissary.External.Server do
     end
   end
 
+  @doc """
+  What the server offers, connecting it as `get_tools/2` does: its tools,
+  and which of its resources and prompts it declares.
+  """
+  @spec offerings(String.t(), String.t()) ::
+          {:ok, %{tools: [map()], declared: [:prompts | :resources]}} | {:error, term()}
+  def offerings(name, athanor_id) do
+    case lookup(name, athanor_id) do
+      {:ok, pid} -> call_server(pid, :offerings, @connect_call_timeout_ms)
+      {:error, _} = err -> err
+    end
+  end
+
   @doc "Call a tool on the server process a caller already holds."
   @spec call_tool(pid(), String.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_tool(pid, tool_name, arguments) when is_pid(pid),
-    do: call_server(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
+    do: call_server(pid, {:call, {:tool, tool_name, arguments}}, @call_timeout_ms)
+
+  @typedoc "A read of a server's resources or prompts (`offering/2`)."
+  @type offering ::
+          {:resources, :list}
+          | {:resources, :read, String.t()}
+          | {:prompts, :list}
+          | {:prompts, :get, String.t(), map()}
+
+  @doc """
+  Read the resources or prompts of the server process a caller already
+  holds, as `call_tool/3` calls a tool: its resources and their templates
+  (`resources/list` and `resources/templates/list`, each to its last page),
+  one resource by its uri (`resources/read`), its prompts (`prompts/list`,
+  to its last page) or one prompt with its arguments (`prompts/get`). The
+  answer is the server's, its credentials masked out. A server that did not
+  declare that offering is never asked it, and the read is refused saying
+  so.
+  """
+  @spec offering(pid(), offering()) :: {:ok, map()} | {:error, term()}
+  def offering(pid, asked) when is_pid(pid),
+    do: call_server(pid, {:call, asked}, @call_timeout_ms)
 
   @doc """
   Get the connection status of the external server.
@@ -303,6 +347,11 @@ defmodule Emissary.External.Server do
       vault_revisions: nil,
       status: :disconnected,
       tools: [],
+      # What the server declared it offers, sorted, among `:prompts`,
+      # `:resources` and `:tools`: what it is asked for, and nothing else.
+      # Each connect reads it again, but a program whose session resumes
+      # is not initialized again, so it keeps what that program declared.
+      offers: [],
       request_id: 0,
       # Detached upstream calls currently running:
       # %{task_pid => {monitor_ref, from, caller_ref}}.
@@ -350,31 +399,16 @@ defmodule Emissary.External.Server do
   end
 
   @impl true
-  def handle_call(:get_tools, _from, %{status: :ready} = state) do
-    {:reply, {:ok, state.tools}, state}
-  end
-
-  def handle_call(:get_tools, _from, %{status: :disconnected} = state) do
-    case do_initialize(state) do
-      {:ok, state} -> {:reply, {:ok, state.tools}, state}
+  def handle_call(asked, _from, state) when asked in [:get_tools, :offerings] do
+    case connected(state) do
+      {:ok, state} -> {:reply, {:ok, offered(asked, state)}, state}
       {:error, reason, state} -> {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call(:get_tools, _from, %{status: :error} = state) do
-    if can_reinit?(state) do
-      case do_initialize(state) do
-        {:ok, state} -> {:reply, {:ok, state.tools}, state}
-        {:error, reason, state} -> {:reply, {:error, reason}, state}
-      end
-    else
-      {:reply, {:error, state.error}, state}
-    end
-  end
-
   @impl true
-  def handle_call({:call_tool, tool_name, arguments}, from, state) do
-    dispatch_call(state, from, {tool_name, arguments, 0})
+  def handle_call({:call, asked}, from, state) do
+    dispatch_call(state, from, {asked, 0})
   end
 
   @impl true
@@ -419,14 +453,36 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # Runs a call in a detached task, or answers why it cannot run. `attempt`
-  # counts the times the service refused this call before running it.
-  defp dispatch_call(state, from, {tool_name, arguments, _attempt} = call) do
+  # The server connected, connecting it when it is not, or why not: once
+  # disconnected, and again in error once the backoff allows.
+  defp connected(%{status: :ready} = state), do: {:ok, state}
+  defp connected(%{status: :disconnected} = state), do: do_initialize(state)
+
+  defp connected(%{status: :error} = state) do
+    if can_reinit?(state), do: do_initialize(state), else: {:error, state.error, state}
+  end
+
+  defp offered(:get_tools, state), do: state.tools
+  defp offered(:offerings, state), do: %{tools: state.tools, declared: state.offers -- [:tools]}
+
+  # Runs a call in a detached task, or answers why it cannot run: a tool's
+  # (`{:tool, name, arguments}`) or a read of the server's resources or
+  # prompts (`t:offering/0`), each only of a server that declared it.
+  # `attempt` counts the times the service refused this call before
+  # running it. What is checked is what the process the call is sent to
+  # declared: a program's session the call itself opens may be a new
+  # process of the program, initialized afresh, so the offering is checked
+  # again once it is open, before anything is written to it.
+  defp dispatch_call(state, from, {asked, _attempt} = call) do
     state = ensure_ready(state)
+    offering = offering_of(asked)
 
     cond do
       state.status != :ready ->
         {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
+
+      offering not in state.offers ->
+        {:reply, undeclared(state, offering), state}
 
       map_size(state.in_flight) >= @max_in_flight ->
         {:reply,
@@ -437,40 +493,51 @@ defmodule Emissary.External.Server do
       state.transport == :program ->
         case ensure_session(state) do
           {:ok, state} ->
-            {request_id, state} = next_request_id(state)
-
-            body =
-              Message.encode_request(request_id, "tools/call", %{
-                "name" => tool_name,
-                "arguments" => arguments || %{}
-              })
-
-            case start_call(state, from, call, body, tool_name, request_id) do
-              {:noreply, state} -> {:noreply, start_reader(state)}
-              reply -> reply
-            end
+            start_program_call(state, from, call, offering)
 
           {:error, reason, state} ->
             {:reply, {:error, mask_credentials(failure_sentence(reason), state)}, state}
         end
 
       true ->
-        {request_id, state} = next_request_id(state)
-
-        body =
-          Message.encode_request(request_id, "tools/call", %{
-            "name" => tool_name,
-            "arguments" => arguments || %{}
-          })
-
-        start_call(state, from, call, body, tool_name, nil)
+        start_call(state, from, call)
     end
   end
 
-  # Runs one call's upstream round trip in a detached task. A program call's
-  # task awaits its answer by `request_id`, which this process hands it
-  # from the program's session.
-  defp start_call(state, from, call, body, tool_name, request_id) do
+  # A program's call starts on the session it opened only when the process
+  # behind that session declared the call's offering.
+  defp start_program_call(state, from, call, offering) do
+    if offering in state.offers do
+      case start_call(state, from, call) do
+        {:noreply, state} -> {:noreply, start_reader(state)}
+        reply -> reply
+      end
+    else
+      {:reply, undeclared(state, offering), state}
+    end
+  end
+
+  defp undeclared(state, offering),
+    do: {:error, {:invalid_argument, "#{state.name} declares no #{offering}"}}
+
+  defp offering_of({:tool, _name, _arguments}), do: :tools
+  defp offering_of(asked), do: elem(asked, 0)
+
+  # The most requests one call makes, each of its own id: a listing reads
+  # up to its page bound, and a read of resources two listings.
+  defp requests({:resources, :list}), do: 2 * @max_listing_pages
+  defp requests({:prompts, :list}), do: @max_listing_pages
+  defp requests(_one), do: 1
+
+  # Runs one call's upstream round trip in a detached task. The ids its
+  # requests carry are taken here, from this process's count, so no two
+  # requests of the connection share one; a program call's task awaits
+  # each answer by its id, which this process hands it from the program's
+  # session.
+  defp start_call(state, from, {asked, _attempt} = call) do
+    first = state.request_id + 1
+    ids = first..(state.request_id + requests(asked))
+    state = %{state | request_id: ids.last}
     # The upstream HTTP round-trip runs OUTSIDE this process so one slow
     # server never head-of-line-blocks every other caller of the same
     # server for up to their full call timeout. The task gets a snapshot
@@ -479,7 +546,14 @@ defmodule Emissary.External.Server do
     # GenServer above. The tool catalogue is dropped from the snapshot —
     # the call doesn't read it, and it would otherwise be copied into
     # every task heap.
-    snapshot = %{state | tools: [], in_flight: %{}, calls: %{}, pending: %{}}
+    snapshot = %{
+      state
+      | tools: [],
+        in_flight: %{},
+        calls: %{},
+        pending: %{},
+        request_id: first - 1
+    }
 
     server = self()
 
@@ -490,19 +564,19 @@ defmodule Emissary.External.Server do
 
            reply =
              try do
-               dispatch_upstream_call(snapshot, body, tool_name)
+               upstream_call(snapshot, asked)
              rescue
                e ->
                  # The exception can carry the upstream URL, a transport
                  # internal or what the upstream answered; the caller (a
-                 # guest or the console) gets the tool's name only, the
+                 # guest or the console) gets the call's subject only, the
                  # log the rest, the injected values masked.
                  Logger.warning(
-                   "[Emissary.External.Server] call to #{tool_name} raised: " <>
+                   "[Emissary.External.Server] call to #{subject(asked)} raised: " <>
                      log_reason(e, snapshot)
                  )
 
-                 {:error, "External call failed for #{tool_name}"}
+                 {:error, "External call failed for #{subject(asked)}"}
              end
 
            case reply do
@@ -523,8 +597,8 @@ defmodule Emissary.External.Server do
         caller_ref = Process.monitor(caller)
 
         pending =
-          if request_id,
-            do: Map.put(state.pending, request_id, task_pid),
+          if state.transport == :program,
+            do: Map.merge(state.pending, Map.new(ids, &{&1, task_pid})),
             else: state.pending
 
         {:noreply,
@@ -641,7 +715,7 @@ defmodule Emissary.External.Server do
 
   # A lifetime, generation or lease the grant no longer matches: sync again
   # and send the call once more.
-  defp after_refusal(state, from, {tool, arguments, 0}, code) when code in @retried_refusals do
+  defp after_refusal(state, from, {asked, 0}, code) when code in @retried_refusals do
     state = %{
       drop_session(state, :refused)
       | status: :disconnected,
@@ -649,7 +723,7 @@ defmodule Emissary.External.Server do
         last_init_attempt: nil
     }
 
-    case dispatch_call(state, from, {tool, arguments, 1}) do
+    case dispatch_call(state, from, {asked, 1}) do
       {:reply, reply, state} ->
         GenServer.reply(from, reply)
         {:noreply, state}
@@ -665,10 +739,10 @@ defmodule Emissary.External.Server do
   # The program's session ended before the call reached it (idle, a
   # crash): it is opened again, the program initialized afresh, and the
   # call sent once more.
-  defp after_refusal(state, from, {tool, arguments, 0}, :session_ended) do
+  defp after_refusal(state, from, {asked, 0}, :session_ended) do
     state = drop_session(state, :ended)
 
-    case dispatch_call(state, from, {tool, arguments, 1}) do
+    case dispatch_call(state, from, {asked, 1}) do
       {:reply, reply, state} ->
         GenServer.reply(from, reply)
         {:noreply, state}
@@ -743,36 +817,112 @@ defmodule Emissary.External.Server do
     )
   end
 
-  # Bring a not-yet-ready server up before dispatching, mirroring the
-  # get_tools arms: disconnected always retries, error retries when the
-  # backoff allows.
+  # Bring a not-yet-ready server up before dispatching, as a listing
+  # does (`connected/1`).
   defp ensure_ready(state) do
-    case state.status do
-      :ready ->
-        state
+    case connected(state) do
+      {:ok, state} -> state
+      {:error, _reason, state} -> state
+    end
+  end
 
-      :disconnected ->
-        case do_initialize(state) do
-          {:ok, s} -> s
-          {:error, _, s} -> s
-        end
+  # Runs in a Task: performs the upstream round trips of one call against a
+  # state SNAPSHOT, whose count starts at the ids taken for it, and never
+  # mutates server state.
+  defp upstream_call(state, {:tool, tool_name, arguments}) do
+    {request_id, state} = next_request_id(state)
 
-      :error ->
-        if can_reinit?(state) do
-          case do_initialize(state) do
-            {:ok, s} -> s
-            {:error, _, s} -> s
-          end
-        else
-          state
+    body =
+      Message.encode_request(request_id, "tools/call", %{
+        "name" => tool_name,
+        "arguments" => arguments || %{}
+      })
+
+    case answer(state, body) do
+      {:ok, result} -> {:ok, mask_credentials(result, state)}
+      {:error, reason} -> {:error, mask_credentials(reason, state)}
+      {:backends_refused, _code, _boot} = refused -> refused
+    end
+  end
+
+  defp upstream_call(state, asked) do
+    case read_offering(state, asked) do
+      {:ok, result} -> {:ok, mask_credentials(result, state)}
+      {:backends_refused, _code, _boot} = refused -> refused
+      {:error, reason} -> {:error, mask_credentials(reason, state)}
+      {:error, reason, _state} -> {:error, mask_credentials(reason, state)}
+    end
+  end
+
+  defp read_offering(state, {:resources, :list}) do
+    listing = {state.name, "resources/templates/list", "resourceTemplates"}
+
+    with {:ok, resources, state} <- read_listing(state, {"resources/list", "resources"}),
+         {:ok, templates, _state} <- list_pages(state, listing, &templates_page/2),
+         do: {:ok, %{"resources" => resources, "resourceTemplates" => templates}}
+  end
+
+  defp read_offering(state, {:prompts, :list}) do
+    with {:ok, prompts, _state} <- read_listing(state, {"prompts/list", "prompts"}),
+         do: {:ok, %{"prompts" => prompts}}
+  end
+
+  defp read_offering(state, {:resources, :read, uri}) do
+    with {:ok, result, _state} <- read_request(state, "resources/read", %{"uri" => uri}),
+         do: {:ok, result}
+  end
+
+  defp read_offering(state, {:prompts, :get, name, arguments}) do
+    params = %{"name" => name, "arguments" => arguments}
+
+    with {:ok, result, _state} <- read_request(state, "prompts/get", params),
+         do: {:ok, result}
+  end
+
+  defp read_listing(state, {method, key}),
+    do: list_pages(state, {state.name, method, key}, &read_request(&1, method, &2))
+
+  # One request of a read, from its task: the server's answer, or why not.
+  defp read_request(state, method, params) do
+    {request_id, state} = next_request_id(state)
+    body = Message.encode_request(request_id, method, params)
+
+    case answered(state, body, upstream(state, body)) do
+      {:ok, result} -> {:ok, result, state}
+      refused -> refused
+    end
+  end
+
+  # A page of a server's resource templates. A server that lists resources
+  # and has no handler for their templates answers this one request as a
+  # method it does not know (-32601): it has no templates, which takes
+  # nothing from its resources.
+  defp templates_page(state, params) do
+    {request_id, state} = next_request_id(state)
+    body = Message.encode_request(request_id, "resources/templates/list", params)
+
+    case upstream(state, body) do
+      {:ok, %Message{type: :error, error: %{"code" => -32_601}}} ->
+        {:ok, %{"resourceTemplates" => []}, state}
+
+      reply ->
+        case answered(state, body, reply) do
+          {:ok, result} -> {:ok, result, state}
+          refused -> refused
         end
     end
   end
 
-  # Runs in a Task: performs the upstream round-trip against a state
-  # SNAPSHOT and never mutates server state.
-  defp dispatch_upstream_call(state, body, tool_name) do
-    case upstream(state, body) do
+  # What a call is of, for a sentence: the tool, or the read's method.
+  defp subject({:tool, tool_name, _arguments}), do: tool_name
+  defp subject(asked), do: "#{elem(asked, 0)}/#{elem(asked, 1)}"
+
+  # One request's round trip, from a call's task: the server's result, or
+  # why not, as it answered.
+  defp answer(state, body), do: answered(state, body, upstream(state, body))
+
+  defp answered(state, body, reply) do
+    case reply do
       # An upstream server asking for more input is refused, deliberately.
       #
       # `input_required` is how a server requests sampling, elicitation or
@@ -786,16 +936,17 @@ defmodule Emissary.External.Server do
       # guest would receive an interim answer as though it were final.
       {:ok, %Message{type: :response, result: %{"resultType" => @input_required}}} ->
         Logger.warning(
-          "[Emissary.External.Server] #{state.name} returned input_required for #{tool_name}; refused"
+          "[Emissary.External.Server] #{state.name} returned input_required for " <>
+            "#{Protocol.named_subject(body) || body["method"]}; refused"
         )
 
         {:error, "#{state.name} asked for additional input, which external servers may not do."}
 
       {:ok, %Message{type: :response, result: result}} ->
-        {:ok, mask_credentials(result, state)}
+        {:ok, result}
 
       {:ok, %Message{type: :error, error: error}} ->
-        {:error, mask_credentials(upstream_message(error), state)}
+        {:error, upstream_message(error)}
 
       {:legacy, _state} ->
         {:error, "#{state.name} changed protocol era mid-connection"}
@@ -804,7 +955,7 @@ defmodule Emissary.External.Server do
         refused
 
       {:error, reason} ->
-        {:error, mask_credentials(reason, state)}
+        {:error, reason}
     end
   end
 
@@ -1047,15 +1198,32 @@ defmodule Emissary.External.Server do
       "clientInfo" => %{"name" => "cyfr", "version" => Prima.Version.current()}
     }
 
-    with {:ok, _result, state} <- request(state, "initialize", params),
+    with {:ok, result, state} <- request(state, "initialize", params),
          {:ok, state} <- notify(state, "notifications/initialized") do
-      {:ok, state}
+      {:ok, declared_anew(state, declared(result))}
     end
   end
 
+  # What an initialize declares replaces all the process declared before:
+  # what it does not declare is empty, so a replacement that offers no tools
+  # leaves none of its predecessor's, in this process or in the athanor's
+  # listing.
+  defp declared_anew(state, offers) do
+    if :tools in offers or state.tools == [] do
+      %{state | offers: offers}
+    else
+      tools_changed(state.athanor_id)
+      %{state | offers: offers, tools: []}
+    end
+  end
+
+  # The program's tools, asked only of one whose `initialize` declared them.
   defp list_program_tools(state) do
     with {:ok, state} <- ensure_session(state) do
-      case list_pages(state, state.name, &request(&1, "tools/list", &2)) do
+      listing = {state.name, "tools/list", "tools"}
+
+      case :tools in state.offers && list_pages(state, listing, &request(&1, "tools/list", &2)) do
+        false -> {:ok, [], state}
         {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
         {:error, reason, state} -> {:error, reason, state}
       end
@@ -1298,7 +1466,7 @@ defmodule Emissary.External.Server do
           {:rpc_failed, ^id, _reason} ->
             {:error, "#{state.name} ended before it answered"}
         after
-          state.timeout_ms -> {:error, {:uncertain, "timeout: tools/call"}}
+          state.timeout_ms -> {:error, {:uncertain, "timeout: #{body["method"]}"}}
         end
 
       {:ok, :ended} ->
@@ -1389,9 +1557,19 @@ defmodule Emissary.External.Server do
   # of a `400` before concluding the peer is legacy, because a modern server
   # also answers `400` for an unsupported version or a bad header.
   defp connect(state) do
-    case send_tools_list(%{state | era: :modern}) do
-      {:ok, tools, state} ->
-        {:ok, tools, nil, state}
+    case discover(%{state | era: :modern}) do
+      {:ok, offers, state} ->
+        case listed(offers, state) do
+          {:ok, tools, listed} ->
+            {:ok, tools, nil, %{listed | offers: offers}}
+
+          {:legacy, _state} ->
+            {:error,
+             {:failed, "#{state.name} answered its discovery and not its listing of tools"}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:legacy, state} ->
         Logger.info("[Emissary.External.Server] #{state.name} speaks a pre-2026-07-28 revision")
@@ -1402,12 +1580,44 @@ defmodule Emissary.External.Server do
     end
   end
 
+  # The current revision's probe, `server/discover`, which states what the
+  # server offers without a session. A peer that cannot speak the current
+  # revision answers it as `refused_status/3` reads one, or as a method it
+  # does not know (-32601).
+  defp discover(state) do
+    {request_id, state} = next_request_id(state)
+
+    case http_post(state, Message.encode_request(request_id, "server/discover", %{})) do
+      {:ok, %Message{type: :response, result: result}} -> {:ok, declared(result), state}
+      {:ok, %Message{type: :error, error: %{"code" => -32_601}}} -> {:legacy, state}
+      {:ok, %Message{type: :error, error: error}} -> {:error, upstream_message(error)}
+      {:legacy, state} -> {:legacy, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # What a server's discovery or `initialize` answer declares it offers,
+  # sorted: what it is asked for, and nothing else.
+  defp declared(%{"capabilities" => %{} = capabilities}) do
+    for {name, offering} <- [{"prompts", :prompts}, {"resources", :resources}, {"tools", :tools}],
+        is_map_key(capabilities, name),
+        do: offering
+  end
+
+  defp declared(_answer), do: []
+
+  # The tools a server lists, asked only of one that declares them.
+  defp listed(offers, state),
+    do: if(:tools in offers, do: send_tools_list(state), else: {:ok, [], state})
+
   defp legacy_connect(state) do
     case send_initialize(state) do
       {:ok, init_result, state} ->
+        offers = declared(init_result)
+
         with :ok <- send_initialized_notification(state),
-             {:ok, tools, listed} <- send_tools_list(state) do
-          {:ok, tools, server_info(init_result), listed}
+             {:ok, tools, listed} <- listed(offers, state) do
+          {:ok, tools, server_info(init_result), %{listed | offers: offers}}
         else
           # `state` is the one `initialize` answered, which holds the peer's
           # session, so a failure after it is masked with that session.
@@ -1500,7 +1710,7 @@ defmodule Emissary.External.Server do
   # The listing is the upstream's words as much as a result is, and is
   # stored, answered and drawn: it is masked as a tool call's result is.
   defp send_tools_list(state) do
-    case list_pages(state, state.name, &http_list_page/2) do
+    case list_pages(state, {state.name, "tools/list", "tools"}, &http_list_page/2) do
       {:ok, tools, state} -> {:ok, mask_credentials(tools, state), state}
       {:error, sentence, _state} -> {:error, {:failed, sentence}}
       {:legacy, state} -> {:legacy, state}
@@ -1519,23 +1729,27 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # Every tool a paged `tools/list` holds: `fetch` asks for one page with
-  # the params given and answers `{:ok, result, state}` or what the caller
-  # passes back as it is. Pages are read while the peer names a next
-  # cursor, to @max_listing_pages, and all of them within the handshake
-  # limit counted from the first request: each page waits only for what
-  # is left of it, and a listing that runs out fails as one too long does.
-  defp list_pages(state, who, fetch) do
+  # Every item a paged listing holds, `{who, method, key}`: the items at
+  # `key` of each page of `method` that `who` answers (`tools/list`'s
+  # `tools`, `resources/list`'s `resources`, `resources/templates/list`'s
+  # `resourceTemplates`, `prompts/list`'s `prompts`). `fetch` asks for one
+  # page with the params given and answers `{:ok, result, state}` or what
+  # the caller passes back as it is. Pages are read while the peer names a
+  # next cursor, to @max_listing_pages, and all of them within the
+  # handshake limit counted from the first request: each page waits only
+  # for what is left of it, and a listing that runs out fails as one too
+  # long does.
+  defp list_pages(state, {who, method, key}, fetch) do
     limit = min(state.timeout_ms, @initialize_timeout_ms)
     deadline = System.monotonic_time(:millisecond) + limit
-    list_pages(state, {who, fetch, deadline, limit}, %{}, [], 1)
+    list_pages(state, {{who, method, key}, fetch, deadline, limit}, %{}, [], 1)
   end
 
-  defp list_pages(state, {who, fetch, deadline, limit} = listing, params, acc, page) do
+  defp list_pages(state, {what, fetch, deadline, limit} = listing, params, acc, page) do
     remaining = deadline - System.monotonic_time(:millisecond)
 
     if remaining <= 0 do
-      {:error, out_of_time(who, limit), state}
+      {:error, out_of_time(what, limit), state}
     else
       %{state | timeout_ms: min(state.timeout_ms, remaining)}
       |> fetch.(params)
@@ -1544,30 +1758,31 @@ defmodule Emissary.External.Server do
     end
   end
 
-  defp listed_page({:ok, result, state}, _before, {who, _, deadline, limit} = listing, acc, page) do
+  defp listed_page({:ok, result, state}, _before, {what, _, deadline, limit} = listing, acc, page) do
+    {who, method, key} = what
     late? = System.monotonic_time(:millisecond) > deadline
 
-    case {listed_tools(result), next_cursor(result)} do
+    case {listed_items(result, key), next_cursor(result)} do
       _page when late? ->
-        {:error, out_of_time(who, limit), state}
+        {:error, out_of_time(what, limit), state}
 
       {:error, _cursor} ->
-        {:error, "#{who} answered tools/list without a list of tools", state}
+        {:error, "#{who} answered #{method} without a list of #{words(key)}", state}
 
-      {{:ok, tools}, nil} ->
-        {:ok, acc ++ tools, state}
+      {{:ok, items}, nil} ->
+        {:ok, acc ++ items, state}
 
-      {{:ok, _tools}, _cursor} when page >= @max_listing_pages ->
-        {:error, "#{who} listed more than #{@max_listing_pages} pages of tools", state}
+      {{:ok, _items}, _cursor} when page >= @max_listing_pages ->
+        {:error, "#{who} listed more than #{@max_listing_pages} pages of #{words(key)}", state}
 
-      {{:ok, tools}, cursor} ->
-        list_pages(state, listing, %{"cursor" => cursor}, acc ++ tools, page + 1)
+      {{:ok, items}, cursor} ->
+        list_pages(state, listing, %{"cursor" => cursor}, acc ++ items, page + 1)
     end
   end
 
   # A page that failed because the deadline cut its wait short is the
   # listing running out of time, not the peer's failure.
-  defp listed_page(failed, before, {who, _, deadline, limit}, _acc, _page)
+  defp listed_page(failed, before, {what, _, deadline, limit}, _acc, _page)
        when elem(failed, 0) == :error do
     if System.monotonic_time(:millisecond) >= deadline do
       state =
@@ -1576,7 +1791,7 @@ defmodule Emissary.External.Server do
           _failed -> before
         end
 
-      {:error, out_of_time(who, limit), state}
+      {:error, out_of_time(what, limit), state}
     else
       failed
     end
@@ -1584,7 +1799,11 @@ defmodule Emissary.External.Server do
 
   defp listed_page(other, _before, _listing, _acc, _page), do: other
 
-  defp out_of_time(who, limit), do: "#{who} did not finish listing its tools within #{limit} ms"
+  defp out_of_time({who, _method, key}, limit),
+    do: "#{who} did not finish listing its #{words(key)} within #{limit} ms"
+
+  defp words("resourceTemplates"), do: "resource templates"
+  defp words(key), do: key
 
   # A page is fetched with its wait cut to what is left of the deadline;
   # the state it hands back keeps the timeout it had before.
@@ -1601,15 +1820,22 @@ defmodule Emissary.External.Server do
   defp next_cursor(%{"nextCursor" => cursor}) when is_binary(cursor) and cursor != "", do: cursor
   defp next_cursor(_result), do: nil
 
-  # A listing is a list of tool objects, at `tools` or, for some servers,
-  # with no `tools` key at all; anything else is no listing.
-  defp listed_tools(%{"tools" => tools}) when is_list(tools),
-    do: if(Enum.all?(tools, &is_map/1), do: {:ok, tools}, else: :error)
+  # A listing is a list of objects at its key or, for some servers, with no
+  # such key at all; anything else is no listing.
+  defp listed_items(result, key) when is_map(result) do
+    case result do
+      %{^key => items} when is_list(items) ->
+        if Enum.all?(items, &is_map/1), do: {:ok, items}, else: :error
 
-  defp listed_tools(result) when is_map(result) and not is_map_key(result, "tools"),
-    do: {:ok, []}
+      %{^key => _not_a_list} ->
+        :error
 
-  defp listed_tools(_result), do: :error
+      _none ->
+        {:ok, []}
+    end
+  end
+
+  defp listed_items(_result, _key), do: :error
 
   defp server_info(%{"serverInfo" => info}) when is_map(info), do: info
   defp server_info(_init_result), do: nil

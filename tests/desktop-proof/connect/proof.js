@@ -398,9 +398,11 @@ function landed() {
 // about again, and the device's pages ask for the passphrase again: this
 // road keeps no sign-in.
 async function rememberedPhase() {
-  const next = await landed()
-  row("remembered", next.next === "the device's pages",
-    "launched again, the app opens the CYFR selected last by itself, and its approved account service is not asked about again", next)
+  await judged("remembered", "launched again, the app opens the CYFR selected last by itself, and its approved account service is not asked about again",
+    async () => {
+      const next = await landed()
+      return [next.next === "the device's pages", next]
+    })
   const locked = await js(content().webContents, `!!document.querySelector('form[action="/unlock"]')`)
   row("asks_again", locked && !(await sessionCookie(content())),
     "launched again, the six-word road keeps no session and asks for the passphrase again", {locked})
