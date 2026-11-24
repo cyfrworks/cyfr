@@ -6,6 +6,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
@@ -54,12 +55,39 @@ func runWithin(within time.Duration, cmd *exec.Cmd) error {
 	defer bound.Stop()
 	select {
 	case err := <-done:
-		return err
+		// What the run left behind in its job is ended too.
+		return errors.Join(err, endJob(job))
 	case <-bound.C:
 	}
-	_ = windows.TerminateJobObject(job, 1)
+	gerr := endJob(job)
 	<-done
-	return fmt.Errorf("%w %v", errOverran, within)
+	return errors.Join(fmt.Errorf("%w %v", errOverran, within), gerr)
+}
+
+// jobAccounting is JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.
+type jobAccounting struct {
+	TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses     uint32
+}
+
+// endJob ends every process of job and waits until none is left, at most
+// boundGrace, answering an error where one still is.
+func endJob(job windows.Handle) error {
+	_ = windows.TerminateJobObject(job, 1)
+	deadline := time.Now().Add(boundGrace)
+	for {
+		var info jobAccounting
+		if err := windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil); err != nil {
+			return err
+		}
+		if info.ActiveProcesses == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%d processes of the job were still running %v after it was ended", info.ActiveProcesses, boundGrace)
+		}
+		time.Sleep(20 * time.Millisecond) // sleep-ok: the pace of asking Windows whether a job it was asked to end is gone
+	}
 }
 
 // joinAndResume assigns the suspended process pid to job, then resumes it.

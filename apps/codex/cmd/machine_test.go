@@ -244,6 +244,11 @@ func runFakeBrew(dir, args string) int {
 		fmt.Printf("{\"formulae\":[],\"casks\":[{\"token\":\"cyfr\",\"version\":%q,\"sha256\":%q}]}\n", strings.TrimSpace(string(to)), strings.TrimSpace(string(sum)))
 	case "list --cask cyfr", "update":
 	case "upgrade --cask cyfr":
+		// Homebrew's own refresh of its taps, between the update's check
+		// of the cask and this upgrade, is off.
+		if os.Getenv("HOMEBREW_NO_AUTO_UPDATE") != "1" {
+			return 9
+		}
 		to, err := os.ReadFile(filepath.Join(dir, "upgrade-to"))
 		if err != nil || os.WriteFile(filepath.Join(dir, "version"), to, 0o644) != nil {
 			return 3

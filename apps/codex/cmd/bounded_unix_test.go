@@ -10,56 +10,40 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
 
-// A run its bound ends is ended whole, what it started with it, and
-// answers errOverran, never its own status; a run within its bound answers
-// its own.
+// A run its bound ends is ended whole before runWithin answers, a child
+// that ignores SIGTERM among them, which never finishes its work after the
+// answer; the answer is errOverran, never the run's own status. A run
+// within its bound answers its own, and what it left running in its group
+// is ended before the answer too.
 func TestRunWithinEndsTheWholeTreeAtItsBound(t *testing.T) {
-	pids := filepath.Join(t.TempDir(), "pids")
-	c := exec.Command("/bin/sh", "-c", "/bin/sleep 60 & echo $! > '"+pids+"'; wait")
+	marker := filepath.Join(t.TempDir(), "finished")
+	c := exec.Command("/bin/sh", "-c", "(trap '' TERM; /bin/sleep 2; printf finished > \"$1\") & wait", "probe", marker)
 	start := time.Now()
-	err := runWithin(time.Second, c)
-	if !errors.Is(err, errOverran) || err.Error() != "it did not finish within 1s" {
+	err := runWithin(200*time.Millisecond, c)
+	if !errors.Is(err, errOverran) || err.Error() != "it did not finish within 200ms" {
 		t.Fatalf("the bounded run answered %v", err)
 	}
-	if took := time.Since(start); took > boundGrace {
+	if took := time.Since(start); took > 2*boundGrace {
 		t.Errorf("the bounded run took %v", took)
 	}
-	raw, _ := os.ReadFile(pids)
-	pid, perr := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if perr != nil {
-		t.Fatalf("the child's pid %q: %v", raw, perr)
+	time.Sleep(3 * time.Second) // sleep-ok: longer than the child's own work, which a bound that ended it never finishes
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a child finished its work after the bound answered")
 	}
-	// The child is gone, or a zombie its parent's end left to init: it
-	// takes no signal-able life either way within the grace.
-	deadline := time.Now().Add(boundGrace)
-	for syscall.Kill(pid, 0) == nil && !zombie(pid) {
-		if time.Now().After(deadline) {
-			t.Fatalf("the bound left the child %d running", pid)
-		}
-		time.Sleep(50 * time.Millisecond) // sleep-ok: a bounded wait for the kernel to reap a killed child
-	}
+
+	left := filepath.Join(t.TempDir(), "left")
 	var exit *exec.ExitError
-	if err := runWithin(time.Minute, exec.Command("/bin/sh", "-c", "exit 7")); !errors.As(err, &exit) || exit.ExitCode() != 7 {
+	if err := runWithin(time.Minute, exec.Command("/bin/sh", "-c", "(/bin/sleep 2; printf left > \"$1\") & exit 7", "probe", left)); !errors.As(err, &exit) || exit.ExitCode() != 7 {
 		t.Errorf("a run within its bound answered %v, want its status 7", err)
 	}
-}
-
-// zombie is whether process pid has ended and waits to be reaped, where
-// /proc says so (Linux); elsewhere none is known as one.
-func zombie(pid int) bool {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return false
+	time.Sleep(3 * time.Second) // sleep-ok: longer than the work the run left behind, which its end ended
+	if _, err := os.Stat(left); err == nil {
+		t.Error("what a run left running in its group finished after it answered")
 	}
-	fields := strings.Fields(string(raw[strings.LastIndexByte(string(raw), ')')+1:]))
-	return len(fields) > 0 && fields[0] == "Z"
 }
 
 // The app asked to quit: asked again until it says none runs, answering

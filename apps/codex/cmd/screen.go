@@ -339,10 +339,10 @@ func (a fetchedApp) remove() {
 // screenCommands are the commands `cyfr screen on` runs, the packages'
 // only if needed: app is the sha256 of the CYFR app's package fetched into
 // the project, or "" where the machine has it. The package is the
-// account's file, so root copies it where the account cannot write, and
-// apt installs that copy only once root has checked it against app: a
-// package changed after the fetch is never installed. That copy is
-// stageApp's alone.
+// account's file, so root takes its bytes from a process of the
+// account's and installs them only once it has checked them against app,
+// in a folder only root may enter: a package changed after the fetch is
+// never installed (stageApp).
 func screenCommands(dir, account, app string) []string {
 	base := machine.installed("labwc") && machine.installed("wvkbd") && machine.installed("swayidle")
 	var commands []string
@@ -350,7 +350,7 @@ func screenCommands(dir, account, app string) []string {
 		commands = append(commands, "apt-get update")
 	}
 	if app != "" {
-		commands = append(commands, stageApp(filepath.Join(dir, screenAppFile), app))
+		commands = append(commands, stageApp(filepath.Join(dir, screenAppFile), app, account))
 	}
 	if !base {
 		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd swayidle")
@@ -367,18 +367,23 @@ func screenCommands(dir, account, app string) []string {
 }
 
 // stageApp is the one command that installs the CYFR app's package from
-// the account's file at path, whose sha256 is sum: root's copy in a folder
-// of its own, checked, handed to apt. The folder is that command's alone,
-// a subshell whose exit removes it on every way out, the copy, the check
-// or apt failing, an interrupt, or apt done, so nothing staged outlives
-// it; it runs before anything of the screen is installed, so a failure
-// leaves no part of the screen behind. options are apt-get install's own,
-// before the package (cyfr update's).
-func stageApp(path, sum string, options ...string) string {
+// the account's file at path, whose sha256 is sum, as root. Root never
+// opens path: a process of account's own (runuser) reads it, with no more
+// than account may, and hands root its bytes, which root writes into a
+// folder of its own that only root may enter (mktemp -d), checks there
+// against sum and hands to apt from there. A link at path to a file only
+// root may read is refused as account would be, and nothing of what it
+// reads is put where another account could see it. The folder is that
+// command's alone, a subshell whose exit removes it on every way out, the
+// read, the check or apt failing, an interrupt, or apt done, so nothing
+// staged outlives it; it runs before anything of the screen is installed,
+// so a failure leaves no part of the screen behind. options are apt-get
+// install's own, before the package (cyfr update's).
+func stageApp(path, sum, account string, options ...string) string {
 	deb := "\"$d/" + appPackage + ".deb\""
 	install := strings.Join(append([]string{"apt-get", "install", "-y"}, options...), " ")
-	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 \"$d\"" +
-		" && install -m 0644 " + shellQuote([]string{path}) + " " + deb +
+	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0700 \"$d\"" +
+		" && runuser -u " + shellQuote([]string{account}) + " -- cat -- " + shellQuote([]string{path}) + " > " + deb +
 		" && echo '" + sum + "  '" + deb + " | sha256sum --check --strict --quiet" +
 		" && " + install + " " + deb + " )"
 }

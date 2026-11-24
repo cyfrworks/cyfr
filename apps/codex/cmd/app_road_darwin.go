@@ -27,18 +27,23 @@ import (
 func systemAppRoad() appRoad { return macRoad{apps: filepath.Dir(installedAppBundle)} }
 
 // macRoad replaces CYFR.app in apps whole. The new app is copied from the
-// verified DMG into a hidden bundle beside it, macStaging, its signature
-// checked and its team the installed app's; then one rename swaps the two
-// (RENAME_SWAP), so apps holds the old app or the new one whole at every
-// instant. The new app's own cyfr must answer the release, or the swap is
-// made again, back; only then is the old app, now in macStaging, removed.
+// verified DMG into a hidden bundle of this run's own beside it
+// (macStaging), its signature checked and its team the installed app's;
+// then one rename swaps the two (RENAME_SWAP), so apps holds the old app
+// or the new one whole at every instant. The old app, now in the staging
+// bundle, stays until the transaction has read the new app's release
+// (finish): confirmed, it is removed; not, the swap is made again, back.
 // A crash between the swap and that removal leaves the new app installed
-// and the old one hidden in macStaging, which the next update removes
-// before it stages anything; so does a crash while the new app is copied.
+// and the old one hidden beside it, which the next update removes before
+// it stages anything, under the one update's lock (lockUpdate); so does a
+// crash while the new app is copied.
 type macRoad struct{ apps string }
 
-// macStaging is the hidden bundle beside CYFR.app a replacement stages in.
-const macStaging = ".CYFR-update.app"
+// macStaging is the hidden bundle beside CYFR.app the run whose process
+// id is pid stages in; macStagingGlob matches every run's.
+func macStaging(pid int) string { return fmt.Sprintf(".CYFR-update-%d.app", pid) }
+
+const macStagingGlob = ".CYFR-update-*.app"
 
 // The bounds of the Mac road's steps: mounting and leaving the DMG, the
 // copy of its app, the check of the app's signature.
@@ -79,11 +84,15 @@ func (r macRoad) elevate(_ io.Writer, again string) (func(), error) {
 
 func (r macRoad) replace(out io.Writer, s *staged, _ bool) error {
 	installed := filepath.Join(r.apps, "CYFR.app")
-	staging := filepath.Join(r.apps, macStaging)
-	// What a crash left of an update before this one.
-	if err := os.RemoveAll(staging); err != nil {
-		return fmt.Errorf("an earlier update's %s could not be removed (%v); nothing was replaced", staging, err)
+	// What a crash left of an update before this one: no other update runs
+	// (lockUpdate).
+	leftovers, _ := filepath.Glob(filepath.Join(r.apps, macStagingGlob))
+	for _, l := range leftovers {
+		if err := os.RemoveAll(l); err != nil {
+			return fmt.Errorf("an earlier update's %s could not be removed (%v); nothing was replaced", l, err)
+		}
 	}
+	staging := filepath.Join(r.apps, macStaging(os.Getpid()))
 	mount := filepath.Join(s.dir, "mount")
 	if err := os.Mkdir(mount, 0o700); err != nil {
 		return err
@@ -94,29 +103,35 @@ func (r macRoad) replace(out io.Writer, s *staged, _ bool) error {
 	}
 	copied := runWithin(dittoWithin, exec.Command("ditto", filepath.Join(mount, "CYFR.app"), staging))
 	_ = runWithin(hdiutilWithin, exec.Command("hdiutil", "detach", "-force", mount))
+	s.kept = staging
 	if copied != nil {
-		_ = os.RemoveAll(staging)
 		return fmt.Errorf("the new app could not be copied out of its disk image (%w); nothing was replaced", copied)
 	}
 	if err := sameSigner(staging, installed); err != nil {
-		_ = os.RemoveAll(staging)
 		return fmt.Errorf("the new app's signature was refused (%w); nothing was replaced", err)
 	}
 	if err := unix.RenamexNp(staging, installed, unix.RENAME_SWAP); err != nil {
-		_ = os.RemoveAll(staging)
 		return fmt.Errorf("the new app could not take the old one's place (%w); nothing was replaced", err)
 	}
-	if got := machine.appRelease(); got != s.target {
-		if err := unix.RenamexNp(staging, installed, unix.RENAME_SWAP); err != nil {
-			return fmt.Errorf("the new app answers %q, not %s, and the old one could not be put back (%w); it is %s", got, s.target, err, staging)
-		}
-		_ = os.RemoveAll(staging)
-		return fmt.Errorf("the new app's own cyfr answered %q, not %s, so the app before it was put back", got, s.target)
-	}
-	if err := os.RemoveAll(staging); err != nil {
-		fmt.Fprintf(out, "The CYFR app before this one could not be removed from %s (%v); the next update removes it.\n", staging, err)
-	}
+	s.swapped = true
 	return nil
+}
+
+// finish removes the old app, which the swap left in the staging bundle,
+// once the new app is confirmed; otherwise it swaps the two back, so the
+// old app is installed whole again, and removes the new one. A staging
+// bundle no swap reached is removed either way.
+func (r macRoad) finish(_ io.Writer, s *staged, confirmed bool) error {
+	if s.kept == "" {
+		return nil
+	}
+	if s.swapped && !confirmed {
+		if err := unix.RenamexNp(s.kept, filepath.Join(r.apps, "CYFR.app"), unix.RENAME_SWAP); err != nil {
+			return fmt.Errorf("the app before could not be swapped back from %s: %w", s.kept, err)
+		}
+		s.swapped = false
+	}
+	return os.RemoveAll(s.kept)
 }
 
 func (macRoad) closesTheBox() ([]string, []string) { return nil, nil }

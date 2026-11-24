@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // installedAppPath is where the cyfr-desktop package puts the app.
@@ -28,8 +29,11 @@ func installedAppCyfr() (string, error) {
 // package but a removed one's: installed, or left part way by a dpkg that
 // did not finish, which the package tool's next install mends.
 func installedAppPresent() bool {
-	out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", appPackage).Output()
-	status := strings.TrimSpace(string(out))
+	var out strings.Builder
+	c := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status}", appPackage)
+	c.Stdout = &out
+	err := runWithin(10*time.Second, c)
+	status := strings.TrimSpace(out.String())
 	return err == nil && status != "" && status != "not-installed" && status != "config-files"
 }
 

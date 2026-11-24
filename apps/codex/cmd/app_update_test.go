@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/release"
+	"github.com/cyfr/codex/internal/version"
 )
 
 // roadStandIn is the installed app's road, its closing and its reopening,
@@ -31,6 +32,10 @@ type roadStandIn struct {
 	box                              bool
 	released                         int
 	interruptAfterFetch              bool
+	// backTo is the release going back leaves the app at; finishErr what
+	// finish answers.
+	backTo    string
+	finishErr error
 }
 
 // appScenario is programScenario on a machine with the CYFR app installed
@@ -85,6 +90,17 @@ func (a standInRoad) replace(_ io.Writer, s *staged, older bool) error {
 	return nil
 }
 
+func (a standInRoad) finish(_ io.Writer, _ *staged, confirmed bool) error {
+	r := a.r
+	if confirmed {
+		r.s.log = append(r.s.log, "finish")
+	} else {
+		r.s.log = append(r.s.log, "go back")
+		r.s.machine.app = r.backTo
+	}
+	return r.finishErr
+}
+
 func (a standInRoad) closesTheBox() ([]string, []string) {
 	if !a.r.box {
 		return nil, nil
@@ -98,7 +114,7 @@ func newAppScenario(t *testing.T, current, latest, app string) *appScenario {
 	t.Cleanup(cancel)
 	a := &appScenario{programScenario: newProgramScenario(t, current, latest), ctx: ctx, cancel: cancel}
 	a.machine.installed, a.machine.app = []string{appPackage}, app
-	a.road = &roadStandIn{s: a, becomes: latest}
+	a.road = &roadStandIn{s: a, becomes: latest, backTo: app}
 	saved, savedQuit, savedReopen, savedCyfr, savedManifest := appRoadHere, quitApp, reopenApp, appCyfr, fetchManifest
 	t.Cleanup(func() {
 		appRoadHere, quitApp, reopenApp, appCyfr, fetchManifest = saved, savedQuit, savedReopen, savedCyfr, savedManifest
@@ -186,7 +202,7 @@ func TestUpdateBringsTheInstalledAppByItsRoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cyfr update answered %v:\n%s", err, out)
 	}
-	a.steps("fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "reopen")
+	a.steps("fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "finish", "reopen")
 	self := resolvedPath(t, a.self)
 	if want := []string{self, self, "update", "--continue-as", "1.1.0", "--yes"}; len(a.handed) != 1 || !slices.Equal(a.handed[0], want) {
 		t.Errorf("cyfr update handed over %v, want once as %v", a.handed, want)
@@ -217,7 +233,7 @@ func TestUpdateBringsTheAppAndAStandaloneCyfr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cyfr update answered %v:\n%s", err, out)
 	}
-	a.steps("the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0")
+	a.steps("the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "finish")
 	a.installed("1.1.0")
 	self := resolvedPath(t, a.self)
 	if want := "The CYFR app and this cyfr, " + self + ", are release 1.1.0.\n"; !strings.Contains(out, want) {
@@ -247,14 +263,25 @@ func TestUpdateOfTheAppRefusesAtEachStep(t *testing.T) {
 			[]string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit"}, "The CYFR app could not be closed (it was still running); nothing was replaced"},
 		{"the installer fails", func(a *appScenario) {
 			a.road.ran, a.road.replaceErr = true, errors.New("apt could not install the CYFR app's package (exit status 100)")
-		}, []string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "reopen"},
-			"apt could not install the CYFR app's package (exit status 100); the CYFR app is release 1.0.0, and your CYFR was not touched"},
+		}, []string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "go back", "reopen"},
+			"apt could not install the CYFR app's package (exit status 100); the CYFR app is release 1.0.0; your CYFR was not touched. Run 'cyfr update' again"},
 		{"another release installed", func(a *appScenario) { a.road.becomes = "1.0.5" },
-			[]string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0"},
-			"The installer finished, but the CYFR app is release 1.0.5, not 1.1.0; your CYFR was not touched"},
+			[]string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "go back"},
+			"The installer finished, but the installed app's own cyfr answered 1.0.5, not 1.1.0; the CYFR app is release 1.0.0; your CYFR was not touched"},
 		{"no release answered", func(a *appScenario) { a.road.becomes = "" },
-			[]string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0"},
-			"The installer finished, but the CYFR app's own cyfr answers no release, not 1.1.0; your CYFR was not touched"},
+			[]string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "go back"},
+			"The installer finished, but the installed app's own cyfr answered no release, not 1.1.0; the CYFR app is release 1.0.0; your CYFR was not touched"},
+		{"the app that cannot be put back", func(a *appScenario) {
+			a.road.becomes, a.road.backTo, a.road.finishErr = "", "", errors.New("the swap was refused")
+		}, []string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "go back"},
+			"; the CYFR app's own cyfr answers no release, and the CYFR app before it could not be put back (the swap was refused); your CYFR was not touched. Install release 1.1.0 from "},
+		{"another update runs", func(a *appScenario) {
+			unlock, err := lockUpdate()
+			if err != nil {
+				a.t.Fatal(err)
+			}
+			a.t.Cleanup(unlock)
+		}, nil, "Another cyfr update is changing CYFR on this computer; nothing was changed. Run 'cyfr update' again once it has finished"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
@@ -313,7 +340,7 @@ func TestUpdateLeavesAnAppAtTheReleaseAlone(t *testing.T) {
 	if _, err := a.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "the stack's update began") {
 		t.Errorf("cyfr update answered %v", err)
 	}
-	a.steps("fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0")
+	a.steps("fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "finish")
 }
 
 // --version of an older release tells the road it is older, and names
@@ -326,7 +353,7 @@ func TestUpdateOfTheAppToAnExactRelease(t *testing.T) {
 	if _, err := a.run(updateOptions{version: "1.0.0"}); err != nil && !strings.Contains(err.Error(), "the stack's update began") {
 		t.Fatalf("cyfr update answered %v", err)
 	}
-	a.steps("fetch 1.0.0", "elevate cyfr update --version 1.0.0", "quit", "replace installer 1.0.0 older")
+	a.steps("fetch 1.0.0", "elevate cyfr update --version 1.0.0", "quit", "replace installer 1.0.0 older", "finish")
 
 	a = newAppScenario(t, "0.6.0-alpha.1", "0.6.0-alpha.1", "0.6.0-alpha.1")
 	a.theAppsOwn()
@@ -334,58 +361,106 @@ func TestUpdateOfTheAppToAnExactRelease(t *testing.T) {
 	if _, err := a.run(updateOptions{version: "0.6.0-alpha.2"}); err != nil {
 		t.Fatalf("cyfr update answered %v", err)
 	}
-	a.steps("fetch 0.6.0-alpha.2", "elevate cyfr update --version 0.6.0-alpha.2", "quit", "replace installer 0.6.0-alpha.2")
+	a.steps("fetch 0.6.0-alpha.2", "elevate cyfr update --version 0.6.0-alpha.2", "quit", "replace installer 0.6.0-alpha.2", "finish")
 }
 
 // On the box's own screen the launcher would start the old app again as
 // soon as it ended, so the screen's service is stopped first, as root,
-// and started again once the installer is done, whatever it answered; the
-// app is not asked to quit. A stop that fails replaces nothing and starts
-// the screen again.
+// and started again once the installer is done and what it left settled,
+// whatever it answered; the app is not asked to quit. A stop that fails
+// replaces nothing and starts the screen again. The service's commands
+// and the road's steps are one log, so their order is held; every root
+// command is one bounded transient unit.
 func TestUpdateOnTheBoxStopsItsScreenAroundTheInstaller(t *testing.T) {
 	for _, c := range []struct {
 		name       string
 		stopErr    error
 		replaceErr error
-		applied    [][]string
 		steps      []string
 	}{
-		{"a working installer", nil, nil, nil, []string{"fetch 1.1.0", "elevate cyfr update", "replace installer 1.1.0"}},
-		{"a failing installer", nil, errors.New("apt could not install"), nil, []string{"fetch 1.1.0", "elevate cyfr update", "replace installer 1.1.0"}},
-		{"a stop that fails", errors.New("refused"), nil, nil, []string{"fetch 1.1.0", "elevate cyfr update"}},
+		{"a working installer", nil, nil, []string{"fetch 1.1.0", "elevate cyfr update", "root: stop the screen", "replace installer 1.1.0", "finish", "root: start the screen"}},
+		{"a failing installer", nil, errors.New("apt could not install"), []string{"fetch 1.1.0", "elevate cyfr update", "root: stop the screen", "replace installer 1.1.0", "go back", "root: start the screen"}},
+		{"a stop that fails", errors.New("refused"), nil, []string{"fetch 1.1.0", "elevate cyfr update", "root: stop the screen", "root: start the screen"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
 			a.theAppsOwn()
 			a.road.box, a.road.replaceErr = true, c.replaceErr
-			machine.screenService = func() (bool, bool) { return true, true }
-			stopped := false
-			machine.apply = func(commands []string) error {
-				a.machine.applied = append(a.machine.applied, commands)
-				if strings.Contains(commands[0], "stop the screen") {
-					stopped = true
-					return c.stopErr
-				}
-				return nil
-			}
+			a.boxStandIn(c.stopErr, nil)
 			_, err := a.run(updateOptions{yes: true})
 			if (c.stopErr == nil && c.replaceErr == nil) != (err == nil) {
 				t.Errorf("cyfr update answered %v", err)
 			}
 			a.steps(c.steps...)
-			if !stopped {
-				t.Error("the screen was not stopped")
-			}
-			var ran []string
 			for _, commands := range a.machine.applied {
-				if len(commands) != 1 || !strings.HasPrefix(commands[0], "timeout --kill-after=10s 30s 'sh' '-c' ") {
-					t.Errorf("a root command was not bounded: %q", commands)
-					continue
+				if len(commands) != 1 || !strings.HasPrefix(commands[0], "'systemd-run' '--wait' '--pipe' '--collect' '--quiet' '-p' 'RuntimeMaxSec=30' '-p' 'KillSignal=SIGKILL' '-p' 'TimeoutStopSec=10' '--' '/bin/sh' '-c' ") {
+					t.Errorf("a root command was not one bounded unit: %q", commands)
 				}
-				ran = append(ran, strings.TrimSuffix(strings.TrimPrefix(commands[0], "timeout --kill-after=10s 30s 'sh' '-c' '"), "'"))
 			}
-			if want := []string{"stop the screen", "start the screen"}; !slices.Equal(ran, want) {
-				t.Errorf("as root the update ran %q, want %q", ran, want)
+		})
+	}
+}
+
+// boxStandIn makes the machine the box with its screen running, its root
+// commands logged in the road's log as they run: stop answers stopErr,
+// start startErr.
+func (a *appScenario) boxStandIn(stopErr, startErr error) {
+	machine.screenService = func() (bool, bool) { return true, true }
+	machine.apply = func(commands []string) error {
+		a.machine.applied = append(a.machine.applied, commands)
+		switch {
+		case strings.Contains(commands[0], "stop the screen"):
+			a.log = append(a.log, "root: stop the screen")
+			return stopErr
+		case strings.Contains(commands[0], "start the screen"):
+			a.log = append(a.log, "root: start the screen")
+			return startErr
+		}
+		a.t.Errorf("root was handed %q", commands)
+		return nil
+	}
+}
+
+// An app the update closed that does not come back stops the update before
+// the stack, saying the app is the new release, how to start it and to run
+// cyfr update again, on the box and on a desktop alike; that run finds the
+// app at the release and goes on to the stack.
+func TestUpdateStopsBeforeTheStackWhenTheAppDoesNotComeBack(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		box  bool
+		says string
+	}{
+		{"a desktop", false, "The CYFR app is release 1.1.0, but the CYFR app could not be opened again (refused): open CYFR, then run 'cyfr update' again to update CYFR here; your CYFR was not touched"},
+		{"the box", true, "The CYFR app is release 1.1.0, but the screen could not be started again (refused): start it with 'sudo systemctl start cyfr-screen', then run 'cyfr update' again to update CYFR here; your CYFR was not touched"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
+			a.theAppsOwn()
+			a.road.ran, a.road.box = true, c.box
+			refused := errors.New("refused")
+			if c.box {
+				a.boxStandIn(nil, refused)
+			} else {
+				reopenApp = func() error {
+					a.log = append(a.log, "reopen")
+					return refused
+				}
+			}
+			if _, err := a.run(updateOptions{yes: true}); err == nil || err.Error() != c.says {
+				t.Errorf("cyfr update answered %v, want %q", err, c.says)
+			}
+			a.untouched()
+
+			// Run again, as the refusal says, by the new release's cyfr.
+			version.Version = "1.1.0"
+			a.log = nil
+			if _, err := a.run(updateOptions{yes: true}); err == nil || !strings.Contains(err.Error(), "the stack's update began") {
+				t.Errorf("cyfr update again answered %v", err)
+			}
+			a.steps()
+			if !slices.Equal(a.manifests, []string{"1.1.0"}) {
+				t.Errorf("the stack's update was asked %v, want 1.1.0's", a.manifests)
 			}
 		})
 	}

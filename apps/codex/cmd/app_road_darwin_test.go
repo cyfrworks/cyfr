@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -84,26 +85,52 @@ func macAnswers(t *testing.T, r macRoad, version string) {
 	}
 }
 
-// The new app from the verified DMG replaces the installed one whole, and
-// what an earlier update's crash left hidden beside it is removed first.
+// macApps lists the folder of applications.
+func macApps(t *testing.T, r macRoad) []string {
+	t.Helper()
+	entries, _ := os.ReadDir(r.apps)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// The new app from the verified DMG takes the installed one's place whole,
+// and the old one is kept beside it until the transaction confirms the new
+// one, then removed; what an earlier update's crash left hidden beside it
+// is removed before anything is staged.
 func TestTheMacRoadSwapsTheWholeApp(t *testing.T) {
 	r, _ := macRoadOn(t, "1.0.0")
-	writeFile(t, filepath.Join(r.apps, macStaging, "Contents", "Info.plist"), "a crash's leftover")
+	writeFile(t, filepath.Join(r.apps, macStaging(1), "Contents", "Info.plist"), "a crash's leftover")
 	s := macDMG(t, macApp(t, t.TempDir(), "1.1.0"), "1.1.0")
 	if err := r.replace(&bytes.Buffer{}, s, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := machine.appRelease(); got != "1.1.0" {
+		t.Errorf("the installed app answers %q after the swap, want 1.1.0", got)
+	}
+	if want := []string{macStaging(os.Getpid()), "CYFR.app"}; !slices.Equal(macApps(t, r), want) {
+		t.Errorf("before the confirmation the applications folder holds %v, want the old app kept beside the new: %v", macApps(t, r), want)
+	}
+	if err := r.finish(&bytes.Buffer{}, s, true); err != nil {
 		t.Fatal(err)
 	}
 	macAnswers(t, r, "1.1.0")
 }
 
-// A new app whose own cyfr answers another release is swapped back: the
-// app before it stays installed, whole; one whose signature does not
-// verify, a file changed after signing, replaces nothing.
+// Any refusal after the swap, its own cyfr answering another release or
+// none, or a reading that fails, swaps the app before back: it is
+// installed whole again and the new one removed. One whose signature does
+// not verify, a file changed after signing, replaces nothing.
 func TestTheMacRoadPutsTheAppBackOrReplacesNothing(t *testing.T) {
 	r, _ := macRoadOn(t, "1.0.0")
-	s := macDMG(t, macApp(t, t.TempDir(), "1.0.5"), "1.1.0")
-	if err := r.replace(&bytes.Buffer{}, s, false); err == nil || !strings.Contains(err.Error(), `the new app's own cyfr answered "1.0.5", not 1.1.0, so the app before it was put back`) {
-		t.Errorf("a new app of another release answered %v", err)
+	s := macDMG(t, macApp(t, t.TempDir(), "1.1.0"), "1.1.0")
+	if err := r.replace(&bytes.Buffer{}, s, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.finish(&bytes.Buffer{}, s, false); err != nil {
+		t.Fatal(err)
 	}
 	macAnswers(t, r, "1.0.0")
 
@@ -112,6 +139,9 @@ func TestTheMacRoadPutsTheAppBackOrReplacesNothing(t *testing.T) {
 	s = macDMG(t, changed, "1.1.0")
 	if err := r.replace(&bytes.Buffer{}, s, false); err == nil || !strings.Contains(err.Error(), "the new app's signature was refused") {
 		t.Errorf("a new app changed after signing answered %v", err)
+	}
+	if err := r.finish(&bytes.Buffer{}, s, false); err != nil {
+		t.Fatal(err)
 	}
 	macAnswers(t, r, "1.0.0")
 }

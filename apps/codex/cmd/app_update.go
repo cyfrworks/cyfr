@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cyfr/codex/internal/release"
@@ -22,8 +23,8 @@ import (
 // bounds can take when it works: appQuitWithin the app's own end (its
 // cyfr's five-second shutdown and its lock), appAskWithin one start of the
 // app that asks the running one to end, appReplaceWithin a package tool's
-// install of the app, and boundGrace what a process the bound ended is
-// given to go.
+// install of the app, and boundGrace how long a process the bound killed
+// may take to be gone.
 const (
 	appReplaceWithin = 20 * time.Minute
 	boundGrace       = 10 * time.Second
@@ -72,6 +73,13 @@ type appRoad interface {
 	// installer's own undoing left it; it never answers success unless
 	// its installer did.
 	replace(out io.Writer, s *staged, older bool) error
+	// finish ends the replacement once the transaction has read the
+	// installed app's release: confirmed, it removes what was kept to go
+	// back to; not, it puts back what it kept. It is the one step that
+	// removes the app before, so nothing needed to go back is gone before
+	// the last step that can refuse. An error confirmed is what was left
+	// behind; unconfirmed, that the app could not be put back.
+	finish(out io.Writer, s *staged, confirmed bool) error
 	// closesTheBox is the root commands that stop the box's screen and
 	// start it again, through the same elevation, where the road has one;
 	// nil elsewhere.
@@ -80,8 +88,15 @@ type appRoad interface {
 
 // staged is release target's installer fetch verified: file, its sha256
 // sum, in dir, the folder of its own fetch made; a road whose installer
-// fetches for itself (Homebrew) stages no file.
-type staged struct{ target, dir, file, sum string }
+// fetches for itself (Homebrew) stages no file. kept is what a road's
+// replace kept to go back to, which its finish removes or puts back (the
+// Mac's old app, Windows' cyfr set aside), and swapped whether the Mac's
+// swap was made.
+type staged struct {
+	target, dir, file, sum string
+	kept                   string
+	swapped                bool
+}
 
 // remove removes the folder fetch made.
 func (s *staged) remove() {
@@ -193,46 +208,80 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	}
 
 	replaced := road.replace(out, s, older)
-	after := machine.appRelease()
+	answered := machine.appRelease()
+	confirmed := replaced == nil && answered == target
+	finished := road.finish(out, s, confirmed)
+	after := answered
+	if !confirmed {
+		after = machine.appRelease()
+	}
+	// The app is opened again as it was, whatever came before; one that
+	// is not stops the update before the stack, whose next run finishes
+	// it.
+	var reopen string
 	if box {
 		if err := applyWithin(appQuitWithin, start); err != nil {
-			fmt.Fprintf(out, "The screen could not be started again (%v); run 'sudo systemctl start cyfr-screen'.\n", err)
+			reopen = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start cyfr-screen'", err)
 		}
 	} else if ran {
 		if err := reopenApp(); err != nil {
-			fmt.Fprintf(out, "The CYFR app could not be opened again (%v); open it yourself.\n", err)
+			reopen = fmt.Sprintf("the CYFR app could not be opened again (%v): open CYFR", err)
 		}
 	}
 	switch {
-	case replaced != nil:
-		return fmt.Errorf("%v; %s, and your CYFR was not touched. Run '%s' again", replaced, appIs(after), again)
-	case after != target:
-		return fmt.Errorf("The installer finished, but %s, not %s; your CYFR was not touched. Run '%s' again", appIs(after), target, again)
+	case !confirmed && finished != nil:
+		return fmt.Errorf("%s, and the CYFR app before it could not be put back (%v); your CYFR was not touched. Install release %s from %s/tag/%s", refusedReplacement(replaced, answered, after, target), finished, target, releasesPage, target)
+	case !confirmed && reopen != "":
+		return fmt.Errorf("%s; %s, and your CYFR was not touched. Then run '%s' again", refusedReplacement(replaced, answered, after, target), reopen, again)
+	case !confirmed:
+		return fmt.Errorf("%s; your CYFR was not touched. Run '%s' again", refusedReplacement(replaced, answered, after, target), again)
+	case finished != nil:
+		fmt.Fprintf(out, "What was kept of the CYFR app before this one could not be removed (%v); the next update removes it.\n", finished)
+	}
+	if reopen != "" {
+		return fmt.Errorf("The CYFR app is release %s, but %s, then run '%s' again to update CYFR here; your CYFR was not touched", target, reopen, again)
 	}
 	fmt.Fprintf(out, "The CYFR app is release %s.\n", target)
 	return nil
 }
 
+// refusedReplacement says why a replacement is refused and which release
+// the app is now, once what was kept went back (after): its installer's
+// failure, or the installed app's own cyfr answering another than target.
+func refusedReplacement(replaced error, answered, after, target string) string {
+	if replaced != nil {
+		return fmt.Sprintf("%v; %s", replaced, appIs(after))
+	}
+	said := "the installed app's own cyfr answered no release"
+	if answered != "" {
+		said = "the installed app's own cyfr answered " + answered
+	}
+	return fmt.Sprintf("The installer finished, but %s, not %s; %s", said, target, appIs(after))
+}
+
 // applyWithin runs commands as root through one sudo, whose login
-// elevate took, bounded by within: timeout, in a process group of its
-// own that a terminal's ^C does not reach, ends the whole group the
-// commands make at the bound, and its status then is errOverran.
+// elevate took, in a transient system unit bounded by within
+// (systemd-run): at the bound systemd kills every process the unit's
+// control group holds, whatever root started (KillSignal=SIGKILL), and
+// systemd-run returns only once the unit has stopped. A terminal's ^C
+// does not reach the unit. A run that failed at or past its bound is
+// errOverran, never its own status.
 func applyWithin(within time.Duration, commands []string) error {
-	c := shellQuote([]string{"sh", "-c", strings.Join(commands, " && ")})
-	err := machine.apply([]string{fmt.Sprintf("timeout --kill-after=%ds %ds %s", int(boundGrace.Seconds()), int(within.Seconds()), c)})
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && (exit.ExitCode() == timedOut || exit.ExitCode() == timedOutKilled) {
+	start := time.Now()
+	err := machine.apply([]string{boundedRoot(within, commands)})
+	if err != nil && time.Since(start) >= within {
 		return fmt.Errorf("%w %v", errOverran, within)
 	}
 	return err
 }
 
-// timedOut and timedOutKilled are timeout's statuses for a command its
-// bound ended, by its signal and by the kill after it.
-const (
-	timedOut       = 124
-	timedOutKilled = 137
-)
+// boundedRoot is commands, each run only once those before it succeeded,
+// as one transient unit of at most within (applyWithin).
+func boundedRoot(within time.Duration, commands []string) string {
+	return shellQuote([]string{"systemd-run", "--wait", "--pipe", "--collect", "--quiet",
+		"-p", fmt.Sprintf("RuntimeMaxSec=%d", int(within.Seconds())), "-p", "KillSignal=SIGKILL", "-p", fmt.Sprintf("TimeoutStopSec=%d", int(boundGrace.Seconds())),
+		"--", "/bin/sh", "-c", strings.Join(commands, " && ")})
+}
 
 // appQuitNone and appQuitAsked are the statuses the installed app started
 // with --quit ends with (desktop/src/app.js): none of its kind ran for
@@ -294,4 +343,31 @@ func startInstalledApp() error {
 		return err
 	}
 	return c.Process.Release()
+}
+
+// errUpdateRuns is the refusal of a second cyfr update while one runs.
+var errUpdateRuns = errors.New("Another cyfr update is changing CYFR on this computer; nothing was changed. Run 'cyfr update' again once it has finished")
+
+// lockUpdate takes the lock one cyfr update at a time holds while it
+// changes the installed app or this program (updateLockPath), before
+// anything is staged, and answers what lets it go; a second update is
+// refused (errUpdateRuns). The lock goes with this process, however it
+// ends, and is not handed over: the program the update goes on as runs
+// the stack's step under the stack's own lock.
+func lockUpdate() (func(), error) {
+	f, err := os.OpenFile(updateLockPath, os.O_RDONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("cyfr update could not open its lock %s (%v); nothing was changed", updateLockPath, err)
+	}
+	held, err := takeLock(f)
+	switch {
+	case held:
+		f.Close()
+		return nil, errUpdateRuns
+	case err != nil:
+		f.Close()
+		return nil, fmt.Errorf("cyfr update could not take its lock %s (%v); nothing was changed", updateLockPath, err)
+	}
+	var once sync.Once
+	return func() { once.Do(func() { f.Close() }) }, nil
 }

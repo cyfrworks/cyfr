@@ -8,10 +8,13 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
 	"os/exec"
-	"strconv"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The DEB's road installs the verified copy through apt as one root
@@ -35,33 +38,58 @@ func TestTheDebRoadInstallsThroughApt(t *testing.T) {
 			t.Fatalf("the road ran as root %q, want one command", m.applied)
 		}
 		ran := m.applied[0][0]
-		if !strings.HasPrefix(ran, "timeout --kill-after=10s 1200s 'sh' '-c' 'dpkg --configure -a && ( ") || !strings.Contains(ran, c.apt) ||
-			!strings.Contains(ran, "install -m 0644 '\\''/tmp/cyfr-update-1/the.deb'\\''") || !strings.Contains(ran, "sha256sum --check --strict --quiet") {
+		account, _ := user.Current()
+		if !strings.HasPrefix(ran, "'systemd-run' '--wait' '--pipe' '--collect' '--quiet' '-p' 'RuntimeMaxSec=1200' '-p' 'KillSignal=SIGKILL' '-p' 'TimeoutStopSec=10' '--' '/bin/sh' '-c' 'dpkg --configure -a && ( ") || !strings.Contains(ran, c.apt) ||
+			!strings.Contains(ran, "runuser -u '\\''"+account.Username+"'\\'' -- cat -- '\\''/tmp/cyfr-update-1/the.deb'\\''") || !strings.Contains(ran, "sha256sum --check --strict --quiet") {
 			t.Errorf("the road ran as root %q, want the bounded check and %q", ran, c.apt)
 		}
 	}
 }
 
-// A root command its bound ended is errOverran, never its own status, and
-// a refusal of apt says what apt answered.
+// A refusal of apt says what apt answered.
 func TestTheDebRoadSaysWhatItsInstallerAnswered(t *testing.T) {
 	m := standInMachine(t)
-	for _, c := range []struct {
-		status int
-		says   string
-	}{
-		{124, "apt could not install the CYFR app's package (it did not finish within 20m0s)"},
-		{137, "apt could not install the CYFR app's package (it did not finish within 20m0s)"},
-		{100, "apt could not install the CYFR app's package (exit status 100)"},
-	} {
-		m.applyErr = exec.Command("/bin/sh", "-c", "exit "+strconv.Itoa(c.status)).Run()
-		if m.applyErr == nil {
-			t.Fatal("the stand-in status did not fail")
+	m.applyErr = exec.Command("/bin/sh", "-c", "exit 100").Run()
+	err := (debRoad{}).replace(&bytes.Buffer{}, &staged{file: "f", sum: "s"}, false)
+	if err == nil || err.Error() != "apt could not install the CYFR app's package (exit status 100)" || errors.Is(err, errOverran) {
+		t.Errorf("apt's refusal answered %v", err)
+	}
+}
+
+// The root command's bound ends what root started, a child that ignores
+// SIGTERM among them, before applyWithin answers errOverran: nothing of
+// it finishes its work afterwards. Run as a transient unit of this
+// account's own systemd where it runs one, else of the system's through a
+// sudo that asks for no password, the way root runs it.
+func TestApplyWithinEndsWhatRootStartedAtItsBound(t *testing.T) {
+	run := func(command string) *exec.Cmd { return nil }
+	switch {
+	case exec.Command("systemd-run", "--user", "--wait", "--quiet", "--collect", "/bin/true").Run() == nil:
+		run = func(command string) *exec.Cmd {
+			return exec.Command("/bin/sh", "-c", strings.Replace(command, "'systemd-run' ", "'systemd-run' '--user' ", 1))
 		}
-		err := (debRoad{}).replace(&bytes.Buffer{}, &staged{file: "f", sum: "s"}, false)
-		if err == nil || err.Error() != c.says || (c.status != 100) != errors.Is(err, errOverran) {
-			t.Errorf("status %d answered %v, want %q", c.status, err, c.says)
-		}
+	case exec.Command("sudo", "-n", "systemd-run", "--wait", "--quiet", "--collect", "/bin/true").Run() == nil:
+		run = func(command string) *exec.Cmd { return exec.Command("sudo", "-n", "/bin/sh", "-c", command) }
+	default:
+		t.Skip("no systemd here runs a transient unit for this account, nor a sudo without a password for the system's")
+	}
+	marker := filepath.Join(t.TempDir(), "finished")
+	saved := machine.apply
+	t.Cleanup(func() { machine.apply = saved })
+	machine.apply = func(commands []string) error {
+		c := run(commands[0])
+		c.Stdout, c.Stderr = os.Stderr, os.Stderr
+		return c.Run()
+	}
+	start := time.Now()
+	err := applyWithin(time.Second, []string{"(trap '' TERM; /bin/sleep 3; printf finished > " + shellQuote([]string{marker}) + ") & wait"})
+	if !errors.Is(err, errOverran) {
+		t.Fatalf("applyWithin answered %v, want errOverran", err)
+	}
+	took := time.Since(start)
+	time.Sleep(4 * time.Second) // sleep-ok: longer than the child's own work, which a bound that ended it never finishes
+	if _, err := os.Stat(marker); err == nil {
+		t.Errorf("a child root started finished its work after the bound answered (in %v)", took)
 	}
 }
 

@@ -65,11 +65,13 @@ func screenCommandsIn(dir string, tail ...string) []string {
 }
 
 // appCommand is the command that installs the CYFR app's package fetched
-// into dir, whose sha256 is sum: root's copy of it, checked, is what apt
+// into dir, whose sha256 is sum: the bytes this account's own process
+// reads, written into root's own folder and checked there, are what apt
 // installs, in a folder the command's own exit removes.
 func appCommand(dir, sum string) string {
-	return `( trap 'rm -rf "$d"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 "$d"` +
-		" && install -m 0644 " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` "$d/cyfr-desktop.deb"` +
+	account, _ := user.Current()
+	return `( trap 'rm -rf "$d"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0700 "$d"` +
+		" && runuser -u " + shellQuote([]string{account.Username}) + " -- cat -- " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` > "$d/cyfr-desktop.deb"` +
 		" && echo '" + sum + `  '"$d/cyfr-desktop.deb" | sha256sum --check --strict --quiet` +
 		` && apt-get install -y "$d/cyfr-desktop.deb" )`
 }

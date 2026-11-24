@@ -39,21 +39,23 @@ func TestTheMsiRoadRefusesWhatWindowsInstallerRefuses(t *testing.T) {
 }
 
 // The app's cyfr running the update steps aside for Windows Installer,
-// which would otherwise end the terminal it runs in, and stays aside once
-// the installer put the new one in its place, removed by a later update;
-// it is put back where the installer failed and put none there, and the
-// installer's status is said.
+// which would otherwise end the terminal it runs in. Once the release is
+// confirmed it stays aside, removed by a later update; where the installer
+// failed, or the installed app's cyfr does not answer the release, it goes
+// back over whatever is at its place. The installer's status is said.
 func TestTheMsiRoadStepsAsideForTheInstaller(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		script string
-		says   string
-		holds  string
-		aside  bool
+		name      string
+		script    string
+		says      string
+		confirmed bool
+		holds     string
+		aside     bool
 	}{
-		{"a working installer", "copy /y \"%~dp0new\" \"%CYFR_TEST_CARRIED%\" >nul\r\nexit /b 0", "", "new", true},
-		{"one that wants a restart", "copy /y \"%~dp0new\" \"%CYFR_TEST_CARRIED%\" >nul\r\nexit /b 3010", "", "new", true},
-		{"a failing installer", "exit /b 1603", "Windows Installer could not install the CYFR app (exit status 1603: the install failed and was undone)", "old", false},
+		{"a working installer", "copy /y \"%~dp0new\" \"%CYFR_TEST_CARRIED%\" >nul\r\nexit /b 0", "", true, "new", true},
+		{"one that wants a restart", "copy /y \"%~dp0new\" \"%CYFR_TEST_CARRIED%\" >nul\r\nexit /b 3010", "", true, "new", true},
+		{"another release installed", "copy /y \"%~dp0new\" \"%CYFR_TEST_CARRIED%\" >nul\r\nexit /b 0", "", false, "old", false},
+		{"a failing installer", "exit /b 1603", "Windows Installer could not install the CYFR app (exit status 1603: the install failed and was undone)", false, "old", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -70,9 +72,13 @@ func TestTheMsiRoadStepsAsideForTheInstaller(t *testing.T) {
 			msiexecProgram = filepath.Join(bin, "msiexec.cmd")
 			selfExecutable = func() (string, error) { return carried, nil }
 			appCyfr = func() (string, error) { return carried, nil }
-			err := (msiRoad{}).replace(&bytes.Buffer{}, &staged{target: "1.1.0", dir: dir, file: filepath.Join(dir, "the.msi")}, false)
+			s := &staged{target: "1.1.0", dir: dir, file: filepath.Join(dir, "the.msi")}
+			err := (msiRoad{}).replace(&bytes.Buffer{}, s, false)
 			if (c.says == "") != (err == nil) || (err != nil && err.Error() != c.says) {
 				t.Errorf("the road answered %v, want %q", err, c.says)
+			}
+			if err := (msiRoad{}).finish(&bytes.Buffer{}, s, c.confirmed); err != nil {
+				t.Fatal(err)
 			}
 			if got := read(t, carried); got != c.holds {
 				t.Errorf("the app's cyfr holds %q, want %q", got, c.holds)

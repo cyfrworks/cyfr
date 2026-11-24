@@ -110,8 +110,10 @@ var machine = machineSeams{
 	},
 	appRelease: func() string {
 		if runtime.GOOS == "linux" {
-			out, err := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage).Output()
-			if err != nil || string(out) != "installed "+runtime.GOARCH {
+			var out strings.Builder
+			query := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Status} ${Architecture}", appPackage)
+			query.Stdout = &out
+			if err := runWithin(10*time.Second, query); err != nil || out.String() != "installed "+runtime.GOARCH {
 				return ""
 			}
 		}
@@ -119,13 +121,12 @@ var machine = machineSeams{
 		if err != nil {
 			return ""
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, path, "--version")
+		var said strings.Builder
+		cmd := exec.Command(path, "--version")
 		cmd.Env = append(os.Environ(), "CYFR_NO_UPDATE_CHECK=1")
-		cmd.WaitDelay = time.Second
-		said, err := cmd.Output()
-		first, _, _ := strings.Cut(string(said), "\n")
+		cmd.Stdout = &said
+		err = runWithin(10*time.Second, cmd)
+		first, _, _ := strings.Cut(said.String(), "\n")
 		answered, ok := strings.CutPrefix(strings.TrimRight(first, "\r"), "cyfr version ")
 		if err != nil || !ok || answered == "" {
 			return ""
@@ -137,8 +138,8 @@ var machine = machineSeams{
 		return exec.Command("systemctl", "is-active", "--quiet", "display-manager").Run() == nil
 	},
 	screenService: func() (bool, bool) {
-		return exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen").Run() == nil,
-			exec.Command("systemctl", "is-active", "--quiet", "cyfr-screen").Run() == nil
+		return runWithin(10*time.Second, exec.Command("systemctl", "is-enabled", "--quiet", "cyfr-screen")) == nil,
+			runWithin(10*time.Second, exec.Command("systemctl", "is-active", "--quiet", "cyfr-screen")) == nil
 	},
 	groups: func(ctx context.Context, account string) []string {
 		args := []string{"-nG"}

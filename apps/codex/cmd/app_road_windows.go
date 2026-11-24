@@ -63,31 +63,44 @@ func (msiRoad) replace(out io.Writer, s *staged, _ bool) error {
 		return fmt.Errorf("cyfr update could not tell where the app's cyfr is (%v); nothing was replaced", err)
 	}
 	removeAsides(carried)
-	aside := ""
 	if self, err := selfExecutable(); err == nil && samePath(self, carried) {
-		aside = carried + msiAside + strconv.Itoa(os.Getpid())
+		aside := carried + msiAside + strconv.Itoa(os.Getpid())
 		if err := os.Rename(carried, aside); err != nil {
 			return fmt.Errorf("this cyfr could not step aside for the installer (%v); nothing was replaced", err)
 		}
+		s.kept = aside
 	}
 	fmt.Fprintln(out, "Installing the CYFR app with Windows Installer...")
 	log := filepath.Join(s.dir, "msiexec.log")
 	err = runWithin(appReplaceWithin, exec.Command(msiexecProgram, "/i", s.file, "/qn", "/norestart", "/l*v", log))
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == msiRebootNeeded {
-		err = nil
-	}
-	if aside != "" {
-		if _, serr := os.Stat(carried); errors.Is(serr, fs.ErrNotExist) {
-			_ = os.Rename(aside, carried)
-		}
-	}
 	switch {
+	case errors.As(err, &exit) && exit.ExitCode() == msiRebootNeeded:
+		return nil
 	case errors.As(err, &exit):
 		return fmt.Errorf("Windows Installer could not install the CYFR app (exit status %d%s)", exit.ExitCode(), msiSays(exit.ExitCode()))
 	case err != nil:
 		return fmt.Errorf("Windows Installer could not install the CYFR app (%w)", err)
 	}
+	return nil
+}
+
+// finish puts the cyfr set aside back over whatever is at its place where
+// the installer failed or the installed app's cyfr does not answer the
+// release, so the cyfr the person runs is the one that ran this; once the
+// release is confirmed it stays aside, removed by a later update.
+func (msiRoad) finish(_ io.Writer, s *staged, confirmed bool) error {
+	if confirmed || s.kept == "" {
+		return nil
+	}
+	carried := strings.TrimSuffix(s.kept, s.kept[strings.LastIndex(s.kept, msiAside):])
+	if err := os.Remove(carried); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("the new app's cyfr could not be taken away from %s: %w", carried, err)
+	}
+	if err := os.Rename(s.kept, carried); err != nil {
+		return fmt.Errorf("the cyfr set aside could not go back to %s: %w", carried, err)
+	}
+	s.kept = ""
 	return nil
 }
 

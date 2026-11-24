@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/user"
 )
 
 // systemAppRoad is Linux's: the system's package tool installs the
@@ -53,11 +54,18 @@ func (debRoad) replace(out io.Writer, s *staged, older bool) error {
 	fmt.Fprintln(out, "Installing the CYFR app's package with apt...")
 	// A dpkg an earlier update left cut off part way is finished first:
 	// until it is, apt refuses every install.
-	if err := applyWithin(appReplaceWithin, []string{"dpkg --configure -a", stageApp(s.file, s.sum, options...)}); err != nil {
+	account, err := user.Current()
+	if err != nil {
+		return fmt.Errorf("cyfr update could not tell which account runs it (%v); nothing was replaced", err)
+	}
+	if err := applyWithin(appReplaceWithin, []string{"dpkg --configure -a", stageApp(s.file, s.sum, account.Username, options...)}); err != nil {
 		return fmt.Errorf("apt could not install the CYFR app's package (%w)", err)
 	}
 	return nil
 }
+
+// finish keeps nothing: dpkg's own transaction is the package's going back.
+func (debRoad) finish(io.Writer, *staged, bool) error { return nil }
 
 func (debRoad) closesTheBox() ([]string, []string) {
 	return []string{"systemctl stop cyfr-screen"}, []string{"systemctl start cyfr-screen"}
