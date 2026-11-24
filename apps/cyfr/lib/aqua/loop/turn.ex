@@ -85,8 +85,12 @@ defmodule Aqua.Loop.Turn do
 
   @doc """
   Build the spec for `turn` as `ctx` (the actor's external-plane context).
-  `opts`: `:authority` (the turn's pinned authority, required) and
-  `:excerpt?` (read the room excerpt the turn's options name).
+  `opts`: `:authority` (the turn's pinned authority, required),
+  `:excerpt?` (read the room excerpt the turn's options name) and
+  `:reading` (the reading of its list's servers the turn's start held the
+  grant to: `tools/4`; a turn taken over or recovered is rebuilt without
+  it, reads them again for what it hands, within its pinned grant, and
+  asks nothing).
 
   A catalyst brain's own grant is the one the turn's row pinned with its
   start (`brain_pin/5`), and nothing else: a turn whose row pins none
@@ -149,7 +153,7 @@ defmodule Aqua.Loop.Turn do
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(brain_authority, catalyst),
-        tools: ctx |> tools(offered, authority) |> elem(0),
+        tools: ctx |> tools(offered, authority, Keyword.get(opts, :reading)) |> elem(0),
         deadline_ms: deadline_ms(authority, brain_timeout_ms(brain_authority, catalyst)),
         options: options,
         brain_options: brain_options,
@@ -685,12 +689,17 @@ defmodule Aqua.Loop.Turn do
   covers it under the digest of the server's revision it was read from,
   as the gate decides its call (`Prima.Authority.Transition.external_tool_granted?/3`), and every
   harness carries it (`Aqua.Loop.Request.tools/2`). A turn offered none
-  reads no server.
+  reads no server. `reading` is that listing as the turn's start already
+  read it, which it is handed from in place of a second read.
   """
-  @spec tools(Context.t(), Aqua.Offered.t(), Authority.t()) ::
-          {[Request.tool()], %{String.t() => Request.unhanded()}}
-  def tools(%Context{} = ctx, offered, %Authority{} = authority) do
-    {external, unhanded} = external_tools(ctx, offered, authority)
+  @spec tools(
+          Context.t(),
+          Aqua.Offered.t(),
+          Authority.t(),
+          [Sanctum.Proxy.server_listing()] | nil
+        ) :: {[Request.tool()], %{String.t() => Request.unhanded()}}
+  def tools(%Context{} = ctx, offered, %Authority{} = authority, reading \\ nil) do
+    {external, unhanded} = external_tools(ctx, offered, authority, reading)
 
     {tools, refused} =
       Request.tools(offered, external: external, accounts: launch_accounts(ctx, offered))
@@ -700,21 +709,24 @@ defmodule Aqua.Loop.Turn do
 
   # The outside entries the turn may hand, as the person's servers list
   # them now, and why each other is not.
-  defp external_tools(ctx, offered, authority) do
+  defp external_tools(ctx, offered, authority, reading) do
     case for({key, "offered"} <- offered, String.contains?(key, ":"), do: key) do
       [] -> {[], %{}}
-      keys -> listed(ctx, keys, authority)
+      keys -> listed(keys, reading || read(ctx, keys), authority)
     end
   end
 
-  # Only the servers the list names are asked, and each definition is
-  # judged under the digest of the revision it was read from.
-  defp listed(ctx, keys, authority) do
+  # Only the servers the list names are asked.
+  defp read(ctx, keys) do
     servers = keys |> Enum.map(&hd(String.split(&1, ":", parts: 2))) |> Enum.uniq()
+    Sanctum.Proxy.impl!().list_external_tools(ctx, servers)
+  end
 
+  # Each definition is judged under the digest of the revision it was read
+  # from.
+  defp listed(keys, reading, authority) do
     listing =
-      for %{server_digest: digest, tools: tools} <-
-            Sanctum.Proxy.impl!().list_external_tools(ctx, servers),
+      for %{server_digest: digest, tools: tools} <- reading,
           tool <- tools,
           into: %{},
           do: {tool["name"], {digest, tool}}

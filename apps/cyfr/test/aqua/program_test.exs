@@ -5628,6 +5628,52 @@ defmodule Aqua.ProgramTest do
       assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: "gh:search")
     end
 
+    # A server's resources and prompts, on in the list and granted, are
+    # handed as two tools, and each ask is the server's read or get, made
+    # once through the gate, its answer the ask's result.
+    @tag harness: :api
+    test "a server's resources and prompts, on the model's harness", %{ctx: ctx, thread: thread} do
+      offering!(ctx)
+      turn = api_turn!(ctx, thread, "read them", [asking(offering_asks()), answer("Read them.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:offerings, ctx)
+      assert model_rounds(ctx, turn) == 2
+      assert handed_offerings(chat_tools()) == ["docs__prompts", "docs__resources"]
+      # The round's four asks run side by side, in no set order.
+      assert Enum.sort(offered_reads()) == Enum.sort(offering_reads())
+      assert Enum.sort(server_calls(ctx, turn)) == offering_calls()
+    end
+
+    @tag harness: :program
+    test "a server's resources and prompts, on a program",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      offering!(ctx)
+      turn = accept!(ctx, thread, row, "read them")
+      loop = run(ctx, turn)
+      %{start: start, work: work} = started!(fake, row)
+      assert handed_offerings(start["tools"]) == ["docs__prompts", "docs__resources"]
+      assert handed_offerings(work["tools"]) == ["docs__prompts", "docs__resources"]
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      for {id, name, args} <- offering_asks() do
+        say(fake, row, ask(turn, id, name, args))
+        answered = sent()
+        say(fake, row, %{"t" => "accepted", "id" => answered["id"]})
+      end
+
+      say(fake, row, said(turn, "msg_1", "Read them."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:offerings, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:offerings)
+      assert offered_reads() == offering_reads()
+      assert Enum.sort(server_calls(ctx, turn)) == offering_calls()
+    end
+
     # An entry that is off, that its server no longer lists or whose
     # server's configuration moved since the grant is not handed, and an
     # ask of it is refused as unhanded, its server never called.
@@ -5835,32 +5881,150 @@ defmodule Aqua.ProgramTest do
     end
 
     # What a grant gives a server's tools is what the server exposed when
-    # it was given: exposure widened or narrowed since, its digest the same,
-    # the turn's start asks for the grant again, never handing a tool the
-    # person was not shown.
-    test "an exposure widened or narrowed since the grant refuses the turn's start",
+    # it was given: exposure widened since, its digest the same, the turn's
+    # start asks for the grant again, never handing a tool the person was
+    # not shown; narrowed since, it narrows the grant alike, and the turn
+    # starts without the tool, asking nothing.
+    test "an exposure widened since the grant refuses the turn's start, and one narrowed " <>
+           "asks nothing",
          %{ctx: ctx, thread: thread} do
       served!(ctx, HTTPStub.open(), "gh", [search_tool()],
         config: %{"tool_patterns" => ["other"]}
       )
 
       offer!(ctx, ["gh:search"])
+      expose!(ctx, ["other", "search"])
+      turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+      stop_supervised!(ScriptedWorker)
 
-      for exposed <- [["other", "search"], ["other"]] do
-        {:ok, _} =
-          Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
-            config_json: Jason.encode!(%{"tool_patterns" => exposed})
-          })
+      # Given again for what the server exposes now, as the sheet showed it,
+      # then narrowed.
+      consent_again!(ctx)
+      expose!(ctx, ["other"])
+      turn = api_turn!(ctx, thread, "search for it", [answer("Not that one.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert model_rounds(ctx, turn) == 1
+      assert not_handed(ctx, turn) == %{"gh:search" => :unlisted}
+    end
 
-        turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
-        assert {:failed, _} = Task.await(run(ctx, turn), 60_000), inspect(exposed)
-        assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
-        assert model_rounds(ctx, turn) == 0
-        stop_supervised!(ScriptedWorker)
+    # What a grant gives a server's resources is what the server declared
+    # when it was given. CYFR's client holds a connected server's
+    # declaration until it connects again: one that, connected again after
+    # the grant, declares its resources has the turn's start ask for the
+    # grant again, before any is read.
+    test "a server CYFR connects to again after the grant, declaring its resources now, " <>
+           "refuses the turn's start",
+         %{ctx: ctx, thread: thread} do
+      {:ok, offers} = Agent.start_link(fn -> ["tools"] end)
+      offering!(ctx, offers: fn -> Agent.get(offers, & &1) end)
+      offer!(ctx, ["docs:@resources"])
 
-        # Given again for what the server exposes now, as the sheet showed it.
-        consent_again!(ctx)
-      end
+      # Not declared: the grant names none of them, the start stands and
+      # they are not handed.
+      turn = api_turn!(ctx, thread, "read them", [answer("Nothing to read.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert not_handed(ctx, turn) == %{"docs:@resources" => :unlisted}
+      stop_supervised!(ScriptedWorker)
+
+      # Declared now, by the client connected again.
+      Agent.update(offers, fn _ -> ["tools", "resources"] end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+      turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+      refute_received {:offered, _path, "resources/" <> _, _params}
+    end
+
+    # A turn taken over after its server came back declaring resources is
+    # rebuilt under its pinned grant: it reads the servers again for what
+    # it hands, is handed nothing beyond the grant and asks nothing; the
+    # comparison that asks is the next turn's start.
+    @tag harness: :api
+    test "a turn taken over after its server came back declaring resources is handed none " <>
+           "and asks nothing, and the next turn's start asks",
+         %{ctx: ctx, thread: thread} do
+      {:ok, offers} = Agent.start_link(fn -> ["tools"] end)
+      offering!(ctx, offers: fn -> Agent.get(offers, & &1) end)
+      offer!(ctx, ["docs:@resources"])
+
+      turn =
+        api_turn!(ctx, thread, "read them", [
+          {:hold, self()},
+          answer("Read them."),
+          answer("Read them.")
+        ])
+
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+
+      # Declared now, by the client connected again, and the turn's loop
+      # gone: another takes the turn over.
+      Agent.update(offers, fn _ -> ["tools", "resources"] end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+      quiet!(loop.pid)
+      Task.shutdown(loop, :brutal_kill)
+
+      assert {:ok, [{:adopt, _taken}]} =
+               Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      assert :completed = Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
+      assert handed_offerings(last_chat_tools()) == []
+      assert not_handed(ctx, turn) == %{"docs:@resources" => :ungranted}
+      stop_supervised!(ScriptedWorker)
+
+      turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+    end
+
+    # A server CYFR cannot connect to at a turn's start costs the person no
+    # prompt: the turn starts without what it would offer, said where a
+    # missing server's tools are said, and the grant given stands, so its
+    # resources are offered again, nothing asked, once CYFR connects to it.
+    # A peer that goes quiet behind a client still connected is another
+    # case: its declaration stands, and the call that reaches it fails as
+    # any call does.
+    test "a server CYFR cannot connect to at a turn's start: the turn starts without its " <>
+           "offerings and asks nothing, and they are offered again once it connects",
+         %{ctx: ctx, thread: thread} do
+      {:ok, silent} = Agent.start_link(fn -> false end)
+      offering!(ctx, silent: silent)
+
+      # Granted while it answered; silent now, and the client's next
+      # connect, its first since, finds it so.
+      Agent.update(silent, fn _ -> true end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+      turn = api_turn!(ctx, thread, "read them", [answer("It does not answer.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert model_rounds(ctx, turn) == 1
+      assert handed_offerings(chat_tools()) == []
+
+      assert not_handed(ctx, turn) == %{
+               "docs:@resources" => :unlisted,
+               "docs:@prompts" => :unlisted
+             }
+
+      stop_supervised!(ScriptedWorker)
+
+      # Answering again, at the client's next connect.
+      Agent.update(silent, fn _ -> false end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+
+      turn =
+        api_turn!(ctx, thread, "read them", [
+          asking([{"ask-1", "docs__resources", %{"method" => "list"}}]),
+          answer("Read them.")
+        ])
+
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert handed_offerings(chat_tools()) == ["docs__prompts", "docs__resources"]
+      assert offered_reads() == [{"resources/list", %{}}, {"resources/templates/list", %{}}]
     end
 
     # A reissue writes what it compared: a server's endpoint changed
@@ -5988,7 +6152,8 @@ defmodule Aqua.ProgramTest do
     row
   end
 
-  # `stub` answers at `path` as a server listing `tools`. With `hold`, an
+  # `stub` answers at `path` as a server declaring tools and listing
+  # `tools`. With `hold`, an
   # Agent's flag, each listing asked while the flag is up tells the test
   # it is held, `{:holding, pid}`, and answers once sent `:go`.
   defp route!(stub, path, tools, hold \\ nil) do
@@ -6000,6 +6165,9 @@ defmodule Aqua.ProgramTest do
 
       result =
         case body["method"] do
+          "server/discover" ->
+            %{"capabilities" => %{"tools" => %{}}}
+
           "tools/list" ->
             if hold && Agent.get(hold, & &1) do
               send(test, {:holding, self()})
@@ -6022,6 +6190,14 @@ defmodule Aqua.ProgramTest do
     end)
   end
 
+  # `gh`'s configuration exposing `patterns`.
+  defp expose!(ctx, patterns) do
+    {:ok, _} =
+      Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+        config_json: Jason.encode!(%{"tool_patterns" => patterns})
+      })
+  end
+
   # A server of the athanor's that no list names: asking it anything fails
   # the test, since its stub answers no request.
   defp unasked!(ctx) do
@@ -6036,6 +6212,138 @@ defmodule Aqua.ProgramTest do
 
     on_exit(fn -> Emissary.External.ServerSupervisor.stop("unasked", ctx.athanor_id) end)
   end
+
+  # `docs`, a server of the athanor's over HTTP, declaring `:offers` (a
+  # function; resources and prompts unless given) through `server/discover`,
+  # its tools `search` when it offers tools; each request it is made is told
+  # to the test as `{:offered, path, method, params}` and each read answered
+  # as `offering_answer/2` answers it. While `:silent`, an Agent's flag, is
+  # up it answers nothing, and its client gives up on it after half a
+  # second. On Aqua's list with no other server's entry, and granted, unless
+  # `:offers` is given.
+  defp offering!(ctx, opts \\ []) do
+    stub = HTTPStub.open()
+    test = self()
+    declared = Keyword.get(opts, :offers, fn -> ["resources", "prompts"] end)
+    silent = Keyword.get(opts, :silent)
+
+    HTTPStub.stub(stub, "POST", "/docs", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+      params = Map.delete(body["params"] || %{}, "_meta")
+      send(test, {:offered, "/docs", body["method"], params})
+
+      if silent && Agent.get(silent, & &1) do
+        # Past the client's half second, so it never reads this.
+        receive do: (:never -> :ok), after: (2_000 -> :ok)
+        Plug.Conn.resp(conn, 503, "")
+      else
+        result =
+          case body["method"] do
+            "server/discover" -> %{"capabilities" => Map.new(declared.(), &{&1, %{}})}
+            "tools/list" -> %{"tools" => [search_tool()]}
+            method -> offering_answer(method, params)
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end
+    end)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "docs",
+        url: "http://127.0.0.1:#{stub.port}/docs",
+        config_json: Jason.encode!(if(silent, do: %{"timeout_ms" => 500}, else: %{}))
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id) end)
+
+    unless Keyword.has_key?(opts, :offers) do
+      unasked!(ctx)
+      offer!(ctx, ["docs:@resources", "docs:@prompts"])
+    end
+  end
+
+  defp offering_answer("resources/list", _params),
+    do: %{"resources" => [%{"uri" => "file:///readme", "name" => "readme"}]}
+
+  defp offering_answer("resources/templates/list", _params),
+    do: %{"resourceTemplates" => [%{"uriTemplate" => "file:///{path}", "name" => "file"}]}
+
+  defp offering_answer("resources/read", %{"uri" => uri}),
+    do: %{"contents" => [%{"uri" => uri, "mimeType" => "text/plain", "text" => "read " <> uri}]}
+
+  defp offering_answer("prompts/list", _params), do: %{"prompts" => [%{"name" => "greet"}]}
+
+  defp offering_answer("prompts/get", %{"name" => name, "arguments" => arguments}),
+    do: %{
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => %{"type" => "text", "text" => "#{name} #{arguments["who"]}"}
+        }
+      ]
+    }
+
+  defp offering_asks,
+    do: [
+      {"ask-1", "docs__resources", %{"method" => "list"}},
+      {"ask-2", "docs__resources", %{"method" => "read", "uri" => "file:///readme"}},
+      {"ask-3", "docs__prompts", %{"method" => "list"}},
+      {"ask-4", "docs__prompts",
+       %{"method" => "get", "name" => "greet", "arguments" => %{"who" => "me"}}}
+    ]
+
+  # The reads each ask is: what the server was asked after its discovery,
+  # each once.
+  defp offering_reads,
+    do: [
+      {"resources/list", %{}},
+      {"resources/templates/list", %{}},
+      {"resources/read", %{"uri" => "file:///readme"}},
+      {"prompts/list", %{}},
+      {"prompts/get", %{"name" => "greet", "arguments" => %{"who" => "me"}}}
+    ]
+
+  # What `docs` was asked beside its discovery, in order: never
+  # initialized, never asked for tools it does not declare.
+  defp offered_reads do
+    for {:offered, "/docs", method, params} <- drain(:offered),
+        method != "server/discover",
+        do: {method, params}
+  end
+
+  defp drain(tag) do
+    receive do
+      message when elem(message, 0) == tag -> [message | drain(tag)]
+    after
+      0 -> []
+    end
+  end
+
+  # The turn's calls of `docs`, as their own rows record them, sorted.
+  defp offering_calls,
+    do: [
+      {"docs:@prompts", "tool_server", "completed"},
+      {"docs:@prompts", "tool_server", "completed"},
+      {"docs:@resources", "tool_server", "completed"},
+      {"docs:@resources", "tool_server", "completed"}
+    ]
+
+  # The names of a server's reserved entries among `tools` a harness was
+  # handed.
+  defp handed_offerings(tools),
+    do:
+      tools
+      |> Enum.map(& &1["name"])
+      |> Enum.filter(&String.starts_with?(&1, "docs__"))
+      |> Enum.sort()
 
   defp search_tool(words \\ "Search the person's code"),
     do: %{
@@ -6064,6 +6372,18 @@ defmodule Aqua.ProgramTest do
       Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "tools_add" => keys})
 
     consent_again!(ctx)
+  end
+
+  # The tools the last request of the scripted catalyst carried.
+  defp last_chat_tools do
+    params =
+      for(
+        %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+        do: params
+      )
+      |> List.last()
+
+    params["tools"]
   end
 
   # The tools the first request of the scripted catalyst carried.
@@ -7145,6 +7465,30 @@ defmodule Aqua.ProgramTest do
       usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
     }
 
+  defp expected(:offerings, _ctx) do
+    answers = [
+      {"docs:@resources",
+       Map.merge(
+         offering_answer("resources/list", %{}),
+         offering_answer("resources/templates/list", %{})
+       )},
+      {"docs:@resources", offering_answer("resources/read", %{"uri" => "file:///readme"})},
+      {"docs:@prompts", offering_answer("prompts/list", %{})},
+      {"docs:@prompts",
+       offering_answer("prompts/get", %{"name" => "greet", "arguments" => %{"who" => "me"}})}
+    ]
+
+    %{
+      shown: [{"text", "person", "read them"}, {"text", "aqua", "Read them."}],
+      asks:
+        for {tool, result} <- answers do
+          {tool, nil, true, "closed", "ok", nil, Jason.encode!(result, pretty: true)}
+        end,
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+  end
+
   defp expected(:unhanded, _ctx),
     do: %{
       shown: [{"text", "person", "search for it"}, {"text", "aqua", "None of them."}],
@@ -7236,7 +7580,7 @@ defmodule Aqua.ProgramTest do
 
   # The deliveries of a row whose asks were answered: the post, then each
   # ask's answer, each the result row the table compares.
-  defp delivered(row) when row in [:asks, :launch, :server] do
+  defp delivered(row) when row in [:asks, :launch, :server, :offerings] do
     %{shown: [{"text", "person", post} | _], asks: asks} = expected(row, nil)
 
     [{"post", "ok", "text", post}] ++
