@@ -1252,9 +1252,12 @@ async function hopped() {
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
   const account = live().find((w) => w.webContents.url === hop)
+  // The page's own navigation to the answer, as the engine raises it:
+  // did-start-navigation first, then will-navigate.
   const answer = () => {
     const back = {url: ANSWER, isMainFrame: true, initiator: account.webContents.mainFrame, prevented: false,
       preventDefault() { this.prevented = true }}
+    account.webContents.emit("did-start-navigation", {url: ANSWER, isMainFrame: true, isSameDocument: false})
     account.webContents.emit("will-navigate", back)
     assert.ok(back.prevented, "the account window does not load the return")
   }

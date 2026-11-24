@@ -439,10 +439,16 @@ function advance(s, e) {
     // ceremony may go on. A frame loads nothing and ends nothing, ever.
     // A navigation the account window's top frame started, however it
     // began: a page that takes a request goes on only as the one reader
-    // reads it for the ceremony shown; anything else ends the ceremony.
-    case "account-started":
-      if (!["starting", "locking"].includes(s.name) && accountLoad(e.url, kept(s), e.kind) === "allow") return same(s)
-      return same(s, [{unhop: true}])
+    // reads it for the ceremony shown; anything else ends the ceremony but
+    // the CYFR's /login, the answer's address. Only the page's own
+    // navigation reaches that (main cancels it every time, so it never
+    // lands here for a history move or a reload to find), and the engine
+    // raises will-navigate after this, where the act takes it or ends the
+    // ceremony.
+    case "account-started": {
+      const where = ["starting", "locking"].includes(s.name) ? "block" : accountLoad(e.url, kept(s), e.kind)
+      return where === "allow" || where === "return" ? same(s) : same(s, [{unhop: true}])
+    }
     case "account-navigate": {
       if (e.target !== "top") return {state: s, allow: false, do: []}
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: [{unhop: true}]}
