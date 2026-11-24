@@ -6,7 +6,8 @@
 // Command cyfr-acp drives a program that speaks the Agent Client Protocol
 // (ACP, version 1) as a brain of CYFR's. It is built once and installed
 // under one name for each program, the name it runs under picking the
-// program's profile (profile.go): `cyfr-antigravity` for Antigravity's CLI.
+// program's profile (profile.go): `cyfr-antigravity` for Antigravity's CLI,
+// `cyfr-opencode` for OpenCode's.
 // It is the start of a `driven` program row's command, before the
 // program's own:
 //
@@ -41,8 +42,9 @@
 // prompt carrying the post's uuid in its `_meta`, since an ACP prompt takes
 // no id of the client's; a post while a prompt runs is a second prompt
 // where the program steers with one, `accepted` once the program has
-// answered the earlier, and is otherwise answered `later`, so the driver
-// holds no post. While a call of CYFR's tools is held, a post during the
+// answered the earlier, or the program's own steer request, `accepted`
+// once it says it took it and `later` where it says no turn runs, and is
+// otherwise answered `later`, so the driver holds no post. While a call of CYFR's tools is held, a post during the
 // running prompt is answered `later` on every profile, steering or not, and
 // nothing is written: the holder writes one command at a time, so a steer's
 // confirmation that waited on the program, itself waiting on the ask's
@@ -50,7 +52,9 @@
 // prompts carried. A load's replay is never passed on, so `held` names none.
 //
 // A `forget` removes the session's files the profile names and proves them
-// absent. What a program keeps of every session in one index of its own
+// absent, or, for a program that keeps its sessions in a store of its own
+// with its sign-in, asks the program to delete it and to load it after,
+// forgotten only on the load's not-found answer. What a program keeps of every session in one index of its own
 // stays (Antigravity: each session's title and summary, in its index under
 // antigravity-cli, antigravity_words.go), since CYFR never writes a
 // program's database.
