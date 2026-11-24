@@ -102,7 +102,9 @@ defmodule Cyfr.StackShapeTest do
     [root] =
       Regex.run(
         ~r/^const Root = "([^"]+)"$/m,
-        read!("apps/locus/keeper/internal/stage/space_linux.go"), capture: :all_but_first)
+        read!("apps/locus/keeper/internal/stage/space_linux.go"),
+        capture: :all_but_first
+      )
 
     root
   end
