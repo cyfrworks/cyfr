@@ -21,6 +21,9 @@
 #   next start is locked again; the app killed ends its cyfr within 5 s,
 #   and the next start is locked too, with one screen shell running; a
 #   --screen-project that names no project explicitly is refused.
+# Before the app starts, Gtk's image loader can start: glycin runs each
+# loader under bwrap, and a loader that cannot start makes Gtk abort the
+# app whenever it asks for an icon.
 # Windows are told apart by labwc's own list of them (toplevels.py), and
 # the keyboard is seen on the output's picture, not as a process.
 #
@@ -30,7 +33,9 @@
 #
 # Usage: bash tests/desktop-proof/screen/app.sh DEB
 # DEB is the cyfr-desktop package of this machine's architecture. It needs
-# Docker and Ubuntu's archive, and binds no port of this machine.
+# Ubuntu 26.04, Docker, Ubuntu's archive and root through sudo -n, to load the package's
+# AppArmor profile, which it removes again unless this machine held it
+# before; it binds no port of this machine.
 set -uo pipefail
 
 # ---- inside the container, as root ----
@@ -87,7 +92,9 @@ if [ "${1:-}" = --session ]; then
       sleep 0.2 # sleep-ok: polls a condition, bounded
     done
   }
-  starts() { grep -c '^CYFR: ready$' "$OUT/app.log" 2>/dev/null || echo 0; }
+  # grep -c prints 0 and fails on a log with no such line, and prints
+  # nothing on no log.
+  starts() { local n; n=$(grep -c '^CYFR: ready$' "$OUT/app.log" 2>/dev/null); echo "${n:-0}"; }
   started() { [ "$(starts)" -ge "$1" ]; }
   window() { wlrctl toplevel find title:CYFR; }
   shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell$'; }
@@ -96,7 +103,6 @@ if [ "${1:-}" = --session ]; then
   closedAt() { awk -v h="$1" '$1 == "closed" && $2 == h { print $3; exit }' "$OUT/toplevels"; }
   closed() { [ -n "$(closedAt "$1")" ]; }
   newer() { awk -v h="$1" '$1 == "open" && $2 > h { found = 1 } END { exit !found }' "$OUT/toplevels"; }
-  lines() { grep -c "$1" "$OUT/app.log" 2>/dev/null || echo 0; }
   # A lock the shell made: the window shown closes within HIDE_MS of SINCE
   # (this machine's clock), and a newer window shows the shell's page,
   # painted. The hide waits on nothing (shell.Shell.Lock): measured, 6 to
@@ -150,6 +156,13 @@ PY
   # window made to cover it does.
   wlr-randr --output HEADLESS-1 --custom-mode 1600x900 >>"$OUT/randr.log" 2>&1 ||
     { verdict FAIL "the output's size was not set: $(tr '\n' ' ' <"$OUT/randr.log")"; finish; }
+
+  # glycin's own test of its sandbox (glycin/src/sandbox.rs).
+  if bwrap --unshare-all --die-with-parent --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 /usr/bin/true >"$OUT/bwrap.log" 2>&1; then
+    verdict PASS "Gtk's image loader can start: bwrap runs glycin's test of its sandbox"
+  else
+    verdict FAIL "Gtk's image loader cannot start, so Gtk aborts the app on an icon: bwrap said $(tr '\n' ' ' <"$OUT/bwrap.log")"
+  fi
 
   python3 -I /fixture/toplevels.py >"$OUT/toplevels" 2>"$OUT/toplevels.err" &
 
@@ -240,9 +253,11 @@ DEB=$(realpath -e "$1") || exit 64
 command -v docker >/dev/null || { echo "screen app: docker is needed" >&2; exit 69; }
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-screen-app.XXXXXX") || exit 1
 BOX="${PROOF_RUN_PREFIX:-}cyfr-screen-app-$$"
+UNLOAD_PROFILE=""
 cleanup() {
   local code=$?
   docker rm -f "$BOX" >/dev/null 2>&1
+  [ -z "$UNLOAD_PROFILE" ] || sudo -n apparmor_parser --remove "$WORK/apparmor-profile" >/dev/null 2>&1
   rm -rf "$WORK"
   exit "$code"
 }
@@ -257,9 +272,23 @@ chmod 755 "$WORK" "$WORK/fixture"
 chmod 644 "$WORK"/fixture/*
 
 # The engine's sandbox makes namespaces of its own inside the container, as
-# in tests/desktop-proof/home.sh's client.
+# in tests/desktop-proof/home.sh's client, and so does glycin's bwrap.
+# Docker's AppArmor profile refuses bwrap's mounts ("Failed to make /
+# slave"), so the container runs unconfined, and the app and bwrap each
+# run under their own profile as on the box: the package's, loaded here,
+# and for bwrap the host's, which Ubuntu 26.04 holds and 24.04 does not.
+# Unconfined without the package's, the host's kernel refuses the
+# engine's namespaces (apparmor_restrict_unprivileged_userns).
+dpkg-deb --fsys-tarfile "$DEB" | tar -xO ./opt/cyfr/resources/apparmor-profile >"$WORK/apparmor-profile" ||
+  { echo "screen app: the package holds no AppArmor profile" >&2; exit 1; }
+profile=$(sed -n 's/^profile "\([^"]*\)".*/\1/p' "$WORK/apparmor-profile")
+held=$(sudo -n cat /sys/kernel/security/apparmor/profiles) ||
+  { echo "screen app: loading the package's AppArmor profile needs root through sudo -n" >&2; exit 69; }
+grep -q "^$profile (" <<<"$held" || UNLOAD_PROFILE=1
+sudo -n apparmor_parser --replace "$WORK/apparmor-profile" ||
+  { echo "screen app: the package's AppArmor profile $profile was not loaded" >&2; exit 1; }
 docker run -d --init --name "$BOX" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
-  --security-opt seccomp=unconfined --shm-size 512m \
+  --security-opt seccomp=unconfined --security-opt apparmor=unconfined --shm-size 512m \
   -v "$WORK/fixture:/fixture:ro" "$IMAGE" sleep infinity >/dev/null || exit 1
 docker exec "$BOX" bash /fixture/app.sh --inside >"$WORK/prepare.log" 2>&1 ||
   { tail -n 30 "$WORK/prepare.log"; echo "FAIL prepare: the package, labwc, wvkbd or swayidle was not installed"; exit 1; }
@@ -267,7 +296,11 @@ docker exec -d -u proof "$BOX" python3 -s /fixture/login1.py || exit 1
 
 said=$(docker exec -u proof -e HOME=/home/proof "$BOX" bash /fixture/app.sh --case)
 echo "$said"
+# The app's output whole, on a pass too, so a red elsewhere can be told
+# from what a green run says; the GPU's render node lines say nothing.
+echo "==== the app's output"
+docker exec "$BOX" sh -c 'grep -v drm_render_node /tmp/screen-app/app.log | cut -c 1-400; echo "launches: $(tr "\n" " " </tmp/screen-app/launches)"' 2>&1
 if ! grep -qx DONE <<<"$said" || grep -q '^FAIL ' <<<"$said"; then
-  docker exec "$BOX" sh -c 'tail -n 25 /tmp/screen-app/app.log /tmp/screen-app/labwc.log /tmp/screen-app/launches' 2>/dev/null
+  docker exec "$BOX" sh -c 'tail -n 25 /tmp/screen-app/labwc.log' 2>/dev/null
   exit 1
 fi
