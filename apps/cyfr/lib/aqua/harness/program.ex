@@ -28,11 +28,13 @@ defmodule Aqua.Harness.Program do
   step admitted, it starts this process, which opens a session, starts
   or resumes the harness with the turn's instructions and configuration
   and sets the turn's work (`work`, with the turn's tools); the loop is
-  told when the work is taken (`{:took, ...}`). A start that opens a new
-  native session names the turn's tools too, which a harness that keeps
-  its session's tools for the session's life (Codex) takes there alone: a
-  tool a later turn adds is not one it can call, and one a later turn
-  lacks is still refused at CYFR's gate. A start the program says is
+  told when the work is taken (`{:took, ...}`). Every start names the
+  turn's tools too, a resume's among them: a harness that keeps its
+  session's tools for the session's life (Codex) takes a new session's
+  there alone, so a tool a later turn adds is not one it can call and one
+  a later turn lacks is still refused at CYFR's gate, and one given its
+  tools again at a resume (an ACP program) takes the turn's there. A start
+  the program says is
   signed out is given no post, and no new native session of it is kept.
   The first post a process is written carries the turn's facts
   (`Aqua.Prompt`), since its instructions hold nothing that moves by
@@ -77,9 +79,26 @@ defmodule Aqua.Harness.Program do
   post, and one past
   the line's bound is named as too large to hand over.
   `accepted` says the write was taken and nothing more: a post's
-  obligation ends when an `idle` names it. A write that may have reached
-  the driver, its answer lost, keeps its step and is never sent again:
-  the session closes and recovery reconciles it.
+  obligation ends when an `idle` names it. A post the driver answers
+  `later` was not written, its harness taking a message only between its
+  native turns: it is held, its step and id kept, after every post held
+  before it, none replacing another. Meanwhile an answer owed is written
+  at once, as is the notice of an answer the harness refused, and every
+  other post and recovery prompt waits behind the held ones. Once an
+  `idle` ends the native turn, each held is written again as it was, in
+  the order first answered `later`, one at a time; one answered `later`
+  again stays first, and it and every one behind it wait for the next
+  idle, so none overtakes an earlier one. The turn is not done while one
+  waits. A session that
+  ends meanwhile gives each back to the posts that wait, in order
+  (`Aqua.Tape.uncarry/3`), so the next start does not name it pending and
+  delivers it anew. A restart of CYFR while one is held loses that the
+  program never took it: the next start names it pending, and the turn
+  ends uncertain, the post never written again, unless the resume answers
+  `gone`: then the fresh start's prompt carries the thread, the post in
+  it, written once. A write that may have reached the driver, its answer
+  lost, keeps its step and is never sent again: the session closes and
+  recovery reconciles it.
 
   ## Recovery
 
@@ -351,6 +370,10 @@ defmodule Aqua.Harness.Program do
       # its handle is where Stop looks (`Aqua.Loop`).
       phase: :unopened,
       outstanding: nil,
+      # The posts the driver answered `later`, in the order first answered
+      # so, each with whether the native turn it waits on is idle since
+      # (`held/2`).
+      later: [],
       fresh?: false,
       missed?: false,
       facts?: false,
@@ -522,11 +545,11 @@ defmodule Aqua.Harness.Program do
   defp pending(_work, nil), do: {:ok, []}
   defp pending(work, _session), do: Tape.brain_pending(work.guest, work.turn)
 
-  # A start that opens a new native session names the work's tools beside
-  # the work's own: a harness whose session keeps the tools it started
-  # with for its life (Codex) takes them here and nowhere else, and one
-  # that takes each work's (Claude Code) reads them from the `work`. A
-  # resume names none, since the session keeps its own.
+  # Every start names the work's tools beside the work's own: a harness
+  # whose session keeps the tools it started with for its life (Codex)
+  # takes a new session's here and nowhere else, one given its tools again
+  # at a resume (an ACP program) takes them here at each start, and one
+  # that takes each work's (Claude Code) reads them from the `work`.
   defp write_start(%{work: work} = state, session, pending) do
     command =
       %{
@@ -536,7 +559,7 @@ defmodule Aqua.Harness.Program do
         "system" => work.system,
         "session" => session,
         "pending" => if(pending != [], do: pending),
-        "tools" => if(is_nil(session), do: work.tools)
+        "tools" => work.tools
       }
       |> reject_nil()
 
@@ -593,6 +616,7 @@ defmodule Aqua.Harness.Program do
     phase = if state.phase == :over, do: :over, else: :closed
 
     %{state | brain: nil, boot: nil, phase: phase, outstanding: nil}
+    |> release()
     |> withdraw()
     |> session_ended()
   end
@@ -698,6 +722,8 @@ defmodule Aqua.Harness.Program do
       accepted: [],
       refused: [],
       idle: nil,
+      # The batch's `later`s and idles, in the order of its lines.
+      holds: [],
       errors: [],
       foreign?: false,
       native?: false
@@ -745,6 +771,11 @@ defmodule Aqua.Harness.Program do
     if input?(outstanding, id), do: put_commit(acc, :refused, id), else: acc
   end
 
+  # A post the harness takes only between its native turns, which waits
+  # for the idle that ends the one it runs: nothing of it is written.
+  defp effect(%{"t" => "later", "id" => id}, acc, _work, _work_id, _outstanding),
+    do: %{acc | holds: acc.holds ++ [{:later, id}]}
+
   defp effect(%{"t" => "said", "work" => work_id} = event, acc, _work, work_id, _outstanding),
     do: put_commit(acc, :said, %{message: event["message"], text: event["text"]})
 
@@ -764,7 +795,7 @@ defmodule Aqua.Harness.Program do
   # obligation as it was.
   defp effect(%{"t" => "idle"} = event, acc, _work, work_id, _outstanding) do
     acc = Enum.reduce(event["answered"] || [], acc, &put_commit(&2, :answered, &1))
-    acc = %{acc | idle: event}
+    acc = %{acc | idle: event, holds: acc.holds ++ [:idle]}
     if event["work"] == work_id, do: busy(acc, false), else: acc
   end
 
@@ -871,6 +902,7 @@ defmodule Aqua.Harness.Program do
     state
     |> on_started(effects)
     |> on_answers(effects)
+    |> held(effects)
     |> on_errors(effects)
     |> on_idle(effects)
     |> deliver()
@@ -955,6 +987,34 @@ defmodule Aqua.Harness.Program do
     end)
   end
 
+  # Each post answered `later` is held as it was written, its step and id
+  # kept, after those held before it, none replacing another, until an
+  # idle after its `later` says the native turn it waited on ended
+  # (`deliver/1`). One answered `later` again as it is written again
+  # (`write_later/1`) goes back first, so none overtakes an earlier one.
+  defp held(state, %{holds: holds}) do
+    Enum.reduce(holds, state, fn
+      :idle, state ->
+        %{state | later: Enum.map(state.later, &%{&1 | rested?: true})}
+
+      {:later, id}, state ->
+        case state.outstanding do
+          %{id: ^id, command: %{}} = delivery ->
+            hold = %{delivery: delivery, rested?: false}
+
+            later =
+              if delivery[:held?],
+                do: [hold | state.later],
+                else: state.later ++ [hold]
+
+            %{state | outstanding: nil, later: later}
+
+          _not_this_post ->
+            state
+        end
+    end)
+  end
+
   # An error the harness reported ends the turn, saying it.
   defp on_errors(state, %{errors: []}), do: state
 
@@ -971,8 +1031,11 @@ defmodule Aqua.Harness.Program do
 
     cond do
       state.phase == :over -> state
-      idle["stop"] == "end_turn" -> tell(state, {:end, :done})
-      true -> fail(state, lost(work, {:ended, idle["stop"]}))
+      idle["stop"] != "end_turn" -> fail(state, lost(work, {:ended, idle["stop"]}))
+      # A held post is written now or after a later idle (`deliver/1`):
+      # the turn goes on.
+      state.later != [] -> state
+      true -> tell(state, {:end, :done})
     end
   end
 
@@ -1041,10 +1104,24 @@ defmodule Aqua.Harness.Program do
   # The next command the rows say is owed, one at a time while the session
   # is ready, chosen from one view of them (`Arca.TurnStorage.brain_owed/2`):
   # a prompt a recovery owes, then a closed ask's result, then a post that
-  # waits. A read that did not answer is never nothing owed.
-  defp deliver(%{phase: :ready, outstanding: nil, work: work} = state) do
+  # waits. The posts answered `later` go first, in the order first
+  # answered so, each once its native turn is idle: one that still waits
+  # holds every one behind it. While any is held a result is still
+  # written, and every other post and prompt waits behind them. A read
+  # that did not answer is never nothing owed.
+  defp deliver(%{phase: :ready, outstanding: nil, later: [%{rested?: true} | _]} = state),
+    do: write_later(state)
+
+  defp deliver(%{phase: :ready, outstanding: nil} = state), do: deliver_owed(state)
+
+  defp deliver(state), do: state
+
+  defp deliver_owed(%{work: work} = state) do
+    held? = state.later != []
+
     case Tape.brain_owed(work.guest, work.turn) do
       {:ok, :none} -> state
+      {:ok, {kind, _owed}} when held? and kind != :answer -> state
       {:ok, {:notice, %{context?: true, message_id: row_id}}} -> notice(state, "fresh", row_id)
       {:ok, {:notice, %{action: kind, message_id: row_id}}} -> notice(state, kind, row_id)
       {:ok, {:answer, result}} -> deliver_answer(state, result)
@@ -1053,7 +1130,30 @@ defmodule Aqua.Harness.Program do
     end
   end
 
-  defp deliver(state), do: state
+  # The first held post, written again as it was, under its id. It leaves
+  # the hold before the write, so one that may have reached the driver
+  # keeps its step (`not_written/3`) and is never given back
+  # (`release/1`); one answered `later` again is held again, first.
+  defp write_later(%{later: [%{delivery: delivery} | later]} = state) do
+    delivery = Map.put(delivery, :held?, true)
+    state = %{state | later: later}
+
+    case write(state, delivery.command) do
+      :ok -> delivered(state, delivery)
+      {:error, reason} -> not_written(state, delivery, reason)
+    end
+  end
+
+  # A held post was never written to the harness: as its session ends
+  # each waits again among the turn's posts (`Aqua.Tape.uncarry/3`), in
+  # the order held, so the next start does not name it pending and
+  # delivers it anew. One that cannot be given back keeps its step, which
+  # the next start names pending: uncertain, never written twice.
+  defp release(%{later: later, work: work} = state) do
+    Enum.each(later, fn %{delivery: %{id: id}} -> Tape.uncarry(work.guest, work.turn, id) end)
+
+    %{state | later: []}
+  end
 
   # The loop waits again after it found something pending. When that was
   # deleted before it was handed over, nothing is owed either way and the
@@ -1175,7 +1275,7 @@ defmodule Aqua.Harness.Program do
         :ok ->
           delivered(
             %{state | fresh?: false, missed?: false, facts?: false},
-            %{id: step.id, input?: true, deliver: "post"}
+            %{id: step.id, input?: true, deliver: "post", command: command}
           )
 
         {:error, reason} ->
@@ -1325,7 +1425,7 @@ defmodule Aqua.Harness.Program do
           :ok ->
             delivered(
               %{state | fresh?: state.fresh? and kind != "fresh", missed?: false, facts?: false},
-              %{id: step.id, input?: true, deliver: "notice"}
+              %{id: step.id, input?: true, deliver: "notice", command: command}
             )
 
           {:error, reason} ->
@@ -1507,6 +1607,7 @@ defmodule Aqua.Harness.Program do
 
   defp session_lost(state, reason) do
     %{state | brain: nil, boot: nil, outstanding: nil}
+    |> release()
     |> withdraw()
     |> session_ended()
     |> ended(reason)
