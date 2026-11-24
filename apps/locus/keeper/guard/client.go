@@ -96,6 +96,21 @@ func (c *Client) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tc
 			m.Addresses[i] = a.Unmap().WithZone("").String()
 		}
 	}
+	return c.admit(m, netns, udp, tcp)
+}
+
+// AdmitRole asks the guard for the route of a role's service process,
+// which listens on port in its space: ReachRole, private or not, answered
+// as Admit answers.
+func (c *Client) AdmitRole(spawnID string, port uint16, private bool, netns, udp, tcp *os.File) (Route, error) {
+	if port == 0 {
+		return Route{}, errors.New("a role admit names a port of 1..65535")
+	}
+	p := int(port)
+	return c.admit(Message{Type: TypeAdmit, SpawnID: spawnID, Reach: ReachRole, Port: &p, Private: &private}, netns, udp, tcp)
+}
+
+func (c *Client) admit(m Message, netns, udp, tcp *os.File) (Route, error) {
 	number, err := c.request(m, unix.UnixRights(int(netns.Fd()), int(udp.Fd()), int(tcp.Fd())))
 	return Route{Conn: number}, err
 }

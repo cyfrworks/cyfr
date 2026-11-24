@@ -88,6 +88,12 @@ ENDPOINT_ADDRESS = RELEASE["endpoint_address"]
 # The stand-in for cyfr the overlay starts, under cyfr's name on the builds
 # network and at cyfr's fixed endpoint address.
 STAND_IN = "cyfr-stand-in"
+# The overlay's fixed IPv4 subnet of the builds network and the stand-in's
+# address on it, where it answers as core's host API
+# (compose.locus-builds.yml gives the guard CYFR_GUARD_HOST_API).
+BUILDS_SUBNET = "172.16.237.0/24"
+HOST_API_ADDRESS = "172.16.237.7"
+HOST_API_PORT = 4000
 RELEASE_UID = RELEASE["uid"]
 RELEASE_USER = RELEASE["user"]
 RELEASE_BIN = RELEASE["bin"]
@@ -155,14 +161,16 @@ check_signing()
 
 
 def build_canary():
-    """Builds tests/fixtures/residue-canary.go for Linux on this host's architecture."""
+    """Builds tests/fixtures/residue-canary.go, and tests/builder-image/guard-role-space.go beside it, for Linux on this
+    host's architecture."""
     # The read-only fixture mount must be traversable by pooled build UIDs.
     out = imagesuite.temporary_directory("cyfr-canary-", 0o755)
     run(
         "docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-canary-build-{os.getpid()}",
-        "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
+        "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{HERE}:/here:ro", "-v", f"{out}:/out",
         "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/go-cache", "-e", "GOFLAGS=-buildvcs=false",
-        "-w", "/src", "golang:1.27.2-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
+        "-w", "/src", "golang:1.27.2-alpine", "sh", "-c",
+        "go build -o /out/canary residue-canary.go && go build -o /out/guard-role-space /here/guard-role-space.go",
     )
     return out
 

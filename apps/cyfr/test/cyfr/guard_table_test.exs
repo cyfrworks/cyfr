@@ -11,8 +11,10 @@ defmodule Cyfr.GuardTableTest do
   deployment's private hosts; and for the spaces, what every route is held
   to (the metadata, the control plane and the island's subnets; then the
   private rows), the jumps to each route's chain and to its replies, the
-  refusal of all else from or into a space, of both families, and the
-  masquerade of the route range the guard chose.
+  refusal of all else from or into a space, of both families, the jumps of
+  the connections to the island's own addresses to the roles' forwarding,
+  and the masquerade of the route range the guard chose. It refuses to
+  start on a host API it cannot read.
   """
 
   use ExUnit.Case, async: true
@@ -46,6 +48,7 @@ defmodule Cyfr.GuardTableTest do
     # kernel and logs as it adds each, and so is the route range it chose
     # beside them.
     subnets = for "[cyfr-guard] island subnet " <> subnet <- lines, do: subnet
+    addresses = for "[cyfr-guard] island address " <> address <- lines, do: address
     [range] = for "[cyfr-guard] routes take " <> range <- lines, do: range
     assert range =~ ~r{^10\.\d+\.0\.0/16$}
 
@@ -57,6 +60,10 @@ defmodule Cyfr.GuardTableTest do
              [
                "iptables -N CYFR_GUARD",
                "ip6tables -N CYFR_GUARD",
+               "iptables -N CYFR_GUARD_REFUSE",
+               "iptables -N CYFR_GUARD_PRIVATE",
+               "iptables -N CYFR_GUARD_ROUTES",
+               "iptables -N CYFR_GUARD_REPLIES",
                "iptables -A OUTPUT -j CYFR_GUARD",
                "ip6tables -A OUTPUT -j CYFR_GUARD",
                # Into a space, nothing but the ICMP answering its refusals.
@@ -79,12 +86,6 @@ defmodule Cyfr.GuardTableTest do
                  "ip6tables -A CYFR_GUARD -d fd12:3456::/64 -j RETURN"
                ] ++
                rejects("CYFR_GUARD", private) ++
-               [
-                 "iptables -N CYFR_GUARD_REFUSE",
-                 "iptables -N CYFR_GUARD_PRIVATE",
-                 "iptables -N CYFR_GUARD_ROUTES",
-                 "iptables -N CYFR_GUARD_REPLIES"
-               ] ++
                rejects("CYFR_GUARD_REFUSE", Enum.reject(metadata, &v6?/1)) ++
                [
                  "iptables -A CYFR_GUARD_REFUSE -d #{@control_plane}/32 -j REJECT --reject-with icmp-admin-prohibited"
@@ -96,12 +97,80 @@ defmodule Cyfr.GuardTableTest do
                  "iptables -A FORWARD -i sp+ -j REJECT --reject-with icmp-admin-prohibited",
                  "iptables -A FORWARD -o sp+ -j CYFR_GUARD_REPLIES",
                  "iptables -A FORWARD -o sp+ -j REJECT --reject-with icmp-admin-prohibited",
+                 "iptables -A INPUT -i sp+ -p tcp -m conntrack --ctstate DNAT --ctdir REPLY -j CYFR_GUARD_ROUTES",
                  "iptables -A INPUT -i sp+ -j REJECT --reject-with icmp-admin-prohibited",
                  "ip6tables -A FORWARD -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
                  "ip6tables -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited",
                  "ip6tables -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+                 "iptables -t nat -N CYFR_GUARD_ROLES"
+               ] ++
+               Enum.flat_map(addresses, fn address ->
+                 [
+                   "iptables -t nat -A PREROUTING -d #{address}/32 ! -i sp+ -p tcp -j CYFR_GUARD_ROLES",
+                   "iptables -t nat -A OUTPUT -d #{address}/32 -p tcp -j CYFR_GUARD_ROLES"
+                 ]
+               end) ++
+               [
                  "iptables -t nat -A POSTROUTING -s #{range} ! -o sp+ -j MASQUERADE"
                ]
+
+    # The island's own addresses are this namespace's addresses on its
+    # subnets.
+    assert Enum.all?(addresses, fn address -> Enum.any?(v4_subnets, &within?(address, &1)) end)
+  end
+
+  # Core's host API is one address and port on the island's subnets; the
+  # guard starts on one it reads so, logging it, and refuses to start on any
+  # other value, naming it.
+  test "the guard refuses to start on a host API that is not an address and port of the island's subnets" do
+    rules = fn host_api ->
+      System.cmd("sh", [GuardTable.path(), "rules"],
+        env: [{"CYFR_GUARD_CONTROL_PLANE", @control_plane}, {"CYFR_GUARD_HOST_API", host_api}],
+        stderr_to_stdout: true
+      )
+    end
+
+    {output, 0} = rules.("")
+    refute output =~ "host API"
+
+    assert [address | _] =
+             for(
+               "[cyfr-guard] island address " <> address <- String.split(output, "\n"),
+               do: address
+             ),
+           "this host has no IPv4 address on a subnet of its own: #{output}"
+
+    {output, 0} = rules.("#{address}:4300")
+    assert output =~ "[cyfr-guard] host API #{address}:4300 passes private roles"
+
+    for bad <- [
+          address,
+          "#{address}:0",
+          "#{address}:065",
+          "#{address}:65536",
+          "#{address}:4300:1",
+          "#{address}:http",
+          "192.0.2.1:4300",
+          "#{address}.1:4300",
+          "[::1]:4300"
+        ] do
+      {output, status} = rules.(bad)
+      assert status != 0, "a host API of #{inspect(bad)} was taken: #{output}"
+      assert output =~ "[cyfr-guard] error: CYFR_GUARD_HOST_API is '#{bad}'"
+      refute output =~ ~r/^iptables /m
+    end
+  end
+
+  defp within?(address, cidr) do
+    [base, bits] = String.split(cidr, "/")
+    shift = 32 - String.to_integer(bits)
+    Bitwise.bsr(ipv4(base), shift) == Bitwise.bsr(ipv4(address), shift)
+  end
+
+  defp ipv4(text) do
+    {:ok, {a, b, c, d}} = :inet.parse_ipv4strict_address(String.to_charlist(text))
+    <<n::32>> = <<a, b, c, d>>
+    n
   end
 
   # The route range is the first /16 of 10.0.0.0/8 from 10.213.0.0/16 on that

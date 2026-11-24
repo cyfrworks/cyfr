@@ -283,13 +283,15 @@ func checkDescriptors(netns, udp, tcp *os.File) error {
 }
 
 // The kernel's connection table (conntrack, through ctnetlink): a withdrawn
-// route leaves no entry of its space's address behind, so no later route
-// that takes the address finds a connection of the earlier one's.
+// route leaves no entry of its space's address behind, one its space opened
+// or one forwarded into it, so no later route that takes the address finds
+// a connection of the earlier one's.
 const (
 	nfnlSubsysCtnetlink = 1
 	ctnlMsgGet          = 1
 	ctnlMsgDelete       = 2
 	ctaTupleOrig        = 1
+	ctaTupleReply       = 2
 	ctaTupleIP          = 1
 	ctaIPv4Src          = 1
 	ctaZone             = 18
@@ -361,8 +363,8 @@ func ctMessage(msg uint16, flags uint16, seq uint32, body []byte) []byte {
 	return out
 }
 
-// conntrackOf answers the entries of the IPv4 connection table whose
-// original source is addr, each as the attributes a delete names it by:
+// conntrackOf answers the entries of the IPv4 connection table addr is a
+// party to, as the source of the original tuple or of the reply's, each as the attributes a delete names it by:
 // its original tuple and, where it has one, its zone.
 func conntrackOf(addr netip.Addr) ([][]byte, error) {
 	fd, err := ctnetlink()
@@ -406,7 +408,8 @@ func conntrackOf(addr netip.Addr) ([][]byte, error) {
 }
 
 // parseDump reads one batch of a connection-table dump: the entries whose
-// original source is addr, whether the batch ends the dump, and whether any
+// original source or reply source is addr (a connection forwarded into a
+// space has the space's address as the reply's source alone), whether the batch ends the dump, and whether any
 // of its messages says the dump was interrupted.
 func parseDump(msgs []syscall.NetlinkMessage, addr netip.Addr) (found [][]byte, done, interrupted bool, err error) {
 	want := addr.As4()
@@ -428,18 +431,21 @@ func parseDump(msgs []syscall.NetlinkMessage, addr netip.Addr) (found [][]byte, 
 		if len(m.Data) < 4 {
 			continue
 		}
-		var orig, zone, source []byte
+		var orig, zone []byte
+		party := false
 		for _, a := range attrs(m.Data[4:]) {
 			switch attrType(a) {
-			case ctaTupleOrig:
-				orig = a[1]
+			case ctaTupleOrig, ctaTupleReply:
+				if attrType(a) == ctaTupleOrig {
+					orig = a[1]
+				}
 				for _, t := range attrs(a[2]) {
 					if attrType(t) != ctaTupleIP {
 						continue
 					}
 					for _, ip := range attrs(t[2]) {
-						if attrType(ip) == ctaIPv4Src && len(ip[2]) == 4 {
-							source = ip[2]
+						if attrType(ip) == ctaIPv4Src && len(ip[2]) == 4 && [4]byte(ip[2]) == want {
+							party = true
 						}
 					}
 				}
@@ -447,7 +453,7 @@ func parseDump(msgs []syscall.NetlinkMessage, addr netip.Addr) (found [][]byte, 
 				zone = a[1]
 			}
 		}
-		if orig != nil && len(source) == 4 && [4]byte(source) == want {
+		if orig != nil && party {
 			entry := append(append([]byte(nil), orig...), make([]byte, (4-len(orig)%4)%4)...)
 			if zone != nil {
 				entry = append(entry, zone...)
@@ -459,8 +465,8 @@ func parseDump(msgs []syscall.NetlinkMessage, addr netip.Addr) (found [][]byte, 
 	return found, false, interrupted, nil
 }
 
-// forgetConnections removes from the connection table every entry whose
-// original source is addr, the address of a route being withdrawn. An entry
+// forgetConnections removes from the connection table every entry addr is
+// a party to (conntrackOf), addr the address of a route being withdrawn. An entry
 // already gone is removed.
 func forgetConnections(addr netip.Addr) error {
 	// The address is free only once one whole, uninterrupted pass of the

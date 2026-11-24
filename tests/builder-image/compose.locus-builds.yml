@@ -15,8 +15,11 @@
 # the guard with an ip6tables that fails. It adds a stand-in for cyfr, the
 # image under test answering on port 4000 at cyfr's fixed endpoint address
 # and under cyfr's name on the builds network, which the suite proves a
-# build cannot reach, and it enables IPv6 on the builds network, so the
-# guard's IPv6 rules meet routed packets. The containers take the names
+# build cannot reach, at a fixed address on that network's fixed subnet
+# (stack.py's BUILDS_SUBNET), where it also stands in for core's host API,
+# which the guard is given (CYFR_GUARD_HOST_API) and the suite proves a
+# private role alone reaches; and it enables IPv6 on the builds network, so
+# the guard's IPv6 rules meet routed packets. The containers take the names
 # compose gives them from the project, so a run does not meet a deployed
 # stack on the same host. The tests supply the builds key as
 # CYFR_LOCUS_BUILDS_KEY through the environment compose interpolates, which
@@ -41,6 +44,7 @@ services:
       - ${GUARD_TOOLS_DIR:?set GUARD_TOOLS_DIR}:/opt/cyfr-guard-tools:ro
     environment:
       - PATH=/opt/cyfr-guard-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - CYFR_GUARD_HOST_API=172.16.237.7:4000
   cyfr-stand-in:
     image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
     pull_policy: never
@@ -52,8 +56,13 @@ services:
       default:
         ipv4_address: ${ENDPOINT_ADDRESS:?set ENDPOINT_ADDRESS}
       locus-builds:
+        ipv4_address: 172.16.237.7
         aliases:
           - cyfr
 networks:
   locus-builds:
     enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.16.237.0/24
+          ip_range: 172.16.237.128/25
