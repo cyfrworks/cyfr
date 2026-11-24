@@ -431,6 +431,49 @@ func TestASpacesMessageQueueIsItsOwn(t *testing.T) {
 	}
 }
 
+// A program behind shells with no trap, as a session's command line puts
+// one in front of every program, has its orderly end: the shells die at
+// their TERM, and the program is asked next, alone, while what it started
+// is not asked until it has ended. Here the program, asked, tells its own
+// child after half a second to write its word, which the child drops if it
+// is asked itself; and it says so if it is ever asked twice.
+func TestAProgramBehindShellsEndsInItsTurn(t *testing.T) {
+	for name, front := range map[string]string{
+		"one shell":  `sh prog.sh; :`,
+		"two shells": `sh -c 'sh prog.sh; :'; :`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := keptKeeper(t)
+			uid := testKeptFirst
+			path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-turn")
+			if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+				t.Fatalf("home_make: %v", made)
+			}
+			script := `cat > store.sh <<'X'
+trap 'echo store-asked; exit 1' TERM
+while [ ! -e told ]; do sleep 0.05; done
+echo stored
+X
+cat > prog.sh <<'X'
+sh store.sh &
+trap 'if [ -e asked ]; then echo asked-again; exit 1; fi; : > asked; sleep 0.5; : > told; wait; exit 0' TERM
+echo ready
+while :; do sleep 0.05; done
+X
+` + front
+			id, rc := k.spawnKept(t, "p", script, path, uid)
+			rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+			grace := int64(5000)
+			k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+			rc.readUntil(t, func() bool { return false })
+			if got := string(rc.got[frame.StreamStdout]); got != "ready\nstored\n" {
+				t.Fatalf("the closed session said %q, want the program's orderly end", got)
+			}
+			k.releasedPair(t, id)
+		})
+	}
+}
+
 // A process the command left is asked to end once, and its orderly end,
 // which a second ask would cut short as a browser's is, runs to its end
 // within the close's bound: the helper here writes its word 600 ms after

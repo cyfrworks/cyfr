@@ -645,11 +645,22 @@ func Init() int {
 	for _, fd := range []int{ControlFD, RelayFD} {
 		_ = unix.Close(fd)
 	}
-	var ending atomic.Bool
+	// The first signal that ends the command begins the end by levels
+	// (Ender): the command's children of that moment are held before it is
+	// passed on, and asked once the command has ended. A scan the command's
+	// reaping overtook holds nothing, as the keeper's does.
+	var ending, reaped atomic.Bool
+	children := make(chan []Held, 1)
+	e := spaceEnder()
 	go func() {
 		for s := range signals {
-			if s != unix.SIGUSR1 && s != unix.SIGUSR2 {
-				ending.Store(true)
+			if s != unix.SIGUSR1 && s != unix.SIGUSR2 && !ending.Swap(true) {
+				held, _, _ := e.Children([]int{command}, noDeadline)
+				if reaped.Load() {
+					e.Release(held)
+					held = nil
+				}
+				children <- held
 			}
 			_ = unix.Kill(command, s.(syscall.Signal))
 		}
@@ -665,16 +676,17 @@ func Init() int {
 			return ExitFailed
 		}
 		if got == command {
+			reaped.Store(true)
 			break
 		}
 	}
 	// A command ended for a signal it was passed, as a close ends it,
-	// leaves the processes it left to end in their turn, as the keeper's
-	// end in order gives a leader's children and then its group: each
-	// process left in the space is sent SIGTERM once and waited for, within
-	// the keeper's own bound on the group. A command that ended of its own
-	// accord ends the space at once.
+	// leaves the processes it left to end in their turn, by the levels a
+	// kept session ends by (Ender.InTurn), and then the rest of the space,
+	// each process asked once, within the keeper's own bound on the group.
+	// A command that ended of its own accord ends the space at once.
 	if ending.Load() {
+		e.InTurn(<-children, noDeadline)
 		endTheRest()
 	}
 	if ws.Signaled() {
@@ -708,6 +720,42 @@ func endTheRest() {
 				time.Sleep(10 * time.Millisecond) // sleep-ok: polls the reaping of what the signal ended
 			}
 		}
+	}
+}
+
+// noDeadline is the init's bound on an end by levels: none of its own, the
+// keeper's bound on the group being the one that ends it.
+var noDeadline = time.Now().Add(100 * 365 * 24 * time.Hour)
+
+// spaceHeld is how many pidfds an end in a space holds at once.
+const spaceHeld = 64
+
+// spaceEnder is the end by levels as the init runs it: the space's /proc
+// lists its processes, the init holds at most spaceHeld pidfds at once.
+func spaceEnder() Ender {
+	held := 0
+	return Ender{
+		Procs: func() ([]int, error) {
+			entries, err := os.ReadDir("/proc")
+			var pids []int
+			for _, e := range entries {
+				if pid, err := strconv.Atoi(e.Name()); err == nil && pid != 1 {
+					pids = append(pids, pid)
+				}
+			}
+			return pids, err
+		},
+		Reserve: func() bool {
+			if held >= spaceHeld {
+				return false
+			}
+			held++
+			return true
+		},
+		Unreserve:    func(n int) { held -= n },
+		Poll:         unix.Poll,
+		Probe:        func(fd int) error { return unix.PidfdSendSignal(fd, 0, nil, 0) },
+		PollInterval: 20 * time.Millisecond,
 	}
 }
 
