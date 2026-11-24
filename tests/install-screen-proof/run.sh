@@ -437,11 +437,15 @@ box_install() {
   # The guest's virtio display has no 3D; the product sets no renderer.
   guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
     fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
+  # A release whose scaffold ships the AppArmor profile cyfr-locus has init
+  # load it once its files are written: one question and one more sudo.
   pane_step init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1500 \
-    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1 or 2 \[1\]' 1
+    'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1 or 2 \[1\]' 1 'Load it\? \(yes/no\)' yes
   check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
   check "it asks \"Install these requirements?\" once" test "${PANE_ANSWERED[0]}" = 1
-  check "sudo asks at most two passwords, the requirements' and the screen's (asked ${PANE_ANSWERED[1]})" test "${PANE_ANSWERED[1]}" -le 2
+  check "it asks to load the AppArmor profile at most once (asked ${PANE_ANSWERED[3]})" test "${PANE_ANSWERED[3]}" -le 1
+  check "sudo asks at most two passwords, the requirements' and the screen's, and the profile's when asked (asked ${PANE_ANSWERED[1]})" \
+    test "${PANE_ANSWERED[1]}" -le $((2 + PANE_ANSWERED[3]))
   check "cyfr says whose password on the line before sudo's first prompt" sh -c 'grep -A1 -xF -- "$1" "$2" | sed -n 2p | grep -qE -- "$3"' sh \
     "$PASSWORD_SENTENCE" "$GUEST_DIR/transcript-init.txt" "$SUDO_PROMPT"
   check "init goes on through the docker group and asks the screen question once (asked ${PANE_ANSWERED[2]})" sh -c '[ "$1" = 1 ] && grep -qx "This machine has no desktop. Show CYFR on its screen?" "$2"' sh "${PANE_ANSWERED[2]}" "$GUEST_DIR/transcript-init.txt"

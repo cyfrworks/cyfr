@@ -119,22 +119,23 @@ def main():
         # ————— a home of its own, under a uid of its own —————
         a = whoami(c, OWNER, key="a", home_id=SHARED)
         expect(a["home"] == f"{KEPT_ROOT}/{SHARED}" and a["home_mode"] == "700" and a["cwd"] == a["home"]
-               and a["tmpdir"] == f"{a['home']}/tmp", "a kept program runs in its row's home, 0700, as HOME", a)
+               and a["tmpdir"] == "/tmp", "a kept program runs in its row's home, 0700, as HOME, its TMPDIR its space's own", a)
         expect(KEPT_FIRST <= a["uid"] <= KEPT_LAST and not POOL_FIRST <= a["uid"] <= POOL_LAST
                and a["gid"] == a["uid"], "it runs under a uid of the kept range, never a pool uid", a)
         expect(c.hello()[1]["pool"]["free"] == pool["free"], "a kept session takes no uid of the pool")
         sh(c, OWNER, 'echo kept-value > "$HOME/kept.txt"', key="a", home_id=SHARED)
 
         b = whoami(c, OWNER, key="b", home_id=SHARED)
-        expect(b["uid"] == a["uid"] and b["home"] == a["home"] and b["pid"] != a["pid"],
-               "a second session of the entry shares its home and uid in a process of its own", [a, b])
+        expect(b["uid"] == a["uid"] and b["home"] == a["home"] and b["pidns"] != a["pidns"],
+               "a second session of the entry shares its home and uid in a space of its own", [a, b])
+        first = stack.outside(a)
         seen = sh(c, OWNER, 'cat "$HOME/kept.txt"', key="b", home_id=SHARED)
         expect(seen["stdout"] == "kept-value\n", "the second session sees what the first wrote", seen)
         expect(c.program(OWNER, "probe")["sessions"] == 2, "the program runs two sessions")
 
         status, closed = c.close(OWNER, c.mcp(OWNER, "probe", key="a", home_id=SHARED).session)
         expect((status, closed) == (200, {"version": VERSION, "status": "closed"}), "a session is closed", closed)
-        eventually(lambda: not any(p["pid"] == a["pid"] for p in stack.processes()), "the closed session's process to end")
+        eventually(lambda: not any(p["pid"] == first["pid"] for p in stack.processes()), "the closed session's process to end")
         expect(whoami(c, OWNER, key="b", home_id=SHARED)["pid"] == b["pid"],
                "closing one session leaves the other running under the shared uid")
         c.close(OWNER, c.mcp(OWNER, "probe", key="b", home_id=SHARED).session)
@@ -143,7 +144,7 @@ def main():
 
         again = whoami(c, OWNER, key="a", home_id=SHARED)
         kept = sh(c, OWNER, 'cat "$HOME/kept.txt"', key="a", home_id=SHARED)
-        expect(again["uid"] == a["uid"] and again["pid"] != a["pid"] and kept["stdout"] == "kept-value\n"
+        expect(again["uid"] == a["uid"] and again["pidns"] != a["pidns"] and kept["stdout"] == "kept-value\n"
                and c.mcp(OWNER, "probe", key="a", home_id=SHARED).resumed is False,
                "a kept home survives retirement: the next session finds what the last wrote, under the same uid",
                [again, kept])

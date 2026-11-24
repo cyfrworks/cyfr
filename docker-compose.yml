@@ -31,7 +31,9 @@
 #                 The island starts only once its guard is healthy, which
 #                 it is only with every rule installed.
 # Every Locus service runs under keeper.seccomp.json, shipped beside this
-# file, on a host that allows unprivileged user namespaces (x-locus-role).
+# file, and on a host with AppArmor under the profile cyfr-locus, which
+# `cyfr init` and `cyfr update` load, on a host that allows unprivileged
+# user namespaces (x-locus-role).
 #                                  [locus-builds-guard: profile locus-builds]
 #   caddy      — TLS and the reverse proxy in front of a public home, on
 #                 :80 and :443, forwarding to cyfr's proxy listener on the
@@ -87,21 +89,31 @@ x-locus-role: &locus-role
   # backend's spawn is refused as `memory_unavailable`, which the backend
   # reports as its error.
   # seccomp=./keeper.seccomp.json: cyfr-locus clones every build, runner
-  # and backend into a space of its own, a user, network and IPC
-  # namespace. Docker's default seccomp profile denies a clone that makes a
-  # namespace, so every Locus service runs under keeper.seccomp.json,
-  # shipped beside this file (the image's /etc/cyfr/keeper.json): Docker's
-  # default with that clone allowed and unshare and setns denied. The host
-  # must allow unprivileged user namespaces: user.max_user_namespaces above
-  # 0 and, where AppArmor restricts them
-  # (kernel.apparmor_restrict_unprivileged_userns=1, as on Ubuntu 24.04 and
-  # later), the container keeps Docker's default AppArmor profile, under
-  # which the clone is allowed. Without either, cyfr-locus refuses to
-  # start, naming both, and the container restart-loops.
+  # and backend into a space of its own, a user, network, IPC, pid, mount
+  # and cgroup namespace with files of its own, which the space's first
+  # process mounts in its own mount namespace. Docker's default seccomp
+  # profile denies a clone that makes a namespace and every mount, so every
+  # Locus service runs under keeper.seccomp.json, shipped beside this file
+  # (the image's /etc/cyfr/keeper.json): Docker's default with those
+  # clones and the space's mounts allowed and unshare and setns denied.
+  # apparmor=cyfr-locus: on a host with AppArmor, the container runs under
+  # the profile cyfr-locus, cyfr-locus.apparmor beside this file, which
+  # `cyfr init` and `cyfr update` load: Docker's default with the user
+  # namespace allowed, the space's mounts under its new root allowed and no
+  # other mount. A host without AppArmor, Docker Desktop among them, ignores
+  # the option. systempaths=unconfined: a /proc that Docker has masked lets
+  # no space mount its own, so the container's system paths are unmasked;
+  # on a host with AppArmor the profile denies them again, and on one
+  # without, the keeper alone, never a space, may write /proc/sys. The
+  # host must allow unprivileged user namespaces: user.max_user_namespaces
+  # above 0. Without any of these cyfr-locus refuses to start, naming what
+  # to check, and the container restart-loops.
   security_opt:
       - no-new-privileges:true
       - writable-cgroups=true
       - seccomp=./keeper.seccomp.json
+      - apparmor=cyfr-locus
+      - systempaths=unconfined
   # No Locus service holds tenant state: the root is read-only, each
   # service's tmpfs mounts are its only writable surfaces, and cyfr-locus
   # refuses to start if any other location is writable by a pool uid.

@@ -262,7 +262,8 @@ func probeSpaces(self string, cfg Config, accounts map[int]Account) error {
 func probeSpace(self string, spec pool.Spec, acct Account) error {
 	refuse := func(err error) error {
 		return fmt.Errorf("pool %s's spawns run in a space of their own, a user, network, IPC, pid, mount and cgroup namespace with files of its own (%s), "+
-			"and this host does not let cyfr-locus make one: %w; the host must allow unprivileged user namespaces (check user.max_user_namespaces, above 0), "+
+			"and this host does not let cyfr-locus make one: %w; the host must allow unprivileged user namespaces (check user.max_user_namespaces, above 0, "+
+			"and, where AppArmor restricts them, kernel.apparmor_restrict_unprivileged_userns, which the profile below satisfies), "+
 			"and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json (/etc/cyfr/keeper.json in the image), which lets "+
 			"clone make them and a space mount its files, with its system paths unmasked (security_opt systempaths=unconfined), since a masked /proc "+
 			"lets no space mount its own, and, on a host with AppArmor, under the profile apps/locus/keeper/seccomp/cyfr-locus, which `cyfr init` and "+

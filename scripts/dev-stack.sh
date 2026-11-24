@@ -150,6 +150,19 @@ die() {
   exit 1
 }
 
+# apparmor: every Locus container runs under the AppArmor profile
+# cyfr-locus (docker-compose.dev.yml), which Docker refuses to apply where
+# the host has not loaded it. Where AppArmor is on and the host's copy is
+# not this checkout's, the loop refuses before anything starts, naming the
+# one command that loads it; a process that is not root cannot list the
+# loaded profiles, and /etc/apparmor.d/cyfr-locus is what the host loads.
+apparmor() {
+  local profile="$ROOT/apps/locus/keeper/seccomp/cyfr-locus"
+  [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ] || return 0
+  cmp -s "$profile" /etc/apparmor.d/cyfr-locus ||
+    die "Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded as this checkout has it, so nothing was started. Run \`sudo sh -c 'install -m 0644 $profile /etc/apparmor.d/cyfr-locus && apparmor_parser -r -W /etc/apparmor.d/cyfr-locus'\`, then run scripts/dev-stack.sh again."
+}
+
 # slot_env K: slot K's values, as compose reads them.
 slot_env() {
   local k="$1"
@@ -676,6 +689,7 @@ cat "$f"' 2>/dev/null)" || STACK_ID=""
 run() {
   command -v docker >/dev/null || die "docker is not on PATH."
   command -v python3 >/dev/null || die "python3 is not on PATH."
+  apparmor
   lock
   private
   local left

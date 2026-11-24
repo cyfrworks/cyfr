@@ -76,7 +76,7 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # The boundary cases, defined below; DEV_STACK_CASES names some of them.
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_same_stack case_stack_reset case_cyfr_run_absent case_stack_env case_unresolved case_untrusted case_port_443 case_mixed_address case_missing_bind case_volume_replaced case_new_commit case_export_symlink case_export_cleanup"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_same_stack case_stack_reset case_cyfr_run_absent case_stack_env case_unresolved case_untrusted case_apparmor case_port_443 case_mixed_address case_missing_bind case_volume_replaced case_new_commit case_export_symlink case_export_cleanup"
 for c in ${DEV_STACK_CASES:-}; do
   case " $BOUNDARY_CASES " in
     *" $c "*) ;;
@@ -624,12 +624,15 @@ prepare() {
   cp "$ROOT/scripts/lib/run-names.sh" "$case_dir/scripts/lib/"
   cp "$stubs/image.sh" "$case_dir/scripts/image.sh"
   cp "$ROOT/docker-compose.yml" "$ROOT/docker-compose.dev.yml" "$ROOT/.env.example" "$case_dir/"
+  mkdir -p "$case_dir/apps/locus/keeper/seccomp"
+  cp "$ROOT/apps/locus/keeper/seccomp/cyfr-locus" "$case_dir/apps/locus/keeper/seccomp/"
   if [ "$4" != none ]; then
     printf '%s' "$3" >"$case_dir/.env"
     chmod "$4" "$case_dir/.env"
     cp -p "$case_dir/.env" "$case_dir/env.before"
   fi
   if [ -n "${5:-}" ]; then mkdir -p "$case_dir/data" && echo "$5" >"$case_dir/data/dev-stack.slot"; fi
+  if [ -n "${STACK_PROFILE:-}" ]; then echo "$STACK_PROFILE" >>"$case_dir/apps/locus/keeper/seccomp/cyfr-locus"; fi
   case_project="cyfr-dev-$(run_names_seed "$case_dir")"
 }
 
@@ -1554,6 +1557,22 @@ case_unresolved() {
   calls | grep -q " up " && echo "the worktree's stack started with names that do not resolve: $(calls)"
   [ -z "$(record server.env)" ] || echo "the server started with names that do not resolve"
   nothing_left
+}
+# Where AppArmor is on and the machine has not loaded the checkout's
+# profile cyfr-locus, the loop refuses before anything starts, naming the
+# one command that loads it; where AppArmor is off it goes on.
+case_apparmor() {
+  local profile
+  STACK_PROFILE="# a profile this machine has not loaded" stack "$1" apparmor "$complete" 0600 "" STUB_SERVER_STATUS=0
+  profile="$case_dir/apps/locus/keeper/seccomp/cyfr-locus"
+  if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" != Y ]; then
+    status_is 0
+    return
+  fi
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on though the machine has not loaded its AppArmor profile"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded as this checkout has it, so nothing was started. Run \`sudo sh -c 'install -m 0644 $profile /etc/apparmor.d/cyfr-locus && apparmor_parser -r -W /etc/apparmor.d/cyfr-locus'\`, then run scripts/dev-stack.sh again." ] ||
+    echo "the refusal does not name the command that loads the profile: $(tail -n 1 "$case_dir/err")"
+  [ -z "$(calls)" ] || echo "docker was called before the refusal: $(calls)"
 }
 # An authority the operating system does not trust refuses, naming the
 # command that trusts it.

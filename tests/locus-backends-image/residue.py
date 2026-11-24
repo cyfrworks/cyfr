@@ -6,22 +6,22 @@
 Run as docker-compose.yml's locus-backends service with a pool of one uid,
 and driven only by requests signed as CYFR signs them (harness.py):
 
-- Outside its home a program's process can write only into the home root
-  and the kept homes' root, neither of which it can list: /tmp, /var/tmp
-  and /run are read-only, /dev/shm is absent and the release's run
-  directory is closed to it.
-- The System V shared memory, semaphore set and message queue and the
-  POSIX message queue it opens by name (tests/fixtures/residue-canary.go)
-  are its space's own: the space has an IPC namespace of its own, the
-  container's holds none of them, and the namespace, every object in it,
-  is gone with the space's last process.
-- What outlives the space — an entry in the home root and one in the kept
-  homes' root, a directory tree it made unwritable, and a POSIX message
-  queue made through the container's own mqueue mount, which is the
-  container's namespace — is gone, with every process of its uid, once its
-  owner is released, before a second owner runs under the same uid; and the
-  keeper logs no quarantine. The kept homes' root is searched like any
-  writable mount when a pooled uid is scrubbed.
+- Outside its home a program's process writes only its space's own /tmp,
+  /var/tmp, /dev/shm and /run, which end with the space: the homes' root
+  is read-only there and holds its own home alone, and neither the kept
+  homes' root, the release's run directory nor the container's mqueue
+  mount is in its space.
+- The System V shared memory, semaphore set and message queue it makes
+  (tests/fixtures/residue-canary.go) are its space's own: the space has an
+  IPC namespace of its own, the container's holds none of them, and the
+  namespace, every object in it, is gone with the space's last process. A
+  POSIX message queue it would open by name is refused (EACCES): the
+  container's AppArmor profile lets a process read a queue's attributes
+  alone.
+- Nothing of the space outlives it but its home, which is gone, with every
+  process of its uid, once its owner is released, before a second owner
+  runs under the same uid, who finds nothing the first left; and the
+  keeper logs no quarantine.
 - cyfr-locus refuses to start where a pooled uid could write a shared
   location: a writable root, a shared /tmp, Docker's default /dev/shm.
 
@@ -38,7 +38,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, KEPT_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
+    HOME_ROOT, KEPT_ROOT, POOL_FIRST, PROBE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
     expect, owner_of, probe, require_docker, run,
 )
 from imagesuite import read_listing, read_output, run_name  # noqa: E402
@@ -125,29 +125,31 @@ def main():
         expect(first["uid"] == UID, "the first owner runs under the pool's one uid", first)
         planted = canary(c, owner_of("first"), "plant")
         expect(planted["uid"] == UID and planted["files"] == {
-            f"/tmp/{TAG}": "EROFS", f"/var/tmp/{TAG}": "EROFS", f"/dev/shm/{TAG}": "ENOENT", f"/run/{TAG}": "EROFS",
-            f"{RUN_DIR}/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
-            f"{KEPT_ROOT}/{TAG}": "ok",
-        }, "outside its home a program writes only into the home root and the kept homes' root", planted)
+            f"/tmp/{TAG}": "ok", f"/var/tmp/{TAG}": "ok", f"/dev/shm/{TAG}": "ok", f"/run/{TAG}": "ok",
+            f"{RUN_DIR}/{TAG}": "ENOENT", f"{HOME_ROOT}/{TAG}": "EROFS", f"{HOME_ROOT}/{TAG}-tree/": "EROFS",
+            f"{KEPT_ROOT}/{TAG}": "ENOENT",
+        }, "outside its home a program writes only its space's own /tmp, /var/tmp, /dev/shm and /run", planted)
         for kind in IPC:
-            expect(planted[kind] == "ok", f"the backend leaves a {kind} object", planted)
+            want = "EACCES" if kind == "mqueue" else "ok"
+            expect(planted[kind] == want, f"the backend's {kind} object is answered {want}", planted)
         mounted = c.tool(owner_of("first"), "probe__run", {"argv": ["touch", MOUNT_QUEUE]})
-        expect(mounted["status"] == 0, "the backend makes a queue through the container's mqueue mount", mounted)
+        expect(mounted["status"] != 0, "the container's mqueue mount is not in the backend's space", mounted)
 
         # The objects are its space's: the backend finds them, in an IPC
         # namespace that is not the container's, and the container's own
         # namespace holds none of them.
         found = canary(c, owner_of("first"), "probe")
         for kind in IPC:
-            expect(found[kind] == "present", f"the backend finds its {kind} object in its space", found)
-        space = ipc_namespace(stack, first["pid"])
+            want = "absent" if kind == "mqueue" else "present"
+            expect(found[kind] == want, f"the backend's {kind} object is {want} in its space", found)
+        leader = [p for p in stack.under_uid(UID) if p["cmd"].strip() == PROBE]
+        expect(len(leader) == 1, "the first owner's program runs, as the container numbers it", leader)
+        space = ipc_namespace(stack, leader[0]["pid"])
         expect(space and space != ipc_namespace(stack, 1), "the backend's space has an IPC namespace of its own", space)
         held = held_by_uid(stack)
         expect(not any(line.startswith("/proc/sysvipc/") for line in held) and f"/dev/mqueue/{TAG}" not in held,
                "the container's own namespace holds none of the space's IPC objects", held)
-        expect(f"{HOME_ROOT}/{TAG}" in held and f"{HOME_ROOT}/{TAG}-tree" in held and f"{KEPT_ROOT}/{TAG}" in held
-               and MOUNT_QUEUE in held,
-               "the kernel holds for the uid what outlives its space: its files and the mount's queue", held)
+        expect(held == [first["home"]], "outside its space the kernel holds for the uid its home alone", held)
 
         status, _answer, _ = c.release([owner_of("first")])
         expect(status == 200, "the first owner is released")
@@ -162,13 +164,13 @@ def main():
         probed = canary(c, owner_of("second"), "probe")
         expect(probed["uid"] == UID and probed["files"] == {
             f"/tmp/{TAG}": "absent", f"/var/tmp/{TAG}": "absent", f"/dev/shm/{TAG}": "absent", f"/run/{TAG}": "absent",
-            f"{RUN_DIR}/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
+            f"{RUN_DIR}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
             f"{KEPT_ROOT}/{TAG}": "absent",
         }, "nothing the first owner left reaches the second", probed)
         for kind in IPC:
             expect(probed[kind] == "absent", f"no {kind} object reaches the second owner", probed)
         queue = c.tool(owner_of("second"), "probe__run", {"argv": ["test", "-e", MOUNT_QUEUE]})
-        expect(queue["status"] == 1, "the queue made through the mount does not reach the second owner", queue)
+        expect(queue["status"] == 1, "no queue of the container's mount reaches the second owner", queue)
         expect(held_by_uid(stack) == [second["home"]], "the uid holds the second owner's home and nothing else",
                held_by_uid(stack))
         logs = stack.logs()

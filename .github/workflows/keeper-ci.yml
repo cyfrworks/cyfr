@@ -80,13 +80,22 @@ jobs:
           go test ./internal/stage/ -race -count=1 -v -run '^TestRunnerFilterInstalls$' 2>&1 | tee "$RUNNER_TEMP/runner-filter.log"
           grep -q -- '--- PASS: TestRunnerFilterInstalls ' "$RUNNER_TEMP/runner-filter.log" || { echo "::error::TestRunnerFilterInstalls did not run and pass against an unfiltered control"; exit 1; }
 
+      # Every space builds its files under the AppArmor profile cyfr-locus,
+      # which the real-kernel tests' container runs under, as every Locus
+      # container does.
+      - name: Load the Locus containers' AppArmor profile
+        run: ../../../scripts/ci/apparmor-profile.sh
+
       # The keeper's real-kernel tests start processes under pooled uids and
       # hold each spawn to a memory bound in a cgroup v2 group of its own, so
       # they need root and a cgroup namespace whose root is mounted writable:
       # what the shipped services get from `writable-cgroups=true` (Docker
-      # Engine 28 or later on a cgroup v2 host). As the runner's user above
-      # they skip; here they run as root in a Go container started with the
-      # option, and a skip for want of root or of a bound fails the step.
+      # Engine 28 or later on a cgroup v2 host). Each space mounts its own
+      # files, so the container runs as the services do, under the keeper's
+      # seccomp profile and the AppArmor profile cyfr-locus with its system
+      # paths unmasked. As the runner's user above they skip; here they run
+      # as root in a Go container started with those options, and a skip
+      # for want of root or of a bound fails the step.
       - name: go test as root with writable-cgroups=true (the real kernel)
         run: |
           set -euo pipefail
@@ -98,6 +107,7 @@ jobs:
           fi
           go_version="$(sed -n 's/^go //p' go.mod)"
           docker run --rm --security-opt writable-cgroups=true --security-opt seccomp="$GITHUB_WORKSPACE/apps/locus/keeper/seccomp/keeper.json" \
+            --security-opt apparmor=cyfr-locus --security-opt systempaths=unconfined \
             -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/locus/keeper \
             -e GOFLAGS=-buildvcs=false \
             "golang:$go_version" \
@@ -106,7 +116,7 @@ jobs:
             echo "::error::a real-kernel test skipped for want of root or of a memory bound"
             exit 1
           fi
-          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
+          for t in TestTheProbeProvesTheSpaceWhereTheHostAllowsIt TestARelaySpaceHasItsOwnNamespacesAndNoCapability TestARelaySpacesRelayIsCarriedOnceOpened TestARelaySpacesRelayIsSilentUnopened TestASpaceRunsInItsBoundedGroup TestTwoSessionsOfOneFolderSeeAndSignalOnlyTheirOwn TestASpacesProcessesEndWithItsCommand TestASignalReachesTheCommandInsideItsSpace TestNoThreadOfASpaceHoldsACapability TestTheProbeRefusesAHostThatCannotBuildASpacesFiles; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
 
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-locus" .

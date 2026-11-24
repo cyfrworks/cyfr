@@ -8,18 +8,20 @@
   release refuses to serve builds when started without cyfr-locus, and to
   start at all with a control-plane variable in its environment.
 - A build runs under a pooled uid, alone in its group, in a 0700 home,
-  with none of the release's environment; it cannot read the release's
-  /proc environ (which holds LOCUS_BUILDS_KEY) nor signal it.
-- A build cannot list the home root nor read a concurrent build's tree,
-  even knowing its path.
+  with none of the release's environment, TMPDIR its space's own /tmp; it
+  runs in a space of its own processes and files, so it finds no process
+  of the release's (whose environ holds LOCUS_BUILDS_KEY) to read or
+  signal.
+- A build sees its own home alone under the home root, and finds no
+  concurrent build's process, nor so its tree.
 - No process of a build's uid survives the build — a daemon a build.rs
   starts in a session of its own, ignoring SIGTERM, included — and its
   home is gone when the response arrives.
-- With a pool of one uid, what one build leaves outside its home (an entry
-  in the home root, a directory tree it made unwritable, System V shared
+- With a pool of one uid, what one build leaves outside its home (files in
+  its space's own /tmp, /var/tmp, /dev/shm and /run, System V shared
   memory, semaphores and message queues, a POSIX message queue) is gone
-  before the next build runs under the same uid; /tmp, /var/tmp, /dev/shm,
-  /run and the release's run directory are not writable to it.
+  before the next build runs under the same uid; the home root is
+  read-only to it and the release's run directory is not in its space.
 - Started without the `writable-cgroups=true` security option, as a
   deployment that lacks it would be, the service answers every build
   `unavailable`, naming the option, and runs nothing: no build is ever run
@@ -268,19 +270,17 @@ def test_build_identity(stack):
            "a build runs under a pooled uid, alone in its group", who)
     expect(who["user"] == pool_user(uid), f"the build's uid is the image's {pool_user(uid)}", who)
     expect(re.fullmatch(rf"{HOME_ROOT}/{uid}-[0-9a-f]{{32}}", who["home"]) and who["home_mode"] == "700"
-           and who["tmpdir"] == who["home"] + "/tmp" and who["caps"] == "0000000000000000",
-           "its home is a 0700 directory of its own, TMPDIR is inside it and it holds no capability", who)
+           and who["tmpdir"] == "/tmp" and who["caps"] == "0000000000000000",
+           "its home is a 0700 directory of its own, TMPDIR is its space's /tmp and it holds no capability", who)
 
     env = output_file(answer, "env.txt")
     expect(stack.key not in env and not re.search(r"^(CYFR_|LOCUS_|RELEASE_|ERL_|ELIXIR_)", env, re.M),
            "none of the release's environment reaches a build", env)
 
     release = output_file(answer, "release.txt") or ""
-    expect(release.startswith("pid=") and stack.key not in release
-           and "Permission denied" in release and "Operation not permitted" in release,
-           "a build can neither read the release's environ nor signal it", release)
-    expect("Permission denied" in (output_file(answer, "home-root.txt") or ""),
-           "a build cannot list the home root", output_file(answer, "home-root.txt"))
+    expect(release == "", "a build finds no process of the release's to read or signal", release)
+    expect((output_file(answer, "home-root.txt") or "").split() == [os.path.basename(who["home"])],
+           "a build sees its own home alone under the home root", output_file(answer, "home-root.txt"))
 
 
 def test_concurrent_trees(stack):
@@ -298,12 +298,8 @@ def test_concurrent_trees(stack):
     status, answer = results["intruder"]
     expect(status == 200, "the intruding build succeeds", brief(answer))
     probe = output_file(answer, "probe.txt") or ""
-    found = fields(probe).get("found", "")
-    expect(re.fullmatch(rf"{HOME_ROOT}/3\d{{4}}-[0-9a-f]{{32}}", found),
-           "the intruding build found the concurrent build's home path", probe)
-    expect("victim secret" not in probe and probe.count("Permission denied") >= 3
-           and "ls_status=0" not in probe and "cat_status=0" not in probe and "root_status=0" not in probe,
-           "it can neither list nor read the concurrent build's tree, nor list the home root", probe)
+    expect(fields(probe).get("found") == "" and "victim secret" not in probe and "cat_status=0" not in probe,
+           "the intruding build finds no process of the concurrent build's, nor so its tree", probe)
     expect(results["victim"][0] == 200, "the concurrent build completes undisturbed", brief(results["victim"][1]))
 
 
@@ -334,11 +330,11 @@ def test_residue(stack):
     planted = json.loads(output_file(answer, "plant.json"))
     expect(planted["uid"] == POOL_FIRST, "the first build runs under the pool's one uid", planted)
     expect(planted["files"] == {
-        f"/tmp/{TAG}": "EROFS", f"/var/tmp/{TAG}": "EROFS", f"/dev/shm/{TAG}": "ENOENT", f"/run/{TAG}": "EROFS",
-        f"{RUN_DIR}/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
-    }, "outside its home a build can write only into the home root", planted)
-    expect(all(planted[kind] == "ok" for kind in ("shm", "sem", "msg", "mqueue")),
-           "a build can create System V IPC objects and a POSIX message queue", planted)
+        f"/tmp/{TAG}": "ok", f"/var/tmp/{TAG}": "ok", f"/dev/shm/{TAG}": "ok", f"/run/{TAG}": "ok",
+        f"{RUN_DIR}/{TAG}": "ENOENT", f"{HOME_ROOT}/{TAG}": "EROFS", f"{HOME_ROOT}/{TAG}-tree/": "EROFS",
+    }, "outside its home a build writes only its space's own /tmp, /var/tmp, /dev/shm and /run", planted)
+    expect(all(planted[kind] == "ok" for kind in ("shm", "sem", "msg")) and planted["mqueue"] == "EACCES",
+           "a build can create System V IPC objects, and a POSIX message queue is refused it", planted)
 
     status, answer = stack.build(tincture(f"mkdir -p dist && /canary/canary probe {TAG} {paths} > dist/probe.json"),
                                  "javascript", "tincture")
@@ -347,7 +343,7 @@ def test_residue(stack):
     expect(probed["uid"] == POOL_FIRST, "the second build runs under the same uid", probed)
     expect(probed["files"] == {
         f"/tmp/{TAG}": "absent", f"/var/tmp/{TAG}": "absent", f"/dev/shm/{TAG}": "absent", f"/run/{TAG}": "absent",
-        f"{RUN_DIR}/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
+        f"{RUN_DIR}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
     } and all(probed[kind] == "absent" for kind in ("shm", "sem", "msg", "mqueue")),
         "nothing the first build left reaches the second", probed)
     sysvipc = ipc_tables(stack)

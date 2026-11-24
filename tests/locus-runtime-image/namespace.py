@@ -212,7 +212,8 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), netwo
             "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
-        args += ["--security-opt", f"seccomp={PROFILE}"]
+        args += ["--security-opt", f"seccomp={PROFILE}", "--security-opt", "apparmor=cyfr-locus",
+                 "--security-opt", "systempaths=unconfined"]
     args += ["--entrypoint", "cyfr-locus", image, "serve", *(pool_args or ["--pool", POOL]), "--home-root", HOME_ROOT,
              "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]
     return run(*args, check=False, timeout=timeout)

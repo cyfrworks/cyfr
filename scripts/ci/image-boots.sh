@@ -18,9 +18,11 @@
 #               and keyless and refuses another signer (scripts/cosign.sh
 #               check)
 #   cyfr-locus  the Locus image as docker-compose.yml's locus-builds service
-#               runs it (x-locus-role's capabilities, options and tmpfs
-#               mounts) with a fresh builds key, healthy by the image's own
-#               HEALTHCHECK (the builds wire's health operation)
+#               runs it (x-locus-role's capabilities, options, the keeper's
+#               seccomp profile and the AppArmor profile cyfr-locus, which
+#               scripts/ci/apparmor-profile.sh loads, and tmpfs mounts) with
+#               a fresh builds key, healthy by the image's own HEALTHCHECK
+#               (the builds wire's health operation)
 #
 # The container is the script's own and is removed however it ends; on a
 # failure its log's last lines are printed. Exit status: 0 healthy, 1 not
@@ -47,6 +49,8 @@ case "$kind" in
     docker run --detach --name "$name" --init \
       --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add KILL \
       --security-opt no-new-privileges:true --security-opt writable-cgroups=true \
+      --security-opt "seccomp=$root/apps/locus/keeper/seccomp/keeper.json" \
+      --security-opt apparmor=cyfr-locus --security-opt systempaths=unconfined \
       --read-only --ipc none \
       --tmpfs /var/lib/locus/homes:mode=1733,exec,size=256m \
       --tmpfs /run/locus:uid=10001,gid=10001,mode=0700,size=16m \

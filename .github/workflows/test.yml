@@ -460,6 +460,10 @@ jobs:
           scripts/fetch-prebuilt-binaries.sh
       - name: Compile with warnings as errors
         run: mix compile --force --warnings-as-errors
+      # The loop refuses on a runner whose AppArmor holds another
+      # profile cyfr-locus than the checkout's, as on any machine.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: The dev stack's compose override
         run: bash tests/dev-stack/compose-test.sh
 
@@ -1277,6 +1281,10 @@ jobs:
           - {arch: arm64, runner: ubuntu-24.04-arm, artifact: app-image-arm64}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: apps/codex/go.mod
@@ -1337,6 +1345,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The service bounds every build with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -1438,6 +1450,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The service bounds every runner with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -1547,6 +1563,10 @@ jobs:
     needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The service bounds every backend with a cgroup of its own, which
       # needs the security option writable-cgroups=true: Docker Engine 28 or
       # later on a cgroup v2 host. Without either every case below fails for
@@ -1710,6 +1730,10 @@ jobs:
             cases: [bind, restore-identity]
     steps: &app-image-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The Compose proof drives the stack through the `cyfr` command line
       # it builds from apps/codex, and builds the Tailscale stand-in, a Go
       # module of its own.
@@ -2086,6 +2110,10 @@ jobs:
             viewport: 720x720
     steps: &browser-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: Cache deps and the prod build
         uses: ./.github/actions/setup-elixir
         with:
