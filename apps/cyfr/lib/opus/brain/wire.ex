@@ -239,24 +239,83 @@ defmodule Opus.Brain.Wire do
   @doc """
   The argument names a tool's `parameters` name at their top: those its
   `properties` declare, when an object, and those its `required` lists,
-  when a list, since a schema may require one it does not declare. A call
-  carries each of these as an argument of that name.
+  when a list, since a schema may require one it does not declare, there
+  or through what composes the top: each schema of `allOf`, `anyOf` and
+  `oneOf`, `then` and `else`, and a `$ref` into the same document (`#`
+  and a JSON pointer), each schema read once. A call carries each of these
+  as an argument of that name. A schema that names nothing and takes any
+  property names none.
   """
   @spec named_properties(map()) :: [String.t()]
-  def named_properties(parameters) when is_map(parameters) do
-    declared =
-      case parameters do
-        %{"properties" => %{} = properties} -> Map.keys(properties)
+  def named_properties(parameters) when is_map(parameters),
+    do: parameters |> named(parameters, MapSet.new()) |> elem(0) |> Enum.uniq()
+
+  @composing ~w(allOf anyOf oneOf)
+
+  defp named(schema, root, seen) when is_map(schema) do
+    if MapSet.member?(seen, schema) do
+      {[], seen}
+    else
+      seen = MapSet.put(seen, schema)
+      own = declared(schema) ++ required(schema)
+
+      Enum.reduce(composed(schema, root), {own, seen}, fn part, {names, seen} ->
+        {more, seen} = named(part, root, seen)
+        {names ++ more, seen}
+      end)
+    end
+  end
+
+  defp named(_schema, _root, seen), do: {[], seen}
+
+  defp declared(%{"properties" => %{} = properties}), do: Map.keys(properties)
+  defp declared(_schema), do: []
+
+  defp required(%{"required" => required}) when is_list(required),
+    do: Enum.filter(required, &is_binary/1)
+
+  defp required(_schema), do: []
+
+  defp composed(schema, root) do
+    listed =
+      for key <- @composing,
+          %{^key => parts} when is_list(parts) <- [schema],
+          part <- parts,
+          do: part
+
+    branches = for key <- ~w(then else), %{^key => part} <- [schema], do: part
+
+    referenced =
+      case schema do
+        %{"$ref" => "#" <> pointer} -> [pointed(root, pointer)]
         _ -> []
       end
 
-    required =
-      case parameters do
-        %{"required" => required} when is_list(required) -> Enum.filter(required, &is_binary/1)
-        _ -> []
-      end
+    listed ++ branches ++ referenced
+  end
 
-    Enum.uniq(declared ++ required)
+  # The schema a same-document JSON pointer names (`#` the whole), nil
+  # for one naming nothing.
+  defp pointed(root, ""), do: root
+
+  defp pointed(root, "/" <> pointer) do
+    pointer
+    |> String.split("/")
+    |> Enum.map(&(&1 |> String.replace("~1", "/") |> String.replace("~0", "~")))
+    |> Enum.reduce_while(root, fn
+      segment, %{} = node -> {:cont, Map.get(node, segment)}
+      segment, node when is_list(node) -> {:cont, list_at(node, segment)}
+      _segment, _leaf -> {:halt, nil}
+    end)
+  end
+
+  defp pointed(_root, _pointer), do: nil
+
+  defp list_at(list, segment) do
+    case Integer.parse(segment) do
+      {index, ""} when index >= 0 -> Enum.at(list, index)
+      _ -> nil
+    end
   end
 
   @doc """

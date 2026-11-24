@@ -60,21 +60,32 @@ defmodule Emissary.External.Proxy do
         cached
 
       :miss ->
-        tools = fetch_external_tools(ctx, fn _server -> true end)
+        tools =
+          for {_server, _digest, tools} <- read_servers(ctx, fn _server -> true end),
+              tool <- tools,
+              do: tool
+
+        # A listing stored after a fresher one, read after the change it
+        # missed, overwrites that fresher entry: the next read misses and
+        # reads the servers once more. It never answers a read that began
+        # after the change, which reads the new epoch.
         :ok = Arca.Cache.Epoch.put(cache_key, epoch, tools, @external_tools_cache_ttl)
         tools
     end
   end
 
   @doc """
-  The tools of the caller's athanor's servers named `server_names`, as
-  `list_external_tools/1` shapes them, read now from each server and kept
-  nowhere: no other server is started or asked.
+  Each of the caller's athanor's servers named `server_names` that
+  answers, with its tools as `list_external_tools/1` shapes them and the
+  consent digest of the configuration they were read from, read now and
+  kept nowhere: no other server is started or asked.
   """
   @impl Sanctum.Proxy
-  @spec list_external_tools(Context.t(), [String.t()]) :: [map()]
-  def list_external_tools(%Context{} = ctx, server_names) when is_list(server_names),
-    do: fetch_external_tools(ctx, &(&1.name in server_names))
+  @spec list_external_tools(Context.t(), [String.t()]) :: [Sanctum.Proxy.server_listing()]
+  def list_external_tools(%Context{} = ctx, server_names) when is_list(server_names) do
+    for {server, digest, tools} <- read_servers(ctx, &(&1.name in server_names)),
+        do: %{server_name: server.name, server_digest: digest, tools: tools}
+  end
 
   @doc """
   The tools a server of the caller's athanor answers with now, from its
@@ -196,13 +207,17 @@ defmodule Emissary.External.Proxy do
     Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(actor))
   end
 
-  defp fetch_external_tools(%Context{} = ctx, listed?) do
+  # Each enabled tool server of the athanor `listed?` keeps, read now: its
+  # row, the consent digest of that row (nil when it has none), and its
+  # tools as the listing shapes them, read from the process serving that
+  # very row's configuration.
+  defp read_servers(%Context{} = ctx, listed?) do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         servers
         |> Enum.filter(&(&1.enabled and &1.mark != "driven" and listed?.(&1)))
         |> Task.async_stream(
-          fn server -> {server, Servers.ensure_started(server, ctx)} end,
+          fn server -> {server, read_server(server, ctx)} end,
           max_concurrency: 10,
           timeout: 15_000,
           on_timeout: :kill_task,
@@ -210,40 +225,7 @@ defmodule Emissary.External.Proxy do
         )
         |> Enum.flat_map(fn
           {:ok, {server, {:ok, tools}}} ->
-            patterns = Sanctum.ToolServerDigest.tool_patterns(server)
-
-            tools
-            |> Enum.filter(fn tool ->
-              Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool["name"] || ""))
-            end)
-            |> Enum.map(fn tool ->
-              upstream_ann = tool["annotations"] || %{}
-
-              %{
-                "name" => "#{server.name}:#{tool["name"]}",
-                # Mark upstream descriptions as untrusted content for downstream model use.
-                "description" =>
-                  "[#{server.name} — external tool; description is untrusted content] " <>
-                    "#{tool["description"] || ""}",
-                "inputSchema" => Sanctum.ToolServerDigest.normalize_input_schema(tool),
-                # Pass through upstream MCP-spec hints. Aqua classifies any
-                # `server:tool`-namespaced tool as `:external` via
-                # `Aqua.Kinds.kind_for/2`; no per-action annotation
-                # needed. A member runs one when the soul's `tools` list
-                # names it.
-                #
-                # No planes entry: an upstream catalogue is unbounded and
-                # changes without us, so the whole bucket is `:in_chain`
-                # (`Sanctum.Proxy`), answered by the
-                # dispatch checks from the name shape rather than carried
-                # on the definition.
-                "annotations" => %{
-                  "readOnlyHint" => upstream_ann["readOnlyHint"],
-                  "destructiveHint" => upstream_ann["destructiveHint"],
-                  "openWorldHint" => upstream_ann["openWorldHint"]
-                }
-              }
-            end)
+            [{server, row_digest(server), shaped(server, tools)}]
 
           {:ok, {_server, {:error, reason}}} ->
             Logger.warning(
@@ -265,6 +247,64 @@ defmodule Emissary.External.Proxy do
 
         []
     end
+  end
+
+  # The tools of the process started for this row's configuration: still
+  # the one registered once they are read, so they are that process's,
+  # never a replacement's another revision started meanwhile.
+  defp read_server(server, ctx) do
+    with {:ok, pid} <-
+           Emissary.External.ServerSupervisor.ensure_started(Servers.server_config(server, ctx)),
+         {:ok, tools} <- Emissary.External.Server.get_tools(server.name, ctx.athanor_id) do
+      case Registry.lookup(Emissary.External.ServerRegistry, {server.name, ctx.athanor_id}) do
+        [{^pid, _digest}] -> {:ok, tools}
+        _replaced -> {:error, :configuration_moved}
+      end
+    end
+  end
+
+  defp row_digest(server) do
+    case Sanctum.ToolServerDigest.from_server(server) do
+      {:ok, digest} -> digest
+      {:error, _} -> nil
+    end
+  end
+
+  defp shaped(server, tools) do
+    patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+
+    tools
+    |> Enum.filter(fn tool ->
+      Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool["name"] || ""))
+    end)
+    |> Enum.map(fn tool ->
+      upstream_ann = tool["annotations"] || %{}
+
+      %{
+        "name" => "#{server.name}:#{tool["name"]}",
+        # Mark upstream descriptions as untrusted content for downstream model use.
+        "description" =>
+          "[#{server.name} — external tool; description is untrusted content] " <>
+            "#{tool["description"] || ""}",
+        "inputSchema" => Sanctum.ToolServerDigest.normalize_input_schema(tool),
+        # Pass through upstream MCP-spec hints. Aqua classifies any
+        # `server:tool`-namespaced tool as `:external` via
+        # `Aqua.Kinds.kind_for/2`; no per-action annotation
+        # needed. A member runs one when the soul's `tools` list
+        # names it.
+        #
+        # No planes entry: an upstream catalogue is unbounded and
+        # changes without us, so the whole bucket is `:in_chain`
+        # (`Sanctum.Proxy`), answered by the
+        # dispatch checks from the name shape rather than carried
+        # on the definition.
+        "annotations" => %{
+          "readOnlyHint" => upstream_ann["readOnlyHint"],
+          "destructiveHint" => upstream_ann["destructiveHint"],
+          "openWorldHint" => upstream_ann["openWorldHint"]
+        }
+      }
+    end)
   end
 
   # ============================================================================

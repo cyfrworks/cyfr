@@ -676,8 +676,8 @@ defmodule Aqua.Loop.Turn do
   the person's own servers list it now, read under `ctx`, the turn's own
   context, asking only the servers its entries name (`Sanctum.Proxy`'s
   `list_external_tools/2`), when the grant
-  covers it under its server's current digest, as the gate decides its
-  call (`Prima.Authority.Transition.external_tool_granted?/3`), and every
+  covers it under the digest of the server's revision it was read from,
+  as the gate decides its call (`Prima.Authority.Transition.external_tool_granted?/3`), and every
   harness carries it (`Aqua.Loop.Request.tools/2`). A turn offered none
   reads no server.
   """
@@ -701,21 +701,24 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  # Only the servers the list names are asked.
+  # Only the servers the list names are asked, and each definition is
+  # judged under the digest of the revision it was read from.
   defp listed(ctx, keys, authority) do
     servers = keys |> Enum.map(&hd(String.split(&1, ":", parts: 2))) |> Enum.uniq()
 
     listing =
-      Map.new(Sanctum.Proxy.impl!().list_external_tools(ctx, servers), &{&1["name"], &1})
-
-    digests = server_digests(ctx)
+      for %{server_digest: digest, tools: tools} <-
+            Sanctum.Proxy.impl!().list_external_tools(ctx, servers),
+          tool <- tools,
+          into: %{},
+          do: {tool["name"], {digest, tool}}
 
     Enum.reduce(keys, {[], %{}}, fn key, {handed, unhanded} ->
-      [server, remote] = String.split(key, ":", parts: 2)
+      [_server, remote] = String.split(key, ":", parts: 2)
 
       case listing do
-        %{^key => tool} ->
-          if Transition.external_tool_granted?(authority, digests[server], remote),
+        %{^key => {digest, tool}} ->
+          if Transition.external_tool_granted?(authority, digest, remote),
             do: {[external(key, tool) | handed], unhanded},
             else: {handed, Map.put(unhanded, key, :ungranted)}
 
@@ -723,21 +726,6 @@ defmodule Aqua.Loop.Turn do
           {handed, Map.put(unhanded, key, :unlisted)}
       end
     end)
-  end
-
-  # Each server of the athanor by name, with the digest a grant binds it
-  # under (`Sanctum.ToolServerDigest`), as the gate reads it for a call.
-  defp server_digests(ctx) do
-    case Arca.McpServerStorage.list(Context.actor(ctx)) do
-      {:ok, servers} ->
-        for server <- servers,
-            {:ok, digest} <- [Sanctum.ToolServerDigest.from_server(server)],
-            into: %{},
-            do: {server.name, digest}
-
-      {:error, _unread} ->
-        %{}
-    end
   end
 
   defp external(key, tool),

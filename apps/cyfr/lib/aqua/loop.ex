@@ -634,7 +634,10 @@ defmodule Aqua.Loop do
   # grant names for its source, Aqua's, as the tree and the brains stand
   # once the file is pinned, and the grant's tool servers exactly those
   # its outside entries (`server:tool`) name, each with exactly the tools
-  # named of it as its patterns: Aqua's file edited past its
+  # named of it that the server exposes now as its patterns, narrowed as
+  # consent narrows them (`Sanctum.Consent.Commit`): a server's exposure
+  # is no part of its digest, so one widened or narrowed since the grant
+  # asks for it again. Aqua's file edited past its
   # grant is refused, never run under the old grant, whichever member's
   # turn it is. A crew member's own file is in no grant, so its edit
   # refuses nothing here.
@@ -643,7 +646,8 @@ defmodule Aqua.Loop do
          consented when is_binary(consented) <- Map.get(activation, @grant),
          true <- consented == row.release_digest,
          true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"],
-         true <- granted_servers(authority) == listed_servers(agent.tools) do
+         {:ok, listed} <- listed_servers(ctx, agent.tools),
+         true <- granted_servers(authority) == listed do
       :ok
     else
       {:error, reason} when reason != :not_found -> {:error, reason}
@@ -656,13 +660,34 @@ defmodule Aqua.Loop do
 
   defp granted_servers(_none), do: []
 
-  defp listed_servers(tools) do
+  # Each server the list names, with the tools named of it that its
+  # configuration exposes now; a server the athanor no longer holds
+  # exposes none.
+  defp listed_servers(ctx, tools) do
     pairs =
       for key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool}
 
-    pairs
-    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-    |> Enum.map(fn {server, tools} -> {server, tools |> Enum.uniq() |> Enum.sort()} end)
+    if pairs == [], do: {:ok, []}, else: exposed_servers(ctx, pairs)
+  end
+
+  defp exposed_servers(ctx, pairs) do
+    with {:ok, rows} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
+      exposing = Map.new(rows, &{&1.name, Sanctum.ToolServerDigest.tool_patterns(&1)})
+
+      {:ok,
+       pairs
+       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+       |> Enum.map(fn {server, tools} ->
+         {server, exposed(Map.get(exposing, server, []), tools)}
+       end)
+       |> Enum.sort()}
+    end
+  end
+
+  defp exposed(patterns, tools) do
+    tools
+    |> Enum.filter(fn tool -> Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool)) end)
+    |> Enum.uniq()
     |> Enum.sort()
   end
 

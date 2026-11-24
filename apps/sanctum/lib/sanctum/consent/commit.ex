@@ -269,12 +269,14 @@ defmodule Sanctum.Consent.Commit do
          {:ok, held} <- held_tool_servers(profile_id, head, profile.source_ref),
          decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
          {:ok, asked} <- prepare(ctx, decisions),
-         :ok <- check_same_tool_servers(held, asked.tool_servers),
          :ok <- check_expected_revision(params, asked),
          :ok <- check_head_read(head, asked),
          :ok <- check_shape_unmoved(asked, head),
          {:ok, prep} <- keep_narrowing(ctx, decisions, asked, {profile_id, head}),
          :ok <- check_expected_revision(params, prep),
+         # What is written is what is compared: a narrowed head prepares
+         # twice, and a server may move between the two.
+         :ok <- check_same_tool_servers(held, prep.tool_servers),
          {:ok, activation_json} <- JCS.encode(prep.activation.graph),
          {:ok, consent} <-
            persist(ctx, prep, prep.blob_json, prep.blob_refs, activation_json, :interactive) do
@@ -605,8 +607,8 @@ defmodule Sanctum.Consent.Commit do
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared, place),
          {:ok, selections, lent} <-
            prepared_selections(ctx, decisions, published, place, provided),
-         {:ok, requested, narrow} <- tool_server_decisions(decisions, source_ref, component),
-         {:ok, tool_servers} <- resolve_tool_servers(ctx, requested, narrow),
+         {:ok, requested} <- tool_server_decisions(decisions, source_ref, component),
+         {:ok, tool_servers} <- resolve_tool_servers(ctx, requested),
          # Build the blob before digest validation; preview renders these same bytes.
          blob_inputs = %{
            source_ref: source_ref,
@@ -735,23 +737,21 @@ defmodule Sanctum.Consent.Commit do
 
   # An agent source's tool servers are those its own tools name
   # (`Plan.declared_tool_servers/2`), shown and never chosen: decisions
-  # naming any are refused. Its tools name each tool exactly, so their
-  # patterns are taken whole: one its server does not expose grants
-  # nothing the gate admits, which refuses an unexposed tool's call, and
-  # one the server exposes later moves the server's digest, which the grant
-  # no longer covers. A turn's start holds the grant to those patterns
-  # exactly (`Aqua.Loop`). A component's servers are the caller's choice,
-  # narrowed to what each server's configuration exposes.
+  # naming any are refused. A component's are the caller's choice. Either
+  # is narrowed to what each server's configuration exposes now
+  # (`resolve_tool_servers/2`), which its digest leaves out: a turn's start
+  # holds Aqua's grant to its list narrowed the same way as the server
+  # exposes it then (`Aqua.Loop`), so an exposure that moved asks again.
   defp tool_server_decisions(decisions, source_ref, component) do
     chosen = Map.get(decisions, :tool_servers) || []
 
     with {:ok, manifest} <- manifest(component, source_ref) do
       case {Plan.declared_tool_servers(source_ref, manifest), chosen} do
         {nil, chosen} ->
-          {:ok, chosen, &narrow_tool_patterns/2}
+          {:ok, chosen}
 
         {declared, []} ->
-          {:ok, declared, fn patterns, _config -> {:ok, patterns} end}
+          {:ok, declared}
 
         {_declared, _chosen} ->
           {:error,
@@ -763,7 +763,7 @@ defmodule Sanctum.Consent.Commit do
 
   # Resolve tool-server digests live during preparation. Include a
   # description baseline when the catalog is reachable.
-  defp resolve_tool_servers(ctx, requested, narrow) do
+  defp resolve_tool_servers(ctx, requested) do
     requested
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
       name = Map.get(raw, :server_name)
@@ -773,7 +773,7 @@ defmodule Sanctum.Consent.Commit do
         when is_binary(digest) ->
           # Intersect granted patterns with the server’s configured patterns.
           # Dispatch also rechecks the live configuration.
-          case narrow.(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
+          case narrow_tool_patterns(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
             {:ok, patterns} ->
               grant = %{
                 server_name: candidate.name,

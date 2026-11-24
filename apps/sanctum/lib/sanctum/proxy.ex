@@ -140,12 +140,23 @@ defmodule Sanctum.Proxy do
   @doc "The proxied tools of the caller's athanor, named `server:tool`."
   @callback list_external_tools(Context.t()) :: [map()]
 
-  @doc """
-  The proxied tools of the caller's athanor's servers named
-  `server_names`, read now, starting and asking no other server: what a
-  turn may hand (`Aqua.Loop.Turn`).
+  @typedoc """
+  One server's listing: its tools, named `server:tool`, and the consent
+  digest of the configuration they were read from (nil when it has none),
+  so a definition is judged under the revision it came from.
   """
-  @callback list_external_tools(Context.t(), server_names :: [String.t()]) :: [map()]
+  @type server_listing :: %{
+          server_name: String.t(),
+          server_digest: String.t() | nil,
+          tools: [map()]
+        }
+
+  @doc """
+  The listings of the caller's athanor's servers named `server_names`
+  that answer, read now, starting and asking no other server: what a turn
+  may hand (`Aqua.Loop.Turn`).
+  """
+  @callback list_external_tools(Context.t(), server_names :: [String.t()]) :: [server_listing()]
 
   @doc """
   The argument names a proxied call's `c:dispatch/5` never carries to its

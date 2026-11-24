@@ -93,13 +93,17 @@ defmodule Emissary.External.ServerSupervisor do
   url and timeout.
   Every write to a row raises its epoch, so any change to the row, a row
   deleted and recreated under the same name, or a program restarted
-  changes the digest.
+  changes the digest. It is a SHA-256 of those fields, so two unequal
+  configurations are never taken for one. It is the process's identity,
+  not the consent's (`Sanctum.ToolServerDigest`), which leaves out the
+  epoch and the timeout a process is replaced for.
   """
   def config_digest(config) do
-    :erlang.phash2(
+    fields =
       {config[:id], config[:transport], config[:epoch], config[:url], config[:headers] || %{},
        config[:command], config[:env] || %{}, config[:timeout_ms], config[:home_id]}
-    )
+
+    :crypto.hash(:sha256, :erlang.term_to_binary(fields, [:deterministic]))
   end
 
   @doc """

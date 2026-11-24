@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -426,28 +428,83 @@ func carriedProperties(parameters json.RawMessage) bool {
 
 // namedProperties are the argument names parameters name at their top:
 // those their properties declare, when an object, and those their
-// required lists, when a list.
+// required lists, when a list, there or through what composes the top:
+// each schema of allOf, anyOf and oneOf, then and else, and a $ref into
+// the same document ("#" and a JSON pointer), each schema read once.
 func namedProperties(parameters json.RawMessage) []string {
-	var m map[string]json.RawMessage
-	if json.Unmarshal(parameters, &m) != nil {
+	var root any
+	if json.Unmarshal(parameters, &root) != nil {
 		return nil
 	}
 	var names []string
-	var properties map[string]json.RawMessage
-	if json.Unmarshal(m["properties"], &properties) == nil {
-		for name := range properties {
-			names = append(names, name)
+	seen := map[string]bool{}
+	var walk func(schema any)
+	walk = func(schema any) {
+		m, ok := schema.(map[string]any)
+		if !ok {
+			return
 		}
-	}
-	var required []any
-	if json.Unmarshal(m["required"], &required) == nil {
-		for _, name := range required {
-			if s, ok := name.(string); ok {
-				names = append(names, s)
+		key, _ := json.Marshal(m)
+		if seen[string(key)] {
+			return
+		}
+		seen[string(key)] = true
+		if properties, ok := m["properties"].(map[string]any); ok {
+			for name := range properties {
+				names = append(names, name)
 			}
 		}
+		if required, ok := m["required"].([]any); ok {
+			for _, name := range required {
+				if s, ok := name.(string); ok {
+					names = append(names, s)
+				}
+			}
+		}
+		for _, composing := range []string{"allOf", "anyOf", "oneOf"} {
+			if parts, ok := m[composing].([]any); ok {
+				for _, part := range parts {
+					walk(part)
+				}
+			}
+		}
+		for _, branch := range []string{"then", "else"} {
+			walk(m[branch])
+		}
+		if ref, ok := m["$ref"].(string); ok && strings.HasPrefix(ref, "#") {
+			walk(pointed(root, strings.TrimPrefix(ref, "#")))
+		}
 	}
+	walk(root)
 	return names
+}
+
+// pointed is the schema a same-document JSON pointer names ("" the
+// whole), nil for one naming nothing.
+func pointed(root any, pointer string) any {
+	if pointer == "" {
+		return root
+	}
+	if !strings.HasPrefix(pointer, "/") {
+		return nil
+	}
+	node := root
+	for _, segment := range strings.Split(pointer[1:], "/") {
+		segment = strings.ReplaceAll(strings.ReplaceAll(segment, "~1", "/"), "~0", "~")
+		switch n := node.(type) {
+		case map[string]any:
+			node = n[segment]
+		case []any:
+			index, err := strconv.Atoi(segment)
+			if err != nil || index < 0 || index >= len(n) {
+				return nil
+			}
+			node = n[index]
+		default:
+			return nil
+		}
+	}
+	return node
 }
 
 // StubArgument is a tool as the stub's one argument: its name,

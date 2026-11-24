@@ -34,7 +34,8 @@ defmodule Sanctum.Gate.ProxyTest.Stub do
     do: [%{"name" => "stub:echo", "description" => "stub", "inputSchema" => %{}}]
 
   @impl true
-  def list_external_tools(ctx, _server_names), do: list_external_tools(ctx)
+  def list_external_tools(ctx, _server_names),
+    do: [%{server_name: "stub", server_digest: nil, tools: list_external_tools(ctx)}]
 end
 
 defmodule Sanctum.Gate.ProxyTest.Partial do
