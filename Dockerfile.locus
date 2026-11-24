@@ -269,8 +269,8 @@ RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 # home, on a tmpfs mounted with mode=1733. /var/lib/locus/kept is the kept
 # homes' root, the backends service's `homes` volume, which takes this
 # directory's owner and mode when it is first made: root's and the locus
-# group's, 1773, so the release lists it and a kept home's uid, which has
-# no user entry, makes its own 0700 folder there. /var/lib/locus/space is
+# group's, 1773, as the keeper's start checks, so cyfr-locus lists it and a
+# kept home's uid, which has no user entry, makes its own 0700 folder there. /var/lib/locus/space is
 # where a space's first process builds the space's files, in a mount
 # namespace of its own: here it stays empty.
 RUN groupadd -r -g 10001 locus \

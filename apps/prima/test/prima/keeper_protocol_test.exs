@@ -44,7 +44,9 @@ defmodule Prima.KeeperProtocolTest do
     "measure" => :measure,
     "home_make" => :home_make,
     "home_measure" => :home_measure,
-    "home_retire" => :home_retire
+    "home_reset" => :home_reset,
+    "home_retire" => :home_retire,
+    "home_list" => :home_list
   }
 
   # The member each invalid vector's refusal names.
@@ -93,11 +95,13 @@ defmodule Prima.KeeperProtocolTest do
     "CPU quota on a request that is not a spawn" => "cpu_quota",
     "a spawn carrying isolation, which no request has" => "isolation",
     "isolation on a request that is not a spawn" => "isolation",
-    "kept spawn without a home path" => "home_path",
-    "kept spawn without a home uid" => "home_uid",
-    "home path without a kept home" => "home_path",
-    "relative home path" => "home_path",
-    "home uid of zero" => "home_uid",
+    "kept spawn without a home" => "home",
+    "kept spawn naming a home path" => "home_path",
+    "home without a kept home" => "home",
+    "home that is a path" => "home",
+    "kept spawn naming a home uid" => "home_uid",
+    "home of a leading hyphen" => "home",
+    "home past 64 characters" => "home",
     "home bound of zero" => "home_max_bytes",
     "home mode other than scratch or kept" => "home_mode",
     "pty that is not an object" => "pty",
@@ -138,7 +142,11 @@ defmodule Prima.KeeperProtocolTest do
     "spawn member on a pool request" => "home_mode",
     "control false on a request that is not a spawn" => "control",
     "home_make with an unknown field" => "extra",
-    "home_measure without a uid" => "uid",
+    "home_make naming a path" => "home",
+    "home_reset naming a uid" => "uid",
+    "home_list naming a home" => "home",
+    "home_list after a path" => "after",
+    "home_measure without a home" => "home",
     "hosts that is empty" => "hosts",
     "hosts with a wildcard" => "hosts",
     "hosts with a scheme" => "hosts",
@@ -160,10 +168,10 @@ defmodule Prima.KeeperProtocolTest do
   # atom `encode/1` takes: a closed table, so a vector names no atom it
   # makes.
   @members Map.new(
-             ~w(argv athanor attach cols control core cpu_quota env extra fsize grace_ms
-                home_max_bytes home_mode home_path home_uid hosts id isolation kind memory_bytes
-                nofile nproc path place pool pty rlimits rows sig spawn_id subject token type uid v
-                xpixel)a,
+             ~w(after argv athanor attach cols control core cpu_quota env extra fsize grace_ms
+                home home_max_bytes home_mode home_path home_uid hosts id isolation kind
+                memory_bytes nofile nproc path place pool pty rlimits rows sig spawn_id subject
+                token type uid v xpixel)a,
              &{Atom.to_string(&1), &1}
            )
 
@@ -387,10 +395,16 @@ defmodule Prima.KeeperProtocolTest do
       end
 
       assert @vectors["home_requests"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
-               ~w(home_make home_measure home_retire spawn spawn)
+               ~w(home_list home_list home_make home_measure home_reset home_retire spawn spawn)
 
       spawns = for %{"type" => "spawn"} = spawn <- @vectors["home_requests"], do: spawn
-      assert Enum.any?(spawns, &(&1["home_mode"] == "kept" and &1["home_max_bytes"]))
+
+      assert Enum.any?(
+               spawns,
+               &(&1["home_mode"] == "kept" and KeeperProtocol.home_id?(&1["home"]) and
+                   &1["home_max_bytes"])
+             )
+
       assert Enum.any?(spawns, &(&1["pty"] == %{"rows" => 40, "cols" => 120}))
 
       # A spawn naming scratch and no pty is today's, among the valid ones.
@@ -496,11 +510,11 @@ defmodule Prima.KeeperProtocolTest do
       end
 
       assert @vectors["home_replies"] |> Enum.map(& &1["type"]) |> Enum.sort() ==
-               ~w(error error home_made home_measured home_retired)
+               ~w(error error error error home_made home_made home_measured home_measured home_retired homes homes)
 
       assert @vectors["home_replies"]
              |> Enum.filter(&(&1["type"] == "error"))
-             |> Enum.map(& &1["code"]) == ~w(home_over_cap uid_busy)
+             |> Enum.map(& &1["code"]) == ~w(home_over_cap uid_busy home_absent unavailable)
     end
   end
 
@@ -535,9 +549,12 @@ defmodule Prima.KeeperProtocolTest do
   defp expected_reply(%{"type" => "pool"} = r),
     do: {:pool, r["id"], r["pool"], r["size"], r["free"], r["quarantined"]}
 
-  defp expected_reply(%{"type" => "home_made"} = r), do: {:home_made, r["id"]}
+  defp expected_reply(%{"type" => "home_made"} = r), do: {:home_made, r["id"], r["uid"]}
   defp expected_reply(%{"type" => "home_measured"} = r), do: {:home_measured, r["id"], r["bytes"]}
   defp expected_reply(%{"type" => "home_retired"} = r), do: {:home_retired, r["id"]}
+
+  defp expected_reply(%{"type" => "homes"} = r),
+    do: {:homes, r["id"], r["ids"], r["next"]}
 
   defp memory(nil), do: nil
   defp memory("cap"), do: :cap
@@ -688,17 +705,16 @@ defmodule Prima.KeeperProtocolTest do
 
     test "a kept home's members hold their bounds, and only a kept spawn carries them" do
       bounds = KeeperProtocol.request_bounds()
-      path = "/var/lib/locus/kept/k"
-      kept = %{home_mode: "kept", home_path: path, home_uid: 1}
+      longest = String.duplicate("a", 64)
+      kept = %{home_mode: "kept", home: "vlt_a-1"}
 
-      assert %{"home_mode" => "kept", "home_uid" => 1, "home_max_bytes" => max} =
+      assert %{"home_mode" => "kept", "home" => "vlt_a-1", "home_max_bytes" => max} =
                Jason.decode!(
                  line(spawn_request(Map.put(kept, :home_max_bytes, bounds.max_home_bytes)))
                )
 
       assert max == 1_125_899_906_842_624
-      assert line(spawn_request(%{kept | home_uid: bounds.max_uid}))
-      assert line(spawn_request(%{kept | home_path: "/" <> String.duplicate("a", 4094)}))
+      assert line(spawn_request(%{kept | home: longest}))
       assert line(spawn_request(%{home_mode: "scratch", pty: %{rows: 24, cols: 80}}))
       max_pty = KeeperProtocol.max_pty_size()
       assert line(spawn_request(%{pty: %{rows: max_pty, cols: max_pty}}))
@@ -710,39 +726,47 @@ defmodule Prima.KeeperProtocolTest do
       resize = %{type: :resize, spawn_id: @spawn_id, rows: 50, cols: 132}
 
       assert line(resize) ==
-               ~s({"cols":132,"rows":50,"spawn_id":"#{@spawn_id}","type":"resize","v":4}\n)
+               ~s({"cols":132,"rows":50,"spawn_id":"#{@spawn_id}","type":"resize","v":5}\n)
 
       for {member, value} <- [
             home_max_bytes: bounds.max_home_bytes + 1,
-            home_uid: bounds.max_uid + 1,
-            home_uid: -1,
-            home_path: "/" <> String.duplicate("a", 4095),
-            home_path: "/var/lib/locus/kept/../k",
-            home_path: "/var/lib/locus/kept/k/",
-            home_path: nil,
+            home: longest <> "a",
+            home: "_a",
+            home: "a.b",
+            home: "/var/lib/locus/kept/k",
+            home: "",
+            home: nil,
             home_mode: nil
           ] do
         assert refused(spawn_request(Map.put(kept, member, value))) =~
                  ~r/\A#{member} /
       end
 
-      for member <- [:home_path, :home_uid, :home_max_bytes] do
+      assert refused(spawn_request(%{home_mode: "kept"})) =~ ~r/\Ahome /
+
+      for member <- [:home, :home_max_bytes] do
         scratch = spawn_request(%{member => Map.get(kept, member, 1), :home_mode => "scratch"})
         assert refused(scratch) =~ ~r/\A#{member} /
       end
 
-      home = %{type: :home_retire, id: "h", path: path, uid: 1}
+      home = %{type: :home_retire, id: "h", home: "vlt_a"}
 
-      assert line(home) ==
-               ~s({"id":"h","path":"#{path}","type":"home_retire","uid":1,"v":4}\n)
-
-      assert line(%{home | uid: bounds.max_uid})
-      assert refused(%{home | uid: bounds.max_uid + 1}) =~ ~r/\Auid /
-      assert refused(%{home | uid: 0}) =~ ~r/\Auid /
-      assert refused(%{home | path: "kept/k"}) =~ ~r/\Apath /
-      assert refused(Map.delete(home, :path)) =~ ~r/\Apath /
+      assert line(home) == ~s({"home":"vlt_a","id":"h","type":"home_retire","v":5}\n)
+      assert line(%{home | type: :home_reset})
+      assert refused(%{home | home: "../k"}) =~ ~r/\Ahome /
+      assert refused(Map.delete(home, :home)) =~ ~r/\Ahome /
+      assert refused(Map.put(home, :uid, 1)) =~ ~r/\Auid /
+      assert refused(Map.put(home, :path, "/var/lib/locus/kept/vlt_a")) =~ ~r/\Apath /
       assert refused(Map.put(home, :pool, "backends")) =~ ~r/\Apool /
       assert refused(Map.put(home, :home_mode, "kept")) =~ ~r/\Ahome_mode /
+
+      assert line(%{type: :home_list, id: "l"}) == ~s({"id":"l","type":"home_list","v":5}\n)
+
+      assert line(%{type: :home_list, id: "l", after: "vlt_a"}) ==
+               ~s({"after":"vlt_a","id":"l","type":"home_list","v":5}\n)
+
+      assert refused(%{type: :home_list, id: "l", after: "../k"}) =~ ~r/\Aafter /
+      assert refused(%{type: :home_list, id: "l", home: "vlt_a"}) =~ ~r/\Ahome /
       assert refused(%{type: :pool, id: "1", pool: "p", pty: %{rows: 1, cols: 1}}) =~ ~r/\Apty /
     end
 
@@ -760,13 +784,13 @@ defmodule Prima.KeeperProtocolTest do
       assert line(spawn_request(%{env: env, control: true, memory_bytes: 16_777_216})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
                  ~s("control":true,"cpu_quota":100000,"env":{"ALPHA":"a","ZED":"z"},"id":"1",) <>
-                 ~s("memory_bytes":16777216,"place":"pl-1","pool":"build","type":"spawn","v":4}\n)
+                 ~s("memory_bytes":16777216,"place":"pl-1","pool":"build","type":"spawn","v":5}\n)
 
       assert line(spawn_request(%{pool: "runner", control: true})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
                  ~s("control":true,"cpu_quota":100000,"id":"1",) <>
                  ~s("memory_bytes":16777216,"place":"pl-1",) <>
-                 ~s("pool":"runner","type":"spawn","v":4}\n)
+                 ~s("pool":"runner","type":"spawn","v":5}\n)
 
       # No spawn carries an isolation: a space's reach is its pool's.
       assert Enum.all?(@vectors["valid_requests"], &(not Map.has_key?(&1, "isolation")))
@@ -774,13 +798,13 @@ defmodule Prima.KeeperProtocolTest do
       assert_raise ArgumentError, fn -> line(spawn_request(%{isolation: "netns"})) end
 
       assert line(%{type: :pool, id: "pool-1", pool: "runner"}) ==
-               ~s({"id":"pool-1","pool":"runner","type":"pool","v":4}\n)
+               ~s({"id":"pool-1","pool":"runner","type":"pool","v":5}\n)
     end
   end
 
   describe "replies" do
     test "of another version, type or member, or not one object, are refused" do
-      base = %{"v" => 4, "type" => "released", "spawn_id" => @spawn_id}
+      base = %{"v" => 5, "type" => "released", "spawn_id" => @spawn_id}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(&1))
 
       assert decode.(%{base | "v" => 1}) == {:error, :bad_version}
@@ -799,7 +823,7 @@ defmodule Prima.KeeperProtocolTest do
     end
 
     test "a home_measured's bytes is a whole number JSON carries exactly" do
-      measured = %{"v" => 4, "type" => "home_measured", "id" => "h"}
+      measured = %{"v" => 5, "type" => "home_measured", "id" => "h"}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(measured, &1)))
       most = 9_007_199_254_740_991
 
@@ -810,12 +834,37 @@ defmodule Prima.KeeperProtocolTest do
       assert decode.(%{"bytes" => "1"}) == {:error, {:wrong_type, "bytes"}}
       assert decode.(%{}) == {:error, {:missing_field, "bytes"}}
 
-      assert KeeperProtocol.decode_reply(~s({"v":4,"type":"home_made","id":"h","bytes":1})) ==
+      assert KeeperProtocol.decode_reply(~s({"v":5,"type":"home_made","id":"h","bytes":1})) ==
                {:error, {:unknown_field, "bytes"}}
     end
 
+    test "a home_made carries its uid, and a homes page its ids, with next only while more follow" do
+      decode = &KeeperProtocol.decode_reply(Jason.encode!(Map.put(&1, "v", 5)))
+
+      assert decode.(%{"type" => "home_made", "id" => "h", "uid" => 40_001}) ==
+               {:ok, {:home_made, "h", 40_001}}
+
+      assert decode.(%{"type" => "home_made", "id" => "h"}) == {:error, {:missing_field, "uid"}}
+
+      assert decode.(%{"type" => "home_made", "id" => "h", "uid" => -1}) ==
+               {:error, {:invalid_field, "uid"}}
+
+      page = %{"type" => "homes", "id" => "l", "ids" => ["vlt_a", "vlt_b"]}
+      assert decode.(page) == {:ok, {:homes, "l", ["vlt_a", "vlt_b"], nil}}
+
+      assert decode.(Map.put(page, "next", "vlt_b")) ==
+               {:ok, {:homes, "l", ["vlt_a", "vlt_b"], "vlt_b"}}
+
+      assert decode.(%{page | "ids" => []}) == {:ok, {:homes, "l", [], nil}}
+      assert decode.(%{page | "ids" => ["../x"]}) == {:error, {:invalid_field, "ids"}}
+      assert decode.(%{page | "ids" => [1]}) == {:error, {:invalid_field, "ids"}}
+      assert decode.(%{page | "ids" => "vlt_a"}) == {:error, {:wrong_type, "ids"}}
+      assert decode.(Map.delete(page, "ids")) == {:error, {:missing_field, "ids"}}
+      assert decode.(Map.put(page, "next", "../x")) == {:error, {:invalid_field, "next"}}
+    end
+
     test "a spawned without its uid or pid is refused" do
-      spawned = %{"v" => 4, "type" => "spawned", "id" => "7", "spawn_id" => @spawn_id}
+      spawned = %{"v" => 5, "type" => "spawned", "id" => "7", "spawn_id" => @spawn_id}
       decode = &KeeperProtocol.decode_reply(Jason.encode!(&1))
 
       assert decode.(Map.put(spawned, "pid", 1)) == {:error, {:missing_field, "uid"}}
@@ -827,7 +876,7 @@ defmodule Prima.KeeperProtocolTest do
 
     test "an exited with both a code and a signal, neither, or no memory reason is refused" do
       exited = %{
-        "v" => 4,
+        "v" => 5,
         "type" => "exited",
         "spawn_id" => @spawn_id,
         "code" => nil,
@@ -859,7 +908,7 @@ defmodule Prima.KeeperProtocolTest do
 
     test "a measured's bytes is a whole number, and a reading not made is never one" do
       measured = %{
-        "v" => 4,
+        "v" => 5,
         "type" => "measured",
         "id" => "25",
         "kind" => "run",
@@ -899,7 +948,7 @@ defmodule Prima.KeeperProtocolTest do
 
     test "an athanor is of the grammar every Locus wire gives an athanor's id, and a subject of the id grammar" do
       measured = fn athanor ->
-        %{"v" => 4, "type" => "measured", "id" => "25", "kind" => "build"}
+        %{"v" => 5, "type" => "measured", "id" => "25", "kind" => "build"}
         |> Map.merge(%{"athanor" => athanor, "bytes" => 1, "lesser" => false, "age_ms" => 3})
         |> Jason.encode!()
         |> KeeperProtocol.decode_reply()
@@ -936,7 +985,7 @@ defmodule Prima.KeeperProtocolTest do
 
     test "an error names its request by id, spawn id, both or neither" do
       decode =
-        &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(%{"v" => 4, "type" => "error"}, &1)))
+        &KeeperProtocol.decode_reply(Jason.encode!(Map.merge(%{"v" => 5, "type" => "error"}, &1)))
 
       assert decode.(%{"code" => "bad_request"}) == {:ok, {:error, nil, nil, "bad_request"}}
 

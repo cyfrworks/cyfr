@@ -545,7 +545,7 @@ services:
     # homes' whole disk and their only bound beside a row's own
     # home_max_bytes; it is never under data/ and no backup carries it.
     # The image makes its root root's and the locus group's, 1773, which a
-    # new volume takes: the release lists it to draw a free uid, and a
+    # new volume takes: cyfr-locus lists it to draw a new home's uid, and a
     # home's uid makes its own folder without listing the others. The
     # guard's control, read-only here: its folder is root's own, 0700, so
     # in this container the keeper alone reaches it.

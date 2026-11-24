@@ -575,12 +575,19 @@ type server struct {
 	// nothing it left remains, it is retiring (keptRetiring, its channel
 	// closed at the end); a retirement that cannot finish quarantines it
 	// (keptQuarantined, naming its home) until the sweeper's retry does.
+	// keptMaking holds the uid a home_make drew, or a home_reset's, from the
+	// draw until the home is made, so no other draw takes it while no folder
+	// owns it; homeOps holds each kept home's lock, by its id, which every
+	// home request and a kept spawn's lookup of its home take, outside the
+	// uid's.
 	keptLive        map[int]int
 	keptEnding      map[int]int // a kept uid's released spawns still ending in order (retireKept)
 	keptOps         map[int]*sync.Mutex
 	keptHomes       map[int]string
 	keptRetiring    map[int]chan struct{}
 	keptQuarantined map[int]string
+	keptMaking      map[int]bool
+	homeOps         map[string]*sync.Mutex
 
 	channel  *os.File
 	writeMu  sync.Mutex
@@ -617,7 +624,7 @@ func (s *server) run() int {
 		s.log.Error("socketpair: %v", err)
 		return ExitStart
 	}
-	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client, channelID, s.cfg.Kept),
+	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client, channelID),
 		[]uintptr{0, 1, 2, theirs.Fd()}, s.client.UID, s.client.GID, "")
 	theirs.Close()
 	if err != nil {
@@ -817,8 +824,10 @@ func (s *server) handle(req *protocol.Request) {
 		s.handlePool(req)
 	case protocol.TypeMeasure:
 		s.handleMeasure(req)
-	case protocol.TypeHomeMake, protocol.TypeHomeMeasure, protocol.TypeHomeRetire:
+	case protocol.TypeHomeMake, protocol.TypeHomeMeasure, protocol.TypeHomeReset, protocol.TypeHomeRetire:
 		s.handleHome(req)
+	case protocol.TypeHomeList:
+		s.handleHomeList(req)
 	}
 }
 

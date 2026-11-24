@@ -15,8 +15,8 @@ requests signed as CYFR signs them (harness.py):
   its own, and closing one leaves the other running.
 - A kept home survives retirement: what one session wrote is there for the
   next, once every process of its uid is gone.
-- No pooled uid and not the release's user (`locus`, which lists the root)
-  can read a home.
+- No pooled uid and not the release's user (`locus`, whose group lists the
+  root) can read a home.
 - Two rows of one program, as Aqua's two browsers are, run in two homes
   under two uids: the cookies and storage one keeps in its profile the
   other neither reads, lists nor writes.

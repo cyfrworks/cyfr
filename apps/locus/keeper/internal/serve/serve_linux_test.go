@@ -510,7 +510,7 @@ func parsed(t *testing.T, line string) *protocol.Request {
 // place has the keeper hold a place of id for kind, and answers its reply.
 func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
 	t.Helper()
-	k.s.handle(parsed(t, `{"v":4,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
+	k.s.handle(parsed(t, `{"v":5,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
 	return k.reply(t)
 }
 
@@ -719,9 +719,9 @@ func assertRetired(t *testing.T, k *keeper, uid int) {
 	}
 }
 
-// A keeper given no --kept-homes refuses every home request as a bad
-// request on the channel, before any helper runs, and a request after them
-// is still handled.
+// A keeper given no --kept-homes refuses every home request as unavailable
+// on the channel, before any helper runs, and a request after them is still
+// handled.
 func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
 	if err != nil {
@@ -773,7 +773,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := theirs.Write([]byte(`{"v":4,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+	if _, err := theirs.Write([]byte(`{"v":5,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
@@ -790,7 +790,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 		got[reply.ID] = reply
 	}
 	for _, id := range ids {
-		if want := protocol.NewError(id, "", protocol.CodeBadRequest); got[id] != want {
+		if want := protocol.NewError(id, "", protocol.CodeUnavailable); got[id] != want {
 			t.Fatalf("request %s answered %+v, want %+v", id, got[id], want)
 		}
 	}
@@ -830,7 +830,7 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 		channel: ours,
 	}
 	resize := func(spawnID string) *protocol.Request {
-		req, rerr := protocol.ParseRequest([]byte(`{"v":4,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		req, rerr := protocol.ParseRequest([]byte(`{"v":5,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
 			t.Fatal(rerr.Detail)
 		}

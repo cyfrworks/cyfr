@@ -291,9 +291,9 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 }
 
 // The release of a home's only session marks its uid retiring at once: while
-// that session is still ending, a home_make of the home is refused and a
-// spawn of it waits for the uid's retirement, as for any retiring uid, and
-// another home is unaffected. A newcomer is never admitted beside a uid
+// that session is still ending, a home_make of the home answers its uid and
+// a spawn of it waits for the uid's retirement, as for any retiring uid,
+// and another home is made under another uid. A newcomer is never admitted beside a uid
 // whose last session is ending.
 func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	k := keptKeeper(t)
@@ -310,8 +310,9 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: only, GraceMs: &grace})
 	logged(t, log, "leader-got-term")
 
-	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", home, uid); busy["code"] != protocol.CodeUIDBusy {
-		t.Fatalf("home_make of the home while its last session ends: %v", busy)
+	// A made home's make answers its uid, retiring or not.
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m2", home, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make of the home while its last session ends: %v", made)
 	}
 	k.s.mu.Lock()
 	retiring, busy := k.s.keptState(uid, home)
@@ -326,7 +327,7 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	if placed := k.place(t, "newcomer", protocol.KindProgram); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("the newcomer's place answered %v", placed)
 	}
-	go k.s.handleSpawn(keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, uid, nil))
+	go k.s.handleSpawn(keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, nil))
 	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
 		t.Fatal(err)
 	}

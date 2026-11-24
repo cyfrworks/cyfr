@@ -226,7 +226,7 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), netwo
 
 
 def place_line(place, kind="warm", athanor=None):
-    request = {"v": 4, "type": "place", "id": place, "kind": kind}
+    request = {"v": 5, "type": "place", "id": place, "kind": kind}
     if athanor:
         request["athanor"] = athanor
     return json.dumps(request)
@@ -234,7 +234,7 @@ def place_line(place, kind="warm", athanor=None):
 
 def spawn_line(spawn_id, argv, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE,
                memory_bytes=MEMORY_BYTES, **extra):
-    request = {"v": 4, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
+    request = {"v": 5, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
                "memory_bytes": memory_bytes, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}, **extra}
     if control:
         request["control"] = True
@@ -252,7 +252,7 @@ def replies(stdout):
 def after_placed(ran, step):
     """The replies the client read after its first, which must be the keeper's `placed` for the place its spawn names."""
     got = replies(ran.stdout)
-    expect(got[:1] == [{"v": 4, "type": "placed", "id": PLACE}],
+    expect(got[:1] == [{"v": 5, "type": "placed", "id": PLACE}],
            f"{step}: the keeper placed {PLACE} before the client sent the spawn naming it", {"replies": got, "stderr": ran.stderr[-2000:]})
     return got[1:]
 
@@ -560,7 +560,7 @@ WORK_TIMEOUT_MS = 120_000
 PLACES_CLIENT = r"""
 ask() {
   n=$((n + 1))
-  printf '{"v":4,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
+  printf '{"v":5,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
   while read -r line <&3; do
     echo "read:$1:$line"
     case "$line" in *"\"id\":\"m$n\","*) return 0 ;; esac
@@ -601,7 +601,7 @@ sid=$(printf '%s' "$line" | sed -n 's/.*"spawn_id":"\([0-9a-f]*\)".*/\1/p')
 [ -n "$sid" ] || exit 1
 @OWNERS@
 n=$((n + 1))
-printf '{"v":4,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":4,"type":"measure","id":"m%s","place":"%s"}\n' \
+printf '{"v":5,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":5,"type":"measure","id":"m%s","place":"%s"}\n' \
   "$sid" "$grace" "$n" "$place" >&3
 while read -r line <&3; do
   echo "read:release:$line"
@@ -624,7 +624,7 @@ def assigns():
     sent, before = {}, OWNERS[0][1:3]
     for step, kind, athanor, _ in OWNERS[1:]:
         if (kind, athanor) != before:
-            sent[step] = {"v": 4, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
+            sent[step] = {"v": 5, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
         before = (kind, athanor)
     return sent
 
@@ -699,14 +699,14 @@ def reading(reply, kind, athanor=None):
     """Whether `reply` answers its measure with a reading above zero of a place whose owner is `kind` and `athanor`, and nothing else."""
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 4, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
+    owner = {"v": 5, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(reply):
-    return isinstance(reply, dict) and reply == {"v": 4, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
+    return isinstance(reply, dict) and reply == {"v": 5, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
 
 
 def judge_places(read, detail):
@@ -714,11 +714,11 @@ def judge_places(read, detail):
     steps = {}
     for step, reply in read:
         steps.setdefault(step, []).append(reply)
-    expect(steps.get("placed") == [{"v": 4, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
+    expect(steps.get("placed") == [{"v": 5, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
            detail)
     spawned = (steps.get("spawned") or [None])[0]
     expect(isinstance(spawned, dict)
-           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 4, "type": "spawned", "id": "1"}
+           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 5, "type": "spawned", "id": "1"}
            and re.fullmatch(r"[0-9a-f]{32}", str(spawned.get("spawn_id"))) is not None
            and type(spawned.get("uid")) is int and POOL_FIRST <= spawned["uid"] <= POOL_LAST
            and type(spawned.get("pid")) is int and spawned["pid"] > 0,
@@ -730,7 +730,7 @@ def judge_places(read, detail):
     sent = assigns()
     for step, kind, athanor, what in OWNERS:
         if step in sent:
-            expect(steps.get(f"{step}.assign") == [{"v": 4, "type": "assigned", "id": sent[step]["id"]}],
+            expect(steps.get(f"{step}.assign") == [{"v": 5, "type": "assigned", "id": sent[step]["id"]}],
                    f"measure: before {step}, the keeper applied the assign of {kind} for {athanor} and answered it under its id, "
                    "and nothing else came before that answer", detail)
         got = steps.get(step, [])
@@ -747,7 +747,7 @@ def judge_places(read, detail):
     released = steps.get("release", [])
     end = next((n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") == "released"), None)
     measures = [n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
-    expect(end is not None and released[end] == {"v": 4, "type": "released", "spawn_id": spawned["spawn_id"]}
+    expect(end is not None and released[end] == {"v": 5, "type": "released", "spawn_id": spawned["spawn_id"]}
            and len(measures) == 1 and measures[0] < end and reading(released[measures[0]], kind, athanor),
            "measure: after its release, the runner's place is still read above zero, answered before its released", detail)
     after = steps.get("after", [])

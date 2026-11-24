@@ -230,7 +230,7 @@ function measure(spawn, phase, before = "") {
   const entry = { phase, id, sent_ms: Date.now() - started };
   measures.set(id, { spawn, entry });
   spawn.measures.push(entry);
-  channel.write(before + JSON.stringify({ v: 4, type: "measure", id, place: spawn.place }) + "\n");
+  channel.write(before + JSON.stringify({ v: 5, type: "measure", id, place: spawn.place }) + "\n");
 }
 
 function measured(spawn, entry, reply) {
@@ -242,7 +242,7 @@ function measured(spawn, entry, reply) {
   if (entry.phase !== "running" || spawn.replies.some((r) => r.type === "released")) return;
   const readAt = reply.type === "measured" ? entry.at_ms - reply.age_ms : -Infinity;
   if (spawn.holding_ms !== undefined && readAt > spawn.holding_ms + scenario.measure.margin_ms) {
-    const release = { v: 4, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
+    const release = { v: 5, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
     measure(spawn, "release", JSON.stringify(release) + "\n");
   } else {
     setTimeout(() => measure(spawn, "running"), scenario.measure.poll_ms);
@@ -253,7 +253,7 @@ function settle(spawn, reply) {
   spawn.replies.push({ ...reply, at_ms: Date.now() - started, seq });
   if (reply.type === "placed") {
     const request = {
-      v: 4, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
+      v: 5, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
       attach: { path: attach, token: spawn.token },
     };
     if ("memory_bytes" in spawn) request.memory_bytes = spawn.memory_bytes;
@@ -317,7 +317,7 @@ server.listen(attach, () => {
     }
   });
   for (const s of spawns) {
-    const place = { v: 4, type: "place", id: s.place, kind: "build" };
+    const place = { v: 5, type: "place", id: s.place, kind: "build" };
     if (s.athanor) place.athanor = s.athanor;
     channel.write(JSON.stringify(place) + "\n");
   }
@@ -353,14 +353,14 @@ def reading(entry, athanor):
     reply = entry.get("reply")
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 4, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
+    owner = {"v": 5, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(entry):
-    return entry.get("reply") == {"v": 4, "type": "error", "id": entry["id"], "code": "unmeasured"}
+    return entry.get("reply") == {"v": 5, "type": "error", "id": entry["id"], "code": "unmeasured"}
 
 
 def judge_build(spawn):
@@ -368,7 +368,7 @@ def judge_build(spawn):
     replies = spawn["replies"]
     types = [reply["type"] for reply in replies]
     expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
-           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 4, "type": "placed", "id": spawn["place"]},
+           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 5, "type": "placed", "id": spawn["place"]},
            "the build's place is placed before its spawn names it, and the build is released", spawn)
     released = replies[-1]["seq"]
     phases = {phase: [entry for entry in spawn["measures"] if entry["phase"] == phase] for phase in ("running", "release", "after")}
