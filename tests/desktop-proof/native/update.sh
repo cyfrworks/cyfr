@@ -268,7 +268,7 @@ public static class U {
   [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
   [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint f);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out R r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref P p);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
@@ -276,12 +276,25 @@ public static class U {
 }
 "@
         $h = [U]::FindWindow([NullString]::Value, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
-        [void][U]::MoveWindow($h, 0, 0, 1000, 700, $true); Start-Sleep -Milliseconds 500
+        # Above every other window, the runner agent window among them, which
+        # a background process may not bring forward (SetForegroundWindow).
+        [void][U]::SetWindowPos($h, [IntPtr](-1), 0, 0, 1000, 700, 0x40); Start-Sleep -Milliseconds 500
         [void][U]::SetForegroundWindow($h); $r = New-Object U+R; [void][U]::GetClientRect($h, [ref]$r)
         $p = New-Object U+P; $p.X = 36; $p.Y = $r.B - 45; [void][U]::ClientToScreen($h, [ref]$p)
         [void][U]::SetCursorPos($p.X, $p.Y); Start-Sleep -Milliseconds 100
         [U]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 50; [U]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)' ;;
   esac
+}
+
+# Update CYFR opened from the rail's foot, its title holding TEXT: pressed
+# again until it shows, as a person presses again a press the app missed
+# while its rail was still loading.
+opens_update() {
+  local tries
+  for tries in 1 2 3 4 5 6; do
+    press_rail_update && within 10 titled "$1" && return 0
+  done
+  return 1
 }
 
 # A key, Return or Escape, pressed in Update CYFR's window.
@@ -425,7 +438,7 @@ window() {
   if within 60 answers && within 10 running; then
     before=$(first_pid)
   fi
-  if [ -n "$before" ] && press_rail_update && within 60 titled "release $U"; then
+  if [ -n "$before" ] && opens_update "release $U"; then
     pass window_opened "the rail's foot opened Update CYFR offering $U"
   else
     fail window_opened "no Update CYFR offering $U opened; the app's windows: $(windows_said | tr '\n' ';')"
@@ -442,7 +455,7 @@ window() {
   # Close (Escape), then B the newest, Update CYFR again.
   local step=closed
   if key Escape && within 20 untitled "Update CYFR" && echo "$B" >"$dir/latest" &&
-    step=opened && press_rail_update && within 60 titled "release $B" &&
+    step=opened && opens_update "release $B" &&
     step=pressed && key Return &&
     step=closed-by-update && within 60 not_alive "$before" &&
     step=reopened && within 120 running && within 60 answers && [ "$(release_of)" = "$B" ] &&
@@ -469,7 +482,7 @@ window() {
   echo "$U" >"$dir/latest"
   if sudo -n -v 2>/dev/null; then
     fail window_terminal "sudo -v still asks this account for no password"
-  elif press_rail_update && within 60 titled "needs a terminal" && alive "$after" && [ ! -e "$RECORD" ]; then
+  elif opens_update "needs a terminal" && alive "$after" && [ ! -e "$RECORD" ]; then
     pass window_terminal "Update CYFR offers no yes but the line to run in a terminal; the app ($after) runs on, no update begun"
   else
     fail window_terminal "the app $(alive "$after" && echo 'runs' || echo 'is gone'), the record $([ -e "$RECORD" ] && echo exists || echo 'is none'): $(tail -5 "$LOGS/app-window.log")"
