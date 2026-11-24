@@ -71,6 +71,15 @@ defmodule Emissary.External.ServerEraTest do
     |> Plug.Conn.resp(200, Jason.encode!(payload))
   end
 
+  # A current peer's `server/discover` answer stating `capabilities`.
+  defp discovered(conn, body, capabilities),
+    do:
+      json(conn, %{
+        "jsonrpc" => "2.0",
+        "id" => body["id"],
+        "result" => %{"supportedVersions" => [Protocol.version()], "capabilities" => capabilities}
+      })
+
   describe "a modern peer" do
     test "is used directly, with no handshake at all", %{stub: stub, url: url} do
       methods = :counters.new(1, [])
@@ -81,15 +90,81 @@ defmodule Emissary.External.ServerEraTest do
         send(test_pid, {:method, body["method"], Plug.Conn.get_req_header(conn, "mcp-method")})
         :counters.add(methods, 1, 1)
 
-        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+        if body["method"] == "server/discover",
+          do: discovered(conn, body, %{"tools" => %{}}),
+          else:
+            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
       end)
 
       {pid, {:ok, _tools}} = connect(url, "modern-peer")
       assert %{status: :ready} = GenServer.call(pid, :status, 5_000)
 
-      # One call, and it was tools/list — no initialize, no initialized.
-      assert :counters.get(methods, 1) == 1
+      # Discovery, then the tools it declares — no initialize, no initialized.
+      assert :counters.get(methods, 1) == 2
+      assert_received {:method, "server/discover", ["server/discover"]}
       assert_received {:method, "tools/list", ["tools/list"]}
+    end
+
+    # What a server offers is what it declares: one with no tools connects
+    # and is never asked for them, and what it does declare is kept.
+    test "a peer that declares no tools connects and is never asked for them",
+         %{stub: stub, url: url} do
+      test_pid = self()
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        send(test_pid, {:method, body["method"]})
+        discovered(conn, body, %{"resources" => %{}, "prompts" => %{}})
+      end)
+
+      {pid, {:ok, []}} = connect(url, "toolless-peer")
+      assert %{status: :ready} = GenServer.call(pid, :status, 5_000)
+
+      assert {:ok, %{tools: [], declared: [:prompts, :resources]}} =
+               Server.offerings("toolless-peer", "ath_test")
+
+      assert_received {:method, "server/discover"}
+      refute_received {:method, _other}
+    end
+
+    test "a peer that answers discovery as a legacy one is initialized", %{stub: stub, url: url} do
+      test_pid = self()
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        send(test_pid, {:method, body["method"]})
+
+        case body["method"] do
+          "server/discover" ->
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "error" => %{"code" => -32601, "message" => "Method not found"}
+            })
+
+          "initialize" ->
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "result" => %{"capabilities" => %{"tools" => %{}}}
+            })
+
+          "notifications/initialized" ->
+            Plug.Conn.resp(conn, 202, "")
+
+          "tools/list" ->
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "result" => %{"tools" => [%{"name" => "echo"}]}
+            })
+        end
+      end)
+
+      {_pid, {:ok, [%{"name" => "echo"}]}} = connect(url, "unknown-method-peer")
+
+      for method <- ~w(server/discover initialize notifications/initialized tools/list),
+          do: assert_received({:method, ^method})
     end
 
     test "every request carries the per-request metadata", %{stub: stub, url: url} do
@@ -118,10 +193,18 @@ defmodule Emissary.External.ServerEraTest do
         {body, conn} = read_body(conn)
 
         result =
-          case body["params"]["cursor"] do
-            nil -> %{"tools" => [%{"name" => "first"}], "nextCursor" => "page-two"}
-            "page-two" -> %{"tools" => [%{"name" => "second"}], "nextCursor" => "page-three"}
-            "page-three" -> %{"tools" => [%{"name" => "third"}]}
+          case {body["method"], body["params"]["cursor"]} do
+            {"server/discover", _cursor} ->
+              %{"capabilities" => %{"tools" => %{}}}
+
+            {"tools/list", nil} ->
+              %{"tools" => [%{"name" => "first"}], "nextCursor" => "page-two"}
+
+            {"tools/list", "page-two"} ->
+              %{"tools" => [%{"name" => "second"}], "nextCursor" => "page-three"}
+
+            {"tools/list", "page-three"} ->
+              %{"tools" => [%{"name" => "third"}]}
           end
 
         json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
@@ -136,9 +219,14 @@ defmodule Emissary.External.ServerEraTest do
 
       HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
-        :counters.add(pages, 1, 1)
-        page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
-        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+
+        if body["method"] == "server/discover" do
+          discovered(conn, body, %{"tools" => %{}})
+        else
+          :counters.add(pages, 1, 1)
+          page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
+          json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+        end
       end)
 
       {pid, {:error, reason}} = connect(url, "endless-peer")
@@ -150,7 +238,11 @@ defmodule Emissary.External.ServerEraTest do
     test "a listing trickled past its deadline fails the connect", %{stub: stub, url: url} do
       HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
-        trickle(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+
+        if body["method"] == "server/discover",
+          do: discovered(conn, body, %{"tools" => %{}}),
+          else:
+            trickle(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
       end)
 
       config = [name: "trickled-list-peer", url: url, athanor_id: "ath_test", timeout_ms: 300]
@@ -169,12 +261,17 @@ defmodule Emissary.External.ServerEraTest do
 
       HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
         {body, conn} = read_body(conn)
-        :counters.add(pages, 1, 1)
-        # sleep-ok: the stub's 300 ms per page, so the listing outlasts its one-second deadline
-        # under test
-        Process.sleep(300)
-        page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
-        json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+
+        if body["method"] == "server/discover" do
+          discovered(conn, body, %{"tools" => %{}})
+        else
+          :counters.add(pages, 1, 1)
+          # sleep-ok: the stub's 300 ms per page, so the listing outlasts its one-second deadline
+          # under test
+          Process.sleep(300)
+          page = %{"tools" => [%{"name" => "t#{body["id"]}"}], "nextCursor" => "more"}
+          json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => page})
+        end
       end)
 
       config = [name: "slow-peer", url: url, athanor_id: "ath_test", timeout_ms: 1_000]
@@ -210,7 +307,7 @@ defmodule Emissary.External.ServerEraTest do
         case body["method"] do
           # No JSON-RPC error body: the shape a pre-2026 server produces for a
           # request it cannot parse.
-          "tools/list" when modern? ->
+          "server/discover" when modern? ->
             Plug.Conn.resp(conn, 400, "Bad Request")
 
           "initialize" ->
@@ -219,7 +316,10 @@ defmodule Emissary.External.ServerEraTest do
             |> json(%{
               "jsonrpc" => "2.0",
               "id" => body["id"],
-              "result" => %{"serverInfo" => %{"name" => "old", "version" => "1"}}
+              "result" => %{
+                "capabilities" => %{"tools" => %{}},
+                "serverInfo" => %{"name" => "old", "version" => "1"}
+              }
             })
 
           _method when session != [required] ->
@@ -263,8 +363,44 @@ defmodule Emissary.External.ServerEraTest do
       assert %{status: :ready, server_info: %{"name" => "old"}} =
                GenServer.call(pid, :status, 5_000)
 
-      assert_received {:method, "tools/list", []}
+      assert_received {:method, "server/discover", []}
       assert_received {:method, "initialize", []}
+    end
+
+    test "a legacy peer that declares no tools connects and is never asked for them",
+         %{stub: stub, url: url} do
+      test_pid = self()
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        send(test_pid, {:method, body["method"], []})
+
+        case body["method"] do
+          "server/discover" ->
+            Plug.Conn.resp(conn, 400, "Bad Request")
+
+          "initialize" ->
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "result" => %{"capabilities" => %{"resources" => %{}}}
+            })
+
+          "notifications/initialized" ->
+            Plug.Conn.resp(conn, 202, "")
+        end
+      end)
+
+      {pid, {:ok, []}} = connect(url, "toolless-legacy-peer")
+      assert %{status: :ready} = GenServer.call(pid, :status, 5_000)
+
+      assert {:ok, %{tools: [], declared: [:resources]}} =
+               Server.offerings("toolless-legacy-peer", "ath_test")
+
+      for method <- ~w(server/discover initialize notifications/initialized),
+          do: assert_received({:method, ^method, []})
+
+      refute_received {:method, _other, _session}
     end
 
     test "every request after initialize carries the session it issued",
@@ -354,7 +490,7 @@ defmodule Emissary.External.ServerEraTest do
     # The probe and initialize carry no session; everything after carries
     # the one initialize issued.
     defp assert_handshake do
-      assert_received {:method, "tools/list", []}
+      assert_received {:method, "server/discover", []}
       assert_received {:method, "initialize", []}
       assert_received {:method, "notifications/initialized", ["peer-session"]}
       assert_received {:method, "tools/list", ["peer-session"]}
@@ -437,6 +573,176 @@ defmodule Emissary.External.ServerEraTest do
     end
   end
 
+  describe "a server's resources and prompts" do
+    @offers %{"resources" => %{}, "prompts" => %{}}
+
+    # A peer of `era` declaring resources and prompts and no tools: its
+    # resources over two pages, a template, a read of any uri, a prompt and
+    # its get. Each request is told to the test with its `mcp-name` header.
+    defp offering_peer(stub, test_pid, era) do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        named = Plug.Conn.get_req_header(conn, "mcp-name")
+        send(test_pid, {:asked, body["method"], named})
+
+        case {era, body["method"]} do
+          {:legacy, "server/discover"} -> Plug.Conn.resp(conn, 400, "Bad Request")
+          {:legacy, "initialize"} -> answered(conn, body, %{"capabilities" => @offers})
+          {:legacy, "notifications/initialized"} -> Plug.Conn.resp(conn, 202, "")
+          {:modern, "server/discover"} -> discovered(conn, body, @offers)
+          {_era, method} -> answered(conn, body, offered(method, body["params"]))
+        end
+      end)
+    end
+
+    defp answered(conn, body, result),
+      do: json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+
+    defp offered("resources/list", %{"cursor" => "two"}),
+      do: %{"resources" => [%{"uri" => "file:///b", "name" => "b"}]}
+
+    defp offered("resources/list", _params),
+      do: %{"resources" => [%{"uri" => "file:///a", "name" => "a"}], "nextCursor" => "two"}
+
+    defp offered("resources/templates/list", _params),
+      do: %{"resourceTemplates" => [%{"uriTemplate" => "file:///{path}", "name" => "file"}]}
+
+    defp offered("resources/read", %{"uri" => uri}),
+      do: %{"contents" => [%{"uri" => uri, "mimeType" => "text/plain", "text" => "read " <> uri}]}
+
+    defp offered("prompts/list", _params), do: %{"prompts" => [%{"name" => "greet"}]}
+
+    defp offered("prompts/get", %{"name" => name, "arguments" => arguments}),
+      do: %{
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => %{"type" => "text", "text" => "#{name} #{arguments["who"]}"}
+          }
+        ]
+      }
+
+    for era <- [:modern, :legacy] do
+      test "a #{era} peer's are listed, each list to its last page, read and got",
+           %{stub: stub, url: url} do
+        offering_peer(stub, self(), unquote(era))
+        {pid, {:ok, []}} = connect(url, "offering-#{unquote(era)}-peer")
+
+        assert Server.offering(pid, {:resources, :list}) ==
+                 {:ok,
+                  %{
+                    "resources" => [
+                      %{"uri" => "file:///a", "name" => "a"},
+                      %{"uri" => "file:///b", "name" => "b"}
+                    ],
+                    "resourceTemplates" => [
+                      %{"uriTemplate" => "file:///{path}", "name" => "file"}
+                    ]
+                  }}
+
+        assert Server.offering(pid, {:resources, :read, "file:///a"}) ==
+                 {:ok, offered("resources/read", %{"uri" => "file:///a"})}
+
+        assert Server.offering(pid, {:prompts, :list}) == {:ok, offered("prompts/list", %{})}
+
+        assert Server.offering(pid, {:prompts, :get, "greet", %{"who" => "me"}}) ==
+                 {:ok,
+                  offered("prompts/get", %{"name" => "greet", "arguments" => %{"who" => "me"}})}
+
+        refute_received {:asked, "tools/list", _named}
+
+        if unquote(era) == :modern do
+          # Never initialized, and a read and a get name their subjects as
+          # the revision asks.
+          refute_received {:asked, "initialize", _named}
+          assert_received {:asked, "resources/read", ["file:///a"]}
+          assert_received {:asked, "prompts/get", ["greet"]}
+        end
+      end
+    end
+
+    test "a peer that declares neither is never asked for them", %{stub: stub, url: url} do
+      test_pid = self()
+
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        send(test_pid, {:asked, body["method"], []})
+
+        if body["method"] == "server/discover",
+          do: discovered(conn, body, %{"tools" => %{}}),
+          else:
+            json(conn, %{"jsonrpc" => "2.0", "id" => body["id"], "result" => %{"tools" => []}})
+      end)
+
+      {pid, {:ok, []}} = connect(url, "tools-only-peer")
+
+      for {asked, offering} <- [
+            {{:resources, :list}, "resources"},
+            {{:prompts, :list}, "prompts"}
+          ] do
+        assert {:error, {:invalid_argument, sentence}} = Server.offering(pid, asked)
+        assert sentence =~ "declares no #{offering}"
+      end
+
+      refute_received {:asked, "resources/" <> _, _named}
+      refute_received {:asked, "prompts/" <> _, _named}
+    end
+
+    # A server that lists resources and has no handler for their templates
+    # answers the templates' list -32601: no templates, not no resources.
+    test "a templates' list answered as an unknown method is an empty one",
+         %{stub: stub, url: url} do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        case body["method"] do
+          "server/discover" ->
+            discovered(conn, body, %{"resources" => %{}})
+
+          "resources/list" ->
+            answered(conn, body, %{"resources" => [%{"uri" => "file:///a", "name" => "a"}]})
+
+          "resources/templates/list" ->
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "error" => %{"code" => -32601, "message" => "Method not found"}
+            })
+        end
+      end)
+
+      {pid, {:ok, []}} = connect(url, "templateless-peer")
+
+      assert Server.offering(pid, {:resources, :list}) ==
+               {:ok,
+                %{
+                  "resources" => [%{"uri" => "file:///a", "name" => "a"}],
+                  "resourceTemplates" => []
+                }}
+    end
+
+    test "a listing of resources past 20 pages is refused in its sentence", %{
+      stub: stub,
+      url: url
+    } do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        if body["method"] == "server/discover",
+          do: discovered(conn, body, %{"resources" => %{}}),
+          else:
+            answered(conn, body, %{
+              "resources" => [%{"uri" => "file:///#{body["id"]}"}],
+              "nextCursor" => "more"
+            })
+      end)
+
+      {pid, {:ok, []}} = connect(url, "endless-resources-peer")
+      assert {:error, reason} = Server.offering(pid, {:resources, :list})
+      assert reason =~ "listed more than 20 pages of resources"
+    end
+  end
+
   describe "a modern peer having a bad day is not mistaken for a legacy one" do
     # The era is cached, so a wrong call here downgrades a current server for the
     # life of the connection — on an error that says "retry differently".
@@ -463,7 +769,7 @@ defmodule Emissary.External.ServerEraTest do
       assert %{status: :error} = GenServer.call(pid, :status, 5_000)
 
       # It never tried the handshake: the body identified a current server.
-      assert_received {:method, "tools/list"}
+      assert_received {:method, "server/discover"}
       refute_received {:method, "initialize"}
     end
   end

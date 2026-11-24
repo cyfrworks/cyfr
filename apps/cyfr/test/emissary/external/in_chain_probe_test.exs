@@ -44,7 +44,7 @@ defmodule Emissary.External.InChainProbeTest do
     end
 
     @impl true
-    def handle_call({:call_tool, tool, args}, _from, test) do
+    def handle_call({:call, {:tool, tool, args}}, _from, test) do
       send(test, {:called, tool, args})
       text = Jason.encode!(%{"value" => "[REDACTED]"})
       {:reply, {:ok, %{"content" => [%{"type" => "text", "text" => text}]}}, test}

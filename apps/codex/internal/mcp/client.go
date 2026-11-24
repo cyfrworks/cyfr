@@ -130,7 +130,7 @@ func namedSubject(method string, params any) (string, bool) {
 	}
 
 	switch method {
-	case "tools/call":
+	case "tools/call", "prompts/get":
 		name, ok := m["name"].(string)
 		return name, ok
 	case "resources/read":
