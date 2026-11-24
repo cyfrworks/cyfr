@@ -72,7 +72,19 @@ func newLocalApp(t *testing.T, project string) *localApp {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
 	}
-	if err := a.Clients.SelectProject(project); err != nil {
+	// The folder is the CYFR selected last, at the address its reading
+	// names.
+	l, err := a.Local(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := l.Shell.Address
+	l.Work.End()
+	sel, err := a.Homes.SelectLocal(home, project)
+	if err == nil {
+		err = sel.Commit()
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(t.TempDir())
@@ -939,8 +951,11 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	device := t.TempDir()
-	clients := shell.ClientFile(filepath.Join(device, "client.json"))
-	if err := clients.SelectProject(s.project); err != nil {
+	clients, err := shell.Homes(filepath.Join(device, "homes.json")).SelectLocal(local.Shell.Address, s.project)
+	if err == nil {
+		err = clients.Commit()
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := local.Shell
