@@ -99,7 +99,7 @@ func TestTheStubIsGivenByItsPath(t *testing.T) {
 			} `json:"servers"`
 		} `json:"request"`
 	}
-	if err := json.Unmarshal(setToolsLine("cyfr-tools-1", []string{"{}"}), &line); err != nil {
+	if err := json.Unmarshal(setToolsLine("cyfr-tools-1", "cyfr", []string{"{}"}), &line); err != nil {
 		t.Fatal(err)
 	}
 	if got := line.Request.Servers["cyfr"].Command; got != "/opt/cyfr/bin/cyfr-stub" {
@@ -128,7 +128,7 @@ func TestAWorkWithNoToolsSetsNoServer(t *testing.T) {
 			Servers map[string]any `json:"servers"`
 		} `json:"request"`
 	}
-	if err := json.Unmarshal(setToolsLine("cyfr-tools-1", nil), &line); err != nil {
+	if err := json.Unmarshal(setToolsLine("cyfr-tools-1", "cyfr", nil), &line); err != nil {
 		t.Fatal(err)
 	}
 	if line.Request.Subtype != "mcp_set_servers" || line.Request.Servers == nil || len(line.Request.Servers) != 0 {
@@ -163,5 +163,29 @@ func TestOnlyAResumeThatRanNoTurnFoundNoTranscript(t *testing.T) {
 	}
 	if result(1, missing).noTranscript() || result(0, "the model is overloaded").noTranscript() {
 		t.Fatal("a turn that ran, or other words, is no missing transcript")
+	}
+}
+
+// CYFR's server takes `cyfr` unless a server of the person's own is that
+// name, or begins with it and `_`, as Claude Code writes the name in its
+// tools' (a character outside letters, digits, `_` and `-` as `_`); then
+// the first of `cyfr-2`, `cyfr-3`… that none is.
+func TestCYFRsServerTakesANameNoServerOfThePersonsShadows(t *testing.T) {
+	for _, c := range []struct {
+		listed []string
+		want   string
+	}{
+		{nil, "cyfr"},
+		{[]string{"github", "plugin:cyfr:tools", "cyfr-", "cyfrx", "my-cyfr"}, "cyfr"},
+		{[]string{"cyfr"}, "cyfr-2"},
+		{[]string{"cyfr_"}, "cyfr-2"},
+		{[]string{"cyfr__extra"}, "cyfr-2"},
+		{[]string{"cyfr.tools"}, "cyfr-2"},
+		{[]string{"cyfr", "cyfr-2", "cyfr-3__x"}, "cyfr-4"},
+		{[]string{"cyfr", "cyfr-20"}, "cyfr-2"},
+	} {
+		if got := serverFor(c.listed); got != c.want {
+			t.Fatalf("beside %q CYFR's server is %q, not %q", c.listed, c.want, got)
+		}
 	}
 }

@@ -366,6 +366,98 @@ func TestAnAskIsHeldAndAnsweredThroughTheStubsInput(t *testing.T) {
 	}
 }
 
+// startDriverHolding is a driver whose harness's folder holds the
+// person's own MCP servers by these names, as Claude Code's own
+// configuration names them (`~/.claude.json`).
+func startDriverHolding(t *testing.T, names ...string) *wireSession {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	servers := map[string]any{}
+	for _, name := range names {
+		servers[name] = map[string]any{"type": "stdio", "command": "their-server"}
+	}
+	config, _ := json.Marshal(map[string]any{"mcpServers": servers})
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return startDriverIn(t, home)
+}
+
+// theirsRan posts `theirs`, under which the harness calls each server of
+// the person's own it holds, and answers what it said and the own tools
+// the wire showed; no call of theirs is CYFR's ask.
+func theirsRan(t *testing.T, s *wireSession, id string) (string, []string) {
+	t.Helper()
+	postText(s, id, "theirs")
+	var said string
+	var own []string
+	for _, e := range s.until("idle") {
+		switch e["t"] {
+		case "ask":
+			t.Fatalf("a call of a server of the person's own is the program's, never CYFR's ask: %v", e)
+		case "own":
+			own = append(own, fmt.Sprintf("%v:%v", e["name"], e["phase"]))
+		case "said":
+			said = e["text"].(string)
+		}
+	}
+	return said, own
+}
+
+// A server the person set up in Claude Code itself stays beside CYFR's:
+// the harness holds it, its call is allowed with the model's own input
+// and shown as the program's own tool by name, and CYFR's tool is still
+// CYFR's ask. Servers whose tools Claude Code names `mcp__cyfr__…`
+// (`cyfr__extra`, `cyfr_`) are theirs all the same.
+func TestAServerOfThePersonsOwnStaysBesideCYFRsAndItsCallIsTheProgramsOwn(t *testing.T) {
+	s := startDriverHolding(t, "mine", "cyfr__extra", "cyfr_")
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{filesTool})
+	said, own := theirsRan(t, s, "stp_theirs")
+	if want := "their servers ran: mcp__cyfr___theirs:allow:0 mcp__cyfr__extra__theirs:allow:0 mcp__mine__theirs:allow:0 beside cyfr-2"; said != want {
+		t.Fatalf("each server of the person's own runs, allowed with its own input, beside CYFR's:\n%q\nnot\n%q", want, said)
+	}
+	if want := "[mcp__cyfr___theirs:start mcp__cyfr___theirs:end mcp__cyfr__extra__theirs:start mcp__cyfr__extra__theirs:end mcp__mine__theirs:start mcp__mine__theirs:end]"; fmt.Sprint(own) != want {
+		t.Fatalf("each call of theirs is shown as the program's own tool by name: %v", own)
+	}
+	postText(s, "stp_read", "read it")
+	var ask map[string]any
+	for _, e := range s.until("ask") {
+		ask = e
+	}
+	if ask["name"] != "files" {
+		t.Fatalf("CYFR's tool is still CYFR's ask, by its own name: %v", ask)
+	}
+}
+
+// A server of the person's own named `cyfr` keeps its name and its tools:
+// CYFR's server takes the first name of `cyfr`, `cyfr-2`, `cyfr-3`… that
+// none of theirs is or begins with followed by `_`, since Claude Code
+// lets a server the driver sets replace one of theirs of that name.
+func TestAServerOfThePersonsNamedCyfrKeepsItsNameAndCYFRsTakesAnother(t *testing.T) {
+	s := startDriverHolding(t, "cyfr", "cyfr-2__extra")
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", []any{filesTool})
+	said, _ := theirsRan(t, s, "stp_theirs")
+	if want := "their servers ran: mcp__cyfr__theirs:allow:0 mcp__cyfr-2__extra__theirs:allow:0 beside cyfr-3"; said != want {
+		t.Fatalf("the person's servers keep their names and CYFR's takes another:\n%q\nnot\n%q", want, said)
+	}
+	postText(s, "stp_read", "read it")
+	var ask map[string]any
+	for _, e := range s.until("ask") {
+		ask = e
+	}
+	if ask["name"] != "files" {
+		t.Fatalf("CYFR's tool under its other name is CYFR's ask, by its own name: %v", ask)
+	}
+	s.send(map[string]any{"t": "answer", "id": "stp_answer", "ask": ask["ask"], "content": "three lines", "is_error": false})
+	s.expect("accepted")
+	s.until("idle")
+}
+
 func TestAnErrorAnswerIsTheToolsError(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})

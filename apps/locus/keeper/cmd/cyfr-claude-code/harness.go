@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
@@ -26,28 +27,45 @@ import (
 // `appendSystemPrompt`, so the harness keeps its own prompt. These shapes
 // were read from Claude Code 2.1.318 and held on 2.1.323, the version a
 // brain row pins, in the live probe.
+//
+// The MCP servers a person set up in Claude Code itself (its user, local
+// and project configuration, a plugin's) stay beside CYFR's, as Codex's
+// stay beside its: they are the program's own, which CYFR neither decides
+// nor removes, hides or switches off. Claude Code starts them as it
+// starts, apart from the turn: one that fails to start, or wants a
+// sign-in, is left failed, and one that never answers is given up at
+// Claude Code's own connect timeout, 30 s (`MCP_TIMEOUT`), while the start
+// and the turn go on (2.1.323). Their calls are the program's own tools,
+// allowed like the rest, never CYFR's asks: none passes CYFR's gate, the
+// Aqua page's list or a member's access, which decide only what CYFR hands
+// the harness. A member's access (Default mode alone today) is Claude
+// Code's own setting over what it does with its own tools, and the driver
+// allows every call of theirs as it allows the rest: what a person's server
+// does when called is that server's, which no access covers, a read-only
+// one included were one offered.
 
 // baseArgv is what every session starts with: stream-json both ways,
-// partial messages for streaming, no MCP server but the ones the driver
-// sets, and every permission ask of the harness's put to the driver.
+// partial messages for streaming, and every permission ask of the
+// harness's put to the driver.
 var baseArgv = []string{
 	"-p",
 	"--input-format", "stream-json",
 	"--output-format", "stream-json",
 	"--verbose",
 	"--include-partial-messages",
-	"--strict-mcp-config",
 	"--permission-prompt-tool", "stdio",
 }
 
 const (
+	// stubServer is the name CYFR's server takes unless a server of the
+	// person's own holds it (serverFor).
 	stubServer = "cyfr"
-	toolPrefix = "mcp__cyfr__"
 	// stubBinary is CYFR's stub by its absolute path in the image
 	// (Dockerfile.locus), never by name: npx puts a project's own package
 	// binaries ahead of the PATH it inherits, so a name could run another.
 	stubBinary = "/opt/cyfr/bin/cyfr-stub"
 	initID     = "cyfr-initialize"
+	statusID   = "cyfr-status"
 	toolsID    = "cyfr-tools"
 	// maxToolArgBytes bounds one tool as the stub's argument: the kernel's
 	// bound on one argument, with its NUL (MAX_ARG_STRLEN).
@@ -110,18 +128,80 @@ func initializeLine(system string) []byte {
 	return controlRequest(initID, request)
 }
 
+// statusLine asks the harness for its MCP servers, the person's own among
+// them, which it names as soon as it has read its configuration, before
+// any has started.
+func statusLine() []byte {
+	return controlRequest(statusID, map[string]any{"subtype": "mcp_status"})
+}
+
+// listedServers are the servers' names a `mcp_status` answer lists.
+func listedServers(response json.RawMessage) []string {
+	var status struct {
+		Servers []struct {
+			Name string `json:"name"`
+		} `json:"mcpServers"`
+	}
+	_ = json.Unmarshal(response, &status)
+	names := make([]string, 0, len(status.Servers))
+	for _, s := range status.Servers {
+		names = append(names, s.Name)
+	}
+	return names
+}
+
+// serverFor is the name CYFR's server takes beside the servers the harness
+// lists: `cyfr`, or else the first of `cyfr-2`, `cyfr-3`… that no listed
+// server's name is, or begins with followed by `_`. Claude Code names a
+// tool `mcp__<server>__<tool>`, each character of the server's name that
+// is not a letter, a digit, `_` or `-` written `_`, and a server the
+// driver sets replaces one of the person's of the same name, and a tool of
+// the same whole name, for the life of the process (2.1.323). So neither
+// shadows the other: no server of theirs is named as CYFR's, and no tool of
+// theirs begins with CYFR's prefix.
+func serverFor(listed []string) string {
+	taken := func(name string) bool {
+		for _, other := range listed {
+			other = toolNamePart(other)
+			if other == name || strings.HasPrefix(other, name+"_") {
+				return true
+			}
+		}
+		return false
+	}
+	name := stubServer
+	for n := 2; taken(name); n++ {
+		name = fmt.Sprintf("%s-%d", stubServer, n)
+	}
+	return name
+}
+
+// toolNamePart is a server's name as Claude Code writes it in its tools'.
+func toolNamePart(server string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r < 128 && (unicode.IsLetter(r) || unicode.IsDigit(r)) {
+			return r
+		}
+		return '_'
+	}, server)
+}
+
+// toolPrefix begins the name of each tool of CYFR's server `server`.
+func toolPrefix(server string) string { return "mcp__" + server + "__" }
+
 // stubTool is one tool as the stub's argument.
 func stubTool(t brainwire.Tool) (string, error) {
 	line, err := brainwire.StubArgument(t)
 	return string(line), err
 }
 
-// setToolsLine sets CYFR's tools: the stub with each as one argument, or
-// no server when there are none.
-func setToolsLine(id string, args []string) []byte {
+// setToolsLine sets CYFR's tools: the stub `server` with each as one
+// argument, or no server when there are none. It sets only the servers the
+// driver sets; the person's own are untouched.
+func setToolsLine(id, server string, args []string) []byte {
 	servers := map[string]any{}
 	if len(args) > 0 {
-		servers[stubServer] = map[string]any{"type": "stdio", "command": stubBinary, "args": args}
+		servers[server] = map[string]any{"type": "stdio", "command": stubBinary, "args": args}
 	}
 	return controlRequest(id, map[string]any{"subtype": "mcp_set_servers", "servers": servers})
 }

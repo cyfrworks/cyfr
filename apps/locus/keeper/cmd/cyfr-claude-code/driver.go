@@ -30,12 +30,15 @@ type post struct{ id, work string }
 
 type heldAsk struct{ arguments map[string]any }
 
-// starting is a start the harness has not answered yet.
+// starting is a start the harness has not answered yet: its `initialize`
+// answer, once read (`initialized`), waits for its `mcp_status` answer.
 type starting struct {
-	session string
-	resume  bool
-	pending []string
-	config  brainwire.Config
+	session     string
+	resume      bool
+	pending     []string
+	config      brainwire.Config
+	initialized bool
+	answer      json.RawMessage
 }
 
 type driver struct {
@@ -48,6 +51,8 @@ type driver struct {
 	gen      uint64
 	session  string
 	listing  json.RawMessage
+	// server is the name CYFR's server takes in the harness that runs.
+	server string
 	// What the native turns under way name: each post's line by its uuid,
 	// the work of the native turn under way and its message, the
 	// harness's own tools running, the asks of CYFR's tools it holds, and
@@ -170,7 +175,7 @@ func (d *driver) work(id string, raw json.RawMessage) error {
 	}
 	d.requests++
 	request := fmt.Sprintf("%s-%d", toolsID, d.requests)
-	line := setToolsLine(request, args)
+	line := setToolsLine(request, d.server, args)
 	if len(line) > brainwire.MaxLineBytes {
 		return d.c.Refuse(id, fmt.Sprintf("The tools are %d bytes as one line to the harness, past the %d one line carries.", len(line), brainwire.MaxLineBytes))
 	}
@@ -400,15 +405,26 @@ func (d *driver) controlResponse(l harnessLine) error {
 	if !ok {
 		return nil
 	}
-	if answer.RequestID == initID && d.starting != nil {
+	if answer.RequestID == initID && d.starting != nil && !d.starting.initialized {
 		if answer.Subtype != "success" {
 			return &brainwire.Fatal{Status: 1, Reason: "Claude Code refused to start the session"}
 		}
+		// CYFR's server is named once the person's own are known.
+		d.starting.initialized = true
+		d.starting.answer = answer.Response
+		return d.h.Write(statusLine())
+	}
+	if answer.RequestID == statusID && d.starting != nil && d.starting.initialized {
+		var listed []string
+		if answer.Subtype == "success" {
+			listed = listedServers(answer.Response)
+		}
+		d.server = serverFor(listed)
 		var response struct {
 			Models json.RawMessage `json:"models"`
 		}
-		_ = json.Unmarshal(answer.Response, &response)
 		s := d.starting
+		_ = json.Unmarshal(s.answer, &response)
 		d.starting = nil
 		d.session = s.session
 		d.listing = response.Models
@@ -420,7 +436,7 @@ func (d *driver) controlResponse(l harnessLine) error {
 			held = heldPosts(d.home, s.session, s.pending)
 		}
 		return d.c.Emit(brainwire.NewEvent("started").Set("session", s.session).Set("fresh", !s.resume).Set("held", held).
-			SetOptional("account", account(answer.Response)))
+			SetOptional("account", account(s.answer)))
 	}
 	if id, ok := d.awaiting[answer.RequestID]; ok {
 		delete(d.awaiting, answer.RequestID)
@@ -442,6 +458,10 @@ func (d *driver) controlRequest(l harnessLine) error {
 		ToolName  string         `json:"tool_name"`
 		Input     map[string]any `json:"input"`
 		ToolUseID string         `json:"tool_use_id"`
+		Server    struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+		} `json:"mcp_server"`
 	}
 	// A call's numbers are passed on as the model wrote them.
 	decoder := json.NewDecoder(bytes.NewReader(l.Request))
@@ -453,8 +473,11 @@ func (d *driver) controlRequest(l harnessLine) error {
 	if request.Input == nil {
 		request.Input = map[string]any{}
 	}
-	name, ours := strings.CutPrefix(request.ToolName, toolPrefix)
-	if !ours {
+	// An ask is CYFR's only when the harness names CYFR's server as the
+	// one it set; every other tool, a server's of the person's own among
+	// them, is the harness's own.
+	name, ours := strings.CutPrefix(request.ToolName, toolPrefix(d.server))
+	if !ours || request.Server.Name != d.server || request.Server.Source != "dynamic" {
 		// The harness's own tool runs in its box: allowed, and shown by its
 		// tool_use (assistant) by name only.
 		return d.h.Write(allowLine(l.RequestID, request.Input))
@@ -532,7 +555,7 @@ func (d *driver) assistant(l harnessLine) error {
 		switch {
 		case block.Type == "text":
 			text.WriteString(block.Text)
-		case block.Type == "tool_use" && !strings.HasPrefix(block.Name, toolPrefix) && block.Name != "":
+		case block.Type == "tool_use" && !strings.HasPrefix(block.Name, toolPrefix(d.server)) && block.Name != "":
 			name := ownName(block.Name)
 			d.own[block.ID] = name
 			if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", name).Set("phase", "start")); err != nil {
@@ -643,6 +666,7 @@ func (d *driver) Ended() error {
 	d.h = nil
 	d.starting = nil
 	d.listing = nil
+	d.server = ""
 	d.asks = map[string]heldAsk{}
 	d.awaiting = map[string]string{}
 	if expected {

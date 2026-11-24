@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,8 +39,17 @@ import (
 //	subagent  streams and says words of a subagent's, runs its tool, then replies
 //	around replies in one message of text, a call of CYFR's, and text
 //	handed replies with the initialize request it was started with, as JSON
+//	theirs calls `theirs` of each server of the person's own it still holds,
+//	       each asked as that server's, then replies naming them
 //	noise  writes a line that is no JSON, one of no type the driver
 //	       reads and an event that does not read, then replies
+//
+// The person's own servers are those `$HOME/.claude.json` names under
+// `mcpServers`, held unless it was started with `--strict-mcp-config`, as
+// 2.1.323 was measured to hold them (aq-claude-own): `mcp_status` lists
+// them, and a server `mcp_set_servers` names replaces one of theirs of
+// the same name for the process's life. Each ask of an MCP tool names its
+// server, `mcp_server`, by name and source.
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -63,6 +73,29 @@ func fakeClaude() int {
 		if !strings.Contains(strings.Join(args, " "), a) {
 			fmt.Fprintln(os.Stderr, "fake-claude: missing", a)
 			return 2
+		}
+	}
+	// theirs are the person's own servers it holds, by name; dynamic is the
+	// one server the driver set, CYFR's. Both are read by a turn and set by
+	// the driver's lines, under serversMu.
+	theirs := map[string]bool{}
+	var dynamic string
+	var serversMu sync.Mutex
+	held := func() (string, []string) {
+		serversMu.Lock()
+		defer serversMu.Unlock()
+		return dynamic, sortedKeys(theirs)
+	}
+	if !strings.Contains(strings.Join(args, " "), "--strict-mcp-config") {
+		var config struct {
+			MCPServers map[string]any `json:"mcpServers"`
+		}
+		home, _ := os.UserHomeDir()
+		if raw, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
+			_ = json.Unmarshal(raw, &config)
+		}
+		for name := range config.MCPServers {
+			theirs[name] = true
 		}
 	}
 	fmt.Fprintln(os.Stderr, stderrCanary)
@@ -98,16 +131,29 @@ func fakeClaude() int {
 	wholes := map[string]map[string]any{}
 	var answersMu sync.Mutex
 	asked := 0
-	ask := func(tool string, input map[string]any) map[string]any {
+	askOf := func(tool string, input map[string]any, server map[string]any) map[string]any {
 		answersMu.Lock()
 		asked++
 		id := fmt.Sprintf("ask-%d", asked)
 		ch := make(chan map[string]any, 1)
 		answers[id] = ch
 		answersMu.Unlock()
-		write(map[string]any{"type": "control_request", "request_id": id, "request": map[string]any{
-			"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": fmt.Sprintf("toolu_%d", asked)}})
+		request := map[string]any{"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": fmt.Sprintf("toolu_%d", asked)}
+		if server != nil {
+			request["mcp_server"] = server
+		}
+		write(map[string]any{"type": "control_request", "request_id": id, "request": request})
 		return <-ch
+	}
+	ask := func(tool string, input map[string]any) map[string]any { return askOf(tool, input, nil) }
+	// cyfrs is CYFR's tool of that name, under the server the driver set.
+	cyfrs := func(name string) string {
+		server, _ := held()
+		return "mcp__" + server + "__" + name
+	}
+	askCYFR := func(name string, input map[string]any) map[string]any {
+		server, _ := held()
+		return askOf(cyfrs(name), input, map[string]any{"name": server, "source": "dynamic"})
 	}
 	turns := 0
 	// Each result's usage as Claude Code 2.1.323 reports it: the main
@@ -151,8 +197,8 @@ func fakeClaude() int {
 		case strings.Contains(words, "read"):
 			input := map[string]any{"action": "read", "path": "notes.txt", "count": json.Number("12345678901234567890")}
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_tool", "content": []any{
-				map[string]any{"type": "tool_use", "id": "toolu_read", "name": toolPrefix + "files", "input": input}}}})
-			decision := ask(toolPrefix+"files", input)
+				map[string]any{"type": "tool_use", "id": "toolu_read", "name": cyfrs("files"), "input": input}}}})
+			decision := askCYFR("files", input)
 			updated, _ := decision["updatedInput"].(map[string]any)
 			if result, ok := updated["result"].(string); ok {
 				reply(uuids, "The file says: "+result)
@@ -231,10 +277,26 @@ func fakeClaude() int {
 		case strings.Contains(words, "around"):
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_around", "content": []any{
 				map[string]any{"type": "text", "text": "before the call, "},
-				map[string]any{"type": "tool_use", "id": "toolu_around", "name": toolPrefix + "files", "input": map[string]any{}},
+				map[string]any{"type": "tool_use", "id": "toolu_around", "name": cyfrs("files"), "input": map[string]any{}},
 				map[string]any{"type": "text", "text": "after it"}}}})
 			write(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "uuid": "result-around",
 				"user_message_uuids": uuids, "model_usage_since_last_result": modelUsage})
+		case strings.Contains(words, "theirs"):
+			var ran []string
+			_, own := held()
+			for _, name := range own {
+				tool := "mcp__" + name + "__theirs"
+				use := "toolu_theirs_" + name
+				write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_" + use, "content": []any{
+					map[string]any{"type": "tool_use", "id": use, "name": tool, "input": map[string]any{}}}}})
+				decision := askOf(tool, map[string]any{}, map[string]any{"name": name, "source": "user"})
+				updated, _ := decision["updatedInput"].(map[string]any)
+				write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
+					map[string]any{"type": "tool_result", "tool_use_id": use, "content": "their server ran"}}}})
+				ran = append(ran, fmt.Sprintf("%s:%v:%d", tool, decision["behavior"], len(updated)))
+			}
+			server, _ := held()
+			reply(uuids, "their servers ran: "+strings.Join(ran, " ")+" beside "+server)
 		case strings.Contains(words, "handed"):
 			reply(uuids, string(initialized))
 		case strings.Contains(words, "noise"):
@@ -279,10 +341,29 @@ func fakeClaude() int {
 						answer["account"] = json.RawMessage(account)
 					}
 					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": answer}})
+				case "mcp_status":
+					listed := []any{}
+					server, own := held()
+					for _, name := range own {
+						listed = append(listed, map[string]any{"name": name, "status": "pending", "scope": "user", "source": "user"})
+					}
+					if server != "" {
+						listed = append(listed, map[string]any{"name": server, "status": "connected", "scope": "dynamic", "source": "dynamic"})
+					}
+					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{"mcpServers": listed}}})
 				case "mcp_set_servers":
+					servers, _ := request["servers"].(map[string]any)
+					serversMu.Lock()
+					dynamic = ""
+					for name := range servers {
+						dynamic = name
+						delete(theirs, name)
+					}
+					set := dynamic
+					serversMu.Unlock()
 					errors := map[string]any{}
 					if os.Getenv("FAKE_TOOLS_FAIL") != "" {
-						errors["cyfr"] = "failed to start"
+						errors[set] = "failed to start"
 					}
 					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{"errors": errors}}})
 				}
@@ -322,4 +403,13 @@ func fakeClaude() int {
 			return 0
 		}
 	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
