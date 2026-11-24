@@ -144,6 +144,12 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
     {:ok, conn: conn, ctx: ctx, user: user}
   end
 
+  test "a desktop with no app installed says so", %{conn: conn} do
+    {_view, html} = mount_desktop(conn)
+    assert html =~ "No apps installed"
+    refute html =~ "No tinctures installed"
+  end
+
   # A tincture version in the athanor's tree and its component row,
   # declaring `needs` and `caps`.
   defp tincture!(ctx, name, needs, caps) do

@@ -277,7 +277,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         hint: id,
         to: "/",
         icon: "palette",
-        keywords: "open tincture #{id}"
+        keywords: "open app #{id}"
       }
     ]
   end
@@ -345,11 +345,11 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         %{
           kind: :tincture,
           label: t.title || "#{t.publisher}.#{t.name}",
-          hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "tincture"),
+          hint: if(Prism.Frames.canvas?(t), do: "desktop", else: "app"),
           to: tincture_path(t),
           icon: "palette",
           keywords:
-            ["tincture", t.publisher, t.name, t.title]
+            ["app", t.publisher, t.name, t.title]
             |> Enum.filter(& &1)
             |> Enum.join(" ")
             |> String.downcase()
@@ -388,7 +388,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   defp kind_label(:action), do: "Action"
   defp kind_label(:recent_request), do: "Request"
   defp kind_label(:component), do: "Component"
-  defp kind_label(:tincture), do: "Tincture"
+  defp kind_label(:tincture), do: "App"
   defp kind_label(:thread), do: "Thread"
 
   # ============================================================================

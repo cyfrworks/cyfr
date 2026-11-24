@@ -87,6 +87,38 @@ defmodule PrismWeb.CommandPaletteTest do
     refute has_element?(view, ~s(#command-palette [phx-value-to*="/tinctures"]))
   end
 
+  test "an app is named an app: its hint, its kind and the word that finds it", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "palette-word", "1.0.0",
+      manifest: %{
+        "name" => "palette-word",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: [{"index.html", "<!doctype html><title>palette-word</title>"}]
+    )
+
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "app"})
+
+    item = ~s(#command-palette [phx-value-to="/?publisher=local&tincture_name=palette-word"])
+    assert has_element?(view, item, "App")
+    assert view |> element(item) |> render() =~ ~r{>\s*app\s*</span>}
+    refute view |> element(item) |> render() =~ ~r{>\s*tincture\s*<}i
+
+    html = view |> element("#command-palette input") |> render_keyup(%{"value" => "tincture"})
+    refute html =~ "palette-word"
+  end
+
   # A component row as the registry writes one, `inserted_at` naming how new
   # it is.
   defp component_row!(ctx, name, inserted_at, description \\ nil) do

@@ -1511,7 +1511,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
        %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
     today = today!(me)
-    {:ok, child} = Threads.crew_thread(actor, today.id, "builder")
+    # A member the crew holds: the room lists its standing members' threads.
+    member = Cyfr.Test.SeedBundle.seat_member()
+    {:ok, child} = Threads.crew_thread(actor, today.id, member)
 
     {panel, html} = open_panel(desktop!(conn))
     refute has_element?(panel, "#aqua-panel-sheet select")
@@ -1525,7 +1527,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     pane = on_thread!(child!(panel, "aqua-panel-pane"), today.id)
     pane |> element(~s([id$="-crew-#{child.id}"])) |> render_click()
     on_thread!(pane, child.id)
-    assert has_element?(panel, "#aqua-panel-day-name", "builder's thread")
+    assert has_element?(panel, "#aqua-panel-day-name", member <> "'s thread")
     refute has_element?(panel, "#aqua-panel-day-before")
 
     panel |> element("#aqua-panel-today") |> render_click()

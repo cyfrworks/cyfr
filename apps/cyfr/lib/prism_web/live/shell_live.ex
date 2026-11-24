@@ -607,7 +607,7 @@ defmodule PrismWeb.ShellLive do
           send(lv, {:deliver, tag, :tinctures_refreshed})
         end)
 
-        {:noreply, put_flash(socket, :info, "Refreshing tinctures…")}
+        {:noreply, put_flash(socket, :info, "Refreshing apps…")}
     end
   end
 
@@ -647,10 +647,10 @@ defmodule PrismWeb.ShellLive do
 
             false ->
               "Publish through the consent walk: profile.publish on this " <>
-                "tincture's owner profile."
+                "app's owner profile."
 
             :unknown ->
-              "This tincture's visibility can't be read right now. Try again shortly."
+              "This app's visibility can't be read right now. Try again shortly."
           end
 
         {:noreply, put_flash(socket, :info, message)}
@@ -665,7 +665,7 @@ defmodule PrismWeb.ShellLive do
   def handle_event("open_report", %{"tincture" => tincture_id}, socket) do
     case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Tincture not found; refresh and try again.")}
+        {:noreply, put_flash(socket, :error, "App not found; refresh and try again.")}
 
       tincture ->
         ref =
@@ -3565,7 +3565,7 @@ defmodule PrismWeb.ShellLive do
     {:noreply,
      socket
      |> load_tinctures()
-     |> put_flash(:info, "Tinctures registered and refreshed")}
+     |> put_flash(:info, "Apps registered and refreshed")}
   end
 
   # An archived athanor must let go of already-mounted shells — every
@@ -4161,7 +4161,7 @@ defmodule PrismWeb.ShellLive do
           phx-click="open_report"
           phx-value-tincture={@tincture.id}
           class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-red-400 hover:border-red-900"
-          title="Report this tincture to the registry's moderators"
+          title="Report this app to the registry's moderators"
         >
           Report
         </button>
@@ -4183,7 +4183,7 @@ defmodule PrismWeb.ShellLive do
           phx-click="focus_tincture"
           phx-value-index={i}
           class="flex h-6 min-w-6 items-center justify-center px-0.5"
-          aria-label={"Tincture #{i + 1} of #{length(@tinctures)}"}
+          aria-label={"App #{i + 1} of #{length(@tinctures)}"}
         >
           <span class={[
             "block rounded-full transition-all duration-300",
@@ -4208,7 +4208,7 @@ defmodule PrismWeb.ShellLive do
       phx-value-index={@focused_index - 1}
       disabled={@focused_index == 0}
       class="absolute left-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-      title="Previous tincture (←)"
+      title="Previous app (←)"
     >
       <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
@@ -4219,7 +4219,7 @@ defmodule PrismWeb.ShellLive do
       phx-value-index={@focused_index + 1}
       disabled={@focused_index >= @count - 1}
       class="absolute right-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-      title="Next tincture (→)"
+      title="Next app (→)"
     >
       <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
@@ -4233,8 +4233,8 @@ defmodule PrismWeb.ShellLive do
     <button
       phx-click="refresh_tinctures"
       class="absolute right-6 top-6 z-10 rounded-lg p-2 text-text-muted transition-colors hover:bg-surface-raised hover:text-text-secondary"
-      title="Refresh tinctures"
-      aria-label="Refresh tinctures"
+      title="Refresh apps"
+      aria-label="Refresh apps"
     >
       <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
         <path
@@ -4251,7 +4251,7 @@ defmodule PrismWeb.ShellLive do
     ~H"""
     <div class="flex h-full flex-col items-center justify-center gap-3 text-text-muted">
       <.icon name="grid" class="w-12 h-12 opacity-20" />
-      <p class="text-sm">No tinctures installed</p>
+      <p class="text-sm">No apps installed</p>
       <p class="text-xs text-text-muted/70">
         Run <code class="font-mono">cyfr build compile &lt;path&gt;</code> to add one.
       </p>
