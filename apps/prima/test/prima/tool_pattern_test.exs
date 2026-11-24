@@ -37,6 +37,18 @@ defmodule Prima.ToolPatternTest do
       refute ToolPattern.matches?("*.get", "component.get")
       refute ToolPattern.matches?("a.*.b", "a.x.b")
     end
+
+    # A server's resources and prompts are its reserved names: no grant
+    # given before they existed covers them, so only naming one does.
+    test "a reserved name, one beginning with @, is matched only by naming it" do
+      for name <- ["@resources", "@prompts", "@a.b"] do
+        refute ToolPattern.matches?("*", name)
+        assert ToolPattern.matches?(name, name)
+      end
+
+      refute ToolPattern.matches?("@a.*", "@a.b")
+      refute ToolPattern.matches?("@resources", "@prompts")
+    end
   end
 
   describe "valid?/1" do
@@ -80,6 +92,12 @@ defmodule Prima.ToolPatternTest do
 
     test "invalid and stale patterns expand to nothing" do
       assert ToolPattern.expand(["component*", "read*", ""], @catalog) == []
+    end
+
+    test "a reserved name is taken only by naming it" do
+      catalog = ["@resources", "@prompts" | @catalog]
+      assert ToolPattern.expand(["*"], catalog) == Enum.sort(@catalog)
+      assert ToolPattern.expand(["@resources"], catalog) == ["@resources"]
     end
 
     test "overlapping patterns dedupe" do

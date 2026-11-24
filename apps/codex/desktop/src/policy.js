@@ -264,13 +264,14 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 
 /**
  * The switches the app takes on its command line: the box's screen's
- * project (screenProject) and the folder cyfr setup opened the app in
- * (setupProject). The engine takes every other switch, from opening a
+ * project (screenProject), the folder cyfr setup opened the app in
+ * (setupProject) and --quit, which asks the app this account runs to end
+ * (app.js). The engine takes every other switch, from opening a
  * debugging port to trusting any certificate, so the app refuses them
  * all. A CYFR's route is no switch: main sets it on that CYFR's own
  * stores.
  */
-export const SWITCHES = ["screen-project", "setup-project"]
+export const SWITCHES = ["screen-project", "setup-project", "quit"]
 
 /**
  * Whether `value` names a folder explicitly on `platform`, as the system

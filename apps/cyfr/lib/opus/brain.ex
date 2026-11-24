@@ -49,7 +49,10 @@ defmodule Opus.Brain do
 
   One command is written at a time, after the driver's `hello`: the next
   only once the driver has answered the last (`started` or `gone`,
-  `accepted` or `refused`). Whether a command reaches the driver is decided
+  `accepted` or `refused`, and for a `post` also `later`, which leaves the
+  post the attendant's to write again). A `later` that answers anything
+  but the post written last ends the session, as a line that does not
+  read does. Whether a command reaches the driver is decided
   once, as it is about to be written, by the binding it is written under
   (below). A write the service did not answer may have reached the driver,
   and is never written again: the session ends `:interrupted`, and the
@@ -1381,7 +1384,8 @@ defmodule Opus.Brain do
 
   # What the holder keeps of an event, once: the driver's boot from its
   # hello, which is the session's first line and its only one; the
-  # answer to the command it waits on; what it says of the account
+  # answer to the command it waits on, a `later` answering only a post
+  # (else the line does not read); what it says of the account
   # (`learn/2`), which of a one command is its answer's alone
   # (`exchanged/3`); and the asks it may answer. A line
   # read again after the attendant asked for it again changes nothing.
@@ -1397,24 +1401,31 @@ defmodule Opus.Brain do
   defp apply_event(_state, _seq, %{"t" => "hello"}), do: {:error, :unreadable}
 
   defp apply_event(state, seq, event) do
-    if state.once == nil, do: learn(state.owner, event)
-    {:ok, %{answered(state, event) | applied: seq}}
+    with {:ok, answered} <- answered(state, event) do
+      if state.once == nil, do: learn(state.owner, event)
+      {:ok, %{answered | applied: seq}}
+    end
   end
 
   defp answered(%{outstanding: {"start", _}} = state, %{"t" => "started"}),
-    do: %{state | outstanding: nil, harness: :started}
+    do: {:ok, %{state | outstanding: nil, harness: :started}}
 
   defp answered(%{outstanding: {"start", _}} = state, %{"t" => "gone"}),
-    do: %{state | outstanding: nil, harness: :none}
+    do: {:ok, %{state | outstanding: nil, harness: :none}}
 
   defp answered(%{outstanding: {_t, id}} = state, %{"t" => t, "id" => id})
        when t in ["accepted", "refused"],
-       do: %{state | outstanding: nil}
+       do: {:ok, %{state | outstanding: nil}}
+
+  defp answered(%{outstanding: {"post", id}} = state, %{"t" => "later", "id" => id}),
+    do: {:ok, %{state | outstanding: nil}}
+
+  defp answered(_state, %{"t" => "later"}), do: {:error, :unreadable}
 
   defp answered(state, %{"t" => "ask", "ask" => ask} = event),
-    do: %{state | asks: Map.put(state.asks, ask, Map.get(event, "work"))}
+    do: {:ok, %{state | asks: Map.put(state.asks, ask, Map.get(event, "work"))}}
 
-  defp answered(state, _event), do: state
+  defp answered(state, _event), do: {:ok, state}
 
   # ---------------------------------------------------------------------------
   # Writing

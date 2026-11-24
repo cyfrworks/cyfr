@@ -88,6 +88,8 @@ function reset({relaunch = false} = {}) {
   world.trace = []
   world.menus = []
   world.spawnedIn = []
+  world.lockAsked = []
+  world.lockHeld = false
 }
 
 // A page: a window's or a view's (`owner`), in session `ses`.
@@ -306,9 +308,14 @@ function fromPartition(partition) {
 
 world.app = Object.assign(new EventEmitter(), {
   commandLine: {getSwitchValue: (name) => ({"screen-project": world.screen, "setup-project": world.setup})[name] ?? "",
-    hasSwitch: (name) => ({"screen-project": world.screen, "setup-project": world.setup})[name] !== undefined,
+    hasSwitch: (name) => ({"screen-project": world.screen, "setup-project": world.setup, quit: world.quitSwitch})[name] !== undefined,
     appendSwitch: (...a) => world.switches.push(a)},
-  enableSandbox() {}, requestSingleInstanceLock: () => true, configureWebAuthn() {},
+  enableSandbox() {}, configureWebAuthn() {},
+  // Taken unless another app of this account holds it (world.lockHeld).
+  requestSingleInstanceLock(data) {
+    world.lockAsked.push(data)
+    return !world.lockHeld
+  },
   relaunch(options) { world.relaunched = options },
   whenReady: () => Promise.resolve(),
   getPath(name) {
@@ -2058,6 +2065,56 @@ test("on macOS and Windows a CYFR no one is set up at opens at its setup page, t
   }
 })
 
+// ---- --quit: cyfr update and uninstall asking the running app to end ----
+
+// A launch of the app with --quit, by its own command line, with another
+// app of this account running (`held`) or none: its exit, what it said
+// and what it asked the lock.
+function quitLaunch(held) {
+  const argv = process.argv
+  reset()
+  world.quitSwitch = ""
+  world.lockHeld = held
+  world.exited = undefined
+  process.argv = [argv[0], "--quit"]
+  const said = []
+  try {
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", say: (line) => said.push(line)})
+  } finally {
+    process.argv = argv
+    world.quitSwitch = undefined
+  }
+  return {exited: world.exited, said, asked: world.lockAsked}
+}
+
+test("the app started with --quit asks the one this account runs to end and exits 3, or exits 0 with none, starting nothing", async () => {
+  for (const [held, exited, line] of [[true, 3, "the CYFR app that runs for this account was asked to quit"],
+    [false, 0, "no CYFR app runs for this account"]]) {
+    const launch = quitLaunch(held)
+    await settled()
+    assert.deepEqual(launch, {exited, said: [line], asked: [{quit: true}]}, `another running: ${held}`)
+    assert.deepEqual(world.spawned, [], "no cyfr")
+    assert.deepEqual(world.frames, [], "no window")
+  }
+  world.exited = undefined
+})
+
+test("a running app asked by a launch of --quit ends as a quit does, telling its cyfr; a plain second launch shows it", async () => {
+  await started(true)
+  const focused = frame().focused
+  world.app.emit("second-instance", {}, [], "/", {})
+  await settled()
+  await settled()
+  assert.equal(world.quit, false, "a plain second launch")
+  assert.equal(frame().focused, focused + 1, "is shown")
+  world.trace = []
+  world.app.emit("second-instance", {}, [], "/", {quit: true})
+  await settled()
+  await settled()
+  assert.equal(world.quit, true)
+  assert.deepEqual(world.trace, ["told shutdown", "input ended"], "cyfr told, then its input ended")
+})
+
 // ---- the box's screen ----
 
 const SCREEN = "/home/ana/cyfr"
@@ -2111,6 +2168,16 @@ test("as the box's screen the app runs the screen shell in that project, in one 
   assert.deepEqual(stores(), [], "nothing kept on disk")
   assert.equal(world.windows.find(isRail), undefined, "no rail")
   assert.deepEqual(w.bounds.at(-1), {x: 0, y: 0, width: 1280, height: 860}, "the content the whole window")
+})
+
+test("the box's screen asked by a launch of --quit is shown and goes on: its service is stopped instead", ON_LINUX, async () => {
+  await screenStarted()
+  const focused = frame().focused
+  world.app.emit("second-instance", {}, [], "/", {quit: true})
+  await settled()
+  await settled()
+  assert.deepEqual({quit: world.quit, endedSelf: world.endedSelf, focused: frame().focused}, {quit: false, endedSelf: [], focused: focused + 1})
+  assert.ok(!child.heard.some((m) => m.type === "shutdown"), "cyfr goes on")
 })
 
 test("only an explicit project makes the app a screen; another switch value is refused", ON_LINUX, async () => {

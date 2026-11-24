@@ -70,7 +70,8 @@ defmodule Prima.WorkerAPI do
       take another assignment for that athanor only;
     * `busy` — running an assignment;
     * `tainted` — terminated or being terminated, after a kill or an
-      unclean completion; it is never assigned again.
+      unclean completion, or held until its keeper releases it; it is
+      never assigned again.
   """
   @type status :: %{
           service: String.t(),

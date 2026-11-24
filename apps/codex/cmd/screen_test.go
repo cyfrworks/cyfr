@@ -65,11 +65,13 @@ func screenCommandsIn(dir string, tail ...string) []string {
 }
 
 // appCommand is the command that installs the CYFR app's package fetched
-// into dir, whose sha256 is sum: root's copy of it, checked, is what apt
+// into dir, whose sha256 is sum: the bytes this account's own process
+// reads, written into root's own folder and checked there, are what apt
 // installs, in a folder the command's own exit removes.
 func appCommand(dir, sum string) string {
-	return `( trap 'rm -rf "$d"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 "$d"` +
-		" && install -m 0644 " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` "$d/cyfr-desktop.deb"` +
+	account, _ := user.Current()
+	return `( trap 'rm -rf "$d"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0700 "$d"` +
+		" && runuser -u " + shellQuote([]string{account.Username}) + " -- cat -- " + shellQuote([]string{filepath.Join(dir, screenAppFile)}) + ` > "$d/cyfr-desktop.deb"` +
 		" && echo '" + sum + `  '"$d/cyfr-desktop.deb" | sha256sum --check --strict --quiet` +
 		` && apt-get install -y "$d/cyfr-desktop.deb" )`
 }
@@ -84,14 +86,14 @@ func fetchesTheApp(t *testing.T, release string, body []byte, err error) *int {
 	t.Cleanup(func() { version.Version, appPackageSum, fetchAppPackage = savedVersion, savedSum, savedFetch })
 	version.Version = release
 	named := sha256.Sum256([]byte("the app"))
-	appPackageSum = func(_ context.Context, v, arch string) (string, error) {
+	appPackageSum = func(_ context.Context, v, _, arch string) (string, error) {
 		if v != release || arch != "amd64" {
 			t.Errorf("read the sum of the app of %s for %s", v, arch)
 		}
 		return hex.EncodeToString(named[:]), nil
 	}
 	fetched := new(int)
-	fetchAppPackage = func(_ context.Context, v, arch, want string) ([]byte, error) {
+	fetchAppPackage = func(_ context.Context, v, _, arch, want string) ([]byte, error) {
 		*fetched++
 		if v != release || arch != "amd64" || want != hex.EncodeToString(named[:]) {
 			t.Errorf("fetched the app of %s for %s, its sum %s", v, arch, want)
@@ -186,11 +188,11 @@ func TestScreenOnRunsOnArm64(t *testing.T) {
 	version.Version = "0.6.0"
 	named := sha256.Sum256([]byte("the app"))
 	var asked []string
-	appPackageSum = func(_ context.Context, v, arch string) (string, error) {
+	appPackageSum = func(_ context.Context, v, _, arch string) (string, error) {
 		asked = append(asked, "sum "+v+" "+arch)
 		return hex.EncodeToString(named[:]), nil
 	}
-	fetchAppPackage = func(_ context.Context, v, arch, want string) ([]byte, error) {
+	fetchAppPackage = func(_ context.Context, v, _, arch, want string) ([]byte, error) {
 		asked = append(asked, "fetch "+v+" "+arch)
 		return []byte("the app"), nil
 	}
@@ -227,7 +229,7 @@ func TestScreenOnInstallsOnlyAVerifiedApp(t *testing.T) {
 			s.installed, s.app = nil, ""
 			fetched := fetchesTheApp(t, c.release, []byte("the app"), c.err)
 			if c.sumErr != nil {
-				appPackageSum = func(context.Context, string, string) (string, error) { return "", c.sumErr }
+				appPackageSum = func(context.Context, string, string, string) (string, error) { return "", c.sumErr }
 			}
 			askInput = strings.NewReader("yes\n")
 			before := listing(t, ".")
@@ -323,22 +325,31 @@ func TestScreenOnReadsTheChecksumWritingNothing(t *testing.T) {
 	}
 }
 
-// The machine holds the CYFR app of a release when dpkg holds its package
-// installed for this machine's architecture and the app's own cyfr answers
-// that release, as it spells it: a tag with two hyphens is answered as it
-// is; a package of another architecture, an app that cannot run, one that
-// answers no version and a package not installed hold none.
+// The machine holds the CYFR app of a release when the app's own cyfr
+// answers that release, as it spells it, and on Linux dpkg holds its
+// package installed for this machine's architecture: a tag with two
+// hyphens is answered as it is; an app that cannot run, one that answers
+// no version and, on Linux, a package of another architecture or not
+// installed hold none. Elsewhere no dpkg is asked.
 func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
+	// What a row wants where dpkg decides it, on Linux; elsewhere the
+	// app's own cyfr answers.
+	dpkgDecides := func(onLinux string) string {
+		if runtime.GOOS == "linux" {
+			return onLinux
+		}
+		return "0.6.0"
+	}
 	other := map[string]string{"amd64": "arm64"}[runtime.GOARCH]
 	if other == "" {
 		other = "amd64"
 	}
 	for _, c := range []struct{ name, dpkg, app, want string }{
 		{"a tag with two hyphens", "printf 'installed " + runtime.GOARCH + "'", "echo 'cyfr version 0.6.0-alpha-test.15'", "0.6.0-alpha-test.15"},
-		{"a package of another architecture", "printf 'installed " + other + "'", "echo 'cyfr version 0.6.0'", ""},
+		{"a package of another architecture", "printf 'installed " + other + "'", "echo 'cyfr version 0.6.0'", dpkgDecides("")},
 		{"an app that cannot run", "printf 'installed " + runtime.GOARCH + "'", "exit 126", ""},
 		{"an app that answers no version", "printf 'installed " + runtime.GOARCH + "'", "echo 'not cyfr'", ""},
-		{"a package not installed", "echo 'dpkg-query: no packages found matching cyfr-desktop' >&2; exit 1", "echo 'cyfr version 0.6.0'", ""},
+		{"a package not installed", "echo 'dpkg-query: no packages found matching cyfr-desktop' >&2; exit 1", "echo 'cyfr version 0.6.0'", dpkgDecides("")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bin := t.TempDir()
@@ -348,12 +359,48 @@ func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
 			}
 			saved := appCyfr
 			t.Cleanup(func() { appCyfr = saved })
-			appCyfr = filepath.Join(t.TempDir(), "cyfr")
-			if err := os.WriteFile(appCyfr, []byte("#!/bin/sh\n"+c.app+"\n"), 0o700); err != nil {
+			cyfr := filepath.Join(t.TempDir(), "cyfr")
+			appCyfr = func() (string, error) { return cyfr, nil }
+			if err := os.WriteFile(cyfr, []byte("#!/bin/sh\n"+c.app+"\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if got := realMachine.appRelease(); got != c.want {
 				t.Errorf("appRelease = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// systemctl printing the screen service's state is an answer, an absent
+// unit's "inactive" among them, and every state but inactive and failed
+// runs; a systemctl that prints none, or that cannot be run, gives no
+// answer, which is never taken for a stopped screen.
+func TestTheMachineTellsAnUnreadScreenFromAStoppedOne(t *testing.T) {
+	for _, c := range []struct {
+		name, systemctl string
+		active, unread  bool
+	}{
+		{"it runs", "echo active", true, false},
+		{"its launcher is between two starts", "echo activating; exit 3", true, false},
+		{"it is stopping", "echo deactivating; exit 3", true, false},
+		{"it failed", "echo failed; exit 3", false, false},
+		{"it is stopped", "echo inactive; exit 3", false, false},
+		{"no such unit", "echo inactive; exit 4", false, false},
+		{"no bus to ask", "echo 'Failed to connect to system scope bus via local transport' >&2; exit 1", false, true},
+		{"no systemctl", "", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			if c.systemctl != "" {
+				script := "#!/bin/sh\ncase \"$1\" in is-enabled) exit 1 ;; esac\n" + c.systemctl + "\n"
+				if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, active, err := realMachine.screenService()
+			if active != c.active || (err != nil) != c.unread {
+				t.Errorf("screenService answered active %v, %v; want active %v, unread %v", active, err, c.active, c.unread)
 			}
 		})
 	}
@@ -831,10 +878,9 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 }
 
 // The screen's page says where the app's cyfr, which runs the shell, is
-// another release than the one the folder is set to, with the instruction
-// `cyfr update` gives a package's own cyfr (installPackage), which brings
-// the app there whichever cyfr is on PATH; it says nothing where they
-// agree or where either is no release.
+// another release than the one the folder is set to, with the cyfr update
+// in the folder that brings the app to the folder's release; it says
+// nothing where they agree or where either is no release.
 func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	dir := t.TempDir()
 	compose := func(tag string) {
@@ -845,7 +891,7 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	}
 	for _, c := range []struct{ folder, ours, want string }{
 		{"0.6.0@sha256:" + strings.Repeat("a", 64), "0.6.0", ""},
-		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR in " + dir + " is set to release 0.6.1, so the screen may not work as it should. To bring the app to release 0.6.1, install the package cyfr-desktop of release 0.6.1 from " + releasesPage + "/tag/0.6.1."},
+		{"0.6.1@sha256:" + strings.Repeat("a", 64), "0.6.0", "This screen's CYFR app is release 0.6.0 and the CYFR in " + dir + " is set to release 0.6.1, so the screen may not work as it should. To bring the app to release 0.6.1, run 'cyfr update --version 0.6.1' in " + dir + "."},
 		{"latest", "0.6.0", ""},
 		{"0.6.1", "dev", ""},
 	} {

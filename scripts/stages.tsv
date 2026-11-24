@@ -77,13 +77,13 @@ handoff	dev-stack-test	1	600	dev	docker-compose.dev.yml,docker-compose.yml,scrip
 handoff	prebuilt-binaries-test	1	600	-	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
 handoff	ci-guards-test	1	600	-	scripts/ci/**,scripts/release.sh,tests/ci-guards-test.sh,.github/workflows/rerun.yml,.github/workflows/test.yml,tests/test-partitioned-test.sh,apps/cyfr/test/cluster/**,apps/codex/cmd/release_proof.go,apps/codex/internal/holder/cheap.go	bash tests/ci-guards-test.sh
 handoff	containerd-store-test	-	600	-	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
-handoff	release-graph	1	600	-	.github/workflows/**,.github/actions/**,Dockerfile,Dockerfile.locus,apps/codex/.goreleaser.yml,scripts/release.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
+handoff	release-graph	1	600	-	.github/workflows/**,.github/actions/**,Dockerfile,Dockerfile.locus,apps/codex/.goreleaser.yml,scripts/release.sh,scripts/ci/homebrew-cask.sh,tests/desktop-proof/native/installed-version.sh,tests/desktop-proof/native/installed-machine.sh,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
 handoff	security-scan-test	-	600	-	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
 handoff	go-checks	1	1200	-	apps/codex/**	cd apps/codex && test -z "$(gofmt -l .)" && go vet ./... && go build ./...
 # The Go rows run each module's tests without -race (the pull request's
 # Codex CI and Keeper CI add it) when a path its workflow's pull_request
 # paths name changes; tests/stage-test.sh holds the two lists equal.
-handoff	go-codex	1	900	-	apps/codex/**,.env.example,docker-compose.yml,docker-entrypoint.sh,tests/fixtures/**,tests/desktop-proof/**,apps/cyfr/assets/account/**,seed/aqua/**,scripts/scaffold-tarball.sh,README.md,.github/workflows/test.yml,.github/workflows/codex-ci.yml	cd apps/codex && go test -count=1 ./...
+handoff	go-codex	1	900	-	apps/codex/**,.env.example,docker-compose.yml,docker-entrypoint.sh,tests/fixtures/**,tests/desktop-proof/**,scripts/ci/homebrew-cask.sh,tests/ci-release-rehearsal.sh,apps/cyfr/assets/account/**,seed/aqua/**,scripts/scaffold-tarball.sh,README.md,.github/workflows/test.yml,.github/workflows/codex-ci.yml	cd apps/codex && go test -count=1 ./...
 handoff	go-keeper	1	600	-	apps/locus/keeper/**,tests/fixtures/keeper_protocol.json,tests/fixtures/browser_frames.json,tests/fixtures/brain_wire.json,tests/fixtures/residue-canary.go,.github/workflows/keeper-ci.yml	cd apps/locus/keeper && test -z "$(gofmt -l . ../../../tests/fixtures)" && go vet ./... && go test -count=1 ./...
 # The Rust rows take rustup's bin directory on PATH, where rustup and
 # `cargo install` put their tools, and read not run 69 on a host without the
