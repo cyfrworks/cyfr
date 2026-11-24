@@ -163,6 +163,16 @@ func openFolder(work *shell.Work, dir, holder string) (*localFolder, localReadin
 		work: work, begin: beginUnder(work, preparer())}, read, nil
 }
 
+// localRoute is the engine's route to a CYFR of access mode on the
+// computer it runs on: a tailnet one's proxy and resolver rules, none for
+// any other.
+func localRoute(mode string) (proxy, resolver string) {
+	if mode == access.ModeTailnet {
+		return localProxy, localResolver
+	}
+	return "", ""
+}
+
 // readLocal is the CYFR set up in dir, as the screen and the CYFR app open
 // it: one reading (readFolder), with no call to Docker and nothing
 // started, and the client bound to it, which asks Docker through setup's
@@ -175,9 +185,7 @@ func readLocal(work *shell.Work, dir, holder string) (desktop.Local, error) {
 	}
 	client := &http.Client{Transport: f.transport(nil)}
 	l := desktop.Local{Work: work}
-	if read.Mode == access.ModeTailnet {
-		l.Proxy, l.Resolver = localProxy, localResolver
-	}
+	l.Proxy, l.Resolver = localRoute(read.Mode)
 	l.Shell = shell.Config{
 		Address:    read.Address,
 		Client:     client,

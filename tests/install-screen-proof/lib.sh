@@ -801,15 +801,24 @@ screen_read() { proof_fg timeout 180 docker exec "$GUEST" python3 /proof/screen.
 
 # screen_press TEXT [last]: TEXT pressed where the display shows it; each
 # press, and each miss with the words read then, is a line of
-# GUEST_DIR/screen-press.txt.
+# GUEST_DIR/screen-press.txt, and each miss a picture of the display,
+# screen-missed-N.png, named there.
+MISSES=0
 screen_press() {
   local at
   if at=$(screen_read press "$@" 2>>"$GUEST_DIR/screen-press.txt"); then
     printf '%s pressed %s at %s\n' "$(date -u +%T)" "$1" "$at" >>"$GUEST_DIR/screen-press.txt"
     return 0
   fi
-  { printf '%s missed %s; the display read:\n' "$(date -u +%T)" "$1"; screen_read words; } >>"$GUEST_DIR/screen-press.txt" 2>&1
+  screen_missed "$1"
   return 1
+}
+screen_missed() {
+  local picture
+  MISSES=$((MISSES + 1))
+  picture=screen-missed-$MISSES.png
+  guest_screenshot "$picture" || picture="no picture: the screendump failed"
+  { printf '%s missed %s (%s); the display read:\n' "$(date -u +%T)" "$1" "$picture"; screen_read words; } >>"$GUEST_DIR/screen-press.txt" 2>&1
 }
 
 # screen_shows TEXT SECONDS: whether the display shows TEXT within SECONDS.
@@ -840,8 +849,9 @@ screen_shows_not() {
 }
 
 # screen_tap CHARACTERS: CHARACTERS tapped on the on-screen keyboard's
-# keys, read from the display, a newline its Enter.
-screen_tap() { screen_read tap "$1" 2>>"$GUEST_DIR/screen-press.txt"; }
+# keys, read from the display, a newline its Enter; a miss is recorded as
+# screen_press's are.
+screen_tap() { screen_read tap "$1" 2>>"$GUEST_DIR/screen-press.txt" || { screen_missed "a key of the keyboard"; return 1; }; }
 
 # The boot's journal and apt's history, read once nothing else is to be
 # observed: reading the system journal takes root, so this is the run's
