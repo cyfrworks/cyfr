@@ -340,3 +340,26 @@ wait`
 	}
 	k.releasedPair(t, id)
 }
+
+// A kept close ends a session in order, as a program's own wrapper meets
+// it: the command, a shell running the program as its child, ends at the
+// SIGTERM, and the program it leaves is sent SIGTERM in its turn and says
+// what it says before it ends, within the close's grace.
+func TestAKeptCloseEndsWhatTheCommandLeftInItsTurn(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-order")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	script := `sh -c 'trap "sleep 0.2; echo bye; exit 0" TERM; echo ready; while :; do sleep 0.05; done'; echo after`
+	id, rc := k.spawnKept(t, "o", script, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	grace := int64(5000)
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	rc.readUntil(t, func() bool { return false })
+	if got := string(rc.got[frame.StreamStdout]); got != "ready\nbye\n" {
+		t.Fatalf("the closed session said %q", got)
+	}
+	k.releasedPair(t, id)
+}

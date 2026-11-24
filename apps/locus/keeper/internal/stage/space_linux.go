@@ -6,6 +6,7 @@
 package stage
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -553,7 +555,9 @@ func openTerminal() error {
 // fd 4, and closes the status pipe once the command has executed. It then
 // passes the signals it is sent to the command, reaps every
 // process left to it, and when the command ends says how on its exit pipe
-// and ends, which ends every process of the space.
+// and ends, which ends every process of the space: at once, or, when the
+// command ended after a signal that asks an end, once the processes it
+// left have ended in their turn (endTheRest).
 func Init() int {
 	status := os.NewFile(spaceStatusFD, "status")
 	fail := func(format string, args ...any) int {
@@ -610,14 +614,18 @@ func Init() int {
 	for _, fd := range []int{ControlFD, RelayFD} {
 		_ = unix.Close(fd)
 	}
+	var ending atomic.Bool
 	go func() {
 		for s := range signals {
+			if s != unix.SIGUSR1 && s != unix.SIGUSR2 {
+				ending.Store(true)
+			}
 			_ = unix.Kill(command, s.(syscall.Signal))
 		}
 	}()
 	exit := os.NewFile(spaceExitFD, "exit")
+	var ws unix.WaitStatus
 	for {
-		var ws unix.WaitStatus
 		got, err := unix.Wait4(-1, &ws, 0, nil)
 		if errors.Is(err, unix.EINTR) {
 			continue
@@ -625,14 +633,53 @@ func Init() int {
 		if err != nil {
 			return ExitFailed
 		}
-		if got != command {
+		if got == command {
+			break
+		}
+	}
+	// A command ended for a signal it was passed, as a close ends it,
+	// leaves the processes it left to end in their turn, as the keeper's
+	// end in order gives a leader's children: each child left to the init is
+	// sent SIGTERM and waited for, within the keeper's own bound on the
+	// group. A command that ended of its own accord ends the space at once.
+	if ending.Load() {
+		endTheRest()
+	}
+	if ws.Signaled() {
+		fmt.Fprintf(exit, "signal %d", int(ws.Signal()))
+		return 128 + int(ws.Signal())
+	}
+	fmt.Fprintf(exit, "exit %s", strconv.Itoa(ws.ExitStatus()))
+	return ws.ExitStatus()
+}
+
+// endTheRest sends SIGTERM to every child the space's init has, the
+// processes the command left to it, and reaps until none is left.
+func endTheRest() {
+	entries, _ := os.ReadDir("/proc")
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == 1 {
 			continue
 		}
-		if ws.Signaled() {
-			fmt.Fprintf(exit, "signal %d", int(ws.Signal()))
-			return 128 + int(ws.Signal())
+		stat, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if err != nil {
+			continue
 		}
-		fmt.Fprintf(exit, "exit %s", strconv.Itoa(ws.ExitStatus()))
-		return ws.ExitStatus()
+		// The parent's pid is the second field after the command's name,
+		// which ends at the last parenthesis.
+		fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+		if len(fields) > 1 && fields[1] == "1" {
+			_ = unix.Kill(pid, unix.SIGTERM)
+		}
+	}
+	for {
+		_, err := unix.Wait4(-1, nil, 0, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return
+		}
 	}
 }
