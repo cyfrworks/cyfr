@@ -464,27 +464,36 @@ export const UNANSWERED = `The CYFR at ${HOME} did not answer.`
 
 // A page of the CYFR asked for in `w` while its front takes nothing: what
 // failed, as main said it and as the front saw it, and what the person
-// then has in that window.
+// then has: the chooser, in that same view where the content's storage is
+// memory's (the six-word road) and in a view of its own otherwise (the
+// passkey road, whose view keeps the CYFR's sign-in), and that sign-in,
+// read from the store `w` used.
 export async function unansweredLoad(w) {
   const host = new URL(HOME).hostname
   const page = "/threads"
-  const cookie = await sessionCookie(w)
+  const ses = w.webContents.session
+  const stored = async () => (await ses.cookies.get({url: HOME, name: "_cyfr_key"}))[0]?.value ?? null
+  const cookie = await stored()
   const from = await frontLength()
   const saidBefore = said.length
   let out
   await fault(host, "down")
   try {
     await js(w.webContents, `location.assign(${literal(`${page}?q=${MARKER}#${MARKER}`)}); 1`)
+    let shown = null
     const shows = await waitFor(async () => {
-      if (w.isDestroyed() || !atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
-      const at = await js(w.webContents, `(() => { const inSight = (id) => {
+      const v = content()
+      if (!v || !atBootstrap(v.webContents.getURL()) || v.webContents.isLoading()) return null
+      const at = await js(v.webContents, `(() => { const inSight = (id) => {
         const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
         return {words: inSight("#notice") ? document.querySelector("#notice").textContent : "",
           again: inSight("#again"), onward: inSight("#words")} })()`)
+      shown = v
       return at.words && at.onward ? at : null
     }, "the chooser after a load that failed", 30_000).catch((e) => ({why: e.message}))
-    out = {...shows, visible: !w.isDestroyed() && w.isVisible(), window: content() === w,
-      same: cookie !== null && (await sessionCookie(w)) === cookie, cookie,
+    out = {...shows, visible: !!shown && shown.isVisible(), view: shown === w ? "same" : shown ? "own" : null,
+      inStore: !!shown && shown.webContents.session === ses,
+      same: cookie !== null && (await stored()) === cookie, cookie,
       failed: said.slice(saidBefore).some((l) => l.startsWith("unanswered:")) &&
         (await reachedSince(host, from)).some((r) => r.path === page && r.fault === "down"),
       locks: said.slice(saidBefore).filter((l) => l.startsWith("locked:")), signOuts: await signOutsSince(from)}
@@ -493,8 +502,12 @@ export async function unansweredLoad(w) {
   }
   return {...out, opens: !!cookie && (await opens(cookie)).opens}
 }
+// On the six-word road the chooser is in the same view, its storage
+// memory's; on the passkey road in a view of its own, never the store
+// that keeps the sign-in.
 export const toldUnanswered = (out, again) => out.failed && out.words === UNANSWERED && out.onward && out.again === again &&
-  out.visible && out.window && out.same && out.opens && out.locks.length === 0 && out.signOuts.length === 0
+  out.visible && (again ? out.view === "own" && !out.inStore : out.view === "same") && out.same && out.opens &&
+  out.locks.length === 0 && out.signOuts.length === 0
 
 // The sentence a clear that failed leaves on the chooser.
 // The computer locked and asleep, as the system tells every program, while

@@ -481,21 +481,28 @@ async function keptPhase() {
       cookie = kept
       return [toldUnanswered({cookie, ...detail}, true), detail]
     })
-  await judged("try_again", "Try again asks cyfr, then for the CYFR's root, and Prism opens signed in as before", async () => {
+  // On the passkey road the chooser is in a view of its own, in memory;
+  // Try again there opens the CYFR's root in a view of the CYFR's own
+  // store, Prism shown again.
+  let back = null
+  await judged("try_again", "Try again asks cyfr, then for the CYFR's root, and Prism opens signed in as before, in the CYFR's own store", async () => {
     const pressedAt = history.length
     const frontAt = await frontLength()
+    const chooser = content()
     // When the chooser asked cyfr, by the engine's loads made by then.
     let connectAt = null
-    const ses = w.webContents.session
+    const ses = chooser.webContents.session
     ses.webRequest.onBeforeRequest({urls: [LOOPBACK + "/bootstrap/connect"]}, (_details, callback) => {
       connectAt ??= history.length
       callback({})
     })
-    let back
     try {
-      await js(w.webContents, `document.querySelector("#again").click(); 1`)
-      back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
-        js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
+      await js(chooser.webContents, `document.querySelector("#again").click(); 1`)
+      back = await waitFor(async () => {
+        const v = content()
+        return v && v !== chooser && atHome(v.webContents.getURL()) && !v.webContents.isLoading() &&
+          await js(v.webContents, `!!document.querySelector(".phx-connected")`) ? v : null
+      }, "Prism after Try again", 30_000).catch(() => null)
     } finally {
       ses.webRequest.onBeforeRequest(null)
     }
@@ -504,10 +511,11 @@ async function keptPhase() {
     const asked = history.slice(pressedAt).find((url) => !url.startsWith(LOOPBACK + "/")) ?? null
     const askedFirst = connectAt !== null && !history.slice(pressedAt, connectAt).some((url) => !url.startsWith(LOOPBACK + "/"))
     const answered = (await reachedSince(new URL(HOME).hostname, frontAt)).find((r) => r.method === "GET" && r.path === "/")?.status ?? null
-    return [askedFirst && asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
-      {askedFirst, asked: asked && bare(asked), answered, back}]
+    const own = !!back && back.webContents.session === keptSession()
+    return [askedFirst && asked === HOME + "/" && answered !== null && own && cookie !== null && (await sessionCookie(back)) === cookie,
+      {askedFirst, asked: asked && bare(asked), answered, back: !!back, own}]
   })
-  await choosersWord(w)
+  await choosersWord(back)
   return "quit"
 }
 
