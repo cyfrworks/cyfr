@@ -156,7 +156,8 @@ def main():
         for path in [a["home"], f"{a['home']}/kept.txt", KEPT_ROOT]:
             status, answer = c.call(NEIGHBOUR, "probe__read_path", {"path": path})
             text = answer["result"]["content"][0]["text"]
-            expect('"ok":false' in text and "EACCES" in text, f"a pooled uid cannot read {path}", text)
+            # A pooled program's space holds no kept homes' root at all.
+            expect('"ok":false' in text and "ENOENT" in text, f"a pooled uid finds no {path} in its space", text)
         read = stack.exec(f"cat {a['home']}/kept.txt", user=RELEASE_USER)
         expect(read.returncode != 0 and "Permission denied" in read.stderr,
                f"the release's user, {RELEASE_USER}, cannot read a home", [read.returncode, read.stdout, read.stderr])
