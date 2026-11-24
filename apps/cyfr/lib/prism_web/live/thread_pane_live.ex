@@ -424,6 +424,33 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp resolved(_request, _rows, _ctx), do: nil
 
+  # The request `id` as the store holds its resolution: pending, or
+  # answered by the reply it names as its resolver, with that reply's
+  # outcome. An announcement names a request; the card takes what the
+  # store holds, never the announcement's word. A request that cannot be
+  # read answers nil, and the card keeps what it shows.
+  defp stored_resolution(ctx, id) do
+    actor = Sanctum.Context.actor(ctx)
+
+    case Threads.get_message(actor, id) do
+      {:ok, %{status: "answered", resolved_by: by} = request} when is_binary(by) ->
+        %{status: "answered", resolved_by: by, outcome: resolved(request, %{}, ctx)}
+
+      {:ok, %{status: status}} ->
+        %{status: status, resolved_by: nil, outcome: nil}
+
+      {:error, _unread} ->
+        nil
+    end
+  end
+
+  defp as_stored(request, ctx) do
+    case stored_resolution(ctx, request.id) do
+      %{} = held -> Map.merge(request, held)
+      nil -> request
+    end
+  end
+
   # The workspace thread as it is now, under the pane's own context: one
   # that cannot be found is gone, and one that cannot be read right now
   # keeps what was held.
@@ -976,17 +1003,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # left it, and the room reads its crew threads again, the member's now
   # among them.
   defp handle_thread_event(socket, :request, row) do
-    request =
-      case socket.assigns.requests[row.id] do
-        %{status: "pending", replies: replies} ->
-          Map.merge(row, %{replies: replies, outcome: nil})
-
-        %{} = resolved ->
-          resolved
-
-        nil ->
-          Map.merge(row, %{replies: [], outcome: nil})
-      end
+    replies = get_in(socket.assigns.requests, [row.id, :replies]) || []
+    request = row |> Map.merge(%{replies: replies, outcome: nil}) |> as_stored(socket.assigns.context)
 
     socket |> read_children() |> put_request(request)
   end
@@ -999,7 +1017,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     socket =
       for id <- answered, %{} = request <- [requests[id]], reduce: socket do
-        acc -> put_request(acc, answered_by(request, row))
+        acc -> put_request(acc, answered_by(request, row, acc.assigns.context))
       end
 
     socket =
@@ -1149,13 +1167,11 @@ defmodule PrismWeb.ThreadPaneLive do
     |> upsert_message(request)
   end
 
-  # A request takes the outcome of the first reply that resolves it, and
-  # stays as that reply left it.
-  defp answered_by(request, reply) do
-    request =
-      if request.status == "pending",
-        do: %{request | status: "answered", resolved_by: reply.id, outcome: reply.outcome},
-        else: request
+  # A request a reply names reads as the store holds its resolution: the
+  # outcome of the reply the store names as its resolver, whichever reply
+  # was announced; a reply to it stands beneath it.
+  defp answered_by(request, reply, ctx) do
+    request = as_stored(request, ctx)
 
     if request.id == reply.reply_to,
       do: %{request | replies: Enum.reject(request.replies, &(&1.id == reply.id)) ++ [reply]},

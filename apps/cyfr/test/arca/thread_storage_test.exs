@@ -227,6 +227,45 @@ defmodule Arca.ThreadStorageTest do
       assert Enum.map(found, & &1.id) == newer |> Enum.take(3) |> Enum.map(& &1.id)
     end
 
+    # The rows the store answers this process's queries of threads while
+    # `fun` runs: the work a search does, whatever the athanor holds.
+    defp rows_read(fun) do
+      handler = "thread-title-rows-#{System.unique_integer([:positive])}"
+      parent = self()
+      counter = :counters.new(1, [])
+
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        # The event fires in the querying process; a neighbour's query is
+        # not this test's.
+        fn _event, _measure, meta, _config ->
+          with true <- self() == parent,
+               "threads" <- meta[:source],
+               {:ok, %{num_rows: rows}} when is_integer(rows) <- meta[:result] do
+            :counters.add(counter, 1, rows)
+          end
+        end,
+        nil
+      )
+
+      try do
+        {fun.(), :counters.get(counter, 1)}
+      after
+        :telemetry.detach(handler)
+      end
+    end
+
+    test "is matched by the store, which reads only what it answers", %{ctx: ctx} do
+      _many = titled!(ctx, for(n <- 1..450, do: "Newer #{n}"), 0)
+
+      assert {[], 0} = rows_read(fn -> Threads.list(ctx, title: "absent") end)
+
+      {found, read} = rows_read(fn -> Threads.list(ctx, title: "newer", limit: 3) end)
+      assert length(found) == 3
+      assert read == 3
+    end
+
     test "is plain text: no character of it is a pattern", %{ctx: ctx} do
       [sale] = titled!(ctx, ["50%_off!"], 0)
       _plain = titled!(ctx, ["500 off", "5 of 0"], 1)

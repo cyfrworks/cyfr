@@ -55,15 +55,24 @@ defmodule Aqua.ThreadList do
           archived: boolean()
         }
 
+  # The most characters of a title asked for that a search reads; the
+  # rest is dropped where the text enters.
+  @title_max 100
+
   @doc """
   The caller's list of threads as a view reads it, the latest activity
-  first. `title:` is text a thread's title holds, folded as
-  `thread.search` folds it and matched over every thread of theirs, the
-  oldest included; nil lists the windows the refresh reads.
+  first. `title:` is text a thread's title holds, its first
+  #{@title_max} characters, matched by the store over every thread of
+  theirs, the oldest included, ASCII letters folded to lower case and
+  every other character as itself (`Arca.ThreadStorage.list/2`'s
+  `:title`); nil lists the windows the refresh reads. `kind: :workspace`
+  and `archived: false` ask for those threads as such, before the
+  window: the unarchived workspace threads are the latest of their own,
+  whatever other threads are newer.
   """
   @spec threads(Context.t(), keyword()) :: {:ok, [entry()]} | {:error, term()}
   def threads(%Context{} = ctx, opts) when is_list(opts) do
-    with {:ok, listed} <- read(ctx, Keyword.get(opts, :title)) do
+    with {:ok, listed} <- read(ctx, opts) do
       {:ok, Enum.map(listed, &entry/1)}
     end
   end
@@ -79,23 +88,25 @@ defmodule Aqua.ThreadList do
   """
   @spec listed(Context.t(), String.t()) :: {:ok, [ThreadListed.t()]} | {:error, term()}
   def listed(%Context{} = ctx, _subject) do
-    with {:ok, listed} <- read(ctx, nil) do
+    with {:ok, listed} <- read(ctx, []) do
       {:ok, Enum.map(listed, fn {item, _state} -> item end)}
     end
   end
 
   # The one query: each thread as its live payload reads, with a
   # workspace thread's state beside it.
-  defp read(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, title)
+  defp read(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, opts)
        when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
     actor = Context.actor(ctx)
-    opts = [kind: @listed, title: title]
+    title = opts |> Keyword.get(:title) |> bounded()
+    kind = Keyword.get(opts, :kind)
+    kinds = if kind == :workspace, do: ["workspace"], else: @listed
+    windows = if Keyword.get(opts, :archived) == false, do: [false], else: [false, true]
+    query = [kind: kinds, title: title]
 
-    with active when is_list(active) <- Threads.list(actor, [archived: false] ++ opts),
-         archived when is_list(archived) <- Threads.list(actor, [archived: true] ++ opts),
-         threads = active ++ archived,
+    with {:ok, threads} <- windows(actor, windows, query),
          {:ok, person} <- Listing.person(actor),
-         {:ok, shared} <- Sanctum.SharedThreads.listed(user_id),
+         {:ok, shared} <- shared(user_id, kind),
          {:ok, items} <- items(actor, Users.public_name(person), threads) do
       shared =
         for listing <- shared,
@@ -106,15 +117,31 @@ defmodule Aqua.ThreadList do
     end
   end
 
-  defp read(%Context{}, _title), do: {:error, :no_athanor}
+  defp read(%Context{}, _opts), do: {:error, :no_athanor}
 
-  # A shared thread's title, folded as a search folds text; a pair has
+  defp windows(actor, windows, query) do
+    Enum.reduce_while(windows, {:ok, []}, fn archived, {:ok, acc} ->
+      case Threads.list(actor, [archived: archived] ++ query) do
+        rows when is_list(rows) -> {:cont, {:ok, acc ++ rows}}
+        {:error, _} = unread -> {:halt, unread}
+      end
+    end)
+  end
+
+  defp shared(_user_id, :workspace), do: {:ok, []}
+  defp shared(user_id, _kind), do: Sanctum.SharedThreads.listed(user_id)
+
+  defp bounded(nil), do: nil
+  defp bounded(title) when is_binary(title), do: String.slice(title, 0, @title_max)
+
+  # A shared thread's title, folded as the store folds a title: ASCII
+  # letters to lower case, every other character as itself. A pair has
   # none, and matches only when no title is asked for.
   defp titled?(_title, nil), do: true
   defp titled?(nil, _asked), do: false
 
   defp titled?(title, asked),
-    do: String.contains?(String.downcase(title), String.downcase(asked))
+    do: String.contains?(String.downcase(title, :ascii), String.downcase(asked, :ascii))
 
   defp entry({%ThreadListed{} = item, state}) do
     %{

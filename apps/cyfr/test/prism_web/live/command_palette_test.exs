@@ -121,13 +121,13 @@ defmodule PrismWeb.CommandPaletteTest do
 
   # A component row as the registry writes one, `inserted_at` naming how new
   # it is.
-  defp component_row!(ctx, name, inserted_at, description \\ nil) do
+  defp component_row!(ctx, name, inserted_at, description \\ nil, type \\ "catalyst") do
     {:ok, _} =
       Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "cmp_#{name}",
         name: name,
         version: "0.1.0",
-        component_type: "catalyst",
+        component_type: type,
         description: description || name,
         tags: "[]",
         digest: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower),
@@ -194,6 +194,36 @@ defmodule PrismWeb.CommandPaletteTest do
     # A reference of another kind finds nothing of this one.
     view |> element("#command-palette input") |> render_keyup(%{"value" => "reagent:local.http"})
     refute has_element?(view, ~s(#command-palette [phx-value-to*="catalyst:local.http"]))
+  end
+
+  test "an installed component's row in Dev mode names an app an app, another kind by its own word",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+
+    at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    component_row!(ctx, "hinted-app", at, nil, "tincture")
+    component_row!(ctx, "hinted-cat", DateTime.add(at, 1))
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "hinted"})
+
+    app = ~s(#command-palette [phx-value-to="/components/tincture:local.hinted-app:0.1.0"])
+    cat = ~s(#command-palette [phx-value-to="/components/catalyst:local.hinted-cat:0.1.0"])
+    assert view |> element(app) |> render() =~ ~r{>\s*app\s*</span>}
+    refute view |> element(app) |> render() =~ ~r{>\s*tincture\s*</span>}
+    assert view |> element(cat) |> render() =~ ~r{>\s*catalyst\s*</span>}
   end
 
   test "a desktop is offered as the chooser of desktops, by the shell's key", %{conn: conn} do

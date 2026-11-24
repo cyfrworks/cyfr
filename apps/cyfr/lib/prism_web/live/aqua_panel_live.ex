@@ -359,9 +359,9 @@ defmodule PrismWeb.AquaPanelLive do
   # threads read under the panel's context; a read that fails keeps what
   # was shown.
   defp read_works(socket) do
-    case Aqua.threads(socket.assigns.context, title: nil) do
-      {:ok, threads} ->
-        assign(socket, :works, for(%{kind: :workspace, archived: false} = t <- threads, do: t))
+    case Aqua.threads(socket.assigns.context, kind: :workspace, archived: false) do
+      {:ok, works} ->
+        assign(socket, :works, works)
 
       {:error, _unread} ->
         socket
@@ -994,6 +994,7 @@ defmodule PrismWeb.AquaPanelLive do
             <input
               type="search"
               name="title"
+              maxlength="100"
               value={@all.title}
               placeholder="Find a thread by its title"
               aria-label="Find a thread by its title"

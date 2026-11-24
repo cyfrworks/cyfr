@@ -316,7 +316,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           %{
             kind: :component,
             label: ref,
-            hint: comp[:component_type] || "",
+            hint: type_word(comp[:component_type]),
             to: "/components/#{URI.encode(ref)}",
             icon: "cube",
             keywords: ("component " <> ref) |> String.downcase()
@@ -383,6 +383,12 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # See `ExecutionsLive.short/1`: one truncation, in one unit.
   defp short(nil), do: ""
   defp short(s), do: truncate(s, 16)
+
+  # A component's kind as the person reads it: an app is an app; another
+  # kind keeps CYFR's own word for it.
+  defp type_word("tincture"), do: "app"
+  defp type_word(type) when is_binary(type), do: type
+  defp type_word(_none), do: ""
 
   defp kind_label(:nav), do: "Page"
   defp kind_label(:action), do: "Action"

@@ -607,6 +607,39 @@ defmodule PrismWeb.AquaPanelLiveTest do
     |> List.flatten()
   end
 
+  test "a workspace thread not archived stays listed however many newer threads of another kind there are",
+       %{conn: conn, me: me} do
+    finished = workspace!(me, "Older work")
+    _post = finished!(me, finished)
+    active_at!(finished, 10_000)
+
+    # 200 daily threads, each newer than the workspace thread.
+    now = DateTime.utc_now()
+
+    days =
+      for n <- 1..200 do
+        at = DateTime.add(now, -n * 60, :second)
+
+        %{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: me.athanor_id,
+          kind: "daily",
+          day: Date.add(Date.utc_today(), -n),
+          title: Date.to_iso8601(Date.add(Date.utc_today(), -n)),
+          created_by: me.user_id,
+          last_message_at: at,
+          inserted_at: at,
+          updated_at: at
+        }
+      end
+
+    {200, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, days)
+
+    {panel, _html} = open_panel(desktop!(conn))
+
+    assert drawn(panel, "#aqua-panel-works", "aqua-panel-work-") == [finished.id]
+  end
+
   test "the panel lists every workspace thread not archived, the latest activity first, whatever its state or what is read; one opens at its layer",
        %{conn: conn, mine: mine, me: me} do
     going = workspace!(me, "Going")

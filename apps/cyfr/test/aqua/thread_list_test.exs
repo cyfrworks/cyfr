@@ -115,6 +115,27 @@ defmodule Aqua.ThreadListTest do
     assert ids(refreshed) == ids(listed)
   end
 
+  test "a title asked for is read to its first 100 characters, the rest dropped",
+       %{ada: ada} do
+    long = String.duplicate("a", 100)
+    [thread] = workspaces!(ada.actor, [long], 1)
+
+    assert {:ok, [%{id: id}]} = Aqua.threads(ada.ctx, title: long <> String.duplicate("z", 900))
+    assert id == thread.id
+  end
+
+  test "the unarchived workspace threads are asked for as such, before the window",
+       %{ada: ada} do
+    [older] = workspaces!(ada.actor, ["Older work"], 10_000)
+    # 200 daily threads, each newer than it.
+    _newer = for _n <- 1..200, do: {:ok, _} = Arca.Test.Days.thread(ada.actor)
+
+    assert {:ok, [%{id: id, kind: :workspace, archived: false}]} =
+             Aqua.threads(ada.ctx, kind: :workspace, archived: false)
+
+    assert id == older.id
+  end
+
   test "a title is found as a search folds text, in no post's body, past the list's window, " <>
          "a shared thread's too, and another athanor's never",
        %{ada: ada, bob: bob} do

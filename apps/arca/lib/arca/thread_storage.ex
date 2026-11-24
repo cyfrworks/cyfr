@@ -80,8 +80,8 @@ defmodule Arca.ThreadStorage do
   # `page_result`) is none.
   @post_kinds ~w(text error system opening pointer report)
 
-  # The most posts one search answers, and how many rows a search, of
-  # posts or of titles, reads at a time while it looks for them.
+  # The most posts one search answers, and how many rows it reads at a
+  # time while it looks for them.
   @search_max 20
   @search_batch 200
 
@@ -121,12 +121,12 @@ defmodule Arca.ThreadStorage do
   (200 by default), `:kind` (one of `Arca.Schemas.Thread.kinds/0`, or a
   list of them; every kind when absent), `:archived` (`true` for the
   archived ones alone, `false` for the others; both when absent) and
-  `:title`, text a thread's title holds: a plain substring match of the
-  title folded to lower case by `String.downcase/1`, as `search/3` folds
-  a post's, made here over every thread of the athanor before the limit,
-  read a page at a time, so both adapters answer the same threads and no
-  character of the text is a pattern (a daily thread's title is its
-  date). `nil` matches every title.
+  `:title`, text a thread's title holds: a plain substring match made by
+  the store's own query, with its order and limit, over every thread of
+  the athanor, ASCII letters folded to lower case on both sides and every
+  other character matched as itself, so both adapters answer the same
+  threads and no character of the text is a pattern (a daily thread's
+  title is its date). `nil` matches every title.
   """
   @spec list(Prima.Actor.t(), keyword()) :: [map()] | {:error, :no_athanor | :database_error}
   def list(actor, opts \\ [])
@@ -150,51 +150,46 @@ defmodule Arca.ThreadStorage do
           false -> from(c in query, where: is_nil(c.archived_at))
         end
 
-      case Keyword.get(opts, :title) do
-        nil ->
-          from(c in query,
-            order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
-            limit: ^limit
-          )
-          |> QueryHelpers.where_tenant(actor)
-          |> Repo.all()
+      query =
+        case Keyword.get(opts, :title) do
+          nil -> query
+          title when is_binary(title) -> from(c in query, where: ^titled(title))
+        end
 
-        title when is_binary(title) ->
-          actor
-          |> titled(query, String.downcase(title), nil, [])
-          |> Enum.sort_by(&(&1.last_message_at || &1.inserted_at), {:desc, DateTime})
-          |> Enum.take(limit)
-      end
+      from(c in query,
+        order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
+        limit: ^limit
+      )
+      |> QueryHelpers.where_tenant(actor)
+      |> Repo.all()
     end)
     |> Arca.Data.project()
   end
 
   def list(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
 
-  # Every thread of the athanor `query` reads whose title holds `needle`,
-  # a page at a time below the last id read, by its bytes on both
-  # adapters (`Arca.QueryHelpers.by_bytes/1`), as the cursor's comparison
-  # is.
-  # arca:db-raise-ok inside the caller's rescue.
-  defp titled(actor, query, needle, cursor, found) do
-    page =
-      from(query, order_by: ^[desc: QueryHelpers.by_bytes(:id)], limit: ^@search_batch)
+  # A title holding `text`, matched by the store: ASCII letters folded to
+  # lower case on both sides, by SQLite's `lower/1`, which folds ASCII
+  # alone, and by PostgreSQL's under the "C" collation, which does the
+  # same, and `%`, `_` and `\\` escaped so no character is a pattern.
+  defp titled(text) do
+    pattern =
+      text
+      |> String.downcase(:ascii)
+      |> String.replace("\\", "\\\\")
+      |> String.replace("%", "\\%")
+      |> String.replace("_", "\\_")
 
-    page =
-      if cursor,
-        do: from(page, where: ^QueryHelpers.bytes_before(:id, cursor)),
-        else: page
+    title_like("%" <> pattern <> "%")
+  end
 
-    rows = page |> QueryHelpers.where_tenant(actor) |> Repo.all()
-    found = found ++ Enum.filter(rows, &String.contains?(String.downcase(&1.title || ""), needle))
-
-    case List.last(rows) do
-      %Thread{id: id} when length(rows) == @search_batch ->
-        titled(actor, query, needle, id, found)
-
-      _last_page ->
-        found
-    end
+  if Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) ==
+       Ecto.Adapters.Postgres do
+    defp title_like(pattern),
+      do: dynamic([c], fragment(~s|lower(? COLLATE "C") LIKE ? ESCAPE '\\'|, c.title, ^pattern))
+  else
+    defp title_like(pattern),
+      do: dynamic([c], fragment("lower(?) LIKE ? ESCAPE '\\'", c.title, ^pattern))
   end
 
   @doc "One thread of the context's athanor."

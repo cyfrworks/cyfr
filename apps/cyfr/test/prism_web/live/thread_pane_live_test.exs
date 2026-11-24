@@ -3067,6 +3067,40 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    test "a request reads the outcome its stored resolver holds, whichever reply was announced",
+         %{conn: conn, athanor: athanor, here: here, thread: room} do
+      {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
+      first = request!(here, room, "explorer", "Build the site")
+      second = request!(here, room, "explorer", "And test it")
+      live = open_pane(conn, athanor, room)
+      assert has_element?(live, ~s([id$="-m-#{second.id}"]), "You asked explorer · pending")
+
+      # A failed reply resolves the second request, its announcement lost:
+      # written by the store alone, which broadcasts nothing.
+      {:ok, _failed} =
+        Arca.TurnStorage.accept_message(Sanctum.Context.actor(here), room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "explorer",
+            addressee: "person",
+            reply_to: second.id,
+            outcome: "failed",
+            content: "It broke",
+            payload: %{"from_thread" => child.id, "answers" => [second.id]}
+          },
+          answers: [second.id]
+        })
+
+      # A later successful reply names it too, and is announced.
+      _done = reply!(here, room, first, child, "Built it", [second.id])
+      render(live)
+
+      assert has_element?(live, ~s([id$="-m-#{first.id}"]), "You asked explorer · done")
+      assert has_element?(live, ~s([id$="-m-#{second.id}"]), "You asked explorer · failed")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "a request's card opens its member's thread", %{conn: conn, here: here, thread: room} do
       {:ok, child} = Threads.crew_thread(Sanctum.Context.actor(here), room.id, "explorer")
       request = request!(here, room, "explorer", "Build the site")
