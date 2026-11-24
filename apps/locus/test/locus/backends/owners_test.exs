@@ -1847,8 +1847,12 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{home_id: @home, state: :empty}} = control(owners, 1, reset)
       assert File.ls!(Path.join(ctx.root, @home)) == ["tmp"]
 
-      assert {:ok, %{resumed: false}} =
+      assert {:ok, %{resumed: false, session: reopened}} =
                open(owners, "a", {1, 1}, "kept", home_id: @home, key: "after")
+
+      # Open acknowledges the launch before the shell writes into the home.
+      pid = session_pid(owners, "a", {1, 1}, reopened)
+      assert %{lines: [%{text: "filled"}]} = Backend.recv(pid, 0, 5_000)
     end
 
     test "a measure that fails ends the home's sessions and refuses opens until a reset", ctx do
