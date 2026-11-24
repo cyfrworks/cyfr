@@ -149,10 +149,10 @@
 //                            keeps to set on its store first, which goes
 //                            on to that CYFR's pages by the device's
 //                            (Try with words)
-//   back {notices, retry}    show the chooser, loaded afresh, in place of
-//                            the content as it stands, in its store where
-//                            that is memory's, with no route; with retry,
-//                            offering that CYFR again
+//   back {notices, retry}    show the chooser, a document of main's load,
+//                            in the content window as it stands where its
+//                            store is memory's, the route taken off it
+//                            first; with retry, offering that CYFR again
 //   end {why}                kill cyfr and tell the person (never on the
 //                            box's screen)
 //   quit                     once forgotten, or the wait for it is up,

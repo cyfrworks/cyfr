@@ -1418,7 +1418,7 @@ function fails(w, url, code = -106, isMainFrame = true) {
   w.webContents.emit("did-fail-load", {}, code, "", url, isMainFrame)
 }
 
-test("a CYFR's page that did not load gives way to the chooser, in a view of its own: in a fresh store of memory on the passkey road, in the same store of memory on the six-word road", async () => {
+test("a CYFR's page that did not load gives way to the chooser: in its own view and session off the passkey road, in one of memory on it", async () => {
   for (const road of [true, false]) {
     const said = await signedIn(road)
     const page = content()
@@ -1435,8 +1435,8 @@ test("a CYFR's page that did not load gives way to the chooser, in a view of its
       assert.doesNotMatch(chooser.webContents.session.partition, /^persist:/)
       assert.equal(page.webContents.url, HOME + "/threads", "nothing loaded into the CYFR's view")
     } else {
-      assert.ok(page.destroyed && chooser !== page, "a view of its own, whose document reads main's words")
-      assert.equal(chooser.webContents.session, ses, "the same session")
+      assert.ok(chooser === page && !page.destroyed && world.windows.length === windows, "the same window")
+      assert.equal(page.webContents.session, ses, "the same session")
     }
     assert.ok(!child.heard.some((m) => m.type === "lock"))
     assert.ok(!said.some((line) => line.startsWith("locked:")))
@@ -1760,8 +1760,8 @@ test("a chooser shown while main keeps to a CYFR on a route has that route befor
 })
 
 // A store of memory that loaded a routed CYFR's pages, on the six-word
-// road, shows the chooser again with the route taken off first: the
-// chooser and what it goes on to next are not that CYFR's.
+// road, shows the chooser again, in the same view, with the route taken
+// off first: the chooser and what it goes on to next are not that CYFR's.
 test("on the six-word road a CYFR's page that did not load gives way to the chooser only once its store's route is off", async () => {
   const ROUTE = {mode: "fixed_servers", proxyRules: "socks5://127.0.0.1:1055"}
   await started(false)
@@ -1783,14 +1783,14 @@ test("on the six-word road a CYFR's page that did not load gives way to the choo
   await turns()
   const chooser = content()
   assert.equal(chooser.webContents.url, CHOOSER_AT + "road=words&notice=unanswered")
-  assert.equal(chooser.webContents.session.partition, store)
+  assert.ok(chooser === page && !page.destroyed, "the same view, whose tab holds the device's unlocking")
 })
 
 // main's words reach the chooser by main's own load of a document: a load
-// into the chooser already showing that changed its fragment alone would
-// leave its page as it was (Electron 45.4.1: no new document, and the
-// chooser's script reads its address once).
-test("on the six-word road a proposal whose route cannot be set is said in a chooser document of its own", async () => {
+// into the chooser already showing that changes its fragment alone leaves
+// its page as it was (Electron 45.4.1: no new document, and the chooser's
+// script reads its address once), so main reloads it, in the same view.
+test("on the six-word road a proposal whose route cannot be set is said in a chooser document of main's load", async () => {
   await started(false)
   const before = content()
   // The chooser takes its fragment off its address as it starts.
@@ -1799,9 +1799,10 @@ test("on the six-word road a proposal whose route cannot be set is said in a cho
   child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
   await turns()
   const chooser = content()
-  assert.ok(chooser !== before && before.destroyed, "a document of its own")
-  assert.equal(chooser.webContents.url, CHOOSER_AT + "road=words&notice=unrouted&retry=" + encodeURIComponent(HOME))
-  assert.equal(chooser.webContents.session, before.webContents.session, "the same store of memory")
+  assert.ok(chooser === before && !before.destroyed, "the same view, whose tab holds the device's unlocking")
+  const notice = CHOOSER_AT + "road=words&notice=unrouted&retry=" + encodeURIComponent(HOME)
+  assert.equal(chooser.webContents.url, notice)
+  assert.deepEqual(chooser.webContents.reloaded, [notice], "a document of its own, by main's reload")
   let headers
   chooser.webContents.session.sending({id: 1, method: "POST", url: "http://127.0.0.1:7340/bootstrap/state", webContents: chooser.webContents,
     frame: chooser.webContents.mainFrame, requestHeaders: {}}, (answer) => { headers = answer.requestHeaders })

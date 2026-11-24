@@ -685,14 +685,14 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   }
 
   // The chooser shown in place of a CYFR's page that did not load, or of
-  // a proposal whose route could not be set, loaded afresh in a view of
-  // its own: main's load into a chooser already showing that changes only
-  // its fragment makes no new document, and the page would not read
-  // main's words. In the content's store where that is memory's, with any
-  // route taken off before the chooser loads (where that cannot be done,
-  // in a fresh store), and otherwise in a fresh one, so no kept storage
-  // holds the chooser. Each step only while that content still stands: a
-  // lock or a departure in between closed it.
+  // a proposal whose route could not be set, as a document of main's own
+  // load. Where the content's store is memory's, in the content's view
+  // as it stands, whose tab holds the device's unlocking (its page's
+  // sessionStorage), with any route taken off the store before the
+  // chooser loads (where that cannot be done, in a fresh store and view);
+  // otherwise in a view of its own, so no kept storage holds the chooser.
+  // Each step only while that content still stands: a lock or a departure
+  // in between closed it.
   function back(address) {
     const v = content
     const ses = contentKept ? null : contentSession
@@ -701,7 +701,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     setImmediate(standing(() => {
       if (!ses) return openContent(address, freshSession())
-      routedThen(ses, "", standing(() => openContent(address, ses)), standing(() => openContent(address, freshSession())))
+      routedThen(ses, "", standing(() => {
+        // Into a chooser already showing, a load that changes only its
+        // fragment makes no new document, and the page would not read
+        // main's words: that load is then reloaded, which makes one.
+        const inPage = atChooser(v.webContents.getURL())
+        v.webContents.loadURL(address).then(standing(() => {
+          if (inPage) v.webContents.reload()
+        })).catch(() => {})
+      }), standing(() => openContent(address, freshSession())))
     }))
   }
 
