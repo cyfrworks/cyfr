@@ -16,17 +16,20 @@ const labelNetwork = "com.docker.compose.network"
 
 // heldBy answers, for a start of c that failed, that this computer already
 // holds another CYFR's stack, running or stopped, or "" when Docker shows
-// none. The compose file fixes its networks' subnets (and its container
-// names), so one computer holds one CYFR: a network of another compose
-// project on a subnet c fixes is that CYFR's, which cyfr down keeps
-// (doStop). Docker is asked what holds the subnets; its error's words are
-// never read, and any call that fails answers "".
+// none. The compose file fixes some of its networks' subnets (and its
+// container names), so one computer holds one CYFR, and cyfr down keeps
+// those networks (doStop). Only a CYFR's stack has every one of them: a
+// project is taken for one only where Docker holds, under that project,
+// each network c fixes a subnet for, by the same compose name and on the
+// same subnets. A network that merely holds an address range c fixes is
+// no CYFR, and the start keeps its own sentence. Docker is asked; its
+// error's words are never read, and any call that fails answers "".
 func (e *Engine) heldBy(ctx context.Context, c config) string {
-	var fixed []*net.IPNet
-	for _, n := range c.Networks {
+	fixed := map[string][]string{}
+	for name, n := range c.Networks {
 		for _, p := range n.Ipam.Config {
 			if _, s, err := net.ParseCIDR(p.Subnet); err == nil {
-				fixed = append(fixed, s)
+				fixed[name] = append(fixed[name], s.String())
 			}
 		}
 	}
@@ -42,7 +45,8 @@ func (e *Engine) heldBy(ctx context.Context, c config) string {
 	if err != nil {
 		return ""
 	}
-	var other []string
+	// Each other project's networks by compose name, with their subnets.
+	held := map[string]map[string][]string{}
 	for _, line := range strings.Split(string(res.Stdout), "\n") {
 		var n struct {
 			Labels map[string]string
@@ -51,14 +55,28 @@ func (e *Engine) heldBy(ctx context.Context, c config) string {
 		if json.Unmarshal([]byte(line), &n) != nil {
 			continue
 		}
-		project := n.Labels[labelProject]
-		if project == "" || project == e.project || slices.Contains(other, project) {
+		project, name := n.Labels[labelProject], n.Labels[labelNetwork]
+		if project == "" || project == e.project || name == "" {
 			continue
 		}
-		if slices.ContainsFunc(n.IPAM.Config, func(p struct{ Subnet string }) bool {
-			_, s, err := net.ParseCIDR(p.Subnet)
-			return err == nil && slices.ContainsFunc(fixed, func(f *net.IPNet) bool { return f.Contains(s.IP) || s.Contains(f.IP) })
-		}) {
+		if held[project] == nil {
+			held[project] = map[string][]string{}
+		}
+		for _, p := range n.IPAM.Config {
+			if _, s, err := net.ParseCIDR(p.Subnet); err == nil {
+				held[project][name] = append(held[project][name], s.String())
+			}
+		}
+	}
+	var other []string
+	for project, networks := range held {
+		cyfr := true
+		for name, subnets := range fixed {
+			for _, s := range subnets {
+				cyfr = cyfr && slices.Contains(networks[name], s)
+			}
+		}
+		if cyfr {
 			other = append(other, project)
 		}
 	}

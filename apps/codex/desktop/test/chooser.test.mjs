@@ -13,7 +13,7 @@ import {readFileSync} from "node:fs"
 import {test} from "node:test"
 import vm from "node:vm"
 
-import {initial, step} from "../src/states.js"
+import {UNROUTED, initial, step} from "../src/states.js"
 
 const asset = (name) => readFileSync(new URL(`../../internal/desktop/assets/${name}`, import.meta.url), "utf8")
 const script = asset("chooser.js")
@@ -138,6 +138,7 @@ test("the passkey's way on goes nowhere when its press is not answered with a wa
 })
 
 const UNANSWERED = `The CYFR at ${HOME} did not answer.`
+const UNROUTED_WORDS = `The app could not reach the CYFR at ${HOME} through this computer's tailnet, so it loaded nothing of it.`
 
 test("a chooser told that the CYFR did not answer names it and offers it again", async () => {
   const keys = await chooser("", OPEN, OPEN, ROAD + "&notice=unanswered")
@@ -228,6 +229,20 @@ test("a CYFR selected last that does not open says why, and Try again presses it
     assert.equal($("reopen").hidden, true, `${hash}: the person's Connect hides Try again`)
     assert.deepEqual(went.asked.at(-1), ["/bootstrap/connect", {address: HOME}], hash)
   }
+})
+
+// A proposal whose route main could not set comes back as main's word,
+// naming that CYFR: the chooser says why and offers it again, pressing
+// nothing by itself, the CYFR selected last included.
+test("a CYFR whose route could not be set is said, and Try again presses it", async () => {
+  const OTHER = "https://other.example"
+  const {$, went} = await chooser("", {cyfr: OTHER, resume: OTHER}, OPEN, `#road=words&notice=unrouted&retry=${encodeURIComponent(HOME)}`)
+  assert.equal($("notice").textContent, UNROUTED_WORDS)
+  assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], "Connect and Try again")
+  assert.deepEqual(went.asked, [], "nothing by itself")
+  $("reopen").onclick()
+  await settled()
+  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]])
 })
 
 test("a Connect the person makes on the passkey road leaves the opening to main", async () => {
@@ -324,7 +339,8 @@ const NOTICES = {
   unleft: {words: UNLEFT, observed: [{type: "navigate", window: "rail", url: LOOPBACK + "/rail/select?cyfr=https%3A%2F%2Fbob.example",
     target: "top", asker: "top", showing: LOOPBACK + "/rail/", by: LOOPBACK + "/rail/"}, {type: "late", id: 1}, ready]},
   unforgotten: {words: UNFORGOTTEN, observed: [locked, {type: "forgot", cleared: false}]},
-  unanswered: {words: UNANSWERED, observed: [{type: "load-failed", code: -106, url: HOME + "/threads"}]}
+  unanswered: {words: UNANSWERED, observed: [{type: "load-failed", code: -106, url: HOME + "/threads"}]},
+  unrouted: {words: UNROUTED_WORDS, observed: [{type: "load-failed", code: UNROUTED, url: HOME + "/"}]}
 }
 
 // Every way a load of the chooser can begin that is not main's, as main is

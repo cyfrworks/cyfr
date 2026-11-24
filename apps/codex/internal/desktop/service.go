@@ -607,16 +607,26 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	if a, open := s.again(run, epoch); open {
 		return a
 	}
+	// One reading of the list decides what a press opens: a row's own,
+	// which refuses one the list no longer keeps before any server is
+	// asked, or, for an address typed, the list's as it is read here.
 	from := shell.Typed
+	var rec shell.ClientRecord
 	if req.Kept {
-		row, a, unkept := s.row(home)
+		row, kept, a, unkept := s.row(home)
 		if unkept {
 			return a
 		}
-		from = row
+		from, rec = row, kept
+	} else {
+		list, err := s.Homes.Load()
+		if err != nil {
+			return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
+		}
+		rec = list.Homes[home]
 	}
-	if a, folder := s.folderRow(run, epoch, home, from); folder {
-		return a
+	if rec.Project != "" {
+		return s.folderRow(run, epoch, home, rec.Project, from)
 	}
 	if !ok {
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
@@ -703,15 +713,15 @@ func (s *Service) again(run context.Context, epoch uint64) (answer, bool) {
 // from (shell.Row), or its answer when the list holds it no more, or holds
 // it being forgotten: a row the rail showed before its Forget ended,
 // pressed after, adds nothing. Connect is the one way to add a CYFR.
-func (s *Service) row(home string) (shell.Row, answer, bool) {
-	row, err := s.Homes.Row(home)
+func (s *Service) row(home string) (shell.Row, shell.ClientRecord, answer, bool) {
+	row, rec, err := s.Homes.Row(home)
 	switch {
 	case shell.IsUnkept(err):
-		return row, answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
+		return row, rec, answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
 	case err != nil:
-		return row, answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}, true
+		return row, rec, answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}, true
 	}
-	return row, answer{}, false
+	return row, rec, answer{}, false
 }
 
 // live is whether no lock came since epoch.
@@ -721,35 +731,27 @@ func (s *Service) live(epoch uint64) bool {
 	return s.epoch == epoch
 }
 
-// folderRow opens the CYFR of the folder the list keeps at home, whatever
-// press, retry or start asked: that folder alone is read, and opened only
-// while its reading still names home. A folder that cannot be read, or
-// names another address now, is said; nothing starts Docker, and nothing
-// connects to home as a CYFR elsewhere. false where the list keeps no
-// folder at home.
-func (s *Service) folderRow(run context.Context, epoch uint64, home string, from shell.Row) (answer, bool) {
-	list, err := s.Homes.Load()
-	if err != nil {
-		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}, true
-	}
-	c, held := list.Homes[home]
-	if !held || c.Project == "" {
-		return answer{}, false
-	}
+// folderRow opens the CYFR of the folder project, which the press's one
+// reading of the list keeps at home (connect), whatever press, retry or
+// start asked: that folder alone is read, and opened only while its
+// reading still names home. A folder that cannot be read, or names another
+// address now, is said; nothing starts Docker, and nothing connects to
+// home as a CYFR elsewhere.
+func (s *Service) folderRow(run context.Context, epoch uint64, home, project string, from shell.Row) answer {
 	if s.Local == nil {
-		return answer{Error: "This app reads no folder on this computer, so it cannot open the CYFR in " + c.Project + "."}, true
+		return answer{Error: "This app reads no folder on this computer, so it cannot open the CYFR in " + project + "."}
 	}
-	l, err := s.Local(c.Project)
+	l, err := s.Local(project)
 	// This holds the reading until the service takes it as it opens.
 	defer l.end()
 	switch {
 	case err != nil:
-		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)}, true
+		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", project, err)}
 	case l.Shell.Address != home:
 		return answer{Error: fmt.Sprintf("The CYFR in %s is at %s now, not %s. Connect to %s to add it.",
-			c.Project, l.Shell.Address, home, l.Shell.Address)}, true
+			project, l.Shell.Address, home, l.Shell.Address)}
 	}
-	return s.openLocal(run, epoch, c.Project, &l, from), true
+	return s.openLocal(run, epoch, project, &l, from)
 }
 
 // openLocal selects the CYFR l, set up in project on this computer, with
