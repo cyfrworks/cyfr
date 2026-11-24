@@ -3,36 +3,36 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // client over the inherited socket (fd 3): one JSON object per line, each
-// carrying `"v": 3` and a `type`.
+// carrying `"v": 4` and a `type`.
 //
 // Client to keeper:
 //
-//	{"v":3,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":3,"type":"drop","place":…}
-//	{"v":3,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":3,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
-//	{"v":3,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":3,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":3,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":3,"type":"measure","id":…,"place":…}
-//	{"v":3,"type":"pool","id":…,"pool":…}
-//	{"v":3,"type":"home_make","id":…,"path":…,"uid":…}
-//	{"v":3,"type":"home_measure","id":…,"path":…,"uid":…}
-//	{"v":3,"type":"home_retire","id":…,"path":…,"uid":…}
+//	{"v":4,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":4,"type":"drop","place":…}
+//	{"v":4,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":4,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
+//	{"v":4,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":4,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":4,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":4,"type":"measure","id":…,"place":…}
+//	{"v":4,"type":"pool","id":…,"pool":…}
+//	{"v":4,"type":"home_make","id":…,"path":…,"uid":…}
+//	{"v":4,"type":"home_measure","id":…,"path":…,"uid":…}
+//	{"v":4,"type":"home_retire","id":…,"path":…,"uid":…}
 //
 // Keeper to client:
 //
-//	{"v":3,"type":"placed","id":…}
-//	{"v":3,"type":"assigned","id":…}
-//	{"v":3,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":3,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
-//	{"v":3,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":3,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
-//	{"v":3,"type":"released","spawn_id":…}
-//	{"v":3,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":3,"type":"home_made","id":…}
-//	{"v":3,"type":"home_measured","id":…,"bytes":…}
-//	{"v":3,"type":"home_retired","id":…}
+//	{"v":4,"type":"placed","id":…}
+//	{"v":4,"type":"assigned","id":…}
+//	{"v":4,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":4,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":4,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":4,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":4,"type":"released","spawn_id":…}
+//	{"v":4,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":4,"type":"home_made","id":…}
+//	{"v":4,"type":"home_measured","id":…,"bytes":…}
+//	{"v":4,"type":"home_retired","id":…}
 //
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
@@ -126,15 +126,18 @@
 // serve such a spawn; a long-lived command is ended only by a `release`, by
 // its own exit or by the loss of the client, whichever pool it came from.
 //
-// A spawn's `isolation` is IsolationNetns or absent, and is present exactly
-// when its pool is isolated (`--pool <name>:<first>-<last>:netns` on the
-// keeper's command line): the keeper refuses the one without the other as
-// CodeBadRequest. An isolated spawn's command runs in a user and network
-// namespace cloned for it, whose loopback stays down and whose only
-// mapping is the pooled uid and gid to themselves, so the command keeps
-// its uid, its home and its cgroup and has no route to anything: a
-// descriptor it inherited is its only way out. It holds no capability in
-// any of the five sets and runs with no_new_privs.
+// Every spawn's command runs in a space of its own: a user, network and
+// IPC namespace cloned for it, whose only mapping is its uid and gid to
+// themselves, so the command keeps its uid, its home and its cgroup, holds
+// no capability in any of the five sets, runs with no_new_privs under a
+// filter that refuses every namespace and mount, and shares no abstract
+// socket or System V object with anything else. What the space reaches is
+// its pool's (`--pool <name>:<first>-<last>:<reach>` on the keeper's command
+// line, package pool): a relay pool's space has its loopback down and no
+// route, so a descriptor it inherited is its only way out; a routed pool's
+// space has its own loopback, which no other space shares, and the one
+// route its island's guard makes for it (package guard), whose resolver
+// answers at 127.0.0.11:53 in the space itself.
 //
 // A spawn's `home_mode` is HomeScratch, today's home scrubbed at
 // retirement, or HomeKept, a home that outlives the spawn: absent reads as
@@ -163,22 +166,23 @@
 // A spawn's `hosts` names the only hosts its command may reach beyond
 // the resolver and the deployment's private hosts: 1..MaxHosts distinct
 // exact hostnames (ValidHost: lowercase, no wildcard, scheme, port or
-// trailing dot, and no address literal), never on an isolated spawn, which
-// reaches nothing.
-// Absent keeps the island's public-hosts rule. A keeper given `--guard`
-// resolves the names at the spawn, and only then, and has the island's
-// egress guard admit those addresses for the spawn's uid and refuse it
-// every other public one (package guard); a spawn without `hosts` has the
-// guard clear the uid back to the island's rule. Either is confirmed
-// before the command starts: a name that resolves to no address refuses
-// the spawn as CodeHostsUnresolved, and a guard that does not confirm, or
-// a keeper given no `--guard` for a spawn naming hosts, as
-// CodeGuardUnavailable; no such spawn is ever started open. A guard
-// confirms only once its greeting names the keeper's own network
+// trailing dot, and no address literal). Absent keeps the island's
+// public-hosts rule. A relay pool's spawn, which reaches nothing, is refused
+// one as CodeBadRequest. The keeper resolves the names at the spawn, and only
+// then, and has the guard make the space's route with exactly those
+// addresses and no other public one; a spawn without `hosts` has a route of
+// the island's rule. Each space has its own route, so the hosts of one
+// session never change another's. The route is confirmed before the
+// command starts: a name that resolves to no address refuses the spawn as
+// CodeHostsUnresolved, and a guard that does not confirm the route as
+// CodeGuardUnavailable; no routed spawn is ever started without its route.
+// A guard confirms only once its greeting names the keeper's own network
 // namespace: one that names another (a guard restarted into a new
 // namespace while the keeper's still runs in the old) confirms nothing,
-// and every spawn of a keeper given `--guard` is refused until the service
-// is recreated behind it.
+// and every routed spawn is refused until the service is recreated behind
+// it. When the keeper's connection to the guard ends, the guard having
+// died or its answer failed, the keeper kills every routed spawn before it
+// dials again, and those spawns end as any killed spawn does.
 //
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
@@ -199,7 +203,7 @@ import (
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 3
+const Version = 4
 
 // A place's kinds: a runner at rest and one given a run, a build, and a
 // program's and a terminal's session.
@@ -225,10 +229,6 @@ const (
 	// do not say which.
 	MemoryEither = "either"
 )
-
-// IsolationNetns is the one value a spawn's `isolation` takes: a user and
-// network namespace of the spawn's own.
-const IsolationNetns = "netns"
 
 // A spawn's `home_mode` values.
 const (
@@ -522,10 +522,7 @@ type Request struct {
 	// CPUQuota is required for a spawn and absent for other requests.
 	CPUQuota *uint64 `json:"cpu_quota,omitempty"`
 	Control  bool    `json:"control,omitempty"`
-	// Isolation is IsolationNetns for a spawn of an isolated pool and
-	// empty for any other.
-	Isolation string  `json:"isolation,omitempty"`
-	Attach    *Attach `json:"attach,omitempty"`
+	Attach   *Attach `json:"attach,omitempty"`
 	// Place names a spawn's and a measure's place, and the place a drop or
 	// an assign acts on.
 	Place string `json:"place,omitempty"`
@@ -739,8 +736,8 @@ func validateWhose(req *Request) error {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "isolation", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
-		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, isolation, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
+	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
+		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -769,9 +766,6 @@ func validateSpawn(req *Request) error {
 	if q := *req.CPUQuota; q < MinCPUQuota || q > MaxCPUQuota {
 		return fmt.Errorf("cpu_quota must be within %d..%d", uint64(MinCPUQuota), uint64(MaxCPUQuota))
 	}
-	if req.present["isolation"] && req.Isolation != IsolationNetns {
-		return errors.New("isolation must be " + IsolationNetns)
-	}
 	if req.Attach == nil {
 		return errors.New("attach is required")
 	}
@@ -790,13 +784,10 @@ func validateSpawn(req *Request) error {
 }
 
 // validateHosts checks a spawn's hosts: when present, 1..MaxHosts distinct
-// exact hostnames, on a spawn that is not isolated.
+// exact hostnames.
 func validateHosts(req *Request) error {
 	if !req.present["hosts"] {
 		return nil
-	}
-	if req.present["isolation"] {
-		return errors.New("an isolated spawn reaches nothing: it takes no hosts")
 	}
 	if len(req.Hosts) == 0 || len(req.Hosts) > MaxHosts {
 		return fmt.Errorf("hosts must hold 1..%d hostnames", MaxHosts)

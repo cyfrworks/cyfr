@@ -189,18 +189,22 @@ class ExecAnswering:
         self.users.append(user)
         return subprocess.CompletedProcess([], self.status, self.stdout, "" if self.status == 0 else "daemon error")
 
+    def observe(self, script):
+        self.users.append("observer")
+        return subprocess.CompletedProcess([], self.status, self.stdout, "" if self.status == 0 else "daemon error")
+
 
 class BackendEnviron(unittest.TestCase):
-    """A backend's environment is read from a command that exits 0, run as the backend's own uid: a failed read is no answer."""
+    """A backend's environment is read from a command that exits 0, run by the privileged observer: a failed read is no answer."""
 
     def test_a_failed_read_is_no_answer(self):
         with self.assertRaises(SystemExit):
             harness.backend_environ(ExecAnswering(1, ""), 4242, 30001)
 
-    def test_the_environment_that_was_read_is_the_control_run_as_the_backend(self):
+    def test_the_environment_that_was_read_is_the_observers(self):
         observer = ExecAnswering(0, "PROBE_SECRET=x\nLOG_LEVEL=info\n")
         self.assertEqual(harness.backend_environ(observer, 4242, 30001), "PROBE_SECRET=x\nLOG_LEVEL=info\n")
-        self.assertEqual(observer.users, ["30001"])
+        self.assertEqual(observer.users, ["observer"])
 
 
 class ImageUserName(unittest.TestCase):

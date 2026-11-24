@@ -61,6 +61,10 @@ func TestMain(m *testing.M) {
 			os.Exit(mapped(os.Args[2:]))
 		case "dial":
 			os.Exit(dial(os.Args[2:]))
+		case "ask":
+			os.Exit(ask(os.Args[2]))
+		case "own":
+			os.Exit(own(os.Args[2:]))
 		case "fill":
 			os.Exit(fill())
 		}
@@ -80,6 +84,60 @@ func dial(addresses []string) int {
 		conn.Close()
 		fmt.Printf("dial %s: ok\n", address)
 	}
+	return 0
+}
+
+// ask sends one datagram to address and prints `ask <address>: <answer>`
+// or the error.
+func ask(address string) int {
+	conn, err := net.DialTimeout("udp", address, 2*time.Second)
+	if err == nil {
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		_, err = conn.Write([]byte("q"))
+	}
+	buf := make([]byte, 512)
+	n := 0
+	if err == nil {
+		n, err = conn.Read(buf)
+	}
+	if err != nil {
+		fmt.Printf("ask %s: %v\n", address, err)
+		return 0
+	}
+	fmt.Printf("ask %s: %s\n", address, buf[:n])
+	return 0
+}
+
+// own listens on 127.0.0.1:<port>, answering each connection with the word
+// it is given, keeps the listener for the seconds it is told to, and
+// prints `own <port>: <what a connection to that port read>` first.
+func own(args []string) int {
+	ln, err := net.Listen("tcp", "127.0.0.1:"+args[0])
+	if err != nil {
+		fmt.Printf("own %s: %v\n", args[0], err)
+		return 0
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte(args[1]))
+			c.Close()
+		}
+	}()
+	c, err := net.DialTimeout("tcp", "127.0.0.1:"+args[0], 2*time.Second)
+	if err != nil {
+		fmt.Printf("own %s: %v\n", args[0], err)
+		return 0
+	}
+	got, _ := io.ReadAll(c)
+	c.Close()
+	fmt.Printf("own %s: %s\n", args[0], got)
+	seconds, _ := strconv.Atoi(args[2])
+	time.Sleep(time.Duration(seconds) * time.Second) // sleep-ok: the listener stands while the other space binds the port
 	return 0
 }
 
@@ -144,14 +202,27 @@ type keeper struct {
 	attach  string
 	homes   string
 	stop    chan struct{}
-	// isolated says the runner pool is isolated, and every spawn asks for it.
-	isolated bool
+	// guard is a routed keeper's stand-in guard, nil for a relay keeper.
+	guard *fakeRouteGuard
 }
 
-func newKeeper(t *testing.T) *keeper { return newKeeperOf(t, false) }
+// newKeeper is a keeper whose runner pool's spaces reach nothing but their
+// relays.
+func newKeeper(t *testing.T) *keeper { return newKeeperOf(t, pool.ReachRelay) }
 
-// newKeeperOf is newKeeper with its runner pool isolated or not.
-func newKeeperOf(t *testing.T, isolated bool) *keeper {
+// routedKeeper is a bounded keeper whose runner pool is routed, behind a
+// stand-in guard that admits every route (fakeRouteGuard).
+func routedKeeper(t *testing.T) *keeper {
+	t.Helper()
+	return newKeeperOf(t, pool.ReachRouted).withMemory(t)
+}
+
+// newKeeperOf is newKeeper with its runner pool's spaces of the given
+// reach, on a host that gives a spawn its space as the keeper's start-time
+// probe proves; elsewhere the test is skipped, naming the probe's refusal.
+// The test's supplementary groups are cleared while it runs, as serve.Main
+// clears the keeper's.
+func newKeeperOf(t *testing.T, reach string) *keeper {
 	t.Helper()
 	if os.Getuid() != 0 {
 		t.Skip("starting processes under pooled uids needs root")
@@ -224,7 +295,7 @@ func newKeeperOf(t *testing.T, isolated bool) *keeper {
 	theirs := os.NewFile(uintptr(fds[1]), "client-channel")
 	t.Cleanup(func() { theirs.Close() })
 
-	spec := pool.Spec{Name: "runner", First: testPoolFirst, Last: testPoolLast, Isolated: isolated}
+	spec := pool.Spec{Name: "runner", First: testPoolFirst, Last: testPoolLast, Reach: reach}
 	accounts := map[int]Account{}
 	for uid := spec.First; uid <= spec.Last; uid++ {
 		accounts[uid] = Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
@@ -245,7 +316,26 @@ func newKeeperOf(t *testing.T, isolated bool) *keeper {
 		keptOps:   map[int]*sync.Mutex{},
 		channel:   os.NewFile(uintptr(fds[0]), "channel"),
 	}
-	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), isolated: isolated}
+	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{})}
+	// The keeper's own end would end the test binary: a test that expects
+	// it sets its own.
+	s.exit = func(code int) { t.Errorf("the keeper ended %d", code) }
+	if reach == pool.ReachRouted {
+		k.guard = &fakeRouteGuard{conn: 1}
+		s.guard = k.guard
+		s.cfg.Guard = "/run/test/guard.sock"
+	}
+	groups, err := syscall.Getgroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Setgroups([]int{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Setgroups(groups) })
+	if err := probeSpaces(s.self, s.cfg, s.accounts); err != nil {
+		t.Skipf("this host does not give a spawn its space: %v", err)
+	}
 
 	sigchld := make(chan os.Signal, 1)
 	signal.Notify(sigchld, unix.SIGCHLD)
@@ -331,9 +421,6 @@ func spawnRequest(t *testing.T, attach, id, script string, env map[string]string
 func (k *keeper) spawnBounded(t *testing.T, id, script string, env map[string]string, control bool, memoryBytes uint64) (string, int, *relayConn) {
 	t.Helper()
 	req := spawnRequest(t, k.attach, id, script, env, control, memoryBytes)
-	if k.isolated {
-		req.Isolation = protocol.IsolationNetns
-	}
 	k.handleSpawn(t, req)
 
 	spawned := k.reply(t)
@@ -374,7 +461,7 @@ func parsed(t *testing.T, line string) *protocol.Request {
 // place has the keeper hold a place of id for kind, and answers its reply.
 func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
 	t.Helper()
-	k.s.handle(parsed(t, `{"v":3,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
+	k.s.handle(parsed(t, `{"v":4,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
 	return k.reply(t)
 }
 
@@ -444,7 +531,7 @@ func TestServeRefusesAnUndeclaredKeeperVariableNamingIt(t *testing.T) {
 	}
 	stderr := os.Stderr
 	os.Stderr = logFile
-	code := Main(strings.Fields("--pool build:30001-30016 --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
+	code := Main(strings.Fields("--pool build:30001-30016:relay --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
 	os.Stderr = stderr
 
 	logged, err := os.ReadFile(logFile.Name())
@@ -583,51 +670,6 @@ func assertRetired(t *testing.T, k *keeper, uid int) {
 	}
 }
 
-// A spawn is isolated exactly when its pool is: either mismatch is refused
-// as a bad request before anything is allocated or started.
-func TestIsolationMustMatchThePool(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		isolated  bool
-		isolation string
-	}{
-		{"an isolated pool's spawn without isolation", true, ""},
-		{"another pool's spawn asking for isolation", false, protocol.IsolationNetns},
-	} {
-		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
-		spec := pool.Spec{Name: "runner", First: testPoolFirst, Last: testPoolLast, Isolated: c.isolated}
-		s := &server{
-			cfg:     Config{Pools: []pool.Spec{spec}},
-			log:     logx.NewWriter(io.Discard, "cyfr-locus", false),
-			pools:   map[string]*pool.Pool{spec.Name: pool.New(spec)},
-			spawns:  map[string]*spawn{},
-			places:  map[string]*place{"9": {whose: protocol.Whose{Kind: protocol.KindRun}}},
-			waiters: map[int]*child{},
-			channel: ours,
-		}
-		req := spawnRequest(t, "/run/a.sock", "9", "true", map[string]string{}, true, 64<<20)
-		req.Isolation = c.isolation
-		s.handleSpawn(req)
-		line, _, err := protocol.NewLineReader(theirs).Next()
-		ours.Close()
-		theirs.Close()
-		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		var reply map[string]any
-		if err := json.Unmarshal(line, &reply); err != nil || reply["type"] != protocol.TypeError || reply["code"] != protocol.CodeBadRequest || reply["id"] != "9" {
-			t.Fatalf("%s: answered %s", c.name, line)
-		}
-		if st := s.pools["runner"].Stats(); st.Free != st.Size {
-			t.Fatalf("%s: a uid was allocated: %+v", c.name, st)
-		}
-	}
-}
-
 // A keeper given no --kept-homes refuses every home request as a bad
 // request on the channel, before any helper runs, and a request after them
 // is still handled.
@@ -682,7 +724,7 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := theirs.Write([]byte(`{"v":3,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
+	if _, err := theirs.Write([]byte(`{"v":4,"type":"pool","id":"after","pool":"backends"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	lr := protocol.NewLineReader(theirs)
@@ -739,7 +781,7 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 		channel: ours,
 	}
 	resize := func(spawnID string) *protocol.Request {
-		req, rerr := protocol.ParseRequest([]byte(`{"v":3,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+		req, rerr := protocol.ParseRequest([]byte(`{"v":4,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
 			t.Fatal(rerr.Detail)
 		}
@@ -771,45 +813,29 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 	}
 }
 
-// newIsolatedKeeper is newKeeper with its runner pool isolated, on a host
-// that lets the keeper isolate a spawn as its start-time probe proves;
-// elsewhere the test is skipped, naming the probe's refusal. The test's
-// supplementary groups are cleared while it runs, as serve.Main clears the
-// keeper's.
-func newIsolatedKeeper(t *testing.T) *keeper {
-	t.Helper()
-	k := newKeeperOf(t, true)
-	groups, err := syscall.Getgroups()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Setgroups([]int{}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = syscall.Setgroups(groups) })
-	if err := probeIsolation(k.s.self, k.s.cfg, k.s.accounts); err != nil {
-		t.Skipf("this host does not let the keeper isolate a spawn: %v", err)
-	}
-	return k
+// The probe checks a space's namespace mappings, credentials, capability
+// drop and filter, and a routed space's loopback and name sockets, and
+// passes where the host allows them.
+func TestTheProbeProvesTheSpaceWhereTheHostAllowsIt(t *testing.T) {
+	newKeeper(t)
+	routedKeeper(t)
 }
 
-// The probe checks an isolated stage's namespace mappings, credentials and
-// capability drop, and passes where the host allows them.
-func TestTheProbeProvesIsolationWhereTheHostAllowsIt(t *testing.T) {
-	newIsolatedKeeper(t)
-}
-
-// An isolated spawn runs in a user and network namespace of its own that
+// A relay space runs in a user, network and IPC namespace of its own that
 // maps only its pooled uid and gid, holds no capability in any set, and
 // reaches nothing: the loopback is down and no other interface exists. Its
 // uid, home, control channel and retirement are those of any spawn.
-func TestAnIsolatedSpawnHasItsOwnNamespaceAndNoCapability(t *testing.T) {
-	k := newIsolatedKeeper(t).withMemory(t)
+func TestARelaySpaceHasItsOwnNamespacesAndNoCapability(t *testing.T) {
+	k := newKeeper(t).withMemory(t)
 	keeperNet, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Fatal(err)
 	}
 	keeperUser, err := os.Readlink("/proc/self/ns/user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keeperIPC, err := os.Readlink("/proc/self/ns/ipc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,6 +845,7 @@ echo "setgroups:$(cat /proc/self/setgroups)"
 grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs):' /proc/self/status
 echo "net:$(readlink /proc/self/ns/net)"
 echo "user:$(readlink /proc/self/ns/user)"
+echo "ipc:$(readlink /proc/self/ns/ipc)"
 echo "interfaces:$(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\n' ' ')"
 echo "routes:$(tail -n +2 /proc/net/route | wc -l)"
 if [ -e /proc/self/fd/3 ]; then echo fd3:open; fi
@@ -840,15 +867,15 @@ echo done`
 		"dial 10.0.0.1:80: dial tcp 10.0.0.1:80: connect: network is unreachable",
 	} {
 		if !strings.Contains(strings.Join(strings.Fields(stdout), " "), strings.Join(strings.Fields(want), " ")) {
-			t.Errorf("the isolated spawn lacks %q:\n%s", want, stdout)
+			t.Errorf("the relay space lacks %q:\n%s", want, stdout)
 		}
 	}
 	if !regexpMatch(`(?m)^Groups:\s*$`, stdout) {
-		t.Errorf("the isolated spawn has supplementary groups:\n%s", stdout)
+		t.Errorf("the relay space has supplementary groups:\n%s", stdout)
 	}
-	for _, own := range []string{"net:" + keeperNet, "user:" + keeperUser} {
+	for _, own := range []string{"net:" + keeperNet, "user:" + keeperUser, "ipc:" + keeperIPC} {
 		if strings.Contains(stdout, own+"\n") {
-			t.Errorf("the isolated spawn shares the keeper's %s:\n%s", own, stdout)
+			t.Errorf("the relay space shares the keeper's %s:\n%s", own, stdout)
 		}
 	}
 	rc.readUntil(t, func() bool { return false })
@@ -875,10 +902,10 @@ echo done`
 	}
 }
 
-// An isolated spawn's relay, its fd 4, is carried on stream 5 once the
-// client opens it, both ways.
-func TestAnIsolatedSpawnsRelayIsCarriedOnceOpened(t *testing.T) {
-	k := newIsolatedKeeper(t).withMemory(t)
+// A relay space's relay, its fd 4, is carried on stream 5 once the client
+// opens it, both ways.
+func TestARelaySpacesRelayIsCarriedOnceOpened(t *testing.T) {
+	k := newKeeper(t).withMemory(t)
 	script := `printf 'call\n' >&4; IFS= read -r answer <&4; echo "got:$answer"`
 	spawnID, uid, rc := k.spawn(t, "1", script, map[string]string{}, true)
 	rc.send(t, frame.StreamRelay, nil)
@@ -899,8 +926,8 @@ func TestAnIsolatedSpawnsRelayIsCarriedOnceOpened(t *testing.T) {
 
 // A client that never opens stream 5 receives no frame on it, its end
 // included, though the spawn wrote to its relay and exited.
-func TestAnIsolatedSpawnsRelayIsSilentUnopened(t *testing.T) {
-	k := newIsolatedKeeper(t).withMemory(t)
+func TestARelaySpacesRelayIsSilentUnopened(t *testing.T) {
+	k := newKeeper(t).withMemory(t)
 	spawnID, uid, rc := k.spawn(t, "1", `printf 'call\n' >&4; printf 'bye\n' >&3; echo done`, map[string]string{}, true)
 	rc.readUntil(t, func() bool { return false })
 	if _, sent := rc.got[frame.StreamRelay]; sent || rc.ended[frame.StreamRelay] {
@@ -919,11 +946,11 @@ func TestAnIsolatedSpawnsRelayIsSilentUnopened(t *testing.T) {
 	assertRetired(t, k, uid)
 }
 
-// The keeper places an isolated stage in its spawn's bounded group from the
-// parent side before the spec releases it, so the command starts inside
-// its bound, in its own namespace.
-func TestAnIsolatedSpawnRunsInItsBoundedGroup(t *testing.T) {
-	k := newIsolatedKeeper(t).withMemory(t)
+// The keeper places a stage in its spawn's bounded group from the parent
+// side before the spec releases it, so the command starts inside its
+// bound, in its own namespace.
+func TestASpaceRunsInItsBoundedGroup(t *testing.T) {
+	k := newKeeper(t).withMemory(t)
 	keeperNet, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Fatal(err)
@@ -932,7 +959,7 @@ func TestAnIsolatedSpawnRunsInItsBoundedGroup(t *testing.T) {
 	rc.readUntil(t, func() bool { return false })
 	stdout := string(rc.got[frame.StreamStdout])
 	if !strings.Contains(stdout, "0::/"+cgroup.Name(uid)+"/bound\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
-		t.Fatalf("the isolated bounded spawn of uid %d: %q", uid, stdout)
+		t.Fatalf("the bounded space of uid %d: %q", uid, stdout)
 	}
 	k.reply(t)
 	k.reply(t)

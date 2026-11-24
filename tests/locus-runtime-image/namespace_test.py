@@ -143,24 +143,24 @@ def keeper(sock, requests, marks):
         requests.append(request)
         if request["type"] == "place":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 3, "type": "placed", "id": request["id"]})
+            send({"v": 4, "type": "placed", "id": request["id"]})
         elif request["type"] == "spawn":
-            send({"v": 3, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": UID, "pid": 4242})
+            send({"v": 4, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": UID, "pid": 4242})
         elif request["type"] == "assign":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 3, "type": "assigned", "id": request["id"]})
+            send({"v": 4, "type": "assigned", "id": request["id"]})
         elif request["type"] == "release":
             releasing = True
         elif request["type"] == "measure":
             measures += 1
             if free or measures == 1:
-                send({"v": 3, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": 4, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 3, "type": "measured", "id": request["id"], **owner, "bytes": (180 << 20) + (64 << 20) * holding(),
+                send({"v": 4, "type": "measured", "id": request["id"], **owner, "bytes": (180 << 20) + (64 << 20) * holding(),
                       "lesser": False, "age_ms": 412})
             if releasing:
-                send({"v": 3, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGTERM", "memory": None})
-                send({"v": 3, "type": "released", "spawn_id": SPAWN_ID})
+                send({"v": 4, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGTERM", "memory": None})
+                send({"v": 4, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
 
 
@@ -216,20 +216,21 @@ class PlacesClient(unittest.TestCase):
     def test_the_client_speaks_version_3_and_places_before_its_spawn(self):
         self.assertEqual(self.returncode, 0, self.stderr)
         place = namespace.RUNNER
-        assign = {"v": 3, "type": "assign", "place": place, "athanor": namespace.ATHANOR}
+        assign = {"v": 4, "type": "assign", "place": place, "athanor": namespace.ATHANOR}
         self.assertEqual([r["type"] for r in self.requests],
                          ["place", "spawn", "measure", "measure", "assign", "measure", "measure", "assign", "measure", "assign",
                           "measure", "release", "measure", "measure"])
-        self.assertEqual(self.requests[0], {"v": 3, "type": "place", "id": place, "kind": "warm"})
+        self.assertEqual(self.requests[0], {"v": 4, "type": "place", "id": place, "kind": "warm"})
         spawn = self.requests[1]
-        self.assertEqual({key: spawn[key] for key in ("v", "id", "place", "pool", "argv", "env", "memory_bytes", "control", "isolation")},
-                         {"v": 3, "id": "1", "place": place, "pool": stack.ROLE["pool"], "argv": namespace.RUNNER_ARGV,
+        self.assertNotIn("isolation", spawn)
+        self.assertEqual({key: spawn[key] for key in ("v", "id", "place", "pool", "argv", "env", "memory_bytes", "control")},
+                         {"v": 4, "id": "1", "place": place, "pool": stack.ROLE["pool"], "argv": namespace.RUNNER_ARGV,
                           "env": {"LANG": "C.UTF-8", **namespace.RUNNER_ENV}, "memory_bytes": namespace.RUNNER_MEMORY_BYTES,
-                          "control": True, "isolation": stack.ROLE["isolation"]})
+                          "control": True})
         self.assertEqual([r for r in self.requests if r["type"] == "assign"],
                          [{**assign, "id": "as1", "kind": "run"}, {**assign, "id": "as2", "kind": "warm"},
                           {**assign, "id": "as3", "kind": "run"}])
-        self.assertEqual(self.requests[11], {"v": 3, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
+        self.assertEqual(self.requests[11], {"v": 4, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": namespace.RELEASE_GRACE_MS})
         self.assertEqual([r["id"] for r in self.requests if r["type"] == "measure"], [f"m{n}" for n in range(1, 9)])
         self.assertTrue(all(r["place"] == place for r in self.requests if r["type"] == "measure"))
 
@@ -240,7 +241,7 @@ class PlacesClient(unittest.TestCase):
         self.judge(self.read)
 
     def test_a_refused_assign_fails(self):
-        self.fails(self.edited("warm.assign", lambda got: [{"v": 3, "type": "error", "id": got[0]["id"], "code": "bad_request"}]),
+        self.fails(self.edited("warm.assign", lambda got: [{"v": 4, "type": "error", "id": got[0]["id"], "code": "bad_request"}]),
                    "before warm, the keeper applied the assign")
 
     def test_a_reading_at_the_work_under_nobody_or_another_fails(self):
@@ -266,7 +267,7 @@ class PlacesClient(unittest.TestCase):
         self.fails(self.edited("reused", lambda got: [{**reply, "bytes": 0} for reply in got]), "reused for another run")
 
     def test_a_runner_that_ended_before_its_release_fails(self):
-        exited = {"v": 3, "type": "exited", "spawn_id": SPAWN_ID, "code": 1, "signal": None, "memory": None}
+        exited = {"v": 4, "type": "exited", "spawn_id": SPAWN_ID, "code": 1, "signal": None, "memory": None}
         self.fails(self.edited("warm", lambda got: [exited] + got), "back at rest")
 
     def test_a_reading_answered_only_after_released_fails(self):
@@ -275,7 +276,7 @@ class PlacesClient(unittest.TestCase):
                    "answered before its released")
 
     def test_a_place_read_after_released_fails(self):
-        self.fails(self.edited("after", lambda got: [{"v": 3, "type": "measured", "id": got[0]["id"], "kind": "run",
+        self.fails(self.edited("after", lambda got: [{"v": 4, "type": "measured", "id": got[0]["id"], "kind": "run",
                                                       "athanor": namespace.ATHANOR, "bytes": 1 << 20, "lesser": False,
                                                       "age_ms": 9}]),
                    "the runner's place is free")

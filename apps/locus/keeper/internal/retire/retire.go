@@ -4,9 +4,10 @@
 // Package retire ends everything a pool uid is running and removes what it
 // left behind. `cyfr-locus retire` runs as that uid: it sends SIGTERM to
 // every process the uid owns and waits out the grace period, then sends
-// SIGKILL until none is left; it removes the System V IPC objects the uid
-// owns or created and its POSIX message queues, and then each path of its
-// spec (package residue). Signalling with pid -1 as the uid itself reaches
+// SIGKILL until none is left; it removes the POSIX message queues the uid
+// made in the mqueue mount, and then each path of its spec (package
+// residue). What the uid made in its space's own IPC namespace ended with
+// the space. Signalling with pid -1 as the uid itself reaches
 // exactly that uid's processes, including daemons that left the spawn's
 // session, without the keeper naming a pid that could be reused.
 package retire
@@ -27,8 +28,7 @@ const (
 	ExitClean = 0
 	// ExitSurvivors means a process of the uid outlived every SIGKILL.
 	ExitSurvivors = 1
-	// ExitResidue means an IPC object, a message queue or a path could not
-	// be removed.
+	// ExitResidue means a message queue or a path could not be removed.
 	ExitResidue = 2
 	// ExitInvalid means the spec or the process's credentials were wrong.
 	ExitInvalid = 3

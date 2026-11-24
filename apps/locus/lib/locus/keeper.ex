@@ -169,9 +169,9 @@ defmodule Locus.Keeper do
   ## A spawn with a control channel
 
   A spec with `control: true` asks for a spawn whose fd 3 is a control
-  channel, carried on the relay as stream 4, and, with `isolation:
-  "netns"`, whose fd 4 is its relay (`Prima.RunnerRelay`), carried as
-  stream 5, in a network namespace of its own: a runner of the runtime.
+  channel, carried on the relay as stream 4, and, of a relay pool, whose
+  fd 4 is its relay (`Prima.RunnerRelay`), carried as stream 5, the only
+  way out of its space: a runner of the runtime.
   It is answered `{:ok, handle}` as soon as its request is written, with
   no spawn id, uid or pid yet, since a runner is handed out while it is
   still being staged. Its owner then hears `{:spawned, spawn_id, uid,
@@ -478,7 +478,6 @@ defmodule Locus.Keeper do
       memory_bytes: memory_bytes,
       cpu_quota: cpu_quota,
       control: Map.get(spec, :control, false) == true,
-      isolation: Map.get(spec, :isolation),
       home: Map.get(spec, :home),
       home_max_bytes: Map.get(spec, :home_max_bytes),
       pty: Map.get(spec, :pty),
@@ -1683,7 +1682,6 @@ defmodule Locus.Keeper do
         memory_bytes: opts.memory_bytes,
         cpu_quota: opts.cpu_quota
       }
-      |> put_given(:isolation, opts.isolation)
       |> put_given(:control, opts.control || nil)
       |> Map.merge(home)
       |> put_given(:pty, opts.pty)

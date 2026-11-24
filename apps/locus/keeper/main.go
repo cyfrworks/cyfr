@@ -3,11 +3,12 @@
 
 //go:build linux
 
-// Command cyfr-locus starts processes under uids of their own on behalf of
-// an unprivileged client.
+// Command cyfr-locus starts processes under uids and in spaces of their own
+// (a user, network and IPC namespace each) on behalf of an unprivileged
+// client.
 //
-//	cyfr-locus serve --pool <name>:<first>-<last>[:netns] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]
-//	cyfr-locus guard-control <socket> <ranges>
+//	cyfr-locus serve --pool <name>:<first>-<last>:<relay|routed> --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]
+//	cyfr-locus guard-control <socket> <range>
 //
 // `serve` is the only subcommand an operator runs; `guard-control` is the
 // one an island's egress guard runs once its rules are in (package guard). It needs exactly the
@@ -17,8 +18,8 @@
 // `writable-cgroups=true` security option, which adds no capability), and
 // refuses spawns anywhere else (package cgroup).
 // `stage`, `relay`, `retire` and `home` are helpers that read their
-// instructions from a pipe on fd 3. An isolated stage starts with the keeper's ids until
-// its namespace is mapped; other stages and retirement helpers start as
+// instructions from a pipe on fd 3. A stage starts in its space with the
+// keeper's ids until its namespace is mapped; retirement helpers start as
 // their pooled uid, home helpers as their kept home's uid, and relays start
 // as the client user.
 package main
