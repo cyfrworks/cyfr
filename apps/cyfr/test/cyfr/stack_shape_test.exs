@@ -95,6 +95,18 @@ defmodule Cyfr.StackShapeTest do
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
 
+  # Where a space's first process builds the space's files: the keeper's
+  # one definition, `stage.Root`, which the image makes and the AppArmor
+  # profile lets a space mount under.
+  defp space_root do
+    [root] =
+      Regex.run(
+        ~r/^const Root = "([^"]+)"$/m,
+        read!("apps/locus/keeper/internal/stage/space_linux.go"), capture: :all_but_first)
+
+    root
+  end
+
   # A merge key, as YamlElixir names it: `<<` and a counter.
   defp merge_key?({key, _}), do: String.starts_with?(key, "<<")
 
@@ -381,8 +393,8 @@ defmodule Cyfr.StackShapeTest do
   # that must be spelled and is missing, or is not in the form read, is
   # drift as a differing one is. Its kinds:
   #
-  # - `:users`: Dockerfile.locus's pooled users and the release's user,
-  #   group and directories.
+  # - `:users`: Dockerfile.locus's pooled users, the release's user, group
+  #   and directories, and the directory a space's files are built under.
   # - `:entrypoint`: the image's entrypoint (the image's role), each
   #   other role's compose entrypoint, and each overlay's entrypoint.
   # - `:network`: a service's networks are its own alone, cyfr joins it,
@@ -451,7 +463,7 @@ defmodule Cyfr.StackShapeTest do
         ) ==
           [["1733", "root", "root", home_root]] ++
             for(%{kept_root: root} <- roles, root != nil, do: ["1773", "root", user, root]) ++
-            [["0700", user, user, run_dir]] and
+            [["0700", user, user, run_dir], ["0755", "root", "root", space_root()]] and
         Regex.scan(~r/\bRELEASE_TMP=(\S+)/, dockerfile, capture: :all_but_first) == [[run_dir]]
 
     if release_spelled?, do: pools, else: [{@dockerfile, :users, :release} | pools]
@@ -1469,7 +1481,10 @@ defmodule Cyfr.StackShapeTest do
 
     dockerfile = read!("Dockerfile.locus")
     assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
-    assert dockerfile =~ ~r{install -d -m 0755 -o root -g root /var/lib/locus/space$}m
+    assert dockerfile =~ ~r{install -d -m 0755 -o root -g root #{Regex.escape(space_root())}$}m
+    profile = read!("apps/locus/keeper/seccomp/cyfr-locus")
+    assert profile =~ "mount fstype=tmpfs -> #{space_root()}/,"
+    assert profile =~ "pivot_root oldroot=#{space_root()}/.old/ #{space_root()}/,"
 
     dir = Path.join(System.tmp_dir!(), "cyfr-scaffold-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
