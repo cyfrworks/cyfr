@@ -13,9 +13,11 @@ import (
 )
 
 // The installed app is under the account's local application folder as
-// Windows answers it, whatever LOCALAPPDATA names. Each answer Windows
-// gives is logged, with and without its own check of the folder, before
-// and after LOCALAPPDATA changes, so a red says which one moved.
+// Windows answers it, which lies in the profile folder USERPROFILE names
+// (this test binary's own home) and which LOCALAPPDATA does not move. Each
+// answer Windows gives is logged, with and without its own check of the
+// folder, before and after LOCALAPPDATA changes, so a red says which one
+// moved.
 func TestInstalledAppPathIsTheSystems(t *testing.T) {
 	answers := func(when string) {
 		for _, f := range []struct {
@@ -30,6 +32,9 @@ func TestInstalledAppPathIsTheSystems(t *testing.T) {
 	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DONT_VERIFY)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if profile := os.Getenv("USERPROFILE"); !strings.HasPrefix(strings.ToLower(local), strings.ToLower(profile)+`\`) {
+		t.Errorf("the local application folder %q is not in the profile folder %q", local, profile)
 	}
 	want := filepath.Join(local, "Programs", "cyfr-desktop", "CYFR.exe")
 	for _, elsewhere := range []string{t.TempDir(), `C:\nowhere\at\all`} {
