@@ -431,6 +431,36 @@ func TestASpacesMessageQueueIsItsOwn(t *testing.T) {
 	}
 }
 
+// A process the command left is asked to end once, and its orderly end,
+// which a second ask would cut short as a browser's is, runs to its end
+// within the close's bound: the helper here writes its word 600 ms after
+// it is asked, and ends without it if it is asked again.
+func TestAKeptCloseAsksEachProcessLeftOnce(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-once")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	script := `cat > flush.sh <<'X'
+trap 'if [ -e asked ]; then echo asked-again; exit 1; fi; : > asked; sleep 0.6; echo flushed; exit 0' TERM
+while :; do sleep 0.05; done
+X
+sh flush.sh &
+trap 'exit 0' TERM
+echo ready
+while :; do sleep 0.05; done`
+	id, rc := k.spawnKept(t, "o", script, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	grace := int64(5000)
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	rc.readUntil(t, func() bool { return false })
+	if got := string(rc.got[frame.StreamStdout]); got != "ready\nflushed\n" {
+		t.Fatalf("the closed session said %q, want its helper's orderly end", got)
+	}
+	k.releasedPair(t, id)
+}
+
 // A close asks every process of the space to end, until none is left: a
 // grandchild made after the first SIGTERM, and reparented to the space's
 // init once its parent ends, is asked too, before the close's bound.

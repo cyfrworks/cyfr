@@ -6,6 +6,7 @@
 package stage
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -669,9 +670,10 @@ func Init() int {
 	}
 	// A command ended for a signal it was passed, as a close ends it,
 	// leaves the processes it left to end in their turn, as the keeper's
-	// end in order gives a leader's children: each child left to the init is
-	// sent SIGTERM and waited for, within the keeper's own bound on the
-	// group. A command that ended of its own accord ends the space at once.
+	// end in order gives a leader's children and then its group: each
+	// process left in the space is sent SIGTERM once and waited for, within
+	// the keeper's own bound on the group. A command that ended of its own
+	// accord ends the space at once.
 	if ending.Load() {
 		endTheRest()
 	}
@@ -683,14 +685,18 @@ func Init() int {
 	return ws.ExitStatus()
 }
 
-// endTheRest asks every process left in the space to end: the init is its
-// pid namespace's first process, so one SIGTERM to pid -1 reaches each of
-// them, a process reparented to the init since included. It reaps what
-// ends, and asks again while any is left, until none is or the keeper's
-// own bound on the group ends them all.
+// endTheRest asks every process left in the space to end, once each: the
+// init is its pid namespace's first process, so its /proc lists every one.
+// A process is asked once with SIGTERM and given the rest of the keeper's
+// bound to end in its own turn, never asked again, since a second ask can
+// cut short the orderly end the first began (a browser writing its
+// cookies). Every endAgain it asks each process it has not yet asked, one
+// started or reparented since included, and it reaps what ends, until none
+// is left or the keeper's own bound on the group ends them all.
 func endTheRest() {
+	asked := map[string]bool{}
 	for {
-		_ = unix.Kill(-1, unix.SIGTERM)
+		askTheUnasked(asked)
 		deadline := time.Now().Add(endAgain)
 		for time.Now().Before(deadline) {
 			pid, err := unix.Wait4(-1, nil, unix.WNOHANG, nil)
@@ -705,5 +711,43 @@ func endTheRest() {
 	}
 }
 
-// endAgain is how often endTheRest asks again.
+// endAgain is how often endTheRest asks the processes it has not asked.
 const endAgain = 200 * time.Millisecond
+
+// askTheUnasked sends SIGTERM to each process of the space it has not
+// asked, which it knows by its pid and start time, through a pidfd: a pid
+// given to another process is that process's to be asked, once.
+func askTheUnasked(asked map[string]bool) {
+	entries, _ := os.ReadDir("/proc")
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == 1 {
+			continue
+		}
+		fd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			continue
+		}
+		if start := startTime(pid); start != "" && !asked[e.Name()+" "+start] {
+			asked[e.Name()+" "+start] = true
+			_ = unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0)
+		}
+		_ = unix.Close(fd)
+	}
+}
+
+// startTime is the start time /proc gives the process pid, "" when it has
+// none to read.
+func startTime(pid int) string {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return ""
+	}
+	// The fields after the command's name, which ends at the last
+	// parenthesis, begin with the third; the start time is the 22nd.
+	fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+	if len(fields) < 20 {
+		return ""
+	}
+	return fields[19]
+}
