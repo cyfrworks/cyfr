@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -76,6 +77,21 @@ func TestTheRailsReadTokenChangesNothing(t *testing.T) {
 	}
 	if w := a.readRail(context.Background(), "", 0); w.Code != http.StatusForbidden {
 		t.Fatalf("the rail's read took no token: %d", w.Code)
+	}
+}
+
+// The rail's page as it is served, before any script of it runs, offers
+// Set up on a desktop, and on a box's screen offers none: its first paint,
+// before the list answers, shows nothing the box never offers.
+func TestABoxsRailOffersNoSetUpBeforeItsListAnswers(t *testing.T) {
+	setup := regexp.MustCompile(`<li( hidden)?><a class="way" id="setup"`)
+	desktop := newApp(t, t.TempDir(), offline())
+	if got := setup.FindStringSubmatch(desktop.get("/rail/").Body.String()); got == nil || got[1] != "" {
+		t.Fatalf("a desktop's rail offers no Set up: %q", got)
+	}
+	box := newOnBox(t)
+	if got := setup.FindStringSubmatch(box.get("/rail/").Body.String()); got == nil || got[1] != " hidden" {
+		t.Fatalf("a box's rail offers Set up before its list answers: %q", got)
 	}
 }
 

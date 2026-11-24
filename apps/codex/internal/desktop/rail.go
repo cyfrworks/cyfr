@@ -43,6 +43,10 @@ var railPage = `<!doctype html>
 <title>CYFR</title><style>` + railStyleText + `</style>
 ` + strings.TrimSuffix(railMarkup, "\n") + `<script>` + railScriptText + `</script></html>`
 
+// boxRailPage is the rail on a box's screen (Service.Box), whose first
+// paint, before its list answers, offers no Set up: a box sets nothing up.
+var boxRailPage = strings.Replace(railPage, `<li><a class="way" id="setup"`, `<li hidden><a class="way" id="setup"`, 1)
+
 // RailURL is the rail's address main loads, the read token in its
 // fragment, which no request carries but the rail's own reads.
 func (s *Service) RailURL() string { return shell.Origin + "/rail/#read=" + s.ReadToken }
@@ -94,7 +98,11 @@ func (s *Service) rail(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/rail/" {
 		h.Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, railPage)
+		page := railPage
+		if s.Box != "" {
+			page = boxRailPage
+		}
+		_, _ = io.WriteString(w, page)
 		return
 	}
 	if r.URL.Path != "/rail/list" || r.Method != http.MethodPost {
