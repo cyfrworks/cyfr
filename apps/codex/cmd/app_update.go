@@ -229,7 +229,14 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 		ran = r
 	}
 
+	// The app opened again as it was, or why it could not be: a road's
+	// replacement that installed the app with the box's screen not started
+	// again says so in its place.
+	var reopen string
 	replaced := road.replace(out, s, older)
+	if unstarted := screenUnstarted(""); errors.As(replaced, &unstarted) {
+		replaced, reopen = nil, string(unstarted)
+	}
 	answered := machine.appRelease()
 	confirmed := replaced == nil && answered == target
 	finished := road.finish(out, s, confirmed)
@@ -240,7 +247,6 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	// The app is opened again as it was, whatever came before; one that
 	// is not stops the update before the stack, whose next run finishes
 	// it.
-	var reopen string
 	if box && len(start) > 0 {
 		if err := applyWithin(appQuitWithin, start); err != nil {
 			reopen = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start cyfr-screen'", err)
@@ -269,6 +275,14 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	fmt.Fprintf(out, "The CYFR app is release %s.\n", target)
 	return nil
 }
+
+// screenUnstarted is a replacement that installed the app with the box's
+// screen not started again, saying how to start it: the update stops
+// before the stack, as one whose screen does not start again through sudo
+// does (updateApp).
+type screenUnstarted string
+
+func (s screenUnstarted) Error() string { return string(s) }
 
 // refusedReplacement says why a replacement is refused and which release
 // the app is now, once what was kept went back (after): its installer's

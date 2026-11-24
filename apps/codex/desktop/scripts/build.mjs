@@ -157,15 +157,15 @@ const target = signing?.phase === "app" ? "dir" : {linux: "deb", darwin: "dmg", 
 // links the app and loads its AppArmor profile, with the bundled cyfr
 // linked onto PATH after it and the app's update service's socket enabled
 // at every configure (a reinstall after a removal is told the release
-// before it). Its removal stops the socket before the units go with the
-// package.
+// before it). Its removal stops the socket and every request it accepted
+// before the units go with the package.
 const template = (name) => readFileSync(path.join(root, "node_modules", "app-builder-lib", "templates", "linux", name), "utf8")
 const systemd = "[ -d /run/systemd/system ]"
 writeFileSync(path.join(stage, "after-install.tpl"), template("after-install.tpl") +
   "\nln -sf '/opt/${sanitizedProductName}/resources/cyfr' /usr/bin/cyfr\n" +
   `if ${systemd}; then systemctl daemon-reload; systemctl enable --now cyfr-update.socket || true; fi\n`)
 writeFileSync(path.join(stage, "before-remove.sh"), "#!/bin/sh\n" +
-  `if [ "$1" = remove ] && ${systemd}; then systemctl disable --now cyfr-update.socket || true; fi\n`)
+  `if [ "$1" = remove ] && ${systemd}; then systemctl disable --now cyfr-update.socket || true; systemctl stop 'cyfr-update@*.service' || true; fi\n`)
 writeFileSync(path.join(stage, "after-remove.tpl"), template("after-remove.tpl") +
   "\nif [ \"$(readlink /usr/bin/cyfr)\" = '/opt/${sanitizedProductName}/resources/cyfr' ]; then rm -f /usr/bin/cyfr; fi\n" +
   `if ${systemd}; then systemctl daemon-reload; fi\n`)

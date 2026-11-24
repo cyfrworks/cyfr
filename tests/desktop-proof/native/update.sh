@@ -41,7 +41,13 @@
 #                and for A (an older one), the service refuses each
 #   outsider     an account outside the sudo group is refused at the socket,
 #                and its cyfr update says so and takes the sudo road
-#   removed      the package removed, its socket and units are gone
+#   bound        A back, an install of B hung past the request's bound
+#                with the screen (a stand-in unit) stopped: the request
+#                ends with no answer and the screen runs again
+#   held         a request for B verified and held open while the package
+#                is removed, then told go: nothing is installed
+#   removed      the package removed, its socket, units and requests are
+#                gone
 #
 # It installs software and leaves the app installed, so `run` refuses
 # anywhere but a disposable machine: GitHub's own runner
@@ -351,13 +357,78 @@ service_checks() {
     fail outsider "the socket answered '$said'; exit $status, the app's cyfr answers '$(release_of)': $out"
   fi
 
+  # A back at release A, so B is a newer release the service takes.
   quit_all
-  if sudo apt-get remove -y cyfr-desktop >"$LOGS/remove.log" 2>&1 && ! systemctl is-active --quiet cyfr-update.socket &&
-    [ ! -e /run/cyfr-update.sock ] && ! systemctl cat cyfr-update.socket cyfr-update@.service >/dev/null 2>&1; then
-    pass removed "the socket and its units went with the package"
+  sudo apt-get install -y --allow-downgrades "$dir/$A/cyfr-desktop_${A}_${OS}_$arch.$EXT" >"$LOGS/back-to-a.log" 2>&1
+
+  # An install that hangs (apt held in a hook before dpkg) on a machine
+  # whose screen runs (a stand-in screen unit), under a bound of 20 s.
+  sudo tee /etc/systemd/system/cyfr-screen.service >/dev/null <<<$'[Service]\nExecStart=/bin/sleep infinity'
+  sudo mkdir -p /etc/systemd/system/cyfr-update@.service.d
+  sudo tee /etc/systemd/system/cyfr-update@.service.d/proof-bound.conf >/dev/null <<<$'[Service]\nRuntimeMaxSec=20'
+  sudo tee /etc/apt/apt.conf.d/99cyfr-proof-hang >/dev/null <<<'DPkg::Pre-Invoke {"sleep 300";};'
+  sudo systemctl daemon-reload && sudo systemctl start cyfr-screen
+  local screen_run
+  screen_run=$(systemctl show --property InvocationID --value cyfr-screen)
+  said=$(request "$(id -un)" "$B")
+  if [ "$said" = "closed" ] && within 30 systemctl is-active --quiet cyfr-screen &&
+    [ "$(systemctl show --property InvocationID --value cyfr-screen)" != "$screen_run" ] && [ "$(release_of)" = "$A" ]; then
+    pass bound "the bound ended the hung install with no answer, and the screen it stopped runs again"
   else
-    fail removed "the socket is $(systemctl is-active cyfr-update.socket), $(ls -l /run/cyfr-update.sock 2>&1); $(tail -3 "$LOGS/remove.log")"
+    fail bound "the service answered '$said', the screen is $(systemctl is-active cyfr-screen), the app's cyfr answers '$(release_of)'"
   fi
+  sudo rm -f /etc/apt/apt.conf.d/99cyfr-proof-hang /etc/systemd/system/cyfr-update@.service.d/proof-bound.conf
+  sudo systemctl stop cyfr-screen && sudo rm -f /etc/systemd/system/cyfr-screen.service && sudo systemctl daemon-reload
+
+  # A request verified, held open while the package is removed, then told
+  # go.
+  said=$(request "$(id -un)" "$B" "sudo apt-get remove -y cyfr-desktop")
+  if [ "$said" != "installed $B" ] && ! dpkg-query --show --showformat '${Status}' cyfr-desktop 2>/dev/null | grep -qx 'install ok installed'; then
+    pass held "a request held across the removal installed nothing ($said)"
+  else
+    fail held "the service answered '$said', and dpkg says '$(dpkg-query --show --showformat '${Status} ${Version}' cyfr-desktop 2>&1)'"
+  fi
+
+  if ! dpkg-query --show --showformat '${Status}' cyfr-desktop 2>/dev/null | grep -qx 'install ok installed' &&
+    ! systemctl is-active --quiet cyfr-update.socket && [ ! -e /run/cyfr-update.sock ] &&
+    ! systemctl cat cyfr-update.socket cyfr-update@.service >/dev/null 2>&1 && [ -z "$(systemctl list-units --no-legend 'cyfr-update@*')" ]; then
+    pass removed "the socket, its units and every request went with the package"
+  else
+    fail removed "the socket is $(systemctl is-active cyfr-update.socket), $(ls -l /run/cyfr-update.sock 2>&1); requests: $(systemctl list-units --no-legend 'cyfr-update@*')"
+  fi
+}
+
+# request ACCOUNT VERSION [COMMAND]: VERSION asked of the update service as
+# ACCOUNT; once verified, COMMAND runs (as this account), then go is sent.
+# It prints the service's last answer, or closed for a connection that
+# ended without one, within 90 s.
+request() {
+  sudo -u "$1" python3 -I -c '
+import socket, subprocess, sys
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(90)
+s.connect("/run/cyfr-update.sock")
+s.sendall(sys.argv[1].encode() + b"\n")
+answers = s.makefile("rb")
+said = "closed"
+try:
+    for line in answers:
+        if line.startswith(b"\x1e"):
+            said = line[1:].decode().strip()
+            break
+    if said.startswith("verified"):
+        if len(sys.argv) > 2:
+            subprocess.run(sys.argv[2], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        said = "closed"
+        s.sendall(b"go\n")
+        for line in answers:
+            if line.startswith(b"\x1e"):
+                said = line[1:].decode().strip()
+                break
+except OSError:
+    pass
+print(said)
+' "$2" ${3:+"$3"}
 }
 
 case "${1:-}" in

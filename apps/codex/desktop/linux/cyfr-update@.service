@@ -4,13 +4,16 @@
 # One request to the CYFR app's update service, answered by the package's
 # own cyfr as root (apps/codex/cmd/app_service_linux.go). The bound is the
 # fetch, the wait for go, the screen's stop and apt's install together,
-# and at it everything the request started is killed.
+# and at it everything the request started is killed; however the request
+# ends, its stop step starts the box's screen again where the request
+# stopped it.
 [Unit]
 Description=Update of the CYFR app
 CollectMode=inactive-or-failed
 
 [Service]
 ExecStart=/opt/cyfr/resources/cyfr --serve-app-update
+ExecStopPost=-/opt/cyfr/resources/cyfr --serve-app-update-ended
 StandardInput=socket
 StandardOutput=journal
 StandardError=journal

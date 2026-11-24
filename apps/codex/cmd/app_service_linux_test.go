@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -37,6 +38,15 @@ type serviceStandIn struct {
 	// installed is called once apt succeeds: the installed app is then
 	// the release it installed.
 	installed func(target string)
+	// name and version are what the fetched DEB's control file names,
+	// the app's package at the target where empty.
+	name, version string
+	// removing is the app's package being removed.
+	removing bool
+	// startErr is the screen's start refused.
+	startErr error
+
+	stopped string
 
 	mu      sync.Mutex
 	fetched []string
@@ -46,7 +56,27 @@ type serviceStandIn struct {
 }
 
 func newServiceStandIn(t *testing.T, own string) *serviceStandIn {
-	return &serviceStandIn{t: t, own: own, done: make(chan struct{})}
+	return &serviceStandIn{t: t, own: own, done: make(chan struct{}), stopped: filepath.Join(t.TempDir(), "screen-stopped")}
+}
+
+// buildDeb writes a DEB of package name at version to file, as dpkg-deb
+// builds one, for the service's own reading of what a DEB is; it may run
+// off the test's goroutine, so it answers its failure.
+func buildDeb(t *testing.T, file, name, version string) error {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "DEBIAN"), 0o755); err != nil {
+		return err
+	}
+	control := fmt.Sprintf("Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: CYFR\nDescription: a stand-in\n", name, version)
+	if err := os.WriteFile(filepath.Join(root, "DEBIAN", "control"), []byte(control), 0o644); err != nil {
+		return err
+	}
+	c := exec.Command(dpkgDebProgram, "--root-owner-group", "--build", root, file)
+	c.Env = rootEnv
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("dpkg-deb could not build a stand-in package (%v): %s", err, out)
+	}
+	return nil
 }
 
 func (f *serviceStandIn) host() serviceHost {
@@ -61,18 +91,32 @@ func (f *serviceStandIn) host() serviceHost {
 			fmt.Fprintf(out, "Downloading the CYFR app, release %s...\n", target)
 			dir := f.t.TempDir()
 			file := filepath.Join(dir, "cyfr-desktop_"+target+"_linux_amd64.deb")
-			if err := os.WriteFile(file, []byte("deb"), 0o600); err != nil {
-				f.t.Fatal(err)
+			name, version := appPackage, debVersion(target)
+			if f.name != "" {
+				name, version = f.name, f.version
+			}
+			if err := buildDeb(f.t, file, name, version); err != nil {
+				f.t.Error(err)
+				return nil, err
 			}
 			f.dirs = append(f.dirs, dir)
 			return &staged{target: target, dir: dir, file: file}, nil
 		},
+		identity:   rootHost.identity,
+		installed:  func() (bool, error) { return !f.removing, nil },
 		screenRuns: func() (bool, error) { return f.screen, nil },
+		stopped:    f.stopped,
 		run: func(out io.Writer, name string, args ...string) error {
 			f.mu.Lock()
 			f.ran = append(f.ran, append([]string{name}, args...))
 			f.mu.Unlock()
+			if name == systemctlProgram && args[0] == "start" {
+				return f.startErr
+			}
 			if name == aptProgram {
+				if _, err := os.Stat(f.stopped); f.screen && err != nil {
+					f.t.Error("apt ran with the screen stopped and nothing noting it")
+				}
 				if f.aptErr != nil {
 					return f.aptErr
 				}
@@ -314,7 +358,8 @@ func TestTheUpdateServiceUnitsAreTheCodes(t *testing.T) {
 	}
 	service := read("cyfr-update@.service")
 	carried, _ := installedAppCyfr()
-	for k, v := range map[string]string{"Service.ExecStart": carried + " " + appUpdateServiceArg, "Service.StandardInput": "socket", "Service.StandardOutput": "journal", "Service.KillSignal": "SIGKILL", "Service.ProtectHome": "yes", "Service.PrivateTmp": "yes", "Unit.CollectMode": "inactive-or-failed"} {
+	for k, v := range map[string]string{"Service.ExecStart": carried + " " + appUpdateServiceArg, "Service.StandardInput": "socket", "Service.StandardOutput": "journal", "Service.KillSignal": "SIGKILL", "Service.ProtectHome": "yes", "Service.PrivateTmp": "yes", "Unit.CollectMode": "inactive-or-failed",
+		"Service.ExecStopPost": "-" + carried + " " + appUpdateEndedArg} {
 		if service[k] != v {
 			t.Errorf("cyfr-update@.service has %s=%q, want %q", k, service[k], v)
 		}
@@ -423,14 +468,17 @@ func TestAnUpdateThroughTheServiceAsksNoPassword(t *testing.T) {
 		f.screen = box
 		f.installed = func(target string) { m.app = target }
 		var steps []string
-		saved, savedQuit, savedReopen, savedScreen := dialAppUpdate, quitApp, reopenApp, machine.screenService
+		saved, savedQuit, savedReopen, savedScreen, savedSum := dialAppUpdate, quitApp, reopenApp, machine.screenService, appPackageSum
 		dialAppUpdate = f.dial
+		appPackageSum = func(context.Context, string, string, string) (string, error) {
+			return "", errors.New("the sudo road is not taken in this test")
+		}
 		quitApp = func() (bool, error) { steps = append(steps, "quit"); return true, nil }
 		reopenApp = func() error { steps = append(steps, "reopen"); return nil }
 		machine.screenService = func() (bool, bool, error) { return box, box, nil }
 		var out bytes.Buffer
 		err := updateApp(context.Background(), &out, &serviceRoad{}, "1.0.0", "1.1.0", "cyfr update")
-		dialAppUpdate, quitApp, reopenApp, machine.screenService = saved, savedQuit, savedReopen, savedScreen
+		dialAppUpdate, quitApp, reopenApp, machine.screenService, appPackageSum = saved, savedQuit, savedReopen, savedScreen, savedSum
 		f.served()
 		wantSteps := []string{"quit", "reopen"}
 		if box {
@@ -474,5 +522,181 @@ func TestTheServiceRoadSaysAnUnansweredInstall(t *testing.T) {
 	if err == nil || err.Error() != "CYFR's update service ended without saying whether it installed the CYFR app (it closed the connection)" ||
 		!strings.Contains(out.String(), "Installing the CYFR app's package with apt...\n") {
 		t.Errorf("an unanswered install answered %v: %q", err, out.String())
+	}
+}
+
+// Root installs what the bytes are: a release's DEB that is another
+// package, or the app's package at another release (release A's package
+// under B's name), is refused before verified and never reaches apt.
+func TestTheUpdateServiceInstallsWhatTheBytesAre(t *testing.T) {
+	for _, c := range []struct{ name, version, says string }{
+		{"cyfr-desktop", "1.0.5", "The CYFR app of release 1.1.0 is package cyfr-desktop 1.0.5, not cyfr-desktop 1.1.0; nothing was changed and CYFR runs as it did"},
+		{"cyfr-desktop", "1.1.0~rc.1", "is package cyfr-desktop 1.1.0~rc.1, not cyfr-desktop 1.1.0;"},
+		{"another-package", "1.1.0", "is package another-package 1.1.0, not cyfr-desktop 1.1.0;"},
+	} {
+		f := newServiceStandIn(t, "1.0.0")
+		f.name, f.version = c.name, c.version
+		said := f.ask("1.1.0\ngo\n")
+		if !strings.Contains(said, serviceMark+answerRefused+" ") || !strings.Contains(said, c.says) || strings.Contains(said, answerVerified) || len(f.ran) != 0 {
+			t.Errorf("%s %s was answered %q and ran %q", c.name, c.version, said, f.ran)
+		}
+	}
+	f := newServiceStandIn(t, "1.0.0-alpha.1")
+	if said := f.ask("1.0.0-alpha.2\n"); !strings.Contains(said, serviceMark+answerVerified+" 1.0.0-alpha.2\n") {
+		t.Errorf("a pre-release's own package was answered %q", said)
+	}
+}
+
+// A request whose go comes once the app's package is being removed
+// installs nothing and stops no screen.
+func TestTheUpdateServiceRefusesGoOnceThePackageIsBeingRemoved(t *testing.T) {
+	f := newServiceStandIn(t, "1.0.0")
+	f.screen, f.removing = true, true
+	said := f.ask("1.1.0\ngo\n")
+	if !strings.HasSuffix(said, serviceMark+answerFailed+" The CYFR app's package is being removed or is not installed, so CYFR's update service installed nothing\n") || len(f.ran) != 0 {
+		t.Errorf("a go during the package's removal was answered %q and ran %q", said, f.ran)
+	}
+}
+
+// After go nothing waits on the caller: one that holds the connection and
+// reads nothing more neither stalls the install nor keeps the box's screen
+// down, and the request ends while the caller still holds on.
+func TestTheUpdateServiceNeverWaitsOnItsCaller(t *testing.T) {
+	f := newServiceStandIn(t, "1.0.0")
+	f.screen = true
+	host := f.host()
+	run := host.run
+	host.run = func(out io.Writer, name string, args ...string) error {
+		if name == aptProgram {
+			for range 50 {
+				io.WriteString(out, "apt's progress, which nobody reads\n")
+			}
+		}
+		return run(out, name, args...)
+	}
+	client, server := net.Pipe()
+	defer client.Close()
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		serveUpdate(context.Background(), server, "1.0.0", host)
+	}()
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(client, "1.1.0\n")
+	r := bufio.NewReader(client)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == serviceMark+answerVerified+" 1.1.0\n" {
+			break
+		}
+	}
+	io.WriteString(client, "go\n")
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request waited on a caller that reads nothing")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.ran) != 3 || f.ran[2][1] != "start" {
+		t.Errorf("root ran %q, want the screen stopped, the install and the screen started", f.ran)
+	}
+}
+
+// However a request ends once it stopped the box's screen, the screen
+// starts again: the unit's stop step (screenBack) starts it where the
+// request left it stopped, as when the bound killed the request, and
+// leaves alone a screen the request started itself or never stopped.
+func TestTheBoxsScreenStartsAgainHoweverTheRequestEnds(t *testing.T) {
+	f := newServiceStandIn(t, "1.0.0")
+	if err := os.WriteFile(f.stopped, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	screenBack(f.host())
+	if want := [][]string{{systemctlProgram, "start", "--no-block", "cyfr-screen"}}; !slices.EqualFunc(f.ran, want, slices.Equal[[]string]) {
+		t.Errorf("the stop step after a request killed with the screen stopped ran %q, want %q", f.ran, want)
+	}
+	if _, err := os.Stat(f.stopped); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the note of the stopped screen is left (%v)", err)
+	}
+	f.ran = nil
+	screenBack(f.host())
+	if len(f.ran) != 0 {
+		t.Errorf("the stop step with no screen stopped ran %q", f.ran)
+	}
+	g := newServiceStandIn(t, "1.0.0")
+	g.screen = true
+	g.ask("1.1.0\ngo\n")
+	if _, err := os.Stat(g.stopped); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a request that started the screen again left the note for the stop step (%v)", err)
+	}
+}
+
+// A screen the service cannot start again after an install that succeeded
+// fails the update before the stack, with part C's sentence: the app is
+// at the new release, how to start the screen, and to run cyfr update
+// again.
+func TestAScreenThatDoesNotStartAgainStopsTheUpdate(t *testing.T) {
+	m := standInMachine(t)
+	m.app = "1.0.0"
+	f := newServiceStandIn(t, "1.0.0")
+	f.screen, f.startErr = true, errors.New("exit status 1")
+	f.installed = func(target string) { m.app = target }
+	saved, savedScreen := dialAppUpdate, machine.screenService
+	t.Cleanup(func() { dialAppUpdate, machine.screenService = saved, savedScreen })
+	dialAppUpdate = f.dial
+	machine.screenService = func() (bool, bool, error) { return true, true, nil }
+	err := updateApp(context.Background(), io.Discard, &serviceRoad{}, "1.0.0", "1.1.0", "cyfr update")
+	f.served()
+	want := "The CYFR app is release 1.1.0, but the screen could not be started again (exit status 1): start it with 'sudo systemctl start cyfr-screen', then run 'cyfr update' again to update CYFR here; your CYFR was not touched"
+	if err == nil || err.Error() != want {
+		t.Errorf("an unstarted screen answered %v, want %q", err, want)
+	}
+}
+
+// A cancelled cyfr update stops waiting on the service before the app
+// closes, and the wait has a bound of its own: an unanswered service is
+// one that ended without an answer, which takes the sudo road.
+func TestTheWaitOnTheServiceEnds(t *testing.T) {
+	standInMachine(t)
+	saved, savedWait, savedSum := dialAppUpdate, serviceWait, appPackageSum
+	t.Cleanup(func() { dialAppUpdate, serviceWait, appPackageSum = saved, savedWait, savedSum })
+	appPackageSum = func(context.Context, string, string, string) (string, error) {
+		return "", errors.New("the release is not read in this test")
+	}
+	unanswered := func() (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() { _, _ = io.Copy(io.Discard, server) }()
+		t.Cleanup(func() { server.Close() })
+		return client, nil
+	}
+	dialAppUpdate = unanswered
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan error, 1)
+	r := &serviceRoad{}
+	go func() {
+		_, err := r.fetch(ctx, io.Discard, "1.0.0", "1.1.0")
+		finished <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // sleep-ok: the request on its way before the cancel; a cancel before it ends the wait the same way
+	cancel()
+	select {
+	case err := <-finished:
+		if err == nil || err.Error() != "cyfr update was interrupted before the CYFR app was closed; nothing was changed and CYFR runs as it did" || r.sudo {
+			t.Errorf("a cancelled wait answered %v, took the sudo road %v", err, r.sudo)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelling the update did not end its wait on the service")
+	}
+	serviceWait = 100 * time.Millisecond
+	var out bytes.Buffer
+	r = &serviceRoad{}
+	start := time.Now()
+	if _, err := r.fetch(context.Background(), &out, "1.0.0", "1.1.0"); err == nil || !r.sudo || time.Since(start) > 2*time.Second ||
+		!strings.Contains(out.String(), "CYFR's update service ended without an answer (") {
+		t.Errorf("an unanswered service answered %v after %v, took the sudo road %v: %q", err, time.Since(start), r.sudo, out.String())
 	}
 }

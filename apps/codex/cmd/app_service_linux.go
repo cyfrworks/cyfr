@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -67,7 +68,19 @@ const (
 	// The programs the service runs, by their paths alone.
 	systemctlProgram = "/usr/bin/systemctl"
 	aptProgram       = "/usr/bin/apt-get"
+	dpkgDebProgram   = "/usr/bin/dpkg-deb"
+	dpkgQueryProgram = "/usr/bin/dpkg-query"
+	// appUpdateEndedArg is cyfr-update@.service's ExecStopPost argument.
+	appUpdateEndedArg = "--serve-app-update-ended"
+	// screenStopped is there while a request has stopped the box's screen
+	// and not started it again.
+	screenStopped = "/run/cyfr-update.screen-stopped"
 )
+
+// serviceWait bounds the caller's whole wait on one request: the unit's
+// own bound (RuntimeMaxSec), which ends the service, and its stop; a
+// variable so tests shorten it.
+var serviceWait = askWithin + fetchBinaryTimeout + goWithin + appQuitWithin + appReplaceWithin + boundGrace
 
 // The service's answers, after serviceMark.
 const (
@@ -76,20 +89,28 @@ const (
 	answerUnreachable = "unreachable"
 	answerInstalled   = "installed"
 	answerFailed      = "failed"
+	// answerUnstarted is an install that succeeded with the box's screen
+	// not started again.
+	answerUnstarted = "unstarted"
 )
 
 // appUpdateService runs the service when args are its unit's ExecStart,
-// answering its status and true; any other command line is cyfr's own.
+// or its ExecStopPost (appUpdateEndedArg), answering its status and true;
+// any other command line is cyfr's own.
 func appUpdateService(args []string) (int, bool) {
-	if len(args) != 2 || args[1] != appUpdateServiceArg {
+	if len(args) != 2 || (args[1] != appUpdateServiceArg && args[1] != appUpdateEndedArg) {
 		return 0, false
 	}
-	// A write to a caller that hung up must not end the install.
-	signal.Ignore(syscall.SIGPIPE)
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(os.Stderr, "This is the CYFR app's update service, which systemd starts as root; run cyfr update instead")
 		return 64, true
 	}
+	if args[1] == appUpdateEndedArg {
+		screenBack(rootHost)
+		return 0, true
+	}
+	// A write to a caller that hung up must not end the install.
+	signal.Ignore(syscall.SIGPIPE)
 	conn, err := net.FileConn(os.Stdin)
 	if err == nil {
 		if _, ok := conn.(*net.UnixConn); !ok {
@@ -111,15 +132,55 @@ func appUpdateService(args []string) (int, bool) {
 type serviceHost struct {
 	// fetch is fetchInstaller for this machine.
 	fetch func(ctx context.Context, out io.Writer, target string) (*staged, error)
+	// identity is the package name and version a DEB's own control file
+	// names.
+	identity func(deb string) (name, version string, err error)
+	// installed is whether dpkg holds the app's package installed and not
+	// being removed.
+	installed func() (bool, error)
 	// screenRuns is whether the box's screen runs (machine.screenService).
 	screenRuns func() (bool, error)
 	// run runs one of the service's fixed commands, its output to out.
 	run func(out io.Writer, name string, args ...string) error
+	// stopped is the file that says this request stopped the box's screen
+	// (screenStopped).
+	stopped string
+}
+
+// rootEnv is the environment of every command root runs.
+var rootEnv = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "DEBIAN_FRONTEND=noninteractive", "LANG=C.UTF-8"}
+
+// rootOutput runs one of root's fixed commands and answers its output.
+func rootOutput(name string, args ...string) (string, error) {
+	c := exec.Command(name, args...)
+	c.Env = rootEnv
+	out, err := c.Output()
+	return string(out), err
 }
 
 var rootHost = serviceHost{
 	fetch: func(ctx context.Context, out io.Writer, target string) (*staged, error) {
 		return fetchInstaller(ctx, out, target, "linux", machine.arch())
+	},
+	identity: func(deb string) (string, string, error) {
+		said, err := rootOutput(dpkgDebProgram, "--field", deb, "Package", "Version")
+		if err != nil {
+			return "", "", err
+		}
+		fields := map[string]string{}
+		for _, line := range strings.Split(said, "\n") {
+			if k, v, ok := strings.Cut(line, ": "); ok {
+				fields[k] = v
+			}
+		}
+		return fields["Package"], fields["Version"], nil
+	},
+	installed: func() (bool, error) {
+		said, err := rootOutput(dpkgQueryProgram, "--show", "--showformat", "${Status}", appPackage)
+		if err != nil {
+			return false, err
+		}
+		return said == "install ok installed", nil
 	},
 	screenRuns: func() (bool, error) {
 		_, active, err := machine.screenService()
@@ -127,25 +188,58 @@ var rootHost = serviceHost{
 	},
 	run: func(out io.Writer, name string, args ...string) error {
 		c := exec.Command(name, args...)
-		c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "DEBIAN_FRONTEND=noninteractive", "LANG=C.UTF-8"}
+		c.Env = rootEnv
 		c.Stdout, c.Stderr = out, out
 		return c.Run()
 	},
+	stopped: screenStopped,
 }
 
-// heedless writes to the caller and ignores its failure: the caller may
-// be gone, the install goes on.
-type heedless struct{ w io.Writer }
+// debVersion is release version v as the app's DEB names it: electron-
+// builder writes a pre-release's hyphen as a tilde, which dpkg orders
+// before the release.
+func debVersion(v string) string { return strings.ReplaceAll(v, "-", "~") }
 
-func (h heedless) Write(p []byte) (int, error) {
-	_, _ = h.w.Write(p)
+// unheld writes to the caller only what it takes at once (unheldWithin):
+// one write it does not take and the caller is taken for gone, nothing
+// more is sent, and the request goes on as it would with no caller.
+type unheld struct {
+	conn net.Conn
+	gone bool
+}
+
+// unheldWithin is how long one write to the caller may wait.
+const unheldWithin = 100 * time.Millisecond
+
+func (u *unheld) Write(p []byte) (int, error) {
+	if !u.gone {
+		_ = u.conn.SetWriteDeadline(time.Now().Add(unheldWithin))
+		if _, err := u.conn.Write(p); err != nil {
+			u.gone = true
+		}
+	}
 	return len(p), nil
+}
+
+// screenBack starts the box's screen again where a request stopped it and
+// did not start it: the unit's ExecStopPost runs it on every way the
+// request ends, its bound's kill included.
+func screenBack(host serviceHost) {
+	if err := os.Remove(host.stopped); err == nil {
+		_ = host.run(io.Discard, systemctlProgram, "start", "--no-block", screenName)
+	}
 }
 
 // serveUpdate answers one request on conn as the package whose cyfr is
 // release own.
 func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHost) {
-	out := heedless{conn}
+	var mu sync.Mutex
+	caller := &unheld{conn: conn}
+	out := writerFunc(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return caller.Write(p)
+	})
 	answer := func(what, sentence string) {
 		fmt.Fprintf(out, "%s%s %s\n", serviceMark, what, sentence)
 	}
@@ -176,6 +270,16 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 		return
 	}
 	defer s.remove()
+	// What is installed is what the bytes are: the app's package at exactly
+	// the release asked, whatever the release's files call it.
+	switch name, v, err := host.identity(s.file); {
+	case err != nil:
+		answer(answerRefused, fmt.Sprintf("The CYFR app of release %s could not be read as a package (%v); nothing was changed and CYFR runs as it did", target, err))
+		return
+	case name != appPackage || v != debVersion(target):
+		answer(answerRefused, fmt.Sprintf("The CYFR app of release %s is package %s %s, not %s %s; nothing was changed and CYFR runs as it did", target, name, v, appPackage, debVersion(target)))
+		return
+	}
 	answer(answerVerified, target)
 	if said, err := line(goWithin); err != nil || said != "go" {
 		return
@@ -184,6 +288,11 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 	// The caller said go: from here the install runs to its end, whatever
 	// the caller does. The file has a name of root's own: nothing the
 	// caller sent reaches apt.
+	switch ok, err := host.installed(); {
+	case err != nil || !ok:
+		answer(answerFailed, "The CYFR app's package is being removed or is not installed, so CYFR's update service installed nothing")
+		return
+	}
 	deb := filepath.Join(s.dir, appPackage+".deb")
 	if err := os.Rename(s.file, deb); err != nil {
 		answer(answerFailed, fmt.Sprintf("CYFR's update service could not keep the installer it verified (%v); nothing was replaced", err))
@@ -195,27 +304,44 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 		return
 	}
 	if screen {
+		// Written before the stop: however the request ends from here,
+		// the unit's stop step starts the screen again (screenBack).
+		if err := os.WriteFile(host.stopped, nil, 0o600); err != nil {
+			answer(answerFailed, fmt.Sprintf("CYFR's update service could not note that it stops the screen (%v); nothing was replaced", err))
+			return
+		}
+		defer screenBack(host)
 		fmt.Fprintln(out, "Stopping this machine's screen, so its launcher does not start the old CYFR app again while it is replaced...")
 		if err := host.run(out, systemctlProgram, "stop", screenName); err != nil {
-			// A stop that failed may have stopped it: it is started again.
-			_ = host.run(out, systemctlProgram, "start", screenName)
 			answer(answerFailed, fmt.Sprintf("The screen could not be stopped (%v); nothing was replaced", err))
 			return
 		}
 	}
 	fmt.Fprintln(out, "Installing the CYFR app's package with apt...")
 	installed := host.run(out, aptProgram, "install", "-y", deb)
+	unstarted := ""
 	if screen {
+		_ = os.Remove(host.stopped)
 		if err := host.run(out, systemctlProgram, "start", screenName); err != nil {
-			fmt.Fprintf(out, "The screen could not be started again (%v): start it with 'sudo systemctl start %s'.\n", err, screenName)
+			unstarted = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start %s'", err, screenName)
 		}
 	}
-	if installed != nil {
+	switch {
+	case installed != nil && unstarted != "":
+		answer(answerFailed, fmt.Sprintf("apt could not install the CYFR app's package (%v), and %s", installed, unstarted))
+	case installed != nil:
 		answer(answerFailed, fmt.Sprintf("apt could not install the CYFR app's package (%v)", installed))
-		return
+	case unstarted != "":
+		answer(answerUnstarted, unstarted)
+	default:
+		answer(answerInstalled, target)
 	}
-	answer(answerInstalled, target)
 }
+
+// writerFunc is a function as an io.Writer.
+type writerFunc func(p []byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // dialAppUpdate connects to the update service; a variable so tests stand
 // in for it.
@@ -252,12 +378,20 @@ func (r *serviceRoad) fetch(ctx context.Context, out io.Writer, before, target s
 		return r.tookSudo(ctx, out, before, target, fmt.Sprintf("is not on this machine (%v)", err))
 	}
 	fmt.Fprintln(out, "Asking CYFR's update service to install the CYFR app, with no password...")
+	// The wait has the service's own bound, and a cancelled update stops
+	// waiting: the service then installs nothing, as it never got go.
+	_ = conn.SetDeadline(time.Now().Add(serviceWait))
 	served := &staged{target: target, service: conn}
-	if _, err := fmt.Fprintf(conn, "%s\n", target); err != nil {
-		served.remove()
-		return r.tookSudo(ctx, out, before, target, fmt.Sprintf("could not be asked (%v)", err))
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	_, err = fmt.Fprintf(conn, "%s\n", target)
+	what, said := "", ""
+	if err == nil {
+		what, said, err = relay(conn, out, served)
 	}
-	what, said, err := relay(conn, out, served)
+	if !stop() {
+		served.remove()
+		return nil, errors.New("cyfr update was interrupted before the CYFR app was closed; nothing was changed and CYFR runs as it did")
+	}
 	switch {
 	case err == nil && what == answerVerified:
 		return served, nil
@@ -315,6 +449,8 @@ func (r *serviceRoad) replace(out io.Writer, s *staged, older bool) error {
 	switch {
 	case err != nil:
 		return fmt.Errorf("CYFR's update service ended without saying whether it installed the CYFR app (%v)", err)
+	case what == answerUnstarted:
+		return screenUnstarted(said)
 	case what != answerInstalled:
 		return errors.New(said)
 	}
