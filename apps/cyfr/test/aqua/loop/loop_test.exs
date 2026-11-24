@@ -1051,6 +1051,11 @@ defmodule Aqua.LoopTest do
   end
 
   defp ended!(ctx, turn_id) do
+    # ExUnit can kill the test before the wait expires. Read before the
+    # sandbox's on_exit callbacks stop the runner and release ownership.
+    diagnostic = {:turn_end, turn_id}
+    on_exit(diagnostic, fn -> report_unended(ctx, turn_id) end)
+
     wait_until(
       fn -> ended?(ctx, turn_id) end,
       60_000,
@@ -1058,7 +1063,65 @@ defmodule Aqua.LoopTest do
     )
 
     {:ok, turn} = Tape.turn(ctx, turn_id)
+    on_exit(diagnostic, fn -> :ok end)
     turn
+  end
+
+  defp report_unended(ctx, turn_id) do
+    holder = live_pid(Aqua.Loop.holder(turn_id))
+
+    snapshot =
+      case Tape.turn(ctx, turn_id) do
+        {:ok, turn} ->
+          steps =
+            with {:ok, steps} <- Tape.steps(ctx, turn) do
+              Enum.map(steps, &{&1.kind, &1.dispatch_state})
+            end
+
+          %{
+            status: turn.status,
+            recovery_attempts: turn.recovery_attempts,
+            steps: steps,
+            loop: holder,
+            runner: live_pid(Aqua.Runner.whereis(turn.thread_id)),
+            recovery_plan: recovery_preview(ctx, turn, holder)
+          }
+
+        {:error, reason} ->
+          %{turn: {:unreadable, reason}, loop: holder}
+      end
+
+    IO.puts(:stderr, "Turn #{turn_id} end wait failed. #{inspect(snapshot, limit: :infinity)}")
+  end
+
+  defp live_pid(pid), do: if(is_pid(pid) and Process.alive?(pid), do: pid)
+
+  # RecoveryTable.plan_turn/3 takes the turn as it plans. Describe the
+  # intended action from the row instead of making that write in a diagnostic.
+  defp recovery_preview(ctx, turn, holder) do
+    cond do
+      Tape.terminal?(turn) -> :none
+      holder -> :held
+      turn.status == "accepted" -> :queue
+      turn.status == "paused" -> paused_recovery(ctx, turn)
+      Tape.unacknowledged_episode?(ctx, turn) -> :set_down_uncertain
+      turn.recovery_attempts >= turn.recovery_limit -> :end_uncertain
+      true -> :take_over_and_adopt
+    end
+  end
+
+  defp paused_recovery(ctx, %{paused_reason: "uncertain"} = turn) do
+    if Tape.steer_pending?(ctx, turn), do: :continue, else: :wait_for_sender
+  end
+
+  defp paused_recovery(ctx, turn) do
+    case turn.launch_step_id && Tape.step(ctx, turn.launch_step_id) do
+      {:ok, %{dispatch_state: "dispatched"} = step} ->
+        if Prima.TurnStep.unresolved(step) == :uncertain, do: :settle_launch, else: :continue
+
+      _ ->
+        :continue
+    end
   end
 
   defp ended?(ctx, turn_id) do
