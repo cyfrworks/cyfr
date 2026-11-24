@@ -180,6 +180,7 @@ defmodule Opus.Host do
     WorkerAuth,
     WorkerWire
   }
+
   alias Opus.{Attempt, Keys, Lapse}
   alias Prima.Outcome
   alias Opus.Host.{AttachedFetch, Children, Egress, Question}

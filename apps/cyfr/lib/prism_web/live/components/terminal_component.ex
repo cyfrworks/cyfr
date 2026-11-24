@@ -318,6 +318,7 @@ defmodule PrismWeb.TerminalComponent do
     do:
       "The program stopped because CYFR restarted the part that runs programs. " <>
         "Open it again to go on."
+
   def ended_text(:closed), do: "The program was closed."
   def ended_text(:idle), do: "The program ended after a day with no one watching it."
 

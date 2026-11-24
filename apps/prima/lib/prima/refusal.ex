@@ -1890,8 +1890,7 @@ defmodule Prima.Refusal do
        nil}
 
   defp start_failed(member, :restarted),
-    do:
-      {"#{member} could not start because CYFR restarted the part that runs programs.", :again}
+    do: {"#{member} could not start because CYFR restarted the part that runs programs.", :again}
 
   defp start_failed(member, {:within, 1}),
     do: {"#{member} did not start within a minute.", :again}

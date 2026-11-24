@@ -570,7 +570,14 @@ defmodule Locus.Runtime.HostClient do
           [String.t()],
           Prima.WorkerAPI.refusal() | nil
         ) :: :ok | {:error, term()}
-  def runner_exited(%Locus.Runtime.Credentials{} = credentials, at, boot, runner, attempts, refusal)
+  def runner_exited(
+        %Locus.Runtime.Credentials{} = credentials,
+        at,
+        boot,
+        runner,
+        attempts,
+        refusal
+      )
       when is_binary(boot) and is_binary(runner) and is_list(attempts) do
     args = %{"member" => at.member, "runner" => runner, "attempts" => attempts}
 

@@ -579,7 +579,11 @@ defmodule Locus.Runtime.HostClientTest do
       )
 
     at = %{member: host.member, host_url: host.url}
-    refusal = %{reason: "uid_exhausted", message: "cyfr-locus refused to start a runner (uid_exhausted)"}
+
+    refusal = %{
+      reason: "uid_exhausted",
+      message: "cyfr-locus refused to start a runner (uid_exhausted)"
+    }
 
     assert :ok =
              HostClient.runner_exited(credentials, at, "boot_x", "runner_1", ["att_1"], refusal)

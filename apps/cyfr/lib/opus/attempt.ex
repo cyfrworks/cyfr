@@ -824,12 +824,20 @@ defmodule Opus.Attempt do
     held? = is_nil(holder.runner) or state.claimed_by == holder.runner
 
     cond do
-      not dispatched? -> {:reply, :ok, state}
+      not dispatched? ->
+        {:reply, :ok, state}
+
       is_nil(state.claimed_by) and Map.get(holder, :assigned?, false) ->
         close_untaken(state, Map.get(holder, :refusal))
-      not held? -> {:reply, :ok, state}
-      runner_ended?(state, holder) -> close_lost(state)
-      true -> {:stop, :normal, :ok, release_holds(state)}
+
+      not held? ->
+        {:reply, :ok, state}
+
+      runner_ended?(state, holder) ->
+        close_lost(state)
+
+      true ->
+        {:stop, :normal, :ok, release_holds(state)}
     end
   end
 
