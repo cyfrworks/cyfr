@@ -394,6 +394,52 @@ defmodule Locus.KeeperTest do
       wait_until(fn -> releases(fake, 0) != [] end, 5_000, "the dead reader's spawn released")
     end
 
+    test "a run's heir hears its end once, at cyfr-locus's word, after its reader died, " <>
+           "and a run naming a fenced tag starts nothing",
+         %{name: name, fake: fake} do
+      test = self()
+      tag = make_ref()
+      :ok = FakeKeeper.mode(fake, {:stdout, :binary.copy(<<1>>, 1_048_576), test})
+      :ok = FakeKeeper.hold_releases(fake, test)
+
+      reader =
+        spawn(fn ->
+          Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+            place: place!(name, "build"),
+            deadline: within(60_000),
+            max_stdout_bytes: 16 * 1_048_576,
+            heir: {test, tag},
+            on_stdout:
+              {[],
+               fn _piece, _taken ->
+                 send(test, :taking)
+                 receive do: (:never -> :ok)
+               end}
+          )
+        end)
+
+      assert_receive :taking, 10_000
+      Process.exit(reader, :kill)
+
+      # The keeper asks for the spawn's end, which cyfr-locus has not given.
+      assert_receive {:release_held, _spawn_id}, 10_000
+      assert Keeper.fence(name, tag) == :pending
+      refute_received {Keeper, {:heir, ^tag}, :released}
+
+      :ok = FakeKeeper.carry_releases(fake)
+      assert_receive {Keeper, {:heir, ^tag}, :released}, 10_000
+      assert Keeper.fence(name, tag) == :none
+      refute_receive {Keeper, {:heir, ^tag}, :released}, 200
+
+      assert {:error, {:spawn_failed, :fenced}} =
+               Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+                 place: place!(name, "build"),
+                 deadline: within(10_000),
+                 max_stdout_bytes: 1_048_576,
+                 heir: {test, tag}
+               )
+    end
+
     test "a relay that dials once the client has read the exit and release reports still delivers its output",
          %{name: name, fake: fake, client: client} do
       test = self()

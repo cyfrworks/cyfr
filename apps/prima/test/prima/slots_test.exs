@@ -647,6 +647,70 @@ defmodule Prima.SlotsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # A holding that names an heir
+  # ---------------------------------------------------------------------------
+
+  # The fence the tests give their instance: it says it was asked, and
+  # answers what the test chose.
+  def fence(test, answer, tag) do
+    send(test, {:fence_asked, tag})
+    answer
+  end
+
+  describe "a holding that names an heir" do
+    test "outlives its holder's death, and the sweep, while its fence says the launcher " <>
+           "holds its process, and goes back at the heir's word" do
+      server =
+        start_slots(
+          max: 1,
+          child_reserve: 0,
+          hold_ms: 0,
+          fence: {__MODULE__, :fence, [self(), :pending]}
+        )
+
+      tag = make_ref()
+      holder = hold_for_heir(server, tag)
+
+      Process.exit(holder, :kill)
+      assert_receive {:fence_asked, ^tag}, 2_000
+      assert {:ok, %{reclaimed: 0}} = Slots.sweep(server)
+      assert %{active: 1} = Slots.status(server)
+      assert {:error, :capacity} = Slots.acquire(server, nil, :root, wait_ms: 0)
+
+      send(server, {SomeLauncher, {:heir, tag}, :released})
+      wait_until(fn -> Slots.status(server).active == 0 end)
+    end
+
+    test "goes back at its holder's death when its fence says the launcher holds none" do
+      server = start_slots(max: 1, child_reserve: 0, fence: {__MODULE__, :fence, [self(), :none]})
+      tag = make_ref()
+      holder = hold_for_heir(server, tag)
+
+      Process.exit(holder, :kill)
+      assert_receive {:fence_asked, ^tag}, 2_000
+      wait_until(fn -> Slots.status(server).active == 0 end)
+    end
+
+    test "goes back at the heir's word while its holder lives, and its holder's later " <>
+           "release gives back nothing more" do
+      server = start_slots(max: 2, child_reserve: 0, fence: {__MODULE__, :fence, [self(), :none]})
+      tag = make_ref()
+      holder = hold_for_heir(server, tag)
+      _other = hold(server, nil, :root)
+
+      send(server, {SomeLauncher, {:heir, tag}, :released})
+      wait_until(fn -> Slots.status(server).active == 1 end)
+      send(holder, :release)
+      refute_receive {:fence_asked, _tag}, 200
+      assert %{active: 1} = Slots.status(server)
+    end
+
+    test "a fence that is not {module, function, args} is refused at start" do
+      assert_raise ArgumentError, ~r/fence/, fn -> Slots.start_link(fence: fn _ -> :none end) end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Unreaped kills
   # ---------------------------------------------------------------------------
 
@@ -931,6 +995,21 @@ defmodule Prima.SlotsTest do
     pid =
       spawn(fn ->
         result = Slots.acquire(server, key, class, wait_ms: 5_000)
+        send(parent, {:held, self(), result})
+        holder_loop(server, [ref!(result)])
+      end)
+
+    assert_receive {:held, ^pid, {:ok, _}}, 5_000
+    pid
+  end
+
+  # A holder of one root slot that names `tag` its heir's.
+  defp hold_for_heir(server, tag) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        result = Slots.acquire(server, nil, :root, wait_ms: 0, heir: tag)
         send(parent, {:held, self(), result})
         holder_loop(server, [ref!(result)])
       end)

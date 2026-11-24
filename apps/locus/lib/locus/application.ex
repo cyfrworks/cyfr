@@ -236,8 +236,9 @@ defmodule Locus.Application do
   `Locus.Config.max_concurrent_per_tenant/0` for one athanor, keyed by a
   request's `athanor_id`. A build past either cap is refused, never queued:
   a backlog of multi-minute builds behind a waiting caller helps nobody.
-  The connection serving a build holds its slot, so a connection that dies
-  gives the slot back by its monitor.
+  The connection serving a build holds its slot and names the slots the
+  heir of the build's run, so a connection that dies gives the slot back
+  once the executor holds nothing of the run (`Locus.Executor.fence/1`).
   """
   @spec build_slots() :: {Prima.Slots, [Prima.Slots.option()]}
   def build_slots do
@@ -246,7 +247,8 @@ defmodule Locus.Application do
      max: Locus.Config.max_concurrent(),
      key_max: Locus.Config.max_concurrent_per_tenant(),
      child_reserve: 0,
-     policy: :reject}
+     policy: :reject,
+     fence: {Locus.Executor, :fence, []}}
   end
 
   @doc """

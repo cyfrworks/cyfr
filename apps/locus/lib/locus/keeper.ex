@@ -55,7 +55,10 @@ defmodule Locus.Keeper do
   unread. A spawn cyfr-locus refuses after it made it never ran, and
   `run/2` answers its refusal at that report too, asking for none; a
   report not come within 60 s is logged and still waited for, so the
-  build's slot is held until cyfr-locus has freed its place.
+  build's slot is held until cyfr-locus has freed its place. A run may
+  name an heir (`Locus.Executor`'s `:heir`), told as a long-lived spawn's
+  heir is, at that report whoever still reads the run; a run naming a
+  fenced tag is refused, as a spawn is.
 
   ## A long-lived spawn
 
@@ -384,6 +387,9 @@ defmodule Locus.Keeper do
   @impl Locus.Executor
   def drop(place), do: drop(__MODULE__, place)
 
+  @impl Locus.Executor
+  def fence(tag), do: fence(__MODULE__, tag)
+
   @doc """
   `run/2` through the client `server`. Beside the executor's options,
   `:place` names the spawn's place, which the caller made (`place/3`), and
@@ -407,7 +413,11 @@ defmodule Locus.Keeper do
     }
 
     try do
-      case GenServer.call(server, {:spawn, argv, env, bounds}, @start_timeout_ms) do
+      case GenServer.call(
+             server,
+             {:spawn, argv, env, bounds, Keyword.get(opts, :heir)},
+             @start_timeout_ms
+           ) do
         {:ok, ref} ->
           await(%{
             phase: :running,
@@ -1095,11 +1105,17 @@ defmodule Locus.Keeper do
     :exit, _ -> :gen_tcp.close(conn)
   end
 
+  # A fence stands: every run naming its tag is refused, as every spawn is.
   @impl GenServer
-  def handle_call({:spawn, argv, env, bounds}, {owner, _tag}, state) do
+  def handle_call({:spawn, _argv, _env, _bounds, {_pid, tag}}, _from, state)
+      when is_map_key(state.fences, tag) do
+    {:reply, {:error, {:spawn_failed, :fenced}}, state}
+  end
+
+  def handle_call({:spawn, argv, env, bounds, heir}, {owner, _tag}, state) do
     request = Map.merge(%{pool: @pool, argv: argv, env: env}, bounds)
 
-    case start_spawn(state, request, %{kind: :run, owner: owner, from: nil}) do
+    case start_spawn(state, request, %{kind: :run, owner: owner, from: nil, heir: heir}) do
       {:ok, ref, state} ->
         {:reply, {:ok, ref}, state}
 

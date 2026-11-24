@@ -276,6 +276,8 @@ defmodule Locus.ApplicationTest do
     assert opts[:key_max] == Locus.Config.max_concurrent_per_tenant()
     assert opts[:policy] == :reject
     assert opts[:child_reserve] == 0
+    # A slot whose connection died is given back on the executor's word.
+    assert opts[:fence] == {Locus.Executor, :fence, []}
 
     Application.put_env(:locus, :max_concurrent, 5)
     Application.put_env(:locus, :max_concurrent_per_tenant, 3)
