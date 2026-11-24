@@ -6,7 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"log/syslog"
+	"net"
 	"os"
 	"os/exec"
 	"syscall"
@@ -67,13 +67,18 @@ func screenEndParent(program string, first func()) error {
 	return unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
 }
 
-// screenSay says line on this process's standard error and in the
-// system's log as cyfr-screen, the name the screen's session logs under
-// (cmd/screen/session.sh).
+// screenLog is the system's log, as journald takes it.
+var screenLog = "/dev/log"
+
+// screenSay says line in the system's log as cyfr-screen, the name the
+// screen's session logs under (cmd/screen/session.sh), within a second,
+// and then on this process's standard error. It is said once the app is
+// ended: the app is the reader of that stream, and nobody holds it then.
 func screenSay(line string) {
-	fmt.Fprintln(os.Stderr, line)
-	if l, err := syslog.New(syslog.LOG_ERR|syslog.LOG_USER, "cyfr-screen"); err == nil {
-		_ = l.Err(line)
-		_ = l.Close()
+	if c, err := net.DialTimeout("unixgram", screenLog, time.Second); err == nil {
+		_ = c.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = fmt.Fprintf(c, "<11>cyfr-screen[%d]: %s", os.Getpid(), line)
+		_ = c.Close()
 	}
+	fmt.Fprintln(os.Stderr, line)
 }

@@ -13,20 +13,32 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// labwc stands in for itself by its recorded exchange (testdata): it reads
-// each request the list makes and holds it to the recorded one, byte for
-// byte, and sends each recorded event, stopping at each step until the
-// test sends on next; after the last it ends the connection.
+// labwc stands in for itself by its recorded exchange (testdata): it holds
+// each request the list makes to the recorded one, byte for byte, and
+// sends each recorded event, stopping at each step until the test plays
+// it. Beside the recording it answers each round trip the list asks at
+// once, playing first the step armed to arrive with it, takes any closed
+// window's destroy, and sends what the test injects; it ends
+// the connection when the test ends it.
 type labwc struct {
 	socket string
-	next   chan struct{}
+	steps  chan struct{}
 	failed chan string
+	synced chan struct{}
+
+	mu    sync.Mutex
+	conn  net.Conn
+	armed bool
+	// played is each step's events, in order, and what of them was sent.
+	pending [][][]byte
+	asked   [][]byte
+	ended   chan struct{}
 }
 
 func replay(t *testing.T, file string) *labwc {
@@ -35,69 +47,155 @@ func replay(t *testing.T, file string) *labwc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &labwc{socket: filepath.Join(t.TempDir(), "wayland-0"), next: make(chan struct{}), failed: make(chan string, 1)}
+	l := &labwc{socket: filepath.Join(t.TempDir(), "wayland-0"), steps: make(chan struct{}, 8), failed: make(chan string, 8),
+		synced: make(chan struct{}, 64), ended: make(chan struct{})}
+	// The recording cut at its steps: what labwc sends in each, and what
+	// it is asked across them all, in order.
+	l.pending = [][][]byte{nil}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		kind, rest, _ := strings.Cut(line, " ")
+		switch kind {
+		case "=":
+			l.pending = append(l.pending, nil)
+		case "c", "s":
+			b, err := hex.DecodeString(rest)
+			if err != nil {
+				t.Fatal(line)
+			}
+			if kind == "s" {
+				l.pending[len(l.pending)-1] = append(l.pending[len(l.pending)-1], b)
+			} else {
+				l.asked = append(l.asked, b)
+			}
+		}
+	}
 	ln, err := net.Listen("unix", l.socket)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { ln.Close(); l.end() })
 	go func() {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer c.Close()
-		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-			kind, rest, _ := strings.Cut(line, " ")
-			switch kind {
-			case "#":
-			case "=":
-				<-l.next
-			case "c", "s":
-				want, err := hex.DecodeString(rest)
-				if err != nil {
-					l.failed <- line
-					return
-				}
-				if kind == "s" {
-					if _, err := c.Write(want); err != nil {
-						l.failed <- "the list went before labwc sent " + rest
-						return
-					}
-					continue
-				}
-				got := make([]byte, len(want))
-				if _, err := io.ReadFull(c, got); err != nil || !bytes.Equal(got, want) {
-					l.failed <- "the list asked " + hex.EncodeToString(got) + ", labwc was asked " + rest
-					return
-				}
-			}
+		l.mu.Lock()
+		l.conn = c
+		l.mu.Unlock()
+		l.play()
+		go l.hear(c)
+		for range l.steps {
+			l.play()
 		}
 	}()
 	return l
 }
 
-func (l *labwc) step(t *testing.T) {
-	t.Helper()
-	select {
-	case l.next <- struct{}{}:
-	case why := <-l.failed:
-		t.Fatal(why)
-	case <-time.After(5 * time.Second):
-		t.Fatal("labwc's recording did not reach its next step")
+// play sends the next step's events.
+func (l *labwc) play() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.pending) == 0 {
+		return
+	}
+	for _, b := range l.pending[0] {
+		_, _ = l.conn.Write(b)
+	}
+	l.pending = l.pending[1:]
+}
+
+// hear reads what the list asks.
+func (l *labwc) hear(c net.Conn) {
+	r := bufio.NewReader(c)
+	for {
+		var head [8]byte
+		if _, err := io.ReadFull(r, head[:]); err != nil {
+			return
+		}
+		body := make([]byte, Wire.Uint32(head[4:])>>16-8)
+		if _, err := io.ReadFull(r, body); err != nil {
+			return
+		}
+		msg := append(head[:], body...)
+		object, opcode := Wire.Uint32(head[:]), Wire.Uint32(head[4:])&0xffff
+		l.mu.Lock()
+		switch {
+		case object == Display && opcode == DisplaySync && Wire.Uint32(body) >= firstSync:
+			if l.armed {
+				l.armed = false
+				for _, b := range l.pending[0] {
+					_, _ = c.Write(b)
+				}
+				l.pending = l.pending[1:]
+			}
+			id := Wire.Uint32(body)
+			_, _ = c.Write(Words(id, 12<<16|CallbackDone, 1))
+			_, _ = c.Write(Words(Display, 12<<16|DisplayDeleteID, id))
+			l.synced <- struct{}{}
+		case opcode == handleDestroy && object >= a && len(body) == 0:
+			// A window's destroy once labwc closed it, recorded or not.
+		case len(l.asked) > 0 && bytes.Equal(msg, l.asked[0]):
+			l.asked = l.asked[1:]
+		default:
+			l.failed <- "the list asked " + hex.EncodeToString(msg) + ", which labwc was not asked"
+		}
+		l.mu.Unlock()
 	}
 }
 
-// shows waits until the list shows exactly want.
-func shows(t *testing.T, w *Windows, want ...uint32) {
+// step plays the recording's next step; armStep plays it with the next
+// round trip's answer, ahead of its done.
+func (l *labwc) step()    { l.steps <- struct{}{} }
+func (l *labwc) armStep() { l.mu.Lock(); l.armed = true; l.mu.Unlock() }
+
+// close injects labwc closing the window it numbers handle; open
+// injects it announcing a new window it numbers handle.
+func (l *labwc) close(handle uint32) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, _ = l.conn.Write(Words(handle, 8<<16|handleClosed))
+}
+
+func (l *labwc) open(handle uint32) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, _ = l.conn.Write(Words(windowsManager, 12<<16|managerToplevel, handle))
+}
+
+func (l *labwc) end() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	select {
+	case <-l.ended:
+	default:
+		close(l.ended)
+		if l.conn != nil {
+			l.conn.Close()
+		}
+	}
+}
+
+func (l *labwc) roundTrip(t *testing.T) {
+	t.Helper()
+	select {
+	case <-l.synced:
+	case why := <-l.failed:
+		t.Fatal(why)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the list asked no round trip")
+	}
+}
+
+// shows waits until the list shows n windows, as far as it has read.
+func shows(t *testing.T, w *Windows, n int) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); ; {
-		shown, err := w.Shown()
-		if err == nil && slices.Equal(shown, want) {
+		if m := w.Mark(); m.err == nil && len(m.windows) == n {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the list shows %v (%v), want %v", shown, err, want)
+			m := w.Mark()
+			t.Fatalf("the list shows %d windows (%v), want %d", len(m.windows), m.err, n)
 		}
 		time.Sleep(5 * time.Millisecond) // sleep-ok: polls the list's own reader, bounded
 	}
@@ -105,44 +203,62 @@ func shows(t *testing.T, w *Windows, want ...uint32) {
 
 const a, b, c = 0xff000000, 0xff000001, 0xff000002
 
-// The list as labwc told it: the windows shown as it began, a window
-// opened after, one closed, which it confirms within its bound and no
-// other, and nothing once labwc has gone, a window still shown then
-// included: a list that cannot be read confirms nothing.
+// The list as labwc told it, and a hide's mark against it: a window
+// announced just before the mark, in transit as it was taken, is marked
+// by the round trip; the marked windows closing confirm it even where a
+// new window then takes a closed one's number; an empty list is
+// confirmed once the round trip shows it truly empty; and once labwc has
+// gone nothing is confirmed. Each round trip is the list's own.
 func TestWindows_AsLabwcTellsThem(t *testing.T) {
 	l := replay(t, "testdata/labwc-windows.txt")
 	t.Setenv("WAYLAND_DISPLAY", l.socket)
 	w := ListWindows(t.Context())
 	t.Cleanup(func() { w.Close() })
-	shows(t, w, a, b)
+	shows(t, w, 2)
 
-	l.step(t)
-	shows(t, w, a, b, c)
+	// The third window's announcement arrives only with the round trip.
+	l.armStep()
+	if err := w.Mark().Closed(200 * time.Millisecond); err == nil || !strings.Contains(err.Error(), "still shows 3 of the 3") {
+		t.Fatalf("a window announced before the round trip was not marked: %v", err)
+	}
+	l.roundTrip(t)
 
+	l.step() // one of the first two closes
+	shows(t, w, 2)
+
+	mark := w.Mark()
 	closed := make(chan error, 1)
-	go func() { closed <- w.Closed([]uint32{b}, 5*time.Second) }()
-	l.step(t)
+	go func() { closed <- mark.Closed(5 * time.Second) }()
+	l.roundTrip(t)
+	l.close(c)
+	l.open(c) // a new window, numbered as the closed one was
+	l.step()  // the other closes
 	if err := <-closed; err != nil {
-		t.Fatalf("the closed window was not confirmed: %v", err)
+		t.Fatalf("the marked windows closed, a new one numbered as one of them, and the hide was not confirmed: %v", err)
 	}
-	shows(t, w, a, c)
-	if err := w.Closed([]uint32{c}, 20*time.Millisecond); err == nil || !strings.Contains(err.Error(), "still shows 1 of the 1") {
-		t.Fatalf("a window still shown was confirmed closed: %v", err)
-	}
-	if err := w.Closed(nil, time.Millisecond); err != nil {
-		t.Fatalf("no window to close was not confirmed: %v", err)
-	}
+	shows(t, w, 1)
 
-	go func() { closed <- w.Closed([]uint32{a, c}, 5*time.Second) }()
-	l.step(t)
-	if err := <-closed; err == nil || !strings.Contains(err.Error(), "cannot be read") {
-		t.Fatalf("the end of labwc's connection, a window still shown, was %v", err)
+	l.close(c)
+	shows(t, w, 0)
+	if err := w.Mark().Closed(time.Second); err != nil {
+		t.Fatalf("an empty list was not confirmed: %v", err)
 	}
-	if shown, err := w.Shown(); err == nil || !strings.Contains(err.Error(), "cannot be read") {
-		t.Fatalf("after labwc's end the list shows %v (%v)", shown, err)
+	l.roundTrip(t)
+
+	l.end()
+	for deadline := time.Now().Add(5 * time.Second); w.Mark().err == nil; {
+		if time.Now().After(deadline) {
+			t.Fatal("the list went on after labwc's end")
+		}
+		time.Sleep(5 * time.Millisecond) // sleep-ok: polls the list's own reader, bounded
 	}
-	if err := w.Closed(nil, time.Millisecond); err == nil {
-		t.Fatal("a list that cannot be read confirmed a hide")
+	if err := w.Mark().Closed(time.Second); err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("after labwc's end a hide was %v", err)
+	}
+	select {
+	case why := <-l.failed:
+		t.Fatal(why)
+	default:
 	}
 }
 
@@ -151,7 +267,7 @@ func TestWindows_AsLabwcTellsThem(t *testing.T) {
 func TestWindows_ThatCannotBeRead(t *testing.T) {
 	t.Setenv("WAYLAND_DISPLAY", filepath.Join(t.TempDir(), "none"))
 	w := ListWindows(t.Context())
-	if _, err := w.Shown(); err == nil {
+	if err := w.Mark().Closed(time.Second); err == nil {
 		t.Fatal("a compositor that is not there was read")
 	}
 
@@ -182,7 +298,68 @@ func TestWindows_ThatCannotBeRead(t *testing.T) {
 	t.Setenv("WAYLAND_DISPLAY", socket)
 	w = ListWindows(t.Context())
 	defer w.Close()
-	if _, err := w.Shown(); err == nil || !strings.Contains(err.Error(), "offers no list of its windows") {
+	if err := w.Mark().Closed(time.Second); err == nil || !strings.Contains(err.Error(), "offers no list of its windows") {
 		t.Fatalf("a compositor without a list of windows: %v", err)
+	}
+}
+
+// A compositor that stops reading holds nothing of the list's: with its
+// socket full of the list's requests, the list is marked at once all the
+// same, and gives up within its bound, which confirms nothing.
+func TestWindows_ACompositorThatDoesNotReadHoldsNothing(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "wayland-0")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var asked [60 + 12]byte
+		if _, err := io.ReadFull(conn, asked[:24]); err != nil {
+			return
+		}
+		global := append(Words(7, uint32(len(managerName)+1)), managerName...)
+		global = append(global, 0)
+		for len(global)%4 != 0 {
+			global = append(global, 0)
+		}
+		global = append(global, Words(3)...)
+		_, _ = conn.Write(append(Words(windowsRegistry, uint32(8+len(global))<<16|RegistryGlobal), global...))
+		_, _ = conn.Write(Words(windowsListed, 12<<16|CallbackDone, 1))
+		if _, err := io.ReadFull(conn, asked[:]); err != nil {
+			return
+		}
+		_, _ = conn.Write(Words(windowsBound, 12<<16|CallbackDone, 1))
+		// Windows opened and closed, each closed one's destroy asked of a
+		// compositor that reads no more.
+		for h := uint32(a); h < a+200000; h++ {
+			if _, err := conn.Write(append(Words(windowsManager, 12<<16|managerToplevel, h), Words(h, 8<<16|handleClosed)...)); err != nil {
+				return
+			}
+		}
+		time.Sleep(10 * time.Second) // sleep-ok: the compositor lives on, reading nothing
+	}()
+	t.Setenv("WAYLAND_DISPLAY", socket)
+	w := ListWindows(t.Context())
+	defer w.Close()
+	began := time.Now()
+	for time.Since(began) < 3*time.Second {
+		at := time.Now()
+		m := w.Mark()
+		if took := time.Since(at); took > 200*time.Millisecond {
+			t.Fatalf("a mark waited %v on a compositor that does not read", took)
+		}
+		if m.err != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: marks again while the list writes
+	}
+	if err := w.Mark().Closed(time.Second); err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("a compositor that does not read: %v", err)
 	}
 }

@@ -6,8 +6,11 @@ package cmd
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -243,5 +246,93 @@ func TestScreenEndParent(t *testing.T) {
 				t.Fatalf("the child answered %q", answer)
 			}
 		})
+	}
+}
+
+// TestEndScreenAppHelper is a process and its child for
+// TestEndScreenAppWaitsOnNoReader: as "parent" it starts itself again as
+// "child" with a standard error it has filled and never reads, as the
+// stuck app holds the shell's, and waits for it; as "child" it carries out
+// an unconfirmed hide (endScreenApp) on its parent, then says when.
+func TestEndScreenAppHelper(t *testing.T) {
+	dir := os.Getenv("CYFR_END_APP_DIR")
+	switch os.Getenv("CYFR_END_APP_ROLE") {
+	case "parent":
+		var p [2]int
+		if err := syscall.Pipe2(p[:], syscall.O_NONBLOCK|syscall.O_CLOEXEC); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			if _, err := syscall.Write(p[1], make([]byte, 4096)); err != nil {
+				break
+			}
+		}
+		if err := syscall.SetNonblock(p[1], false); err != nil {
+			t.Fatal(err)
+		}
+		child := exec.Command(os.Args[0], "-test.run=^TestEndScreenAppHelper$")
+		child.Env = append(os.Environ(), "CYFR_END_APP_ROLE=child")
+		child.Stderr = os.NewFile(uintptr(p[1]), "full")
+		_ = child.Start()
+		_ = child.Wait()
+	case "child":
+		// As the shell does, through its writer to main (desktop.NewWriter):
+		// a write to a pipe nobody reads is an error, not this process's end.
+		signal.Ignore(syscall.SIGPIPE)
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		screenLog = filepath.Join(dir, "log")
+		self, _ := os.Executable()
+		began := time.Now()
+		endScreenApp(self, ln, errors.New("the compositor still shows 1 of the 1 windows"))
+		_ = os.WriteFile(filepath.Join(dir, "said"), []byte(time.Since(began).String()), 0o600)
+	default:
+		t.Skip("run by TestEndScreenAppWaitsOnNoReader")
+	}
+}
+
+// An unconfirmed hide is carried out whatever the stuck app leaves unread:
+// with the shell's standard error full and never read, and the system's
+// log read by nobody, the parent is ended at once, and what is said is
+// said after, within its own bound.
+func TestEndScreenAppWaitsOnNoReader(t *testing.T) {
+	dir := t.TempDir()
+	logged, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: filepath.Join(dir, "log"), Net: "unixgram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logged.Close()
+	parent := exec.Command(os.Args[0], "-test.run=^TestEndScreenAppHelper$")
+	parent.Env = append(os.Environ(), "CYFR_END_APP_ROLE=parent", "CYFR_END_APP_DIR="+dir)
+	if err := parent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { ended <- parent.Wait() }()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		_ = parent.Process.Kill()
+		t.Fatal("the parent was not ended: the end waited on a reader")
+	}
+	status, _ := parent.ProcessState.Sys().(syscall.WaitStatus)
+	if !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("the parent ended as %v, not by SIGKILL", parent.ProcessState)
+	}
+	var said []byte
+	for deadline := time.Now().Add(5 * time.Second); len(said) == 0 && time.Now().Before(deadline); {
+		said, _ = os.ReadFile(filepath.Join(dir, "said"))
+		time.Sleep(10 * time.Millisecond) // sleep-ok: polls the child's answer, bounded
+	}
+	if len(said) == 0 {
+		t.Fatal("the child never finished saying why")
+	}
+	buf := make([]byte, 4096)
+	_ = logged.SetReadDeadline(time.Now().Add(time.Second))
+	n, err := logged.Read(buf)
+	if err != nil || !strings.Contains(string(buf[:n]), "cyfr-screen[") || !strings.Contains(string(buf[:n]), "was ended from outside") {
+		t.Fatalf("the system's log got %q (%v)", buf[:n], err)
 	}
 }

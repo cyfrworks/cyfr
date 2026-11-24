@@ -486,16 +486,11 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	windows := wayland.ListWindows(ctx)
 	defer windows.Close()
 	hiding := func() func() error {
-		shown, err := windows.Shown()
-		return func() error {
-			if err != nil {
-				return err
-			}
-			return windows.Closed(shown, screenHideWithin)
-		}
+		mark := windows.Mark()
+		return func() error { return mark.Closed(screenHideWithin) }
 	}
 	var ln net.Listener
-	browser, err := newScreenApp(in, out, local, hiding, func(why error) { endScreenApp(ln, why) })
+	browser, err := newScreenApp(in, out, local, hiding, func(why error) { endScreenApp(appProgram, ln, why) })
 	if err != nil {
 		return err
 	}
@@ -569,9 +564,9 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	case err := <-moved:
 		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
 	}
-	// The last lock hides as the screen's end, after which nothing shows.
-	browser.end()
-	sh.Lock("")
+	// The last lock hides as the screen's end, after which nothing shows,
+	// and is confirmed or carried out before this returns.
+	browser.finish(sh.Lock)
 	return ended
 }
 
@@ -582,23 +577,22 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 const screenHideWithin = 2 * time.Second
 
 // endScreenApp carries out a hide the compositor did not confirm, why
-// saying what it said instead: where this process's parent is the
-// installed app, it says so on its standard error, which the app may no
-// longer read, and in the system's log (screenSay), closes the shell's
-// listener, so the app's next start, whose cyfr takes it, finds it free,
-// and ends the app by the kernel (screenEndParent). Its own lock goes on
-// meanwhile: the proofs to CYFR, the channel's close and the key's
-// erase hold the shell, which this process's end waits for; the app's
-// end ends its pipe, and so the shell (runScreenShell). Where the parent
-// is not the app, nothing is ended, and that is said.
-func endScreenApp(ln net.Listener, why error) {
-	err := screenEndParent(appProgram, func() {
-		screenSay(fmt.Sprintf("The lock's hide was not confirmed within %v (%v), so the CYFR app is ended from outside, and its launcher starts it again, locked.", screenHideWithin, why))
-		ln.Close()
-	})
-	if err != nil {
+// saying what it said instead. Where this process's parent is program, the
+// installed app, it closes the shell's listener, so the app's next start,
+// whose cyfr takes it, finds it free, ends the app by the kernel
+// (screenEndParent), and only then says why (screenSay): before, the
+// saying could wait on the stuck app, the reader of this process's
+// standard error. Its own lock goes on meanwhile: the proofs to CYFR,
+// the channel's close and the key's erase hold the shell, which this
+// process's end waits for; the app's end ends its pipe, and so the shell
+// (runScreenShell). Where the parent is not the app, nothing is ended,
+// and that is said.
+func endScreenApp(program string, ln net.Listener, why error) {
+	if err := screenEndParent(program, func() { ln.Close() }); err != nil {
 		fmt.Fprintf(os.Stderr, "The lock's hide was not confirmed within %v (%v), and the CYFR app was not ended: %v.\n", screenHideWithin, why, err)
+		return
 	}
+	screenSay(fmt.Sprintf("The lock's hide was not confirmed within %v (%v), so the CYFR app was ended from outside, and its launcher starts it again, locked.", screenHideWithin, why))
 }
 
 // releaseApart is what the screen's page says where the app's cyfr, which

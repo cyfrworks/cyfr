@@ -59,6 +59,8 @@ type screenApp struct {
 	// it is.
 	endApp func(why error)
 	ended  sync.Once
+	// awaited counts the hides whose confirmation is awaited (last).
+	awaited sync.WaitGroup
 
 	// gone is closed at the first message to main that could not be
 	// written: the app has gone, and show ends.
@@ -125,7 +127,9 @@ func (a *screenApp) hide() {
 	// What is shown is marked before main is told, so a window main opens
 	// for the lock page is none of it.
 	gone := a.hiding()
+	a.awaited.Add(1)
 	go func() {
+		defer a.awaited.Done()
 		if err := gone(); err != nil {
 			a.ended.Do(func() { a.endApp(err) })
 		}
@@ -136,6 +140,15 @@ func (a *screenApp) hide() {
 	}
 	a.say(desktop.Message{Type: desktop.TypeLocked})
 	a.propose()
+}
+
+// finish is the shell's last lock, through lock (shell.Shell.Lock), whose
+// hide says ending: it returns once every hide begun has been confirmed or
+// carried out, so the process that returns from it leaves none undone.
+func (a *screenApp) finish(lock func(why string)) {
+	a.end()
+	lock("")
+	a.awaited.Wait()
 }
 
 // end makes the next hide the shell's last.
