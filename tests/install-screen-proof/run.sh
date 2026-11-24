@@ -507,7 +507,7 @@ kid = "sha256:" + hashlib.sha256(pub).hexdigest()
 added = [e["key"]["kid"] for e in log["entries"] if e["kind"] == "add_key"]
 sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifier"] and kid in added else 1)' \
     "$GUEST_DIR/handle-saved.json" "$GUEST_DIR/holder-saved.json" "$GUEST_DIR/log-saved.json"
-  check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/client.json'
+  check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/homes.json'
   check "the screen sends CYFR the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
 
@@ -706,7 +706,7 @@ screen_confirms() {
   check "the key's card is closed" screen_shows_not 'Copy this key now' 15
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
-  client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/.cyfr/device/client.json")
+  client=$(guest_ssh "python3 -I -c 'import json, sys; l = json.load(open(sys.argv[1])); print(l[\"homes\"][l[\"last\"]][\"client_id\"])' ~/.cyfr/device/homes.json")
   check "the home records it confirmed by this screen's own client ($client) and consumed by the key's making" \
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }

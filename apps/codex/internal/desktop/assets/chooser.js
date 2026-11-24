@@ -14,10 +14,10 @@ function check(){$("docker").textContent="Checking whether Docker answers\u2026"
 function progress(p){run=p.run||0;const running=!p.done&&!p.error;busy=running;if(p.done&&p.folder===$("folder").textContent)found=true;$("choose").hidden=true;$("setup").hidden=false;$("progress").hidden=false;
 $("progress").textContent=["Setting up CYFR in "+p.folder].concat(p.steps.map(i=>steps[i]||i)).join("\n")+(running?"\u2026":"");
 $("change").hidden=$("back").hidden=running||!!p.done;$("check").hidden=$("start").hidden=true;$("retry").hidden=!p.error;offer();
-if(p.error||p.done)say(p.error?p.error+".":"CYFR is set up in "+p.folder+" and started."+(p.unrecorded?" "+p.unrecorded:""));
+if(p.error||p.done)say(p.error?p.error+".":"CYFR is set up in "+p.folder+" and started.");
 if(running)post("/bootstrap/setup",{seen:p.seq}).then(a=>a.setup?progress(a.setup):say(a.error));else if(p.done&&started){started=false;opening()}}
 function begin(){started=true;say("");post("/bootstrap/start",{picks,run}).then(a=>{folder(a);if(a.setup)progress(a.setup);if(a.error)say(a.error)})}
-function opening(){$("go").hidden=true;say("Opening CYFR\u2026");post("/bootstrap/open",{picks,run}).then(a=>{if(a.next)return location.replace(a.next);say(a.error||notices[a.notice]||"CYFR did not open.");$("go").hidden=false})}
+function opening(){$("go").hidden=true;say("Opening CYFR\u2026");post("/bootstrap/open",{picks,run}).then(a=>{if(a.next){if(!passkey)location.replace(a.next);return}say(a.error||notices[a.notice]||"CYFR did not open.");$("go").hidden=false})}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token,epoch},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("named").textContent=a.cyfr;$("service").textContent=a.confirm}

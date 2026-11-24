@@ -858,8 +858,9 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 
 // The screen's launcher starts the app on the route its folder's CYFR
 // takes, read at that start: a tailnet folder's proxy and resolver rules,
-// none for another, and none for a folder that cannot be read, whose
-// shell says why on the screen.
+// none for another, and none for a folder that cannot be read: there the
+// shell fails before it shows anything, the reason goes to the app's
+// error stream, the app ends itself and the launcher tries again.
 func TestTheScreensAppStartsOnItsFoldersRoute(t *testing.T) {
 	for _, c := range []struct {
 		name, env string
@@ -886,5 +887,24 @@ func TestTheScreensAppStartsOnItsFoldersRoute(t *testing.T) {
 				t.Fatalf("the app starts as %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// `cyfr screen app` is the screen's launcher's alone: it resolves, and the
+// screen's help lists it nowhere.
+func TestTheScreensAppCommandIsHidden(t *testing.T) {
+	found, rest, err := rootCmd.Find([]string{"screen", "app", "/home/alice/cyfr"})
+	if err != nil || found != screenAppCmd || !slices.Equal(rest, []string{"/home/alice/cyfr"}) {
+		t.Fatalf("cyfr screen app resolves to %v %q (%v)", found, rest, err)
+	}
+	out, err := runCommand(t, t.Context(), "screen", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\n  off ") {
+		t.Fatalf("the screen's help lists no commands:\n%s", out)
+	}
+	if strings.Contains(out, "\n  app ") {
+		t.Fatalf("the screen's help lists cyfr screen app:\n%s", out)
 	}
 }

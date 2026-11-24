@@ -6,8 +6,9 @@ defmodule Locus.Backends.ServiceTest do
   The backends service over a loopback port, met with the shared vectors
   (`tests/fixtures/locus_backends.json`) at their own instant and boot:
   every route and the lifetime every answer names; each control type's
-  round trip through the vectors; every invalid body refused with its
-  refusal; header-first refusals that close the connection with the body
+  round trip through the vectors, a status's answer held in the answering
+  count from before it is collected until it is written; every invalid
+  body refused with its refusal; header-first refusals that close the connection with the body
   unread; the body bounds and the hash check; every fence vector
   (`fence_rejected`) replayed against a fresh service, a held message's
   body sent only once the messages after it are answered; the session
@@ -15,7 +16,8 @@ defmodule Locus.Backends.ServiceTest do
   the body, a message of one mode to a session of the other refused, and,
   through the test environment's `Locus.DirectLauncher`, a
   session end to end: lines sent and received, the owner's secrets masked
-  in every line, a recv replayed by its `after`; and the close route: no
+  in every line, a recv replayed by its `after`, and the bytes an answer
+  carries held in the answering count until it is written; and the close route: no
   success before the release, whoever follows the session or owns its row
   by then, nothing of another version's, row's or athanor's ended, and a
   place kept held past the bound.
@@ -49,6 +51,9 @@ defmodule Locus.Backends.ServiceTest do
   # opens.
   @roomy_budget Jason.decode!(@vectors["hello"]["answer"])["memory"]["budget_bytes"]
   @owners Module.concat(__MODULE__, Table)
+  # The backends role's count, of this suite's own, for a test whose
+  # sessions name it.
+  @output Module.concat(__MODULE__, Output)
 
   defmodule Launcher do
     @moduledoc false
@@ -77,6 +82,7 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     def send(_handle, _data), do: :ok
+    def taken(_handle), do: :ok
     def signal(_handle, _sig), do: :ok
     def resize(_handle, _rows, _cols), do: :ok
     def release(_agent, _handle, _grace_ms), do: :ok
@@ -115,6 +121,7 @@ defmodule Locus.Backends.ServiceTest do
         id: :launcher
       )
 
+    start_supervised!({Locus.Output, name: @output, bounds: Locus.Output.bounds().backends})
     clock = start_supervised!({Agent, fn -> 1_000_000 end}, id: :clock)
     now = start_supervised!({Agent, fn -> @instant end}, id: :now)
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: :backends)
@@ -152,7 +159,9 @@ defmodule Locus.Backends.ServiceTest do
     server =
       start_supervised!(
         Locus.Backends.listener(
-          plug: {Service, owners: @owners, key: @key, now: fn -> Agent.get(now, & &1) end},
+          plug:
+            {Service,
+             owners: @owners, key: @key, output: @output, now: fn -> Agent.get(now, & &1) end},
           ip: {127, 0, 0, 1},
           port: 0,
           startup_log: false
@@ -587,6 +596,40 @@ defmodule Locus.Backends.ServiceTest do
       )
     end
 
+    # A status names no deadline: it asks the answering count, without
+    # waiting, for the most its collection and its answer can hold, for
+    # each owner it names sixteen programs, each a stderr tail of 65,536
+    # bytes reported as at most three bytes a byte and encoded as at most
+    # six, with a kilobyte for each program's other members, two for the
+    # owner's and one for the answer's.
+    test "a status asks the answering count for the most it can hold, before collecting, without waiting, and gives it back once written",
+         ctx do
+      named = [%{athanor: "ath_room", server: "srv_room"}]
+      room = 1 * (16 * (7 * 65_536 + 1_024) + 2_048) + 1_024
+
+      assert %{status: 200} = control(ctx, %{type: :status, owners: named})
+
+      wait_until(fn ->
+        Locus.Output.held(@output) |> Map.take([:answering, :answering_peak, :waiting]) == %{
+          answering: 0,
+          answering_peak: room,
+          waiting: 0
+        }
+      end)
+
+      # With no room now, it is refused at once, and nothing waits.
+      bound = Locus.Output.bounds().backends.answering
+
+      assert {:ok, full} =
+               Locus.Output.reserve(@output, bound, System.monotonic_time(:millisecond) + 5_000)
+
+      started = System.monotonic_time(:millisecond)
+      assert_refused(control(ctx, %{type: :status, owners: named}), "unavailable")
+      assert System.monotonic_time(:millisecond) - started < 1_000
+      assert %{waiting: 0} = Locus.Output.held(@output)
+      Locus.Output.return(full)
+    end
+
     test "a hello names no lifetime, and answers this one", ctx do
       answer = control(ctx, %{type: :hello, g: @g, cyfr_boot: @cyfr_boot})
       assert answer.status == 200
@@ -897,6 +940,37 @@ defmodule Locus.Backends.ServiceTest do
 
       sent = invoke(ctx, %{type: :send, session: session, lines: ["late"]})
       assert {:ok, %{status: :ended}} = LB.read_session_answer(:send, sent.body)
+    end
+
+    @tag launcher: :direct
+    @tag session_opts: [output: @output]
+    test "a recv's answer holds its bytes in the answering count until it is written, then gives them back",
+         ctx do
+      fetch_sync(ctx)
+      opened = invoke(ctx, open_message())
+      assert {:ok, %{session: session}} = LB.read_session_answer(:open, opened.body)
+      sent = invoke(ctx, %{type: :send, session: session, lines: ["hello"]})
+      assert {:ok, %{status: :running}} = LB.read_session_answer(:send, sent.body)
+
+      wait_until(
+        fn -> Locus.Output.held(@output).unread > 0 end,
+        5_000,
+        "the line to be buffered"
+      )
+
+      answer = invoke(ctx, %{type: :recv, session: session, after: 0, max_wait_ms: 0})
+      assert {:ok, %{lines: [%{text: "hello"}]}} = LB.read_session_answer(:recv, answer.body)
+      assert Locus.Output.held(@output).answering_peak == byte_size(~s("hello")) + 32
+
+      # The connection stays open, and with it the process that wrote the
+      # answer: only its return gives the bytes back.
+      wait_until(
+        fn -> Locus.Output.held(@output).answering == 0 end,
+        5_000,
+        "the written answer's grant to be returned"
+      )
+
+      :gen_tcp.close(answer.socket)
     end
 
     @tag launcher: :direct

@@ -118,6 +118,7 @@ defmodule Locus.ListenerTest do
     def pool_stats(_server, "backends"), do: {:ok, %{size: 64, free: 64, quarantined: 0}}
     def spawn(_server, _spec), do: {:ok, %{ref: make_ref(), spawn_id: nil, uid: nil, pid: nil}}
     def send(_handle, _data), do: :ok
+    def taken(_handle), do: :ok
     def signal(_handle, _sig), do: :ok
     def release(_server, _handle, _grace_ms), do: :ok
     def fence(_server, _tag), do: :pending
@@ -820,10 +821,10 @@ defmodule Locus.ListenerTest do
       wire = build_body() |> Jason.decode!()
 
       for {body, status, expected} <- [
-            {Jason.encode!(%{wire | "version" => 2}), 409,
-             bs(:protocol_mismatch, %{"builder" => 1, "client" => 2})},
+            {Jason.encode!(%{wire | "version" => 1}), 409,
+             bs(:protocol_mismatch, %{"builder" => 2, "client" => 1})},
             {Jason.encode!(Map.delete(wire, "version")), 409,
-             bs(:protocol_mismatch, %{"builder" => 1, "client" => nil})},
+             bs(:protocol_mismatch, %{"builder" => 2, "client" => nil})},
             {"[]", 400, bs(:malformed, "the body is not a JSON object")}
           ] do
         client =
@@ -848,8 +849,8 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 400, bs(:malformed, sentence), :close, @unread_ms)
 
       for {body, status, expected} <- [
-            {~s({"version":2}), 409, bs(:protocol_mismatch, %{"builder" => 1, "client" => 2})},
-            {~s({"version":1,"verbose":true}), 400,
+            {~s({"version":1}), 409, bs(:protocol_mismatch, %{"builder" => 2, "client" => 1})},
+            {~s({"version":2,"verbose":true}), 400,
              bs(:malformed, "verbose is not a field of this message")}
           ] do
         client = ctx.port |> connect() |> send_request("POST", health_route(), [], body)
@@ -867,8 +868,8 @@ defmodule Locus.ListenerTest do
   defp bs(class, reason) do
     reason = if is_atom(reason), do: Atom.to_string(reason), else: reason
 
-    ~s({"class":"#{class}","diagnostics":[],"reason":#{Jason.encode!(reason)},) <>
-      ~s("type":"refusal","version":1}\n)
+    ~s({"class":"#{class}","reason":#{Jason.encode!(reason)},) <>
+      ~s("type":"refusal","version":2}\n)
   end
 
   defp assert_health_answered(client) do

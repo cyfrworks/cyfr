@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -199,37 +201,37 @@ func TestScreenApp_ReadyIsTheFirstMessage(t *testing.T) {
 // 1; opened for the current attempt's home-ready alone, once; a lock's
 // locked naming no CYFR, then home again as the next attempt; a stale
 // home-ready or home-failed changes nothing, and leave is a lock that
-// leaves no CYFR named; the current attempt's home-failed ends the shell;
+// leaves no CYFR named, answered left once it ran; the current attempt's home-failed ends the shell;
 // main's shutdown and the end of its pipe end it; a line that is not
 // main's message ends it refused.
 func TestScreenApp_WhatMainSays(t *testing.T) {
 	const home = "http://localhost:4000"
 	ready := func(n int) string {
-		return `{"version":1,"type":"home-ready","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
+		return `{"version":2,"type":"home-ready","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
 	}
 	failed := func(n int) string {
-		return `{"version":1,"type":"home-failed","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
+		return `{"version":2,"type":"home-failed","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
 	}
-	const lock, leave = `{"version":1,"type":"lock"}`, `{"version":1,"type":"leave"}`
+	const lock, leave = `{"version":2,"type":"lock"}`, `{"version":2,"type":"leave","id":1}`
 	for name, c := range map[string]struct {
 		lines   []string
 		locks   []string
 		said    []string
 		refused bool
 	}{
-		"opened once": {lines: []string{ready(1), ready(1)}, said: []string{"opened"}},
+		"opened once": {lines: []string{ready(1), ready(1)}, said: []string{"opened 1"}},
 		"a lock proposes again": {lines: []string{ready(1), lock, ready(1), failed(1), ready(2)}, locks: []string{"Locked."},
-			said: []string{"opened", "locked", "home 2", "opened"}},
+			said: []string{"opened 1", "locked", "home 2", "opened 2"}},
 		"a stale home-ready": {lines: []string{lock, ready(1)}, locks: []string{"Locked."},
 			said: []string{"locked", "home 2"}},
 		"leave names no CYFR": {lines: []string{leave, ready(1), ready(2)}, locks: []string{"Locked."},
-			said: []string{"locked", "home 2", "opened"}},
-		"another CYFR's home-ready": {lines: []string{`{"version":1,"type":"home-ready","home":"https://other.example","attempt":1}`}},
+			said: []string{"locked", "home 2", "left", "opened 2"}},
+		"another CYFR's home-ready": {lines: []string{`{"version":2,"type":"home-ready","home":"https://other.example","attempt":1}`}},
 		"the current home-failed": {lines: []string{lock, failed(2), lock}, locks: []string{"Locked."},
 			said: []string{"locked", "home 2"}, refused: true},
-		"shutdown":       {lines: []string{`{"version":1,"type":"shutdown"}`, lock}},
+		"shutdown":       {lines: []string{`{"version":2,"type":"shutdown"}`, lock}},
 		"the pipe's end": {},
-		"not a message":  {lines: []string{`{"version":1,"type":"unlock"}`}, refused: true},
+		"not a message":  {lines: []string{`{"version":2,"type":"unlock"}`}, refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sink := &lineSink{}
@@ -264,7 +266,7 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	a.end()
 	a.hide()
 	a.hide()
-	if _, err := io.WriteString(answer, `{"version":1,"type":"home-ready","home":"http://localhost:4000","attempt":1}`+"\n"); err != nil {
+	if _, err := io.WriteString(answer, `{"version":2,"type":"home-ready","home":"http://localhost:4000","attempt":1}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	answer.Close()
@@ -380,5 +382,49 @@ func TestScreenApp_AHideNotConfirmedEndsTheApp(t *testing.T) {
 	case <-bEnded:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the shell's last hide, not confirmed, ended nothing")
+	}
+}
+
+// ending is the last message of the shell's run: a leave the shell's last
+// lock answers gets no left after it (tests/fixtures/desktop-process.json
+// endings).
+func TestScreenApp_NothingFollowsEnding(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "desktop-process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Endings []struct {
+			Name     string            `json:"name"`
+			ToCyfr   []json.RawMessage `json:"to_cyfr"`
+			FromCyfr []struct {
+				Type string `json:"type"`
+			} `json:"from_cyfr"`
+		} `json:"endings"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil || len(v.Endings) == 0 {
+		t.Fatalf("no endings (%v)", err)
+	}
+	for _, c := range v.Endings {
+		t.Run(c.Name, func(t *testing.T) {
+			lines := make([]string, len(c.ToCyfr))
+			for i, m := range c.ToCyfr {
+				lines[i] = string(m)
+			}
+			sink := &lineSink{}
+			a := &screenApp{in: strings.NewReader(strings.Join(lines, "\n")), to: desktop.NewWriter(sink, nil),
+				home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}, hiding: confirmed}
+			// The lock main's message makes is the shell's last.
+			if err := a.show(func(string) { a.end(); a.hide() }); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{desktop.TypeReady, "home 1"}
+			for _, m := range c.FromCyfr {
+				want = append(want, m.Type)
+			}
+			if said := sink.said(t, len(want)+1); strings.Join(said, ", ") != strings.Join(want, ", ") {
+				t.Fatalf("the shell said %v, want %v", said, want)
+			}
+		})
 	}
 }

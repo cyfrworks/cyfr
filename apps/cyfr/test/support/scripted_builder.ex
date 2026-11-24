@@ -35,13 +35,24 @@ defmodule Cyfr.Test.ScriptedBuilder do
   build request with nothing queued is refused `unavailable`. An answer is:
 
   - `{:refuse, refusal}` or `{:refuse, refusal, diagnostics}` — a refusal
-    before the stream, the one line of the body at its class's status.
+    before the stream at its class's status: the diagnostics' progress
+    lines, then the refusal's line.
   - `{:respond, status, body}` — any status and body: another server's
     page, a line of the fixture.
   - `{:stream, steps}` — a `200` whose lines are the steps, in order,
     after which the answer ends:
-      - `{:progress, stage, message}`, `{:result, result}` and
-        `{:refusal, refusal, diagnostics}` — the protocol's lines
+      - `{:progress, stage, message}` — a progress line
+      - `{:result, result}` — a build's lines as a builder writes them: a
+        progress line for each of `result.diagnostics`, each file of
+        `result.outputs` (`%{path => bytes}`, in path order) as output
+        lines of at most `Prima.BuilderProtocol.max_chunk_bytes/0` bytes
+        each, a file of no bytes as none, then the result naming each
+        file's size and digest
+      - `{:refusal, refusal, diagnostics}` — a progress line for each
+        diagnostic, then the refusal's line
+    A diagnostic is a log line as a person reads it, `stage: message`
+    (`Prima.BuilderProtocol.diagnostic/2`), and is sent as the progress
+    line that reads so; one of no stage of the protocol's is refused.
       - `{:line, text}` — `text` and a newline, whatever it is
       - `{:bytes, iodata}` — bytes as they are, no newline
       - `{:repeat, binary, times}` — the same bytes again and again,
@@ -290,11 +301,68 @@ defmodule Cyfr.Test.ScriptedBuilder do
     end
 
     defp refuse(conn, refusal, diagnostics) do
-      {:ok, line} = BuilderProtocol.encode_refusal(refusal, diagnostics)
+      {:ok, line} = BuilderProtocol.encode_refusal(refusal)
 
       conn
       |> put_resp_content_type("application/x-ndjson")
-      |> send_resp(BuilderProtocol.status(refusal), line <> "\n")
+      |> send_resp(BuilderProtocol.status(refusal), [progress_lines(diagnostics), line, "\n"])
+    end
+
+    defp progress_lines(diagnostics), do: Enum.map(diagnostics, &[progress_line(&1), "\n"])
+
+    defp progress_line(diagnostic) do
+      stage =
+        Enum.find(BuilderProtocol.stages(), fn stage ->
+          String.starts_with?(diagnostic, "#{stage}: ")
+        end) ||
+          raise ArgumentError,
+                "a scripted diagnostic is a progress line as a person reads it, " <>
+                  "`stage: message` of the protocol's stages: #{inspect(diagnostic)}"
+
+      message = String.replace_prefix(diagnostic, "#{stage}: ", "")
+      {:ok, line} = BuilderProtocol.encode_progress(stage, message)
+      line
+    end
+
+    # A build's files as output lines, in path order, each chunk within the
+    # bound and a file of no bytes as no line, then its result.
+    defp build_lines(%{language: language, target_type: type, outputs: outputs}) do
+      {lines, _seq} =
+        outputs
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.flat_map_reduce(1, fn {path, bytes}, seq ->
+          chunks = chunks(bytes, BuilderProtocol.max_chunk_bytes())
+
+          lines =
+            chunks
+            |> Enum.with_index(seq)
+            |> Enum.map(fn {chunk, at} ->
+              {:ok, line} = BuilderProtocol.encode_output(path, at, chunk)
+              [line, "\n"]
+            end)
+
+          {lines, seq + length(chunks)}
+        end)
+
+      named =
+        outputs
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.map(fn {path, bytes} ->
+          %{path: path, size: byte_size(bytes), digest: Prima.Digest.sha256(bytes)}
+        end)
+
+      {:ok, result} =
+        BuilderProtocol.encode_result(%{language: language, target_type: type, outputs: named})
+
+      [lines, result, "\n"]
+    end
+
+    defp chunks("", _max), do: []
+    defp chunks(bytes, max) when byte_size(bytes) <= max, do: [bytes]
+
+    defp chunks(bytes, max) do
+      <<chunk::binary-size(^max), rest::binary>> = bytes
+      [chunk | chunks(rest, max)]
     end
 
     defp answer(conn, {:refuse, refusal}), do: refuse(conn, refusal, [])
@@ -318,13 +386,12 @@ defmodule Cyfr.Test.ScriptedBuilder do
     end
 
     defp step(conn, {:result, result}) do
-      {:ok, line} = BuilderProtocol.encode_result(result)
-      chunk(conn, line <> "\n")
+      chunk(conn, [progress_lines(Map.get(result, :diagnostics, [])), build_lines(result)])
     end
 
     defp step(conn, {:refusal, refusal, diagnostics}) do
-      {:ok, line} = BuilderProtocol.encode_refusal(refusal, diagnostics)
-      chunk(conn, line <> "\n")
+      {:ok, line} = BuilderProtocol.encode_refusal(refusal)
+      chunk(conn, [progress_lines(diagnostics), line, "\n"])
     end
 
     defp step(conn, {:line, text}), do: chunk(conn, [text, "\n"])

@@ -42,7 +42,8 @@ import (
 // TestMain lets the test binary stand in for cyfr-locus's helpers, which
 // the keeper under test starts as `<self> stage`, `<self> relay`,
 // `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` and
-// `<self> mapped` are the memory tests' commands.
+// `<self> mapped` are the memory tests' commands, `<self> fill` the relay's
+// end's.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -60,6 +61,8 @@ func TestMain(m *testing.M) {
 			os.Exit(mapped(os.Args[2:]))
 		case "dial":
 			os.Exit(dial(os.Args[2:]))
+		case "fill":
+			os.Exit(fill())
 		}
 	}
 	os.Exit(m.Run())

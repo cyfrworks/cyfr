@@ -119,7 +119,7 @@ defmodule Compendium.Builds.StagedBuildTest do
   @tag :capture_log
   test "a refused, failed or timed-out build is answered as compile answers it, storing nothing",
        %{ctx: ctx} do
-    log = ["src/main.tsx(1,1): error TS2304: Cannot find name 'x'."]
+    log = ["output: src/main.tsx(1,1): error TS2304: Cannot find name 'x'."]
     before = stored(ctx)
 
     ScriptedBuilder.script([
