@@ -32,6 +32,8 @@ type onBox struct {
 	answers atomic.Bool
 	// tokens counts the reads of the folder's setup token.
 	tokens atomic.Int32
+	// hangs holds every ask whether its CYFR answers until the asker ends.
+	hangs atomic.Bool
 	mu      sync.Mutex
 	log     []string
 }
@@ -60,7 +62,11 @@ func newOnBox(t *testing.T) *onBox {
 				b.tokens.Add(1)
 				return strings.Repeat("cd", 32), nil
 			}},
-			Answers: func(context.Context) error {
+			Answers: func(ctx context.Context) error {
+				if b.hangs.Load() {
+					<-ctx.Done()
+					return ctx.Err()
+				}
 				if b.answers.Load() {
 					return nil
 				}
@@ -368,7 +374,15 @@ func TestABoxsSelectionsStartLockedAndGiveACYFRElsewhereNothing(t *testing.T) {
 	if n := b.tokens.Load(); n != 0 {
 		t.Fatalf("This box's press read its setup token %d times", n)
 	}
+	// A press waits on no CYFR: with its CYFR never answering, This box
+	// opens all the same.
+	b.hangs.Store(true)
 	b.Leave(1)
+	b.next(t)
+	b.next(t)
+	b.openBox(t, localAddress)
+	b.hangs.Store(false)
+	b.Leave(2)
 	b.next(t)
 	b.next(t)
 

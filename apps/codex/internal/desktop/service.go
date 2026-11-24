@@ -766,12 +766,15 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		return answer{Error: fmt.Sprintf("The CYFR in %s names %s as its account service. The app takes an https address, "+
 			"or a plain http one only at a CYFR's own address on this computer.", project, l.Shell.Directory)}
 	}
+	// This box is not asked at the press: its pages ask, apart, and wait.
 	l.waits = s.Box != "" && project == s.Box
-	if err := l.Answers(run); err != nil && !l.waits {
-		if !s.live(epoch) {
-			return answer{Error: lockedSentence}
+	if !l.waits {
+		if err := l.Answers(run); err != nil {
+			if !s.live(epoch) {
+				return answer{Error: lockedSentence}
+			}
+			return answer{Error: err.Error()}
 		}
-		return answer{Error: err.Error()}
 	}
 	sel, err := s.Homes.SelectLocal(home, project, from)
 	if err != nil {
