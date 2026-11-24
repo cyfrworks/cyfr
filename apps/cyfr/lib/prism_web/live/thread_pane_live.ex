@@ -1004,7 +1004,9 @@ defmodule PrismWeb.ThreadPaneLive do
   # among them.
   defp handle_thread_event(socket, :request, row) do
     replies = get_in(socket.assigns.requests, [row.id, :replies]) || []
-    request = row |> Map.merge(%{replies: replies, outcome: nil}) |> as_stored(socket.assigns.context)
+
+    request =
+      row |> Map.merge(%{replies: replies, outcome: nil}) |> as_stored(socket.assigns.context)
 
     socket |> read_children() |> put_request(request)
   end
