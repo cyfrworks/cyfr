@@ -150,16 +150,27 @@ quit_all() {
 }
 
 run() {
-  local dir arch out status before= after
-  dir=$(cd "$1" && pwd) && arch=$(cat "$dir/arch") || { echo "update: $1 holds no releases built by this script" >&2; exit 64; }
+  local dir arch out status before='' after
+  if ! dir=$(cd "$1" && pwd) || ! arch=$(cat "$dir/arch"); then
+    echo "update: $1 holds no releases built by this script" >&2
+    exit 64
+  fi
   if ! { [ "${GITHUB_ACTIONS:-}" = true ] && [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; } && [ ! -e /.dockerenv ]; then
     echo "update: run installs the CYFR app and leaves it installed: it runs on GitHub's own runners or in a container alone" >&2
     exit 64
   fi
   # cyfr runs root's commands for an account of the sudo or admin group
-  # alone (apps/codex/cmd/prerequisites.go mayAdminister).
-  if [ "$OS" = linux ] && ! id -nG | tr ' ' '\n' | grep -qxE 'sudo|admin'; then
+  # alone (apps/codex/cmd/prerequisites.go mayAdminister), as the system's
+  # group list says, and with no terminal only where sudo -v asks for no
+  # password, which sudo-rs asks while any rule that matches the account
+  # does: on this disposable machine the sudo group's own rule asks none.
+  if [ "$OS" = linux ] && ! id -nG "$(id -un)" | tr ' ' '\n' | grep -qxE 'sudo|admin'; then
     sudo usermod -aG sudo "$(id -un)" || { echo "update: this account could not join the sudo group" >&2; exit 1; }
+    sudo sed -i 's/^%sudo\(\s\+\)ALL=(ALL:ALL) ALL$/%sudo\1ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers && sudo visudo -c >/dev/null
+  fi
+  if [ "$OS" = linux ] && ! sudo -n -v 2>/dev/null; then
+    echo "update: sudo -v asks this account for a password, so cyfr update would refuse with no terminal" >&2
+    exit 1
   fi
   LOGS=$(mktemp -d)
   trap 'quit_all; rm -rf "$LOGS"' EXIT
