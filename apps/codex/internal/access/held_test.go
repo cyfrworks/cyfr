@@ -14,14 +14,20 @@ import (
 // A start that fails while this computer already holds another CYFR's
 // stack, running or stopped, says so, naming that CYFR's folder when its
 // containers name it and else its project: Docker is asked what holds the
-// subnets the compose file fixes, whatever words its error had. A network
-// of this stack's own, or another on a subnet the file does not fix, is
-// no other CYFR, and the start's own sentence stays.
+// networks the compose file fixes the subnets of, whatever words its error
+// had. Only a project holding every one of them, by the same compose name
+// on the same subnets, is a CYFR's: another project on one of those
+// ranges (a photo service), one holding part of them, and this stack's
+// own networks are none, and the start keeps its own sentence.
 func TestAStartBesideAnotherCYFRSaysThisComputerHasOne(t *testing.T) {
-	network := func(project, subnet string) string {
-		return fmt.Sprintf(`{"Labels":{%q:%q,%q:"default"},"IPAM":{"Config":[{"Subnet":%q}]}}`, labelProject, project, labelNetwork, subnet)
+	network := func(project, name, subnet string) string {
+		return fmt.Sprintf(`{"Labels":{%q:%q,%q:%q},"IPAM":{"Config":[{"Subnet":%q}]}}`, labelProject, project, labelNetwork, name, subnet)
 	}
-	start := func(t *testing.T, networks []string, folder string) string {
+	stack := func(project string) []string {
+		return []string{network(project, "default", "172.16.230.0/24"), network(project, "edge", "172.16.234.0/24"),
+			network(project, "locus-runtime", "172.16.231.0/24"), network(project, "locus-builds", "172.20.0.0/16")}
+	}
+	start := func(t *testing.T, networks []string, folders map[string]string) string {
 		h := newHome(t)
 		h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
 			a := c.Args
@@ -40,8 +46,12 @@ func TestAStartBesideAnotherCYFRSaysThisComputerHasOne(t *testing.T) {
 					out += strings.ReplaceAll(n, "OWN", h.fake.st.Project) + "\n"
 				}
 				return &fakeAnswer{Stdout: out}
-			case a[0] == "ps" && slices.Contains(a, "label="+labelProject+"=cyfr-old"):
-				return &fakeAnswer{Stdout: folder + "\n"}
+			case a[0] == "ps":
+				for project, folder := range folders {
+					if slices.Contains(a, "label="+labelProject+"="+project) {
+						return &fakeAnswer{Stdout: folder + "\n"}
+					}
+				}
 			}
 			return nil
 		}
@@ -51,23 +61,26 @@ func TestAStartBesideAnotherCYFRSaysThisComputerHasOne(t *testing.T) {
 		}
 		return err.Error()
 	}
-	alone := start(t, nil, "")
+	alone := start(t, nil, nil)
 	if strings.Contains(alone, "already") || !strings.HasPrefix(alone, "cyfr up: the stack did not start: ") {
 		t.Fatalf("with no other CYFR the start says %q", alone)
 	}
+	photos := map[string]string{"photos": "/home/ada/photos"}
 	for _, c := range []struct {
-		name, folder, want string
-		networks           []string
+		name, want string
+		networks   []string
+		folders    map[string]string
 	}{
-		{"running, its folder named", "/home/ada/cyfr", "cyfr up: the stack did not start: this computer already has a CYFR, in /home/ada/cyfr, and one computer holds one CYFR",
-			[]string{network("OWN", "172.16.231.0/24"), network("cyfr-old", "172.16.231.0/24")}},
-		{"stopped, its project named", "", "cyfr up: the stack did not start: this computer already has a CYFR, the Compose project cyfr-old, and one computer holds one CYFR",
-			[]string{network("cyfr-old", "172.16.230.0/24")}},
-		{"another project on a subnet not fixed", "/home/ada/cyfr", alone, []string{network("cyfr-old", "10.9.0.0/24")}},
-		{"this stack's own networks", "/home/ada/cyfr", alone, []string{network("OWN", "172.16.231.0/24")}},
+		{"a CYFR running, its folder named", "cyfr up: the stack did not start: this computer already has a CYFR, in /home/ada/cyfr, and one computer holds one CYFR",
+			append(stack("OWN"), stack("cyfr-old")...), map[string]string{"cyfr-old": "/home/ada/cyfr"}},
+		{"a CYFR stopped, its project named", "cyfr up: the stack did not start: this computer already has a CYFR, the Compose project cyfr-old, and one computer holds one CYFR",
+			stack("cyfr-old"), nil},
+		{"a photo service on one of its ranges", alone, []string{network("photos", "default", "172.16.231.0/24")}, photos},
+		{"a project holding part of them", alone, []string{network("photos", "default", "172.16.230.0/24"), network("photos", "locus-runtime", "172.16.231.0/24")}, photos},
+		{"this stack's own networks", alone, stack("OWN"), nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := start(t, c.networks, c.folder); got != c.want {
+			if got := start(t, c.networks, c.folders); got != c.want {
 				t.Errorf("the start says %q, want %q", got, c.want)
 			}
 		})
