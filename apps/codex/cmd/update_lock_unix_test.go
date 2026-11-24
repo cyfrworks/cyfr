@@ -79,8 +79,13 @@ func TestASecondAccountTakesTheUpdateLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(shared) })
-	if err := os.Chmod(shared, 0o1777); err != nil {
+	// Shared as the computer's temporary folders are: every account may
+	// write, none take from another.
+	if err := os.Chmod(shared, 0o777|os.ModeSticky); err != nil {
 		t.Fatal(err)
+	}
+	if info, err := os.Stat(shared); err != nil || info.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("the shared folder is %v (%v), not sticky", info.Mode(), err)
 	}
 	// The other account runs a copy of this test binary it may execute.
 	self, err := os.Executable()
