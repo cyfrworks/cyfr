@@ -421,7 +421,13 @@ async function passkeyPhase() {
   // in the app.
   out = await signOutOfPrism(w)
   const other = await otherBrowserAnswer(fresh[0])
-  await js((await toSignIn()).webContents, `location.assign(${literal(other)}); 1`)
+  // The page reads an answer as it loads: given to the sign-in page showing,
+  // the answer changes the fragment alone, so the page is loaded again
+  // with it.
+  const page = await toSignIn()
+  await js(page.webContents, `location.assign(${literal(other)}); 1`)
+  await waitFor(() => page.webContents.getURL() === other, "the other browser's answer in the address")
+  page.webContents.reload()
   w = await contentAt((u) => u.startsWith(HOME + "/login"), "the sign-in page with the other browser's answer")
   const refusedAnswer = await waitFor(() => js(w.webContents, `document.querySelector('[data-test="sign-in-error"]')?.textContent.trim() || null`),
     "the sign-in's refusal")
