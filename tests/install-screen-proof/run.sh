@@ -437,8 +437,8 @@ box_install() {
   # The guest's virtio display has no 3D; the product sets no renderer.
   guest_root 'mkdir -p /etc/systemd/system/cyfr-screen.service.d && printf "[Service]\nEnvironment=WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1\n" >/etc/systemd/system/cyfr-screen.service.d/proof.conf' ||
     fail "the guest's renderer was not set ($GUEST_DIR/root.txt)"
-  # A release whose scaffold ships the AppArmor profile cyfr-locus has init
-  # load it once its files are written: one question and one more sudo.
+  # A release whose cyfr carries the Locus services' AppArmor profile has
+  # init offer it before it writes anything: one question and one more sudo.
   pane_step init 'mkdir -p ~/cyfr && cd ~/cyfr && cyfr init' 1500 \
     'Install these requirements\? \(yes/no\)' yes "$SUDO_PROMPT" @password 'Choose 1 or 2 \[1\]' 1 'Load it\? \(yes/no\)' yes
   check "cyfr init exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
