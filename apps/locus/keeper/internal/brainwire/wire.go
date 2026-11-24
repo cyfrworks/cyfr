@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -35,7 +36,22 @@ const (
 	SignedOut = "signed_out"
 	// uuidPrefix starts what a post's uuid is derived from.
 	uuidPrefix = "cyfr-brain-post\x00"
+	// What every harness carries of a tool whole (Carried): Claude Code
+	// keeps a description's first MaxDescription characters, counted as
+	// JavaScript counts them, in UTF-16 code units; its stub takes a tool
+	// as one argument of at most MaxStubArgument bytes; and its driver
+	// takes the stub's answer members (uncarried) out of every call's
+	// arguments.
+	MaxDescription  = 16384
+	MaxStubArgument = 131071
+	// MaxToolsBytes bounds a list of carried tools as the stub's
+	// arguments, each a JSON string in one array (ToolsBytes): three
+	// quarters of a line, the rest for what a line carries beside them, a
+	// start's instructions and the set Claude Code's driver wraps them in.
+	MaxToolsBytes = 786432
 )
+
+var uncarried = []string{"result", "error"}
 
 var (
 	ErrUnreadable = errors.New("unreadable")
@@ -375,6 +391,63 @@ func toolOK(raw json.RawMessage) bool {
 	var name string
 	return ofType(tString, m["name"]) && json.Unmarshal(m["name"], &name) == nil &&
 		len(name) >= 1 && len(name) <= 128 && ofType(tString, m["description"]) && ofType(tObject, m["parameters"])
+}
+
+// Carried is whether a tool a line carries is one every harness carries
+// whole: its description at most MaxDescription UTF-16 code units, its
+// parameters' properties naming none of uncarried, and at most
+// MaxStubArgument bytes as the stub's argument. A line may carry a tool
+// past these, which a driver refuses; the holder hands an outside
+// server's tool only when it is carried (Aqua.Loop.Request).
+func Carried(raw json.RawMessage) bool {
+	var t Tool
+	if !toolOK(raw) || json.Unmarshal(raw, &t) != nil ||
+		len(utf16.Encode([]rune(t.Description))) > MaxDescription || !carriedProperties(t.Parameters) {
+		return false
+	}
+	arg, err := StubArgument(t)
+	return err == nil && len(arg) <= MaxStubArgument
+}
+
+// carriedProperties is whether parameters' properties, when they are an
+// object, name none of uncarried.
+func carriedProperties(parameters json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(parameters, &m) != nil {
+		return true
+	}
+	var properties map[string]json.RawMessage
+	if json.Unmarshal(m["properties"], &properties) != nil {
+		return true
+	}
+	for _, name := range uncarried {
+		if _, ok := properties[name]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+// StubArgument is a tool as the stub's one argument: its name,
+// description and parameters as the stub's inputSchema.
+func StubArgument(t Tool) ([]byte, error) {
+	return Marshal(map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
+}
+
+// ToolsBytes is what tools take as the stub's arguments, each a JSON
+// string in one array, as Claude Code's driver sets them: a list of
+// carried tools takes at most MaxToolsBytes.
+func ToolsBytes(tools []Tool) (int, error) {
+	args := make([]string, 0, len(tools))
+	for _, t := range tools {
+		arg, err := StubArgument(t)
+		if err != nil {
+			return 0, err
+		}
+		args = append(args, string(arg))
+	}
+	line, err := Marshal(args)
+	return len(line), err
 }
 
 func idNameOK(raw json.RawMessage) bool {

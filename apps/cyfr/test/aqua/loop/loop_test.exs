@@ -23,33 +23,6 @@ end
 # round has drained the post and not yet opened its model step. The test
 # sets the term through `Prima.Test.Env`, which restores it; `once` lets
 # the round's later listings of the same files through.
-defmodule Aqua.LoopTest.Outside do
-  @moduledoc false
-  # An outside server's tool whose definition the catalog knows, so a turn
-  # offered it hands it to its model (`Aqua.Loop.Turn`).
-  @behaviour Prima.Provider
-
-  alias Prima.{Arg, Operation}
-
-  @impl true
-  def service, do: "ghserver"
-
-  @impl true
-  def tools do
-    [
-      Operation.tool([
-        Operation.new("ghserver:issues.list", "list", "List the issues", [Arg.new("q", :string)],
-          kind: :read,
-          planes: [:external, :in_chain]
-        )
-      ])
-    ]
-  end
-
-  @impl true
-  def handle(_name, _ctx, args), do: {:ok, args}
-end
-
 defmodule Aqua.LoopTest.DrainGapStore do
   use Arca.Storage.TestDouble
 
@@ -1289,72 +1262,6 @@ defmodule Aqua.LoopTest do
 
     assert Tape.usage(ctx, thread.id) ==
              %{input: 10, output: 0, models: ["resolved-model"], accounting: :partial}
-  end
-
-  test "an outside server's tool the soul is offered runs, through the gate under the " <>
-         "turn's authority",
-       %{ctx: ctx, thread: thread} do
-    tool = "ghserver:issues.list"
-
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "tools_add" => [tool]
-      })
-
-    consent!(ctx, "aqua")
-    turn = accept!(ctx, thread, "@aqua list the issues")
-
-    script!([
-      calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]),
-      reply("done")
-    ])
-
-    # The tool's definition is known, so the request hands it to the model.
-    assert :completed =
-             Sanctum.Catalog.with_providers([Aqua.LoopTest.Outside], fn ->
-               Task.await(run(ctx, turn), 60_000)
-             end)
-
-    {:ok, steps} = Tape.steps(ctx, turn)
-    listed = Enum.find(steps, &(&1.tool == tool))
-
-    # Dispatched, not refused by the offered set: the gate decided it.
-    assert listed.dispatch_state == "closed"
-    refute listed.error =~ "among the tools"
-    assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: tool)
-  end
-
-  test "an outside server's tool the soul is offered but no definition names is refused: the " <>
-         "model was never handed it",
-       %{ctx: ctx, thread: thread} do
-    tool = "ghserver:issues.list"
-
-    {:ok, _} =
-      Cyfr.Test.AquaTool.call(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "tools_add" => [tool]
-      })
-
-    consent!(ctx, "aqua")
-    turn = accept!(ctx, thread, "@aqua list the issues")
-
-    script!([
-      calls([{"c1", "ghserver__issues.list", %{"q" => "x"}}]),
-      reply("done")
-    ])
-
-    assert :completed = Task.await(run(ctx, turn), 60_000)
-
-    {:ok, steps} = Tape.steps(ctx, turn)
-    listed = Enum.find(steps, &(&1.tool == tool))
-
-    assert {listed.dispatch_state, listed.outcome, listed.error} ==
-             {"closed", "denied", "ghserver__issues.list is not one of the tools this work has"}
-
-    assert {:ok, []} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: tool)
   end
 
   # A call that runs is still the chain's to admit (§5.4): it goes through

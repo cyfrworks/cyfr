@@ -361,9 +361,9 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
-        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Provisioning
+        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
-        Sanctum.VirtualTools
+        Sanctum.ToolServerDigest Sanctum.VirtualTools
       ),
       reason:
         "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
@@ -387,6 +387,12 @@ defmodule Cyfr.Boundaries do
           "thread open beside it (`Aqua.RoomExcerpt`), a line said aloud into one " <>
           "(`Aqua.Aloud`), and the shared threads on the person's list of threads " <>
           "(`Aqua.ThreadList`). " <>
+          "`Sanctum.Proxy` is the port a turn reads the person's own servers' tools " <>
+          "through, under the turn's context (`list_external_tools/1`), and the names " <>
+          "a proxied call never carries to its server (`host_stamped/0`), which no tool " <>
+          "it hands may name; `Sanctum.ToolServerDigest` is the digest a server's grant " <>
+          "binds, so a turn hands a server's tool only while the grant covers the " <>
+          "server as the gate will decide its call (`Aqua.Loop.Turn.tools/3`). " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -2039,7 +2045,7 @@ defmodule Cyfr.Boundaries do
       start_provisioning: 1,
       under_claim: 3
     ],
-    "Sanctum.Proxy" => [install!: 1],
+    "Sanctum.Proxy" => [host_stamped: 0, impl!: 0, install!: 1],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,

@@ -318,7 +318,7 @@ defmodule Sanctum.Consent.Plan do
          head_tool_servers: head_tool_servers(stored, source_ref),
          shape_diff: shape_diff,
          candidates: candidates,
-         tool_server_candidates: Sanctum.Proxy.impl!().consent_candidates(ctx),
+         tool_server_candidates: tool_server_candidates(ctx, source_ref, manifest),
          warnings: need_warnings(needs, provided_notes),
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}
@@ -326,6 +326,53 @@ defmodule Sanctum.Consent.Plan do
   end
 
   def plan(_ctx, _params), do: {:error, {:invalid_plan, :ref_required}}
+
+  @doc false
+  # Shared with the commit path: the tool servers an agent source's own
+  # tools name, each `server:tool` (`Compendium.AgentSource`), each server
+  # with exactly the tools named as its patterns. They are its grant's
+  # tool-server decisions, shown and chosen by no caller. Nil for a
+  # component, whose grant's servers are the caller's choice among the
+  # athanor's.
+  @spec declared_tool_servers(String.t(), map()) ::
+          [%{server_name: String.t(), tool_patterns: [String.t()]}] | nil
+  def declared_tool_servers(source_ref, manifest) do
+    case Prima.ComponentRef.parse(source_ref) do
+      {:ok, %Prima.ComponentRef{type: "agent"}} -> servers_of(declared_tools(manifest))
+      _component -> nil
+    end
+  end
+
+  defp servers_of(tools) do
+    pairs =
+      for key when is_binary(key) <- tools,
+          [server, tool] <- [String.split(key, ":", parts: 2)],
+          do: {server, tool}
+
+    pairs
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.map(fn {server, tools} ->
+      %{server_name: server, tool_patterns: tools |> Enum.uniq() |> Enum.sort()}
+    end)
+    |> Enum.sort_by(& &1.server_name)
+  end
+
+  defp declared_tools(%{"caps" => %{"tools" => tools}}) when is_list(tools), do: tools
+  defp declared_tools(_manifest), do: []
+
+  # What a plan offers a grant's tool servers from: an agent source's own,
+  # or, for a component, every server of the athanor.
+  defp tool_server_candidates(ctx, source_ref, manifest) do
+    case declared_tool_servers(source_ref, manifest) do
+      nil ->
+        Sanctum.Proxy.impl!().consent_candidates(ctx)
+
+      declared ->
+        for %{server_name: name} <- declared,
+            {:ok, candidate} <- [Sanctum.Proxy.impl!().consent_candidate(ctx, name)],
+            do: candidate
+    end
+  end
 
   @doc false
   # Shared with the commit path: which profile (if any) this grant would

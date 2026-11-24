@@ -589,7 +589,8 @@ defmodule Sanctum.Consent.Commit do
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared, place),
          {:ok, selections, lent} <-
            prepared_selections(ctx, decisions, published, place, provided),
-         {:ok, tool_servers} <- resolve_tool_servers(ctx, decisions),
+         {:ok, requested} <- tool_server_decisions(decisions, source_ref, component),
+         {:ok, tool_servers} <- resolve_tool_servers(ctx, requested),
          # Build the blob before digest validation; preview renders these same bytes.
          blob_inputs = %{
            source_ref: source_ref,
@@ -716,11 +717,32 @@ defmodule Sanctum.Consent.Commit do
 
   defp dot_prefix(pattern), do: String.trim_trailing(pattern, "*")
 
+  # An agent source's tool servers are those its own tools name
+  # (`Plan.declared_tool_servers/2`), shown and never chosen: decisions
+  # naming any are refused. A component's are the caller's choice.
+  defp tool_server_decisions(decisions, source_ref, component) do
+    chosen = Map.get(decisions, :tool_servers) || []
+
+    with {:ok, manifest} <- manifest(component, source_ref) do
+      case {Plan.declared_tool_servers(source_ref, manifest), chosen} do
+        {nil, chosen} ->
+          {:ok, chosen}
+
+        {declared, []} ->
+          {:ok, declared}
+
+        {_declared, _chosen} ->
+          {:error,
+           {:invalid_argument,
+            "Aqua's tool servers are those its list of tools names: its grant chooses none"}}
+      end
+    end
+  end
+
   # Resolve tool-server digests live during preparation. Include a
   # description baseline when the catalog is reachable.
-  defp resolve_tool_servers(ctx, decisions) do
-    decisions
-    |> Map.get(:tool_servers, [])
+  defp resolve_tool_servers(ctx, requested) do
+    requested
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
       name = Map.get(raw, :server_name)
 

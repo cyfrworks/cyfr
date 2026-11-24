@@ -632,19 +632,33 @@ defmodule Aqua.Loop do
 
   # The tools the turn pinned must be those of the release the loaded
   # grant names for its source, Aqua's, as the tree and the brains stand
-  # once the file is pinned: Aqua's file edited past its grant is refused,
-  # never run under the old grant, whichever member's turn it is. A crew
-  # member's own file is in no grant, so its edit refuses nothing here.
-  defp consented_release(ctx, %{activation: activation}, %{agent: agent}) do
+  # once the file is pinned, and the grant's tool servers exactly those
+  # its outside entries (`server:tool`) name: Aqua's file edited past its
+  # grant is refused, never run under the old grant, whichever member's
+  # turn it is. A crew member's own file is in no grant, so its edit
+  # refuses nothing here.
+  defp consented_release(ctx, %{activation: activation} = authority, %{agent: agent}) do
     with {:ok, row} <- Compendium.crew_grant_row(ctx),
          consented when is_binary(consented) <- Map.get(activation, @grant),
          true <- consented == row.release_digest,
-         true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"] do
+         true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"],
+         true <- granted_servers(authority) == listed_servers(agent.tools) do
       :ok
     else
       {:error, reason} when reason != :not_found -> {:error, reason}
       _moved -> {:error, :agent_changed}
     end
+  end
+
+  defp granted_servers(%{resources: %{tool_servers: servers}}) when is_list(servers),
+    do: servers |> Enum.map(& &1.server_name) |> Enum.sort()
+
+  defp granted_servers(_none), do: []
+
+  defp listed_servers(tools) do
+    for(key <- tools, [server, _tool] <- [String.split(key, ":", parts: 2)], do: server)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   # ---------------------------------------------------------------------------

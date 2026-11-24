@@ -66,6 +66,11 @@ defmodule Sanctum.Proxy do
   # lookup.
   @key {__MODULE__, :impl}
 
+  # The arguments a proxied call never carries to its server: the action
+  # the gate routed on and the lineage the host stamps for its own
+  # records, which name internal executions, attempts, threads and calls.
+  @host_stamped ~w(action parent_execution_id root_execution_id attempt thread_id call_id parent_call_id)
+
   @typedoc "The plane a proxied call is made from."
   @type plane :: :in_chain | :external
 
@@ -134,6 +139,15 @@ defmodule Sanctum.Proxy do
 
   @doc "The proxied tools of the caller's athanor, named `server:tool`."
   @callback list_external_tools(Context.t()) :: [map()]
+
+  @doc """
+  The argument names a proxied call's `c:dispatch/5` never carries to its
+  server: the action the gate routed on and the lineage the host stamps.
+  A third-party server is told none of them, so a tool whose parameters
+  name one is never handed to a model (`Aqua.Loop.Request`).
+  """
+  @spec host_stamped() :: [String.t()]
+  def host_stamped, do: @host_stamped
 
   @doc """
   Install the port's implementation. Called once by `Cyfr.Application` at

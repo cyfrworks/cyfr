@@ -86,14 +86,67 @@ defmodule Aqua.Loop.BindingTest do
     assert {:ok, %Call{kind: :external, tool: "github:search", target: "github:search"}} =
              Binding.resolve("github__search", %{"q" => "x"})
 
-    assert Binding.model_name("github:search") == "github__search"
-    assert Binding.host_name("github__search") == "github:search"
+    assert Binding.outside_name("github:search") == {:ok, "github__search"}
+    assert Binding.host_name("github__search") == {:ok, "github:search"}
 
     assert {:ok, %Call{kind: :catalog, tool: "notes", action: "read"}} =
              Binding.resolve("notes.read", %{"id" => "n"})
 
     assert {:error, "unknown tool: nope.thing"} = Binding.resolve("nope.thing", %{})
     assert {:error, "unknown tool: bare"} = Binding.resolve("bare", %{})
+  end
+
+  test "an outside tool's name spells one key, which it reads back as, and no other name " <>
+         "holding __ is an outside tool's" do
+    for key <- [
+          "github:search",
+          "a-b:c_d",
+          "_x:y_",
+          "A1:-b",
+          "MCP:x",
+          "gh:" <> String.duplicate("t", 60)
+        ] do
+      assert {:ok, name} = Binding.outside_name(key), key
+      assert Binding.host_name(name) == {:ok, key}, key
+      assert {:ok, %Call{kind: :external, tool: ^key, target: ^key}} = Binding.resolve(name, %{})
+    end
+
+    # A server or a tool holding `__`, a server ending in `_` or a tool
+    # beginning with one, the server `mcp`, a tool named as a server's
+    # resources or prompts, a character outside the grammar, a whole name
+    # past 64 characters.
+    for key <- [
+          "a__b:c",
+          "a:b__c",
+          "a_:b",
+          "a:_b",
+          "mcp:x",
+          "a:resources",
+          "a:prompts",
+          "a:@resources",
+          "a b:c",
+          "a:b.c",
+          "a:b/c",
+          ":b",
+          "a:",
+          "gh:" <> String.duplicate("t", 61)
+        ] do
+      assert Binding.outside_name(key) == :error, key
+    end
+
+    for name <- [
+          "a___b",
+          "a__b__c",
+          "mcp__x",
+          "a__resources",
+          "a__prompts",
+          "__x",
+          "x__",
+          "gh__" <> String.duplicate("t", 61)
+        ] do
+      assert Binding.host_name(name) == :error, name
+      assert {:error, "unknown tool: " <> ^name} = Binding.resolve(name, %{}), name
+    end
   end
 
   test "an argument the canonical form has no form for, at any depth, is refused " <>

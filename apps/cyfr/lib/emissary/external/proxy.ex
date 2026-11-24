@@ -671,13 +671,9 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  # The arguments a server sees: the guest's own, without the action the
-  # gate routed on or the lineage the host stamped for its own records.
-  # The lineage names internal executions, attempts, threads and calls,
-  # and a third-party server is told none of them.
-  @host_stamped ~w(action parent_execution_id root_execution_id attempt thread_id call_id parent_call_id)
-
-  defp upstream_args(args), do: Map.drop(args, @host_stamped)
+  # The arguments a server sees: the guest's own, without what the host
+  # stamped (`Sanctum.Proxy.host_stamped/0`).
+  defp upstream_args(args), do: Map.drop(args, Sanctum.Proxy.host_stamped())
 
   # An upstream call's refusal in the table's terms. A reason the gate
   # knows (`Sanctum.Refusals.known?/1`) passes as it is — an
