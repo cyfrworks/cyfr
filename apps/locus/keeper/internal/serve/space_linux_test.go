@@ -231,8 +231,8 @@ func pidsRunning(t *testing.T, uid int, cmdline string) []int {
 	return pids
 }
 
-// A signal the keeper is asked to send reaches the command's process group
-// inside its space, past the stage and the space's init, which both live on
+// A signal the keeper is asked to send reaches the command inside its
+// space, past the stage's waiter and the space's init, which both live on
 // until the command ends.
 func TestASignalReachesTheCommandInsideItsSpace(t *testing.T) {
 	k := newKeeper(t).withMemory(t)
@@ -313,4 +313,30 @@ func containsInt(list []int, v int) bool {
 		}
 	}
 	return false
+}
+
+// A kept session's close sends SIGTERM to its command alone, which the
+// space passes down unchanged: a child the command ends itself, as a driver
+// closes its browser, is still running when the command handles the
+// signal, and what the command says before it ends is carried.
+func TestAKeptClosesSignalReachesTheCommandAlone(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-close")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	script := `sleep 600 & child=$!
+trap 'kill -0 $child 2>/dev/null && echo child:alive; kill $child; echo bye; exit 0' TERM
+echo ready
+wait`
+	id, rc := k.spawnKept(t, "c", script, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	grace := int64(5000)
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	rc.readUntil(t, func() bool { return false })
+	if got := string(rc.got[frame.StreamStdout]); got != "ready\nchild:alive\nbye\n" {
+		t.Fatalf("the closed session said %q", got)
+	}
+	k.releasedPair(t, id)
 }

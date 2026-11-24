@@ -62,9 +62,11 @@ const (
 	spaceExitFD   = 8
 )
 
-// passedSignals are the signals the keeper may send a spawn: the stage and
-// the init pass each down to the command's process group, the group the
-// keeper's own signal reached before a space had processes of its own.
+// passedSignals are the signals the keeper may send a spawn: the stage's
+// waiter and the init pass each down to the command alone, so a program
+// that ends its own children first, as a driver closes its browser before
+// it says bye, is not overtaken. A SIGKILL ends the waiter, and the space
+// with it.
 var passedSignals = []os.Signal{unix.SIGTERM, unix.SIGINT, unix.SIGHUP, unix.SIGQUIT, unix.SIGUSR1, unix.SIGUSR2}
 
 // keptOut are the root's entries a space is never given from its
@@ -549,7 +551,7 @@ func openTerminal() error {
 // session of its own, which takes its terminal as its controlling one when
 // it has one, with its control channel on fd 3 and a relay space's relay on
 // fd 4, and closes the status pipe once the command has executed. It then
-// passes the signals it is sent to the command's process group, reaps every
+// passes the signals it is sent to the command, reaps every
 // process left to it, and when the command ends says how on its exit pipe
 // and ends, which ends every process of the space.
 func Init() int {
@@ -595,7 +597,7 @@ func Init() int {
 		files = append(files, RelayFD)
 	}
 	_, terminal := unix.IoctlGetTermios(0, unix.TCGETS)
-	pid, err := syscall.ForkExec(path, spec.Argv, &syscall.ProcAttr{
+	command, err := syscall.ForkExec(path, spec.Argv, &syscall.ProcAttr{
 		Dir:   spec.Home,
 		Env:   spec.Environ(),
 		Files: files,
@@ -610,7 +612,7 @@ func Init() int {
 	}
 	go func() {
 		for s := range signals {
-			_ = unix.Kill(-pid, s.(syscall.Signal))
+			_ = unix.Kill(command, s.(syscall.Signal))
 		}
 	}()
 	exit := os.NewFile(spaceExitFD, "exit")
@@ -623,7 +625,7 @@ func Init() int {
 		if err != nil {
 			return ExitFailed
 		}
-		if got != pid {
+		if got != command {
 			continue
 		}
 		if ws.Signaled() {
