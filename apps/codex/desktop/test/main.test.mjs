@@ -983,7 +983,7 @@ test("Forget in a row's menu has cyfr forget that CYFR only once the person conf
     menu.items[0].click()
     const {parent, options} = world.boxes.at(-1)
     assert.equal(parent, frame(), name)
-    assert.ok(options.message.includes(PORT_B), `${name}: the dialog names the CYFR`)
+    assert.equal(options.message, `Forget the CYFR at ${PORT_B} on this computer?`, `${name}: the dialog names the CYFR`)
     assert.deepEqual([options.buttons, options.cancelId, options.defaultId], [["Forget", "Cancel"], 1, 1], name)
     await turns()
     assert.deepEqual(forgets(), [], `${name}: not before the dialog answers`)
