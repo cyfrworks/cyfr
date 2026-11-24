@@ -89,14 +89,15 @@ func TestEveryApprovalIsAllowedTheTimeAnsweredAndNothingElse(t *testing.T) {
 func TestTextOfManyLinesReachesCodexAsOneLine(t *testing.T) {
 	text := "first line\nsecond line\r\nthird"
 	thread := "019a0000-0000-7000-8000-00000000aaaa"
+	none := map[string]any{"features": map[string]any{"plugins": false, "apps": false}, "mcp_servers": map[string]any{}}
 	for _, c := range []struct {
 		line []byte
 		want map[string]any
 	}{
-		{threadStart("cyfr-thread-1", text, []map[string]any{}, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/start", "params": map[string]any{
-			"approvalPolicy": "never", "sandbox": "danger-full-access", "dynamicTools": []any{}, "developerInstructions": text}}},
-		{threadResume("cyfr-thread-1", thread, text, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/resume", "params": map[string]any{
-			"threadId": thread, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "developerInstructions": text}}},
+		{threadStart("cyfr-thread-1", text, []map[string]any{}, nil, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/start", "params": map[string]any{
+			"approvalPolicy": "never", "sandbox": "danger-full-access", "dynamicTools": []any{}, "config": none, "developerInstructions": text}}},
+		{threadResume("cyfr-thread-1", thread, text, nil, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/resume", "params": map[string]any{
+			"threadId": thread, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "config": none, "developerInstructions": text}}},
 		{toolAnswer(json.RawMessage("7"), text, true), map[string]any{"id": float64(7), "result": map[string]any{
 			"contentItems": []any{map[string]any{"type": "inputText", "text": text}}, "success": true}}},
 	} {

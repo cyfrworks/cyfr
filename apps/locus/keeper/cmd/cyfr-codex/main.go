@@ -22,8 +22,10 @@
 // It says `hello` first, naming the wire's version and its boot, fresh for
 // each process. A `start` starts the app-server and in it a new thread,
 // given the start's tools as its dynamic tools, which the thread keeps for
-// its life, or resumes the thread it names; Codex's answer answers
-// `started`, and a thread it holds no rollout of answers `gone`. A `work`
+// its life, or resumes the thread it names, each with no MCP server of
+// Codex's own, since a server is one a person adds in CYFR
+// (noServersOfItsOwn); Codex's answer answers `started`, and a thread it
+// holds no rollout of answers `gone`. A `work`
 // writes nothing: Codex takes no tools after a thread's start. A `post` is
 // a turn of its own (`turn/start`), or is added to the native turn under
 // way (`turn/steer`), under a uuid derived from the post's id; it is

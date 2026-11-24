@@ -38,6 +38,13 @@
 //   names in its reply, and refuses one naming no turn under way;
 //   `thread/delete` removes the thread and its rollout, leaving the
 //   snapshot, as Codex does, and refuses a thread it does not hold.
+// - `config/read` names the MCP servers its folder's ~/.codex/config.toml
+//   names (`[mcp_servers.<name>]`, with `command` and `args`). A thread's
+//   start or resume starts each, as Codex 0.169.0 does, unless the
+//   request's `config` switches it off by its name, and the model is shown
+//   its tools (`mcp__<name>`, named in the `hello` reply's tools); a name
+//   the configuration does not hold refuses the thread, as Codex does.
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -77,6 +84,44 @@ let initialized = false;
 let nextRequest = 0;
 const waiting = new Map();
 let thread = null;
+
+let servers = [];
+
+// The MCP servers the folder's config.toml names, with their commands.
+function configured() {
+  const file = path.join(home, 'config.toml');
+  const named = {};
+  if (!fs.existsSync(file)) return named;
+  let current = null;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const header = line.match(/^\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*$/);
+    if (header) {
+      current = named[header[1]] = { command: '', args: [] };
+    } else if (line.startsWith('[')) {
+      current = null;
+    } else if (current) {
+      const member = line.match(/^(command|args)\s*=\s*(.+)$/);
+      if (member) current[member[1]] = JSON.parse(member[2]);
+    }
+  }
+  return named;
+}
+
+// Starts each configured server `config` does not switch off, or says why
+// the thread is refused.
+function startServers(config) {
+  const named = configured();
+  const given = config?.mcp_servers || {};
+  const unknown = Object.keys(given).find((name) => !named[name]);
+  if (unknown) return `failed to load configuration: invalid transport\nin \`mcp_servers.${unknown}\`\n`;
+  servers = [];
+  for (const [name, server] of Object.entries(named)) {
+    if (given[name]?.enabled === false) continue;
+    spawn(server.command, server.args, { stdio: 'ignore' }).on('error', () => {});
+    servers.push(`mcp__${name}`);
+  }
+  return null;
+}
 
 const threadFile = (id) => path.join(threads, `${id}.json`);
 const save = () => fs.writeFileSync(threadFile(thread.id), JSON.stringify(thread));
@@ -139,7 +184,7 @@ async function turn(turnId, params) {
     notify('item/started', { ...base, item: command });
     notify('item/completed', { ...base, item: { ...command, status: 'completed', aggregatedOutput: 'FAKE-FOLDER-CANARY', exitCode: 0 } });
     const patch = await request('item/fileChange/requestApproval', { ...base, itemId: 'call_own_2', reason: 'write FAKE-FOLDER-CANARY' });
-    const tools = thread.dynamicTools.map((t) => t.name).join(',');
+    const tools = [...thread.dynamicTools.map((t) => t.name), ...servers].join(',');
     reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${thread.model || 'fake-sol'}, effort ${params.effort || 'unset'}, `
       + `tools ${tools}, policy ${thread.approvalPolicy}/${thread.sandbox}, patch ${patch.result?.decision}, instructions "${thread.developerInstructions}".`);
   } else if (words.includes('read')) {
@@ -183,10 +228,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return ok(fs.existsSync(auth)
         ? { account: { type: 'chatgpt', email: 'FAKE-ACCOUNT-CANARY@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true }
         : { account: null, requiresOpenaiAuth: true });
+    case 'config/read':
+      return ok({ config: { mcp_servers: configured() }, origins: {} });
     case 'model/list':
       return ok({ data: MODELS, nextCursor: null });
     case 'thread/start': {
       const p = message.params;
+      const refused = startServers(p.config);
+      if (refused) return fail(refused);
       thread = { id: crypto.randomUUID(), model: p.model, dynamicTools: p.dynamicTools || [], approvalPolicy: p.approvalPolicy, sandbox: p.sandbox,
         developerInstructions: p.developerInstructions || '',
         total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
@@ -199,6 +248,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'thread/resume': {
       const file = threadFile(message.params.threadId);
       if (!fs.existsSync(file)) return fail(`no rollout found for thread id ${message.params.threadId}`);
+      const refused = startServers(message.params.config);
+      if (refused) return fail(refused);
       thread = JSON.parse(fs.readFileSync(file, 'utf8'));
       thread.approvalPolicy = message.params.approvalPolicy;
       thread.sandbox = message.params.sandbox;

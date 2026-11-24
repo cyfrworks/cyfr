@@ -701,7 +701,8 @@ func TestAStartNamingNoModelOrEffortSendsNeither(t *testing.T) {
 	work(s, "stp_work", "trn_1")
 	want := map[string]any{
 		"thread": map[string]any{"approvalPolicy": "never", "sandbox": "danger-full-access", "developerInstructions": "be brief",
-			"dynamicTools": []any{map[string]any{"type": "function", "name": "files", "description": "Read the athanor's files", "inputSchema": map[string]any{"type": "object"}}}},
+			"dynamicTools": []any{map[string]any{"type": "function", "name": "files", "description": "Read the athanor's files", "inputSchema": map[string]any{"type": "object"}}},
+			"config":       map[string]any{"features": map[string]any{"plugins": false, "apps": false}, "mcp_servers": map[string]any{}}},
 		"turn": map[string]any{"threadId": session, "clientUserMessageId": brainwire.PostUUID("stp_post"),
 			"input": []any{map[string]any{"type": "text", "text": "params", "text_elements": []any{}}}},
 	}
@@ -885,6 +886,55 @@ func TestAStartRunsItsThreadInItsAccess(t *testing.T) {
 	}
 }
 
+// Codex starts each MCP server its folder's configuration names, and each
+// an installed plugin carries, at a thread's start, and runs their calls
+// unasked: a thread starts and resumes with each server the configuration
+// names switched off by its name, plugins off and ChatGPT's apps off.
+func TestAThreadStartsAndResumesWithNoMCPServerOfCodexsOwn(t *testing.T) {
+	t.Setenv("FAKE_NO_REPEAT", "1")
+	t.Setenv("FAKE_MCP_SERVERS", "planted,other-one")
+	off := map[string]any{"features": map[string]any{"plugins": false, "apps": false},
+		"mcp_servers": map[string]any{"planted": map[string]any{"enabled": false}, "other-one": map[string]any{"enabled": false}}}
+	s := startDriver(t)
+	session := startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	if thread := sent(s, "stp_post", "trn_1")["thread"].(map[string]any); !reflect.DeepEqual(thread["config"], off) {
+		t.Fatalf("a new thread starts with every server of Codex's own off: %v", thread["config"])
+	}
+	s.end()
+
+	t.Setenv("FAKE_MCP_SERVERS", "planted,other-one,added-since")
+	off["mcp_servers"].(map[string]any)["added-since"] = map[string]any{"enabled": false}
+	again := startDriverIn(t, s.home)
+	again.expect("hello")
+	again.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}, "system": "be brief"})
+	again.expect("started")
+	work(again, "stp_work_2", "trn_2")
+	if thread := sent(again, "stp_post_2", "trn_2")["thread"].(map[string]any); thread["threadId"] != session || !reflect.DeepEqual(thread["config"], off) {
+		t.Fatalf("a resumed thread runs with every server its configuration names now off: %v", thread)
+	}
+}
+
+// A start whose configuration Codex cannot read starts no thread, since
+// which servers to switch off is not known.
+func TestAStartWhoseConfigurationCannotBeReadStartsNoThread(t *testing.T) {
+	t.Setenv("FAKE_CONFIG_FAIL", "1")
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "start", "gen": 1, "config": map[string]any{}, "tools": []any{filesTool}})
+	select {
+	case e, ok := <-s.events:
+		if ok {
+			t.Fatalf("a start whose configuration cannot be read writes nothing: %v", e)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the driver did not end")
+	}
+	if status := <-s.done; status != 1 || !strings.Contains(s.stderr.String(), "cyfr-codex: OpenAI Codex's configuration could not be read, so no thread started\n") {
+		t.Fatalf("the driver ends with 1, saying why: %d %q", status, s.stderr.String())
+	}
+}
+
 func TestAResumeOfAThreadCodexHoldsNoRolloutOfIsGoneThenAFreshStartRuns(t *testing.T) {
 	s := startDriver(t)
 	s.expect("hello")
@@ -1007,7 +1057,8 @@ func TestAResumeNamesThePendingPostsItsRolloutHoldsAndRepeatsOnlyItsTotal(t *tes
 	if e := again.next(); e["t"] != "accepted" {
 		t.Fatalf("the resumed thread repeats nothing else before its next work: %v", e)
 	}
-	resumed := map[string]any{"threadId": session, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "developerInstructions": "be brief"}
+	resumed := map[string]any{"threadId": session, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "developerInstructions": "be brief",
+		"config": map[string]any{"features": map[string]any{"plugins": false, "apps": false}, "mcp_servers": map[string]any{}}}
 	if got := sent(again, "stp_after", "trn_2")["thread"]; !reflect.DeepEqual(got, resumed) {
 		t.Fatalf("the thread resumes under the box's policy with the start's system prompt: %v", got)
 	}

@@ -50,7 +50,9 @@ import (
 // `initialize`, writes a canary to its standard error, which the driver
 // must never pass on, and keeps a sign-in, `auth.json`, while
 // FAKE_SIGNED_OUT is unset; FAKE_ACCOUNT, when set, is its account's
-// answer, or "fail". A resume sends the thread's last total again
+// answer, or "fail". Its configuration's read names the MCP servers
+// FAKE_MCP_SERVERS lists, by commas, and fails while FAKE_CONFIG_FAIL is
+// set. A resume sends the thread's last total again
 // unless FAKE_NO_REPEAT is set, and is refused in words other than a
 // missing rollout's while FAKE_RESUME_FAIL is set. A thread whose rollout
 // file is empty is refused in Codex's words for it. An injection
@@ -346,6 +348,18 @@ func fakeCodex() int {
 				} else {
 					ok(map[string]any{"account": nil, "requiresOpenaiAuth": true})
 				}
+			case m.Method == "config/read":
+				// The servers its configuration names, as Codex's read of
+				// its folder's config.toml answers them.
+				if os.Getenv("FAKE_CONFIG_FAIL") != "" {
+					fail(-32603, "HARNESS-WORDS the configuration could not be read")
+					continue
+				}
+				servers := map[string]any{}
+				for _, name := range strings.FieldsFunc(os.Getenv("FAKE_MCP_SERVERS"), func(r rune) bool { return r == ',' }) {
+					servers[name] = map[string]any{"command": "planted", "enabled": true}
+				}
+				ok(map[string]any{"config": map[string]any{"model": nil, "mcp_servers": servers}, "origins": map[string]any{}})
 			case m.Method == "model/list":
 				if str("cursor") == "" {
 					ok(map[string]any{"data": []any{

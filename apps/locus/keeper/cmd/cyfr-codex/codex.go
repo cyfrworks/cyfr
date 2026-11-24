@@ -16,9 +16,9 @@ import (
 // Codex's app-server protocol on its standard input and output, as the
 // driver speaks it: JSON-RPC 2.0 messages without the `jsonrpc` member, one
 // per line. The driver sends requests (`initialize`, `account/read`,
-// `model/list`, `thread/start`, `thread/resume`, `thread/inject_items`,
-// `turn/start`, `turn/steer`, `thread/delete`) and the `initialized`
-// notification, and answers Codex's own requests: `item/tool/call` for CYFR's tools, given
+// `config/read`, `model/list`, `thread/start`, `thread/resume`,
+// `thread/inject_items`, `turn/start`, `turn/steer`, `thread/delete`) and
+// the `initialized` notification, and answers Codex's own requests: `item/tool/call` for CYFR's tools, given
 // to the thread as its dynamic tools, held until CYFR answers it and then
 // answered by its request's id; the approvals, which are allowed; and
 // `currentTime/read`. Every other request is refused. These shapes are
@@ -119,12 +119,58 @@ func dynamicTools(tools []brainwire.Tool) ([]map[string]any, error) {
 	return out, nil
 }
 
-// threadStart starts a new thread under its access's policy, with CYFR's
-// system prompt as developer instructions beside Codex's own, CYFR's tools
-// as its dynamic tools, which the thread keeps for its life, and the
-// start's model.
-func threadStart(id string, system string, tools []map[string]any, config brainwire.Config, policy threadPolicy) []byte {
-	params := map[string]any{"approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "dynamicTools": tools}
+// configRead asks for Codex's configuration as it reads it from its
+// folder, every layer merged, for the MCP servers it names.
+func configRead(id string) []byte {
+	return request(id, "config/read", map[string]any{"includeLayers": false})
+}
+
+// ownServers are the names of the MCP servers Codex's configuration
+// answer names, or false for an answer that is no configuration.
+func ownServers(m rpc) ([]string, bool) {
+	var answer struct {
+		Config *struct {
+			Servers map[string]json.RawMessage `json:"mcp_servers"`
+		} `json:"config"`
+	}
+	if m.Error != nil || json.Unmarshal(m.Result, &answer) != nil || answer.Config == nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(answer.Config.Servers))
+	for name := range answer.Config.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, true
+}
+
+// noServersOfItsOwn is the configuration a thread starts and resumes
+// under: no MCP server of Codex's own. An MCP server is one a person adds
+// in CYFR, whose gate decides every call; the tools a crew member calls
+// through Codex are CYFR's, its dynamic tools. Codex starts each server
+// its folder's configuration names, and each an installed plugin carries,
+// at a thread's start, shows the model their tools and its resource
+// reading tools, and runs their calls with no ask. So each server the
+// configuration names now (`servers`, read at each start and resume) is
+// switched off by its name, plugins are off and ChatGPT's apps, an
+// account's connectors, are off. Measured on Codex 0.169.0: a whole
+// `mcp_servers` table given here merges with the folder's and switches
+// none off, and a name the configuration does not hold refuses the start.
+func noServersOfItsOwn(servers []string) map[string]any {
+	off := map[string]any{}
+	for _, name := range servers {
+		off[name] = map[string]any{"enabled": false}
+	}
+	return map[string]any{"features": map[string]any{"plugins": false, "apps": false}, "mcp_servers": off}
+}
+
+// threadStart starts a new thread under its access's policy and with no
+// MCP server of Codex's own, with CYFR's system prompt as developer
+// instructions beside Codex's own, CYFR's tools as its dynamic tools,
+// which the thread keeps for its life, and the start's model.
+func threadStart(id string, system string, tools []map[string]any, servers []string, config brainwire.Config, policy threadPolicy) []byte {
+	params := map[string]any{"approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "dynamicTools": tools,
+		"config": noServersOfItsOwn(servers)}
 	if system != "" {
 		params["developerInstructions"] = system
 	}
@@ -135,9 +181,11 @@ func threadStart(id string, system string, tools []map[string]any, config brainw
 }
 
 // threadResume resumes the thread the folder holds, which keeps the dynamic
-// tools it was started with, under its access's policy.
-func threadResume(id, thread, system string, config brainwire.Config, policy threadPolicy) []byte {
-	params := map[string]any{"threadId": thread, "approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "excludeTurns": true}
+// tools it was started with, under its access's policy and with no MCP
+// server of Codex's own.
+func threadResume(id, thread, system string, servers []string, config brainwire.Config, policy threadPolicy) []byte {
+	params := map[string]any{"threadId": thread, "approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "excludeTurns": true,
+		"config": noServersOfItsOwn(servers)}
 	if system != "" {
 		params["developerInstructions"] = system
 	}

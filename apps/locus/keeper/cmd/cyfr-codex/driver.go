@@ -468,7 +468,8 @@ func accountOf(m rpc) string {
 }
 
 // startStep is the start's handshake, one answer at a time: `initialize`,
-// then the sign-in read, then the thread started or resumed.
+// then the sign-in read, then the configuration's, then the thread
+// started or resumed with no MCP server of Codex's own.
 func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case "initialize":
@@ -484,12 +485,20 @@ func (d *driver) startStep(s *starting, m rpc) error {
 	case "account":
 		s.account = accountOf(m)
 		d.signedIn = s.account == brainwire.SignedIn
+		s.stage = "config"
+		s.request = d.nextID("config")
+		return d.h.Write(configRead(s.request))
+	case "config":
+		servers, read := ownServers(m)
+		if !read {
+			return &brainwire.Fatal{Status: 1, Reason: "OpenAI Codex's configuration could not be read, so no thread started"}
+		}
 		s.stage = "thread"
 		s.request = d.nextID("thread")
 		if s.resume {
-			return d.h.Write(threadResume(s.request, s.session, s.system, d.config, d.policy))
+			return d.h.Write(threadResume(s.request, s.session, s.system, servers, d.config, d.policy))
 		}
-		return d.h.Write(threadStart(s.request, s.system, s.tools, d.config, d.policy))
+		return d.h.Write(threadStart(s.request, s.system, s.tools, servers, d.config, d.policy))
 	case "thread":
 		if m.Error != nil {
 			// A thread the folder holds no rollout of, or an empty one, is
