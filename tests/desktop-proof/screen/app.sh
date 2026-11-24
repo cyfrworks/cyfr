@@ -303,7 +303,9 @@ chmod 644 "$WORK"/fixture/*
 dpkg-deb --fsys-tarfile "$DEB" | tar -xO ./opt/cyfr/resources/apparmor-profile >"$WORK/apparmor-profile" ||
   { echo "screen app: the package holds no AppArmor profile" >&2; exit 1; }
 profile=$(sed -n 's/^profile "\([^"]*\)".*/\1/p' "$WORK/apparmor-profile")
-cat /sys/kernel/security/apparmor/policy/profiles/*/name 2>/dev/null | grep -qxF -- "$profile" ||
+# grep reads to the end: under pipefail, grep -q's early exit would fail
+# the pipe by cat's SIGPIPE.
+cat /sys/kernel/security/apparmor/policy/profiles/*/name 2>/dev/null | grep -xF -- "$profile" >/dev/null ||
   { echo "FAIL the package's AppArmor profile $profile is not loaded on this machine: install the package here first (tests/desktop-proof/native/linux.sh)"; exit 1; }
 docker run -d --init --name "$BOX" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined --shm-size 512m \
