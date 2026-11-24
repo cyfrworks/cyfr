@@ -50,9 +50,11 @@
 #                             and that account is its first person, in
 #                             Prism, live. The setup token spends itself
 #                             when the first person is made; until then it
-#                             is in no address the app sent, no header, no
-#                             line it or the proof printed, nothing the run
-#                             keeps and no file of the app's after it quit.
+#                             is in no address the app sent and no header,
+#                             the one scrub met it nowhere in all the run
+#                             kept (every line the app, cyfr and the proof
+#                             printed among it), and no file of the app's
+#                             holds it after it quit.
 #                             The setup page hands it to its own CYFR over
 #                             that CYFR's socket, which is what it is for:
 #                             a message to another origin is the policy's
@@ -67,8 +69,10 @@
 #   DEB    the candidate cyfr-desktop package for this host's architecture
 #   IMAGE  the app image, loaded
 # It needs Docker, node and npm's install of apps/codex/desktop (pack.mjs
-# bundles with its esbuild), and python3. The rows land in
-# SETUP_PROOF_OUT (default: the run's scratch directory). It removes only
+# bundles with its esbuild), and python3. What the run keeps, its rows
+# among them, lands in SETUP_PROOF_OUT (default: the run's scratch
+# directory), built there once, at the end, by one step (build_upload):
+# nothing writes to it during the run. It removes only
 # what it made: the client by the id its own create returned, the stack of
 # its own Compose project, its scratch directory; each Docker call there has
 # a bound, and a removal that fails fails the run, naming what is left and
@@ -82,7 +86,10 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 W=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-desktop-proof-setup-XXXXXX")
 OUT=${SETUP_PROOF_OUT:-$W/out}
 RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-app-$$"; D="$W/$RUN"; CLIENT="$RUN-client"
-mkdir -p "$W/fixture/out" "$D" "$OUT"
+# KEPT and fixture/out (the proof's own records) hold what the run keeps
+# until build_upload makes OUT of them.
+KEPT="$W/fixture/kept"
+mkdir -p "$W/fixture/out" "$KEPT" "$D" "$OUT"
 : >"$W/fixture/withheld"
 # compose_in NAME DIR ARGS: the Compose project NAME in DIR, bounded.
 compose_in() { (cd "$2" && timeout 300 docker compose --project-name "$1" --project-directory "$2" -f docker-compose.yml -f docker-compose.override.yml "${@:3}"); }
@@ -97,37 +104,20 @@ cleanup() {
   # The answerer holds this script's output open: a run that fails before
   # it is stopped would otherwise never end for whoever reads that output.
   [ -z "${ANSWERER:-}" ] || kill "$ANSWERER" 2>/dev/null || true
+  for s in ${SCRUBS:-}; do kill "$s" 2>/dev/null || true; done
+  if build_upload; then
+    [ "${MET:-0}" = 0 ] || { echo "FAIL upload: the one scrub met a value the run withholds $MET times in what it kept, and cut it"; [ "$code" != 0 ] || code=1; }
+  else
+    [ "$code" != 0 ] || code=1
+  fi
   if [ -n "$CLIENT_ID" ]; then
-    # A failed call's error text is kept but for a line carrying a value
-    # of a folder's .env, which is dropped: compose can quote what it read.
-    timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times 2>/dev/null | python3 -I -c '
-import sys
-values = set()
-for f in sys.argv[1:]:
-    try:
-        lines = open(f).read().splitlines()
-    except OSError:
-        values = None
-        break
-    for line in lines:
-        v = line.partition("=")[2].strip().strip(chr(34) + chr(39))
-        if len(v) >= 8:
-            values.add(v)
-for line in sys.stdin:
-    if line.startswith("    ") and (values is None or any(v in line for v in values)):
-        print("    (a line carrying a value of .env, dropped)" if values is not None else "    (a .env unread: its error text dropped)")
-        continue
-    sys.stdout.write(line)
-' $(find "$W" -mindepth 2 -maxdepth 2 -name .env 2>/dev/null) >"$OUT/docker-calls.txt" 2>/dev/null || true
     timeout 60 docker rm -f "$CLIENT_ID" >/dev/null 2>&1 || left="$left the client container $CLIENT_ID;"
   fi
-  for s in ${SCRUBS:-}; do kill "$s" 2>/dev/null || true; done
   local p
   for p in $PROJECTS; do
     [ ! -f "${p#*:}/.env" ] || compose_in "${p%%:*}" "${p#*:}" down -v --remove-orphans >/dev/null 2>&1 ||
       left="$left the Compose project ${p%%:*}, whose files are in ${p#*:};"
   done
-  cp "$W"/fixture/out/* "$OUT/" 2>/dev/null || true
   # The stack's own files are root's: they are removed as root.
   if [ -z "$left" ]; then
     timeout 120 docker run --rm --name "$RUN-clean" --network none -v "$W:/w" ubuntu:24.04 find /w -mindepth 1 -not -path "/w/out*" -delete >/dev/null 2>&1 ||
@@ -257,13 +247,37 @@ work_left() { timeout "$1" docker exec "$CLIENT_ID" sh -c 'n=0; for p in /proc/[
   case "$(tr "\0" " " <$p/cmdline 2>/dev/null)" in *setup-project*) n=$((n+1));; esac; done; echo $n'; }
 # The stack's containers there, read within $1 seconds.
 stack_left() { (cd "$D" && timeout "$1" docker compose --project-name "$RUN" --project-directory "$D" -f docker-compose.yml -f docker-compose.override.yml ps -aq) | wc -l; }
-# The setup token of each folder set up so far, which the one scrub
-# withholds from all the run writes (tests/desktop-proof/scrub.mjs), the
-# app's output too: added before each launch, and by the passkey launch's
-# proof as soon as it reads its folder's.
+# The secrets of each folder set up so far, its setup token among them,
+# which the one scrub withholds from all that is uploaded: read from each
+# folder's .env as build_upload begins, so a line written before any was
+# known is cut all the same.
 withhold() {
   local e
-  for e in "$W"/*/.env; do [ ! -f "$e" ] || sed -n 's/^CYFR_SETUP_TOKEN=//p' "$e"; done >>"$W/fixture/withheld"
+  for e in "$W"/*/.env; do
+    [ ! -f "$e" ] || sed -nE 's/^[A-Z0-9_]*(KEY|SECRET|TOKEN|ROOT|PASSWORD)[A-Z0-9_]*=//p' "$e"
+  done >>"$W/fixture/withheld"
+}
+# What CI uploads, built once by one step on every exit (cleanup) and for
+# first_passkey's verdict: OUT emptied, then every file the run kept (the
+# app's scrubbed output, the proof's records, the docker calls) through the
+# one scrub (tests/desktop-proof/scrub-kept.mjs), every secret collected
+# known to it before its first line is read. MET is how often it met one.
+# A step that cannot run or finish leaves OUT empty, and the run says so.
+build_upload() {
+  local said files
+  [ -z "$CLIENT_ID" ] || timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times >"$KEPT/docker-calls.txt" 2>/dev/null || true
+  withhold
+  find "$OUT" -mindepth 1 -delete 2>/dev/null || true
+  shopt -s nullglob; files=("$KEPT"/* "$W"/fixture/out/*); shopt -u nullglob
+  if said=$(node "$ROOT/tests/desktop-proof/scrub-kept.mjs" "$W/fixture/withheld" "$OUT" "${files[@]}" 2>&1); then
+    MET=$(sed -n 's/^met //p' <<<"$said")
+    echo "upload: $(sed -n 's/^built //p' <<<"$said")"
+  else
+    find "$OUT" -mindepth 1 -delete 2>/dev/null || true
+    MET=
+    echo "FAIL upload: what the run kept could not be scrubbed into $OUT, which is left empty: ${said##*$'\n'}"
+    return 1
+  fi
 }
 # One launch, one verdict: it failed if the app's exit status is not 0, past
 # its 600 s limit among them, if its output is still open 15 s after it
@@ -275,13 +289,12 @@ withhold() {
 # unread, each pass bounds its readings by the time left, and a pass that
 # ends past the deadline changes nothing.
 launch() {
-  withhold
-  CYFR_PROOF_WITHHELD="$W/fixture/withheld" node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$OUT/app-$1.log" &
+  node "$ROOT/tests/desktop-proof/scrub-lines.mjs" <"$W/fixture/app-output" >"$KEPT/app-$1.log" &
   local scrub=$! status=0
   SCRUBS="${SCRUBS:-} $scrub"
   timeout 600 docker exec -u "$(id -u):$PG" -w /home/proof -e HOME=/home/proof "$CLIENT_ID" bash -c "
     exec 9>$W/fixture/app-output
-    dbus-run-session -- xvfb-run -a -s '-screen 0 1400x1000x24' bash -c 'exec env -i HOME=/home/proof USER=proof LOGNAME=proof PATH=/opt/wrap:/usr/bin:/bin LANG=C.UTF-8 DISPLAY=\$DISPLAY XAUTHORITY=\$XAUTHORITY DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS CYFR_DESKTOP_PROOF_FIXTURE=$W/fixture CYFR_DESKTOP_PROOF_PHASE=$1 CYFR_PROOF_WITHHELD=$W/fixture/withheld /opt/cyfr/CYFR' >&9 2>&1" || status=$?
+    dbus-run-session -- xvfb-run -a -s '-screen 0 1400x1000x24' bash -c 'exec env -i HOME=/home/proof USER=proof LOGNAME=proof PATH=/opt/wrap:/usr/bin:/bin LANG=C.UTF-8 DISPLAY=\$DISPLAY XAUTHORITY=\$XAUTHORITY DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS CYFR_DESKTOP_PROOF_FIXTURE=$W/fixture CYFR_DESKTOP_PROOF_PHASE=$1 /opt/cyfr/CYFR' >&9 2>&1" || status=$?
   local deadline=$(( $(date +%s%N) + 15000000000 ))
   grep -E "^(PASS|FAIL)" "$W/fixture/out/setup.txt" 2>/dev/null | sed -n "$(( ${2:-0} + 1 )),\$p" || true
   [ "$status" = 0 ] || failed "$1: the app ended with status $status$( [ "$status" != 124 ] || echo ", at its 600 s limit")"
@@ -342,9 +355,10 @@ launch passkey "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
 # setup page's own address (the engine's own record of a request keeps
 # that address too) and the message that page sends its own CYFR over its
 # socket: in no request line or header the app sent, a referrer among them
-# (the record names the setup page's own request), no line the app or the
-# proof printed (the part's), nothing the run keeps for upload (the one
-# scrub withholds it), and no file of the app's account here, its profile
+# (the record names the setup page's own request); met by the one scrub
+# nowhere in all the run kept, which every line the app, cyfr and the proof
+# printed passes through (build_upload: MET, of every secret withheld, this
+# token among them); and in no file of the app's account here, its profile
 # included, nor of /tmp but this run's own scratch, wherever TMPDIR puts it.
 TOKEN=$(cat "$W/fixture/setup-token" 2>/dev/null) || failed "first_passkey: the passkey launch read no setup token"
 part=$(cat "$W/fixture/first-passkey.json" 2>/dev/null || echo '{"ok": false, "threw": "no part written"}')
@@ -365,13 +379,13 @@ for f in sys.argv[2:]:
 print(carrying, setup)
 PY
 )
-kept=$( { grep -rlaF -f "$W/fixture/withheld" "$OUT" "$W/fixture/out" 2>/dev/null || true; } | wc -l)
+build_upload || failed "first_passkey: what the run kept could not be built for upload"
 files=$(timeout 120 docker exec "$CLIENT_ID" sh -c "find /home/proof /tmp -path '$W' -prune -o -type f -print0 2>/dev/null |
   xargs -0 -r grep -laF -- '$TOKEN' 2>/dev/null; true")
 profile=$(timeout 60 docker exec "$CLIENT_ID" sh -c 'find /home/proof/.config -mindepth 1 2>/dev/null | wc -l')
 if python3 -I -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok") is True else 1)' "$part" &&
-  [ "$requests" = 0 ] && [ "$recorded" -gt 0 ] && [ "$kept" = 0 ] && [ -z "$files" ] && [ "$profile" -gt 0 ]; then
-  echo "PASS first_passkey: on the passkey road the CYFR set up opens at its setup page, whose Create your account makes the account with a passkey in the account window, and that account is its first person, in Prism, live; its setup token is in no address or header sent, no printed line, nothing the run keeps and no file of the app's"
+  [ "$requests" = 0 ] && [ "$recorded" -gt 0 ] && [ "$MET" = 0 ] && [ -z "$files" ] && [ "$profile" -gt 0 ]; then
+  echo "PASS first_passkey: on the passkey road the CYFR set up opens at its setup page, whose Create your account makes the account with a passkey in the account window, and that account is its first person, in Prism, live; its setup token is in no address or header sent, met by the one scrub nowhere in all the run kept, and in no file of the app's"
 else
-  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), files the run keeps carrying a setup token $kept, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
+  failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), times the one scrub met a withheld secret in all the run kept $MET, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
 fi

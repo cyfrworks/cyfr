@@ -136,10 +136,11 @@ page gone within a tenth of a second.
 What a proof records holds no credential: headings and notices, never a
 page's text, and addresses cut at their fragment or query and without the
 credential some carry in their path (a sign-in's ticket, a canvas's or a
-served file's asset credential), and no value the proof withholds (the
-setup token, once the setup proof has read it). One scrub does it for
-everything written, the app's own output too, before it is written
-(`scrub.mjs`).
+served file's asset credential). One scrub does it for everything written,
+the app's own output too, before it is written (`scrub.mjs`). The setup
+proof builds what it uploads once, at its end (`scrub-kept.mjs`): every
+file it kept through that scrub, with every secret of the folders it set
+up withheld, which the scrub cuts wherever it stands and counts.
 
 ## `media/`: camera and microphone
 
