@@ -153,7 +153,10 @@ defmodule Aqua.Loop.Turn do
         model: model,
         capabilities: capabilities,
         request_cap: request_cap(brain_authority, catalyst),
-        tools: ctx |> tools(offered, authority, Keyword.get(opts, :reading)) |> elem(0),
+        tools:
+          ctx
+          |> tools(offered, authority, Keyword.get(opts, :reading), Aqua.Reader.mark(thread.id))
+          |> elem(0),
         deadline_ms: deadline_ms(authority, brain_timeout_ms(brain_authority, catalyst)),
         options: options,
         brain_options: brain_options,
@@ -688,21 +691,28 @@ defmodule Aqua.Loop.Turn do
   `list_external_tools/2`), when the grant
   covers it under the digest of the server's revision it was read from,
   as the gate decides its call (`Prima.Authority.Transition.external_tool_granted?/3`), and every
-  harness carries it (`Aqua.Loop.Request.tools/2`). A turn offered none
-  reads no server. `reading` is that listing as the turn's start already
-  read it, which it is handed from in place of a second read.
+  harness carries it (`Aqua.Loop.Request.tools/2`), under a name that
+  holds neither `mark`, the turn's thread's, nor the frames' stand-in. A
+  turn offered none reads no server. `reading` is that listing as the
+  turn's start already read it, which it is handed from in place of a
+  second read.
   """
   @spec tools(
           Context.t(),
           Aqua.Offered.t(),
           Authority.t(),
-          [Sanctum.Proxy.server_listing()] | nil
+          [Sanctum.Proxy.server_listing()] | nil,
+          String.t() | nil
         ) :: {[Request.tool()], %{String.t() => Request.unhanded()}}
-  def tools(%Context{} = ctx, offered, %Authority{} = authority, reading \\ nil) do
+  def tools(%Context{} = ctx, offered, %Authority{} = authority, reading \\ nil, mark \\ nil) do
     {external, unhanded} = external_tools(ctx, offered, authority, reading)
 
     {tools, refused} =
-      Request.tools(offered, external: external, accounts: launch_accounts(ctx, offered))
+      Request.tools(offered,
+        external: external,
+        accounts: launch_accounts(ctx, offered),
+        mark: mark
+      )
 
     {tools, Map.merge(unhanded, refused)}
   end

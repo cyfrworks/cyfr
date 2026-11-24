@@ -249,7 +249,15 @@ defmodule Aqua.ProgramToolTest do
           %{"type" => "tool_result"} = result <- results,
           do: result
 
-    Jason.decode!(content)
+    # A program's output is outside data, in its outside frame
+    # (`Aqua.Reader.outside/3`).
+    [_frame, answer] =
+      Regex.run(
+        ~r/\A⟦cyfr-[A-Z2-7]{16} outside program⟧\n(.*)\n⟦cyfr-[A-Z2-7]{16} end⟧\z/s,
+        content
+      )
+
+    Jason.decode!(answer)
   end
 
   defp calls(blocks),

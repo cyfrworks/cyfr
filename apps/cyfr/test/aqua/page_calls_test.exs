@@ -666,6 +666,32 @@ defmodule Aqua.PageCallsTest do
     assert app_runs() == 1
   end
 
+  # A page is no model: what its call is answered holds no frame and no
+  # thread's mark, a reread of a job that carries a scroll among it.
+  test "a page's call is answered with no frame and no mark", %{ctx: ctx, driver: driver} do
+    worker!([])
+    room = workspace!(ctx)
+    _put = put!(ctx, room, @html)
+    mark = Aqua.Reader.mark(room.id)
+
+    {:ok, _job} =
+      Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), room.id, %{
+        author: ctx.user_id,
+        sent_by: "person",
+        content: "tend it " <> mark,
+        payload: %{"scrolls" => [%{"name" => "fern", "body" => "water " <> mark, "files" => []}]}
+      })
+
+    action(driver, room, 1, "thread.events", %{"thread" => room.id})
+    assert {200, %{"ok" => true} = answer} = answered!(1)
+    settled!(ctx, room)
+
+    read = Jason.encode!(answer)
+    assert read =~ "tend it" and read =~ "water"
+    refute read =~ mark
+    refute read =~ "⟦"
+  end
+
   # ---------------------------------------------------------------------------
   # Aqua's tools
   # ---------------------------------------------------------------------------

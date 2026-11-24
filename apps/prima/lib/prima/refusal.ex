@@ -381,6 +381,18 @@ defmodule Prima.Refusal do
   @spec signal_tags() :: [Prima.ConsentSignal.tag()]
   def signal_tags, do: @signal_tags
 
+  @doc """
+  Whether `reason`, bare or refused, is an outside source's own words for
+  why it failed, `{:outside_error, message}`: what an MCP server answered
+  as its error, tagged where its answer is read
+  (`Emissary.External.Server`). Every other refusal is CYFR's own
+  sentence.
+  """
+  @spec outside?(term()) :: boolean()
+  def outside?(%__MODULE__{reason: reason}), do: outside?(reason)
+  def outside?({:outside_error, message}) when is_binary(message), do: true
+  def outside?(_reason), do: false
+
   @doc "The sentence an unknown reason reads as."
   @spec unconfirmed() :: String.t()
   def unconfirmed, do: @unconfirmed
@@ -1717,6 +1729,11 @@ defmodule Prima.Refusal do
        "This command lost track of the change before it finished (#{why}), so it may have " <>
          "been applied. Do not ask for it again: run `cyfr access --resume`, which finishes it " <>
          "under the lock and reports what happened."}
+
+  # An outside source's own words for why it failed (`outside?/1`), read
+  # as a producer's sentence is.
+  defp row({:outside_error, message}) when is_binary(message),
+    do: {:internal, Prima.Sanitizer.sanitize(message)}
 
   # A crafted sentence a producer returned as a bare binary: internal,
   # and its words as they are.
