@@ -301,6 +301,10 @@ public static class U {
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
 }
 "@
+        # The Arm runner image shows the first-run privacy page of Windows,
+        # "Microsoft account", over the whole screen, above any topmost
+        # window: its process is ended first, on this disposable machine.
+        Get-Process | Where-Object { $_.MainWindowTitle -eq "Microsoft account" } | Stop-Process -Force -ErrorAction SilentlyContinue
         $h = [U]::FindWindow([NullString]::Value, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
         # Above every other window, the runner agent window among them, which
         # a background process may not bring forward (SetForegroundWindow).
