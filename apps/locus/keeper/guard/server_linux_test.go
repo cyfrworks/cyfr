@@ -8,10 +8,12 @@ package guard
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -318,19 +320,23 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 
 // A connection that ends while a route's pair cannot be removed leaves the
 // route to the guard's retries, its slot taken; one that still cannot go
-// past withdrawBound ends the guard.
+// past the bound ends the guard, the retries running on real time.
 func TestARouteThatCannotBeWithdrawnEndsTheGuardPastItsBound(t *testing.T) {
 	ts := startServer(t, "net:[1]")
-	clock := time.Now()
-	var mu sync.Mutex
-	ts.s.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	ts.s.bound, ts.s.interval = 300*time.Millisecond, 20*time.Millisecond
 	exited := make(chan int, 1)
-	ts.s.exit = func(code int) { exited <- code }
+	ts.s.exit = func(code int) {
+		select {
+		case exited <- code:
+		default:
+		}
+	}
 	r := dialRaw(t, ts.path)
 	if got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
 	ts.maker.setFail("unpair")
+	began := time.Now()
 	r.conn.Close()
 	ts.waitEnded(t)
 	ts.s.mu.Lock()
@@ -339,23 +345,90 @@ func TestARouteThatCannotBeWithdrawnEndsTheGuardPastItsBound(t *testing.T) {
 	if !taken || pending != 1 {
 		t.Fatalf("the lost connection's route not wholly removed: slot taken %t, %d tried again", taken, pending)
 	}
-	ts.s.retryPending()
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go ts.s.retryLoop(stop)
 	select {
 	case code := <-exited:
-		t.Fatalf("the guard ended within its bound: %d", code)
-	default:
-	}
-	mu.Lock()
-	clock = clock.Add(withdrawBound + time.Second)
-	mu.Unlock()
-	ts.s.retryPending()
-	select {
-	case code := <-exited:
-		if code != ExitServe {
-			t.Fatalf("the guard ended %d", code)
+		if code != ExitServe || time.Since(began) < ts.s.bound {
+			t.Fatalf("the guard ended %d after %s, its bound %s", code, time.Since(began), ts.s.bound)
 		}
-	default:
+	case <-time.After(10 * time.Second):
 		t.Fatal("a route not withdrawn past its bound did not end the guard")
+	}
+}
+
+// A clear of a route the retry withdrew answers cleared once and touches
+// nothing, whichever came first: the retry before the clear's lookup, or
+// the retry succeeding and a later admit taking the slot before the clear.
+func TestAClearOfARouteTheRetryWithdrewTouchesNothing(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	r := dialRaw(t, ts.path)
+	admit := func(id string) Message {
+		return r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
+	}
+	clear := func(id string) Message { return r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+id+`"}`)) }
+	first, later := testSpawn, "ffeeddccbbaa99887766554433221100"
+	if got := admit(first); got.Type != TypeAdmitted {
+		t.Fatalf("admit: %+v", got)
+	}
+	ts.maker.setFail("unpair")
+	if got := clear(first); got.Type != TypeRefused {
+		t.Fatalf("a clear whose removal failed answered %+v", got)
+	}
+	ts.maker.setFail()
+	ts.s.retryPending()
+	// The slot is free now: a later route takes it and its address.
+	if got := admit(later); got.Type != TypeAdmitted {
+		t.Fatalf("a later admit: %+v", got)
+	}
+	before := len(ts.maker.taken())
+	if got := clear(first); got.Type != TypeCleared {
+		t.Fatalf("a clear of a route the retry withdrew answered %+v", got)
+	}
+	if steps := ts.maker.taken()[before:]; len(steps) != 0 {
+		t.Fatalf("a clear of a withdrawn route acted on the slot's later route: %v", steps)
+	}
+	if got := clear(first); got.Type != TypeRefused {
+		t.Fatalf("a second clear of the same route answered %+v, want refused once it is answered", got)
+	}
+	ts.s.mu.Lock()
+	taken := ts.s.taken[0]
+	ts.s.mu.Unlock()
+	if !taken {
+		t.Fatal("the later route's slot was freed")
+	}
+}
+
+// A dump the kernel marks interrupted proves nothing; one that ends with
+// DONE and no interruption answers what it holds.
+func TestAnInterruptedDumpIsNoAnswer(t *testing.T) {
+	addr := netip.MustParseAddr("10.213.0.2")
+	done := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: syscall.NLMSG_DONE}}
+	intr := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: syscall.NLMSG_DONE, Flags: unix.NLM_F_DUMP_INTR}}
+	if found, end, interrupted, err := parseDump([]syscall.NetlinkMessage{done}, addr); err != nil || !end || interrupted || len(found) != 0 {
+		t.Fatalf("a whole empty dump: %v %t %t %v", found, end, interrupted, err)
+	}
+	if _, end, interrupted, err := parseDump([]syscall.NetlinkMessage{intr}, addr); err != nil || !end || !interrupted {
+		t.Fatalf("an interrupted dump read as whole: %t %t %v", end, interrupted, err)
+	}
+}
+
+// Every netlink read the guard makes is bounded: a socket that is never
+// answered gives its read up at the deadline.
+func TestANetlinkReadThatIsNeverAnsweredEnds(t *testing.T) {
+	before := netlinkTimeout
+	netlinkTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { netlinkTimeout = before })
+	fd, err := nlSocket(unix.NETLINK_ROUTE)
+	if err != nil {
+		t.Skipf("no netlink socket here: %v", err)
+	}
+	defer unix.Close(fd)
+	began := time.Now()
+	_, _, err = unix.Recvfrom(fd, make([]byte, 64), 0)
+	if !errors.Is(err, unix.EAGAIN) || time.Since(began) > 2*time.Second {
+		t.Fatalf("an unanswered read answered %v after %s", err, time.Since(began))
 	}
 }
 

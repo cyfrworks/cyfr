@@ -83,6 +83,9 @@ type fakeRouteGuard struct {
 	// says no connection is live.
 	refuseClears int
 	dead         bool
+	// afterLive runs as Live returns, as a peer's close just after the
+	// check would.
+	afterLive func()
 }
 
 type routeCall struct {
@@ -126,8 +129,12 @@ func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns,
 
 func (g *fakeRouteGuard) Live(r guard.Route) bool {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	return !g.dead && r.Conn == g.conn
+	live, after := !g.dead && r.Conn == g.conn, g.afterLive
+	g.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return live
 }
 
 func (g *fakeRouteGuard) Clear(spawnID string, r guard.Route) error {
@@ -435,6 +442,12 @@ func TestASurvivorOfTheGuardsEndEndsTheKeeper(t *testing.T) {
 	k.reply(t)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "up\n") })
+	k.s.mu.Lock()
+	var group interface{ Procs() ([]int, error) }
+	for _, sp := range k.s.routing {
+		group = sp.group
+	}
+	k.s.mu.Unlock()
 	k.s.guardLost(1)
 	select {
 	case code := <-exited:
@@ -444,7 +457,46 @@ func TestASurvivorOfTheGuardsEndEndsTheKeeper(t *testing.T) {
 	default:
 		t.Fatal("the keeper went on with a routed space of the lost guard alive")
 	}
+	// The keeper's last act is the kernel's group kill: the space's
+	// processes are gone, though the kill the test stood in for left them.
+	if pids, err := group.Procs(); (err != nil && !errors.Is(err, os.ErrNotExist)) || len(pids) != 0 {
+		t.Fatalf("the space outlived the keeper's end: %v %v", pids, err)
+	}
 	k.s.groupKilled = nil
+}
+
+// A command released just after its connection was found live belongs to a
+// space already counted among the routed ones: the peer's close that comes
+// after the check, and the loss it brings, kill it before guardLost returns.
+func TestAReleaseJustBeforeTheGuardsEndIsKilledByIt(t *testing.T) {
+	k := routedKeeper(t)
+	lost := make(chan struct{})
+	k.guard.mu.Lock()
+	k.guard.afterLive = func() {
+		// The peer closes now: its loss waits for the keeper's lock, held
+		// by the release, and then finds the space.
+		go func() { k.s.guardLost(1); close(lost) }()
+	}
+	k.guard.mu.Unlock()
+	k.handleSpawn(t, spawnRequest(t, k.attach, "w", `echo up; sleep 600`, map[string]string{}, false, 64<<20))
+	spawned := k.reply(t)
+	if spawned["type"] != protocol.TypeSpawned {
+		t.Fatalf("answered %v", spawned)
+	}
+	<-lost
+	k.s.mu.Lock()
+	sp := k.s.spawns[spawned["spawn_id"].(string)]
+	k.s.mu.Unlock()
+	if sp != nil {
+		if pids, err := sp.group.Procs(); (err != nil && !errors.Is(err, os.ErrNotExist)) || len(pids) != 0 {
+			t.Fatalf("a space released just before the guard's end outlived it: %v %v", pids, err)
+		}
+	}
+	exited := k.reply(t)
+	if exited["type"] != protocol.TypeExited || exited["signal"] != "SIGKILL" {
+		t.Fatalf("answered %v", exited)
+	}
+	k.reply(t)
 }
 
 // An admitted whose connection is no longer live at the release refuses the

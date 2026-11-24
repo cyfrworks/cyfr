@@ -183,9 +183,9 @@ def connections_of(stack, inner):
 
 
 def route_mark(rules, slot):
-    """The connection mark route `slot` gives a new connection, as its pass chain sets it."""
+    """The connection mark route `slot` gives a connection that carries none, as its pass chain sets it."""
     for rule in rules:
-        found = re.search(rf"^-A CYFR_GUARD_P{slot} .*--ctstate NEW -j CONNMARK --set-xmark (0x[0-9a-f]+)/0xffffffff$", rule)
+        found = re.search(rf"^-A CYFR_GUARD_P{slot} -m connmark --mark 0x0 -j CONNMARK --set-xmark (0x[0-9a-f]+)/0xffffffff$", rule)
         if found:
             return int(found.group(1), 16)
     return None
@@ -220,7 +220,7 @@ def tuple_reuse(stack, c, open_slot, offline):
     _iface, slot, rules = route_of(stack, c, REUSE)
     expect(slot == open_slot, f"the second session took the withdrawn route's slot, {open_slot}, and its address", slot)
     mark = route_mark(rules, slot)
-    expect(mark is not None, "the route marks a connection only as it is made, on its first packet", rules)
+    expect(mark is not None, "the route marks only a connection that carries no mark, never over another's", rules)
     second = run_in(c, REUSE, ["node", "-e", UDP_REUSE_PROBE, "reuse", REUSE_PORT, "1.1.1.1", "53"])
     expect(second["stdout"].strip() == "reply=yes", "the second session's exchange on the same tuple is answered", second)
     if tracked is not None:

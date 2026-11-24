@@ -46,8 +46,10 @@
 #      admitted for it and refuses every other.
 # What passes leaves masqueraded as this namespace's own address, and a
 # connection it opens takes the route's mark as it is made, and never
-# after (CONNMARK on a new connection alone, through CYFR_GUARD_P<slot>, a
-# number the guard never gives twice in its life). A packet into a space
+# after: CONNMARK sets it only on a connection that carries no mark yet
+# (through CYFR_GUARD_P<slot>; a route's mark is its own identity, a
+# number the guard never gives twice in its life), so no route overwrites
+# another's, an unreplied entry's included. A packet into a space
 # passes only as a reply of a connection carrying its own route's mark,
 # and a withdrawn route leaves no connection in the kernel's table (the
 # control removes them as it removes the pair), so a later route that took
@@ -604,7 +606,7 @@ route() {
     echo "*filter"
     echo ":$r - [0:0]"
     echo ":$p - [0:0]"
-    echo "-A $p -m conntrack --ctstate NEW -j CONNMARK --set-mark $mark"
+    echo "-A $p -m connmark --mark 0 -j CONNMARK --set-mark $mark"
     echo "-A $p -j ACCEPT"
     echo "-A $r ! -s $inner/32 -j DROP"
     echo "-A $r -o sp+ -j REJECT --reject-with icmp-admin-prohibited"

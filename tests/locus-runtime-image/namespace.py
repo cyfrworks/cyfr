@@ -17,8 +17,9 @@ The steps, each observed from inside the container as root, which owns
 every runner's user namespace and so reads a runner's /proc entries (the
 runner's own uid, outside that namespace, may not):
 
-- `refusals`: the image under Docker's default seccomp profile refuses to
-  serve, naming user.max_user_namespaces and
+- `refusals`: a routed keeper whose guard's socket is not there refuses
+  to start, naming the socket; the image under Docker's default seccomp
+  profile refuses to serve, naming user.max_user_namespaces and
   kernel.apparmor_restrict_unprivileged_userns; under the profile a spawn
   of the relay pool naming hosts, which it could never reach, is refused
   as bad_request, and so is one carrying `isolation`, which no request has.
@@ -202,7 +203,7 @@ class IsolatedStack(Stack):
 # ---------------------------------------------------------------------------
 
 
-def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None):
+def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None, pool_args=None):
     """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client;
     with `network`, in that container's network namespace."""
     args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
@@ -212,7 +213,7 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), netwo
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
         args += ["--security-opt", f"seccomp={PROFILE}"]
-    args += ["--entrypoint", "cyfr-locus", image, "serve", "--pool", POOL, "--home-root", HOME_ROOT,
+    args += ["--entrypoint", "cyfr-locus", image, "serve", *(pool_args or ["--pool", POOL]), "--home-root", HOME_ROOT,
              "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]
     return run(*args, check=False, timeout=timeout)
 
@@ -255,6 +256,14 @@ def test_refusals(image):
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,
            f"under Docker's default seccomp profile cyfr-locus refuses to serve the relay pool, naming both settings (exit {refused.returncode})",
            refused.stderr)
+    # The keeper's own entry point: a routed pool whose guard is not there
+    # refuses the boot, naming the guard's socket.
+    guard = "/run/cyfr-guard-control/guard.sock"
+    unguarded = keeper_run(image, "exec sleep 5", timeout=60,
+                           pool_args=["--pool", f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:routed", "--guard", guard])
+    expect(unguarded.returncode == 78 and "does not make a route" in unguarded.stderr and guard in unguarded.stderr,
+           f"a routed keeper whose guard is not there refuses to start, naming {guard} (exit {unguarded.returncode})",
+           unguarded.stderr[-2000:])
     for name, extra in [("naming hosts", {"hosts": ["api.example.com"]}), ("carrying isolation", {"isolation": "netns"})]:
         client = PLACE_FIRST + (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], **extra)}' >&3; "
                                 "read -r line <&3; echo \"reply:$line\"")

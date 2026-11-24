@@ -78,7 +78,7 @@ func Main(args []string) int {
 	}
 	log.Info("control: serving %s in %s, routes in %s", args[0], netns, rng)
 	s := newServer(log, netns, rng, kernelRoutes{apply: runScript})
-	go s.retryLoop()
+	go s.retryLoop(nil)
 	for {
 		conn, err := listener.AcceptUnix()
 		if err != nil {
@@ -160,10 +160,15 @@ type route struct {
 	sockets [2]uint64
 	// conn is the connection that made it; answered the names its names
 	// answered, read as they stopped; failedAt when its withdrawal first
-	// failed, zero while none has.
+	// failed, zero while none has; gone once its withdrawal is complete,
+	// after which no step acts on it again. A route is its own: its mark
+	// is its identity, never given twice, and a step names the route,
+	// never its slot or address, which a later route may hold once this
+	// one is gone.
 	conn     uint64
 	answered uint64
 	failedAt time.Time
+	gone     bool
 }
 
 // routeMaker makes and removes the parts of a route: kernelRoutes in
@@ -244,7 +249,16 @@ type server struct {
 	// pending holds every route whose withdrawal failed: it keeps its slot
 	// and is tried again until it is gone, or the guard ends.
 	pending map[*route]bool
-	conns   atomic.Uint64
+	// routes holds each open connection's routes by spawn id, standing,
+	// being tried again, or withdrawn by a retry and not yet asked for: a
+	// clear of one the retry withdrew answers cleared once and touches
+	// nothing. A connection's entry goes at its end.
+	routes map[uint64]map[string]*route
+	// bound is withdrawBound and interval retryInterval; tests shorten
+	// them.
+	bound    time.Duration
+	interval time.Duration
+	conns    atomic.Uint64
 	// onEnd, when set, is called once a connection's withdrawals are done.
 	onEnd func()
 	// exit ends the guard; os.Exit in production.
@@ -255,7 +269,8 @@ type server struct {
 
 func newServer(log *logx.Logger, netns string, rng netip.Prefix, maker routeMaker) *server {
 	return &server{log: log, netns: netns, rng: rng, maker: maker, upstream: islandResolver,
-		pending: map[*route]bool{}, exit: os.Exit, now: time.Now}
+		pending: map[*route]bool{}, routes: map[uint64]map[string]*route{}, exit: os.Exit, now: time.Now,
+		bound: withdrawBound, interval: retryInterval}
 }
 
 // serve answers one connection until it ends, then withdraws every route
@@ -263,21 +278,30 @@ func newServer(log *logx.Logger, netns string, rng netip.Prefix, maker routeMake
 func (s *server) serve(conn *net.UnixConn) {
 	defer conn.Close()
 	id := s.conns.Add(1)
-	made := map[string]*route{}
+	s.mu.Lock()
+	s.routes[id] = map[string]*route{}
+	s.mu.Unlock()
 	defer func() {
-		if len(made) > 0 {
-			began := time.Now()
-			withdrawn := 0
-			for _, r := range made {
-				if err := s.withdraw(r); err == nil {
-					withdrawn++
-				}
+		s.mu.Lock()
+		made := s.routes[id]
+		delete(s.routes, id)
+		standing, withdrawn := 0, 0
+		for _, r := range made {
+			if r.gone {
+				continue
 			}
-			if withdrawn == len(made) {
-				s.log.Warn("control: connection %d ended; its %d routes are withdrawn (%s)", id, len(made), time.Since(began).Round(time.Millisecond))
-			} else {
-				s.log.Error("control: connection %d ended; %d of its %d routes are withdrawn, and the guard tries the rest again", id, withdrawn, len(made))
+			standing++
+			if err := s.withdrawLocked(r); err == nil {
+				withdrawn++
 			}
+		}
+		s.mu.Unlock()
+		switch {
+		case standing == 0:
+		case withdrawn == standing:
+			s.log.Warn("control: connection %d ended; its %d routes are withdrawn", id, standing)
+		default:
+			s.log.Error("control: connection %d ended; %d of its %d routes are withdrawn, and the guard tries the rest again", id, withdrawn, standing)
 		}
 		if s.onEnd != nil {
 			s.onEnd()
@@ -300,7 +324,7 @@ func (s *server) serve(conn *net.UnixConn) {
 		for i, fd := range fds {
 			files[i] = os.NewFile(uintptr(fd), "descriptor")
 		}
-		reply := s.answer(id, packet, files, made)
+		reply := s.answer(id, packet, files)
 		out, err := Encode(reply)
 		if err == nil {
 			_, err = conn.Write(out)
@@ -314,7 +338,7 @@ func (s *server) serve(conn *net.UnixConn) {
 // answer applies one request and names its outcome. The descriptors it
 // came with are the route's from an admit that is admitted, and are closed
 // otherwise.
-func (s *server) answer(id uint64, packet []byte, files []*os.File, made map[string]*route) Message {
+func (s *server) answer(id uint64, packet []byte, files []*os.File) Message {
 	keep := false
 	defer func() {
 		if !keep {
@@ -333,31 +357,33 @@ func (s *server) answer(id uint64, packet []byte, files []*os.File, made map[str
 	}
 	switch req.Type {
 	case TypeAdmit:
-		if made[req.SpawnID] != nil {
+		s.mu.Lock()
+		held := s.routes[id][req.SpawnID] != nil
+		s.mu.Unlock()
+		if held {
 			return refuse("this connection already holds a route for the spawn")
 		}
-		r, err := s.admit(id, req, files)
+		_, err := s.admit(id, req, files)
 		if err != nil {
 			s.log.Error("control: connection %d: refused the route of spawn %s: %v", id, req.SpawnID, err)
 			return refuse("the guard could not make the route: " + err.Error())
 		}
 		keep = true
-		made[req.SpawnID] = r
 		return Message{Type: TypeAdmitted, SpawnID: req.SpawnID}
 	default:
-		r := made[req.SpawnID]
-		if r == nil {
-			r = s.pendingOf(id, req.SpawnID)
-		}
+		// The lookup and every step of the withdrawal are taken under the
+		// one lock: no retry runs between them, and a route the retry
+		// withdrew before is answered cleared and touched no more.
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		r := s.routes[id][req.SpawnID]
 		if r == nil {
 			return refuse("this connection holds no route for the spawn")
 		}
-		// A route not wholly withdrawn is the guard's to try again, and
-		// this connection's no more: its end leaves it to the retries.
-		delete(made, req.SpawnID)
-		if err := s.withdraw(r); err != nil {
+		if err := s.withdrawLocked(r); err != nil {
 			return refuse("the guard could not remove the whole route, and tries again: " + err.Error())
 		}
+		delete(s.routes[id], req.SpawnID)
 		return Message{Type: TypeCleared, SpawnID: req.SpawnID}
 	}
 }
@@ -414,6 +440,7 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 		return fail(fmt.Errorf("its names: %w", err))
 	}
 	r.names = n
+	s.routes[id][req.SpawnID] = r
 	s.log.Info("control: route %s of spawn %s made, %s to %s, reach %s", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.reach)
 	// The namespace is the pair's to hold now; the sockets are the names'.
 	_ = r.netns.Close()
@@ -431,8 +458,12 @@ func (s *server) withdraw(r *route) error {
 	return s.withdrawLocked(r)
 }
 
-// withdrawLocked is withdraw with s.mu held.
+// withdrawLocked is withdraw with s.mu held. A route already gone is not
+// touched: its slot and address may be a later route's.
 func (s *server) withdrawLocked(r *route) error {
+	if r.gone {
+		return nil
+	}
 	if r.names != nil {
 		r.answered = r.names.answered.Load()
 	}
@@ -444,6 +475,9 @@ func (s *server) withdrawLocked(r *route) error {
 		s.log.Error("control: route %s of spawn %s could not all be removed, and keeps its slot while the guard tries again: %v", outerName(r.slot), r.spawnID, err)
 		return err
 	}
+	// Complete and recorded before its slot, and so its address, is given
+	// again.
+	r.gone = true
 	delete(s.pending, r)
 	delete(s.sockets, r.sockets[0])
 	delete(s.sockets, r.sockets[1])
@@ -452,23 +486,17 @@ func (s *server) withdrawLocked(r *route) error {
 	return nil
 }
 
-// pendingOf is the route of connection conn and spawn spawnID that is
-// being tried again, or nil.
-func (s *server) pendingOf(conn uint64, spawnID string) *route {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for r := range s.pending {
-		if r.conn == conn && r.spawnID == spawnID {
-			return r
-		}
-	}
-	return nil
-}
-
 // retryLoop tries every route not yet withdrawn again, each retryInterval.
-func (s *server) retryLoop() {
-	for range time.Tick(retryInterval) {
-		s.retryPending()
+func (s *server) retryLoop(stop <-chan struct{}) {
+	tick := time.NewTicker(s.interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tick.C:
+			s.retryPending()
+		}
 	}
 }
 
@@ -481,8 +509,8 @@ func (s *server) retryPending() {
 		if err := s.withdrawLocked(r); err == nil {
 			continue
 		}
-		if s.now().Sub(r.failedAt) > withdrawBound {
-			s.log.Error("control: route %s of spawn %s could not be withdrawn within %s; the guard ends, and its namespace with every route", outerName(r.slot), r.spawnID, withdrawBound)
+		if s.now().Sub(r.failedAt) > s.bound {
+			s.log.Error("control: route %s of spawn %s could not be withdrawn within %s; the guard ends, and its namespace with every route", outerName(r.slot), r.spawnID, s.bound)
 			s.exit(ExitServe)
 			return
 		}

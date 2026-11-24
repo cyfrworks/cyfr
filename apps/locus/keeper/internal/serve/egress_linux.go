@@ -278,7 +278,18 @@ func (s *server) guardLost(conn uint64) {
 	}
 	wg.Wait()
 	if survived.Load() {
-		s.log.Error("egress: a routed space of the guard's lost connection %d still runs; the keeper ends, so none runs while another guard is dialled", conn)
+		// What ends a space the keeper leaves behind is the kernel's own
+		// group kill, written here as the keeper's last act: cgroup.kill
+		// sends SIGKILL to every process of the group at once, and one the
+		// kernel holds in an uninterruptible wait dies as it leaves it.
+		// Inside a container the container's end then takes every process
+		// too; on bare Linux nothing else would, so this kill is the end.
+		for _, sp := range routed {
+			if sp.group != nil {
+				sp.group.KillBy(time.Now())
+			}
+		}
+		s.log.Error("egress: a routed space of the guard's lost connection %d still ran; its group is killed and the keeper ends, so none runs while another guard is dialled", conn)
 		s.exitKeeper(ExitLost)
 		return
 	}

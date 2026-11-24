@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -76,14 +77,11 @@ func ifinfomsg() []byte { return make([]byte, unix.SizeofIfInfomsg) }
 // netlinkDo sends one request on a route netlink socket of the guard's
 // namespace and reads its acknowledgement.
 func netlinkDo(kind uint16, flags uint16, body []byte) error {
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+	fd, err := nlSocket(unix.NETLINK_ROUTE)
 	if err != nil {
 		return err
 	}
 	defer unix.Close(fd)
-	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return err
-	}
 	msg := make([]byte, unix.SizeofNlMsghdr, unix.SizeofNlMsghdr+len(body))
 	msg = append(msg, body...)
 	binary.NativeEndian.PutUint32(msg[0:4], uint32(len(msg)))
@@ -321,10 +319,20 @@ func attrs(b []byte) [][3][]byte {
 
 func attrType(a [3][]byte) uint16 { return binary.NativeEndian.Uint16(a[0]) }
 
-// ctnetlink opens a netfilter netlink socket of the guard's namespace.
-func ctnetlink() (int, error) {
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_NETFILTER)
+// netlinkTimeout bounds every read of a netlink answer: a step the guard
+// takes under its lock never waits longer for the kernel.
+var netlinkTimeout = 5 * time.Second
+
+// nlSocket opens a netlink socket of protocol proto in the guard's
+// namespace, bound, its every read bounded by netlinkTimeout.
+func nlSocket(proto int) (int, error) {
+	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, proto)
 	if err != nil {
+		return -1, err
+	}
+	tv := unix.NsecToTimeval(netlinkTimeout.Nanoseconds())
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv); err != nil {
+		unix.Close(fd)
 		return -1, err
 	}
 	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
@@ -333,6 +341,13 @@ func ctnetlink() (int, error) {
 	}
 	return fd, nil
 }
+
+// ctnetlink opens a netfilter netlink socket of the guard's namespace.
+func ctnetlink() (int, error) { return nlSocket(unix.NETLINK_NETFILTER) }
+
+// errDumpInterrupted is a dump the kernel says changed while it was read
+// (NLM_F_DUMP_INTR): it proves nothing and is read again.
+var errDumpInterrupted = errors.New("the connection table changed while it was read")
 
 // ctMessage is one ctnetlink request of the given message type.
 func ctMessage(msg uint16, flags uint16, seq uint32, body []byte) []byte {
@@ -358,79 +373,123 @@ func conntrackOf(addr netip.Addr) ([][]byte, error) {
 	if err := unix.Sendto(fd, ctMessage(ctnlMsgGet, unix.NLM_F_DUMP, 1, nil), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return nil, err
 	}
-	want := addr.As4()
-	var found [][]byte
 	buf := make([]byte, 1<<16)
+	var found [][]byte
+	interrupted := false
 	for {
 		n, _, err := unix.Recvfrom(fd, buf, 0)
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			// A read that times out or fails before the dump's end is a
+			// short dump, no answer.
+			return nil, fmt.Errorf("the dump ended short: %w", err)
 		}
 		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
 		if err != nil {
 			return nil, err
 		}
-		for _, m := range msgs {
-			switch m.Header.Type {
-			case syscall.NLMSG_DONE:
-				return found, nil
-			case syscall.NLMSG_ERROR:
-				if len(m.Data) >= 4 {
-					if code := int32(binary.NativeEndian.Uint32(m.Data[0:4])); code != 0 {
-						return nil, unix.Errno(-code)
-					}
-				}
-				return found, nil
+		entries, done, intr, err := parseDump(msgs, addr)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, entries...)
+		interrupted = interrupted || intr
+		if done {
+			if interrupted {
+				return nil, errDumpInterrupted
 			}
-			if len(m.Data) < 4 {
-				continue
-			}
-			var orig, zone []byte
-			var source []byte
-			for _, a := range attrs(m.Data[4:]) {
-				switch attrType(a) {
-				case ctaTupleOrig:
-					orig = a[1]
-					for _, t := range attrs(a[2]) {
-						if attrType(t) != ctaTupleIP {
-							continue
-						}
-						for _, ip := range attrs(t[2]) {
-							if attrType(ip) == ctaIPv4Src && len(ip[2]) == 4 {
-								source = ip[2]
-							}
-						}
-					}
-				case ctaZone:
-					zone = a[1]
-				}
-			}
-			if orig != nil && len(source) == 4 && [4]byte(source) == want {
-				entry := append(append([]byte(nil), orig...), make([]byte, (4-len(orig)%4)%4)...)
-				if zone != nil {
-					entry = append(entry, zone...)
-					entry = append(entry, make([]byte, (4-len(zone)%4)%4)...)
-				}
-				found = append(found, entry)
-			}
+			return found, nil
 		}
 	}
+}
+
+// parseDump reads one batch of a connection-table dump: the entries whose
+// original source is addr, whether the batch ends the dump, and whether any
+// of its messages says the dump was interrupted.
+func parseDump(msgs []syscall.NetlinkMessage, addr netip.Addr) (found [][]byte, done, interrupted bool, err error) {
+	want := addr.As4()
+	for _, m := range msgs {
+		if m.Header.Flags&unix.NLM_F_DUMP_INTR != 0 {
+			interrupted = true
+		}
+		switch m.Header.Type {
+		case syscall.NLMSG_DONE:
+			return found, true, interrupted, nil
+		case syscall.NLMSG_ERROR:
+			if len(m.Data) >= 4 {
+				if code := int32(binary.NativeEndian.Uint32(m.Data[0:4])); code != 0 {
+					return nil, false, interrupted, unix.Errno(-code)
+				}
+			}
+			return found, true, interrupted, nil
+		}
+		if len(m.Data) < 4 {
+			continue
+		}
+		var orig, zone, source []byte
+		for _, a := range attrs(m.Data[4:]) {
+			switch attrType(a) {
+			case ctaTupleOrig:
+				orig = a[1]
+				for _, t := range attrs(a[2]) {
+					if attrType(t) != ctaTupleIP {
+						continue
+					}
+					for _, ip := range attrs(t[2]) {
+						if attrType(ip) == ctaIPv4Src && len(ip[2]) == 4 {
+							source = ip[2]
+						}
+					}
+				}
+			case ctaZone:
+				zone = a[1]
+			}
+		}
+		if orig != nil && len(source) == 4 && [4]byte(source) == want {
+			entry := append(append([]byte(nil), orig...), make([]byte, (4-len(orig)%4)%4)...)
+			if zone != nil {
+				entry = append(entry, zone...)
+				entry = append(entry, make([]byte, (4-len(zone)%4)%4)...)
+			}
+			found = append(found, entry)
+		}
+	}
+	return found, false, interrupted, nil
 }
 
 // forgetConnections removes from the connection table every entry whose
 // original source is addr, the address of a route being withdrawn. An entry
 // already gone is removed.
 func forgetConnections(addr netip.Addr) error {
-	entries, err := conntrackOf(addr)
-	if err != nil {
-		return fmt.Errorf("reading the connection table: %w", err)
+	// The address is free only once one whole, uninterrupted pass of the
+	// table finds no entry of it: each pass deletes what it found, and the
+	// next proves the deletion.
+	for pass := 0; pass < forgetPasses; pass++ {
+		entries, err := conntrackOf(addr)
+		if errors.Is(err, errDumpInterrupted) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("reading the connection table: %w", err)
+		}
+		if len(entries) == 0 {
+			return nil
+		}
+		if err := deleteConnections(addr, entries); err != nil {
+			return err
+		}
 	}
-	if len(entries) == 0 {
-		return nil
-	}
+	return fmt.Errorf("no whole pass of the connection table found it free of %s in %d passes", addr, forgetPasses)
+}
+
+// forgetPasses bounds the passes forgetConnections makes.
+const forgetPasses = 8
+
+// deleteConnections deletes each entry of addr a pass found; one already
+// gone is deleted.
+func deleteConnections(addr netip.Addr, entries [][]byte) error {
 	fd, err := ctnetlink()
 	if err != nil {
 		return err
@@ -444,7 +503,7 @@ func forgetConnections(addr netip.Addr) error {
 		buf := make([]byte, 4096)
 		n, _, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
-			return err
+			return fmt.Errorf("the deletion's answer: %w", err)
 		}
 		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
 		if err != nil {
@@ -457,13 +516,6 @@ func forgetConnections(addr netip.Addr) error {
 				}
 			}
 		}
-	}
-	left, err := conntrackOf(addr)
-	if err != nil {
-		return err
-	}
-	if len(left) > 0 {
-		return fmt.Errorf("%d connections of %s stay in the table", len(left), addr)
 	}
 	return nil
 }
