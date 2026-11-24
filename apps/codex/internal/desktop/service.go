@@ -607,6 +607,16 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	if a, open := s.again(run, epoch); open {
 		return a
 	}
+	// On a box's screen a press of the address This box's folder names now
+	// is a press of This box (box): the folder read anew, never a row of
+	// the list, which holds none yet when This box's first opening failed
+	// and the chooser offers it again.
+	if req.Kept {
+		if l, ok := s.thisBox(home); ok {
+			defer l.end()
+			return s.openLocal(run, epoch, s.Box, &l, shell.Typed)
+		}
+	}
 	// One reading of the list decides what a press opens: a row's own,
 	// which refuses one the list no longer keeps before any server is
 	// asked, or, for an address typed, the list's as it is read here.
@@ -937,6 +947,20 @@ func (s *Service) boxAt() (string, bool) {
 		return "", false
 	}
 	return l.Shell.Address, true
+}
+
+// thisBox is This box's folder read now, held for its opening, when it
+// names home; any other reading is ended.
+func (s *Service) thisBox(home string) (Local, bool) {
+	if s.Box == "" || s.Local == nil {
+		return Local{}, false
+	}
+	l, err := s.Local(s.Box)
+	if err != nil || l.Shell.Address != home {
+		l.end()
+		return Local{}, false
+	}
+	return l, true
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system

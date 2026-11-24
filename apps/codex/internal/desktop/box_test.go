@@ -222,6 +222,41 @@ func TestThisBoxOpensWhatItsFolderNamesNow(t *testing.T) {
 	}
 }
 
+// Try again, which the chooser offers for This box when its first opening
+// failed (main set no route, and the press's page was left), sends what
+// it sends for any CYFR offered again: its address, kept. On a box that is
+// This box's press, its folder read anew, on a first start with no entry
+// of the list too: This box is proposed again and opens.
+func TestTryAgainOnThisBoxsFirstOpeningPressesThisBox(t *testing.T) {
+	b := newOnBox(t)
+	ctx, leave := context.WithCancel(context.Background())
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		b.request(ctx, "/bootstrap/box", map[string]string{}, nil)
+	}()
+	if m := b.next(t); m.Type != TypeHome || m.Home != localAddress {
+		t.Fatalf("This box's press proposed %+v", m)
+	}
+	leave()
+	<-first
+	if _, kept := held(t, b.Homes, localAddress); kept {
+		t.Fatal("a first opening that failed left an entry")
+	}
+	done := b.connect(t, "/bootstrap/connect", map[string]string{"address": localAddress, "kept": "true"})
+	if m := b.next(t); m.Type != TypeHome || m.Home != localAddress || m.Setup != "" {
+		t.Fatalf("Try again proposed %+v, not This box", m)
+	}
+	b.ready(localAddress)
+	if got := answered(t, done); got.Next != "/" {
+		t.Fatalf("Try again answered %+v", got)
+	}
+	b.opened(t, localAddress)
+	if rec, ok := held(t, b.Homes, localAddress); !ok || rec.Project != boxFolder {
+		t.Fatalf("This box's entry is %+v", rec)
+	}
+}
+
 // After a CYFR was selected, a box's start offers it, not This box.
 func TestABoxOffersTheLastSelectedOverThisBox(t *testing.T) {
 	b := newOnBox(t)

@@ -233,16 +233,21 @@ test("a CYFR selected last that does not open says why, and Try again presses it
 
 // A proposal whose route main could not set comes back as main's word,
 // naming that CYFR: the chooser says why and offers it again, pressing
-// nothing by itself, the CYFR selected last included.
+// nothing by itself, the CYFR selected last included. On the box's screen
+// too, This box's first opening among them, which the service takes as a
+// press of This box (internal/desktop
+// TestTryAgainOnThisBoxsFirstOpeningPressesThisBox).
 test("a CYFR whose route could not be set is said, and Try again presses it", async () => {
   const OTHER = "https://other.example"
-  const {$, went} = await chooser("", {cyfr: OTHER, resume: OTHER}, OPEN, `#road=words&notice=unrouted&retry=${encodeURIComponent(HOME)}`)
-  assert.equal($("notice").textContent, UNROUTED_WORDS)
-  assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], "Connect and Try again")
-  assert.deepEqual(went.asked, [], "nothing by itself")
-  $("reopen").onclick()
-  await settled()
-  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]])
+  for (const box of ["", "&box=1"]) {
+    const {$, went} = await chooser("", {cyfr: OTHER, resume: OTHER}, OPEN, `#road=words${box}&notice=unrouted&retry=${encodeURIComponent(HOME)}`)
+    assert.equal($("notice").textContent, UNROUTED_WORDS, box)
+    assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], `${box}: Connect and Try again`)
+    assert.deepEqual(went.asked, [], `${box}: nothing by itself`)
+    $("reopen").onclick()
+    await settled()
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]], box)
+  }
 })
 
 test("a Connect the person makes on the passkey road leaves the opening to main", async () => {
