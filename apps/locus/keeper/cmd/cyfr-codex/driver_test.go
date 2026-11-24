@@ -360,6 +360,27 @@ func TestAPostWhoseSteerMayHaveBeenTakenIsNeverWrittenAgain(t *testing.T) {
 	}
 }
 
+// A usage limit's error says when it lifts, by the reset of the limit
+// Codex reported reached (`account/rateLimits/updated`, which names no
+// thread, before the failed turn, as 0.169.0 sent it), in UTC; a limit
+// not reached names no time.
+func TestAUsageLimitSaysWhenItLifts(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	work(s, "stp_work", "trn_1")
+	postText(s, "stp_post", "trn_1", "limited")
+	var errs []map[string]any
+	for e := s.next(); e["t"] != "idle"; e = s.next() {
+		if e["t"] == "error" {
+			errs = append(errs, e)
+		}
+	}
+	want := "OpenAI Codex reported a usage or rate limit; it lifts at 11:16 UTC on 24 November 2026."
+	if len(errs) != 1 || errs[0]["type"] != "rate_limited" || errs[0]["message"] != want {
+		t.Fatalf("one error, a rate limit's, saying when it lifts: %v", errs)
+	}
+}
+
 func TestAnAskIsHeldAndAnsweredByItsRequestsID(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})

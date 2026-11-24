@@ -356,6 +356,40 @@ func errorKind(raw json.RawMessage) string {
 	return "provider_error"
 }
 
+// limitSentence says a usage or rate limit, and when it lifts when Codex
+// named the reset of a limit it reached (reachedReset).
+func limitSentence(resets int64) string {
+	return "OpenAI Codex reported a usage or rate limit; " + brainwire.UntilWords(resets) + "."
+}
+
+// reachedReset is when the limits Codex reports reached all lift, by its
+// `account/rateLimits/updated` (0.169.0: `rateLimits` with a `primary` and
+// a `secondary` window, each null or its `usedPercent` and `resetsAt`, in
+// Unix seconds): the latest reset of a window used to 100 percent or past
+// it, or 0 when none is or it does not read.
+func reachedReset(params json.RawMessage) int64 {
+	type window struct {
+		Used   float64 `json:"usedPercent"`
+		Resets int64   `json:"resetsAt"`
+	}
+	var notice struct {
+		Limits struct {
+			Primary   *window `json:"primary"`
+			Secondary *window `json:"secondary"`
+		} `json:"rateLimits"`
+	}
+	if json.Unmarshal(params, &notice) != nil {
+		return 0
+	}
+	var latest int64
+	for _, w := range []*window{notice.Limits.Primary, notice.Limits.Secondary} {
+		if w != nil && w.Used >= 100 && w.Resets > latest {
+			latest = w.Resets
+		}
+	}
+	return latest
+}
+
 // signedOutSentence refuses a post and a listing while Codex has no
 // sign-in, as its account read answers. A key counts only once its login
 // stored it: the app-server does not use one from the environment.
@@ -394,7 +428,7 @@ func errorSentence(kind string) string {
 	case "authentication":
 		return "The account or key OpenAI Codex used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
-		return "OpenAI Codex reported a usage or rate limit; ask again later."
+		return limitSentence(0)
 	case "overloaded":
 		return "OpenAI Codex reported its provider overloaded; ask again later."
 	case "invalid_request":

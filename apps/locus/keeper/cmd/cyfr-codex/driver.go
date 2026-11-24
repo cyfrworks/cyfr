@@ -84,6 +84,9 @@ type driver struct {
 	// Whether the session's total holds a sub-agent's counts is not
 	// established, so from then on its usage is partial.
 	others bool
+	// reached is when the limits Codex last reported reached lift, in Unix
+	// seconds, or 0 (reachedReset).
+	reached int64
 	// resumed is set while a resumed thread has sent no usable total, one
 	// that carries counts: its first is partial, since it may end a stretch
 	// a sub-agent worked in whose total's event never committed, and
@@ -610,6 +613,11 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 	if !d.running() {
 		return nil
 	}
+	// The account's limits name no thread.
+	if method == "account/rateLimits/updated" {
+		d.reached = reachedReset(params)
+		return nil
+	}
 	var n notice
 	ok := json.Unmarshal(params, &n) == nil
 	if ok && n.ThreadID != "" && n.ThreadID != d.session {
@@ -726,7 +734,11 @@ func (d *driver) completed(n notice) error {
 		if n.Turn.Status == "failed" {
 			kind = errorKind(n.Turn.Error)
 		}
-		if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", kind).Set("message", errorSentence(kind))); err != nil {
+		message := errorSentence(kind)
+		if kind == "rate_limited" {
+			message = limitSentence(d.reached)
+		}
+		if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", kind).Set("message", message)); err != nil {
 			return err
 		}
 	}
@@ -771,6 +783,7 @@ func (d *driver) Close() {
 	d.session = ""
 	d.others = false
 	d.resumed = false
+	d.reached = 0
 	d.handing = ""
 	d.active = ""
 	d.turns = map[string]*turn{}

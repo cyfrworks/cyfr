@@ -233,6 +233,16 @@ func fakeCodex() int {
 			command["status"], command["aggregatedOutput"] = "completed", "FOLDER-CANARY"
 			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": command})
 			reply(turn, "ran it")
+		case strings.Contains(words, "limited"):
+			// As Codex 0.169.0 answered a usage limit (aq-drivers cx-m2): its
+			// limits, naming no thread, then the error and the failed turn.
+			notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{"limitId": "codex",
+				"primary":   map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1795518975},
+				"secondary": map[string]any{"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1795900000}}})
+			limit := map[string]any{"message": "HARNESS-WORDS You've hit your usage limit. Try again at 11:16 AM.", "codexErrorInfo": "usageLimitExceeded"}
+			notify("error", map[string]any{"threadId": thread.id, "turnId": turn, "willRetry": false, "error": limit})
+			complete(turn, "failed", limit)
+			return
 		case strings.Contains(words, "fail"):
 			harness := "HARNESS-WORDS unexpected status 401 Unauthorized, sign in at https://example.invalid"
 			notify("error", map[string]any{"threadId": thread.id, "turnId": turn, "willRetry": true, "error": map[string]any{"message": harness}})
