@@ -214,8 +214,10 @@ func browserHome() (string, error) {
 }
 
 // startChrome starts Chrome on its debugging pipe with its profile in
-// home's chrome folder, reaching nothing by itself (quiet), waits for its
-// first answer, and gives b its pipe; logging is added to its flags.
+// home's chrome folder, reaching nothing by itself (quiet), by the name
+// the shell gives itself less Headless (ownName), waits for its first
+// answer, and gives b its pipe and its agent; logging is added to its
+// flags.
 func startChrome(path, home string, b *browser, logging []string) (*chromeProcess, error) {
 	profile := filepath.Join(home, "chrome")
 	// The host runs one session per person, so a singleton entry in the
@@ -229,6 +231,82 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 	if err := chromeTemp(home); err != nil {
 		return nil, err
 	}
+	// Chrome's own sandbox cannot start under the backends service's
+	// options (no new privileges, and a seccomp profile that denies making
+	// a namespace), so Chrome runs without it, held by the home's uid, the
+	// egress guard, the read-only root and its memory bound.
+	// The debugging pipe makes Chrome tell its pages navigator.webdriver is
+	// true; AutomationControlled, the one feature behind it, is turned off
+	// so it reads false as a person's browser does. Nothing else a page
+	// reads changes with it.
+	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--disable-dev-shm-usage",
+		"--password-store=basic", "--window-size=1280,900", "--disable-blink-features=AutomationControlled"}, quiet...)
+	args = append(args, b.person.switches()...)
+	// The person's zone is Chrome's process's TZ, and only Chrome's: the
+	// driver's own environment, which a row of the browser never sets, holds
+	// none (person.go).
+	env := append(without(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"), "TZ"),
+		"DBUS_SESSION_BUS_ADDRESS=disabled:", "TMPDIR="+chromeTmp)
+	env = append(env, b.person.env()...)
+	agent, err := ownName(path, home, args, env)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, "--user-data-dir="+profile, "--user-agent="+agent["userAgent"].(string))
+	p, err := launch(path, home, append(args, logging...), env, b.onTarget)
+	if err != nil {
+		return nil, err
+	}
+	b.c = p.c
+	ctx, cancel := context.WithTimeout(context.Background(), startWait)
+	defer cancel()
+	if _, err := ready(ctx, p); err != nil {
+		return nil, err
+	}
+	b.agent = agent
+	return p, nil
+}
+
+// ownPrefix begins the name of the throwaway profile ownName reads the
+// shell's name in, in Chrome's temporary folder, where chromeTemp removes
+// one a killed driver left.
+const ownPrefix = "own-name."
+
+// ownName runs the shell once, as startChrome runs it, on a throwaway
+// profile in home's Chrome temporary folder and by no name of the
+// driver's, reads how it names itself, its User-Agent and its client
+// hints (ownAgent), closes it and removes the profile, whatever the
+// reading's end; and answers the override every target is given (agentOf).
+// Chrome is started by the switch the override names, which blanks the
+// high-entropy client hints a page reads of the running Chrome (measured on
+// the image's Chromium 156), so they are read before it starts.
+func ownName(path, home string, args, env []string) (map[string]any, error) {
+	profile, err := os.MkdirTemp(filepath.Join(home, chromeTmp), ownPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(profile)
+	p, err := launch(path, home, append(args, "--user-data-dir="+profile), env, func(string, json.RawMessage) {})
+	if err != nil {
+		return nil, err
+	}
+	defer p.close()
+	ctx, cancel := context.WithTimeout(context.Background(), startWait)
+	defer cancel()
+	v, err := ready(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := ownAgent(ctx, p.c, v.UserAgent)
+	if err != nil {
+		return nil, fmt.Errorf("Chrome did not say how it names itself (%v)", err)
+	}
+	return agent, nil
+}
+
+// launch starts Chrome at path with args and env in home, its pipe's
+// target events to onTarget.
+func launch(path, home string, args, env []string, onTarget func(string, json.RawMessage)) (*chromeProcess, error) {
 	commandsIn, commandsOut, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -239,29 +317,12 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 		commandsOut.Close()
 		return nil, err
 	}
-	// Chrome's own sandbox cannot start under the backends service's
-	// options (no new privileges, and a seccomp profile that denies making
-	// a namespace), so Chrome runs without it, held by the home's uid, the
-	// egress guard, the read-only root and its memory bound.
-	// The debugging pipe makes Chrome tell its pages navigator.webdriver is
-	// true; AutomationControlled, the one feature behind it, is turned off
-	// so it reads false as a person's browser does. Nothing else a page
-	// reads changes with it.
-	args := append([]string{"--no-sandbox", "--remote-debugging-pipe", "--user-data-dir=" + profile,
-		"--disable-dev-shm-usage", "--password-store=basic", "--window-size=1280,900",
-		"--disable-blink-features=AutomationControlled"}, quiet...)
-	args = append(args, b.person.switches()...)
-	cmd := exec.Command(path, append(args, logging...)...)
+	cmd := exec.Command(path, args...)
 	// Chrome runs in its home with its temporary folder named relative to
 	// it (chromeTemp), so the socket that locks its profile has a short path
 	// whatever the home's.
 	cmd.Dir = home
-	// The person's zone is Chrome's process's TZ, and only Chrome's: the
-	// driver's own environment, which a row of the browser never sets, holds
-	// none (person.go).
-	cmd.Env = append(without(without(without(os.Environ(), "DBUS_SESSION_BUS_ADDRESS"), "TMPDIR"), "TZ"),
-		"DBUS_SESSION_BUS_ADDRESS=disabled:", "TMPDIR="+chromeTmp)
-	cmd.Env = append(cmd.Env, b.person.env()...)
+	cmd.Env = env
 	// Chrome reads its commands on fd 3 and writes its answers on fd 4. Its
 	// standard streams are the null device, so nothing it prints reaches
 	// the terminal. A process group of its own keeps the terminal's hangup
@@ -283,34 +344,32 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 		commandsOut.Close()
 		close(p.exited)
 	}()
-	b.c = newCDP(commandsOut, answersIn, b.onTarget)
-	p.c = b.c
-	ctx, cancel := context.WithTimeout(context.Background(), startWait)
-	defer cancel()
-	v, err := ready(ctx, b.c)
+	p.c = newCDP(commandsOut, answersIn, onTarget)
+	return p, nil
+}
+
+// ready waits for p's Chrome's first answer, its version, has it report
+// its targets' ends, and closes any page target it finds, which no window
+// uses: with no startup window there is none. A Chrome that does not get
+// there is killed, and the error says why.
+func ready(ctx context.Context, p *chromeProcess) (version, error) {
+	v, err := readied(ctx, p.c)
 	if err != nil {
 		p.kill()
 		var refused *cdpError
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
-			return nil, fmt.Errorf("Chrome did not answer within %d seconds", int(startWait.Seconds()))
+			return v, fmt.Errorf("Chrome did not answer within %d seconds", int(startWait.Seconds()))
 		case errors.As(err, &refused):
-			return nil, fmt.Errorf("Chrome refused %s", refused.Message)
+			return v, fmt.Errorf("Chrome refused %s", refused.Message)
 		default:
-			return nil, fmt.Errorf("Chrome ended (%s)", p.cmd.ProcessState)
+			return v, fmt.Errorf("Chrome ended (%s)", p.cmd.ProcessState)
 		}
 	}
-	if b.agent, err = ownAgent(ctx, b.c, v.UserAgent); err != nil {
-		p.kill()
-		return nil, fmt.Errorf("Chrome did not say how it names itself (%v)", err)
-	}
-	return p, nil
+	return v, nil
 }
 
-// ready waits for Chrome's first answer, its version, has it report its
-// targets' ends, and closes any page target it finds, which no window
-// uses: with no startup window there is none.
-func ready(ctx context.Context, c *cdp) (version, error) {
+func readied(ctx context.Context, c *cdp) (version, error) {
 	var v version
 	if err := c.call(ctx, "", "Browser.getVersion", nil, &v); err != nil {
 		return v, err
@@ -347,16 +406,21 @@ func ready(ctx context.Context, c *cdp) (version, error) {
 const chromeTmp = "tmp"
 
 // chromeTemp makes Chrome's temporary folder in home, and removes the
-// lock folders a dead Chrome left there: the host runs one session per
-// person, so none is a live Chrome's.
+// lock folders a dead Chrome left there and the throwaway profile a killed
+// reading of the shell's name left (ownName): the host runs one session
+// per person, so none is a live Chrome's.
 func chromeTemp(home string) error {
 	dir := filepath.Join(home, chromeTmp)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	stale, err := filepath.Glob(filepath.Join(dir, "org.chromium.Chromium.*"))
-	if err != nil {
-		return err
+	var stale []string
+	for _, pattern := range []string{"org.chromium.Chromium.*", ownPrefix + "*"} {
+		matched, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return err
+		}
+		stale = append(stale, matched...)
 	}
 	for _, path := range stale {
 		if err := os.RemoveAll(path); err != nil {

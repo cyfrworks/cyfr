@@ -15,16 +15,24 @@ import (
 
 // The headless shell names itself HeadlessChrome: in its User-Agent, its
 // Sec-CH-UA client hints and navigator.userAgentData's brands, which a
-// site may read to turn a headless browser away. At its start the driver
-// reads what the shell says of itself, its User-Agent and its client
-// hints as a page of the reserved origin reads them, and every target it
-// attaches, a window, a frame of another process, a worker or a window a
-// page opened, is told before it runs to say the same with the
-// HeadlessChrome entry taken out: Chrome in place of HeadlessChrome in the
-// User-Agent, and the shell's own brand and full-version lists without
-// their HeadlessChrome entry, nothing else added, removed or reordered. A
-// target Chrome refuses to name that way is not let run (page.go). Nothing
-// else a page reads is changed by it.
+// site may read to turn a headless browser away. Before Chrome starts, the
+// driver runs the shell once on a throwaway profile and reads what it says
+// of itself, its User-Agent and its client hints as a page of the reserved
+// origin reads them (ownName, main.go). Chrome is then started by that
+// User-Agent with Chrome in place of HeadlessChrome, by its own switch,
+// which every window, frame and worker reads and sends from its first
+// read. Every target the driver attaches, a window, a frame of another
+// process, a worker or a window a page opened, is told before it runs to
+// say the same, with the shell's own brand and full-version lists without
+// their HeadlessChrome entry and its other hints as the shell gave them,
+// nothing else added, removed or reordered. A target Chrome refuses to
+// name that way is not let run (page.go). No switch names the brands, and
+// the User-Agent switch blanks the high-entropy hints of the running
+// Chrome (measured on the image's Chromium 156): a target the driver does
+// not name reads HeadlessChrome among its brands and in its Sec-CH-UA, and
+// an architecture, bitness, form factors and full versions that are blank,
+// a service worker until it is named once it runs and a shared worker
+// always (person.go). Nothing else a page reads is changed by it.
 
 // headless is the product name the shell gives itself.
 const headless = "HeadlessChrome"
