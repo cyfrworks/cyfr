@@ -268,8 +268,9 @@ test("the account window's document frames nothing, keeping its own policies, wh
 })
 
 test("the app takes its route's switches, the screen's project and setup's folder, and refuses every other switch", () => {
-  assert.deepEqual(SWITCHES, ["proxy-server", "host-resolver-rules", "screen-project", "setup-project", "quit"])
+  assert.deepEqual(SWITCHES, ["proxy-server", "host-resolver-rules", "screen-project", "setup-project", "quit", "updated"])
   assert.equal(unlistedSwitch(["--quit"], "linux"), null)
+  assert.equal(unlistedSwitch(["--updated"], "linux"), null)
   assert.equal(unlistedSwitch(["--screen-project=/home/ana/cyfr"], "linux"), null)
   assert.equal(unlistedSwitch(["--setup-project=/home/ana/setup-here"], "linux"), null)
   assert.equal(unlistedSwitch([], "linux"), null)

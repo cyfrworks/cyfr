@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,7 +22,6 @@ import (
 
 	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/shell"
-	"github.com/cyfr/codex/internal/version"
 )
 
 // updating is a over Update CYFR's stand-ins: each offer is plan, numbered
@@ -109,7 +109,7 @@ func offeredAs(id uint64) func(updateRead) bool {
 }
 
 var appPlan = UpdatePlan{UpdateOffer: UpdateOffer{App: "0.0.1", Target: "0.0.2", Step: "app", Says: []string{"Updating closes this app."}},
-	Dir: "/the/device", Args: []string{"update", "--version", "0.0.2"}, Header: "Updating the CYFR app to release 0.0.2, as asked in the app at 2026-11-25 12:00 UTC."}
+	Dir: "/the/device", Args: []string{"update", "--version", "0.0.2"}}
 
 // Update CYFR's page and its read take the read token and carry neither
 // token; the run token reads nothing there, and the read token starts
@@ -154,8 +154,8 @@ func TestUpdateCYFRsReadTakesTheReadTokenAlone(t *testing.T) {
 // Only the offer held starts, by its number, and only once: a yes naming
 // another number, one repeated, one to an offer with no yes to give, and
 // one for an offer dropped since start nothing. The run's record is made
-// anew, its header first, for this account alone. Once the run ends the
-// offer is dropped, and the next is worked out.
+// anew, for this account alone. Once the run ends the offer is dropped,
+// and the next is worked out.
 func TestOnlyTheOfferHeldStartsAndOnlyOnce(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
 	u := newUpdating(t, a, appPlan)
@@ -171,22 +171,20 @@ func TestOnlyTheOfferHeldStartsAndOnlyOnce(t *testing.T) {
 	a.StartUpdate(1)
 	a.StartUpdate(1)
 	if len(u.begun) != 1 || !reflect.DeepEqual(u.begun[0], UpdatePlan{UpdateOffer: UpdateOffer{ID: 1, App: "0.0.1", Target: "0.0.2", Step: "app",
-		Says: appPlan.Says}, Dir: appPlan.Dir, Args: appPlan.Args, Header: appPlan.Header}) {
+		Says: appPlan.Says}, Dir: appPlan.Dir, Args: appPlan.Args}) {
 		t.Fatalf("started %+v", u.begun)
 	}
 	if u.records[0] != a.UpdateRecord {
 		t.Fatalf("the run's output is %s", u.records[0])
 	}
 	data, err := os.ReadFile(a.UpdateRecord)
-	if err != nil || string(data) != appPlan.Header+"\n" {
+	if err != nil || len(data) != 0 {
 		t.Fatalf("the record holds %q (%v)", data, err)
 	}
 	if info, _ := os.Stat(a.UpdateRecord); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("the record's mode is %v", info.Mode())
 	}
-	if got := a.shown(t, func(r updateRead) bool { return r.Running }); got.Outcome != "CYFR is being updated." {
-		t.Fatalf("the page shows %+v while it runs", got)
-	}
+	a.shown(t, func(r updateRead) bool { return r.Running })
 	u.ends <- errors.New("exit status 1")
 	a.shown(t, offeredAs(2))
 	a.StartUpdate(1)
@@ -283,56 +281,117 @@ func TestAClosedWindowsLastReadWorksOutNoOffer(t *testing.T) {
 	}
 }
 
-// A record waiting is said at ready; the page shows it once, summed up,
-// and the window's close removes it. One the page never showed, and one
-// whose update still runs, stays.
-func TestARecordIsShownOnceAndRemovedAsItsWindowCloses(t *testing.T) {
-	a := newApp(t, t.TempDir(), offline())
+// The shell's own lock, the device's (its Lock, its idle lock, its
+// channel's end), drops the offer as the service's does.
+func TestTheShellsOwnLockDropsTheOffer(t *testing.T) {
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
 	u := newUpdating(t, a, appPlan)
-	header := AppHeader(version.Version, time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC))
-	write := func(text string) {
-		t.Helper()
-		if err := os.WriteFile(a.UpdateRecord, []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	a.openedFolder(t)
+	offer := a.shown(t, func(r updateRead) bool { return r.Offer != nil }).Offer
+	a.sh.Lock("Device locked.")
+	a.StartUpdate(offer.ID)
+	if len(u.begun) != 0 {
+		t.Fatal("a yes to an offer from before the shell's lock started")
 	}
-	write(header + "\nUpdating the CYFR app from 0.0.1 to " + version.Version + "...\n")
-	if !a.RecordWaits() {
-		t.Fatal("a record waiting is not said")
+}
+
+// The record is the last update's, kept until the next update replaces
+// it: the window's close removes nothing, and the page is given it with
+// when it was last written and its sum, the refusal cyfr ended on or else
+// the last line it said.
+func TestTheLastRecordStaysUntilTheNextUpdate(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	newUpdating(t, a, appPlan)
+	record := "Updating the CYFR app from 0.0.1 to 0.0.2...\nThe CYFR app is release 0.0.2.\n"
+	if err := os.WriteFile(a.UpdateRecord, []byte(record), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	a.UpdateClosed()
-	if !a.RecordWaits() {
-		t.Fatal("a record the page never showed was removed")
+	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(a.UpdateRecord, at, at); err != nil {
+		t.Fatal(err)
 	}
 	got := a.shown(t, func(r updateRead) bool { return r.Record != "" })
-	if got.Outcome != "The CYFR app is release "+version.Version+"." || !strings.HasPrefix(got.Record, header) {
+	if got.Record != record || got.At != "2026-11-25 12:00 UTC" || got.Outcome != "The CYFR app is release 0.0.2." || got.Running {
 		t.Fatalf("the page shows %+v", got)
 	}
-	u.runsLock.Store(true)
 	a.UpdateClosed()
-	if !a.RecordWaits() {
-		t.Fatal("the record of an update that still runs was removed")
+	if data, err := os.ReadFile(a.UpdateRecord); err != nil || string(data) != record {
+		t.Fatalf("the window's close left the record %q (%v)", data, err)
+	}
+	for text, want := range map[string]string{
+		"Updating the CYFR app from 0.0.1 to 0.0.3...\nError: The CYFR app of release 0.0.3 did not verify (x); nothing was changed and CYFR runs as it did\n": "The CYFR app of release 0.0.3 did not verify (x); nothing was changed and CYFR runs as it did",
+		"Updated to release 0.0.2.\n\n": "Updated to release 0.0.2.",
+		"":                              "The update ended without saying how.",
+	} {
+		if got := outcome(text, false); got != want {
+			t.Errorf("%q is summed up as %q", text, got)
+		}
+		if got := outcome(text, true); got != "CYFR is being updated." {
+			t.Errorf("a running %q is summed up as %q", text, got)
+		}
+	}
+}
+
+// Whether an update runs is read from the locks an update holds alone,
+// never from what the record says: a page shown one running is told, by
+// its read that waits, once the lock is let go.
+func TestAnUpdateRunsWhileItsLockIsHeld(t *testing.T) {
+	saved := runsPoll
+	t.Cleanup(func() { runsPoll = saved })
+	runsPoll = 20 * time.Millisecond
+	a := newApp(t, t.TempDir(), offline())
+	u := newUpdating(t, a, appPlan)
+	if err := os.WriteFile(a.UpdateRecord, []byte("Updated to release 0.0.2.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u.runsLock.Store(true)
+	running := a.shown(t, func(r updateRead) bool { return r.Running && r.Offer != nil })
+	if running.Outcome != "CYFR is being updated." {
+		t.Fatalf("the page shows %+v while the lock is held", running)
 	}
 	u.runsLock.Store(false)
-	a.shown(t, func(r updateRead) bool { return r.Record != "" })
-	a.UpdateClosed()
-	if a.RecordWaits() {
-		t.Fatal("the record shown stays after its window closed")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var got updateRead
+	if w := a.readUpdate(ctx, a.ReadToken, running.Seq); w.Body.Len() == 0 || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
+		got.Running || got.Outcome != "Updated to release 0.0.2." {
+		t.Fatalf("with the lock let go the waiting read answered %q", w.Body)
 	}
+}
 
-	for record, want := range map[string]string{
-		header + "\nError: The CYFR app of release 0.0.3 did not verify (x); nothing was changed and CYFR runs as it did\n": "The CYFR app of release 0.0.3 did not verify (x); nothing was changed and CYFR runs as it did",
-		AppHeader("9.9.9", time.Now()) + "\n":                                                "The update ended without saying how; what it said is below.",
-		StackHeader("/home/ada/cyfr", "0.0.2", time.Now()) + "\nUpdated to release 0.0.2.\n": "Your CYFR in /home/ada/cyfr is release 0.0.2.",
-	} {
-		if got := outcome(record, false); got != want {
-			t.Errorf("%q is summed up as %q", record, got)
-		}
-		if got := outcome(record, true); got != "CYFR is being updated." {
-			t.Errorf("a running %q is summed up as %q", record, got)
-		}
-	}
-	if got := recordProject(StackHeader("/home/ada/my cyfr", "0.0.2", time.Now()) + "\n"); got != "/home/ada/my cyfr" {
-		t.Fatalf("the stack's record names %q", got)
+// A yes while an update runs, by its locks, cyfr update's or the stack's
+// of the CYFR the offer changes, starts nothing and leaves the record as
+// it was: the page says why.
+func TestAYesWhileAnUpdateRunsIsRefusedBeforeTheRecordIsTouched(t *testing.T) {
+	for name, plan := range map[string]UpdatePlan{"app": appPlan, "stack": {UpdateOffer: UpdateOffer{App: "0.0.2", Target: "0.0.2", Step: "stack",
+		Says: []string{"Updating it to release 0.0.2:"}}, Dir: "/home/ada/cyfr", Args: []string{"update", "--version", "0.0.2", "--confirmed", "c"}}} {
+		t.Run(name, func(t *testing.T) {
+			a := newApp(t, t.TempDir(), offline())
+			u := newUpdating(t, a, plan)
+			var asked []string
+			a.UpdateRuns = func(project string) bool {
+				asked = append(asked, project)
+				return project == plan.Dir && name == "stack" || name == "app"
+			}
+			if err := os.WriteFile(a.UpdateRecord, []byte("the last update's\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			offer := a.shown(t, func(r updateRead) bool { return r.Offer != nil }).Offer
+			a.StartUpdate(offer.ID)
+			if len(u.begun) != 0 {
+				t.Fatal("a yes while an update runs started one")
+			}
+			if data, _ := os.ReadFile(a.UpdateRecord); string(data) != "the last update's\n" {
+				t.Fatalf("the refused yes left the record %q", data)
+			}
+			if got := a.shown(t, func(r updateRead) bool { return r.Refused != "" }); !strings.HasPrefix(got.Refused, "Another update is changing CYFR on this computer") {
+				t.Fatalf("the page shows %+v", got)
+			}
+			if name == "stack" && !slices.Contains(asked, plan.Dir) {
+				t.Fatalf("the stack's lock was not asked: %q", asked)
+			}
+		})
 	}
 }

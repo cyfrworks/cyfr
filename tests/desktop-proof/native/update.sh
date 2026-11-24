@@ -39,15 +39,20 @@
 #   window_opened      the rail's foot opens Update CYFR, offering the
 #                      newest release, U
 #   window_unverified  its yes runs the update, which refuses before
-#                      anything closes: the record says U did not verify,
+#                      anything closes: Update CYFR says U did not verify,
 #                      the same app runs at A and answers, and Update CYFR
 #                      offers U again
 #   window_update      with B the newest, its yes closes the app, which
 #                      opens again at B, a new process, with Update CYFR
-#                      open by itself on the record of the update to B; no
+#                      open by itself saying the app is release B, as its
+#                      page read from the record of the update to B; no
 #                      docker was called
-#   window_record      Close on that window (Escape) removes the record it
-#                      showed
+#   window_record      Close on that window (Escape) leaves the record,
+#                      the last update's, as it was
+#
+# What Update CYFR says is read from its window's title, which its page
+# sets from what it was served (internal/desktop/assets/update.js): what
+# the page was given, not what a person saw drawn.
 #   window_terminal    (Linux) where sudo would ask for a password, Update
 #                      CYFR offers no yes but the line to run in a terminal,
 #                      the app running on and no update begun
@@ -199,7 +204,6 @@ case "$OS" in
   windows) RECORD="$(cygpath -u "$USERPROFILE")/.cyfr/device/update.log" ;;
   *) RECORD="$HOME/.cyfr/device/update.log" ;;
 esac
-says() { [ -f "$RECORD" ] && grep -qF "$1" "$RECORD"; }
 
 # Whether a window of the app's has a title holding TEXT.
 titled() {
@@ -227,8 +231,8 @@ public static class W {
   public static List<string> All() {
     var all = new List<string>();
     EnumWindows((h, p) => {
-      var s = new StringBuilder(512);
-      if (IsWindowVisible(h) && GetWindowText(h, s, 512) > 0) { R r; GetWindowRect(h, out r); all.Add(s + " " + r.L + "," + r.T + "," + r.Rt + "," + r.B); }
+      var s = new StringBuilder(4096);
+      if (IsWindowVisible(h) && GetWindowText(h, s, 4096) > 0) { R r; GetWindowRect(h, out r); all.Add(s + " " + r.L + "," + r.T + "," + r.Rt + "," + r.B); }
       return true;
     }, IntPtr.Zero);
     return all;
@@ -467,7 +471,7 @@ window() {
   fi
 
   key Return
-  if within 120 says "did not verify" && within 60 titled "release $U" && alive "$before" && answers && [ "$(release_of)" = "$A" ]; then
+  if within 120 titled "did not verify" && within 60 titled "release $U" && alive "$before" && answers && [ "$(release_of)" = "$A" ]; then
     pass window_unverified "the yes refused U before anything closed: the app at $A ($before) runs on, answering, and offers U again"
   else
     fail window_unverified "the app $(alive "$before" && echo still || echo 'no longer') runs, its cyfr answers '$(release_of)'; the record: $(tail -5 "$RECORD" 2>/dev/null)"
@@ -480,7 +484,7 @@ window() {
     step=pressed && key Return &&
     step=closed-by-update && within 60 not_alive "$before" &&
     step=reopened && within 120 running && within 60 answers && [ "$(release_of)" = "$B" ] &&
-    step=record && within 60 titled "Update CYFR" && says "Updating the CYFR app to release $B" && says "The CYFR app is release $B." &&
+    step=record && within 60 titled "The CYFR app is release $B" &&
     step=docker && [ ! -s "$docker" ]; then
     after=$(first_pid)
     pass window_update "the app at $A ($before) closed and opened again at $B ($after), Update CYFR open on the record; no docker call"
@@ -489,10 +493,12 @@ window() {
     return
   fi
 
-  if key Escape && within 20 untitled "Update CYFR" && within 10 eval '[ ! -e "$RECORD" ]'; then
-    pass window_record "Close removed the record it showed"
+  local kept
+  kept=$(sum "$RECORD" 2>/dev/null)
+  if [ -n "$kept" ] && key Escape && within 20 untitled "Update CYFR" && [ "$(sum "$RECORD" 2>/dev/null)" = "$kept" ]; then
+    pass window_record "Close left the record of the update to $B as it was"
   else
-    fail window_record "the record $([ -e "$RECORD" ] && echo stays || echo 'is gone'), Update CYFR $(titled "Update CYFR" && echo 'still shows' || echo closed)"
+    fail window_record "the record $([ -e "$RECORD" ] && echo 'is there' || echo 'is gone'), Update CYFR $(titled "Update CYFR" && echo 'still shows' || echo closed)"
   fi
 
   [ "$OS" = linux ] || return
@@ -503,10 +509,10 @@ window() {
   echo "$U" >"$dir/latest"
   if sudo -n -v 2>/dev/null; then
     fail window_terminal "sudo -v still asks this account for no password"
-  elif opens_update "needs a terminal" && alive "$after" && [ ! -e "$RECORD" ]; then
+  elif opens_update "needs a terminal" && alive "$after" && [ "$(sum "$RECORD" 2>/dev/null)" = "$kept" ]; then
     pass window_terminal "Update CYFR offers no yes but the line to run in a terminal; the app ($after) runs on, no update begun"
   else
-    fail window_terminal "the app $(alive "$after" && echo 'runs' || echo 'is gone'), the record $([ -e "$RECORD" ] && echo exists || echo 'is none'): $(tail -5 "$LOGS/app-window.log")"
+    fail window_terminal "the app $(alive "$after" && echo 'runs' || echo 'is gone'), the record $([ "$(sum "$RECORD" 2>/dev/null)" = "$kept" ] && echo 'as it was' || echo 'changed'): $(tail -5 "$LOGS/app-window.log")"
   fi
   sudo -n rm -f "$asks"
 }

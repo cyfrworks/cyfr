@@ -1,16 +1,25 @@
 "use strict"
 // The page's one read token, from the address main loaded, kept for this
-// window alone: the address keeps no copy of it.
+// window alone: the address keeps no copy of it. updated is main's word
+// that the update this page started opened the app again: the page says
+// how that update ended, as it does for one it saw run; opened any other
+// way, the last update's record is there on request.
 const fragment = new URLSearchParams(location.hash.slice(1))
-if (fragment.get("read")) sessionStorage.setItem("read", fragment.get("read"))
+if (fragment.get("read")) {
+  sessionStorage.setItem("read", fragment.get("read"))
+  sessionStorage.setItem("updated", fragment.get("updated") === "1" ? "1" : "")
+}
 history.replaceState(null, "", "/update/")
 const token = sessionStorage.getItem("read") || ""
+let watched = sessionStorage.getItem("updated") === "1"
 const $ = (id) => document.getElementById(id)
 // The yes is a navigation to an address main alone answers, naming the
 // offer shown by its number: the page starts nothing itself.
 function show(r) {
   const o = r.offer
-  $("status").textContent = r.running ? "CYFR is being updated." : r.outcome || (o ? "" : "Reading the newest release…")
+  if (r.running) watched = true
+  const ended = watched && !r.running ? r.outcome ?? "" : ""
+  $("status").textContent = r.running ? "CYFR is being updated." : ended || (o ? "" : "Reading the newest release…")
   $("status").hidden = $("status").textContent === ""
   $("releases").textContent = o ? (o.target && o.step === "app"
     ? `This CYFR app is release ${o.app}; release ${o.target} is the newest.` : `This CYFR app is release ${o.app}.`) : ""
@@ -31,11 +40,12 @@ function show(r) {
     yes.textContent = o.step === "app" ? `Update the CYFR app to ${o.target}` : `Update your CYFR to ${o.target}`
   }
   $("said").hidden = !r.record
+  $("when").textContent = r.at ? `What the last update said, last written ${r.at}` : ""
   $("record").textContent = r.record ?? ""
   // What the window's title says, which the system shows: the state, in
   // its fewest words.
-  document.title = r.running ? "Update CYFR — updating" : offered ? `Update CYFR — release ${o.target}`
-    : o?.terminal ? "Update CYFR — needs a terminal" : "Update CYFR"
+  document.title = ["Update CYFR", ...(r.running ? ["updating"]
+    : [ended, offered ? `release ${o.target}` : o?.terminal ? "needs a terminal" : ""].filter(Boolean))].join(" — ")
   // Focus moves only when what it was on changes, the yes appearing or
   // going, so a read landing never moves it under a key being pressed.
   const focus = offered ? yes : $("close")

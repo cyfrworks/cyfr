@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -92,7 +91,7 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 	t.Cleanup(func() { quitApp, reopenApp, updateLockPath = savedQuit, savedReopen, savedLock })
 	updateLockPath = filepath.Join(t.TempDir(), "update.lock")
 	quitApp = func() (bool, error) { return false, nil }
-	reopenApp = func() error { return errors.New("a test opened the installed app") }
+	reopenApp = func(bool) error { return errors.New("a test opened the installed app") }
 	return s
 }
 
@@ -392,11 +391,13 @@ func TestContinueAsChecksTheRelease(t *testing.T) {
 	s.unchanged()
 }
 
-// fakeBrew puts a brew on PATH, this test binary (runFakeBrew), that
-// records each run in its directory's log, answers `--prefix` with its
-// directory, `list --cask cyfr` as installed and `list --cask --versions
-// cyfr` with the version in its directory's version file, which `upgrade
-// --cask cyfr` sets to upgradeTo.
+// fakeBrew makes a Homebrew prefix whose Caskroom holds CYFR's cask, the
+// one prefix cyfr looks in (brewPrefixes), its brew this test binary
+// (runFakeBrew), that records each run in its directory's log, answers
+// `--prefix` with its directory, `list --cask cyfr` as installed and
+// `list --cask --versions cyfr` with the version in its directory's
+// version file, which `upgrade --cask cyfr` sets to upgradeTo. PATH holds
+// no brew.
 func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -422,26 +423,33 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 		return caskSum, nil
 	}
 	machine.appRelease = func() string { return strings.TrimSpace(read(t, filepath.Join(dir, "version"))) }
-	standInLink(t, filepath.Join(dir, "brew"))
-	t.Setenv(fakeBrewDir, dir)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if found, err := exec.LookPath("brew"); err != nil || found != filepath.Join(dir, "brew") {
-		t.Fatalf("PATH's brew is %q (%v), not the stand-in", found, err)
+	if err := errors.Join(os.MkdirAll(filepath.Join(dir, "bin"), 0o755), os.MkdirAll(filepath.Join(dir, "Caskroom", "cyfr"), 0o755)); err != nil {
+		t.Fatal(err)
 	}
+	standInLink(t, filepath.Join(dir, "bin", "brew"))
+	t.Setenv(fakeBrewDir, dir)
+	saved := brewPrefixes
+	t.Cleanup(func() { brewPrefixes = saved })
+	brewPrefixes = []string{dir}
 	return dir
 }
 
-// A cask install is told, and brew run, where PATH holds no brew, as in an
-// app opened from the Finder and the cyfr it starts: Homebrew's own brew
-// in its prefix is the one asked.
-func TestACaskInstallIsFoundWherePATHHoldsNoBrew(t *testing.T) {
+// A cask install is told, and brew run, by the brew of the Homebrew
+// prefix whose Caskroom holds CYFR's cask, the first of Homebrew's own
+// prefixes that does, never by PATH's: an app opened from the Finder, and
+// the cyfr it starts, have none, and PATH may name any program. A prefix
+// with a brew but no cask of CYFR's is not asked, and with none holding
+// it there is no cask install, a brew on PATH or not.
+func TestACaskInstallIsFoundByTheBrewOfThePrefixHoldingItsCask(t *testing.T) {
 	dir := fakeBrew(t, "0.9.0", "0.10.0")
-	saved := brewPlaces
-	t.Cleanup(func() { brewPlaces = saved })
-	brewPlaces = []string{filepath.Join(t.TempDir(), "brew"), filepath.Join(dir, "brew")}
-	t.Setenv("PATH", t.TempDir())
+	other := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	standInLink(t, filepath.Join(other, "bin", "brew"))
+	brewPrefixes = []string{other, dir}
 	if !caskInstalled() {
-		t.Fatal("the cask install is not found with brew off PATH")
+		t.Fatal("the cask install is not found by its prefix's brew")
 	}
 	if got, err := caskBinary(); err != nil || got != filepath.Join(dir, "bin", release.BinaryName(runtime.GOOS)) {
 		t.Fatalf("the cask's cyfr is %q (%v)", got, err)
@@ -449,9 +457,10 @@ func TestACaskInstallIsFoundWherePATHHoldsNoBrew(t *testing.T) {
 	if log := read(t, filepath.Join(dir, "log")); log != "list --cask cyfr\n--prefix\n" {
 		t.Fatalf("brew was run as %q", log)
 	}
-	brewPlaces = nil
+	brewPrefixes = []string{other}
+	t.Setenv("PATH", filepath.Join(dir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if caskInstalled() {
-		t.Fatal("a cask install is found with no brew anywhere")
+		t.Fatal("a cask install is found where no prefix's Caskroom holds CYFR's cask, by PATH's brew")
 	}
 }
 

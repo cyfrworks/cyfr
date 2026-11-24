@@ -297,7 +297,8 @@ function fromPartition(partition) {
 
 world.app = Object.assign(new EventEmitter(), {
   commandLine: {getSwitchValue: (name) => ({"screen-project": world.screen, "setup-project": world.setup})[name] ?? "",
-    hasSwitch: (name) => ({"screen-project": world.screen, "setup-project": world.setup, quit: world.quitSwitch})[name] !== undefined,
+    hasSwitch: (name) => ({"screen-project": world.screen, "setup-project": world.setup, quit: world.quitSwitch,
+      updated: world.updatedSwitch})[name] !== undefined,
     appendSwitch: (...a) => world.switches.push(a)},
   enableSandbox() {}, configureWebAuthn() {},
   // Taken unless another app of this account holds it (world.lockHeld).
@@ -826,20 +827,52 @@ test("Update CYFR's yes is sent as update with the offer its page names, from it
   assert.equal(sent("update-closed").length, 2, "the window's own close is told too")
 })
 
-test("a record waiting to be shown opens Update CYFR as cyfr is ready, over the chooser", async () => {
+test("the app the update opened again (--updated) opens Update CYFR on its record as cyfr is ready, over the chooser, and only then", async () => {
   reset()
-  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: () => {}})
-  await settled()
-  child.say({type: "ready", url: READY, rail: RAIL, update: UPDATE, record: true})
-  await settled()
-  assert.ok(updateWindow(), "Update CYFR opened by itself")
-  assert.ok(content().webContents.url.startsWith(READY), "beside the chooser")
+  world.updatedSwitch = ""
+  try {
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: () => {}})
+    await settled()
+    child.say({type: "ready", url: READY, rail: RAIL, update: UPDATE})
+    await settled()
+    assert.equal(updateWindow()?.webContents.url, UPDATE + "&updated=1", "Update CYFR opened by itself, on the update's record")
+    assert.ok(content().webContents.url.startsWith(READY), "beside the chooser")
+  } finally {
+    world.updatedSwitch = undefined
+  }
   reset()
   startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: () => {}})
   await settled()
   child.say({type: "ready", url: READY, rail: RAIL, update: UPDATE})
   await settled()
-  assert.equal(updateWindow(), undefined, "no record, no window")
+  assert.equal(updateWindow(), undefined, "opened plainly, it opens nothing by itself")
+})
+
+test("Update CYFR closes as the cyfr that served it ends: a press of the rail's foot then opens the next cyfr's", async () => {
+  await signedIn()
+  press("http://127.0.0.1:7340/rail/update")
+  await settled()
+  const prior = updateWindow()
+  assert.ok(prior && !prior.destroyed)
+  const old = child
+  mock.timers.enable({apis: ["setTimeout"]})
+  try {
+    select(PORT_B)
+    await turns()
+    mock.timers.tick(DEPARTURE_MS)
+    await turns()
+    old.emit("exit", null, "SIGKILL")
+    await turns()
+    assert.ok(prior.destroyed, "the old cyfr's window is closed with it")
+    const next = UPDATE.replace(/=.*/, "=bmV3")
+    child.say({type: "ready", url: READY, rail: RAIL, update: next})
+    await turns()
+    press("http://127.0.0.1:7340/rail/update")
+    await turns()
+    assert.equal(updateWindow().webContents.url, next, "the next cyfr's page, with its own read token")
+  } finally {
+    mock.timers.reset()
+  }
 })
 
 test("a navigation of the rail that is no press, a redirect or a frame's among them, is refused and does nothing", async () => {
@@ -1703,18 +1736,25 @@ test("a frame asking the top frame to go to the sign-in route is refused and ope
   assert.equal(live().length, 1, "no account window")
 })
 
-test("a CYFR rerouted is a relaunch only after the content closed, and signs nobody out", async () => {
-  await started(true)
-  child.proposes(HOME)
-  await settled()
-  world.cleared = []
-  const page = content()
-  child.proposes("https://bob.example", {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
-  await settled()
-  await settled()
-  assert.ok(page.destroyed)
-  signedNobodyOut()
-  assert.ok(world.relaunched?.args.includes("--proxy-server=socks5://127.0.0.1:1055"))
+test("a CYFR rerouted is a relaunch only after the content closed, and signs nobody out; Update CYFR opened on its record once, it opens it no more", async () => {
+  const argv = process.argv
+  process.argv = [argv[0], "--updated"]
+  try {
+    await started(true)
+    child.proposes(HOME)
+    await settled()
+    world.cleared = []
+    const page = content()
+    child.proposes("https://bob.example", {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
+    await settled()
+    await settled()
+    assert.ok(page.destroyed)
+    signedNobodyOut()
+    assert.ok(world.relaunched?.args.includes("--proxy-server=socks5://127.0.0.1:1055"))
+    assert.ok(!world.relaunched.args.includes("--updated"), "the relaunch carries no --updated")
+  } finally {
+    process.argv = argv
+  }
 })
 
 test("cyfr's own locked naming a CYFR main never kept to leaves it keeping to none", async () => {

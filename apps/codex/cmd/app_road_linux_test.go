@@ -99,16 +99,16 @@ func TestTheDebRoadElevatesBeforeAnythingCloses(t *testing.T) {
 	m := standInMachine(t)
 	m.administrator = nil
 	var out bytes.Buffer
-	if _, err := (debRoad{}).elevate(&out, "cyfr update"); err == nil || !strings.Contains(err.Error(), "Nothing was changed. Run `cyfr update` again once they have") {
+	if _, err := (debRoad{}).elevate(&out, "cyfr update", true); err == nil || !strings.Contains(err.Error(), "Nothing was changed. Run `cyfr update` again once they have") {
 		t.Errorf("an account outside sudo's groups answered %v", err)
 	}
 	m = standInMachine(t)
 	m.authErr = errors.New("no")
-	if _, err := (debRoad{}).elevate(&out, "cyfr update"); err == nil || err.Error() != "The password was not accepted, so nothing was changed and CYFR runs as it did. Run 'cyfr update' again to try again" {
+	if _, err := (debRoad{}).elevate(&out, "cyfr update", true); err == nil || err.Error() != "The password was not accepted, so nothing was changed and CYFR runs as it did. Run 'cyfr update' again to try again" {
 		t.Errorf("a refused password answered %v", err)
 	}
 	m = standInMachine(t)
-	let, err := (debRoad{}).elevate(&out, "cyfr update")
+	let, err := (debRoad{}).elevate(&out, "cyfr update", true)
 	if err != nil || m.authenticated != 1 || m.forgotten != 0 {
 		t.Fatalf("the elevation answered %v, authenticated %d, forgot %d", err, m.authenticated, m.forgotten)
 	}
@@ -116,4 +116,27 @@ func TestTheDebRoadElevatesBeforeAnythingCloses(t *testing.T) {
 	if m.forgotten != 1 || len(m.applied) != 0 {
 		t.Errorf("the login was forgotten %d times, root ran %q", m.forgotten, m.applied)
 	}
+}
+
+// Update CYFR's offer asks the road as its run, which has no terminal,
+// meets it: where sudo would ask for a password the road refuses with the
+// line to run at a terminal, asking nothing, even where this cyfr has a
+// terminal.
+func TestTheDebRoadAsksNothingForTheAppsPage(t *testing.T) {
+	m := standInMachine(t)
+	m.passwordless = false
+	var out bytes.Buffer
+	if _, err := (debRoad{}).elevate(&out, "cyfr update --version 0.10.0", false); err == nil ||
+		err.Error() != "sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `cyfr update --version 0.10.0` at a terminal" {
+		t.Fatalf("the road answered %v", err)
+	}
+	if m.authenticated != 0 || out.Len() != 0 {
+		t.Fatalf("the road asked for a password %d times and said %q", m.authenticated, out.String())
+	}
+	m.passwordless = true
+	let, err := (debRoad{}).elevate(&out, "cyfr update --version 0.10.0", false)
+	if err != nil || m.authenticated != 0 {
+		t.Fatalf("with sudo asking nothing the road answered %v, asked %d times", err, m.authenticated)
+	}
+	let()
 }

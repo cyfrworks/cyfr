@@ -81,8 +81,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), f
 		// so nothing is served on the port once this returns.
 		_ = ln.Close()
 	}()
-	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL(), Update: svc.UpdateURL(),
-		Record: svc.RecordWaits()}); err != nil {
+	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL(), Update: svc.UpdateURL()}); err != nil {
 		return err
 	}
 	ran := make(chan error, 1)
@@ -134,7 +133,7 @@ func newDesktopService(ctx context.Context, device, folder string, tell func(des
 			return windowOffer(ctx, device, project)
 		},
 		BeginUpdate:  beginWindowUpdate,
-		UpdateRecord: filepath.Join(device, "update.log"),
+		UpdateRecord: filepath.Join(device, updateRecordName),
 		UpdateRuns:   windowUpdateRuns,
 		Local: func(project string) (desktop.Local, error) {
 			// The reading holds work from here: its caller once it is

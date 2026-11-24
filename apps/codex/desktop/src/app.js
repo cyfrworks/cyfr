@@ -164,7 +164,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   }
   // Not a route of a CYFR's, so not part of the one main was started on.
   if (!route.resolver) app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
-  let state = initial(accountRoad, route, screen)
+  let state = initial(accountRoad, route, screen, app.commandLine.hasSwitch("updated"))
   let child = null
   let frame = null // the app's one window, holding the rail and the content
   let rail = null // the rail's view
@@ -213,14 +213,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.erase) erase(effect.erase)
     if (effect.rail) openRail(effect.rail.url)
     if (effect.update) openUpdate(effect.update.url)
-    if (effect.unupdate && updateWindow && !updateWindow.isDestroyed()) updateWindow.destroy()
+    if (effect.unupdate) closeUpdate()
     if (effect.menu) rowMenu(effect.menu.home)
     if (effect.root) openHome(effect.root.home, effect.root.path, effect.root.setup)
     if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession())
     if (effect.back) back(chooserAddress(effect.back))
     if (effect.relaunch) {
       say("starting again with the CYFR's route")
-      const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
+      // Update CYFR opened on its record once already.
+      const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a) && a !== "--updated")
       if (effect.relaunch.proxy) args.push(`--proxy-server=${effect.relaunch.proxy}`, `--host-resolver-rules=${effect.relaunch.resolver}`)
       ending(() => {
         if (child && child.exitCode === null) child.kill()
@@ -438,7 +439,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function closeFrame() {
     const f = frame
     frame = null
-    if (updateWindow && !updateWindow.isDestroyed()) updateWindow.destroy()
+    closeUpdate()
     if (rail && !rail.webContents.isDestroyed()) rail.webContents.close()
     rail = null
     if (f && !f.isDestroyed()) {
@@ -586,6 +587,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       on({type: "update-closed"})
     })
     w.loadURL(url).catch(() => {})
+  }
+
+  // Update CYFR's window closed, by main: by its Close, with the app's
+  // window, or as the cyfr that served it ends, whose read token and offer
+  // end with it, so no press of it reaches the next.
+  function closeUpdate() {
+    if (updateWindow && !updateWindow.isDestroyed()) updateWindow.destroy()
   }
 
   // The content's view, at `address` in session `ses`: what showed before
@@ -846,6 +854,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function restartCyfr() {
     const old = child
     child = null
+    closeUpdate()
     clearTimeout(readiness)
     if (!old || old.exitCode !== null || old.signalCode !== null) return startCyfr()
     let started = false
@@ -910,6 +919,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     mine.on("error", (e) => heard({type: "gone", why: `it could not start (${e.message})`}))
     mine.on("exit", (code, signal) => {
+      if (child === mine) closeUpdate()
       if (!quitting) heard({type: "gone", why: last.replace(/^Error: /, "") || `it exited (${signal ?? code})`})
     })
   }

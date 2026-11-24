@@ -9,14 +9,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/desktop"
+	"github.com/cyfr/codex/internal/shell"
 	"github.com/cyfr/codex/internal/version"
 )
 
@@ -29,22 +32,50 @@ import (
 // change, worked out by the new release's own code (cyfr update --offer)
 // and made only as it was shown (--confirmed).
 
-// windowNow stamps the record's first line; a variable so tests fix it.
-var windowNow = time.Now
-
 // offerWithin bounds the read of this computer's own CYFR's change: the
 // manifest's fetch and the schema's read, each bounded within it.
 const offerWithin = composeRunTimeout + 2*time.Minute
+
+// updateRecordName is the update's record, the output of each run Update
+// CYFR starts, in the device's folder beside its list of CYFRs; windowRecord
+// is its path.
+const updateRecordName = "update.log"
+
+func windowRecord() string {
+	dir, err := shell.DeviceFolder()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, updateRecordName)
+}
+
+// writesTheRecord is whether out is the update's record: the run Update
+// CYFR started, its output that file by its start (beginWindowUpdate),
+// and the program it hands over to, which keeps that output. Its update
+// is the app's alone, and it opens the app again with --updated.
+func writesTheRecord(out io.Writer) bool {
+	f, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	mine, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	record, err := os.Stat(windowRecord())
+	return err == nil && os.SameFile(mine, record)
+}
 
 // windowOffer is what Update CYFR offers this app, whose own cyfr this
 // is, with project the folder of this computer's own CYFR when it is the
 // one open. Where a newer release is published, the app's own update to
 // it, once what the transaction would refuse before the app closes is
-// asked (the road's elevation): refused, the sentence and the line to run
+// asked as its run, which has no terminal, would meet it (the road's
+// elevation, asking nothing): refused, the sentence and the line to run
 // in a terminal instead. Where none is, this computer's own CYFR's change,
-// if its stack is behind the app. Its run starts in device, a folder that
-// holds no CYFR, so the app's update calls no Docker; this computer's own
-// CYFR's runs in its folder.
+// if its stack is behind the app. The app's run is the app's alone
+// (writesTheRecord), started in device; this computer's own CYFR's runs
+// in its folder.
 func windowOffer(ctx context.Context, device, project string) desktop.UpdatePlan {
 	current := version.Version
 	p := desktop.UpdatePlan{UpdateOffer: desktop.UpdateOffer{App: current, Says: []string{}}}
@@ -83,31 +114,27 @@ func windowOffer(ctx context.Context, device, project string) desktop.UpdatePlan
 		return p
 	}
 	// What the transaction would refuse before the app closes is asked
-	// now, so the page says it before any yes. sudo asks for a password
-	// wherever a terminal opens (unlockSudo), and an app started from one
-	// gives this cyfr that terminal: there the run, which has none
-	// (detachedFromApp), refuses before the app closes instead, and the
-	// page shows its refusal.
-	if !machine.terminal() {
-		var said strings.Builder
-		let, err := road.elevate(&said, again)
-		if err != nil {
-			for _, line := range strings.Split(strings.TrimSpace(said.String()), "\n") {
-				if line = strings.TrimSpace(line); line != "" {
-					say(line)
-				}
+	// now, as its run meets it with no terminal (detachedFromApp), so the
+	// page says it before any yes: sudo is never asked for a password,
+	// whatever terminal this cyfr has.
+	var said strings.Builder
+	let, err := road.elevate(&said, again, false)
+	if err != nil {
+		for _, line := range strings.Split(strings.TrimSpace(said.String()), "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				say(line)
 			}
-			say(err.Error())
-			// On a Mac only an account that may not write the app is
-			// refused, which sudo lets write it (macRoad's elevate).
-			p.Terminal = again
-			if runtime.GOOS == "darwin" && !cask {
-				p.Terminal = "sudo " + again
-			}
-			return p
 		}
-		let()
+		say(err.Error())
+		// On a Mac only an account that may not write the app is
+		// refused, which sudo lets write it (macRoad's elevate).
+		p.Terminal = again
+		if runtime.GOOS == "darwin" && !cask {
+			p.Terminal = "sudo " + again
+		}
+		return p
 	}
+	let()
 	p.Step = "app"
 	say(fmt.Sprintf("Updating closes this app, replaces it with release %s once it is checked against the release's signed checksums, and opens it again.", target))
 	if cask {
@@ -116,7 +143,7 @@ func windowOffer(ctx context.Context, device, project string) desktop.UpdatePlan
 	if project != "" {
 		say(fmt.Sprintf("Your CYFR in %s keeps running its release until you update it too: this page offers that once the app has opened again.", project))
 	}
-	p.Dir, p.Args, p.Header = device, []string{"update", "--version", target}, desktop.AppHeader(target, windowNow())
+	p.Dir, p.Args = device, []string{"update", "--version", target}
 	return p
 }
 
@@ -143,7 +170,8 @@ func stackOffer(ctx context.Context, p *desktop.UpdatePlan, project string) {
 	}
 	text := strings.TrimSuffix(out.String(), "\n")
 	var shown shownChange
-	if err := json.Unmarshal([]byte(text[strings.LastIndex(text, "\n")+1:]), &shown); err != nil || shown.Change == "" && shown.Current == "" {
+	if err := json.Unmarshal([]byte(text[strings.LastIndex(text, "\n")+1:]), &shown); err != nil ||
+		(shown.Change == "" || shown.Confirmation == "") && shown.Current == "" {
 		p.Says = append(p.Says, fmt.Sprintf("Your CYFR in %s could not be checked for its update: its answer could not be read.", project))
 		return
 	}
@@ -156,8 +184,7 @@ func stackOffer(ctx context.Context, p *desktop.UpdatePlan, project string) {
 	for _, line := range strings.Split(strings.TrimSpace(shown.Change), "\n") {
 		p.Says = append(p.Says, strings.TrimSpace(line))
 	}
-	p.Dir, p.Args = project, []string{"update", "--version", version.Version, "--confirmed", changeDigest(shown.Change)}
-	p.Header = desktop.StackHeader(project, version.Version, windowNow())
+	p.Dir, p.Args = project, []string{"update", "--version", version.Version, "--confirmed", shown.Confirmation}
 }
 
 // lastError is the sentence cyfr ended on, its last "Error: " line.

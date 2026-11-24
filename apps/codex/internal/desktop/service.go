@@ -139,9 +139,10 @@ type Service struct {
 	Offer       func(ctx context.Context, project string) UpdatePlan
 	BeginUpdate func(plan UpdatePlan, record *os.File) (wait func() error, err error)
 	// UpdateRecord is where an update Update CYFR starts writes what it
-	// says, one record, made anew by each; UpdateRuns says whether an
-	// update runs on this computer, by the locks it holds, project's own
-	// for one of the CYFR in that folder.
+	// says, one record, made anew by each and kept until the next;
+	// UpdateRuns says whether an update runs on this computer, by the
+	// locks it holds, and with project, whether the CYFR in that folder is
+	// held by its own lock.
 	UpdateRecord string
 	UpdateRuns   func(project string) bool
 
@@ -1162,10 +1163,13 @@ func (s *Service) lock(why string, leave bool) {
 	}
 }
 
-// sayLocked tells main the device locked, naming the CYFR committed.
+// sayLocked tells main the device locked, naming the CYFR committed: the
+// end of every lock, the shell's own among them, so Update CYFR's offer
+// is dropped here too.
 func (s *Service) sayLocked() {
 	s.mu.Lock()
 	m, ended := s.committed, s.ended
+	s.voidOffer()
 	s.mu.Unlock()
 	if ended {
 		return

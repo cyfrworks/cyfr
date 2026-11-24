@@ -4,7 +4,6 @@
 package cmd
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -431,7 +430,7 @@ func (c caskRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*
 }
 
 // elevate takes nothing: Homebrew asks for what it needs itself.
-func (caskRoad) elevate(io.Writer, string) (func(), error) { return func() {}, nil }
+func (caskRoad) elevate(io.Writer, string, bool) (func(), error) { return func() {}, nil }
 
 func (caskRoad) replace(out io.Writer, s *staged, _ bool) error {
 	if err := brew(out, brewUpgradeWithin, "upgrade", "--cask", "cyfr"); err != nil {
@@ -464,25 +463,29 @@ func brew(out io.Writer, within time.Duration, args ...string) error {
 // the update refreshes the tap once, itself, before it checks the cask's
 // sum, and nothing refreshes it between that check and the upgrade.
 func brewCommand(args ...string) *exec.Cmd {
-	c := exec.Command(cmp.Or(brewProgram(), "brew"), args...)
+	c := exec.Command(brewProgram(), args...)
 	c.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
 	return c
 }
 
-// brewPlaces are the brew programs Homebrew installs, on Apple silicon and
-// on Intel Macs, a variable so tests stand in for them.
-var brewPlaces = []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"}
-
-// brewProgram is this account's brew: PATH's, else Homebrew's own in one
-// of its two prefixes, since an app opened from the Finder, and the cyfr
-// it starts, have a PATH that holds neither; "" where there is none.
-func brewProgram() string {
-	if found, err := exec.LookPath("brew"); err == nil {
-		return found
+// brewPrefixes are Homebrew's own prefixes, on Apple silicon and on
+// Intel Macs, and none elsewhere, where Homebrew installs no app; a
+// variable so tests stand in for them.
+var brewPrefixes = func() []string {
+	if runtime.GOOS == "darwin" {
+		return []string{"/opt/homebrew", "/usr/local"}
 	}
-	for _, place := range brewPlaces {
-		if info, err := os.Stat(place); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return place
+	return nil
+}()
+
+// brewProgram is the brew of the Homebrew prefix whose Caskroom holds
+// CYFR's cask, "" where none does: never PATH's, which an app opened from
+// the Finder, and the cyfr it starts, do not have, and which may name any
+// program.
+func brewProgram() string {
+	for _, prefix := range brewPrefixes {
+		if info, err := os.Stat(filepath.Join(prefix, "Caskroom", "cyfr")); err == nil && info.IsDir() {
+			return filepath.Join(prefix, "bin", "brew")
 		}
 	}
 	return ""

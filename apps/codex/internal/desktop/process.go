@@ -35,8 +35,7 @@ const (
 	// Ready names the first page: the chooser, its run token in the
 	// fragment; and, for the CYFR app, the rail's page and Update CYFR's,
 	// the read token in each fragment, which reads the list of CYFRs and
-	// the update's offer and changes nothing, with record where a record
-	// of an update waits to be shown, which main opens Update CYFR for.
+	// the update's offer and changes nothing.
 	TypeReady = "ready"
 	// Home names the CYFR selected, the account service approved for it and
 	// how to reach it, as a numbered attempt; main answers the attempt it
@@ -91,15 +90,15 @@ const (
 	// by its number: main sends it from that window's own page alone, and
 	// cyfr starts only the offer it holds under that number, once.
 	TypeUpdate = "update"
-	// UpdateClosed says the Update CYFR window closed: a record it showed
-	// is removed.
+	// UpdateClosed says the Update CYFR window closed: the offer it showed
+	// is dropped.
 	TypeUpdateClosed = "update-closed"
 )
 
 // fields is each message's fields beyond version and type, those that may
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
-	TypeReady:        {required: []string{"url"}, optional: []string{"rail", "update", "record"}},
+	TypeReady:        {required: []string{"url"}, optional: []string{"rail", "update"}},
 	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "setup"}},
 	TypeOpened:       {required: []string{"home", "attempt"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
@@ -131,11 +130,9 @@ type Message struct {
 	Attempt uint64
 	ID      uint64
 	// Rail and Update are ready's addresses of the rail's page and of
-	// Update CYFR's, and Record whether a record waits to be shown; OK is
-	// erased's answer and Offer update's number.
+	// Update CYFR's; OK is erased's answer and Offer update's number.
 	Rail     string
 	Update   string
-	Record   bool
 	OK       bool
 	Offer    uint64
 	Proxy    string
@@ -289,9 +286,6 @@ func (m Message) object() (map[string]any, error) {
 		if values[f] != "" {
 			o[f] = values[f]
 		}
-	}
-	if m.Record {
-		o["record"] = true
 	}
 	return o, nil
 }

@@ -32,9 +32,12 @@ func (debRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*sta
 // elevate takes sudo's login, refusing an account that may not
 // administer this machine before anything asks (mayAdminister,
 // unlockSudo); the login is forgotten once the update is done.
-func (debRoad) elevate(out io.Writer, again string) (func(), error) {
+func (debRoad) elevate(out io.Writer, again string, ask bool) (func(), error) {
 	if err := mayAdminister([]string{"apt-get install -y ./" + appPackage + "_RELEASE.deb"}, out, again); err != nil {
 		return nil, err
+	}
+	if !ask && !machine.passwordless() {
+		return nil, sudoNeedsATerminal(again)
 	}
 	if err := unlockSudo(out, again); err != nil {
 		var refused passwordRefused

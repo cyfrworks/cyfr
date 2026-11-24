@@ -63,8 +63,7 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			attempt, _ := o["attempt"].(float64)
 			id, _ := o["id"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), ID: uint64(id), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
-				Rail: str(o, "rail"), Update: str(o, "update"), Record: o["record"] == true, Proxy: str(o, "proxy"), Resolver: str(o, "resolver"),
-				Setup: str(o, "setup")}
+				Rail: str(o, "rail"), Update: str(o, "update"), Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Setup: str(o, "setup")}
 			read, write := io.Pipe()
 			t.Cleanup(func() { read.Close() })
 			if err := NewWriter(write, nil).Queue(m); err != nil {

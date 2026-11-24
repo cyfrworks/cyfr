@@ -4,6 +4,7 @@
 package desktop
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	_ "embed"
@@ -13,12 +14,10 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/cyfr/codex/internal/shell"
-	"github.com/cyfr/codex/internal/version"
 )
 
 // Update CYFR's one page, style and script, each allowed by its hash alone,
@@ -68,23 +67,24 @@ type UpdateOffer struct {
 }
 
 // UpdatePlan is an offer and what its yes starts: the app's own cyfr with
-// Args in Dir, the record's first line Header.
+// Args in Dir.
 type UpdatePlan struct {
 	UpdateOffer
-	Dir    string
-	Args   []string
-	Header string
+	Dir  string
+	Args []string
 }
 
 // updateRead is the page's read: the offer (none while it is worked out),
-// whether an update runs, what the record holds and the sentence that
-// sums it up, or why a yes started nothing; Seq is the change it shows, as
-// the rail's list's is.
+// whether an update runs, what the last update's record holds, when it
+// was last written and the sentence that sums it up, or why a yes started
+// nothing; Seq is the change it shows, as the rail's list's is, whether
+// an update runs among it.
 type updateRead struct {
 	Offer   *UpdateOffer `json:"offer"`
 	Running bool         `json:"running,omitempty"`
 	Outcome string       `json:"outcome,omitempty"`
 	Record  string       `json:"record,omitempty"`
+	At      string       `json:"at,omitempty"`
 	Refused string       `json:"refused,omitempty"`
 	Seq     uint64       `json:"seq"`
 }
@@ -93,15 +93,19 @@ type updateRead struct {
 // where the outcome is.
 const maxRecordShown = 256 << 10
 
+// runsPoll is how often a read that shows an update running, which this
+// cyfr learns of from its locks alone (UpdateRuns), asks them again; a
+// variable so tests shorten it.
+var runsPoll = time.Second
+
 // updating is Update CYFR's state, under s.mu: the offer held, if any, and
 // the work that makes it (generation counts each, so an offer worked out
 // for a CYFR left meanwhile is dropped); the offer whose yes started a
 // run, at most once each; whether that run, this cyfr's child, still
-// runs; why a yes started nothing; whether the record was shown; whether
-// the window closed, after which no offer is worked out until a page
-// reads from its start: a read of the page closing, woken by its close,
-// works out none for the next window to find; and the changes the page is
-// shown.
+// runs; why a yes started nothing; whether the window closed, after which
+// no offer is worked out until a page reads from its start: a read of the
+// page closing, woken by its close, works out none for the next window to
+// find; and the changes the page is shown.
 type updating struct {
 	offer      *UpdatePlan
 	offers     uint64
@@ -111,12 +115,12 @@ type updating struct {
 	started    uint64
 	running    bool
 	refused    string
-	shown      bool
 	seq        uint64
 }
 
 // voidOffer drops the offer held, under s.mu: the CYFR selected changed,
-// a lock came, or its run ended. The page reads the next.
+// a lock came, by any road, its window closed, or its run ended. The page
+// reads the next.
 func (s *Service) voidOffer() {
 	s.update.offer = nil
 	s.update.generation++
@@ -194,19 +198,27 @@ func (s *Service) updatePage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.workOffer()
-		seq, woken := s.update.seq+1, s.waitWoken()
+		woken := s.waitWoken()
 		s.mu.Unlock()
-		if seq != req.Seen {
-			break
+		now := s.updateNow()
+		if now.Seq != req.Seen {
+			h.Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(now)
+			return
+		}
+		// An update this cyfr did not start ends with no word to it: its
+		// locks are asked again while one runs.
+		var poll <-chan time.Time
+		if now.Running {
+			poll = time.After(runsPoll)
 		}
 		select {
 		case <-woken:
+		case <-poll:
 		case <-ctx.Done():
 			return
 		}
 	}
-	h.Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.updateNow())
 }
 
 // workOffer begins working out the offer, under s.mu, where none is held
@@ -245,111 +257,83 @@ func (s *Service) workOffer() {
 	}()
 }
 
-// updateNow is the page's read now. The record it gives is marked shown,
-// so the window's close removes it.
+// updateNow is the page's read now: whether an update runs is this
+// cyfr's own run or the locks an update holds, never what the record
+// says.
 func (s *Service) updateNow() updateRead {
-	record, _ := readRecord(s.UpdateRecord)
+	record, at, _ := readRecord(s.UpdateRecord)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := updateRead{Seq: s.update.seq + 1, Refused: s.update.refused}
+	out := updateRead{Refused: s.update.refused, Record: record}
 	if s.update.offer != nil {
 		offer := s.update.offer.UpdateOffer
 		out.Offer = &offer
 	}
-	out.Running = s.update.running || (s.UpdateRuns != nil && s.UpdateRuns(recordProject(record)))
+	out.Running = s.update.running || (s.UpdateRuns != nil && s.UpdateRuns(""))
+	out.Seq = 2 * (s.update.seq + 1)
+	if out.Running {
+		out.Seq++
+	}
 	if record != "" {
-		out.Record = record
 		out.Outcome = outcome(record, out.Running)
-		s.update.shown = true
+		out.At = at.UTC().Format("2006-01-02 15:04 UTC")
 	}
 	return out
 }
 
-// readRecord is the end of the record at path, "" where there is none.
-func readRecord(path string) (string, error) {
+// readRecord is the end of the record at path and when it was last
+// written, "" where there is none.
+func readRecord(path string) (string, time.Time, error) {
 	if path == "" {
-		return "", nil
+		return "", time.Time{}, nil
 	}
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return "", time.Time{}, nil
 	}
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	defer f.Close()
-	if info, err := f.Stat(); err == nil && info.Size() > maxRecordShown {
+	info, err := f.Stat()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if info.Size() > maxRecordShown {
 		_, _ = f.Seek(-maxRecordShown, io.SeekEnd)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxRecordShown))
-	return string(data), err
-}
-
-// The record's first line, which this cyfr writes before the run it
-// starts: the release it goes to, and for this computer's own CYFR its
-// folder.
-var (
-	appHeader   = regexp.MustCompile(`^Updating the CYFR app to release (\S+), as asked in the app`)
-	stackHeader = regexp.MustCompile(`^Updating your CYFR in (.+) to release (\S+), as asked in the app`)
-)
-
-// AppHeader and StackHeader are the record's first line for an update of
-// the app, and of this computer's own CYFR in folder, to target.
-func AppHeader(target string, at time.Time) string {
-	return "Updating the CYFR app to release " + target + ", as asked in the app at " + at.UTC().Format("2006-01-02 15:04 UTC") + "."
-}
-
-func StackHeader(folder, target string, at time.Time) string {
-	return "Updating your CYFR in " + folder + " to release " + target + ", as asked in the app at " + at.UTC().Format("2006-01-02 15:04 UTC") + "."
-}
-
-// recordProject is the folder the record's update changes, "" for the
-// app's.
-func recordProject(record string) string {
-	if m := stackHeader.FindStringSubmatch(firstLine(record)); m != nil {
-		return m[1]
-	}
-	return ""
-}
-
-func firstLine(text string) string {
-	line, _, _ := strings.Cut(text, "\n")
-	return line
+	return string(data), info.ModTime(), err
 }
 
 // outcome sums up the record in a sentence: still running; its refusal,
-// the last line cyfr ended on with; the release the app went to, where
-// this app, the one reading it, is that release; the release this
-// computer's own CYFR went to, as the update's own report says it.
+// the last line cyfr ended on with; else the last line it said, which for
+// an update that went through names the release it went to.
 func outcome(record string, running bool) string {
 	if running {
 		return "CYFR is being updated."
 	}
-	refusal := ""
+	refusal, last := "", ""
 	for _, line := range strings.Split(record, "\n") {
-		if said, ok := strings.CutPrefix(strings.TrimSpace(line), "Error: "); ok {
+		line = strings.TrimSpace(line)
+		if said, ok := strings.CutPrefix(line, "Error: "); ok {
 			refusal = said
 		}
+		if line != "" {
+			last = line
+		}
 	}
-	if refusal != "" {
-		return refusal
-	}
-	if m := appHeader.FindStringSubmatch(firstLine(record)); m != nil && version.Version == m[1] {
-		return "The CYFR app is release " + m[1] + "."
-	}
-	if m := stackHeader.FindStringSubmatch(firstLine(record)); m != nil && strings.Contains(record, "Updated to release "+m[2]+".") {
-		return "Your CYFR in " + m[1] + " is release " + m[2] + "."
-	}
-	return "The update ended without saying how; what it said is below."
+	return cmp.Or(refusal, last, "The update ended without saying how.")
 }
 
 // StartUpdate is main's update: the person's yes to the offer numbered
 // id. Only the offer held now, with a yes to give, starts, and only once:
 // a yes to an offer dropped since (a late one) or to one started already
-// starts nothing. Its run is the app's own cyfr, started by BeginUpdate
-// with the record, made anew for it and readable by this account alone,
-// as its output; once it ends the offer is dropped, and the page reads
-// the next beside the record.
+// starts nothing, and one while an update runs, by its locks, is refused
+// before the record is touched. Its run is the app's own cyfr, started by
+// BeginUpdate with the record, made anew for it and readable by this
+// account alone, as its output; once it ends the offer is dropped, and
+// the page reads the next beside the record.
 func (s *Service) StartUpdate(id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -359,7 +343,15 @@ func (s *Service) StartUpdate(id uint64) {
 	}
 	s.update.started = id
 	s.update.refused = ""
-	s.update.shown = false
+	project := ""
+	if p.Step == "stack" {
+		project = p.Dir
+	}
+	if s.UpdateRuns != nil && s.UpdateRuns(project) {
+		s.update.refused = "Another update is changing CYFR on this computer, so nothing was started. Once it has finished, open Update CYFR again."
+		s.voidOffer()
+		return
+	}
 	wait, err := s.beginRun(*p)
 	if err != nil {
 		s.update.refused = err.Error()
@@ -379,8 +371,8 @@ func (s *Service) StartUpdate(id uint64) {
 	}()
 }
 
-// beginRun makes the record anew, its header first, and starts plan's run
-// with it as its output.
+// beginRun makes the record anew and starts plan's run with it as its
+// output.
 func (s *Service) beginRun(p UpdatePlan) (func() error, error) {
 	if err := os.Remove(s.UpdateRecord); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.New("The record of the last update could not be replaced (" + err.Error() + "); nothing was changed.")
@@ -390,39 +382,16 @@ func (s *Service) beginRun(p UpdatePlan) (func() error, error) {
 		return nil, errors.New("The update's record could not be made (" + err.Error() + "); nothing was changed.")
 	}
 	defer f.Close()
-	if _, err := io.WriteString(f, p.Header+"\n"); err != nil {
-		return nil, errors.New("The update's record could not be written (" + err.Error() + "); nothing was changed.")
-	}
 	return s.BeginUpdate(p, f)
 }
 
-// UpdateClosed is main's update-closed: the window is gone, so a record it
-// showed is removed, unless its update still runs; one it never showed
-// stays for the next open. The offer held, and why a yes started nothing,
-// go with the page.
+// UpdateClosed is main's update-closed: the window is gone, and with it
+// the offer held and why a yes started nothing. The record stays, the
+// last update's, until the next update replaces it.
 func (s *Service) UpdateClosed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.update.refused = ""
 	s.update.closed = true
-	if s.update.shown && !s.update.running && (s.UpdateRuns == nil || !s.UpdateRuns(s.recordProjectNow())) {
-		_ = os.Remove(s.UpdateRecord)
-		s.update.shown = false
-	}
 	s.voidOffer()
-}
-
-func (s *Service) recordProjectNow() string {
-	record, _ := readRecord(s.UpdateRecord)
-	return recordProject(record)
-}
-
-// RecordWaits is whether a record of an update waits to be shown, which
-// ready says, so main opens Update CYFR at once.
-func (s *Service) RecordWaits() bool {
-	if s.UpdateRecord == "" {
-		return false
-	}
-	_, err := os.Stat(s.UpdateRecord)
-	return err == nil
 }

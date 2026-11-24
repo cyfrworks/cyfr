@@ -356,22 +356,23 @@ test("the rail's page loads nothing, and only its own top frame's presses act", 
   }
 })
 
-test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by itself at ready where a record waits; never on the box's screen", () => {
+test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by itself at the first ready of an app the update opened again; never on the box's screen", () => {
   const r = step(run(open, true).s, railed("/rail/update"))
   assert.deepEqual(r.do, [{update: {url: UPDATE}}])
   assert.equal(r.allow, false)
   assert.equal(r.state.name, "open", "the CYFR open is left as it is")
   assert.equal(r.state.home, HOME)
-  const recorded = {...ready, message: {...ready.message, record: true}}
-  assert.deepEqual(run([recorded], true).effects.slice(-2), [{chooser: []}, {update: {url: UPDATE}}], "a record waiting opens it, over the chooser")
-  assert.ok(!run([ready], true).effects.some((e) => e.update), "no record, nothing opens")
+  const updated = step(initial(true, {proxy: "", resolver: ""}, "", true), ready)
+  assert.deepEqual(updated.do.slice(-2), [{chooser: []}, {update: {url: UPDATE + "&updated=1"}}], "the update's reopen opens it, over the chooser")
+  assert.equal(updated.state.updated, false, "once")
+  assert.ok(!run([ready], true).effects.some((e) => e.update), "opened plainly, nothing opens")
   for (const before of [[], [ready, home()], [...open, selects(BOB)]]) {
     assert.deepEqual(step(run(before, true).s, railed("/rail/update")).do, [], "not while cyfr starts, a proposal or a departure waits")
   }
   const SCREEN_PAGE = "http://127.0.0.1:7340/"
-  const screen = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
-  assert.equal(step(screen, {type: "ready", url: SCREEN_PAGE, message: {type: "ready", url: SCREEN_PAGE, record: true}}).state.name, "ended",
-    "the screen's cyfr names no record")
+  const screen = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr", true)
+  assert.ok(!step(screen, {type: "ready", url: SCREEN_PAGE, message: {type: "ready", url: SCREEN_PAGE}}).do.some((e) => e.update),
+    "the box's screen opens no Update CYFR, --updated or not")
 })
 
 test("Update CYFR's page loads nothing; its yes sends the offer it names, from its own top frame alone; its close is told to cyfr", () => {

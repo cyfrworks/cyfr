@@ -47,8 +47,9 @@ func init() {
 	_ = updateCmd.Flags().MarkHidden("continue-as")
 	// The CYFR app's Update CYFR page (cmd/app_window.go): --offer prints
 	// the change to the CYFR in the directory as JSON and makes none;
-	// --confirmed makes the change only where it is still the one whose
-	// digest the page showed, in place of --yes.
+	// --confirmed makes the change only where what it reads is still what
+	// the offer read (confirmation), in place of --yes. Each touches this
+	// CYFR alone, at --version, this program's release.
 	updateCmd.Flags().Bool("offer", false, "")
 	_ = updateCmd.Flags().MarkHidden("offer")
 	updateCmd.Flags().String("confirmed", "", "")
@@ -248,8 +249,22 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		ctx = context.Background()
 	}
 	switch {
-	case o.offer:
-		// The change is this program's own to show: no program step.
+	case o.offer || o.confirmed != "":
+		// The CYFR app's second yes, and its offer, are the stack's alone,
+		// at this program's release: the program and the app are never
+		// touched. The confirmed change holds cyfr update's lock to its
+		// end, so the app reads that an update runs from that lock alone
+		// (windowUpdateRuns).
+		if o.version != version.Version {
+			return fmt.Errorf("This cyfr is release %s, not release %s, which the CYFR app's Update CYFR named; nothing was changed. Open Update CYFR in the app again", version.Version, o.version)
+		}
+		if o.confirmed != "" {
+			unlock, err := lockUpdate()
+			if err != nil {
+				return err
+			}
+			defer unlock()
+		}
 	case o.continueAs == "":
 		finished, err := updateProgram(ctx, out, o)
 		if finished || err != nil {
@@ -258,6 +273,13 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 	case o.continueAs != version.Version:
 		self, _ := selfExecutable()
 		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; your CYFR was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
+	}
+	// The CYFR app's first yes updates the app alone, wherever it runs:
+	// its run is the one whose output is the update's record
+	// (beginWindowUpdate), and its second yes, the stack's, is confirmed.
+	if o.confirmed == "" && !o.offer && writesTheRecord(out) {
+		fmt.Fprintf(out, "The CYFR app is release %s; Update CYFR offers your CYFR's own update, where this computer has one, now that the app has opened again.\n", version.Version)
+		return nil
 	}
 	if !access.HasComposeFile(".") {
 		fmt.Fprintf(out, "There is no CYFR in this directory, so the update ends with the program: it holds no compose file (%s). To update a CYFR, run 'cyfr update' in its directory, the one that holds its docker-compose.yml.\n", strings.Join(access.ComposeMainFiles, ", "))
@@ -552,18 +574,31 @@ func (u *updater) change() (text, none string, err error) {
 	return b.String(), "", nil
 }
 
-// changeDigest is the digest of a change as change words it, which the
-// CYFR app's page shows and --confirmed names.
-func changeDigest(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
+// confirmation is what --confirmed names: the digest of the folder, the
+// exact release and the compose file's bytes, as this update read them
+// for the change it shows. A run confirmed with it makes the change only
+// where it reads the same three itself, so the change made is worked out
+// from what the person was shown.
+func (u *updater) confirmation() (string, error) {
+	folder, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cyfr update could not tell which folder it runs in (%v); nothing was changed", err)
+	}
+	h := sha256.New()
+	for _, part := range [][]byte{[]byte(folder), []byte(u.version), u.compose.original} {
+		fmt.Fprintf(h, "%d\n", len(part))
+		h.Write(part)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// shownChange is --offer's answer, its output's last line, in JSON: the change, or the
-// sentence for a home with nothing to update.
+// shownChange is --offer's answer, its output's last line, in JSON: the
+// change and its confirmation, or the sentence for a home with nothing to
+// update.
 type shownChange struct {
-	Change  string `json:"change,omitempty"`
-	Current string `json:"current,omitempty"`
+	Change       string `json:"change,omitempty"`
+	Confirmation string `json:"confirmation,omitempty"`
+	Current      string `json:"current,omitempty"`
 }
 
 // showChange prints the change as --offer answers it, making none; a
@@ -573,16 +608,22 @@ func (u *updater) showChange() error {
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(u.out).Encode(shownChange{Change: text, Current: none})
+	shown := shownChange{Change: text, Current: none}
+	if none == "" {
+		if shown.Confirmation, err = u.confirmation(); err != nil {
+			return err
+		}
+	}
+	return json.NewEncoder(u.out).Encode(shown)
 }
 
 // offer shows what the update changes and asks to make it, answering done
 // when the update ends here (change): a home on this release already is
 // left alone and a change not confirmed is not made. yes makes the change
-// without asking; confirmed, the digest of the change the CYFR app's page
-// showed, makes it only where it is still that change, so the change made
-// is the one the person saw; with no terminal to ask on and neither, the
-// change is shown and not made.
+// without asking; confirmed, the confirmation the CYFR app's page showed
+// the change with, makes it only where this update read what that offer
+// read, so the change made is the one the person saw; with no terminal
+// to ask on and neither, the change is shown and not made.
 func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 	text, none, err := u.change()
 	if none != "" {
@@ -593,10 +634,17 @@ func (u *updater) offer(yes bool, confirmed string) (bool, error) {
 		return true, err
 	}
 	fmt.Fprint(u.out, text)
-	switch {
-	case confirmed != "" && changeDigest(text) != confirmed:
-		return true, errors.New("What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now")
-	case confirmed != "" || yes:
+	if confirmed != "" {
+		read, err := u.confirmation()
+		if err != nil {
+			return true, err
+		}
+		if read != confirmed {
+			return true, errors.New("What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now")
+		}
+		return false, nil
+	}
+	if yes {
 		return false, nil
 	}
 	if !askTerminal() {
@@ -1638,6 +1686,14 @@ func (u *updater) readSchema() error {
 		err = fmt.Errorf("the answer %q is not a schema fingerprint", schema)
 	}
 	if err != nil {
+		// What docker says passes the engine's redaction, .env's values
+		// blanked, before it is said: a diagnostic can quote them. The
+		// engine opens under the lock, after this read.
+		redaction := access.NewRedactor(".")
+		if u.engine != nil {
+			redaction = u.engine.Redactor()
+		}
+		err = redaction.Err(err)
 		return fmt.Errorf("cyfr update could not read which schema this CYFR's database was built from (%v), and release %s runs only on a database built from its own schema; nothing was stopped or changed. Fix the cause and run 'cyfr update' again", err, u.version)
 	}
 	if schema != u.manifest.SchemaFingerprint {

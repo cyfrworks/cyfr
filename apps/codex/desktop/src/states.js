@@ -58,12 +58,14 @@
 //
 // Update CYFR is main's too: cyfr serves its page and its read alone, and
 // main shows it in a window of its own over the content, in the app's own
-// store, from the rail's foot, or by itself as cyfr is ready when a record
-// of an update waits to be shown (ready's record). Its yes is a navigation
-// main answers (ACTS, window "update"), naming the offer shown by its
-// number, which main sends cyfr as update; cyfr starts only the offer it
-// holds under that number, once. Its window's close is told to cyfr
-// (update-closed). The box's screen has none of it in this part.
+// store, from the rail's foot, or by itself as cyfr is ready when the
+// update the page started opened the app again (--updated, `updated`),
+// on that update's record. Its yes is a navigation main answers (ACTS,
+// window "update"), naming the offer shown by its number, which main
+// sends cyfr as update; cyfr starts only the offer it holds under that
+// number, once. Its window's close is told to cyfr (update-closed), and
+// it closes as the cyfr that served it ends (app.js). The box's screen
+// has none of it in this part.
 //
 // The box's screen (`screen`, its project; app.js) is the six-word road
 // with no chooser: cyfr's first page is the device's own, at loopback's
@@ -177,10 +179,13 @@ import {absolute} from "./process.js"
 /** How long a departure waits for cyfr's left and the old pages' end. */
 export const DEPARTURE_MS = 20_000
 
-/** The state main starts in. */
-export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
+/**
+ * The state main starts in; `updated` where an update Update CYFR started
+ * opened the app (--updated), which opens Update CYFR on its record once.
+ */
+export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "", updated = false) {
   return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
-    notices: [], picks: 0, picking: 0, pickFor: null, leaves: 0, seen: 0}
+    notices: [], picks: 0, picking: 0, pickFor: null, leaves: 0, seen: 0, updated: updated && !screen}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -427,15 +432,16 @@ function advance(s, e) {
       // own pages alone.
       const rail = e.message?.rail ?? ""
       const update = e.message?.update ?? ""
-      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" || rail || update || e.message?.record
+      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" || rail || update
         : !e.url.startsWith(LOOPBACK + "/bootstrap/#token=") || !rail.startsWith(LOOPBACK + "/rail/#read=") ||
           !update.startsWith(LOOPBACK + "/update/#read="))) {
         return stopped(s, "its first page was not the chooser")
       }
-      // A record of an update waiting to be shown opens Update CYFR at once.
-      return {state: {...s, name: "chooser", readyURL: e.url, railURL: rail, updateURL: update},
+      // The app the update opened again opens Update CYFR on its record,
+      // once: a cyfr started again later opens nothing by itself.
+      return {state: {...s, name: "chooser", readyURL: e.url, railURL: rail, updateURL: update, updated: false},
         do: [{say: "ready"}, ...(rail ? [{rail: {url: rail}}] : []), {chooser: s.notices},
-          ...(e.message?.record && !s.screen ? [{update: {url: update}}] : [])]}
+          ...(s.updated ? [{update: {url: update + "&updated=1"}}] : [])]}
     }
     case "home": {
       // The box's screen makes its first person by the device's pages: a
@@ -527,7 +533,7 @@ function advance(s, e) {
       return ending(s, {quit: true})
     case "second-instance":
       return askedToQuit(s, e) ? ending(s, {quit: true}) : same(s, [{show: true}])
-    // Update CYFR's window closed: a record it showed is cyfr's to remove.
+    // Update CYFR's window closed: the offer it showed is dropped.
     case "update-closed":
       return same(s, [{send: {type: "update-closed"}}])
     // The system's dialog answered pick `id`: the folder, or null.

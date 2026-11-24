@@ -15,27 +15,25 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/desktop"
+	"github.com/cyfr/codex/internal/version"
 )
 
 // The app's Update CYFR page offers the newest release as cyfr update
-// would go to it, by the app's own cyfr in the device's folder, which
-// holds no CYFR, so the app's update calls no Docker: once the road's
-// elevation, all the transaction asks before the app closes, is given,
+// would go to it, by the app's own cyfr: once the road's elevation, all
+// the transaction asks before the app closes, is given, asking nothing,
 // and given back. Its yes names the release shown.
 func TestThePageOffersTheNewestReleaseTheRunGoesTo(t *testing.T) {
 	a := newAppScenario(t, "0.9.0", "0.10.0", "0.9.0")
-	a.machine.noTerminal = true
 	device := t.TempDir()
 	p := windowOffer(context.Background(), device, "/home/ada/cyfr")
 	if p.App != "0.9.0" || p.Target != "0.10.0" || p.Step != "app" || p.Terminal != "" || p.Dir != device ||
-		!reflect.DeepEqual(p.Args, []string{"update", "--version", "0.10.0"}) ||
-		!strings.HasPrefix(p.Header, "Updating the CYFR app to release 0.10.0, as asked in the app at ") {
+		!reflect.DeepEqual(p.Args, []string{"update", "--version", "0.10.0"}) {
 		t.Fatalf("offered %+v", p)
 	}
 	if !slices.Contains(p.Says, "Your CYFR in /home/ada/cyfr keeps running its release until you update it too: this page offers that once the app has opened again.") {
 		t.Fatalf("the page does not say what becomes of this computer's own CYFR: %q", p.Says)
 	}
-	if !reflect.DeepEqual(a.log, []string{"elevate cyfr update --version 0.10.0"}) || a.road.released != 1 {
+	if !reflect.DeepEqual(a.log, []string{"elevate cyfr update --version 0.10.0, asking nothing"}) || a.road.released != 1 {
 		t.Fatalf("the road was asked %q, its elevation given back %d times", a.log, a.road.released)
 	}
 	if ran, _ := os.ReadFile(a.ran); len(ran) != 0 {
@@ -45,25 +43,21 @@ func TestThePageOffersTheNewestReleaseTheRunGoesTo(t *testing.T) {
 
 // Where the transaction would refuse before the app closes, the page says
 // so and offers no yes, but the line to run in a terminal instead, with
-// the release; where this cyfr has a terminal, sudo's would ask on it, so
-// nothing is asked and the run refuses instead.
+// the release, whether or not this cyfr has a terminal: the run has none.
 func TestThePageSaysWhatTheRunWouldRefuseAndTheLineToRunInstead(t *testing.T) {
-	a := newAppScenario(t, "0.9.0", "0.10.0", "0.9.0")
-	a.machine.noTerminal = true
-	a.road.elevateErr = errors.New("sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `cyfr update --version 0.10.0` at a terminal")
-	p := windowOffer(context.Background(), t.TempDir(), "")
-	terminal := "cyfr update --version 0.10.0"
-	if runtime.GOOS == "darwin" {
-		terminal = "sudo " + terminal
-	}
-	if p.Step != "" || p.Target != "0.10.0" || p.Terminal != terminal || p.Says[len(p.Says)-1] != a.road.elevateErr.Error() || p.Args != nil {
-		t.Fatalf("offered %+v", p)
-	}
-
-	b := newAppScenario(t, "0.9.0", "0.10.0", "0.9.0")
-	b.road.elevateErr = errors.New("asked on a terminal")
-	if p := windowOffer(context.Background(), t.TempDir(), ""); p.Step != "app" || len(b.log) != 0 {
-		t.Fatalf("with a terminal the road was asked %q, offering %+v", b.log, p)
+	for _, noTerminal := range []bool{true, false} {
+		a := newAppScenario(t, "0.9.0", "0.10.0", "0.9.0")
+		a.machine.noTerminal = noTerminal
+		a.road.elevateErr = errors.New("sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `cyfr update --version 0.10.0` at a terminal")
+		p := windowOffer(context.Background(), t.TempDir(), "")
+		terminal := "cyfr update --version 0.10.0"
+		if runtime.GOOS == "darwin" {
+			terminal = "sudo " + terminal
+		}
+		if p.Step != "" || p.Target != "0.10.0" || p.Terminal != terminal || p.Says[len(p.Says)-1] != a.road.elevateErr.Error() || p.Args != nil ||
+			!reflect.DeepEqual(a.log, []string{"elevate cyfr update --version 0.10.0, asking nothing"}) {
+			t.Fatalf("with no terminal %v: offered %+v, the road asked %q", noTerminal, p, a.log)
+		}
 	}
 }
 
@@ -96,7 +90,6 @@ func TestThePageSaysWhyThereIsNothingToUpdate(t *testing.T) {
 // A Homebrew install's page offers the release its tap names, by brew.
 func TestTheCaskInstallsPageOffersTheUpdateByBrew(t *testing.T) {
 	a := newAppScenario(t, "0.9.0", "0.10.0", "0.9.0")
-	a.machine.noTerminal = true
 	caskInstalled = func() bool { return true }
 	p := windowOffer(context.Background(), t.TempDir(), "")
 	if p.Step != "app" || !slices.Contains(p.Says, "Homebrew replaces it, as it installed it.") || len(a.log) != 0 {
@@ -123,19 +116,17 @@ func standInSelf(t *testing.T, script string) (log string) {
 
 // With this app on the newest release and this computer's own CYFR open,
 // the page offers that CYFR's change, as this release's own cyfr update
-// shows it in its folder (--offer); its yes makes it there only as shown
-// (--confirmed with the change's digest). A CYFR on its release, and one
-// whose check is refused, are said, with no yes.
+// shows it in its folder (--offer); its yes makes it there only as read
+// for that offer (--confirmed with its confirmation). A CYFR on its
+// release, an answer with no confirmation and one whose check is refused,
+// are said, with no yes.
 func TestThePageOffersThisComputersOwnCYFRsChangeAsThisReleaseShowsIt(t *testing.T) {
-	const change = "\nThis CYFR is on release 0.9.0; this cyfr is release 0.10.0.\nUpdating it stops the stack, snapshots it into backups/, switches these images to release 0.10.0 and starts it:\n  cyfr: a → b\n"
-	a := newAppScenario(t, "0.10.0", "0.10.0", "0.10.0")
-	a.machine.noTerminal = true
+	newAppScenario(t, "0.10.0", "0.10.0", "0.10.0")
 	project := t.TempDir()
-	log := standInSelf(t, "echo 'Verifying the manifest of release 0.10.0...'\nprintf '%s\\n' '{\"change\":\"\\nThis CYFR is on release 0.9.0; this cyfr is release 0.10.0.\\nUpdating it stops the stack, snapshots it into backups/, switches these images to release 0.10.0 and starts it:\\n  cyfr: a → b\\n\"}'\n")
+	log := standInSelf(t, "echo 'Verifying the manifest of release 0.10.0...'\nprintf '%s\\n' '{\"change\":\"\\nThis CYFR is on release 0.9.0; this cyfr is release 0.10.0.\\nUpdating it stops the stack, snapshots it into backups/, switches these images to release 0.10.0 and starts it:\\n  cyfr: a → b\\n\",\"confirmation\":\"c0ffee\"}'\n")
 	p := windowOffer(context.Background(), t.TempDir(), project)
 	if p.Step != "stack" || p.Target != "0.10.0" || p.Dir != project ||
-		!reflect.DeepEqual(p.Args, []string{"update", "--version", "0.10.0", "--confirmed", changeDigest(change)}) ||
-		!strings.HasPrefix(p.Header, "Updating your CYFR in "+project+" to release 0.10.0, as asked in the app at ") {
+		!reflect.DeepEqual(p.Args, []string{"update", "--version", "0.10.0", "--confirmed", "c0ffee"}) {
 		t.Fatalf("offered %+v", p)
 	}
 	for _, line := range []string{"This CYFR app is release 0.10.0, the newest.",
@@ -153,6 +144,11 @@ func TestThePageOffersThisComputersOwnCYFRsChangeAsThisReleaseShowsIt(t *testing
 	if p := windowOffer(context.Background(), t.TempDir(), project); p.Step != "" ||
 		!slices.Contains(p.Says, "Your CYFR in "+project+": This CYFR is on release 0.10.0 already, so there is nothing to update.") {
 		t.Fatalf("a CYFR on its release is offered %+v", p)
+	}
+	standInSelf(t, "printf '%s\\n' '{\"change\":\"a change\"}'\n")
+	if p := windowOffer(context.Background(), t.TempDir(), project); p.Step != "" ||
+		!slices.Contains(p.Says, "Your CYFR in "+project+" could not be checked for its update: its answer could not be read.") {
+		t.Fatalf("a change with no confirmation is offered %+v", p)
 	}
 	standInSelf(t, "echo 'Error: cyfr update needs docker on PATH to update the stack; nothing was changed' >&2\nexit 1\n")
 	if p := windowOffer(context.Background(), t.TempDir(), project); p.Step != "" ||
@@ -215,4 +211,95 @@ func must(path string, err error) string {
 		panic(err)
 	}
 	return path
+}
+
+// theRecord makes the update's record in a home of the test's own and
+// answers it open for writing, as the run Update CYFR starts has it for
+// its output.
+func theRecord(t *testing.T) *os.File {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.MkdirAll(filepath.Dir(windowRecord()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(windowRecord(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// The app's own update from Update CYFR, whose output is the record,
+// updates the app alone, wherever it runs: in a folder that holds a CYFR
+// the program it hands over to calls no Docker and says the app's
+// release, and the app is opened again with --updated. The same update
+// at a terminal reopens it plainly and goes on to the folder's CYFR.
+func TestTheAppsUpdateFromItsWindowUpdatesTheAppAlone(t *testing.T) {
+	a := newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
+	a.theAppsOwn()
+	a.road.ran = true
+	record := theRecord(t)
+	if err := runUpdate(a.ctx, record, record, updateOptions{version: "1.1.0"}); err != nil {
+		t.Fatalf("cyfr update answered %v:\n%s", err, read(t, record.Name()))
+	}
+	a.steps("fetch 1.1.0", "elevate cyfr update --version 1.1.0", "quit", "replace installer 1.1.0", "finish", "reopen --updated")
+
+	// The program handed over to, at the new release, with the record its
+	// output, in this folder, which holds a compose file.
+	a.handed, a.manifests = nil, nil
+	version.Version = "1.1.0"
+	if err := runUpdate(a.ctx, record, record, updateOptions{continueAs: "1.1.0"}); err != nil {
+		t.Fatalf("the handover answered %v", err)
+	}
+	if said := read(t, record.Name()); !strings.HasSuffix(said, "The CYFR app is release 1.1.0; Update CYFR offers your CYFR's own update, where this computer has one, now that the app has opened again.\n") {
+		t.Fatalf("the handover said %q", said)
+	}
+	a.untouched()
+
+	if _, err := a.run(updateOptions{continueAs: "1.1.0"}); err == nil || len(a.manifests) != 1 {
+		t.Fatalf("at a terminal the handover answered %v and reached the stack for %v", err, a.manifests)
+	}
+	b := newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
+	b.theAppsOwn()
+	b.road.ran = true
+	if _, err := b.run(updateOptions{version: "1.1.0", yes: true}); err != nil || b.log[len(b.log)-1] != "reopen" {
+		t.Fatalf("at a terminal the app was reopened as %q (%v)", b.log, err)
+	}
+}
+
+// Update CYFR's second yes, the stack's (--confirmed), and its offer
+// touch the CYFR in the folder alone, at this program's release: the app
+// and the program are never fetched, closed or replaced, a release other
+// than this program's is refused with nothing changed, and the confirmed
+// change holds cyfr update's lock, refused while another update holds it.
+func TestTheStacksYesNeverTouchesTheApp(t *testing.T) {
+	a := newAppScenario(t, "0.10.0", "0.11.0", "0.11.0")
+	a.theAppsOwn()
+	for _, o := range []updateOptions{{version: "0.10.0", confirmed: "c0ffee"}, {version: "0.10.0", offer: true}} {
+		a.manifests = nil
+		if _, err := a.run(o); err == nil || !reflect.DeepEqual(a.manifests, []string{"0.10.0"}) || len(a.log) != 0 || len(a.fetched) != 0 {
+			t.Fatalf("%+v answered %v, the road took %q, the stack's update was asked %v", o, err, a.log, a.manifests)
+		}
+	}
+	a.manifests = nil
+	for _, o := range []updateOptions{{version: "0.11.0", confirmed: "c0ffee"}, {confirmed: "c0ffee"}, {version: "0.11.0", offer: true}} {
+		if _, err := a.run(o); err == nil || !strings.HasPrefix(err.Error(), "This cyfr is release 0.10.0, not release "+o.version+", which the CYFR app's Update CYFR named; nothing was changed") {
+			t.Fatalf("%+v answered %v", o, err)
+		}
+	}
+	a.untouched()
+	if len(a.log) != 0 {
+		t.Fatalf("the road took %q", a.log)
+	}
+	unlock, err := lockUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if _, err := a.run(updateOptions{version: "0.10.0", confirmed: "c0ffee"}); !errors.Is(err, errUpdateRuns) || len(a.manifests) != 0 {
+		t.Fatalf("a confirmed change while another update runs answered %v, the stack's update asked %v", err, a.manifests)
+	}
 }

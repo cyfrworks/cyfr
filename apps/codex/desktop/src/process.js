@@ -5,8 +5,8 @@
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 2, its type and exactly its type's fields: text, but for attempt,
 // the proposal's number, id, a departure's or an erase's, and offer, an
-// update's, whole ones from 1, erased's ok, true or false, ready's record,
-// true when there, erase's home and account, each an
+// update's, whole ones from 1, erased's ok, true or false, erase's home
+// and account, each an
 // origin in its one spelling,
 // folder-picked's path, a
 // folder spelled from a root (absolute) or null, and its epoch and pick,
@@ -17,7 +17,7 @@ export const VERSION = 2
 export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
-  ready: {required: ["url"], optional: ["rail", "update", "record"]},
+  ready: {required: ["url"], optional: ["rail", "update"]},
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "setup"]},
   opened: {required: ["home", "attempt"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
@@ -83,8 +83,7 @@ export function readFromCyfr(line) {
     if (!["version", "type", ...required, ...optional].includes(key)) throw new Refused("fields")
   }
   for (const key of [...required, ...optional.filter((k) => Object.hasOwn(m, k))]) {
-    const valid = whole(key) ? Number.isSafeInteger(m[key]) && m[key] > 0
-      : key === "record" ? m[key] === true : typeof m[key] === "string" && m[key] !== ""
+    const valid = whole(key) ? Number.isSafeInteger(m[key]) && m[key] > 0 : typeof m[key] === "string" && m[key] !== ""
     if (!valid) throw new Refused("fields")
   }
   // Fields that come together or not at all, and a route only beside them.
