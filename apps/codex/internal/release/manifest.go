@@ -211,14 +211,16 @@ func strictObject(data []byte, keys ...string) (map[string]json.RawMessage, erro
 // TrustMaterial is the sigstore trust root verification runs under. The
 // production value is the public-good instance's trusted root, fetched
 // through sigstore-go's TUF client from the TUF root embedded in this
-// binary and cached under the user's home. Tests replace the variable;
-// nothing a release download carries ever becomes trust material.
+// binary and kept in memory alone: a verification writes nothing on the
+// machine, so `cyfr screen on` can read a release's checksums before the
+// person is asked anything. Tests replace the variable; nothing a release
+// download carries ever becomes trust material.
 //
 // The TUF client's default fetcher uses http.DefaultClient, which has no
 // timeout and ignores ctx, so the fetcher here gets a client bounded by
 // fetchTimeout whose every request carries ctx.
 var TrustMaterial = func(ctx context.Context) (root.TrustedMaterial, error) {
-	opts := tuf.DefaultOptions()
+	opts := tuf.DefaultOptions().WithDisableLocalCache()
 	f := fetcher.NewDefaultFetcher()
 	f.SetHTTPClient(&http.Client{Timeout: fetchTimeout, Transport: contextTransport{ctx}})
 	opts.Fetcher = f

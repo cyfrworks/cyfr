@@ -58,6 +58,7 @@ func testMachine(system string) machineSeams {
 		refusal:        realMachine.refusal, // asks the docker the test puts on PATH
 		dockerHere:     func(context.Context) (bool, error) { return true, nil },
 		installed:      func(string) bool { return false },
+		appRelease:     func() string { return "" },
 		running:        func() bool { return false },
 		groups:         func(context.Context, string) []string { return nil },
 		displayManager: func() bool { return false },

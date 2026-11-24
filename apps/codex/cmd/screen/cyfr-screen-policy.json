@@ -1,6 +1,0 @@
-{
-  "PasswordManagerEnabled": false,
-  "AutofillAddressEnabled": false,
-  "AutofillCreditCardEnabled": false,
-  "ExtensionInstallBlocklist": ["*"]
-}

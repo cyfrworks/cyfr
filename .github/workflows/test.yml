@@ -367,6 +367,11 @@ jobs:
       # directory vectors.
       - name: The cyfr.run stand-in answers as the vectors say
         run: python3 -I tests/registry-stand-in/standin_test.py
+      # The install-and-screen proof's reading of the screen's cookie
+      # stores, off the guest: read as SQLite holds them, its write-ahead
+      # log included.
+      - name: The install-and-screen proof's cookie-store reading
+        run: python3 -I tests/install-screen-proof/box_test.py
       # The tag pipeline publishes nothing unless every check passed: its
       # graph read from release.yml, then mutants of it, each refused.
       # It reads YAML through PyYAML, which -I finds only among the system
@@ -1298,6 +1303,15 @@ jobs:
         env:
           PROOF_OUT: ${{ runner.temp }}/desktop-proof
         run: bash tests/desktop-proof/home.sh "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb" cyfr:push
+      # The same DEB sets CYFR up on this computer, with the runner's own
+      # Docker behind a client of Ubuntu 26.04 (tests/setup-proof/app.sh),
+      # whose teardown removes only what it made.
+      - name: The setup proof in the app removes only what it made
+        run: bash tests/setup-proof/app-cleanup-test.sh
+      - name: The app sets CYFR up on this computer
+        env:
+          SETUP_PROOF_OUT: ${{ runner.temp }}/desktop-proof/setup-here
+        run: bash tests/setup-proof/app.sh "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb" cyfr:push
       # What each proof recorded: its rows, its log and the app's output.
       # No secret is in them: a proof records headings and notices, never a
       # page's text, every line and the app's output are scrubbed of what an

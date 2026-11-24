@@ -284,9 +284,9 @@ same worktree refuses, naming the run that holds it.
   and binds no port of the machine.
 
   Codex CI's `screen-idle` job runs `tests/desktop-proof/screen/idle.sh`:
-  the device screen's idle watch under Ubuntu 26.04's labwc, beside a
-  real Chrome whose page, and whose sandboxed frame, plays a video
-  a tap started, and the suspend watch with the real swayidle on a stand-in
+  the device screen's idle watch under Ubuntu 26.04's labwc, beside the
+  CYFR app's engine (Electron at the version its package pins), whose
+  page, and whose sandboxed frame, plays a video a tap started, and the suspend watch with the real swayidle on a stand-in
   logind, subscribed and not. It needs Docker and Go and binds no port of the machine, so here
   it runs as `scripts/heavy-check.sh -- bash tests/desktop-proof/screen/idle.sh`.
 
@@ -300,6 +300,14 @@ same worktree refuses, naming the run that holds it.
   another such proof or the native smoke, which binds that port on purpose.
   The Go tests do not: each gives the commands that serve it a port of its
   own.
+
+  The same job then runs `tests/setup-proof/app.sh` (its header names the
+  rows): the DEB in a client of Ubuntu 26.04 with the runner's Docker
+  behind it, whose app process lacks the docker group its account has,
+  sets CYFR up in a folder from the setup screen, quits during the
+  download, sets it up again and makes its first person. It too binds
+  127.0.0.1:7340 on the host's network, so here it runs inside
+  `flock /var/tmp/cyfr/port-7340.lock`, one at a time.
 
   Past `handoff`, the pull request's run on GitHub is the check, and it
   runs every check in parallel; a CI job is reproduced here by running

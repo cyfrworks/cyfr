@@ -1515,7 +1515,7 @@ async function screenStarted(project = SCREEN) {
 
 test("as the box's screen the app runs the screen shell in that project, in one frameless maximized window with no menu", ON_LINUX, async () => {
   await screenStarted()
-  assert.deepEqual(world.spawned, [["screen", "shell", "--app"]])
+  assert.deepEqual(world.spawned, [["screen", "shell"]])
   assert.deepEqual(world.spawnedIn, [SCREEN])
   assert.deepEqual(world.menus, [null], "no menu")
   const w = content()

@@ -90,7 +90,7 @@ if [ "${1:-}" = --session ]; then
   starts() { grep -c '^CYFR: ready$' "$OUT/app.log" 2>/dev/null || echo 0; }
   started() { [ "$(starts)" -ge "$1" ]; }
   window() { wlrctl toplevel find title:CYFR; }
-  shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'; }
+  shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell$'; }
   # The windows labwc shows now, by its handles, and whether one closed.
   shown() { awk '$1 == "open" { w[$2] = 1 } $1 == "closed" { delete w[$2] } END { for (h in w) print h }' "$OUT/toplevels"; }
   closedAt() { awk -v h="$1" '$1 == "closed" && $2 == h { print $3; exit }' "$OUT/toplevels"; }
@@ -197,7 +197,7 @@ PY
     verdict FAIL "the keyboard killed: the window shown (${was:-none}) $(closed "${was:-none}" && echo "closed after $(cat "$OUT/took") ms, the bound $HIDE_MS" || echo 'did not close'), the keyboard $(keyboard && echo shown || echo 'not shown'), $(pgrep -c -u proof -x wvkbd-mobintl) running: $(grep -a 'keyboard' "$OUT/app.log" | tail -n 3 | tr '\n' ' ')"
   fi
 
-  pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$'
+  pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$'
   if within 30 grep -q '^ended' "$OUT/launches" && within 60 started 2 && within 30 window; then
     why=$(grep -m 1 '^CYFR: cyfr ended: ' "$OUT/app.log" | cut -c 7-)
     first=$(grep -m 1 '^ended' "$OUT/launches")
@@ -210,9 +210,9 @@ PY
     verdict FAIL "cyfr killed did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
   fi
 
-  shell=$(pgrep -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell --app$')
+  shell=$(pgrep -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$')
   pkill -KILL -u proof -o -f -- '^/opt/cyfr/CYFR --screen-project='
-  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && within 60 started 3 && within 30 window && within 30 sh -c '[ "$(pgrep -u proof -c -f -- "^/opt/cyfr/resources/cyfr screen shell --app\$")" = 1 ]'; then
+  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && within 60 started 3 && within 30 window && within 30 sh -c '[ "$(pgrep -u proof -c -f -- "^/opt/cyfr/resources/cyfr screen shell\$")" = 1 ]'; then
     verdict PASS "the app killed ends its cyfr within 5 s, and the next start is locked, with one screen shell"
   else
     verdict FAIL "after the app was killed: its cyfr $(kill -0 "$shell" 2>/dev/null && echo 'still runs' || echo ended), $(shells) screen shells, $(starts) starts"

@@ -223,6 +223,17 @@ func TestFetchBinaryRefusesWhatDoesNotVerify(t *testing.T) {
 	}
 }
 
+// signedPackage is the package as cyfr screen on reads it: the sum the
+// signed checksums.txt names first (PackageChecksum), then the package
+// that has it (FetchPackage).
+func signedPackage(version, goarch string) ([]byte, error) {
+	sum, err := PackageChecksum(context.Background(), version, goarch)
+	if err != nil {
+		return nil, err
+	}
+	return FetchPackage(context.Background(), version, goarch, sum)
+}
+
 // The package a signed checksums.txt names answers its own bytes, on
 // either architecture, for a release and a pre-release alike.
 func TestFetchPackageAnswersTheVerifiedPackage(t *testing.T) {
@@ -230,7 +241,7 @@ func TestFetchPackageAnswersTheVerifiedPackage(t *testing.T) {
 		r := newBinaryRelease(t, version)
 		r.serve(t)
 		for _, goarch := range []string{"amd64", "arm64"} {
-			got, err := FetchPackage(context.Background(), version, goarch)
+			got, err := signedPackage(version, goarch)
 			if err != nil {
 				t.Fatalf("FetchPackage %s %s: %v", version, goarch, err)
 			}
@@ -287,7 +298,7 @@ func TestFetchPackageRefusesUnsignedWrongOrMissing(t *testing.T) {
 			r := newBinaryRelease(t, version)
 			c.edit(t, r)
 			r.serve(t)
-			got, err := FetchPackage(context.Background(), c.asked, "amd64")
+			got, err := signedPackage(c.asked, "amd64")
 			if got != nil {
 				t.Errorf("FetchPackage answered %d bytes", len(got))
 			}
@@ -300,6 +311,23 @@ func TestFetchPackageRefusesUnsignedWrongOrMissing(t *testing.T) {
 				t.Errorf("FetchPackage = %v, want a 404 refusal", err)
 			}
 		})
+	}
+}
+
+// A package that changed after its sum was read, between the question
+// and the download, is refused, and none of it answered.
+func TestFetchPackageRefusesAPackageChangedAfterItsSumWasRead(t *testing.T) {
+	const version = "0.9.0"
+	r := newBinaryRelease(t, version)
+	r.serve(t)
+	sum, err := PackageChecksum(context.Background(), version, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.assets[PackageName(version, "amd64")] = []byte("attacker")
+	r.serve(t)
+	if got, err := FetchPackage(context.Background(), version, "amd64", sum); got != nil || !errors.Is(err, ErrUnverified) {
+		t.Errorf("FetchPackage = %d bytes, %v; want ErrUnverified and none", len(got), err)
 	}
 }
 
