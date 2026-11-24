@@ -68,9 +68,10 @@ defmodule Locus.Runtime.WorkerService do
   was answered. A runner whose assign went unanswered, or was answered
   past the deadline, is retired, since whose its place is cannot be
   known. A `start` no runner can be found for answers `{:error,
-  :unavailable}`, and while the keeper refuses runners `{:error,
-  {:unavailable, sentence}}` with the keeper's account of why; the
-  listener refuses either `503`,
+  :unavailable}`, and one whose runner's spawn the keeper refused while
+  it refuses runners `{:error, {:unavailable, sentence}}` with the
+  keeper's account of why it refused that spawn
+  (`Locus.Runtime.RunnerPool.take/4`); the listener refuses either `503`,
   the second naming the sentence. The pool may hand out a runner whose
   clean completion it has read and sent here but the service has not yet
   read: that assignment is forgotten then, as its completion would forget
@@ -436,7 +437,7 @@ defmodule Locus.Runtime.WorkerService do
   # A runner for the start while its deadline has not passed.
   defp take(assignment, deadline) do
     if System.monotonic_time(:millisecond) < deadline,
-      do: RunnerPool.take(RunnerPool, assignment.athanor_id, assignment.execution_id),
+      do: RunnerPool.take(RunnerPool, assignment.athanor_id, assignment.execution_id, deadline),
       else: {:error, :past_deadline}
   end
 

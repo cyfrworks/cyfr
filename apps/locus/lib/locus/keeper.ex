@@ -70,7 +70,9 @@ defmodule Locus.Keeper do
   its owner and its heir hear of its end only then, as of a started
   spawn's, and no release is asked of it. A run answers its refusal at
   that `released` ("A run"); a runner's owner hears `{:refused, code,
-  spawn_id}`, then `:released`. The caller
+  spawn_id}`, then `:released`. A spawn whose caller stopped waiting for
+  its answer before this server took it is never written: its heir is
+  told it is released, nothing of it having started. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, what
   each read of the connection carried, the leader's exit and the uid's
@@ -1116,10 +1118,20 @@ defmodule Locus.Keeper do
     {:reply, {:error, {:spawn_failed, :fenced}}, state}
   end
 
+  # A caller that stopped waiting before its spawn was taken asked for it
+  # to be abandoned already, its request behind this one: the spawn is
+  # never written, and its heir is told nothing of it was started.
   def handle_call({:spawn_handle, ref, argv, env, opts}, {owner, _tag} = from, state) do
-    case kept_spawn(state, opts) do
-      {:ok, home} -> spawn_handle(ref, argv, env, opts, home, from, owner, state)
-      {:error, code} -> {:reply, {:error, {:refused, code}}, state}
+    receive do
+      {:"$gen_cast", {:abandon, ^ref}} ->
+        tell_heir(opts)
+        {:reply, {:error, {:launcher_unavailable, :timeout}}, state}
+    after
+      0 ->
+        case kept_spawn(state, opts) do
+          {:ok, home} -> spawn_handle(ref, argv, env, opts, home, from, owner, state)
+          {:error, code} -> {:reply, {:error, {:refused, code}}, state}
+        end
     end
   end
 

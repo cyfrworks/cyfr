@@ -332,6 +332,7 @@ defmodule Opus.Programs.DefinitionTest do
     assert drivers == Enum.uniq(drivers)
     assert Definition.brain("claude-code").title == "Claude Code"
     assert Definition.brain("antigravity").title == "Antigravity"
+    assert Definition.brain("opencode").title == "OpenCode"
     assert Definition.brain("nope") == nil
   end
 end
