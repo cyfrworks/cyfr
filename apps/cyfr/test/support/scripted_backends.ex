@@ -1031,17 +1031,23 @@ defmodule Cyfr.Test.ScriptedBackends do
   # A recv counts as the session's use when it arrives, as Locus counts it,
   # not while it waits: a session no line reaches is ended by its idle
   # period even with a recv waiting on it.
-  defp handle_mode(conn, agent, _fields, %{type: type} = message)
+  defp handle_mode(conn, agent, fields, %{type: type} = message)
        when type in [:recv, :output] do
     Agent.update(agent, &touch(&1, message.session))
     deadline = now() + message.max_wait_ms
-    recv(conn, agent, message.session, message.after, deadline)
+    recv(conn, agent, message.session, message.after, deadline, fields.boot)
   end
 
-  defp recv(conn, agent, id, after_seq, deadline) do
+  # A recv waiting while the service starts again is of a lifetime it no
+  # longer runs: Locus's connection for it ends with that process, and the
+  # asker's next try is refused `stale_boot`, which this answers at once.
+  defp recv(conn, agent, id, after_seq, deadline, boot) do
     st = Agent.get(agent, & &1)
 
     case st.sessions[id] do
+      _any when st.boot != boot ->
+        refuse(conn, st, :stale_boot)
+
       nil ->
         refuse(conn, st, :unknown_session)
 
@@ -1071,7 +1077,7 @@ defmodule Cyfr.Test.ScriptedBackends do
           # deadline
           Process.sleep(10)
           expire_idle(agent)
-          recv(conn, agent, id, after_seq, deadline)
+          recv(conn, agent, id, after_seq, deadline, boot)
         end
     end
   end

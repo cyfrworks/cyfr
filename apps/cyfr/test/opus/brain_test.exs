@@ -1182,8 +1182,10 @@ defmodule Opus.BrainTest do
     end
 
     test "a driver that says why it ends ends the session with that why, never its words",
-         %{fake: fake, row: row, brain: {_pid, ref}} do
+         %{fake: fake, row: row, brain: {_pid, ref} = brain} do
       say(fake, row, %{"t" => "ending", "why" => "servers_unlisted"})
+      {_boot, [{seq, %{"t" => "ending"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
       Scripted.end_sessions(fake, row.id)
       assert_receive {Brain, ^ref, {:ended, {:exited, :servers_unlisted}}}, 5_000
     end
