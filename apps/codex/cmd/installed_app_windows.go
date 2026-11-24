@@ -15,9 +15,10 @@ import (
 // account (its per-user MSI, apps/codex/desktop/scripts/build.mjs): under
 // the account's local application folder, as Windows answers it
 // (FOLDERID_LocalAppData), never as an environment variable names it, in
-// the folder the package's name names.
+// the folder the package's name names. Windows is not asked to check the
+// folder is there: whether the app is, its caller's look decides.
 func installedAppPath() (string, error) {
-	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DEFAULT)
+	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DONT_VERIFY)
 	if err != nil {
 		return "", err
 	}

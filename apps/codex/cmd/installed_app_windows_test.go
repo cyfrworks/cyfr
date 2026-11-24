@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,19 +13,34 @@ import (
 )
 
 // The installed app is under the account's local application folder as
-// Windows answers it, whatever LOCALAPPDATA names.
+// Windows answers it, whatever LOCALAPPDATA names. Each answer Windows
+// gives is logged, with and without its own check of the folder, before
+// and after LOCALAPPDATA changes, so a red says which one moved.
 func TestInstalledAppPathIsTheSystems(t *testing.T) {
-	elsewhere := t.TempDir()
-	t.Setenv("LOCALAPPDATA", elsewhere)
-	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DEFAULT)
+	answers := func(when string) {
+		for _, f := range []struct {
+			name string
+			flag uint32
+		}{{"checked", windows.KF_FLAG_DEFAULT}, {"unchecked", windows.KF_FLAG_DONT_VERIFY}} {
+			p, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, f.flag)
+			t.Logf("%s, %s: %q (%v)", when, f.name, p, err)
+		}
+	}
+	answers("LOCALAPPDATA=" + os.Getenv("LOCALAPPDATA"))
+	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DONT_VERIFY)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := installedAppPath()
-	if want := filepath.Join(local, "Programs", "cyfr-desktop", "CYFR.exe"); err != nil || got != want {
-		t.Errorf("the installed app is %q (%v), want %q", got, err, want)
-	}
-	if strings.HasPrefix(strings.ToLower(got), strings.ToLower(elsewhere)) {
-		t.Errorf("the installed app %q follows LOCALAPPDATA", got)
+	want := filepath.Join(local, "Programs", "cyfr-desktop", "CYFR.exe")
+	for _, elsewhere := range []string{t.TempDir(), `C:\nowhere\at\all`} {
+		t.Setenv("LOCALAPPDATA", elsewhere)
+		answers("LOCALAPPDATA=" + elsewhere)
+		got, err := installedAppPath()
+		if err != nil || got != want {
+			t.Errorf("with LOCALAPPDATA=%s the installed app is %q (%v), want %q", elsewhere, got, err, want)
+		}
+		if strings.HasPrefix(strings.ToLower(got), strings.ToLower(elsewhere)) {
+			t.Errorf("the installed app %q follows LOCALAPPDATA", got)
+		}
 	}
 }
