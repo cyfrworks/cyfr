@@ -317,8 +317,8 @@ func containsInt(list []int, v int) bool {
 
 // A kept session's close sends SIGTERM to its command alone, which the
 // space passes down unchanged: a child the command ends itself, as a driver
-// closes its browser, is still running when the command handles the
-// signal, and what the command says before it ends is carried.
+// closes its browser, is not sent it, and what the command says before it
+// ends is carried.
 func TestAKeptClosesSignalReachesTheCommandAlone(t *testing.T) {
 	k := keptKeeper(t)
 	uid := testKeptFirst
@@ -326,8 +326,8 @@ func TestAKeptClosesSignalReachesTheCommandAlone(t *testing.T) {
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
-	script := `sleep 600 & child=$!
-trap 'kill -0 $child 2>/dev/null && echo child:alive; kill $child; echo bye; exit 0' TERM
+	script := `sh -c 'trap "echo child:signalled; exit 0" TERM; while :; do sleep 0.05; done' & child=$!
+trap 'sleep 0.2; kill -KILL $child; echo bye; exit 0' TERM
 echo ready
 wait`
 	id, rc := k.spawnKept(t, "c", script, path, uid)
@@ -335,7 +335,7 @@ wait`
 	grace := int64(5000)
 	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
 	rc.readUntil(t, func() bool { return false })
-	if got := string(rc.got[frame.StreamStdout]); got != "ready\nchild:alive\nbye\n" {
+	if got := string(rc.got[frame.StreamStdout]); got != "ready\nbye\n" {
 		t.Fatalf("the closed session said %q", got)
 	}
 	k.releasedPair(t, id)

@@ -181,7 +181,8 @@ def main():
                          f'ls "{other}" 2>&1; echo "rc=$?"; touch "{other}/profile/Default/Cookies" 2>&1; echo "rc=$?"',
                          key=key, home_id=home)
             out = crossed["stdout"]
-            expect(out.count("Permission denied") == 4 and "rc=0" not in out and "-cookie" not in out
+            # Another row's home is not in a row's space at all.
+            expect(out.count("No such file or directory") == 4 and "rc=0" not in out and "-cookie" not in out
                    and "-store" not in out,
                    f"the {key} row neither reads, lists nor writes the other's cookies and storage", out)
         mine = sh(c, OWNER, 'cat "$HOME/profile/Default/Cookies"', key="apart", home_id=APART)
