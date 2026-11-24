@@ -39,12 +39,17 @@ import (
 const Root = "/var/lib/locus/space"
 
 // The arguments after `stage` that start a space's first process, the same
-// for the keeper's start-time proof, and the space's init.
+// for the keeper's start-time proof, the space's init, and the stage's
+// waiter.
 const (
 	FirstArg      = "first"
 	FirstProbeArg = "first-probe"
 	InitArg       = "init"
+	WaitArg       = "wait"
 )
+
+// waitExitFD is the waiter's end of the init's exit pipe.
+const waitExitFD = 3
 
 // Descriptors of a space's first process and its init besides the
 // command's stdio: the spec, in a memory file read from its start; the
@@ -72,27 +77,31 @@ var keptOut = map[string]bool{"proc": true, "sys": true, "dev": true, "tmp": tru
 var devices = []string{"null", "zero", "full", "random", "urandom", "tty"}
 
 // enter is the stage's last part: it clones the space's first process,
-// which runs the command, drops every capability of its own and installs
-// the space's filter, and then waits for the first process and ends as the
-// command ended. home is the spec's home, bound into the space, or "" for
+// which runs the command, drops every capability of its own, installs the
+// space's filter and executes itself as the space's waiter (Wait). It
+// returns only when a step fails. home is the spec's home, bound into the space, or "" for
 // the keeper's start-time proof, which executes nothing. status is the
 // stage's status pipe: the first process and the init write a reason there
 // and the init closes it once the command has executed.
-func enter(spec []byte, home string, control, relay, terminal bool, uid, gid int, status *os.File) (int, error) {
+func enter(spec []byte, home string, control, relay, terminal bool, uid, gid int, status *os.File) error {
 	memfd, err := unix.MemfdCreate("space-spec", unix.MFD_CLOEXEC)
 	if err != nil {
-		return 0, fmt.Errorf("the spec's memory file: %w", err)
+		return fmt.Errorf("the spec's memory file: %w", err)
 	}
 	specFile := os.NewFile(uintptr(memfd), "space-spec")
 	defer specFile.Close()
 	if _, err := specFile.Write(spec); err != nil {
-		return 0, fmt.Errorf("the spec's memory file: %w", err)
+		return fmt.Errorf("the spec's memory file: %w", err)
 	}
 	exitR, exitW, err := os.Pipe()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer exitR.Close()
+	self, err := os.Readlink("/proc/self/exe")
+	if err != nil {
+		return fmt.Errorf("the stage's binary: %w", err)
+	}
 	files := []uintptr{0, 1, 2, specFile.Fd(), status.Fd(), ^uintptr(0), ^uintptr(0), ^uintptr(0), exitW.Fd()}
 	if control {
 		files[ControlFD] = ControlFD
@@ -118,24 +127,49 @@ func enter(spec []byte, home string, control, relay, terminal bool, uid, gid int
 	})
 	_ = exitW.Close()
 	if err != nil {
-		return 0, fmt.Errorf("cloning the space's first process: %w", err)
+		return fmt.Errorf("cloning the space's first process: %w", err)
 	}
 	// From here only the space holds the command's stdio and channels.
 	if err := leaveToSpace(control, relay, terminal); err != nil {
 		_ = unix.Kill(pid, unix.SIGKILL)
-		return 0, err
+		return err
 	}
 	if err := dropCapabilities(); err != nil {
 		_ = unix.Kill(pid, unix.SIGKILL)
-		return 0, fmt.Errorf("capabilities: %w", err)
+		return fmt.Errorf("capabilities: %w", err)
 	}
 	if err := checkCredentials(uid, gid); err != nil {
 		_ = unix.Kill(pid, unix.SIGKILL)
-		return 0, fmt.Errorf("credentials: %w", err)
+		return fmt.Errorf("credentials: %w", err)
 	}
 	if err := installSpaceFilter(); err != nil {
 		_ = unix.Kill(pid, unix.SIGKILL)
-		return 0, fmt.Errorf("seccomp: %w", err)
+		return fmt.Errorf("seccomp: %w", err)
+	}
+	// Capabilities belong to a thread, and only this one has dropped its
+	// own: the stage executes itself again as the space's waiter, which
+	// takes this thread's credentials and filter alone. The status pipe,
+	// close-on-exec here, is the first process's and the init's from here.
+	if err := unix.Dup3(int(exitR.Fd()), waitExitFD, 0); err != nil {
+		_ = unix.Kill(pid, unix.SIGKILL)
+		return fmt.Errorf("the exit pipe: %w", err)
+	}
+	err = syscall.Exec(self, []string{"cyfr-locus", "stage", WaitArg, strconv.Itoa(pid)}, []string{})
+	_ = unix.Kill(pid, unix.SIGKILL)
+	return fmt.Errorf("executing the space's waiter %s: %w", self, err)
+}
+
+// Wait runs `cyfr-locus stage wait <pid>`: the stage once it holds nothing,
+// outside the space's processes, the parent of the space's first process
+// <pid>. It passes the keeper's signals down to it, waits for it, and ends
+// as the command ended, as the init says on the exit pipe at waitExitFD.
+func Wait() int {
+	if len(os.Args) != 4 {
+		return ExitFailed
+	}
+	pid, err := strconv.Atoi(os.Args[3])
+	if err != nil || pid <= 0 {
+		return ExitFailed
 	}
 	signals := make(chan os.Signal, 8)
 	signal.Notify(signals, passedSignals...)
@@ -144,9 +178,6 @@ func enter(spec []byte, home string, control, relay, terminal bool, uid, gid int
 			_ = unix.Kill(pid, s.(syscall.Signal))
 		}
 	}()
-	// The status pipe is the first process's and the init's from here: it
-	// closes once the command has executed.
-	_ = status.Close()
 	var ws unix.WaitStatus
 	for {
 		_, err := unix.Wait4(pid, &ws, 0, nil)
@@ -154,12 +185,12 @@ func enter(spec []byte, home string, control, relay, terminal bool, uid, gid int
 			continue
 		}
 		if err != nil {
-			return 0, fmt.Errorf("waiting for the space's first process: %w", err)
+			return ExitFailed
 		}
 		break
 	}
-	word, _ := io.ReadAll(io.LimitReader(exitR, 64))
-	return endAs(string(word), ws), nil
+	word, _ := io.ReadAll(io.LimitReader(os.NewFile(waitExitFD, "exit"), 64))
+	return endAs(string(word), ws)
 }
 
 // leaveToSpace gives the stage's own stdio up for /dev/null and closes its

@@ -264,3 +264,53 @@ func TestTheProbeRefusesAHostThatCannotBuildASpacesFiles(t *testing.T) {
 		t.Fatalf("the probe without %s: %v", stage.Root, err)
 	}
 }
+
+// No thread of any process a spawn runs under its uid holds a capability
+// in any set, in its space or outside it: the stage's waiter, the space's
+// init and the command alike.
+func TestNoThreadOfASpaceHoldsACapability(t *testing.T) {
+	k := newKeeper(t).withMemory(t)
+	id, uid, rc := k.spawn(t, "c", `echo ready; exec sleep 600`, map[string]string{}, false)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	k.s.mu.Lock()
+	leader := k.s.spawns[id].leader.pid
+	k.s.mu.Unlock()
+	var pids []int
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if pids = append(pidsOf(t, uid, "cyfr-locus"), pidsOf(t, uid, "sleep")...); len(pids) >= 3 {
+			break
+		}
+	}
+	if len(pids) < 3 || !containsInt(pids, leader) {
+		t.Fatalf("the waiter %d, the init and the command of uid %d: %v", leader, uid, pids)
+	}
+	for _, pid := range pids {
+		tasks, err := os.ReadDir(filepath.Join("/proc", strconv.Itoa(pid), "task"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range tasks {
+			status, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "task", task.Name(), "status"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, set := range []string{"CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"} {
+				if !strings.Contains(string(status), "\n"+set+":\t0000000000000000\n") {
+					t.Errorf("thread %s of process %d holds %s:\n%s", task.Name(), pid, set, status)
+				}
+			}
+		}
+	}
+	k.release(t, id)
+	k.replies(t, id)
+	assertRetired(t, k, uid)
+}
+
+func containsInt(list []int, v int) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}

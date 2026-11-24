@@ -126,6 +126,8 @@ func Main() int {
 			return First(os.Args[2] == FirstProbeArg)
 		case InitArg:
 			return Init()
+		case WaitArg:
+			return Wait()
 		}
 	}
 	// The status pipe moves above the command's descriptors, close-on-exec,
@@ -185,11 +187,8 @@ func Main() int {
 	if err := closeOnExecFrom(TerminalFD + 1); err != nil {
 		return fail("descriptors: %v", err)
 	}
-	code, err := enter(data, spec.Home, spec.Control, spec.Reach == pool.ReachRelay, spec.Terminal, spec.UID, spec.GID, status)
-	if err != nil {
-		return fail("%v", err)
-	}
-	return code
+	err = enter(data, spec.Home, spec.Control, spec.Reach == pool.ReachRelay, spec.Terminal, spec.UID, spec.GID, status)
+	return fail("%v", err)
 }
 
 // MaxSpecBytes bounds the spec a stage reads.
@@ -212,8 +211,11 @@ func decodeSpec(data []byte) (Spec, error) {
 // probe is the stage's start-time proof for the keeper: the namespace the
 // keeper cloned it into maps the probe's ids, the stage becomes them, a
 // routed probe brings its loopback up and binds its two name sockets, and
-// the stage drops every capability set, passes the check a spawn's stage
-// makes before it executes the command and installs the space's filter.
+// the stage clones the space's first process, which builds the space's
+// files and drops every capability set, drops every set of its own, passes
+// the check a spawn's stage makes before it executes the command, installs
+// the space's filter and ends as the first process ended. It returns only
+// when a step fails.
 func probe(status *os.File) error {
 	specFile := os.NewFile(SpecFD, "spec")
 	data, err := io.ReadAll(io.LimitReader(specFile, 4096))
@@ -246,14 +248,7 @@ func probe(status *os.File) error {
 		_ = unix.Close(udp)
 		_ = unix.Close(tcp)
 	}
-	code, err := enter(nil, "", false, false, false, p.UID, p.GID, status)
-	if err != nil {
-		return err
-	}
-	if code != 0 {
-		return fmt.Errorf("the space's first process ended %d", code)
-	}
-	return nil
+	return enter(nil, "", false, false, false, p.UID, p.GID, status)
 }
 
 // ownNamespace refuses to go on unless the stage runs in a user namespace
