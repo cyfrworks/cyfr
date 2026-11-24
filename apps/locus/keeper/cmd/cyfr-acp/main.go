@@ -95,9 +95,8 @@ func run(name string, command []string) int {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		fmt.Fprintf(os.Stderr, "usage: %s HARNESS [ARG]...: cyfr-acp runs under a program's name, one of %s\n",
-			strings.Join(names, " | "), strings.Join(names, ", "))
-		return 2
+		return brainwire.Usage(name, fmt.Sprintf("usage: %s HARNESS [ARG]...: cyfr-acp runs under a program's name, one of %s",
+			strings.Join(names, " | "), strings.Join(names, ", ")))
 	}
 	return brainwire.Main(p.name, command, func(command []string, c *brainwire.Conn, home string) brainwire.Driver {
 		return newDriver(p, command, c, home)

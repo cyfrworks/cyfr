@@ -46,8 +46,8 @@ its message is one of the events, with exactly its members.
 - `forget` removes that session's folder and the driver's records of it,
   confirmed by the program's load, and leaves another session and the
   sign-in; the running session is not forgotten.
-- A start naming an access the driver does not list, or the program's own
-  tools, ends the driver with no line written.
+- A start naming an access the driver does not list ends the driver, its one
+  line its `ending`, `unfit`; one naming the program's own tools, `broken`.
 - Nothing of the program's standard error, its folder or its sign-in
   reaches a line of the driver's.
 - On a terminal, the driver runs the program's command unchanged.
@@ -64,7 +64,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import ROOT, Stack, eventually, expect, owner_of, probe, require_docker  # noqa: E402
+from harness import ROOT, Stack, ending, eventually, expect, owner_of, probe, require_docker  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "fixtures", "brain_wire.json"), encoding="utf-8") as _vectors:
     VECTORS = json.load(_vectors)
@@ -341,8 +341,9 @@ def main():
             r.expect("hello", f"{key}: a driver to refuse a start it cannot honour")
             status, answer = c.send(OWNER, r.session, [json.dumps(start)])
             expect(status == 200, f"{key}: the start is written", answer)
-            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-            expect(not running and lines == [], f"{key}: the start ends the driver and writes nothing", lines)
+            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: False, r.after, timeout_s=TIMEOUT_S)
+            why = "broken" if key == "brain-own-tools" else "unfit"
+            expect(not running and lines == [ending(why)], f"{key}: the start ends the driver and writes only its ending, {why}", lines)
             r.close()
         eventually(lambda: not harnesses(stack), "no program to run for a refused start")
 

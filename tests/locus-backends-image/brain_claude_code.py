@@ -20,7 +20,8 @@ its message is one of the events, with exactly its members.
 - A start naming Default mode, or no access, runs the harness in its default
   permission mode, its own tools allowed, seen as the harness's whole command
   line and the driver's whole answers. A start naming an access the driver
-  does not list ends the driver before anything runs, with no line written.
+  does not list ends the driver before anything runs, its one line its
+  `ending`, `unfit`.
 - A start runs the harness with the start's configuration as its flags,
   and `started` names the new session; a work sets CYFR's tools on the stub;
   a post is a turn, streamed as `text` and said whole, its usage each
@@ -42,7 +43,7 @@ its message is one of the events, with exactly its members.
 - `forget` removes that session's transcript, and leaves another session's
   and the sign-in.
 - Every command line the vectors refuse (their `refuse` lines from the
-  holder) ends the driver with no line written.
+  holder) ends the driver, its one line its `ending`, `broken`.
 - Nothing of the harness's standard error, its folder or its sign-in reaches
   a line of the driver's.
 - On a terminal, the driver runs the harness's command unchanged: the
@@ -59,7 +60,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import ROOT, Stack, eventually, expect, owner_of, probe, require_docker  # noqa: E402
+from harness import ROOT, Stack, ending, eventually, expect, owner_of, probe, require_docker  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "fixtures", "brain_wire.json"), encoding="utf-8") as _vectors:
     VECTORS = json.load(_vectors)
@@ -267,8 +268,8 @@ def main():
         r.expect("hello", "a driver to refuse an unlisted access")
         status, answer = c.send(OWNER, r.session, [json.dumps({"t": "start", "gen": 7, "config": {"model": "fake-haiku", "access": "bypassPermissions"}})])
         expect(status == 200, "the start is written", answer)
-        lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-        expect(not running and lines == [], "a start naming an access the driver does not list ends it and writes nothing", lines)
+        lines, _after, running = c.lines_until(OWNER, r.session, lambda got: False, r.after, timeout_s=TIMEOUT_S)
+        expect(not running and lines == [ending("unfit")], "a start naming an access the driver does not list ends it and writes only its ending, unfit", lines)
         r.close()
 
         # ————— a start in Default mode, named or not, whole —————
@@ -332,8 +333,8 @@ def main():
             r.expect("hello", "a driver to refuse a command")
             status, answer = c.send(OWNER, r.session, [refused["line"]])
             expect(status == 200, f"the line is written: {refused['name']}", answer)
-            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-            expect(not running and lines == [], f"the driver ends on it and writes nothing: {refused['name']}", lines)
+            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: False, r.after, timeout_s=TIMEOUT_S)
+            expect(not running and lines == [ending("broken")], f"the driver ends on it and writes only its ending, broken: {refused['name']}", lines)
             r.close()
 
         # ————— nothing of stderr, the folder or the sign-in —————

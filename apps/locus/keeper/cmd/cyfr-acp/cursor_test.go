@@ -360,8 +360,11 @@ func TestCursorWithoutALoadIsRefused(t *testing.T) {
 	s := startCursor(t, "")
 	s.expect("hello")
 	s.send(startCommand("", map[string]any{}, filesTool))
-	if status := s.exit(); status == 0 || !strings.Contains(s.stderr.String(), "does not offer to load a session") {
+	if status := s.exit(); status != 1 || !strings.Contains(s.stderr.String(), "does not offer to load a session") {
 		t.Fatalf("refused: %d %s", status, s.stderr.String())
+	}
+	if s.why() != "unsupported" {
+		t.Fatalf("the holder is told unsupported alone: %s", s.output())
 	}
 }
 

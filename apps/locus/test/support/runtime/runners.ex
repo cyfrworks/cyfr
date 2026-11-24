@@ -59,7 +59,7 @@ defmodule Locus.Runtime.Test.Runners do
   Answer once no runner exit the worker service of this VM reports is in
   flight (`reports_in_flight/0`). The service reports each exit in a
   process of its own, which ends once CYFR answers or the report gives up
-  (`Locus.Runtime.HostClient.runner_exited/5` bounds it). Fails past
+  (`Locus.Runtime.HostClient.runner_exited/6` bounds it). Fails past
   `timeout_ms`.
   """
   @spec await_reports(non_neg_integer()) :: :ok
