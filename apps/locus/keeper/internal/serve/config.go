@@ -2,9 +2,10 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package serve is `cyfr-locus serve`: it checks its own privileges, starts
-// the client command as the client user with a socketpair on fd 3, and
-// answers the client's requests (package protocol) by starting, signalling
-// and retiring processes under pooled uids.
+// a process for each role whose key it is given, each in a space of its own
+// with a socketpair on fd 3, and answers each role's requests (package
+// protocol) on that role's channel by starting, signalling and retiring
+// processes under the uids of that role's pool.
 package serve
 
 import (
@@ -13,12 +14,15 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -27,16 +31,84 @@ import (
 
 // Config is the parsed command line.
 type Config struct {
-	Pools      []pool.Spec
-	HomeRoot   string
-	ClientUser string
-	ClientArgv []string
+	Pools []pool.Spec
+	Roles []RoleSpec
+	// HomeRoot holds a folder of each role's spawns' homes, named for the
+	// role.
+	HomeRoot string
+	// Command is what every role process runs, in its own environment.
+	Command []string
 	// Kept is the kept-homes root and uid range, nil for a keeper that
 	// keeps no homes.
 	Kept *home.Kept
 	// Guard is the socket of the island's egress guard's control (package
-	// guard): given exactly when some pool is routed.
+	// guard), which routes every role's space.
 	Guard string
+}
+
+// RoleSpec is one --role: a process the keeper starts when its key is set,
+// under its own uid, which is its gid, listening on its port in its space,
+// whose spawns draw from its one pool. Private gives its route the guard's
+// private reach; Kept makes it the one role whose sessions keep homes.
+type RoleSpec struct {
+	Name    string
+	UID     int
+	Port    uint16
+	Pool    string
+	Private bool
+	Kept    bool
+}
+
+// KeyEnv is the role's key variable: the keeper starts the role only when
+// its environment holds it, not empty.
+func (r RoleSpec) KeyEnv() string { return r.envPrefix() + "KEY" }
+
+// envPrefix is the prefix of every variable of the role's.
+func (r RoleSpec) envPrefix() string { return "LOCUS_" + strings.ToUpper(r.Name) + "_" }
+
+// User is the role's user name.
+func (r RoleSpec) User() string { return "locus-" + r.Name }
+
+// ParseRole parses `<name>:<uid>:<port>:<pool>[:private][:kept]`. The name
+// is a role's (cgroup.ValidRoleName) and not `log`, whose variables are
+// every role's; the uid is not root's and the port is 1..65535.
+func ParseRole(value string) (RoleSpec, error) {
+	fields := strings.Split(value, ":")
+	bad := func(why string) (RoleSpec, error) {
+		return RoleSpec{}, fmt.Errorf("role %q: %s; want <name>:<uid>:<port>:<pool>[:private][:kept]", value, why)
+	}
+	if len(fields) < 4 || len(fields) > 6 {
+		return bad("four to six fields")
+	}
+	r := RoleSpec{Name: fields[0], Pool: fields[3]}
+	if !cgroup.ValidRoleName(r.Name) || r.Name == "log" {
+		return bad("its name is a lowercase letter, then lowercase letters and digits, and not log")
+	}
+	uid, err := parseID(fields[1])
+	if err != nil || uid == 0 {
+		return bad("its uid is a non-root id")
+	}
+	r.UID = uid
+	port, err := strconv.ParseUint(fields[2], 10, 16)
+	if err != nil || port == 0 || fields[2] != strconv.FormatUint(port, 10) {
+		return bad("its port is 1..65535")
+	}
+	r.Port = uint16(port)
+	if r.Pool == "" {
+		return bad("it names its pool")
+	}
+	flags := fields[4:]
+	for i, f := range flags {
+		switch {
+		case f == "private" && i == 0 && !r.Private:
+			r.Private = true
+		case f == "kept" && !r.Kept:
+			r.Kept = true
+		default:
+			return bad("its flags are private, then kept")
+		}
+	}
+	return r, nil
 }
 
 type poolFlags []pool.Spec
@@ -52,19 +124,36 @@ func (p *poolFlags) Set(value string) error {
 	return nil
 }
 
-// Usage is the command line `serve` accepts.
-const Usage = "cyfr-locus serve --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]"
+type roleFlags []RoleSpec
 
-// ParseArgs parses the arguments after `serve`. Pools may repeat but must
-// have distinct names and disjoint ranges.
+func (r *roleFlags) String() string { return fmt.Sprint(*r) }
+
+func (r *roleFlags) Set(value string) error {
+	spec, err := ParseRole(value)
+	if err != nil {
+		return err
+	}
+	*r = append(*r, spec)
+	return nil
+}
+
+// Usage is the command line `serve` accepts.
+const Usage = "cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> -- <command> [args…]"
+
+// ParseArgs parses the arguments after `serve`. Pools and roles may repeat:
+// pools with distinct names and disjoint ranges, roles with distinct names,
+// uids and ports, each role's uid outside every pool and the kept range,
+// and each pool named by exactly one role. At most one role is kept, and it
+// names a routed pool; --kept-homes is given exactly when one is.
 func ParseArgs(args []string) (Config, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var cfg Config
 	var pools poolFlags
+	var roles roleFlags
+	fs.Var(&roles, "role", "a role process, <name>:<uid>:<port>:<pool>[:private][:kept]")
 	fs.Var(&pools, "pool", "a uid pool and its spaces' reach, <name>:<first>-<last>:<relay|routed>")
-	fs.StringVar(&cfg.HomeRoot, "home-root", "", "directory holding the spawned processes' homes")
-	fs.StringVar(&cfg.ClientUser, "client-user", "", "user the client command runs as")
+	fs.StringVar(&cfg.HomeRoot, "home-root", "", "directory holding a folder of each role's spawns' homes")
 	var kept string
 	fs.StringVar(&kept, "kept-homes", "", "the kept-homes root and the uids its homes own, <dir>:<first>-<last>")
 	fs.StringVar(&cfg.Guard, "guard", "", "the socket of the island's egress guard's control")
@@ -79,9 +168,10 @@ func ParseArgs(args []string) (Config, error) {
 		cfg.Kept = &k
 	}
 	cfg.Pools = pools
-	cfg.ClientArgv = fs.Args()
-	if len(args) < len(cfg.ClientArgv)+1 || args[len(args)-len(cfg.ClientArgv)-1] != "--" {
-		return Config{}, errors.New("the client command must follow --")
+	cfg.Roles = roles
+	cfg.Command = fs.Args()
+	if len(args) < len(cfg.Command)+1 || args[len(args)-len(cfg.Command)-1] != "--" {
+		return Config{}, errors.New("the roles' command must follow --")
 	}
 
 	if len(cfg.Pools) == 0 {
@@ -97,6 +187,9 @@ func ParseArgs(args []string) (Config, error) {
 			}
 		}
 	}
+	if err := checkRoles(cfg); err != nil {
+		return Config{}, err
+	}
 	if !filepath.IsAbs(cfg.HomeRoot) || filepath.Clean(cfg.HomeRoot) != cfg.HomeRoot {
 		return Config{}, errors.New("--home-root must be a clean absolute path")
 	}
@@ -110,24 +203,81 @@ func ParseArgs(args []string) (Config, error) {
 			return Config{}, errors.New("--kept-homes and --home-root must not hold one another")
 		}
 	}
-	if cfg.Guard != "" && (!filepath.IsAbs(cfg.Guard) || filepath.Clean(cfg.Guard) != cfg.Guard) {
+	if cfg.Guard == "" {
+		return Config{}, errors.New("every role's space is routed through its island's guard: --guard is required")
+	}
+	if !filepath.IsAbs(cfg.Guard) || filepath.Clean(cfg.Guard) != cfg.Guard {
 		return Config{}, errors.New("--guard must be a clean absolute path")
 	}
-	switch routed := cfg.Routed(); {
-	case routed && cfg.Guard == "":
-		return Config{}, errors.New("a routed pool's spaces leave through their island's guard: --guard is required")
-	case !routed && cfg.Guard != "":
-		return Config{}, errors.New("--guard is given and no pool is routed")
-	case !routed && cfg.Kept != nil:
-		return Config{}, errors.New("--kept-homes is given and no pool is routed: a program's session leaves through its island's guard")
-	}
-	if cfg.ClientUser == "" {
-		return Config{}, errors.New("--client-user is required")
-	}
-	if len(cfg.ClientArgv) == 0 || cfg.ClientArgv[0] == "" {
-		return Config{}, errors.New("a client command is required after --")
+	if len(cfg.Command) == 0 || cfg.Command[0] == "" {
+		return Config{}, errors.New("the roles' command is required after --")
 	}
 	return cfg, nil
+}
+
+// checkRoles refuses roles that are not each their own: see ParseArgs.
+func checkRoles(cfg Config) error {
+	if len(cfg.Roles) == 0 {
+		return errors.New("at least one --role is required")
+	}
+	var kept *RoleSpec
+	for i, r := range cfg.Roles {
+		for _, other := range cfg.Roles[:i] {
+			switch {
+			case r.Name == other.Name:
+				return fmt.Errorf("role %s is named twice", r.Name)
+			case r.UID == other.UID:
+				return fmt.Errorf("roles %s and %s share uid %d", other.Name, r.Name, r.UID)
+			case r.Port == other.Port:
+				return fmt.Errorf("roles %s and %s share port %d", other.Name, r.Name, r.Port)
+			case r.Pool == other.Pool:
+				return fmt.Errorf("roles %s and %s share pool %s", other.Name, r.Name, r.Pool)
+			}
+		}
+		spec, known := poolOf(cfg.Pools, r.Pool)
+		if !known {
+			return fmt.Errorf("role %s names pool %s, which no --pool declares", r.Name, r.Pool)
+		}
+		for _, p := range cfg.Pools {
+			if p.Contains(r.UID) {
+				return fmt.Errorf("pool %s contains role %s's uid %d", p.Name, r.Name, r.UID)
+			}
+		}
+		if k := cfg.Kept; k != nil && k.Contains(r.UID) {
+			return fmt.Errorf("the kept-home uids %d-%d hold role %s's uid %d", k.First, k.Last, r.Name, r.UID)
+		}
+		if r.Kept {
+			if kept != nil {
+				return fmt.Errorf("roles %s and %s are both kept", kept.Name, r.Name)
+			}
+			if !spec.Routed() {
+				return fmt.Errorf("role %s is kept and its pool %s is not routed: a program's session leaves through its island's guard", r.Name, r.Pool)
+			}
+			kept = &cfg.Roles[i]
+		}
+	}
+	for _, p := range cfg.Pools {
+		if !slices.ContainsFunc(cfg.Roles, func(r RoleSpec) bool { return r.Pool == p.Name }) {
+			return fmt.Errorf("pool %s is named by no --role", p.Name)
+		}
+	}
+	switch {
+	case kept != nil && cfg.Kept == nil:
+		return fmt.Errorf("role %s is kept and no --kept-homes is given", kept.Name)
+	case kept == nil && cfg.Kept != nil:
+		return errors.New("--kept-homes is given and no role is kept")
+	}
+	return nil
+}
+
+// poolOf is the pool of pools named name.
+func poolOf(pools []pool.Spec, name string) (pool.Spec, bool) {
+	for _, spec := range pools {
+		if spec.Name == name {
+			return spec, true
+		}
+	}
+	return pool.Spec{}, false
 }
 
 // Routed reports whether some pool is routed.
@@ -157,54 +307,56 @@ type Lookup struct {
 // SystemLookup reads the system user database.
 var SystemLookup = Lookup{ByName: user.Lookup, ByID: user.LookupId}
 
-// ResolveAccounts resolves the client user and every pooled uid. A pooled
-// uid without a user entry is named by its number and takes its own number
-// as gid. The client and every pooled uid must be non-root, no pooled uid
-// may be the client's, and every pooled gid must be distinct, non-root and
-// not the client's, so no spawned process shares a group with another or
-// with the client.
-func ResolveAccounts(cfg Config, lookup Lookup) (Account, map[int]Account, error) {
-	u, err := lookup.ByName(cfg.ClientUser)
-	if err != nil {
-		return Account{}, nil, fmt.Errorf("client user %s: %w", cfg.ClientUser, err)
-	}
-	client, err := toAccount(u)
-	if err != nil {
-		return Account{}, nil, fmt.Errorf("client user %s: %w", cfg.ClientUser, err)
-	}
-	if client.UID == 0 || client.GID == 0 {
-		return Account{}, nil, fmt.Errorf("client user %s must not be root or in group 0", cfg.ClientUser)
+// ResolveAccounts resolves each role's account and every pooled uid. A
+// role's account is its uid, as its gid, under its user name (RoleSpec.User):
+// a user entry of that uid must say the same. A pooled uid without a user
+// entry is named by its number and takes its own number as gid. Every
+// pooled gid must be distinct, non-root and no role's, so no spawned
+// process shares a group with another or with a role.
+func ResolveAccounts(cfg Config, lookup Lookup) ([]Account, map[int]Account, error) {
+	roles := make([]Account, len(cfg.Roles))
+	roleGIDs := map[int]string{}
+	for i, r := range cfg.Roles {
+		acct := Account{UID: r.UID, GID: r.UID, Name: r.User()}
+		if u, err := lookup.ByID(strconv.Itoa(r.UID)); err == nil {
+			found, err := toAccount(u)
+			if err != nil {
+				return nil, nil, fmt.Errorf("role %s's uid %d: %w", r.Name, r.UID, err)
+			}
+			if found.Name != acct.Name || found.GID != acct.GID {
+				return nil, nil, fmt.Errorf("role %s's uid %d is the user %s of gid %d, not %s of gid %d", r.Name, r.UID, found.Name, found.GID, acct.Name, acct.GID)
+			}
+		}
+		roles[i] = acct
+		roleGIDs[acct.GID] = r.Name
 	}
 
 	accounts := map[int]Account{}
 	gids := map[int]int{}
 	for _, spec := range cfg.Pools {
-		if spec.Contains(client.UID) {
-			return Account{}, nil, fmt.Errorf("pool %s contains the client uid %d", spec.Name, client.UID)
-		}
 		for uid := spec.First; uid <= spec.Last; uid++ {
 			acct := Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
 			if u, err := lookup.ByID(strconv.Itoa(uid)); err == nil {
 				if acct, err = toAccount(u); err != nil {
-					return Account{}, nil, fmt.Errorf("uid %d: %w", uid, err)
+					return nil, nil, fmt.Errorf("uid %d: %w", uid, err)
 				}
 			}
-			if acct.GID == 0 || acct.GID == client.GID {
-				return Account{}, nil, fmt.Errorf("uid %d has gid %d, which is root's or the client's", uid, acct.GID)
+			if role, taken := roleGIDs[acct.GID]; acct.GID == 0 || taken {
+				return nil, nil, fmt.Errorf("uid %d has gid %d, which is root's or role %s's", uid, acct.GID, role)
 			}
 			if other, taken := gids[acct.GID]; taken {
-				return Account{}, nil, fmt.Errorf("uids %d and %d share gid %d", other, uid, acct.GID)
+				return nil, nil, fmt.Errorf("uids %d and %d share gid %d", other, uid, acct.GID)
 			}
 			gids[acct.GID] = uid
 			accounts[uid] = acct
 		}
 	}
 	if k := cfg.Kept; k != nil {
-		if err := checkKeptUIDs(*k, client, gids, lookup); err != nil {
-			return Account{}, nil, err
+		if err := checkKeptUIDs(*k, roleGIDs, gids, lookup); err != nil {
+			return nil, nil, err
 		}
 	}
-	return client, accounts, nil
+	return roles, accounts, nil
 }
 
 // KeptAccount is the account a kept home's uid runs as: no user entry, its
@@ -213,13 +365,14 @@ func KeptAccount(uid int) Account {
 	return Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
 }
 
-// checkKeptUIDs refuses a kept-home range that holds the client's uid or
-// gid, a pooled gid, or a uid with a user entry: a kept home's uid runs as
-// KeptAccount, so its gid is its own number, which no other account may
-// hold.
-func checkKeptUIDs(k home.Kept, client Account, poolGIDs map[int]int, lookup Lookup) error {
-	if k.Contains(client.UID) || k.Contains(client.GID) {
-		return fmt.Errorf("the kept-home uids %d-%d hold the client's uid or gid", k.First, k.Last)
+// checkKeptUIDs refuses a kept-home range that holds a role's gid, a pooled
+// gid, or a uid with a user entry: a kept home's uid runs as KeptAccount, so
+// its gid is its own number, which no other account may hold.
+func checkKeptUIDs(k home.Kept, roleGIDs map[int]string, poolGIDs map[int]int, lookup Lookup) error {
+	for gid, role := range roleGIDs {
+		if k.Contains(gid) {
+			return fmt.Errorf("the kept-home uids %d-%d hold role %s's gid %d", k.First, k.Last, role, gid)
+		}
 	}
 	for gid := range poolGIDs {
 		if k.Contains(gid) {
@@ -266,10 +419,10 @@ func parseID(s string) (int, error) {
 // EnvPrefix is the prefix of the keeper's own variable names.
 const EnvPrefix = "KEEPER_"
 
-// DeclaredEnv are the KEEPER_ names the keeper knows: ChannelEnv, which it
-// sets for its client; an inherited value is replaced, never read
-// (ClientEnviron).
-var DeclaredEnv = []string{protocol.ChannelEnv}
+// DeclaredEnv are the KEEPER_ names the keeper knows: ChannelEnv and
+// RunDirEnv, which it sets for each role; an inherited value is replaced,
+// never read (RoleEnviron).
+var DeclaredEnv = []string{protocol.ChannelEnv, protocol.RunDirEnv}
 
 // CheckEnviron is the one reader of the keeper's KEEPER_ environment: it
 // refuses every KEEPER_ name DeclaredEnv does not hold, naming each, so a
@@ -291,24 +444,104 @@ func CheckEnviron(environ []string) error {
 		strings.Join(slices.Compact(unknown), ", "), strings.Join(DeclaredEnv, ", "))
 }
 
-// ClientEnviron is the client's environment: the keeper's own, with HOME,
-// USER and LOGNAME describing the client user and protocol.ChannelEnv
-// naming the channel socket on fd 3.
-func ClientEnviron(environ []string, client Account, channel string) []string {
-	out := make([]string, 0, len(environ)+5)
+// releaseEnv are the image's locale and release variables every role
+// process is given as the keeper has them.
+var releaseEnv = []string{"LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS", "RELEASE_DISTRIBUTION", "PATH"}
+
+// Limit variables are the keeper's alone: a role's bounds, which its group
+// holds and the role never reads.
+const (
+	memoryLimitEnv = "MEMORY_LIMIT"
+	cpuLimitEnv    = "CPU_LIMIT"
+)
+
+// RoleEnviron is a role process's whole environment, built from nothing:
+// releaseEnv's variables as environ has them, every variable of the role's
+// own (LOCUS_<NAME>_…, its key among them) but its limits, every LOCUS_LOG_
+// variable, RELEASE_TMP and HOME naming its run folder, ChannelEnv naming
+// its channel socket and RunDirEnv its run folder. No other role's variable
+// reaches it.
+func RoleEnviron(environ []string, r RoleSpec, runDir, channel string) map[string]string {
+	env := map[string]string{}
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		switch name {
-		case "HOME", "USER", "LOGNAME", protocol.ChannelEnv:
+		name, value, _ := strings.Cut(kv, "=")
+		own, isOwn := strings.CutPrefix(name, r.envPrefix())
+		switch {
+		case slices.Contains(releaseEnv, name), strings.HasPrefix(name, "LOCUS_LOG_"):
+		case isOwn && own != memoryLimitEnv && own != cpuLimitEnv:
+		default:
 			continue
 		}
-		out = append(out, kv)
+		env[name] = value
 	}
-	dir := client.Home
-	if dir == "" {
-		dir = "/"
+	env["RELEASE_TMP"] = runDir
+	env["HOME"] = runDir
+	env[protocol.ChannelEnv] = channel
+	env[protocol.RunDirEnv] = runDir
+	return env
+}
+
+// Keyed reports whether environ holds the role's key, not empty.
+func Keyed(environ []string, r RoleSpec) bool {
+	for _, kv := range environ {
+		if name, value, _ := strings.Cut(kv, "="); name == r.KeyEnv() && value != "" {
+			return true
+		}
 	}
-	return append(out, "HOME="+dir, "USER="+client.Name, "LOGNAME="+client.Name, protocol.ChannelEnv+"="+channel)
+	return false
+}
+
+var (
+	sizePattern = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)([bkmgt]?)$`)
+	cpusPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+	sizeUnits   = map[string]int64{"": 1, "b": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}
+)
+
+// RoleLimits reads the role's bounds from environ, as Docker reads a
+// container's: LOCUS_<NAME>_MEMORY_LIMIT a size, a number with an optional
+// unit b, k, m, g or t of either case, binary multiples, at least a page;
+// LOCUS_<NAME>_CPU_LIMIT a number of processors, such as 2 or 0.5, at least
+// a hundredth of one. Each absent or empty is no bound; anything else is
+// refused by its name, never its value.
+func RoleLimits(environ []string, r RoleSpec) (cgroup.Limits, error) {
+	var l cgroup.Limits
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if value == "" {
+			continue
+		}
+		switch name {
+		case r.envPrefix() + memoryLimitEnv:
+			m := sizePattern.FindStringSubmatch(strings.ToLower(value))
+			bytes, ok := new(big.Rat), m != nil
+			if ok {
+				_, ok = bytes.SetString(m[1])
+			}
+			if ok {
+				bytes.Mul(bytes, new(big.Rat).SetInt64(sizeUnits[m[2]]))
+				ok = bytes.IsInt() && bytes.Num().IsUint64() && bytes.Num().Uint64() >= 4096
+			}
+			if !ok {
+				return cgroup.Limits{}, fmt.Errorf("%s is not a size of at least 4096 bytes, such as 4G or 512m", name)
+			}
+			l.MemoryBytes = bytes.Num().Uint64()
+		case r.envPrefix() + cpuLimitEnv:
+			cpus, ok := new(big.Rat), cpusPattern.MatchString(value)
+			if ok {
+				_, ok = cpus.SetString(value)
+			}
+			quota := new(big.Rat)
+			if ok {
+				quota.Mul(cpus, new(big.Rat).SetInt64(cgroup.CPUPeriod))
+				ok = quota.IsInt() && quota.Num().IsUint64() && quota.Num().Uint64() >= cgroup.CPUPeriod/100
+			}
+			if !ok {
+				return cgroup.Limits{}, fmt.Errorf("%s is not a number of processors of at least 0.01 in hundred-thousandths, such as 2 or 0.5", name)
+			}
+			l.CPUQuota = quota.Num().Uint64()
+		}
+	}
+	return l, nil
 }
 
 // PoolAccounts is the set of pooled uids and gids.

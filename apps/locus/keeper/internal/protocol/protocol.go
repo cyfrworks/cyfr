@@ -2,8 +2,16 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
-// client over the inherited socket (fd 3): one JSON object per line, each
-// carrying `"v": 5` and a `type`.
+// clients, one role process each, over each one's inherited socket (fd 3):
+// one JSON object per line, each carrying `"v": 5` and a `type`.
+//
+// Each role's channel is its own. A request names only what is its role's:
+// a pool another role draws from is unknown (CodeUnknownPool), a spawn
+// another role holds unknown (CodeUnknownSpawn), a place another role holds
+// absent, as it is to a spawn, an assign and a measure, and a kept home on
+// a role whose sessions keep none unavailable (CodeUnavailable). Every
+// reply and every report of a spawn goes to the channel of the role that
+// asked for it.
 //
 // Client to keeper:
 //
@@ -74,7 +82,7 @@
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
-// TMPDIR): nothing of the keeper's or the client's environment is
+// TMPDIR): nothing of the keeper's or any client's environment is
 // inherited, so the request names exactly the variables that reach the
 // command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
 // refused.
@@ -127,7 +135,8 @@
 // closes the command's reading side, so the command reads end of file. A
 // `release` ends the channel with the command's processes. Any pool may
 // serve such a spawn; a long-lived command is ended only by a `release`, by
-// its own exit or by the loss of the client, whichever pool it came from.
+// its own exit or by the end of the client that asked for it, whichever
+// pool it came from.
 //
 // Every spawn's command runs in a space of its own: a user, network and
 // IPC namespace cloned for it, whose only mapping is its uid and gid to
@@ -265,6 +274,11 @@ const (
 
 // ChannelEnv is the client environment variable naming the channel socket.
 const ChannelEnv = "KEEPER_CHANNEL"
+
+// RunDirEnv is the client environment variable naming its role's run
+// folder, which is at the same path inside its space and outside it: the
+// client listens there for its spawns' relays.
+const RunDirEnv = "KEEPER_RUN_DIR"
 
 // Message types.
 const (

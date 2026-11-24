@@ -271,7 +271,7 @@ func TestASignalReachesTheCommandInsideItsSpace(t *testing.T) {
 	k := newKeeper(t).withMemory(t)
 	id, uid, rc := k.spawn(t, "t", `trap 'echo got:TERM; exit 0' TERM; echo ready; while :; do sleep 0.05; done`, map[string]string{}, false)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
-	k.s.handle(parsed(t, `{"v":`+strconv.Itoa(protocol.Version)+`,"type":"signal","spawn_id":"`+id+`","sig":"SIGTERM"}`))
+	k.s.handle(k.c, parsed(t, `{"v":`+strconv.Itoa(protocol.Version)+`,"type":"signal","spawn_id":"`+id+`","sig":"SIGTERM"}`))
 	rc.readUntil(t, func() bool { return false })
 	if got := string(rc.got[frame.StreamStdout]); !strings.Contains(got, "got:TERM\n") {
 		t.Fatalf("stdout %q", got)
@@ -366,7 +366,7 @@ wait`
 	id, rc := k.spawnKept(t, "c", script, path, uid)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
 	grace := int64(5000)
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
 	rc.readUntil(t, func() bool { return false })
 	if got := string(rc.got[frame.StreamStdout]); got != "ready\nbye\n" {
 		t.Fatalf("the closed session said %q", got)
@@ -389,7 +389,7 @@ func TestAKeptCloseEndsWhatTheCommandLeftInItsTurn(t *testing.T) {
 	id, rc := k.spawnKept(t, "o", script, path, uid)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
 	grace := int64(5000)
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
 	rc.readUntil(t, func() bool { return false })
 	if got := string(rc.got[frame.StreamStdout]); got != "ready\nbye\n" {
 		t.Fatalf("the closed session said %q", got)
@@ -464,7 +464,7 @@ X
 			id, rc := k.spawnKept(t, "p", script, path, uid)
 			rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
 			grace := int64(5000)
-			k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+			k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
 			rc.readUntil(t, func() bool { return false })
 			if got := string(rc.got[frame.StreamStdout]); got != "ready\nstored\n" {
 				t.Fatalf("the closed session said %q, want the program's orderly end", got)
@@ -496,7 +496,7 @@ while :; do sleep 0.05; done`
 	id, rc := k.spawnKept(t, "o", script, path, uid)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
 	grace := int64(5000)
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
 	rc.readUntil(t, func() bool { return false })
 	if got := string(rc.got[frame.StreamStdout]); got != "ready\nflushed\n" {
 		t.Fatalf("the closed session said %q, want its helper's orderly end", got)
@@ -531,7 +531,7 @@ echo after`
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
 	grace := int64(5000)
 	began := time.Now()
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
 	rc.readUntil(t, func() bool { return false })
 	if got := string(rc.got[frame.StreamStdout]); got != "ready\ngrand:asked\n" || time.Since(began) > 4*time.Second {
 		t.Fatalf("the closed session said %q after %s", got, time.Since(began))

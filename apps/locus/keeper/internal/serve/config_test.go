@@ -4,68 +4,106 @@
 package serve
 
 import (
-	"errors"
 	"os/user"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
 )
 
+// theRoles is the image's command line, before its pools.
+const theRoles = "--role runtime:10011:4200:runner:private --role builds:10012:4100:build --role backends:10013:4101:backends:kept " +
+	"--pool runner:30101-30108:relay --pool build:30001-30016:routed --pool backends:20001-20032:routed " +
+	"--home-root /var/lib/locus/homes --kept-homes /var/lib/locus/kept:40001-49999 --guard /run/g/guard.sock"
+
 func TestParseArgs(t *testing.T) {
-	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032:routed --home-root /var/lib/locus/homes --guard /run/g/guard.sock --client-user locus -- /app/bin/locus start"))
+	cfg, err := ParseArgs(strings.Fields(theRoles + " -- /app/bin/locus start"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Config{
-		Pools:      []pool.Spec{{Name: "backends", First: 20001, Last: 20032, Reach: pool.ReachRouted}},
-		HomeRoot:   "/var/lib/locus/homes",
-		ClientUser: "locus",
-		ClientArgv: []string{"/app/bin/locus", "start"},
-		Guard:      "/run/g/guard.sock",
+		Pools: []pool.Spec{
+			{Name: "runner", First: 30101, Last: 30108, Reach: pool.ReachRelay},
+			{Name: "build", First: 30001, Last: 30016, Reach: pool.ReachRouted},
+			{Name: "backends", First: 20001, Last: 20032, Reach: pool.ReachRouted},
+		},
+		Roles: []RoleSpec{
+			{Name: "runtime", UID: 10011, Port: 4200, Pool: "runner", Private: true},
+			{Name: "builds", UID: 10012, Port: 4100, Pool: "build"},
+			{Name: "backends", UID: 10013, Port: 4101, Pool: "backends", Kept: true},
+		},
+		HomeRoot: "/var/lib/locus/homes",
+		Command:  []string{"/app/bin/locus", "start"},
+		Kept:     &home.Kept{Root: "/var/lib/locus/kept", First: 40001, Last: 49999},
+		Guard:    "/run/g/guard.sock",
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("config %+v", cfg)
 	}
-
-	two, err := ParseArgs(strings.Fields("--pool a:100-199:relay --pool b:200-299:relay --home-root /h --client-user c -- run --flag"))
-	if err != nil || len(two.Pools) != 2 || !reflect.DeepEqual(two.ClientArgv, []string{"run", "--flag"}) {
-		t.Fatalf("two pools: %+v %v", two, err)
+	if cfg.Roles[1].KeyEnv() != "LOCUS_BUILDS_KEY" || cfg.Roles[1].User() != "locus-builds" {
+		t.Fatalf("role builds: key %s, user %s", cfg.Roles[1].KeyEnv(), cfg.Roles[1].User())
 	}
 
-	// The locus-runtime service's command line: the runner pool's spaces
-	// reach nothing but their relays, and the keeper has no guard.
-	relay, err := ParseArgs(strings.Fields("--pool runner:30101-30108:relay --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
-	if err != nil || !reflect.DeepEqual(relay.Pools, []pool.Spec{{Name: "runner", First: 30101, Last: 30108, Reach: pool.ReachRelay}}) {
-		t.Fatalf("a relay pool: %+v %v", relay, err)
+	one, err := ParseArgs(strings.Fields("--role a:100:4000:p --pool p:200-299:relay --home-root /h --guard /g -- run --flag"))
+	if err != nil || len(one.Roles) != 1 || one.Kept != nil || !reflect.DeepEqual(one.Command, []string{"run", "--flag"}) {
+		t.Fatalf("one role: %+v %v", one, err)
 	}
-	if relay.Routed() || !cfg.Routed() {
+	if one.Routed() || !cfg.Routed() {
 		t.Fatal("Routed does not say whether some pool is routed")
 	}
 }
 
+func TestParseRoleRefusals(t *testing.T) {
+	for _, value := range []string{
+		"a:100:4000", "a:100:4000:p:private:kept:x", "A:100:4000:p", "a_b:100:4000:p", "log:100:4000:p", "1a:100:4000:p",
+		"a:0:4000:p", "a:-1:4000:p", "a:4294967295:4000:p", "a:x:4000:p", "a:100:0:p", "a:100:65536:p", "a:100:04000:p",
+		"a:100:4000:", "a:100:4000:p:kept:private", "a:100:4000:p:private:private", "a:100:4000:p:kept:kept", "a:100:4000:p:shared",
+	} {
+		if r, err := ParseRole(value); err == nil {
+			t.Errorf("role %q accepted as %+v", value, r)
+		}
+	}
+}
+
 func TestParseArgsRefusals(t *testing.T) {
+	const pools = " --pool p:200-299:routed --pool q:300-399:relay --home-root /h --guard /g"
 	for _, args := range []string{
-		"--home-root /h --client-user c -- run",
-		"--pool a:100-199:relay --client-user c -- run",
-		"--pool a:100-199:relay --home-root h --client-user c -- run",
-		"--pool a:100-199:relay --home-root /h/ --client-user c -- run",
-		"--pool a:100-199:relay --home-root /h -- run",
-		"--pool a:100-199:relay --home-root /h --client-user c --",
-		"--pool a:100-199:relay --home-root /h --client-user c run",
-		"--pool a:100-199:relay --pool a:200-299:relay --home-root /h --client-user c -- run",
-		"--pool a:100-199:relay --pool b:150-299:relay --home-root /h --client-user c -- run",
-		"--pool a:0-199:relay --home-root /h --client-user c -- run",
-		"--pool a:100-199:relay --home-root /h --client-user c --unknown x -- run",
-		// A pool with no reach, a routed pool without its guard, a guard
-		// with no routed pool, and kept homes outside a routed keeper.
-		"--pool a:100-199 --home-root /h --client-user c -- run",
-		"--pool a:100-199:routed --home-root /h --client-user c -- run",
-		"--pool a:100-199:relay --home-root /h --guard /g/s --client-user c -- run",
-		"--pool a:100-199:relay --home-root /h --kept-homes /k:400-499 --client-user c -- run",
+		"--home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:300-399:relay --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:300-399:relay --home-root h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:300-399:relay --home-root /h/ --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q" + pools + " --",
+		"--role a:100:4000:p --role b:101:4001:q" + pools + " run",
+		"--role a:100:4000:p --role b:101:4001:q" + pools + " --unknown x -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool p:300-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:250-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:0-199:relay --pool q:300-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299 --pool q:300-399:relay --home-root /h --guard /g -- run",
+		// Every role's space is routed: the guard is required.
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:routed --pool q:300-399:relay --home-root /h -- run",
+		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:routed --pool q:300-399:relay --home-root /h --guard g -- run",
+		// The roles are each their own.
+		"--pool p:200-299:routed --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role a:101:4001:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:100:4001:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4000:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4001:p" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4001:r" + pools + " -- run",
+		"--role a:100:4000:p" + pools + " -- run",
+		"--role a:250:4000:p --role b:101:4001:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:301:4001:q" + pools + " -- run",
+		// Kept on one role of a routed pool, with --kept-homes, and its
+		// range holds no role's uid.
+		"--role a:100:4000:p:kept --role b:101:4001:q:kept" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:100:4000:p --role b:101:4001:q:kept" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:100:4000:p:kept --role b:101:4001:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4001:q" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:450:4000:p:kept --role b:101:4001:q" + pools + " --kept-homes /k:400-499 -- run",
 	} {
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
 			t.Errorf("%q accepted", args)
@@ -100,16 +138,21 @@ func poolUser(uid int, gid int) user.User {
 	return user.User{Uid: strconv.Itoa(uid), Gid: strconv.Itoa(gid), Username: name, HomeDir: "/nonexistent"}
 }
 
-var locusUser = user.User{Uid: "10001", Gid: "10001", Username: "locus", HomeDir: "/nonexistent"}
+// roleUser is the image's user entry of a role.
+func roleUser(name string, uid int) user.User {
+	return user.User{Uid: strconv.Itoa(uid), Gid: strconv.Itoa(uid), Username: "locus-" + name, HomeDir: "/nonexistent"}
+}
+
+var twoRoles = []RoleSpec{{Name: "runtime", UID: 10011, Pool: "runner"}, {Name: "backends", UID: 10013, Pool: "backends"}}
 
 func TestResolveAccounts(t *testing.T) {
-	cfg := Config{Pools: []pool.Spec{{Name: "backends", First: 20001, Last: 20003}}, ClientUser: "locus"}
-	client, accounts, err := ResolveAccounts(cfg, fakeLookup(locusUser, poolUser(20001, 20001), poolUser(20002, 20002)))
+	cfg := Config{Pools: []pool.Spec{{Name: "backends", First: 20001, Last: 20003}}, Roles: twoRoles}
+	roles, accounts, err := ResolveAccounts(cfg, fakeLookup(roleUser("runtime", 10011), poolUser(20001, 20001), poolUser(20002, 20002)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client != (Account{UID: 10001, GID: 10001, Name: "locus", Home: "/nonexistent"}) {
-		t.Fatalf("client %+v", client)
+	if !reflect.DeepEqual(roles, []Account{{UID: 10011, GID: 10011, Name: "locus-runtime"}, {UID: 10013, GID: 10013, Name: "locus-backends"}}) {
+		t.Fatalf("roles %+v", roles)
 	}
 	if accounts[20001].Name != "cyfr-b20001" || accounts[20002].GID != 20002 {
 		t.Fatalf("named accounts %+v", accounts)
@@ -120,59 +163,101 @@ func TestResolveAccounts(t *testing.T) {
 }
 
 func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
-	pools := []pool.Spec{{Name: "backends", First: 20001, Last: 20002}}
-	cases := map[string]struct {
-		cfg   Config
-		users []user.User
-	}{
-		"unknown client": {Config{Pools: pools, ClientUser: "nobody-here"}, nil},
-		"root client": {Config{Pools: pools, ClientUser: "root"},
-			[]user.User{{Uid: "0", Gid: "0", Username: "root"}}},
-		"client in group 0": {Config{Pools: pools, ClientUser: "locus"},
-			[]user.User{{Uid: "10001", Gid: "0", Username: "locus"}}},
-		"client uid in a pool": {Config{Pools: []pool.Spec{{Name: "p", First: 10000, Last: 10002}}, ClientUser: "locus"},
-			[]user.User{locusUser}},
-		"pool uid in group 0": {Config{Pools: pools, ClientUser: "locus"},
-			[]user.User{locusUser, poolUser(20001, 0)}},
-		"pool uid in the client's group": {Config{Pools: pools, ClientUser: "locus"},
-			[]user.User{locusUser, poolUser(20001, 10001)}},
-		"two pool uids share a group": {Config{Pools: pools, ClientUser: "locus"},
-			[]user.User{locusUser, poolUser(20001, 20002)}},
+	cfg := Config{Pools: []pool.Spec{{Name: "backends", First: 20001, Last: 20002}}, Roles: twoRoles}
+	cases := map[string][]user.User{
+		"a role's uid under another name": {{Uid: "10011", Gid: "10011", Username: "locus"}},
+		"a role's uid in another group":   {{Uid: "10011", Gid: "10001", Username: "locus-runtime"}},
+		"pool uid in group 0":             {poolUser(20001, 0)},
+		"pool uid in a role's group":      {poolUser(20001, 10013)},
+		"two pool uids share a group":     {poolUser(20001, 20002)},
 	}
-	for name, c := range cases {
-		if _, _, err := ResolveAccounts(c.cfg, fakeLookup(c.users...)); err == nil {
+	for name, users := range cases {
+		if _, _, err := ResolveAccounts(cfg, fakeLookup(users...)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 }
 
-func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
-	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_LOCUS_BACKENDS_KEY=t", "KEEPER_CHANNEL=socket:[1]", "LOGNAME=root"},
-		Account{Name: "locus", Home: "/nonexistent"}, "socket:[4242]")
-	want := []string{"PATH=/usr/bin", "CYFR_LOCUS_BACKENDS_KEY=t", "HOME=/nonexistent", "USER=locus", "LOGNAME=locus", "KEEPER_CHANNEL=socket:[4242]"}
+// A role's environment is built from nothing: its own variables but its
+// limits, the log's, the image's locale and release variables, and what
+// the keeper sets, its channel and run folder; never another role's.
+func TestRoleEnvironHoldsTheRolesOwnAndNothingOfAnothers(t *testing.T) {
+	environ := []string{
+		"PATH=/usr/bin", "HOME=/root", "USER=root", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "LANGUAGE=en", "ELIXIR_ERL_OPTIONS=+fnu",
+		"RELEASE_DISTRIBUTION=none", "RELEASE_TMP=/tmp", "HOSTNAME=locus", "CYFR_LOG_FORMAT=json",
+		"LOCUS_RUNTIME_KEY=rk", "LOCUS_RUNTIME_PORT=4200", "LOCUS_RUNTIME_MEMORY_LIMIT=4G", "LOCUS_RUNTIME_CPU_LIMIT=4",
+		"LOCUS_BUILDS_KEY=bk", "LOCUS_BUILDS_MEMORY_LIMIT=4G", "LOCUS_RUNTIMES_KEY=x", "LOCUS_LOG_LEVEL=info",
+		"KEEPER_CHANNEL=socket:[1]", "KEEPER_RUN_DIR=/elsewhere",
+	}
+	got := RoleEnviron(environ, RoleSpec{Name: "runtime"}, "/run/locus/runtime", "socket:[4242]")
+	want := map[string]string{
+		"PATH": "/usr/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LANGUAGE": "en", "ELIXIR_ERL_OPTIONS": "+fnu", "RELEASE_DISTRIBUTION": "none",
+		"LOCUS_RUNTIME_KEY": "rk", "LOCUS_RUNTIME_PORT": "4200", "LOCUS_LOG_LEVEL": "info",
+		"RELEASE_TMP": "/run/locus/runtime", "HOME": "/run/locus/runtime", "KEEPER_CHANNEL": "socket:[4242]", "KEEPER_RUN_DIR": "/run/locus/runtime",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ %q", got)
 	}
 }
 
+func TestKeyedNeedsTheRolesOwnKeyNotEmpty(t *testing.T) {
+	r := RoleSpec{Name: "builds"}
+	for environ, want := range map[string]bool{
+		"LOCUS_BUILDS_KEY=k": true, "LOCUS_BUILDS_KEY=": false, "LOCUS_RUNTIME_KEY=k": false, "LOCUS_BUILDS_KEYS=k": false,
+	} {
+		if got := Keyed([]string{environ}, r); got != want {
+			t.Errorf("Keyed(%q) = %t", environ, got)
+		}
+	}
+}
+
+// A role's bounds are read as Docker reads a container's, and anything
+// else refuses the boot by the variable's name.
+func TestRoleLimitsReadDockersSyntaxStrictly(t *testing.T) {
+	r := RoleSpec{Name: "runtime"}
+	for _, c := range []struct {
+		memory, cpu string
+		want        cgroup.Limits
+	}{
+		{"4G", "4", cgroup.Limits{MemoryBytes: 4 << 30, CPUQuota: 400_000}},
+		{"2g", "0.5", cgroup.Limits{MemoryBytes: 2 << 30, CPUQuota: 50_000}},
+		{"512M", "1.25", cgroup.Limits{MemoryBytes: 512 << 20, CPUQuota: 125_000}},
+		{"1.5g", "0.01", cgroup.Limits{MemoryBytes: 3 << 29, CPUQuota: 1_000}},
+		{"8192", "", cgroup.Limits{MemoryBytes: 8192}},
+		{"64k", "", cgroup.Limits{MemoryBytes: 64 << 10}},
+		{"1t", "", cgroup.Limits{MemoryBytes: 1 << 40}},
+		{"", "", cgroup.Limits{}},
+	} {
+		environ := []string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + c.memory, "LOCUS_RUNTIME_CPU_LIMIT=" + c.cpu, "LOCUS_BUILDS_MEMORY_LIMIT=nonsense"}
+		got, err := RoleLimits(environ, r)
+		if err != nil || got != c.want {
+			t.Errorf("memory %q, cpu %q: %+v, %v", c.memory, c.cpu, got, err)
+		}
+	}
+	for _, bad := range []string{"0", "4096b0", "4 G", "4GB", "4Gi", "-4G", "4x", ".5g", "1.", "0.3b", "4095", "99999999999t"} {
+		if _, err := RoleLimits([]string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_MEMORY_LIMIT") || strings.Contains(err.Error(), strconv.Quote(bad)) {
+			t.Errorf("memory %q: %v", bad, err)
+		}
+	}
+	for _, bad := range []string{"0", "0.009", "0.000001", "-1", "1e2", "two", "2 ", ".5", "0x2"} {
+		if _, err := RoleLimits([]string{"LOCUS_RUNTIME_CPU_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_CPU_LIMIT") {
+			t.Errorf("cpu %q: %v", bad, err)
+		}
+	}
+}
+
 func TestParseArgsKeptHomes(t *testing.T) {
-	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032:routed --home-root /var/lib/locus/homes --kept-homes /var/lib/locus/kept:40001-49999 --guard /run/g/guard.sock --client-user locus -- /app/bin/locus start"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Kept == nil || *cfg.Kept != (home.Kept{Root: "/var/lib/locus/kept", First: 40001, Last: 49999}) {
-		t.Fatalf("kept homes %+v", cfg.Kept)
-	}
 	for _, kept := range []string{
-		"/var/lib/locus/kept:20030-20040",       // overlaps the pool
+		"/var/lib/locus/kept:20030-20040",       // overlaps a pool
 		"/var/lib/locus/homes/kept:40001-40002", // inside the home root
 		"/var/lib/locus:40001-40002",            // holds the home root
 		"kept:40001-40002",                      // relative
 		"/var/lib/locus/kept:40002-40001",       // falling
 		"/var/lib/locus/kept:1-70000",           // too many
 		"/var/lib/locus/kept",                   // no range
+		"/var/lib/locus/kept:10010-10020",       // holds a role's uid
 	} {
-		args := "--pool backends:20001-20032:routed --home-root /var/lib/locus/homes --guard /run/g/guard.sock --kept-homes " + kept + " --client-user locus -- run"
+		args := strings.Replace(theRoles, "/var/lib/locus/kept:40001-49999", kept, 1) + " -- run"
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
 			t.Errorf("--kept-homes %s accepted", kept)
 		}
@@ -182,20 +267,20 @@ func TestParseArgsKeptHomes(t *testing.T) {
 func TestResolveAccountsRefusesAKeptRangeSharingAnIdentity(t *testing.T) {
 	pools := []pool.Spec{{Name: "backends", First: 20001, Last: 20002}}
 	kept := func(first, last int) *home.Kept { return &home.Kept{Root: "/k", First: first, Last: last} }
-	ok := Config{Pools: pools, ClientUser: "locus", Kept: kept(40001, 40010)}
-	if _, _, err := ResolveAccounts(ok, fakeLookup(locusUser)); err != nil {
+	ok := Config{Pools: pools, Roles: twoRoles, Kept: kept(40001, 40010)}
+	if _, _, err := ResolveAccounts(ok, fakeLookup()); err != nil {
 		t.Fatalf("a kept range outside every identity: %v", err)
 	}
 	cases := map[string]struct {
 		kept  *home.Kept
 		users []user.User
 	}{
-		"the client's uid": {kept(10000, 10002), []user.User{locusUser}},
-		"a pooled gid":     {kept(40001, 40010), []user.User{locusUser, poolUser(20001, 40005)}},
-		"a user entry":     {kept(40001, 40010), []user.User{locusUser, poolUser(40007, 40007)}},
+		"a role's gid": {kept(10010, 10012), nil},
+		"a pooled gid": {kept(40001, 40010), []user.User{poolUser(20001, 40005)}},
+		"a user entry": {kept(40001, 40010), []user.User{poolUser(40007, 40007)}},
 	}
 	for name, c := range cases {
-		cfg := Config{Pools: pools, ClientUser: "locus", Kept: c.kept}
+		cfg := Config{Pools: pools, Roles: twoRoles, Kept: c.kept}
 		if _, _, err := ResolveAccounts(cfg, fakeLookup(c.users...)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
@@ -203,7 +288,7 @@ func TestResolveAccountsRefusesAKeptRangeSharingAnIdentity(t *testing.T) {
 }
 
 func TestCheckEnvironRefusesEveryUndeclaredKeeperVariableByName(t *testing.T) {
-	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]"}
+	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]", "KEEPER_RUN_DIR=/run/locus/x"}
 	if err := CheckEnviron(accepted); err != nil {
 		t.Fatalf("refused %q: %v", accepted, err)
 	}
@@ -227,49 +312,44 @@ func TestCheckEnvironRefusesEveryUndeclaredKeeperVariableByName(t *testing.T) {
 // uint32 credential, and 4294967295 is no id.
 func TestResolveAccountsRefusesAnIdOutsideTheLinuxRange(t *testing.T) {
 	pools := []pool.Spec{{Name: "backends", First: 20001, Last: 20001}}
+	roles := []RoleSpec{{Name: "runtime", UID: 10011, Pool: "backends"}}
 	for _, bad := range []string{"-1", "4294967295", "4294967296", "4294987297", "+10001"} {
-		client := locusUser
-		client.Uid = bad
-		clientGroup := locusUser
-		clientGroup.Gid = bad
+		roleGroup := roleUser("runtime", 10011)
+		roleGroup.Gid = bad
 		pooled := poolUser(20001, 20001)
 		pooled.Uid = bad
 		pooledGroup := poolUser(20001, 20001)
 		pooledGroup.Gid = bad
 		cases := map[string]Lookup{
-			"client uid": fakeLookup(client),
-			"client gid": fakeLookup(clientGroup),
+			"role gid":   fakeLookup(roleGroup),
 			"pooled uid": recordFor(pooled),
-			"pooled gid": fakeLookup(locusUser, pooledGroup),
+			"pooled gid": fakeLookup(pooledGroup),
 		}
 		for name, lookup := range cases {
-			_, _, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, lookup)
+			_, _, err := ResolveAccounts(Config{Pools: pools, Roles: roles}, lookup)
 			if err == nil || !strings.Contains(err.Error(), strconv.Quote(bad)+" is not an id from 0 to 4294967294") {
 				t.Errorf("%s %s: error %v", name, bad, err)
 			}
 		}
 	}
-	// The parser's refusal comes before any policy: a root uid with a
-	// bad gid is refused for its gid, not by the root check.
-	root := locusUser
-	root.Uid, root.Gid = "0", "-1"
-	_, _, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, fakeLookup(root))
-	if err == nil || !strings.Contains(err.Error(), `gid "-1" is not an id from 0 to 4294967294`) {
-		t.Errorf("a root uid with gid -1: error %v", err)
-	}
 	top := poolUser(20001, 4294967294)
-	_, accounts, err := ResolveAccounts(Config{Pools: pools, ClientUser: "locus"}, fakeLookup(locusUser, top))
+	_, accounts, err := ResolveAccounts(Config{Pools: pools, Roles: roles}, fakeLookup(top))
 	if err != nil || accounts[20001].GID != 4294967294 {
 		t.Fatalf("the highest gid: %+v, %v", accounts[20001], err)
 	}
 }
 
-// recordFor answers the client's name with locusUser and every uid with
-// record, whatever uid the record carries.
+// recordFor answers every uid with record, whatever uid the record
+// carries, but the role's, which has none.
 func recordFor(record user.User) Lookup {
 	return Lookup{
-		ByName: fakeLookup(locusUser).ByName,
-		ByID:   func(string) (*user.User, error) { return &record, nil },
+		ByName: fakeLookup().ByName,
+		ByID: func(uid string) (*user.User, error) {
+			if uid == "10011" {
+				return nil, user.UnknownUserIdError(10011)
+			}
+			return &record, nil
+		},
 	}
 }
 
@@ -277,13 +357,5 @@ func TestPoolAccountsNamesEveryPooledUidAndGid(t *testing.T) {
 	got := PoolAccounts(map[int]Account{20001: {UID: 20001, GID: 20001}, 20002: {UID: 20002, GID: 30002}})
 	if !got.UIDs[20001] || !got.UIDs[20002] || !got.GIDs[20001] || !got.GIDs[30002] || got.GIDs[20002] || len(got.UIDs) != 2 {
 		t.Fatalf("accounts %+v", got)
-	}
-}
-
-func TestUnknownUserErrorsAreWrapped(t *testing.T) {
-	_, _, err := ResolveAccounts(Config{ClientUser: "ghost"}, fakeLookup())
-	var unknown user.UnknownUserError
-	if !errors.As(err, &unknown) {
-		t.Fatalf("error %v does not wrap the lookup failure", err)
 	}
 }
