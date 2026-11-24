@@ -362,13 +362,12 @@ func (s *server) proveGuard(spec pool.Spec) error {
 		return err
 	}
 	defer statusR.Close()
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	stageRoute, keeperRoute, err := keeperPair("probe-route")
 	if err != nil {
 		specR.Close()
 		statusW.Close()
 		return err
 	}
-	stageRoute, keeperRoute := os.NewFile(uintptr(fds[0]), "probe-route"), os.NewFile(uintptr(fds[1]), "probe-route-keeper")
 	defer keeperRoute.Close()
 	pid, err := syscall.ForkExec(s.self, []string{"cyfr-locus", "stage", stage.ProbeArg}, &syscall.ProcAttr{
 		Dir:   "/",
@@ -409,7 +408,9 @@ func (s *server) proveGuard(spec pool.Spec) error {
 	if err != nil {
 		return refuse(err)
 	}
-	_ = keeperRoute.SetReadDeadline(time.Now().Add(stageTimeout))
+	if err := keeperRoute.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
+		return refuse(fmt.Errorf("its probe's route socket: %w", err))
+	}
 	files, err := receiveRoute(keeperRoute)
 	if err != nil {
 		return refuse(fmt.Errorf("its probe's descriptors: %w", err))
@@ -1083,8 +1084,10 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		if commandRelay, helperRelay, err = socketpair("relay"); err != nil {
 			return protocol.CodeInternal, err
 		}
-	} else if stageRoute, keeperRoute, err = socketpair("route"); err != nil {
+	} else if stageRoute, keeperRoute, err = keeperPair("route"); err != nil {
 		return protocol.CodeInternal, err
+	} else {
+		opened = append(opened, stageRoute, keeperRoute)
 	}
 
 	// The spawn's group exists before its stage does, and the stage
@@ -1137,9 +1140,10 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 			return protocol.CodeInternal, err
 		}
 		opened = append(opened, devnull)
-		if stageTerminal, keeperTerminal, err = socketpair("terminal"); err != nil {
+		if stageTerminal, keeperTerminal, err = keeperPair("terminal"); err != nil {
 			return protocol.CodeInternal, err
 		}
+		opened = append(opened, stageTerminal, keeperTerminal)
 		stageFiles = []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd()}
 		stageOwned = []*os.File{specR, statusW}
 		_ = stderrW.Close()
@@ -1271,6 +1275,22 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		return protocol.CodeInternal, err
 	}
 	return "", nil
+}
+
+// keeperPair is a socketpair whose first end goes to a stage and whose
+// second the keeper holds itself: non-blocking, so that a deadline set on
+// it bounds the keeper's wait on the stage.
+func keeperPair(name string) (stageEnd, keeperEnd *os.File, err error) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := unix.SetNonblock(fds[1], true); err != nil {
+		_ = unix.Close(fds[0])
+		_ = unix.Close(fds[1])
+		return nil, nil, err
+	}
+	return os.NewFile(uintptr(fds[0]), name+"-stage"), os.NewFile(uintptr(fds[1]), name+"-keeper"), nil
 }
 
 // readStatus reads a stage's status pipe to its end, within stageTimeout:

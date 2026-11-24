@@ -100,7 +100,9 @@ func (s *server) spawnEgress(req *protocol.Request) (egress, string, error) {
 // waits for that word before it executes anything, is killed by the
 // launch's failure path.
 func (s *server) admitRoute(sp *spawn, route *os.File, e egress) (string, error) {
-	_ = route.SetReadDeadline(time.Now().Add(stageTimeout))
+	if err := route.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
+		return protocol.CodeInternal, fmt.Errorf("the stage's route socket: %w", err)
+	}
 	files, err := receiveRoute(route)
 	if err != nil {
 		return protocol.CodeExecFailed, fmt.Errorf("the stage's route descriptors: %w", err)
@@ -129,7 +131,9 @@ func (s *server) admitRoute(sp *spawn, route *os.File, e egress) (string, error)
 		return protocol.CodeGuardUnavailable, errors.New("the guard's connection ended as its route was admitted")
 	}
 	sp.route = &r
-	_ = route.SetWriteDeadline(time.Now().Add(stageTimeout))
+	if err := route.SetWriteDeadline(time.Now().Add(stageTimeout)); err != nil {
+		return protocol.CodeInternal, fmt.Errorf("the stage's route socket: %w", err)
+	}
 	if _, err := route.Write([]byte{stage.RouteGo}); err != nil {
 		return protocol.CodeExecFailed, fmt.Errorf("telling the stage its route is made: %w", err)
 	}

@@ -318,11 +318,27 @@ func First(probe bool) int {
 	return fail("executing the space's init %s: %v", self, err)
 }
 
-// readSpaceSpec reads the spec the stage wrote to the space's memory file.
+// readSpaceSpec reads the spec the stage wrote to the space's memory file,
+// from its start, on the descriptor itself: no *os.File owns it, whose
+// collection would close it before the init reads it again.
 func readSpaceSpec() (Spec, error) {
-	data, err := io.ReadAll(io.NewSectionReader(os.NewFile(spaceSpecFD, "space-spec"), 0, 4*MaxSpecBytes))
-	if err != nil {
-		return Spec{}, fmt.Errorf("spec: %w", err)
+	data := make([]byte, 0, 4096)
+	buf := make([]byte, 64<<10)
+	for {
+		n, err := unix.Pread(spaceSpecFD, buf, int64(len(data)))
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return Spec{}, fmt.Errorf("spec: %w", err)
+		}
+		if n == 0 {
+			break
+		}
+		data = append(data, buf[:n]...)
+		if len(data) > 4*MaxSpecBytes {
+			return Spec{}, errors.New("spec: too long")
+		}
 	}
 	spec, err := decodeSpec(data)
 	if err != nil {

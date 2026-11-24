@@ -709,7 +709,9 @@ func (s *server) runHomeHelper(acct Account, spec home.HelperSpec) (string, erro
 // space's first process opened in the space's own devpts and handed up, and
 // sets its size to rows by cols, within stageTimeout.
 func receiveTerminal(from *os.File, rows, cols uint16) (*os.File, error) {
-	_ = from.SetReadDeadline(time.Now().Add(stageTimeout))
+	if err := from.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
+		return nil, fmt.Errorf("its socket: %w", err)
+	}
 	fds, err := receiveDescriptors(from, 1)
 	if err != nil {
 		return nil, err
