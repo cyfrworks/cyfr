@@ -18,9 +18,8 @@ import (
 )
 
 // The DEB's road installs the verified copy through apt as one root
-// command bounded by appReplaceWithin: it first finishes what a dpkg cut
-// off part way left, then reinstalls, allowing an older release only where
-// --version asks for one.
+// command bounded by appReplaceWithin, reinstalling a release dpkg left part
+// way and allowing an older release only where --version asks for one.
 func TestTheDebRoadInstallsThroughApt(t *testing.T) {
 	for _, c := range []struct {
 		older bool
@@ -39,7 +38,7 @@ func TestTheDebRoadInstallsThroughApt(t *testing.T) {
 		}
 		ran := m.applied[0][0]
 		account, _ := user.Current()
-		if !strings.HasPrefix(ran, "'systemd-run' '--wait' '--pipe' '--collect' '--quiet' '-p' 'RuntimeMaxSec=1200' '-p' 'KillSignal=SIGKILL' '-p' 'TimeoutStopSec=10' '--' '/bin/sh' '-c' 'dpkg --configure -a && ( ") || !strings.Contains(ran, c.apt) ||
+		if !strings.HasPrefix(ran, "'systemd-run' '--wait' '--pipe' '--collect' '--quiet' '-p' 'RuntimeMaxSec=1200' '-p' 'KillSignal=SIGKILL' '-p' 'TimeoutStopSec=10' '--' '/bin/sh' '-c' '( ") || !strings.Contains(ran, c.apt) ||
 			!strings.Contains(ran, "runuser -u '\\''"+account.Username+"'\\'' -- cat -- '\\''/tmp/cyfr-update-1/the.deb'\\''") || !strings.Contains(ran, "sha256sum --check --strict --quiet") {
 			t.Errorf("the road ran as root %q, want the bounded check and %q", ran, c.apt)
 		}

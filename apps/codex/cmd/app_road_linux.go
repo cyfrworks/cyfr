@@ -21,8 +21,8 @@ func systemAppRoad() appRoad { return debRoad{} }
 // DEB once root has checked its copy against the signed sum (stageApp), as
 // one root command bounded by appReplaceWithin. dpkg puts back the files
 // of an install that fails while it unpacks; one ended part way leaves
-// the package half installed, which the next update mends: it finishes
-// what dpkg left (dpkg --configure -a) and installs the package again.
+// dpkg interrupted, and apt refuses every install, saying so, until an
+// administrator runs dpkg --configure -a (the README's update section).
 type debRoad struct{}
 
 func (debRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*staged, error) {
@@ -52,13 +52,11 @@ func (debRoad) replace(out io.Writer, s *staged, older bool) error {
 		options = append(options, "--allow-downgrades")
 	}
 	fmt.Fprintln(out, "Installing the CYFR app's package with apt...")
-	// A dpkg an earlier update left cut off part way is finished first:
-	// until it is, apt refuses every install.
 	account, err := user.Current()
 	if err != nil {
 		return fmt.Errorf("cyfr update could not tell which account runs it (%v); nothing was replaced", err)
 	}
-	if err := applyWithin(appReplaceWithin, []string{"dpkg --configure -a", stageApp(s.file, s.sum, account.Username, options...)}); err != nil {
+	if err := applyWithin(appReplaceWithin, []string{stageApp(s.file, s.sum, account.Username, options...)}); err != nil {
 		return fmt.Errorf("apt could not install the CYFR app's package (%w)", err)
 	}
 	return nil
