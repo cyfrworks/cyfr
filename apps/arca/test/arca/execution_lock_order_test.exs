@@ -538,7 +538,7 @@ defmodule Arca.ExecutionLockOrderTest do
           purpose: "brain",
           tool: "program",
           action: "start",
-          idempotency_key: TurnStorage.brain_start_key(turn.id),
+          idempotency_key: TurnStorage.admission_key(turn.id),
           dispatch_state: "dispatched",
           fence: turn.fence
         })

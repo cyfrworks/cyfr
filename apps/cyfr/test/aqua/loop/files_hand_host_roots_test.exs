@@ -61,13 +61,17 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
     # Only the model is scripted: the files catalyst runs on the runtime.
     script!([
       calls([
-        {"c1", "files.write",
+        {"c1", "files",
          %{
+           "action" => "write",
            "path" => "aqua/aqua.md",
            "content" => "---\ntools:\n  - browser.turn_on\n---\n"
          }}
       ]),
-      calls([{"c2", "files.write", %{"path" => "data/control.md", "content" => "control"}}]),
+      calls([
+        {"c2", "files",
+         %{"action" => "write", "path" => "data/control.md", "content" => "control"}}
+      ]),
       reply("done")
     ])
 

@@ -230,7 +230,7 @@ defmodule Aqua.RunnerTest do
   end
 
   # The loop's own waits, which read nothing (`Aqua.Loop`).
-  @quiet [:harness_wait, :awaiting, :collect, :model_wait]
+  @quiet [:harness_wait, :awaiting, :collect]
 
   # A loop told that its thread moved reads its steps (`Aqua.Loop`): one
   # killed in that read takes the test's one shared connection with it. It
@@ -2179,7 +2179,13 @@ defmodule Aqua.RunnerTest do
            "becomes a step of that turn once it takes its root back",
          %{ctx: ctx, workspace: ws} do
       app = quiet_app!(ctx)
-      run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
+
+      run =
+        call("r1", "execution", %{
+          "action" => "run",
+          "reference" => app <> ":1.0.0",
+          "input" => %{}
+        })
 
       start_supervised!(
         {ScriptedWorker,

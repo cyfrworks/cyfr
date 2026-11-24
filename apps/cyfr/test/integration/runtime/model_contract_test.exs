@@ -661,7 +661,8 @@ defmodule Locus.Runtime.ModelContractTest do
         }
       ])
 
-    assert %{status: "failed", error: "the provider said no"} = played.turn
+    assert %{status: "failed", error: "Aqua could not answer: the provider said no"} =
+             played.turn
 
     assert [
              %{
@@ -687,7 +688,7 @@ defmodule Locus.Runtime.ModelContractTest do
 
     assert Enum.any?(
              played.rows,
-             &(&1.content =~ "The model could not answer: the provider said no")
+             &(&1.content =~ "Aqua could not answer: the provider said no")
            )
 
     assert {:turn_finished, nil} in played.seen.thread
@@ -967,7 +968,8 @@ defmodule Locus.Runtime.ModelContractTest do
     # upstream, and the step fails with the refusal.
     capped = Prima.Refusal.message(:connection_cap)
     played = play(ctx, attached_step(port, "Past the cap."))
-    assert %{status: "failed", error: ^capped} = played.turn
+    ended = "Aqua could not answer: " <> capped
+    assert %{status: "failed", error: ^ended} = played.turn
     assert [%{outcome: "error", error: ^capped, child_execution_id: id}] = model_steps(played)
     assert [%{args: %{"connection" => "api_key"}}] = TwoServices.calls(:attached_fetch, id)
     refute_received {Fixture, :upstream, _request}
