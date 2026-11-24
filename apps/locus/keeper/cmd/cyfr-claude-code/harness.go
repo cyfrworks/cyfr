@@ -344,7 +344,7 @@ func errorKind(err string) string {
 // answerWait bounds the harness's answer to a start (its `initialize` and
 // its `mcp_status`) and to a work's `mcp_set_servers`, the answers the
 // driver holds a command for, as listingWait bounds a listing's: 2.1.323
-// answers each within a second (aq-drivers), and a start's first fetch of
+// answers each within a second (measured), and a start's first fetch of
 // the program is a listing's. A var, so a test can shorten it.
 var answerWait = listingWait
 
@@ -356,13 +356,12 @@ func toolsLateSentence() string {
 
 // unsendableSentence is the driver's words for a turn whose request the
 // API refused for a message of the session's own history: a previous
-// message id it does not take (2.1.323 ended every later turn of such a
-// session so, its request's 400, aq-drivers cl-c5). Nothing the person
-// sent was invalid, and the session cannot go on: each turn of it is
-// refused so. It names no action: none works in a daily thread and a
-// workspace thread alike (a daily thread's pane sends to today's same
-// thread, archived or not).
-const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this thread's session cannot go on; nothing you sent was refused."
+// message id it does not take (Claude Code 2.1.323 ended every later turn
+// of such a session so, its request's 400). Nothing the person sent was
+// invalid, and the session cannot go on, so the driver removes it
+// (result): the next message starts a fresh session from the thread's
+// posts.
+const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this session could not go on; nothing you sent was refused. Your next message starts a fresh one from this thread's posts."
 
 // unsendableWords are the API's words, in a failed result's `result`, for
 // that refusal; they are read there alone, never in what the model said.

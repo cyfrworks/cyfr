@@ -717,11 +717,35 @@ func (d *driver) result(l harnessLine) error {
 			answered = append(answered, p.id)
 		}
 	}
-	return d.c.Emit(brainwire.NewEvent("idle").Set("gen", d.gen).SetOptional("work", work).Set("answered", answered).Set("stop", stop))
+	if err := d.c.Emit(brainwire.NewEvent("idle").Set("gen", d.gen).SetOptional("work", work).Set("answered", answered).Set("stop", stop)); err != nil {
+		return err
+	}
+	if stop == stopError && unsendable(l) {
+		return d.dropSession()
+	}
+	return nil
+}
+
+// dropSession ends a session the model's API refuses for a message of its
+// own history, which every later turn of it would meet: the harness is
+// stopped, the session's transcript and plan files are removed as forget
+// removes them (removeSession), nothing else of the folder, and the driver
+// ends. The next start of the session finds no transcript and answers
+// `gone`, so Aqua forgets the session and starts the thread over from its
+// posts. Claude Code's own copy of that history is lost; the thread keeps
+// every post.
+func (d *driver) dropSession() error {
+	session := d.session
+	d.h.Stop()
+	d.h = nil
+	if reason := removeSession(d.home, session); reason != "" {
+		return &brainwire.Fatal{Status: 1, Reason: "a session the model's API refuses could not be removed: " + reason}
+	}
+	return &brainwire.Fatal{Status: 1, Reason: "the model's API refuses this session's history, so it was removed"}
 }
 
 // failure is the type and the driver's words of a turn that ended in
-// error, as its result says it (2.1.323, aq-drivers cl-c2): a stop of
+// error, as its result says it (Claude Code 2.1.323, measured): a stop of
 // `refusal` is the model's refusal it kept to after its retry, whatever
 // the message's type; then the HTTP status the request ended with, which
 // types a 429 and a 529 when the message's type does not (a 529's is
@@ -734,8 +758,7 @@ func (d *driver) failure(l harnessLine) (string, string) {
 	if l.StopReason == "refusal" {
 		return "invalid_request", refusalSentence
 	}
-	var said string
-	if l.APIErrorStatus != nil && *l.APIErrorStatus == 400 && json.Unmarshal(l.Result, &said) == nil && strings.Contains(said, unsendableWords) {
+	if unsendable(l) {
 		return "invalid_request", unsendableSentence
 	}
 	kind := d.errKind
@@ -754,6 +777,14 @@ func (d *driver) failure(l harnessLine) (string, string) {
 		return kind, limitSentence(d.reached)
 	}
 	return kind, errorSentence(kind)
+}
+
+// unsendable is a failed result the model's API gave for a message of the
+// session's own history: a 400 whose result's own text, and nothing the
+// model said, names unsendableWords.
+func unsendable(l harnessLine) bool {
+	var said string
+	return l.APIErrorStatus != nil && *l.APIErrorStatus == 400 && json.Unmarshal(l.Result, &said) == nil && strings.Contains(said, unsendableWords)
 }
 
 // workOf is the work of the first post a line's uuids name, or none.

@@ -20,8 +20,8 @@
 //   `added`.
 // - The person's own MCP servers, those `$HOME/.claude.json` names under
 //   `mcpServers`, are started at its start unless it was started with
-//   `--strict-mcp-config`, as Claude Code 2.1.323 was measured to start them
-//   (aq-claude-own). `mcp_status` names them with their source, `user`,
+//   `--strict-mcp-config`, as Claude Code 2.1.323 was measured to start
+//   them. `mcp_status` names them with their source, `user`,
 //   beside the driver's, `dynamic`; a server `mcp_set_servers` names
 //   replaces one of theirs of the same name for the process's life; each
 //   ask of an MCP tool names its server (`mcp_server`).

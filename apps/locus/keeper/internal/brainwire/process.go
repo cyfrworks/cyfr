@@ -128,7 +128,7 @@ func (p *Process) WriteUnchecked(line []byte) {
 // turn/interrupt), closes its input and waits for its end, then ends its
 // process group, so a server it started ends with it. A harness still
 // running termAfter later is asked to end, a TERM to its group (Claude Code
-// 2.1.323 and Codex 0.169.0 each end within a second of one, aq-drivers),
+// 2.1.323 and Codex 0.169.0 each ended within a second of one, measured),
 // and one still running at closeWait is killed. Stop returns only once the
 // harness has ended, whichever way.
 func (p *Process) Stop(farewell ...[]byte) {

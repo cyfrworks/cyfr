@@ -13,7 +13,7 @@ import (
 )
 
 // A harness that goes on after its input closes, as Claude Code 2.1.323
-// does while a request to its model streams (aq-drivers cl-c8: 17.6 s), is
+// does while a request to its model streams (17.6 s measured), is
 // asked to end with a TERM before it is killed at the bound, and its own
 // end is the one Stop waits for.
 func TestAHarnessThatGoesOnAfterItsInputIsAskedToEndBeforeItIsKilled(t *testing.T) {

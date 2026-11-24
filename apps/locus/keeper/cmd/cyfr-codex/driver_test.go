@@ -333,7 +333,7 @@ func TestAPostWhoseSteerIsRefusedStartsATurn(t *testing.T) {
 // A steer Codex answers with an error other than a refusal of the request
 // (-32600: "no active turn to steer", "expected active turn id … but
 // found …", "thread not found: …" and a malformed input, as Codex 0.169.0
-// answers each, aq-drivers cx-m1) may have been taken: the post is refused
+// answers each, measured) may have been taken: the post is refused
 // as of a delivery not known, and is never written again as a turn of its
 // own, so nothing is said twice.
 func TestAPostWhoseSteerMayHaveBeenTakenIsNeverWrittenAgain(t *testing.T) {
@@ -385,7 +385,7 @@ func TestAUsageLimitSaysWhenItLifts(t *testing.T) {
 // A close during a native turn asks Codex to stop it in its own way,
 // `turn/interrupt` naming the turn, before its input closes, so its
 // rollout keeps the turn as interrupted (0.169.0 answers one at once and
-// ends the turn so, aq-drivers cx-m3).
+// ends the turn so, measured).
 func TestACloseDuringATurnInterruptsItFirst(t *testing.T) {
 	s := startDriver(t)
 	session := startFresh(s, map[string]any{})

@@ -708,6 +708,74 @@ func TestATurnsErrorIsTypedByWhatItsResultSays(t *testing.T) {
 	}
 }
 
+// A turn the model's API refused for a message of the session's own
+// history ends that session: the driver says so, removes that session's
+// transcript and no other file, and ends, so the next start of the session
+// answers gone and the thread starts over from its posts. An error of any
+// other kind removes nothing, and the session goes on.
+func TestASessionTheAPIRefusesIsRemovedAndItsNextStartIsGone(t *testing.T) {
+	// refused posts `poisoned` in a new session, after files of others the
+	// driver must leave, and answers the session once its driver ended.
+	refused := func(t *testing.T) (*wireSession, string, []string) {
+		s := startDriver(t)
+		session := startFresh(s, map[string]any{})
+		project := filepath.Join(s.home, ".claude", "projects", "-fake")
+		kept := []string{filepath.Join(project, "0b9d3a1e-5c2f-4e8a-9d61-7a3b2c1d0e4f.jsonl"), filepath.Join(s.home, ".claude", ".credentials.json")}
+		for _, name := range kept {
+			if err := os.WriteFile(name, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		work(s, "stp_work", []any{})
+		postText(s, "stp_post", "poisoned")
+		var errs []string
+		for e := s.next(); e["t"] != "idle"; e = s.next() {
+			if e["t"] == "error" {
+				errs = append(errs, fmt.Sprint(e["message"]))
+			}
+		}
+		if fmt.Sprint(errs) != "["+unsendableSentence+"]" {
+			t.Fatalf("the turn says the session could not go on: %v", errs)
+		}
+		select {
+		case <-s.done:
+		case <-time.After(20 * time.Second):
+			t.Fatal("the driver of a session that cannot go on did not end")
+		}
+		return s, session, kept
+	}
+	t.Run("the refused session's transcript is removed, and no other file", func(t *testing.T) {
+		s, session, kept := refused(t)
+		if _, err := os.Stat(filepath.Join(s.home, ".claude", "projects", "-fake", session+".jsonl")); !os.IsNotExist(err) {
+			t.Fatalf("the session's transcript is removed: %v", err)
+		}
+		for _, name := range kept {
+			if _, err := os.Stat(name); err != nil {
+				t.Fatalf("another session's transcript and the sign-in stay: %s %v", name, err)
+			}
+		}
+	})
+	t.Run("its next start is gone", func(t *testing.T) {
+		s, session, _ := refused(t)
+		again := startDriverIn(t, s.home)
+		again.expect("hello")
+		again.send(map[string]any{"t": "start", "gen": 4, "session": session, "config": map[string]any{}})
+		again.expect("gone")
+	})
+	t.Run("any other error removes nothing", func(t *testing.T) {
+		s := startDriver(t)
+		session := startFresh(s, map[string]any{})
+		work(s, "stp_work", []any{})
+		postText(s, "stp_post", "overloaded")
+		s.until("idle")
+		postText(s, "stp_again", "hello")
+		s.until("idle")
+		if _, err := os.Stat(filepath.Join(s.home, ".claude", "projects", "-fake", session+".jsonl")); err != nil {
+			t.Fatalf("an error of another kind removes nothing, and the session goes on: %v", err)
+		}
+	})
+}
+
 func TestALateResultNamesNoWork(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})

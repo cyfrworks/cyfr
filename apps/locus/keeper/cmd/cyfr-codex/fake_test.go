@@ -234,7 +234,7 @@ func fakeCodex() int {
 			notify("item/completed", map[string]any{"threadId": thread.id, "turnId": turn, "item": command})
 			reply(turn, "ran it")
 		case strings.Contains(words, "limited"):
-			// As Codex 0.169.0 answered a usage limit (aq-drivers cx-m2): its
+			// As Codex 0.169.0 answered a usage limit (measured): its
 			// limits, naming no thread, then the error and the failed turn.
 			notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{"limitId": "codex",
 				"primary":   map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1795518975},

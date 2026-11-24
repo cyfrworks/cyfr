@@ -29,7 +29,7 @@ import (
 //	rate   ends with an errored message of the rate limit and an errored result
 //	overloaded, refusing, limited  end as 2.1.323 ended a 529, a refusal the
 //	       model kept to after its one retry, and a 429 after a rejected
-//	       limit (aq-drivers cl-c2): an errored message, typed as the
+//	       limit (measured): an errored message, typed as the
 //	       harness types it, and an errored result with its status
 //	late   replies, then writes a later result naming no line, as a background end
 //	uncounted  replies with a result that reports no model's usage
@@ -56,7 +56,7 @@ import (
 //
 // The person's own servers are those `$HOME/.claude.json` names under
 // `mcpServers`, held unless it was started with `--strict-mcp-config`, as
-// 2.1.323 was measured to hold them (aq-claude-own): `mcp_status` lists
+// 2.1.323 was measured to hold them: `mcp_status` lists
 // them, and a server `mcp_set_servers` names replaces one of theirs of
 // the same name for the process's life. Each ask of an MCP tool names its
 // server, `mcp_server`, by name and source, and its call, `tool_use_id`.
@@ -239,7 +239,7 @@ func fakeClaude() int {
 				kind, status, stop = "invalid_request", nil, "refusal"
 			case strings.Contains(words, "poisoned"):
 				// As 2.1.323 ended every turn of a session whose history the
-				// API refused (aq-drivers cl-c5): the request's 400 and its words.
+				// API refused (2.1.323, measured): the request's 400 and its words.
 				kind, status = "unknown", 400
 				said = "API Error: 400 messages.3.content.0: diagnostics.previous_message_id: String should match pattern '^msg_' (starts with `msg_`) HARNESS-WORDS"
 			case strings.Contains(words, "limited"):
