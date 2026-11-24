@@ -340,6 +340,34 @@ func errorKind(err string) string {
 	return "provider_error"
 }
 
+// refusalSentence is the driver's words for a turn the model refused to
+// answer and kept to (a result whose stop is `refusal`, 2.1.323): no
+// request of the person's was invalid, so it is said as what it is.
+const refusalSentence = "Claude Code's model declined to answer this; rephrase the request, or choose another model."
+
+// limitSentence says a rate limit, and when it lifts when the harness said
+// (rejectedUntil).
+func limitSentence(resets int64) string {
+	return "Claude Code reported a rate limit; " + brainwire.UntilWords(resets) + "."
+}
+
+// rejectedUntil is when a limit lifts by a `rate_limit_event`'s
+// `rate_limit_info`, in the shape T3 Code reads from a subscription's
+// session (ClaudeAdapterV2.ts: `status`, and `resetsAt` in Unix seconds; a
+// key's session sends none, as 2.1.323 sent none on one): its reset while
+// its status is `rejected`, or 0, a limit not reached or one that does not
+// read.
+func rejectedUntil(info json.RawMessage) int64 {
+	var limit struct {
+		Status string  `json:"status"`
+		Resets float64 `json:"resetsAt"`
+	}
+	if json.Unmarshal(info, &limit) != nil || limit.Status != "rejected" || limit.Resets <= 0 {
+		return 0
+	}
+	return int64(limit.Resets)
+}
+
 // errorSentence is the driver's own words for an error of the harness's:
 // the harness's words (a sign-in prompt among them) never leave the box.
 // An account's error says only what the type tells: the account or key
@@ -350,7 +378,7 @@ func errorSentence(kind string) string {
 	case "authentication":
 		return "The account or key Claude Code used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
-		return "Claude Code reported a rate limit; ask again later."
+		return limitSentence(0)
 	case "overloaded":
 		return "Claude Code reported its provider overloaded; ask again later."
 	case "invalid_request":
@@ -380,6 +408,9 @@ type harnessLine struct {
 	RequestID       string          `json:"request_id"`
 	Request         json.RawMessage `json:"request"`
 	Response        json.RawMessage `json:"response"`
+	APIErrorStatus  *int            `json:"api_error_status"`
+	StopReason      string          `json:"stop_reason"`
+	RateLimitInfo   json.RawMessage `json:"rate_limit_info"`
 }
 
 // main is a line of the main session, not of a subagent's.

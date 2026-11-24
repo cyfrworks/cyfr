@@ -27,6 +27,10 @@ import (
 //	read   asks CYFR's `files` and replies quoting the answer's `result` or `error`
 //	own    runs its own Bash after asking, shows its result, then replies
 //	rate   ends with an errored message of the rate limit and an errored result
+//	overloaded, refusing, limited  end as 2.1.323 ended a 529, a refusal the
+//	       model kept to after its one retry, and a 429 after a rejected
+//	       limit (aq-drivers cl-c2): an errored message, typed as the
+//	       harness types it, and an errored result with its status
 //	late   replies, then writes a later result naming no line, as a background end
 //	uncounted  replies with a result that reports no model's usage
 //	partial    replies with a result one of whose models' counts does not read
@@ -223,6 +227,22 @@ func fakeClaude() int {
 			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
 				map[string]any{"type": "tool_result", "tool_use_id": "toolu_own", "content": "FOLDER-CANARY " + fmt.Sprint(decision["behavior"])}}}})
 			reply(uuids, "ran it")
+		case strings.Contains(words, "overloaded"), strings.Contains(words, "refusing"), strings.Contains(words, "limited"):
+			kind, status, stop := "server_error", any(529), "stop_sequence"
+			switch {
+			case strings.Contains(words, "refusing"):
+				kind, status, stop = "invalid_request", nil, "refusal"
+			case strings.Contains(words, "limited"):
+				// Its shape as T3 Code reads it from a subscription's session
+				// (ClaudeAdapterV2.ts, isClaudeBlockedAssistantRateLimit): a
+				// key's session sends none, as 2.1.323 sent none on one.
+				write(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1795518975}})
+				kind, status = "rate_limit", 429
+			}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": kind, "message": map[string]any{"id": "msg_err", "stop_reason": stop, "content": []any{
+				map[string]any{"type": "text", "text": "API Error: HARNESS-WORDS"}}}})
+			write(map[string]any{"type": "result", "subtype": "success", "is_error": true, "api_error_status": status, "terminal_reason": "api_error", "stop_reason": stop,
+				"num_turns": 1, "uuid": "result-err", "user_message_uuids": uuids, "result": "API Error: HARNESS-WORDS", "usage": map[string]any{}})
 		case strings.Contains(words, "rate"):
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": "rate_limit", "message": map[string]any{"id": "msg_err", "content": []any{
 				map[string]any{"type": "text", "text": "API Error: please run /login HARNESS-WORDS"}}}})

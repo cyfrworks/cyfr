@@ -61,6 +61,11 @@ type driver struct {
 	turnWork string
 	message  string
 	errored  bool
+	// errKind is the type of the errored message of the turn under way, and
+	// reached when the limit the harness last said rejected lifts, in Unix
+	// seconds, or 0.
+	errKind string
+	reached int64
 	own      map[string]string
 	asks     map[string]heldAsk
 	awaiting map[string]string
@@ -394,6 +399,8 @@ func (d *driver) Line(line []byte) error {
 		if l.main() {
 			return d.toolResults(l.Message)
 		}
+	case "rate_limit_event":
+		d.reached = rejectedUntil(l.RateLimitInfo)
 	case "result":
 		return d.result(l)
 	}
@@ -561,12 +568,13 @@ func (d *driver) assistant(l harnessLine) error {
 	if l.Error != nil {
 		// An errored message is the harness's own words about its account
 		// or its provider, a sign-in prompt among them: none of its text is
-		// passed on, only its type in the driver's words.
-		kind := errorKind(*l.Error)
+		// passed on. Its type is kept for the result that ends the turn,
+		// which says it with what the result adds (failure).
 		d.errored = true
+		d.errKind = errorKind(*l.Error)
 		// The error ends the turn for its holder, and its own tools with it.
 		d.own = map[string]string{}
-		return d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("type", kind).Set("message", errorSentence(kind)))
+		return nil
 	}
 	var text strings.Builder
 	for _, block := range message.Content {
@@ -642,15 +650,15 @@ func (d *driver) result(l harnessLine) error {
 	switch {
 	case strings.HasPrefix(l.Subtype, "error_max_"):
 		stop = stopLimit
-	case failed || (l.Subtype != "success" && l.Subtype != ""):
+	case failed || d.errored || l.StopReason == "refusal" || (l.Subtype != "success" && l.Subtype != ""):
 		stop = stopError
-		if !d.errored {
-			if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", "provider_error").Set("message", errorSentence("provider_error"))); err != nil {
-				return err
-			}
+		kind, message := d.failure(l)
+		if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", kind).Set("message", message)); err != nil {
+			return err
 		}
 	}
 	d.errored = false
+	d.errKind = ""
 	answered := []string{}
 	seen := map[string]bool{}
 	for _, uuid := range l.UserMessageIDs {
@@ -660,6 +668,36 @@ func (d *driver) result(l harnessLine) error {
 		}
 	}
 	return d.c.Emit(brainwire.NewEvent("idle").Set("gen", d.gen).SetOptional("work", work).Set("answered", answered).Set("stop", stop))
+}
+
+// failure is the type and the driver's words of a turn that ended in
+// error, as its result says it (2.1.323, aq-drivers cl-c2): a stop of
+// `refusal` is the model's refusal it kept to after its retry, whatever
+// the message's type; then the HTTP status the request ended with, which
+// types a 429 and a 529 when the message's type does not (a 529's is
+// `server_error`); then the errored message's own type; else the
+// provider's error. A rate limit says when it lifts once the harness said
+// (`rate_limit_event`).
+func (d *driver) failure(l harnessLine) (string, string) {
+	if l.StopReason == "refusal" {
+		return "invalid_request", refusalSentence
+	}
+	kind := d.errKind
+	if l.APIErrorStatus != nil {
+		switch *l.APIErrorStatus {
+		case 429:
+			kind = "rate_limited"
+		case 529:
+			kind = "overloaded"
+		}
+	}
+	if kind == "" {
+		kind = "provider_error"
+	}
+	if kind == "rate_limited" {
+		return kind, limitSentence(d.reached)
+	}
+	return kind, errorSentence(kind)
 }
 
 // workOf is the work of the first post a line's uuids name, or none.
@@ -690,6 +728,7 @@ func (d *driver) Ended() error {
 	d.starting = nil
 	d.listing = nil
 	d.server = ""
+	d.reached = 0
 	d.own = map[string]string{}
 	d.asks = map[string]heldAsk{}
 	d.awaiting = map[string]string{}

@@ -630,6 +630,35 @@ func TestTheHarnessesErrorIsTypedInTheDriversWords(t *testing.T) {
 	}
 }
 
+// A turn the harness ended in its model's error is typed by what its result
+// says, its HTTP status before the message's own type, which 2.1.323 gave
+// a 529 as `server_error`: an overload, a refusal the model kept to, a rate
+// limit, with when it lifts when the harness said so in its
+// `rate_limit_event`. One error each, in the driver's words.
+func TestATurnsErrorIsTypedByWhatItsResultSays(t *testing.T) {
+	for words, want := range map[string][2]string{
+		"overloaded": {"overloaded", "Claude Code reported its provider overloaded; ask again later."},
+		"refusing":   {"invalid_request", refusalSentence},
+		"limited":    {"rate_limited", "Claude Code reported a rate limit; it lifts at 11:16 UTC on 24 November 2026."},
+	} {
+		t.Run(words, func(t *testing.T) {
+			s := startDriver(t)
+			startFresh(s, map[string]any{})
+			work(s, "stp_work", []any{})
+			postText(s, "stp_post", words)
+			var errs []string
+			for e := s.next(); e["t"] != "idle"; e = s.next() {
+				if e["t"] == "error" {
+					errs = append(errs, fmt.Sprintf("%v: %v", e["type"], e["message"]))
+				}
+			}
+			if fmt.Sprint(errs) != fmt.Sprintf("[%s: %s]", want[0], want[1]) || strings.Contains(s.output(), "HARNESS-WORDS") {
+				t.Fatalf("one error, %s, in the driver's words: %v", want[0], errs)
+			}
+		})
+	}
+}
+
 func TestALateResultNamesNoWork(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
