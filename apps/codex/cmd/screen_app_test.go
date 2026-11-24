@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -280,5 +282,49 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	}
 	if said := early.said(t, 1); len(said) != 0 {
 		t.Fatalf("a shell ending before it showed anything said %v", said)
+	}
+}
+
+// ending is the last message of the shell's run: a leave the shell's last
+// lock answers gets no left after it (tests/fixtures/desktop-process.json
+// endings).
+func TestScreenApp_NothingFollowsEnding(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "desktop-process.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Endings []struct {
+			Name     string            `json:"name"`
+			ToCyfr   []json.RawMessage `json:"to_cyfr"`
+			FromCyfr []struct {
+				Type string `json:"type"`
+			} `json:"from_cyfr"`
+		} `json:"endings"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil || len(v.Endings) == 0 {
+		t.Fatalf("no endings (%v)", err)
+	}
+	for _, c := range v.Endings {
+		t.Run(c.Name, func(t *testing.T) {
+			lines := make([]string, len(c.ToCyfr))
+			for i, m := range c.ToCyfr {
+				lines[i] = string(m)
+			}
+			sink := &lineSink{}
+			a := &screenApp{in: strings.NewReader(strings.Join(lines, "\n")), to: desktop.NewWriter(sink, nil),
+				home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
+			// The lock main's message makes is the shell's last.
+			if err := a.show(func(string) { a.end(); a.hide() }); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{desktop.TypeReady, "home 1"}
+			for _, m := range c.FromCyfr {
+				want = append(want, m.Type)
+			}
+			if said := sink.said(t, len(want)+1); strings.Join(said, ", ") != strings.Join(want, ", ") {
+				t.Fatalf("the shell said %v, want %v", said, want)
+			}
+		})
 	}
 }

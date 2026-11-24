@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -49,9 +50,9 @@ func DeviceFolder() (string, error) {
 // the folder a CYFR on this computer is set up in (Project), the account
 // service's directory approved for a CYFR elsewhere (Directory), and the
 // client that CYFR admitted this device's key as, with the certificate it
-// connects under there. Generation numbers the entry: one added again
-// after it was gone is another, and nothing bound to the old one writes
-// it.
+// connects under there. Generation is the list's count of changes
+// (HomeList.Generations) when this entry came to be or its admission last
+// changed: a writer bound to another writes nothing.
 type ClientRecord struct {
 	Project     string          `json:"project,omitempty"`
 	Directory   string          `json:"directory,omitempty"`
@@ -74,13 +75,49 @@ const HomesVersion = 1
 
 // HomeList is the list of CYFRs as its file holds it: each by its address
 // in its one spelling (account.CanonicalHome), the one whose selection
-// was committed last, if any, and how many entries were ever added, which
-// numbers each.
+// was committed last, if any, and Generations, a count that only goes up,
+// moved by every entry coming to be or going and every change of an
+// entry's admission (its client, or whether it holds a certificate). Gone
+// is that count as each address's entry went, so an address whose entry
+// came and went since a writer read it is not the address it read.
 type HomeList struct {
 	Version     int                     `json:"version"`
 	Homes       map[string]ClientRecord `json:"homes"`
 	Last        string                  `json:"last,omitempty"`
 	Generations uint64                  `json:"generations"`
+	Gone        map[string]uint64       `json:"gone,omitempty"`
+}
+
+// at is the count as the list holds it for home: its entry's, the count as
+// its last entry went, or 0 for an address that never had one.
+func (l *HomeList) at(home string) uint64 {
+	if rec, held := l.Homes[home]; held {
+		return rec.Generation
+	}
+	return l.Gone[home]
+}
+
+// remove takes the entry at home out of the list, moving the count.
+func (l *HomeList) remove(home string) {
+	if _, held := l.Homes[home]; !held {
+		return
+	}
+	delete(l.Homes, home)
+	l.Generations++
+	if l.Gone == nil {
+		l.Gone = map[string]uint64{}
+	}
+	l.Gone[home] = l.Generations
+	if l.Last == home {
+		l.Last = ""
+	}
+}
+
+// admitted is whether change from a to b is a change of admission: another
+// client, or a certificate held where none was, or none where one was. A
+// renewal, a new certificate for the same client, is none.
+func admitted(a, b ClientRecord) bool {
+	return a.ClientID != b.ClientID || (len(a.Certificate) == 0) != (len(b.Certificate) == 0)
 }
 
 // Homes keeps this user's list of CYFRs in a file of its own, private to
@@ -102,7 +139,7 @@ func (f Homes) Load() (HomeList, error) {
 	var read HomeList
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&read); err != nil || dec.More() {
+	if dec.Decode(&read) != nil || dec.Decode(new(json.RawMessage)) != io.EOF {
 		return l, fmt.Errorf("%s is not a list of CYFRs", f)
 	}
 	if read.Version != HomesVersion {
@@ -114,6 +151,11 @@ func (f Homes) Load() (HomeList, error) {
 	for home, rec := range read.Homes {
 		if canonical, ok := account.CanonicalHome(home); !ok || canonical != home || rec.Generation == 0 ||
 			rec.Generation > read.Generations || rec.Project != "" && !filepath.IsAbs(rec.Project) {
+			return l, fmt.Errorf("%s holds an entry it cannot read, %q", f, home)
+		}
+	}
+	for home, gone := range read.Gone {
+		if _, held := read.Homes[home]; held || gone == 0 || gone > read.Generations {
 			return l, fmt.Errorf("%s holds an entry it cannot read, %q", f, home)
 		}
 	}
@@ -146,11 +188,12 @@ func (f Homes) Update(change func(*HomeList) bool) error {
 	return writeJSON(string(f), list)
 }
 
-// add puts rec in the list at home as a new entry, numbered.
+// add puts rec in the list at home as a new entry, moving the count.
 func (l *HomeList) add(home string, rec ClientRecord) ClientRecord {
 	l.Generations++
 	rec.Generation = l.Generations
 	l.Homes[home] = rec
+	delete(l.Gone, home)
 	return rec
 }
 
@@ -166,6 +209,9 @@ type Selection struct {
 	home string
 	mu   sync.Mutex
 	rec  ClientRecord
+	// bound is the list's count for home as the selection read it, or as
+	// its own last write left it: it writes only while that is so.
+	bound uint64
 	// approved is whether the directory in rec was approved in this
 	// selection (or is cyfr.run), rather than taken from an approval the
 	// entry held, which may have ended since.
@@ -186,7 +232,7 @@ func (f Homes) Select(home, directory string, approved bool) (*Selection, error)
 		return nil, fmt.Errorf("this computer lists %s as the CYFR in %s, not as one elsewhere", home, rec.Project)
 	}
 	rec.Directory = directory
-	return &Selection{file: f, home: home, rec: rec, approved: approved}, nil
+	return &Selection{file: f, home: home, rec: rec, approved: approved, bound: l.at(home)}, nil
 }
 
 // SelectLocal begins selecting the CYFR at home set up in project, a local
@@ -207,7 +253,7 @@ func (f Homes) SelectLocal(home, project string) (*Selection, error) {
 		return nil, fmt.Errorf("this computer lists %s as the CYFR in %s, not as the one in %s", home, rec.Project, project)
 	}
 	rec.Project, rec.Directory = project, ""
-	return &Selection{file: f, home: home, rec: rec, approved: true}, nil
+	return &Selection{file: f, home: home, rec: rec, approved: true, bound: l.at(home)}, nil
 }
 
 // Entry is the selection of whatever the list holds at home, as it holds
@@ -217,7 +263,7 @@ func (f Homes) Entry(home string) (*Selection, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Selection{file: f, home: home, rec: l.Homes[home]}, nil
+	return &Selection{file: f, home: home, rec: l.Homes[home], bound: l.at(home)}, nil
 }
 
 // Load is the selected CYFR's record.
@@ -228,30 +274,37 @@ func (s *Selection) Load() (ClientRecord, error) {
 }
 
 // Update applies change to the selected CYFR's record, and to its entry
-// once the selection is bound to the one the list holds, or when the
-// change is an admission (a client and the certificate this CYFR issued
-// it), which adds the entry where the list holds none at that address.
+// while nothing about its address changed since the selection read it or
+// last wrote it (bound): to the entry the list holds, or, where it holds
+// none and the change is an admission (a client and the certificate this
+// CYFR issued it), as the entry it adds. An admission moves the list's
+// count, and the selection is bound to its own write.
 func (s *Selection) Update(change func(*ClientRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	gen := s.rec.Generation
 	change(&s.rec)
-	s.rec.Generation = gen
 	return s.file.Update(func(l *HomeList) bool {
+		if l.at(s.home) != s.bound {
+			return false
+		}
 		cur, held := l.Homes[s.home]
 		switch {
-		case gen != 0:
-			if !held || cur.Generation != gen {
-				return false
-			}
+		case held:
+			before := cur
 			if !change(&cur) {
 				return false
 			}
-			cur.Generation = gen
+			cur.Generation = before.Generation
+			if admitted(before, cur) {
+				l.Generations++
+				cur.Generation = l.Generations
+			}
 			l.Homes[s.home] = cur
+			s.bound, s.rec.Generation = cur.Generation, cur.Generation
 			return true
-		case !held && s.rec.ClientID != "" && len(s.rec.Certificate) != 0:
+		case s.rec.ClientID != "" && len(s.rec.Certificate) != 0:
 			s.rec = l.add(s.home, s.rec)
+			s.bound = s.rec.Generation
 			return true
 		}
 		return false
@@ -262,29 +315,31 @@ func (s *Selection) Update(change func(*ClientRecord) bool) error {
 // where the list holds none at its address, or kept, with the account
 // service's address written only when this selection approved it (one it
 // took from the entry stays as the entry holds it now, ended or not), and
-// it is the CYFR selected last. An entry that is no longer the one the
-// selection began from refuses it.
+// it is the CYFR selected last. An address whose entry came, went or was
+// admitted anew since the selection read it refuses it.
 func (s *Selection) Commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var refused error
 	err := s.file.Update(func(l *HomeList) bool {
+		if l.at(s.home) != s.bound {
+			refused = fmt.Errorf("this computer's list changed at %s meanwhile", s.home)
+			return false
+		}
 		cur, held := l.Homes[s.home]
 		switch {
-		case held && cur.Generation == s.rec.Generation:
+		case held:
 			if s.approved && cur.Project == "" {
 				cur.Directory = s.rec.Directory
 			}
 			l.Homes[s.home] = cur
-		case held || s.rec.Generation != 0:
-			refused = fmt.Errorf("this computer's list changed at %s meanwhile", s.home)
-			return false
 		default:
 			rec := ClientRecord{Project: s.rec.Project, ClientID: s.rec.ClientID, Certificate: s.rec.Certificate}
 			if s.approved {
 				rec.Directory = s.rec.Directory
 			}
 			s.rec.Generation = l.add(s.home, rec).Generation
+			s.bound = s.rec.Generation
 		}
 		l.Last = s.home
 		return true

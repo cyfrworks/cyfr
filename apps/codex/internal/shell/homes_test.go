@@ -61,7 +61,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	admit(t, sel, "pcl_a", `{"a":1}`)
-	atA := ClientRecord{Directory: "https://cyfr.run", ClientID: "pcl_a", Certificate: json.RawMessage(`{"a": 1}`), Generation: 1}
+	atA := ClientRecord{Directory: "https://cyfr.run", ClientID: "pcl_a", Certificate: json.RawMessage(`{"a": 1}`), Generation: 2}
 	if l := listOf(t, f); !sameRecord(l.Homes[a], atA) || l.Last != a {
 		t.Fatalf("the CYFR opened and admitted is %+v, last %q", l.Homes[a], l.Last)
 	}
@@ -75,7 +75,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	}
 	l := listOf(t, f)
 	if !sameRecord(l.Homes[a], atA) || l.Homes[b].ClientID != "pcl_b" || l.Homes[b].Directory != "https://accounts.example.com" ||
-		l.Homes[b].Generation != 2 || l.Last != b {
+		l.Homes[b].Generation != 3 || l.Last != b {
 		t.Fatalf("a second CYFR made the list %+v", l)
 	}
 
@@ -107,7 +107,7 @@ func TestTheListKeepsEachCYFRsStandingApart(t *testing.T) {
 	if err := here.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if l := listOf(t, f); !sameRecord(l.Homes[box], ClientRecord{Project: "/home/ada/cyfr", Generation: 3}) || l.Last != box {
+	if l := listOf(t, f); !sameRecord(l.Homes[box], ClientRecord{Project: "/home/ada/cyfr", Generation: 4}) || l.Last != box {
 		t.Fatalf("the folder's CYFR is %+v", l)
 	}
 	if _, err := f.Select(box, "https://cyfr.run", true); err == nil || !strings.Contains(err.Error(), "/home/ada/cyfr") {
@@ -131,13 +131,7 @@ func TestAWriterOfAnEntryGoneWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	admit(t, sel, "pcl_a", `{"a":1}`)
-	if err := f.Update(func(l *HomeList) bool {
-		delete(l.Homes, a)
-		l.Last = ""
-		return true
-	}); err != nil {
-		t.Fatal(err)
-	}
+	removeAt(t, f, a)
 	admit(t, sel, "pcl_a", `{"a":2}`)
 	if err := sel.Commit(); err == nil {
 		t.Fatal("a selection of an entry gone committed")
@@ -147,17 +141,84 @@ func TestAWriterOfAnEntryGoneWritesNothing(t *testing.T) {
 	}
 }
 
+// removeAt takes the entry at home out of f, as a Forget's end does.
+func removeAt(t *testing.T, f Homes, home string) {
+	t.Helper()
+	if err := f.Update(func(l *HomeList) bool { l.remove(home); return true }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A renewal that arrives after the CYFR admitted this device anew, under
+// another client, leaves the new admission's certificate as it is.
+func TestALateRenewalLeavesANewerAdmission(t *testing.T) {
+	const a = "https://a.example.com"
+	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
+	first, _ := f.Select(a, "https://cyfr.run", true)
+	if err := first.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := f.Select(a, "https://cyfr.run", true)
+	replacement, _ := f.Select(a, "https://cyfr.run", true)
+	admit(t, replacement, "pcl_new", `{"client":"new"}`)
+	if err := old.Update(func(c *ClientRecord) bool { c.Certificate = json.RawMessage(`{"client":"old"}`); return true }); err != nil {
+		t.Fatal(err)
+	}
+	if c := listOf(t, f).Homes[a]; c.ClientID != "pcl_new" || !strings.Contains(string(c.Certificate), `"new"`) {
+		t.Fatalf("a late renewal replaced the newer admission: %+v", c)
+	}
+	// Its own renewal, the same client's next certificate, still lands.
+	if err := replacement.Update(func(c *ClientRecord) bool { c.Certificate = json.RawMessage(`{"client":"new","n":2}`); return true }); err != nil {
+		t.Fatal(err)
+	}
+	if c := listOf(t, f).Homes[a]; !strings.Contains(string(c.Certificate), `"n": 2`) {
+		t.Fatalf("the admission's own renewal was lost: %+v", c)
+	}
+}
+
+// A selection begun where the list held nothing adds nothing once an entry
+// came and went there meanwhile.
+func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
+	const a = "https://a.example.com"
+	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
+	pending, _ := f.Select(a, "https://cyfr.run", true)
+	added, _ := f.Select(a, "https://cyfr.run", true)
+	if err := added.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	removeAt(t, f, a)
+	admit(t, pending, "pcl_late", `{"client":"late"}`)
+	if err := pending.Commit(); err == nil {
+		t.Fatal("a selection of an address that came and went committed")
+	}
+	if l := listOf(t, f); len(l.Homes) != 0 || l.Last != "" {
+		t.Fatalf("a late writer recreated the entry: %+v", l)
+	}
+	// A selection begun after, of the same address, adds it.
+	again, _ := f.Select(a, "https://cyfr.run", true)
+	if err := again.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if l := listOf(t, f); l.Last != a || len(l.Gone) != 0 {
+		t.Fatalf("the address added again is %+v", l)
+	}
+}
+
 // A file that is not this list is refused whole and left as it is.
 func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 	for name, raw := range map[string]string{
-		"not JSON":              `{"homes":`,
-		"another version":       `{"version":2,"homes":{},"generations":0}`,
-		"an unknown field":      `{"version":1,"homes":{},"generations":0,"why":1}`,
-		"an address unspelled":  `{"version":1,"homes":{"https://A.example.com/":{"generation":1}},"generations":1}`,
-		"an entry unnumbered":   `{"version":1,"homes":{"https://a.example.com":{}},"generations":1}`,
-		"a number never given":  `{"version":1,"homes":{"https://a.example.com":{"generation":2}},"generations":1}`,
-		"a folder from nowhere": `{"version":1,"homes":{"http://localhost:4000":{"project":"cyfr","generation":1}},"generations":1}`,
-		"a last it lacks":       `{"version":1,"homes":{},"last":"https://a.example.com","generations":0}`,
+		"not JSON":               `{"homes":`,
+		"cut short":              `{"version":1,"homes":{"https://a.example.com":{"generation":1}},"generati`,
+		"a brace after it":       `{"version":1,"homes":{},"generations":0}}`,
+		"a second list after it": `{"version":1,"homes":{},"generations":0}{"version":1,"homes":{},"generations":0}`,
+		"a gone entry held":      `{"version":1,"homes":{"https://a.example.com":{"generation":1}},"generations":2,"gone":{"https://a.example.com":2}}`,
+		"another version":        `{"version":2,"homes":{},"generations":0}`,
+		"an unknown field":       `{"version":1,"homes":{},"generations":0,"why":1}`,
+		"an address unspelled":   `{"version":1,"homes":{"https://A.example.com/":{"generation":1}},"generations":1}`,
+		"an entry unnumbered":    `{"version":1,"homes":{"https://a.example.com":{}},"generations":1}`,
+		"a number never given":   `{"version":1,"homes":{"https://a.example.com":{"generation":2}},"generations":1}`,
+		"a folder from nowhere":  `{"version":1,"homes":{"http://localhost:4000":{"project":"cyfr","generation":1}},"generations":1}`,
+		"a last it lacks":        `{"version":1,"homes":{},"last":"https://a.example.com","generations":0}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := Homes(filepath.Join(t.TempDir(), "homes.json"))
@@ -174,6 +235,21 @@ func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 			err := f.Update(func(l *HomeList) bool { return true })
 			if after, _ := os.ReadFile(string(f)); err == nil || string(after) != raw {
 				t.Fatalf("the list was written over (%v): %s", err, after)
+			}
+			// Nor does a selection begun before the file went bad write it.
+			sound := Homes(filepath.Join(t.TempDir(), "homes.json"))
+			early, err := sound.Select("https://b.example.com", "https://cyfr.run", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(string(sound), []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := early.Commit(); err == nil {
+				t.Fatal("a commit over a file that is not a list went on")
+			}
+			if after, _ := os.ReadFile(string(sound)); string(after) != raw {
+				t.Fatalf("a commit wrote over the file: %s", after)
 			}
 		})
 	}

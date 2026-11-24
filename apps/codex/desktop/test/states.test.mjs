@@ -825,3 +825,22 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
   walk(initialWorld(true))
   assert.ok(endings > 0, "no walk ended with the shell's end")
 })
+
+test("ending is the last word of a run: after it main ends, and a left, which the vectors say never follows, changes nothing", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
+  assert.ok(vectors["endings"].length > 0)
+  for (const {name, from_cyfr: said} of vectors["endings"]) {
+    let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+    for (const e of [{type: "ready", url: "http://127.0.0.1:7340/"}, home(), taken, openedAt(HOME)]) s = step(s, e).state
+    const effects = []
+    for (const m of said) {
+      const r = step(s, {type: m.type, message: m})
+      s = r.state
+      effects.push(...r.do)
+    }
+    assert.equal(s.name, "ended", name)
+    assert.ok(effects.some((e) => e.quit), name)
+    const after = step(s, leftOf(7))
+    assert.deepEqual([after.state, after.do], [s, []], name)
+  }
+})

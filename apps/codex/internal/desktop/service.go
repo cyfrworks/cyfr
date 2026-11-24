@@ -764,10 +764,16 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 		}
 		return answer{Error: "The app did not get ready to open " + home + ". Connect again."}
 	}
+	// Whether the selection is still wanted is read in the hold that
+	// commits it, its request's end beside the lock's and the service's:
+	// a home-ready and an end both pending commit nothing.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.epoch != epoch || s.ended {
 		return answer{Error: lockedSentence}
+	}
+	if run.Err() != nil {
+		return answer{Error: "The app did not get ready to open " + home + ". Connect again."}
 	}
 	if err := sel.Commit(); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}

@@ -72,13 +72,24 @@ func newScreenApp(in io.Reader, out io.Writer, l desktop.Local) (*screenApp, err
 		home: desktop.Message{Type: desktop.TypeHome, Home: l.Shell.Address, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver}}, nil
 }
 
+// say gives main m after every message given before it, under a.mu: the
+// one way the shell talks to main, which takes nothing once ending was
+// given, the last message of the shell's run.
+func (a *screenApp) say(m desktop.Message) {
+	if a.over {
+		return
+	}
+	_ = a.to.Queue(m)
+	a.over = m.Type == desktop.TypeEnding
+}
+
 // propose proposes home as the next attempt; the caller holds a.mu.
 func (a *screenApp) propose() {
 	a.attempt++
 	a.answered = false
 	home := a.home
 	home.Attempt = a.attempt
-	_ = a.to.Queue(home)
+	a.say(home)
 }
 
 // hide hides what is on the screen and shows a fresh lock page
@@ -93,11 +104,10 @@ func (a *screenApp) hide() {
 		return
 	}
 	if a.last {
-		a.over = true
-		_ = a.to.Queue(desktop.Message{Type: desktop.TypeEnding})
+		a.say(desktop.Message{Type: desktop.TypeEnding})
 		return
 	}
-	_ = a.to.Queue(desktop.Message{Type: desktop.TypeLocked})
+	a.say(desktop.Message{Type: desktop.TypeLocked})
 	a.propose()
 }
 
@@ -120,7 +130,7 @@ func (a *screenApp) show(lock func(why string)) error {
 		a.mu.Unlock()
 		return nil
 	}
-	_ = a.to.Queue(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
+	a.say(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
 	a.ready = true
 	a.propose()
 	a.mu.Unlock()
@@ -156,7 +166,7 @@ func (a *screenApp) show(lock func(why string)) error {
 			a.mu.Lock()
 			if m.Home == a.home.Home && m.Attempt == a.attempt && !a.answered && !a.over {
 				a.answered = true
-				_ = a.to.Queue(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home, Attempt: a.attempt})
+				a.say(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home, Attempt: a.attempt})
 			}
 			a.mu.Unlock()
 		case desktop.TypeHomeFailed:
@@ -172,8 +182,12 @@ func (a *screenApp) show(lock func(why string)) error {
 		case desktop.TypeLeave:
 			// The screen keeps to its one CYFR: a leave is a lock, answered
 			// once the lock ended the device's sessions there.
+			// A lock that was the shell's last said ending, after which
+			// nothing is said: that leave is answered by the end alone.
 			lock("Locked.")
-			_ = a.to.Queue(desktop.Message{Type: desktop.TypeLeft, ID: m.ID})
+			a.mu.Lock()
+			a.say(desktop.Message{Type: desktop.TypeLeft, ID: m.ID})
+			a.mu.Unlock()
 		case desktop.TypeShutdown:
 			return nil
 		}

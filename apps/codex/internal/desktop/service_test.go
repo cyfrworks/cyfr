@@ -2580,3 +2580,38 @@ func TestLeavingEndsTheFolderWorkThoughTheHidePanics(t *testing.T) {
 		t.Fatal("the folder's Work outlived the panicking lock that let go of it")
 	}
 }
+
+// A selection whose request ended while main's home-ready for it was also
+// waiting commits nothing, whichever the service reads first: last stays
+// the CYFR committed before it.
+func TestACancelledSelectionCommitsNothing(t *testing.T) {
+	const first, next = "https://a.example.com", "https://b.example.com"
+	dir := t.TempDir()
+	f := shell.Homes(filepath.Join(dir, "homes.json"))
+	seed(t, f, first, shell.ClientRecord{Directory: account.DefaultDirectory})
+	for range 64 {
+		sel, err := f.Select(next, account.DefaultDirectory, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &Service{Homes: f, Record: filepath.Join(dir, "holder.json")}
+		ctx, cancel := context.WithCancel(context.Background())
+		// Both pending before the selection reads either: main's answer
+		// and the request's end.
+		s.Tell = func(m Message) {
+			if m.Type == TypeHome {
+				s.ready <- true
+				cancel()
+			}
+		}
+		got := s.selectHome(ctx, 0, sel, shell.Config{Address: next, Client: offline()}, nil,
+			Message{Type: TypeHome, Home: next, Account: account.DefaultDirectory})
+		cancel()
+		if got.Next != "" || got.Error == "" {
+			t.Fatalf("a cancelled selection answered %+v", got)
+		}
+		if l, err := f.Load(); err != nil || l.Last != first || len(l.Homes) != 1 {
+			t.Fatalf("a cancelled selection moved the list to %+v (%v)", l, err)
+		}
+	}
+}
