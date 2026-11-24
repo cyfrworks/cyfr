@@ -33,8 +33,8 @@ defmodule Locus.Runtime.WorkerListener do
   for a start or a kill, `{"v": 1, "ok": status}` for the status as
   `Prima.WorkerAPI.status_to_wire/1` writes it, `{"v": 1, "error": name}`
   for a start that is `malformed` or a kill that finds nothing. A start no
-  runner can take is refused `503` `unavailable`, with a `message` naming
-  why while the keeper refuses runners.
+  runner can take is refused `503` `unavailable`, with a `message` where
+  the service's answer names why.
 
   Nothing a request carries is logged: a refusal is logged by its reason.
   """

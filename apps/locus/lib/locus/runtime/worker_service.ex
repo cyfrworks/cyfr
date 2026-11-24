@@ -68,10 +68,10 @@ defmodule Locus.Runtime.WorkerService do
   was answered. A runner whose assign went unanswered, or was answered
   past the deadline, is retired, since whose its place is cannot be
   known. A `start` no runner can be found for answers `{:error,
-  :unavailable}`, and while the keeper refuses runners `{:error,
-  {:unavailable, sentence}}` with the keeper's account of why; the
-  listener refuses either `503`,
-  the second naming the sentence. The pool may hand out a runner whose
+  :unavailable}`, which the listener refuses `503`; while the keeper
+  refuses runners a start is given a runner all the same, and a spawn the
+  keeper refuses ends its run with the keeper's reason
+  (`Locus.Runtime.RunnerPool`). The pool may hand out a runner whose
   clean completion it has read and sent here but the service has not yet
   read: that assignment is forgotten then, as its completion would forget
   it, before the runner is assigned again, so a kill of the old root is
@@ -419,9 +419,6 @@ defmodule Locus.Runtime.WorkerService do
               :ok = RunnerPool.taint(RunnerPool, pid, 0)
               {:reply, {:error, :unavailable}, state}
           end
-
-        {:error, {:refused, refusal}} ->
-          {:reply, {:error, {:unavailable, refusal.message}}, state}
 
         {:error, reason} ->
           Logger.error(

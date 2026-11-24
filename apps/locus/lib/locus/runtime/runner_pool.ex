@@ -72,15 +72,23 @@ defmodule Locus.Runtime.RunnerPool do
   never handed out, counted `tainted` in `status/1` and asked no
   release, it keeps its place among the runners spawned ahead, so the
   pool starts none in its stead while the keeper still holds its uid and
-  place. The pool then refuses until a runner starts again: it spawns
-  one runner at a time, after a wait that doubles from one second to half
-  a minute and once no runner it refused after making is held, never
-  hands out a runner still spawning nor counts it in `status/1`, and
-  answers a `take/3` no fresh or idle runner can serve `{:error,
-  {:refused, refusal}}`, the keeper's own account of why
-  (`c:Locus.Runtime.Keeper.refusal/1`), which `status/1` reports too. The
-  first runner that attaches ends the refusal and the pool fills again,
-  around any runner still held.
+  place. The pool remembers the refusal, the keeper's own account of
+  why (`c:Locus.Runtime.Keeper.refusal/1`), which `status/1` reports, and
+  it paces the pool's own spawning ahead and nothing else: the pool
+  spawns one runner at a time, after a wait that doubles from one second
+  to half a minute and once no runner it refused after making is held,
+  and never hands out a runner still spawning nor counts it in
+  `status/1`. A `take/3` no fresh or idle runner can serve spawns one, as
+  it does when no refusal stands, and is never answered from the
+  remembered refusal: the keeper answers that spawn. So during a lack
+  that lasts a start may answer ok and its run end at once, its assignee
+  hearing `{:gone, {:refused, reason}}` with the keeper's reason of that
+  moment; one refused after the keeper made it is held, as above, until
+  the keeper releases it, which it does at once, so a start holds at most
+  one such runner. The first runner that attaches ends the refusal, and
+  so does the release of any runner but one the keeper refused after
+  making it, which frees a uid the refusal may have lacked: the pool then
+  fills again at once, around any runner still held.
   """
 
   use GenServer
@@ -116,13 +124,11 @@ defmodule Locus.Runtime.RunnerPool do
 
   @doc """
   Take a runner for a subtree of `athanor` running `execution_id`: its
-  handle and its id, or `{:error, {:refused, refusal}}` while the keeper
-  refuses runners and none is fresh or idle for it.
+  handle and its id, spawning one when none is fresh or idle for it,
+  whether or not the keeper refuses runners.
   """
   @spec take(GenServer.server(), String.t(), String.t()) ::
-          {:ok, pid(), String.t()}
-          | {:error,
-             {:refused, Prima.WorkerAPI.refusal()} | :not_serving | {:spawn_failed, term()}}
+          {:ok, pid(), String.t()} | {:error, :not_serving | {:spawn_failed, term()}}
   def take(pool, athanor, execution_id) when is_binary(athanor) and is_binary(execution_id),
     do: GenServer.call(pool, {:take, athanor, execution_id})
 
@@ -204,9 +210,6 @@ defmodule Locus.Runtime.RunnerPool do
 
         state = put_runner(state, pid, entry)
         {:reply, {:ok, pid, entry.id}, refill(state)}
-
-      :none when state.refusal != nil ->
-        {:reply, {:error, {:refused, state.refusal}}, state}
 
       :none ->
         case spawn_runner(state) do
@@ -321,7 +324,7 @@ defmodule Locus.Runtime.RunnerPool do
   def handle_info({_launcher, {:heir, {__MODULE__, id}}, :released}, state) do
     case Enum.find(state.runners, fn {_pid, entry} -> entry.id == id end) do
       nil -> {:noreply, state}
-      {pid, %{down: true}} -> {:noreply, refill(forget(state, pid))}
+      {pid, %{down: true} = entry} -> {:noreply, released(state, pid, entry)}
       {pid, entry} -> {:noreply, put_runner(state, pid, %{entry | released: true})}
     end
   end
@@ -337,8 +340,8 @@ defmodule Locus.Runtime.RunnerPool do
       nil ->
         {:noreply, state}
 
-      %{released: true} ->
-        {:noreply, refill_later(forget(state, pid))}
+      %{released: true} = entry ->
+        {:noreply, released(state, pid, entry)}
 
       entry ->
         Logger.error(
@@ -463,10 +466,28 @@ defmodule Locus.Runtime.RunnerPool do
     gone(state, pid, entry, reason)
   end
 
-  defp on_event(:released, pid, _entry, state) do
+  defp on_event(:released, pid, entry, state) do
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
-    refill(forget(state, pid))
+    released(state, pid, entry)
   end
+
+  # The keeper released the runner, freeing its uid: a refusal the pool
+  # remembers may have lacked it, so the refusal ends and the pool fills at
+  # once. The release of a runner the keeper refused after making it frees
+  # only what its own refusal held, and the refusal stands.
+  defp released(%{refusal: refusal} = state, pid, %{state: held})
+       when refusal != nil and held != :refused do
+    Logger.info("[Locus.Runtime.RunnerPool] a runner's release ends the keeper's refusal")
+
+    refill(%{
+      forget(state, pid)
+      | refusal: nil,
+        backoff_ms: @refill_backoff_ms,
+        refill_scheduled: false
+    })
+  end
+
+  defp released(state, pid, _entry), do: refill(forget(state, pid))
 
   # The runner is no longer usable: what it was running is gone, and the
   # keeper is asked to end whatever is left of it.
