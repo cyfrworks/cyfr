@@ -128,8 +128,8 @@ defmodule PrismWeb.ShellLive do
   `settings` and from a desktop address with `?shell=threads&ref=<id>`
   (the palette's threads), handed here as `shell_key`: without a `ref`,
   Aqua's panel on All threads; with one, a shared thread the person sits
-  in opens in the chat, decided by a read under their seat
-  (`Sanctum.SharedThreads.active_seat?/2`), and any other id in Aqua's
+  in opens in the chat, decided by the list of their seats
+  (`Sanctum.SharedThreads.listed/1`), and any other id in Aqua's
   panel, which reads it under the person's own athanor. The panel asks
   for a shared thread its list holds the same way (`{:open_chat, ref}`).
 
@@ -1669,9 +1669,14 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp settings(socket, "threads", ref) when is_binary(ref) do
-    case Sanctum.SharedThreads.active_seat?(socket.assigns.context.user_id, ref) do
-      {:ok, true} -> settings(socket, "chat", ref)
-      _not_seated -> settings(socket, "aqua", ref)
+    case Sanctum.SharedThreads.listed(socket.assigns.context.user_id) do
+      {:ok, shared} ->
+        if Enum.any?(shared, &(&1.id == ref)),
+          do: settings(socket, "chat", ref),
+          else: settings(socket, "aqua", ref)
+
+      {:error, _unread} ->
+        settings(socket, "aqua", ref)
     end
   end
 
