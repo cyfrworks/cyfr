@@ -1309,10 +1309,6 @@ defmodule Cyfr.DocsDriftTest do
     # The keeper sets it for the client it starts; an inherited value is
     # replaced, never read.
     "KEEPER_CHANNEL" => :keeper,
-    # The keeper hands its client the kept homes' root and uid range from
-    # its own `--kept-homes` flag, which compose's entrypoint sets; an
-    # inherited value is replaced, never read.
-    "KEEPER_KEPT_HOMES" => :keeper,
     # The worker service hands each runner its role and identities
     # (`Locus.Runtime.Settings.runner_environment/1`). cyfr-locus places
     # the control channel and the relay on file descriptors 3 and 4, which

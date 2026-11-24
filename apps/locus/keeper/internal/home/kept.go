@@ -13,12 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/cyfr/locus/keeper/internal/procfs"
 )
 
 // KeptRootMode is the mode the kept-homes root must have: sticky, and
 // writable and searchable but not listable by the uids that make their homes
-// in it; its owner (uid 0, the keeper) and its group (the client's) list it,
-// the client to draw a free uid for a new home.
+// in it; its owner (uid 0, the keeper, which lists it to draw a new home's
+// uid) and its group (the client's) list it.
 const KeptRootMode = fs.ModeDir | fs.ModeSticky | 0o773
 
 // KeptHomeMode is the mode every kept home has: its own uid's alone.
@@ -64,11 +66,6 @@ func ParseKept(value string) (Kept, error) {
 	return Kept{Root: root, First: first, Last: last}, nil
 }
 
-// String is the flag's value, which the client is handed as KEEPER_KEPT_HOMES.
-func (k Kept) String() string {
-	return k.Root + ":" + strconv.Itoa(k.First) + "-" + strconv.Itoa(k.Last)
-}
-
 // Contains reports whether uid is in the range.
 func (k Kept) Contains(uid int) bool { return uid >= k.First && uid <= k.Last }
 
@@ -85,6 +82,75 @@ func (k Kept) Validate(path string, uid int) error {
 		return fmt.Errorf("uid %d is outside the kept-home range %d-%d", uid, k.First, k.Last)
 	}
 	return nil
+}
+
+// Owner is the uid of the kept home id: the owner of its folder under the
+// root, read without following a symbolic link, a directory owned by a uid
+// of the range. An absent home is fs.ErrNotExist; anything else there is
+// ErrNotKeptHome.
+func (k Kept) Owner(id string) (int, error) {
+	info, err := os.Lstat(filepath.Join(k.Root, id))
+	if err != nil {
+		return 0, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || !k.Contains(int(st.Uid)) {
+		return 0, fmt.Errorf("%s: %w", id, ErrNotKeptHome)
+	}
+	return int(st.Uid), nil
+}
+
+// IDs is the id of every kept home under the root, in byte order: each
+// entry named by a valid id that is a home (Owner).
+func (k Kept) IDs() ([]string, error) {
+	entries, err := os.ReadDir(k.Root)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, e := range entries {
+		if !ValidID(e.Name()) {
+			continue
+		}
+		if _, err := k.Owner(e.Name()); err == nil {
+			ids = append(ids, e.Name())
+		}
+	}
+	return ids, nil
+}
+
+// Taken is every uid of the range that is not free for a new home: the
+// owner of any entry under the root, a home or not, and any uid a process
+// under procRoot (a /proc mount) holds (procfs.HeldUIDs). A root or a
+// /proc that cannot be read takes them all, as an error.
+func (k Kept) Taken(procRoot string) (map[int]bool, error) {
+	entries, err := os.ReadDir(k.Root)
+	if err != nil {
+		return nil, err
+	}
+	held, err := procfs.HeldUIDs(procRoot)
+	if err != nil {
+		return nil, err
+	}
+	taken := map[int]bool{}
+	for uid := range held {
+		if k.Contains(uid) {
+			taken[uid] = true
+		}
+	}
+	for _, e := range entries {
+		info, err := os.Lstat(filepath.Join(k.Root, e.Name()))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && k.Contains(int(st.Uid)) {
+			taken[int(st.Uid)] = true
+		}
+	}
+	return taken, nil
 }
 
 // CheckKeptRoot verifies that root is a directory owned by uid 0 and the

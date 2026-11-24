@@ -148,18 +148,10 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 
 func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
 	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_LOCUS_BACKENDS_KEY=t", "KEEPER_CHANNEL=socket:[1]", "LOGNAME=root"},
-		Account{Name: "locus", Home: "/nonexistent"}, "socket:[4242]", nil)
+		Account{Name: "locus", Home: "/nonexistent"}, "socket:[4242]")
 	want := []string{"PATH=/usr/bin", "CYFR_LOCUS_BACKENDS_KEY=t", "HOME=/nonexistent", "USER=locus", "LOGNAME=locus", "KEEPER_CHANNEL=socket:[4242]"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ %q", got)
-	}
-
-	// A keeper that keeps homes names them; an inherited value is replaced.
-	kept := &home.Kept{Root: "/var/lib/locus/kept", First: 40001, Last: 49999}
-	got = ClientEnviron([]string{"KEEPER_KEPT_HOMES=/elsewhere:1-2", "PATH=/usr/bin"}, Account{Name: "locus"}, "socket:[1]", kept)
-	want = []string{"PATH=/usr/bin", "HOME=/", "USER=locus", "LOGNAME=locus", "KEEPER_CHANNEL=socket:[1]", "KEEPER_KEPT_HOMES=/var/lib/locus/kept:40001-49999"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("environ with kept homes %q", got)
 	}
 }
 
@@ -211,7 +203,7 @@ func TestResolveAccountsRefusesAKeptRangeSharingAnIdentity(t *testing.T) {
 }
 
 func TestCheckEnvironRefusesEveryUndeclaredKeeperVariableByName(t *testing.T) {
-	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]", "KEEPER_KEPT_HOMES=/k:1-2"}
+	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]"}
 	if err := CheckEnviron(accepted); err != nil {
 		t.Fatalf("refused %q: %v", accepted, err)
 	}

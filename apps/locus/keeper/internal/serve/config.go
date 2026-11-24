@@ -266,10 +266,10 @@ func parseID(s string) (int, error) {
 // EnvPrefix is the prefix of the keeper's own variable names.
 const EnvPrefix = "KEEPER_"
 
-// DeclaredEnv are the KEEPER_ names the keeper knows. ChannelEnv and
-// KeptHomesEnv are the ones it sets for its client; an inherited value is
-// replaced, never read (ClientEnviron).
-var DeclaredEnv = []string{protocol.ChannelEnv, protocol.KeptHomesEnv}
+// DeclaredEnv are the KEEPER_ names the keeper knows: ChannelEnv, which it
+// sets for its client; an inherited value is replaced, never read
+// (ClientEnviron).
+var DeclaredEnv = []string{protocol.ChannelEnv}
 
 // CheckEnviron is the one reader of the keeper's KEEPER_ environment: it
 // refuses every KEEPER_ name DeclaredEnv does not hold, naming each, so a
@@ -292,15 +292,14 @@ func CheckEnviron(environ []string) error {
 }
 
 // ClientEnviron is the client's environment: the keeper's own, with HOME,
-// USER and LOGNAME describing the client user, protocol.ChannelEnv naming
-// the channel socket on fd 3 and, for a keeper that keeps homes,
-// protocol.KeptHomesEnv naming the kept-homes root and uid range.
-func ClientEnviron(environ []string, client Account, channel string, kept *home.Kept) []string {
+// USER and LOGNAME describing the client user and protocol.ChannelEnv
+// naming the channel socket on fd 3.
+func ClientEnviron(environ []string, client Account, channel string) []string {
 	out := make([]string, 0, len(environ)+5)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
 		switch name {
-		case "HOME", "USER", "LOGNAME", protocol.ChannelEnv, protocol.KeptHomesEnv:
+		case "HOME", "USER", "LOGNAME", protocol.ChannelEnv:
 			continue
 		}
 		out = append(out, kv)
@@ -309,11 +308,7 @@ func ClientEnviron(environ []string, client Account, channel string, kept *home.
 	if dir == "" {
 		dir = "/"
 	}
-	out = append(out, "HOME="+dir, "USER="+client.Name, "LOGNAME="+client.Name, protocol.ChannelEnv+"="+channel)
-	if kept != nil {
-		out = append(out, protocol.KeptHomesEnv+"="+kept.String())
-	}
-	return out
+	return append(out, "HOME="+dir, "USER="+client.Name, "LOGNAME="+client.Name, protocol.ChannelEnv+"="+channel)
 }
 
 // PoolAccounts is the set of pooled uids and gids.
