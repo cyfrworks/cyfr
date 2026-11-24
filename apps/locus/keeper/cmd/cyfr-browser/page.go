@@ -537,6 +537,68 @@ func (b *browser) attachChild(w *window, session, kind string) {
 	}
 }
 
+// browserTargets are what the browser's own attachment holds at their
+// start: a window a page opens, which Chrome attaches to no session of its
+// opener's, and a shared worker, which belongs to no page. It holds every
+// window, the driver's own among them, so each is let run (attachedToBrowser).
+var browserTargets = map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+	"filter": []map[string]any{{"type": "page"}, {"type": "shared_worker"}}}
+
+// attachedToBrowser sets up a target the browser's attachment holds. A
+// window a page opened belongs to its opener's window, or to the window
+// the window that opened it belongs to, and is set up as another of that
+// window's targets (attachChild): named before it runs, its reserved
+// origin's requests failed, and closed when Chrome refuses to name it. A
+// shared worker is named and let run; one Chrome refuses to name is not
+// let run, which the driver's log says. A window the driver made, or one
+// no window of the driver's opened, is let run as it is: the driver's own
+// is named on its own session (browser.go).
+func (b *browser) attachedToBrowser(params json.RawMessage) {
+	var attached struct {
+		SessionID  string `json:"sessionId"`
+		TargetInfo struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+			OpenerID string `json:"openerId"`
+		} `json:"targetInfo"`
+	}
+	if json.Unmarshal(params, &attached) != nil || attached.SessionID == "" {
+		return
+	}
+	session, info := attached.SessionID, attached.TargetInfo
+	var opener *window
+	if info.Type == "page" && info.OpenerID != "" {
+		b.mu.Lock()
+		if opener = b.opened[info.OpenerID]; opener == nil {
+			for _, w := range b.windows {
+				if made(w) && w.target == info.OpenerID {
+					opener = w
+				}
+			}
+		}
+		if opener != nil {
+			b.opened[info.TargetID] = opener
+		}
+		b.mu.Unlock()
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), opWait)
+		defer cancel()
+		switch {
+		case opener != nil:
+			b.attachChild(opener, session, "page")
+		case info.Type == "shared_worker":
+			if err := b.name(ctx, session, info.Type); err != nil {
+				fmt.Fprintf(b.log, "cyfr-browser: a shared worker was not named, so it was not let run: %v\n", err)
+				return
+			}
+			_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
+		default:
+			_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
+		}
+	}()
+}
+
 // errUnnamed answers the action of a window one of whose targets Chrome
 // refused to name as the browser it is.
 var errUnnamed = &failure{"unnamed", "The browser could not name a frame, worker or window of this page as the browser it is, so it did not let it run."}

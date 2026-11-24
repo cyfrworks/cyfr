@@ -75,6 +75,9 @@ type browser struct {
 	person person
 	// log is the driver's log.
 	log io.Writer
+	// opened is the window each window a page opened belongs to, by its
+	// target, so a window one of those opens belongs there too (page.go).
+	opened map[string]*window
 }
 
 // window is one Chrome page target and its flattened session. Its name is
@@ -104,16 +107,21 @@ type window struct {
 }
 
 func newBrowser() *browser {
-	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64), log: os.Stderr}
+	return &browser{windows: map[string]*window{}, pages: make(chan pageEvent, 64), log: os.Stderr,
+		opened: map[string]*window{}}
 }
 
-// onTarget forgets a window whose target Chrome reports gone, with its put
-// and its calls, and closes one whose page crashed.
+// onTarget sets up a target the browser's attachment reports (page.go),
+// forgets a window whose target Chrome reports gone, with its put and its
+// calls, and closes one whose page crashed.
 func (b *browser) onTarget(method string, params json.RawMessage) {
 	var event struct {
 		TargetID string `json:"targetId"`
 	}
 	switch method {
+	case "Target.attachedToTarget":
+		b.attachedToBrowser(params)
+		return
 	case "Target.targetDestroyed", "Target.detachedFromTarget", "Target.targetCrashed":
 		if json.Unmarshal(params, &event) != nil {
 			return
@@ -122,6 +130,7 @@ func (b *browser) onTarget(method string, params json.RawMessage) {
 		return
 	}
 	b.mu.Lock()
+	delete(b.opened, event.TargetID)
 	for name, w := range b.windows {
 		if made(w) && w.target == event.TargetID {
 			delete(b.windows, name)

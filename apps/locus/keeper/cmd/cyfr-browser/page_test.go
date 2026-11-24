@@ -59,6 +59,10 @@ type pageChrome struct {
 	// makes is reported with; callerOrigin, the Origin a frame's caller
 	// sends when it is not the frame's document's, as a sandboxed frame's.
 	loaders, callerOrigin map[string]string
+	// order holds each naming and each run, as "name <session>" and
+	// "run <session>", in the order the driver asked them; closed, the
+	// targets it closed.
+	order, closed []string
 }
 
 type navigation struct {
@@ -305,6 +309,20 @@ func (f *pageChrome) attach(parent, kind string) string {
 	return child
 }
 
+// attachToBrowser reports a target of kind attached to the browser's own
+// attachment, held, opened by the target opener ("" for none), and
+// answers its session.
+func (f *pageChrome) attachToBrowser(kind, opener string) string {
+	f.mu.Lock()
+	f.children++
+	child := fmt.Sprintf("C%d", f.children)
+	f.mu.Unlock()
+	f.write(map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{
+		"sessionId": child, "waitingForDebugger": true,
+		"targetInfo": map[string]any{"targetId": "X" + child, "type": kind, "url": "", "openerId": opener}}})
+	return child
+}
+
 // event writes an event of session.
 func (f *pageChrome) event(session, method string, params map[string]any) {
 	f.write(map[string]any{"method": method, "sessionId": session, "params": params})
@@ -431,10 +449,18 @@ func (f *pageChrome) serve(commands io.Reader) {
 					"error": map[string]any{"code": -32000, "message": "Not allowed"}})
 				continue
 			}
+			f.mu.Lock()
+			f.order = append(f.order, "name "+m.SessionID)
+			f.mu.Unlock()
 			reply(map[string]any{})
 		case "Runtime.runIfWaitingForDebugger":
+			f.mu.Lock()
+			f.order = append(f.order, "run "+m.SessionID)
+			f.mu.Unlock()
 			reply(map[string]any{})
 			f.runs <- m.SessionID
+		case "Target.getTargetInfo":
+			reply(map[string]any{"targetInfo": map[string]any{"targetId": "X" + m.SessionID}})
 		case "Page.getFrameTree":
 			reply(map[string]any{"frameTree": f.tree(m.SessionID)})
 		case "Network.getRequestPostData":
@@ -543,6 +569,9 @@ func (f *pageChrome) serve(commands io.Reader) {
 				status: p.ResponseCode, headers: headers, body: body, nav: isNav && !nav.link}
 		case "Target.closeTarget":
 			session := "S" + strings.TrimPrefix(p.TargetID, "T")
+			f.mu.Lock()
+			f.closed = append(f.closed, p.TargetID)
+			f.mu.Unlock()
 			reply(map[string]any{"success": true})
 			f.write(map[string]any{"method": "Target.detachedFromTarget", "params": map[string]any{
 				"sessionId": session, "targetId": p.TargetID}})
@@ -1968,4 +1997,110 @@ func TestASandboxedFramesCallIsRefused(t *testing.T) {
 		t.Errorf("a sandboxed frame's call was answered %+v", a)
 	}
 	r.h.quiet(func(m map[string]any) bool { return m["t"] == "call" }, "a sandboxed frame's call went up")
+}
+
+// A window a page opens, which Chrome attaches to the browser's own
+// attachment with its opener named, is named before it runs, and belongs
+// to its opener's window: its requests for the reserved origin are failed
+// and none of its calls goes up, as for any target of the window that is
+// not one of its frames. A window that one opens belongs to the same
+// window. Neither is a window of the driver's: the driver's windows stay
+// as they were, and one of them ending forgets nothing else. A window the
+// driver made itself, which the attachment reports with no opener, and a
+// shared worker are let run, the worker once it is named.
+func TestAWindowAPageOpensIsNamedBeforeItRuns(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	r.b.agent = map[string]any{"userAgent": "Mozilla/5.0 Chrome/156.0.8078.79"}
+	if shown := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+		t.Fatalf("the put answered %v", shown)
+	}
+	r.f.navigated()
+	popup := r.f.attachToBrowser("page", "T1")
+	if run := <-r.f.runs; run != popup {
+		t.Fatalf("%s ran in place of the window the page opened, %s", run, popup)
+	}
+	inner := r.f.attachToBrowser("page", "X"+popup)
+	if run := <-r.f.runs; run != inner {
+		t.Fatalf("%s ran in place of the window the opened window opened, %s", run, inner)
+	}
+	own := r.f.attachToBrowser("page", "")
+	if run := <-r.f.runs; run != own {
+		t.Fatalf("%s ran in place of a window with no opener, %s", run, own)
+	}
+	shared := r.f.attachToBrowser("shared_worker", "")
+	if run := <-r.f.runs; run != shared {
+		t.Fatalf("%s ran in place of the shared worker %s", run, shared)
+	}
+	r.f.mu.Lock()
+	order := strings.Join(r.f.order, ", ")
+	r.f.mu.Unlock()
+	for _, s := range []string{popup, inner, shared} {
+		named, ran := strings.Index(order, "name "+s+","), strings.Index(order, "run "+s)
+		if named < 0 || ran < 0 || named > ran {
+			t.Fatalf("%s was not named before it ran: %s", s, order)
+		}
+	}
+	if strings.Contains(order, "name "+own+",") {
+		t.Fatalf("a window with no opener was named on the attachment's session: %s", order)
+	}
+	for _, s := range []string{popup, inner} {
+		if a := r.f.answer(r.f.pause(s, "POST", reservedOrigin+"/_f/v1/invoke", "P"+s, true, `{"from":"popup"}`)); a.method != "Fetch.failRequest" {
+			t.Fatalf("the call of the opened window %s was answered %+v, not failed", s, a)
+		}
+		if a := r.f.answer(r.f.pause(s, "GET", reservedOrigin+testRoot+"/app.js", "P"+s, true, "")); a.method != "Fetch.failRequest" {
+			t.Fatalf("the opened window %s was answered %+v for a file of its opener's put", s, a)
+		}
+	}
+	r.h.quiet(func(m map[string]any) bool { return m["t"] == "call" }, "a call of a window a page opened went up")
+	r.f.write(map[string]any{"method": "Target.targetDestroyed", "params": map[string]any{"targetId": "X" + popup}})
+	r.f.write(map[string]any{"method": "Target.detachedFromTarget", "params": map[string]any{"sessionId": popup, "targetId": "X" + popup}})
+	r.h.send(map[string]any{"t": "req", "id": 2, "win": "thr_01", "op": "read", "args": map[string]any{}})
+	// The read's answer comes after Chrome's events of the window's end, so
+	// the driver has taken them by then; the fake answers no page read.
+	if read := r.h.response(2); strings.Contains(fmt.Sprint(read), "no_window") {
+		t.Fatalf("the window that opened a window that ended answered %v", read)
+	}
+	r.b.mu.Lock()
+	windows, opened, opener := len(r.b.windows), len(r.b.opened), r.b.opened["X"+inner]
+	r.b.mu.Unlock()
+	if windows != 1 || opened != 1 || opener == nil || opener.name != "thr_01" {
+		t.Fatalf("the driver holds %d windows and %d opened ones, the inner one of %v", windows, opened, opener)
+	}
+	r.f.mu.Lock()
+	closed := r.f.closed
+	r.f.mu.Unlock()
+	if len(closed) != 0 {
+		t.Fatalf("the driver closed %v", closed)
+	}
+}
+
+// A window a page opens that Chrome refuses to name never runs: it is
+// closed, and the window that opened it says so at its next action.
+func TestAWindowAPageOpensThatCannotBeNamedIsClosed(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	r.b.agent = map[string]any{"userAgent": "Mozilla/5.0 Chrome/156.0.8078.79"}
+	if shown := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+		t.Fatalf("the put answered %v", shown)
+	}
+	r.f.navigated()
+	r.f.mu.Lock()
+	r.f.refuseChildNaming = true
+	r.f.mu.Unlock()
+	popup := r.f.attachToBrowser("page", "T1")
+	select {
+	case run := <-r.f.runs:
+		t.Fatalf("%s ran though the window %s was not named", run, popup)
+	case <-time.After(300 * time.Millisecond):
+	}
+	r.h.send(map[string]any{"t": "req", "id": 2, "win": "thr_01", "op": "read", "args": map[string]any{}})
+	read := r.h.response(2)
+	failure, _ := read["error"].(map[string]any)
+	r.f.mu.Lock()
+	closed := strings.Join(r.f.closed, " ")
+	r.f.mu.Unlock()
+	if failure["code"] != "unnamed" || closed != "X"+popup {
+		t.Fatalf("the window's next action answered %v, and the driver closed %q", read, closed)
+	}
 }
