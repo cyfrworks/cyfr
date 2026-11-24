@@ -72,7 +72,7 @@ Every library is bundled; nothing is imported from a remote URL.
 - `browser(action: "page", tincture: "tincture:local.my-viewer:0.1.0")`, then `browser(action: "read")` or `browser(action: "screenshot")` — it loads in this thread's window as a plain site with no frame, a built template's from its last compile; its `cyfr.invoke` and `cyfr.action` are your own calls in this thread, held to its declaration, and its streams do not open there (the `browser` scroll)
 - Ask the person to open the app and say what they see; fix from there
 
-**If scaffold fails**, tell the person in your own words that the app could not be made, and stop: the manifest that makes a directory a tincture comes from `component(action: "create")`, never from `source`.
+**If scaffold fails**, tell the person why in plain words, such as a version that already exists or a name already taken, never as a tool's or an operation's name, and stop: the manifest that makes a directory a tincture comes from `component(action: "create")`, never from `source`.
 
 ## The Cyfr SDK
 

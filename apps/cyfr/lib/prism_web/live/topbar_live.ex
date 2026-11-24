@@ -221,6 +221,17 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, socket}
   end
 
+  # A recent app call's row names the app as a person does, by its name;
+  # a call that names no app shows its request.
+  defp app_name(call) do
+    ref = call.tincture_ref || call.reference
+
+    case is_binary(ref) && Prima.ComponentRef.parse(ref) do
+      {:ok, %{name: name}} -> name
+      _unnamed -> ref || call.request_id
+    end
+  end
+
   defp drain_offer_messages do
     receive do
       %Bus.FileOffer{} -> drain_offer_messages()
@@ -435,7 +446,7 @@ defmodule PrismWeb.TopbarLive do
   defp source_class("schedule"), do: "bg-amber-900/30 text-amber-300"
   defp source_class(_), do: "bg-blue-900/30 text-blue-300"
 
-  defp source_label("tincture"), do: "Tincture"
+  defp source_label("tincture"), do: "App"
   defp source_label("schedule"), do: "Cron"
   defp source_label(_), do: "MCP"
 
@@ -595,7 +606,7 @@ defmodule PrismWeb.TopbarLive do
                   <li class="flex items-center gap-2">
                     <.status_indicator status={t.status} />
                     <span class="text-gray-300 font-mono text-xs truncate">
-                      {t.tincture_ref || t.reference || t.request_id}
+                      {app_name(t)}
                     </span>
                   </li>
                 <% end %>

@@ -219,6 +219,54 @@ defmodule PrismWeb.TopbarLiveTest do
     html = render(bar)
     assert html =~ "Recent app calls"
     refute html =~ "Recent tincture invokes"
+    # The row names the app as a person does, never by its reference.
+    assert html =~ ~r/<span[^>]*>\s*maps\s*<\/span>/
+    refute html =~ "tincture:local.maps"
+  end
+
+  test "an app's request in flight is badged as an app's", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+    wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the mount's refresh to drain")
+    render_click(bar, "toggle_popover", %{"name" => "activity"})
+
+    athanor_id = seated_athanor().id
+
+    ctx = %{
+      Sanctum.TestContext.local(:prism)
+      | athanor_id: athanor_id,
+        request_id: Prima.UUID7.request_id()
+    }
+
+    call =
+      Prima.Decision.new(
+        call_id: Prima.UUID7.generate_id("call"),
+        request_id: ctx.request_id,
+        user_id: ctx.user_id,
+        athanor_id: athanor_id,
+        plane: :external,
+        tool: "tincture",
+        action: "invoke",
+        inserted_at: DateTime.utc_now(),
+        admission: :admitted
+      )
+
+    :ok = Sanctum.Decisions.open(ctx, call, %{method: "tincture/invoke", input: %{}})
+    send(bar.pid, Cyfr.Bus.Request.new(Prima.Actor.in_athanor(athanor_id), :logged))
+
+    wait_until(
+      fn -> render(bar) =~ "In-flight requests (1)" end,
+      5_000,
+      "the app's request to show in flight"
+    )
+
+    html = render(bar)
+    assert html =~ ~r/<span[^>]*>\s*App\s*<\/span>/
+    refute html =~ ~r/>\s*Tincture\s*</
   end
 
   test "Running follows Aqua's turn, whose root announces no execution", %{conn: conn} do

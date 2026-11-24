@@ -678,6 +678,11 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert scroll =~
              "To the person it is an app: never name a tool, an operation or a tincture to them."
+
+    assert scroll =~
+             "**If scaffold fails**, tell the person why in plain words, such as a version " <>
+               "that already exists or a name already taken, never as a tool's or an " <>
+               "operation's name, and stop"
   end
 
   test "local_unit! finds a shipped formula by name" do
