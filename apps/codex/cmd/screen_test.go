@@ -594,7 +594,7 @@ func TestScreenFilesAreFilledIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := read(t, filepath.Join(screenDir, "launcher.sh"))
-	if !strings.Contains(launcher, "\n    /opt/cyfr/CYFR --screen-project=/home/alice/cyfr\n") || strings.Contains(launcher, "@") {
+	if !strings.Contains(launcher, "\n    /opt/cyfr/resources/cyfr screen app /home/alice/cyfr\n") || strings.Contains(launcher, "@") {
 		t.Errorf("launcher:\n%s", launcher)
 	}
 	session := read(t, filepath.Join(screenDir, "session.sh"))
@@ -853,5 +853,38 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 		if got := releaseApart(dir, c.ours); got != c.want {
 			t.Errorf("the folder at %s, the app at %s: %q, want %q", c.folder, c.ours, got, c.want)
 		}
+	}
+}
+
+// The screen's launcher starts the app on the route its folder's CYFR
+// takes, read at that start: a tailnet folder's proxy and resolver rules,
+// none for another, and none for a folder that cannot be read, whose
+// shell says why on the screen.
+func TestTheScreensAppStartsOnItsFoldersRoute(t *testing.T) {
+	for _, c := range []struct {
+		name, env string
+		route     []string
+	}{
+		{"tailnet", "CYFR_ACCESS=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n",
+			[]string{"--proxy-server=socks5://127.0.0.1:1055", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"}},
+		{"local", "CYFR_ACCESS=local\nCYFR_PORT=4321\n", nil},
+		{"public", "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n", nil},
+		{"unreadable", "", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if c.env != "" {
+				if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(c.env), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := readFolder(dir); err != nil {
+					t.Fatalf("the folder is not read: %v", err)
+				}
+			}
+			want := append([]string{"/opt/cyfr/CYFR", "--screen-project=" + dir}, c.route...)
+			if got := screenAppArgs(dir); !slices.Equal(got, want) {
+				t.Fatalf("the app starts as %q, want %q", got, want)
+			}
+		})
 	}
 }

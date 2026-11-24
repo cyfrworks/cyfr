@@ -33,10 +33,11 @@
 # (tests/install-screen-proof); this smoke has no CYFR.
 #
 # Usage: bash tests/desktop-proof/screen/app.sh DEB
-# DEB is the cyfr-desktop package of this machine's architecture. It needs
-# Ubuntu 26.04, Docker, Ubuntu's archive and root through sudo -n, to load the package's
-# AppArmor profile, which it removes again unless this machine held it
-# before; it binds no port of this machine.
+# DEB is the cyfr-desktop package of this machine's architecture, which
+# this machine has installed (tests/desktop-proof/native/linux.sh), so its
+# AppArmor profile is loaded: this changes nothing of this machine's. It
+# needs Ubuntu 26.04, Docker and Ubuntu's archive; it binds no port of
+# this machine.
 set -uo pipefail
 
 # ---- inside the container, as root ----
@@ -126,7 +127,7 @@ if [ "${1:-}" = --session ]; then
       if [ "$end" = "ended 137" ] && [ -n "$why" ] && [ -n "$itself" ]; then
         verdict PASS "cyfr killed ($n) ends the app ($end; it said: $why; $itself), and the next start shows the locked screen again"
       else
-        verdict FAIL "cyfr killed ($n) ended the app as $end, saying ${why:-nothing}${itself:+; $itself}: it must end 137 by itself, saying cyfr ended and that it ends itself: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
+        verdict FAIL "cyfr killed ($n) ended the app as $end, saying ${why:-nothing}${itself:+; $itself}: it must end 137 by itself, saying cyfr ended and that it ends itself: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ') $(held | tr '\n' ' ')"
       fi
     else
       verdict FAIL "cyfr killed ($n) did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ') $(held | tr '\n' ' ')"
@@ -199,7 +200,7 @@ PY
 
   # The stand-in for the screen's launcher: the app again whenever it ends.
   (while [ ! -e "$OUT/stop" ]; do
-    /opt/cyfr/CYFR --screen-project="$PROJECT" >>"$OUT/app.log" 2>&1
+    /opt/cyfr/resources/cyfr screen app "$PROJECT" >>"$OUT/app.log" 2>&1
     echo "ended $?" >>"$OUT/launches"
     sleep 1 # sleep-ok: the launcher's pause between starts
   done) &
@@ -273,11 +274,9 @@ DEB=$(realpath -e "$1") || exit 64
 command -v docker >/dev/null || { echo "screen app: docker is needed" >&2; exit 69; }
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-screen-app.XXXXXX") || exit 1
 BOX="${PROOF_RUN_PREFIX:-}cyfr-screen-app-$$"
-UNLOAD_PROFILE=""
 cleanup() {
   local code=$?
   docker rm -f "$BOX" >/dev/null 2>&1
-  [ -z "$UNLOAD_PROFILE" ] || sudo -n apparmor_parser --remove "$WORK/apparmor-profile" >/dev/null 2>&1
   rm -rf "$WORK"
   exit "$code"
 }
@@ -295,18 +294,17 @@ chmod 644 "$WORK"/fixture/*
 # in tests/desktop-proof/home.sh's client, and so does glycin's bwrap.
 # Docker's AppArmor profile refuses bwrap's mounts ("Failed to make /
 # slave"), so the container runs unconfined, and the app and bwrap each
-# run under their own profile as on the box: the package's, loaded here,
-# and for bwrap the host's, which Ubuntu 26.04 holds and 24.04 does not.
-# Unconfined without the package's, the host's kernel refuses the
-# engine's namespaces (apparmor_restrict_unprivileged_userns).
+# run under their own profile as on the box: the package's, which the
+# package's install on this machine loaded, and for bwrap the host's,
+# which Ubuntu 26.04 holds and 24.04 does not. Unconfined without the
+# package's, the host's kernel refuses the engine's namespaces
+# (apparmor_restrict_unprivileged_userns). The loaded profiles' names are
+# read where any account may read them; nothing is loaded or removed.
 dpkg-deb --fsys-tarfile "$DEB" | tar -xO ./opt/cyfr/resources/apparmor-profile >"$WORK/apparmor-profile" ||
   { echo "screen app: the package holds no AppArmor profile" >&2; exit 1; }
 profile=$(sed -n 's/^profile "\([^"]*\)".*/\1/p' "$WORK/apparmor-profile")
-held=$(sudo -n cat /sys/kernel/security/apparmor/profiles) ||
-  { echo "screen app: loading the package's AppArmor profile needs root through sudo -n" >&2; exit 69; }
-grep -q "^$profile (" <<<"$held" || UNLOAD_PROFILE=1
-sudo -n apparmor_parser --replace "$WORK/apparmor-profile" ||
-  { echo "screen app: the package's AppArmor profile $profile was not loaded" >&2; exit 1; }
+cat /sys/kernel/security/apparmor/policy/profiles/*/name 2>/dev/null | grep -qxF -- "$profile" ||
+  { echo "FAIL the package's AppArmor profile $profile is not loaded on this machine: install the package here first (tests/desktop-proof/native/linux.sh)"; exit 1; }
 docker run -d --init --name "$BOX" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHECK_CPUS"} \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined --shm-size 512m \
   -v "$WORK/fixture:/fixture:ro" "$IMAGE" sleep infinity >/dev/null || exit 1

@@ -8,8 +8,10 @@
 # idle and suspend watches and the shell's own pages, locking CYFR
 # whenever any of them ends. It never starts or stops CYFR. Tokens stay in
 # .env, which the shell reads itself. The app ends when its shell does,
-# and an app that ends is started again, locked.
+# and an app that ends is started again, locked. cyfr starts it (`cyfr
+# screen app`, which becomes the app's process) on the route the folder's
+# CYFR takes, read at each start.
 while :; do
-    /opt/cyfr/CYFR --screen-project=@DIR@
+    /opt/cyfr/resources/cyfr screen app @DIR@
     sleep 1
 done

@@ -189,7 +189,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       message(`CYFR stopped: ${effect.end}. Quit the app and open it again.`)
     }
     if (effect.quit && screen) {
-      // On the box's screen the app does not quit, it ends, and in this
+      // The one end of the screen's app, which every road that ends it
+      // reaches (states.js: stopped, quit). On the box's screen the app
+      // does not quit, it ends, and in this
       // turn: its end is what lets its launcher start it again, locked,
       // and the toolkit's teardown of the window just closed runs in the
       // loop's next turns, where it can hang the main thread (Gtk loading

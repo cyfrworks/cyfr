@@ -48,6 +48,9 @@ const (
 // for it.
 var appCyfr = "/opt/cyfr/resources/cyfr"
 
+// appProgram is the CYFR app's own program in its package.
+const appProgram = "/opt/cyfr/CYFR"
+
 // appPackageSum and fetchAppPackage are release.PackageChecksum and
 // release.FetchPackage, variables so tests stand in for the release.
 var (
@@ -105,8 +108,36 @@ var screenShellCmd = &cobra.Command{
 	},
 }
 
+var screenAppCmd = &cobra.Command{
+	Use:    "app DIR",
+	Short:  "Start the CYFR app as this machine's screen for the project in DIR, on the route its CYFR takes (the screen's launcher runs it)",
+	Hidden: true,
+	Args:   cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		return screenExec(screenAppArgs(args[0]))
+	},
+}
+
+// screenAppArgs is the CYFR app's command line as this machine's screen
+// for the project in dir, which becomes the app's process (screenExec):
+// --screen-project, and the engine's route to the folder's CYFR where it
+// takes one (localRoute), read at each start, since the engine takes a
+// route only as it starts: the app never starts itself again on the route
+// its shell names (desktop/src/states.js), its launcher does, through
+// this. A folder that cannot be read starts the app on none, and its
+// shell, reading the same folder, says why on the screen.
+func screenAppArgs(dir string) []string {
+	args := []string{appProgram, "--screen-project=" + dir}
+	if read, err := readFolder(dir); err == nil {
+		if proxy, resolver := localRoute(read.Mode); proxy != "" {
+			args = append(args, "--proxy-server="+proxy, "--host-resolver-rules="+resolver)
+		}
+	}
+	return args
+}
+
 func init() {
-	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd)
+	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd, screenAppCmd)
 	rootCmd.AddCommand(screenCmd)
 }
 

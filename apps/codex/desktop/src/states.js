@@ -120,9 +120,12 @@
 //   back {notices}           show the chooser in the content window as it
 //                            stands, its session as it is
 //   relaunch {proxy, resolver}  once forgotten, or the wait for it is up
-//   end {why}                kill cyfr and tell the person
+//                            (never on the box's screen)
+//   end {why}                kill cyfr and tell the person (never on the
+//                            box's screen)
 //   quit                     once forgotten, or the wait for it is up,
-//                            shut cyfr down and quit
+//                            shut cyfr down and quit; on the box's screen
+//                            the app's one end, at once (app.js)
 //   hop {url, kind}, unhop
 //   deliver {url}            load a sign-in's answer into the content
 //                            window; answers delivered as that call
@@ -161,6 +164,10 @@ function ending(s, last) {
   const [t, answer] = unpicked(s)
   return {state: {...t, name: "ended", returning: null}, do: [...answer, {close: true}, last]}
 }
+// cyfr's end, or the app's at what cyfr said, for why: on the box's screen
+// the app's one end (quit), after the sentence, which its launcher answers
+// with a start, locked; elsewhere cyfr is killed and a message says why.
+const stopped = (s, why) => ending(s, s.screen ? {say: `cyfr ended: ${why}`, quit: true} : {end: why})
 const same = (s, effects = []) => ({state: s, do: effects})
 const withdrawn = (s, effects = []) => same(s.returning ? {...s, returning: null} : s, effects)
 const adding = (notices, notice) => !notice || notices.includes(notice) ? notices : [...notices, notice]
@@ -305,7 +312,7 @@ export function step(s, e) {
     // ---- cyfr ----
     case "ready":
       if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" : !e.url.startsWith(LOOPBACK + "/bootstrap/#token="))) {
-        return ending(s, s.screen ? {quit: true} : {end: "its first page was not the chooser"})
+        return stopped(s, "its first page was not the chooser")
       }
       return {state: {...s, name: "chooser", readyURL: e.url}, do: [{say: "ready"}, {chooser: []}]}
     case "home": {
@@ -313,9 +320,14 @@ export function step(s, e) {
       // From before the lock; on the screen, the proposal after it.
       if (s.name === "locking") return s.screen ? same({...s, wanted: m}) : same(s)
       if (!["chooser", "taking", "proposed"].includes(s.name) || !homeMessage(m)) {
-        return ending(s, {end: "it named a CYFR this app does not open"})
+        return stopped(s, "it named a CYFR this app does not open")
       }
-      if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
+      if (rerouted(s, m)) {
+        // The screen's app is started on its CYFR's route by its launcher
+        // (cmd/screen.go, cyfr screen app), never by itself.
+        return s.screen ? stopped(s, "it named a route the app was not started on, which the screen's launcher starts it on")
+          : ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
+      }
       return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, device: m.road === "device", returning: null},
         do: [{say: `home: ${m.home}`}, ...(s.name === "taking" ? [] : [{take: true}])]}
     }
@@ -328,7 +340,7 @@ export function step(s, e) {
     }
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
-      if (s.name !== "proposed" || e.home !== s.home) return ending(s, {end: "it opened a CYFR this app was not keeping to"})
+      if (s.name !== "proposed" || e.home !== s.home) return stopped(s, "it opened a CYFR this app was not keeping to")
       // A CYFR that opens at the device's pages (home's road) loads none
       // of its own: the chooser goes to those pages, on either road.
       return s.accountRoad && !s.device ? same({...s, name: "open", notices: []}, [{root: {home: s.home}}]) : same({...s, name: "open"})
@@ -341,7 +353,7 @@ export function step(s, e) {
     case "ending":
       return step(s, {type: "gone", why: "the screen shell is ending"})
     case "gone":
-      return ending(s, s.screen ? {say: `cyfr ended: ${e.why}`, quit: true} : {end: e.why})
+      return stopped(s, e.why)
 
     // ---- the system, the windows, the person ----
     case "forgot": {

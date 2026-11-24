@@ -57,6 +57,7 @@ function reset({relaunch = false} = {}) {
   world.powerMonitor.removeAllListeners()
   world.quit = false
   world.endedSelf = []
+  world.trace = []
   world.menus = []
   world.spawnedIn = []
 }
@@ -202,6 +203,18 @@ function cyfr() {
     kill() { child.killed = true }
   })
   child.heard = []
+  // What main tells cyfr and its input's end, in the order main does them,
+  // beside what it says (world.trace): heard reads them a turn later.
+  const write = child.stdin.write.bind(child.stdin)
+  const end = child.stdin.end.bind(child.stdin)
+  child.stdin.write = (chunk, ...rest) => {
+    for (const line of String(chunk).split("\n").filter(Boolean)) world.trace.push(`told ${JSON.parse(line).type}`)
+    return write(chunk, ...rest)
+  }
+  child.stdin.end = (...rest) => {
+    world.trace.push("input ended")
+    return end(...rest)
+  }
   child.stdin.setEncoding("utf8")
   child.stdin.on("data", (chunk) => {
     for (const line of chunk.split("\n").filter(Boolean)) child.heard.push(JSON.parse(line))
@@ -1495,8 +1508,16 @@ const ON_LINUX = {skip: process.platform !== "linux" && "the box's screen runs o
 const SHELL_PAGE = "http://127.0.0.1:7340/"
 
 // The screen's end by the kernel, recorded: the turn it came in, and what
-// main had done by then.
-const endSelf = () => { world.endedSelf.push({quit: world.quit, exited: world.exited}) }
+// main had done by then: quit or exited, and what it had told cyfr and
+// said, in order, since the test last cleared world.trace.
+const endSelf = () => { world.endedSelf.push({quit: world.quit, exited: world.exited, trace: [...world.trace]}) }
+const sayTraced = (said) => (line) => {
+  said.push(line)
+  world.trace.push(`said ${line}`)
+}
+// What the screen's one end has done by the instant it ends: cyfr told to
+// shut down, its input ended, then the sentence.
+const ENDS = ["told shutdown", "input ended", "said ended: the app's process ends itself, without the toolkit's teardown"]
 
 // The app started as the box's screen for SCREEN (or `project`), on
 // whatever road the platform would give, its shell said ready.
@@ -1506,7 +1527,7 @@ async function screenStarted(project = SCREEN) {
   world.exited = undefined
   const said = []
   try {
-    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: (line) => said.push(line), endSelf})
+    startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: sayTraced(said), endSelf})
     await settled()
     if (world.exited === undefined) {
       child.say({type: "ready", url: SHELL_PAGE})
@@ -1599,23 +1620,66 @@ test("on the screen cyfr's end ends the app's process in its own turn, after its
   const quits = []
   world.app.on("before-quit", () => quits.push("before-quit"))
   world.exited = undefined
+  world.trace = []
   // The turn the line from cyfr is read in, and nothing after it: the
   // toolkit's teardown would run in a later one.
   child.emit("exit", 0, null)
-  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined}], "ended in that turn, no quit or exit asked")
-  assert.deepEqual(said.slice(-2), ["cyfr ended: it exited (0)", "ended: the app's process ends itself, without the toolkit's teardown"])
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: it exited (0)", ...ENDS]}],
+    "ended in that turn, cyfr told and its input ended before the sentence, no quit or exit asked")
   assert.deepEqual(quits, [])
+  assert.ok(said.length > 0)
 })
 
 test("on the screen the shell's ending ends the app's process once cyfr is told", ON_LINUX, async () => {
   const said = await screenStarted()
   assert.ok(await opens())
   await give(content())
+  world.trace = []
   child.say({type: "ending"})
   await settled()
-  assert.equal(world.endedSelf.length, 1)
-  assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is told first")
-  assert.deepEqual(said.slice(-2), ["cyfr ended: the screen shell is ending", "ended: the app's process ends itself, without the toolkit's teardown"])
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: the screen shell is ending", ...ENDS]}],
+    "cyfr told and its input ended before the sentence")
+  assert.ok(said.length > 0)
+})
+
+// Every road by which the screen's app ends is its one end: cyfr told and
+// its input ended, the sentence, then the process's own end, in the turn
+// the cause came in; none reaches the engine's quit, exit or relaunch. A
+// route other than the one the app started on is its launcher's to start
+// it on (cmd/screen.go, cyfr screen app), never the app's own.
+test("on the screen every end of the app is its one end, and none is the engine's quit, exit or relaunch", ON_LINUX, async () => {
+  const roads = {
+    "cyfr's exit": [() => child.emit("exit", 1, null), "cyfr ended: it exited (1)"],
+    "the shell's ending": [() => child.say({type: "ending"}), "cyfr ended: the screen shell is ending"],
+    "the system's quit": [() => world.app.quit(), null],
+    "the content window closed": [() => content().emit("closed"), null],
+    "a route the app was not started on": [() => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
+      "cyfr ended: it named a route the app was not started on, which the screen's launcher starts it on"],
+    "a CYFR this app does not open": [() => child.say({type: "home", home: "not an address", account: ACCOUNT, attempt: 9}),
+      "cyfr ended: it named a CYFR this app does not open"],
+    "a CYFR it was not keeping to opened": [() => child.say({type: "opened", home: "https://other.example"}),
+      "cyfr ended: it opened a CYFR this app was not keeping to"]
+  }
+  for (const [road, [cause, sentence]] of Object.entries(roads)) {
+    await screenStarted()
+    world.exited = undefined
+    world.trace = []
+    cause()
+    await settled()
+    await settled()
+    assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: [...(sentence ? [`said ${sentence}`] : []), ...ENDS]}], road)
+    assert.equal(world.relaunched, null, road)
+  }
+  // Its first page not the shell's own, the same.
+  reset()
+  world.screen = SCREEN
+  startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: sayTraced([]), endSelf})
+  world.screen = undefined
+  await settled()
+  world.trace = []
+  child.say({type: "ready", url: READY})
+  await settled()
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: its first page was not the chooser", ...ENDS]}])
 })
 
 test("on the screen a failed load of the shell's own page locks, and so does a confirmation lost or failed", ON_LINUX, async () => {
