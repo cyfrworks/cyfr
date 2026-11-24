@@ -35,7 +35,7 @@ set -euo pipefail
 always=(.github/workflows/test.yml scripts/ci/self-test-scope.sh)
 
 # The containment library, the host queue, the run names, the stage table,
-# the shared images and the janitor. Their fixtures are
+# the shared images, the archive's key and the janitor. Their fixtures are
 # scratch repositories holding copies of these; the stage table's guard
 # reads every workflow.
 host=(
@@ -45,6 +45,7 @@ host=(
   scripts/janitor.sh scripts/nightly.sh scripts/stage.sh scripts/stages.tsv
   tests/contain-test.sh tests/heavy-check-test.sh tests/run-names-test.sh tests/stage-test.sh
   tests/image-test.sh tests/image-stub.sh tests/janitor-test.sh
+  scripts/apt-key.sh tests/apt-key-test.sh tests/apt-key-release
   tests/handle-proof/run.sh
   tests/install-screen-proof/prepare.sh tests/install-screen-proof/base-image.sh
   tests/install-screen-proof/lib.sh

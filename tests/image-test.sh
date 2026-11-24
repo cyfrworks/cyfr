@@ -148,6 +148,21 @@ context_paths "$(last_context)" >"$S/got"
 printf '%s\n' .dockerignore Dockerfile LICENSE README.md apps/locus/mix.exs apps/prima/mix.exs seed/a.txt | LC_ALL=C sort >"$S/want"
 diff "$S/want" "$S/got" >/dev/null || fail "the app context is not the source list: $(diff "$S/want" "$S/got" | tr '\n' ' ')"
 
+begin "a RUN bind mount's source is an input and in the context; a cache mount and one from a stage read none"
+cp "$repo/Dockerfile" "$S/Dockerfile.orig"
+printf '%s\n' 'RUN --mount=type=cache,target=/c --mount=type=bind,from=keeper,target=/k \' \
+  '    --mount=type=bind,source=config/config.exs,target=/t true' >>"$repo/Dockerfile"
+mounted=$(tag_of "$repo" app)
+[ "$mounted" != "$base_app" ] || fail 'the mount left the tag as it was'
+(cd "$repo" && scripts/image.sh app) >/dev/null 2>&1
+context_paths "$(last_context)" >"$S/got"
+printf '%s\n' .dockerignore Dockerfile LICENSE README.md apps/locus/mix.exs apps/prima/mix.exs config/config.exs seed/a.txt | LC_ALL=C sort >"$S/want"
+diff "$S/want" "$S/got" >/dev/null || fail "the mounted context is not the source list: $(diff "$S/want" "$S/got" | tr '\n' ' ')"
+printf '%s\n' '# an edit' >>"$repo/config/config.exs"
+[ "$(tag_of "$repo" app)" != "$mounted" ] || fail 'an edit of the mounted source kept the tag'
+git -C "$repo" checkout -q -- config/config.exs
+cp "$S/Dockerfile.orig" "$repo/Dockerfile"
+
 begin 'dated and undated builds get different tags'
 [ "$(tag_of "$repo" --undated locus)" != "$base_locus" ] || fail 'the undated tag is the dated one'
 
@@ -171,6 +186,8 @@ refused 11 'COPY **/mix.exs /x' '`**/mix.exs` holds a glob character other than 
 refused 11 'COPY missing/ /x' '`missing/` resolves to no file of the tree'
 refused 11 'COPY --exclude=*.md config/ /x' 'the flag `--exclude=*.md` is not read here'
 refused 11 'COPY config/' 'a COPY needs a source and a destination'
+refused 11 'RUN --mount=type=bind,target=/t true' 'the bind mount `--mount=type=bind,target=/t` names no source, and the whole context is not read here'
+refused 11 'RUN --mount=type=bind,source=missing.sh,target=/t true' '`missing.sh` resolves to no file of the tree'
 refused 13 'RUN true \
   && true
 COPY nothing-here /x' '`nothing-here` resolves to no file of the tree'

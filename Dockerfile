@@ -70,12 +70,15 @@ RUN mix compile && mix assets.deploy && mix release cyfr
 # by Dockerfile.locus.
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runner
 
-# APT_REFRESH busts the build cache for this layer so the upgrade is not
-# served stale from a cached layer: CI passes the UTC date (YYYY-MM-DD), so
-# the layer refreshes once a day and is shared within it; a local build may
-# leave it.
+# APT_REFRESH is the archive's key (scripts/apt-key.sh), which CI reads
+# when its build starts: the layer is reused while the archive holds what
+# it held, and built again on the archive's packages as soon as one moves,
+# a published fix among them. The script, mounted for this layer alone,
+# holds apt's lists to that key, so no layer is cached under a key its
+# lists were not. A local build may leave it at 0, unchecked.
 ARG APT_REFRESH=0
-RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
+RUN --mount=type=bind,source=scripts/apt-key.sh,target=/tmp/apt-key.sh \
+    bash /tmp/apt-key.sh --update "${APT_REFRESH}" && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
     openssl \
     libncurses6 \

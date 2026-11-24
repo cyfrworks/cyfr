@@ -6,8 +6,8 @@
 # unless all six verification workflows passed and the tag names the
 # version apps/prima/mix.exs declares, can neither be cancelled nor let a
 # failure pass, builds both images for both platforms with the scan reading
-# the loaded image and each image's upgrade layer refreshed on the UTC date
-# (APT_REFRESH, read by both Dockerfiles), boots each loaded image on its
+# the loaded image and each image's upgrade layer keyed on the archive's
+# key (scripts/apt-key.sh, APT_REFRESH in both Dockerfiles), boots each loaded image on its
 # platform's runner before its digest is uploaded, merges each image's two digests
 # by exact name, attests the merge's printed digest and hands it to the
 # CLI release, which pins the scaffold's compose to the merged digests,
@@ -156,11 +156,19 @@ LOAD = "type=docker,name="
 # (scripts/ci/image-boots.sh), before its digest is uploaded.
 BOOT_RUN = 'scripts/ci/image-boots.sh "$IMAGE" "$LOADED"'
 # The upgrade layer's cache key: one build argument, the output of a step
-# that writes the UTC date on every run, so each image's upgrade refreshes
-# daily (Dockerfile and Dockerfile.locus read it as ARG APT_REFRESH).
+# that writes the archive's key (scripts/apt-key.sh) on every run, so each
+# image's upgrade is built on what Debian's archive holds (Dockerfile and
+# Dockerfile.locus read it as ARG APT_REFRESH).
+APT_KEY_READ = "apt_key=$(scripts/apt-key.sh)"
 APT_ARG = re.compile(r"^APT_REFRESH=\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$")
 OUTPUT_LINE = re.compile(r'^echo "[\w-]+=[^"]*" >> "\$GITHUB_OUTPUT"$')
-APT_UPGRADE = re.compile(r"^RUN .*\$\{APT_REFRESH\}.*apt-get upgrade", re.MULTILINE)
+# The layer's RUN, continued lines and all, runs the key's guard on
+# APT_REFRESH before it upgrades.
+APT_UPGRADE = re.compile(
+    r"^RUN --mount=type=bind,source=scripts/apt-key\.sh,target=(\S+) \\\n"
+    r"\s+bash \1 --update \"\$\{APT_REFRESH\}\" && apt-get upgrade",
+    re.MULTILINE,
+)
 # The switch to the containerd image store. It restarts the daemon, so it
 # precedes buildx's builder and every build.
 STORE_SWITCH = "sudo scripts/ci/containerd-image-store.sh"
@@ -438,7 +446,7 @@ def check_apt_refresh(job, inputs):
     if not match:
         return f"the build's build-args are {args!r}, not APT_REFRESH from a step's output"
     step_id, output = match.groups()
-    dated = f'echo "{output}=$(date -u +%F)" >> "$GITHUB_OUTPUT"'
+    written = f'echo "{output}=$apt_key" >> "$GITHUB_OUTPUT"'
     steps = job.get("steps", [])
     at = step_index(job, lambda s: s.get("id") == step_id)
     build = step_index(job, lambda s: "docker/build-push-action" in str(s.get("uses")))
@@ -449,19 +457,20 @@ def check_apt_refresh(job, inputs):
         return f"the step {step_id} that writes APT_REFRESH runs only if {step['if']}"
     if at > build:
         return f"the step {step_id} that writes APT_REFRESH runs after the build"
-    # Every line before the dated one writes an output and nothing else, so
-    # nothing in the step can end it before the date is written.
+    # The key is read and written on two lines together, and every line
+    # before them writes an output and nothing else, so nothing in the step
+    # can end it before the key is written.
     lines = [line.strip() for line in str(step.get("run", "")).splitlines() if line.strip()]
-    if dated not in lines:
-        return f"the step {step_id} does not write {output} as the UTC date"
-    at_date = lines.index(dated)
-    for line in lines[:at_date]:
+    if APT_KEY_READ not in lines or lines[lines.index(APT_KEY_READ) + 1 :][:1] != [written]:
+        return f"the step {step_id} does not write {output} as the archive's key"
+    at_key = lines.index(APT_KEY_READ)
+    for line in lines[:at_key]:
         if not OUTPUT_LINE.match(line):
-            return f"the step {step_id} runs {line!r} before it writes the date"
-    # A later write of the same output would replace the date.
-    for line in lines[at_date + 1 :]:
+            return f"the step {step_id} runs {line!r} before it writes the key"
+    # A later write of the same output would replace the key.
+    for line in lines[at_key + 2 :]:
         if re.search(rf"(?<![\w-]){re.escape(output)}=", line):
-            return f"the step {step_id} writes {output} again after the date: {line!r}"
+            return f"the step {step_id} writes {output} again after the key: {line!r}"
     return None
 
 
@@ -472,7 +481,7 @@ def check_apt_layers(dockerfiles):
     for path, text in dockerfiles.items():
         layer = APT_UPGRADE.search(text)
         if layer is None:
-            return f"{path} has no apt-get upgrade layer that reads ${{APT_REFRESH}}"
+            return f"{path} has no apt-get upgrade layer that guards ${{APT_REFRESH}} with scripts/apt-key.sh"
         stage = [m.end() for m in re.finditer(r"^FROM\b.*$", text[: layer.start()], re.MULTILINE)]
         if not stage or not re.search(r"^ARG APT_REFRESH\b", text[stage[-1] : layer.start()], re.MULTILINE):
             return f"{path}'s apt-get upgrade layer does not read an ARG APT_REFRESH of its own stage"
@@ -2390,7 +2399,7 @@ def no_apt_refresh(wf):
 
 def apt_refresh_fixed(wf):
     step = step_named(wf, "images", "Extract metadata")
-    step["run"] = step["run"].replace("$(date -u +%F)", "2026-10-15")
+    step["run"] = step["run"].replace("$(scripts/apt-key.sh)", "2026-10-15")
 
 
 def apt_refresh_skipped(wf):
@@ -2406,7 +2415,7 @@ def apt_refresh_after_build(wf):
 
 def apt_refresh_exits_first(wf):
     step = step_named(wf, "images", "Extract metadata")
-    step["run"] = step["run"].replace('echo "apt-refresh=', 'exit 0\necho "apt-refresh=', 1)
+    step["run"] = step["run"].replace("apt_key=", "exit 0\napt_key=", 1)
 
 
 def apt_refresh_overwritten(wf):
@@ -3032,7 +3041,7 @@ MUTANTS = [
     ("the loaded image named under the registry", loaded_under_registry),
     ("no max-mode provenance on the build", no_provenance),
     ("no APT_REFRESH build argument", no_apt_refresh),
-    ("an APT_REFRESH that is not the date", apt_refresh_fixed),
+    ("an APT_REFRESH that is not the archive's key", apt_refresh_fixed),
     ("an APT_REFRESH written for one image only", apt_refresh_for_locus_only),
     ("an APT_REFRESH step with an if:", apt_refresh_skipped),
     ("an APT_REFRESH step after the build", apt_refresh_after_build),
@@ -3186,6 +3195,7 @@ def graph_mode():
         for name, mutant in [
             ("no ARG APT_REFRESH", text.replace("\nARG APT_REFRESH", "\n# ARG APT_REFRESH")),
             ("an upgrade that does not read it", text.replace("${APT_REFRESH}", "refresh")),
+            ("an upgrade without the key's guard", text.replace("--update", "--of")),
             ("the ARG above the upgrade stage's FROM", arg_above_stage(text)),
         ]:
             if mutant == text:
@@ -3239,7 +3249,7 @@ def graph_mode():
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
         f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
         f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh, {len(RELEASE_NOTE_MUTANTS)} of "
-        f"release-note.sh and {3 * len(files)} of the Dockerfiles, "
+        f"release-note.sh and {4 * len(files)} of the Dockerfiles, "
         f"{vectors} manifest vectors, {scaffold_refused} versions, {forms} scaffold argument forms and "
         f"{planted} planted composes refused; {versions} versions held to the rule, which "
         f"{len(RULE_MUTANTS)} other rules and {file_mutants} mutants of the vector file fail; "

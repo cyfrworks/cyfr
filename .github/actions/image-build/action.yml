@@ -21,6 +21,10 @@ inputs:
   write:
     description: "'false' loads the image and writes no cache; 'true' writes the cache and keeps no image"
     required: true
+outputs:
+  apt-key:
+    description: The archive's key the build's upgrade layer was built on (scripts/apt-key.sh)
+    value: ${{ steps.apt-key.outputs.key }}
 runs:
   using: composite
   steps:
@@ -38,12 +42,17 @@ runs:
           true|false) ;;
           *) echo "::error::image-build write must be 'true' or 'false', got '$WRITE'"; exit 1 ;;
         esac
-    # Each image's upgrade layer refreshes once a UTC day and is shared
-    # within it (both Dockerfiles' APT_REFRESH).
-    - name: The UTC date the upgrade layer refreshes on
-      id: apt-refresh
+    # Each image's upgrade layer is keyed on what Debian's archive holds
+    # (both Dockerfiles' APT_REFRESH, scripts/apt-key.sh): reused while the
+    # archive is unchanged, built again on it as soon as a package moves.
+    # An archive that cannot be read fails this step, after the script's
+    # tries, with no other key to build on.
+    - name: The archive's key the upgrade layer is built on
+      id: apt-key
       shell: bash
-      run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      run: |
+        key=$(scripts/apt-key.sh)
+        echo "key=$key" >> "$GITHUB_OUTPUT"
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
     - name: Build the image
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -51,7 +60,7 @@ runs:
         context: .
         file: ${{ inputs.image == 'locus' && 'Dockerfile.locus' || 'Dockerfile' }}
         build-args: |
-          APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
+          APT_REFRESH=${{ steps.apt-key.outputs.key }}
         load: ${{ inputs.write == 'false' }}
         tags: ${{ inputs.write == 'false' && (inputs.image == 'locus' && 'cyfr-locus:ci' || 'cyfr:push') || '' }}
         outputs: ${{ inputs.write == 'true' && 'type=cacheonly' || '' }}

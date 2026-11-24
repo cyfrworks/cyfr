@@ -6,10 +6,16 @@
 # through .github/actions/image-build, the definition test.yml's image jobs
 # build through, with no image kept. It is the only workflow whose token
 # may write a package, release.yml's publishing aside, so it runs only on
-# a push to main and on a schedule just after the UTC date turns, when both
-# images' upgrade layers (APT_REFRESH) are due again. A failed login or
-# write is a red run here, with no fallback: it gates no Test run and no
-# merge, and a red run is how a cache that is not being refreshed shows.
+# a push to main and on an hourly schedule. Both images' upgrade layers are
+# keyed on what Debian's archive holds (APT_REFRESH, scripts/apt-key.sh),
+# so a published fix moves the key: a Test run that starts after it builds
+# the layer on the fix itself, and the next hourly run here writes it to
+# the cache, so the runs after that reuse it. An hourly run whose image's
+# cache already holds main's head at the archive's key, as an Actions cache
+# entry the write leaves records, writes nothing; a push always writes. A
+# failed read of the archive, login or write is a red run here, with no
+# fallback: it gates no Test run and no merge, and a red run is how a
+# cache that is not being refreshed shows.
 # scripts/release.sh waits for its run on HEAD as for every workflow's, a
 # release pushing to the same registry.
 name: Layer cache
@@ -17,7 +23,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '7 0 * * *'
+    - cron: '7 * * * *'
 permissions: {}
 # A running write finishes and the newest push's waits (GitHub keeps one
 # waiting run), so pushes faster than an export still refresh the cache.
@@ -45,14 +51,44 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: The archive's key
+        if: github.event_name == 'schedule'
+        id: apt-key
+        run: |
+          key=$(scripts/apt-key.sh)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      # The record holds nothing: its key alone says what the cache holds.
+      # A record that cannot be read is a miss, and the run writes.
+      - name: Whether the cache holds main's head at this key
+        if: github.event_name == 'schedule'
+        id: held
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/layer-cache-written
+          key: layer-cache-${{ matrix.image }}-${{ github.sha }}-${{ steps.apt-key.outputs.key }}
+          lookup-only: true
       - name: Log in to GHCR
+        if: steps.held.outputs.cache-hit != 'true'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Write the layer cache
+        if: steps.held.outputs.cache-hit != 'true'
+        id: write
         uses: ./.github/actions/image-build
         with:
           image: ${{ matrix.image }}
           write: 'true'
+      # Under the key the build itself read, which a moment after the
+      # check above may have moved.
+      - name: The record of what the cache holds
+        if: steps.held.outputs.cache-hit != 'true'
+        run: mkdir -p "$RUNNER_TEMP/layer-cache-written"
+      - name: Record what the cache holds
+        if: steps.held.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/layer-cache-written
+          key: layer-cache-${{ matrix.image }}-${{ github.sha }}-${{ steps.write.outputs.apt-key }}
