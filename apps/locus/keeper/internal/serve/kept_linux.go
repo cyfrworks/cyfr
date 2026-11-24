@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -706,36 +705,21 @@ func (s *server) runHomeHelper(acct Account, spec home.HelperSpec) (string, erro
 	return string(out), nil
 }
 
-// openPty opens a pseudo-terminal of rows by cols: its master, which the
-// relay holds, and its slave, which becomes the spawn's stdin, stdout and
-// stderr and its controlling terminal.
-func openPty(rows, cols uint16) (master, slave *os.File, err error) {
-	mfd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+// receiveTerminal reads the master of a pty spawn's terminal, which the
+// space's first process opened in the space's own devpts and handed up, and
+// sets its size to rows by cols, within stageTimeout.
+func receiveTerminal(from *os.File, rows, cols uint16) (*os.File, error) {
+	_ = from.SetReadDeadline(time.Now().Add(stageTimeout))
+	fds, err := receiveDescriptors(from, 1)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ptmx: %w", err)
+		return nil, err
 	}
-	master = os.NewFile(uintptr(mfd), "pty-master")
-	fail := func(err error) (*os.File, *os.File, error) {
+	master := os.NewFile(uintptr(fds[0]), "pty-master")
+	if err := unix.IoctlSetWinsize(fds[0], unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols}); err != nil {
 		_ = master.Close()
-		return nil, nil, err
+		return nil, fmt.Errorf("its size: %w", err)
 	}
-	unlock := 0
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(mfd), unix.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); errno != 0 {
-		return fail(fmt.Errorf("unlocking the pty: %w", errno))
-	}
-	n, err := unix.IoctlGetUint32(mfd, unix.TIOCGPTN)
-	if err != nil {
-		return fail(fmt.Errorf("the pty's number: %w", err))
-	}
-	sfd, err := unix.Open("/dev/pts/"+strconv.FormatUint(uint64(n), 10), unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fail(fmt.Errorf("the pty's slave: %w", err))
-	}
-	if err := unix.IoctlSetWinsize(sfd, unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols}); err != nil {
-		_ = unix.Close(sfd)
-		return fail(fmt.Errorf("the pty's size: %w", err))
-	}
-	return master, os.NewFile(uintptr(sfd), "pty-slave"), nil
+	return master, nil
 }
 
 // dupFile duplicates f, close-on-exec.

@@ -135,6 +135,8 @@ func TestRunnerFilterNamesTheListedCalls(t *testing.T) {
 		unix.SYS_UNSHARE: true, unix.SYS_SETNS: true, unix.SYS_MOUNT: true, unix.SYS_UMOUNT2: true,
 		unix.SYS_PIVOT_ROOT: true, unix.SYS_KEYCTL: true, unix.SYS_ADD_KEY: true, unix.SYS_REQUEST_KEY: true,
 		unix.SYS_BPF: true, unix.SYS_USERFAULTFD: true, unix.SYS_PERF_EVENT_OPEN: true,
+		unix.SYS_OPEN_TREE: true, unix.SYS_MOVE_MOUNT: true, unix.SYS_FSOPEN: true, unix.SYS_FSCONFIG: true,
+		unix.SYS_FSMOUNT: true, unix.SYS_FSPICK: true, unix.SYS_MOUNT_SETATTR: true,
 	}
 	seen := map[uint32]bool{}
 	for _, nr := range calls.refused {

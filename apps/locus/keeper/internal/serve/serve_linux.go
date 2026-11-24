@@ -193,17 +193,16 @@ func Main(args []string) int {
 // IPC namespace, which takes no capability of the keeper's own namespace,
 // and holding as ambient capabilities, inside that namespace only, what the
 // stage needs there to become the pooled ids, bring a routed space's
-// loopback up and bind its name sockets, and drop every set. It keeps the
-// keeper's ids until the keeper has mapped them. A pty spawn's stage takes
-// its terminal, on its stdin, as its controlling one.
-func spaceAttr(pty bool) *syscall.SysProcAttr {
+// loopback up and bind its name sockets, build the space's files in a mount
+// namespace it owns, and drop every set. It keeps the keeper's ids until
+// the keeper has mapped them. A pty spawn's command takes its terminal as
+// its controlling one, in the space's own session (package stage).
+func spaceAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		Setsid:     true,
-		Setctty:    pty,
-		Ctty:       0,
 		Pdeathsig:  syscall.SIGKILL,
 		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
-		AmbientCaps: []uintptr{unix.CAP_SETUID, unix.CAP_SETGID, unix.CAP_SETPCAP,
+		AmbientCaps: []uintptr{unix.CAP_SETUID, unix.CAP_SETGID, unix.CAP_SETPCAP, unix.CAP_SYS_ADMIN,
 			unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE},
 	}
 }
@@ -240,10 +239,11 @@ func mapIDs(pid, uid, gid int) error {
 // its pools' spawns its space: for every reach the keeper serves it clones a
 // stage as it clones every spawn's, maps the first uid of the first pool of
 // that reach, and waits for the stage to become it, bring up a routed
-// space's loopback and bind its name sockets, drop every capability set,
-// pass the check a spawn's stage makes before it executes anything and
-// install the space's filter. A host that refuses any step refuses the
-// keeper, naming what to check: there is no weaker space.
+// space's loopback and bind its name sockets, clone the space's first
+// process, which builds the space's files and pivots into them, and with it
+// drop every capability set, pass the check a spawn's stage makes before it
+// executes anything and install the space's filter. A host that refuses any
+// step refuses the keeper, naming what to check: there is no weaker space.
 func probeSpaces(self string, cfg Config, accounts map[int]Account) error {
 	probed := map[string]bool{}
 	for _, spec := range cfg.Pools {
@@ -261,10 +261,12 @@ func probeSpaces(self string, cfg Config, accounts map[int]Account) error {
 // probeSpace is probeSpaces's proof for one pool's reach.
 func probeSpace(self string, spec pool.Spec, acct Account) error {
 	refuse := func(err error) error {
-		return fmt.Errorf("pool %s's spawns run in a space of their own, a user, network and IPC namespace (%s), and this host does not let cyfr-locus make one: %w; "+
-			"the host must allow unprivileged user namespaces (check user.max_user_namespaces, above 0, and, where AppArmor restricts them, "+
-			"kernel.apparmor_restrict_unprivileged_userns) and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json "+
-			"(/etc/cyfr/keeper.json in the image), which lets clone make them", spec.Name, spec.Reach, err)
+		return fmt.Errorf("pool %s's spawns run in a space of their own, a user, network, IPC, pid, mount and cgroup namespace with files of its own (%s), "+
+			"and this host does not let cyfr-locus make one: %w; the host must allow unprivileged user namespaces (check user.max_user_namespaces, above 0), "+
+			"and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json (/etc/cyfr/keeper.json in the image), which lets "+
+			"clone make them and a space mount its files, with its system paths unmasked (security_opt systempaths=unconfined), since a masked /proc "+
+			"lets no space mount its own, and, on a host with AppArmor, under the profile apps/locus/keeper/seccomp/cyfr-locus, which `cyfr init` and "+
+			"`cyfr update` load (security_opt apparmor=cyfr-locus)", spec.Name, spec.Reach, err)
 	}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
@@ -286,7 +288,7 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 		Dir:   "/",
 		Env:   []string{},
 		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd()},
-		Sys:   spaceAttr(false),
+		Sys:   spaceAttr(),
 	})
 	specR.Close()
 	statusW.Close()
@@ -371,7 +373,7 @@ func (s *server) proveGuard(spec pool.Spec) error {
 		Dir:   "/",
 		Env:   []string{},
 		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd(), ^uintptr(0), stageRoute.Fd()},
-		Sys:   spaceAttr(false),
+		Sys:   spaceAttr(),
 	})
 	specR.Close()
 	statusW.Close()
@@ -1110,6 +1112,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		Env:      req.Env,
 		Limits:   limits(sp.kept, req.Rlimits),
 		Control:  req.Control,
+		Terminal: req.Pty != nil,
 		Reach:    sp.reach,
 		Cgroup:   group.Path(),
 	})
@@ -1118,29 +1121,26 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 	}
 	stageFiles := []uintptr{stdinR.Fd(), stdoutW.Fd(), stderrW.Fd(), specR.Fd(), statusW.Fd()}
 	stageOwned := []*os.File{stdinR, stdoutW, stderrW, specR, statusW}
-	// A pty spawn's stdin, stdout and stderr are the terminal's other end;
-	// the relay holds the master as its stdin and its stdout, and its
+	// A pty spawn's stdin, stdout and stderr are a terminal of its space's
+	// own, which the space's first process opens and whose master it hands
+	// up over the terminal socket (stage.TerminalFD); the stage itself has
+	// none. The relay holds the master as its stdin and its stdout, and its
 	// stderr is a pipe no one writes, which ends at once. The keeper keeps
 	// a descriptor of the master as sp.pty, which a `resize` sets the size
 	// through; the spawn's retirement closes it, after a failure here too.
 	pty := req.Pty != nil
+	var stageTerminal, keeperTerminal *os.File
 	if pty {
-		master, slave, err := openPty(uint16(*req.Pty.Rows), uint16(*req.Pty.Cols))
+		devnull, err := os.Open(os.DevNull)
 		if err != nil {
 			return protocol.CodeInternal, err
 		}
-		opened = append(opened, master, slave)
-		masterIn, err := dupFile(master, "pty-stdin")
-		if err != nil {
+		opened = append(opened, devnull)
+		if stageTerminal, keeperTerminal, err = socketpair("terminal"); err != nil {
 			return protocol.CodeInternal, err
 		}
-		opened = append(opened, masterIn)
-		if sp.pty, err = dupFile(master, "pty-master"); err != nil {
-			return protocol.CodeInternal, err
-		}
-		stageFiles = []uintptr{slave.Fd(), slave.Fd(), slave.Fd(), specR.Fd(), statusW.Fd()}
-		stageOwned = []*os.File{slave, specR, statusW}
-		stdinW, stdoutR = masterIn, master
+		stageFiles = []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd()}
+		stageOwned = []*os.File{specR, statusW}
 		_ = stderrW.Close()
 	}
 	// A descriptor of ^0 is closed in the child: a spawn without a control
@@ -1159,6 +1159,10 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		stageFiles = append(stageFiles, stageRoute.Fd())
 		stageOwned = append(stageOwned, stageRoute)
 	}
+	if pty {
+		stageFiles = append(stageFiles, stageTerminal.Fd())
+		stageOwned = append(stageOwned, stageTerminal)
+	}
 	if !relayed {
 		// From here the end of the guard's connection finds this spawn
 		// (guardLost); its retirement removes it.
@@ -1169,7 +1173,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		s.routing[sp.id] = sp
 		s.mu.Unlock()
 	}
-	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, stageFiles, "/", spaceAttr(pty))
+	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, stageFiles, "/", spaceAttr())
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -1206,8 +1210,24 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 			return code, err
 		}
 	}
-	_ = statusR.SetReadDeadline(time.Now().Add(stageTimeout))
-	reason, err := io.ReadAll(io.LimitReader(statusR, 4096))
+	if pty {
+		master, err := receiveTerminal(keeperTerminal, uint16(*req.Pty.Rows), uint16(*req.Pty.Cols))
+		if err != nil {
+			reason, _ := readStatus(statusR)
+			return protocol.CodeExecFailed, fmt.Errorf("the space's terminal: %w%s", err, reason)
+		}
+		opened = append(opened, master)
+		masterIn, err := dupFile(master, "pty-stdin")
+		if err != nil {
+			return protocol.CodeInternal, err
+		}
+		opened = append(opened, masterIn)
+		if sp.pty, err = dupFile(master, "pty-master"); err != nil {
+			return protocol.CodeInternal, err
+		}
+		stdinW, stdoutR = masterIn, master
+	}
+	reason, err := readStatus(statusR)
 	if err != nil {
 		return protocol.CodeExecFailed, err
 	}
@@ -1250,6 +1270,14 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		return protocol.CodeInternal, err
 	}
 	return "", nil
+}
+
+// readStatus reads a stage's status pipe to its end, within stageTimeout:
+// empty once the command has executed, the stage's reason otherwise.
+func readStatus(statusR *os.File) (string, error) {
+	_ = statusR.SetReadDeadline(time.Now().Add(stageTimeout))
+	reason, err := io.ReadAll(io.LimitReader(statusR, 4096))
+	return string(reason), err
 }
 
 // watchLeader reports the leader's exit and retires the spawn.

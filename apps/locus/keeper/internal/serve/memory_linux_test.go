@@ -118,7 +118,8 @@ mkdir "$own/inner" 2>/dev/null && echo nested
 cat /proc/self/cgroup`
 	spawnID, uid, rc := k.spawnBounded(t, "42", script, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
-	group := "0::/" + cgroup.Name(uid) + "/bound\n"
+	// The space's cgroup namespace has the spawn's group at its root.
+	group := "0::/\n"
 	want := group + fmt.Sprintf("max=67108864 swap=0 group=1 cpu=%d %d\n", protocol.CPUPeriod, protocol.CPUPeriod) + group
 	if got := string(rc.got[frame.StreamStdout]); got != want {
 		t.Fatalf("the spawn saw\n%s\nwant\n%s", got, want)

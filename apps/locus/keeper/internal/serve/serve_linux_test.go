@@ -23,10 +23,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
-	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
@@ -43,7 +43,7 @@ import (
 // the keeper under test starts as `<self> stage`, `<self> relay`,
 // `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` and
 // `<self> mapped` are the memory tests' commands, `<self> fill` the relay's
-// end's.
+// end's, `<self> mounts` the space tests'.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -67,6 +67,8 @@ func TestMain(m *testing.M) {
 			os.Exit(own(os.Args[2:]))
 		case "fill":
 			os.Exit(fill())
+		case "mounts":
+			os.Exit(tryMounts())
 		}
 	}
 	os.Exit(m.Run())
@@ -258,12 +260,26 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		t.Fatal(err)
 	}
 	// The pooled uids and the client user must be able to execute the
-	// helpers, which go test keeps in a directory only root can enter.
+	// helpers, which go test keeps in a directory only root can enter. A
+	// space sees the container's /opt and none of its /tmp, so the copy is
+	// kept there, and the space's files are built where the image builds
+	// them.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(base, "cyfr-locus")
+	if err := os.MkdirAll(stage.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin, err := os.MkdirTemp("/opt", "cyfr-locus-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(bin) })
+	if err := os.Chmod(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(bin, "cyfr-locus")
 	data, err := os.ReadFile(self)
 	if err != nil {
 		t.Fatal(err)
@@ -948,7 +964,8 @@ func TestARelaySpacesRelayIsSilentUnopened(t *testing.T) {
 
 // The keeper places a stage in its spawn's bounded group from the parent
 // side before the spec releases it, so the command starts inside its
-// bound, in its own namespace.
+// bound, in its own namespace, where the group is its cgroup namespace's
+// root.
 func TestASpaceRunsInItsBoundedGroup(t *testing.T) {
 	k := newKeeper(t).withMemory(t)
 	keeperNet, err := os.Readlink("/proc/self/ns/net")
@@ -958,7 +975,7 @@ func TestASpaceRunsInItsBoundedGroup(t *testing.T) {
 	_, uid, rc := k.spawnBounded(t, "1", `cat /proc/self/cgroup; readlink /proc/self/ns/net; echo done`, map[string]string{}, false, 64<<20)
 	rc.readUntil(t, func() bool { return false })
 	stdout := string(rc.got[frame.StreamStdout])
-	if !strings.Contains(stdout, "0::/"+cgroup.Name(uid)+"/bound\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
+	if !strings.Contains(stdout, "0::/\n") || !strings.Contains(stdout, "done\n") || strings.Contains(stdout, keeperNet) {
 		t.Fatalf("the bounded space of uid %d: %q", uid, stdout)
 	}
 	k.reply(t)
@@ -967,3 +984,34 @@ func TestASpaceRunsInItsBoundedGroup(t *testing.T) {
 }
 
 func regexpMatch(pattern, s string) bool { return regexp.MustCompile(pattern).MatchString(s) }
+
+// openPty opens a pseudo-terminal of rows by cols in the test's own devpts:
+// its master, as a spawn's terminal is handed up, and its slave.
+func openPty(rows, cols uint16) (master, slave *os.File, err error) {
+	mfd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	master = os.NewFile(uintptr(mfd), "pty-master")
+	unlock := 0
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(mfd), unix.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); errno != 0 {
+		master.Close()
+		return nil, nil, errno
+	}
+	n, err := unix.IoctlGetUint32(mfd, unix.TIOCGPTN)
+	if err != nil {
+		master.Close()
+		return nil, nil, err
+	}
+	sfd, err := unix.Open("/dev/pts/"+strconv.FormatUint(uint64(n), 10), unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		master.Close()
+		return nil, nil, err
+	}
+	if err := unix.IoctlSetWinsize(sfd, unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols}); err != nil {
+		master.Close()
+		unix.Close(sfd)
+		return nil, nil, err
+	}
+	return master, os.NewFile(uintptr(sfd), "pty-slave"), nil
+}

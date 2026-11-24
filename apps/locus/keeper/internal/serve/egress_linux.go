@@ -139,12 +139,23 @@ func (s *server) admitRoute(sp *spawn, route *os.File, e egress) (string, error)
 // receiveRoute reads the one message of a routed stage: its network
 // namespace, its UDP and its TCP name socket.
 func receiveRoute(route *os.File) ([]*os.File, error) {
-	conn, err := route.SyscallConn()
+	fds, err := receiveDescriptors(route, guard.AdmitDescriptors)
+	if err != nil {
+		return nil, err
+	}
+	return []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")}, nil
+}
+
+// receiveDescriptors reads one message of one byte from a stage or a
+// space's first process carrying exactly want descriptors, received
+// close-on-exec; any other message is refused and its descriptors closed.
+func receiveDescriptors(from *os.File, want int) ([]int, error) {
+	conn, err := from.SyscallConn()
 	if err != nil {
 		return nil, err
 	}
 	buf := make([]byte, 1)
-	oob := make([]byte, unix.CmsgSpace(4*guard.AdmitDescriptors))
+	oob := make([]byte, unix.CmsgSpace(4*want))
 	var n, oobn int
 	var rerr error
 	err = conn.Read(func(fd uintptr) bool {
@@ -169,13 +180,13 @@ func receiveRoute(route *os.File) ([]*os.File, error) {
 			}
 		}
 	}
-	if n != 1 || len(fds) != guard.AdmitDescriptors {
+	if n != 1 || len(fds) != want {
 		for _, fd := range fds {
 			_ = unix.Close(fd)
 		}
-		return nil, fmt.Errorf("a message of %d bytes and %d descriptors, not 1 and %d", n, len(fds), guard.AdmitDescriptors)
+		return nil, fmt.Errorf("a message of %d bytes and %d descriptors, not 1 and %d", n, len(fds), want)
 	}
-	return []*os.File{os.NewFile(uintptr(fds[0]), "netns"), os.NewFile(uintptr(fds[1]), "names-udp"), os.NewFile(uintptr(fds[2]), "names-tcp")}, nil
+	return fds, nil
 }
 
 // withdrawRoute has the guard withdraw a retiring spawn's route once its
