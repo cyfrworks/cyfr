@@ -7,8 +7,9 @@ macOS and Windows, with no CYFR and no signing credentials (Codex CI's
 `desktop-native` job; its header lists the checks).
 
 **`screen/idle.sh`, the device screen's idle lock**, with no CYFR (Codex
-CI's `screen-idle` job, amd64): this tree's watches under Ubuntu 26.04's
-labwc beside a real Chrome with the screen's flags, with nothing playing,
+CI's `screen-idle` job, Linux amd64 and arm64): this tree's watches under
+Ubuntu 26.04's labwc beside the CYFR app's engine (Electron at the version
+its package pins, a window made as the app makes the screen's), with nothing playing,
 with a page playing a video a tap started and with a sandboxed frame
 playing one; and the suspend watch over the real swayidle and a stand-in logind.
 Each video row holds that the watch locks while the control, swayidle's

@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/idle/idletest"
+	"github.com/cyfr/codex/internal/version"
 )
 
 // hungScreen is a screen whose key is on an account and whose Docker never
@@ -34,19 +34,18 @@ type hungScreen struct {
 	compositor *idletest.Compositor
 	passphrase string
 	asked      string
-	browser    string
 }
 
 func startHungScreen(t *testing.T, edit ...func(*holder.Record)) *hungScreen {
 	t.Helper()
 	screenProject(t)
 	// The folder's account service too, or a test of making an account asks
-	// cyfr.run.
+	// cyfr.run: the folder's own CYFR, which Docker never answers for.
 	env, err := os.OpenFile(".env", os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = env.WriteString("CYFR_DIRECTORY_URL=http://127.0.0.1:9\n")
+	_, err = env.WriteString("CYFR_DIRECTORY_URL=http://localhost:4321\n")
 	if err = errors.Join(err, env.Close()); err != nil {
 		t.Fatal(err)
 	}
@@ -58,9 +57,7 @@ func startHungScreen(t *testing.T, edit ...func(*holder.Record)) *hungScreen {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An account service on this computer that is not the folder's CYFR is
-	// refused with nothing sent, so this test asks no network.
-	rec.Identifier, rec.Directory = "per_"+strings.Repeat("e", 64), "http://127.0.0.1:9"
+	rec.Identifier, rec.Directory = "per_"+strings.Repeat("e", 64), "http://localhost:4321"
 	for _, e := range edit {
 		e(rec)
 	}
@@ -72,13 +69,11 @@ func startHungScreen(t *testing.T, edit ...func(*holder.Record)) *hungScreen {
 		t.Fatal(err)
 	}
 	seen := t.TempDir()
-	h := &hungScreen{passphrase: passphrase, asked: filepath.Join(seen, "asked"), browser: filepath.Join(seen, "browser")}
+	h := &hungScreen{passphrase: passphrase, asked: filepath.Join(seen, "asked")}
 	h.compositor = screenCompositor(t, idletest.Options{})
 	programs := quietScreen()
 	// sleep-ok: stand-ins that run until what started them ends them
 	programs["docker"] = "echo asked $$ >>" + h.asked + "\nexec /bin/sleep 100"
-	// sleep-ok: a stand-in child that runs until the shell ends it
-	programs["google-chrome-stable"] = "echo $$ >>" + h.browser + "\nexec /bin/sleep 100"
 	screenPrograms(t, programs)
 	h.runningScreen = startScreen(t)
 	return h
@@ -181,23 +176,20 @@ func TestScreenShell_ALostWatchWaitsForNoUnlock(t *testing.T) {
 	h.soon("the loss's lock", func() { <-unlocked })
 }
 
-// The browser's exit locks an unlock still in flight, which no page is
-// left to finish for.
-func TestScreenShell_TheBrowsersExitLocksAnUnlockInFlight(t *testing.T) {
+// The app's lock (a page it lost, among others) locks an unlock still in
+// flight, which no page is left to finish for.
+func TestScreenShell_TheAppsLockLocksAnUnlockInFlight(t *testing.T) {
 	h := startHungScreen(t)
-	pid := h.browserPID()
 	unlocked := h.unlocking()
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		t.Fatal(err)
-	}
-	h.soon("the browser's exit's lock", func() { <-unlocked })
+	h.app.send(mainLocks)
+	h.soon("the app's lock", func() { <-unlocked })
 }
 
 // It locks with nothing in flight and no channel open too: the proof a
 // typed passphrase handed the page ends with that page.
-func TestScreenShell_TheBrowsersExitLocksWithNothingInFlight(t *testing.T) {
+func TestScreenShell_TheAppsLockLocksWithNothingInFlight(t *testing.T) {
 	h := startHungScreen(t, func(r *holder.Record) { r.Identifier, r.Directory = "", "" })
-	pid := h.browserPID()
+	h.app.until("ready")
 	post := h.posted
 	_, after, ok := strings.Cut(post("/create", url.Values{"name": {"ada"}, "secret": {h.passphrase}}), `data-proof="`)
 	proof, _, _ := strings.Cut(after, `"`)
@@ -205,20 +197,18 @@ func TestScreenShell_TheBrowsersExitLocksWithNothingInFlight(t *testing.T) {
 		t.Fatal("the typed passphrase handed its page no proof")
 	}
 	if page := post("/saved", url.Values{"proof": {proof}}); strings.Contains(page, onlyThatPage) {
-		t.Fatalf("that page's proof was refused before the browser's exit:\n%s", page)
+		t.Fatalf("that page's proof was refused before the app's lock:\n%s", page)
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		t.Fatal(err)
-	}
-	h.startedAgain()
+	h.app.send(mainLocks)
+	h.app.until("locked")
 	if page := post("/saved", url.Values{"proof": {proof}}); !strings.Contains(page, onlyThatPage) {
-		t.Fatalf("the proof outlived the browser that held it:\n%s", page)
+		t.Fatalf("the proof outlived the app's lock:\n%s", page)
 	}
 }
 
-// A recovery code shown and not yet saved ends with the browser that
-// showed it: the screen's next page is the account made again.
-func TestScreenShell_TheBrowsersExitEndsAnUnsavedRecoveryCode(t *testing.T) {
+// A recovery code shown and not yet saved ends with the app's lock: the
+// screen's next page is the account made again.
+func TestScreenShell_TheAppsLockEndsAnUnsavedRecoveryCode(t *testing.T) {
 	screenProject(t)
 	dir, err := os.Getwd()
 	if err != nil {
@@ -241,15 +231,12 @@ func TestScreenShell_TheBrowsersExitEndsAnUnsavedRecoveryCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &hungScreen{browser: filepath.Join(t.TempDir(), "browser")}
+	h := &hungScreen{}
 	h.compositor = screenCompositor(t, idletest.Options{})
 	programs := quietScreen()
 	programs["docker"] = "case \"$1\" in\ncontext) echo unix:///var/run/docker.sock;;\nps) echo c0ffee;;\ninspect) echo '" + string(container) + "';;\nesac"
-	// sleep-ok: a stand-in child that runs until the shell ends it
-	programs["google-chrome-stable"] = "echo $$ >>" + h.browser + "\nexec /bin/sleep 100"
 	screenPrograms(t, programs)
 	h.runningScreen = startScreen(t)
-	pid := h.browserPID()
 	h.shows(`action="/passphrase"`)
 
 	drawn := pageCode.FindStringSubmatch(h.posted("/passphrase", url.Values{}))
@@ -261,15 +248,13 @@ func TestScreenShell_TheBrowsersExitEndsAnUnsavedRecoveryCode(t *testing.T) {
 	if proof == nil {
 		t.Fatalf("setup reached no recovery code:\n%s", setUp)
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		t.Fatal(err)
-	}
-	h.startedAgain()
+	h.app.send(mainLocks)
+	h.app.until("locked")
 	if page := h.posted("/", nil); !strings.Contains(page, "No account yet?") {
-		t.Fatalf("after the browser's exit the account is not to be made again:\n%s", page)
+		t.Fatalf("after the app's lock the account is not to be made again:\n%s", page)
 	}
 	if page := h.posted("/saved", url.Values{"proof": {proof[1]}}); !strings.Contains(page, onlyThatPage) {
-		t.Fatalf("the code's proof outlived the browser that held it:\n%s", page)
+		t.Fatalf("the code's proof outlived the app's lock:\n%s", page)
 	}
 }
 
@@ -293,32 +278,10 @@ func (h *hungScreen) posted(path string, fields url.Values) string {
 	return html.UnescapeString(string(raw))
 }
 
-// startedAgain waits for the browser that follows the first.
-func (h *hungScreen) startedAgain() {
-	h.t.Helper()
-	h.until("the browser started again", func() bool {
-		raw, _ := os.ReadFile(h.browser)
-		return strings.Count(string(raw), "\n") > 1
-	})
-}
-
 const onlyThatPage = "Only the page this device's PIN or passphrase was typed on can do that."
 
-// browserPID is the first browser's, once it runs.
-func (h *hungScreen) browserPID() int {
-	h.t.Helper()
-	var pid int
-	h.until("the browser runs", func() bool {
-		raw, err := os.ReadFile(h.browser)
-		if err != nil {
-			return false
-		}
-		first, _, whole := strings.Cut(string(raw), "\n")
-		pid, err = strconv.Atoi(first)
-		return whole && err == nil && pid > 1
-	})
-	return pid
-}
+// mainLocks is main's lock, as the app sends it when it lost its page.
+const mainLocks = `{"version":1,"type":"lock"}`
 
 // Where only a new login gives the screen's setup's work the docker group,
 // the screen's page says so in place of "CYFR is starting", which is for a
@@ -347,29 +310,17 @@ exit 1`
 	}
 }
 
-// A screen that ends while its context lives on, Chrome no longer
-// starting here, ends the reading it began too: the Docker call that holds
-// it is gone at once, not at the reading's own bound.
+// A screen that ends while its context lives on, main's pipe ending,
+// ends the reading it began too: the Docker call that holds it is gone at
+// once, not at the reading's own bound.
 func TestScreenShell_AScreenThatEndsEndsItsReadings(t *testing.T) {
 	h := startHungScreen(t)
-	pid := h.browserPID()
 	h.shows(watchedPage)
 	h.until("the page's reading reached Docker", func() bool { return h.timesAsked() > 0 })
-	chrome, err := exec.LookPath("google-chrome-stable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(chrome); err != nil {
-		t.Fatal(err)
-	}
-	// No Chrome of this computer's either.
-	t.Setenv("PATH", filepath.Dir(chrome))
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		t.Fatal(err)
-	}
+	h.app.reply.Close()
 	select {
 	case err := <-h.ended:
-		if err == nil || !strings.Contains(err.Error(), "Chrome did not start") {
+		if err != nil {
 			t.Fatalf("the screen ended with %v", err)
 		}
 	case <-time.After(10 * time.Second):
@@ -391,5 +342,69 @@ func TestScreenShell_AScreenThatEndsEndsItsReadings(t *testing.T) {
 	})
 	if took := time.Since(ended); took > 3*time.Second {
 		t.Fatalf("the reading's Docker call ended %v after the screen", took)
+	}
+}
+
+// The screen's warning is read as each page is drawn: one shell on one
+// listener, its CYFR answering and its folder set to the app's release,
+// draws its lock page with no warning; once only the folder's release
+// changes, as a `cyfr update` at the same address leaves it, the next
+// lock page from that listener names the folder's release.
+func TestScreenShell_TheNextLockPageNamesTheFolderUpdatedAtItsAddress(t *testing.T) {
+	screenProject(t)
+	saved := version.Version
+	t.Cleanup(func() { version.Version = saved })
+	version.Version = "0.6.0"
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := func(tag string) {
+		if err := os.WriteFile("docker-compose.yml", []byte("services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:"+tag+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compose("0.6.0")
+	accounts := accounttest.New(t)
+	at, err := url.Parse(accounts.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := "http://localhost:" + at.Port()
+	env := "CYFR_ACCESS=local\nCYFR_PORT=" + at.Port() + "\nCYFR_SETUP_TOKEN=the-token\nCYFR_DIRECTORY_URL=" + home + "\n"
+	if err := os.WriteFile(".env", []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	accounts.ServedAt(home)
+	container, err := json.Marshal(map[string]any{"id": "c0ffee", "running": true, "started": "t1", "dir": dir,
+		"ports": map[string]any{at.Port() + "/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": at.Port()}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &hungScreen{}
+	h.compositor = screenCompositor(t, idletest.Options{})
+	programs := quietScreen()
+	programs["docker"] = "case \"$1\" in\ncontext) echo unix:///var/run/docker.sock;;\nps) echo c0ffee;;\ninspect) echo '" + string(container) + "';;\nesac"
+	screenPrograms(t, programs)
+	h.runningScreen = startScreen(t)
+	h.shows(`action="/passphrase"`)
+	drawn := pageCode.FindStringSubmatch(h.posted("/passphrase", url.Values{}))
+	if drawn == nil {
+		t.Fatal("no passphrase was drawn")
+	}
+	proof := pageProof.FindStringSubmatch(h.posted("/setup", url.Values{"name": {"ada"}, "secret": {drawn[1]}, "again": {drawn[1]}}))
+	if proof == nil {
+		t.Fatal("setup reached no recovery code")
+	}
+	h.posted("/saved", url.Values{"proof": {proof[1]}})
+	h.app.send(mainLocks)
+	h.app.until("locked")
+	const named = "is set to release 0.6.1"
+	if page := h.posted("/", nil); !strings.Contains(page, "CYFR is locked") || strings.Contains(page, "is set to release") {
+		t.Fatalf("the lock page, the releases agreeing:\n%s", page)
+	}
+	compose("0.6.1")
+	if page := h.posted("/", nil); !strings.Contains(page, "CYFR is locked") || !strings.Contains(page, named) {
+		t.Fatalf("the next lock page does not name the folder's release:\n%s", page)
 	}
 }

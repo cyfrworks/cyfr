@@ -25,7 +25,7 @@ func screenClocks() (boot, monotonic time.Duration, err error) {
 }
 
 // screenChild makes a child of the screen's shell end with it: a shell
-// killed outright leaves no keyboard, suspend watch or Chrome behind, and no
+// killed outright leaves no keyboard or suspend watch behind, and no
 // suspend watch aimed at its pid once that pid is reused.
 func screenChild(c *exec.Cmd) *exec.Cmd {
 	c.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}

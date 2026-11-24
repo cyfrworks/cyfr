@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/version"
 )
 
 // standIn is a machine for prepareMachine, a fresh Ubuntu 26.04 unless a
@@ -31,11 +32,13 @@ type standIn struct {
 	passwordless, noTerminal           bool
 	arch, system                       string
 	installed, member, process         []string
-	administrator                      []string
-	applied                            [][]string
-	applyErr, authErr                  error
-	authenticated, forgotten           int
-	prompt                             func()
+	// app is the release the installed CYFR app's cyfr answers, "" none.
+	app                      string
+	administrator            []string
+	applied                  [][]string
+	applyErr, authErr        error
+	authenticated, forgotten int
+	prompt                   func()
 	// refused is what docker writes where it does not answer.
 	refused string
 }
@@ -66,7 +69,10 @@ func standInMachine(t *testing.T) *standIn {
 			t.Fatalf("%s is reachable at %s: no test of the machine may run it", program, found)
 		}
 	}
-	s := &standIn{supported: true, arch: "amd64", system: "linux", administrator: []string{"sudo"}}
+	// The CYFR app of this cyfr's version is installed, unless a test says
+	// otherwise, so `cyfr screen on` fetches nothing.
+	s := &standIn{supported: true, arch: "amd64", system: "linux", administrator: []string{"sudo"},
+		installed: []string{appPackage}, app: version.Version}
 	saved, savedTerminal, savedInput, savedSg := machine, askTerminal, askInput, sgProgram
 	t.Cleanup(func() { machine, askTerminal, askInput, sgProgram = saved, savedTerminal, savedInput, savedSg })
 	// No test reaches the real sg, which would run this test binary again.
@@ -84,6 +90,7 @@ func standInMachine(t *testing.T) *standIn {
 	}
 	machine.dockerHere = func(context.Context) (bool, error) { return true, nil }
 	machine.installed = func(pkg string) bool { return slices.Contains(s.installed, pkg) }
+	machine.appRelease = func() string { return s.app }
 	machine.running = func() bool { return s.running }
 	machine.displayManager = func() bool { return s.displayManager }
 	machine.system = func() string { return s.system }

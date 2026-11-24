@@ -123,29 +123,48 @@ func FetchBinary(ctx context.Context, version, goos, goarch string) ([]byte, err
 	return binary, nil
 }
 
-// FetchPackage downloads release version's CYFR app package for Linux on
-// goarch and answers its bytes, verified (fetchVerified). A release with no
-// package for goarch refuses with ErrUnverified.
-func FetchPackage(ctx context.Context, version, goarch string) ([]byte, error) {
-	return fetchVerified(ctx, version, PackageName(version, goarch), maxPackageSize)
+// PackageChecksum answers the sha256 release version's signed checksums.txt
+// names for its CYFR app package for Linux on goarch (assetChecksum),
+// reading nothing else of the release. A release with no package for
+// goarch refuses with ErrUnverified.
+func PackageChecksum(ctx context.Context, version, goarch string) (string, error) {
+	return assetChecksum(ctx, version, PackageName(version, goarch))
 }
 
-// fetchVerified answers release version's asset, at most limit bytes: its
-// sha256 is compared with the line of the release's checksums.txt that
-// VerifiedChecksum answers, so nothing is answered before checksums.txt
-// verifies as the release workflow's signature for version and the asset
-// is the file it names. Every integrity failure wraps ErrUnverified; a
-// download that fails is a transport error.
+// FetchPackage downloads release version's CYFR app package for Linux on
+// goarch and answers its bytes once their sha256 is want, the sum
+// PackageChecksum answered (fetchAsset).
+func FetchPackage(ctx context.Context, version, goarch, want string) ([]byte, error) {
+	return fetchAsset(ctx, version, PackageName(version, goarch), want, maxPackageSize)
+}
+
+// fetchVerified answers release version's asset, at most limit bytes, once
+// it is the file the release's signed checksums.txt names (assetChecksum,
+// fetchAsset).
 func fetchVerified(ctx context.Context, version, asset string, limit int64) ([]byte, error) {
-	if !IsVersion(version) {
-		return nil, fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, version)
-	}
-	client := &http.Client{}
-	want, err := VerifiedChecksum(ctx, client, fmt.Sprintf(checksumsURLTemplate, version), version, asset)
+	want, err := assetChecksum(ctx, version, asset)
 	if err != nil {
 		return nil, err
 	}
-	data, err := FetchBounded(ctx, client, fmt.Sprintf(downloadURLTemplate, version, asset), limit)
+	return fetchAsset(ctx, version, asset, want, limit)
+}
+
+// assetChecksum is the sha256 the line of release version's checksums.txt
+// names for asset, answered only once checksums.txt verifies as the
+// release workflow's signature for version (VerifiedChecksum). Every
+// integrity failure wraps ErrUnverified; a download that fails is a
+// transport error.
+func assetChecksum(ctx context.Context, version, asset string) (string, error) {
+	if !IsVersion(version) {
+		return "", fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, version)
+	}
+	return VerifiedChecksum(ctx, &http.Client{}, fmt.Sprintf(checksumsURLTemplate, version), version, asset)
+}
+
+// fetchAsset answers release version's asset, at most limit bytes, once its
+// sha256 is want; one that is not refuses with ErrUnverified.
+func fetchAsset(ctx context.Context, version, asset, want string, limit int64) ([]byte, error) {
+	data, err := FetchBounded(ctx, &http.Client{}, fmt.Sprintf(downloadURLTemplate, version, asset), limit)
 	if err != nil {
 		return nil, err
 	}

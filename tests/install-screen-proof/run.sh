@@ -11,8 +11,10 @@
 # port. Before that init, two of its refusals change nothing: a wrong
 # password at sudo's own prompt, and an account outside the sudo group. Before that `cyfr up`, the same terminal, older than the docker
 # group init joined, runs `cyfr setup`, whose pages set up and start a
-# second CYFR beside it, taken down again. After a reboot labwc and Chrome run on tty1 and show the screen's
-# own setup page (screen-setup.png): with the guest's isolated swtpm it asks
+# second CYFR beside it, taken down again. Before init, this tree's CYFR
+# app's package is installed, so init's `cyfr screen on` finds the app of
+# its release and fetches none. After a reboot labwc and the CYFR app run
+# on tty1 as the screen and show the screen's own setup page (screen-setup.png): with the guest's isolated swtpm it asks
 # for a six-digit PIN and seals the key in the chip; with --no-tpm it
 # shows its six-word passphrase on the screen alone, never to a local
 # read, refuses six digits and takes the passphrase drawn last.
@@ -26,14 +28,33 @@
 # and opens Prism with the box's hello under the setup token. A local
 # program naming the shell's Host and Origin gets no ticket. Then, reading
 # what the box holds over SSH: the lock after five minutes without input,
-# a wrong PIN, the unlock; Prism's Lock, and again with CYFR silent, the
-# screen hidden within 5 s of the press; an API key made in Prism, which
-# asks a fresh confirmation, confirmed on this device after a Cancel and
-# a wrong PIN; the shell killed; its connection to CYFR severed past 60 s
-# while a Prism page stays open; and Chrome's profile, copied while
-# unlocked, put back before a reboot. After each lock, kill, cut and
-# reboot the session cookie Chrome held (read from its profile, never
-# kept in the evidence) is sent to sign in. After
+# a wrong PIN, the unlock with the PIN, or without a chip the six words,
+# tapped on the screen's keyboard; every renderer of the app under the
+# native smoke's sandbox assertion; Prism's Lock, and again with CYFR
+# silent, the screen hidden within 5 s of the press; an API key made in
+# Prism, which asks a fresh confirmation, confirmed on this device by touch,
+# its Cancel, a wrong PIN, the PIN and its Confirm tapped; the shell killed;
+# its connection to CYFR severed past 60 s while a Prism page stays open;
+# and the session open on the screen, which no cookie store of the
+# screen's account holds, read by the cookie's name as SQLite holds it,
+# its write-ahead log included, since the engine encrypts a stored
+# cookie's value, so a search for the value proves nothing, and which a
+# reboot ends. After each
+# lock, kill, cut and reboot the session cookie the screen last sent CYFR
+# (read from the request heads root observes on the guest's loopback,
+# box.py) is sent to sign in. The video in the
+# five minutes is a canvas written with the API key the screen made: the
+# proof reads that key off the loopback wire as root, as CYFR sent it to
+# the screen, since Prism shows a key once, to the person, and nothing else
+# hands it over; it stays in root's file on the guest, is used for that
+# canvas alone; the proof closes Prism's card that shows it with its Done
+# before it goes on. The evidence holds credentials of the run's own
+# guest, its session cookies, the API key, the six words and the setup
+# token among them, and that guest no longer exists when the run ends;
+# the evidence stays on this host and is read before it is attached
+# anywhere. Every press and read
+# of the screen is a person's: the display read by tesseract on QEMU's
+# screendump and the guest's tablet pressed there (guest/screen.py). After
 # `cyfr down` and another reboot CYFR stays down, the screen says why
 # (screen-waiting.png), and Ctrl+Alt+F2 reaches a terminal:
 #
@@ -69,7 +90,8 @@
 #
 # Needs docker with the host's /dev/kvm, ssh, ssh-keygen, git, go, python3,
 # timeout, flock, getent, and the guest's network: Ubuntu's archive,
-# GitHub's releases, ghcr.io and Google's Chrome download. Stdout is framed
+# GitHub's releases and ghcr.io; and this tree's apps/codex/desktop
+# node_modules (npm ci --ignore-scripts there). Stdout is framed
 # `_START=<pid>` first and `_EXIT=<pid> <status>` last
 # (scripts/await-task.sh). Exits 0 when every check passed; 1 when one
 # failed or the run broke; 64 on usage or a refused prefix; 69 without a
@@ -150,6 +172,14 @@ INSTALL_VERSION=$(sh -c '. "$1"; unset CYFR_VERSION; resolve_version' sh "$WORK/
   { echo "install proof: the release the install line takes could not be read from GitHub's listing" >&2; exit 69; }
 echo "install proof: the install line takes release $INSTALL_VERSION"
 
+# packages_left_none: whether no package file is left in the account's
+# home, the project's folder among it, or anywhere under /tmp, mktemp's
+# folders root stages in included, read as root into
+# GUEST_DIR/left-packages.txt.
+packages_left_none() {
+  guest_root_out "find /tmp /home/proof -name '*.deb'" >"$GUEST_DIR/left-packages.txt" && [ ! -s "$GUEST_DIR/left-packages.txt" ]
+}
+
 transcript_has() { grep -qE -- "$2" "$GUEST_DIR/transcript-$1.txt"; }
 
 # shell_page NAME: the screen's own page as the guest's loopback serves it,
@@ -174,63 +204,78 @@ shell_page_until() {
 # sends it to sign in (out).
 cookie_is() { case $(cookie_answer "$2") in "$1 "*) return 0 ;; esac; return 1; }
 
-# Whether, within 60 s, the screen's Chrome is the one browser on the
-# shell's pages and has run 8 s, its page drawn: a lock starts Chrome
-# again, and keys typed before its window is up go nowhere.
-screen_ready() {
-  local closes
-  budget 60 || return 1
-  closes=$((SECONDS + BUDGET))
-  until guest_ssh 'ps -u proof -o etimes=,args= | grep -- "-[-]app=http://127.0.0.1:7340/" | grep -v -- "--type=" |
-      awk "{ n++; t = \$1 } END { exit !(n == 1 && t >= 8) }"'; do
-    [ "$SECONDS" -lt "$closes" ] || return 1
-    sleep 2
-  done
-}
+# Whether, within 60 s, the screen's display shows its lock page, read
+# off the display: a lock gives the app's window a fresh lock page, and
+# keys typed before it is drawn go nowhere.
+screen_ready() { screen_shows "CYFR is locked" 60; }
 
 # The PIN (or passphrase) the person types on the locked screen once its
-# Chrome is up, then the time the unlock and Prism's page take.
+# lock page shows, then the time the unlock and Prism's page take.
 screen_unlock() {
-  check "the screen's Chrome is up on the lock page to take the PIN" screen_ready
+  check "the screen shows its lock page to take the PIN" screen_ready
   printf '%s\n' "$SECRET" | guest_keys || fail "QMP did not type"
   sleep 15
 }
 
-# Whether labwc runs on tty1 and Chrome beside it, within two minutes; the
-# record is GUEST_DIR/screen.txt.
+# A tap types: on the locked screen the person taps on the on-screen
+# keyboard's keys, read off the display (guest/screen.py tap): with a chip
+# the PIN, without one the six words, letters and spaces, then Enter,
+# which unlocks.
+screen_tap_unlock() {
+  step "a tap types: the $SECRET_NAME tapped on the screen's keyboard"
+  check "the screen shows its lock page to take the PIN" screen_ready
+  check "the $SECRET_NAME and Enter are tapped on the keyboard's keys" screen_tap "$SECRET"$'\n'
+  sleep 15
+}
+
+# Whether labwc runs on tty1 and the CYFR app beside it as the screen,
+# with its one screen shell, within two minutes; the record is
+# GUEST_DIR/screen.txt.
+APP_MAIN="^/opt/cyfr/CYFR --screen-project="
+APP_SHELL="^/opt/cyfr/resources/cyfr screen shell$"
+# screen_sandboxed: the renderers of the screen's app, under the native
+# smoke's one assertion of their sandbox (tests/desktop-proof/sandbox.sh),
+# read as root in the guest, into GUEST_DIR/sandbox.txt.
+screen_sandboxed() {
+  guest_copy_in "$ROOT/tests/desktop-proof/sandbox.sh" sandbox.sh &&
+    guest_root_out "bash -c '. /home/proof/sandbox.sh && renderers_sandboxed \$(python3 -I /root/box.py renderers)'" >"$GUEST_DIR/sandbox.txt"
+}
+
 screen_runs() {
-  GUEST_SSH_TIMEOUT=130 guest_ssh 'for n in $(seq 1 120); do
-      pgrep -u proof -t tty1 -x labwc >/dev/null && pgrep -u proof -f /opt/google/chrome/chrome >/dev/null && break
-      sleep 1
-    done
-    systemctl is-active cyfr-screen; ps -o user=,tty=,args= -C labwc; pgrep -u proof -f /opt/google/chrome/chrome | wc -l
-    pgrep -u proof -t tty1 -x labwc >/dev/null && pgrep -u proof -f /opt/google/chrome/chrome >/dev/null' >"$GUEST_DIR/screen.txt" 2>&1
+  GUEST_SSH_TIMEOUT=130 guest_ssh "up() { pgrep -u proof -t tty1 -x labwc >/dev/null && pgrep -u proof -f -- '$APP_MAIN' >/dev/null &&
+      [ \"\$(pgrep -u proof -c -f -- '$APP_SHELL')\" = 1 ]; }
+    for n in \$(seq 1 120); do up && break; sleep 1; done
+    systemctl is-active cyfr-screen; ps -o user=,tty=,args= -C labwc; pgrep -u proof -a -f -- '$APP_MAIN'; pgrep -u proof -a -f -- '$APP_SHELL'
+    up" >"$GUEST_DIR/screen.txt" 2>&1
 }
 
 # After a boot with CYFR up: the screen, CYFR answering again, then the
 # shell's next look at it.
 screen_back() {
-  screen_runs || fail "labwc and Chrome did not start on tty1 ($GUEST_DIR/screen.txt)"
+  screen_runs || fail "labwc and the CYFR app did not start on tty1 ($GUEST_DIR/screen.txt)"
   guest_ssh "for n in \$(seq 1 90); do curl -s -o /dev/null --max-time 2 http://localhost:4000/ && exit 0; sleep 2; done; exit 1" ||
     fail "CYFR did not come back after the reboot"
   sleep 25
 }
 
-# Reboots the guest and waits for its SSH, the cyfr.run guard's counters
-# read first, as a boot clears them.
+# Reboots the guest and waits for its SSH on the next boot, its boot id
+# another (an old boot still shutting down answers SSH too), the cyfr.run
+# guard's counters read first, as a boot clears them.
 REBOOTS=0
 guest_reboot() {
-  local closes
+  local closes boot now
   REBOOTS=$((REBOOTS + 1))
   cyfr_run_guarded "before-reboot-$REBOOTS" final
+  boot=$(guest_ssh 'cat /proc/sys/kernel/random/boot_id') || fail "the guest's boot id was not read"
   guest_root 'systemd-run --on-active=2 systemctl reboot' || fail "the guest was not rebooted ($GUEST_DIR/root.txt)"
   sleep 15
   budget 300 || fail "the case's deadline came before the guest came back"
   closes=$((SECONDS + BUDGET))
-  until guest_ssh true 2>/dev/null; do
-    [ "$SECONDS" -lt "$closes" ] || fail "the guest's SSH did not come back within $BUDGET s"
+  until now=$(guest_ssh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) && [ -n "$now" ] && [ "$now" != "$boot" ]; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the guest did not come back on a new boot within $BUDGET s"
     sleep 2
   done
+  observe_start
 }
 
 # The setup pages' driver, on the guest: once cyfr setup in ~/setup-pages
@@ -354,6 +399,9 @@ box_install() {
   pane_step_end script
 
   guest_copy_in "$CANDIDATE_BIN" .local/bin/cyfr || fail "the candidate was not copied into the guest"
+  guest_copy_in "$CANDIDATE_DEB" cyfr-desktop.deb || fail "the candidate app was not copied into the guest"
+  guest_root 'apt-get -o Acquire::Retries=3 install -y -qq /home/proof/cyfr-desktop.deb && rm /home/proof/cyfr-desktop.deb' ||
+    fail "the candidate app was not installed ($GUEST_DIR/root.txt)"
   requirements_refused
 
   step "cyfr init on a machine without Docker, its screen question answered 1"
@@ -370,11 +418,11 @@ box_install() {
   check "init goes on through the docker group and asks the screen question once (asked ${PANE_ANSWERED[2]})" sh -c '[ "$1" = 1 ] && grep -qx "This machine has no desktop. Show CYFR on its screen?" "$2"' sh "${PANE_ANSWERED[2]}" "$GUEST_DIR/transcript-init.txt"
   check "it never asks how CYFR is reached" sh -c '! grep -q "How will you reach CYFR" "$1"' sh "$GUEST_DIR/transcript-init.txt"
   check "it shows the screen's commands" transcript_has init '^  systemctl enable cyfr-screen$'
-  check "it says what it downloads" transcript_has init '^Downloading Chrome from Google \(about 110 MB\)$'
+  check "it downloads no CYFR app: this release's is installed already" sh -c '! grep -q "^Downloading" "$1"' sh "$GUEST_DIR/transcript-init.txt"
   check "it ends on the CYFR reached from this computer" transcript_has init '^CYFR is set up in this directory, reached from this computer at http://localhost:4000\.$'
   check "it gives the next step" transcript_has init '^Next: cyfr up, then sudo reboot\.$'
   check "nothing took the terminal: tty1's getty runs and the screen does not" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-active --quiet cyfr-screen'
-  check "Chrome's package left no .deb behind" guest_ssh '! ls /tmp/*.deb'
+  check "no package is left behind, in the account's home or anywhere under /tmp, where root stages ($GUEST_DIR/left-packages.txt)" packages_left_none
   pane_step_end init
 
   step "this tree's server in the release's place, and the box its own account service in .env"
@@ -406,15 +454,18 @@ box_install() {
   else
     check "the guest has no TPM" guest_ssh '! test -e /dev/tpmrm0'
   fi
-  check "Chrome's managed policy saves no password and installs no extension" guest_ssh 'grep -q "\"PasswordManagerEnabled\": false" /etc/opt/chrome/policies/managed/cyfr-screen.json && grep -q "\"ExtensionInstallBlocklist\": \[\"\*\"\]" /etc/opt/chrome/policies/managed/cyfr-screen.json'
+  check "the screen runs the CYFR app of this release, its own cyfr answering it, for this machine, and no Chrome is installed" \
+    guest_ssh "[ \"\$(dpkg-query -W -f '\${db:Status-Status} \${Architecture}' cyfr-desktop)\" = 'installed amd64' ] &&
+      [ \"\$(/opt/cyfr/resources/cyfr --version | head -n 1)\" = 'cyfr version $INSTALL_VERSION' ] && ! dpkg -s google-chrome-stable >/dev/null 2>&1"
+  check "every renderer of the screen's app runs under seccomp mode 2 in a user namespace other than the app's ($GUEST_DIR/sandbox.txt)" screen_sandboxed
 }
 
 # The account made on the screen: its recovery code shown before anything
 # reached the box's account service, then "I saved it", which makes the
 # account there with the box's key its first and the name its own, and
 # opens Prism; then each way the screen locks and what a lock leaves of
-# the session, a change confirmed on the screen, and Chrome's profile
-# copied. The account service is read
+# the session, a change confirmed on the screen, and the session kept on
+# no disk. The account service is read
 # as the screen reads it, from the guest.
 screen_signed_in() {
   local id
@@ -457,16 +508,20 @@ added = [e["key"]["kid"] for e in log["entries"] if e["kind"] == "add_key"]
 sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifier"] and kid in added else 1)' \
     "$GUEST_DIR/handle-saved.json" "$GUEST_DIR/holder-saved.json" "$GUEST_DIR/log-saved.json"
   check "the box keeps its client at CYFR beside its key" guest_ssh 'grep -q "\"client_id\": *\"pcl_" ~/.cyfr/device/client.json'
-  check "Chrome holds the session cookie Prism opened with" screen_cookie prism
+  check "the screen sends CYFR the session cookie Prism opened with" screen_cookie prism
   check "the home serves that cookie on a page that needs a session" cookie_is in prism
+
+  screen_confirms
   guest_ssh "curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' -H 'Origin: http://127.0.0.1:7340' -d x=y http://127.0.0.1:7340/open" >"$GUEST_DIR/open-forged.txt" 2>&1
   check "a local program naming the shell's Host and Origin is sent back to the page, with no ticket" grep -qx '303 http://127.0.0.1:7340/' "$GUEST_DIR/open-forged.txt"
-  check "Chrome's profile is copied while Prism is open" guest_ssh "cp -a $SCREEN_PROFILE ~/chrome-copy"
+  screen_video
 
-  step "five minutes without input lock the screen"
-  sleep 320
+  step "five minutes without input lock the screen, a video started by a tap playing"
+  sleep 280
+  check "the video still plays 280 s after its tap" screen_shows Playing 15
+  sleep 40
   shell_page idle
-  check "the screen locked itself after five minutes without input" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
+  check "the screen locked itself after five minutes without input, the video playing" grep -q 'CYFR is locked' "$GUEST_DIR/shell-idle.html"
   check "screenshot screen-locked.png" guest_screenshot screen-locked.png
   check "after the idle lock the home sends that unlock's cookie to sign in" cookie_is out prism
   if [ "$GUEST_TPM" = swtpm ]; then
@@ -474,62 +529,50 @@ sys.exit(0 if handle["identifier"] == holder.get("identifier") == log["identifie
     sleep 5
     check "screenshot screen-wrong-pin.png" guest_screenshot screen-wrong-pin.png
   fi
-  screen_unlock
+  screen_tap_unlock
   check "screenshot screen-unlocked.png" guest_screenshot screen-unlocked.png
   check "the unlock reached Prism, the shell's page no longer shown" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-unlocked.png" "$GUEST_DIR/screen-locked.png"
-  check "Chrome holds the new unlock's session cookie" screen_cookie unlocked
+  check "the screen sends CYFR the new unlock's session cookie" screen_cookie unlocked
   check "the home serves it" cookie_is in unlocked
 
   step "Prism's Lock"
-  screen_find lock && printf '\n' | guest_keys || fail "QMP did not press Prism's Lock"
+  screen_press Lock || fail "the screen did not press Prism's Lock ($GUEST_DIR/screen-press.txt)"
   shell_page_until lock-prism 'CYFR is locked' 20
   check "Prism's Lock locked the screen, which says so" grep -q 'Locked\.' "$GUEST_DIR/shell-lock-prism.html"
   screen_ready
   check "screenshot screen-locked-prism.png" guest_screenshot screen-locked-prism.png
   check "after Prism's Lock the home sends that unlock's cookie to sign in" cookie_is out unlocked
   screen_unlock
-  check "Chrome holds the next unlock's session cookie" screen_cookie relocked
+  check "the screen sends CYFR the next unlock's session cookie" screen_cookie relocked
   check "the home serves it" cookie_is in relocked
 
   screen_hides_first
-  screen_confirms
   screen_killed
   screen_severed
-  screen_copied_profile
+  screen_keeps_no_session
 }
 
 # Prism's Lock while CYFR accepts and answers nothing (the shell's
 # connection silenced, as screen_severed silences it): the screen is
-# hidden first, Chrome ended within 5 s of the press, though telling CYFR
-# and closing the connection take 10 s; the session still ends, within a
-# minute, at the home. Timed from the press, on this machine's clock,
-# polling the guest's Chrome over SSH (a poll's time aside): only an answer
-# that the one Chrome found before the press has ended counts as its end,
-# so a lookup that found none, or a poll that failed, fails the row.
+# hidden first, within 5 s of the press, though telling CYFR and closing
+# the connection take 10 s; the session still ends, within a minute, at
+# the home. Timed from the press of the tablet on Prism's Lock to the
+# first screendump on which less than half of what the display showed
+# above the keyboard is still there (guest/screen.py hides, a dump's time
+# aside); a press that found no Lock, or no hide within 30 s, fails the row.
 screen_hides_first() {
-  local ports old pressed gone took
+  local ports took
   step "Prism's Lock with CYFR silent: the screen is hidden first"
   # Prism is open on the session the step before unlocked (relocked).
   ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
   check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
-  old=$(guest_ssh 'ps -u proof -o pid=,args= | grep -- "-[-]app=http://127.0.0.1:7340/" | grep -v -- "--type=" | awk "{print \$1}"')
-  check "the screen's one Chrome is found before the press (${old:-none})" sh -c 'case $1 in "" | *[!0-9]*) exit 1 ;; esac' sh "$old"
   guest_root "for p in $ports; do for c in INPUT OUTPUT; do for d in sport dport; do
       iptables -w -I \$c -p tcp --\$d \$p -m comment --comment cyfr-proof-silent -j DROP || exit 1
     done; done; done" || fail "the shell's connection was not silenced ($GUEST_DIR/root.txt)"
-  screen_find lock || fail "QMP did not find Prism's Lock"
-  pressed=$(date +%s%3N)
-  printf '\n' | guest_keys || fail "QMP did not press Prism's Lock"
-  gone=""
-  while [ -z "$gone" ] && [ $(($(date +%s%3N) - pressed)) -lt 30000 ]; do
-    case $(guest_ssh "if kill -0 $old 2>/dev/null; then echo alive; else echo ended; fi" 2>/dev/null) in
-      ended) gone=$(date +%s%3N) ;;
-    esac
-  done
-  took=$((${gone:-$(date +%s%3N)} - pressed))
-  echo "the Chrome screen hid $took ms after the press, CYFR silent" >>"$GUEST_DIR/timing.txt"
-  check "with CYFR silent, Prism's Lock hid the screen $took ms after the press, within 5 s" \
-    sh -c '[ -n "$1" ] && [ "$2" -lt 5000 ]' sh "$gone" "$took"
+  took=$(screen_read hides Lock 30 2>>"$GUEST_DIR/screen-press.txt")
+  echo "the app's screen hid ${took:-never} ms after the press, CYFR silent" >>"$GUEST_DIR/timing.txt"
+  check "with CYFR silent, Prism's Lock hid the screen ${took:-never} ms after the press, within 5 s" \
+    sh -c '[ -n "$1" ] && [ "$1" -lt 5000 ]' sh "$took"
   guest_root "for p in $ports; do for c in INPUT OUTPUT; do for d in sport dport; do
       iptables -w -D \$c -p tcp --\$d \$p -m comment --comment cyfr-proof-silent -j DROP
     done; done; done" || fail "the silence was not undone ($GUEST_DIR/root.txt)"
@@ -539,8 +582,50 @@ screen_hides_first() {
   check "that session ended at the home within 60 s, a poll's 5 s aside (in ${took:-more than 150} s)" \
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
   screen_unlock
-  check "Chrome holds the next unlock's session cookie" screen_cookie unsilenced
+  check "the screen sends CYFR the next unlock's session cookie" screen_cookie unsilenced
   check "the home serves it" cookie_is in unsilenced
+}
+
+# A video in the five minutes: the API key the screen just made, read as
+# root off the loopback wire as CYFR sent it to the screen (box.py), since
+# Prism shows a key once, to the person, writes the canvas proof-video
+# (video/) and puts it first among the person's canvases, and is used for
+# nothing else; Prism shows it, and a tap of its Play starts a video made
+# on the page, which takes the engine's idle notification as playback
+# does. The five minutes that follow lock the screen all the same.
+screen_video() {
+  local framed
+  step "a video canvas written with that key, started by a tap"
+  framed=$(guest_root_out "python3 -I /root/box.py framed $OBSERVED")
+  check "CYFR's WebSocket frames to the screen are plain, so its key is read on the wire (${framed:-unread})" test "$framed" = plain
+  check "the key CYFR sent the screen is read off the wire, into root's file alone" \
+    guest_root "python3 -I /root/box.py key $OBSERVED /root/proof-key >/dev/null"
+  guest_copy_in "$HERE/video/index.html" video-index.html && guest_copy_in "$HERE/video/app.js" video-app.js ||
+    fail "the video canvas's files were not copied into the guest"
+  guest_root 'install -d -m 700 /root/proof-video && install -m 600 /home/proof/video-index.html /root/proof-video/index.html &&
+    install -m 600 /home/proof/video-app.js /root/proof-video/app.js && rm /home/proof/video-index.html /home/proof/video-app.js' ||
+    fail "the video canvas's files were not given to root ($GUEST_DIR/root.txt)"
+  check "that key writes the canvas and puts it first among the person's canvases" \
+    guest_root "python3 -I /root/box.py canvas /root/proof-key /root/proof-video >/root/proof-video/reference"
+  # Prism's own way to a canvas: its search, which lists it below what
+  # was typed, as a desktop; that result opens Choose your desktop, where
+  # a press of it makes it the one shown.
+  guest_chord ctrl shift k || fail "QMP did not send the keys"
+  sleep 3
+  printf 'proof-video' | guest_keys || fail "QMP did not type"
+  sleep 3
+  screen_press proof-video last || fail "the screen did not press the canvas's result ($GUEST_DIR/screen-press.txt)"
+  check "Prism offers it among the desktops to choose" screen_shows 'Choose your desktop' 15
+  screen_press proof-video || fail "the screen did not choose the canvas ($GUEST_DIR/screen-press.txt)"
+  # A canvas runs once the person grants it.
+  check "Prism asks the person to grant it" screen_shows 'Grant proof-video' 15
+  screen_press Grant last || fail "the screen did not press Grant ($GUEST_DIR/screen-press.txt)"
+  sleep 8
+  check "screenshot screen-video.png" guest_screenshot screen-video.png
+  check "Prism shows the canvas, its Play to tap" screen_shows Play 30
+  screen_press Play || fail "the screen did not press Play ($GUEST_DIR/screen-press.txt)"
+  check "the tap started the video" screen_shows Playing 15
+  check "screenshot screen-video-playing.png" guest_screenshot screen-video-playing.png
 }
 
 # A sensitive change confirmed on this screen: an API key made in Prism,
@@ -556,22 +641,25 @@ screen_confirms() {
   # search, which does.
   guest_chord ctrl shift k || fail "QMP did not send the keys"
   sleep 3
-  screen_find 'api keys' && printf '\n' | guest_keys || fail "QMP did not press API Keys"
+  # Its search, typed into, lists the page below what was typed, and a
+  # press of that result opens it.
+  printf 'API keys' | guest_keys || fail "QMP did not type"
+  sleep 3
+  check "the search lists the API Keys page" screen_shows PAGE 10
+  screen_press 'API Keys' last || fail "the screen did not press API Keys ($GUEST_DIR/screen-press.txt)"
   sleep 8
   check "screenshot screen-api-keys.png" guest_screenshot screen-api-keys.png
   # Create Key opens the form; Tab reaches its name, and Enter there
   # submits it, which asks the fresh confirmation.
-  screen_find 'create key' && printf '\n' | guest_keys || fail "QMP did not press Create Key"
+  screen_press 'Create Key' || fail "the screen did not press Create Key ($GUEST_DIR/screen-press.txt)"
   sleep 3
   printf '\tproof-key\n' | guest_keys || fail "QMP did not type the key's name"
   sleep 6
   check "screenshot screen-confirm-asked.png" guest_screenshot screen-confirm-asked.png
   since=$(guest_ssh 'date +%s')
-  # The sheet opens with the keyboard's focus on Confirm on this device,
-  # and Enter presses it; the page it opens shows that it was that link.
-  # Chrome's find bar is not used here: closed, it leaves the focus on the
-  # page's body, not on the match in the sheet.
-  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  # The sheet's Confirm on this device, pressed; the page it opens shows
+  # that it was that link.
+  screen_press 'Confirm on this device' || fail "the screen did not press Prism's Confirm on this device ($GUEST_DIR/screen-press.txt)"
   confirm_page_until confirm-drawn "$since" 60
   check "Confirm on this device opened the screen's own page, which draws the key CYFR is asked to make" \
     sh -c 'grep -q "Confirm on this device" "$1" && grep -q key.create "$1"' sh "$GUEST_DIR/shell-confirm-drawn.html"
@@ -583,37 +671,39 @@ screen_confirms() {
     sh -c '! grep -q key.create "$1" && ! grep -qF "$2" "$1" && grep -q "A confirmation is open" "$1"' sh "$GUEST_DIR/shell-confirm-plain.html" "$ref"
 
   step "Cancel signs nothing"
-  # The PIN's field, Confirm, then Cancel.
-  printf '\t\t\t\n' | guest_keys || fail "QMP did not press Cancel"
+  check "the confirmation's Cancel is tapped" screen_press Cancel
   sleep 5
   shell_page confirm-cancelled
   check "the screen says nothing was confirmed" grep -q 'Nothing was confirmed' "$GUEST_DIR/shell-confirm-cancelled.html"
   confirmation_state cancelled "$ref"
   check "the home holds the change still pending, confirmed by no client" \
     json_is "$GUEST_DIR/confirmation-cancelled.json" '{"state": "pending", "confirmed_client_id": null, "proof": null}'
+  # The answered window closes by itself, and Prism, which still asks,
+  # is on the screen again, its Confirm on this device a press away.
+  sleep 6
+  check "screenshot screen-confirm-cancelled.png" guest_screenshot screen-confirm-cancelled.png
 
   step "a wrong PIN, then the PIN again, confirm it on this screen"
-  # Back to Prism's tab, which still asks.
-  guest_chord ctrl 1 || fail "QMP did not send the keys"
-  sleep 2
   since=$(guest_ssh 'date +%s')
-  # Prism's tab keeps its focus on Confirm on this device, as above.
-  printf '\n' | guest_keys || fail "QMP did not press Confirm on this device"
+  screen_press 'Confirm on this device' || fail "the screen did not press Prism's Confirm on this device ($GUEST_DIR/screen-press.txt)"
   confirm_page_until confirm-again "$since" 60
   check "Confirm on this device draws it again" grep -q key.create "$GUEST_DIR/shell-confirm-again.html"
-  printf '\t000000\n' | guest_keys || fail "QMP did not type"
+  check "a wrong PIN, 000000, is tapped into the confirmation and its Confirm tapped" confirm_tapped 000000
   sleep 6
   confirm_page confirm-wrong
   check "a wrong PIN confirms nothing: the screen says so and still asks" \
     sh -c 'grep -q "That is not this device" "$1" && grep -q "Confirm on this device" "$1"' sh "$GUEST_DIR/shell-confirm-wrong.html"
   confirmation_state wrong "$ref"
   check "the home still holds it pending" json_is "$GUEST_DIR/confirmation-wrong.json" '{"state": "pending", "confirmed_client_id": null}'
-  printf '\t%s\n' "$SECRET" | guest_keys || fail "QMP did not type"
+  # The PIN makes the key, which Prism shows once, in a card the person
+  # closes with its Done.
+  check "the $SECRET_NAME is tapped into the confirmation and its Confirm tapped" confirm_tapped "$SECRET"
   sleep 8
   shell_page confirmed
   check "the screen confirmed it with the PIN again" grep -q 'Confirmed on this device' "$GUEST_DIR/shell-confirmed.html"
-  check "screenshot screen-confirmed.png" guest_screenshot screen-confirmed.png
-  sleep 6
+  check "Prism shows the key it made" screen_shows 'Copy this key now' 30
+  screen_press Done last || fail "the screen did not press the key's Done ($GUEST_DIR/screen-press.txt)"
+  check "the key's card is closed" screen_shows_not 'Copy this key now' 15
   check "screenshot screen-key-made.png" guest_screenshot screen-key-made.png
   confirmation_state confirmed "$ref"
   client=$(guest_ssh "python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"client_id\"])' ~/.cyfr/device/client.json")
@@ -621,10 +711,18 @@ screen_confirms() {
     json_is "$GUEST_DIR/confirmation-confirmed.json" "{\"state\": \"consumed\", \"confirmed_client_id\": \"$client\"}"
 }
 
+# confirm_tapped SECRET: as a person at the box confirms, by touch: the
+# confirmation's field tapped by its label, which holds it, SECRET tapped
+# on the on-screen keyboard's keys, then the confirmation's Confirm, the
+# lower of the two the page shows (its heading is the other).
+confirm_tapped() {
+  screen_press "$SECRET_NAME again" && screen_tap "$1" && screen_press Confirm last
+}
+
 # confirm_page_until NAME SINCE SECONDS: the confirmation as the window
 # Prism opened shows it, in GUEST_DIR/shell-NAME.html: the reference that
-# window's address names, read from the screen's Chrome history after
-# SINCE (the guest's Unix seconds) into CONFIRM_REF, asked of the shell's
+# window's address names, read from the requests the box observed the
+# screen make after SINCE (the guest's Unix seconds) into CONFIRM_REF, asked of the shell's
 # page, which shows a drawn confirmation only to a request naming it; read
 # each 3 s until the page draws it, within SECONDS.
 CONFIRM_REF=""
@@ -633,7 +731,7 @@ confirm_page_until() {
   budget "$3" || return 1
   closes=$((SECONDS + BUDGET))
   while :; do
-    CONFIRM_REF=$(guest_ssh "python3 -I ~/box.py visits $SCREEN_PROFILE $2 '/confirm?ref='" 2>/dev/null |
+    CONFIRM_REF=$(guest_root_out "python3 -I /root/box.py visits $OBSERVED $2 7340 '/confirm?ref='" 2>/dev/null |
       sed -n 's/.*[?&]ref=\([A-Za-z0-9_-]*\).*/\1/p' | tail -n 1)
     if [ -n "$CONFIRM_REF" ]; then
       confirm_page "$1"
@@ -703,7 +801,7 @@ screen_killed() {
 }
 
 # The shell's connection to CYFR severed: its packets, on the ports of its
-# own connections alone, dropped both ways, while Prism's page in Chrome
+# own connections alone, dropped both ways, while Prism's page in the app
 # keeps its own. The session ends within 60 s; the shell, its ping
 # unanswered, locks the screen as unreachable at its next report, which
 # replaces the page held open, unless the home's end came first and sent
@@ -713,7 +811,7 @@ screen_severed() {
   local ports cut took seen closes
   step "the shell's connection to CYFR severed past 60 s while Prism's page stays open"
   screen_unlock
-  check "Chrome holds the next unlock's session cookie" screen_cookie severed
+  check "the screen sends CYFR the next unlock's session cookie" screen_cookie severed
   check "the home serves it" cookie_is in severed
   ports=$(guest_root_out "ss -tnpH state established '( dport = :4000 )' | grep '\"cyfr\",' | awk '{print \$3}' | sed 's/.*://'" | tr '\n' ' ')
   check "the shell holds its connection to CYFR (local ports $ports)" test -n "${ports// /}"
@@ -730,7 +828,7 @@ screen_severed() {
     sh -c '[ -n "$1" ] && [ "$1" -le 65 ]' sh "$took"
   budget 90 || BUDGET=0
   closes=$((SECONDS + BUDGET))
-  until seen=$(guest_ssh "python3 -I ~/box.py visits $SCREEN_PROFILE $cut /login" 2>/dev/null) && [ -n "$seen" ] ||
+  until seen=$(guest_root_out "python3 -I /root/box.py visits $OBSERVED $cut 4000 /login" 2>/dev/null) && [ -n "$seen" ] ||
     { shell_page severed-locked && grep -q "CYFR is locked" "$GUEST_DIR/shell-severed-locked.html"; } ||
     [ "$SECONDS" -ge "$closes" ]; do sleep 10; done
   check "Prism's page, held open past the session's end, went to the sign-in page or was replaced by the lock page (${seen:-locked})" \
@@ -754,10 +852,10 @@ screen_severed() {
 
 # screen_stays_stopped STOP FILE: STOP run as root on the guest, then a
 # watch that kills nothing: the screen's processes have 20 seconds to end
-# by themselves, and then for five seconds in a row nothing may hold the
-# screen's Chrome profile and none of the account's labwc, the D-Bus
-# daemon dbus-run-session started, launcher, screen shell, keyboard, idle
-# watch or Chrome, its crash handler among them, may run. Every process
+# by themselves, and then for five seconds in a row none of the account's
+# labwc, the D-Bus daemon dbus-run-session started, launcher, screen
+# shell, keyboard, idle watch or CYFR app, any process of its own among
+# them, may run. Every process
 # it sees is kept in FILE with its parent: pid, parent pid, start time
 # and command line, so a process left over or come back names what
 # started it (the brackets keep each pattern from matching the shells
@@ -766,14 +864,13 @@ screen_severed() {
 screen_stays_stopped() {
   guest_root_out "$1; "'
     seen() {
-      { pgrep -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"
-        pgrep -u proof -x labwc
+      { pgrep -u proof -x labwc
         pgrep -u proof -f "^dbus-daemon --nofork --print-addres[s]"
         pgrep -u proof -f "/\.cyfr/screen/launcher\.s[h]"
         pgrep -u proof -f "cyfr screen shel[l]"
         pgrep -u proof -x wvkbd-mobintl
         pgrep -u proof -x swayidle
-        pgrep -u proof -f "/opt/google/chrom[e]/"
+        pgrep -u proof -f "^/opt/cyfr/CYF[R]"
       } | sort -un | paste -sd, -
     }
     record() {
@@ -807,7 +904,7 @@ screen_stop_watched() {
   check "$1: the screen's processes end by themselves within 20 s and none runs for five seconds in a row ($GUEST_DIR/$3)" test "$status" = 0
   [ "$status" = 0 ] || guest_root '
     pkill -KILL -u proof -f "/\.cyfr/screen/launcher\.s[h]"; pkill -KILL -u proof -f "cyfr screen shel[l]"
-    pkill -KILL -f -- "--user-data-dir=/home/proof/cyfr/.cyfr/screen/chrom[e]"; pkill -KILL -u proof -f "/opt/google/chrom[e]/"
+    pkill -KILL -u proof -f "^/opt/cyfr/CYF[R]"
     pkill -KILL -u proof -x labwc; pkill -KILL -u proof -x wvkbd-mobintl; pkill -KILL -u proof -x swayidle
     pkill -KILL -u proof -f "^dbus-daemon --nofork --print-addres[s]"; true'
 }
@@ -832,21 +929,28 @@ screen_session_gone() {
   guest_root '! loginctl list-sessions --no-legend | grep -qw tty1'
 }
 
-# Chrome's profile, copied while Prism was open, put back while the screen
-# is stopped, then a reboot: the screen boots locked, and the copy's
-# cookie, the one Prism first opened with, opens nothing.
-screen_copied_profile() {
-  step "Chrome's profile copied while unlocked and put back, then a reboot"
-  guest_root 'systemctl stop cyfr-screen' || fail "the screen was not stopped ($GUEST_DIR/root.txt)"
-  guest_ssh "rm -rf $SCREEN_PROFILE && mv ~/chrome-copy $SCREEN_PROFILE" || fail "the copied profile was not put back"
-  profile_cookie copy
-  check "the copy holds the cookie Prism first opened with" test "${COOKIE_DIGEST[copy]:-none}" = "${COOKIE_DIGEST[prism]:-}"
+# The session open on the screen is on no disk: no cookie store of the
+# screen's account holds its cookie while Prism is open, and after a
+# reboot the screen boots locked and that cookie opens nothing.
+screen_keeps_no_session() {
+  local stored closes
+  step "the session open on the screen is on no disk, and a reboot ends it"
+  screen_unlock
+  check "the screen sends CYFR that unlock's session cookie" screen_cookie kept
+  check "the home serves it" cookie_is in kept
+  # The stores are read by the cookie's name (box.py stored), each 5 s
+  # for 45 s: a cookie store takes its writes in batches, seconds after
+  # the page was sent the cookie.
+  closes=$((SECONDS + 45))
+  while stored=$(guest_root_out "python3 -I /root/box.py stored /home/proof/.config") && [ "$stored" = 0 ] &&
+    [ "$SECONDS" -lt "$closes" ]; do sleep 5; done
+  check "no cookie store of the screen's account holds CYFR's session cookie, read for 45 s (it holds ${stored:-unread})" test "$stored" = 0
   guest_reboot
   screen_back
-  shell_page copied
-  check "with the copied profile back the screen boots locked" grep -q 'CYFR is locked' "$GUEST_DIR/shell-copied.html"
-  check "screenshot screen-copied.png" guest_screenshot screen-copied.png
-  check "the copy's cookie opens nothing" cookie_is out copy
+  shell_page rebooted
+  check "after the reboot the screen boots locked" grep -q 'CYFR is locked' "$GUEST_DIR/shell-rebooted.html"
+  check "screenshot screen-rebooted.png" guest_screenshot screen-rebooted.png
+  check "the session it had open opens nothing" cookie_is out kept
 }
 
 clean_install() {
@@ -864,7 +968,7 @@ clean_install() {
   guest_ssh "sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env" >"$WORK/token" 2>&1
   guest_ssh 'ps -eo args' >"$GUEST_DIR/processes.txt" 2>&1
   check "the setup token is in no process's arguments" sh -c '[ -s "$1" ] && ! grep -qF "$(cat "$1")" "$2"' sh "$WORK/token" "$GUEST_DIR/processes.txt"
-  check "no screen file holds the setup token" guest_ssh "! grep -rqF \"\$(sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env)\" --exclude-dir=chrome ~/cyfr/.cyfr/screen ~/.cyfr/device"
+  check "no screen file holds the setup token" guest_ssh "! grep -rqF \"\$(sed -n 's/^CYFR_SETUP_TOKEN=//p' ~/cyfr/.env)\" ~/cyfr/.cyfr/screen ~/.cyfr/device ~/.config/CYFR"
 
   step "setup on the screen, typed: a name and the PIN (or passphrase) twice"
   if [ "$GUEST_TPM" = none ]; then
@@ -888,10 +992,10 @@ clean_install() {
     shell_page six-digits
     check "without a chip six digits are refused" grep -q 'needs the six-word passphrase' "$GUEST_DIR/shell-six-digits.html"
     check "a refused PIN made no key" guest_ssh '! test -e ~/.cyfr/device/holder.json'
-    KIND=software
+    KIND=software SECRET_NAME=Passphrase
   else
     SECRET=$(printf '%06d' $((RANDOM % 1000000)))
-    KIND=chip
+    KIND=chip SECRET_NAME=PIN
   fi
   printf 'alice\t%s\t%s\n' "$SECRET" "$SECRET" | guest_keys || fail "QMP did not type"
   sleep 15
@@ -925,7 +1029,7 @@ clean_install() {
   guest_ssh 'cd ~/cyfr && ~/.local/bin/cyfr down' >"$GUEST_DIR/down.txt" 2>&1 || fail "cyfr down failed ($GUEST_DIR/down.txt)"
   volumes_seen after-cyfr-down
   guest_reboot
-  screen_runs || fail "labwc and Chrome did not come back on tty1 ($GUEST_DIR/screen.txt)"
+  screen_runs || fail "labwc and the CYFR app did not come back on tty1 ($GUEST_DIR/screen.txt)"
   sleep 20
   check "screenshot screen-waiting.png" guest_screenshot screen-waiting.png
   check "the waiting page is on the screen, not the setup page" sh -c '! cmp -s "$1" "$2"' sh "$GUEST_DIR/screen-waiting.png" "$GUEST_DIR/screen-setup.png"
@@ -940,7 +1044,7 @@ clean_install() {
 active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "screenshot screen-terminal.png" guest_screenshot screen-terminal.png
 
-  step "cyfr uninstall --yes stops CYFR as cyfr down does and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
+  step "cyfr uninstall --yes stops CYFR as cyfr down does, removes the CYFR app, and removes nothing else from the folder: the folder, the volumes, the settings and the device key as cyfr down left them"
   # Read as root after cyfr down and again after the uninstall, and
   # compared whole: the folder, each volume's files and the account's
   # ~/.cyfr (its settings and device key), each entry's kind, size, mode,
@@ -1018,6 +1122,8 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "the one command it prints removes exactly the stack's volumes" volume_command_names_the_volumes
   check "it names no volume of another project" volume_command_names_no_other_project
   check "it prints no command that removes a file or a folder" sh -c '[ -z "$(grep -w rm "$1" | grep -v "^    docker volume rm ")" ]' sh "$GUEST_DIR/transcript-uninstall.txt"
+  check "it names the CYFR app among what it removes, and says it removed it" \
+    sh -c 'grep -qx "  the CYFR app, the package cyfr-desktop" "$1" && grep -qx "Removed the CYFR app." "$1"' sh "$GUEST_DIR/transcript-uninstall.txt"
   pane_step_end uninstall
   screen_stop_watched "after the uninstall" : screen-holders-uninstall.txt
   screen_session_record after-the-uninstall
@@ -1029,6 +1135,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   check "no CYFR image is left" guest_ssh "[ -z \"\$(docker images -q ghcr.io/cyfrworks/cyfr-locus)\" ] && ! docker image inspect $APP_IMAGE >/dev/null 2>&1"
   check "the program and its link onto PATH are gone" guest_ssh '! ls -d ~/.local/bin/cyfr /usr/local/bin/cyfr 2>/dev/null'
   check "the screen is given back to tty1's login prompt" guest_ssh 'systemctl is-active --quiet getty@tty1 && ! systemctl is-enabled --quiet cyfr-screen && [ ! -e /etc/systemd/system/cyfr-screen.service ]'
+  check "the CYFR app's package is removed, its program with it" guest_ssh '[ "$(dpkg-query -W -f "\${db:Status-Status}" cyfr-desktop 2>/dev/null)" != installed ] && [ ! -e /opt/cyfr/CYFR ]'
   check "Docker and the packages stay" guest_ssh 'docker info >/dev/null && dpkg-query -W -f "\${db:Status-Status}" docker.io cosign | grep -qx installedinstalled'
   cyfr_run_guarded end final
   guest_journal
@@ -1042,6 +1149,7 @@ proof_kvm_preflight
 proof_base_verify
 proof_seed
 candidate_build
+candidate_app_build
 candidate_server_use
 clean_install || status=$?
 echo
