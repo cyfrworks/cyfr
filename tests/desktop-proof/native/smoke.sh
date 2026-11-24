@@ -162,6 +162,8 @@ within_from() {
 }
 # within SECONDS COMMAND...: the same, from now.
 within() { within_from "$SECONDS" "$@"; }
+# Whether the folder holds anything the app wrote there.
+profiled() { [ -d "$1" ] && [ -n "$(ls -A "$1")" ]; }
 # PID is the shell's own child, which a signal can always be asked of: the
 # one failure of kill -0 on one is that it is gone. No PID is not a gone one.
 gone() { [ -n "$1" ] && ! kill -0 "$1" 2>/dev/null; }
@@ -337,13 +339,16 @@ if ready first "$FIRST"; then
     windows_listed "$FIRST_OS"
   fi
 
+  # The profile is the app's own folder, which the engine fills as the app
+  # starts (its single-instance lock among it); a CYFR's stored session
+  # comes only with that CYFR, so no partition is looked for.
   case "$OS" in
-    linux) PROFILE="$RUN/home/.config/CYFR/Partitions" ;;
-    macos) PROFILE="$RUN/home/Library/Application Support/CYFR/Partitions" ;;
+    linux) PROFILE="$RUN/home/.config/CYFR" ;;
+    macos) PROFILE="$RUN/home/Library/Application Support/CYFR" ;;
     *) PROFILE= ;;
   esac
   if [ -n "$PROFILE" ]; then
-    if within 30 test -d "$PROFILE"; then
+    if within 30 profiled "$PROFILE"; then
       pass profile "the app made its profile under the run's HOME"
     else
       fail profile "the app kept no profile at $PROFILE within 30 s"

@@ -4,7 +4,9 @@
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 2, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, and id, a departure's, whole ones from 1,
+// the proposal's number, and id, a departure's or an erase's, whole ones
+// from 1, erased's ok, true or false, erase's home and account, each an
+// origin in its one spelling,
 // folder-picked's path, a
 // folder spelled from a root (absolute) or null, and its epoch and pick,
 // whole numbers from 0, the chooser's own as it asked for the pick.
@@ -14,22 +16,24 @@ export const VERSION = 2
 export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
-  ready: {required: ["url"]},
+  ready: {required: ["url"], optional: ["rail"]},
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "setup"]},
   opened: {required: ["home", "attempt"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
   ending: {required: []},
   left: {required: ["id"]},
+  erase: {required: ["id", "home"], optional: ["account"]},
   "home-ready": {required: ["home", "attempt"]},
-  "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
   leave: {required: ["id"]},
   shutdown: {required: []},
-  "folder-picked": {required: ["path", "epoch", "pick"]}
+  "folder-picked": {required: ["path", "epoch", "pick"]},
+  forget: {required: ["home"]},
+  erased: {required: ["id", "ok"]}
 }
 
-const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "left"]
-const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
+const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "left", "erase"]
+const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked", "forget", "erased"]
 
 /**
  * Whether `path` is a folder spelled from a root on any system the app
@@ -46,6 +50,16 @@ export class Refused extends Error {
 }
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
+
+/** Whether `v` is an origin in its one spelling, as URL writes it. */
+export function isOrigin(v) {
+  if (typeof v !== "string") return false
+  try {
+    return new URL(v).origin === v
+  } catch {
+    return false
+  }
+}
 // The fields that are a number, a whole one from 1.
 const whole = (key) => key === "attempt" || key === "id"
 
@@ -76,6 +90,8 @@ export function readFromCyfr(line) {
   if (together.length && named === 0 && (Object.hasOwn(m, "proxy") || Object.hasOwn(m, "resolver"))) throw new Refused("fields")
   // A setup token in its one form, which the CYFR's setup page reads.
   if (Object.hasOwn(m, "setup") && !/^[0-9a-f]{64}$/.test(m.setup)) throw new Refused("fields")
+  // What an erase names is erased by its origin: nothing else is one.
+  if (m.type === "erase" && ![m.home, m.account ?? m.home].every(isOrigin)) throw new Refused("fields")
   return m
 }
 
@@ -89,6 +105,8 @@ export function toCyfr(type, fields = {}) {
     if (key === "path" && fields.path !== null && !absolute(fields.path)) throw new Error(`${type} names no absolute folder`)
     if ((key === "epoch" || key === "pick") && !(Number.isSafeInteger(fields[key]) && fields[key] >= 0)) throw new Error(`${type} needs ${key} as a whole number`)
     if (whole(key) && !(Number.isSafeInteger(fields[key]) && fields[key] > 0)) throw new Error(`${type} needs ${key} as a whole number from 1`)
+    if (key === "ok" && typeof fields.ok !== "boolean") throw new Error(`${type} needs ok as true or false`)
+    if (type === "forget" && key === "home" && !isOrigin(fields.home)) throw new Error(`forget needs home as an origin`)
     m[key] = fields[key]
   }
   return JSON.stringify(m) + "\n"
