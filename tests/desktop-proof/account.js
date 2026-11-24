@@ -81,8 +81,10 @@ const AUTHENTICATOR = {protocol: "ctap2", transport: "internal", hasResidentKey:
  */
 export async function armWindow(w, credentials = [...held.values()]) {
   const wc = w.webContents
-  w.show()
-  w.focus()
+  // A view of the app's window has no show or focus of its own: its page
+  // is focused.
+  w.show?.()
+  w.focus?.()
   wc.focus()
   const cdp = wc.debugger
   if (!cdp.isAttached()) {

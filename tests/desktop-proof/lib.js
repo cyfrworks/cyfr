@@ -116,6 +116,13 @@ Menu.buildFromTemplate = (template) => ({popup() {
   setImmediate(() => template[0]?.click?.())
 }})
 
+/**
+ * Whether window `w` is a child of the app's window. The engine answers a
+ * child's parent with an object of its own, never the frame itself, so
+ * the two are told by id.
+ */
+export const childOfFrame = (w) => !!frame() && w.getParentWindow()?.id === frame().id
+
 export function appWindows() {
   return BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w !== client)
 }
@@ -126,13 +133,15 @@ export function frame() {
 }
 
 // Each view of the app's window as the proofs read a window: one object
-// for each view, so two reads of the same view are the same.
+// for each view, so two reads of the same view are the same. Its page is
+// the one it had when first read: a closed view answers none.
 const asWindows = new WeakMap()
 function asWindow(view) {
   if (!asWindows.has(view)) {
-    asWindows.set(view, {view, webContents: view.webContents, getParentWindow: () => null, getBounds: () => view.getBounds(),
-      isDestroyed: () => view.webContents.isDestroyed(),
-      isVisible: () => !view.webContents.isDestroyed() && !!frame()?.isVisible() && frame().contentView.children.includes(view)})
+    const wc = view.webContents
+    asWindows.set(view, {view, webContents: wc, getParentWindow: () => null, getBounds: () => view.getBounds(),
+      isDestroyed: () => wc.isDestroyed(),
+      isVisible: () => !wc.isDestroyed() && !!frame()?.isVisible() && frame().contentView.children.includes(view)})
   }
   return asWindows.get(view)
 }

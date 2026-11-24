@@ -24,7 +24,7 @@ import {BrowserWindow, session} from "electron"
 
 import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothWays, devicePrism, held, lockDevice,
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
-import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, frame, rail, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
+import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, childOfFrame, rail, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
   reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
   submit, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
@@ -170,7 +170,7 @@ async function passkeyPhase() {
   const listed = await waitFor(() => js(w.webContents, `document.querySelector('[data-test="pairing-waiting-code"]')?.textContent.trim() || null`),
     "the passkey waiting in Your devices")
   await js(w.webContents, `document.querySelector('[data-test="pairing-approve"]').click(); 1`)
-  const approve = await waitFor(() => appWindows().find((x) => x.getParentWindow() === frame() && x.webContents.getURL().startsWith(LOOPBACK + "/passkey")),
+  const approve = await waitFor(() => appWindows().find((x) => childOfFrame(x) && x.webContents.getURL().startsWith(LOOPBACK + "/passkey")),
     "the device's approval window")
   await waitFor(() => js(approve.webContents, `!!document.querySelector('form[action="/passkey/decide"]')`), "the approval page")
   const shownThere = await js(approve.webContents, `document.querySelector("p.code")?.textContent.trim() || null`)

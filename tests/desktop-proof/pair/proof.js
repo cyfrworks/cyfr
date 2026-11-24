@@ -253,7 +253,7 @@ async function pairPhase() {
 
   // a_again: A on the rail opens A again, signed in under the very session
   // it had, asking nothing.
-  const aMark = await sessionMark(a.w)
+  const aMark = (await markIn(HOME)).mark
   await select(HOME)
   const again = await prismAt(HOME)
   const aMarkAgain = await sessionMark(again)
@@ -276,7 +276,7 @@ async function pairPhase() {
   // A signed in again for the next launch, its session's mark kept.
   answerWith(() => 0)
   const a2 = await signIn(HOME)
-  writeFileSync(SESSIONS, JSON.stringify({[HOME]: await sessionMark(a2.w), [SECOND]: await sessionMark(b.w, SECOND)}))
+  writeFileSync(SESSIONS, JSON.stringify({[HOME]: await sessionMark(a2.w), [SECOND]: (await markIn(SECOND)).mark}))
 
   // Killed while B is being selected: A left, B not yet open.
   const saidBefore = said.length
@@ -285,11 +285,18 @@ async function pairPhase() {
   return "kill"
 }
 
+// What tells `home`'s session in its own store from another, and when it
+// ends, with nothing of the cookie itself (lib.js sessionMark), read from
+// the store: a view of a CYFR left is closed.
+async function markIn(home) {
+  const [cookie] = await contentStore(home).cookies.get({url: home, name: "_cyfr_key"})
+  return {cookie, mark: cookie ? {digest: createHash("sha256").update(cookie.value).digest("hex").slice(0, 16), expires: cookie.expirationDate ?? null} : null}
+}
+
 // Still signed in at `home` as the first launch left it, from its store.
 async function stillSigned(home) {
   const was = JSON.parse(readFileSync(SESSIONS, "utf8"))[home]
-  const [cookie] = await contentStore(home).cookies.get({url: home, name: "_cyfr_key"})
-  const is = cookie ? {digest: createHash("sha256").update(cookie.value).digest("hex").slice(0, 16), expires: cookie.expirationDate ?? null} : null
+  const {cookie, mark: is} = await markIn(home)
   return {was, is, same: !!is && is.digest === was?.digest && is.expires === was?.expires, opens: !!cookie && (await opens(cookie.value, home)).opens}
 }
 
