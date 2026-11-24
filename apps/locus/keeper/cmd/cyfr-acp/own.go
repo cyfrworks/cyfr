@@ -56,11 +56,15 @@ var acpKinds = map[string]bool{"read": true, "edit": true, "delete": true, "move
 var mcpPart = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
 // ownName is what is shown of a call: an MCP call's `mcp:<server>/<tool>`,
-// each part a bounded name of a few characters, or else its ACP kind, never
-// a title, which may carry a folder's path.
-func (d *driver) ownName(kind string, rawInput json.RawMessage) string {
+// each part a bounded name of a few characters; the program's own name of
+// the tool, where the profile reads its calls' names and it is one such;
+// or else its ACP kind, never a title, which may carry a folder's path.
+func (d *driver) ownName(kind, name string, rawInput json.RawMessage) string {
 	if server, tool, ok := d.p.mcpCall(rawInput); ok && mcpPart.MatchString(server) && mcpPart.MatchString(tool) {
 		return "mcp:" + server + "/" + tool
+	}
+	if d.p.namesTools && mcpPart.MatchString(name) {
+		return name
 	}
 	if acpKinds[kind] {
 		return kind
@@ -79,13 +83,13 @@ func decoded(raw json.RawMessage) (any, bool) {
 	return v, true
 }
 
-func (d *driver) ownUpdate(callID, status, kind string, rawInput json.RawMessage) error {
+func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawMessage) error {
 	if callID == "" {
 		return nil
 	}
 	call, seen := d.own[callID]
 	if !seen {
-		call = &ownCall{name: d.ownName(kind, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
+		call = &ownCall{name: d.ownName(kind, name, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
 		if !call.waits {
 			call.started = true
 			if err := d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "start")); err != nil {

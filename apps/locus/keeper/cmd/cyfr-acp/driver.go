@@ -76,11 +76,21 @@ type nativeTurn struct {
 	posts []string
 }
 
-// steer is a post written as a second prompt, whose answer waits on the
-// program's confirmation.
-type steer struct {
-	post   string
+// steering is a post written mid-turn, whose answer waits on the
+// program's confirmation: a second prompt's (prompt), or the answer to the
+// profile's steer request (request, its key).
+type steering struct {
+	post    string
+	prompt  *prompt
+	request string
+}
+
+// ending is a native turn's last prompt answered while a steer request was
+// still unanswered: the turn ends once the steer is.
+type ending struct {
+	turn   *nativeTurn
 	prompt *prompt
+	m      rpc
 }
 
 type driver struct {
@@ -119,7 +129,8 @@ type driver struct {
 	requests int
 	prompts  map[string]*prompt
 	turn     *nativeTurn
-	steer    *steer
+	steer    *steering
+	ending   *ending
 	message  string
 	text     strings.Builder
 	own      map[string]*ownCall
@@ -234,7 +245,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	session := str("session")
 	resume := session != ""
 	// A session that is no session id of the program's has no transcript.
-	if resume && !brainwire.IsUUID(session) {
+	if resume && !d.p.sessionID(session) {
 		return d.c.Emit(brainwire.NewEvent("gone"))
 	}
 	cwd, err := os.Getwd()
@@ -292,14 +303,20 @@ func (d *driver) post(id, work string, members map[string]json.RawMessage) error
 	blocks := append(context, content...)
 	if d.turn != nil {
 		// A held ask's answer comes after the post's (main.go).
-		if !d.p.steers || (d.sock != nil && len(d.sock.held) > 0) {
+		switch {
+		case d.p.steer == steerLater || (d.sock != nil && len(d.sock.held) > 0):
 			return d.c.Later(id)
+		case d.p.steer == steerRequest:
+			key, err := d.send(d.p.steerMethod, map[string]any{"sessionId": d.session, "prompt": promptContent(blocks, d.caps, d.p.title),
+				"_meta": map[string]any{"cyfr": map[string]any{"post": brainwire.PostUUID(id)}}})
+			d.steer = &steering{post: id, request: key}
+			return err
 		}
 		p, refused, err := d.writePrompt(id, blocks)
 		if p == nil {
 			return firstOf(err, d.refusal(id, refused))
 		}
-		d.steer = &steer{post: id, prompt: p}
+		d.steer = &steering{post: id, prompt: p}
 		return nil
 	}
 	d.turn = &nativeTurn{work: work}
@@ -363,11 +380,14 @@ func (d *driver) models(id string) error {
 	if d.h != nil && !d.running() {
 		return d.c.Refuse(id, "The harness is starting: its models are listed once it has started.")
 	}
-	answer := d.answer
-	if d.h == nil {
+	// A program whose efforts are read by selecting each model lists them
+	// in a listing session of the driver's own even while one runs, whose
+	// model the listing must not change.
+	listed := listing{answer: d.answer}
+	if d.h == nil || d.p.selectEfforts {
 		var account string
 		var err error
-		answer, account, err = d.listOnce()
+		listed, account, err = d.listOnce()
 		if err != nil {
 			return d.c.Refuse(id, d.p.title+" did not list its models: "+err.Error()+".")
 		}
@@ -381,7 +401,7 @@ func (d *driver) models(id string) error {
 	for _, a := range d.p.access {
 		choices = append(choices, a.Choice)
 	}
-	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", listedModels(answer)).Set("access", choices).
+	return d.c.Emit(brainwire.NewEvent("models").Set("id", id).Set("models", listedModels(listed.answer, listed.efforts)).Set("access", choices).
 		Set("account", brainwire.SignedIn))
 }
 
@@ -413,6 +433,9 @@ func (d *driver) Line(line []byte) error {
 func (d *driver) response(key string, m rpc) error {
 	if s := d.starting; s != nil && key == s.request {
 		return d.startStep(s, m)
+	}
+	if st := d.steer; st != nil && st.request != "" && key == st.request {
+		return d.steered(st, m)
 	}
 	if p, ok := d.prompts[key]; ok {
 		delete(d.prompts, key)
@@ -461,7 +484,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		var answer sessionAnswer
 		_ = json.Unmarshal(m.Result, &answer)
 		switch {
-		case !s.resume && !brainwire.IsUUID(answer.SessionID):
+		case !s.resume && !d.p.sessionID(answer.SessionID):
 			return &brainwire.Fatal{Status: 1, Reason: d.p.title + " started no session the driver can name"}
 		case s.resume && answer.SessionID != "" && answer.SessionID != s.session:
 			return &brainwire.Fatal{Status: 1, Reason: d.p.title + " went on with another session than the one named"}
@@ -576,6 +599,7 @@ func (d *driver) update(params json.RawMessage) error {
 		// them: read as the kind says.
 		Content  json.RawMessage `json:"content"`
 		CallID   string          `json:"toolCallId"`
+		Name     string          `json:"name"`
 		Status   string          `json:"status"`
 		ToolKind string          `json:"kind"`
 		RawInput json.RawMessage `json:"rawInput"`
@@ -611,7 +635,7 @@ func (d *driver) update(params json.RawMessage) error {
 		d.text.WriteString(block.Text)
 		return d.c.EmitText(d.event("text").Set("message", id), "delta", block.Text)
 	case "tool_call", "tool_call_update":
-		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.RawInput)
+		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Name, u.RawInput)
 	}
 	return nil
 }
@@ -652,6 +676,13 @@ func (d *driver) answered(p *prompt, m rpc) error {
 			break
 		}
 	}
+	if st := d.steer; st != nil && st.request != "" {
+		if len(t.open) == 0 {
+			d.ending = &ending{turn: t, prompt: p, m: m}
+			return nil
+		}
+		return d.ended(t, p, m)
+	}
 	if st := d.steer; st != nil {
 		d.steer = nil
 		if st.prompt == p && m.Error != nil {
@@ -673,6 +704,38 @@ func (d *driver) answered(p *prompt, m rpc) error {
 	return d.ended(t, p, m)
 }
 
+// steered is the answer to a steer request: the post is accepted once the
+// program took it into the running turn, whose idle names it; it is
+// `later` where the program says no turn runs; any other answer refuses
+// it. A turn whose last prompt was answered meanwhile ends then.
+func (d *driver) steered(st *steering, m rpc) error {
+	d.steer = nil
+	taken, noTurn := false, false
+	if m.Error == nil {
+		taken, noTurn = d.p.steerAnswer(m.Result)
+	}
+	var err error
+	switch {
+	case taken:
+		if d.turn != nil {
+			d.turn.posts = append(d.turn.posts, st.post)
+		}
+		err = d.c.Accept(st.post)
+	case noTurn:
+		err = d.c.Later(st.post)
+	default:
+		err = d.c.Refuse(st.post, d.p.title+" did not take the message sent during its turn.")
+	}
+	if err != nil {
+		return err
+	}
+	if e := d.ending; e != nil {
+		d.ending = nil
+		return d.ended(e.turn, e.prompt, e.m)
+	}
+	return nil
+}
+
 type promptResult struct {
 	StopReason string          `json:"stopReason"`
 	Usage      json.RawMessage `json:"usage"`
@@ -689,7 +752,7 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 	last := len(t.open) == 0
 	if len(result.Usage) > 0 || (last && m.Error == nil) {
 		usage := d.event("usage").Set("result", fmt.Sprintf("%s-%d", d.c.Boot, p.id))
-		accounting, models := promptUsage(result.Usage, d.model, d.p.counted)
+		accounting, models := promptUsage(result.Usage, d.model, d.p)
 		usage.Set("accounting", accounting)
 		if accounting != "unavailable" {
 			usage.Set("models", models)
@@ -777,6 +840,7 @@ func (d *driver) Close() {
 	d.prompts = map[string]*prompt{}
 	d.turn = nil
 	d.steer = nil
+	d.ending = nil
 	d.message = ""
 	d.text.Reset()
 	d.own = map[string]*ownCall{}

@@ -201,10 +201,12 @@ func option(options []configOption, category string) *configOption {
 }
 
 // listedModels are the session's models, as its `model` option offers
-// them, each with the efforts of its `thought_level` option the program
-// has a variant of: a variant is an available model named
-// `<model>-<effort>`, as Antigravity names them.
-func listedModels(answer sessionAnswer) []brainwire.Model {
+// them, each with its efforts: those `efforts` names for it where the
+// profile reads them by selecting the model, and otherwise those of the
+// session's `thought_level` option the program has a variant of, a
+// variant being an available model named `<model>-<effort>`, as Antigravity
+// names them.
+func listedModels(answer sessionAnswer, efforts map[string][]string) []brainwire.Model {
 	models := []brainwire.Model{}
 	model := option(answer.Options, "model")
 	if model == nil {
@@ -219,15 +221,37 @@ func listedModels(answer sessionAnswer) []brainwire.Model {
 		levels = effort.choices()
 	}
 	for _, c := range model.choices() {
-		efforts := []string{}
-		for _, level := range levels {
-			if variants[c.value+"-"+level.value] {
-				efforts = append(efforts, level.value)
+		listed := []string{}
+		if efforts != nil {
+			listed = append(listed, efforts[c.value]...)
+		} else {
+			for _, level := range levels {
+				if variants[c.value+"-"+level.value] {
+					listed = append(listed, level.value)
+				}
 			}
 		}
-		models = brainwire.AppendModel(models, c.value, c.name, efforts)
+		models = brainwire.AppendModel(models, c.value, c.name, listed)
 	}
 	return models
+}
+
+// unsetEffort is the value of an effort option that names no effort of its
+// own, which is never listed as one.
+const unsetEffort = "default"
+
+// selectedEfforts are the efforts a session's `thought_level` option offers
+// for the model it has now.
+func selectedEfforts(options []configOption) []string {
+	out := []string{}
+	if o := option(options, "thought_level"); o != nil {
+		for _, c := range o.choices() {
+			if c.value != unsetEffort {
+				out = append(out, c.value)
+			}
+		}
+	}
+	return out
 }
 
 // promptContent is a post's blocks as an ACP prompt's content: text; an
@@ -254,43 +278,40 @@ func promptContent(blocks []brainwire.Block, caps agentCapabilities, title strin
 
 func textBlock(text string) map[string]any { return map[string]any{"type": "text", "text": text} }
 
-// acpCounts are the wire's counts by a prompt answer's usage names. Its
-// thoughtTokens are inside outputTokens and its totalTokens the sum, so
-// neither is counted again.
-var acpCounts = map[string]string{
-	"input_tokens":       "inputTokens",
-	"output_tokens":      "outputTokens",
-	"cache_read_tokens":  "cachedReadTokens",
-	"cache_write_tokens": "cachedWriteTokens",
-}
-
-// promptUsage reads a prompt answer's usage under the session's model: no
-// usage is "unavailable", never zeros; a count that does not read, or a
-// model the wire cannot name, is "partial" naming no model's counts; and
-// counts that read take the profile's accounting.
-func promptUsage(raw json.RawMessage, model, counted string) (string, []brainwire.ModelCounts) {
+// promptUsage reads a prompt answer's usage under the session's model, each
+// of the wire's counts the sum of the profile's names for it: no usage is
+// "unavailable", never zeros; a count that does not read, or a model the
+// wire cannot name, is "partial" naming no model's counts; and counts that
+// read take the profile's accounting. A count the profile names nothing
+// for is one the program does not report: 0, under an accounting that
+// says the counts may be short.
+func promptUsage(raw json.RawMessage, model string, p *profile) (string, []brainwire.ModelCounts) {
 	var usage map[string]json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil || usage == nil {
 		return "unavailable", nil
 	}
-	names := make([]string, 0, len(acpCounts))
-	for name := range acpCounts {
+	names := make([]string, 0, len(p.counts))
+	for name := range p.counts {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	counts := map[string]uint64{}
 	for _, name := range names {
-		var n uint64
-		value := usage[acpCounts[name]]
-		if !brainwire.IsCount(value) || json.Unmarshal(value, &n) != nil {
-			return "partial", []brainwire.ModelCounts{}
+		var sum uint64
+		for _, field := range p.counts[name] {
+			var n uint64
+			value := usage[field]
+			if !brainwire.IsCount(value) || json.Unmarshal(value, &n) != nil || sum+n < sum {
+				return "partial", []brainwire.ModelCounts{}
+			}
+			sum += n
 		}
-		counts[name] = n
+		counts[name] = sum
 	}
 	if !brainwire.IsID(model) {
 		return "partial", []brainwire.ModelCounts{}
 	}
-	return counted, []brainwire.ModelCounts{{Model: model, Counts: counts}}
+	return p.counted, []brainwire.ModelCounts{{Model: model, Counts: counts}}
 }
 
 // errorKind is the wire's type for a prompt's JSON-RPC error: the
