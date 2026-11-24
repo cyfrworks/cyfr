@@ -27,6 +27,9 @@
 #   3 Prism's Lock there closes the window shown within the lock's bound
 #     (2 s, labwc's own list of windows, as the screen step's rows), and
 #     x.test holds no session of the box's account any more
+#   4 the six words open x.test again, and x.test stopped while its Prism
+#     shows: the end of its channel locks the box with no press, the
+#     window shown closing and the lock page shown again
 #   5 x.test stopped, This box pressed on the rail shows This box's lock
 #     page, and the six words open This box's Prism there: This box holds
 #     a session of the box's key again
@@ -268,11 +271,31 @@ if [ "${1:-}" = --session ]; then
     within 30 sees "CYFR is locked" || { failed 3 "no lock page showed again"; return; }
     verdict PASS "row 3: Prism's Lock at x.test closed the window shown $took ms after the press, confirmed by labwc's list, and x.test holds no session of the box's account"
   }
+  # ---- 4: x.test stopped while open there: its channel's end locks ----
+  STOPPED=""
+  stop_x() {
+    local said
+    said=$(ask '{"ask": "stop-x"}')
+    [ "$(py "$said" 'd.get("stopped")')" = True ] && STOPPED=yes
+  }
+  row4() {
+    local was since took
+    push "Passphrase" || { failed 4 "x.test's lock page offers no passphrase"; return; }
+    typed "$WORDS" && key Return || { failed 4 "wtype did not type"; return; }
+    within 60 live x -ge 1 || { failed 4 "x.test holds no session of the box's account again: $(cat "$OUT/held-x" 2>/dev/null)"; return; }
+    within 60 sees "Lock" || { failed 4 "x.test's Prism did not show again"; return; }
+    was=$(shown | head -n 1)
+    since=$(date +%s.%N)
+    stop_x || { failed 4 "x.test could not be stopped"; return; }
+    within 30 closed "$was" || { failed 4 "the window shown ($was) did not close once x.test stopped"; return; }
+    took=$(ms "$(closedAt "$was")" "$since")
+    within 30 sees "CYFR is locked" || { failed 4 "no lock page showed after x.test stopped"; return; }
+    verdict PASS "row 4: x.test stopped while its Prism showed: the end of its channel locked the box with no press, the window shown closing $took ms after the stop was asked, and the lock page shows again"
+  }
   # ---- 5: x.test stopped, This box opens and unlocks ----
   row5() {
-    local before said took
-    said=$(ask '{"ask": "stop-x"}')
-    [ "$(py "$said" 'd.get("stopped")')" = True ] || { failed 5 "x.test could not be stopped: $said"; return; }
+    local before took
+    [ -n "$STOPPED" ] || stop_x || { failed 5 "x.test could not be stopped"; return; }
     before=$(proposals "$BOX_HOME")
     rail 36 66
     within 30 proposed "$BOX_HOME" "$before" || { failed 5 "This box was not proposed after its row was pressed"; return; }
@@ -290,6 +313,7 @@ if [ "${1:-}" = --session ]; then
   row1
   row2
   row3
+  row4
   row5
   finish
 fi
