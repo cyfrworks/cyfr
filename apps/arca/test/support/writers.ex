@@ -31,14 +31,19 @@ defmodule Arca.Test.Writers do
   names one: `{:ok, row}`, `{:error, {:invalid_label, label}}` for a label
   the label rule refuses, or `{:error, {:invalid, errors}}` for any other
   field the profile vocabulary refuses. The athanor arrives in `attrs` and
-  its absence raises.
+  its absence raises. A row `attrs` names `status: "revoked"` is written
+  as a revocation leaves one: inserted standing, then revoked with the
+  cause `attrs` names under `revoked_by`, since no insert is revoked.
   """
   @spec put_profile(map()) :: {:ok, map()} | {:error, term()}
   # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly two lines down.
   def put_profile(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Test.Writers.put_profile", fn ->
       _ = Map.fetch!(attrs, :athanor_id)
-      row = Map.put_new(attrs, :id, Prima.UUID7.generate_id("prof"))
+      {revocation, attrs} = Map.split(attrs, [:status, :revoked_by])
+      revoked? = revocation[:status] == "revoked"
+      standing = if revoked?, do: %{}, else: Map.take(revocation, [:status])
+      row = attrs |> Map.merge(standing) |> Map.put_new(:id, Prima.UUID7.generate_id("prof"))
 
       # The schema's changeset holds the row to the profile vocabulary and
       # carries the active-identity index. A label refusal keeps the typed
@@ -48,6 +53,14 @@ defmodule Arca.Test.Writers do
           if Keyword.has_key?(errors, :label),
             do: {:error, {:invalid_label, Map.get(row, :label)}},
             else: refusal
+
+        {:ok, profile} when revoked? ->
+          changes = [status: "revoked", revoked_by: revocation[:revoked_by]]
+
+          {1, _} =
+            Arca.Repo.update_all(from(p in Profile, where: p.id == ^profile.id), set: changes)
+
+          {:ok, struct(profile, changes)}
 
         result ->
           result

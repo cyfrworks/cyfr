@@ -573,7 +573,7 @@ defmodule Arca.VaultStorageTest do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
       source = "formula:local.shared-#{System.unique_integer([:positive])}"
       old = dependent_profile!(actor, entry.id, source)
-      :ok = Arca.ProfileStorage.transition(actor, old.id, :any, "revoked")
+      :ok = Arca.ProfileStorage.revoke_by_person(actor, old.id)
       live = dependent_profile!(actor, entry.id, source)
 
       assert {:ok, %{affected: [affected], rebound_share_ids: []}} =

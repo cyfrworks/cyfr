@@ -208,12 +208,20 @@ defmodule Sanctum.Test.ConsentFixtures do
     Enum.each(vault_refs, &ensure_entry!(ctx, &1))
     ensure_servers!(ctx, consent.resolved_policy)
 
+    # A profile is minted standing; one seeded revoked is then revoked by
+    # its person, as no mint is revoked.
+    {revoked, attrs} = Map.split(profile_attrs(ctx, profile), [:revoked_by])
+    attrs = if revoked != %{}, do: %{attrs | status: "active"}, else: attrs
+
     {:ok, _} =
       Arca.ConsentStorage.mint_profile_with_revision(
-        profile_attrs(ctx, profile),
+        attrs,
         consent_attrs(profile, consent),
         vault_refs
       )
+
+    if revoked != %{},
+      do: :ok = Arca.ProfileStorage.revoke_by_person(Context.actor(ctx), profile.id)
 
     :ok
   end
@@ -516,15 +524,20 @@ defmodule Sanctum.Test.ConsentFixtures do
     :ok
   end
 
+  # A profile seeded revoked is its person's revocation, as `profile.revoke`
+  # writes one.
   defp profile_attrs(%Context{} = ctx, profile) do
+    status = Atom.to_string(Map.get(profile, :status, :active))
+
     %{
       id: profile.id,
       athanor_id: ctx.athanor_id,
       source_ref: profile.source_ref,
       kind: Atom.to_string(profile.kind),
       label: Map.get(profile, :label, "default"),
-      status: Atom.to_string(Map.get(profile, :status, :active))
+      status: status
     }
+    |> Map.merge(if status == "revoked", do: %{revoked_by: "person"}, else: %{})
   end
 
   defp consent_attrs(profile, consent) do

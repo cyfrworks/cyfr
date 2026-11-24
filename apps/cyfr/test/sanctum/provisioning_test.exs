@@ -387,6 +387,212 @@ defmodule Sanctum.ProvisioningTest do
              Filler.install_shipped(in_athanor, "catalyst:local.foo")
   end
 
+  # A grant the person revoked is theirs: no walk mints over it, on any
+  # path that mints, until the person consents again. A grant a removal
+  # revoked is not theirs, and the component installed again is granted.
+  describe "a grant its person revoked" do
+    @foo "catalyst:local.foo"
+
+    defp provisioned!(bundle_dir, tag) do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|#{tag}-#{n}"}
+      athanor = unfilled!(ctx.user_id, "#{tag} #{n}")
+      in_athanor = %{ctx | athanor_id: athanor.id}
+      {:ok, _filled} = Provisioning.provision(athanor, in_athanor)
+      in_athanor
+    end
+
+    # The person's revoke of the profile labelled `label`, as
+    # `profile.revoke` takes it from them.
+    defp person_revokes!(ctx, source_ref, label \\ "default") do
+      {:ok, profiles} = Sanctum.Consent.profiles(ctx, source_ref)
+      %{id: id} = Enum.find(profiles, &(&1.label == label))
+      revoke_by_id!(ctx, id)
+      id
+    end
+
+    defp revoke_by_id!(ctx, id) do
+      {:ok, %{status: "revoked"}} =
+        Sanctum.Provider.handle("profile", ctx, %{"action" => "revoke", "profile_id" => id})
+    end
+
+    # The person's own grant of foo under `label`, through the consent walk.
+    defp person_grants!(ctx, label) do
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @foo, label: label})
+      decisions = %{ref: @foo, label: label}
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+      {:ok, _committed} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+    end
+
+    # Every version of foo gone from the athanor's tree, as a reset of the
+    # tree takes them (a person cannot delete what ships), and the registry
+    # reconciled: the name's last row is removed and its cascade runs.
+    defp removed!(ctx) do
+      :ok =
+        Arca.Overlay.with_internal_writes(fn ->
+          Arca.delete_tree(Sanctum.Context.actor(ctx), ["components", "catalysts", "local", "foo"])
+        end)
+
+      :ok = Compendium.ProjectionReconciler.await(ctx, "components")
+      assert {:ok, []} = Sanctum.Consent.profiles(ctx, @foo)
+    end
+
+    defp ship_foo!(bundle_dir, version) do
+      src = Path.join([bundle_dir, "catalysts", "local", "foo", version])
+      File.mkdir_p!(src)
+      File.write!(Path.join(src, "catalyst.wasm"), @valid_wasm)
+
+      File.write!(
+        Path.join(src, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => "foo",
+          "version" => version,
+          "type" => "catalyst",
+          "caps" => %{"egress" => %{"domains" => []}}
+        })
+      )
+    end
+
+    defp stays_revoked!(ctx) do
+      assert {:ok, []} = Sanctum.Consent.profiles(ctx, @foo)
+      assert {:ok, :revoked} = Sanctum.Consent.ungranted(ctx, @foo)
+    end
+
+    test "is not minted again by an update", %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "update")
+      person_revokes!(ctx, @foo)
+      ship_foo!(bundle_dir, "1.1.0")
+
+      assert {:ok, %{component_ref: "catalyst:local.foo:1.1.0"}} =
+               Filler.install_shipped(ctx, "catalyst:local.foo:1.1.0")
+
+      stays_revoked!(ctx)
+    end
+
+    test "is not minted again by the boot's seed sync", %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "sync")
+      person_revokes!(ctx, @foo)
+
+      assert :ok = Filler.sync_seeds()
+
+      stays_revoked!(ctx)
+    end
+
+    test "is not minted again by a fill tried again", %{bundle_dir: bundle_dir} do
+      # foo is minted by the fill's local half; bar's closure cannot be
+      # pulled, so the fill fails and is tried again.
+      write_bundle!(bundle_dir)
+      bar = Path.join([bundle_dir, "catalysts", "local", "bar", "1.0.0"])
+      File.mkdir_p!(bar)
+      File.write!(Path.join(bar, "catalyst.wasm"), @valid_wasm)
+
+      File.write!(
+        Path.join(bar, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => "bar",
+          "version" => "1.0.0",
+          "type" => "catalyst",
+          "caps" => %{"egress" => %{"domains" => []}},
+          "dependencies" => %{"static" => ["catalyst:someone.elsewhere"]}
+        })
+      )
+
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|refill-#{n}"}
+      athanor = unfilled!(ctx.user_id, "Refill #{n}")
+      ctx = %{ctx | athanor_id: athanor.id}
+
+      assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(athanor, ctx)
+      person_revokes!(ctx, @foo)
+      {:ok, athanor} = Athanors.get(athanor.id)
+
+      assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(athanor, ctx)
+
+      stays_revoked!(ctx)
+    end
+
+    test "stays revoked when the component is removed and installed again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "revoked-removed")
+      person_revokes!(ctx, @foo)
+      removed!(ctx)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      stays_revoked!(ctx)
+    end
+
+    test "stays revoked when another label's grant stood and the component is removed and " <>
+           "installed again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "revoked-work")
+      person_grants!(ctx, "work")
+      person_revokes!(ctx, @foo)
+      removed!(ctx)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      stays_revoked!(ctx)
+    end
+
+    test "stays revoked once its person revoked a default, though a newer default was " <>
+           "granted and removed, and the person revoked the older one again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "regranted")
+      older = person_revokes!(ctx, @foo)
+      person_grants!(ctx, "default")
+      removed!(ctx)
+      revoke_by_id!(ctx, older)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      stays_revoked!(ctx)
+    end
+
+    # The person's no stands over every removal and install that follow:
+    # the component waits, says its grant was revoked, and is granted by
+    # the person's own consent on the same path as before.
+    test "stays revoked after its person consented again and the component was removed and " <>
+           "installed again, until the person consents again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "consented-again")
+      person_revokes!(ctx, @foo)
+      person_grants!(ctx, "default")
+      assert {:ok, [%{label: "default", status: :active}]} = Sanctum.Consent.profiles(ctx, @foo)
+      removed!(ctx)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      stays_revoked!(ctx)
+
+      assert {:ok, %{consent: %{head_state: "revoked"}}} =
+               Compendium.Component.setup_plan(ctx, @foo)
+
+      person_grants!(ctx, "default")
+      assert {:ok, [%{label: "default", status: :active}]} = Sanctum.Consent.profiles(ctx, @foo)
+    end
+
+    test "a removal's revocation is not the person's, and an install grants it again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "removed")
+      removed!(ctx)
+      assert {:ok, :no_grant} = Sanctum.Consent.ungranted(ctx, @foo)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      assert {:ok, [%{kind: :owner, status: :active}]} = Sanctum.Consent.profiles(ctx, @foo)
+    end
+  end
+
   test "an install refuses at once while another filler holds the claim, rather than queueing",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)

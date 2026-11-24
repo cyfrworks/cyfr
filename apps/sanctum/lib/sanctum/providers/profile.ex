@@ -491,7 +491,7 @@ defmodule Sanctum.Providers.Profile do
 
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          {:ok, profile} <- Arca.ProfileStorage.get(actor, profile_id),
-         :ok <- Arca.ProfileStorage.transition(actor, profile_id, :any, "revoked") do
+         :ok <- Arca.ProfileStorage.revoke_by_person(actor, profile_id) do
       Sanctum.Telemetry.consent_changed(ctx.athanor_id, profile.source_ref)
       {:ok, %{status: "revoked", profile_id: profile_id}}
     else

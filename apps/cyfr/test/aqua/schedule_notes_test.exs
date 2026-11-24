@@ -375,7 +375,7 @@ defmodule Aqua.ScheduleNotesTest do
 
       plant(fn ->
         :ok =
-          Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), profile_id, :any, "revoked")
+          Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), profile_id)
       end)
 
       assert {:ok, %{"refused" => 1}} = drain(athanor)

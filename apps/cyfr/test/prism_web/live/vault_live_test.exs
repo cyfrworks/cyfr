@@ -562,10 +562,17 @@ defmodule PrismWeb.VaultLiveTest do
           nil
         )
 
-      if status != "active",
-        do:
+      case status do
+        "active" ->
+          :ok
+
+        "revoked" ->
+          :ok = Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), profile.id)
+
+        status ->
           :ok =
             Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), profile.id, :any, status)
+      end
 
       profile
     end

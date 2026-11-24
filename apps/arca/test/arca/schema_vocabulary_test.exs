@@ -25,7 +25,8 @@ defmodule Arca.SchemaVocabularyTest do
   generation, which is positive. So are a shared thread's kind, which has
   a title or a pair and never both, and its positive generation, and a
   shared thread's row of people, a seat naming its person or an
-  invitation naming its identifier, and its read mark, never below 0.
+  invitation naming its identifier, and its read mark, never below 0. A
+  revoked profile names who revoked it, and no other profile names any.
   """
 
   use ExUnit.Case, async: false
@@ -265,6 +266,21 @@ defmodule Arca.SchemaVocabularyTest do
 
       for status <- ~w(bogus needs_reauth tombstoned) do
         refused!("profiles", profile(ctx, status), "profiles_status_known")
+      end
+    end
+
+    test "a revoked profile names who revoked it, and no other profile names any", ctx do
+      for cause <- Arca.Schemas.Profile.revocation_causes() do
+        assert {1, _} = insert!("profiles", %{profile(ctx, "revoked") | revoked_by: cause})
+      end
+
+      for row <- [
+            %{profile(ctx, "revoked") | revoked_by: nil},
+            %{profile(ctx, "revoked") | revoked_by: "bogus"},
+            %{profile(ctx, "active") | revoked_by: "person"},
+            %{profile(ctx, "needs_consent") | revoked_by: "removal"}
+          ] do
+        refused!("profiles", row, "profiles_revoked_by_cause")
       end
     end
 
@@ -1001,6 +1017,7 @@ defmodule Arca.SchemaVocabularyTest do
       source_ref: "reagent:local.vocab",
       label: id("label"),
       status: status,
+      revoked_by: if(status == "revoked", do: "person"),
       inserted_at: now(),
       updated_at: now()
     }

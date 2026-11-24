@@ -737,7 +737,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       # Out of the read once revoked; then a pinned revision that names no
       # version.
-      set_profile!(ctx, mismatched, status: "revoked")
+      set_profile!(ctx, mismatched, status: "revoked", revoked_by: "person")
       invalid = grant!(ctx, "g-invalid", policy("reagent:local.g-invalid", canonical))
       ConsentFixtures.hand_edit_head!(ctx, invalid, scope: "pinned")
 
@@ -746,7 +746,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       end
 
       # And a blob carrying an entry its references do not name.
-      set_profile!(ctx, invalid, status: "revoked")
+      set_profile!(ctx, invalid, status: "revoked", revoked_by: "person")
       ref = "reagent:local.g-blob-only"
 
       blob_only =
