@@ -273,6 +273,7 @@ defmodule PrismWeb.TopbarLiveTest do
         %{error_message: "ended"},
         Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )
+
     :ok = Aqua.ThreadList.changed(ctx, thread.id)
 
     wait_until(
