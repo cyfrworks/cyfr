@@ -325,22 +325,31 @@ func TestScreenOnReadsTheChecksumWritingNothing(t *testing.T) {
 	}
 }
 
-// The machine holds the CYFR app of a release when dpkg holds its package
-// installed for this machine's architecture and the app's own cyfr answers
-// that release, as it spells it: a tag with two hyphens is answered as it
-// is; a package of another architecture, an app that cannot run, one that
-// answers no version and a package not installed hold none.
+// The machine holds the CYFR app of a release when the app's own cyfr
+// answers that release, as it spells it, and on Linux dpkg holds its
+// package installed for this machine's architecture: a tag with two
+// hyphens is answered as it is; an app that cannot run, one that answers
+// no version and, on Linux, a package of another architecture or not
+// installed hold none. Elsewhere no dpkg is asked.
 func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
+	// What a row wants where dpkg decides it, on Linux; elsewhere the
+	// app's own cyfr answers.
+	dpkgDecides := func(onLinux string) string {
+		if runtime.GOOS == "linux" {
+			return onLinux
+		}
+		return "0.6.0"
+	}
 	other := map[string]string{"amd64": "arm64"}[runtime.GOARCH]
 	if other == "" {
 		other = "amd64"
 	}
 	for _, c := range []struct{ name, dpkg, app, want string }{
 		{"a tag with two hyphens", "printf 'installed " + runtime.GOARCH + "'", "echo 'cyfr version 0.6.0-alpha-test.15'", "0.6.0-alpha-test.15"},
-		{"a package of another architecture", "printf 'installed " + other + "'", "echo 'cyfr version 0.6.0'", ""},
+		{"a package of another architecture", "printf 'installed " + other + "'", "echo 'cyfr version 0.6.0'", dpkgDecides("")},
 		{"an app that cannot run", "printf 'installed " + runtime.GOARCH + "'", "exit 126", ""},
 		{"an app that answers no version", "printf 'installed " + runtime.GOARCH + "'", "echo 'not cyfr'", ""},
-		{"a package not installed", "echo 'dpkg-query: no packages found matching cyfr-desktop' >&2; exit 1", "echo 'cyfr version 0.6.0'", ""},
+		{"a package not installed", "echo 'dpkg-query: no packages found matching cyfr-desktop' >&2; exit 1", "echo 'cyfr version 0.6.0'", dpkgDecides("")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bin := t.TempDir()
