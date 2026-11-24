@@ -56,11 +56,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is 0.6.4 on the react template, the default layout's, and the publish check accepts it" do
+  test "the shipped canvas is 0.6.5 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
-    assert canvas.version == "0.6.4"
+    assert canvas.version == "0.6.5"
 
     # The seed ships it beside the versions before it, which stay as they
     # shipped.
@@ -92,14 +92,16 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Compendium.tincture_entry(canvas.manifest) == {:ok, "dist/index.html"}
     assert Compendium.tincture_lockfile_required?(canvas.manifest)
 
-    # It reads the athanor's runs, schedules and schedule runs, names no
-    # feed, and declares nothing else: no action and no connect origin.
+    # It reads the athanor's runs, schedules and schedule runs and how the
+    # CYFR stands, names no feed, and declares nothing else: no action and
+    # no connect origin.
     assert declaration.actions == []
 
     assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
              {"runs.changes", nil},
              {"schedules.changes", nil},
-             {"schedule_runs.changes", nil}
+             {"schedule_runs.changes", nil},
+             {"system.changes", nil}
            ]
 
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
@@ -203,8 +205,8 @@ defmodule Cyfr.Test.SeedBundleTest do
   # Each shipped desktop: the versions it shipped before, oldest first,
   # and its newest.
   @desktops [
-    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.4"},
-    {"line", ~w(0.1.0 0.2.0), "0.3.4"},
+    {"canvas", ~w(0.4.0 0.5.0 0.6.0), "0.6.5"},
+    {"line", ~w(0.1.0 0.2.0), "0.3.5"},
     {"night", ~w(0.1.0 0.2.0), "0.3.4"},
     {"road", ~w(0.1.0 0.2.0), "0.3.4"},
     {"street", ~w(0.1.0 0.2.0), "0.3.4"},
@@ -260,10 +262,10 @@ defmodule Cyfr.Test.SeedBundleTest do
     end
   end
 
-  test "the line desktop is 0.3.4 on the vanilla template, and the publish check accepts it" do
+  test "the line desktop is 0.3.5 on the vanilla template, and the publish check accepts it" do
     line = SeedBundle.local_unit!("tinctures", "line")
     assert line.ref == "tincture:local.line"
-    assert line.version == "0.3.4"
+    assert line.version == "0.3.5"
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), line.rel)
 
     assert Prima.Manifest.validate(line.manifest, fn _ -> true end) == :ok
@@ -665,6 +667,22 @@ defmodule Cyfr.Test.SeedBundleTest do
     page = File.read!(Path.join(dir, "index.html"))
     refute page =~ ~r/https?:\/\//
     assert page =~ "Entries are changed and removed on the console's vault page."
+  end
+
+  test "the artisan scroll names an app as a person does, and tells Aqua never to name a tool, an operation or a tincture to them" do
+    scroll = File.read!(Path.expand("../../../../seed/aqua/skills/artisan/SKILL.md", __DIR__))
+    [_, description] = Regex.run(~r/^description: "([^"]*)"$/m, scroll)
+
+    assert description =~ ~r/\bapp\b/
+    refute description =~ ~r/tincture/i
+
+    assert scroll =~
+             "To the person it is an app: never name a tool, an operation or a tincture to them."
+
+    assert scroll =~
+             "**If scaffold fails**, tell the person why in plain words, such as a version " <>
+               "that already exists or a name already taken, never as a tool's or an " <>
+               "operation's name, and stop"
   end
 
   test "local_unit! finds a shipped formula by name" do
