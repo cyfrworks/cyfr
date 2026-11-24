@@ -13,12 +13,12 @@ Driven only by requests signed as CYFR signs them (harness.py):
   keeper's own variables alone, under the keeper's resource limits; one
   owner's key reaches no other owner's sessions; the program's own
   tools/list answers over its session.
-- No backend can read another's home or /proc environ, or the release's
-  (which holds LOCUS_BACKENDS_KEY), nor list the kept homes' root, nor
-  signal another backend, a relay,
-  the release or cyfr-locus. Each reads another's command line, the limit
-  README.md and integration-guide.md state: the service runs every backend
-  in one process namespace with an ordinary /proc.
+- Every backend runs in a space of its own processes and files: it lists
+  its own processes alone, under the space's init, and sees no other
+  backend's, nor the release (which holds LOCUS_BACKENDS_KEY), a relay or
+  cyfr-locus, so it can read no other's environment or command line and
+  signal none of them; it sees its own home alone under the homes' root,
+  no kept homes' root and no run folder of the service's.
 - Releasing an owner retires every process of its uid, a detached daemon
   that ignores SIGTERM included, its relay and its home; a program that
   exits ends its session, is counted as a crash and retired, and the next
@@ -45,7 +45,11 @@ Driven only by requests signed as CYFR signs them (harness.py):
   listen on the same port at the same time, reaching its own.
 - Two sessions of one kept folder, under one uid of the kept range, each
   listen on the same port of their own loopbacks and each reaches its own;
-  neither reaches the service's listener.
+  neither reaches the service's listener. Each lists and signals only its
+  own processes, has a /tmp of its own, sees no other home, terminal or
+  group, reads its own memory cap at the root of its cgroup tree and can
+  mount nothing. Two terminal sessions of that folder, open at once, each
+  hold the space's first terminal and see no other.
 - A session's name lookup reaches an upstream resolver the suite runs
   (name-listener.mjs, beside the guard as its resolver's upstream), which
   hears the session's own name.
@@ -88,6 +92,11 @@ NO_CAPS = "0000000000000000"
 PROBE_TOOLS = ["echo_env", "exit", "fail", "hog", "read_environ", "read_path", "run", "signal", "spawn_daemon",
                "whoami"]
 OPEN = {"type": "open", "program": "probe", "key": "k", "mode": "run", "argv": []}
+# A terminal's command: it names its terminal and every terminal its space
+# lists, then waits for a line.
+TTY = {"name": "tty", "home": "kept", "env": {},
+       "command": """sh -c 'echo "tty=$(tty) pts=$(ls -A /dev/pts | tr "\\n" " ")."; read line' sh"""}
+OWN_TERMINAL = b"tty=/dev/pts/0 pts=0 ptmx .\r\n"
 
 
 def home_gone(stack, home):
@@ -110,12 +119,25 @@ def sync_probe(c, owner, env=None):
 
 def inspect_pid(stack, image, script):
     """A script run beside the service, in its PID and network namespaces with CAP_SYS_PTRACE:
-    cyfr-locus is not dumpable, so root inside the service cannot list its descriptors."""
+    cyfr-locus is not dumpable, so root inside the service cannot list its descriptors. The inspector runs under the
+    service's own AppArmor profile, which lets a process of that profile alone read another's."""
     name = f"{stack.project}-inspect"
     run("docker", "rm", "--force", name, check=False)
     return run("docker", "run", "--rm", "--name", name, "--pid", f"container:{stack.container}",
-               "--network", f"container:{stack.container}", "--cap-add", "SYS_PTRACE", "--entrypoint", "sh",
-               image, "-c", script, check=False)
+               "--network", f"container:{stack.container}", "--cap-add", "SYS_PTRACE",
+               "--security-opt", f"apparmor={imagesuite.APPARMOR}", "--entrypoint", "sh", image, "-c", script, check=False)
+
+
+# A daemon of probe-backend.mjs's spawn_daemon, as its command line reads.
+DAEMON = "sleep 1000000"
+
+
+def own_processes(c, owner):
+    """The pids a backend's /proc lists and the uid of each, from inside its space."""
+    listed = c.tool(owner, "probe__run", {"argv": ["sh", "-c",
+                                                   "for p in /proc/[0-9]*; do echo ${p#/proc/} $(awk '/^Uid:/ {print $2}' $p/status); done"]})
+    expect(listed["status"] == 0, f"{owner['athanor']} lists its own processes", listed)
+    return dict(tuple(map(int, line.split())) for line in listed["stdout"].splitlines() if len(line.split()) == 2)
 
 
 # The ports backends listen on for the own-loopback cases.
@@ -295,9 +317,52 @@ def test_still_network(c):
     c.release([owner])
 
 
+def test_kept_terminals(c):
+    """Two terminal sessions of one kept folder, open at once: each holds its space's first terminal and lists no
+    other. Answers their sessions, still open."""
+    terminals = []
+    for key in ("tty-one", "tty-two"):
+        status, opened = c.open(KEPT_OWNER, "tty", key=key, mode="terminal", rows=24, cols=80, home_id=KEPT_ENTRY)
+        expect(status == 200 and opened.get("status") == "running", f"the terminal session {key} opens", opened)
+        terminals.append(opened["session"])
+    for session in terminals:
+        read, _after, running = c.output_until(KEPT_OWNER, session, lambda read: b"." in read)
+        expect(running and OWN_TERMINAL in read,
+               "a terminal session of the kept folder holds its own first terminal and lists no other", read)
+    return terminals
+
+
+def test_kept_spaces(stack, run_kept, sessions, uid):
+    """Two sessions of one kept folder each list and signal only their own, have a /tmp of their own, see no other
+    home, terminal or group, read their own cap and can mount nothing, while two terminals of the folder are open."""
+    first, second = sessions
+    expect(run_kept(first, ["sh", "-c", "echo first > /tmp/mine"])["status"] == 0, "the first session writes its /tmp")
+    seen = run_kept(second, ["cat", "/tmp/mine"])
+    expect(seen["status"] != 0 and not seen["stdout"], "the second session's /tmp is its own", seen)
+    listed = run_kept(second, ["sh", "-c", "for p in /proc/[0-9]*; do cat $p/cmdline | tr '\\0' ' '; echo; done"])
+    expect([line.strip() for line in listed["stdout"].splitlines()].count(PROBE) == 1,
+           "the second session lists its own program alone", listed)
+    theirs = [stack.outside(json.loads(first.call("whoami", {})[1]["result"]["content"][0]["text"]))]
+    for p in theirs:
+        killed = run_kept(second, ["sh", "-c", f"kill -0 {p['pid']} 2>/dev/null || echo unsignalled"])
+        own = run_kept(second, ["sh", "-c", f"test -e /proc/{p['pid']} && echo own || true"])
+        expect(own["stdout"].strip() == "own" or killed["stdout"].strip() == "unsignalled",
+               f"the second session signals no process of the first, pid {p['pid']} as the container numbers it", killed)
+    views = run_kept(second, ["sh", "-c", f"ls -A {KEPT_ROOT}; echo pts:$(ls -A /dev/pts); "
+                                          "echo groups:$(find /sys/fs/cgroup -mindepth 1 -type d | wc -l); "
+                                          "echo cap:$(cat /sys/fs/cgroup/memory.max); "
+                                          "mount -t tmpfs none /tmp 2>/dev/null && echo mounted || echo unmounted; "
+                                          "unshare -m true 2>/dev/null && echo unshared || echo kept"])
+    lines = views["stdout"].splitlines()
+    expect(lines[0] == KEPT_ENTRY and "pts:ptmx" in lines and "groups:0" in lines and "unmounted" in lines and "kept" in lines,
+           "the second session sees its own home alone, no other terminal or group, and mounts nothing", views)
+    cap = next((l.split(":", 1)[1] for l in lines if l.startswith("cap:")), "")
+    expect(cap.isdigit() and int(cap) > 0, "the second session reads its own memory cap at the root of its cgroup tree", views)
+
+
 def test_kept_sessions(stack, c):
     """Two sessions of one kept folder, under one uid, each with its own loopback."""
-    status, answer, _ = c.sync(KEPT_OWNER, [probe(home="kept")])
+    status, answer, _ = c.sync(KEPT_OWNER, [probe(home="kept"), TTY])
     expect(status == 200, "an owner of a kept program is synced", answer)
     sessions = [c.mcp(KEPT_OWNER, "probe", key=key, home_id=KEPT_ENTRY) for key in ("mcp", "second")]
 
@@ -309,9 +374,14 @@ def test_kept_sessions(stack, c):
         return json.loads(result["content"][0]["text"])
 
     whos = [json.loads(s.call("whoami", {})[1]["result"]["content"][0]["text"]) for s in sessions]
-    expect(all(KEPT_FIRST <= w["uid"] <= KEPT_LAST for w in whos) and whos[0]["uid"] == whos[1]["uid"]
-           and whos[0]["pid"] != whos[1]["pid"],
-           "two sessions of the kept folder run under its one uid of the kept range", whos)
+    uid = whos[0]["uid"]
+    expect(all(KEPT_FIRST <= w["uid"] <= KEPT_LAST for w in whos) and whos[1]["uid"] == uid
+           and whos[0]["pidns"] != whos[1]["pidns"] and all(stack.outside(w) for w in whos),
+           "two sessions of the kept folder run under its one uid of the kept range, each in a space of its own", whos)
+    terminals = test_kept_terminals(c)
+    test_kept_spaces(stack, run_kept, sessions, uid)
+    for session in terminals:
+        c.close(KEPT_OWNER, session)
     for session, word in zip(sessions, ("first", "second")):
         expect(run_kept(session, ["sh", "-c", listen_script(KEPT_PORT, word)])["status"] == 0,
                f"the {word} session listens on port {KEPT_PORT} of its own loopback")
@@ -354,9 +424,10 @@ def test_guard_death(image):
         expect(c.hello()[0] == 200 and c.reconcile([])[0] == 200, "the service is greeted and reconciled")
         owner = owner_of("guard-dies")
         sync_probe(c, owner)
-        daemon = c.tool(owner, "probe__spawn_daemon")["pid"]
-        uid = c.tool(owner, "probe__whoami")["uid"]
-        eventually(lambda: any(p["pid"] == daemon for p in stack.processes()), "the session's daemon to start")
+        c.tool(owner, "probe__spawn_daemon")
+        who = c.tool(owner, "probe__whoami")
+        uid = who["uid"]
+        eventually(lambda: stack.outside(who, DAEMON), "the session's daemon to start")
         control = stack.guard_exec("for p in /proc/[0-9]*; do grep -qa guard-control $p/cmdline 2>/dev/null && echo ${p#/proc/}; done")
         pids = control.stdout.split()
         expect(pids, "the guard's control runs", control.stdout + control.stderr)
@@ -470,7 +541,7 @@ def main():
             named = image_user_name(stack, who["uid"])
             expect(named == pool_user(who["uid"]), f"{name}'s uid is the image's {pool_user(who['uid'])}", named)
             expect(re.fullmatch(rf"{HOME_ROOT}/{who['uid']}-[0-9a-f]{{32}}", who["home"]) and who["home_mode"] == "700"
-                   and who["marker_mode"] == "600" and who["tmpdir"] == f"{who['home']}/tmp" and who["cwd"] == who["home"],
+                   and who["marker_mode"] == "600" and who["tmpdir"] == "/tmp" and who["cwd"] == who["home"],
                    f"{name}'s home is its own, 0700, and its files are its own", who)
             # PWD is set by the backend's own `sh -c`.
             expect(who["env_names"] == ["HOME", "LOGNAME", "PATH", "PROBE_SECRET", "PWD", "TMPDIR", "USER"],
@@ -506,20 +577,40 @@ def main():
                 result = c.tool(owner, f"probe__{tool}", args)
                 expect(result == {"ok": False, "code": code}, f"{owner['athanor']} {tool} {args} is refused {code}", result)
 
-            refused("read_path", {"path": other["marker"]}, "EACCES")
-            refused("read_path", {"path": other["home"]}, "EACCES")
-            refused("read_path", {"path": HOME_ROOT}, "EACCES")
-            refused("read_path", {"path": KEPT_ROOT}, "EACCES")
-            refused("read_path", {"path": RUN_DIR}, "EACCES")
-            refused("read_environ", {"pid": other["pid"]}, "EACCES")
-            refused("read_environ", {"pid": release["pid"]}, "EACCES")
-            for target in [other["pid"], release["pid"], keeper["pid"]] + [r["pid"] for r in relays]:
-                refused("signal", {"pid": target, "sig": "SIGKILL"}, "EPERM")
-            # The command line is the one thing of another backend's a backend
-            # reads, which is why a definition keeps credentials out of it.
-            seen = c.tool(self_owner, "probe__run", {"argv": ["cat", f"/proc/{other['pid']}/cmdline"]})
-            expect(seen["status"] == 0 and seen["stdout"].split("\0") == PROBE.split() + [""],
-                   f"{self_owner['athanor']} reads another backend's command line, never its environment", seen)
+            me = alpha if self_owner is ALPHA else beta
+            refused("read_path", {"path": other["marker"]}, "ENOENT")
+            refused("read_path", {"path": other["home"]}, "ENOENT")
+            refused("read_path", {"path": KEPT_ROOT}, "ENOENT")
+            refused("read_path", {"path": RUN_DIR}, "ENOENT")
+            homes = c.tool(self_owner, "probe__run", {"argv": ["ls", "-A", HOME_ROOT]})
+            expect(homes["status"] == 0 and homes["stdout"].split() == [os.path.basename(me["home"])],
+                   f"{self_owner['athanor']} sees its own home alone under the homes' root", homes)
+            # Its space lists its own processes alone, so nothing of another
+            # backend's, the release's, a relay's or cyfr-locus's has a pid
+            # there: no environment or command line to read, no one to signal.
+            own = own_processes(c, self_owner)
+            expect(own and set(own.values()) == {me["uid"]} and me["pid"] in own,
+                   f"{self_owner['athanor']} lists its own processes alone", own)
+            theirs = stack.outside(other)
+            expect(theirs is not None, f"{self_owner['athanor']}'s neighbour runs, as the container numbers it", theirs)
+            for target in [theirs, release, keeper] + relays:
+                # The two numberings are apart: a number of the container's
+                # may also name a process of the space's own, never another's.
+                there = c.tool(self_owner, "probe__run", {"argv": ["sh", "-c",
+                    f"if [ -e /proc/{target['pid']} ]; then echo \"$(awk '/^Uid:/ {{print $2}}' /proc/{target['pid']}/status)"
+                    f"|$(tr '\\0\\n|' '   ' < /proc/{target['pid']}/cmdline)\"; else echo absent; fi"]})
+                said = there["stdout"].strip()
+                if said != "absent":
+                    uid, _, cmd = said.partition("|")
+                    expect(uid == str(me["uid"]) and cmd.strip() != target["cmd"].strip(),
+                           f"pid {target['pid']} in {self_owner['athanor']}'s space is a process of its own", there)
+                    continue
+                target = target["pid"]
+                refused("read_environ", {"pid": target}, "ENOENT")
+                refused("signal", {"pid": target, "sig": "SIGKILL"}, "ESRCH")
+                seen = c.tool(self_owner, "probe__run", {"argv": ["cat", f"/proc/{target}/cmdline"]})
+                expect(seen["status"] != 0 and not seen["stdout"],
+                       f"{self_owner['athanor']} reads no command line of pid {target}, another's", seen)
         expect(c.tool(ALPHA, "probe__whoami")["pid"] == alpha["pid"] and c.tool(BETA, "probe__whoami")["pid"] == beta["pid"],
                "both backends survived each other's attempts")
 
@@ -530,9 +621,9 @@ def main():
         test_still_network(c)
 
         # ————— retirement —————
-        daemon = c.tool(ALPHA, "probe__spawn_daemon")["pid"]
-        started = eventually(lambda: next((p for p in stack.processes() if p["pid"] == daemon), None), "the daemon to start")
-        leader = next(p for p in stack.processes() if p["pid"] == alpha["pid"])
+        c.tool(ALPHA, "probe__spawn_daemon")
+        started = eventually(lambda: stack.outside(alpha, DAEMON), "the daemon to start")
+        leader = stack.outside(alpha)
         expect(alpha["uid"] in started["uids"] and started["sid"] != leader["sid"],
                "the daemon runs as alpha's uid, in a session of its own", [started, leader])
         status, released, _ = c.release([ALPHA])
@@ -554,7 +645,7 @@ def main():
                "the exit is reported, its status named, and nothing of beta's runs", crashed)
         eventually(lambda: home_gone(stack, beta["home"]), "the exited program's home to be scrubbed")
         again = c.tool(BETA, "probe__whoami")
-        expect(again["pid"] != beta["pid"] and again["home"] != beta["home"]
+        expect(again["home"] != beta["home"]
                and client.initializations == initialized + 1 and client.resumed is False,
                "the next call starts the program again, initialized afresh, in a new home", again)
 
@@ -577,8 +668,9 @@ def main():
             orphan = Controller(base, stack.key)
             expect(orphan.hello()[0] == 200, "a second service is greeted")
             sync_probe(orphan, owner_of("orphan"))
-            daemon = orphan.tool(owner_of("orphan"), "probe__spawn_daemon")["pid"]
-            eventually(lambda: any(p["pid"] == daemon for p in stack.processes(lost)), "the orphan's daemon to start")
+            orphan.tool(owner_of("orphan"), "probe__spawn_daemon")
+            orphan_who = orphan.tool(owner_of("orphan"), "probe__whoami")
+            eventually(lambda: stack.outside(orphan_who, DAEMON, lost), "the orphan's daemon to start")
             _keeper, lost_release = keeper_and_release(stack, lost)
             kill_in(lost, lost_release["pid"], "the kill reached the release")
             expect(run("docker", "wait", lost).stdout.strip() == "70", "cyfr-locus exits 70 when the release dies")

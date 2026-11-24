@@ -17,7 +17,9 @@ The steps, each observed from inside the container as root, which owns
 every runner's user namespace and so reads a runner's /proc entries (the
 runner's own uid, outside that namespace, may not):
 
-- `refusals`: a routed keeper whose guard's socket is not there refuses
+- `refusals`: on a host that enforces AppArmor, the image under Docker's
+  default AppArmor profile refuses to start, naming this release's
+  profile; a routed keeper whose guard's socket is not there refuses
   to start, naming the socket; the image under Docker's default seccomp
   profile refuses to serve, naming user.max_user_namespaces and
   kernel.apparmor_restrict_unprivileged_userns; under the profile a spawn
@@ -122,7 +124,7 @@ from control_plane import ControlPlane  # noqa: E402
 from memory import CHILD_BYTES as HOG_BYTES, HOG, HOG_REF, wasm  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, RELEASE, ROLE, RUN_DIR, SERVICE, SERVICE_UID,  # noqa: E402
                    SERVICE_USER, Stack, expect, run, wait_until)
-from imagesuite import PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
+from imagesuite import APPARMOR, PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 from worker_auth import ATTEMPT_FIELDS  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
@@ -203,9 +205,11 @@ class IsolatedStack(Stack):
 # ---------------------------------------------------------------------------
 
 
-def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None, pool_args=None):
+def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None, pool_args=None,
+               apparmor=APPARMOR):
     """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client;
-    with `network`, in that container's network namespace."""
+    with `network`, in that container's network namespace. Without `seccomp` it runs under Docker's default seccomp
+    profile, and with `apparmor` None under Docker's default AppArmor profile."""
     args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
             *(["--network", f"container:{network}"] if network else []),
             *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
@@ -213,6 +217,9 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), netwo
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
         args += ["--security-opt", f"seccomp={PROFILE}"]
+    if apparmor:
+        args += ["--security-opt", f"apparmor={apparmor}"]
+    args += ["--security-opt", "systempaths=unconfined"]
     args += ["--entrypoint", "cyfr-locus", image, "serve", *(pool_args or ["--pool", POOL]), "--home-root", HOME_ROOT,
              "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]
     return run(*args, check=False, timeout=timeout)
@@ -251,6 +258,17 @@ def after_placed(ran, step):
 
 
 def test_refusals(image):
+    # Under Docker's default AppArmor profile, on a host that enforces
+    # AppArmor, the keeper refuses before anything else of a space is tried,
+    # naming this release's profile.
+    with open("/sys/module/apparmor/parameters/enabled") as enabled:
+        apparmor_on = enabled.read().strip() == "Y"
+    if apparmor_on:
+        defaulted = keeper_run(image, "exec sleep 5", apparmor=None, timeout=60)
+        expect(defaulted.returncode == 78 and "docker-default (enforce)" in defaulted.stderr
+               and f"not this release's profile {APPARMOR} (enforce)" in defaulted.stderr,
+               f"under Docker's default AppArmor profile cyfr-locus refuses to start, naming {APPARMOR} "
+               f"(exit {defaulted.returncode})", defaulted.stderr[-2000:])
     refused = keeper_run(image, "exec sleep 5", seccomp=False, timeout=60)
     expect(refused.returncode == 78 and "user.max_user_namespaces" in refused.stderr
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,

@@ -156,6 +156,13 @@ func (s *wireSession) expect(t string) map[string]any {
 	return e
 }
 
+// why is what the driver's ending, its last line, tells the holder.
+func (s *wireSession) why() any {
+	s.t.Helper()
+	got := s.until("ending")
+	return got[len(got)-1]["why"]
+}
+
 // until gathers events up to and including the first of type t.
 func (s *wireSession) until(t string) []map[string]any {
 	s.t.Helper()
@@ -485,6 +492,9 @@ func TestAStartWhoseServersAreNotListedEndsBeforeAnythingIsSet(t *testing.T) {
 			if !strings.Contains(s.stderr.String(), "Claude Code did not list its MCP servers") {
 				t.Fatalf("the driver says why on its standard error: %q", s.stderr.String())
 			}
+			if s.why() != "servers_unlisted" {
+				t.Fatalf("the holder is told servers_unlisted: %s", s.output())
+			}
 		})
 	}
 }
@@ -575,6 +585,9 @@ func TestAnAnswerTheHarnessDoesNotGiveInTimeEndsTheWait(t *testing.T) {
 		case code := <-s.done:
 			if code != 1 || !strings.Contains(s.stderr.String(), "Claude Code did not answer its start in time") {
 				t.Fatalf("the driver ends with 1, saying why on its standard error: %d %q", code, s.stderr.String())
+			}
+			if s.why() != "unanswered" {
+				t.Fatalf("the holder is told unanswered: %s", s.output())
 			}
 		case <-time.After(20 * time.Second):
 			t.Fatal("a start the harness never answered went on")
@@ -1031,6 +1044,9 @@ func TestTheHarnessesEndEndsTheDriver(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the driver outlived its harness")
 	}
+	if why := s.why(); why != "ended" {
+		t.Fatalf("the holder is told ended: %v", why)
+	}
 }
 
 func TestACommandTheWireDoesNotReadEndsTheDriver(t *testing.T) {
@@ -1041,6 +1057,9 @@ func TestACommandTheWireDoesNotReadEndsTheDriver(t *testing.T) {
 	}
 	if status := <-s.done; status != 2 {
 		t.Fatalf("an unreadable command ends the driver with 2: %d", status)
+	}
+	if why := s.why(); why != "broken" {
+		t.Fatalf("the holder is told broken: %v", why)
 	}
 }
 
@@ -1697,8 +1716,8 @@ func TestAStartRunsInItsAccessAndAllowsTheHarnessesOwnTools(t *testing.T) {
 }
 
 // A start naming an access the driver does not list, fresh or resuming,
-// ends it with 2 before it starts any harness, writing no line and saying
-// why on its standard error. The harness's command names nothing here, so
+// ends it with 2 before it starts any harness, writing only its ending,
+// `unfit`, and saying why on its standard error. The harness's command names nothing here, so
 // a start of it would say it did not start, as the listed access's does.
 func TestAStartNamingAnAccessTheDriverDoesNotListEndsIt(t *testing.T) {
 	session := "3b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
@@ -1715,8 +1734,12 @@ func TestAStartNamingAnAccessTheDriverDoesNotListEndsIt(t *testing.T) {
 		if status := s.end(); status != 2 {
 			t.Fatalf("%s: the driver ends with 2: %d", name, status)
 		}
+		var after []map[string]any
 		for e := range s.events {
-			t.Fatalf("%s: the driver writes no line after its hello: %v", name, e)
+			after = append(after, e)
+		}
+		if len(after) != 1 || after[0]["t"] != "ending" || after[0]["why"] != "unfit" {
+			t.Fatalf("%s: the driver writes only its ending, unfit, after its hello: %v", name, after)
 		}
 		if got := s.stderr.String(); got != "cyfr-claude-code: "+unlistedAccess+"\n" {
 			t.Fatalf("%s: the driver says why, and starts nothing: %q", name, got)
@@ -1727,6 +1750,9 @@ func TestAStartNamingAnAccessTheDriverDoesNotListEndsIt(t *testing.T) {
 	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"access": "default"}})
 	if status := s.end(); status != 1 || !strings.Contains(s.stderr.String(), "cyfr-claude-code: the harness did not start") {
 		t.Fatalf("the listed access starts the harness (a positive control): %d %q", status, s.stderr.String())
+	}
+	if s.why() != "unrunnable" {
+		t.Fatalf("a harness that could not be run tells the holder unrunnable: %s", s.output())
 	}
 }
 

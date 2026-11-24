@@ -499,6 +499,18 @@ defmodule Aqua.Harness.Program do
   defp refused_open(work, _unavailable), do: refused(work, :unreached)
 
   defp refused(work, kind), do: {:refused, {:harness, work.title, kind}}
+
+  defp start_failed(work, {:exited, why}), do: {:start_failed, why, again(work)}
+  defp start_failed(work, :restarted), do: {:start_failed, :restarted, again(work)}
+  defp start_failed(_work, _unsaid), do: :start_failed
+
+  # What starts the member again where its failed start is read
+  # (`Prima.Refusal`): a message in its thread, asking a crew member for
+  # its job again, or nothing the reader can give a schedule's or another
+  # source's turn again from there.
+  defp again(%{turn: %{request_id: request}}) when is_binary(request), do: :ask
+  defp again(%{turn: %{origin: "interactive"}}), do: :message
+  defp again(_work), do: :none
   defp lost(work, kind), do: {:lost, {:harness, work.title, kind}}
   defp signed_out(work), do: {:refused, {:crew_unready, work.title, :signed_out}}
 
@@ -524,8 +536,16 @@ defmodule Aqua.Harness.Program do
     }
   end
 
+  # Every line the program is handed is delivered (`Aqua.Reader.deliver/2`):
+  # every text in it read without the thread's mark, the engine's frames and
+  # rule then given it. The one place a line passes before it leaves.
   defp write(%{brain: brain, work: work}, command),
-    do: Opus.Brain.write(brain, bound(work), command)
+    do:
+      Opus.Brain.write(
+        brain,
+        bound(work),
+        Reader.deliver(command, Reader.mark(work.turn.thread_id))
+      )
 
   # The harness starts, resuming the thread's native session if it keeps
   # one, with the posts whose delivery its transcript says. A read that
@@ -1216,7 +1236,7 @@ defmodule Aqua.Harness.Program do
           "t" => "answer",
           "id" => step.id,
           "ask" => call && Tape.payload(call)["tool_call_id"],
-          "content" => row.content || "",
+          "content" => Reader.result(row, Reader.token()),
           "is_error" => ask.outcome != "ok"
         }
 
@@ -1457,7 +1477,7 @@ defmodule Aqua.Harness.Program do
         "thread so far is above, with what your calls in this work answered; they are not " <>
         "run again. Go on with the last message, or say where it stands."
 
-  defp notice_text(_work, _answer, row), do: Reader.late_answer(row)
+  defp notice_text(_work, _answer, row), do: Reader.late_answer(row, Reader.token())
 
   defp prompt_context(%{work: work}, "fresh") do
     with {:ok, answers} <- answers(work),
@@ -1618,17 +1638,21 @@ defmodule Aqua.Harness.Program do
   defp ended(%{work: work} = state, :replaced), do: fail(state, lost(work, :ended))
 
   # A driver that ends before it takes the work fails its start: the same
-  # start is not made again by itself.
-  defp ended(%{phase: phase, work: work} = state, _reason) when phase in @starting,
-    do: fail(state, refused(work, :start_failed))
+  # start is not made again by itself. Its end says why when the driver
+  # said (`{:exited, why}`, `Opus.Brain.Wire.endings/0`) or the service it
+  # ran on started again.
+  defp ended(%{phase: phase, work: work} = state, reason) when phase in @starting,
+    do: fail(state, refused(work, start_failed(work, reason)))
 
   # One that dies at work is resumed, once for each death.
   defp ended(state, _reason), do: open_session(%{state | phase: :closed, recovering?: true})
 
   # The clock ran out: over a start that was not taken, or over the
   # program's silence at work, by the database's clock.
-  defp silence(%{phase: phase, work: work} = state) when phase in @starting,
-    do: fail(shut(state), refused(work, :start_failed))
+  defp silence(%{phase: phase, work: work} = state) when phase in @starting do
+    minutes = max(div(Opus.Brain.silence_ms() + 59_999, 60_000), 1)
+    fail(shut(state), refused(work, {:start_failed, {:within, minutes}, again(work)}))
+  end
 
   defp silence(%{phase: :ready, work: work} = state) do
     case Tape.brain_silence(work.guest, state.thread_id) do

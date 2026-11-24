@@ -21,6 +21,30 @@ defmodule Aqua.Reader do
   carried it, or when the program it was handed to refused it
   (`Aqua.Tape.refused_posts/2`). A delivery that is uncertain is no
   refusal, since it may have been read.
+
+  ## Frames
+
+  What the athanor hands a model as its procedure, a scroll, and what an
+  outside source returned each read inside a frame of the engine's: an
+  opening line, `⟦<mark> scroll "<name>"⟧` (`scroll/2`) or `⟦<mark>
+  outside <name>⟧` (`outside/3`), the text, then `⟦<mark> end⟧`. The mark
+  is the thread's own (`mark/1`), derived from the server's secret, so it
+  needs no stored state. Until a model is handed them, the frames and the
+  rule that names them (`Aqua.Prompt`) are written with a stand-in no
+  stored or outside text holds (`token/0`), and `deliver/2`, where what a
+  model reads is assembled, is the one removal: every text in it is read
+  without the thread's mark, then the stand-in becomes the mark. So only a
+  frame or the rule the engine wrote holds the mark, whatever any input
+  says. A reading that hands nothing to a model (`frames` nil, a reread
+  that a tool's answer or a page holds) draws no frame at all. A changed
+  server secret changes every mark.
+
+  A job's scrolls are kept as they were read in the row that hands it, a
+  request's or an opening's `scrolls`, and read after the job's words,
+  each in its frame. A call's result row keeps its answer as it came and,
+  for a scroll or an outside answer, the frame it reads in
+  (`payload["frame"]`, `result/2`), so a shortened result keeps both of
+  its frame's lines.
   """
 
   alias Aqua.{Attachments, Tape}
@@ -29,13 +53,15 @@ defmodule Aqua.Reader do
   @typedoc """
   Who reads (`me`: an agent by name, `:nobody` where nothing shows a
   reader's own, nil for a summary, to which every agent's words are the
-  assistant's), the turns still open (`open`), the posts whose
-  delivery was refused, whether a person's name goes before their text,
-  the cited posts handed over, the files deleted by row id, and how a
-  person is named.
+  assistant's), the stand-in its frames are written with (`frames`:
+  `token/0` where a model is handed what it reads, nil where nothing is),
+  the turns still open (`open`), the posts whose delivery was refused, whether a person's
+  name goes before their text, the cited posts handed over, the files
+  deleted by row id, and how a person is named.
   """
   @type reading :: %{
           me: String.t() | :nobody | nil,
+          frames: String.t() | nil,
           open: [String.t()],
           refused: [String.t()],
           named?: boolean(),
@@ -59,6 +85,7 @@ defmodule Aqua.Reader do
          {:ok, refused} <- Tape.refused_posts(guest, joined.rows ++ joined.cited) do
       reading = %{
         me: if(read == :history, do: turn.agent, else: :nobody),
+        frames: if(read == :history, do: token()),
         open: [turn.id | joined.open],
         refused: refused,
         named?: true,
@@ -68,6 +95,139 @@ defmodule Aqua.Reader do
       }
 
       {:ok, %{rows: joined.rows, reading: reading, read_threads: joined.read_threads}}
+    end
+  end
+
+  @mark_key "cyfr-thread-mark|"
+  @token_key "cyfr-frame-token|"
+
+  @doc """
+  The thread's mark, `cyfr-` and 16 base32 characters: HMAC-SHA256 of the
+  thread's id under a key derived from the server's secret under a label
+  of its own, as the at-rest keyring is
+  (`Cyfr.Application.derive_keyring!/1`). The same thread has the same
+  mark for as long as the secret stands, with nothing stored.
+  """
+  @spec mark(String.t()) :: String.t()
+  def mark(thread_id) when is_binary(thread_id) do
+    key = :crypto.hash(:sha256, @mark_key <> key_base())
+    tag = :crypto.mac(:hmac, :sha256, key, thread_id) |> binary_part(0, 10)
+    "cyfr-" <> Base.encode32(tag, padding: false)
+  end
+
+  @doc """
+  The stand-in the engine writes its frames and the rule with until
+  `deliver/2` makes each the mark: derived from the server's secret and
+  this node's own start, so it differs at every boot and no stored or
+  outside text can hold it. Nothing that holds it is stored or handed on
+  but through `deliver/2`.
+  """
+  @spec token() :: String.t()
+  def token do
+    case :persistent_term.get({__MODULE__, :token}, nil) do
+      nil ->
+        boot = "#{node()}|#{System.pid()}|#{:erlang.system_info(:start_time)}"
+        key = :crypto.hash(:sha256, @token_key <> key_base())
+        tag = :crypto.mac(:hmac, :sha256, key, boot) |> binary_part(0, 15)
+        token = "cyfr-frame-" <> Base.encode32(tag, padding: false)
+        :persistent_term.put({__MODULE__, :token}, token)
+        token
+
+      token ->
+        token
+    end
+  end
+
+  defp key_base, do: Application.fetch_env!(:sanctum, :secret_key_base)
+
+  @doc """
+  What a model is handed of `term`, the thread's mark being `mark`: every
+  text in it, a map's keys among them, read without the mark, removed
+  until none is left, then the stand-in the engine's frames and rule are
+  written with (`token/0`) made the mark. The one removal: where the
+  engine assembles what a model reads, a request or a program's line, it
+  hands `deliver/2`'s answer and writes nothing after it.
+  """
+  @spec deliver(term(), String.t()) :: term()
+  def deliver(term, mark) when is_binary(mark) and mark != "",
+    do: delivered(term, mark, token())
+
+  defp delivered(text, mark, token) when is_binary(text),
+    do: text |> unmarked(mark) |> String.replace(token, mark)
+
+  defp delivered(values, mark, token) when is_list(values),
+    do: Enum.map(values, &delivered(&1, mark, token))
+
+  defp delivered(%{} = values, mark, token) when not is_struct(values),
+    do:
+      Map.new(values, fn {key, value} ->
+        {delivered(key, mark, token), delivered(value, mark, token)}
+      end)
+
+  defp delivered(value, _mark, _token), do: value
+
+  @doc """
+  `text` without `mark`, removed until none is left, so no removal joins
+  the text around it into the mark again.
+  """
+  @spec unmarked(String.t() | nil, String.t()) :: String.t()
+  def unmarked(nil, _mark), do: ""
+
+  def unmarked(text, mark) when is_binary(text) and is_binary(mark) and mark != "" do
+    if String.contains?(text, mark),
+      do: unmarked(String.replace(text, mark, ""), mark),
+      else: text
+  end
+
+  @doc """
+  A scroll as `frames` reads it: in its frame, written with the stand-in
+  (`token/0`), its body as written and then its other files' names; or,
+  where nothing is handed to a model (nil), the same words under a plain
+  heading and no frame. A scroll a job carries and a scroll a turn reads
+  (`aqua.skill_get`) read alike.
+  """
+  @spec scroll(String.t() | nil, %{name: String.t(), body: String.t(), files: [String.t()]}) ::
+          String.t()
+  def scroll(frames, %{name: name, body: body, files: files}) do
+    files =
+      case files do
+        [] -> ""
+        names -> "\n\n[The scroll's files: " <> Enum.join(names, ", ") <> "]"
+      end
+
+    case frames do
+      nil -> "[The scroll \"#{name}\"]\n" <> body <> files
+      token -> "⟦#{token} scroll \"#{name}\"⟧\n" <> body <> files <> "\n⟦#{token} end⟧"
+    end
+  end
+
+  @doc """
+  What an outside source returned to the call named `name`, as `frames`
+  reads it: in its frame, or, where nothing is handed to a model (nil),
+  as it came.
+  """
+  @spec outside(String.t() | nil, String.t(), String.t()) :: String.t()
+  def outside(nil, _name, text), do: text
+  def outside(token, name, text), do: "⟦#{token} outside #{name}⟧\n" <> text <> "\n⟦#{token} end⟧"
+
+  @doc """
+  A call's result row as `frames` reads it: its answer as it came, in the
+  frame its row keeps for a scroll or an outside answer
+  (`payload["frame"]`), else as it is.
+  """
+  @spec result(Tape.row(), String.t() | nil) :: String.t()
+  def result(row, frames) do
+    text = row.content || ""
+
+    case Tape.payload(row)["frame"] do
+      %{"kind" => "scroll", "name" => name} = frame ->
+        scroll(frames, %{name: name, body: text, files: List.wrap(frame["files"])})
+
+      %{"kind" => "outside", "name" => name} ->
+        outside(frames, name, text)
+
+      _unframed ->
+        text
     end
   end
 
@@ -120,16 +280,18 @@ defmodule Aqua.Reader do
       first_line(row.content)
   end
 
-  @doc "A call's result whose answer comes too late to be one, as a message of its own."
-  @spec late_answer(Tape.row()) :: String.t()
-  def late_answer(row) do
+  @doc """
+  A call's result whose answer comes too late to be one, as a message of
+  its own, its answer as `frames` reads it (`result/2`).
+  """
+  @spec late_answer(Tape.row(), String.t() | nil) :: String.t()
+  def late_answer(row, frames) do
     payload = Tape.payload(row)
 
     "Your work was interrupted before your call #{payload["name"]} " <>
       "(#{payload["tool_call_id"]}) was answered, so its answer comes as this message " <>
       "instead. It answered" <>
-      if(payload["is_error"], do: " with an error: ", else: ": ") <>
-      (row.content || "")
+      if(payload["is_error"], do: " with an error: ", else: ": ") <> result(row, frames)
   end
 
   @doc """
@@ -141,20 +303,36 @@ defmodule Aqua.Reader do
   its answer.
   """
   @spec read(Tape.row(), reading()) :: {:own, String.t()} | {:said, String.t()} | :none
-  def read(%{kind: "opening"} = row, reading), do: {:said, opening_text(row, reading)}
-  def read(%{kind: "pointer"} = row, _reading), do: {:said, pointer_text(row)}
-  def read(%{kind: "report"} = row, _reading), do: {:said, report_text(row)}
-  def read(%{kind: "nudge"} = row, _reading), do: {:said, server_text(row)}
+  # A call's result, in the frame its row keeps.
+  def read(%{kind: "tool_result"} = row, %{me: :nobody} = reading),
+    do:
+      {:said, "Your call #{Tape.payload(row)["name"]} answered: " <> result(row, frames(reading))}
+
+  # Any other row's words, then the scrolls the job it hands carries, each
+  # in its frame.
+  def read(row, reading) do
+    case words(row, reading) do
+      {:said, text} -> {:said, text <> attached(row, frames(reading))}
+      own_or_none -> own_or_none
+    end
+  end
+
+  defp frames(reading), do: Map.get(reading, :frames)
+
+  defp words(%{kind: "opening"} = row, reading), do: {:said, opening_text(row, reading)}
+  defp words(%{kind: "pointer"} = row, _reading), do: {:said, pointer_text(row)}
+  defp words(%{kind: "report"} = row, _reading), do: {:said, report_text(row)}
+  defp words(%{kind: "nudge"} = row, _reading), do: {:said, server_text(row)}
 
   # A stop, a take-over, a restart and an unknown outcome each leave one;
   # what is true of them all is said, then the row's own words of its cause.
-  def read(%{kind: "turn_aborted"} = row, _reading) do
+  defp words(%{kind: "turn_aborted"} = row, _reading) do
     {:said,
      "[The assistant's work here was interrupted before it finished; tools may have partially " <>
        "executed. " <> (row.content || "") <> "]"}
   end
 
-  def read(%{kind: "text"} = row, %{me: me} = reading) do
+  defp words(%{kind: "text"} = row, %{me: me} = reading) do
     cond do
       # The reader's own post is its call's to show (`thread.post`).
       posted?(row) and own?(row, me) -> :none
@@ -172,13 +350,28 @@ defmodule Aqua.Reader do
     end
   end
 
-  def read(%{kind: kind} = row, %{me: :nobody}) when kind in ~w(error system),
+  defp words(%{kind: kind} = row, %{me: :nobody}) when kind in ~w(error system),
     do: {:said, server_text(row)}
 
-  def read(%{kind: "tool_result"} = row, %{me: :nobody}),
-    do: {:said, "Your call #{Tape.payload(row)["name"]} answered: #{row.content}"}
+  defp words(%{}, _reading), do: :none
 
-  def read(%{}, _reading), do: :none
+  # The scrolls a job carries, kept in the row that hands it: an opening,
+  # a request, and the request's copy delivered into its member's thread.
+  # Its asker never reads its own request (`words/2` answers none).
+  defp attached(row, frames), do: scrolls(List.wrap(Tape.payload(row)["scrolls"]), frames)
+
+  @doc """
+  A job's scrolls, each `%{"name", "body", "files"}` as the row that hands
+  it keeps them, as `frames` reads them after the job's words: each after
+  a blank line, in its frame (`scroll/2`). What a job's bound is measured
+  on (`Aqua.Crew.scrolls/3`).
+  """
+  @spec scrolls([map()], String.t() | nil) :: String.t()
+  def scrolls(scrolls, frames) when is_list(scrolls) do
+    for %{"name" => name, "body" => body} = scroll <- scrolls, into: "" do
+      "\n\n" <> scroll(frames, %{name: name, body: body, files: List.wrap(scroll["files"])})
+    end
+  end
 
   # The reading agent's own speech: a row it sent. A row written before
   # rows named their sender is read by its author.
@@ -253,7 +446,7 @@ defmodule Aqua.Reader do
   defp quoted(cited, reading) do
     named_by_agent = agent_text(cited)
 
-    case read(cited, %{reading | me: :nobody, named?: false, refs: %{}}) do
+    case words(cited, %{reading | me: :nobody, named?: false, refs: %{}}) do
       {:said, ^named_by_agent} -> {:said, cited.content}
       said_or_none -> said_or_none
     end

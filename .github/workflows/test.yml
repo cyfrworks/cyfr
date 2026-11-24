@@ -460,6 +460,10 @@ jobs:
           scripts/fetch-prebuilt-binaries.sh
       - name: Compile with warnings as errors
         run: mix compile --force --warnings-as-errors
+      # The loop refuses on a runner whose AppArmor holds another
+      # profile cyfr-locus than the checkout's, as on any machine.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: The dev stack's compose override
         run: bash tests/dev-stack/compose-test.sh
 
@@ -1277,6 +1281,10 @@ jobs:
           - {arch: arm64, runner: ubuntu-24.04-arm, artifact: app-image-arm64}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: apps/codex/go.mod
@@ -1337,6 +1345,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The service bounds every build with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -1389,6 +1401,13 @@ jobs:
       - name: Build isolation, uid reuse, and the refusal without the option
         run: python3 tests/builder-image/isolation.py cyfr-locus:smoke
 
+      # The release's boot check on this run's image (scripts/ci/image-boots.sh,
+      # which release.yml's images job runs on a tag): the Locus image behind
+      # its builds island's guard, as compose starts it, healthy by its own
+      # probe.
+      - name: The Locus image boots as the release checks it
+        run: scripts/ci/image-boots.sh cyfr-locus cyfr-locus:smoke
+
       # Every case: the keeper's own bound in the running service, and a
       # hostile JavaScript, Rust build.rs, process-tree and home-filling
       # build each ended at its 1 GiB bound as the wire's `memory` class
@@ -1438,6 +1457,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The service bounds every runner with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -1547,6 +1570,10 @@ jobs:
     needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The service bounds every backend with a cgroup of its own, which
       # needs the security option writable-cgroups=true: Docker Engine 28 or
       # later on a cgroup v2 host. Without either every case below fails for
@@ -1680,6 +1707,19 @@ jobs:
       - name: Antigravity's brain driver
         run: python3 tests/locus-backends-image/brain_antigravity.py cyfr-locus:backends
 
+      # OpenCode's brain driver, cyfr-acp as cyfr-opencode, beside a fake
+      # `opencode acp` in a kept folder: a listing that reads each model's
+      # efforts by selecting it and has the program delete its session, a
+      # start of OpenCode's own session id with the instructions leading the
+      # first prompt, a turn whose retry notices write nothing, OpenCode's
+      # steer request, CYFR's call from inside its `execute` as an ask, a
+      # second session of the same home, a resume, gone, a forget by the
+      # program's own delete leaving the sign-in its store holds, nothing of
+      # stderr, the folder or the sign-in on the wire, and the program
+      # unchanged on a terminal.
+      - name: OpenCode's brain driver
+        run: python3 tests/locus-backends-image/brain_opencode.py cyfr-locus:backends
+
       # A program's network list: a row's hosts admitted for its uid at the
       # guard, pooled or kept, its listed host reached and an unlisted
       # address refused on its own chain over IPv4 and IPv6, on every
@@ -1724,6 +1764,10 @@ jobs:
             cases: [bind, restore-identity]
     steps: &app-image-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       # The Compose proof drives the stack through the `cyfr` command line
       # it builds from apps/codex, and builds the Tailscale stand-in, a Go
       # module of its own.
@@ -2022,6 +2066,10 @@ jobs:
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
+      # cyfr init offers the Locus profile where the kernel has not loaded
+      # it, and refuses with no terminal to ask at.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: Install dependencies
         run: |
           scripts/ci/retry.sh mix deps.get
@@ -2100,6 +2148,10 @@ jobs:
             viewport: 720x720
     steps: &browser-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: Cache deps and the prod build
         uses: ./.github/actions/setup-elixir
         with:

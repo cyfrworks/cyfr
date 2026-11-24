@@ -1094,6 +1094,31 @@ defmodule Opus.BrainTest do
     end
   end
 
+  describe "a sync of its owner under the same boot" do
+    test "ends no opening session: it goes on under the new grant, reading on",
+         %{fake: fake, row: row, binding: binding} do
+      {:ok, {holder, ref} = brain} = Brain.open(binding)
+      controller = GenServer.whereis(Opus.Programs.via("local"))
+      Cyfr.Test.Settings.put("athanor_program_memory_bytes", 2_147_483_648)
+      send(controller, :tick)
+      assert_receive {:control, "sync", %{"athanor_memory_bytes" => 2_147_483_648}, _}, 2_000
+
+      wait_until(
+        fn -> :sys.get_state(controller).inflight == nil end,
+        2_000,
+        "the sync to settle"
+      )
+
+      # What the sync told the holder is handled.
+      :sys.get_state(holder)
+      refute_received {Brain, ^ref, {:ended, _reason}}
+
+      say(fake, row, hello())
+      assert {"boot-one", [{1, %{"t" => "hello"}}]} = batch(brain)
+      assert Process.alive?(holder)
+    end
+  end
+
   describe "a crash or a loss with a tool result outstanding" do
     setup %{fake: fake, row: row, binding: binding} do
       brain = started!(fake, row, binding)
@@ -1179,6 +1204,47 @@ defmodule Opus.BrainTest do
       assert_receive {Brain, ^ref, {:ended, :exited}}, 5_000
       assert Brain.write(brain, binding, answer) == {:error, :unavailable}
       refute_sent()
+    end
+
+    test "a driver that says why it ends ends the session with that why, never its words",
+         %{fake: fake, row: row, brain: {_pid, ref} = brain} do
+      say(fake, row, %{"t" => "ending", "why" => "servers_unlisted"})
+      {_boot, [{seq, %{"t" => "ending"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+      Scripted.end_sessions(fake, row.id)
+      assert_receive {Brain, ^ref, {:ended, {:exited, :servers_unlisted}}}, 5_000
+    end
+
+    test "a second ending, or any line after one, is read past and changes nothing",
+         %{fake: fake, row: row, binding: binding, brain: {_pid, ref} = brain} do
+      say(fake, row, %{"t" => "ending", "why" => "ended"})
+      {_boot, [{seq, %{"t" => "ending"}}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+      say(fake, row, %{"t" => "ending", "why" => "outdated"})
+
+      say(fake, row, %{
+        "t" => "said",
+        "gen" => 0,
+        "work" => binding.turn_id,
+        "message" => "msg_after",
+        "text" => "after its end"
+      })
+
+      Scripted.end_sessions(fake, row.id)
+      assert_receive {Brain, ^ref, {:ended, {:exited, :ended}}}, 5_000
+      refute_received {Brain, ^ref, {:lines, _boot, _lines}}
+    end
+
+    test "an ending outside the wire's endings is a line that does not read",
+         %{fake: fake, row: row, brain: {_pid, ref}} do
+      say(fake, row, %{"t" => "ending", "why" => "ENOENT /home/person/.config"})
+      assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
+    end
+
+    test "a service that started again ends the session as restarted, not as the driver's exit",
+         %{fake: fake, brain: {_pid, ref}} do
+      Scripted.restart(fake, "bb_again")
+      assert_receive {Brain, ^ref, {:ended, :restarted}}, 5_000
     end
 
     test "the holder's death closes its session, and the next opens a driver that has heard nothing",

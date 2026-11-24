@@ -115,6 +115,8 @@ defmodule Compendium.FacadeTest do
     resolve_agent: 3,
     resolve_verified_activation: 2,
     shipped_versions: 2,
+    skill: 2,
+    skill_bound: 0,
     skill_dir: 1,
     skills_index: 2,
     skills_index_limit: 0,

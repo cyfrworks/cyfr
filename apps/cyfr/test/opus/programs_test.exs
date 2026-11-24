@@ -1160,8 +1160,8 @@ defmodule Opus.ProgramsTest do
 
     warning =
       "The command expands GITHUB_TOKEN, a vault-bound env name: the " <>
-        "value is placed on the command line, where every process on the backends service, " <>
-        "other athanors' programs included, can read it; the safe route is to let the " <>
+        "value is placed on the command line, where every process of the program's own " <>
+        "session can read it; the safe route is to let the " <>
         "program read it from its environment."
 
     log =

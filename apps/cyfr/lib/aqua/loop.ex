@@ -1777,11 +1777,19 @@ defmodule Aqua.Loop do
 
     Tape.close_step(guest(state), state.turn, step, outcome, %{
       result:
-        result_row(step, outcome, page_value(call, result), text, %{
-          "tool_call_id" => call && call.tool_call_id,
-          "name" => call && call.model_name,
-          "is_error" => error?
-        }),
+        result_row(
+          state,
+          step,
+          call,
+          outcome,
+          page_value(call, result),
+          text,
+          proposed(call, result, %{
+            "tool_call_id" => call && call.tool_call_id,
+            "name" => call && call.model_name,
+            "is_error" => error?
+          })
+        ),
       execution_id: step.child_execution_id,
       error: if(error?, do: text, else: nil),
       threads: threads
@@ -1789,13 +1797,97 @@ defmodule Aqua.Loop do
   end
 
   # A page's call is answered in the wire's shape (`Aqua.PageCalls.answer/3`):
-  # its result row is the answer the page is handed.
-  defp result_row(%{purpose: "page"}, outcome, result, text, payload) do
+  # its result row is the answer the page is handed. A page is no model:
+  # its answer holds no frame, and no thread's mark. A model's result row
+  # keeps the answer as it came and the frame it reads in (`frame/3`),
+  # which the reader draws (`Aqua.Reader.result/2`), and a scroll a chain
+  # proposed keeps the proposal its thread shows the person to save.
+  defp result_row(state, %{purpose: "page"}, _call, outcome, result, text, payload) do
     {status, body} = Aqua.PageCalls.answer(outcome, result, text)
-    %{content: body, payload: Map.put(payload, "status", status)}
+    mark = Reader.mark(state.turn.thread_id)
+
+    with_status(%{
+      content: Reader.unmarked(body, mark),
+      payload: Map.put(payload, "status", status)
+    })
   end
 
-  defp result_row(_step, _outcome, _result, text, payload), do: %{content: text, payload: payload}
+  defp result_row(_state, _step, call, outcome, result, text, payload) do
+    row =
+      case frame(call, outcome, result) do
+        nil -> %{content: text, payload: payload}
+        {nil, frame} -> %{content: text, payload: Map.put(payload, "frame", frame)}
+        {answer, frame} -> %{content: answer, payload: Map.put(payload, "frame", frame)}
+      end
+
+    with_status(row)
+  end
+
+  # A result that proposes a scroll is `proposed`, the status the thread
+  # finds its card by.
+  defp with_status(%{payload: %{"proposal" => %{}}} = row),
+    do: Map.put(row, :status, "proposed")
+
+  defp with_status(row), do: row
+
+  # The frame a model's result reads in, by what the answer is
+  # (`Aqua.Loop.Policy.answer_of/1`) and who wrote it: a scroll read, as
+  # its body and its files' names, in a scroll's frame; an outside answer,
+  # and an outside source's own words for why it failed
+  # (`Prima.Refusal.outside?/1`), in the outside frame. CYFR's own answers,
+  # and every refusal, skip and unknown outcome CYFR wrote, are unframed.
+  defp frame(nil, _outcome, _result), do: nil
+
+  defp frame(%Call{} = call, outcome, result) do
+    case {Policy.answer_of(call), outcome, result} do
+      {:scroll, "ok", {:ok, %{} = answer}} ->
+        %{name: name, body: body, files: files} = scroll_of(answer)
+        {body, %{"kind" => "scroll", "name" => name, "files" => files}}
+
+      {:outside, "ok", _answer} ->
+        {nil, %{"kind" => "outside", "name" => call.model_name}}
+
+      {:outside, "error", {:error, reason}} ->
+        if Prima.Refusal.outside?(reason),
+          do: {nil, %{"kind" => "outside", "name" => call.model_name}}
+
+      _unframed ->
+        nil
+    end
+  end
+
+  defp scroll_of(answer) do
+    answer = answer |> Jason.encode!() |> Jason.decode!()
+
+    %{
+      name: answer["name"] || "",
+      body: answer["content"] || "",
+      files: List.wrap(answer["resources"])
+    }
+  end
+
+  # The scroll a chain's `aqua.skill_create` or `aqua.skill_update`
+  # proposed in place of a write, kept on its result row: its name,
+  # description and body as they would be stored, and what it was made
+  # against, which the thread shows the person to save.
+  defp proposed(%Call{kind: :catalog, tool: "aqua", action: action}, {:ok, %{} = answer}, payload)
+       when action in ["skill_create", "skill_update"] do
+    case answer |> Jason.encode!() |> Jason.decode!() do
+      %{"proposed" => name, "description" => d, "content" => c, "against" => against}
+      when is_binary(name) and is_binary(d) and is_binary(c) and is_binary(against) ->
+        Map.put(payload, "proposal", %{
+          "name" => name,
+          "description" => d,
+          "content" => c,
+          "against" => against
+        })
+
+      _written ->
+        payload
+    end
+  end
+
+  defp proposed(_call, _result, payload), do: payload
 
   defp page_value(%Call{kind: :hand}, {:ok, %{output: output}}),
     do: {:ok, Aqua.PageCalls.data(output)}
@@ -2063,11 +2155,19 @@ defmodule Aqua.Loop do
     closed =
       Tape.close_step(guest(state), state.turn, step, "ok", %{
         result:
-          result_row(step, "ok", {:ok, output(result)}, text, %{
-            "tool_call_id" => call && call.tool_call_id,
-            "name" => call && call.model_name,
-            "is_error" => false
-          }),
+          result_row(
+            state,
+            step,
+            call,
+            "ok",
+            {:ok, output(result)},
+            text,
+            %{
+              "tool_call_id" => call && call.tool_call_id,
+              "name" => call && call.model_name,
+              "is_error" => false
+            }
+          ),
         execution_id: id,
         threads: launched_threads(state, step, id, result)
       })

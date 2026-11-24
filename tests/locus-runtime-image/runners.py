@@ -315,8 +315,8 @@ def uid_gone(stack, uid):
 
 
 def wait_gone(stack, runner, timeout, what):
-    """When the runner's uid held no process any more, as wall-clock seconds."""
-    return wait_until(lambda: uid_gone(stack, runner["uid"]) and time.time(), timeout, what)
+    """When nothing of the runner was left any more (`Stack.runner_left`), as wall-clock seconds."""
+    return wait_until(lambda: stack.runner_left(runner) == [] and time.time(), timeout, what)
 
 
 def home_scrubbed(stack, runner):
@@ -325,11 +325,9 @@ def home_scrubbed(stack, runner):
 
 def os_cleanup(stack, runner, label):
     """The OS facts of a retired runner: no process of it is left, its VM by
-    pid nor anything started in its home, and its home is scrubbed. The pool
-    hands a freed uid to a fresh runner once it is the oldest free one, so
-    its uid's holding no process is what `wait_gone` saw at its retirement,
-    and what is left of it is read here by its own pid and home."""
-    left = [p for p in stack.processes() if p["pid"] == runner.get("pid") or runner["home"] in p["cmd"]]
+    pid nor anything it started (`Stack.runner_left`), and its home is
+    scrubbed."""
+    left = stack.runner_left(runner)
     expect(left == [], f"{label}: no process of uid {runner['uid']}'s runner, in {runner['home']}, remains", stack.processes())
     homes = sorted({h for p in stack.uid_processes(runner["uid"]) for h in re.findall(r"-home (\S+)", p["cmd"])})
     if homes:

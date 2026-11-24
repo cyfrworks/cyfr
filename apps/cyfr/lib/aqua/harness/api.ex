@@ -626,9 +626,17 @@ defmodule Aqua.Harness.Api do
   # summary, a refusal's text — passes through here, and none happens
   # unless the join was written. A turn whose fence moved answers
   # `:superseded`.
+  # What the model is handed is the request delivered
+  # (`Aqua.Reader.deliver/2`): every text in it read without the thread's
+  # mark, the engine's frames and rule then given it. The one place a
+  # request of any purpose passes before it leaves.
   defp model_call(%__MODULE__{spec: spec} = state, step, request, retained) do
-    input = %{"operation" => "chat", "params" => request}
-    retained_input = retained && %{"operation" => "chat", "params" => retained}
+    mark = Reader.mark(state.turn.thread_id)
+    input = %{"operation" => "chat", "params" => Reader.deliver(request, mark)}
+
+    retained_input =
+      retained && %{"operation" => "chat", "params" => Reader.deliver(retained, mark)}
+
     guest = guest(state)
     turn = state.turn
     streamed = stream_attrs(state, step)

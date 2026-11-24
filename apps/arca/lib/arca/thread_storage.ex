@@ -1488,7 +1488,7 @@ defmodule Arca.ThreadStorage do
   bound the window (exclusive / inclusive) — a turn's task is the human
   rows between the last turn's cursor and the message that started it.
   `posts: true` keeps only the rows a person reads as posts, leaving out
-  what a turn writes for itself.
+  what a turn writes for itself; `status:` only the rows of that status.
   """
   @spec messages(Prima.Actor.t(), String.t(), keyword()) ::
           [map()] | {:error, :no_athanor | :database_error}
@@ -1516,6 +1516,12 @@ defmodule Arca.ThreadStorage do
         if Keyword.get(opts, :posts, false),
           do: from(m in query, where: m.kind in ^@post_kinds),
           else: query
+
+      query =
+        case Keyword.get(opts, :status) do
+          nil -> query
+          status -> from(m in query, where: m.status == ^status)
+        end
 
       # `:limit` bounds a read that would otherwise load every row of a
       # long-lived thread; unset loads all (turn assembly needs the

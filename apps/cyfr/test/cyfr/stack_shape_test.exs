@@ -56,12 +56,19 @@ defmodule Cyfr.StackShapeTest do
     }
   }
 
-  # Every Locus service runs under the keeper's seccomp profile: every
-  # spawn is cloned into a space of its own.
+  # Every Locus service runs under the keeper's seccomp profile and, on a
+  # host with AppArmor, the profile .env names (CYFR_LOCUS_APPARMOR), with its system paths
+  # unmasked: every spawn is cloned into a space of its own, which mounts
+  # its own /proc.
+  @confinement [
+    "seccomp=./keeper.seccomp.json",
+    "apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}",
+    "systempaths=unconfined"
+  ]
   @security_opt %{
-    builds: ["no-new-privileges:true", "writable-cgroups=true", "seccomp=./keeper.seccomp.json"],
-    backends: ["no-new-privileges:true", "writable-cgroups=true", "seccomp=./keeper.seccomp.json"],
-    runtime: ["no-new-privileges:true", "writable-cgroups=true", "seccomp=./keeper.seccomp.json"]
+    builds: ["no-new-privileges:true", "writable-cgroups=true" | @confinement],
+    backends: ["no-new-privileges:true", "writable-cgroups=true" | @confinement],
+    runtime: ["no-new-privileges:true", "writable-cgroups=true" | @confinement]
   }
 
   # Keys that would hand a Locus service the host's privileges, namespaces,
@@ -87,6 +94,20 @@ defmodule Cyfr.StackShapeTest do
   @suite_files %{"scripts/builder-smoke.py" => :builds}
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
+
+  # Where a space's first process builds the space's files: the keeper's
+  # one definition, `stage.Root`, which the image makes and the AppArmor
+  # profile lets a space mount under.
+  defp space_root do
+    [root] =
+      Regex.run(
+        ~r/^const Root = "([^"]+)"$/m,
+        read!("apps/locus/keeper/internal/stage/space_linux.go"),
+        capture: :all_but_first
+      )
+
+    root
+  end
 
   # A merge key, as YamlElixir names it: `<<` and a counter.
   defp merge_key?({key, _}), do: String.starts_with?(key, "<<")
@@ -374,8 +395,8 @@ defmodule Cyfr.StackShapeTest do
   # that must be spelled and is missing, or is not in the form read, is
   # drift as a differing one is. Its kinds:
   #
-  # - `:users`: Dockerfile.locus's pooled users and the release's user,
-  #   group and directories.
+  # - `:users`: Dockerfile.locus's pooled users, the release's user, group
+  #   and directories, and the directory a space's files are built under.
   # - `:entrypoint`: the image's entrypoint (the image's role), each
   #   other role's compose entrypoint, and each overlay's entrypoint.
   # - `:network`: a service's networks are its own alone, cyfr joins it,
@@ -444,7 +465,7 @@ defmodule Cyfr.StackShapeTest do
         ) ==
           [["1733", "root", "root", home_root]] ++
             for(%{kept_root: root} <- roles, root != nil, do: ["1773", "root", user, root]) ++
-            [["0700", user, user, run_dir]] and
+            [["0700", user, user, run_dir], ["0755", "root", "root", space_root()]] and
         Regex.scan(~r/\bRELEASE_TMP=(\S+)/, dockerfile, capture: :all_but_first) == [[run_dir]]
 
     if release_spelled?, do: pools, else: [{@dockerfile, :users, :release} | pools]
@@ -1347,6 +1368,9 @@ defmodule Cyfr.StackShapeTest do
       {"the block's list without no-new-privileges:true",
        "\n      - no-new-privileges:true\n      - writable-cgroups=true\n",
        "\n      - writable-cgroups=true\n", every.("security_opt")},
+      {"the block's list without its AppArmor profile",
+       "\n      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}\n      - systempaths=unconfined\n",
+       "\n      - systempaths=unconfined\n", every.("security_opt")},
       {"locus-backends without its merge", "\n  #{backends.service}:\n    <<: *locus-role\n",
        "\n  #{backends.service}:\n", for(key <- @role_keys, do: {backends.service, key})},
       {"locus-builds setting read_only: false", "\n  #{builds.service}:\n    <<: *locus-role\n",
@@ -1432,18 +1456,22 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  # cyfr-locus clones every spawn into a space of its own, a user, network
-  # and IPC namespace, which Docker's default seccomp profile denies. Every
-  # Locus service runs under the keeper's profile, which the image carries
-  # and a scaffolded project holds beside its compose file, where compose
-  # reads it; a project without it does not start the service.
-  test "every Locus service runs under the keeper's seccomp profile, shipped beside the compose file" do
+  # cyfr-locus clones every spawn into a space of its own, a user,
+  # network, IPC, pid, mount and cgroup namespace with files of its own,
+  # which Docker's default seccomp and AppArmor profiles deny. Every Locus
+  # service runs under the keeper's seccomp profile, which the image
+  # carries and a scaffolded project holds beside its compose file, where
+  # compose reads it, and under the AppArmor profile .env names, which cyfr
+  # carries, loads and names there, and whose name the image carries for the
+  # keeper to prove; a project without the one, or a host without the
+  # other, does not start the service. The image makes the directory a
+  # space's files are built under, which the profile lets a space mount.
+  test "every Locus service runs under the keeper's seccomp and AppArmor profiles, shipped beside the compose file" do
     role = LocusRoles.role!(:runtime)
     compose = read!("docker-compose.yml")
     parsed = YamlElixir.read_from_string!(compose)
-    assert "seccomp=./keeper.seccomp.json" in parsed["x-locus-role"]["security_opt"]
+    for option <- @confinement, do: assert(option in parsed["x-locus-role"]["security_opt"])
     assert compose =~ "user.max_user_namespaces"
-    assert compose =~ "kernel.apparmor_restrict_unprivileged_userns"
     runtime = service_block(compose, role.service)
 
     # The image's entrypoint is the builds role's; the runtime's service
@@ -1456,6 +1484,11 @@ defmodule Cyfr.StackShapeTest do
 
     dockerfile = read!("Dockerfile.locus")
     assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
+    assert dockerfile =~ ~r{^COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile$}m
+    assert dockerfile =~ ~r{install -d -m 0755 -o root -g root #{Regex.escape(space_root())}$}m
+    profile = read!("apps/codex/internal/apparmor/cyfr-locus")
+    assert profile =~ "mount fstype=tmpfs -> #{space_root()}/,"
+    assert profile =~ "pivot_root oldroot=#{space_root()}/.old/ #{space_root()}/,"
 
     dir = Path.join(System.tmp_dir!(), "cyfr-scaffold-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -1699,8 +1732,8 @@ defmodule Cyfr.StackShapeTest do
         "include:\n  - sidecar.yml\nservices:\n  #{runtime.service}:\n"},
        unread.(runtime_overlay, :runtime)},
       {"the runtime's last overlay naming a routed entrypoint",
-       {runtime_last_overlay, "      - seccomp=./keeper.seccomp.json\n",
-        "      - seccomp=./keeper.seccomp.json\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\n"},
+       {runtime_last_overlay, "      - systempaths=unconfined\n",
+        "      - systempaths=unconfined\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\n"},
        [{runtime_last_overlay, :entrypoint, :runtime}]},
       # Every value an overlay gives is read: one the test does not expect
       # is drift, whatever key carries it.

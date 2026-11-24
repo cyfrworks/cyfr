@@ -643,7 +643,7 @@
 			"args": [
 				{
 					"index": 0,
-					"value": 637665280,
+					"value": 67108864,
 					"op": "SCMP_CMP_MASKED_EQ"
 				}
 			],
@@ -656,7 +656,7 @@
 					"s390x"
 				]
 			},
-			"comment": "cyfr-locus: Docker's rule with CLONE_NEWUSER, CLONE_NEWNET and CLONE_NEWIPC taken out of the mask, so an unprivileged clone may make a user, network and IPC namespace (the space of every spawn the keeper makes) and no other"
+			"comment": "cyfr-locus: Docker's rule with every namespace but CLONE_NEWUTS taken out of the mask: the keeper clones a spawn's stage into a user, network and IPC namespace, and the stage clones its first process into a pid, mount and cgroup namespace (the space of every spawn)"
 		},
 		{
 			"names": [
@@ -666,11 +666,11 @@
 			"args": [
 				{
 					"index": 1,
-					"value": 637665280,
+					"value": 67108864,
 					"op": "SCMP_CMP_MASKED_EQ"
 				}
 			],
-			"comment": "cyfr-locus: Docker's rule with CLONE_NEWUSER, CLONE_NEWNET and CLONE_NEWIPC taken out of the mask, so an unprivileged clone may make a user, network and IPC namespace (the space of every spawn the keeper makes) and no other; s390 parameter ordering for clone is different",
+			"comment": "cyfr-locus: Docker's rule with every namespace but CLONE_NEWUTS taken out of the mask, as above; s390 parameter ordering for clone is different",
 			"includes": {
 				"arches": [
 					"s390",
@@ -682,6 +682,21 @@
 					"CAP_SYS_ADMIN"
 				]
 			}
+		},
+		{
+			"names": [
+				"mount",
+				"umount2",
+				"pivot_root",
+				"mount_setattr"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"excludes": {
+				"caps": [
+					"CAP_SYS_ADMIN"
+				]
+			},
+			"comment": "cyfr-locus: a space's first process builds its files inside the space's own user and mount namespace, where alone it holds the capability the kernel asks; the container's AppArmor profile (cyfr-locus) allows those mounts alone, and the space's own filter refuses every one"
 		},
 		{
 			"names": [

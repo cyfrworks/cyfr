@@ -414,6 +414,40 @@ defmodule Aqua.Loop.FlushTest do
     assert summary_text =~ "they can no longer be read: gone.png"
   end
 
+  # A compaction's earlier summary is text the engine did not write: the
+  # next compaction's request hands it to its model without the thread's
+  # mark, as every such text.
+  test "a second compaction's request holds the earlier summary without the thread's mark", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    mark = Aqua.Reader.mark(thread.id)
+
+    {:ok, _summary} =
+      Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), thread.id, %{
+        author: Prima.Author.system(),
+        sent_by: "aqua",
+        kind: "compaction",
+        content: "the story so far " <> mark,
+        payload: %{"first_kept_seq" => 0}
+      })
+
+    # Past the window from its first round, the turn summarizes first.
+    turn = accept_large!(ctx, thread)
+    script!([flush_reply([]), reply("the story since"), reply("done")])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert ["flush", "compaction", "chat"] =
+             for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
+
+    [_flush, summary, _chat] = chat_requests()
+    asked = Jason.encode!(summary)
+    assert asked =~ "the story so far"
+    refute asked =~ mark
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------

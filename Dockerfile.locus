@@ -49,24 +49,30 @@
 # Every spawn runs in a space of its own: cyfr-locus clones it into a user,
 # network and IPC namespace mapping only its pooled uid and gid, so it
 # holds no capability and shares no loopback, abstract socket or System V
-# object with anything else. Each pool names its spaces' reach: the
-# runtime's runners are relay spaces (`runner:…:relay`), whose loopback
+# object with anything else, and the space's first process into a pid,
+# mount and cgroup namespace, where it builds the space's files under
+# /var/lib/locus/space: this image read-only, a /proc of the space's own
+# processes, its own /tmp, /dev/shm, /run and terminals, its group alone,
+# and its home, the only home it sees. Each pool names its spaces' reach:
+# the runtime's runners are relay spaces (`runner:…:relay`), whose loopback
 # stays down and whose relay is their one way to anything; builds and
 # backends are routed spaces (`:routed`), each with its own loopback and
-# the one route its island's guard makes for it (`--guard`). The clone
-# takes no capability of the container's, but two things of the host and
+# the one route its island's guard makes for it (`--guard`). The space
+# takes no capability of the container's, but three things of the host and
 # the engine: the host allows unprivileged user namespaces
-# (user.max_user_namespaces above 0, and where AppArmor restricts them,
-# kernel.apparmor_restrict_unprivileged_userns), and the container runs
-# under the seccomp profile /etc/cyfr/keeper.json carries, Docker's default
-# with clone allowed to make a user, network and IPC namespace and unshare
-# and setns denied (docker-compose.yml's x-locus-role
+# (user.max_user_namespaces above 0); the container runs under the seccomp
+# profile /etc/cyfr/keeper.json carries, Docker's default with clone
+# allowed to make the space's namespaces and the space's mounts allowed and
+# unshare and setns denied (docker-compose.yml's x-locus-role
 # `security_opt: seccomp=./keeper.seccomp.json`,
-# apps/locus/keeper/seccomp/keeper.json shipped beside it), since Docker's
-# own profile denies such a clone. Without either, cyfr-locus refuses to
-# start, naming both. A runtime container's read-only root carries the
-# build toolchain's files too; its runners still hold no capability, no
-# route and no descriptor but their channel and relay.
+# apps/locus/keeper/seccomp/keeper.json shipped beside it); and on a host
+# with AppArmor, under this release's profile by its name
+# (apps/codex/internal/apparmor, which `cyfr init` and `cyfr update` load
+# and .env's CYFR_LOCUS_APPARMOR names), with its system paths unmasked
+# (`systempaths=unconfined`). Without any of them, cyfr-locus refuses to
+# start, naming what to check. A runtime container's read-only root
+# carries the build toolchain's files too; its runners still hold no
+# capability, no route and no descriptor but their channel and relay.
 
 # ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser, cyfr-fetch
 # and the brain drivers cyfr-claude-code, cyfr-codex and cyfr-acp: static Go binaries, pinned
@@ -264,7 +270,9 @@ RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 # homes' root, the backends service's `homes` volume, which takes this
 # directory's owner and mode when it is first made: root's and the locus
 # group's, 1773, so the release lists it and a kept home's uid, which has
-# no user entry, makes its own 0700 folder there.
+# no user entry, makes its own 0700 folder there. /var/lib/locus/space is
+# where a space's first process builds the space's files, in a mount
+# namespace of its own: here it stays empty.
 RUN groupadd -r -g 10001 locus \
     && useradd -r -u 10001 -g locus -d /nonexistent -M -s /usr/sbin/nologin locus \
     && for i in $(seq 1 8); do \
@@ -284,7 +292,8 @@ RUN groupadd -r -g 10001 locus \
        done \
     && install -d -m 1733 -o root -g root /var/lib/locus/homes \
     && install -d -m 1773 -o root -g locus /var/lib/locus/kept \
-    && install -d -m 0700 -o locus -g locus /run/locus
+    && install -d -m 0700 -o locus -g locus /run/locus \
+    && install -d -m 0755 -o root -g root /var/lib/locus/space
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
@@ -318,15 +327,19 @@ COPY --from=keeper /out/cyfr-claude-code /opt/cyfr/bin/cyfr-claude-code
 COPY --from=keeper /out/cyfr-codex /opt/cyfr/bin/cyfr-codex
 # The one driver of programs that speak the Agent Client Protocol, linked
 # under one name a program, the name it runs under picking its program
-# (cyfr-antigravity). Its harness reaches CYFR's tools through the stub in
-# socket mode, on a socket inside the session's own space.
+# (cyfr-antigravity, cyfr-opencode). Its harness reaches CYFR's tools
+# through the stub in socket mode, on a socket inside the session's own
+# space.
 COPY --from=keeper /out/cyfr-acp /opt/cyfr/bin/cyfr-acp
-RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity
+RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity && ln -s cyfr-acp /opt/cyfr/bin/cyfr-opencode
 # The pinned, checksummed fetch of a program that is not on npm into the
-# row's own folder, before it runs it (Antigravity's row): the image
-# carries no program.
+# row's own folder, before it runs it (Antigravity's and OpenCode's rows):
+# the image carries no program.
 COPY --from=keeper /out/cyfr-fetch /opt/cyfr/bin/cyfr-fetch
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
+# The name of the AppArmor profile this release runs under, which the
+# keeper proves at its boot (its stage.ProfileNameFile).
+COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,
 # is its one tool.

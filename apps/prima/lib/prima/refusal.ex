@@ -381,6 +381,18 @@ defmodule Prima.Refusal do
   @spec signal_tags() :: [Prima.ConsentSignal.tag()]
   def signal_tags, do: @signal_tags
 
+  @doc """
+  Whether `reason`, bare or refused, is an outside source's own words for
+  why it failed, `{:outside_error, message}`: what an MCP server answered
+  as its error, tagged where its answer is read
+  (`Emissary.External.Server`). Every other refusal is CYFR's own
+  sentence.
+  """
+  @spec outside?(term()) :: boolean()
+  def outside?(%__MODULE__{reason: reason}), do: outside?(reason)
+  def outside?({:outside_error, message}) when is_binary(message), do: true
+  def outside?(_reason), do: false
+
   @doc "The sentence an unknown reason reads as."
   @spec unconfirmed() :: String.t()
   def unconfirmed, do: @unconfirmed
@@ -1718,6 +1730,11 @@ defmodule Prima.Refusal do
          "been applied. Do not ask for it again: run `cyfr access --resume`, which finishes it " <>
          "under the lock and reports what happened."}
 
+  # An outside source's own words for why it failed (`outside?/1`), read
+  # as a producer's sentence is.
+  defp row({:outside_error, message}) when is_binary(message),
+    do: {:internal, Prima.Sanitizer.sanitize(message)}
+
   # A crafted sentence a producer returned as a bare binary: internal,
   # and its words as they are.
   defp row(reason) when is_binary(reason), do: {:internal, Prima.Sanitizer.sanitize(reason)}
@@ -1766,6 +1783,21 @@ defmodule Prima.Refusal do
 
   defp harness(member, {:start_failed, :unstarted}),
     do: {:unavailable, "#{member} did not start."}
+
+  # A start that failed for a reason its program's driver, CYFR's start
+  # clock or the service named (`Aqua.Harness.Program`): what happened,
+  # then what the person can do from where they read it. `then` says what
+  # starts the member again there: a message in the thread (`:message`),
+  # asking it again (`:ask`, a crew member's job), or nothing that reader
+  # can do (`:none`, a schedule's or another source's turn).
+  defp harness(member, {:start_failed, why, then}) when then in [:message, :ask, :none] do
+    case start_failed(member, why) do
+      {said, :again} -> {:unavailable, said <> again(member, then)}
+      {said, nil} -> {:unavailable, said}
+      {said, action} when is_binary(action) -> {:unavailable, said <> " " <> action}
+      nil -> nil
+    end
+  end
 
   defp harness(member, {:start_unfit, options}) when is_list(options) do
     if Enum.all?(options, &is_binary/1) do
@@ -1825,4 +1857,67 @@ defmodule Prima.Refusal do
     do: {:timeout, "#{member} stopped: the turn ran out of time. Send a message to go on."}
 
   defp harness(_member, _unknown), do: nil
+
+  # What a failed start says, by its reason, and the action that follows
+  # it: `:again` for whatever starts the member again where it is read
+  # (`again/2`), a sentence for a place to fix it, or nil for none. A
+  # driver's reasons are `Opus.Brain.Wire.endings/0`, its own findings.
+  defp start_failed(member, :unanswered),
+    do: {"#{member} could not start: its program did not answer in time.", :again}
+
+  defp start_failed(member, :servers_unlisted),
+    do:
+      {"#{member} could not start: its program did not list its MCP servers.",
+       "Open its terminal on the Programs page to check them."}
+
+  defp start_failed(member, :refused),
+    do:
+      {"#{member} could not start: its program refused to start a session.",
+       "Open its terminal on the Programs page to see why."}
+
+  defp start_failed(member, :outdated),
+    do:
+      {"#{member} could not start: its program is older than CYFR can drive.",
+       "Change the version in its command on the Programs page."}
+
+  defp start_failed(member, :unsupported),
+    do:
+      {"#{member} could not start: this version of its program is not one CYFR can drive.",
+       "Change the version in its command on the Programs page."}
+
+  defp start_failed(member, :ended),
+    do: {"#{member} could not start: its program ended while starting.", :again}
+
+  defp start_failed(member, :unrunnable),
+    do:
+      {"#{member} could not start: its program could not be run.",
+       "Check its command on the Programs page."}
+
+  defp start_failed(member, :unreadable),
+    do: {"#{member} could not start: its program answered in a way CYFR could not read.", nil}
+
+  defp start_failed(member, :unfit),
+    do:
+      {"#{member} could not start: its program does not take the model, effort or access " <>
+         "chosen for it.", "Check them on #{member}'s card on the Aqua page."}
+
+  defp start_failed(member, :broken),
+    do:
+      {"#{member} could not start: CYFR and its program's driver did not understand each other.",
+       nil}
+
+  defp start_failed(member, :restarted),
+    do: {"#{member} could not start because CYFR restarted the part that runs programs.", :again}
+
+  defp start_failed(member, {:within, 1}),
+    do: {"#{member} did not start within a minute.", :again}
+
+  defp start_failed(member, {:within, minutes}) when is_integer(minutes) and minutes > 1,
+    do: {"#{member} did not start within #{minutes} minutes.", :again}
+
+  defp start_failed(_member, _unknown), do: nil
+
+  defp again(_member, :message), do: " Send a message to try again."
+  defp again(member, :ask), do: " Ask #{member} for it again."
+  defp again(_member, :none), do: ""
 end

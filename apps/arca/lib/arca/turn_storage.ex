@@ -2906,8 +2906,9 @@ defmodule Arca.TurnStorage do
   `outcome`, `execution_id` and error, and the `step.closed` event, in
   one transaction. `attrs`: `:result` (`%{content, payload}` for the
   row, which names the call it answers, its `tool_call_id` and `name`,
-  as the call's row does where the payload gives none; omitted for a
-  step that produced none), `:execution_id`, `:error`,
+  as the call's row does where the payload gives none, and its `status`
+  where it has one, `proposed` for a result that waits on the person;
+  omitted for a step that produced none), `:execution_id`, `:error`,
   `:fence`, `:threads`, the ids of the threads whose posts the result
   carries, joined into the turn's read threads in the same transaction
   and recorded on the result row as its payload's `threads`. A step
@@ -5536,6 +5537,7 @@ defmodule Arca.TurnStorage do
             author: Message.system_author(),
             sent_by: turn.agent,
             kind: result_kind(step),
+            status: Map.get(result, :status),
             content: Map.get(result, :content, ""),
             payload: result_payload(athanor_id, result, step, threads),
             turn_id: turn.id,
