@@ -76,27 +76,25 @@ container starts:
   worker made and a shared worker, in the first window and the later one,
   and a window a page opened on a click, read navigator.userAgent as the
   User-Agent the shell gives itself, read by the shell alone, with Chrome
-  in place of HeadlessChrome, and each one's public request sends it; all
-  but the shared worker and the window a page opened read the page's
-  brands and send no HeadlessChrome in Sec-CH-UA. Those two, never
-  attached, read Chrome's own brands, HeadlessChrome among them, and blank
-  high-entropy hints; the shared worker's request sends no Sec-CH-UA, and
-  the window's sends HeadlessChrome in it. Chrome runs by the switch --user-agent
-  naming that User-Agent. No page the driver shows can register a service
-  worker, so the shell alone under that switch, on an origin of its own
-  (agent-probe.mjs, in a container of the image), shows a service worker
-  at its first read reading and sending it, its script's request among
-  them, and reading Chrome's own brands and blank high-entropy hints.
-  Started with its person
-  (the vector file's person, ja-JP and Asia/Tokyo), the page, a frame of
-  it, a dedicated worker, a worker that worker made and a shared worker,
-  in the first window and the later one, read the person's zone and locale
-  in Intl, a Date's offset in the zone and how a date is formatted, all
-  but the shared worker read the person's language as navigator.language
-  and navigator.languages exactly as reported (the shared worker's, which
-  the driver cannot hold at its start, is measured), and each one's public
-  request carries that language as its Accept-Language; an ordinary font
-  and a colour emoji render; a session started with no person reads
+  in place of HeadlessChrome, and each one's public request sends it; each
+  reads the page's brands and the shell's own high-entropy hints without
+  HeadlessChrome, and sends no HeadlessChrome in Sec-CH-UA, the shared
+  worker's request no Sec-CH-UA at all. Chrome runs by the switch
+  --user-agent naming that User-Agent. No page the driver shows can
+  register a service worker, so the shell alone under that switch, on an
+  origin of its own (agent-probe.mjs, in a container of the image), shows
+  a service worker at its first read reading and sending it, its script's
+  request among them, and reading Chrome's own brands and blank
+  high-entropy hints. Started with its person (the vector file's person,
+  ja-JP and Asia/Tokyo), the page, a frame of it, a dedicated worker, a
+  worker that worker made and a shared worker, in the first window and
+  the later one, read the person's zone and locale in Intl, a Date's
+  offset in the zone and how a date is formatted, all but the shared
+  worker read the person's language as navigator.language and
+  navigator.languages exactly as reported (the shared worker's, Chrome's
+  own, is measured), and each one's public request carries that language
+  as its Accept-Language; an ordinary font and a colour emoji render; a
+  session started with no person reads
   Chrome's own en-US and UTC.
 - A browser's start removes the Chrome the driver once fetched into its
   home and leaves the profile as it was.
@@ -1117,7 +1115,7 @@ def browser_kind(stack, c, uid):
                 expect(named_hints(reading.get("hints"), seen_by_page["fullVersionList"]),
                        f"the shared worker of the page in {win} reads the shell's own high-entropy hints, without "
                        "HeadlessChrome", [surface, reading, seen_by_page["fullVersionList"]])
-            # A shared worker is never held at its start (person.go): its navigator reads Chrome's own language.
+            # A shared worker's navigator reads Chrome's own language, held at its start or not (person.go).
             asked = {k: v for k, v in wanted.items() if surface != "shared" or k not in ("language", "languages")}
             expect(isinstance(reading, dict) and {k: reading.get(k) for k in asked} == asked,
                    f"the {surface} of the page in {win} reads " +
@@ -1126,8 +1124,8 @@ def browser_kind(stack, c, uid):
                    "their zone and locale in Intl, a Date's offset and how it formats a date", [surface, reading, asked])
             if surface == "shared":
                 print(f"measure: the shared worker of the page in {win} reads navigator.language "
-                      f"{reading.get('language')!r} and navigator.languages {reading.get('languages')!r}, Chrome's own: "
-                      "a shared worker is not held at its start", flush=True)
+                      f"{reading.get('language')!r} and navigator.languages {reading.get('languages')!r}, Chrome's own",
+                      flush=True)
             marked = [] if offline else request_headers(text, f"?kind-{'dedicated' if surface == 'worker' else surface}-"
                                                               f"{seen_by_page['token']}")
             expect(offline or (marked and all(request.get("accept-language") == PERSON["accept_language"]
@@ -1138,11 +1136,13 @@ def browser_kind(stack, c, uid):
                    f"the public request of the {surface} of the page in {win} sends the shell's own User-Agent, Chrome "
                    "in place of HeadlessChrome", [surface, marked, agent])
             if surface == "shared":
-                print(f"measure: the public request of the shared worker of the page in {win} sends Sec-CH-UA "
-                      f"{[request.get('sec-ch-ua') for request in marked]!r}", flush=True)
-            expect(offline or all("HeadlessChrome" not in request.get("sec-ch-ua", "") for request in marked),
-                   f"the public request of the {surface} of the page in {win} sends no HeadlessChrome in Sec-CH-UA",
-                   [surface, marked])
+                expect(offline or all("sec-ch-ua" not in request for request in marked),
+                       f"the public request of the shared worker of the page in {win} sends no Sec-CH-UA",
+                       [surface, marked])
+            else:
+                expect(offline or all("HeadlessChrome" not in request.get("sec-ch-ua", "") for request in marked),
+                       f"the public request of the {surface} of the page in {win} sends no HeadlessChrome in "
+                       "Sec-CH-UA", [surface, marked])
         xframe = seen_by_page["xframe"]
         marked = [] if offline else request_headers(text, f"?kind-xframe-{seen_by_page['token']}")
         expect(isinstance(xframe, dict) and xframe.get("agent") == agent and xframe.get("brandNames") == names
