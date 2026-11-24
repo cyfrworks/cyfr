@@ -348,7 +348,7 @@ const (
 	brewUpgradeWithin = 30 * time.Minute
 )
 
-func (c caskRoad) fetch(ctx context.Context, out io.Writer, target string) (*staged, error) {
+func (c caskRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*staged, error) {
 	if c.exact {
 		lookup, cancel := context.WithTimeout(ctx, 30*time.Second)
 		latest, err := latestRelease(lookup)

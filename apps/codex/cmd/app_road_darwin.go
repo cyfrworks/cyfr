@@ -48,7 +48,7 @@ const (
 	codesignWithin = 2 * time.Minute
 )
 
-func (macRoad) fetch(ctx context.Context, out io.Writer, target string) (*staged, error) {
+func (macRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*staged, error) {
 	return fetchInstaller(ctx, out, target, "darwin", runtime.GOARCH)
 }
 

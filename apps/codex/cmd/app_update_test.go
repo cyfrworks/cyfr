@@ -50,7 +50,7 @@ type appScenario struct {
 // standInRoad is roadStandIn as an appRoad.
 type standInRoad struct{ r *roadStandIn }
 
-func (a standInRoad) fetch(_ context.Context, _ io.Writer, target string) (*staged, error) {
+func (a standInRoad) fetch(_ context.Context, _ io.Writer, _, target string) (*staged, error) {
 	r := a.r
 	r.s.log = append(r.s.log, "fetch "+target)
 	if r.interruptAfterFetch {
@@ -394,32 +394,23 @@ func TestUpdateOnTheBoxStopsItsScreenAroundTheInstaller(t *testing.T) {
 // A standalone cyfr inside an app's bundle wherever it lies, the bundle
 // as this system's packaging lays it out, is the app's: cyfr update
 // refuses before any download rather than rewrite it, which would break
-// the bundle's signature.
+// the bundle's signature, as it did on macOS and Windows.
 func TestUpdateNeverRewritesTheCyfrInsideAnAppsBundle(t *testing.T) {
-	s := newProgramScenario(t, "1.0.0", "1.1.0")
-	bundle := t.TempDir()
-	var self string
-	switch runtime.GOOS {
-	case "darwin":
-		bundle = filepath.Join(bundle, "CYFR.app")
-		self = filepath.Join(bundle, "Contents", "Resources", "cyfr")
-	case "windows":
-		self = filepath.Join(bundle, "resources", "cyfr.exe")
-		writeFile(t, filepath.Join(bundle, "CYFR.exe"), "the app")
-	default:
-		self = filepath.Join(bundle, "resources", "cyfr")
-		writeFile(t, filepath.Join(bundle, "CYFR"), "the app")
+	bundle, self := appBundleLayout(t, t.TempDir())
+	saved := fetchBinary
+	t.Cleanup(func() { fetchBinary = saved })
+	fetched := 0
+	fetchBinary = func(context.Context, string, string, string) ([]byte, error) {
+		fetched++
+		return []byte("new cyfr"), nil
 	}
-	writeFile(t, self, "old cyfr")
-	selfExecutable = func() (string, error) { return self, nil }
-	_, err := s.run(updateOptions{})
-	bundle = resolvedPath(t, bundle)
-	want := "This cyfr, " + resolvedPath(t, self) + ", is the one inside the CYFR app at " + bundle + ", which cyfr update does not rewrite; nothing was changed."
+	_, err := fetchSelf(context.Background(), io.Discard, self, "1.1.0", false)
+	want := "This cyfr, " + self + ", is the one inside the CYFR app at " + bundle + ", which cyfr update does not rewrite; nothing was changed."
 	if err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("cyfr update answered %v, want %q", err, want)
 	}
-	if len(s.fetched) != 0 || read(t, self) != "old cyfr" || len(s.handed) != 0 {
-		t.Errorf("the bundle's cyfr was fetched %v, handed over %v or rewritten: %q", s.fetched, s.handed, read(t, self))
+	if fetched != 0 || read(t, self) != "the app's cyfr" {
+		t.Errorf("the bundle's cyfr was fetched %d times or rewritten: %q", fetched, read(t, self))
 	}
 }
 

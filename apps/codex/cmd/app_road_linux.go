@@ -23,7 +23,7 @@ func systemAppRoad() appRoad { return debRoad{} }
 // the package half installed, which the next install mends.
 type debRoad struct{}
 
-func (debRoad) fetch(ctx context.Context, out io.Writer, target string) (*staged, error) {
+func (debRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*staged, error) {
 	return fetchInstaller(ctx, out, target, "linux", machine.arch())
 }
 

@@ -56,8 +56,10 @@ var (
 type appRoad interface {
 	// fetch verifies release target's installer for this machine against
 	// the release's signed checksums, changing nothing of CYFR's: what it
-	// keeps lies in a folder of its own, which staged.remove removes.
-	fetch(ctx context.Context, out io.Writer, target string) (*staged, error)
+	// keeps lies in a folder of its own, which staged.remove removes. It
+	// refuses a target its installer would not install over before, the
+	// installed app's release ("" for none it answers).
+	fetch(ctx context.Context, out io.Writer, before, target string) (*staged, error)
 	// elevate takes, before the app closes, what replace needs to run as
 	// someone else, and refuses where it cannot, answering what lets it go
 	// once the update is done; again is the command to run once a refusal
@@ -153,7 +155,7 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	} else {
 		fmt.Fprintf(out, "Updating the CYFR app from %s to %s...\n", before, target)
 	}
-	s, err := road.fetch(ctx, out, target)
+	s, err := road.fetch(ctx, out, before, target)
 	if err != nil {
 		return err
 	}
