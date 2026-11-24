@@ -484,9 +484,9 @@ defmodule Aqua.Crew do
   of `names` read by name under the caller's actor (`Compendium.skill/2`),
   its body as written and its other files' names, in the order named. A
   name is given once, every scroll is one each harness carries
-  (`Compendium.AquaSkills`), and what their frames deliver together,
-  names, bodies and files' names, is within one scroll's bound, so a job's
-  post fits one line of the brain wire. A name
+  (`Compendium.AquaSkills`), and the scrolls as a member reads them, each
+  in its frame (`Aqua.Reader.scrolls/2`), hold no more bytes than one
+  scroll's bound, so a job's post fits one line of the brain wire. A name
   this athanor has no scroll of, another athanor's included, refuses the
   whole call in a sentence naming it, before anything is written. None
   named is none.
@@ -505,13 +505,10 @@ defmodule Aqua.Crew do
 
       true ->
         with {:ok, scrolls} <- read_scrolls(ctx, names, operation),
-             :ok <- within_bound(scrolls, operation) do
-          {:ok,
-           for(
-             scroll <- scrolls,
-             do: %{"name" => scroll.name, "body" => scroll.body, "files" => scroll.files}
-           )}
-        end
+             kept =
+               for(s <- scrolls, do: %{"name" => s.name, "body" => s.body, "files" => s.files}),
+             :ok <- within_bound(kept, operation),
+             do: {:ok, kept}
     end
   end
 
@@ -545,8 +542,10 @@ defmodule Aqua.Crew do
     end)
   end
 
+  # Measured on what is rendered, delimiters and separators with it, the
+  # stand-in no shorter than the mark it becomes (`Aqua.Reader.deliver/2`).
   defp within_bound(scrolls, operation) do
-    bytes = scrolls |> Enum.map(& &1.delivered) |> Enum.sum()
+    bytes = byte_size(Aqua.Reader.scrolls(scrolls, Aqua.Reader.token()))
 
     %{bytes: most} = Compendium.skill_bound()
 
@@ -555,8 +554,8 @@ defmodule Aqua.Crew do
       else:
         {:error,
          {:invalid_argument,
-          "#{operation}: the scrolls named hold #{bytes} bytes together, more than the " <>
-            "#{most} one job carries"}}
+          "#{operation}: the scrolls named come to #{bytes} bytes as the member reads them, " <>
+            "more than the #{most} one job carries"}}
   end
 
   defp with_scrolls(payload, []), do: payload

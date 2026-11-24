@@ -340,6 +340,39 @@ defmodule Compendium.Providers.AquaConsentTest do
              Aqua.Crew.scrolls(ctx, ["many-files"], "crew.ask")
   end
 
+  # A job's bound is on what the member reads: many small scrolls whose
+  # names and bodies fit it, each in its frame, delimiters and separators
+  # with it, do not, and the ask is refused in the sentence that names the
+  # bound.
+  test "many small scrolls that fit as parts and not as framed are refused for one job", %{
+    ctx: ctx
+  } do
+    names = for n <- 1..1_400, do: "s" <> String.pad_leading("#{n}", 4, "0")
+
+    for name <- names do
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.skill_manifest(name),
+          ~s(---\nname: "#{name}"\ndescription: "d"\n---\n\nb\n)
+        )
+    end
+
+    assert {:error, {:invalid_argument, refusal}} = Aqua.Crew.scrolls(ctx, names, "crew.ask")
+
+    framed =
+      for(name <- names, do: %{"name" => name, "body" => "b", "files" => []})
+      |> Aqua.Reader.scrolls(Aqua.Reader.token())
+      |> byte_size()
+
+    assert Enum.sum(Enum.map(names, &(byte_size(&1) + 1))) < 131_072
+    assert framed > 131_072
+
+    assert refusal ==
+             "crew.ask: the scrolls named come to #{framed} bytes as the member reads them, " <>
+               "more than the 131072 one job carries"
+  end
+
   # The index a turn's prompt carries drops scrolls past the bound before
   # it counts to its limit, so they hide no usable one.
   test "scrolls past the bound sorted before a usable one hide it from no turn's index", %{

@@ -358,9 +358,17 @@ defmodule Aqua.Reader do
   # The scrolls a job carries, kept in the row that hands it: an opening,
   # a request, and the request's copy delivered into its member's thread.
   # Its asker never reads its own request (`words/2` answers none).
-  defp attached(row, frames) do
-    for %{"name" => name, "body" => body} = scroll <- List.wrap(Tape.payload(row)["scrolls"]),
-        into: "" do
+  defp attached(row, frames), do: scrolls(List.wrap(Tape.payload(row)["scrolls"]), frames)
+
+  @doc """
+  A job's scrolls, each `%{"name", "body", "files"}` as the row that hands
+  it keeps them, as `frames` reads them after the job's words: each after
+  a blank line, in its frame (`scroll/2`). What a job's bound is measured
+  on (`Aqua.Crew.scrolls/3`).
+  """
+  @spec scrolls([map()], String.t() | nil) :: String.t()
+  def scrolls(scrolls, frames) when is_list(scrolls) do
+    for %{"name" => name, "body" => body} = scroll <- scrolls, into: "" do
       "\n\n" <> scroll(frames, %{name: name, body: body, files: List.wrap(scroll["files"])})
     end
   end

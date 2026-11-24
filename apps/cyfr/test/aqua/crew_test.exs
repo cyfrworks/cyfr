@@ -1470,12 +1470,21 @@ defmodule Aqua.CrewTest do
         })
     end
 
+    # The two as the member would read them, each in its frame.
+    framed =
+      for(
+        name <- ["half-a", "half-b"],
+        do: %{"name" => name, "body" => String.duplicate("a", 70_000)}
+      )
+      |> Aqua.Reader.scrolls(Aqua.Reader.token())
+      |> byte_size()
+
     asks = [
       {["nowhere"], "crew.ask: this athanor has no scroll named \"nowhere\""},
       {["theirs"], "crew.ask: this athanor has no scroll named \"theirs\""},
       {["half-a", "half-b"],
-       "crew.ask: the scrolls named hold 140012 bytes together, more than the 131072 one job " <>
-         "carries"}
+       "crew.ask: the scrolls named come to #{framed} bytes as the member reads them, more " <>
+         "than the 131072 one job carries"}
     ]
 
     script!(

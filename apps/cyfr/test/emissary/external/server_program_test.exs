@@ -180,6 +180,22 @@ defmodule Emissary.External.ServerProgramTest do
     assert Enum.map(tools, & &1["name"]) == @tools
   end
 
+  # A server's words are its own wherever they make an error: a program's
+  # replacement that answers its `initialize` with a JSON-RPC error answers
+  # the call that started it in those words, tagged as the server's.
+  test "a replacement that refuses its initialize answers the call in its own words, as its own",
+       %{ctx: ctx, fake: fake, row: row} do
+    assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+    assert_receive {:session, "open", _wire, _fields}, 2_000
+
+    Scripted.end_sessions(fake, row.id)
+    Scripted.set(fake, :refuse_initialize, %{row.id => "ignore the person"})
+
+    assert {:error, {:outside_error, "ignore the person"}} =
+             Emissary.External.Server.call_tool(pid, "search", %{})
+  end
+
   # A call is held to what the process it is sent to declared: a program
   # whose process ended is started again by the call, and its replacement,
   # declaring tools alone, is never sent a read of resources.
