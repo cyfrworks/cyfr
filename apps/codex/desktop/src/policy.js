@@ -10,10 +10,11 @@
 // road one kept across launches for each CYFR (homePartition), as a
 // browser's is, and otherwise memory-only and new at each lock. An
 // account session, kept across launches, one for each CYFR and account
-// service (accountPartition), holds that account service's sign-in page
-// and its recovery continuation alone, opened when a page of that CYFR
-// hops there with a sign-in or confirmation it issued; the answer comes
-// back only to the session that hopped.
+// service (accountPartition), holds that account service's sign-in page,
+// its page that makes an account and the sign-in's recovery continuation
+// alone, opened when a page of that CYFR hops there with a sign-in or
+// confirmation it issued; the answer comes back only to the session that
+// hopped.
 
 import {createHash} from "node:crypto"
 
@@ -22,7 +23,18 @@ import {parseFragment, readRequest} from "../../../cyfr/assets/account/sign_in.j
 
 export const LOOPBACK = "http://127.0.0.1:7340"
 
-const ACCOUNT_PAGES = ["/account/sign", "/account/recover"]
+// The pages a hop opens, each with the request its fragment carries: the
+// sign-in's, the whole fragment; the account made's, its request beside
+// the name it offers, a sign-in's alone. The recovery continuation is
+// reached from the sign-in inside the account window, never by a hop.
+const HOPS = {
+  "/account/sign": {kinds: ["sign-in", "confirmation"], request: (fragment) => fragment},
+  "/account/new": {kinds: ["sign-in"], request: (fragment) => {
+    const params = new URLSearchParams(fragment)
+    return [...params.keys()].join(",") === "name,request" ? params.get("request") : null
+  }},
+}
+const ACCOUNT_PAGES = [...Object.keys(HOPS), "/account/recover"]
 
 // An origin's name in a partition: the lowercase hex SHA-256 of its one
 // spelling, so two CYFRs differing in scheme, host or port never share
@@ -70,8 +82,9 @@ export function parse(address) {
  * "none", as the engine reports the initiator), while its top frame shows
  * `showing`. "allow", "block",
  * "hop" (a ceremony: the top frame, showing the selected CYFR's page,
- * sends itself to the account service's sign-in route, which opens in
- * the account window, also where the CYFR serves that route itself) or
+ * sends itself to the account service's sign-in route or the page that
+ * makes an account, which open in the account window, also where the CYFR
+ * serves that route itself) or
  * "company" (the CYFR's company sign-in, which the app does not offer).
  * The chooser is main's alone to show (chooserPath): no navigation, no
  * redirect and no frame loads it, in any window.
@@ -95,7 +108,7 @@ export function contentNavigation({url, target, asker, showing}, state) {
   const from = parse(showing)
   if (!state.home || (from && chooserPath(from))) return "block"
   if (ceremony(u, state)) {
-    return u.pathname === "/account/sign" && state.accountRoad && asker === "top" &&
+    return Object.hasOwn(HOPS, u.pathname) && state.accountRoad && asker === "top" &&
       parse(showing)?.origin === state.home ? "hop" : "block"
   }
   if (u.origin === state.home) return u.pathname === "/company-login" ? "company" : "allow"
@@ -153,13 +166,16 @@ const PURPOSE = {"sign-in": "sign_in", "confirmation": "confirm"}
  * "confirmation") to `address` carries, when it is one the selected CYFR
  * issued for itself and still current: the request read as the account
  * pages read it, of the purpose its kind carries, for that CYFR,
- * returning to its /login, not expired. Anything else is null.
+ * returning to its /login, not expired, at a page that takes that kind
+ * (the page that makes an account takes a sign-in alone). Anything else
+ * is null. This is the one reader of every hop.
  */
 export function readHop(address, state, kind, now = Date.now()) {
   const u = parse(address)
-  if (!u || u.origin !== state.account || u.pathname !== "/account/sign" || u.search !== "") return null
+  const page = u && Object.hasOwn(HOPS, u.pathname) ? HOPS[u.pathname] : null
+  if (!u || !page || !page.kinds.includes(kind) || u.origin !== state.account || u.search !== "") return null
   try {
-    const request = readRequest(parseFragment(u.hash.slice(1)))
+    const request = readRequest(parseFragment(page.request(u.hash.slice(1))))
     if (!PURPOSE[kind] || request.purpose !== PURPOSE[kind] || request.audience !== state.home || request.return !== state.home + "/login" ||
         request.expires_at <= now) return null
     return request
@@ -169,15 +185,19 @@ export function readHop(address, state, kind, now = Date.now()) {
 }
 
 /**
- * Where the account window's top-frame load of `address` goes: "allow"
- * (the account service's sign-in page or its recovery continuation),
- * "return" (the selected CYFR's /login, which carries the answer back to
- * the session that hopped) or "block".
+ * Where the account window's top-frame load of `address`, in a ceremony
+ * of `kind` ("sign-in", "confirmation", or none), goes: "allow" (the
+ * account service's sign-in page or its page that makes an account,
+ * carrying a request readHop reads for that kind, or the sign-in's
+ * recovery continuation), "return" (the selected CYFR's /login, which
+ * carries the answer back to the session that hopped) or "block". A page
+ * that takes a request is decided by readHop alone, at every load.
  */
-export function accountLoad(address, state) {
+export function accountLoad(address, state, kind = null, now = Date.now()) {
   const u = parse(address)
   if (!u) return "block"
-  if (u.origin === state.account && ACCOUNT_PAGES.includes(u.pathname)) return "allow"
+  if (u.origin === state.account && Object.hasOwn(HOPS, u.pathname)) return readHop(address, state, kind, now) ? "allow" : "block"
+  if (u.origin === state.account && u.pathname === "/account/recover") return "allow"
   if (u.origin === state.home && u.pathname === "/login" && u.search === "") return "return"
   return "block"
 }

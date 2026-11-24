@@ -385,7 +385,7 @@ defmodule Compendium.Scaffold do
       type: "tincture",
       version: version,
       publisher: Compendium.ComponentPath.default_publisher(),
-      description: "TODO: Describe your tincture",
+      description: "An app made in CYFR.",
       tincture: tincture,
       dependencies: %{
         static: []
@@ -606,7 +606,7 @@ defmodule Compendium.Scaffold do
     <body>
       <div id="app">
         <h1>#{name}</h1>
-        <p>Edit this tincture to build your UI.</p>
+        <p>Edit this app to build your page.</p>
         <div id="data"></div>
       </div>
       <script src="app.js"></script>

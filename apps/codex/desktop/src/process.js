@@ -17,7 +17,7 @@ export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
   ready: {required: ["url"], optional: ["rail"]},
-  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "road"]},
+  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "setup"]},
   opened: {required: ["home", "attempt"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
   ending: {required: []},
@@ -88,8 +88,8 @@ export function readFromCyfr(line) {
   const named = together.filter((k) => Object.hasOwn(m, k)).length
   if (named !== 0 && named !== together.length) throw new Refused("fields")
   if (together.length && named === 0 && (Object.hasOwn(m, "proxy") || Object.hasOwn(m, "resolver"))) throw new Refused("fields")
-  // The one road a home names: the device's pages.
-  if (Object.hasOwn(m, "road") && m.road !== "device") throw new Refused("fields")
+  // A setup token in its one form, which the CYFR's setup page reads.
+  if (Object.hasOwn(m, "setup") && !/^[0-9a-f]{64}$/.test(m.setup)) throw new Refused("fields")
   // What an erase names is erased by its origin: nothing else is one.
   if (m.type === "erase" && ![m.home, m.account ?? m.home].every(isOrigin)) throw new Refused("fields")
   return m

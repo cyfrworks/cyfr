@@ -29,7 +29,8 @@ test("a content window loads the device's pages, then the selected CYFR, and not
   assert.equal(top(home + "/", before), "block", "the CYFR before main keeps to it")
   assert.equal(top(home + "/threads?x=1", ready), "allow")
   assert.equal(top(home + "/company-login", ready), "company")
-  assert.equal(top(account + "/account/new#x", ready), "block")
+  assert.equal(top(account + "/account/new#x", ready), "hop", "the page that makes an account, a hop")
+  assert.equal(top(account + "/account/new#x", linux), "block", "no account road on Linux")
   for (const chooser of [LOOPBACK + "/bootstrap/", LOOPBACK + "/bootstrap/#token=t&road=passkey"]) {
     assert.equal(top(home + "/login", ready, chooser), "block", "no CYFR's page in the chooser's view, its sign-in neither")
     assert.equal(top(LOOPBACK + "/", ready, chooser), "allow", "the chooser goes on to the device's pages")
@@ -40,8 +41,13 @@ test("a content window loads the device's pages, then the selected CYFR, and not
   }
 })
 
-test("only the content window's top frame, showing the selected CYFR's page, hops, to the sign-in route alone", () => {
+test("only the content window's top frame, showing the selected CYFR's page, hops, to the sign-in route and the page that makes an account alone", () => {
   assert.equal(top(account + "/account/sign#x", ready), "hop")
+  assert.equal(top(account + "/account/new#x", ready), "hop")
+  for (const [showing, asker, why] of [[home + "/setup", "none", "asked by no frame"], [LOOPBACK + "/bootstrap/", "top", "from the device's pages"],
+    ["https://evil.example/", "top", "from another page"]]) {
+    assert.equal(top(account + "/account/new#x", ready, showing, asker), "block", `the page that makes an account, ${why}`)
+  }
   assert.equal(top(account + "/account/recover#x", ready), "block", "recovery is reached inside the account window")
   assert.equal(top(account + "/account/sign#x", ready, home + "/login", "none"), "block", "asked by no frame")
   assert.equal(top(account + "/account/sign#x", linux), "block", "no account road on Linux")
@@ -72,7 +78,7 @@ test("a frame navigates itself or a frame inside it to what a frame may load, an
 test("a frame never hops and never loads a ceremony's route, by navigation or by redirect", () => {
   const same = {home, account: home, accountRoad: true}
   for (const state of [ready, same, linux]) {
-    for (const route of ["/account/sign#x", "/account/recover"]) {
+    for (const route of ["/account/sign#x", "/account/new#x", "/account/recover"]) {
       assert.equal(frame(state.account + route, state), "block", `${state.account}${route}`)
     }
   }
@@ -89,6 +95,7 @@ test("a content page opens the device's confirmations in a window of their own, 
   assert.equal(contentOpen(LOOPBACK + "/unlock", ready), "deny")
   assert.equal(contentOpen(account + "/account/sign#x", ready), "hop")
   assert.equal(contentOpen(account + "/account/sign#x", linux), "deny")
+  assert.equal(contentOpen(account + "/account/new#x", ready), "deny", "an account is made by a hop of the top frame alone")
   assert.equal(contentOpen(home + "/", ready), "deny")
   assert.equal(contentOpen("https://evil.example/", ready), "deny")
 })
@@ -120,18 +127,66 @@ test("a hop carries a current sign-in or confirmation the selected CYFR issued f
   assert.equal(readHop(`${account}/account/sign#not-a-request`, ready, "sign-in", now), null)
 })
 
-test("the account window loads the sign-in page and its recovery continuation, and returns only to the CYFR's /login", () => {
-  assert.equal(accountLoad(account + "/account/sign#x", ready), "allow")
+// The page that makes an account, as a CYFR's Create your account sends
+// the person there: the name it offers, then the sign-in's request.
+const made = (request, name = "") => `${account}/account/new#name=${name}&request=${fragment(request)}`
+
+test("a hop to the page that makes an account carries a current sign-in the selected CYFR issued for its own /login, read by the one reader", () => {
+  const now = 1790000000000
+  let read = 0
+  for (const [name, {request}] of Object.entries(signIn["requests"])) {
+    const forHome = {...request, return: home + "/login"}
+    if (request.purpose !== "sign_in") {
+      assert.equal(readHop(made(forHome), ready, "confirmation", now), null, `${name}: no confirmation makes an account`)
+      continue
+    }
+    read++
+    assert.deepEqual(readHop(made(forHome), ready, "sign-in", now), forHome, name)
+    assert.deepEqual(readHop(made(forHome, "mira"), ready, "sign-in", now), forHome, `${name}, a name offered`)
+    assert.equal(readHop(made(forHome), ready, "confirmation", now), null, `${name}, as a confirmation`)
+    assert.equal(readHop(made(request), ready, "sign-in", now), null, `${name}, returning elsewhere`)
+    assert.equal(readHop(made(forHome), ready, "sign-in", request.expires_at), null, `${name}, expired`)
+    assert.equal(readHop(made(forHome), {...ready, home: "https://bob.example"}, "sign-in", now), null, `${name}, for another CYFR`)
+    assert.equal(readHop(made(forHome).replace(account, "https://evil.example"), ready, "sign-in", now), null, `${name}, at another service`)
+    assert.equal(readHop(made(forHome).replace("/account/new#", "/account/new?x=1#"), ready, "sign-in", now), null, `${name}, with a query`)
+    assert.equal(readHop(made(forHome) + "&more=1", ready, "sign-in", now), null, `${name}, with another field`)
+    assert.equal(readHop(made(forHome).replace("#name=&", "#"), ready, "sign-in", now), null, `${name}, with no name field`)
+    assert.equal(readHop(`${account}/account/new#${fragment(forHome)}`, ready, "sign-in", now), null, `${name}, as the sign-in's fragment`)
+  }
+  assert.ok(read > 0)
+})
+
+test("the account window loads the sign-in page and the page that makes an account with a request the one reader reads for its ceremony, the recovery continuation, and returns only to the CYFR's /login", () => {
+  const now = 1790000000000
+  const signing = {...signIn["requests"]["sign_in"].request, return: home + "/login"}
+  const confirming = {...signIn["requests"]["confirm"].request, return: home + "/login"}
+  assert.equal(accountLoad(hop(signing), ready, "sign-in", now), "allow")
+  assert.equal(accountLoad(made(signing), ready, "sign-in", now), "allow")
+  assert.equal(accountLoad(hop(confirming), ready, "confirmation", now), "allow")
+  // A page that takes a request, at any load of the window, whatever
+  // ceremony it shows: with no request, an expired one or another CYFR's.
+  for (const kind of ["sign-in", "confirmation", null]) {
+    for (const [address, why] of [[account + "/account/new", "no request"], [account + "/account/sign", "no request"],
+      [account + "/account/new#x", "no request read"], [made(signing).replace("/account/new", "/account/sign"), "not its page's fragment"],
+      [made(signing), "expired", signing.expires_at], [hop(signing), "expired", signing.expires_at],
+      [made({...signing, audience: "https://bob.example", return: "https://bob.example/login"}), "another CYFR's"],
+      [hop({...confirming, audience: "https://bob.example", return: "https://bob.example/login"}), "another CYFR's"]]) {
+      const at = why === "expired" ? signing.expires_at : now
+      assert.equal(accountLoad(address, ready, kind, at), "block", `${kind}: ${why}: ${address.split("#")[0]}`)
+    }
+  }
+  assert.equal(accountLoad(made(signing), ready, "confirmation", now), "block", "a confirmation makes no account")
+  assert.equal(accountLoad(made(signing), ready, null, now), "block", "no ceremony")
+  assert.equal(accountLoad(hop(signing), ready, "confirmation", now), "block", "a sign-in's request in a confirmation")
   assert.equal(accountLoad(account + "/account/recover", ready), "allow")
   assert.equal(accountLoad(home + "/login#answer", ready), "return")
   assert.equal(accountLoad(home + "/login?next=/x#answer", ready), "block")
-  for (const elsewhere of [home + "/", home + "/threads", account + "/account/new", account + "/", "https://idp.example/authorize"]) {
-    assert.equal(accountLoad(elsewhere, ready), "block", elsewhere)
+  for (const elsewhere of [home + "/", home + "/threads", account + "/account/devices", account + "/account/add", account + "/", "https://idp.example/authorize"]) {
+    assert.equal(accountLoad(elsewhere, ready, "sign-in", now), "block", elsewhere)
   }
   const same = {home: account, account, accountRoad: true}
   assert.equal(accountLoad(account + "/login#a", same), "return", "a CYFR that is its own account service")
   assert.equal(accountLoad(account + "/", same), "block")
-
 })
 
 test("no page is granted a device, a capture or a credential", () => {
@@ -252,13 +307,17 @@ test("main takes a home's account service by the rule cyfr holds", () => {
   for (const s of processes.account_services) assert.equal(homeMessage({home: s.home, account: s.account}), s.accepted, s.name)
 })
 
-test("a local CYFR serving its own accounts hops to its sign-in route alone, and nothing else of this computer loads", () => {
+test("a local CYFR serving its own accounts hops to its sign-in route and the page that makes an account alone, and nothing else of this computer loads", () => {
   const origin = "http://localhost:4000"
   const local = {home: origin, account: origin, accountRoad: true}
   assert.equal(top(origin + "/threads", local, LOOPBACK + "/"), "allow")
   assert.equal(top(origin + "/account/sign#x", local, origin + "/login"), "hop")
+  assert.equal(top(origin + "/account/new#x", local, origin + "/setup"), "hop", "Create your account, from its setup page")
   assert.equal(top(origin + "/account/new#x", {...local, account: "https://cyfr.run"}, origin + "/login"), "allow", "the CYFR's own page")
-  assert.equal(accountLoad(origin + "/account/sign", local), "allow")
+  const now = 1790000000000
+  const signing = {...signIn["requests"]["sign_in"].request, audience: origin, return: origin + "/login"}
+  assert.equal(accountLoad(`${origin}/account/sign#${fragment(signing)}`, local, "sign-in", now), "allow")
+  assert.equal(accountLoad(origin + "/account/sign", local, "sign-in", now), "block", "a sign-in page with no request")
   assert.equal(accountLoad(origin + "/login#answer=x", local), "return")
   assert.equal(accountLoad(origin + "/threads", local), "block")
   for (const elsewhere of ["http://localhost:4100/", "http://127.0.0.1:4000/", "http://localhost:4100/account/sign"]) {

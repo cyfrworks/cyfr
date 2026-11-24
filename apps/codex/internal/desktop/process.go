@@ -91,7 +91,7 @@ const (
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}, optional: []string{"rail"}},
-	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "road"}},
+	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "setup"}},
 	TypeOpened:       {required: []string{"home", "attempt"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
 	TypeEnding:       {},
@@ -123,10 +123,11 @@ type Message struct {
 	OK       bool
 	Proxy    string
 	Resolver string
-	// Road is RoadDevice where the CYFR opens at the device's pages on
-	// either road: one just set up, whose first person is made there.
-	Road string
-	Path *string
+	// Setup is the setup token of a CYFR on this computer that no one is
+	// set up at yet: on the passkey road main opens its setup page with
+	// it, in the address's fragment alone, where the first person is made.
+	Setup string
+	Path  *string
 	// Epoch and Pick are what the chooser showed as it asked for the pick
 	// a folder-picked answers: the time since a lock, and the picks
 	// answered before it. cyfr takes only the answer to the pick asked
@@ -137,9 +138,6 @@ type Message struct {
 // maxWhole is the largest whole number both sides read exactly, a
 // JavaScript number's.
 const maxWhole = 1<<53 - 1
-
-// RoadDevice is home's road for a CYFR that opens at the device's pages.
-const RoadDevice = "device"
 
 // absolute is whether a folder-picked folder is spelled from a root, on
 // any system the app runs on: /, a drive's letter, colon and separator, or
@@ -248,7 +246,7 @@ func (m Message) object() (map[string]any, error) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
 	values := map[string]string{"url": m.URL, "rail": m.Rail, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
-		"resolver": m.Resolver, "road": m.Road}
+		"resolver": m.Resolver, "setup": m.Setup}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {
 		if f == "attempt" || f == "id" {

@@ -17,7 +17,7 @@ $("change").hidden=$("back").hidden=running||!!p.done;$("check").hidden=$("start
 if(p.error||p.done)say(p.error?p.error+".":"CYFR is set up in "+p.folder+" and started.");
 if(running)post("/bootstrap/setup",{seen:p.seq}).then(a=>a.setup?progress(a.setup):say(a.error));else if(p.done&&started){started=false;opening()}}
 function begin(){started=true;say("");post("/bootstrap/start",{picks,run}).then(a=>{folder(a);if(a.setup)progress(a.setup);if(a.error)say(a.error)})}
-function opening(){$("go").hidden=true;say("Opening CYFR\u2026");post("/bootstrap/open",{picks,run}).then(a=>{if(a.next)return location.replace(a.next);say(a.error||"CYFR did not open.");$("go").hidden=false})}
+function opening(){$("go").hidden=true;say("Opening CYFR\u2026");post("/bootstrap/open",{picks,run}).then(a=>{if(a.next){if(!passkey)location.replace(a.next);return}say(a.error||"CYFR did not open.");$("go").hidden=false})}
 function post(p,b){return fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({token,epoch},b))}).then(r=>{s.setItem("token",token);return r.ok?r.json():{error:"This page is not the app's own. Quit the app and open it again."}},()=>({error:"The app's connection stopped. Quit it and open it again."}))}
 function show(a,told){say(a.error||told);asked=a.confirm?a:null;const stay=!!(a.next&&(passkey||told));$("confirm").hidden=!asked;$("choose").hidden=!!asked||stay;$("road").hidden=!stay;
 if(asked){$("named").textContent=a.cyfr;$("service").textContent=a.confirm}

@@ -680,6 +680,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "sign_in.json" => [
       {"apps/codex/desktop/test/main.test.mjs", ~w(home requests)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(home max_fragment_bytes requests)},
+      {"apps/codex/desktop/test/states.test.mjs", ~w(requests)},
       {"apps/codex/internal/account/wire_test.go",
        ~w(answer_refusals answers keys request_refusals requests)},
       {"apps/cyfr/assets/test/account/pages.test.mjs",

@@ -186,7 +186,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.erase) erase(effect.erase)
     if (effect.rail) openRail(effect.rail.url)
     if (effect.menu) rowMenu(effect.menu.home)
-    if (effect.root) openHome(effect.root.home, effect.root.path)
+    if (effect.root) openHome(effect.root.home, effect.root.path, effect.root.setup)
     if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession())
     if (effect.back) back(chooserAddress(effect.back))
     if (effect.relaunch) {
@@ -549,9 +549,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   }
 
   // The CYFR at `home`, opened at `path` in its own kept storage, which
-  // is made only now that cyfr committed it.
-  function openHome(home, path) {
-    openContent(home + path, kept_(homePartition(home)), true)
+  // is made only now that cyfr committed it, or with `setup` at its setup
+  // page, the token in the fragment alone.
+  function openHome(home, path, setup = "") {
+    openContent(setup ? `${home}/setup#${setup}` : home + path, kept_(homePartition(home)), true)
   }
 
   // The chooser shown in place of a CYFR's page that did not load: in the
@@ -580,10 +581,20 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     accountWindow = w
     const contents = w.webContents
+    const ceremony = () => hop && content && hop.from === content ? hop.kind : null
+    // Every navigation of the top frame, however it began (the page's own,
+    // main's load or reload, a history move, a change of fragment), starts
+    // here: the one reader decides it, and a refused one ends the ceremony.
+    contents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame) on({type: "account-started", url: details.url, kind: ceremony()})
+    })
+    // What that event cannot do: cancel a navigation before its request is
+    // sent, and take a press of the page's as an act (the answer). The
+    // engine raises these for the page's own navigations, a redirect and a
+    // frame's alone.
     const ask = (event, redirect = false) => {
       const decided = on({type: "account-navigate", window: "account", url: event.url, target: event.isMainFrame ? "top" : "frame",
-        ...begun(event, contents), redirect,
-        kind: hop && content && hop.from === content ? hop.kind : null})
+        ...begun(event, contents), redirect, kind: ceremony()})
       if (!decided.allow) event.preventDefault()
     }
     contents.on("will-navigate", (event) => ask(event))
@@ -701,7 +712,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const top = (f) => accountWindow && !accountWindow.isDestroyed() && f &&
       f.processId === accountWindow.webContents.mainFrame.processId &&
       f.routingId === accountWindow.webContents.mainFrame.routingId &&
-      accountLoad(f.url, kept(state)) === "allow"
+      accountLoad(f.url, kept(state), hop?.kind) === "allow"
     const current = hop && top(frame) && details.relyingPartyId === relyingParty(kept(state).account) &&
       details.accounts.length > 0
     if (!current) return answer(null)
