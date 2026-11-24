@@ -48,6 +48,13 @@ const (
 	ReachRouted = "routed"
 )
 
+// RouteLink is the name of a routed space's one link besides its loopback,
+// the inner end of its guard's pair: the one link that comes up in the
+// space. Its namespace holds only its loopback (and, on Docker Desktop,
+// fallback tunnel devices, down and without an address) when the guard
+// makes the pair.
+const RouteLink = "eth0"
+
 // Spec names a pool, its inclusive uid range and its spaces' reach.
 type Spec struct {
 	Name  string

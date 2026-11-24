@@ -289,7 +289,8 @@ def test_still_network(c):
     expect(at_start["status"] == 0 and later["status"] == 0 and at_start["stdout"] == later["stdout"],
            f"what the command found at its start is what its space holds {STILL_FOR_S} s later",
            {"at start": at_start, "later": later})
-    expect([a[5] for a in addresses] == ["lo"], "at the command's start only the loopback has an IPv6 address",
+    expect([a[5] for a in addresses] == ["lo"], "at the command's start only the loopback has an IPv6 address: the route's "
+           "link has none, and any other link of the space, as Docker Desktop's tunnel devices, is down",
            addresses)
     c.release([owner])
 

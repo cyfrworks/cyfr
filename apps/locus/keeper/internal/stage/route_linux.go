@@ -12,6 +12,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/pool"
 )
 
 // A routed space's part of its route. The stage brings the space's loopback
@@ -118,56 +120,47 @@ func handRouteUp(fd int) error {
 }
 
 // stillLinks makes the space's network still before its command starts.
-// The guard's inner end comes up with an IPv6 link-local address whose
+// The guard's inner end, the one link that comes up in the space
+// (pool.RouteLink), comes up with an IPv6 link-local address whose
 // duplicate address detection ends a second or two later, and the address
 // changing then is a change of the namespace's network under a command
 // already running: Chrome, for one, fails its requests in flight with
-// net::ERR_NETWORK_CHANGED. A space has no IPv6 route out, so every link
-// but the loopback is given no IPv6 address at all: the kernel generates
-// none on it, and the one it made is removed now, while the stage still
-// holds NET_ADMIN, before the command runs.
+// net::ERR_NETWORK_CHANGED. A space has no IPv6 route out, so that link is
+// given no IPv6 address at all: the kernel generates none on it, and the
+// one it made is removed now, while the stage still holds NET_ADMIN,
+// before the command runs. A space whose guard made no pair, as the
+// keeper's tests' stand-in guard makes none, has no such link to still.
 func stillLinks() error {
-	links, err := syscall.NetlinkRIB(unix.RTM_GETLINK, unix.AF_UNSPEC)
-	if err != nil {
-		return fmt.Errorf("the space's links: %w", err)
+	index, err := linkIndex(pool.RouteLink)
+	if errors.Is(err, unix.ENODEV) {
+		return nil
 	}
-	msgs, err := syscall.ParseNetlinkMessage(links)
 	if err != nil {
-		return fmt.Errorf("the space's links: %w", err)
+		return fmt.Errorf("the route's link: %w", err)
 	}
-	others := map[int32]bool{}
-	for _, m := range msgs {
-		if m.Header.Type != unix.RTM_NEWLINK || len(m.Data) < unix.SizeofIfInfomsg {
-			continue
-		}
-		index := int32(binary.NativeEndian.Uint32(m.Data[4:8]))
-		if binary.NativeEndian.Uint32(m.Data[8:12])&unix.IFF_LOOPBACK != 0 {
-			continue
-		}
-		others[index] = true
-		mode := attr(unix.IFLA_INET6_ADDR_GEN_MODE, []byte{addrGenModeNone})
-		body := make([]byte, unix.SizeofIfInfomsg)
-		binary.NativeEndian.PutUint32(body[4:8], uint32(index))
-		body = append(body, attr(unix.IFLA_AF_SPEC, attr(unix.AF_INET6, mode))...)
-		if err := request(unix.RTM_SETLINK, body); err != nil {
-			return fmt.Errorf("link %d's IPv6 addresses: %w", index, err)
-		}
+	body := make([]byte, unix.SizeofIfInfomsg)
+	binary.NativeEndian.PutUint32(body[4:8], index)
+	mode := attr(unix.IFLA_INET6_ADDR_GEN_MODE, []byte{addrGenModeNone})
+	body = append(body, attr(unix.IFLA_AF_SPEC, attr(unix.AF_INET6, mode))...)
+	if err := request(unix.RTM_SETLINK, body); err != nil {
+		return fmt.Errorf("the route's link's IPv6 addresses: %w", err)
 	}
 	addrs, err := syscall.NetlinkRIB(unix.RTM_GETADDR, unix.AF_INET6)
 	if err != nil {
-		return fmt.Errorf("the space's addresses: %w", err)
+		return fmt.Errorf("the route's link's addresses: %w", err)
 	}
-	if msgs, err = syscall.ParseNetlinkMessage(addrs); err != nil {
-		return fmt.Errorf("the space's addresses: %w", err)
+	msgs, err := syscall.ParseNetlinkMessage(addrs)
+	if err != nil {
+		return fmt.Errorf("the route's link's addresses: %w", err)
 	}
 	for _, m := range msgs {
 		if m.Header.Type != unix.RTM_NEWADDR || len(m.Data) < unix.SizeofIfAddrmsg || m.Data[0] != unix.AF_INET6 ||
-			!others[int32(binary.NativeEndian.Uint32(m.Data[4:8]))] {
+			binary.NativeEndian.Uint32(m.Data[4:8]) != index {
 			continue
 		}
 		attrs, err := syscall.ParseNetlinkRouteAttr(&m)
 		if err != nil {
-			return fmt.Errorf("the space's addresses: %w", err)
+			return fmt.Errorf("the route's link's addresses: %w", err)
 		}
 		body := append([]byte(nil), m.Data[:unix.SizeofIfAddrmsg]...)
 		for _, a := range attrs {
@@ -176,10 +169,27 @@ func stillLinks() error {
 			}
 		}
 		if err := request(unix.RTM_DELADDR, body); err != nil && !errors.Is(err, unix.EADDRNOTAVAIL) {
-			return fmt.Errorf("an IPv6 address of link %d: %w", binary.NativeEndian.Uint32(m.Data[4:8]), err)
+			return fmt.Errorf("an IPv6 address of the route's link: %w", err)
 		}
 	}
 	return nil
+}
+
+// linkIndex is the index of the link named name in the space.
+func linkIndex(name string) (uint32, error) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer unix.Close(fd)
+	ifr, err := unix.NewIfreq(name)
+	if err != nil {
+		return 0, err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCGIFINDEX, ifr); err != nil {
+		return 0, err
+	}
+	return ifr.Uint32(), nil
 }
 
 // attr is one netlink attribute of kind holding data, padded to its

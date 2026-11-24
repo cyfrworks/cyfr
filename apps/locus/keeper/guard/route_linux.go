@@ -17,6 +17,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cyfr/locus/keeper/internal/pool"
 )
 
 // What a route is made of, with the capability the guard holds, NET_ADMIN
@@ -29,10 +31,8 @@ import (
 // namespace descends from the guard's own.
 
 const (
-	// innerName is the inner end's name, in a namespace that holds only
-	// its loopback (and, on Docker Desktop, fallback tunnel devices, down
-	// and without an address) when the pair is made.
-	innerName = "eth0"
+	// innerName is the inner end's name (pool.RouteLink).
+	innerName = pool.RouteLink
 	// vethInfoPeer is VETH_INFO_PEER, the veth peer's attributes.
 	vethInfoPeer = 1
 	// nsGetNstype is NS_GET_NSTYPE, which answers a namespace
