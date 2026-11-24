@@ -14,8 +14,9 @@
 #      Docker has masked lets no one mount a fresh one: what Docker masked,
 #      and all of /proc/sys, are denied here instead, to the keeper and to
 #      every space.
-#   4. `unix` and the read of a POSIX message queue's attributes, which the
-#      newer rule set refuses otherwise.
+#   4. `unix` and POSIX message queues, which the newer rule set refuses
+#      otherwise: a space's queues are its own IPC namespace's and end with
+#      it, and the keeper reads what a spawn left in the container's.
 abi <abi/4.0>,
 include <tunables/global>
 
@@ -28,7 +29,7 @@ profile cyfr-locus flags=(attach_disconnected,mediate_deleted) {
   umount,
   unix,
   userns,
-  mqueue (read, getattr) type=posix,
+  mqueue type=posix,
 
   signal (receive) peer=unconfined,
   signal (receive) peer=runc,
