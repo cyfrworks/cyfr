@@ -263,6 +263,11 @@ defmodule Sanctum.Consent do
           | {:error, Sanctum.Consent.TinctureGrant.refusal()}
   defdelegate tincture_grant(ctx, reference), to: Sanctum.Consent.TinctureGrant, as: :fetch
 
+  @doc "What updating a shipped source adds to its grant. See `Sanctum.Consent.Bootstrap.update_adds/4`."
+  @spec update_adds(Sanctum.Context.t(), String.t(), term(), term()) ::
+          {:ok, %{adds: [map()], revised: boolean()}} | {:error, term()}
+  defdelegate update_adds(ctx, source_ref, current, newer), to: Sanctum.Consent.Bootstrap
+
   @doc """
   Whether vault row `ref` of profile `profile_id`'s head revision `consent`
   (from `head_consent/2`) is live now, as a run's attach reads its

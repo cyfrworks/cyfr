@@ -268,6 +268,27 @@ defmodule Compendium.Provenance do
 
   defp sort_versions_desc(versions), do: Compendium.Semver.sort_desc(versions)
 
+  @doc """
+  The manifest the seed ships for `version` of `name` of `type`, read
+  from the install media, never the athanor's copy. A version the seed
+  does not hold is `{:error, :not_shipped}`.
+  """
+  @spec shipped_manifest(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def shipped_manifest(type, name, version)
+      when is_binary(type) and is_binary(name) and is_binary(version) do
+    prefix =
+      Arca.Storage.seed_prefix("components") ++
+        [ComponentPath.type_plural(type), ComponentPath.default_publisher(), name, version]
+
+    with {:ok, manifest} <-
+           Arca.get_json(Prima.Actor.system(), prefix ++ [ComponentPath.manifest_name()]) do
+      Prima.Manifest.decode_strict(manifest)
+    else
+      {:error, :not_found} -> {:error, :not_shipped}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @wasm_types ~w(catalyst reagent formula)
 
   @doc """

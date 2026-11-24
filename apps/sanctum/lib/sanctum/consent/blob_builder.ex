@@ -1076,6 +1076,57 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   @doc """
+  What the manifest `newer` asks of the node `node_key` beyond what
+  `current` asks, as preview rows (`ask_rows/1`'s): a row `current` does
+  not hold whole, and of a row it holds, the names it adds to each list,
+  the rest of the row kept to say whose it is. Limits are no reach and are
+  never listed. Only the node's own ask is compared, never a dependency's.
+  """
+  @spec added_rows(String.t(), term(), term()) :: {:ok, [row()]} | {:error, term()}
+  def added_rows(node_key, current, newer) when is_binary(node_key) do
+    with {:ok, held} <- ask_rows(%{node_key => %{manifest: current}}),
+         {:ok, asked} <- ask_rows(%{node_key => %{manifest: newer}}),
+         {:ok, held} <- by_identity(held) do
+      {:ok,
+       asked
+       |> Enum.reject(&(&1["kind"] == "limits"))
+       |> Enum.map(&added_row(&1, Map.get(held, row_identity(&1))))
+       |> Enum.reject(&is_nil/1)}
+    end
+  end
+
+  defp by_identity(rows), do: {:ok, Map.new(rows, &{row_identity(&1), &1})}
+
+  # A row is matched by what makes it one of its kind
+  # (`Prima.ConsentPreview.Row.identity/1`); one that does not decode is
+  # matched by itself whole, so it is never taken as held.
+  defp row_identity(row) do
+    case Prima.ConsentPreview.Row.decode(row) do
+      {:ok, decoded} -> Prima.ConsentPreview.Row.identity(decoded)
+      {:error, _undecoded} -> row
+    end
+  end
+
+  defp added_row(row, nil), do: row
+
+  defp added_row(%{"values" => values} = row, %{"values" => held}) do
+    added =
+      Map.new(values, fn {field, value} ->
+        case {value, Map.get(held, field)} do
+          {list, was} when is_list(list) and is_list(was) -> {field, list -- was}
+          {other, _was} -> {field, other}
+        end
+      end)
+
+    more? =
+      Enum.any?(added, fn {field, value} ->
+        if is_list(value), do: value != [], else: value != Map.get(held, field)
+      end)
+
+    if more?, do: %{row | "values" => added}
+  end
+
+  @doc """
   The grant a decoded blob's `nodes` holds as preview rows: each node's
   resources and limits, marked narrowed where `narrowed` names the kind,
   and a tincture's declarations, which the shape digest binds. Each node's

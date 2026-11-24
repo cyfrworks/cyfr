@@ -81,7 +81,10 @@ defmodule Compendium.Component do
   Generate a setup plan for a component.
 
   Returns the component's declared needs, its dependencies, the consent
-  section (when a profile exists), and overall readiness.
+  section (when a profile exists), overall readiness, and `update`: for a
+  shipped copy the install media ships a newer version of, that version,
+  what it adds to the grant and whether the update grants it
+  (`Sanctum.Consent.update_adds/4`), else nil.
   """
   @spec setup_plan(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def setup_plan(%Context{} = ctx, reference) when is_binary(reference) do
@@ -115,8 +118,32 @@ defmodule Compendium.Component do
        needs: needs,
        dependencies: deps,
        consent: consent,
-       ready: consent.ready
+       ready: consent.ready,
+       update: shipped_update(ctx, component, manifest)
      }}
+  end
+
+  # The newer version the install media ships for a shipped copy, and what
+  # it adds to the grant (`Sanctum.Consent.update_adds/4`), so the update
+  # can say so before it is made: nil when the media ships none newer, or
+  # when what it adds cannot be read, since the update is still offered.
+  defp shipped_update(ctx, component, manifest) do
+    type = to_string(Map.get(component, :component_type))
+
+    with {:ok, version} when is_binary(version) <-
+           Compendium.ConsentFacts.newer_shipped(ctx, component),
+         {:ok, newer} <- Compendium.Provenance.shipped_manifest(type, component.name, version),
+         {:ok, %{adds: adds, revised: revised}} <-
+           Sanctum.Consent.update_adds(
+             ctx,
+             Prima.ComponentRow.node_key(component),
+             manifest,
+             newer
+           ) do
+      %{version: version, adds: adds, revised: revised}
+    else
+      _none -> nil
+    end
   end
 
   # ============================================================================

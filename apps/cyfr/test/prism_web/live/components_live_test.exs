@@ -279,6 +279,116 @@ defmodule PrismWeb.ComponentsLiveTest do
              Compendium.Registry.get_latest(ctx, "shelf-tool", "local", "reagent")
   end
 
+  describe "an update of a desktop CYFR ships" do
+    # A desktop the install media ships at 1.0.0 reading one stream, copied
+    # in and granted by its bootstrap, and 1.1.0 beside it in the media:
+    # what 1.1.0 asks beyond the grant is said before the person presses.
+    @desk "tincture:local.shelf-desk"
+
+    setup %{ctx: ctx, seed: seed} do
+      ship_desk!(seed, "1.0.0", ["runs.changes"])
+
+      {:ok, %{component_ref: "tincture:local.shelf-desk:1.0.0"}} =
+        Compendium.Provisioning.install_shipped(ctx, "#{@desk}:1.0.0")
+
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, @desk)
+      {:ok, profile_id: profile_id}
+    end
+
+    defp ship_desk!(seed, version, streams) do
+      dir = Path.join([seed, "components", "tinctures", "local", "shelf-desk", version])
+      File.mkdir_p!(dir)
+
+      File.write!(
+        Path.join(dir, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "type" => "tincture",
+          "version" => version,
+          "description" => "shipped",
+          "tincture" => %{"entry" => "index.html", "desktop" => %{"data" => streams}}
+        })
+      )
+
+      File.write!(Path.join(dir, "index.html"), "<!doctype html><title>desk</title>")
+    end
+
+    defp desk_expanded(conn) do
+      {view, _html} = mount_athanor(conn, "/components")
+      render_click(view, "toggle_expand", %{"ref" => @desk})
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Update to 1.1.0" end)
+      view
+    end
+
+    defp update_confirm(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s(button[phx-click="pull"][phx-value-ref="#{@desk}:1.1.0"]))
+      |> LazyHTML.attribute("data-confirm")
+    end
+
+    defp consent_head(ctx, profile_id),
+      do: Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+
+    defp update!(view) do
+      render_click(view, "pull", %{"ref" => "#{@desk}:1.1.0"})
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Pulled shelf-desk 1.1.0" end)
+    end
+
+    test "an update that adds a stream names it beside Update and in its confirmation",
+         %{conn: conn, ctx: ctx, seed: seed, profile_id: profile_id} do
+      ship_desk!(seed, "1.1.0", ["runs.changes", "system.changes"])
+      view = desk_expanded(conn)
+
+      assert has_element?(
+               view,
+               ~s([data-test="update-adds"]),
+               "Updating to 1.1.0 adds to its grant: Streams it listens to: system.changes"
+             )
+
+      refute view |> element(~s([data-test="update-adds"])) |> render() =~ "runs.changes"
+
+      assert update_confirm(view) == [
+               "Update shelf-desk to 1.1.0? It adds to its grant: " <>
+                 "Streams it listens to: system.changes."
+             ]
+
+      # What CYFR ships is granted by its bootstrap, as before.
+      update!(view)
+
+      assert {:ok, %{revision: 2, granted_via: "bootstrap"}, _refs} =
+               consent_head(ctx, profile_id)
+    end
+
+    test "an update that adds nothing says nothing and asks nothing",
+         %{conn: conn, seed: seed} do
+      ship_desk!(seed, "1.1.0", ["runs.changes"])
+      view = desk_expanded(conn)
+
+      refute has_element?(view, ~s([data-test="update-adds"]))
+      assert update_confirm(view) == []
+    end
+
+    test "a grant the person made is never revised, and the page says so",
+         %{conn: conn, ctx: ctx, seed: seed, profile_id: profile_id} do
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, granted_via: "interactive")
+      ship_desk!(seed, "1.1.0", ["runs.changes", "system.changes"])
+      view = desk_expanded(conn)
+
+      words =
+        "1.1.0 asks for more than your grant gives: Streams it listens to: system.changes. " <>
+          "Your grant stays as it is."
+
+      assert has_element?(view, ~s([data-test="update-adds"]), words)
+      assert update_confirm(view) == ["Update shelf-desk to 1.1.0? " <> words]
+
+      update!(view)
+
+      assert {:ok, %{revision: 1, granted_via: "interactive"}, _refs} =
+               consent_head(ctx, profile_id)
+    end
+  end
+
   describe "the consent section over a head it cannot read" do
     # A damaged head or profile row, or one the store cannot answer, is
     # said in the section's own sentence and offered no grant, which could

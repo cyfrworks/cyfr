@@ -2815,6 +2815,47 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp placement_label(placement) when is_binary(placement), do: "Placed: #{placement}"
   defp placement_label(_none), do: "Placed: where the shell places it"
 
+  @doc """
+  Preview rows in one line a kind, as this sheet heads and names them
+  ("Streams it listens to: system.changes"), in the sheet's order of
+  kinds: what a page outside the sheet says of a grant, such as what an
+  update adds to it.
+  """
+  @spec summary([map()]) :: [String.t()]
+  def summary(rows) when is_list(rows) do
+    kinds = Enum.map(Prima.ConsentPreview.kinds(), &Atom.to_string/1)
+
+    rows
+    |> Enum.group_by(& &1["kind"])
+    |> Enum.sort_by(fn {kind, _rows} ->
+      Enum.find_index(kinds, &(&1 == kind)) || length(kinds)
+    end)
+    |> Enum.map(fn {kind, rows} ->
+      "#{kind_heading(kind)}: #{rows |> Enum.flat_map(&row_names/1) |> Enum.uniq() |> Enum.join(", ")}"
+    end)
+  end
+
+  defp row_names(%{"kind" => kind, "values" => values}) when kind in ["egress", "storage"] do
+    for {field, list} <- values,
+        is_list(list),
+        list != [],
+        do: "#{field_label(kind, field)} #{Enum.join(list, ", ")}"
+  end
+
+  defp row_names(%{"kind" => "tools", "values" => %{"tools" => tools}}), do: tools
+  defp row_names(%{"kind" => "system_actions", "values" => %{"actions" => actions}}), do: actions
+
+  defp row_names(%{"kind" => "controls", "values" => %{"controls" => controls}}),
+    do: Enum.map(controls, &"“#{&1["label"]}”")
+
+  defp row_names(%{"kind" => "frame", "values" => values}) do
+    List.wrap(values["capabilities"]) ++
+      if(values["placement"], do: [placement_label(values["placement"])], else: [])
+  end
+
+  defp row_names(%{"values" => %{"name" => name}}) when is_binary(name), do: [name]
+  defp row_names(_row), do: []
+
   defp field_label("egress", "domains"), do: "Talks to"
   defp field_label("egress", "methods"), do: "Methods"
   defp field_label("egress", "schemes"), do: "Schemes"

@@ -190,6 +190,45 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
+  @doc """
+  What updating the shipped source `source_ref` from the manifest
+  `current` to the manifest `newer` adds to its grant: `adds`, what
+  `newer` asks of the source beyond `current`
+  (`Sanctum.Consent.BlobBuilder.added_rows/3`), and `revised`, whether
+  the walk that follows the update grants it, as it does for a source
+  with no owner profile standing or whose head is bootstrap-only
+  (`bootstrap_component/4`). A head a person committed is theirs and is
+  never revised, so `revised` is false for it.
+  """
+  @spec update_adds(Context.t(), String.t(), term(), term()) ::
+          {:ok, %{adds: [BlobBuilder.row()], revised: boolean()}} | {:error, term()}
+  def update_adds(%Context{} = ctx, source_ref, current, newer) when is_binary(source_ref) do
+    with {:ok, adds} <- BlobBuilder.added_rows(source_ref, current, newer),
+         {:ok, revised} <- revised_at_update?(ctx, source_ref) do
+      {:ok, %{adds: adds, revised: revised}}
+    end
+  end
+
+  defp revised_at_update?(ctx, source_ref) do
+    case claimed(ctx, source_ref) do
+      :unclaimed ->
+        {:ok, true}
+
+      {:claimed, nil} ->
+        {:ok, false}
+
+      {:claimed, profile} ->
+        case Arca.ConsentStorage.get_head(Context.actor(ctx), profile.id) do
+          {:ok, %{granted_via: "bootstrap"}, _refs} -> {:ok, true}
+          {:ok, _person_head, _refs} -> {:ok, false}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # Whether the athanor's claim is still the one this walk runs under, read
   # once before the walk so a lost claim walks nothing. It guards no write:
   # each mint and revision holds the claim in its own transaction

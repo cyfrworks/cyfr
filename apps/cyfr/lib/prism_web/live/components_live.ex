@@ -1063,6 +1063,31 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
+  # What updating to `newer_ref` adds to the grant, as the plan read it
+  # (`Sanctum.Consent.update_adds/4`), in the consent sheet's words: the
+  # line beside Update and the words of its confirmation, or nil when it
+  # adds nothing. What CYFR ships is granted by its bootstrap at the
+  # update; a grant the person made or revoked stays as it is.
+  defp update_adds(plan, newer_ref) when is_binary(newer_ref) do
+    with %{version: version, adds: [_ | _] = adds, revised: revised} <- plan_field(plan, :update),
+         true <- version == shipped_version(newer_ref) do
+      added = adds |> PrismWeb.ConsentSheetComponent.summary() |> Enum.join("; ")
+
+      if revised do
+        {"Updating to #{version} adds to its grant: #{added}", "It adds to its grant: #{added}."}
+      else
+        words =
+          "#{version} asks for more than your grant gives: #{added}. Your grant stays as it is."
+
+        {words, words}
+      end
+    else
+      _nothing_added -> nil
+    end
+  end
+
+  defp update_adds(_plan, _newer_ref), do: nil
+
   defp shipped_version(ref) do
     case Prima.ComponentRef.parse(ref) do
       {:ok, %Prima.ComponentRef{version: version}} -> version
@@ -1513,6 +1538,14 @@ defmodule PrismWeb.ComponentsLive do
                                       <td class="px-3 py-2 text-right">
                                         <div class="flex items-center justify-end gap-1">
                                           <% newer_ref = newer_shipped_ref(ver, @expanded_versions) %>
+                                          <% adds = update_adds(@expanded_plan, newer_ref) %>
+                                          <span
+                                            :if={newer_ref && adds}
+                                            class="text-xs text-amber-300 text-right"
+                                            data-test="update-adds"
+                                          >
+                                            {elem(adds, 0)}
+                                          </span>
                                           <span
                                             :if={newer_ref && MapSet.member?(@pulling, newer_ref)}
                                             class="text-xs text-emerald-400 animate-pulse"
@@ -1525,6 +1558,11 @@ defmodule PrismWeb.ComponentsLive do
                                             class="text-xs px-2 py-0.5 text-emerald-400 hover:text-emerald-300"
                                             phx-click="pull"
                                             phx-value-ref={newer_ref}
+                                            data-confirm={
+                                              adds &&
+                                                "Update #{comp_field(ver, :name)} to #{shipped_version(newer_ref)}? " <>
+                                                  elem(adds, 1)
+                                            }
                                             title="copy the newer shipped version in beside this one"
                                           >
                                             Update to {shipped_version(newer_ref)}
