@@ -194,7 +194,7 @@ test("a reload and the history keep the road main said, and the address keeps no
 test("as the app starts on the passkey road the CYFR remembered connects by itself, and main opens it", async () => {
   const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, OPEN, ROAD)
   await settled()
-  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME}]])
+  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]], "a press of the CYFR kept, which adds none")
   assert.deepEqual([went.byItself, went.pressed], [[], []], "the window is main's to send to the root")
   assert.equal($("road").hidden, true, "and no way on shows meanwhile")
 })
@@ -210,6 +210,7 @@ test("a Connect the person makes on the passkey road leaves the opening to main"
   assert.deepEqual(went.asked, [], "nothing by itself")
   $("connect").fire("submit")
   await settled()
+  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME}]], "the person's Connect, the one way to add a CYFR, is no press of one kept")
   assert.deepEqual([went.byItself, went.pressed], [[], []])
 })
 
@@ -233,7 +234,7 @@ test("a CYFR main's address names is connected to, in place of the one remembere
   const BOB = "https://bob.example:8443"
   for (const hash of [`#token=t&connect=${encodeURIComponent(BOB)}`, `${ROAD}&connect=${encodeURIComponent(BOB)}`]) {
     const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, {cyfr: BOB}, hash)
-    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: BOB}]], hash)
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: BOB, kept: true}]], `${hash}: a row's press, which adds none`)
     assert.equal($("address").value, BOB)
     assert.equal(went.address, "/bootstrap/", "the address keeps none")
     const again = await reload(went)

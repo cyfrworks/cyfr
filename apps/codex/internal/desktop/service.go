@@ -440,10 +440,13 @@ func (s *Service) finish() {
 // the setup it shows (none 0): a request that acts says what the page
 // showed, and is refused where that is no longer so.
 type request struct {
-	Token     string `json:"token"`
-	Epoch     uint64 `json:"epoch,omitempty"`
-	Run       uint64 `json:"run,omitempty"`
-	Address   string `json:"address,omitempty"`
+	Token   string `json:"token"`
+	Epoch   uint64 `json:"epoch,omitempty"`
+	Run     uint64 `json:"run,omitempty"`
+	Address string `json:"address,omitempty"`
+	// Kept is a press of a CYFR this computer keeps (a row of the rail, or
+	// the last one opened): it selects one that is listed and adds none.
+	Kept      bool   `json:"kept,omitempty"`
 	Home      string `json:"cyfr,omitempty"`
 	Directory string `json:"directory,omitempty"`
 	Picks     uint64 `json:"picks,omitempty"`
@@ -577,6 +580,11 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	if a, open := s.again(run, epoch); open {
 		return a
 	}
+	if req.Kept {
+		if a, unkept := s.unkept(home); unkept {
+			return a
+		}
+	}
 	project, l, remembered := s.remembered()
 	defer l.end()
 	if remembered && l.Shell.Address == home {
@@ -614,9 +622,9 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	c, held := list.Homes[home]
 	switch {
 	case found.Directory == account.DefaultDirectory:
-		return s.selectRemote(run, epoch, home, found, true)
+		return s.selectRemote(run, epoch, home, found, true, req.Kept)
 	case held && c.Project == "" && c.Directory == found.Directory:
-		return s.selectRemote(run, epoch, home, found, false)
+		return s.selectRemote(run, epoch, home, found, false, req.Kept)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -640,7 +648,7 @@ func (s *Service) approve(ctx context.Context, epoch uint64, req request) answer
 	if p == nil || p.epoch != epoch || p.home != req.Home || p.found.Directory != req.Directory {
 		return answer{Error: "That is not the account service this app asked about. Connect again."}
 	}
-	return s.selectRemote(run, epoch, p.home, p.found, true)
+	return s.selectRemote(run, epoch, p.home, p.found, true, false)
 }
 
 // again answers a Connect at the CYFR open, which the chooser's passkey
@@ -666,6 +674,24 @@ func (s *Service) again(run context.Context, epoch uint64) (answer, bool) {
 		return answer{Home: home, Error: err.Error()}, true
 	}
 	return s.opened(home), true
+}
+
+// unkept answers a press of a CYFR this computer keeps (request.Kept) for
+// home when the list holds it no more, or holds it being forgotten: a row
+// the rail showed before its Forget ended, pressed after, adds nothing.
+// Connect is the one way to add a CYFR.
+func (s *Service) unkept(home string) (answer, bool) {
+	list, err := s.Homes.Load()
+	if err != nil {
+		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}, true
+	}
+	switch c, held := list.Homes[home]; {
+	case !held:
+		return answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
+	case c.Forgetting:
+		return answer{Error: fmt.Sprintf("%s is being forgotten on this computer.", home)}, true
+	}
+	return answer{}, false
 }
 
 // live is whether no lock came since epoch.
@@ -721,10 +747,13 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 
 // selectRemote selects the CYFR elsewhere at home, with the account
 // service found for it, approved in this selection or not.
-func (s *Service) selectRemote(run context.Context, epoch uint64, home string, found account.Discovered, approved bool) answer {
+func (s *Service) selectRemote(run context.Context, epoch uint64, home string, found account.Discovered, approved, kept bool) answer {
 	sel, err := s.Homes.Select(home, found.Directory, approved)
 	if err != nil {
 		return answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}
+	}
+	if kept {
+		sel.AddsNone()
 	}
 	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks}, nil,
 		Message{Type: TypeHome, Home: home, Account: found.Origin})

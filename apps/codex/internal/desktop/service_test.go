@@ -101,7 +101,8 @@ func (a *app) setupGone(t *testing.T) {
 }
 
 // request is a request as the chooser's page sends it, changed by edit:
-// in the epoch now unless body names one, its numbers as numbers.
+// in the epoch now unless body names one, its numbers as numbers and kept
+// as a bool.
 func (a *app) request(ctx context.Context, path string, body map[string]string, edit func(*http.Request)) *httptest.ResponseRecorder {
 	if _, ok := body["token"]; !ok {
 		body["token"] = a.Token
@@ -111,6 +112,9 @@ func (a *app) request(ctx context.Context, path string, body map[string]string, 
 		sent[k] = v
 		if n, err := strconv.ParseUint(v, 10, 64); err == nil && (k == "epoch" || k == "picks" || k == "run") {
 			sent[k] = n
+		}
+		if k == "kept" {
+			sent[k] = v == "true"
 		}
 	}
 	if _, ok := body["epoch"]; !ok {

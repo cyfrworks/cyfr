@@ -228,6 +228,18 @@ type Selection struct {
 	// selection (or is cyfr.run), rather than taken from an approval the
 	// entry held, which may have ended since.
 	approved bool
+	// addsNone is a selection of a CYFR the list held as it was pressed
+	// (AddsNone): committed once the list holds it no more, it adds none.
+	addsNone bool
+}
+
+// AddsNone makes s a selection that adds no entry: its commit is refused
+// once the list no longer holds its CYFR, as when a Forget ended between
+// the press and the commit.
+func (s *Selection) AddsNone() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addsNone = true
 }
 
 // Select begins selecting home, a remote CYFR's origin, with directory the
@@ -369,6 +381,9 @@ func (s *Selection) Commit(ceremony string) error {
 			if s.approved && cur.Project == "" {
 				cur.Directory = s.rec.Directory
 			}
+		case s.addsNone:
+			refused = fmt.Errorf("this computer no longer keeps %s", s.home)
+			return false
 		default:
 			rec := ClientRecord{Project: s.rec.Project, ClientID: s.rec.ClientID, Certificate: s.rec.Certificate}
 			if s.approved {

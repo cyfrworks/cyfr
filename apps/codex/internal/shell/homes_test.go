@@ -205,6 +205,35 @@ func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 	}
 }
 
+// A selection that adds none (a press of a row, or of the last one opened)
+// commits nothing once the list no longer holds its CYFR, as when a Forget
+// ended between the press and the commit; one the list holds commits as
+// any other.
+func TestASelectionThatAddsNoneAddsNoCYFR(t *testing.T) {
+	const a = "https://a.example.com"
+	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
+	unheld, _ := f.Select(a, "https://cyfr.run", true)
+	unheld.AddsNone()
+	if err := unheld.Commit(""); err == nil {
+		t.Fatal("a selection that adds none added a CYFR")
+	}
+	if l := listOf(t, f); len(l.Homes) != 0 || l.Last != "" {
+		t.Fatalf("the list is %+v", l)
+	}
+	added, _ := f.Select(a, "https://cyfr.run", true)
+	if err := added.Commit(""); err != nil {
+		t.Fatal(err)
+	}
+	kept, _ := f.Select(a, "https://cyfr.run", true)
+	kept.AddsNone()
+	if err := kept.Commit(""); err != nil {
+		t.Fatalf("a CYFR the list holds was refused: %v", err)
+	}
+	if l := listOf(t, f); l.Last != a || len(l.Homes) != 1 {
+		t.Fatalf("the list is %+v", l)
+	}
+}
+
 // A file that is not this list is refused whole and left as it is.
 func TestAListItCannotReadIsRefusedAndKept(t *testing.T) {
 	for name, raw := range map[string]string{

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/shell"
 )
 
@@ -128,6 +129,33 @@ func held(t *testing.T, f shell.Homes, home string) (shell.ClientRecord, bool) {
 	}
 	rec, ok := l.Homes[home]
 	return rec, ok
+}
+
+// A row the rail showed before its Forget ended, pressed after, adds
+// nothing: a press of a CYFR this computer keeps is answered with a
+// sentence, asks the CYFR nothing and lists it no more; Connect is the one
+// way to add it again.
+func TestAPressOfARowForgottenMeanwhileAddsNothing(t *testing.T) {
+	const home = "https://work.example.com"
+	a := newApp(t, t.TempDir(), offline())
+	seed(t, a.Homes, home, shell.ClientRecord{Directory: account.DefaultDirectory})
+	a.Forget(home)
+	for _, id := range a.erases(t, 1) {
+		a.Erased(id, true)
+	}
+	a.quiet(t)
+	if _, ok := held(t, a.Homes, home); ok {
+		t.Fatal("the CYFR is still listed")
+	}
+	asked := a.discovered.Load()
+	got := a.post(t, "/bootstrap/connect", map[string]string{"address": home, "kept": "true"})
+	if !strings.Contains(got.Error, "no longer keeps "+home) {
+		t.Fatalf("the press answered %+v", got)
+	}
+	a.quiet(t)
+	if _, ok := held(t, a.Homes, home); ok || a.discovered.Load() != asked {
+		t.Fatalf("the press added the CYFR (%v) or asked it (%d)", ok, a.discovered.Load()-asked)
+	}
 }
 
 // Forget marks the CYFR being forgotten, so nothing opens or adds it, asks
