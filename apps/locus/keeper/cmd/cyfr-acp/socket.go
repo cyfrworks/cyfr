@@ -89,7 +89,10 @@ func (d *driver) socketRequest(s *toolSocket, conn net.Conn, r toolsock.Request)
 		for _, t := range d.tools {
 			tools = append(tools, toolsock.Tool{Name: t.Name, Description: t.Description, InputSchema: t.Parameters})
 		}
-		_ = reply(conn, toolsock.Listing{Tools: tools})
+		// A listing its client was not handed does not qualify the start.
+		if reply(conn, toolsock.Listing{Tools: tools}) != nil {
+			return nil
+		}
 		d.listed = true
 		if st := d.starting; st != nil && st.stage == stageListing {
 			return d.started(st)
@@ -122,6 +125,9 @@ func (d *driver) socketRequest(s *toolSocket, conn net.Conn, r toolsock.Request)
 		return refuse("This call's arguments are past what CYFR takes in one call; make it smaller.")
 	}
 	s.held[ask] = conn
+	if d.turn != nil {
+		d.claim(arguments)
+	}
 	return d.c.Emit(e)
 }
 

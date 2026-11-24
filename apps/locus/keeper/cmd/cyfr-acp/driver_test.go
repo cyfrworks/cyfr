@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -495,9 +497,6 @@ func TestAnAskIsHeldUntilItsAnswerAndAPermissionIsNoAnswer(t *testing.T) {
 	postText(s, "stp_read", "trn_1", "read it")
 	var ask map[string]any
 	for _, e := range s.until("ask") {
-		if e["t"] == "own" {
-			t.Fatalf("CYFR's call is no own tool: %v", e)
-		}
 		ask = e
 	}
 	if ask["name"] != "files" || !brainwire.IsUUID(ask["ask"].(string)) || ask["work"] != "trn_1" || ask["gen"] != float64(3) ||
@@ -516,6 +515,9 @@ func TestAnAskIsHeldUntilItsAnswerAndAPermissionIsNoAnswer(t *testing.T) {
 	got := s.until("idle")
 	if said := saidOf(got); said != `permission selected allow; the tool answered "three lines", error false` {
 		t.Fatalf("the permission is allowed and the answer reaches the program as the call's result: %q", said)
+	}
+	if own := ofType(got, "own"); len(own) != 0 || strings.Contains(s.output(), `"t":"own"`) {
+		t.Fatalf("CYFR's call, matched to its socket call, is no own tool: %v", own)
 	}
 	s.send(map[string]any{"t": "answer", "id": "stp_again", "ask": ask["ask"], "content": "x", "is_error": false})
 	if e := s.expect("refused"); e["id"] != "stp_again" {
@@ -571,9 +573,11 @@ func TestAStubThatNeverListsFailsTheStart(t *testing.T) {
 	}
 }
 
-// The program's own tools are `own`, by kind, or by title where the kind
-// is other, each started and ended once; CYFR's own calls are not, by
-// their title or by their server's name.
+// The program's own tools are `own`, by their ACP kind, or an MCP call by
+// its server and tool in a fixed form, never by a title, which may carry a
+// folder's path. A call is CYFR's only by the driver's own record of a
+// call on its socket: one titled as CYFR's, or a person's server named
+// cyfr, is shown as the program's own.
 func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
@@ -582,10 +586,12 @@ func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 	for _, e := range ofType(s.until("idle"), "own") {
 		seen = append(seen, e["name"].(string)+":"+e["phase"].(string))
 	}
-	want := []string{"read:start", "read:end", "execute:start", "execute:end", "Run mine_tool:start", "Run mine_tool:end",
-		"Run broken_tool:start", "Run broken_tool:end"}
-	if !reflect.DeepEqual(seen, want) {
-		t.Fatalf("own tools by name, CYFR's left out: %v", seen)
+	var want []string
+	for _, name := range []string{"read", "mcp:mine/reverse_text", "other", "other", "mcp:cyfr/files", "execute", "other", "other"} {
+		want = append(want, name+":start", name+":end")
+	}
+	if !reflect.DeepEqual(seen, want) || strings.Contains(s.output(), "/home/x") || strings.Contains(s.output(), "Run m") {
+		t.Fatalf("each own tool by its kind or its server and tool, none hidden by its title or its server's name: %v", seen)
 	}
 }
 
@@ -857,8 +863,8 @@ func TestModelsAreListedWithOrWithoutASessionAndTheListingForgotten(t *testing.T
 	if len(databases)+len(brains) != 0 {
 		t.Fatalf("the listing session is forgotten: %v %v", databases, brains)
 	}
-	if _, err := os.Stat(listingRecord(s.home)); !brainwire.Absent(err) {
-		t.Fatalf("no listing is left to forget: %v", err)
+	if records, err := os.ReadDir(listingRecords(s.home)); len(records) != 0 || (err != nil && !brainwire.Absent(err)) {
+		t.Fatalf("no listing is left to forget: %v %v", records, err)
 	}
 	s.send(startCommand("", map[string]any{}, filesTool))
 	s.expect("started")
@@ -963,5 +969,233 @@ func TestACallCYFRCannotShowIsAnsweredAnErrorAtOnce(t *testing.T) {
 	postText(s, "stp_after", "trn_1", "hello")
 	if asks := ofType(s.until("idle"), "ask"); len(asks) != 0 || strings.Contains(s.output(), `"t":"ask"`) {
 		t.Fatalf("no ask is shown: %v", asks)
+	}
+}
+
+// A steer written before a call of CYFR's reaches the socket, and confirmed
+// only after: the ask is on the wire at once, before the post's answer, so
+// neither waits on the other; the confirmation then comes, and the ask's
+// answer reaches the program.
+func TestAnAskAfterASteerIsShownBeforeTheSteersAnswer(t *testing.T) {
+	t.Setenv("FAKE_CONFIRM_LATE", "1")
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_first", "trn_1", "callsteer")
+	s.expect("text")
+	s.send(map[string]any{"t": "post", "id": "stp_steer", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "the steer"}}})
+	ask := s.expect("ask")
+	if e := s.expect("accepted"); e["id"] != "stp_steer" {
+		t.Fatalf("the steer is confirmed after the ask: %v", e)
+	}
+	s.send(map[string]any{"t": "answer", "id": "stp_answer", "ask": ask["ask"], "content": "for a", "is_error": false})
+	s.expect("accepted")
+	got := s.until("idle")
+	if saidOf(got) != `Starting. Read the steer: the steer; the tool answered "for a"` || fmt.Sprint(got[len(got)-1]["answered"]) != "[stp_first stp_steer]" {
+		t.Fatalf("the answer reaches the program and the turn names both posts: %v", got)
+	}
+}
+
+// A steer while a call of the program's is open, before it reaches the
+// socket: Antigravity answers the earlier prompt at once with the counts
+// so far, which are counted, and the turn goes on with the call.
+func TestASteerWhileACallIsOpenCountsTheEarlierPrompt(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_first", "trn_1", "callsteer")
+	s.expect("text")
+	s.send(map[string]any{"t": "post", "id": "stp_steer", "work": "trn_1", "content": []any{map[string]any{"type": "text", "text": "the steer"}}})
+	before := s.until("ask")
+	ask := before[len(before)-1]
+	usages := ofType(before, "usage")
+	if accepted := ofType(before, "accepted"); len(accepted) != 1 || accepted[0]["id"] != "stp_steer" || len(usages) != 1 ||
+		!reflect.DeepEqual(usages[0]["models"], []any{map[string]any{"model": "fake-neon", "counts": map[string]any{
+			"input_tokens": float64(98), "output_tokens": float64(9), "cache_read_tokens": float64(3), "cache_write_tokens": float64(0)}}}) {
+		t.Fatalf("the steer is accepted and the earlier prompt's counts so far are counted: %v", before)
+	}
+	s.send(map[string]any{"t": "answer", "id": "stp_answer", "ask": ask["ask"], "content": "for a", "is_error": false})
+	s.expect("accepted")
+	got := s.until("idle")
+	later := ofType(got, "usage")
+	if len(later) != 1 || later[0]["result"] == usages[0]["result"] || fmt.Sprint(got[len(got)-1]["answered"]) != "[stp_first stp_steer]" ||
+		saidOf(got) != `Starting. Read the steer: the steer; the tool answered "for a"` {
+		t.Fatalf("the turn goes on to the later prompt's own counts: %v", got)
+	}
+}
+
+// A forget follows no link: a folder on the way to a session's file, from
+// the program's folder down, or the file itself, that is a link refuses
+// the forget, and nothing is removed through it.
+func TestForgetFollowsNoLink(t *testing.T) {
+	session := "5f0e6c0a-0d7e-4b8e-9c1e-6b8b6f0a1d2e"
+	for _, linked := range []string{".gemini", ".gemini/antigravity-cli/brain", ".gemini/antigravity-cli/annotations/" + session + ".pbtxt"} {
+		t.Run(linked, func(t *testing.T) {
+			s := startDriver(t)
+			elsewhere := t.TempDir()
+			real := filepath.Join(elsewhere, "real")
+			cli := filepath.Join(s.home, ".gemini", "antigravity-cli")
+			if linked == ".gemini" {
+				cli = filepath.Join(real, "antigravity-cli")
+			}
+			for _, dir := range []string{filepath.Join(cli, "brain", session), filepath.Join(cli, agySessionDatabases), filepath.Join(cli, "annotations")} {
+				_ = os.MkdirAll(dir, 0o700)
+			}
+			kept := []string{filepath.Join(cli, "brain", session, "transcript.jsonl"), filepath.Join(cli, agySessionDatabases, session+".db"),
+				filepath.Join(cli, "annotations", session+".pbtxt")}
+			for _, f := range kept {
+				_ = os.WriteFile(f, []byte("FAKE"), 0o600)
+			}
+			target := filepath.Join(s.home, linked)
+			switch linked {
+			case ".gemini":
+			case ".gemini/antigravity-cli/brain":
+				real = filepath.Join(elsewhere, "brain")
+				_ = os.Rename(filepath.Join(cli, "brain"), real)
+				kept[0] = filepath.Join(real, session, "transcript.jsonl")
+			default:
+				real = filepath.Join(elsewhere, "secret")
+				_ = os.Rename(kept[2], real)
+				kept[2] = real
+			}
+			if err := os.Symlink(real, target); err != nil {
+				t.Fatal(err)
+			}
+			s.expect("hello")
+			s.send(map[string]any{"t": "forget", "id": "obx_1", "session": session})
+			if e := s.expect("refused"); e["id"] != "obx_1" || !strings.Contains(e["reason"].(string), "link") {
+				t.Fatalf("a link on the way refuses the forget: %v", e)
+			}
+			for _, f := range kept {
+				if _, err := os.Stat(f); err != nil {
+					t.Fatalf("nothing is removed through a link: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// Two listings of one home keep a record each, each holding its record's
+// kernel lock for its life: a listing removes its own session; another
+// listing's record whose lock is held is a live listing, left alone with
+// its session; an interrupted one's, its holder gone and so its lock
+// released, is removed with its session.
+func TestAListingRemovesOnlyItsOwnSession(t *testing.T) {
+	s := startDriver(t)
+	cli := filepath.Join(s.home, ".gemini", "antigravity-cli")
+	made := func(id string) string {
+		_ = os.MkdirAll(filepath.Join(cli, "brain", id), 0o700)
+		_ = os.MkdirAll(filepath.Join(cli, agySessionDatabases), 0o700)
+		db := filepath.Join(cli, agySessionDatabases, id+".db")
+		_ = os.WriteFile(db, []byte("FAKE"), 0o600)
+		return db
+	}
+	live, dead := "11111111-0d7e-4b8e-9c1e-6b8b6f0a1d2e", "22222222-0d7e-4b8e-9c1e-6b8b6f0a1d2e"
+	liveDB, deadDB := made(live), made(dead)
+	_ = os.MkdirAll(listingRecords(s.home), 0o700)
+	record := func(name, session string, hold bool) {
+		f, err := os.OpenFile(filepath.Join(listingRecords(s.home), name), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString(session)
+		if hold {
+			t.Cleanup(func() { f.Close() })
+			return
+		}
+		// Its holder ends: the kernel releases the lock.
+		f.Close()
+	}
+	record("live-listing", live, true)
+	record("dead-listing", dead, false)
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "mdl_1"})
+	s.expect("models")
+	if _, err := os.Stat(liveDB); err != nil {
+		t.Fatalf("a live listing keeps its session: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(listingRecords(s.home), "live-listing")); err != nil {
+		t.Fatalf("a live listing keeps its record: %v", err)
+	}
+	if _, err := os.Lstat(deadDB); !brainwire.Absent(err) {
+		t.Fatalf("an interrupted listing's session is removed: %v", err)
+	}
+	records, _ := os.ReadDir(listingRecords(s.home))
+	databases, _ := filepath.Glob(filepath.Join(cli, agySessionDatabases, "*.db"))
+	if len(records) != 1 || len(databases) != 1 {
+		t.Fatalf("the listing's own session and record are gone, the live one's alone stay: %v %v", records, databases)
+	}
+}
+
+// A session/new answer naming no session id CYFR can name is no sign-in:
+// the start ends with its words, and a listing is refused saying nothing
+// of the account.
+func TestASessionWithNoIDIsNotSignedIn(t *testing.T) {
+	t.Setenv("FAKE_BAD_SESSION", "1")
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "mdl_1"})
+	if e := s.expect("refused"); e["id"] != "mdl_1" || e["account"] != nil {
+		t.Fatalf("the listing is refused, saying nothing of the account: %v", e)
+	}
+	s.send(startCommand("", map[string]any{}, filesTool))
+	if status := s.exit(); status != 1 || strings.Contains(s.output(), "signed_in") || !strings.Contains(s.stderr.String(), "started no session") {
+		t.Fatalf("the start ends with its words: %d %q", status, s.stderr.String())
+	}
+}
+
+// A listing the driver could not hand its client does not qualify the
+// start: its tools did not reach the program.
+func TestAListingNotHandedDoesNotStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GEMINI_HOME", "")
+	t.Setenv(fakeEnv, "1")
+	t.Setenv("FAKE_NO_LIST", "1")
+	s := startDriverWith(t, antigravity, home, func(d *driver) { d.listWait = 300 * time.Millisecond })
+	s.expect("hello")
+	// A listing past what the socket holds, which a client that never reads
+	// cannot be handed.
+	big := map[string]any{"name": "big", "description": strings.Repeat("d", 900_000), "parameters": map[string]any{"type": "object"}}
+	s.send(startCommand("", map[string]any{}, big))
+	var conn net.Conn
+	for deadline := time.Now().Add(10 * time.Second); conn == nil && time.Now().Before(deadline); {
+		if c, err := net.Dial("unix", "@"+s.d.socketName); err == nil {
+			conn = c
+		}
+	}
+	if conn == nil {
+		t.Fatal("the socket was never bound")
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte(`{"op":"list"}` + "\n"))
+	if status := s.exit(); status != 1 || strings.Contains(s.output(), `"started"`) {
+		t.Fatalf("the start ends without its tools reaching the program: %d %q", status, s.stderr.String())
+	}
+}
+
+// A call whose kind is none the program gives a call of a stub server's is
+// shown as the program's own while it runs, its start at once, its end
+// when it ends: the program's own command, and a person's server named
+// cyfr through the program's own call_mcp_tool.
+func TestAnOwnToolIsShownWhileItRuns(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_running", "trn_1", "running")
+	var seen []string
+	for _, e := range s.until("idle") {
+		switch e["t"] {
+		case "own":
+			seen = append(seen, e["name"].(string)+":"+e["phase"].(string))
+		case "text":
+			if e["delta"] == "running. " {
+				seen = append(seen, "text")
+			}
+		}
+	}
+	want := []string{"execute:start", "mcp:cyfr/files:start", "text", "execute:end", "mcp:cyfr/files:end"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("each own tool starts while it runs and ends when it ends: %v", seen)
 	}
 }

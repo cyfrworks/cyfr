@@ -83,13 +83,6 @@ type steer struct {
 	prompt *prompt
 }
 
-// ownCall is one of the program's own tool calls, by its call id.
-type ownCall struct {
-	name           string
-	relay, started bool
-	ended          bool
-}
-
 type driver struct {
 	p              *profile
 	harnessCommand []string
@@ -130,6 +123,9 @@ type driver struct {
 	message  string
 	text     strings.Builder
 	own      map[string]*ownCall
+	// unclaimed are the arguments of the turn's socket calls no tool_call
+	// update was matched to yet (own.go).
+	unclaimed []any
 }
 
 func newDriver(p *profile, command []string, c *brainwire.Conn, home string) *driver {
@@ -582,7 +578,6 @@ func (d *driver) update(params json.RawMessage) error {
 		CallID   string          `json:"toolCallId"`
 		Status   string          `json:"status"`
 		ToolKind string          `json:"kind"`
-		Title    string          `json:"title"`
 		RawInput json.RawMessage `json:"rawInput"`
 	}
 	if json.Unmarshal(n.Update, &u) != nil {
@@ -616,7 +611,7 @@ func (d *driver) update(params json.RawMessage) error {
 		d.text.WriteString(block.Text)
 		return d.c.EmitText(d.event("text").Set("message", id), "delta", block.Text)
 	case "tool_call", "tool_call_update":
-		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Title, u.RawInput)
+		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.RawInput)
 	}
 	return nil
 }
@@ -639,41 +634,6 @@ func (d *driver) said() error {
 	d.message = ""
 	d.text.Reset()
 	return d.c.EmitText(d.event("said").Set("message", id), "text", text)
-}
-
-// ownUpdate shows the program's own tool calls by name: started on first
-// sight while pending or running, ended once completed or failed. CYFR's
-// own calls are the socket's asks, never `own`.
-func (d *driver) ownUpdate(callID, status, kind, title string, rawInput json.RawMessage) error {
-	if callID == "" {
-		return nil
-	}
-	call, seen := d.own[callID]
-	if !seen {
-		name := kind
-		if name == "" || name == "other" {
-			name = title
-		}
-		if name == "" {
-			name = "tool"
-		}
-		call = &ownCall{name: name, relay: d.p.relayCall(title, rawInput)}
-		d.own[callID] = call
-	}
-	if call.relay || call.ended {
-		return nil
-	}
-	if !call.started {
-		call.started = true
-		if err := d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "start")); err != nil {
-			return err
-		}
-	}
-	if status == "completed" || status == "failed" {
-		call.ended = true
-		return d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "end"))
-	}
-	return nil
 }
 
 // answered is a prompt's answer. A steer waits on it: the earlier prompt's
@@ -741,6 +701,9 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 	if !last {
 		return nil
 	}
+	if err := d.flushOwn(); err != nil {
+		return err
+	}
 	if err := d.said(); err != nil {
 		return err
 	}
@@ -770,6 +733,7 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 	idle := d.event("idle").Set("answered", t.posts).Set("stop", stop)
 	d.turn = nil
 	d.own = map[string]*ownCall{}
+	d.unclaimed = nil
 	return d.c.Emit(idle)
 }
 
@@ -812,4 +776,5 @@ func (d *driver) Close() {
 	d.message = ""
 	d.text.Reset()
 	d.own = map[string]*ownCall{}
+	d.unclaimed = nil
 }

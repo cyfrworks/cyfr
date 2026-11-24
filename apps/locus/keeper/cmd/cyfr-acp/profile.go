@@ -44,11 +44,26 @@ type profile struct {
 	// instructions lead the session's first prompt (instructions.go).
 	appends          func(capabilities json.RawMessage) bool
 	instructionsMeta func(system string) map[string]any
-	// relayCall says a tool_call update is a call of CYFR's own server,
-	// which the socket shows as an ask, so it is never `own`.
-	relayCall func(title string, rawInput json.RawMessage) bool
-	// sessionFiles are the files that hold one session's content in the
-	// folder, every one a forget removes.
+	// callArguments are the argument objects a tool_call's rawInput may
+	// show a call with: a call of CYFR's is matched to one of them by the
+	// arguments its socket call carries (driver.go's ownUpdate), and to
+	// nothing the program names or titles.
+	callArguments func(rawInput json.RawMessage) []json.RawMessage
+	// stubKinds are the ACP kinds the program gives a call that reaches a
+	// stub server, CYFR's among them, read from the update's kind field: a
+	// call of one of them waits to be matched to the socket, and is shown
+	// as the program's own only at its end; a call of any other kind is the
+	// program's own, shown while it runs (own.go). A program whose
+	// announcement gives no kind field shows every own call at its end, its
+	// stated lack.
+	stubKinds map[string]bool
+	// mcpCall is the server and tool a tool_call's rawInput names when it
+	// is a call of an MCP server's, shown as `mcp:<server>/<tool>`.
+	mcpCall func(rawInput json.RawMessage) (server, tool string, ok bool)
+	// sessionRoot is the program's folder in the home, and sessionFiles the
+	// files under it that hold one session's content, every one a forget
+	// removes; nothing on the way from the root is followed through a link.
+	sessionRoot  func(home string) string
 	sessionFiles func(home, session string) []string
 	// counted is the accounting of a prompt's counts that read.
 	counted string
@@ -105,16 +120,38 @@ var antigravity = &profile{
 	instructionsMeta: func(system string) map[string]any {
 		return map[string]any{"antigravity": map[string]any{"systemPrompt": map[string]any{"append": system}}}
 	},
-	// Antigravity names a stdio server's tool `mcp_<server>_<tool>` and
-	// titles its call "Run mcp_<server>_<tool>"; a call through its own
-	// call_mcp_tool names the server in its input.
-	relayCall: func(title string, rawInput json.RawMessage) bool {
+	// Seen in Antigravity 1.5.16: a stdio server's tool is shown with its
+	// arguments and a required toolSummary of Antigravity's own, which it
+	// drops before it calls the server; its own call_mcp_tool shows the
+	// call as {ServerName, ToolName, Arguments}.
+	callArguments: func(rawInput json.RawMessage) []json.RawMessage {
+		var input map[string]json.RawMessage
+		if json.Unmarshal(rawInput, &input) != nil || input == nil {
+			return nil
+		}
+		var out []json.RawMessage
+		if arguments, ok := input["Arguments"]; ok {
+			out = append(out, arguments)
+		}
+		delete(input, "toolSummary")
+		if shown, err := json.Marshal(input); err == nil {
+			out = append(out, shown)
+		}
+		return out
+	},
+	// Seen in Antigravity 1.5.16: a stdio server's tool is kind other ("Run
+	// mcp_<server>_<tool>"); its own tools are read, edit, execute and the
+	// rest, and a person's server through its call_mcp_tool is execute.
+	stubKinds: map[string]bool{"other": true},
+	mcpCall: func(rawInput json.RawMessage) (string, string, bool) {
 		var input struct {
 			ServerName string `json:"ServerName"`
+			ToolName   string `json:"ToolName"`
 		}
-		_ = json.Unmarshal(rawInput, &input)
-		return strings.HasPrefix(title, "Run mcp_"+relayServer+"_") || input.ServerName == relayServer
+		ok := json.Unmarshal(rawInput, &input) == nil && input.ServerName != "" && input.ToolName != ""
+		return input.ServerName, input.ToolName, ok
 	},
+	sessionRoot: geminiHome,
 	sessionFiles: func(home, session string) []string {
 		cli := filepath.Join(geminiHome(home), "antigravity-cli")
 		return []string{

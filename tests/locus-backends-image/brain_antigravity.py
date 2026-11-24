@@ -276,8 +276,10 @@ def main():
         answered = d.until("idle")
         expect(answered[0] == {"t": "accepted", "id": "stp_answer_1"}
                and [e["text"] for e in answered if e["t"] == "said"] == ["The file says: three lines"]
-               and answered[-1]["answered"] == ["stp_post_4"],
-               "the answer reaches the program as the call's result, and the later post was not written", answered)
+               and answered[-1]["answered"] == ["stp_post_4"]
+               and not [e for e in answered if e["t"] == "own"],
+               "the answer reaches the program as the call's result, CYFR's call is no own tool, and the later "
+               "post was not written", answered)
         d.send({"t": "post", "id": "stp_post_5", "work": WORK, "content": [{"type": "text", "text": "say hello"}]})
         later = d.until("idle")
         expect(later[0] == {"t": "accepted", "id": "stp_post_5"} and later[-1]["answered"] == ["stp_post_5"]

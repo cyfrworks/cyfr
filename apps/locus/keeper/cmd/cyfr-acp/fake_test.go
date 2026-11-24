@@ -49,6 +49,8 @@ import (
 //	stop:R    answers with the stop reason R
 //	rpcerr:C:M  answers with the JSON-RPC error C, its message M after a canary
 //	die       ends the process with status 3
+//	running   runs its own command and a person's server named cyfr, saying so while they run
+//	callsteer opens a call of CYFR's, takes a steer while it is open, then calls the socket
 //
 // It writes a canary to its standard error and its tier, which the driver
 // must never pass on. FAKE_SIGNED_OUT answers every session and prompt
@@ -59,7 +61,9 @@ import (
 // FAKE_NO_RESUME and FAKE_NO_LOAD change initialize's answer, and
 // FAKE_NO_APPEND drops its systemPrompt place; FAKE_MODE is the session's
 // mode; FAKE_NO_LIST never lists; FAKE_STEER_FAIL answers a second prompt
-// -32603 at once; FAKE_HOLD keeps running after its input ends, until a
+// -32603 at once, and FAKE_CONFIRM_LATE confirms a steer only after the
+// turn's call reached the socket; FAKE_BAD_SESSION answers session/new with
+// no session id it could name; FAKE_HOLD keeps running after its input ends, until a
 // TERM. Each cancel and TERM is logged in `$HOME/fake-acp.log`.
 const fakeEnv = "CYFR_FAKE_ACP"
 
@@ -130,6 +134,8 @@ func fakeACP() int {
 		current         map[string]string
 		active          json.RawMessage
 		steered         chan string
+		callOpen        bool
+		unconfirmed     json.RawMessage
 	}
 	state.current = map[string]string{"model": "fake-neon", "thought_level": "high", "mode": "default"}
 	if mode := os.Getenv("FAKE_MODE"); mode != "" {
@@ -230,8 +236,10 @@ func fakeACP() int {
 				reply("no steer came")
 			}
 		case strings.Contains(words, "read"):
+			// Antigravity shows the call's arguments with a toolSummary of its
+			// own, which it drops before it calls the server.
 			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_1", "name": "mcp_cyfr_files", "status": "in_progress",
-				"kind": "other", "title": "Run mcp_cyfr_files", "rawInput": map[string]any{"path": "notes.txt", "toolSummary": "Read notes"}}
+				"kind": "other", "title": "Run mcp_cyfr_files", "rawInput": json.RawMessage(`{"path":"notes.txt","count":12345678901234567890,"toolSummary":"Read notes"}`)}
 			update(call)
 			call["sessionUpdate"], call["status"] = "tool_call_update", "pending"
 			update(call)
@@ -253,6 +261,43 @@ func fakeACP() int {
 			call["status"] = "completed"
 			update(call)
 			reply(fmt.Sprintf("permission %s %s; the tool answered %q, error %v", p.Result.Outcome.Outcome, p.Result.Outcome.OptionID, result.Text, result.IsError))
+		case strings.Contains(words, "callsteer"):
+			// A call of CYFR's opens, and a steer comes while it is open.
+			chunk("Starting. ")
+			call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_2", "name": "mcp_cyfr_files", "status": "in_progress",
+				"kind": "other", "title": "Run mcp_cyfr_files", "rawInput": json.RawMessage(`{"path":"a.txt","toolSummary":"Read a"}`)}
+			update(call)
+			state.Lock()
+			state.callOpen = true
+			state.Unlock()
+			var steer string
+			select {
+			case steer = <-state.steered:
+			case <-time.After(5 * time.Second):
+			}
+			results := make(chan toolsock.Result, 1)
+			go func() {
+				var result toolsock.Result
+				if toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(`{"path":"a.txt"}`)}, &result) != nil {
+					result.Text = "unreachable"
+				}
+				results <- result
+			}()
+			state.Lock()
+			late := state.unconfirmed
+			state.unconfirmed = nil
+			state.Unlock()
+			if late != nil {
+				time.Sleep(200 * time.Millisecond) // sleep-ok: the call reaches the driver before the steer is confirmed
+				answer(late, map[string]any{"stopReason": "end_turn"})
+			}
+			result := <-results
+			state.Lock()
+			state.callOpen = false
+			state.Unlock()
+			call["sessionUpdate"], call["status"] = "tool_call_update", "completed"
+			update(call)
+			reply(fmt.Sprintf("Read the steer: %s; the tool answered %q", steer, result.Text))
 		case strings.Contains(words, "tools"):
 			state.Lock()
 			listed := strings.Join(state.listed, ",")
@@ -263,6 +308,23 @@ func fakeACP() int {
 			given, _ := json.Marshal(map[string]any{"session": state.opened, "set": state.set, "prompt": params})
 			state.Unlock()
 			reply(string(given))
+		case strings.Contains(words, "running"):
+			// Its own command, and a person's server named cyfr through its
+			// own call_mcp_tool, each running while the turn says so.
+			calls := []map[string]any{
+				{"sessionUpdate": "tool_call", "toolCallId": "call_run", "status": "in_progress", "kind": "execute", "title": "Run ls /home/x", "rawInput": map[string]any{"CommandLine": "ls"}},
+				{"sessionUpdate": "tool_call", "toolCallId": "call_theirs", "status": "in_progress", "kind": "execute", "title": "MCP Tool files",
+					"rawInput": map[string]any{"ServerName": "cyfr", "ToolName": "files", "Arguments": map[string]any{"path": "x"}}},
+			}
+			for _, call := range calls {
+				update(call)
+			}
+			chunk("running. ")
+			for _, call := range calls {
+				call["sessionUpdate"], call["status"] = "tool_call_update", "completed"
+				update(call)
+			}
+			reply("done")
 		case strings.Contains(words, "own"):
 			for _, call := range []map[string]any{
 				{"toolCallId": "call_read", "kind": "read", "title": "File notes.md", "rawInput": map[string]any{"Path": "/home/x/notes.md"}},
@@ -270,6 +332,8 @@ func fakeACP() int {
 				{"toolCallId": "call_other", "kind": "other", "title": "Run mine_tool", "rawInput": map[string]any{}},
 				{"toolCallId": "call_cyfr", "kind": "other", "title": "Run mcp_cyfr_files", "rawInput": map[string]any{"path": "x"}},
 				{"toolCallId": "call_cyfr_by_name", "kind": "execute", "title": "MCP Tool files", "rawInput": map[string]any{"ServerName": "cyfr", "ToolName": "files"}},
+				{"toolCallId": "call_odd", "kind": "execute", "title": "MCP Tool /home/x/secret", "rawInput": map[string]any{"ServerName": "../home x", "ToolName": "t"}},
+				{"toolCallId": "call_path", "kind": "/home/x/folder", "title": "File /home/x/folder/notes.md", "rawInput": map[string]any{}},
 			} {
 				call["sessionUpdate"], call["status"] = "tool_call", "in_progress"
 				update(call)
@@ -380,6 +444,12 @@ func fakeACP() int {
 				state.opened = m.Params
 				state.Unlock()
 				files(state.session)
+				if os.Getenv("FAKE_BAD_SESSION") != "" {
+					result := sessionResult()
+					result["sessionId"] = "session one"
+					answer(m.ID, result)
+					continue
+				}
 				answer(m.ID, sessionResult())
 				listSoon(m.Params)
 			case m.Method == "session/resume":
@@ -440,11 +510,27 @@ func fakeACP() int {
 						failWith(m.ID, -32603, "HARNESS-WORDS the steer was not taken")
 						continue
 					}
-					// The earlier prompt answers at once; this one carries
-					// the turn on.
+					// The earlier prompt answers at once, with the counts so far
+					// while a call is open and none otherwise, as Antigravity
+					// 1.5.16 was measured answering; this one carries the turn
+					// on. FAKE_CONFIRM_LATE confirms only once the turn's call
+					// has reached the driver, an order the driver must take
+					// though Antigravity was not seen to make it.
 					state.active = m.ID
+					open := state.callOpen
+					late := os.Getenv("FAKE_CONFIRM_LATE") != ""
+					if late {
+						state.unconfirmed = earlier
+					}
 					state.Unlock()
-					answer(earlier, map[string]any{"stopReason": "end_turn"})
+					switch {
+					case late:
+					case open:
+						answer(earlier, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 98, "outputTokens": 9,
+							"cachedReadTokens": 3, "cachedWriteTokens": 0, "thoughtTokens": 2, "totalTokens": 110}})
+					default:
+						answer(earlier, map[string]any{"stopReason": "end_turn"})
+					}
 					state.steered <- words
 					continue
 				}

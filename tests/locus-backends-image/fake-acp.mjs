@@ -33,8 +33,10 @@
 //   (`session/request_permission`), the call's arguments without the
 //   `toolSummary` agy adds, and replies with the answer; `slow` streams a
 //   first part and waits for a second prompt, which steers the turn: the
-//   earlier prompt answers `end_turn` at once with no usage, and the turn
-//   replies naming the steer. Each reply streams as agent message chunks,
+//   earlier prompt answers `end_turn` at once, with no usage, or with the
+//   counts so far while a call of a server's is open (as agy 1.5.16 was
+//   measured answering, in both orders), and the turn replies naming the
+//   steer. Each reply streams as agent message chunks,
 //   then the prompt's answer with its usage. `session/cancel` answers the
 //   open prompt `cancelled`.
 // - Each session's files are agy's: `~/.gemini/antigravity-cli/brain/<id>/`,
@@ -190,6 +192,7 @@ const offered = () => [...servers.entries()].flatMap(([name, s]) => s.tools.map(
 // ---- A turn ----
 let active = null;
 let steered = null;
+let callOpen = false;
 const usage = (text) => ({ inputTokens: 12, outputTokens: text.length + 1, cachedReadTokens: 5, cachedWriteTokens: 2, thoughtTokens: 1, totalTokens: 20 + text.length });
 
 function finish(result) {
@@ -233,15 +236,18 @@ async function turn(words, params, earlier) {
     const call = { sessionUpdate: 'tool_call', toolCallId: `call_${crypto.randomInt(2 ** 47)}`, name: `mcp_${name}_files`, args: { ...args, toolSummary: 'Read notes' },
       status: 'in_progress', kind: 'other', title: `Run mcp_${name}_files`, rawInput: { ...args, toolSummary: 'Read notes' } };
     update(call);
+    callOpen = true;
     update({ ...call, sessionUpdate: 'tool_call_update', status: 'pending' });
     const permission = await ask('session/request_permission', { sessionId: session.id, toolCall: { ...call, status: 'pending' },
       options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] });
     if (permission.result?.outcome?.optionId !== 'allow') {
+      callOpen = false;
       update({ ...call, sessionUpdate: 'tool_call_update', status: 'failed' });
       return reply('The call was not allowed.');
     }
     update({ ...call, sessionUpdate: 'tool_call_update', status: 'in_progress' });
     const called = await held.request('tools/call', { name: 'files', arguments: args });
+    callOpen = false;
     update({ ...call, sessionUpdate: 'tool_call_update', status: 'completed' });
     const said = (called.result?.content || []).map((b) => b.text).join('');
     reply(called.result?.isError ? `CYFR refused: ${said}` : `The file says: ${said}`);
@@ -308,7 +314,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       if (active !== null) {
         const before = active;
         active = message.id;
-        answer(before, { stopReason: 'end_turn' });
+        answer(before, callOpen ? { stopReason: 'end_turn', usage: usage('') } : { stopReason: 'end_turn' });
         steered?.(words);
         return undefined;
       }
