@@ -56,6 +56,15 @@
 // menu, which main draws and confirms with the person, then leaves that
 // CYFR if it is open, and only then tells cyfr to forget it.
 //
+// Update CYFR is main's too: cyfr serves its page and its read alone, and
+// main shows it in a window of its own over the content, in the app's own
+// store, from the rail's foot, or by itself as cyfr is ready when a record
+// of an update waits to be shown (ready's record). Its yes is a navigation
+// main answers (ACTS, window "update"), naming the offer shown by its
+// number, which main sends cyfr as update; cyfr starts only the offer it
+// holds under that number, once. Its window's close is told to cyfr
+// (update-closed). The box's screen has none of it in this part.
+//
 // The box's screen (`screen`, its project; app.js) is the six-word road
 // with no chooser: cyfr's first page is the device's own, at loopback's
 // root, and the content window shows it again wherever the chooser would
@@ -126,6 +135,9 @@
 //   erase {id, home, account}  clear that store, idempotently, and tell
 //                            cyfr erased with id and whether it is empty
 //   rail {url}               show the rail's page beside the content
+//   update {url}             show Update CYFR in its window over the
+//                            content, or bring that window forward
+//   unupdate                 close Update CYFR's window
 //   menu {home}              the row's menu of the CYFR at home, which
 //                            answers forget-confirmed once the person
 //                            chose Forget and confirmed it
@@ -159,7 +171,7 @@
 //                            the content window; answers picked with id
 //   say {line}
 
-import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, parse, railPress} from "./policy.js"
+import {LOOPBACK, accountLoad, contentNavigation, contentOpen, homeMessage, parse, railPress, updatePress} from "./policy.js"
 import {absolute} from "./process.js"
 
 /** How long a departure waits for cyfr's left and the old pages' end. */
@@ -205,6 +217,10 @@ const atChooser = (url) => {
 const atRail = (url) => {
   const u = parse(url)
   return !!u && u.origin === LOOPBACK && u.pathname === "/rail/"
+}
+const atUpdate = (url) => {
+  const u = parse(url)
+  return !!u && u.origin === LOOPBACK && u.pathname === "/update/"
 }
 // What a press on the rail may do now: nothing while cyfr starts, a lock
 // or a departure runs, or a proposal waits for its commit; and none on
@@ -257,6 +273,20 @@ export const ACTS = {
   connect: {window: "rail", by: (_, url) => atRail(url),
     to: (s, e) => railFree(s) && ["connect", "setup"].includes(railPress(e.url)?.act),
     then: (s, e) => ({...away(s, railPress(e.url).act === "setup" ? {way: "setup"} : {}), allow: false})},
+  // Update CYFR, at the rail's foot: its window over the content, the
+  // CYFR open left as it is.
+  update: {window: "rail", by: (_, url) => atRail(url),
+    to: (s, e) => railFree(s) && railPress(e.url)?.act === "update" && !!s.updateURL,
+    then: (s) => ({state: s, allow: false, do: [{update: {url: s.updateURL}}]})},
+  // Update CYFR's yes, from its own page alone: cyfr is told the offer's
+  // number, and starts only the offer it holds under it.
+  start: {window: "update", by: (_, url) => atUpdate(url),
+    to: (s, e) => !s.screen && updatePress(e.url)?.act === "start",
+    then: (s, e) => ({state: s, allow: false, do: [{send: {type: "update", fields: {offer: updatePress(e.url).offer}}}]})},
+  // Its Close.
+  close: {window: "update", by: (_, url) => atUpdate(url),
+    to: (s, e) => updatePress(e.url)?.act === "close",
+    then: (s) => ({state: s, allow: false, do: [{unupdate: true}]})},
   // A row's menu on the rail, which main draws: its Forget is confirmed
   // there (forget-confirmed).
   menu: {window: "rail", by: (_, url) => atRail(url),
@@ -363,8 +393,8 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
-    railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
-    picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
+    railURL: s.railURL, updateURL: s.updateURL, home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null,
+    notices: s.notices, picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
   if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
   const taken = step(next, {type: "home", message: s.wanted})
   return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
@@ -372,7 +402,7 @@ function settle(s) {
 
 // The chooser's state after a departure: main keeps to none.
 const chooserOf = (s) => ({name: "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL, railURL: s.railURL,
-  home: "", account: "", route: s.route, returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
+  updateURL: s.updateURL, home: "", account: "", route: s.route, returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
   leaves: s.leaves, seen: s.seen})
 
 /**
@@ -393,14 +423,19 @@ function advance(s, e) {
   switch (e.type) {
     // ---- cyfr ----
     case "ready": {
-      // The box's screen has no rail in this part: its own pages alone.
+      // The box's screen has no rail and no Update CYFR in this part: its
+      // own pages alone.
       const rail = e.message?.rail ?? ""
-      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" || rail
-        : !e.url.startsWith(LOOPBACK + "/bootstrap/#token=") || !rail.startsWith(LOOPBACK + "/rail/#read="))) {
+      const update = e.message?.update ?? ""
+      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" || rail || update || e.message?.record
+        : !e.url.startsWith(LOOPBACK + "/bootstrap/#token=") || !rail.startsWith(LOOPBACK + "/rail/#read=") ||
+          !update.startsWith(LOOPBACK + "/update/#read="))) {
         return stopped(s, "its first page was not the chooser")
       }
-      return {state: {...s, name: "chooser", readyURL: e.url, railURL: rail},
-        do: [{say: "ready"}, ...(rail ? [{rail: {url: rail}}] : []), {chooser: s.notices}]}
+      // A record of an update waiting to be shown opens Update CYFR at once.
+      return {state: {...s, name: "chooser", readyURL: e.url, railURL: rail, updateURL: update},
+        do: [{say: "ready"}, ...(rail ? [{rail: {url: rail}}] : []), {chooser: s.notices},
+          ...(e.message?.record && !s.screen ? [{update: {url: update}}] : [])]}
     }
     case "home": {
       // The box's screen makes its first person by the device's pages: a
@@ -492,6 +527,9 @@ function advance(s, e) {
       return ending(s, {quit: true})
     case "second-instance":
       return askedToQuit(s, e) ? ending(s, {quit: true}) : same(s, [{show: true}])
+    // Update CYFR's window closed: a record it showed is cyfr's to remove.
+    case "update-closed":
+      return same(s, [{send: {type: "update-closed"}}])
     // The system's dialog answered pick `id`: the folder, or null.
     case "picked":
       if (!s.picking || e.id !== s.picking) return same(s)
@@ -528,8 +566,9 @@ function advance(s, e) {
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: []}
       const act = pressed(s, e)
       if (act) return act.then(s, e)
-      // The rail's page loads nothing: a press is an act or nothing.
-      if (e.window === "rail") return {state: s, allow: false, do: []}
+      // The rail's page and Update CYFR's load nothing: a press is an act
+      // or nothing.
+      if (e.window === "rail" || e.window === "update") return {state: s, allow: false, do: []}
       const where = contentNavigation(e, kept(s))
       if (where === "allow") {
         if (sentToSignIn(s, e)) return {...lock(s, "the CYFR asks for a sign-in", ""), allow: false}

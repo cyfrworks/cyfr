@@ -272,7 +272,7 @@ func updateTarget(ctx context.Context, current, exact string, settled func(strin
 	case errors.Is(err, release.ErrNoRelease):
 		return "", "", noReleaseYet, nil
 	case err != nil:
-		return "", "", 0, fmt.Errorf("cyfr update could not look up the newest release (%v); nothing was changed", err)
+		return "", "", 0, fmt.Errorf("cyfr update could not look up the newest release (%w); nothing was changed", err)
 	case latest == current && settled(latest):
 		return "", latest, onNewest, nil
 	case latest != current && !release.IsNewer(latest, current):

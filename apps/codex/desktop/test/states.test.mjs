@@ -35,7 +35,8 @@ function run(events, accountRoad = false) {
 }
 
 const RAIL = "http://127.0.0.1:7340/rail/#read=cmVhZA"
-const ready = {type: "ready", url: READY, message: {type: "ready", url: READY, rail: RAIL}}
+const UPDATE = "http://127.0.0.1:7340/update/#read=cmVhZA"
+const ready = {type: "ready", url: READY, message: {type: "ready", url: READY, rail: RAIL, update: UPDATE}}
 // Begun by the document showing, unless `over` says another began it.
 const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY,
   by: over.showing ?? READY, ...over})
@@ -244,6 +245,11 @@ const RAIL_DOC = "http://127.0.0.1:7340/rail/"
 const railed = (path, over = {}) => ({type: "navigate", window: "rail", url: "http://127.0.0.1:7340" + path, target: "top",
   asker: "top", showing: RAIL_DOC, by: RAIL_DOC, ...over})
 const selects = (h) => railed("/rail/select?cyfr=" + encodeURIComponent(h))
+const UPDATE_DOC = "http://127.0.0.1:7340/update/"
+// A press on Update CYFR: a navigation of its page to `path`, which main
+// answers.
+const updated = (path, over = {}) => ({type: "navigate", window: "update", url: "http://127.0.0.1:7340" + path, target: "top",
+  asker: "top", showing: UPDATE_DOC, by: UPDATE_DOC, ...over})
 const parted = (id) => ({type: "parted", id})
 
 test("a press on the rail for another CYFR leaves the one open, and the chooser connects to it once both left and parted", () => {
@@ -347,6 +353,55 @@ test("the rail's page loads nothing, and only its own top frame's presses act", 
   }
   for (const before of [[], [ready, home()], [...open, selects(BOB)]]) {
     assert.deepEqual(step(run(before, true).s, selects(BOB)).do, [], "not while cyfr starts, a proposal or a departure waits")
+  }
+})
+
+test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by itself at ready where a record waits; never on the box's screen", () => {
+  const r = step(run(open, true).s, railed("/rail/update"))
+  assert.deepEqual(r.do, [{update: {url: UPDATE}}])
+  assert.equal(r.allow, false)
+  assert.equal(r.state.name, "open", "the CYFR open is left as it is")
+  assert.equal(r.state.home, HOME)
+  const recorded = {...ready, message: {...ready.message, record: true}}
+  assert.deepEqual(run([recorded], true).effects.slice(-2), [{chooser: []}, {update: {url: UPDATE}}], "a record waiting opens it, over the chooser")
+  assert.ok(!run([ready], true).effects.some((e) => e.update), "no record, nothing opens")
+  for (const before of [[], [ready, home()], [...open, selects(BOB)]]) {
+    assert.deepEqual(step(run(before, true).s, railed("/rail/update")).do, [], "not while cyfr starts, a proposal or a departure waits")
+  }
+  const SCREEN_PAGE = "http://127.0.0.1:7340/"
+  const screen = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+  assert.equal(step(screen, {type: "ready", url: SCREEN_PAGE, message: {type: "ready", url: SCREEN_PAGE, record: true}}).state.name, "ended",
+    "the screen's cyfr names no record")
+})
+
+test("Update CYFR's page loads nothing; its yes sends the offer it names, from its own top frame alone; its close is told to cyfr", () => {
+  const s = run(open, true).s
+  for (const [what, e] of Object.entries({
+    "an address that is no press": updated("/update/"),
+    "a yes naming no offer": updated("/update/start"),
+    "a yes naming offer 0": updated("/update/start?offer=0"),
+    "a yes with more": updated("/update/start?offer=4&target=9.9.9"),
+    "a yes naming its offer twice": updated("/update/start?offer=4&offer=5"),
+    "a yes past a safe number": updated("/update/start?offer=99999999999999999"),
+    "the read": updated("/update/read"),
+    "a redirect": {...updated("/update/start?offer=4"), redirect: true},
+    "a frame": {...updated("/update/start?offer=4"), target: "frame", asker: "frame-inside"},
+    "the rail's document": {...updated("/update/start?offer=4"), by: RAIL_DOC},
+    "the rail's window": {...updated("/update/start?offer=4"), window: "rail"},
+    "the content window": {...updated("/update/start?offer=4"), window: "content", by: UPDATE_DOC},
+    "a CYFR's page": {...updated("/update/start?offer=4"), window: "content", by: HOME + "/", showing: HOME + "/"},
+  })) {
+    const r = step(s, e)
+    assert.equal(r.allow, false, what)
+    assert.ok(!r.do.some((x) => x.send || x.update || x.unupdate), `${what}: ${JSON.stringify(r.do)}`)
+  }
+  assert.deepEqual(step(s, updated("/update/start?offer=4")).do, [{send: {type: "update", fields: {offer: 4}}}])
+  assert.deepEqual(step(s, updated("/update/close")).do, [{unupdate: true}])
+  assert.deepEqual(step(s, {type: "update-closed"}).do, [{send: {type: "update-closed"}}])
+  assert.deepEqual(step(run([ready], true).s, updated("/update/start?offer=4")).do, [{send: {type: "update", fields: {offer: 4}}}],
+    "from the chooser too: the offer is cyfr's to judge")
+  for (const before of [[], [...open, selects(BOB)]]) {
+    assert.deepEqual(step(run(before, true).s, updated("/update/start?offer=4")).do, [], "not while cyfr starts or a departure runs")
   }
 })
 
@@ -612,6 +667,13 @@ const PRESSES = {
     {name: "Set up on the rail", event: railed("/rail/setup"), acted: (r) => r.do.some((e) => e.send?.type === "leave")}],
   menu: [
     {name: "a row's menu on the rail", event: railed("/rail/menu?cyfr=" + encodeURIComponent(BOB)), acted: (r) => r.do.some((e) => e.menu)}],
+  update: [
+    {name: "Update CYFR on the rail", event: railed("/rail/update"), acted: (r) => r.do.some((e) => e.update?.url === UPDATE)}],
+  start: [
+    {name: "Update CYFR's yes", event: updated("/update/start?offer=4"),
+      acted: (r) => r.do.some((e) => e.send?.type === "update" && e.send.fields.offer === 4)}],
+  close: [
+    {name: "Update CYFR's Close", event: updated("/update/close"), acted: (r) => r.do.some((e) => e.unupdate)}],
   onward: [
     {name: "Use this computer's key", event: navigate({url: "http://127.0.0.1:7340/", showing: atWays}),
       acted: (r) => r.state.notices.length === 0}],
@@ -636,8 +698,10 @@ test("an act is no redirect, and is begun by the top frame's own document that o
     "the CYFR's page": HOME + "/login", "the account's page": SIGN_IN, "another site": "https://evil.example/bootstrap/",
     "the chooser's path at the CYFR": HOME + "/bootstrap/", "the chooser's path on another port": "http://127.0.0.1:7341/bootstrap/",
     "the CYFR's host on another port": HOME + ":9443/login", "the account's path on another port": ACCOUNT + ":9443/account/sign",
-    "the rail": RAIL_DOC, "the rail's path on another port": "http://127.0.0.1:7341/rail/", none: ""}
+    "the rail": RAIL_DOC, "the rail's path on another port": "http://127.0.0.1:7341/rail/", "Update CYFR": UPDATE_DOC,
+    "Update CYFR's path on another port": "http://127.0.0.1:7341/update/", none: ""}
   const offers = {external: ["chooser", "the chooser with its road"], pick: ["chooser", "the chooser with its road"], reopen: ["chooser", "the chooser with its road"], select: ["the rail"], connect: ["the rail"], menu: ["the rail"], onward: ["chooser", "the chooser with its road"],
+    update: ["the rail"], start: ["Update CYFR"], close: ["Update CYFR"],
     hop: ["the CYFR's page", "the chooser's path at the CYFR"], answer: ["the account's page"]}
   for (const [act, rows] of Object.entries(PRESSES)) {
     for (const {name, event, acted} of rows) {
@@ -667,9 +731,9 @@ test("on the box's screen none of the chooser's acts is offered or accepted, fro
   }
   const states = {"the shell's page": screen([]), "a CYFR open": screen([home(), taken, openedAt(HOME)])}
   for (const [where, s] of Object.entries(states)) {
-    for (const act of ["pick", "external", "reopen", "select", "connect", "menu"]) {
+    for (const act of ["pick", "external", "reopen", "select", "connect", "menu", "update", "start"]) {
       for (const {name, event, acted} of PRESSES[act]) {
-        for (const by of [SCREEN_PAGE, CHOOSER_DOC, atWays, RAIL_DOC]) {
+        for (const by of [SCREEN_PAGE, CHOOSER_DOC, atWays, RAIL_DOC, UPDATE_DOC]) {
           const r = step(s, {...event, by, showing: by})
           assert.ok(!acted(r), `${where}: ${name} from ${by} acted`)
           assert.equal(r.allow, false, `${where}: ${name} from ${by} loaded`)
