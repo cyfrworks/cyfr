@@ -44,6 +44,16 @@ func (f *fakeMaker) rules(r *route) error   { return f.step("rules", r) }
 func (f *fakeMaker) unpair(r *route) error  { return f.step("unpair", r) }
 func (f *fakeMaker) unrules(r *route) error { return f.step("unrules", r) }
 
+// setFail sets which parts fail from now on.
+func (f *fakeMaker) setFail(parts ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = map[string]bool{}
+	for _, p := range parts {
+		f.fail[p] = true
+	}
+}
+
 func (f *fakeMaker) taken() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -263,7 +273,7 @@ func TestARouteIsAdmittedWholeAndClearedWhole(t *testing.T) {
 func TestARefusedRouteLeavesNothing(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
-	ts.maker.fail["rules"] = true
+	ts.maker.setFail("rules")
 	got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...)
 	if got.Type != TypeRefused || got.SpawnID != testSpawn {
 		t.Fatalf("answered %+v", got)
@@ -271,18 +281,81 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 	if steps := ts.maker.taken(); !reflect.DeepEqual(steps, []string{"pair sp0", "rules sp0", "unpair sp0", "unrules sp0"}) {
 		t.Fatalf("steps %v", steps)
 	}
-	ts.maker.fail = map[string]bool{"unrules": true}
+	ts.maker.setFail("unpair")
 	if got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
+	// A route whose pair cannot be removed is refused cleared, keeps its
+	// slot and is the guard's to try again; a clear asked again answers
+	// cleared once it is gone.
 	if got := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
 		t.Fatalf("a clear whose removal failed answered %+v", got)
 	}
 	ts.s.mu.Lock()
-	taken := ts.s.taken[0]
+	taken, pending := ts.s.taken[0], len(ts.s.pending)
+	ts.s.mu.Unlock()
+	if !taken || pending != 1 {
+		t.Fatalf("a route not wholly removed: slot taken %t, %d tried again", taken, pending)
+	}
+	ts.s.retryPending()
+	ts.s.mu.Lock()
+	taken = ts.s.taken[0]
 	ts.s.mu.Unlock()
 	if !taken {
-		t.Fatal("a slot whose route was not wholly removed was freed")
+		t.Fatal("a route whose pair still cannot be removed lost its slot")
+	}
+	ts.maker.setFail()
+	if got := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
+		t.Fatalf("a clear asked again once the route can go answered %+v", got)
+	}
+	ts.s.mu.Lock()
+	taken, pending = ts.s.taken[0], len(ts.s.pending)
+	ts.s.mu.Unlock()
+	if taken || pending != 0 {
+		t.Fatalf("a route withdrawn at last: slot taken %t, %d tried again", taken, pending)
+	}
+}
+
+// A connection that ends while a route's pair cannot be removed leaves the
+// route to the guard's retries, its slot taken; one that still cannot go
+// past withdrawBound ends the guard.
+func TestARouteThatCannotBeWithdrawnEndsTheGuardPastItsBound(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	clock := time.Now()
+	var mu sync.Mutex
+	ts.s.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	exited := make(chan int, 1)
+	ts.s.exit = func(code int) { exited <- code }
+	r := dialRaw(t, ts.path)
+	if got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("admit: %+v", got)
+	}
+	ts.maker.setFail("unpair")
+	r.conn.Close()
+	ts.waitEnded(t)
+	ts.s.mu.Lock()
+	taken, pending := ts.s.taken[0], len(ts.s.pending)
+	ts.s.mu.Unlock()
+	if !taken || pending != 1 {
+		t.Fatalf("the lost connection's route not wholly removed: slot taken %t, %d tried again", taken, pending)
+	}
+	ts.s.retryPending()
+	select {
+	case code := <-exited:
+		t.Fatalf("the guard ended within its bound: %d", code)
+	default:
+	}
+	mu.Lock()
+	clock = clock.Add(withdrawBound + time.Second)
+	mu.Unlock()
+	ts.s.retryPending()
+	select {
+	case code := <-exited:
+		if code != ExitServe {
+			t.Fatalf("the guard ended %d", code)
+		}
+	default:
+		t.Fatal("a route not withdrawn past its bound did not end the guard")
 	}
 }
 

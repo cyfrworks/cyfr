@@ -29,6 +29,12 @@ runner's own uid, outside that namespace, may not):
   dial from the container's own namespace is answered; the command has no
   resolver either, its name lookup failing at once, and an IPC namespace
   of its own.
+- `names`: a keeper started from the image in the namespace of the suites'
+  name listener (tests/locus-backends-image/name-listener.mjs), an
+  upstream resolver the suite runs whose answers name each query: the
+  client's lookup in the container's namespace reaches it and is answered,
+  and a runner's same kind of lookup finds no resolver, and the listener
+  never hears it.
 - `relay`: under the profile a spawn of the relay pool gets its relay
   on fd 4, carried as the keeper's stream 5: with a client that opens the
   stream, the runner's call on fd 4 arrives there and the answer reaches
@@ -119,7 +125,7 @@ from imagesuite import PROJECT_PREFIX, read_output, read_word, run_name  # noqa:
 from worker_auth import ATTEMPT_FIELDS  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
-KEEPER_STEPS = ("refusals", "connect", "relay", "nested", "measure")
+KEEPER_STEPS = ("refusals", "connect", "names", "relay", "nested", "measure")
 STEPS = KEEPER_STEPS + ("spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
 POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['reach']}"
 TOKEN = "0123456789abcdef" * 4
@@ -196,9 +202,11 @@ class IsolatedStack(Stack):
 # ---------------------------------------------------------------------------
 
 
-def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
-    """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client."""
+def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None):
+    """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client;
+    with `network`, in that container's network namespace."""
     args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
+            *(["--network", f"container:{network}"] if network else []),
             *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
             "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
@@ -291,6 +299,39 @@ def test_connect(image):
            "connect: from the command's namespace neither the loopback nor the container's address is reachable (no route "
            "exists), no name resolves at once, and its IPC namespace is its own",
            {"replies": got, "stdout": ran.stdout, "stderr": ran.stderr[-2000:]})
+
+
+# The suites' name listener (tests/locus-backends-image/name-listener.mjs):
+# an upstream resolver the suite runs, which the code under test did not
+# write, that prints `heard <name>` for each query.
+LISTENER_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "locus-backends-image")
+
+
+def test_names(image):
+    """The container's own resolver asks the suites' name listener; a runner's same kind of query reaches nothing."""
+    tag = secrets.token_hex(4)
+    listener = f"{PROJECT_PREFIX}locus-names-{os.getpid()}-{tag}"
+    run("docker", "rm", "--force", listener, check=False)
+    run("docker", "run", "--detach", "--name", listener, "--dns", "127.0.0.53", "-v", f"{LISTENER_DIR}:/listener:ro",
+        "--entrypoint", "node", image, "/listener/name-listener.mjs")
+    try:
+        control, runner = f"keeper-{tag}.l5.test", f"runner-{tag}.l5.test"
+        command = f'getent hosts {runner} >/dev/null 2>&1 && exit 3; exit 42'
+        request = spawn_line("1", ["/bin/sh", "-c", command])
+        client = (f'echo "own:$(getent hosts {control} | cut -d" " -f1)"; '
+                  + PLACE_FIRST + f"printf '%s\\n' '{request}' >&3; "
+                  'read -r line <&3; echo "reply:$line"; read -r line <&3; echo "reply:$line"')
+        ran = keeper_run(image, client, network=listener)
+        got = after_placed(ran, "names")
+        heard = [line.split(" ", 1)[1] for line in run("docker", "logs", listener, check=False).stdout.splitlines()
+                 if line.startswith("heard ")]
+        expect("own:192.0.2.7" in ran.stdout and control in heard,
+               "names: the container's own resolver asks the suites' name listener, which answers", {"stdout": ran.stdout, "heard": heard})
+        expect(len(got) == 2 and got[1]["type"] == "exited" and got[1]["code"] == 42 and runner not in heard,
+               "names: a runner's lookup of the same kind finds no resolver, and the listener never hears it",
+               {"replies": got, "heard": heard, "stderr": ran.stderr[-2000:]})
+    finally:
+        run("docker", "rm", "--force", listener, check=False)
 
 
 class Attach:
@@ -1003,6 +1044,8 @@ def main(image, steps):
         test_refusals(image)
     if "connect" in steps:
         test_connect(image)
+    if "names" in steps:
+        test_names(image)
     if "relay" in steps:
         test_relay(image)
     if "nested" in steps:

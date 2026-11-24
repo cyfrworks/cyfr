@@ -283,3 +283,187 @@ func checkDescriptors(netns, udp, tcp *os.File) error {
 	}
 	return nil
 }
+
+// The kernel's connection table (conntrack, through ctnetlink): a withdrawn
+// route leaves no entry of its space's address behind, so no later route
+// that takes the address finds a connection of the earlier one's.
+const (
+	nfnlSubsysCtnetlink = 1
+	ctnlMsgGet          = 1
+	ctnlMsgDelete       = 2
+	ctaTupleOrig        = 1
+	ctaTupleIP          = 1
+	ctaIPv4Src          = 1
+	ctaZone             = 18
+	nlaTypeMask         = 0x3fff
+)
+
+// attrs splits a run of netlink attributes into (type, whole attribute,
+// payload) triples.
+func attrs(b []byte) [][3][]byte {
+	var out [][3][]byte
+	for len(b) >= unix.SizeofRtAttr {
+		n := int(binary.NativeEndian.Uint16(b[0:2]))
+		if n < unix.SizeofRtAttr || n > len(b) {
+			break
+		}
+		kind := make([]byte, 2)
+		binary.NativeEndian.PutUint16(kind, binary.NativeEndian.Uint16(b[2:4])&nlaTypeMask)
+		out = append(out, [3][]byte{kind, b[:n], b[unix.SizeofRtAttr:n]})
+		aligned := (n + unix.NLMSG_ALIGNTO - 1) &^ (unix.NLMSG_ALIGNTO - 1)
+		if aligned > len(b) {
+			break
+		}
+		b = b[aligned:]
+	}
+	return out
+}
+
+func attrType(a [3][]byte) uint16 { return binary.NativeEndian.Uint16(a[0]) }
+
+// ctnetlink opens a netfilter netlink socket of the guard's namespace.
+func ctnetlink() (int, error) {
+	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_NETFILTER)
+	if err != nil {
+		return -1, err
+	}
+	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
+}
+
+// ctMessage is one ctnetlink request of the given message type.
+func ctMessage(msg uint16, flags uint16, seq uint32, body []byte) []byte {
+	out := make([]byte, unix.SizeofNlMsghdr+4, unix.SizeofNlMsghdr+4+len(body))
+	out = append(out, body...)
+	binary.NativeEndian.PutUint32(out[0:4], uint32(len(out)))
+	binary.NativeEndian.PutUint16(out[4:6], nfnlSubsysCtnetlink<<8|msg)
+	binary.NativeEndian.PutUint16(out[6:8], unix.NLM_F_REQUEST|flags)
+	binary.NativeEndian.PutUint32(out[8:12], seq)
+	out[16] = unix.AF_INET
+	return out
+}
+
+// conntrackOf answers the entries of the IPv4 connection table whose
+// original source is addr, each as the attributes a delete names it by:
+// its original tuple and, where it has one, its zone.
+func conntrackOf(addr netip.Addr) ([][]byte, error) {
+	fd, err := ctnetlink()
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(fd)
+	if err := unix.Sendto(fd, ctMessage(ctnlMsgGet, unix.NLM_F_DUMP, 1, nil), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return nil, err
+	}
+	want := addr.As4()
+	var found [][]byte
+	buf := make([]byte, 1<<16)
+	for {
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range msgs {
+			switch m.Header.Type {
+			case syscall.NLMSG_DONE:
+				return found, nil
+			case syscall.NLMSG_ERROR:
+				if len(m.Data) >= 4 {
+					if code := int32(binary.NativeEndian.Uint32(m.Data[0:4])); code != 0 {
+						return nil, unix.Errno(-code)
+					}
+				}
+				return found, nil
+			}
+			if len(m.Data) < 4 {
+				continue
+			}
+			var orig, zone []byte
+			var source []byte
+			for _, a := range attrs(m.Data[4:]) {
+				switch attrType(a) {
+				case ctaTupleOrig:
+					orig = a[1]
+					for _, t := range attrs(a[2]) {
+						if attrType(t) != ctaTupleIP {
+							continue
+						}
+						for _, ip := range attrs(t[2]) {
+							if attrType(ip) == ctaIPv4Src && len(ip[2]) == 4 {
+								source = ip[2]
+							}
+						}
+					}
+				case ctaZone:
+					zone = a[1]
+				}
+			}
+			if orig != nil && len(source) == 4 && [4]byte(source) == want {
+				entry := append(append([]byte(nil), orig...), make([]byte, (4-len(orig)%4)%4)...)
+				if zone != nil {
+					entry = append(entry, zone...)
+					entry = append(entry, make([]byte, (4-len(zone)%4)%4)...)
+				}
+				found = append(found, entry)
+			}
+		}
+	}
+}
+
+// forgetConnections removes from the connection table every entry whose
+// original source is addr, the address of a route being withdrawn. An entry
+// already gone is removed.
+func forgetConnections(addr netip.Addr) error {
+	entries, err := conntrackOf(addr)
+	if err != nil {
+		return fmt.Errorf("reading the connection table: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	fd, err := ctnetlink()
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	for i, entry := range entries {
+		seq := uint32(i + 2)
+		if err := unix.Sendto(fd, ctMessage(ctnlMsgDelete, unix.NLM_F_ACK, seq, entry), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+			return err
+		}
+		buf := make([]byte, 4096)
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return err
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return err
+		}
+		for _, m := range msgs {
+			if m.Header.Type == syscall.NLMSG_ERROR && len(m.Data) >= 4 {
+				if code := int32(binary.NativeEndian.Uint32(m.Data[0:4])); code != 0 && unix.Errno(-code) != unix.ENOENT {
+					return fmt.Errorf("removing a connection of %s: %w", addr, unix.Errno(-code))
+				}
+			}
+		}
+	}
+	left, err := conntrackOf(addr)
+	if err != nil {
+		return err
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("%d connections of %s stay in the table", len(left), addr)
+	}
+	return nil
+}

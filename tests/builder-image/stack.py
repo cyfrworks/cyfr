@@ -168,8 +168,11 @@ def build_canary():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir, guard_tools_dir=None):
+    def __init__(self, project, image, canary_dir, guard_tools_dir=None, names=False):
         super().__init__(project)
+        # With names, the guard's resolver asks the suites' name listener
+        # (compose.names.yml), which starts beside it.
+        self.names = names
         self.image = image
         self.canary_dir = canary_dir
         # The service names the keeper's seccomp profile beside the
@@ -193,6 +196,7 @@ class Stack(imagesuite.Stack):
             "BUILDER_IMAGE": self.image,
             "CANARY_DIR": self.canary_dir,
             "GUARD_TOOLS_DIR": self.guard_tools_dir,
+            "NAME_LISTENER_DIR": os.path.join(ROOT, "tests", "locus-backends-image"),
             "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
             "CYFR_LOCUS_BUILDS_KEY": self.key,
             "BUILD_POOL": self.pool,
@@ -207,6 +211,8 @@ class Stack(imagesuite.Stack):
         files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-builds.yml")]
         if not self.writable_cgroups:
             files.append(os.path.join(HERE, "compose.no-writable-cgroups.yml"))
+        if self.names:
+            files.append(os.path.join(HERE, "compose.names.yml"))
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
             *[arg for file in files for arg in ("-f", file)],
@@ -224,7 +230,8 @@ class Stack(imagesuite.Stack):
         self.pool = pool
         self.timeout_ms = timeout_ms
         self.writable_cgroups = writable_cgroups
-        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []))
+        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []),
+                     *(["name-listener"] if self.names else []))
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
         self.guard = self.compose("ps", "--quiet", GUARD).stdout.strip()
         # The builder listens in the guard's namespace: the port is the guard's.
@@ -254,6 +261,12 @@ class Stack(imagesuite.Stack):
 
     def guard_logs(self):
         return read_output(self.compose("logs", "--no-color", GUARD, check=False), "the builds guard's log")
+
+    def names_heard(self):
+        """The names the suites' name listener was asked, in order (`Stack(names=True)`)."""
+        text = read_output(self.compose("logs", "--no-color", "--no-log-prefix", "name-listener", check=False),
+                           "the name listener's log")
+        return [line.split(" ", 1)[1].strip() for line in text.splitlines() if line.startswith("heard ")]
 
     def exec(self, script, user=None):
         user_args = ["-u", user] if user else []

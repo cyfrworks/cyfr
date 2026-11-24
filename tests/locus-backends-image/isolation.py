@@ -46,6 +46,9 @@ Driven only by requests signed as CYFR signs them (harness.py):
 - Two sessions of one kept folder, under one uid of the kept range, each
   listen on the same port of their own loopbacks and each reaches its own;
   neither reaches the service's listener.
+- A session's name lookup reaches an upstream resolver the suite runs
+  (name-listener.mjs, beside the guard as its resolver's upstream), which
+  hears the session's own name.
 - When the guard's control dies, the keeper kills every routed space at
   once: a session's processes are gone within a second, before any guard
   is dialled again.
@@ -60,6 +63,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import sys
 import time
 
@@ -291,6 +295,23 @@ def test_kept_sessions(stack, c):
     for session in sessions:
         c.close(KEPT_OWNER, session.session)
     c.release([KEPT_OWNER])
+
+
+def test_names(image):
+    """A session's name reaches the suites' own name listener, upstream of the guard's resolver."""
+    stack = Stack("locus-backends-isolation-names", image, names=True)
+    try:
+        stack.up()
+        c = stack.controller()
+        owner = owner_of("names")
+        sync_probe(c, owner)
+        asked = f"session-{secrets.token_hex(4)}.l5.test"
+        resolved = c.tool(owner, "probe__run", {"argv": ["getent", "hosts", asked]})
+        expect(resolved["status"] == 0 and "192.0.2.7" in (resolved.get("stdout") or ""),
+               f"a session resolves {asked}, which only the suites' name listener answers", resolved)
+        expect(asked in stack.names_heard(), f"the name listener heard the session's {asked}", stack.names_heard())
+    finally:
+        stack.down()
 
 
 def test_guard_death(image):
@@ -568,6 +589,7 @@ def main():
     # fixed subnet could not exist beside the first's.
     test_guard_failure(image)
     test_guard_death(image)
+    test_names(image)
 
 
 if __name__ == "__main__":

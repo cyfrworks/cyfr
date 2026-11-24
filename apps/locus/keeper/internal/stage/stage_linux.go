@@ -78,6 +78,10 @@ type Probe struct {
 	UID    int  `json:"uid"`
 	GID    int  `json:"gid"`
 	Routed bool `json:"routed"`
+	// Route says the keeper handed a route socket on RouteFD: the probe
+	// hands its route up as a routed spawn's stage does, so the keeper's
+	// guard proves it makes one.
+	Route bool `json:"route"`
 }
 
 // Main runs `cyfr-locus stage`. It does not return on success.
@@ -236,7 +240,12 @@ func probe() error {
 	if err := become(p.UID, p.GID); err != nil {
 		return fmt.Errorf("credentials: %w", err)
 	}
-	if p.Routed {
+	switch {
+	case p.Route:
+		if err := handRouteUp(RouteFD); err != nil {
+			return fmt.Errorf("the space's route: %w", err)
+		}
+	case p.Routed:
 		udp, tcp, err := nameSockets()
 		if err != nil {
 			return fmt.Errorf("the space's loopback and name sockets: %w", err)

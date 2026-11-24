@@ -870,8 +870,15 @@ def guard_counters(saved):
 
 
 def backend_environ(stack, pid, uid):
-    """The environment of process `pid` as `NAME=value` lines, read as the backend's own uid, which runs the process."""
-    return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user=str(uid)), f"the environment of pid {pid}")
+    """The environment of process `pid`, of uid `uid`, as `NAME=value` lines, read as the container's root.
+
+    A program runs in a space of its own, a user namespace its keeper made:
+    a process of its uid outside that namespace may not read its /proc
+    entries (that takes CAP_SYS_PTRACE in the program's namespace), and the
+    container's root, the namespace's owner, may.
+    """
+    return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user="0"),
+                       f"the environment of pid {pid}, uid {uid}")
 
 
 def image_user_name(stack, uid):
@@ -938,8 +945,11 @@ def require_docker():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None):
+    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None, names=False):
         super().__init__(project)
+        # With names, the guard's resolver asks the suites' name listener
+        # (compose.names.yml), which starts beside it.
+        self.names = names
         self.image = image
         self.canary_dir = canary_dir or HERE
         # The service names the keeper's seccomp profile beside the
@@ -980,6 +990,8 @@ class Stack(imagesuite.Stack):
 
     def compose(self, *args, check=True, env=None):
         files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-backends.yml")]
+        if self.names:
+            files.append(os.path.join(HERE, "compose.names.yml"))
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
             *[arg for file in files for arg in ("-f", file)], *args,
@@ -993,7 +1005,8 @@ class Stack(imagesuite.Stack):
         """
         self.pool = pool or f"{POOL_FIRST}-{POOL_LAST}"
         self.memory_bytes = memory_bytes
-        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []))
+        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []),
+                     *(["name-listener"] if self.names else []))
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
         self.guard = self.compose("ps", "--quiet", GUARD).stdout.strip()
         expect(self.container and self.guard, f"compose started the {SERVICE} container behind its guard")
@@ -1017,6 +1030,12 @@ class Stack(imagesuite.Stack):
 
     def guard_logs(self):
         return read_output(self.compose("logs", "--no-color", GUARD, check=False), "the backends guard's log")
+
+    def names_heard(self):
+        """The names the suites' name listener was asked, in order (`Stack(names=True)`)."""
+        text = read_output(self.compose("logs", "--no-color", "--no-log-prefix", "name-listener", check=False),
+                           "the name listener's log")
+        return [line.split(" ", 1)[1].strip() for line in text.splitlines() if line.startswith("heard ")]
 
     def guard_exec(self, script):
         return run("docker", "exec", self.guard, "sh", "-c", script, check=False)
@@ -1077,6 +1096,10 @@ class Stack(imagesuite.Stack):
         for cap in host.get("CapAdd") or []:
             args += ["--cap-add", cap]
         for option in host.get("SecurityOpt") or []:
+            # Docker reports a seccomp profile inline, as its JSON; the run
+            # takes it as the file the project holds.
+            if option.startswith("seccomp="):
+                option = f"seccomp={os.path.join(self.project_dir, 'keeper.seccomp.json')}"
             args += ["--security-opt", option]
         for name, value in (host.get("Sysctls") or {}).items():
             args += ["--sysctl", f"{name}={value}"]

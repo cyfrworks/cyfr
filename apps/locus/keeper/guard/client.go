@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -52,6 +53,11 @@ type Client struct {
 	mu   sync.Mutex
 	link *link
 	next uint64
+	// live is the connection standing, read without mu by Live.
+	live atomic.Pointer[link]
+	// answered, when set, is called by the reader after it hands an
+	// answer on and before it reads again: a test holds it there.
+	answered func()
 }
 
 // link is one connection and its reader.
@@ -173,6 +179,34 @@ func (c *Client) settle() *link {
 	return c.link
 }
 
+// Live reports whether r's connection is the client's live one at this
+// instant: it stands, its reader has not seen it end, and no end or packet
+// waits on it unread. It takes no lock a request holds, so it may be asked
+// under a lock the connection's end takes (the keeper's).
+func (c *Client) Live(r Route) bool {
+	l := c.live.Load()
+	if l == nil || l.number != r.Conn {
+		return false
+	}
+	select {
+	case <-l.ended:
+		return false
+	default:
+	}
+	raw, err := l.conn.SyscallConn()
+	if err != nil {
+		return false
+	}
+	pending := true
+	if cerr := raw.Control(func(fd uintptr) {
+		_, _, rerr := unix.Recvfrom(int(fd), make([]byte, 1), unix.MSG_PEEK|unix.MSG_DONTWAIT)
+		pending = !errors.Is(rerr, unix.EAGAIN)
+	}); cerr != nil {
+		return false
+	}
+	return !pending
+}
+
 // end closes l and waits for its reader to have handled the end; c.mu is
 // held.
 func (c *Client) end(l *link) {
@@ -210,6 +244,7 @@ func (c *Client) connect() (*link, error) {
 	c.next++
 	l := &link{conn: uc, number: c.next, answers: make(chan []byte, 1), ended: make(chan struct{})}
 	c.link = l
+	c.live.Store(l)
 	go c.read(l)
 	return l, nil
 }
@@ -220,6 +255,7 @@ func (c *Client) connect() (*link, error) {
 // the end seen by anything that would dial again.
 func (c *Client) read(l *link) {
 	defer close(l.ended)
+	defer c.live.CompareAndSwap(l, nil)
 	defer func() {
 		if c.lost != nil {
 			c.lost(l.number)
@@ -239,6 +275,9 @@ func (c *Client) read(l *link) {
 			return
 		}
 		l.answers <- packet
+		if c.answered != nil {
+			c.answered()
+		}
 	}
 }
 

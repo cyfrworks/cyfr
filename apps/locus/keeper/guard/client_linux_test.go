@@ -284,3 +284,39 @@ func TestAGuardOfAnotherNamespaceIsRefused(t *testing.T) {
 		t.Fatal("no guard admitted")
 	}
 }
+
+// An admitted the reader handed on just before the connection's end is not
+// a live route: Live, asked before the reader reads the end, sees the end
+// waiting unread.
+func TestAnAdmittedJustBeforeTheEndIsNotLive(t *testing.T) {
+	g := startScripted(t, "net:[7]")
+	c := NewClient(g.path, "net:[7]", nil)
+	hold := make(chan struct{})
+	c.answered = func() { <-hold }
+	netns, udp, tcp := descriptors(t)
+	type result struct {
+		r   Route
+		err error
+	}
+	done := make(chan result, 1)
+	go func() { r, err := c.Admit(testSpawn, ReachIsland, nil, netns, udp, tcp); done <- result{r, err} }()
+	conn := g.accept(t)
+	request(t, conn)
+	answer(t, conn, Message{Type: TypeAdmitted, SpawnID: testSpawn})
+	got := <-done
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if !c.Live(got.r) {
+		t.Fatal("a route of a standing connection is not live")
+	}
+	conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for c.Live(got.r) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond) // sleep-ok: a bounded poll for the peer's end to arrive
+	}
+	if c.Live(got.r) {
+		t.Fatal("an admitted whose connection ended, its reader held before the end, is live")
+	}
+	close(hold)
+}

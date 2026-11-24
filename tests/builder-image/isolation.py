@@ -36,6 +36,9 @@
   has no route out of a space; its names are answered by the guard on the
   space's own 127.0.0.11:53; and the public registry is reached (skipped,
   with its reason, under CYFR_TEST_OFFLINE=1).
+- A build's name lookup reaches an upstream resolver the suite runs
+  (tests/locus-backends-image/name-listener.mjs, beside the guard as its
+  resolver's upstream), which hears the build's own name.
 - A build's listener on its own loopback is its own: the container's root
   and a concurrent build of another uid find nothing there, and the other
   build listens on the same port at the same time, reaching its own.
@@ -55,6 +58,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import shutil
 import sys
 import threading
@@ -592,6 +596,22 @@ def test_guard_unreadable(image, canary):
         imagesuite.remove_directory(tools)
 
 
+def test_names(image, canary):
+    """A build's name reaches the suites' own name listener, upstream of the guard's resolver."""
+    stack = Stack("locus-builds-isolation-names", image, canary, names=True)
+    try:
+        stack.up()
+        asked = f"build-{secrets.token_hex(4)}.l5.test"
+        status, answer = stack.build(tincture(f"mkdir -p dist && getent hosts {asked} > dist/name.txt 2>&1; echo status=$? >> dist/name.txt"),
+                                     "javascript", "tincture")
+        expect(status == 200, "the name build succeeds", brief(answer))
+        got = output_file(answer, "name.txt") or ""
+        expect("192.0.2.7" in got and "status=0" in got, f"a build resolves {asked}, which only the suites' name listener answers", got)
+        expect(asked in stack.names_heard(), f"the name listener heard the build's {asked}", stack.names_heard())
+    finally:
+        stack.down()
+
+
 def test_no_bound_no_build(stack):
     stack.up(writable_cgroups=False)
     options = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]["SecurityOpt"]
@@ -631,6 +651,7 @@ def main(image):
         # fixed subnet could not exist beside the first's.
         test_guard_failure(image, canary)
         test_guard_unreadable(image, canary)
+        test_names(image, canary)
     finally:
         shutil.rmtree(canary, ignore_errors=True)
 

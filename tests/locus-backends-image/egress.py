@@ -20,9 +20,10 @@ signed as CYFR signs them (harness.py):
   stack's own service name).
 - A program whose row names no hosts has a route of the island's rule: it
   reaches the address the first is refused.
-- A tracked UDP exchange of a withdrawn route serves no later route that
-  took its address: the later route's packet on that tuple is judged by
-  its own chain and refused.
+- A withdrawn route leaves no connection in the kernel's table, and a
+  connection takes its route's mark only as it is made: a later route that
+  takes the address and is allowed the same destination makes its own
+  exchange on the same tuple, under its own mark alone.
 - Two sessions of one kept folder have a route each, of their own start,
   and closing one leaves the other's as it was.
 - An open whose hosts resolve to no address is refused `hosts_unresolved`
@@ -172,29 +173,61 @@ def held_to_list(stack, c, owner, offline, **session):
     return iface, slot, rules
 
 
+def connections_of(stack, inner):
+    """The guard's connection-table entries whose original source is `inner`, from /proc/net/nf_conntrack, or None
+    where the kernel keeps no such file."""
+    listed = stack.guard_exec("cat /proc/net/nf_conntrack")
+    if listed.returncode != 0:
+        return None
+    return [line for line in listed.stdout.splitlines() if re.search(rf"\bsrc={re.escape(inner)}\b", line.split("dst=")[0] + " ")]
+
+
+def route_mark(rules, slot):
+    """The connection mark route `slot` gives a new connection, as its pass chain sets it."""
+    for rule in rules:
+        found = re.search(rf"^-A CYFR_GUARD_P{slot} .*--ctstate NEW -j CONNMARK --set-xmark (0x[0-9a-f]+)/0xffffffff$", rule)
+        if found:
+            return int(found.group(1), 16)
+    return None
+
+
 def tuple_reuse(stack, c, open_slot, offline):
-    """The open program's UDP exchange stays in the kernel's table after its route is withdrawn; a listed session that
-    takes the same slot, and so the same address, sends on that tuple and is refused on its own chain."""
+    """A withdrawn route leaves no connection in the kernel's table, and a connection takes its route's mark only as it
+    is made: the open program's UDP exchange is gone with its route, and a session that takes the same slot, and so
+    the same address, and is allowed the same destination, makes its own exchange on the same tuple under its own
+    route's mark."""
     if offline:
         print("skip: a tracked UDP exchange to 1.1.1.1:53 needs the public network: CYFR_TEST_OFFLINE=1", flush=True)
         c.release([OPEN])
         return
+    inner = run_in(c, OPEN, ["node", "-e", INNER])["stdout"].strip()
     first = run_in(c, OPEN, ["node", "-e", UDP_REUSE_PROBE, "reuse", REUSE_PORT, "1.1.1.1", "53"])
     expect(first["stdout"].strip() == "reply=yes",
-           "the open program's query to 1.1.1.1:53 from its chosen port is answered, and the kernel tracks it", first)
+           "the open program's query to 1.1.1.1:53 from its chosen port is answered", first)
+    tracked = connections_of(stack, inner)
+    if tracked is None:
+        print("skip: the kernel keeps no /proc/net/nf_conntrack, so the connection table is not read here", flush=True)
+    else:
+        expect(tracked, f"the kernel tracks the open program's exchange from {inner}", tracked)
     status, _answer, _ = c.release([OPEN])
     expect(status == 200, "the open program's owner is released")
     eventually(lambda: f"sp{open_slot}" not in routes(stack), f"the open program's route, sp{open_slot}, to be withdrawn")
-    status, answer, _ = c.sync(REUSE, [probe(hosts=[LISTED_HOST])])
-    expect(status == 200, "a listed owner is synced", answer)
-    _iface, slot, _rules = route_of(stack, c, REUSE)
-    expect(slot == open_slot, f"the listed session took the withdrawn route's slot, {open_slot}, and its address", slot)
-    before = stack.guard_counters()
+    if tracked is not None:
+        left = connections_of(stack, inner)
+        expect(left == [], f"the withdrawn route left no connection of {inner} in the kernel's table", left)
+    status, answer, _ = c.sync(REUSE, [probe()])
+    expect(status == 200, "a second open owner is synced", answer)
+    _iface, slot, rules = route_of(stack, c, REUSE)
+    expect(slot == open_slot, f"the second session took the withdrawn route's slot, {open_slot}, and its address", slot)
+    mark = route_mark(rules, slot)
+    expect(mark is not None, "the route marks a connection only as it is made, on its first packet", rules)
     second = run_in(c, REUSE, ["node", "-e", UDP_REUSE_PROBE, "reuse", REUSE_PORT, "1.1.1.1", "53"])
-    after = stack.guard_counters()
-    expect(second["stdout"].strip() == "reply=no" and chain_rose(before, after, f"CYFR_GUARD_R{slot}", "-j REJECT") >= 1,
-           "the listed session's packet on the withdrawn route's tuple is refused on its own chain, and nothing answers",
-           second)
+    expect(second["stdout"].strip() == "reply=yes", "the second session's exchange on the same tuple is answered", second)
+    if tracked is not None:
+        entries = connections_of(stack, inner)
+        marks = {int(m) for line in entries for m in re.findall(r"\bmark=(\d+)", line)}
+        expect(entries and marks == {mark}, f"every connection of {inner} now is the second route's, marked {mark}",
+               {"entries": entries, "mark": mark})
 
 
 def main():

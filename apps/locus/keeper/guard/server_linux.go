@@ -33,8 +33,17 @@ const (
 // per change (cyfr-guard.sh, installed under this name on PATH).
 const Script = "cyfr-guard"
 
-// applyTimeout bounds one run of the guard script.
-const applyTimeout = 30 * time.Second
+const (
+	// applyTimeout bounds one run of the guard script.
+	applyTimeout = 30 * time.Second
+	// withdrawBound bounds how long a route the guard could not withdraw is
+	// tried again: past it the guard ends, and its namespace goes with every
+	// pair, rule and connection of every route, the one state from which all
+	// of them are known gone.
+	withdrawBound = 30 * time.Second
+	// retryInterval is how often a route not yet withdrawn is tried again.
+	retryInterval = time.Second
+)
 
 // Main runs `cyfr-locus guard-control <socket> <range>`, which the guard
 // execs once its rules are installed: it serves the control on socket
@@ -56,6 +65,12 @@ func Main(args []string) int {
 		log.Error("refusing to serve: reading this network namespace: %v", err)
 		return ExitConfig
 	}
+	// A route's withdrawal removes its connections from the kernel's
+	// table: a guard that cannot read the table makes no route.
+	if _, err := conntrackOf(netip.IPv4Unspecified()); err != nil {
+		log.Error("refusing to serve: the kernel's connection table cannot be read through ctnetlink: %v", err)
+		return ExitConfig
+	}
 	listener, err := listen(args[0])
 	if err != nil {
 		log.Error("refusing to serve: %v", err)
@@ -63,6 +78,7 @@ func Main(args []string) int {
 	}
 	log.Info("control: serving %s in %s, routes in %s", args[0], netns, rng)
 	s := newServer(log, netns, rng, kernelRoutes{apply: runScript})
+	go s.retryLoop()
 	for {
 		conn, err := listener.AcceptUnix()
 		if err != nil {
@@ -142,6 +158,12 @@ type route struct {
 	// sockets are the inodes of its two name sockets, which no other
 	// route may hold.
 	sockets [2]uint64
+	// conn is the connection that made it; answered the names its names
+	// answered, read as they stopped; failedAt when its withdrawal first
+	// failed, zero while none has.
+	conn     uint64
+	answered uint64
+	failedAt time.Time
 }
 
 // routeMaker makes and removes the parts of a route: kernelRoutes in
@@ -189,7 +211,15 @@ func (k kernelRoutes) rules(r *route) error {
 	return k.apply(append(args, r.addresses...)...)
 }
 
-func (k kernelRoutes) unpair(r *route) error { return removePair(r.slot) }
+// unpair removes the pair, then every entry the kernel's connection table
+// holds of the route's address: a later route that takes the address takes
+// no connection of this one's.
+func (k kernelRoutes) unpair(r *route) error {
+	if err := removePair(r.slot); err != nil {
+		return err
+	}
+	return forgetConnections(r.inner)
+}
 
 func (k kernelRoutes) unrules(r *route) error { return k.apply("unroute", outerName(r.slot)) }
 
@@ -211,13 +241,21 @@ type server struct {
 	// sockets holds the name sockets of every route standing, by inode:
 	// a socket is one route's, and is refused to another.
 	sockets map[uint64]bool
+	// pending holds every route whose withdrawal failed: it keeps its slot
+	// and is tried again until it is gone, or the guard ends.
+	pending map[*route]bool
 	conns   atomic.Uint64
 	// onEnd, when set, is called once a connection's withdrawals are done.
 	onEnd func()
+	// exit ends the guard; os.Exit in production.
+	exit func(code int)
+	// now is the clock the withdrawal's bound is read on.
+	now func() time.Time
 }
 
 func newServer(log *logx.Logger, netns string, rng netip.Prefix, maker routeMaker) *server {
-	return &server{log: log, netns: netns, rng: rng, maker: maker, upstream: islandResolver}
+	return &server{log: log, netns: netns, rng: rng, maker: maker, upstream: islandResolver,
+		pending: map[*route]bool{}, exit: os.Exit, now: time.Now}
 }
 
 // serve answers one connection until it ends, then withdraws every route
@@ -229,10 +267,17 @@ func (s *server) serve(conn *net.UnixConn) {
 	defer func() {
 		if len(made) > 0 {
 			began := time.Now()
+			withdrawn := 0
 			for _, r := range made {
-				s.withdraw(r)
+				if err := s.withdraw(r); err == nil {
+					withdrawn++
+				}
 			}
-			s.log.Warn("control: connection %d ended; its %d routes are withdrawn (%s)", id, len(made), time.Since(began).Round(time.Millisecond))
+			if withdrawn == len(made) {
+				s.log.Warn("control: connection %d ended; its %d routes are withdrawn (%s)", id, len(made), time.Since(began).Round(time.Millisecond))
+			} else {
+				s.log.Error("control: connection %d ended; %d of its %d routes are withdrawn, and the guard tries the rest again", id, withdrawn, len(made))
+			}
 		}
 		if s.onEnd != nil {
 			s.onEnd()
@@ -291,7 +336,7 @@ func (s *server) answer(id uint64, packet []byte, files []*os.File, made map[str
 		if made[req.SpawnID] != nil {
 			return refuse("this connection already holds a route for the spawn")
 		}
-		r, err := s.admit(req, files)
+		r, err := s.admit(id, req, files)
 		if err != nil {
 			s.log.Error("control: connection %d: refused the route of spawn %s: %v", id, req.SpawnID, err)
 			return refuse("the guard could not make the route: " + err.Error())
@@ -302,19 +347,24 @@ func (s *server) answer(id uint64, packet []byte, files []*os.File, made map[str
 	default:
 		r := made[req.SpawnID]
 		if r == nil {
+			r = s.pendingOf(id, req.SpawnID)
+		}
+		if r == nil {
 			return refuse("this connection holds no route for the spawn")
 		}
-		if err := s.withdraw(r); err != nil {
-			return refuse("the guard could not remove the whole route: " + err.Error())
-		}
+		// A route not wholly withdrawn is the guard's to try again, and
+		// this connection's no more: its end leaves it to the retries.
 		delete(made, req.SpawnID)
+		if err := s.withdraw(r); err != nil {
+			return refuse("the guard could not remove the whole route, and tries again: " + err.Error())
+		}
 		return Message{Type: TypeCleared, SpawnID: req.SpawnID}
 	}
 }
 
 // admit makes a route: a free slot, its pair, its rules and its names, or
 // nothing that stays.
-func (s *server) admit(req Message, files []*os.File) (*route, error) {
+func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	slot := -1
@@ -340,7 +390,7 @@ func (s *server) admit(req Message, files []*os.File) (*route, error) {
 	}
 	s.marks++
 	gateway, inner := slotAddresses(s.rng, slot)
-	r := &route{spawnID: req.SpawnID, slot: slot, gateway: gateway, inner: inner, mark: s.marks,
+	r := &route{spawnID: req.SpawnID, slot: slot, gateway: gateway, inner: inner, mark: s.marks, conn: id,
 		reach: req.Reach, addresses: req.Addresses, netns: files[0], udp: files[1], tcp: files[2], sockets: sockets}
 	s.taken[slot] = true
 	if s.sockets == nil {
@@ -348,10 +398,8 @@ func (s *server) admit(req Message, files []*os.File) (*route, error) {
 	}
 	s.sockets[sockets[0]], s.sockets[sockets[1]] = true, true
 	fail := func(err error) (*route, error) {
-		if uerr := s.undo(r); uerr != nil {
-			s.log.Error("control: the parts of spawn %s's refused route could not all be removed, and slot %d stays taken: %v", r.spawnID, slot, uerr)
-		} else {
-			s.taken[slot] = false
+		if uerr := s.withdrawLocked(r); uerr != nil {
+			s.log.Error("control: the parts of spawn %s's refused route could not all be removed, and slot %d stays taken while the guard tries again: %v", r.spawnID, slot, uerr)
 		}
 		return nil, err
 	}
@@ -374,27 +422,76 @@ func (s *server) admit(req Message, files []*os.File) (*route, error) {
 }
 
 // withdraw takes a route down, the pair first so nothing passes, then its
-// names and its rules, and frees its slot once all of it is gone.
+// names and its rules, and frees its slot only once all of it is gone. A
+// route not wholly withdrawn keeps its slot, and so its address, and is
+// tried again (retryLoop) until it is gone or withdrawBound has passed.
 func (s *server) withdraw(r *route) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var answered uint64
+	return s.withdrawLocked(r)
+}
+
+// withdrawLocked is withdraw with s.mu held.
+func (s *server) withdrawLocked(r *route) error {
 	if r.names != nil {
-		answered = r.names.answered.Load()
+		r.answered = r.names.answered.Load()
 	}
 	if err := s.undo(r); err != nil {
-		s.log.Error("control: spawn %s's route could not all be removed, and slot %d stays taken: %v", r.spawnID, r.slot, err)
+		if r.failedAt.IsZero() {
+			r.failedAt = s.now()
+		}
+		s.pending[r] = true
+		s.log.Error("control: route %s of spawn %s could not all be removed, and keeps its slot while the guard tries again: %v", outerName(r.slot), r.spawnID, err)
 		return err
 	}
+	delete(s.pending, r)
+	delete(s.sockets, r.sockets[0])
+	delete(s.sockets, r.sockets[1])
 	s.taken[r.slot] = false
-	s.log.Info("control: route %s of spawn %s withdrawn; it answered %d names", outerName(r.slot), r.spawnID, answered)
+	s.log.Info("control: route %s of spawn %s withdrawn; it answered %d names", outerName(r.slot), r.spawnID, r.answered)
 	return nil
 }
 
-// undo removes every part of r; s.mu is held.
+// pendingOf is the route of connection conn and spawn spawnID that is
+// being tried again, or nil.
+func (s *server) pendingOf(conn uint64, spawnID string) *route {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for r := range s.pending {
+		if r.conn == conn && r.spawnID == spawnID {
+			return r
+		}
+	}
+	return nil
+}
+
+// retryLoop tries every route not yet withdrawn again, each retryInterval.
+func (s *server) retryLoop() {
+	for range time.Tick(retryInterval) {
+		s.retryPending()
+	}
+}
+
+// retryPending tries each route not yet withdrawn once. One that still
+// fails past withdrawBound ends the guard.
+func (s *server) retryPending() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for r := range s.pending {
+		if err := s.withdrawLocked(r); err == nil {
+			continue
+		}
+		if s.now().Sub(r.failedAt) > withdrawBound {
+			s.log.Error("control: route %s of spawn %s could not be withdrawn within %s; the guard ends, and its namespace with every route", outerName(r.slot), r.spawnID, withdrawBound)
+			s.exit(ExitServe)
+			return
+		}
+	}
+}
+
+// undo removes every part of r that stands; s.mu is held. Each part is
+// removed once: a route tried again removes only what is left of it.
 func (s *server) undo(r *route) error {
-	delete(s.sockets, r.sockets[0])
-	delete(s.sockets, r.sockets[1])
 	err := s.maker.unpair(r)
 	if r.names != nil {
 		r.names.stop()

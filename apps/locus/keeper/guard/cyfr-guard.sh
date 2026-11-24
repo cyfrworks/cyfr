@@ -44,12 +44,14 @@
 #   6. a route of reach `island` passes everything else, the public
 #      Internet; a route of reach `hosts` passes the addresses its keeper
 #      admitted for it and refuses every other.
-# What passes leaves masqueraded as this namespace's own address, and the
-# connection carries the route's mark (CONNMARK, through CYFR_GUARD_P<slot>,
-# a number the guard never gives twice in its life). A packet into a space
-# passes only as a reply of a connection carrying its own route's mark, so
-# a connection a withdrawn route left in the kernel's table gives nothing to
-# a later route that took its address. IPv6 has no route: a space's IPv6
+# What passes leaves masqueraded as this namespace's own address, and a
+# connection it opens takes the route's mark as it is made, and never
+# after (CONNMARK on a new connection alone, through CYFR_GUARD_P<slot>, a
+# number the guard never gives twice in its life). A packet into a space
+# passes only as a reply of a connection carrying its own route's mark,
+# and a withdrawn route leaves no connection in the kernel's table (the
+# control removes them as it removes the pair), so a later route that took
+# its address inherits nothing of it. IPv6 has no route: a space's IPv6
 # packet, and any packet a space sends to this namespace itself, is refused.
 # A refusal answers the sender at once with an administratively-prohibited
 # ICMP, which it sees as EHOSTUNREACH, never a timeout: the namespace's
@@ -602,7 +604,7 @@ route() {
     echo "*filter"
     echo ":$r - [0:0]"
     echo ":$p - [0:0]"
-    echo "-A $p -j CONNMARK --set-mark $mark"
+    echo "-A $p -m conntrack --ctstate NEW -j CONNMARK --set-mark $mark"
     echo "-A $p -j ACCEPT"
     echo "-A $r ! -s $inner/32 -j DROP"
     echo "-A $r -o sp+ -j REJECT --reject-with icmp-admin-prohibited"

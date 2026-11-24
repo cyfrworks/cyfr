@@ -14,6 +14,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +67,9 @@ func resolveHosts(hosts []string) ([]netip.Addr, string, error) {
 type routeGuard interface {
 	Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error)
 	Clear(spawnID string, r guard.Route) error
+	// Live reports whether r's connection is the live one at this instant,
+	// with no end waiting unread on it.
+	Live(r guard.Route) bool
 }
 
 // egress is what a routed spawn may reach, read from its request before it
@@ -114,15 +118,17 @@ func (s *server) admitRoute(sp *spawn, route *os.File, e egress) (string, error)
 	if err != nil {
 		return protocol.CodeGuardUnavailable, fmt.Errorf("its route was not made: %w", err)
 	}
+	// The admitted counts only while its connection is the live one at the
+	// instant the command is released: both are decided under s.mu, which
+	// the connection's end (guardLost) takes too, so either the end comes
+	// first and the spawn is refused, or the route is recorded first and
+	// the end kills the space.
 	s.mu.Lock()
-	lost := s.lostRoutes[r.Conn]
-	if !lost {
-		sp.route = &r
-	}
-	s.mu.Unlock()
-	if lost {
+	defer s.mu.Unlock()
+	if s.lostRoutes[r.Conn] || !s.guard.Live(r) {
 		return protocol.CodeGuardUnavailable, errors.New("the guard's connection ended as its route was admitted")
 	}
+	sp.route = &r
 	_ = route.SetWriteDeadline(time.Now().Add(stageTimeout))
 	if _, err := route.Write([]byte{stage.RouteGo}); err != nil {
 		return protocol.CodeExecFailed, fmt.Errorf("telling the stage its route is made: %w", err)
@@ -173,25 +179,57 @@ func receiveRoute(route *os.File) ([]*os.File, error) {
 }
 
 // withdrawRoute has the guard withdraw a retiring spawn's route once its
-// processes are gone, and answers once the guard has said cleared, the
-// route's connection has ended (and with it the route, by the guard's own
-// rule), or the clear failed, which is logged: a route of a space with no
-// process left carries nothing, and the guard withdraws it at the
-// connection's end.
+// processes are gone. The route stays the keeper's until the guard says
+// cleared, or its connection has ended (the guard's own rule withdraws
+// every route made over it): one the guard refuses is asked again at each
+// sweep (retryClears), and nothing counts it cleared before.
 func (s *server) withdrawRoute(sp *spawn) {
 	s.mu.Lock()
 	r := sp.route
-	sp.route = nil
 	gone := r != nil && s.lostRoutes[r.Conn]
 	s.mu.Unlock()
-	// A route of a connection that ended went with it: nothing is asked.
-	if r == nil || gone {
+	if r == nil {
 		return
 	}
-	switch err := s.guard.Clear(sp.id, *r); {
-	case err == nil, errors.Is(err, guard.ErrConnectionGone):
-	default:
-		s.log.Warn("spawn %s: withdrawing its route: %v", sp.id, err)
+	if !gone {
+		if err := s.guard.Clear(sp.id, *r); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
+			s.log.Warn("spawn %s: its route is not yet withdrawn, and is asked again: %v", sp.id, err)
+			s.mu.Lock()
+			if s.uncleared == nil {
+				s.uncleared = map[string]guard.Route{}
+			}
+			s.uncleared[sp.id] = *r
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.mu.Lock()
+	sp.route = nil
+	s.mu.Unlock()
+}
+
+// retryClears asks the guard again for every route it has not yet said
+// cleared, and forgets one only once it has, or once its connection ended.
+func (s *server) retryClears() {
+	s.mu.Lock()
+	todo := make(map[string]guard.Route, len(s.uncleared))
+	for id, r := range s.uncleared {
+		todo[id] = r
+	}
+	s.mu.Unlock()
+	for id, r := range todo {
+		s.mu.Lock()
+		gone := s.lostRoutes[r.Conn]
+		s.mu.Unlock()
+		if !gone {
+			if err := s.guard.Clear(id, r); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
+				s.log.Warn("spawn %s: its route is still not withdrawn: %v", id, err)
+				continue
+			}
+		}
+		s.mu.Lock()
+		delete(s.uncleared, id)
+		s.mu.Unlock()
 	}
 }
 
@@ -219,20 +257,57 @@ func (s *server) guardLost(conn uint64) {
 		return
 	}
 	// The group's kill (cgroup.kill, the deadline already passed) takes
-	// every process of each space at once and waits until its group is
-	// empty; the leader's own kill covers a space whose group could not be
-	// made, which never started anything.
+	// every process of each space at once and answers, from the group's own
+	// listing, whether the group is empty within its bound. Only when every
+	// group is: the client dials again once this returns. A space that
+	// outlives it ends the keeper, and the container starts again behind a
+	// guard, so no routed space of a lost guard runs while another is
+	// dialled.
 	var wg sync.WaitGroup
+	var survived atomic.Bool
 	for _, sp := range routed {
 		wg.Add(1)
 		go func(sp *spawn) {
 			defer wg.Done()
 			s.signalChild(sp.leader, syscall.SIGKILL)
-			if sp.group != nil && !sp.group.KillBy(time.Now()) {
+			if !s.killGroup(sp) {
+				survived.Store(true)
 				s.log.Error("spawn %s: processes outlived its group's kill after the guard's connection ended", sp.id)
 			}
 		}(sp)
 	}
 	wg.Wait()
+	if survived.Load() {
+		s.log.Error("egress: a routed space of the guard's lost connection %d still runs; the keeper ends, so none runs while another guard is dialled", conn)
+		s.exitKeeper(ExitLost)
+		return
+	}
 	s.log.Warn("egress: the guard's connection %d ended; its %d routed spaces are killed", conn, len(routed))
+}
+
+// killGroup kills every process of sp's group at once and answers whether
+// the group is empty, as its own listing says, within the kill's bound.
+func (s *server) killGroup(sp *spawn) bool {
+	if s.groupKilled != nil {
+		return s.groupKilled(sp)
+	}
+	if sp.group == nil {
+		return true
+	}
+	if sp.group.KillBy(time.Now()) {
+		return true
+	}
+	// A group its retirement removed meanwhile holds nothing: its removal
+	// waited for its last process.
+	_, err := sp.group.Procs()
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// exitKeeper ends the keeper with code.
+func (s *server) exitKeeper(code int) {
+	if s.exit != nil {
+		s.exit(code)
+		return
+	}
+	os.Exit(code)
 }

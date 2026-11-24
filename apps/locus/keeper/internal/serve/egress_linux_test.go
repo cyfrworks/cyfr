@@ -79,6 +79,10 @@ type fakeRouteGuard struct {
 	refuse bool
 	hold   chan struct{}
 	before func(spawnID string)
+	// refuseClears refuses that many clears before it answers one; dead
+	// says no connection is live.
+	refuseClears int
+	dead         bool
 }
 
 type routeCall struct {
@@ -120,10 +124,20 @@ func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns,
 	return guard.Route{Conn: conn}, nil
 }
 
+func (g *fakeRouteGuard) Live(r guard.Route) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !g.dead && r.Conn == g.conn
+}
+
 func (g *fakeRouteGuard) Clear(spawnID string, r guard.Route) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, routeCall{op: guard.TypeClear, spawnID: spawnID, conn: r.Conn})
+	if g.refuseClears > 0 {
+		g.refuseClears--
+		return errors.New("refused: the guard could not remove the whole route, and tries again")
+	}
 	if f := g.routes[spawnID]; f != nil {
 		f.Close()
 		delete(g.routes, spawnID)
@@ -372,4 +386,99 @@ func TestTheGuardsConnectionEndKillsEveryRoutedSpace(t *testing.T) {
 	}
 	k.release(t, b)
 	k.releasedPair(t, b)
+}
+
+// A route the guard refuses to clear stays the keeper's: it is asked again
+// at each sweep, and forgotten only once the guard says cleared.
+func TestARouteIsTheKeepersUntilTheGuardSaysCleared(t *testing.T) {
+	k := routedKeeper(t)
+	k.guard.mu.Lock()
+	k.guard.refuseClears = 2
+	k.guard.mu.Unlock()
+	k.handleSpawn(t, spawnRequest(t, k.attach, "c", `echo up`, map[string]string{}, false, 64<<20))
+	spawnID := k.reply(t)["spawn_id"].(string)
+	rc := k.accept(t)
+	rc.readUntil(t, func() bool { return false })
+	k.releasedPair(t, spawnID)
+	k.guard.waitOps(t, spawnID, guard.TypeAdmit, guard.TypeClear)
+	k.s.mu.Lock()
+	_, held := k.s.uncleared[spawnID]
+	k.s.mu.Unlock()
+	if !held {
+		t.Fatal("a route the guard refused to clear was counted cleared")
+	}
+	k.s.retryClears()
+	k.s.mu.Lock()
+	_, held = k.s.uncleared[spawnID]
+	k.s.mu.Unlock()
+	if !held {
+		t.Fatal("a route the guard refused again was counted cleared")
+	}
+	k.s.retryClears()
+	k.guard.waitOps(t, spawnID, guard.TypeAdmit, guard.TypeClear, guard.TypeClear, guard.TypeClear)
+	k.s.mu.Lock()
+	_, held = k.s.uncleared[spawnID]
+	k.s.mu.Unlock()
+	if held {
+		t.Fatal("a route the guard cleared is still asked for")
+	}
+}
+
+// A routed space that outlives its kill after the guard's connection ended
+// ends the keeper before anything dials again.
+func TestASurvivorOfTheGuardsEndEndsTheKeeper(t *testing.T) {
+	k := routedKeeper(t)
+	exited := make(chan int, 1)
+	k.s.exit = func(code int) { exited <- code }
+	k.s.groupKilled = func(*spawn) bool { return false }
+	k.handleSpawn(t, spawnRequest(t, k.attach, "s", `echo up; sleep 600`, map[string]string{}, false, 64<<20))
+	k.reply(t)
+	rc := k.accept(t)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "up\n") })
+	k.s.guardLost(1)
+	select {
+	case code := <-exited:
+		if code != ExitLost {
+			t.Fatalf("the keeper ended %d", code)
+		}
+	default:
+		t.Fatal("the keeper went on with a routed space of the lost guard alive")
+	}
+	k.s.groupKilled = nil
+}
+
+// An admitted whose connection is no longer live at the release refuses the
+// spawn: its command never runs.
+func TestAnAdmittedOfAConnectionNotLiveRefusesTheSpawn(t *testing.T) {
+	k := routedKeeper(t)
+	marker := filepath.Join(filepath.Dir(k.homes), "ran")
+	k.guard.mu.Lock()
+	k.guard.dead = true
+	k.guard.mu.Unlock()
+	k.handleSpawn(t, spawnRequest(t, k.attach, "d", `touch `+marker, map[string]string{}, false, 64<<20))
+	k.expect(t, protocol.NewReleased(k.refusedMade(t, "d", protocol.CodeGuardUnavailable)))
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the command of a route not live ran: %v", err)
+	}
+}
+
+// A routed keeper's boot has its guard make and clear one probe route; a
+// guard that is not there refuses it, naming the guard's socket.
+func TestBootProvesTheGuard(t *testing.T) {
+	k := routedKeeper(t)
+	spec := k.s.cfg.Pools[0]
+	if err := k.s.proveGuard(spec); err != nil {
+		t.Fatalf("a guard that makes and clears a route: %v", err)
+	}
+	calls := k.guard.taken()
+	if len(calls) != 2 || calls[0].op != guard.TypeAdmit || calls[1].op != guard.TypeClear || calls[0].spawnID != calls[1].spawnID {
+		t.Fatalf("the boot asked the guard %+v, want one admit and its clear", calls)
+	}
+	missing := filepath.Join(t.TempDir(), "absent.sock")
+	k.s.cfg.Guard = missing
+	k.s.guard = guard.NewClient(missing, "net:[x]", nil)
+	err := k.s.proveGuard(spec)
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("a missing guard: %v", err)
+	}
 }

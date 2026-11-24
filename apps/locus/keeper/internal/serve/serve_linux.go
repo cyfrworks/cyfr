@@ -173,6 +173,15 @@ func Main(args []string) int {
 			return ExitConfig
 		}
 		s.guard = guard.NewClient(cfg.Guard, netns, s.guardLost)
+		for _, spec := range cfg.Pools {
+			if spec.Routed() {
+				if err := s.proveGuard(spec); err != nil {
+					log.Error("refusing to start: %v", err)
+					return ExitConfig
+				}
+				break
+			}
+		}
 		log.Info("egress: every routed space's route is made by the guard on %s before it starts", cfg.Guard)
 	}
 	s.memory = delegateMemory(log)
@@ -324,6 +333,107 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 	return nil
 }
 
+// proveGuard proves, before a routed keeper serves, that its guard makes a
+// space's route: a probe stage of pool spec's first uid, in a space of its
+// own, hands its namespace and name sockets up; the guard admits a route
+// with them, and once the stage has ended, clears it. A guard that does
+// either otherwise, or none at all, refuses the keeper by name.
+func (s *server) proveGuard(spec pool.Spec) error {
+	refuse := func(err error) error {
+		return fmt.Errorf("pool %s's spaces are routed, and its guard on %s does not make a route: %w", spec.Name, s.cfg.Guard, err)
+	}
+	acct := s.accounts[spec.First]
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return err
+	}
+	defer devnull.Close()
+	specR, specW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer specW.Close()
+	statusR, statusW, err := os.Pipe()
+	if err != nil {
+		specR.Close()
+		return err
+	}
+	defer statusR.Close()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		specR.Close()
+		statusW.Close()
+		return err
+	}
+	stageRoute, keeperRoute := os.NewFile(uintptr(fds[0]), "probe-route"), os.NewFile(uintptr(fds[1]), "probe-route-keeper")
+	defer keeperRoute.Close()
+	pid, err := syscall.ForkExec(s.self, []string{"cyfr-locus", "stage", stage.ProbeArg}, &syscall.ProcAttr{
+		Dir:   "/",
+		Env:   []string{},
+		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd(), ^uintptr(0), stageRoute.Fd()},
+		Sys:   spaceAttr(false),
+	})
+	specR.Close()
+	statusW.Close()
+	stageRoute.Close()
+	if err != nil {
+		return refuse(fmt.Errorf("cloning its probe: %w", err))
+	}
+	reaped := false
+	reap := func() unix.WaitStatus {
+		var ws unix.WaitStatus
+		for !reaped {
+			if _, err := unix.Wait4(pid, &ws, 0, nil); !errors.Is(err, unix.EINTR) {
+				reaped = true
+			}
+		}
+		return ws
+	}
+	defer func() {
+		if !reaped {
+			_ = unix.Kill(pid, unix.SIGKILL)
+			reap()
+		}
+	}()
+	if err := mapIDs(pid, acct.UID, acct.GID); err != nil {
+		return refuse(err)
+	}
+	probe, err := json.Marshal(stage.Probe{UID: acct.UID, GID: acct.GID, Routed: true, Route: true})
+	if err == nil {
+		_, err = specW.Write(probe)
+	}
+	_ = specW.Close()
+	if err != nil {
+		return refuse(err)
+	}
+	_ = keeperRoute.SetReadDeadline(time.Now().Add(stageTimeout))
+	files, err := receiveRoute(keeperRoute)
+	if err != nil {
+		return refuse(fmt.Errorf("its probe's descriptors: %w", err))
+	}
+	id := randomHex(16)
+	r, err := s.guard.Admit(id, guard.ReachIsland, nil, files[0], files[1], files[2])
+	for _, f := range files {
+		_ = f.Close()
+	}
+	if err != nil {
+		return refuse(err)
+	}
+	if _, err := keeperRoute.Write([]byte{stage.RouteGo}); err != nil {
+		return refuse(err)
+	}
+	_ = statusR.SetReadDeadline(time.Now().Add(stageTimeout))
+	reason, _ := io.ReadAll(io.LimitReader(statusR, 4096))
+	ws := reap()
+	if len(reason) > 0 || !ws.Exited() || ws.ExitStatus() != 0 {
+		return refuse(fmt.Errorf("its probe ended %v: %s", ws, reason))
+	}
+	if err := s.guard.Clear(id, r); err != nil {
+		return refuse(fmt.Errorf("the probe route was not cleared: %w", err))
+	}
+	return nil
+}
+
 // delegateMemory prepares the keeper's cgroup for spawns bounded in memory
 // and CPU, or reports why spawns will be refused here.
 func delegateMemory(log *logx.Logger) *cgroup.Manager {
@@ -435,7 +545,15 @@ type server struct {
 	// that ended, so an admit answered over one is never recorded.
 	routing    map[string]*spawn
 	lostRoutes map[uint64]bool
-	waiters    map[int]*child
+	// uncleared holds every withdrawn spawn's route the guard has not yet
+	// said cleared, by spawn id, asked again at each sweep.
+	uncleared map[string]guard.Route
+	// exit ends the keeper (os.Exit in production) and groupKilled kills a
+	// spawn's group and answers whether it is empty (killGroup); tests set
+	// either.
+	exit        func(code int)
+	groupKilled func(sp *spawn) bool
+	waiters     map[int]*child
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
 	// retirement and a home request take, so none of them interleaves
@@ -1423,6 +1541,9 @@ func (s *server) sweep() {
 	}
 	s.mu.Unlock()
 	s.sweepKept()
+	if s.guard != nil {
+		s.retryClears()
+	}
 	for _, e := range todo {
 		if !s.scrub(s.accounts[e.uid], 0, nil, "") {
 			continue

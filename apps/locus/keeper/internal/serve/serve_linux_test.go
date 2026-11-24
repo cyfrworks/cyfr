@@ -317,6 +317,9 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		channel:   os.NewFile(uintptr(fds[0]), "channel"),
 	}
 	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{})}
+	// The keeper's own end would end the test binary: a test that expects
+	// it sets its own.
+	s.exit = func(code int) { t.Errorf("the keeper ended %d", code) }
 	if reach == pool.ReachRouted {
 		k.guard = &fakeRouteGuard{conn: 1}
 		s.guard = k.guard
