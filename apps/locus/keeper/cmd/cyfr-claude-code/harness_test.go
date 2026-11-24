@@ -166,21 +166,24 @@ func TestOnlyAResumeThatRanNoTurnFoundNoTranscript(t *testing.T) {
 	}
 }
 
-// CYFR's server takes `cyfr` unless a server of the person's own is that
-// name, or begins with it and `_`, as Claude Code writes the name in its
-// tools' (a character outside letters, digits, `_` and `-` as `_`); then
-// the first of `cyfr-2`, `cyfr-3`… that none is.
+// CYFR's server takes `cyfr` unless a server of the person's own takes it:
+// one whose tools' prefix, its name as Claude Code writes it there (a
+// character outside letters, digits, `_` and `-` as `_`) between `mcp__`
+// and `__`, begins with `mcp__cyfr__`; then the first of `cyfr-2`,
+// `cyfr-3`… that none takes. A name that only begins with `cyfr` and `_`
+// cannot spell one of CYFR's tools, and takes nothing.
 func TestCYFRsServerTakesANameNoServerOfThePersonsShadows(t *testing.T) {
 	for _, c := range []struct {
 		listed []string
 		want   string
 	}{
 		{nil, "cyfr"},
-		{[]string{"github", "plugin:cyfr:tools", "cyfr-", "cyfrx", "my-cyfr"}, "cyfr"},
+		{[]string{"github", "plugin:cyfr:tools", "cyfr-", "cyfrx", "my-cyfr", "cyfr.tools", "cyfr_x", "cyfr-_"}, "cyfr"},
 		{[]string{"cyfr"}, "cyfr-2"},
 		{[]string{"cyfr_"}, "cyfr-2"},
 		{[]string{"cyfr__extra"}, "cyfr-2"},
-		{[]string{"cyfr.tools"}, "cyfr-2"},
+		{[]string{"cyfr."}, "cyfr-2"},
+		{[]string{"cyfr:_x"}, "cyfr-2"},
 		{[]string{"cyfr", "cyfr-2", "cyfr-3__x"}, "cyfr-4"},
 		{[]string{"cyfr", "cyfr-20"}, "cyfr-2"},
 	} {

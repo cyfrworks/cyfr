@@ -415,9 +415,11 @@ func (d *driver) controlResponse(l harnessLine) error {
 		return d.h.Write(statusLine())
 	}
 	if answer.RequestID == statusID && d.starting != nil && d.starting.initialized {
-		var listed []string
-		if answer.Subtype == "success" {
-			listed = listedServers(answer.Response)
+		// Without the person's servers listed, no name for CYFR's is known
+		// not to replace one of theirs, so nothing is set.
+		listed, ok := listedServers(answer.Response)
+		if answer.Subtype != "success" || !ok {
+			return &brainwire.Fatal{Status: 1, Reason: "Claude Code did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own"}
 		}
 		d.server = serverFor(listed)
 		var response struct {
@@ -475,11 +477,23 @@ func (d *driver) controlRequest(l harnessLine) error {
 	}
 	// An ask is CYFR's only when the harness names CYFR's server as the
 	// one it set; every other tool, a server's of the person's own among
-	// them, is the harness's own.
-	name, ours := strings.CutPrefix(request.ToolName, toolPrefix(d.server))
-	if !ours || request.Server.Name != d.server || request.Server.Source != "dynamic" {
-		// The harness's own tool runs in its box: allowed, and shown by its
-		// tool_use (assistant) by name only.
+	// them, is the harness's own. This is the one decision of whose a call
+	// is: a tool named with CYFR's prefix is shown as the harness's own only
+	// here, once this says so (assistant waits for it).
+	name, prefixed := strings.CutPrefix(request.ToolName, toolPrefix(d.server))
+	if !prefixed || request.Server.Name != d.server || request.Server.Source != "dynamic" {
+		// The harness's own tool runs in its box: allowed, and shown by name
+		// only, from its tool_use (assistant) or, named as CYFR's are, from
+		// here, until its result.
+		if prefixed && request.ToolUseID != "" {
+			if _, shown := d.own[request.ToolUseID]; !shown {
+				own := ownName(request.ToolName)
+				d.own[request.ToolUseID] = own
+				if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", own).Set("phase", "start")); err != nil {
+					return err
+				}
+			}
+		}
 		return d.h.Write(allowLine(l.RequestID, request.Input))
 	}
 	arguments := callArguments(request.Input)
@@ -555,6 +569,8 @@ func (d *driver) assistant(l harnessLine) error {
 		switch {
 		case block.Type == "text":
 			text.WriteString(block.Text)
+		// A tool named with CYFR's prefix may still be a server's of the
+		// person's: its permission says whose it is (controlRequest).
 		case block.Type == "tool_use" && !strings.HasPrefix(block.Name, toolPrefix(d.server)) && block.Name != "":
 			name := ownName(block.Name)
 			d.own[block.ID] = name

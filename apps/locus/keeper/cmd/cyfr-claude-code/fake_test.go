@@ -41,6 +41,10 @@ import (
 //	handed replies with the initialize request it was started with, as JSON
 //	theirs calls `theirs` of each server of the person's own it still holds,
 //	       each asked as that server's, then replies naming them
+//	arrived calls a tool named with CYFR's prefix that is a server's named
+//	       by FAKE_LATE_SERVER (JSON, `mcp_server` as the ask names it),
+//	       as one that started after its listing, then replies with the
+//	       driver's whole answer
 //	noise  writes a line that is no JSON, one of no type the driver
 //	       reads and an event that does not read, then replies
 //
@@ -49,7 +53,9 @@ import (
 // 2.1.323 was measured to hold them (aq-claude-own): `mcp_status` lists
 // them, and a server `mcp_set_servers` names replaces one of theirs of
 // the same name for the process's life. Each ask of an MCP tool names its
-// server, `mcp_server`, by name and source.
+// server, `mcp_server`, by name and source, and its call, `tool_use_id`.
+// FAKE_STATUS answers `mcp_status` with an error (`error`) or a success
+// that lists no servers (`unlisted`).
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -131,7 +137,7 @@ func fakeClaude() int {
 	wholes := map[string]map[string]any{}
 	var answersMu sync.Mutex
 	asked := 0
-	askOf := func(tool string, input map[string]any, server map[string]any) map[string]any {
+	askOf := func(tool string, input map[string]any, server map[string]any, use ...string) map[string]any {
 		answersMu.Lock()
 		asked++
 		id := fmt.Sprintf("ask-%d", asked)
@@ -139,6 +145,9 @@ func fakeClaude() int {
 		answers[id] = ch
 		answersMu.Unlock()
 		request := map[string]any{"subtype": "can_use_tool", "tool_name": tool, "input": input, "tool_use_id": fmt.Sprintf("toolu_%d", asked)}
+		if len(use) > 0 {
+			request["tool_use_id"] = use[0]
+		}
 		if server != nil {
 			request["mcp_server"] = server
 		}
@@ -289,7 +298,7 @@ func fakeClaude() int {
 				use := "toolu_theirs_" + name
 				write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_" + use, "content": []any{
 					map[string]any{"type": "tool_use", "id": use, "name": tool, "input": map[string]any{}}}}})
-				decision := askOf(tool, map[string]any{}, map[string]any{"name": name, "source": "user"})
+				decision := askOf(tool, map[string]any{}, map[string]any{"name": name, "source": "user"}, use)
 				updated, _ := decision["updatedInput"].(map[string]any)
 				write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
 					map[string]any{"type": "tool_result", "tool_use_id": use, "content": "their server ran"}}}})
@@ -297,6 +306,17 @@ func fakeClaude() int {
 			}
 			server, _ := held()
 			reply(uuids, "their servers ran: "+strings.Join(ran, " ")+" beside "+server)
+		case strings.Contains(words, "arrived"):
+			var server map[string]any
+			_ = json.Unmarshal([]byte(os.Getenv("FAKE_LATE_SERVER")), &server)
+			tool, input := cyfrs("late"), map[string]any{"query": "theirs"}
+			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{"id": "msg_late", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_late", "name": tool, "input": input}}}})
+			decision := askOf(tool, input, server, "toolu_late")
+			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "toolu_late", "content": "their late server ran"}}}})
+			answer, _ := json.Marshal(decision)
+			reply(uuids, string(answer))
 		case strings.Contains(words, "handed"):
 			reply(uuids, string(initialized))
 		case strings.Contains(words, "noise"):
@@ -350,7 +370,14 @@ func fakeClaude() int {
 					if server != "" {
 						listed = append(listed, map[string]any{"name": server, "status": "connected", "scope": "dynamic", "source": "dynamic"})
 					}
-					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{"mcpServers": listed}}})
+					answer := map[string]any{"subtype": "success", "request_id": id, "response": map[string]any{"mcpServers": listed}}
+					switch os.Getenv("FAKE_STATUS") {
+					case "error":
+						answer = map[string]any{"subtype": "error", "request_id": id, "error": "no status"}
+					case "unlisted":
+						answer["response"] = map[string]any{}
+					}
+					write(map[string]any{"type": "control_response", "response": answer})
 				case "mcp_set_servers":
 					servers, _ := request["servers"].(map[string]any)
 					serversMu.Lock()

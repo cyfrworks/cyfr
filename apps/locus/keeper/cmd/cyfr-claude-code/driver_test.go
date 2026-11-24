@@ -394,7 +394,9 @@ func theirsRan(t *testing.T, s *wireSession, id string) (string, []string) {
 	postText(s, id, "theirs")
 	var said string
 	var own []string
-	for _, e := range s.until("idle") {
+	// Read one event at a time: an ask held for CYFR would keep the turn
+	// from its idle.
+	for e := s.next(); e["t"] != "idle"; e = s.next() {
 		switch e["t"] {
 		case "ask":
 			t.Fatalf("a call of a server of the person's own is the program's, never CYFR's ask: %v", e)
@@ -456,6 +458,72 @@ func TestAServerOfThePersonsNamedCyfrKeepsItsNameAndCYFRsTakesAnother(t *testing
 	s.send(map[string]any{"t": "answer", "id": "stp_answer", "ask": ask["ask"], "content": "three lines", "is_error": false})
 	s.expect("accepted")
 	s.until("idle")
+}
+
+// A start whose harness does not list its MCP servers, its status read
+// refused or answered with no list, ends before anything is set: no name
+// for CYFR's server is known not to replace one of the person's, and a
+// server of theirs named `cyfr` would be replaced for the process's life.
+func TestAStartWhoseServersAreNotListedEndsBeforeAnythingIsSet(t *testing.T) {
+	for _, status := range []string{"error", "unlisted"} {
+		t.Run(status, func(t *testing.T) {
+			t.Setenv("FAKE_STATUS", status)
+			s := startDriverHolding(t, "cyfr")
+			s.expect("hello")
+			s.send(map[string]any{"t": "start", "gen": 3, "config": map[string]any{}, "system": "be brief"})
+			select {
+			case code := <-s.done:
+				if code != 1 || strings.Contains(s.output(), `"started"`) {
+					t.Fatalf("the start ends the driver with 1 and no started: %d %s", code, s.output())
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("a start with no listing of the servers went on")
+			}
+			if !strings.Contains(s.stderr.String(), "Claude Code did not list its MCP servers") {
+				t.Fatalf("the driver says why on its standard error: %q", s.stderr.String())
+			}
+		})
+	}
+}
+
+// A tool named with CYFR's prefix whose server is not CYFR's as the harness
+// names it, by name or by source (one of the person's that started after
+// the listing), is the harness's own: no ask reaches CYFR, the call is
+// allowed with the model's own input untouched, and it is shown as the
+// harness's own tool, start and end, from its permission.
+func TestALateServerNamedAsCYFRsIsTheProgramsOwnByItsPermission(t *testing.T) {
+	for name, server := range map[string]string{
+		"another server": `{"name": "cyfr__late", "source": "user"}`,
+		"another source": `{"name": "cyfr", "source": "user"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("FAKE_LATE_SERVER", server)
+			s := startDriver(t)
+			startFresh(s, map[string]any{})
+			work(s, "stp_work", []any{filesTool})
+			postText(s, "stp_late", "arrived")
+			var said string
+			var own []string
+			// One event at a time: an ask held for CYFR would keep the turn
+			// from its idle.
+			for e := s.next(); e["t"] != "idle"; e = s.next() {
+				switch e["t"] {
+				case "ask":
+					t.Fatalf("a call of a server that is not CYFR's never reaches CYFR: %v", e)
+				case "own":
+					own = append(own, fmt.Sprintf("%v:%v", e["name"], e["phase"]))
+				case "said":
+					said = e["text"].(string)
+				}
+			}
+			if want := `{"behavior":"allow","updatedInput":{"query":"theirs"}}`; said != want {
+				t.Fatalf("the call is allowed with the model's own input untouched:\n%s\nnot\n%s", want, said)
+			}
+			if want := "[mcp__cyfr__late:start mcp__cyfr__late:end]"; fmt.Sprint(own) != want {
+				t.Fatalf("the call is shown as the harness's own tool, start and end: %v", own)
+			}
+		})
+	}
 }
 
 func TestAnErrorAnswerIsTheToolsError(t *testing.T) {

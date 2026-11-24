@@ -135,35 +135,44 @@ func statusLine() []byte {
 	return controlRequest(statusID, map[string]any{"subtype": "mcp_status"})
 }
 
-// listedServers are the servers' names a `mcp_status` answer lists.
-func listedServers(response json.RawMessage) []string {
+// listedServers are the servers' names a `mcp_status` answer lists, and
+// whether it lists them: `mcpServers` a list, empty when there are none.
+// An answer that lists none, or names a server without a name, says
+// nothing of the person's servers, so no name can be chosen beside them.
+func listedServers(response json.RawMessage) ([]string, bool) {
 	var status struct {
-		Servers []struct {
+		Servers *[]struct {
 			Name string `json:"name"`
 		} `json:"mcpServers"`
 	}
-	_ = json.Unmarshal(response, &status)
-	names := make([]string, 0, len(status.Servers))
-	for _, s := range status.Servers {
+	if json.Unmarshal(response, &status) != nil || status.Servers == nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(*status.Servers))
+	for _, s := range *status.Servers {
+		if s.Name == "" {
+			return nil, false
+		}
 		names = append(names, s.Name)
 	}
-	return names
+	return names, true
 }
 
 // serverFor is the name CYFR's server takes beside the servers the harness
 // lists: `cyfr`, or else the first of `cyfr-2`, `cyfr-3`… that no listed
-// server's name is, or begins with followed by `_`. Claude Code names a
-// tool `mcp__<server>__<tool>`, each character of the server's name that
-// is not a letter, a digit, `_` or `-` written `_`, and a server the
-// driver sets replaces one of the person's of the same name, and a tool of
-// the same whole name, for the life of the process (2.1.323). So neither
-// shadows the other: no server of theirs is named as CYFR's, and no tool of
-// theirs begins with CYFR's prefix.
+// server takes. Claude Code names a tool `mcp__<server>__<tool>`, each
+// character of the server's name that is not a letter, a digit, `_` or
+// `-` written `_`, and a server the driver sets replaces one of the
+// person's of the same name, and a tool of the same whole name, for the
+// life of the process (2.1.323). A listed server takes a name when its
+// tools' prefix, `mcp__<its name so written>__`, begins with that name's,
+// `mcp__<name>__`: then a tool of theirs could be spelled as one of
+// CYFR's. So neither shadows the other: no server of theirs is named as
+// CYFR's, and no tool of theirs begins with CYFR's prefix.
 func serverFor(listed []string) string {
 	taken := func(name string) bool {
 		for _, other := range listed {
-			other = toolNamePart(other)
-			if other == name || strings.HasPrefix(other, name+"_") {
+			if strings.HasPrefix(toolPrefix(toolNamePart(other)), toolPrefix(name)) {
 				return true
 			}
 		}

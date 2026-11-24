@@ -156,22 +156,31 @@ function stopServers(which = servers) {
   which.clear();
 }
 
-// The person's own start with the process, apart from the driver's lines.
-let ownStarted = Promise.resolve();
+// The person's own start with the process, apart from the driver's lines
+// and the turn: nothing waits for them, as Claude Code 2.1.323 waits for
+// none (one that never answers is no part of a set or a turn). One the
+// driver's set replaced is stopped once it has started.
+const shadowed = new Set();
+let ownListed = Promise.resolve();
 if (!args.includes('--strict-mcp-config')) {
   let configured = {};
   try {
     configured = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).mcpServers || {};
   } catch {}
   ownNames = Object.keys(configured).sort();
-  ownStarted = Promise.all(ownNames.map((name) => startServer(name, configured[name], own)));
+  ownListed = Promise.all(ownNames.map((name) => startServer(name, configured[name], own).then((server) => {
+    if (server && shadowed.has(name)) {
+      server.child.kill('SIGINT');
+      own.delete(name);
+    }
+  })));
 }
 
 async function setServers(requestId, wanted) {
   const removed = [...servers.keys()];
   stopServers();
-  await ownStarted;
   for (const name of Object.keys(wanted)) {
+    shadowed.add(name);
     own.get(name)?.child.kill('SIGINT');
     own.delete(name);
     ownNames = ownNames.filter((n) => n !== name);
@@ -251,9 +260,12 @@ async function turn(message) {
     }
     reply(said);
   } else if (words.includes('theirs')) {
+    // The model calls a tool of theirs once it is listed, as when started.
+    await ownListed;
     const ran = [];
     for (const name of ownNames) {
       const server = own.get(name);
+      if (!server) continue;
       const tool = `mcp__${name}__echo_env`;
       const input = { name: 'THEIR_SERVER' };
       out({ type: 'assistant', message: { id: `msg_${crypto.randomUUID()}`, role: 'assistant', model, content: [{ type: 'tool_use', id: `toolu_fake_${asked + 1}`, name: tool, input }], usage: { input_tokens: 5, output_tokens: 2 } }, parent_tool_use_id: null, session_id: sessionId });
