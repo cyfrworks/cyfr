@@ -241,7 +241,7 @@ defmodule PrismWeb.AquaLiveTest do
 
   # What the setup says while nothing is connected and nothing ticked.
   @setup_needs "Tick what you have: a key from a model provider, or Claude Code, " <>
-                 "OpenAI Codex, Antigravity or OpenCode on your own plan."
+                 "OpenAI Codex, Antigravity, OpenCode or Cursor on your own plan."
 
   # The setup read again, as the page reads it after a write of its own,
   # which asks no program.
@@ -4630,6 +4630,9 @@ defmodule PrismWeb.AquaLiveTest do
     do: [%{"id" => "full-access", "name" => "Full access, no approvals"}]
 
   defp driver_access("cyfr-opencode" <> _rest),
+    do: [%{"id" => "full-access", "name" => "Full access, no approvals"}]
+
+  defp driver_access("cyfr-cursor" <> _rest),
     do: [%{"id" => "full-access", "name" => "Full access, no approvals"}]
 
   # The text of each element `selector` finds, trimmed.
