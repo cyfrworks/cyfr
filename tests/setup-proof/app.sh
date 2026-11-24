@@ -62,7 +62,7 @@
 #   two     two_reopened      the passkey launch's CYFR, still running, is
 #                             the one selected last: the app opens it by
 #                             itself as it starts, signed in as before, in
-#                             its own store
+#                             a store kept on disk
 #           two_set_up        Set up on the rail sets CYFR up in a third
 #                             folder on a port of its own beside it, its
 #                             first person made with a passkey, and adds it

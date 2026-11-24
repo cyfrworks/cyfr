@@ -293,11 +293,14 @@ lib.run("setup", {
   // row switches to it, still signed in.
   async two() {
     const OTHER = inputs.other
-    await judged("two_reopened", "the folder's CYFR selected last opens by itself as the app starts, signed in as before, in its own store",
+    // Which store is two_apart's to read; this row, that the one opened is
+    // kept on disk.
+    await judged("two_reopened", "the folder's CYFR selected last opens by itself as the app starts, signed in as before, in a store kept on disk",
       async () => {
         const w = await contentAt(atCYFR(OTHER), "the CYFR selected last")
         const live = await waitFor(() => js(w.webContents, `!!document.querySelector("[data-phx-main].phx-connected") || null`), "Prism live")
-        return [!!live && w.webContents.session === store(OTHER), {at: w.webContents.getURL().split("#")[0]}]
+        const kept = !!w.webContents.session.getStoragePath()
+        return [!!live && kept, {at: w.webContents.getURL().split("#")[0], kept}]
       })
     await judged("two_set_up", "Set up on the rail sets CYFR up in a second folder on its own port, its first person made with a passkey, and adds it as a row of its own beside the first",
       async () => {
