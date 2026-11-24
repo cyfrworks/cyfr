@@ -168,33 +168,67 @@ echo done`, sleeps[0], k.s.cfg.Kept.Root, k.s.self)
 	k.releasedPair(t, a)
 }
 
-// The space's init ends every process of the space with the command: a
-// daemon that left the command's session is gone when the command's exit is
-// told, which carries the command's own code, and a command ended by a
+// The space's init ends every process of the space with the command. A
+// daemon one session of a kept home left, out of the command's session,
+// is gone once that session has ended, though another session of the home
+// lives on under the same uid, which the uid's retirement waits for. The
+// exit told carries the command's own code, and a command ended by a
 // signal is told so, by that signal.
 func TestASpacesProcessesEndWithItsCommand(t *testing.T) {
-	k := newKeeper(t).withMemory(t)
-	id, uid, rc := k.spawn(t, "d", `setsid nohup sleep 600 </dev/null >/dev/null 2>&1 & echo started; exit 3`, map[string]string{}, false)
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-end")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	sibling, rc := k.spawnKept(t, "sibling", `echo ready; exec sleep 600`, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	ended, rc := k.spawnKept(t, "daemon", `setsid nohup sleep 601 </dev/null >/dev/null 2>&1 & echo started; exit 3`, path, uid)
 	rc.readUntil(t, func() bool { return false })
 	if !strings.Contains(string(rc.got[frame.StreamStdout]), "started\n") {
 		t.Fatalf("stdout %q", rc.got[frame.StreamStdout])
 	}
-	if exited := k.reply(t); exited["spawn_id"] != id || exited["code"] != float64(3) {
-		t.Fatalf("exit: %v", exited)
+	told := map[string]map[string]any{}
+	for len(told) < 2 {
+		m := k.reply(t)
+		told[m["type"].(string)] = m
 	}
-	if left := pidsOf(t, uid, "sleep"); len(left) != 0 {
-		t.Fatalf("the daemon outlived its space's command: %v", left)
+	if e := told[protocol.TypeExited]; e["spawn_id"] != ended || e["code"] != float64(3) {
+		t.Fatalf("exit: %v", told)
 	}
-	k.reply(t)
-	assertRetired(t, k, uid)
+	if left := pidsRunning(t, uid, "sleep 601"); len(left) != 0 {
+		t.Fatalf("the daemon outlived its session: %v", left)
+	}
+	if lives := pidsRunning(t, uid, "sleep 600"); len(lives) != 1 {
+		t.Fatalf("the other session's command: %v", lives)
+	}
 
-	id, uid, rc = k.spawn(t, "s", `kill -SEGV $$`, map[string]string{}, false)
+	signalled, rc := k.spawnKept(t, "segv", `kill -SEGV $$`, path, uid)
 	rc.readUntil(t, func() bool { return false })
-	if exited := k.reply(t); exited["spawn_id"] != id || exited["signal"] != "SIGSEGV" || exited["code"] != nil {
-		t.Fatalf("exit: %v", exited)
+	told = map[string]map[string]any{}
+	for len(told) < 2 {
+		m := k.reply(t)
+		told[m["type"].(string)] = m
 	}
-	k.reply(t)
-	assertRetired(t, k, uid)
+	if e := told[protocol.TypeExited]; e["spawn_id"] != signalled || e["signal"] != "SIGSEGV" || e["code"] != nil {
+		t.Fatalf("exit: %v", told)
+	}
+	k.release(t, sibling)
+	k.releasedPair(t, sibling)
+}
+
+// pidsRunning answers the pids, as this test's namespace numbers them, of
+// the processes of uid whose command line is cmdline.
+func pidsRunning(t *testing.T, uid int, cmdline string) []int {
+	t.Helper()
+	var pids []int
+	for _, pid := range pidsOf(t, uid, strings.Fields(cmdline)[0]) {
+		raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+		if err == nil && strings.Join(strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00"), " ") == cmdline {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // A signal the keeper is asked to send reaches the command's process group
