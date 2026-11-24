@@ -170,8 +170,10 @@ if [ "${1:-}" = --session ]; then
   # (1600x900; tap.py takes 1280x720), its time kept in $OUT/pressed.
   push() { TAP_AT="$OUT/pressed" screen press "$1" >>"$OUT/presses"; }
   rail() { TAP_AT="$OUT/pressed" python3 -I "$FIX/tap.py" $(($1 * 1280 / 1600)) $(($2 * 720 / 900)) 2>>"$OUT/tap.log"; }
-  typed() { wtype -- "$1"; }
-  key() { wtype -k "$1"; }
+  # Each wtype is a keyboard of its own, whose first key the engine loses
+  # while it takes that keyboard's keymap: each waits 300 ms first.
+  typed() { wtype -s 300 -- "$1"; }
+  key() { wtype -s 300 -k "$1"; }
   # What the run's host answers (box.sh's dispatch): one ask written
   # whole, its answer read once within 120 s.
   ASKS=0
