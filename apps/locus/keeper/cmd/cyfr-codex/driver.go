@@ -46,6 +46,15 @@ type starting struct {
 	stage   string
 	request string
 	account string
+	// thread and model are Codex's answer to the thread's start or resume,
+	// standing, the servers its listing names that are not switched off,
+	// pages the listing's pages read, and notices Codex's notifications
+	// held until the start is answered.
+	thread   string
+	model    string
+	standing []string
+	pages    int
+	notices  []rpc
 }
 
 // waiting is the delivery the holder waits on Codex's answer for: the
@@ -330,6 +339,11 @@ func (d *driver) Line(line []byte) error {
 		return d.response(id, m)
 	case m.Method != "" && len(m.ID) > 0:
 		return d.request(m)
+	case m.Method != "" && d.starting != nil && d.starting.stage == "servers":
+		// The thread runs, its start not yet answered: what Codex says of it
+		// is read once the start is.
+		d.starting.notices = append(d.starting.notices, m)
+		return nil
 	case m.Method != "":
 		return d.notification(m.Method, m.Params)
 	}
@@ -469,7 +483,9 @@ func accountOf(m rpc) string {
 
 // startStep is the start's handshake, one answer at a time: `initialize`,
 // then the sign-in read, then the configuration's, then the thread
-// started or resumed with no MCP server of Codex's own.
+// started or resumed with no MCP server of Codex's own, then Codex's
+// listing of the thread's servers, which must name none that stands
+// (noServersOfItsOwn).
 func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case "initialize":
@@ -487,18 +503,18 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		d.signedIn = s.account == brainwire.SignedIn
 		s.stage = "config"
 		s.request = d.nextID("config")
-		return d.h.Write(configRead(s.request))
+		return d.h.Write(configRead(s.request, d.home))
 	case "config":
 		servers, read := ownServers(m)
 		if !read {
-			return &brainwire.Fatal{Status: 1, Reason: "OpenAI Codex's configuration could not be read, so no thread started"}
+			return d.refuseStart(unreadConfigSentence)
 		}
 		s.stage = "thread"
 		s.request = d.nextID("thread")
 		if s.resume {
-			return d.h.Write(threadResume(s.request, s.session, s.system, servers, d.config, d.policy))
+			return d.h.Write(threadResume(s.request, s.session, s.system, d.home, servers, d.config, d.policy))
 		}
-		return d.h.Write(threadStart(s.request, s.system, s.tools, servers, d.config, d.policy))
+		return d.h.Write(threadStart(s.request, s.system, s.tools, d.home, servers, d.config, d.policy))
 	case "thread":
 		if m.Error != nil {
 			// A thread the folder holds no rollout of, or an empty one, is
@@ -520,28 +536,70 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		if !brainwire.IsUUID(r.Thread.ID) || (s.resume && r.Thread.ID != s.session) {
 			return &brainwire.Fatal{Status: 1, Reason: "OpenAI Codex started no thread the driver can name"}
 		}
-		d.starting = nil
-		d.session = r.Thread.ID
-		d.model = r.Model
-		d.resumed = s.resume
-		switch {
-		case s.system == "":
-		case s.resume && !wasHanded(d.home, d.session, s.system):
-			d.handing = s.system
-		// A new thread has them from its start. One started signed out
-		// takes no post, and CYFR keeps no session of it.
-		case !s.resume && s.account != brainwire.SignedOut:
-			recordHanded(d.home, d.session, s.system)
+		s.thread, s.model = r.Thread.ID, r.Model
+		s.stage = "servers"
+		s.request = d.nextID("servers")
+		return d.h.Write(serverListing(s.request, s.thread, ""))
+	case "servers":
+		standing, next, read := standingServers(m)
+		if !read {
+			return d.refuseStart(unreadServersSentence)
 		}
-		// `held` is delivery evidence and no more: the pending posts the
-		// thread's rollout was read to hold. A pending post it leaves out is
-		// not established, never proved absent.
-		held := []string{}
-		if s.resume && len(s.pending) > 0 {
-			held, _ = heldPosts(d.home, d.session, s.pending)
+		s.standing = append(s.standing, standing...)
+		if next != "" {
+			if s.pages++; s.pages >= listingPages {
+				return d.refuseStart(unreadServersSentence)
+			}
+			s.request = d.nextID("servers")
+			return d.h.Write(serverListing(s.request, s.thread, next))
 		}
-		return d.c.Emit(brainwire.NewEvent("started").Set("session", d.session).Set("fresh", !s.resume).Set("held", held).
-			SetOptional("account", s.account))
+		if len(s.standing) > 0 {
+			return d.refuseStart(ownServerSentence(s.standing))
+		}
+		return d.started(s)
+	}
+	return nil
+}
+
+// refuseStart answers a start that must not go on with Codex's own error
+// in the driver's words, which the holder ends the turn saying, and closes
+// the harness, ending the thread before the model is asked anything.
+func (d *driver) refuseStart(sentence string) error {
+	d.Close()
+	return d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).Set("type", "invalid_request").Set("message", sentence))
+}
+
+// started answers the start: the thread runs with no MCP server of
+// Codex's own. What Codex said of it meanwhile is read now.
+func (d *driver) started(s *starting) error {
+	d.starting = nil
+	d.session = s.thread
+	d.model = s.model
+	d.resumed = s.resume
+	switch {
+	case s.system == "":
+	case s.resume && !wasHanded(d.home, d.session, s.system):
+		d.handing = s.system
+	// A new thread has them from its start. One started signed out
+	// takes no post, and CYFR keeps no session of it.
+	case !s.resume && s.account != brainwire.SignedOut:
+		recordHanded(d.home, d.session, s.system)
+	}
+	// `held` is delivery evidence and no more: the pending posts the
+	// thread's rollout was read to hold. A pending post it leaves out is
+	// not established, never proved absent.
+	held := []string{}
+	if s.resume && len(s.pending) > 0 {
+		held, _ = heldPosts(d.home, d.session, s.pending)
+	}
+	if err := d.c.Emit(brainwire.NewEvent("started").Set("session", d.session).Set("fresh", !s.resume).Set("held", held).
+		SetOptional("account", s.account)); err != nil {
+		return err
+	}
+	for _, m := range s.notices {
+		if err := d.notification(m.Method, m.Params); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -18,10 +18,13 @@ with exactly its members.
   one access the driver honours, full access with no approvals, each
   model with its own efforts, and that the program is signed in, as its
   start does.
-- An MCP server the folder's own configuration names (the person's, or the
-  program's under full access) is never started and its tools are never
-  shown to the model, on a start and on a resume: a server is one a person
-  adds in CYFR.
+- An MCP server Codex's configuration names is switched off by its name on
+  a start and on a resume, so it never runs and the model is never shown
+  its tools; one named after the configuration was read ends the start in
+  the driver's sentence, an `error` naming it and what to do, before the
+  thread is handed anything: a server is one a person adds in CYFR. The
+  stand-in names its servers from files the suite writes, not as Codex
+  loads its configuration, which the real program shows.
 - A start runs the app-server and starts a thread with the start's tools as
   its dynamic tools, its system prompt as developer instructions, its model,
   and, in the full access it names, Codex's own sandbox and asking off, and
@@ -145,16 +148,14 @@ def home_has(c, path):
     return word == "present"
 
 
-def plant(c):
-    """Names an MCP server in the brain row's folder's Codex configuration, as the person on the program's
-    terminal or the program itself could; were it started, it would leave its mark in the folder."""
+def name_servers(c, file, names):
+    """Writes the stand-in's names of Codex's MCP servers, a line each of ~/.codex/<file> in the brain row's
+    folder: `fake-servers` its configuration's, `fake-late-servers` those named after its read."""
     client = c.mcp(OWNER, "probe", key="folder", home_id=HOME)
-    script = ('mkdir -p "$HOME/.codex" && printf \'%s\\n\' \'[mcp_servers.planted]\' \'command = "/bin/sh"\' '
-              '\'args = ["-c", "echo started >> \\"$HOME/planted-started\\""]\' >> "$HOME/.codex/config.toml"')
+    script = f'mkdir -p "$HOME/.codex" && printf "%s" "{"".join(n + chr(10) for n in names)}" > "$HOME/.codex/{file}"'
     status, answer = client.call("run", {"argv": ["/bin/sh", "-c", script]})
     result = (answer or {}).get("result") or {}
-    expect(status == 200 and not result.get("isError"), "the server is named in the folder's configuration", answer)
-    expect(home_has(c, ".codex/config.toml"), "the folder's configuration names it (a positive control)")
+    expect(status == 200 and not result.get("isError"), f"the stand-in's {file} are written", answer)
 
 
 def rollout(thread):
@@ -180,7 +181,7 @@ def main():
         expect(c.hello()[0] == 200, "the backends service is greeted")
         status, synced, _ = c.sync(OWNER, [PROGRAM, probe(home="kept")])
         expect(status == 200, "an owner of the brain row, kept, is synced", synced)
-        plant(c)
+        name_servers(c, "fake-servers", ["planted"])
 
         # ————— hello, and a listing with no harness running —————
         d = Driver(c, "brain-one")
@@ -211,9 +212,8 @@ def main():
         expect(turn[0] == {"t": "accepted", "id": "stp_post_1"}, "the post is accepted first, once Codex took it", turn[0])
         streamed = "".join(e["delta"] for e in turn if e["t"] == "text")
         said = [e["text"] for e in turn if e["t"] == "said"]
-        expect(said and "mcp__" not in said[0] and not home_has(c, "planted-started"),
-               "the server the folder's configuration names is not started, and the model is shown none of its tools",
-               said)
+        expect(said and "mcp__" not in said[0],
+               "the server Codex's configuration names is switched off, and the model is shown none of its tools", said)
         expect(said and streamed == said[0]
                and f"thread {thread}, model fake-mini, effort xhigh, tools files, policy never/danger-full-access, patch accept" in said[0]
                and f'instructions "{SYSTEM}"' in said[0],
@@ -273,12 +273,31 @@ def main():
         d.expect("accepted", "the resumed thread's work is accepted")
         d.send({"t": "post", "id": "stp_post_5", "work": "trn_brain_2", "content": [{"type": "text", "text": "say hello"}]})
         said = [e["text"] for e in d.until("idle") if e["t"] == "said"]
-        expect(said and "mcp__" not in said[0] and not home_has(c, "planted-started"),
-               "nor is it started for the resumed thread, nor its tools shown", said)
+        expect(said and "mcp__" not in said[0], "nor is it on for the resumed thread, nor its tools shown", said)
         expect(said and f"thread {thread}, model fake-sol" in said[0] and "tools files" in said[0]
                and "policy never/danger-full-access" in said[0],
                "the new process runs the thread with the new model, the tools it started with and the first access's policy",
                said)
+
+        # ————— a server named after the configuration's read ends the start, saying so —————
+        seen += d.lines
+        d.close()
+        name_servers(c, "fake-late-servers", ["late"])
+        stands = ('it runs an MCP server of its own, "late", that CYFR does not use: add the server in CYFR, '
+                  "and remove it from Codex's own configuration or plugins on the program's terminal.")
+        for key, start in (("brain-late", {"t": "start", "gen": 8, "config": {}, "system": SYSTEM, "tools": [FILES]}),
+                           ("brain-late-resumed", {"t": "start", "gen": 8, "session": thread, "config": {}, "system": SYSTEM})):
+            d = Driver(c, key)
+            d.expect("hello", f"{key}: a driver to start")
+            d.send(start)
+            ended = d.expect("error", f"{key}: the start is answered with Codex's error in the driver's words")
+            expect(ended == {"t": "error", "gen": 8, "type": "invalid_request", "message": stands},
+                   f"{key}: the error names the server of Codex's own and what to do", ended)
+            seen += d.lines
+            d.close()
+        name_servers(c, "fake-late-servers", [])
+        d = Driver(c, "brain-late-after")
+        d.expect("hello", "a driver once the late server is gone")
 
         # ————— a thread the folder does not hold —————
         seen += d.lines

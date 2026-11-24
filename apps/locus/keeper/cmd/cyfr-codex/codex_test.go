@@ -94,16 +94,34 @@ func TestTextOfManyLinesReachesCodexAsOneLine(t *testing.T) {
 		line []byte
 		want map[string]any
 	}{
-		{threadStart("cyfr-thread-1", text, []map[string]any{}, nil, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/start", "params": map[string]any{
-			"approvalPolicy": "never", "sandbox": "danger-full-access", "dynamicTools": []any{}, "config": none, "developerInstructions": text}}},
-		{threadResume("cyfr-thread-1", thread, text, nil, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/resume", "params": map[string]any{
-			"threadId": thread, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "config": none, "developerInstructions": text}}},
+		{threadStart("cyfr-thread-1", text, []map[string]any{}, "/home/kept", nil, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/start", "params": map[string]any{
+			"approvalPolicy": "never", "sandbox": "danger-full-access", "dynamicTools": []any{}, "cwd": "/home/kept", "config": none, "developerInstructions": text}}},
+		{threadResume("cyfr-thread-1", thread, text, "/home/kept", nil, brainwire.Config{}, accessChoices[0].Native), map[string]any{"id": "cyfr-thread-1", "method": "thread/resume", "params": map[string]any{
+			"threadId": thread, "approvalPolicy": "never", "sandbox": "danger-full-access", "excludeTurns": true, "cwd": "/home/kept", "config": none, "developerInstructions": text}}},
 		{toolAnswer(json.RawMessage("7"), text, true), map[string]any{"id": float64(7), "result": map[string]any{
 			"contentItems": []any{map[string]any{"type": "inputText", "text": text}}, "success": true}}},
 	} {
 		var got map[string]any
 		if bytes.ContainsAny(c.line, "\r\n") || json.Unmarshal(c.line, &got) != nil || !reflect.DeepEqual(got, c.want) {
 			t.Fatalf("text of many lines is one line to Codex, read back as it was: %s", c.line)
+		}
+	}
+}
+
+// A start ending on Codex's own servers names them, at most five, and
+// says what the person does.
+func TestTheSentenceOfServersOfCodexsOwnNamesThem(t *testing.T) {
+	const do = ": add the server in CYFR, and remove it from Codex's own configuration or plugins on the program's terminal."
+	for _, c := range []struct {
+		names []string
+		want  string
+	}{
+		{[]string{"late"}, `it runs an MCP server of its own, "late", that CYFR does not use` + do},
+		{[]string{"a", "b c"}, `it runs MCP servers of its own, "a", "b c", that CYFR does not use` + do},
+		{[]string{"1", "2", "3", "4", "5", "6", "7"}, `it runs MCP servers of its own, "1", "2", "3", "4", "5" and 2 more, that CYFR does not use` + do},
+	} {
+		if got := ownServerSentence(c.names); got != c.want {
+			t.Fatalf("%v: %q", c.names, got)
 		}
 	}
 }

@@ -51,14 +51,45 @@ import (
 // must never pass on, and keeps a sign-in, `auth.json`, while
 // FAKE_SIGNED_OUT is unset; FAKE_ACCOUNT, when set, is its account's
 // answer, or "fail". Its configuration's read names the MCP servers
-// FAKE_MCP_SERVERS lists, by commas, and fails while FAKE_CONFIG_FAIL is
-// set. A resume sends the thread's last total again
+// `configured` gives, or answers as FAKE_CONFIG says: "fail", or a list
+// "null", "missing", a "list" or a "null-server"; its listing of a
+// thread's servers names each with its status, or none that reads while
+// FAKE_LISTING is "odd". A resume sends the thread's last total again
 // unless FAKE_NO_REPEAT is set, and is refused in words other than a
 // missing rollout's while FAKE_RESUME_FAIL is set. A thread whose rollout
 // file is empty is refused in Codex's words for it. An injection
 // (`thread/inject_items`) is kept in the thread's rollout, and refused
 // while FAKE_INJECT_FAIL is set or a turn runs.
 const fakeEnv = "CYFR_FAKE_CODEX"
+
+// configured are the MCP servers the fake's configuration names: its
+// folder's (FAKE_MCP_SERVERS), a trusted project's in the folder `cwd`
+// (FAKE_PROJECT_SERVERS), read only for a folder named, and, when the
+// thread starts, those named since its configuration was read
+// (FAKE_LATE_SERVERS).
+func configured(cwd string, starting bool) []string {
+	names := commas(os.Getenv("FAKE_MCP_SERVERS"))
+	if cwd != "" {
+		names = append(names, commas(os.Getenv("FAKE_PROJECT_SERVERS"))...)
+	}
+	if starting {
+		names = append(names, commas(os.Getenv("FAKE_LATE_SERVERS"))...)
+	}
+	return names
+}
+
+func commas(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ',' })
+}
+
+func contains(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
 
@@ -120,6 +151,8 @@ func fakeCodex() int {
 		steered                                  chan string
 		total                                    map[string]int
 		opened                                   map[string]any
+		servers                                  []string
+		off                                      map[string]bool
 	}
 	rolloutOf := func(id string) string {
 		matches, _ := filepath.Glob(filepath.Join(sessions, "rollout-*-"+id+".jsonl"))
@@ -349,17 +382,40 @@ func fakeCodex() int {
 					ok(map[string]any{"account": nil, "requiresOpenaiAuth": true})
 				}
 			case m.Method == "config/read":
-				// The servers its configuration names, as Codex's read of
-				// its folder's config.toml answers them.
-				if os.Getenv("FAKE_CONFIG_FAIL") != "" {
-					fail(-32603, "HARNESS-WORDS the configuration could not be read")
-					continue
-				}
+				// The servers its configuration names for the folder the read
+				// names, as Codex's read of its files answers them.
 				servers := map[string]any{}
-				for _, name := range strings.FieldsFunc(os.Getenv("FAKE_MCP_SERVERS"), func(r rune) bool { return r == ',' }) {
+				for _, name := range configured(str("cwd"), false) {
 					servers[name] = map[string]any{"command": "planted", "enabled": true}
 				}
-				ok(map[string]any{"config": map[string]any{"model": nil, "mcp_servers": servers}, "origins": map[string]any{}})
+				switch os.Getenv("FAKE_CONFIG") {
+				case "fail":
+					fail(-32603, "HARNESS-WORDS the configuration could not be read")
+				case "null":
+					ok(map[string]any{"config": map[string]any{"mcp_servers": nil}})
+				case "missing":
+					ok(map[string]any{"config": map[string]any{"model": nil}})
+				case "list":
+					ok(map[string]any{"config": map[string]any{"mcp_servers": []any{"planted"}}})
+				case "null-server":
+					ok(map[string]any{"config": map[string]any{"mcp_servers": map[string]any{"planted": nil}}})
+				default:
+					ok(map[string]any{"config": map[string]any{"model": nil, "mcp_servers": servers}, "origins": map[string]any{}})
+				}
+			case m.Method == "mcpServerStatus/list":
+				if os.Getenv("FAKE_LISTING") == "odd" || str("threadId") != thread.id {
+					ok(map[string]any{"data": nil})
+					continue
+				}
+				data := []any{}
+				for _, name := range thread.servers {
+					status := "connected"
+					if thread.off[name] {
+						status = "disabled"
+					}
+					data = append(data, map[string]any{"name": name, "runtimeStatus": status, "tools": map[string]any{}})
+				}
+				ok(map[string]any{"data": data, "nextCursor": nil})
 			case m.Method == "model/list":
 				if str("cursor") == "" {
 					ok(map[string]any{"data": []any{
@@ -371,6 +427,27 @@ func fakeCodex() int {
 					}, "nextCursor": nil})
 				}
 			case m.Method == "thread/start" || m.Method == "thread/resume":
+				// The thread's servers are its folder's as Codex reads them
+				// now, each on unless the thread's config switches it off; a
+				// name its configuration does not hold refuses the thread.
+				servers := configured(str("cwd"), true)
+				off := map[string]bool{}
+				config, _ := m.Params["config"].(map[string]any)
+				given, _ := config["mcp_servers"].(map[string]any)
+				unknown := ""
+				for name, v := range given {
+					if !contains(servers, name) {
+						unknown = name
+					}
+					if server, _ := v.(map[string]any); server["enabled"] == false {
+						off[name] = true
+					}
+				}
+				if unknown != "" {
+					fail(-32600, "failed to load configuration: invalid transport\nin `mcp_servers."+unknown+"`")
+					continue
+				}
+				thread.servers, thread.off = servers, off
 				thread.opened = m.Params
 				thread.policy, thread.sandbox = str("approvalPolicy"), str("sandbox")
 				thread.instructions = str("developerInstructions")

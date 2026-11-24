@@ -38,13 +38,16 @@
 //   names in its reply, and refuses one naming no turn under way;
 //   `thread/delete` removes the thread and its rollout, leaving the
 //   snapshot, as Codex does, and refuses a thread it does not hold.
-// - `config/read` names the MCP servers its folder's ~/.codex/config.toml
-//   names (`[mcp_servers.<name>]`, with `command` and `args`). A thread's
-//   start or resume starts each, as Codex 0.169.0 does, unless the
-//   request's `config` switches it off by its name, and the model is shown
-//   its tools (`mcp__<name>`, named in the `hello` reply's tools); a name
-//   the configuration does not hold refuses the thread, as Codex does.
-import { spawn } from 'node:child_process';
+// - `config/read` names the MCP servers its configuration names, each a
+//   line of ~/.codex/fake-servers, the suite's stand-in for what Codex
+//   reads from its files (Codex's own loader is the real program's, which
+//   this does not imitate). A thread's start or resume runs each of them,
+//   and each a line of ~/.codex/fake-late-servers names, one named after
+//   the read, unless the request's `config` switches it off by its name;
+//   a name its configuration does not hold refuses the thread, as Codex
+//   does. `mcpServerStatus/list` lists the thread's servers, each
+//   `disabled` or `connected`, and the `hello` reply names each running
+//   one's tools as the model is shown them (`mcp__<name>`).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -86,40 +89,24 @@ const waiting = new Map();
 let thread = null;
 
 let servers = [];
+let off = new Set();
 
-// The MCP servers the folder's config.toml names, with their commands.
-function configured() {
-  const file = path.join(home, 'config.toml');
-  const named = {};
-  if (!fs.existsSync(file)) return named;
-  let current = null;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    const header = line.match(/^\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*$/);
-    if (header) {
-      current = named[header[1]] = { command: '', args: [] };
-    } else if (line.startsWith('[')) {
-      current = null;
-    } else if (current) {
-      const member = line.match(/^(command|args)\s*=\s*(.+)$/);
-      if (member) current[member[1]] = JSON.parse(member[2]);
-    }
-  }
-  return named;
-}
+// The names a line each of ~/.codex/<file> holds.
+const named = (file) => {
+  const at = path.join(home, file);
+  return fs.existsSync(at) ? fs.readFileSync(at, 'utf8').split('\n').filter(Boolean) : [];
+};
 
-// Starts each configured server `config` does not switch off, or says why
-// the thread is refused.
+// Runs the thread's servers, each named in the configuration or since its
+// read, each on unless `config` switches it off, or says why the thread is
+// refused.
 function startServers(config) {
-  const named = configured();
+  const all = [...named('fake-servers'), ...named('fake-late-servers')];
   const given = config?.mcp_servers || {};
-  const unknown = Object.keys(given).find((name) => !named[name]);
+  const unknown = Object.keys(given).find((name) => !all.includes(name));
   if (unknown) return `failed to load configuration: invalid transport\nin \`mcp_servers.${unknown}\`\n`;
-  servers = [];
-  for (const [name, server] of Object.entries(named)) {
-    if (given[name]?.enabled === false) continue;
-    spawn(server.command, server.args, { stdio: 'ignore' }).on('error', () => {});
-    servers.push(`mcp__${name}`);
-  }
+  servers = all;
+  off = new Set(Object.keys(given).filter((name) => given[name]?.enabled === false));
   return null;
 }
 
@@ -184,7 +171,7 @@ async function turn(turnId, params) {
     notify('item/started', { ...base, item: command });
     notify('item/completed', { ...base, item: { ...command, status: 'completed', aggregatedOutput: 'FAKE-FOLDER-CANARY', exitCode: 0 } });
     const patch = await request('item/fileChange/requestApproval', { ...base, itemId: 'call_own_2', reason: 'write FAKE-FOLDER-CANARY' });
-    const tools = [...thread.dynamicTools.map((t) => t.name), ...servers].join(',');
+    const tools = [...thread.dynamicTools.map((t) => t.name), ...servers.filter((name) => !off.has(name)).map((name) => `mcp__${name}`)].join(',');
     reply(turnId, `Hello from the fake Codex: thread ${thread.id}, model ${thread.model || 'fake-sol'}, effort ${params.effort || 'unset'}, `
       + `tools ${tools}, policy ${thread.approvalPolicy}/${thread.sandbox}, patch ${patch.result?.decision}, instructions "${thread.developerInstructions}".`);
   } else if (words.includes('read')) {
@@ -229,7 +216,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         ? { account: { type: 'chatgpt', email: 'FAKE-ACCOUNT-CANARY@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true }
         : { account: null, requiresOpenaiAuth: true });
     case 'config/read':
-      return ok({ config: { mcp_servers: configured() }, origins: {} });
+      return ok({ config: { mcp_servers: Object.fromEntries(named('fake-servers').map((name) => [name, { enabled: true }])) }, origins: {} });
+    case 'mcpServerStatus/list':
+      if (!thread || message.params.threadId !== thread.id) return fail('thread not found');
+      return ok({ data: servers.map((name) => ({ name, runtimeStatus: off.has(name) ? 'disabled' : 'connected', tools: {} })), nextCursor: null });
     case 'model/list':
       return ok({ data: MODELS, nextCursor: null });
     case 'thread/start': {

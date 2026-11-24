@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
 )
@@ -17,7 +18,7 @@ import (
 // driver speaks it: JSON-RPC 2.0 messages without the `jsonrpc` member, one
 // per line. The driver sends requests (`initialize`, `account/read`,
 // `config/read`, `model/list`, `thread/start`, `thread/resume`,
-// `thread/inject_items`, `turn/start`, `turn/steer`, `thread/delete`) and
+// `mcpServerStatus/list`, `thread/inject_items`, `turn/start`, `turn/steer`, `thread/delete`) and
 // the `initialized` notification, and answers Codex's own requests: `item/tool/call` for CYFR's tools, given
 // to the thread as its dynamic tools, held until CYFR answers it and then
 // answered by its request's id; the approvals, which are allowed; and
@@ -119,25 +120,33 @@ func dynamicTools(tools []brainwire.Tool) ([]map[string]any, error) {
 	return out, nil
 }
 
-// configRead asks for Codex's configuration as it reads it from its
-// folder, every layer merged, for the MCP servers it names.
-func configRead(id string) []byte {
-	return request(id, "config/read", map[string]any{"includeLayers": false})
+// configRead asks for Codex's configuration as it reads it for a thread
+// in the folder `cwd`, every layer merged, a trusted project's own among
+// them, for the MCP servers it names.
+func configRead(id, cwd string) []byte {
+	return request(id, "config/read", map[string]any{"includeLayers": false, "cwd": cwd})
 }
 
 // ownServers are the names of the MCP servers Codex's configuration
-// answer names, or false for an answer that is no configuration.
+// answer names, or false for an answer that is not a configuration whose
+// `mcp_servers` is an object of servers: Codex answers `{}` for none, so
+// a list missing, null or of another shape is no answer.
 func ownServers(m rpc) ([]string, bool) {
 	var answer struct {
-		Config *struct {
-			Servers map[string]json.RawMessage `json:"mcp_servers"`
-		} `json:"config"`
+		Config map[string]json.RawMessage `json:"config"`
 	}
 	if m.Error != nil || json.Unmarshal(m.Result, &answer) != nil || answer.Config == nil {
 		return nil, false
 	}
-	names := make([]string, 0, len(answer.Config.Servers))
-	for name := range answer.Config.Servers {
+	var servers map[string]map[string]json.RawMessage
+	if json.Unmarshal(answer.Config["mcp_servers"], &servers) != nil || servers == nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(servers))
+	for name, server := range servers {
+		if server == nil {
+			return nil, false
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -148,14 +157,23 @@ func ownServers(m rpc) ([]string, bool) {
 // under: no MCP server of Codex's own. An MCP server is one a person adds
 // in CYFR, whose gate decides every call; the tools a crew member calls
 // through Codex are CYFR's, its dynamic tools. Codex starts each server
-// its folder's configuration names, and each an installed plugin carries,
-// at a thread's start, shows the model their tools and its resource
-// reading tools, and runs their calls with no ask. So each server the
-// configuration names now (`servers`, read at each start and resume) is
+// its configuration names, in its folder's config.toml and in a trusted
+// project's own in the thread's folder, and each an installed plugin
+// carries, at a thread's start, shows the model their tools and its
+// resource reading tools, and runs their calls with no ask. Codex 0.169.0
+// takes no layer above those files that one process could be given, so
+// the servers go by name: each server the configuration names for the
+// thread's folder, read at each start and resume (`configRead`), is
 // switched off by its name, plugins are off and ChatGPT's apps, an
-// account's connectors, are off. Measured on Codex 0.169.0: a whole
-// `mcp_servers` table given here merges with the folder's and switches
-// none off, and a name the configuration does not hold refuses the start.
+// account's connectors, are off. Then, before the model is asked
+// anything, Codex's listing of the thread's servers must name none that
+// is not off (`standingServers`), or the thread is ended and the turn is
+// refused naming it (`ownServerSentence`). Measured on 0.169.0: a whole
+// `mcp_servers` table given here merges with the files' and switches none
+// off, and a name the configuration does not hold refuses the start.
+// Not handled: a server named in a file between the read and the thread's
+// start starts, and its process runs, before the listing finds it; its
+// tools reach no model.
 func noServersOfItsOwn(servers []string) map[string]any {
 	off := map[string]any{}
 	for _, name := range servers {
@@ -164,13 +182,55 @@ func noServersOfItsOwn(servers []string) map[string]any {
 	return map[string]any{"features": map[string]any{"plugins": false, "apps": false}, "mcp_servers": off}
 }
 
-// threadStart starts a new thread under its access's policy and with no
-// MCP server of Codex's own, with CYFR's system prompt as developer
+// serverListing asks Codex for the thread's MCP servers, from `cursor`'s
+// page on.
+func serverListing(id, thread, cursor string) []byte {
+	params := map[string]any{"threadId": thread, "detail": "toolsAndAuthOnly"}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	return request(id, "mcpServerStatus/list", params)
+}
+
+// standingServers are the servers one page of Codex's listing names that
+// are not switched off, and the next page's cursor, or false for a page
+// that does not read: every entry names its server and its runtime
+// status, and only `disabled` is off.
+func standingServers(m rpc) ([]string, string, bool) {
+	var page struct {
+		Data *[]struct {
+			Name   *string `json:"name"`
+			Status *string `json:"runtimeStatus"`
+		} `json:"data"`
+		Next *string `json:"nextCursor"`
+	}
+	if m.Error != nil || json.Unmarshal(m.Result, &page) != nil || page.Data == nil {
+		return nil, "", false
+	}
+	standing := []string{}
+	for _, server := range *page.Data {
+		if server.Name == nil {
+			return nil, "", false
+		}
+		if server.Status == nil || *server.Status != "disabled" {
+			standing = append(standing, *server.Name)
+		}
+	}
+	next := ""
+	if page.Next != nil {
+		next = *page.Next
+	}
+	return standing, next, true
+}
+
+// threadStart starts a new thread in the folder `cwd`, the one its
+// configuration was read for, under its access's policy and with no MCP
+// server of Codex's own, with CYFR's system prompt as developer
 // instructions beside Codex's own, CYFR's tools as its dynamic tools,
 // which the thread keeps for its life, and the start's model.
-func threadStart(id string, system string, tools []map[string]any, servers []string, config brainwire.Config, policy threadPolicy) []byte {
+func threadStart(id string, system string, tools []map[string]any, cwd string, servers []string, config brainwire.Config, policy threadPolicy) []byte {
 	params := map[string]any{"approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "dynamicTools": tools,
-		"config": noServersOfItsOwn(servers)}
+		"cwd": cwd, "config": noServersOfItsOwn(servers)}
 	if system != "" {
 		params["developerInstructions"] = system
 	}
@@ -181,11 +241,12 @@ func threadStart(id string, system string, tools []map[string]any, servers []str
 }
 
 // threadResume resumes the thread the folder holds, which keeps the dynamic
-// tools it was started with, under its access's policy and with no MCP
+// tools it was started with, in the folder `cwd`, the one its
+// configuration was read for, under its access's policy and with no MCP
 // server of Codex's own.
-func threadResume(id, thread, system string, servers []string, config brainwire.Config, policy threadPolicy) []byte {
+func threadResume(id, thread, system, cwd string, servers []string, config brainwire.Config, policy threadPolicy) []byte {
 	params := map[string]any{"threadId": thread, "approvalPolicy": policy.approvalPolicy, "sandbox": policy.sandbox, "excludeTurns": true,
-		"config": noServersOfItsOwn(servers)}
+		"cwd": cwd, "config": noServersOfItsOwn(servers)}
 	if system != "" {
 		params["developerInstructions"] = system
 	}
@@ -414,6 +475,40 @@ const instructionsSentence = "OpenAI Codex did not take its changed instructions
 // unrecordedSentence refuses a post whose changed instructions the folder
 // cannot record: the stale record would hide the change after them.
 const unrecordedSentence = "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written."
+
+// The sentences a start ends with, Codex's error in the driver's words:
+// the holder says each after the program's name and "could not answer".
+//
+// unreadConfigSentence ends a start whose configuration Codex did not
+// answer as one: which MCP servers of its own to switch off is not known.
+const unreadConfigSentence = "its own configuration could not be read, so it was not started; check the configuration in its folder on the program's terminal."
+
+// unreadServersSentence ends a start whose thread's servers Codex did not
+// list as the driver reads them.
+const unreadServersSentence = "it did not say which MCP servers it runs, so it was not started; send it again."
+
+// ownServerSentence ends a start whose thread Codex runs with MCP servers
+// of its own, by their names (at most five): CYFR uses only the servers a
+// person adds in CYFR.
+func ownServerSentence(names []string) string {
+	shown := names
+	if len(shown) > 5 {
+		shown = shown[:5]
+	}
+	quoted := make([]string, len(shown))
+	for i, name := range shown {
+		quoted[i] = fmt.Sprintf("%q", name)
+	}
+	listed := strings.Join(quoted, ", ")
+	if len(names) > len(shown) {
+		listed += fmt.Sprintf(" and %d more", len(names)-len(shown))
+	}
+	what := "an MCP server of its own, " + listed + ", that CYFR does not use"
+	if len(names) > 1 {
+		what = "MCP servers of its own, " + listed + ", that CYFR does not use"
+	}
+	return "it runs " + what + ": add the server in CYFR, and remove it from Codex's own configuration or plugins on the program's terminal."
+}
 
 // unreadAccountSentence refuses a post while Codex's account read failed:
 // no sign-out.

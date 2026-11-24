@@ -3844,6 +3844,36 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    # Codex's driver answers a start Codex would run with an MCP server of
+    # its own with Codex's error in its own sentence, in place of `started`,
+    # before the thread is handed anything (`cyfr-codex`).
+    test "an error in place of the start's answer ends the turn in the driver's words and " <>
+           "closes the session, having handed it nothing",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start", "gen" => gen} = sent()
+
+      message =
+        "it runs an MCP server of its own, \"late\", that CYFR does not use: add the server " <>
+          "in CYFR, and remove it from Codex's own configuration or plugins on the program's terminal."
+
+      say(fake, row, %{
+        "t" => "error",
+        "gen" => gen,
+        "type" => "invalid_request",
+        "message" => message
+      })
+
+      line = "#{@title} could not answer: #{message}"
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+      assert_receive {:session, "close", _wire, _fields}, 10_000
+      assert running_sessions(fake, row) == []
+      refute_received {:session, "send", _wire, _fields}
+    end
+
     # Codex's driver refuses a post while Codex is signed out, in its own
     # sentence, before anything of it reaches the harness (`cyfr-codex`).
     test "a post the driver refuses ends the turn in the driver's words and closes the " <>
