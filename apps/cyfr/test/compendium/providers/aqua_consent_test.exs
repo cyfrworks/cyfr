@@ -254,23 +254,31 @@ defmodule Compendium.Providers.AquaConsentTest do
              write.("longer-line", String.duplicate("é", 1_025), "c")
   end
 
-  # A scroll stored past the bound, shipped or written before, is handed
-  # to no harness: a chain neither lists nor reads it and no job carries
-  # it, while the person's own session reads it, to see and change it.
-  test "a scroll stored past the bound is carried by no harness and read from outside", %{
-    ctx: ctx
-  } do
+  # A scroll stored past the bound, written before or replaced through
+  # Files, is handed to no harness: a chain neither lists nor reads it and
+  # no job carries it, while the person's own session reads it, to see and
+  # change it. Files keeps no check of its own for it.
+  test "a scroll replaced through Files past the bound is carried by no harness and read from outside",
+       %{ctx: ctx} do
     auth = granting(["aqua.skill_get", "aqua.skill_list"])
     session = Sanctum.TestContext.local(:prism)
     lineage = caller!(session)
     body = String.duplicate("a", 131_072)
 
-    :ok =
-      Arca.put(
-        Sanctum.Context.actor(ctx),
-        Compendium.AquaPath.skill_manifest("too-big"),
-        ~s(---\nname: "too-big"\ndescription: "d"\n---\n\n) <> body <> "\n"
-      )
+    {:ok, _} =
+      Tool.handle(ctx, %{
+        "action" => "skill_create",
+        "name" => "too-big",
+        "description" => "d",
+        "content" => "short"
+      })
+
+    assert {:ok, _written} =
+             Arca.Files.write(
+               Sanctum.Context.actor(ctx),
+               Enum.join(Compendium.AquaPath.skill_manifest("too-big"), "/"),
+               ~s(---\nname: "too-big"\ndescription: "d"\n---\n\n) <> body <> "\n"
+             )
 
     in_chain = fn args ->
       Sanctum.Gate.call_in_chain("aqua", Sanctum.Context.enter_guest(session), args, auth,
@@ -296,9 +304,74 @@ defmodule Compendium.Providers.AquaConsentTest do
              Aqua.Crew.scrolls(ctx, ["too-big"], "crew.ask")
 
     prompt =
-      Aqua.Prompt.compose(ctx, mark: Aqua.Reader.mark("thr_bound"), agent: %{"prompt" => ""})
+      Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
 
     refute prompt.text =~ "too-big"
+  end
+
+  # The bound is on what a scroll's frame delivers: a short scroll whose
+  # files' names take it past one line is carried by no harness, alone or
+  # with others in a job.
+  test "a scroll whose files' names take it past the bound is carried by no harness", %{ctx: ctx} do
+    {:ok, _} =
+      Tool.handle(ctx, %{
+        "action" => "skill_create",
+        "name" => "many-files",
+        "description" => "d",
+        "content" => "short"
+      })
+
+    for n <- 1..600 do
+      name = String.pad_leading("#{n}", 230, "f")
+
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.skill_dir("many-files") ++ [name],
+          "x"
+        )
+    end
+
+    assert {:ok, %{carried: false, delivered: delivered}} = Compendium.skill(ctx, "many-files")
+    assert delivered > 131_072
+
+    assert {:error,
+            {:invalid_argument, "crew.ask: the scroll 'many-files' is too large for Aqua to use"}} =
+             Aqua.Crew.scrolls(ctx, ["many-files"], "crew.ask")
+  end
+
+  # The index a turn's prompt carries drops scrolls past the bound before
+  # it counts to its limit, so they hide no usable one.
+  test "scrolls past the bound sorted before a usable one hide it from no turn's index", %{
+    ctx: ctx
+  } do
+    long = String.duplicate("d", 1_025)
+
+    for n <- 1..41 do
+      name = "aa" <> String.pad_leading("#{n}", 2, "0")
+
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.skill_manifest(name),
+          ~s(---\nname: "#{name}"\ndescription: "#{long}"\n---\n\nbody\n)
+        )
+    end
+
+    {:ok, _} =
+      Tool.handle(ctx, %{
+        "action" => "skill_create",
+        "name" => "zz-usable",
+        "description" => "the one that works",
+        "content" => "body"
+      })
+
+    {:ok, %{entries: entries}} = Compendium.skills_index(ctx, Compendium.skills_index_limit())
+    assert "zz-usable" in Enum.map(entries, & &1.name)
+    refute Enum.any?(entries, &String.starts_with?(&1.name, "aa"))
+
+    prompt = Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
+    assert prompt.text =~ "- zz-usable — the one that works"
   end
 
   # A chain authority granting exactly `tools`, the shape the consent blob

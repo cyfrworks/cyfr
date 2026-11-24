@@ -969,6 +969,31 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-notes button[phx-value-name=plan]")
     end
 
+    # A scroll replaced through Files past the bound stays the athanor's,
+    # and the page says on it why Aqua does not use it.
+    test "a scroll replaced through Files past the bound says why on the page",
+         %{conn: conn, ctx: ctx} do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "skill_create",
+          "name" => "too-big",
+          "description" => "d",
+          "content" => "short"
+        })
+
+      {:ok, _written} =
+        Arca.Files.write(
+          Sanctum.Context.actor(ctx),
+          Enum.join(Compendium.AquaPath.skill_manifest("too-big"), "/"),
+          ~s(---\nname: "too-big"\ndescription: "d"\n---\n\n) <> String.duplicate("a", 131_072)
+        )
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert view |> element("#aqua-scroll-too-large-too-big") |> render() =~
+               "Aqua does not use this scroll"
+    end
+
     test "the scrolls disclosure opens when a scroll exists, and one is written, edited and deleted here",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"skills" => [shipped | _]}} =

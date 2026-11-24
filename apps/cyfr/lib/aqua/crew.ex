@@ -484,8 +484,9 @@ defmodule Aqua.Crew do
   of `names` read by name under the caller's actor (`Compendium.skill/2`),
   its body as written and its other files' names, in the order named. A
   name is given once, every scroll is one each harness carries
-  (`Compendium.AquaSkills`), and their bodies together are within one
-  scroll's bound, so a job's post fits one line of the brain wire. A name
+  (`Compendium.AquaSkills`), and what their frames deliver together,
+  names, bodies and files' names, is within one scroll's bound, so a job's
+  post fits one line of the brain wire. A name
   this athanor has no scroll of, another athanor's included, refuses the
   whole call in a sentence naming it, before anything is written. None
   named is none.
@@ -504,8 +505,13 @@ defmodule Aqua.Crew do
 
       true ->
         with {:ok, scrolls} <- read_scrolls(ctx, names, operation),
-             :ok <- within_bound(scrolls, operation),
-             do: {:ok, scrolls}
+             :ok <- within_bound(scrolls, operation) do
+          {:ok,
+           for(
+             scroll <- scrolls,
+             do: %{"name" => scroll.name, "body" => scroll.body, "files" => scroll.files}
+           )}
+        end
     end
   end
 
@@ -517,9 +523,7 @@ defmodule Aqua.Crew do
     |> Enum.reduce_while({:ok, []}, fn name, {:ok, kept} ->
       case Compendium.skill(ctx, name) do
         {:ok, %{carried: true} = scroll} ->
-          {:cont,
-           {:ok,
-            [%{"name" => scroll.name, "body" => scroll.body, "files" => scroll.files} | kept]}}
+          {:cont, {:ok, [scroll | kept]}}
 
         {:ok, _past_bound} ->
           {:halt,
@@ -542,7 +546,7 @@ defmodule Aqua.Crew do
   end
 
   defp within_bound(scrolls, operation) do
-    bytes = scrolls |> Enum.map(&byte_size(&1["body"])) |> Enum.sum()
+    bytes = scrolls |> Enum.map(& &1.delivered) |> Enum.sum()
 
     %{bytes: most} = Compendium.skill_bound()
 

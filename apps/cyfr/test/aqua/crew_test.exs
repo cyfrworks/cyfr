@@ -1474,7 +1474,7 @@ defmodule Aqua.CrewTest do
       {["nowhere"], "crew.ask: this athanor has no scroll named \"nowhere\""},
       {["theirs"], "crew.ask: this athanor has no scroll named \"theirs\""},
       {["half-a", "half-b"],
-       "crew.ask: the scrolls named hold 140000 bytes together, more than the 131072 one job " <>
+       "crew.ask: the scrolls named hold 140012 bytes together, more than the 131072 one job " <>
          "carries"}
     ]
 

@@ -134,8 +134,9 @@ defmodule Emissary.External.ServerProgramTest do
     assert {:ok, %{"content" => [%{"text" => "found"}]}} =
              Emissary.External.Server.call_tool(pid, "search", %{})
 
-    # The program's own message, not a result read as success.
-    assert {:error, "Unknown tool: pulls"} =
+    # The program's own message, not a result read as success, tagged as
+    # its own words (`Prima.Refusal.outside?/1`).
+    assert {:error, {:outside_error, "Unknown tool: pulls"}} =
              Emissary.External.Server.call_tool(pid, "pulls", %{})
   end
 

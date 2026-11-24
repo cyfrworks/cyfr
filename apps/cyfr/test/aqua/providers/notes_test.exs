@@ -407,12 +407,7 @@ defmodule Aqua.Providers.NotesTest do
     {:ok, _} = Aqua.Notes.pin(ctx, "about-you", "Likes ramen.")
 
     # The turn's prompt shows the page with the revision it stands at.
-    composed =
-      Aqua.Prompt.compose(ctx,
-        mark: Aqua.Reader.mark("thr_notes"),
-        agent: %{"prompt" => "", "tool_policy" => %{}}
-      )
-
+    composed = Aqua.Prompt.compose(ctx, agent: %{"prompt" => "", "tool_policy" => %{}})
     [_, read] = Regex.run(~r/### Pinned: about-you \(revision (\d+)\)/, composed.text)
     read = String.to_integer(read)
 

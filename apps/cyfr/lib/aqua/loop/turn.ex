@@ -167,7 +167,6 @@ defmodule Aqua.Loop.Turn do
       prompt =
         Aqua.Prompt.compose(ctx,
           agent: agent,
-          mark: Aqua.Reader.mark(thread.id),
           own_tools?: Aqua.Harness.facts(spec).own_tools?,
           search?: Request.offers_search?(offered, authority, capabilities),
           authority: authority,

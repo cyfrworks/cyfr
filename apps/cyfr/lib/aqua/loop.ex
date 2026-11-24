@@ -1778,10 +1778,12 @@ defmodule Aqua.Loop do
     Tape.close_step(guest(state), state.turn, step, outcome, %{
       result:
         result_row(
+          state,
           step,
+          call,
           outcome,
           page_value(call, result),
-          framed(state, call, {outcome, result}, text),
+          text,
           proposed(call, result, %{
             "tool_call_id" => call && call.tool_call_id,
             "name" => call && call.model_name,
@@ -1795,57 +1797,64 @@ defmodule Aqua.Loop do
   end
 
   # A page's call is answered in the wire's shape (`Aqua.PageCalls.answer/3`):
-  # its result row is the answer the page is handed, unframed. A model's
-  # reads in its class's frame (`framed/4`), and a scroll a chain proposed
-  # keeps the proposal its thread shows the person to save.
-  defp result_row(%{purpose: "page"}, outcome, result, {text, _framed}, payload) do
+  # its result row is the answer the page is handed. A page is no model:
+  # its answer holds no frame, and no thread's mark. A model's result row
+  # keeps the answer as it came and the frame it reads in (`frame/3`),
+  # which the reader draws (`Aqua.Reader.result/2`), and a scroll a chain
+  # proposed keeps the proposal its thread shows the person to save.
+  defp result_row(state, %{purpose: "page"}, _call, outcome, result, text, payload) do
     {status, body} = Aqua.PageCalls.answer(outcome, result, text)
-    %{content: body, payload: Map.put(payload, "status", status)}
+    mark = Reader.mark(state.turn.thread_id)
+
+    with_status(%{
+      content: Reader.unmarked(body, mark),
+      payload: Map.put(payload, "status", status)
+    })
   end
 
-  defp result_row(_step, _outcome, _result, {_text, framed}, payload),
-    do: %{content: framed, payload: payload}
-
-  # A result's text as it was, and as the model reads it: the thread's mark
-  # removed (`Aqua.Reader.unmarked/2`), then by what the answer is
-  # (`Aqua.Loop.Policy.answer_of/1`) and how the call closed: a scroll read
-  # as its body and its files' names in a scroll's frame, an outside
-  # answer, and an outside server's own error, in the outside frame.
-  # CYFR's own answers, every refusal, skip and unknown outcome stay
-  # unframed. The frame is in the row, so a resume, a recovery and a
-  # reread read what the model read.
-  defp framed(state, nil, _closed, text),
-    do: {text, Reader.unmarked(text, Reader.mark(state.turn.thread_id))}
-
-  defp framed(state, %Call{} = call, closed, text) do
-    mark = Reader.mark(state.turn.thread_id)
-    plain = Reader.unmarked(text, mark)
-
-    framed =
-      case {Policy.answer_of(call), closed} do
-        {:scroll, {"ok", {:ok, %{} = answer}}} ->
-          Reader.scroll(mark, scroll_of(answer))
-
-        {:outside, {"ok", _answer}} ->
-          Reader.outside(mark, call.model_name, plain)
-
-        {:outside, {"error", {:error, reason}}} ->
-          if server_error?(call, reason),
-            do: Reader.outside(mark, call.model_name, plain),
-            else: plain
-
-        _unframed ->
-          plain
+  defp result_row(_state, _step, call, outcome, result, text, payload) do
+    row =
+      case frame(call, outcome, result) do
+        nil -> %{content: text, payload: payload}
+        {nil, frame} -> %{content: text, payload: Map.put(payload, "frame", frame)}
+        {answer, frame} -> %{content: answer, payload: Map.put(payload, "frame", frame)}
       end
 
-    {text, framed}
+    with_status(row)
   end
 
-  # An outside server's own error, which `Binding.render/2` words as the
-  # server's: never a refusal of CYFR's, which names its own sentence.
-  defp server_error?(%Call{kind: :external}, %Prima.Refusal{}), do: false
-  defp server_error?(%Call{kind: :external}, reason), do: not is_binary(reason)
-  defp server_error?(_call, _reason), do: false
+  # A result that proposes a scroll is `proposed`, the status the thread
+  # finds its card by.
+  defp with_status(%{payload: %{"proposal" => %{}}} = row),
+    do: Map.put(row, :status, "proposed")
+
+  defp with_status(row), do: row
+
+  # The frame a model's result reads in, by what the answer is
+  # (`Aqua.Loop.Policy.answer_of/1`) and who wrote it: a scroll read, as
+  # its body and its files' names, in a scroll's frame; an outside answer,
+  # and an outside source's own words for why it failed
+  # (`Prima.Refusal.outside?/1`), in the outside frame. CYFR's own answers,
+  # and every refusal, skip and unknown outcome CYFR wrote, are unframed.
+  defp frame(nil, _outcome, _result), do: nil
+
+  defp frame(%Call{} = call, outcome, result) do
+    case {Policy.answer_of(call), outcome, result} do
+      {:scroll, "ok", {:ok, %{} = answer}} ->
+        %{name: name, body: body, files: files} = scroll_of(answer)
+        {body, %{"kind" => "scroll", "name" => name, "files" => files}}
+
+      {:outside, "ok", _answer} ->
+        {nil, %{"kind" => "outside", "name" => call.model_name}}
+
+      {:outside, "error", {:error, reason}} ->
+        if Prima.Refusal.outside?(reason),
+          do: {nil, %{"kind" => "outside", "name" => call.model_name}}
+
+      _unframed ->
+        nil
+    end
+  end
 
   defp scroll_of(answer) do
     answer = answer |> Jason.encode!() |> Jason.decode!()
@@ -2147,10 +2156,12 @@ defmodule Aqua.Loop do
       Tape.close_step(guest(state), state.turn, step, "ok", %{
         result:
           result_row(
+            state,
             step,
+            call,
             "ok",
             {:ok, output(result)},
-            framed(state, call, {"ok", {:ok, result}}, text),
+            text,
             %{
               "tool_call_id" => call && call.tool_call_id,
               "name" => call && call.model_name,

@@ -945,8 +945,10 @@ defmodule Emissary.External.Server do
       {:ok, %Message{type: :response, result: result}} ->
         {:ok, result}
 
+      # The server's own words for why the call failed, tagged as its
+      # (`Prima.Refusal.outside?/1`): a model reads them as outside data.
       {:ok, %Message{type: :error, error: error}} ->
-        {:error, upstream_message(error)}
+        {:error, {:outside_error, upstream_message(error)}}
 
       {:legacy, _state} ->
         {:error, "#{state.name} changed protocol era mid-connection"}

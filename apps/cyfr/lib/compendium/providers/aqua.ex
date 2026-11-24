@@ -1148,7 +1148,7 @@ defmodule Compendium.Providers.Aqua do
             "\n"
           ])
 
-        if Compendium.AquaSkills.carried?(byte_size(manifest), description),
+        if Compendium.AquaSkills.fits?(byte_size(manifest), description),
           do: {:ok, manifest},
           else: {:error, {:invalid_argument, too_large(name)}}
     end
@@ -1156,9 +1156,9 @@ defmodule Compendium.Providers.Aqua do
 
   defp too_large(name),
     do:
-      "The scroll '#{name}' is too large for Aqua to use: a scroll holds at most " <>
-        "#{Compendium.AquaSkills.max_bytes()} bytes and its description at most " <>
-        "#{Compendium.AquaSkills.max_description()} characters"
+      "The scroll '#{name}' is too large for Aqua to use: a scroll, its files' names " <>
+        "with it, holds at most #{Compendium.AquaSkills.max_bytes()} bytes and its " <>
+        "description at most #{Compendium.AquaSkills.max_description()} characters"
 
   defp taken(name), do: "Scroll '#{name}' already exists"
 

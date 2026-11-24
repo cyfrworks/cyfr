@@ -758,18 +758,8 @@ defmodule Aqua.LoopTest do
       turn_id = turn.id
       agent = Prima.Author.agent()
       system = Prima.Author.system()
-      # A hand's answer is outside data, in the room's outside frame.
-      mark = Aqua.Reader.mark(room.id)
-
-      list_result =
-        Aqua.Reader.outside(mark, "files", Jason.encode!(%{"entries" => []}, pretty: true))
-
-      write_result =
-        Aqua.Reader.outside(
-          mark,
-          "files",
-          Jason.encode!(%{"written" => "data/x.md"}, pretty: true)
-        )
+      list_result = Jason.encode!(%{"entries" => []}, pretty: true)
+      write_result = Jason.encode!(%{"written" => "data/x.md"}, pretty: true)
 
       keep_result =
         Jason.encode!(%{"athanor_id" => ctx.athanor_id, "kept" => "status", "replaced" => false},

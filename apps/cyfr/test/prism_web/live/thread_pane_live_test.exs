@@ -3152,12 +3152,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # body a save writes, and Save as scroll writes exactly those from the
   # person's own session, or says why it did not.
   describe "a scroll a turn proposed" do
-    defp proposed!(here, thread, proposal) do
+    # A proposal's result row as the loop writes it (`Aqua.Loop`): a model's
+    # `tool_result`, or a page's `page_result`, `proposed`.
+    defp proposed!(here, thread, proposal, kind \\ "tool_result") do
       {:ok, row} =
         Threads.append(Sanctum.Context.actor(here), thread.id, %{
           author: Prima.Author.agent(),
           sent_by: "aqua",
-          kind: "tool_result",
+          kind: kind,
+          status: "proposed",
           content: Jason.encode!(proposal),
           payload: %{
             "tool_call_id" => "c1",
@@ -3238,6 +3241,46 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                  "action" => "skill_get",
                  "name" => "fern-care"
                })
+    end
+
+    # The pane reads the thread's proposals as such: one behind more than
+    # the pane's window of newer results, and one a page's call made, each
+    # has its card while its row can be seen.
+    test "a proposal has its card behind many newer results, and a page's proposal has one",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      actor = Sanctum.Context.actor(here)
+
+      older =
+        proposed!(here, thread, %{
+          "name" => "older-way",
+          "description" => "d",
+          "content" => "c",
+          "against" => "none"
+        })
+
+      for n <- 1..501 do
+        {:ok, _result} =
+          Threads.append(actor, thread.id, %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "tool_result",
+            content: "result #{n}",
+            payload: %{"tool_call_id" => "c#{n}", "name" => "files", "is_error" => false}
+          })
+      end
+
+      paged =
+        proposed!(
+          here,
+          thread,
+          %{"name" => "paged-way", "description" => "d", "content" => "c", "against" => "none"},
+          "page_result"
+        )
+
+      pane = open_pane(conn, athanor, thread)
+
+      assert pane |> element(card(older, "name")) |> render() =~ "older-way"
+      assert pane |> element(card(paged, "name")) |> render() =~ "paged-way"
     end
   end
 end

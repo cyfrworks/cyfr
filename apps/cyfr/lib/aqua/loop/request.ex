@@ -463,14 +463,10 @@ defmodule Aqua.Loop.Request do
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
     |> merge_same_role()
+    |> Enum.map(&joined_text/1)
     |> attach_blocks(blocks, Keyword.get(opts, :task_message_id))
-    |> attach(:excerpt, excerpt(Keyword.get(opts, :excerpt), reading.mark))
+    |> attach(:excerpt, Keyword.get(opts, :excerpt))
   end
-
-  # A shared thread's words are no text of the engine's: read without the
-  # reading thread's mark.
-  defp excerpt(nil, _mark), do: nil
-  defp excerpt(text, mark), do: Reader.unmarked(text, mark)
 
   @doc """
   The rows a request made of `rows` carries to the model: those the
@@ -483,7 +479,7 @@ defmodule Aqua.Loop.Request do
   end
 
   defp carried_row({:pinned, row}), do: row
-  defp carried_row({:summary, _text}), do: nil
+  defp carried_row({:shaped, _summary}), do: nil
   defp carried_row(row), do: row
 
   # ---------------------------------------------------------------------------
@@ -567,7 +563,18 @@ defmodule Aqua.Loop.Request do
 
         kept = Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))
 
-        [{:summary, compaction.content} | pinned ++ kept]
+        summary = %{
+          role: "user",
+          blocks: [
+            %{
+              "type" => "text",
+              "text" => Reader.summary(compaction.content)
+            }
+          ],
+          step: nil
+        }
+
+        [{:shaped, summary} | pinned ++ kept]
     end
   end
 
@@ -583,17 +590,8 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape({:summary, text}, acc, reading) do
-    summary = %{
-      role: "user",
-      blocks: [%{"type" => "text", "text" => Reader.summary(text, reading.mark)}],
-      step: nil
-    }
-
-    [summary | acc]
-  end
-
-  defp shape({:pinned, row}, acc, reading), do: said(Reader.waiting(row, reading.mark), row, acc)
+  defp shape({:shaped, message}, acc, _reading), do: [message | acc]
+  defp shape({:pinned, row}, acc, _reading), do: said(Reader.waiting(row), row, acc)
 
   defp shape(%{kind: "tool_call"} = row, acc, _reading) do
     payload = Tape.payload(row)
@@ -618,14 +616,15 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%{kind: "tool_result"} = row, acc, _reading) do
+  # A call's result, in the frame its row keeps (`Aqua.Reader.result/2`).
+  defp shape(%{kind: "tool_result"} = row, acc, reading) do
     payload = Tape.payload(row)
 
     block = %{
       "type" => "tool_result",
       "tool_call_id" => payload["tool_call_id"],
       "name" => payload["name"],
-      "content" => row.content || "",
+      "content" => Reader.result(row, Map.get(reading, :frames)),
       "is_error" => payload["is_error"] == true
     }
 
@@ -724,6 +723,26 @@ defmodule Aqua.Loop.Request do
   defp answer_dangling_calls([]), do: []
 
   defp calls(blocks), do: for(%{"type" => "tool_call"} = b <- blocks, do: b["id"])
+
+  # An assistant message's texts as one block before its calls, in their
+  # order: the one string the providers that join an assistant's texts
+  # make of them, so what a model reads of them is what
+  # `Aqua.Reader.deliver/2` read.
+  defp joined_text(%{"role" => "assistant", "content" => blocks} = message) do
+    case Enum.split_with(blocks, &match?(%{"type" => "text"}, &1)) do
+      {[_one], _calls} ->
+        message
+
+      {[], _calls} ->
+        message
+
+      {texts, calls} ->
+        text = %{"type" => "text", "text" => Enum.map_join(texts, & &1["text"])}
+        %{message | "content" => [text | calls]}
+    end
+  end
+
+  defp joined_text(message), do: message
 
   defp merge_same_role(messages) do
     Enum.reduce(messages, [], fn

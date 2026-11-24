@@ -369,17 +369,18 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # The scrolls a turn proposed among the posts drawn (`proposal?/1`): the
-  # thread's newest call results are read beside them, and each that
-  # proposes a scroll within the posts' window is drawn in its place.
+  # The scrolls the thread's turns proposed (`proposal?/1`), read as such
+  # (`proposed`), each from where the posts drawn begin, and drawn in its
+  # place among them: a proposal has its card while its row can be seen.
   defp with_proposals(rows, ctx, thread_id) do
-    case Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, @window,
-           kinds: ["tool_result"]
+    from = if length(rows) >= @window, do: rows |> Enum.map(& &1.seq) |> Enum.min(), else: 0
+
+    case Threads.messages(Sanctum.Context.actor(ctx), thread_id,
+           after_seq: from - 1,
+           status: "proposed"
          ) do
-      results when is_list(results) ->
-        from = if length(rows) >= @window, do: rows |> Enum.map(& &1.seq) |> Enum.min(), else: 0
-        proposals = Enum.filter(results, &(proposal?(&1) and &1.seq >= from))
-        Enum.sort_by(rows ++ proposals, & &1.seq)
+      proposals when is_list(proposals) ->
+        Enum.sort_by(rows ++ Enum.filter(proposals, &proposal?/1), & &1.seq)
 
       {:error, _} ->
         rows
@@ -2865,11 +2866,11 @@ defmodule PrismWeb.ThreadPaneLive do
   # itself, its calls, their results and its compaction, is none.
   defp drawn?(row), do: row.kind in drawn_kinds() or proposal?(row)
 
-  # A call's result that proposes a scroll (`Aqua.Loop`): the scroll as it
-  # would be stored and what it was made against.
+  # A call's result that proposes a scroll (`Aqua.Loop`), a model's or a
+  # page's: the scroll as it would be stored and what it was made against.
   defp proposal?(row), do: proposal(row) != nil
 
-  defp proposal(%{kind: "tool_result"} = row) do
+  defp proposal(%{kind: kind} = row) when kind in ["tool_result", "page_result"] do
     case Threads.payload(row)["proposal"] do
       %{"name" => _, "description" => _, "content" => _, "against" => _} = proposal -> proposal
       _none -> nil

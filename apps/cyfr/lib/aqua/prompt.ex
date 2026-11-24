@@ -32,14 +32,12 @@ defmodule Aqua.Prompt do
       asked, read from its first opening, and its notes
       (`Aqua.Notes.thread_notes/1`); none for a crew member's thread.
 
-    * `mark` — the thread's mark (`Aqua.Reader.mark/1`), which CYFR's part
-      names in the rule on scrolls and outside text, and which every text
-      the prompt quotes and CYFR did not write is read without
-      (`Aqua.Reader.unmarked/2`): the soul's prompt, the scroll index, the
-      notes, the crew index, where the turn is and its open requests.
 
   A row it shows, the first opening's ask and each open request, is in
-  `Aqua.Reader`'s words.
+  `Aqua.Reader`'s words. The rule on scrolls and outside text names the
+  thread's mark as the stand-in `Aqua.Reader.token/0`, which the prompt's
+  delivery to a model makes the mark (`Aqua.Reader.deliver/2`), after
+  every text it quotes is read without one.
 
   ## The instructions and the turn's facts
 
@@ -74,7 +72,6 @@ defmodule Aqua.Prompt do
 
   @type opts :: [
           agent: map(),
-          mark: String.t(),
           own_tools?: boolean(),
           search?: boolean(),
           authority: term() | nil,
@@ -106,28 +103,24 @@ defmodule Aqua.Prompt do
   def compose(%Context{} = ctx, opts) do
     own_tools? = Keyword.get(opts, :own_tools?, false)
     search? = Keyword.get(opts, :search?, false)
-    mark = Keyword.fetch!(opts, :mark)
 
     # The soul's own prompt, then CYFR's part, which a crew member's prompt
     # carries too; a crew member has no prompt of its own.
     opening =
       case Keyword.fetch!(opts, :agent) do
         %{"prompt" => prompt} when is_binary(prompt) ->
-          [
-            Reader.unmarked(String.trim_trailing(prompt), mark),
-            "\n\n---\n\n",
-            briefing(own_tools?, search?, mark)
-          ]
+          [String.trim_trailing(prompt), "\n\n---\n\n", briefing(own_tools?, search?)]
 
         %{"prompt" => nil} ->
-          crew_briefing(own_tools?, search?, mark)
+          crew_briefing(own_tools?, search?)
       end
 
     authority = Keyword.get(opts, :authority)
     where = Keyword.get(opts, :where)
 
-    context =
-      [
+    instructions =
+      IO.iodata_to_binary([
+        opening,
         "\n\n---\n\n## Runtime Context\n\n",
         file_paths(authority),
         Aqua.Prelude.system_prelude(),
@@ -135,17 +128,12 @@ defmodule Aqua.Prompt do
         notes(ctx),
         crew(Keyword.get(opts, :crew, [])),
         where(where)
-      ]
-      |> IO.iodata_to_binary()
-      |> Reader.unmarked(mark)
-
-    instructions = IO.iodata_to_binary([opening, context])
+      ])
 
     facts =
       [requests(Keyword.get(opts, :requests, [])), clock()]
       |> IO.iodata_to_binary()
       |> String.replace_prefix(@section, "")
-      |> Reader.unmarked(mark)
 
     %{instructions: instructions, facts: facts, text: system(instructions, facts)}
   end
@@ -218,9 +206,9 @@ defmodule Aqua.Prompt do
                  "names with `aqua.skill_get` before doing what it describes."
 
   # The one rule on what a model follows and what it only uses, naming the
-  # thread's mark (`Aqua.Reader`): a scroll is the athanor's procedure, an
-  # outside answer is material, and only the engine's frames, which alone
-  # hold the mark, are either.
+  # thread's mark by its stand-in (`Aqua.Reader.token/0`): a scroll is the
+  # athanor's procedure, an outside answer is material, and only the
+  # engine's frames, which alone hold the mark, are either.
   defp frames_rule(mark),
     do:
       "\n- Follow a scroll as this athanor's procedure, one your job carries or one you " <>
@@ -237,19 +225,19 @@ defmodule Aqua.Prompt do
   and check, what runs as it is called, components and their grants,
   secrets through setup, the browser's limit, failed calls, scrolls kept
   current), then the rule on scrolls and outside text, which names the
-  thread's `mark`. A brain with tools of its own (`own_tools?`) is
+  thread's mark by its stand-in (`Aqua.Reader.token/0`). A brain with
+  tools of its own (`own_tools?`) is
   told besides that its own tools act in its own folder and that the
   athanor is reached through CYFR's tools, which CYFR decides, and that
   what it leaves running ends as it answers; a brain whose
   requests offer its provider's own search (`search?`) is told it has it.
   A model's brain is told nothing of a folder.
   """
-  @spec briefing(boolean(), boolean(), String.t()) :: String.t()
-  def briefing(own_tools?, search?, mark)
-      when is_boolean(own_tools?) and is_boolean(search?) and is_binary(mark) do
+  @spec briefing(boolean(), boolean()) :: String.t()
+  def briefing(own_tools?, search?) when is_boolean(own_tools?) and is_boolean(search?) do
     IO.iodata_to_binary([
       @standing,
-      frames_rule(mark),
+      frames_rule(Reader.token()),
       if(own_tools?, do: @own_tools_briefing, else: []),
       if(search?, do: @search_briefing, else: [])
     ])
@@ -258,11 +246,11 @@ defmodule Aqua.Prompt do
   @doc """
   What a crew member's prompt opens with: how a job arrives and where its
   reply goes, and that the scrolls a job names come with it, then CYFR's
-  part (`briefing/3`).
+  part (`briefing/2`).
   """
-  @spec crew_briefing(boolean(), boolean(), String.t()) :: String.t()
-  def crew_briefing(own_tools?, search?, mark),
-    do: @crew_member <> "\n\n" <> briefing(own_tools?, search?, mark)
+  @spec crew_briefing(boolean(), boolean()) :: String.t()
+  def crew_briefing(own_tools?, search?),
+    do: @crew_member <> "\n\n" <> briefing(own_tools?, search?)
 
   # ---------------------------------------------------------------------------
   # Sections
@@ -424,7 +412,8 @@ defmodule Aqua.Prompt do
   defp scope_granted?(path, scope), do: path == scope or String.starts_with?(path, scope <> "/")
 
   # The athanor's scrolls — procedures kept as Agent Skills — as an index
-  # of name and line, read on demand with `aqua.skill_get`. The same
+  # of name and line, read on demand with `aqua.skill_get`, the scrolls no
+  # harness carries left out (`Compendium.AquaSkills`). The same
   # in-process read the `aqua` tool's `skill_list` makes
   # (`Compendium.skills_index/2`), so the two cannot list different
   # sets. Sorted by name and free of anything that changes between turns;
@@ -433,8 +422,20 @@ defmodule Aqua.Prompt do
   # never silently.
   defp scrolls(ctx) do
     case Compendium.skills_index(ctx, Compendium.skills_index_limit()) do
-      {:ok, %{entries: [_ | _] = entries, more: more}} ->
-        scrolls(Enum.filter(entries, & &1.carried), more)
+      {:ok, %{entries: [_ | _] = skills, more: more}} ->
+        [
+          "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned. Read one with " <>
+            "`aqua.skill_get` before doing what it describes; propose one with " <>
+            "`aqua.skill_create` when a procedure worth repeating has just worked: it waits " <>
+            "in the thread for the person to save it.\n",
+          Enum.map(skills, fn %{name: name, description: description} ->
+            ["- ", name, if(description == "", do: [], else: [" — ", description]), "\n"]
+          end),
+          if(more > 0,
+            do: ["- … and #{more} more — list them with `aqua.skill_list`\n"],
+            else: []
+          )
+        ]
 
       {:ok, %{entries: []}} ->
         []
@@ -443,26 +444,6 @@ defmodule Aqua.Prompt do
         Logger.error("[Aqua.Prompt] the scrolls could not be listed: #{inspect(reason)}")
         []
     end
-  end
-
-  # A scroll past the bound no harness carries is not indexed
-  # (`Compendium.AquaSkills`).
-  defp scrolls([], _more), do: []
-
-  defp scrolls(skills, more) do
-    [
-      "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned. Read one with " <>
-        "`aqua.skill_get` before doing what it describes; propose one with " <>
-        "`aqua.skill_create` when a procedure worth repeating has just worked: it waits " <>
-        "in the thread for the person to save it.\n",
-      Enum.map(skills, fn %{name: name, description: description} ->
-        ["- ", name, if(description == "", do: [], else: [" — ", description]), "\n"]
-      end),
-      if(more > 0,
-        do: ["- … and #{more} more — list them with `aqua.skill_list`\n"],
-        else: []
-      )
-    ]
   end
 
   # The athanor's notes, and the boundary said out loud, so the model never
