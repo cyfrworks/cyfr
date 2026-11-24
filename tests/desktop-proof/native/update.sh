@@ -113,7 +113,7 @@ release_of() { "$CARRIED" --version 2>/dev/null | sed -n '1s/^cyfr version //p' 
 # executable with no engine --type, which its helpers carry.
 app_pids() {
   if [ "$OS" = windows ]; then
-    powershell.exe -NoProfile -NonInteractive -Command \
+    pwsh -NoProfile -NonInteractive -Command \
       "Get-CimInstance Win32_Process -Filter \"Name='CYFR.exe'\" | Where-Object { \$_.ExecutablePath -eq '$(cygpath -w "$APP")' -and \$_.CommandLine -notmatch '--type=' } | ForEach-Object { \$_.ProcessId }" | tr -d '\r'
   else
     pgrep -x -f "$APP"
@@ -134,7 +134,7 @@ install_package() {
         rm -rf /Applications/CYFR.app && cp -R "$mount/CYFR.app" /Applications/ &&
         hdiutil detach "$mount" ;;
     windows)
-      powershell.exe -NoProfile -NonInteractive -Command \
+      pwsh -NoProfile -NonInteractive -Command \
         "\$p = Start-Process msiexec.exe -ArgumentList '/i', '\"$(cygpath -w "$1")\"', '/qn', '/norestart' -Wait -PassThru; exit \$p.ExitCode" ;;
   esac
 }

@@ -357,9 +357,8 @@ func TestFetchPackageRefusesAPackageChangedAfterItsSumWasRead(t *testing.T) {
 	}
 }
 
-// The release sums, and attaches, exactly the CYFR app's six installers:
-// the packages FetchPackage asks for by name, and the Mac and Windows
-// installers beside them.
+// The release sums, and attaches, exactly the CYFR app's six installers,
+// each by the name FetchPackage asks for (PackageName).
 func TestTheReleaseShipsTheNamesFetchPackageAsks(t *testing.T) {
 	raw, err := os.ReadFile("../../.goreleaser.yml")
 	if err != nil {
