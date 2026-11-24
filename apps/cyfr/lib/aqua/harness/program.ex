@@ -144,7 +144,7 @@ defmodule Aqua.Harness.Program do
   # All the engine reads of this harness (`Aqua.Harness`): its process is
   # not the root's child, so a launch need not wait for it, and a post
   # written while it works is delivered, never a reason to skip a call.
-  @facts %{child_of_root?: false, supersedes?: false}
+  @facts %{supersedes?: false, own_tools?: true}
   # The most bytes a fresh session's context takes on its post's line, as
   # the line's JSON measures them, escapes included: the newest posts that
   # fit. A post a sender writes is at most 32 KiB, at most six times that
@@ -183,14 +183,23 @@ defmodule Aqua.Harness.Program do
   one not yet taken opens it.
   """
   @impl Aqua.Harness
-  def open(%{admitted: nil} = work), do: admit(work)
+  def open(%{admitted: nil} = work), do: work |> with_generation() |> admit()
 
   def open(%{admitted: %{} = start} = work) do
-    work = Map.put(work, :start, start.id)
+    work = work |> with_generation() |> Map.put(:start, start.id)
 
     case DynamicSupervisor.start_child(@sessions, {__MODULE__, {work, self()}}) do
       {:ok, pid} -> {:ok, pid, @facts}
       {:error, _reason} -> {:end, refused(work, :start_failed)}
+    end
+  end
+
+  # The thread's session generation as stored now, which the work keeps
+  # when the thread cannot be read again: the one the turn was built with.
+  defp with_generation(%{spec: spec} = work) do
+    case Tape.brain(work.guest, work.turn.thread_id) do
+      {:ok, %{generation: generation}} -> Map.put(work, :generation, generation)
+      {:error, _} -> Map.put(work, :generation, spec.thread.brain_generation)
     end
   end
 
@@ -239,7 +248,6 @@ defmodule Aqua.Harness.Program do
       tool: "program",
       action: "start",
       recovery: "replay_safe",
-      idempotency_key: Tape.brain_start_key(work.turn.id),
       call: %{
         kind: "tool_call",
         content: "program",
@@ -785,32 +793,8 @@ defmodule Aqua.Harness.Program do
   # by the code that decides a model's call (`Aqua.Loop.recorded/2`), and
   # recorded once by the native ask's id. Its call row is a `tool_call`,
   # as a model's is.
-  defp ask(work, %{"ask" => ask, "name" => name, "arguments" => arguments}) do
-    call = Aqua.Loop.Binding.resolve(name, arguments, tool_call_id: ask)
-    recorded = Aqua.Loop.recorded(name, call)
-
-    %{
-      kind: recorded.step_kind,
-      tool: recorded.tool,
-      action: recorded.action,
-      recovery: recorded.recovery,
-      child_execution_id: recorded.child_execution_id,
-      idempotency_key: Tape.brain_ask_key(work.turn.id, ask),
-      call: %{
-        kind: "tool_call",
-        content: name,
-        payload:
-          reject_nil(%{
-            "tool_call_id" => ask,
-            "name" => name,
-            "tool" => recorded.tool,
-            "action" => recorded.action,
-            "arguments" => arguments,
-            "kind" => recorded.kind
-          })
-      }
-    }
-  end
+  defp ask(work, %{"ask" => ask, "name" => name, "arguments" => arguments}),
+    do: Aqua.Harness.ask(name, arguments, ask, Tape.brain_ask_key(work.turn.id, ask))
 
   # The open work's text, announced as it is written (`Aqua.Loop.Stream`),
   # each native message a step of its own, under the turn's fence as it
@@ -1491,13 +1475,11 @@ defmodule Aqua.Harness.Program do
 
   # The result rows of the open work's asks that closed, never its start's.
   defp answers(work) do
-    start = Tape.brain_start_key(work.turn.id)
-
     with {:ok, steps} <- Tape.steps(work.guest, work.turn) do
       {:ok,
        for(
          %{purpose: "brain", kind: kind, result_message_id: id} = step <- steps,
-         kind != "input" and step.idempotency_key != start and is_binary(id),
+         kind != "input" and step.id != work.start and is_binary(id),
          do: id
        )}
     end

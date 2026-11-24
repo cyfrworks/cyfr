@@ -838,7 +838,7 @@ func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	if home["home"] == "" || home["account"] == "" || home["attempt"] != float64(1) {
 		t.Fatalf("home was %v", home)
 	}
-	app.send(`{"version":1,"type":"home-ready","home":"` + home["home"].(string) + `","attempt":1}`)
+	app.send(`{"version":2,"type":"home-ready","home":"` + home["home"].(string) + `","attempt":1}`)
 	if opened := app.next("opened"); opened["home"] != home["home"] {
 		t.Fatalf("opened named %v, home %v", opened["home"], home["home"])
 	}

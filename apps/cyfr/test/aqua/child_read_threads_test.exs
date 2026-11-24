@@ -166,12 +166,15 @@ defmodule Aqua.ChildReadThreadsTest do
 
       failed = accept!(ctx, thread, "@aqua hello")
       {result, _probed} = probed_run(ctx, failed, &reads!(ctx, &1))
-      assert {:failed, "the model failed on what it read"} = result
+
+      assert {:failed, "The model could not be reached: the model failed on what it read"} =
+               result
+
       assert read_threads(ctx, failed) == [@read]
 
       refused = accept!(ctx, thread, "@aqua hello again")
       {result, _probed} = probed_run(ctx, refused, &reads!(ctx, &1))
-      assert {:failed, "refused on what it read"} = result
+      assert {:failed, "Aqua could not answer: refused on what it read"} = result
       assert read_threads(ctx, refused) == [@read]
     end
 
@@ -286,7 +289,8 @@ defmodule Aqua.ChildReadThreadsTest do
                      30_000
 
       assert said == sentinel
-      assert {:failed, ^sentinel} = await!(result)
+      line = "The model could not be reached: " <> sentinel
+      assert {:failed, ^line} = await!(result)
       assert read_threads(ctx, turn) == []
     end
 

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,7 +73,19 @@ func newLocalApp(t *testing.T, project string) *localApp {
 		c.Chip = func() bool { return false }
 		c.Detect = func(string) disk.Report { return disk.Report{Root: disk.Unknown, Data: disk.Unknown} }
 	}
-	if err := a.Clients.SelectProject(project); err != nil {
+	// The folder is the CYFR selected last, at the address its reading
+	// names.
+	l, err := a.Local(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := l.Shell.Address
+	l.Work.End()
+	sel, err := a.Homes.SelectLocal(home, project)
+	if err == nil {
+		err = sel.Commit()
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(t.TempDir())
@@ -939,8 +952,11 @@ func TestAFirstPersonIsAdmittedAtABoxInTailnetAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	device := t.TempDir()
-	clients := shell.ClientFile(filepath.Join(device, "client.json"))
-	if err := clients.SelectProject(s.project); err != nil {
+	clients, err := shell.Homes(filepath.Join(device, "homes.json")).SelectLocal(local.Shell.Address, s.project)
+	if err == nil {
+		err = clients.Commit()
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := local.Shell
@@ -1160,6 +1176,44 @@ func TestALockOfAnUnlockedAppIsSaidOnce(t *testing.T) {
 	}
 }
 
+// Main's leave is answered left, with its id, only once the lock that lets
+// go of the CYFR has run: while that lock still hides the pages, main has
+// heard its locked and no left.
+func TestALeaveIsAnsweredOnceTheLockLetGo(t *testing.T) {
+	hiding, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	a, _ := unlockedLocalApp(t, func() {
+		if held.CompareAndSwap(false, true) {
+			close(hiding)
+			<-release
+		}
+	})
+	letGo := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(letGo)
+	ran := make(chan error, 1)
+	go func() { ran <- a.Run(strings.NewReader(`{"version":2,"type":"leave","id":7}` + "\n")) }()
+	select {
+	case <-hiding:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the leave hid nothing")
+	}
+	if m := a.heard(); m.Type != desktop.TypeLocked || m.Home != "" {
+		t.Fatalf("main heard %+v, not a lock naming none", m)
+	}
+	select {
+	case m := <-a.sent:
+		t.Fatalf("main heard %+v while the lock still ran", m)
+	default:
+	}
+	letGo()
+	if err := <-ran; err != nil {
+		t.Fatal(err)
+	}
+	if m := a.heard(); m != (desktop.Message{Type: desktop.TypeLeft, ID: 7}) {
+		t.Fatalf("main heard %+v, not its leave answered", m)
+	}
+}
+
 // Main's leave that arrives while the shell's own lock still restarts the
 // pages is answered a locked naming none all the same: the lock before it
 // named the CYFR main then left, and main keeps to that until told.
@@ -1190,7 +1244,7 @@ func TestALeaveDuringTheShellsOwnLockLeavesMainOnNone(t *testing.T) {
 		t.Fatalf("main heard %+v", m)
 	}
 	left := make(chan error, 1)
-	go func() { left <- a.Run(strings.NewReader(`{"version":1,"type":"leave"}` + "\n")) }()
+	go func() { left <- a.Run(strings.NewReader(`{"version":2,"type":"leave","id":1}` + "\n")) }()
 	// Held until leave waits for the shell that lock holds: what it reads
 	// before that wait, it read inside the other's restart.
 	stacks := make([]byte, 1<<20)

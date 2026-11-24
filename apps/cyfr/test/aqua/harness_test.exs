@@ -55,7 +55,7 @@ defmodule Aqua.HarnessTest do
     end
 
     @impl true
-    def facts, do: %{child_of_root?: false, supersedes?: true}
+    def facts, do: %{supersedes?: true, own_tools?: false}
   end
 
   describe "the boundary's answers, said straight to it" do
@@ -261,7 +261,7 @@ defmodule Aqua.HarnessTest do
       tool: "program",
       action: "start",
       recovery: "replay_safe",
-      idempotency_key: Tape.brain_start_key(turn.id),
+      idempotency_key: Tape.admission_key(turn.id),
       call: %{
         kind: "tool_call",
         content: "program",
@@ -314,7 +314,7 @@ defmodule Aqua.HarnessTest do
 
   defp start_step(ctx, turn) do
     {:ok, steps} = Tape.steps(ctx, turn)
-    Enum.find(steps, &(&1.idempotency_key == TurnStorage.brain_start_key(turn.id)))
+    Enum.find(steps, &(&1.idempotency_key == TurnStorage.admission_key(turn.id)))
   end
 
   # What the start's step says, its result row's words.

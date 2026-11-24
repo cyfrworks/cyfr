@@ -71,8 +71,8 @@ func (l *Local) take() *Local {
 // The chooser's requests are JSON POSTs from the chooser's own page: the
 // exact Host and Origin, application/json, and the run token main put in
 // the chooser's first address, which no other page and no other program
-// was given. The address of the CYFR in the folder the client record
-// remembers opens that CYFR (openLocal): the folder's own settings name
+// was given. The address of the CYFR in the folder selected last in the
+// list opens that CYFR (openLocal): the folder's own settings name
 // its directory, so nothing is discovered or asked (account.ServiceOf),
 // and one that does not answer is named, never started. Any other CYFR's
 // address is read as an https origin; its sign-in
@@ -95,8 +95,8 @@ func (l *Local) take() *Local {
 type Service struct {
 	// Token is the run token the chooser's requests carry.
 	Token string
-	// Clients is this user's client record.
-	Clients shell.ClientFile
+	// Homes is this user's list of CYFRs.
+	Homes shell.Homes
 	// Record is this user's device key's record.
 	Record string
 	// Client reaches the CYFRs and their account services.
@@ -506,23 +506,25 @@ func (s *Service) state(_ context.Context, epoch uint64, _ request) answer {
 
 // shown is what the chooser shows now.
 func (s *Service) shown() answer {
-	c, err := s.Clients.Load()
+	list, err := s.Homes.Load()
 	if err != nil {
-		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
 	}
+	c := list.Homes[list.Last]
 	s.mu.Lock()
 	open, began, home := s.pages != nil, s.began, s.committed.Home
 	folder, picks := s.folderNow()
 	setting := s.settingNow()
 	s.mu.Unlock()
 	if open {
-		// The CYFR open, which the record may not name: it keeps another's
-		// client, or a folder, until this CYFR admitted the device.
 		return s.opened(home)
 	}
-	a := answer{Home: c.Home, Folder: folder, Picks: picks, Setup: setting}
-	if !began {
-		a.Resume = c.Home
+	a := answer{Folder: folder, Picks: picks, Setup: setting}
+	if c.Project == "" {
+		a.Home = list.Last
+	}
+	if !began && c.Project == "" {
+		a.Resume = list.Last
 	}
 	if c.Project != "" && s.Local != nil {
 		// A folder's CYFR fills the field and is never Resume: one press
@@ -591,17 +593,18 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	// An approval stands only while the CYFR names the address approved:
 	// naming anything else, cyfr.run included, ends it now, whatever the
 	// person or a lock does next.
-	if err := s.Clients.EndApproval(home, found.Directory); err != nil {
+	if err := s.Homes.EndApproval(home, found.Directory); err != nil {
 		return answer{Error: "This computer could not forget the account service it approved before (" + err.Error() + ")."}
 	}
-	c, err := s.Clients.Load()
+	list, err := s.Homes.Load()
 	if err != nil {
-		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
 	}
+	c, held := list.Homes[home]
 	switch {
 	case found.Directory == account.DefaultDirectory:
 		return s.selectRemote(run, epoch, home, found, true)
-	case c.Home == home && c.Directory == found.Directory:
+	case held && c.Project == "" && c.Directory == found.Directory:
 		return s.selectRemote(run, epoch, home, found, false)
 	}
 	s.mu.Lock()
@@ -661,10 +664,11 @@ func (s *Service) live(epoch uint64) bool {
 	return s.epoch == epoch
 }
 
-// remembered is the folder the client record selects and the CYFR there,
-// when there is one the app can read.
+// remembered is the folder of the CYFR selected last and the CYFR there,
+// when it is a folder's the app can read.
 func (s *Service) remembered() (string, Local, bool) {
-	c, err := s.Clients.Load()
+	list, err := s.Homes.Load()
+	c := list.Homes[list.Last]
 	if err != nil || c.Project == "" || s.Local == nil {
 		return "", Local{}, false
 	}
@@ -692,9 +696,9 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		}
 		return answer{Error: err.Error()}
 	}
-	sel, err := s.Clients.SelectLocal(project)
+	sel, err := s.Homes.SelectLocal(home, project)
 	if err != nil {
-		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+		return answer{Error: "This computer cannot open the CYFR in " + project + ": " + err.Error() + "."}
 	}
 	setup := ""
 	if l.Shell.SetupToken != nil {
@@ -707,9 +711,9 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 // selectRemote selects the CYFR elsewhere at home, with the account
 // service found for it, approved in this selection or not.
 func (s *Service) selectRemote(run context.Context, epoch uint64, home string, found account.Discovered, approved bool) answer {
-	sel, err := s.Clients.Select(home, found.Directory, approved)
+	sel, err := s.Homes.Select(home, found.Directory, approved)
 	if err != nil {
-		return answer{Error: "This computer's CYFR record could not be read (" + err.Error() + ")."}
+		return answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}
 	}
 	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks}, nil,
 		Message{Type: TypeHome, Home: home, Account: found.Origin})
@@ -758,12 +762,18 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 		}
 		return answer{Error: "The app did not get ready to open " + home + ". Connect again."}
 	}
+	// Whether the selection is still wanted is read in the hold that
+	// commits it, its request's end beside the lock's and the service's:
+	// a home-ready and an end both pending commit nothing.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.epoch != epoch || s.ended {
 		return answer{Error: lockedSentence}
 	}
-	if _, err := sel.Commit(); err != nil {
+	if run.Err() != nil {
+		return answer{Error: "The app did not get ready to open " + home + ". Connect again."}
+	}
+	if err := sel.Commit(); err != nil {
 		return answer{Error: "This computer could not remember the CYFR (" + err.Error() + ")."}
 	}
 	var work *shell.Work
@@ -772,7 +782,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 		work = s.here.Work
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh, Work: work}
-	s.Tell(Message{Type: TypeOpened, Home: home})
+	s.Tell(Message{Type: TypeOpened, Home: home, Attempt: proposal.Attempt})
 	s.committed = proposal
 	return s.opened(home)
 }
@@ -863,11 +873,8 @@ type SetupState struct {
 	Folder string   `json:"folder"`
 	Steps  []string `json:"steps"`
 	Done   bool     `json:"done,omitempty"`
-	// Unrecorded is, for a setup done whose folder the client record could
-	// not take, since it keeps another CYFR, the sentence that says so.
-	Unrecorded string `json:"unrecorded,omitempty"`
-	Error      string `json:"error,omitempty"`
-	Seq        uint64 `json:"seq"`
+	Error  string   `json:"error,omitempty"`
+	Seq    uint64   `json:"seq"`
 }
 
 // settingNow is a copy of the setup begun, or nil, under s.mu.
@@ -915,18 +922,16 @@ func (s *Service) start(_ context.Context, _ uint64, req request) answer {
 			s.wake()
 		})
 		// The folder set up is recorded as the setup ends, before anything
-		// can start the app again: the chooser then offers it. Where the
-		// record keeps another CYFR, the setup says so.
-		var unrecorded string
+		// can start the app again: the chooser then offers it.
 		if err == nil {
-			unrecorded, err = s.remember(folder)
+			err = s.remember(folder)
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if err != nil {
 			cur.Error = err.Error()
 		} else {
-			cur.Done, cur.Unrecorded = true, unrecorded
+			cur.Done = true
 		}
 		cur.Seq++
 		s.wake()
@@ -962,31 +967,27 @@ func (s *Service) awaitSetup(ctx context.Context, epoch uint64, req request) ans
 	}
 }
 
-// remember records folder as the CYFR the client record selects, as
-// opening it does (shell.Selection), and answers, where the record keeps
-// another CYFR and so recorded nothing, the sentence that says so. The one
-// record holds one CYFR until a list replaces it (the switcher).
-func (s *Service) remember(folder string) (string, error) {
-	sel, err := s.Clients.SelectLocal(folder)
-	recorded := false
+// remember adds the CYFR set up in folder to the list, at the address its
+// reading names, as the one selected last, as opening it does
+// (shell.Selection): the chooser then offers it. An app that reads no
+// folder (Local nil) remembers none.
+func (s *Service) remember(folder string) error {
+	if s.Local == nil {
+		return nil
+	}
+	l, err := s.Local(folder)
+	defer l.end()
+	var sel *shell.Selection
 	if err == nil {
-		recorded, err = sel.Commit()
+		sel, err = s.Homes.SelectLocal(l.Shell.Address, folder)
+	}
+	if err == nil {
+		err = sel.Commit()
 	}
 	if err != nil {
-		return "", fmt.Errorf("CYFR is set up in %s, but this computer could not remember it (%v)", folder, err)
+		return fmt.Errorf("CYFR is set up in %s, but this computer could not remember it (%v)", folder, err)
 	}
-	if recorded {
-		return "", nil
-	}
-	c, err := s.Clients.Load()
-	kept := "another CYFR"
-	switch {
-	case err == nil && c.Home != "":
-		kept = c.Home
-	case err == nil && c.Project != "":
-		kept = "the CYFR in " + c.Project
-	}
-	return fmt.Sprintf("This app still remembers %s: to open this one later, choose %s under Or set up CYFR on this computer, then press Open CYFR.", kept, folder), nil
+	return nil
 }
 
 // openFolder opens the CYFR set up in the folder the page shows, the
@@ -1062,9 +1063,21 @@ func (s *Service) End() {
 	s.lock("", false)
 }
 
+// Leave is main's leave numbered id: the device locks and lets go of the
+// CYFR open, every session of the device's there ended, and only then is
+// main told left, with id.
+func (s *Service) Leave(id uint64) {
+	s.lock("", true)
+	s.mu.Lock()
+	ended := s.ended
+	s.mu.Unlock()
+	if !ended {
+		s.Tell(Message{Type: TypeLeft, ID: id})
+	}
+}
+
 // lock is Lock, which lets go of the CYFR open as well when leave says to
-// (main's leave): the client record stays as it is until the next CYFR is
-// opened (shell.Selection).
+// (main's leave): the list stays as it is.
 func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh, here, letGo := s.sh, s.here, leave || s.ended
@@ -1128,7 +1141,7 @@ func (s *Service) Run(in io.Reader) error {
 		case TypeLock:
 			s.Lock("Locked.")
 		case TypeLeave:
-			s.lock("", true)
+			s.Leave(m.ID)
 		case TypeShutdown:
 			s.End()
 			return nil

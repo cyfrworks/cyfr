@@ -3,30 +3,32 @@
 
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
-// version 1, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, a whole one from 1, folder-picked's path, a
+// version 2, its type and exactly its type's fields: text, but for attempt,
+// the proposal's number, and id, a departure's, whole ones from 1,
+// folder-picked's path, a
 // folder spelled from a root (absolute) or null, and its epoch and pick,
 // whole numbers from 0, the chooser's own as it asked for the pick.
 
-export const VERSION = 1
+export const VERSION = 2
 
 export const MAX_LINE = 64 * 1024
 
 const FIELDS = {
   ready: {required: ["url"]},
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "setup"]},
-  opened: {required: ["home"]},
+  opened: {required: ["home", "attempt"]},
   locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
   ending: {required: []},
+  left: {required: ["id"]},
   "home-ready": {required: ["home", "attempt"]},
   "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
-  leave: {required: []},
+  leave: {required: ["id"]},
   shutdown: {required: []},
   "folder-picked": {required: ["path", "epoch", "pick"]}
 }
 
-const FROM_CYFR = ["ready", "home", "opened", "locked", "ending"]
+const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "left"]
 const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked"]
 
 /**
@@ -44,6 +46,8 @@ export class Refused extends Error {
 }
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
+// The fields that are a number, a whole one from 1.
+const whole = (key) => key === "attempt" || key === "id"
 
 /** Read one line cyfr sent, or throw `Refused` with its reason. */
 export function readFromCyfr(line) {
@@ -62,7 +66,7 @@ export function readFromCyfr(line) {
     if (!["version", "type", ...required, ...optional].includes(key)) throw new Refused("fields")
   }
   for (const key of [...required, ...optional.filter((k) => Object.hasOwn(m, k))]) {
-    const valid = key === "attempt" ? Number.isSafeInteger(m[key]) && m[key] > 0 : typeof m[key] === "string" && m[key] !== ""
+    const valid = whole(key) ? Number.isSafeInteger(m[key]) && m[key] > 0 : typeof m[key] === "string" && m[key] !== ""
     if (!valid) throw new Refused("fields")
   }
   // Fields that come together or not at all, and a route only beside them.
@@ -84,6 +88,7 @@ export function toCyfr(type, fields = {}) {
     if (!Object.hasOwn(fields, key)) throw new Error(`${type} needs ${key}`)
     if (key === "path" && fields.path !== null && !absolute(fields.path)) throw new Error(`${type} names no absolute folder`)
     if ((key === "epoch" || key === "pick") && !(Number.isSafeInteger(fields[key]) && fields[key] >= 0)) throw new Error(`${type} needs ${key} as a whole number`)
+    if (whole(key) && !(Number.isSafeInteger(fields[key]) && fields[key] > 0)) throw new Error(`${type} needs ${key} as a whole number from 1`)
     m[key] = fields[key]
   }
   return JSON.stringify(m) + "\n"

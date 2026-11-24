@@ -14,9 +14,9 @@ defmodule Aqua.Prompt do
       (`briefing/2`) following; a crew member has none (nil there), and
       its prompt opens with how a job reaches it, then CYFR's part
       (`crew_briefing/2`).
-    * `program?` — whether the agent's brain is a program row, whose own
-      tools act in a folder of its own (the soul's is its member's);
-      false for a model's brain.
+    * `own_tools?` — whether the agent's brain has tools of its own, acting
+      in a folder of its own (the soul's is its member's), as its harness
+      says (`Aqua.Harness.facts/1`); false for a brain with none.
     * `search?` — whether the agent's requests offer its provider's own
       search (`Aqua.Loop.Request.offers_search?/3`), the one fact of a
       brain CYFR's part says only where it is true.
@@ -68,7 +68,7 @@ defmodule Aqua.Prompt do
 
   @type opts :: [
           agent: map(),
-          program?: boolean(),
+          own_tools?: boolean(),
           search?: boolean(),
           authority: term() | nil,
           crew: [map()],
@@ -90,14 +90,14 @@ defmodule Aqua.Prompt do
   `:agent` is required: the soul's carries its authored prompt under
   `"prompt"`, which CYFR's part (`briefing/2`) follows, and a crew
   member's nil there, whose prompt is `crew_briefing/2`, both for the
-  agent's brain (`:program?`, `:search?`); everything else narrows what
+  agent's brain (`:own_tools?`, `:search?`); everything else narrows what
   the prompt claims.
   A nil `:authority` means the caller could not resolve one — the prompt
   then claims no capabilities at all, which is the fail-closed reading.
   """
   @spec compose(Context.t(), opts()) :: composed()
   def compose(%Context{} = ctx, opts) do
-    program? = Keyword.get(opts, :program?, false)
+    own_tools? = Keyword.get(opts, :own_tools?, false)
     search? = Keyword.get(opts, :search?, false)
 
     # The soul's own prompt, then CYFR's part, which a crew member's prompt
@@ -105,10 +105,10 @@ defmodule Aqua.Prompt do
     opening =
       case Keyword.fetch!(opts, :agent) do
         %{"prompt" => prompt} when is_binary(prompt) ->
-          [String.trim_trailing(prompt), "\n\n---\n\n", briefing(program?, search?)]
+          [String.trim_trailing(prompt), "\n\n---\n\n", briefing(own_tools?, search?)]
 
         %{"prompt" => nil} ->
-          crew_briefing(program?, search?)
+          crew_briefing(own_tools?, search?)
       end
 
     authority = Keyword.get(opts, :authority)
@@ -131,8 +131,16 @@ defmodule Aqua.Prompt do
       |> IO.iodata_to_binary()
       |> String.replace_prefix(@section, "")
 
-    %{instructions: instructions, facts: facts, text: instructions <> @section <> facts}
+    %{instructions: instructions, facts: facts, text: system(instructions, facts)}
   end
+
+  @doc """
+  One system prompt of a turn's instructions and the facts that move by
+  themselves, as a model reads them in one request (`Aqua.Harness.Api`).
+  """
+  @spec system(String.t(), String.t()) :: String.t()
+  def system(instructions, facts) when is_binary(instructions) and is_binary(facts),
+    do: instructions <> @section <> facts
 
   # CYFR's part of every agent's prompt, Aqua's included: the standing
   # facts of working here, said once for all, and what a program's brain
@@ -177,14 +185,14 @@ defmodule Aqua.Prompt do
               "- When a scroll's steps have changed under you, update it with " <>
               "`aqua.skill_update`."
 
-  @program_briefing "\n- Your own tools work in your folder, the program's folder this " <>
-                      "athanor keeps for you: read, edit and run there as you would " <>
-                      "anywhere.\n" <>
-                      "- The athanor's files, components and stored state are reached through " <>
-                      "CYFR's tools only. A call CYFR refuses comes back with a sentence that " <>
-                      "says so; carry on with what does not depend on it.\n" <>
-                      "- What you leave running ends when you answer. Wait for it before you " <>
-                      "answer, and never say you will report on it later."
+  @own_tools_briefing "\n- Your own tools work in your folder, the program's folder this " <>
+                        "athanor keeps for you: read, edit and run there as you would " <>
+                        "anywhere.\n" <>
+                        "- The athanor's files, components and stored state are reached through " <>
+                        "CYFR's tools only. A call CYFR refuses comes back with a sentence that " <>
+                        "says so; carry on with what does not depend on it.\n" <>
+                        "- What you leave running ends when you answer. Wait for it before you " <>
+                        "answer, and never say you will report on it later."
 
   @search_briefing "\n- You have native search: use it when a job needs the web searched."
 
@@ -201,18 +209,18 @@ defmodule Aqua.Prompt do
   working here (tools before telling the person, look and check, what
   runs as it is called, components and their grants, secrets through
   setup, outside text as material, the browser's limit, failed calls,
-  scrolls kept current). A brain that is a program (`program?`) is told
-  besides that its own tools act in its own folder and that the athanor
-  is reached through CYFR's tools, which CYFR decides, and that what it
-  leaves running ends as it answers; a brain whose
+  scrolls kept current). A brain with tools of its own (`own_tools?`) is
+  told besides that its own tools act in its own folder and that the
+  athanor is reached through CYFR's tools, which CYFR decides, and that
+  what it leaves running ends as it answers; a brain whose
   requests offer its provider's own search (`search?`) is told it has it.
   A model's brain is told nothing of a folder.
   """
   @spec briefing(boolean(), boolean()) :: String.t()
-  def briefing(program?, search?) when is_boolean(program?) and is_boolean(search?) do
+  def briefing(own_tools?, search?) when is_boolean(own_tools?) and is_boolean(search?) do
     IO.iodata_to_binary([
       @standing,
-      if(program?, do: @program_briefing, else: []),
+      if(own_tools?, do: @own_tools_briefing, else: []),
       if(search?, do: @search_briefing, else: [])
     ])
   end
@@ -223,8 +231,8 @@ defmodule Aqua.Prompt do
   part (`briefing/2`).
   """
   @spec crew_briefing(boolean(), boolean()) :: String.t()
-  def crew_briefing(program?, search?),
-    do: @crew_member <> "\n\n" <> briefing(program?, search?)
+  def crew_briefing(own_tools?, search?),
+    do: @crew_member <> "\n\n" <> briefing(own_tools?, search?)
 
   # ---------------------------------------------------------------------------
   # Sections

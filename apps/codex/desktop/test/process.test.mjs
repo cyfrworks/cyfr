@@ -39,7 +39,7 @@ test("main refuses each line refused to it, with its reason", () => {
 })
 
 test("main sends nothing cyfr sends", () => {
-  for (const type of ["ready", "home", "opened", "locked", "pick-folder", "unlock"]) {
+  for (const type of ["ready", "home", "opened", "locked", "left", "pick-folder", "unlock"]) {
     assert.throws(() => toCyfr(type, {}))
   }
 })

@@ -457,7 +457,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	_ = exec.Command("pkill", "-x", "wvkbd-mobintl").Run()
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -d -w -C /dev/null before-sleep kill -USR1 ").Run()
 	host, _ := os.Hostname()
-	ln, device, err := screenClaim(listen, dir)
+	ln, device, entry, err := screenClaim(listen, dir, local.Shell.Address)
 	if err != nil {
 		return err
 	}
@@ -470,7 +470,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	// address leaves this shell running, and its next lock page says so.
 	cfg.Warning = func() string { return releaseApart(dir, version.Version) }
 	cfg.Record = filepath.Join(device, "holder.json")
-	cfg.Clients = shell.ClientFile(filepath.Join(device, "client.json"))
+	cfg.Clients = entry
 	cfg.Unwatched = watches.Unwatched
 	sh, err := shell.New(cfg)
 	if err != nil {
@@ -564,23 +564,28 @@ func folderRelease(dir string) string {
 	return ""
 }
 
-// screenClaim takes the shell's listener, then selects the CYFR in dir in
-// this account's client record: the record is shared with the CYFR app,
-// so only the one process holding the listener writes it.
-func screenClaim(listen func() (net.Listener, error), dir string) (net.Listener, string, error) {
+// screenClaim takes the shell's listener, then selects the CYFR in dir, at
+// home, in this account's list of CYFRs, which keeps the device's standing
+// there: the list is shared with the CYFR app, so only the one process
+// holding the listener writes it.
+func screenClaim(listen func() (net.Listener, error), dir, home string) (net.Listener, string, *shell.Selection, error) {
 	ln, err := listen()
 	if err != nil {
-		return nil, "", fmt.Errorf("The screen cannot take %s, which another program holds (%v)", shell.Listen, err)
+		return nil, "", nil, fmt.Errorf("The screen cannot take %s, which another program holds (%v)", shell.Listen, err)
 	}
 	device, err := shell.DeviceDir()
+	var entry *shell.Selection
 	if err == nil {
-		err = shell.ClientFile(filepath.Join(device, "client.json")).SelectProject(dir)
+		entry, err = shell.Homes(filepath.Join(device, "homes.json")).SelectLocal(home, dir)
+	}
+	if err == nil {
+		err = entry.Commit()
 	}
 	if err != nil {
 		ln.Close()
-		return nil, "", fmt.Errorf("The screen cannot show the CYFR here: %v", err)
+		return nil, "", nil, fmt.Errorf("The screen cannot show the CYFR here: %v", err)
 	}
-	return ln, device, nil
+	return ln, device, entry, nil
 }
 
 // sigUSR1 is Linux's SIGUSR1, named by number so this file builds where
