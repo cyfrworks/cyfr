@@ -335,9 +335,15 @@ func ReadEnvValues(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, redactorFor(nil, nil).err(err)
 	}
-	d, err := readDotenv(data, composeEnv)
+	return EnvValues(data)
+}
+
+// EnvValues reads text, a .env file's bytes, as ReadEnvValues reads the
+// file: a commented line assigns nothing.
+func EnvValues(text []byte) (map[string]string, error) {
+	d, err := readDotenv(text, composeEnv)
 	if err != nil {
-		return nil, redactorFor(data, nil).err(err)
+		return nil, redactorFor(text, nil).err(err)
 	}
 	return d.values(), nil
 }
