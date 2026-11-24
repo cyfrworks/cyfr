@@ -2,10 +2,15 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The AppArmor profile every Locus container runs under, on a host with
-# AppArmor (`security_opt: apparmor=cyfr-locus`). It is built into cyfr
-# (package apparmor): `cyfr init`, `update` and `up` write it to
-# /etc/apparmor.d/cyfr-locus and load it, so it is loaded at every boot,
-# and the keeper proves it at its own boot (cyfr-locus's stage.Confinement).
+# AppArmor. Its name carries its content: the name below, its twelve
+# digits zeros, is a placeholder, which each load replaces with cyfr-locus-
+# and the first 12 hex digits of the SHA-256 of this text as it stands
+# (package apparmor's Name; the file name beside it holds the result). It is built into cyfr:
+# `cyfr init` and `update` write it to /etc/apparmor.d/<its name> and load
+# it, so it is loaded at every boot; .env's CYFR_LOCUS_APPARMOR names it to
+# docker-compose.yml's `security_opt`, Docker refuses a container whose
+# named profile is not loaded, and the keeper proves at its boot that it
+# runs under its image's name (cyfr-locus's stage.Confinement).
 # Docker's default profile with four changes:
 #   1. `userns,`: the keeper gives every spawn a user namespace of its own,
 #      and the spawn holds its capabilities inside it alone.
@@ -24,7 +29,7 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-profile cyfr-locus flags=(attach_disconnected,mediate_deleted) {
+profile cyfr-locus-000000000000 flags=(attach_disconnected,mediate_deleted) {
   include <abstractions/base>
 
   network,
@@ -38,8 +43,8 @@ profile cyfr-locus flags=(attach_disconnected,mediate_deleted) {
   signal (receive) peer=unconfined,
   signal (receive) peer=runc,
   signal (receive) peer=crun,
-  signal (send,receive) peer=cyfr-locus,
-  ptrace (trace,read,tracedby,readby) peer=cyfr-locus,
+  signal (send,receive) peer=cyfr-locus-000000000000,
+  ptrace (trace,read,tracedby,readby) peer=cyfr-locus-000000000000,
 
   deny @{PROC}/* w,
   deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,

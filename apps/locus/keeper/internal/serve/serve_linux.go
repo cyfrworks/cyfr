@@ -16,7 +16,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -275,8 +274,8 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 			"and, where AppArmor restricts them, kernel.apparmor_restrict_unprivileged_userns, which the profile below satisfies), "+
 			"and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json (/etc/cyfr/keeper.json in the image), which lets "+
 			"clone make them and a space mount its files, with its system paths unmasked (security_opt systempaths=unconfined), since a masked /proc "+
-			"lets no space mount its own, and, on a host with AppArmor, under the profile cyfr-locus (security_opt apparmor=cyfr-locus), "+
-			"which `%s` loads", spec.Name, spec.Reach, err, stage.LoadProfile)
+			"lets no space mount its own, and, on a host with AppArmor, under this release's profile, which .env's CYFR_LOCUS_APPARMOR names "+
+			"(security_opt apparmor=${CYFR_LOCUS_APPARMOR}) and cyfr init and cyfr update load", spec.Name, spec.Reach, err)
 	}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
@@ -337,9 +336,6 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 	switch {
 	case err != nil:
 		return refuse(err)
-	case strings.Contains(string(reason), stage.PolicyRefusal):
-		_, sentence, _ := strings.Cut(string(reason), stage.PolicyRefusal)
-		return errors.New(sentence)
 	case len(reason) > 0:
 		return refuse(errors.New("the cloned stage: " + string(reason)))
 	case !ws.Exited() || ws.ExitStatus() != 0:

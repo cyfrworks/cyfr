@@ -175,13 +175,14 @@ func Wait() int {
 	if err != nil || pid <= 0 {
 		return ExitFailed
 	}
-	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, passedSignals...)
-	go func() {
-		for s := range signals {
-			_ = unix.Kill(pid, s.(syscall.Signal))
-		}
-	}()
+	// The init is the waiter's child and unreaped, so its pid names it
+	// alone here; its descriptor names it alone after the reap too, when
+	// the pid may be another space's.
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return ExitFailed
+	}
+	passSignals(pidfd)
 	var ws unix.WaitStatus
 	for {
 		_, err := unix.Wait4(pid, &ws, 0, nil)
@@ -195,6 +196,19 @@ func Wait() int {
 	}
 	word, _ := io.ReadAll(io.LimitReader(os.NewFile(waitExitFD, "exit"), 64))
 	return endAs(string(word), ws)
+}
+
+// passSignals passes every signal the waiter is sent to the process pidfd
+// is a descriptor of, which a reaped process's pid, given to another,
+// cannot redirect.
+func passSignals(pidfd int) {
+	signals := make(chan os.Signal, 8)
+	signal.Notify(signals, passedSignals...)
+	go func() {
+		for s := range signals {
+			_ = unix.PidfdSendSignal(pidfd, s.(syscall.Signal), nil, 0)
+		}
+	}()
 }
 
 // leaveToSpace gives the stage's own stdio up for /dev/null and closes its
@@ -312,9 +326,6 @@ func First(probe bool) int {
 		return fail("seccomp: %v", err)
 	}
 	if probe {
-		if err := probeQueue(); err != nil {
-			return fail("%v", err)
-		}
 		return 0
 	}
 	err = syscall.Exec(self, []string{"cyfr-locus", "stage", InitArg}, []string{})

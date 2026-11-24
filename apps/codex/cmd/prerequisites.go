@@ -71,10 +71,10 @@ type machineSeams struct {
 	authenticate func() error
 	// appArmor is whether the kernel enforces AppArmor profiles.
 	appArmor func() bool
-	// appArmorLoaded is whether the kernel holds a profile named
-	// cyfr-locus, by its own list of loaded policy, and whether that list
-	// is visible here: a container sees no host's.
-	appArmorLoaded func() (loaded, visible bool)
+	// appArmorLoaded is whether the kernel holds the profile named name,
+	// by its own list of loaded policy, and whether that list is visible
+	// here: a container sees no host's.
+	appArmorLoaded func(name string) (loaded, visible bool)
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// applyInput runs the commands as root through one sudo, input on
@@ -165,14 +165,14 @@ var machine = machineSeams{
 		raw, err := os.ReadFile("/sys/module/apparmor/parameters/enabled")
 		return err == nil && strings.TrimSpace(string(raw)) == "Y"
 	},
-	appArmorLoaded: func() (bool, bool) {
+	appArmorLoaded: func(want string) (bool, bool) {
 		entries, err := os.ReadDir(appArmorPolicies)
 		if err != nil {
 			return false, false
 		}
 		for _, e := range entries {
 			name, err := os.ReadFile(filepath.Join(appArmorPolicies, e.Name(), "name"))
-			if err == nil && strings.TrimSpace(string(name)) == "cyfr-locus" {
+			if err == nil && strings.TrimSpace(string(name)) == want {
 				return true, true
 			}
 		}
@@ -184,16 +184,28 @@ var machine = machineSeams{
 		return cmd.Run()
 	},
 	apply: func(commands []string) error {
-		cmd := exec.Command("sudo", "sh", "-c", strings.Join(commands, " && "))
+		cmd := asRoot(commands)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 		return cmd.Run()
 	},
 	applyInput: func(commands []string, input []byte) error {
-		cmd := exec.Command("sudo", "sh", "-c", strings.Join(commands, " && "))
+		cmd := asRoot(commands)
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(input), os.Stdout, os.Stderr
 		return cmd.Run()
 	},
 	forget: func() { _ = exec.Command("sudo", "-k").Run() },
+}
+
+// rootPath is the PATH the commands run as root find their programs by,
+// set before anything runs: never the caller's, which sudo may keep and a
+// project's entry may lead.
+const rootPath = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+// asRoot is the one sudo that runs commands, joined by &&, as root: sudo
+// is the person's own, found as every sudo cyfr runs is, by their PATH; it
+// runs /bin/sh by its path, whose first act fixes PATH to rootPath.
+func asRoot(commands []string) *exec.Cmd {
+	return exec.Command("sudo", "/bin/sh", "-c", "PATH="+rootPath+"; export PATH; "+strings.Join(commands, " && "))
 }
 
 // dockerGroup is the group that reaches Docker.

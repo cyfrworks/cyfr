@@ -713,7 +713,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		return showUnconfirmed(ctx, target, o, out)
 	}
 	// The switch starts the stack.
-	if err := ensureAppArmor(ctx, out, "cyfr access "+mode, false); err != nil {
+	if err := ensureAppArmor(ctx, out, "cyfr access "+mode); err != nil {
 		return err
 	}
 

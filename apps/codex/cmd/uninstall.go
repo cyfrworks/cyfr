@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/shell"
 	"github.com/spf13/cobra"
@@ -39,7 +40,7 @@ The program or its link stays when this directory holds it, or holds what it res
 
 CYFR never asks for, reads or keeps a password. When the screen service, the app or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing, and so does a sudo that needs a password with no terminal to ask at.
 
-It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr, this machine's device key and this machine's AppArmor profile cyfr-locus, which every CYFR on it shares. It ends by naming each by its path, and the commands that remove the volumes and the profile.
+It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr, this machine's device key and the AppArmor profile .env names, which every CYFR on the machine may share. It ends by naming each by its path, and the commands that remove the volumes and the profile.
 
 Each step is said as it is done; when one fails, the command says what is already gone and what is still here.`,
 	Example: "  cyfr uninstall\n  cyfr uninstall --yes",
@@ -99,9 +100,10 @@ type uninstallPlan struct {
 	// device is this account's device folder, its key and the CYFR it
 	// connects to, which stays; "" when there is none.
 	device string
-	// appArmor is whether this machine keeps the AppArmor profile
-	// cyfr-locus, which every CYFR on it shares, so it stays.
-	appArmor bool
+	// appArmor is the AppArmor profile this CYFR runs under, as .env names
+	// it, else this cyfr's, when this machine has it loaded: every CYFR on
+	// the machine may share it, so it stays. "" when there is none.
+	appArmor string
 }
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
@@ -161,8 +163,12 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			}
 		}
 	}
-	if loaded, _ := machine.appArmorLoaded(); loaded && machine.system() == "linux" {
-		p.appArmor = true
+	name := apparmor.ProfileName
+	if values, err := access.ReadEnvValues(filepath.Join(p.dir, ".env")); err == nil && values[appArmorEnv] != "" {
+		name = values[appArmorEnv]
+	}
+	if loaded, _ := machine.appArmorLoaded(name); loaded && machine.system() == "linux" {
+		p.appArmor = name
 	}
 	if device, err := shell.DeviceFolder(); err == nil {
 		if _, err := os.Lstat(device); err == nil {
@@ -220,8 +226,8 @@ func (p *uninstallPlan) show(out io.Writer) {
 	if p.device != "" {
 		fmt.Fprintf(out, "  this account's device key, %s\n", p.device)
 	}
-	if p.appArmor {
-		fmt.Fprintln(out, "  this machine's AppArmor profile cyfr-locus, which every CYFR on it shares")
+	if p.appArmor != "" {
+		fmt.Fprintf(out, "  this machine's AppArmor profile %s, which every CYFR on it may share\n", p.appArmor)
 	}
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
@@ -326,8 +332,8 @@ func (p *uninstallPlan) left(volumes []string) string {
 	if len(volumes) > 0 {
 		fmt.Fprintf(&b, "  the stack's volumes, which this command removes:\n    docker volume rm %s\n", shellQuote(volumes))
 	}
-	if p.appArmor {
-		fmt.Fprintf(&b, "  this machine's AppArmor profile cyfr-locus, which every CYFR on it shares and this command removes:\n    %s\n", appArmorRemoval)
+	if p.appArmor != "" {
+		fmt.Fprintf(&b, "  this machine's AppArmor profile %s, which every CYFR on it may share and this command removes:\n    %s\n", p.appArmor, appArmorRemoval(p.appArmor))
 	}
 	return b.String()
 }

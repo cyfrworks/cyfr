@@ -41,10 +41,11 @@ type standIn struct {
 	prompt                   func()
 	// refused is what docker writes where it does not answer.
 	refused string
-	// appArmor is the kernel enforcing AppArmor, loaded its holding a
-	// profile named cyfr-locus, and hidden its policy list unseen, as from
-	// a container.
-	appArmor, loaded, hidden bool
+	// appArmor is the kernel enforcing AppArmor, loaded the names of the
+	// profiles it holds, and hidden its policy list unseen, as from a
+	// container.
+	appArmor, hidden bool
+	loaded           []string
 	// input is what each applyInput gave root on its stdin.
 	input [][]byte
 }
@@ -109,7 +110,7 @@ func standInMachine(t *testing.T) *standIn {
 	machine.passwordless = func() bool { return s.passwordless }
 	machine.terminal = func() bool { return !s.noTerminal }
 	machine.appArmor = func() bool { return s.appArmor }
-	machine.appArmorLoaded = func() (bool, bool) { return s.loaded, !s.hidden }
+	machine.appArmorLoaded = func(name string) (bool, bool) { return slices.Contains(s.loaded, name), !s.hidden }
 	machine.authenticate = func() error {
 		s.authenticated++
 		if s.prompt != nil {
