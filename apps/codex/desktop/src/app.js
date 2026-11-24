@@ -406,10 +406,20 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     accountWindow = w
     const contents = w.webContents
+    const ceremony = () => hop && content && hop.from === content ? hop.kind : null
+    // Every navigation of the top frame, however it began (the page's own,
+    // main's load or reload, a history move, a change of fragment), starts
+    // here: the one reader decides it, and a refused one ends the ceremony.
+    contents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame) on({type: "account-started", url: details.url, kind: ceremony()})
+    })
+    // What that event cannot do: cancel a navigation before its request is
+    // sent, and take a press of the page's as an act (the answer). The
+    // engine raises these for the page's own navigations, a redirect and a
+    // frame's alone.
     const ask = (event, redirect = false) => {
       const decided = on({type: "account-navigate", window: "account", url: event.url, target: event.isMainFrame ? "top" : "frame",
-        ...begun(event, contents), redirect,
-        kind: hop && content && hop.from === content ? hop.kind : null})
+        ...begun(event, contents), redirect, kind: ceremony()})
       if (!decided.allow) event.preventDefault()
     }
     contents.on("will-navigate", (event) => ask(event))

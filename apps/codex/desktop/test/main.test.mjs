@@ -1282,6 +1282,51 @@ test("an account window whose page is lost or failed to load ends the ceremony, 
   }
 })
 
+// Each way the account window's top frame reaches a page, as the pinned
+// engine reports it (measured on Electron 45.4.1 by a probe of the
+// recheck): the events it raises, in order, for a navigation to `url`.
+const ENGINE = {
+  "a history move": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a move within the page's history": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: true}],
+    ["did-navigate-in-page", {}, url, true]],
+  "a reload by main": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a reload by the page": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}],
+    ["will-frame-navigate", pageNavigation(w, url)], ["will-navigate", pageNavigation(w, url)]],
+  "a redirect": (w, url) => [["will-redirect", pageNavigation(w, url)]],
+}
+function pageNavigation(w, url) {
+  return {url, isMainFrame: true, initiator: w.webContents.mainFrame, prevented: false, preventDefault() { this.prevented = true }}
+}
+
+test("every way the account window reaches a page that takes a request is read by the one reader, and a refused one ends the ceremony", async () => {
+  const current = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const refused = {
+    "no request": `${ACCOUNT}/account/new`,
+    "an expired request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, expires_at: Date.now() - 1})}`,
+    "another CYFR's request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, audience: "https://bob.example", return: "https://bob.example/login"})}`,
+  }
+  for (const [how, events] of Object.entries(ENGINE)) {
+    for (const [why, url] of Object.entries(refused)) {
+      const {page} = await hopped()
+      const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+      for (const [name, ...args] of events(account, url)) account.webContents.emit(name, ...args)
+      await settled()
+      assert.ok(account.destroyed, `${how}, ${why}: the ceremony ended`)
+      assert.equal(page.webContents.url, HOME + "/login", `${how}, ${why}: nothing was delivered`)
+    }
+  }
+  // Its own page, as the reader reads it, stays: a reload of it by main or
+  // by the page, and a move within it.
+  for (const how of ["a reload by main", "a reload by the page", "a move within the page's history"]) {
+    await hopped()
+    const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+    const own = `${ACCOUNT}/account/new#name=&request=${fragment(current)}`
+    for (const [name, ...args] of ENGINE[how](account, own)) account.webContents.emit(name, ...args)
+    await settled()
+    assert.ok(!account.destroyed, `${how} of a page the reader reads: the ceremony goes on`)
+  }
+})
+
 test("a redirect in the account window is no answer of a sign-in's", async () => {
   const {page} = await hopped()
   const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))

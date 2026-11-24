@@ -70,7 +70,7 @@ test("a proposal is answered home-ready and replaced by the next until cyfr says
   assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
   assert.equal(run([...proposed, home("https://bob.example", 2), taken]).s.home, "https://bob.example", "after a failure")
   assert.equal(run(open).s.name, "open")
-  assert.equal(run([...open, home("https://bob.example")]).s.name, "ended", "a proposal after a commit")
+  assert.equal(run([...open, home("https://bob.example", 2)]).s.name, "ended", "a proposal after a commit")
   assert.equal(run([...proposed, {type: "opened", home: "https://bob.example"}]).s.name, "ended")
   assert.equal(run([ready, {type: "opened", home: HOME}]).s.name, "ended", "opened with nothing proposed")
 })
@@ -233,7 +233,7 @@ test("main alone opens a CYFR committed at its root, on the passkey road, and th
   assert.ok(!run(open, false).effects.some((e) => e.root))
   const told = run([...open, company, locked()], true)
   assert.deepEqual(told.s.notices, ["company"])
-  assert.deepEqual(run([...open, company, locked(), home(), taken, {type: "opened", home: HOME}], true).s.notices, [])
+  assert.deepEqual(run([...open, company, locked(), home(HOME, 2), taken, {type: "opened", home: HOME}], true).s.notices, [])
 })
 
 test("a CYFR no one is set up at opens at its setup page on the passkey road, the token held no longer, and the next home without one at its root", () => {
@@ -243,7 +243,7 @@ test("a CYFR no one is set up at opens at its setup page on the passkey road, th
   assert.deepEqual(opened.effects.filter((e) => e.root), [{root: {home: HOME, setup: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}], "its setup page")
   assert.equal(opened.s.setup, "", "main holds the token until it is used, and no longer")
   assert.ok(!opened.effects.some((e) => e.say?.includes("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")), "nothing said carries it")
-  const again = run([ready, first, taken, {type: "opened", home: HOME}, locked(), forgot, home(), taken, {type: "opened", home: HOME}], true)
+  const again = run([ready, first, taken, {type: "opened", home: HOME}, locked(), forgot, home(HOME, 2), taken, {type: "opened", home: HOME}], true)
   assert.deepEqual(again.effects.filter((e) => e.root).at(-1), {root: {home: HOME}}, "a home with no token: its root")
   const sixWords = run([ready, first, taken, {type: "opened", home: HOME}], false)
   assert.ok(!sixWords.effects.some((e) => e.root), "on the six-word road main loads none: the device's pages make the first person")
@@ -858,11 +858,42 @@ test("main holds a setup token for its attempt alone, however that attempt ends"
   assert.equal(run([...holding, home(HOME, 2)], true).s.setup, "", "a newer proposal with none ends it")
 })
 
-test("an older proposal never replaces a newer one", () => {
+test("an attempt's number only goes up: a home not above the highest taken changes nothing, after a failed take, a lock or the chooser too", () => {
   for (const at of [[], [taken]]) {
     const newer = run([ready, withSetup(2), ...at], true).s
     for (const older of [withSetup(1, "cd".repeat(32)), home(HOME, 1), withSetup(2, "cd".repeat(32))]) {
       assert.deepEqual(step(newer, older), {state: newer, do: []}, `${newer.name}: attempt ${older.message.attempt}`)
     }
+  }
+  const ends = {
+    "a failed take": [ready, withSetup(2), {type: "taken", taken: false}],
+    "a lock and its end": [ready, withSetup(2), taken, {type: "opened", home: HOME}, locked(), forgot],
+  }
+  for (const [end, events] of Object.entries(ends)) {
+    const back = run(events, true).s
+    for (const older of [withSetup(2, "cd".repeat(32)), withSetup(1, "cd".repeat(32))]) {
+      assert.deepEqual(step(back, older), {state: back, do: []}, `${end}, at ${back.name}: attempt ${older.message.attempt} again`)
+    }
+    assert.equal(step(back, withSetup(3)).state.name, "taking", `${end}: the next attempt is taken`)
+  }
+})
+
+test("on the box's screen a home's setup token is dropped as it arrives, so nothing queued holds one, and an older home never replaces the queued next", () => {
+  const SCREEN = {type: "ready", url: "http://127.0.0.1:7340/"}
+  const onScreen = (events) => {
+    let s = initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr")
+    for (const e of events) s = step(s, e).state
+    return s
+  }
+  assert.ok(!JSON.stringify(onScreen([SCREEN, withSetup(1)])).includes(TOKEN), "taken: no token")
+  const queued = [SCREEN, withSetup(1), taken, {type: "opened", home: HOME}, locked(HOME), withSetup(3)]
+  const s = onScreen(queued)
+  assert.equal(s.name, "locking")
+  assert.equal(s.wanted.attempt, 3, "the next attempt queued")
+  assert.ok(!JSON.stringify(s).includes(TOKEN), "queued: no token")
+  assert.deepEqual(step(s, withSetup(2, "cd".repeat(32))), {state: s, do: []}, "an older home over the queued next changes nothing")
+  for (const [end, e] of [["quit", {type: "quit"}], ["gone", {type: "gone", why: "it ended"}], ["ending", {type: "ending"}]]) {
+    const after = step(s, e).state
+    assert.ok(!JSON.stringify(after).includes(TOKEN), `${end} with a home queued: no token`)
   }
 })

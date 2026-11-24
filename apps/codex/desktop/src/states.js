@@ -143,7 +143,7 @@ import {absolute} from "./process.js"
 /** The state main starts in. */
 export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
   return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
-    notices: [], picks: 0, picking: 0, pickFor: null}
+    notices: [], picks: 0, picking: 0, pickFor: null, seen: 0}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
@@ -289,7 +289,7 @@ function settle(s) {
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
-    picks: s.picks, picking: 0, pickFor: null}
+    picks: s.picks, picking: 0, pickFor: null, seen: s.seen}
   if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
   const taken = step(next, {type: "home", message: s.wanted})
   return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
@@ -318,16 +318,22 @@ function advance(s, e) {
       }
       return {state: {...s, name: "chooser", readyURL: e.url}, do: [{say: "ready"}, {chooser: []}]}
     case "home": {
-      const m = e.message
-      // From before the lock; on the screen, the proposal after it.
-      if (s.name === "locking") return s.screen ? same({...s, wanted: m}) : same(s)
+      // The box's screen makes its first person by the device's pages: a
+      // home's setup token is dropped as it arrives, so none is ever held.
+      const {setup: _dropped, ...rest} = e.message
+      const m = s.screen ? rest : e.message
+      // An attempt's number only goes up: a home not above the highest
+      // taken, and the one queued, changes nothing, in any state.
+      if (Number.isSafeInteger(m.attempt) && m.attempt <= Math.max(s.seen, s.wanted?.attempt ?? 0)) return same(s)
+      const seen = Number.isSafeInteger(m.attempt) ? m.attempt : s.seen
+      // From before the lock; on the screen, the proposal after it, queued
+      // and taken once the lock settles.
+      if (s.name === "locking") return s.screen ? same({...s, wanted: m}) : same({...s, seen})
       if (!["chooser", "taking", "proposed"].includes(s.name) || !homeMessage(m)) {
         return ending(s, {end: "it named a CYFR this app does not open"})
       }
-      // An older proposal never replaces a newer one.
-      if (["taking", "proposed"].includes(s.name) && m.attempt <= s.attempt) return same(s)
       if (rerouted(s, m)) return ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, setup: m.setup ?? "", returning: null},
+      return {state: {...s, name: "taking", home: m.home, account: m.account, attempt: m.attempt, seen, setup: m.setup ?? "", returning: null},
         do: [{say: `home: ${m.home}`}, ...(s.name === "taking" ? [] : [{take: true}])]}
     }
     case "taken": {
@@ -431,6 +437,12 @@ function advance(s, e) {
     // began (`kind`, none otherwise); anything else ends the ceremony, and so
     // does every top-frame load before ready and while locking, when no
     // ceremony may go on. A frame loads nothing and ends nothing, ever.
+    // A navigation the account window's top frame started, however it
+    // began: a page that takes a request goes on only as the one reader
+    // reads it for the ceremony shown; anything else ends the ceremony.
+    case "account-started":
+      if (!["starting", "locking"].includes(s.name) && accountLoad(e.url, kept(s), e.kind) === "allow") return same(s)
+      return same(s, [{unhop: true}])
     case "account-navigate": {
       if (e.target !== "top") return {state: s, allow: false, do: []}
       if (["starting", "locking"].includes(s.name)) return {state: s, allow: false, do: [{unhop: true}]}
