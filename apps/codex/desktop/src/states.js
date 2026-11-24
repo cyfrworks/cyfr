@@ -144,9 +144,14 @@
 //                            the passkey road
 //   chooser {notices}        open the content at the chooser; with
 //                            connect, connecting to that CYFR; with way
-//                            "setup", at setting up on this computer
-//   back {notices, retry}    show the chooser in the content window as it
-//                            stands, its session as it is; with retry,
+//                            "setup", at setting up on this computer;
+//                            with proxy, the route of the CYFR main
+//                            keeps to set on its store first, which goes
+//                            on to that CYFR's pages by the device's
+//                            (Try with words)
+//   back {notices, retry}    show the chooser, loaded afresh, in place of
+//                            the content as it stands, in its store where
+//                            that is memory's, with no route; with retry,
 //                            offering that CYFR again
 //   end {why}                kill cyfr and tell the person (never on the
 //                            box's screen)
@@ -371,9 +376,10 @@ function settle(s) {
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", proxy: again ? s.before.proxy : "", returning: null, notices: s.notices,
     picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
-  if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
+  const shown = {chooser: s.notices, ...(next.proxy ? {proxy: next.proxy} : {})}
+  if (!s.wanted) return {state: next, do: [shown]}
   const taken = step(next, {type: "home", message: s.wanted})
-  return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
+  return {state: taken.state, do: [shown, ...taken.do]}
 }
 
 // The chooser's state after a departure: main keeps to none.
