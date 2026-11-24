@@ -620,13 +620,14 @@ async function leftPhase() {
   // marks still there; forgot: forgotten again once it can, nothing of it
   // is kept and the rail lists it no more.
   answerWith((buttons) => buttons.indexOf("Forget"))
-  const failed = await unclearableSession(kept, async () => {
-    await press("/rail/menu?cyfr=" + encodeURIComponent(HOME))
-    return waitFor(() => railRow(HOME).then((r) => r?.failed ? r : null), "the rail's row not forgotten")
+  await judged("forget_unerased", "Forget that could not erase leaves the CYFR on the rail, not forgotten, and its sign-in as it was", async () => {
+    const failed = await unclearableSession(kept, async () => {
+      await press("/rail/menu?cyfr=" + encodeURIComponent(HOME))
+      return waitFor(() => railRow(HOME).then((r) => r?.failed ? r : null), "the rail's row not forgotten")
+    })
+    const unerased = await storageOf(kept)
+    return [failed.failed && marked(unerased), {failed, unerased}]
   })
-  const unerased = await storageOf(kept)
-  row("forget_unerased", failed.failed && marked(unerased),
-    "Forget that could not erase leaves the CYFR on the rail, not forgotten, and its sign-in as it was", {failed, unerased})
   await press("/rail/menu?cyfr=" + encodeURIComponent(HOME))
   await waitFor(() => railRow(HOME).then((r) => r ? null : true), "the rail without the CYFR")
   const gone = await storageOf(kept)
