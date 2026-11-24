@@ -195,6 +195,11 @@ func TestPreStopExitsReportTheComposeFileAsItIs(t *testing.T) {
 			originalFetch := fetchScaffold
 			t.Cleanup(func() { fetchScaffold = originalFetch })
 			fetchScaffold = func(v string) (scaffoldRelease, error) {
+				// The offer's read of the release being left is the
+				// person's to pass; the edit lands at the new release's.
+				if v != testVersion {
+					return originalFetch(v)
+				}
 				edited := append(slices.Clone(s.compose), "\nname: person-edited-before-stop\n"...)
 				if err := os.WriteFile(filepath.Join(s.project, "docker-compose.yml"), edited, 0640); err != nil {
 					t.Fatal(err)

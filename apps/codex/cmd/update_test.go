@@ -127,7 +127,7 @@ const (
 	testVersion = "0.9.0"
 	testRoster  = `{:ok, rows} = Arca.ControlPlane.roster(); IO.puts("CYFR_ROSTER=" <> JSON.encode!(%{self: Atom.to_string(node()), release: Prima.Version.current(), slots: Enum.map(rows, fn r -> %{node: r.node, owner: r.owner, release: r.release, lease_until: DateTime.to_iso8601(r.lease_until)} end)}))`
 	testLive    = `IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))`
-	testSchema  = `IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())`
+	testSchema  = `IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current()); IO.puts("CYFR_RELEASE=" <> Prima.Version.current())`
 	// testSchemaContainer names the scenarios' offline read's container.
 	testSchemaContainer = "cyfr-schema-read-test"
 	keyBase             = "kb-secret-0123456789abcdef"
@@ -316,7 +316,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	s.answer("cyfrps.out", "c0ffee\n")
 	s.answer("services.out", strings.Join(stackServices, "\n")+"\n")
 	s.stackAnswer(nil)
-	s.answer("schema.out", "booting\nCYFR_SCHEMA="+schemaRelease+"\n")
+	s.answer("schema.out", "booting\nCYFR_SCHEMA="+schemaRelease+"\nCYFR_RELEASE=0.8.0\n")
 	s.answer("probe.out", "180006\n")
 	s.answer("dump.out", "PGDMP custom-format dump")
 
@@ -589,7 +589,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
-	want := append(s.schemaRead(true),
+	want := append(s.offerReads(),
 		"ENGINE lock update",
 		"ENGINE resume",
 		profiles+"config --format json",
@@ -614,7 +614,6 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"stop",
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
-		"SCAFFOLD FETCH 0.8.0",
 		"ENGINE release",
 		"SCAFFOLD WRITE",
 		"ENGINE start update",
@@ -1146,7 +1145,7 @@ func TestUpdateRefusesAFailedPull(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "docker pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus+" failed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	want := append(s.schemaRead(true), "ENGINE lock update", "ENGINE resume", profiles+"config --format json", "SCAFFOLD FETCH "+testVersion, "pull ghcr.io/cyfrworks/cyfr@"+digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus)
+	want := append(s.offerReads(), "ENGINE lock update", "ENGINE resume", profiles+"config --format json", "SCAFFOLD FETCH "+testVersion, "pull ghcr.io/cyfrworks/cyfr@"+digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus)
 	if got := s.log(); !slices.Equal(got, want) {
 		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
 	}
@@ -1206,9 +1205,8 @@ func TestUpdateRewritesOnlyManagedImageLines(t *testing.T) {
 }
 
 // lastReleaseCompose is a compose file of the last release's shape: its
-// images on release 0.8.0, the runtime's pool of the old kind, the Locus
-// services without their AppArmor and system-path options, and a service
-// of the person's own.
+// images on release 0.8.0, the runtime's pool of the old kind and the
+// Locus services without their AppArmor and system-path options.
 func lastReleaseCompose(t *testing.T) string {
 	t.Helper()
 	old := string(shippedCompose(t))
@@ -1218,7 +1216,6 @@ func lastReleaseCompose(t *testing.T) string {
 		{"runner:30101-30108:relay", "runner:30101-30108:netns"},
 		{"      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}\n", ""},
 		{"      - systempaths=unconfined\n", ""},
-		{"\n  caddy:\n", "\n  sidecar:\n    image: alpine:3.22\n  caddy:\n"},
 	} {
 		if !strings.Contains(old, edit.from) {
 			t.Fatalf("the shipped docker-compose.yml holds no %q", edit.from)
@@ -1228,14 +1225,20 @@ func lastReleaseCompose(t *testing.T) string {
 	return old
 }
 
-// An install whose docker-compose.yml is the last release's shape is
-// switched to the release's own file, its images pinned to the manifest's
-// digests, every other line of the old file gone: the snapshot holds the
-// file it replaced, and the update says once where it is and which of its
-// image lines the release's file does not keep, as the offer said before.
+// An install whose docker-compose.yml is the last release's shape, with a
+// service of the person's own they accept to lose, is switched to the
+// release's own file, its images pinned to the manifest's digests, every
+// other line of the old file gone: the snapshot holds the file it
+// replaced, and the update says once where it is and which of its image
+// lines the release's file does not keep, as the offer said before.
 func TestUpdateWritesTheReleasesComposeFile(t *testing.T) {
-	old := lastReleaseCompose(t)
+	shipped := lastReleaseCompose(t)
+	old := strings.Replace(shipped, "\n  caddy:\n", "\n  sidecar:\n    image: alpine:3.22\n  caddy:\n", 1)
 	s := newUpdateScenario(t, []byte(old), nil)
+	// Release 0.8.0 shipped its shape; the sidecar is the person's own,
+	// whose loss the update asks about first.
+	s.composes = map[string]string{"0.8.0": shipped}
+	askWith(t, true, strings.NewReader("yes\n"))
 	out, err := s.run(context.Background())
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
@@ -1292,6 +1295,7 @@ func TestUpdateRefusesAComposeWithoutTheStack(t *testing.T) {
 
 	minimal := "services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:0.8.0@" + digestOld + "\n  workers:\n    image: ghcr.io/cyfrworks/cyfr-locus:0.8.0@" + digestOld + "\n"
 	s := newUpdateScenario(t, []byte(minimal), nil)
+	s.composes = map[string]string{"0.8.0": minimal}
 	if out, err := s.run(context.Background()); err != nil {
 		t.Fatalf("an update of cyfr and one Locus service answered %v\n%s", err, out)
 	}
@@ -1403,18 +1407,22 @@ func TestStackHealthWindowCoversTheShippedHealthChecks(t *testing.T) {
 // A .env line holding the value the release being left shipped in its
 // .env.example, where the new release's ships another, takes the new
 // value, said once; a line the person changed that names a service the
-// release no longer runs is reported with what to write there, and left;
-// every other line the person set, a commented example's included, stays
-// as it is and is not named.
+// release no longer runs, in any form the setting takes (a URL, a host
+// and port, an id=URL list), is reported by its key, its line and the
+// host it names, never its value, with what to write there, and left; a
+// key assigned more than once is the person's, none of its lines changed,
+// and reported; every other line the person set, a commented example's
+// included, stays as it is and is not named.
 func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
-	shipped := string(shippedCompose(t))
-	s := newUpdateScenario(t, []byte(shipped), nil)
-	s.composes = map[string]string{"0.8.0": strings.Replace(shipped, "\n  caddy:\n", "\n  locus-legacy:\n    image: ghcr.io/cyfrworks/cyfr-locus:0.8.0\n  caddy:\n", 1)}
+	legacy := strings.Replace(string(shippedCompose(t)), "\n  caddy:\n", "\n  locus-legacy:\n    image: ghcr.io/cyfrworks/cyfr-locus:0.8.0\n  caddy:\n", 1)
+	s := newUpdateScenario(t, []byte(legacy), nil)
+	s.composes = map[string]string{"0.8.0": legacy}
 	s.examples = map[string]string{
-		"0.8.0": "CYFR_DEFAULTED=old\nCYFR_CHANGED=old\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4100\n# CYFR_COMMENTED=old\n",
-		"0.9.0": "CYFR_DEFAULTED=new\nCYFR_CHANGED=new\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-runtime:4100\nCYFR_COMMENTED=new\n",
+		"0.8.0": "CYFR_DEFAULTED=old\nCYFR_CHANGED=old\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4100\n# CYFR_COMMENTED=old\nCYFR_TWICE=old\n",
+		"0.9.0": "CYFR_DEFAULTED=new\nCYFR_CHANGED=new\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-runtime:4100\nCYFR_COMMENTED=new\nCYFR_TWICE=new\n",
 	}
-	env := scenarioEnv + "CYFR_DEFAULTED=old\nCYFR_CHANGED=mine\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4200\nCYFR_COMMENTED=old\nCYFR_PEER=locus-legacy:7\nCYFR_OTHER=http://locus-runtime:1\n"
+	lines := "CYFR_DEFAULTED=old\nCYFR_CHANGED=mine\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4200/?token=tok-secret-123\nCYFR_COMMENTED=old\nCYFR_PEER=locus-legacy:7\nCYFR_OTHER=http://locus-runtime:1\nCYFR_NAMED_URLS=wrk_one=http://locus-runtime:4201,wrk_locus=http://locus-legacy:4201\nCYFR_TWICE=mine\nCYFR_TWICE=old\n"
+	env := scenarioEnv + lines
 	s.edit(".env", env)
 	out, err := s.run(context.Background())
 	if err != nil {
@@ -1428,7 +1436,7 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 		"CYFR_DEFAULTED":  "new",
 		"CYFR_CHANGED":    "mine",
 		"CYFR_SAME":       "same",
-		"CYFR_LEGACY_URL": "http://locus-legacy:4200",
+		"CYFR_LEGACY_URL": "http://locus-legacy:4200/?token=tok-secret-123",
 		"CYFR_COMMENTED":  "old",
 		"CYFR_PEER":       "locus-legacy:7",
 		"CYFR_OTHER":      "http://locus-runtime:1",
@@ -1437,24 +1445,194 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 			t.Errorf(".env's %s is %q, want %q", name, got[name], want)
 		}
 	}
+	if held := read(t, filepath.Join(s.project, ".env")); !strings.Contains(held, "\nCYFR_TWICE=mine\nCYFR_TWICE=old\n") {
+		t.Errorf("the update changed a line of a key assigned twice:\n%s", held)
+	}
 	said := "Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_DEFAULTED=new.\n"
 	if n := strings.Count(out, said); n != 1 {
 		t.Errorf("the update said %d times %q:\n%s", n, said, out)
 	}
 	report := "These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-		"  CYFR_LEGACY_URL=http://locus-legacy:4200: write http://locus-runtime:4100 there, release 0.9.0's shipped value\n" +
-		"  CYFR_PEER=locus-legacy:7: name a service release 0.9.0's docker-compose.yml runs there\n"
+		"  CYFR_LEGACY_URL, line 9, names locus-legacy: write http://locus-runtime:4100 there, release 0.9.0's shipped value\n" +
+		"  CYFR_NAMED_URLS, line 13, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
+		"  CYFR_PEER, line 11, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n"
 	if n := strings.Count(out, report); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, report, out)
 	}
-	for _, name := range []string{"CYFR_CHANGED", "CYFR_SAME", "CYFR_COMMENTED", "CYFR_OTHER"} {
-		if strings.Contains(out, name) {
-			t.Errorf("the update named %s:\n%s", name, out)
+	twice := "These .env settings are assigned more than once, so they are yours and cyfr update changed none of their lines:\n" +
+		"  CYFR_TWICE, lines 14 and 15: release 0.9.0 ships CYFR_TWICE=new\n"
+	if n := strings.Count(out, twice); n != 1 {
+		t.Errorf("the update reported %d times %q:\n%s", n, twice, out)
+	}
+	for _, shown := range []string{"CYFR_CHANGED", "CYFR_SAME", "CYFR_COMMENTED", "CYFR_OTHER", "tok-secret-123", "4200", "locus-legacy:7", "wrk_"} {
+		if strings.Contains(out, shown) {
+			t.Errorf("the update said %q:\n%s", shown, out)
 		}
 	}
 	if kept := read(t, filepath.Join(s.snapshotDir(), ".env")); kept != env {
 		t.Errorf("the snapshot's .env is %q, not .env as it stood", kept)
 	}
+}
+
+// editedOffer is what the update says of a docker-compose.yml other than
+// the one release 0.8.0 shipped, before it asks anything.
+const editedOffer = "docker-compose.yml is not the file release 0.8.0 shipped: these lines differ, image lines aside (- the release's, + yours):\n"
+
+// editedRefusal is the update's refusal of an edited docker-compose.yml
+// with no terminal to ask on, --yes or not.
+const editedRefusal = "Nothing changed: docker-compose.yml is not the file release 0.8.0 shipped, and there is no terminal to ask on whether to replace it; --yes does not answer this question. Run 'cyfr update' at a terminal"
+
+// A docker-compose.yml that is not the file the release being left
+// shipped, its image lines aside, is said before anything stops: the lines
+// that differ, no environment value among them, that going on writes the
+// release's file and the snapshot keeps the person's, and a sentence of
+// its own when a difference is a managed service's volumes. Then the
+// update asks, --yes or not, the answer defaulting to no; declined, or
+// with no terminal to ask on, nothing changes and the stack runs on; yes
+// replaces the file, the person's kept in the snapshot.
+func TestUpdateAsksBeforeReplacingAnEditedComposeFile(t *testing.T) {
+	shipped := string(shippedCompose(t))
+	edit := func(from, to string) string {
+		t.Helper()
+		if !strings.Contains(shipped, from) {
+			t.Fatalf("the shipped docker-compose.yml holds no %q", from)
+		}
+		return strings.Replace(shipped, from, to, 1)
+	}
+	edited := edit("    environment:\n", "    environment:\n      - CYFR_MINE=secret-in-compose\n")
+	question := "Replace docker-compose.yml with release 0.9.0's and update this CYFR? (yes/no) [no]: "
+	going := "Going on writes release 0.9.0's docker-compose.yml in its place; the snapshot keeps yours, with your changes, for you to carry over by hand.\n"
+	volumes := "The differences change the volumes of cyfr: release 0.9.0's file mounts only its own, so the stack would start without the data the folders you mount there hold.\n"
+	for name, c := range map[string]struct {
+		compose  string
+		terminal bool
+		answer   string
+		volumes  bool
+	}{
+		"declined":    {edited, true, "no\n", false},
+		"no terminal": {edited, false, "", false},
+		"data bind":   {edit("      - ./data:/app/data\n", "      - /srv/cyfr-data:/app/data\n"), false, "", true},
+		"nested bind": {edit("      - ./data:/app/data\n", "      - ./data:/app/data\n      - /srv/components:/app/data/components\n"), false, "", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newUpdateScenario(t, []byte(c.compose), nil)
+			askWith(t, c.terminal, strings.NewReader(c.answer))
+			out, err := s.run(context.Background())
+			switch {
+			case c.terminal && (err != nil || !strings.HasSuffix(out, question+"Nothing changed. Run cyfr update again when you want this release.\n")):
+				t.Fatalf("a declined update answered %v:\n%s", err, out)
+			case !c.terminal && (err == nil || err.Error() != editedRefusal):
+				t.Fatalf("the update answered %v, want %q:\n%s", err, editedRefusal, out)
+			}
+			for _, line := range []string{editedOffer, going} {
+				if !strings.Contains(out, line) {
+					t.Errorf("the update did not say %q:\n%s", line, out)
+				}
+			}
+			if strings.Contains(out, volumes) != c.volumes {
+				t.Errorf("the update said the volumes sentence %v, want %v:\n%s", !c.volumes, c.volumes, out)
+			}
+			if strings.Contains(out, "secret-in-compose") {
+				t.Errorf("the update printed an environment value:\n%s", out)
+			}
+			s.nothingStopped()
+			s.composeUnchanged()
+			s.noBackups()
+		})
+	}
+	if !strings.Contains(edited, "CYFR_MINE") {
+		t.Fatal("no edit")
+	}
+
+	s := newUpdateScenario(t, []byte(edited), nil)
+	askWith(t, true, strings.NewReader("yes\n"))
+	out, err := s.run(context.Background())
+	if err != nil || !strings.Contains(out, editedOffer+"  +       - CYFR_MINE=…\n") || !strings.Contains(out, question) {
+		t.Fatalf("an accepted update answered %v:\n%s", err, out)
+	}
+	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); got != string(switched(shippedCompose(t))) {
+		t.Errorf("the accepted update did not write the release's file:\n%s", got)
+	}
+	if held := read(t, filepath.Join(s.snapshotDir(), "compose")); held != edited {
+		t.Errorf("the snapshot does not hold the edited file")
+	}
+}
+
+// The wait and the cleanup after it run under the head the start started:
+// a .env change of the switch that moves builds to another host drops the
+// builds profile, and neither the wait nor the stop names it.
+func TestUpdateWaitsUnderTheHeadItStarted(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.examples = map[string]string{
+		"0.8.0": "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
+		"0.9.0": "CYFR_LOCUS_BUILDS_URL=https://builds.example.com\n",
+	}
+	saved, savedPoll := stackHealthWindow, stackHealthPoll
+	t.Cleanup(func() { stackHealthWindow, stackHealthPoll = saved, savedPoll })
+	stackHealthWindow, stackHealthPoll = 300*time.Millisecond, 20*time.Millisecond
+	s.stackAnswer(map[string]string{"locus-runtime": "restarting/"})
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "locus-runtime (restarting)") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	env := envAssignments(filepath.Join(s.project, ".env"))
+	b, err := access.ResolveBoot(access.BootInput{File: env, Process: env, Release: true})
+	if err != nil || slices.Contains(b.Head.Profiles, "locus-builds") {
+		t.Fatalf("the switched .env's head is %+v (error %v), want one without builds", b.Head, err)
+	}
+	started := strings.Join(composePrefixArgs(access.ProjectName(s.project), b.Head), " ") + " "
+	log := s.log()
+	for _, call := range []string{started + "up -d", started + "config --services", started + "ps --format json", started + "stop"} {
+		if !slices.Contains(log, call) {
+			t.Errorf("the update did not run %q:\n%s", call, strings.Join(log, "\n"))
+		}
+	}
+}
+
+// The wait has one deadline: a docker call that does not answer ends it
+// there, with the services not seen up named, never a fresh allowance per
+// read.
+func TestUpdateBoundsItsWaitByOneDeadline(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	saved, savedPoll := stackHealthWindow, stackHealthPoll
+	t.Cleanup(func() { stackHealthWindow, stackHealthPoll = saved, savedPoll })
+	stackHealthWindow, stackHealthPoll = 300*time.Millisecond, 20*time.Millisecond
+	s.answer("stack.block", "")
+	t.Cleanup(func() { s.answer("stack.release", "") })
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.run(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "did not come up within 300ms") || !strings.Contains(err.Error(), "docker compose logs caddy cyfr") {
+			t.Fatalf("update answered %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		s.answer("stack.release", "")
+		<-done
+		t.Fatal("the wait outlived its deadline")
+	}
+}
+
+// An update of a CYFR on its release already starts it and waits for every
+// service of the stack: an update run again after one whose services did
+// not come up waits again, its matching pins no reason to skip the wait.
+func TestUpdateWaitsAgainOnItsRelease(t *testing.T) {
+	s := newUpdateScenario(t, switched(shippedCompose(t)), nil)
+	saved, savedPoll := stackHealthWindow, stackHealthPoll
+	t.Cleanup(func() { stackHealthWindow, stackHealthPoll = saved, savedPoll })
+	stackHealthWindow, stackHealthPoll = 300*time.Millisecond, 20*time.Millisecond
+	s.stackAnswer(map[string]string{"locus-runtime": "restarting/"})
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "locus-runtime (restarting)") || !strings.Contains(err.Error(), "docker compose logs locus-runtime") {
+		t.Fatalf("an update on its release answered %v\n%s", err, out)
+	}
+	if !slices.Contains(s.log(), profiles+"ps --format json") {
+		t.Errorf("the update did not wait for the stack:\n%s", strings.Join(s.log(), "\n"))
+	}
+	s.noBackups()
 }
 
 // A repository is managed exactly when Docker resolves it to a manifest
@@ -1550,8 +1728,8 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Errorf("the second update answered %v", err)
 	}
-	// The refused update ran the schema read alone, which writes nothing.
-	if got := s.log()[calls:]; !slices.Equal(got, s.schemaRead(true)) {
+	// The refused update ran the offer's reads alone, which write nothing.
+	if got := s.log()[calls:]; !slices.Equal(got, s.offerReads()) {
 		t.Errorf("the refused update ran %s", strings.Join(got, "\n"))
 	}
 	if holder := s.engine.held(); holder != "update" {
@@ -1577,8 +1755,8 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "(`access tailnet`)") {
 		t.Errorf("an update beside a held lock answered %v", err)
 	}
-	// The refused update ran the schema read alone, which writes nothing.
-	if got := s.log()[calls:]; !slices.Equal(got, s.schemaRead(true)) {
+	// The refused update ran the offer's reads alone, which write nothing.
+	if got := s.log()[calls:]; !slices.Equal(got, s.offerReads()) {
 		t.Errorf("the refused update ran %s", strings.Join(got, "\n"))
 	}
 	s.engine.holder = ""
@@ -1691,6 +1869,10 @@ func TestUpdateSnapshotsNestedStorageMount(t *testing.T) {
 	}
 	compose := strings.Replace(string(shippedCompose(t)), "      - ./data:/app/data\n", "      - ./data:/app/data\n      - "+nested+":/app/data/components\n", 1)
 	s := newUpdateScenario(t, []byte(compose), nil)
+	// Both releases ship the nested bind, so the updated stack reads the
+	// components where the snapshot found them; a bind the person added is
+	// asked about first (TestUpdateAsksBeforeReplacingAnEditedComposeFile).
+	s.composes = map[string]string{"0.8.0": compose, testVersion: compose}
 	// A file only the covered host directory holds, which cyfr never sees.
 	if err := os.WriteFile(filepath.Join(s.project, "data", "components", "covered"), []byte("covered"), 0600); err != nil {
 		t.Fatal(err)
@@ -1713,6 +1895,9 @@ func TestUpdateSnapshotsNestedStorageMount(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(storage, "components", "covered")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("storage/components holds the covered host file (%v)", err)
+	}
+	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); !strings.Contains(got, "      - "+nested+":/app/data/components\n") {
+		t.Errorf("the updated stack no longer binds the components the snapshot holds:\n%s", got)
 	}
 }
 
@@ -1886,6 +2071,7 @@ func TestUpdateSnapshotsNestedMountsInAnyOrder(t *testing.T) {
 	compose := strings.Replace(string(shippedCompose(t)), "      - ./data:/app/data\n",
 		"      - ./data:/app/data\n      - "+deepest+":/app/data/components/acme/deep\n      - "+child+":/app/data/components/acme\n      - "+parent+":/app/data/components\n", 1)
 	s := newUpdateScenario(t, []byte(compose), nil)
+	s.composes = map[string]string{"0.8.0": compose, testVersion: compose}
 	write(filepath.Join(s.project, "data"), "components/covered-root", "hidden")
 	for _, v := range []map[string]any{
 		{"type": "bind", "source": deepest, "target": "/app/data/components/acme/deep"},
@@ -2088,7 +2274,7 @@ func TestUpdateRefusesAnUndeclaredRestore(t *testing.T) {
 	}
 	s.nothingStopped()
 	s.noBackups()
-	if s.hasCall("pull ") || s.scaffold != 0 {
+	if s.hasCall("pull ") || s.hasCall("SCAFFOLD FETCH "+testVersion) {
 		t.Errorf("the update pulled or fetched the scaffold before refusing:\n%s", strings.Join(s.log(), "\n"))
 	}
 }
@@ -2320,12 +2506,19 @@ func askWith(t *testing.T, terminal bool, answer io.Reader) {
 	askInput = answer
 }
 
-// onlyReadTheSchema fails unless the update's one docker call was the
-// schema read through the running cyfr, with no engine call, the lock
-// among them, and changed no file.
+// offerReads are what the offer reads before the lock: the schema read
+// through the running cyfr, then the scaffold of the release it answers,
+// whose compose file tells a person's changes apart.
+func (s *updateScenario) offerReads() []string {
+	return append(s.schemaRead(true), "SCAFFOLD FETCH 0.8.0")
+}
+
+// onlyReadTheSchema fails unless the update ran only the offer's reads
+// (offerReads), with no engine call, the lock among them, and changed no
+// file.
 func (s *updateScenario) onlyReadTheSchema() {
 	s.t.Helper()
-	if log := s.log(); !slices.Equal(log, s.schemaRead(true)) {
+	if log := s.log(); !slices.Equal(log, s.offerReads()) {
 		s.t.Errorf("the update ran:\n%s", strings.Join(log, "\n"))
 	}
 	s.composeUnchanged()
@@ -2410,10 +2603,13 @@ func TestUpdateLeavesAHomeOnItsReleaseAndRefusesANewerOne(t *testing.T) {
 	askWith(t, true, strings.NewReader("yes\n"))
 	s := newUpdateScenario(t, switched(shippedCompose(t)), nil)
 	out, err := s.run(context.Background())
-	if err != nil || !strings.Contains(out, "This CYFR is on release 0.9.0 already, so there is nothing to update; 'cyfr up' starts it if it is stopped.") || strings.Contains(out, "Update this CYFR?") {
+	if err != nil || !strings.Contains(out, "This CYFR is on release 0.9.0 already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\nStarting release 0.9.0...\nRelease 0.9.0 is up.\n") || strings.Contains(out, "Update this CYFR?") {
 		t.Fatalf("a home on its release answered %v:\n%s", err, out)
 	}
-	s.nothingRan()
+	if log := s.log(); !slices.Equal(log, append([]string{"ENGINE lock update", "ENGINE resume"}, startedAndUp()...)) {
+		t.Errorf("a home on its release ran:\n%s", strings.Join(log, "\n"))
+	}
+	s.noBackups()
 
 	newer := strings.ReplaceAll(string(switched(shippedCompose(t))), "ghcr.io/cyfrworks/cyfr:"+testVersion+"@", "ghcr.io/cyfrworks/cyfr:1.0.0-rc.1@")
 	s = newUpdateScenario(t, []byte(newer), nil)
@@ -2494,6 +2690,7 @@ func TestUpdateRefusesAHomeOnANewerReleaseWhateverItsTags(t *testing.T) {
 	for name, compose := range map[string]string{"named": plain, "latest": shipped, "mixed": mixed} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, []byte(compose), nil)
+			s.composes = map[string]string{"0.8.0": compose}
 			s.answer("rpc.out", roster)
 			out, err := s.run(context.Background())
 			for _, part := range []string{"release 1.0.0, newer than this cyfr's 0.9.0, and cyfr update never moves a CYFR to an older release", "Nothing was changed"} {

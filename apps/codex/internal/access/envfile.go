@@ -338,6 +338,21 @@ func ReadEnvValues(path string) (map[string]string, error) {
 	return EnvValues(data)
 }
 
+// EnvLines answers, for each name text assigns, the line, counted from 1,
+// each of its statements starts on, in order, read as ReadEnvValues reads
+// the file.
+func EnvLines(text []byte) (map[string][]int, error) {
+	d, err := readDotenv(text, composeEnv)
+	if err != nil {
+		return nil, redactorFor(text, nil).err(err)
+	}
+	lines := map[string][]int{}
+	for _, st := range d.statements {
+		lines[st.key] = append(lines[st.key], d.lineOf(st.start))
+	}
+	return lines, nil
+}
+
 // EnvValues reads text, a .env file's bytes, as ReadEnvValues reads the
 // file: a commented line assigns nothing.
 func EnvValues(text []byte) (map[string]string, error) {

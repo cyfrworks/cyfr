@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
@@ -147,9 +148,9 @@ type restoreScenario struct {
 // snapshot taken and every docker call of the update forgotten.
 func newRestoreScenario(t *testing.T, compose []byte, env map[string]string, prepare func(*updateScenario)) *restoreScenario {
 	s := newUpdateScenario(t, compose, env)
-	// The release ships the scenario's compose file, so the update leaves
+	// Both releases ship the scenario's compose file, so the update leaves
 	// it switched as the restore's cases hold it.
-	s.composes = map[string]string{testVersion: string(compose)}
+	s.composes = map[string]string{"0.8.0": string(compose), testVersion: string(compose)}
 	for name, data := range map[string]string{"data/cyfr.db": sqliteBytes, "data/cyfr.db-wal": "sqlite-wal"} {
 		if err := os.WriteFile(filepath.Join(s.project, name), []byte(data), 0644); err != nil {
 			t.Fatal(err)
@@ -373,6 +374,26 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	// The snapshot is left as it was, for another restore.
 	if _, err := readSnapshot(r.dir); err != nil {
 		t.Errorf("the snapshot no longer reads: %v", err)
+	}
+}
+
+// A restored .env that names an AppArmor profile this machine has not
+// loaded, as a later update's start takes the profile it replaced off the
+// machine, is said before the restored stack starts, with the command
+// that loads it through the restored release's own cyfr.
+func TestRestoreSaysHowToLoadTheRestoredReleasesProfile(t *testing.T) {
+	appArmorOn(t, apparmor.ProfileName)
+	const older = "cyfr-locus-0123456789ab"
+	r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
+		s.edit(".env", scenarioEnv+appArmorEnv+"="+older+"\n")
+	})
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	want := "The restored .env names the AppArmor profile " + older + ", which this machine has not loaded: an update since the snapshot may have taken it off, and release 0.8.0's Locus services start only under it. Load it with release 0.8.0's cyfr (" + installScript + " | CYFR_VERSION=0.8.0 sh installs it):\n  " + fmt.Sprintf(loadAppArmorFormat, older) + "\n"
+	if !strings.Contains(out, want+"Starting release 0.8.0...\n") {
+		t.Errorf("the restore did not say, before its start, %q:\n%s", want, out)
 	}
 }
 
@@ -1255,8 +1276,8 @@ func TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred(t *testing.T) {
 	// The old deployment can supply its settings explicitly rather than
 	// loading the whole .env into the container; that is valid Compose.
 	compose = strings.Replace(compose, "    environment:\n", "    environment:\n      - CYFR_SECRET_KEY_BASE="+keyBase+"\n      - 'CYFR_CRYPTO_KEYRING="+keyring+"'\n", 1)
-	// The release ships the repository's compose file, which loads .env.
-	r := newRestoreScenario(t, []byte(compose), nil, func(s *updateScenario) { s.composes = nil })
+	// The new release ships the repository's compose file, which loads .env.
+	r := newRestoreScenario(t, []byte(compose), nil, func(s *updateScenario) { s.composes = map[string]string{"0.8.0": compose} })
 	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 	if before == compose {
 		t.Fatal("update did not install its new compose configuration")
