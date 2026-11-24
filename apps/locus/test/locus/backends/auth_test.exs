@@ -162,7 +162,7 @@ defmodule Locus.Backends.AuthTest do
           crossed do
       at(ctx, vector["now"])
 
-      assert {401, [{:refusal, {:unauthorized, refused}, []}]} =
+      assert {401, [{:refusal, {:unauthorized, refused}}]} =
                Wire.post(ctx.builds, @builds["routes"]["build"], body, [
                  {@builds["auth_header"], header}
                ]),
@@ -177,7 +177,7 @@ defmodule Locus.Backends.AuthTest do
     status = @backends["status"]
     at(ctx, status["ts"])
 
-    assert {401, [{:refusal, {:unauthorized, :malformed}, []}]} =
+    assert {401, [{:refusal, {:unauthorized, :malformed}}]} =
              Wire.post(ctx.builds, @builds["routes"]["build"], status["body"], [
                {"x-cyfr-auth", status["header"]}
              ])
@@ -186,7 +186,7 @@ defmodule Locus.Backends.AuthTest do
     invoke = @backends["open"]
     at(ctx, invoke["fields"]["ts"])
 
-    assert {401, [{:refusal, {:unauthorized, :malformed}, []}]} =
+    assert {401, [{:refusal, {:unauthorized, :malformed}}]} =
              Wire.post(ctx.builds, @builds["routes"]["build"], invoke["body"], [
                {"x-cyfr-auth", invoke["header"]}
              ])

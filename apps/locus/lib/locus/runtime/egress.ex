@@ -17,7 +17,9 @@ defmodule Locus.Runtime.Egress do
   by id (`Locus.Runtime.Relay.Runner.fetch/7`).
 
   In the service, `connect_options/3` builds the request options that
-  connect to exactly the pinned address (`Prima.Network.pin/3`). CYFR has
+  connect to exactly the pinned address (`Prima.Network.pin/3`), its
+  socket reading at most 64 KiB at a time unless told more
+  (`transport_opts/1`). CYFR has
   already applied the attempt's private-address policy to that address,
   so the options are built under `:allow_all`, and a metadata address is
   still refused there. The pin's host is kept for TLS SNI and certificate
@@ -122,6 +124,8 @@ defmodule Locus.Runtime.Egress do
                )
   @relay_whys Map.new(@relay_codes, fn {why, code} -> {code, why} end)
 
+  @read_bytes 65_536
+
   @doc """
   Pin `url` for one outbound request of the attempt `client` holds: CYFR
   is asked for every request, and its answer serves that request alone.
@@ -208,17 +212,34 @@ defmodule Locus.Runtime.Egress do
   end
 
   @doc """
+  The socket options of a connection the service reads for its runners
+  `read_bytes` at a time, a pinned fetch's and CYFR's host calls': 64 KiB
+  unless a fetch has its count's room for more (`Locus.Runtime.Relay`), so
+  the piece a holder keeps while it asks the runtime's count for room is
+  at most one read, and the kernel queues at most as much of what the
+  peer sent and the service has not yet read. The HTTP client widens a
+  socket's read buffer (`buffer`) to its send and receive buffers as the
+  kernel reports them once it has connected, and Linux reports each at
+  twice what was set: each is set to half the read.
+  """
+  @spec transport_opts(pos_integer()) :: keyword()
+  def transport_opts(read_bytes \\ @read_bytes) when is_integer(read_bytes) and read_bytes > 1,
+    do: [buffer: read_bytes, recbuf: div(read_bytes, 2), sndbuf: div(read_bytes, 2)]
+
+  @doc """
   The request options that connect to exactly the address `target` pins,
   for `uri` (its path and query the request's), keeping the pin's host for
   TLS SNI and certificate verification; the relay sets the `Host` header
   from the pin itself (`Locus.Runtime.Relay`). A metadata
   address is `{:error, :private_ip_blocked, message}`.
 
+  Its socket is made with `transport_opts/1`.
+
   ## Options
 
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
-    * `:transport_opts` — extra Mint transport opts
+    * `:read_bytes` — what its socket reads at a time (default 65_536)
   """
   @spec connect_options(PinnedTarget.t(), URI.t(), keyword()) ::
           {:ok, connection()} | {:error, :private_ip_blocked, String.t()}
@@ -333,8 +354,11 @@ defmodule Locus.Runtime.Egress do
       %{uri | host: unbracket(target.host)},
       PinnedTarget.address(target),
       opts
-      |> Keyword.take([:receive_timeout, :protocols, :transport_opts])
-      |> Keyword.put(:private_policy, :allow_all)
+      |> Keyword.take([:receive_timeout, :protocols])
+      |> Keyword.merge(
+        transport_opts: transport_opts(Keyword.get(opts, :read_bytes, @read_bytes)),
+        private_policy: :allow_all
+      )
     )
   end
 

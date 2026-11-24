@@ -40,6 +40,11 @@ defmodule Locus.Runtime.Keeper do
   Both keepers spawn through a `Locus.Launcher` that tells a runner's
   owner its events in its own words (`t:Locus.Launcher.control_event/0`),
   and both read them through `event/1`.
+  Each event carrying the runner's bytes (control, relay or log) is
+  answered with `c:taken/1` once they were taken, by the runner's process
+  or, for relay bytes, by its relay's (`Locus.Runtime.Relay`): the keeper
+  reads the runner's next bytes only then, so what a runner writes waits
+  behind its service rather than in the service's memory.
   `c:refusal/1` says what a refusal means for an operator. Control bytes go back with `c:send/2`,
   relay bytes with `c:send_relay/2`, callable from any process once the
   runner attached, and `c:close_relay/1` ends the relay;
@@ -125,6 +130,13 @@ defmodule Locus.Runtime.Keeper do
 
   @doc "Write `data` to the runner's relay, from any process, once the runner attached."
   @callback send_relay(channel(), iodata()) :: :ok | {:error, term()}
+
+  @doc """
+  The word, from any process, that the control, relay or log bytes of the
+  last event were taken: the runner's next bytes are read only once every
+  such event was answered so.
+  """
+  @callback taken(channel()) :: :ok
 
   @doc "End the runner's relay: nothing more is written to it."
   @callback close_relay(channel()) :: :ok

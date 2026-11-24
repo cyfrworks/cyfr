@@ -173,6 +173,9 @@ defmodule Locus.Runtime.Keeper.Channel do
   def send_relay(channel, data), do: answer(Locus.Keeper.send_relay(channel, data))
 
   @impl Locus.Runtime.Keeper
+  def taken(channel), do: Locus.Keeper.taken(channel)
+
+  @impl Locus.Runtime.Keeper
   def close_relay(channel), do: Locus.Keeper.close_relay(channel)
 
   @impl Locus.Runtime.Keeper

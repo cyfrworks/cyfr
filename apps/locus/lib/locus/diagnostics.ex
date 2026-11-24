@@ -4,8 +4,10 @@
 defmodule Locus.Diagnostics do
   @moduledoc """
   A build's log as the build wire carries it (`Prima.BuilderProtocol`): the
-  progress lines a build's answer streams, and the same lines as the
-  `diagnostics` of its terminal line, each `stage: message`.
+  progress lines a build's answer streams, which the client keeps as the
+  build's diagnostics, each `stage: message`
+  (`Prima.BuilderProtocol.diagnostic/2`). No terminal line carries them
+  again, and the builder keeps none of them once it has sent them.
 
   The build writes the log, so nothing about it is trusted: bytes that are
   not UTF-8 are replaced, a line longer than the wire's line bound goes
@@ -13,15 +15,11 @@ defmodule Locus.Diagnostics do
   wire's log bound by a budget (`budget/0`) charged where the lines are
   produced, in the process running the build. A line is charged as the
   bytes that leave the service for it: its whole encoded progress line,
-  envelope, stage, escaped message and newline. The terminal line carries
-  the same lines again as JSON strings, each shorter than the progress line
-  it was charged as, so the answer stays within
-  `Prima.BuilderProtocol.max_answer_bytes/0`. A build that writes without
-  end therefore costs the builder one log's worth of memory, and the
-  answer still encodes. Past the budget a build's own lines are dropped
-  whole behind one line saying so; the few lines the builder writes itself
-  (the stages, why an output was refused) keep a reserve, so a failure is
-  still explained at the end of a loud build.
+  envelope, stage, escaped message and newline, which is what a client
+  keeping the log holds it to. Past the budget a build's own lines are
+  dropped whole behind one line saying so; the few lines the builder
+  writes itself (the stages, why an output was refused) keep a reserve, so
+  a failure is still explained at the end of a loud build.
   """
 
   alias Prima.BuilderProtocol
@@ -45,12 +43,8 @@ defmodule Locus.Diagnostics do
   @spec budget() :: budget()
   def budget, do: :counters.new(2, [])
 
-  @typedoc """
-  One admitted line: its progress line as the wire carries it, without the
-  newline, and the same line as a JSON string for the terminal line's
-  diagnostics (`Prima.BuilderProtocol.encode_diagnostic/1`).
-  """
-  @type admitted :: {progress :: String.t(), diagnostic :: String.t()}
+  @typedoc "One admitted line: its progress line as the wire carries it, without the newline."
+  @type admitted :: String.t()
 
   @doc """
   The lines `message` makes at `stage` within what is left of `budget`,
@@ -64,10 +58,6 @@ defmodule Locus.Diagnostics do
     |> pieces()
     |> Enum.flat_map(&charge(budget, stage, &1))
   end
-
-  @doc "The diagnostics line of a progress line."
-  @spec line(BuilderProtocol.stage(), String.t()) :: String.t()
-  def line(stage, message), do: "#{stage}: #{message}"
 
   @doc """
   `text` as a refusal's sentence: valid UTF-8 within the wire's line bound,
@@ -89,11 +79,11 @@ defmodule Locus.Diagnostics do
     if stage == :output and :counters.get(budget, 2) == 1 do
       []
     else
-      {progress, _diagnostic} = admitted = encode(stage, message)
+      progress = encode(stage, message)
 
       cond do
         within?(budget, progress, limit) ->
-          [admitted]
+          [progress]
 
         stage == :output ->
           :counters.add(budget, 2, 1)
@@ -109,8 +99,8 @@ defmodule Locus.Diagnostics do
   # already spent past the reserve says nothing, so the log's bound holds
   # whatever was admitted before.
   defp cut(budget) do
-    {progress, _diagnostic} = admitted = encode(:output, @cut_message)
-    if within?(budget, progress, BuilderProtocol.max_log_bytes()), do: [admitted], else: []
+    progress = encode(:output, @cut_message)
+    if within?(budget, progress, BuilderProtocol.max_log_bytes()), do: [progress], else: []
   end
 
   # Charges the line with its newline when it fits under `limit`.
@@ -125,11 +115,10 @@ defmodule Locus.Diagnostics do
     end
   end
 
-  # A piece is valid UTF-8 within the line bound, so both encode.
+  # A piece is valid UTF-8 within the line bound, so it encodes.
   defp encode(stage, message) do
     {:ok, progress} = BuilderProtocol.encode_progress(stage, message)
-    {:ok, diagnostic} = BuilderProtocol.encode_diagnostic(line(stage, message))
-    {progress, diagnostic}
+    progress
   end
 
   defp pieces(""), do: []

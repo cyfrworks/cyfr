@@ -36,16 +36,26 @@ defmodule Locus.Keeper do
   carries stdin, stdout and stderr as frames: a stream byte (0 stdin, 1
   stdout, 2 stderr, 3 attach), a 4-byte big-endian length and the payload,
   a zero-length frame ending its stream. The connection goes to the
-  caller, which reads its frames itself. When the command's leader exits,
-  or on `release`, cyfr-locus kills every process of the uid and removes
-  everything the uid left, then reports `released`; `run/2` answers only
-  after that report, so no process of a build outlives the call. A spawn
-  cyfr-locus refuses after it made it never ran, and `run/2` answers its
-  refusal at that report too, asking for none: one not reported within
-  60 s is logged and still waited for, so the build's slot is held until
-  cyfr-locus has freed its place. A deadline passed, a stdout bound exceeded or a cancel
-  (`Locus.Executor.cancel/1`) releases the spawn with no grace. A caller
-  that dies has its spawn released at once.
+  caller, which reads its frames itself, one frame at a read
+  (`@read_bytes`, the socket's own buffer), and the next only once its
+  functions took what the last held (`Locus.Executor`): nothing of a
+  build's output is kept here, and a reader that does not take holds the
+  relay, the build's processes and everything behind them where they are.
+  When the command's leader exits, or on `release`, cyfr-locus kills every
+  process of the uid and removes everything the uid left, waits for the
+  relay to end, which is once its reader has taken the last byte or closed
+  its connection, then reports `released`; `run/2` answers only after that
+  report, however long it takes, so no process of a build outlives the
+  call. The reader closing its connection is what cuts the relay: a
+  deadline passed (the run's own, the reader's deadline), a stdout bound
+  exceeded, a cancel (`Locus.Executor.cancel/1`) or a function's refusal
+  closes it and releases the spawn with no grace, and a caller that dies
+  closes it by dying, its spawn released at once; a relay that attaches
+  once its reader has stopped has its connection closed as it attaches,
+  unread. A spawn cyfr-locus refuses after it made it never ran, and
+  `run/2` answers its refusal at that report too, asking for none; a
+  report not come within 60 s is logged and still waited for, so the
+  build's slot is held until cyfr-locus has freed its place.
 
   ## A long-lived spawn
 
@@ -62,12 +72,41 @@ defmodule Locus.Keeper do
   that `released` ("A run"); a runner's owner hears `{:refused, code,
   spawn_id}`, then `:released`. The caller
   is its owner: this server holds the spawn's relay connection and sends
-  the owner `{Locus.Keeper, ref, event}` for the relay attached, each
-  stdout and stderr frame, the leader's exit and the uid's retirement,
-  the last; the streams and the exit arrive in no defined order, since
-  the exit comes on the channel and the frames on the relay's connection,
-  whose last frames only the retirement waits for. `send/2` writes stdin
-  frames through the connection, holding them until the relay attaches;
+  the owner `{Locus.Keeper, ref, event}` for the relay attached, what
+  each read of the connection carried, the leader's exit and the uid's
+  retirement, the last. What the connection carried before its end
+  reaches the owner, in the wire's order, before the exit and the
+  release: an exit cyfr-locus reports while the connection is open is
+  held until the connection ends, and a release, which cyfr-locus
+  reports once the relay has ended, first has what is left on the
+  connection read and handed to the owner without its word: at most the
+  relay's socket queue and one read, since nothing writes to it any
+  more. A held connection is read one read at a time, of at most one
+  frame, and read again only once its owner has said with `taken/1` that
+  it took every message of the last, its spawn's end under way or not: a
+  read's frames reach the owner as one message a stream, `{:stdout,
+  bytes}`, `{:stderr, bytes}`, `{:control, bytes}` or `{:relay, bytes}`
+  holding that stream's payloads of the read joined. What the relay
+  writes past that waits in the socket, then in the relay, and the
+  spawn's own writes wait behind it, so nothing it writes waits in this
+  node's memory uncounted. An owner that does not take holds its own
+  spawn and no other, and never its release: from the release asked, or
+  the exit reported, an owner that owes its word and takes nothing for
+  5 s loses what its connection has not yet read, the connection closed,
+  which the log says, so the relay can end. Every write to a
+  held connection is its writer's, a process of the connection's own
+  that writes in order and answers each caller once its bytes are
+  written or refused, and never writes one whose caller has gone or
+  stopped waiting before it begins: a relay that stops reading its input
+  holds its writer and the callers waiting on it, never this server, so
+  what waits to be written is what those callers wait with, at most four
+  callers' writes a connection, a fifth refused at once. The writer ends
+  with its connection and with this server, however it stops, and a
+  writer that dies has every caller it left answered at once; a write to
+  a connection that is gone is answered at once. `send/2` writes stdin
+  frames through the connection, a write made before the relay attaches
+  answered once the attached connection has written it, or refused at
+  the spawn's end if it never attaches;
   `signal/2` signals the spawn; `release/3` asks for its retirement with
   a grace; `pool_stats/2` reads a pool. A relay that has
   not attached within 10 s, or that sends a frame the codec refuses or on a stream
@@ -144,8 +183,9 @@ defmodule Locus.Keeper do
   memory}`, `{:error, :relay_protocol}`, `{:error, :channel_lost}`
   and `:released`.
 
-  `send_control/2` writes control bytes, holding them until the relay
-  attaches; once it attaches they are written first, then the zero-length
+  `send_control/2` writes control bytes, a write made before the relay
+  attaches answered as `send/2`'s is; once it attaches they are written
+  first, then the zero-length
   relay frame that opens the relay stream and ends nothing (the keeper
   sends nothing on the stream before it). `send_relay/2` writes relay
   bytes from any process while the stream is open, and `close_relay/1`
@@ -237,15 +277,20 @@ defmodule Locus.Keeper do
   # uid's last zombies and the search for what it left.
   @release_timeout_ms 60_000
   # A relay has ended by the time `released` is sent; its last frames are
-  # already on the socket.
+  # already on the socket. A run's reader has this long to read them, and
+  # a held spawn's owner, once its end is under way, this long to take
+  # what it was told before its connection is closed.
   @drain_timeout_ms 5_000
+  # A run reads one frame at a time: its header and the largest payload.
+  @read_bytes IO.iodata_length(KeeperProtocol.end_frame(:stdout)) +
+                KeeperProtocol.max_frame_bytes()
   @channel_send_timeout_ms 30_000
   @pool_timeout_ms 5_000
   # This server answers an assign by the instant its caller names; the
   # caller waits this much past it for that answer.
   @assign_answer_ms 500
-  # A relay that stops reading must not hold this server: a write it has
-  # not taken within the bound closes its connection.
+  # A relay that stops reading holds its writer, never this server: a
+  # write it has not taken within the bound closes its connection.
   @relay_send_timeout_ms 5_000
 
   # `memory_unavailable` is the keeper's word for any bound it cannot
@@ -367,10 +412,11 @@ defmodule Locus.Keeper do
             server: server,
             ref: ref,
             monitor: monitor,
-            deadline: now() + Keyword.fetch!(opts, :timeout_ms),
+            deadline: Keyword.fetch!(opts, :deadline),
             attach_by: now() + @start_timeout_ms + @attach_timeout_ms,
             released_by: nil,
             on_output: Keyword.get(opts, :on_output, fn _line -> :ok end),
+            taker: Keyword.get(opts, :on_stdout, {nil, fn _piece, acc -> {:ok, acc} end}),
             max_stdout: Keyword.fetch!(opts, :max_stdout_bytes),
             memory_bytes: memory_bytes,
             memory: nil,
@@ -378,7 +424,6 @@ defmodule Locus.Keeper do
             conn: nil,
             conn_open: false,
             frames: "",
-            stdout: [],
             stdout_bytes: 0,
             log: Log.new(),
             exit: nil,
@@ -450,6 +495,14 @@ defmodule Locus.Keeper do
         {:error, {:launcher_unavailable, exit_kind(reason)}}
     end
   end
+
+  @doc """
+  The owner's word that it took the last stdout, stderr, control or relay
+  bytes it was told of: once it has said so of every one, the spawn's
+  relay connection is read again.
+  """
+  @impl Locus.Launcher
+  def taken(%{ref: ref, server: server}), do: GenServer.cast(server, {:taken, ref})
 
   @impl Locus.Launcher
   def send(%{ref: ref, server: server}, data) do
@@ -662,7 +715,17 @@ defmodule Locus.Keeper do
 
   defp on_keeper(s, {:spawned, _uid, _pid}), do: s
 
+  # The reader has stopped: a relay that attaches now is cut as it comes,
+  # and the run ends at the spawn's release as any stopped run does.
+  defp on_keeper(%{failure: failure} = s, {:attached, conn}) when failure != nil do
+    :gen_tcp.close(conn)
+    %{s | conn: conn, conn_open: false}
+  end
+
   defp on_keeper(s, {:attached, conn}) do
+    # One frame a read: what the socket holds past it stays in the kernel,
+    # and the relay waits behind it.
+    _ = :inet.setopts(conn, buffer: @read_bytes)
     feed_stdin(conn, s.stdin)
     reactivate(%{s | conn: conn, conn_open: true})
   end
@@ -698,10 +761,15 @@ defmodule Locus.Keeper do
     Kernel.spawn(fn -> :gen_tcp.send(conn, frames) end)
   end
 
+  # A read joined to the part of a frame the last left, copied only when
+  # one was left: a read that starts on a frame is parsed where it is.
+  defp joined("", data), do: data
+  defp joined(rest, data), do: rest <> data
+
   # A relay carries the command's stdout and stderr; a frame on any other
   # stream, or one the codec refuses, is its fault.
   defp on_frames(s, data) do
-    case KeeperProtocol.parse_frames(s.frames <> data) do
+    case KeeperProtocol.parse_frames(joined(s.frames, data)) do
       {:ok, frames, rest} -> each_frame(%{s | frames: rest}, frames)
       {:error, _reason} -> relay_fault(s)
     end
@@ -720,25 +788,44 @@ defmodule Locus.Keeper do
   defp on_frame(s, :stdout, ""), do: s
   defp on_frame(s, :stderr, ""), do: s
 
+  # A piece is handed on and taken before the next is read; past the
+  # reader's deadline, or once the run is stopping, nothing more is.
   defp on_frame(%{failure: nil} = s, :stdout, payload) do
     bytes = s.stdout_bytes + byte_size(payload)
+    {acc, take} = s.taker
 
-    if bytes > s.max_stdout,
-      do: stop(%{s | stdout: []}, {:output_too_large, s.max_stdout}),
-      else: %{s | stdout: [s.stdout, payload], stdout_bytes: bytes}
+    cond do
+      bytes > s.max_stdout ->
+        stop(s, {:output_too_large, s.max_stdout})
+
+      now() >= s.deadline ->
+        stop(s, :timeout)
+
+      true ->
+        case take.(payload, acc) do
+          {:ok, acc} -> %{s | stdout_bytes: bytes, taker: {acc, take}}
+          {:error, reason} -> stop(s, taker_failure(reason))
+        end
+    end
   end
 
-  defp on_frame(s, :stdout, _payload), do: s
+  defp on_frame(%{failure: nil} = s, :stderr, payload) do
+    case Log.add(s.log, payload, s.on_output) do
+      {:ok, log} -> %{s | log: log}
+      {:error, reason} -> stop(s, taker_failure(reason))
+    end
+  end
 
-  defp on_frame(s, :stderr, payload),
-    do: %{s | log: Log.add(s.log, payload, s.on_output)}
+  defp on_frame(s, stream, _payload) when stream in [:stdout, :stderr], do: s
 
   defp on_frame(s, _stream, _payload), do: {:fault, relay_fault(s)}
 
-  defp relay_fault(s) do
-    if s.conn, do: :gen_tcp.close(s.conn)
-    %{s | frames: "", conn_open: false} |> stop({:spawn_failed, :relay_protocol})
-  end
+  defp relay_fault(s), do: stop(s, {:spawn_failed, :relay_protocol})
+
+  # The run's own ends, a taker's word that it stopped, pass as they are;
+  # any other refusal of a taker is its own.
+  defp taker_failure(reason) when reason in [:timeout, :cancelled], do: reason
+  defp taker_failure(reason), do: {:taker, reason}
 
   defp reactivate(%{conn_open: true, conn: conn} = s) do
     case :inet.setopts(conn, active: :once) do
@@ -769,9 +856,21 @@ defmodule Locus.Keeper do
 
   defp advance(s), do: s
 
+  # The reader stops taking: it closes its connection, which is what cuts
+  # the relay, and asks for the spawn's release, which cyfr-locus reports
+  # once the relay and everything else of the spawn are gone.
   defp stop(%{failure: nil} = s, failure) do
+    if s.conn, do: :gen_tcp.close(s.conn)
     GenServer.cast(s.server, {:release, s.ref, 0})
-    %{s | failure: failure, phase: :releasing, released_by: now() + @release_timeout_ms}
+
+    %{
+      s
+      | failure: failure,
+        phase: :releasing,
+        frames: "",
+        conn_open: false,
+        released_by: now() + @release_timeout_ms
+    }
   end
 
   defp stop(s, _failure), do: s
@@ -781,6 +880,11 @@ defmodule Locus.Keeper do
     max(until - now(), 0)
   end
 
+  # Past the exit the reader still reads, until the stream ends or its own
+  # deadline, after which it takes no more.
+  defp wait_ms(%{phase: :releasing, conn_open: true, released: false} = s),
+    do: max(s.deadline - now(), 0)
+
   defp wait_ms(%{released_by: nil}), do: :infinity
   defp wait_ms(s), do: max(s.released_by - now(), 0)
 
@@ -789,6 +893,9 @@ defmodule Locus.Keeper do
       do: stop(s, {:spawn_failed, :attach_timeout}),
       else: stop(s, :timeout)
   end
+
+  defp on_wait_expired(%{phase: :releasing, conn_open: true, released: false} = s),
+    do: stop(s, :timeout)
 
   # The build's slot is freed only once cyfr-locus says what it made of the
   # refused spawn is gone, so the wait goes on past the bound.
@@ -801,20 +908,26 @@ defmodule Locus.Keeper do
     %{s | released_by: nil}
   end
 
-  defp on_wait_expired(s) do
-    unless s.released do
-      Logger.warning(
-        "[Locus.Keeper] a build's uid was not reported retired within #{@release_timeout_ms} ms"
-      )
-    end
+  # Only cyfr-locus's `released` says the build is gone: one not reported
+  # within the bound is logged once and still waited for. After the report
+  # the relay's connection is waited for only to its drain bound.
+  defp on_wait_expired(%{released: false} = s) do
+    Logger.error(
+      "[Locus.Keeper] a build's uid was not reported retired within " <>
+        "#{@release_timeout_ms} ms; the build waits for it"
+    )
 
-    %{s | phase: :done}
+    %{s | released_by: nil}
   end
+
+  defp on_wait_expired(s), do: %{s | phase: :done}
 
   defp finish(s) do
     if s.conn, do: :gen_tcp.close(s.conn)
     GenServer.cast(s.server, {:done, s.ref})
-    :ok = Log.finish(s.log, s.on_output)
+    # The log's last line, unended, is handed on however the run ended; a
+    # taker that has stopped answers at once.
+    _ = Log.finish(s.log, s.on_output)
 
     # The kernel's own report of how the build ended comes first: a build
     # ended for memory is that, whatever this side was doing when it heard.
@@ -823,7 +936,7 @@ defmodule Locus.Keeper do
       s.memory != nil -> {:error, {:memory, s.memory}}
       s.failure != nil -> {:error, s.failure}
       s.exit == nil -> {:error, {:spawn_failed, :no_exit_reported}}
-      true -> {:ok, %{exit: s.exit, stdout: IO.iodata_to_binary(s.stdout)}}
+      true -> {:ok, %{exit: s.exit, taken: elem(s.taker, 0)}}
     end
   end
 
@@ -1091,26 +1204,35 @@ defmodule Locus.Keeper do
     end
   end
 
-  def handle_call({:stdin, ref, data}, _from, state) do
+  # A write to a held connection is answered once its writer has written
+  # it (`writer/2`), and one made before the relay attaches once the
+  # attached connection has, or refused at the spawn's end; one to a
+  # connection that is gone, or past the writes that may wait for one, is
+  # answered here, at once.
+  def handle_call({:stdin, ref, data}, from, state) do
     case state.requests[ref] do
-      %{kind: :handle, released: false, conn: nil, attached: false} = entry ->
-        {:reply, :ok, put_entry(state, ref, %{entry | pending: [entry.pending, data]})}
+      # A zero-length frame would end the spawn's stdin, so no data sends none.
+      %{kind: :handle, released: false} when data == "" ->
+        {:reply, :ok, state}
 
-      %{kind: :handle, released: false, conn: conn} when conn != nil ->
-        {:reply, write_stdin(conn, data), state}
+      %{kind: :handle, released: false, conn: nil, attached: false} = entry ->
+        hold_write(state, ref, entry, from, :stdin, data)
+
+      %{kind: :handle, released: false, conn: conn} = entry when conn != nil ->
+        write_through(state, ref, entry, from, :stdin, data)
 
       _ ->
         {:reply, {:error, :unknown_spawn}, state}
     end
   end
 
-  def handle_call({:control, ref, data}, _from, state) do
+  def handle_call({:control, ref, data}, from, state) do
     case state.requests[ref] do
       %{kind: :control, conn: nil, attached: false} = entry ->
-        {:reply, :ok, put_entry(state, ref, %{entry | pending: [entry.pending, data]})}
+        hold_write(state, ref, entry, from, :control, data)
 
-      %{kind: :control, conn: conn} when conn != nil ->
-        write_held(state, conn, KeeperProtocol.frames(:control, data))
+      %{kind: :control, conn: conn} = entry when conn != nil ->
+        write_through(state, ref, entry, from, :control, data)
 
       %{kind: :control} ->
         {:reply, {:error, :control_closed}, state}
@@ -1123,10 +1245,10 @@ defmodule Locus.Keeper do
   # An empty write would end the stream.
   def handle_call({:relay, _ref, ""}, _from, state), do: {:reply, :ok, state}
 
-  def handle_call({:relay, ref, data}, _from, state) do
+  def handle_call({:relay, ref, data}, from, state) do
     case state.requests[ref] do
-      %{kind: :control, conn: conn, relay_open: true} when conn != nil ->
-        write_held(state, conn, KeeperProtocol.frames(:relay, data))
+      %{kind: :control, conn: conn, relay_open: true} = entry when conn != nil ->
+        write_through(state, ref, entry, from, :relay, data)
 
       _closed ->
         {:reply, {:error, :relay_closed}, state}
@@ -1265,14 +1387,26 @@ defmodule Locus.Keeper do
   def handle_cast({:close_relay, ref}, state) do
     case state.requests[ref] do
       %{kind: :control, conn: conn, relay_open: true} = entry when conn != nil ->
-        state = put_entry(state, ref, %{entry | relay_open: false})
+        entry =
+          write(%{entry | relay_open: false}, nil, :relay, [KeeperProtocol.end_frame(:relay)])
 
-        case write(conn, KeeperProtocol.end_frame(:relay)) do
-          :ok -> {:noreply, state}
-          {:error, _reason} -> {:noreply, write_failed(state, conn)}
-        end
+        {:noreply, put_entry(state, ref, entry)}
 
       _closed ->
+        {:noreply, state}
+    end
+  end
+
+  # The owner took a frame it was told: once it has taken every one, its
+  # connection is read again. A take restarts the clock on what it still
+  # owes (`drain_bound/2`).
+  def handle_cast({:taken, ref}, state) do
+    case state.requests[ref] do
+      %{owed: owed} = entry when owed > 0 ->
+        entry = %{entry | owed: owed - 1, owing_since: if(owed > 1, do: now())}
+        {:noreply, state |> put_entry(ref, entry) |> read_on(ref)}
+
+      _ ->
         {:noreply, state}
     end
   end
@@ -1376,6 +1510,22 @@ defmodule Locus.Keeper do
 
   def handle_info({:tcp_closed, conn}, state), do: {:noreply, conn_gone(state, conn)}
 
+  # A writer's word on a write it was handed: written, refused, or not
+  # made for a caller gone before it began.
+  def handle_info({:wrote, ref, from, result}, state) do
+    case state.requests[ref] do
+      %{inflight: inflight, conn: conn} = entry ->
+        state = put_entry(state, ref, %{entry | inflight: List.keydelete(inflight, from, 0)})
+
+        if result in [:ok, :gone] or conn == nil or state.conns[conn] == nil,
+          do: {:noreply, state},
+          else: {:noreply, write_failed(state, conn)}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:tcp_error, conn, _reason}, state) do
     :gen_tcp.close(conn)
     {:noreply, conn_gone(state, conn)}
@@ -1393,14 +1543,7 @@ defmodule Locus.Keeper do
     end
   end
 
-  # A retired spawn's relay connection, past the bound it had to deliver
-  # its last frames in.
-  def handle_info({:drain, ref}, state) do
-    case state.requests[ref] do
-      %{kind: :handle, released: true} = entry -> {:noreply, retired(state, ref, entry)}
-      _ -> {:noreply, state}
-    end
-  end
+  def handle_info({:drain_bound, ref}, state), do: {:noreply, drain_bound(state, ref)}
 
   def handle_info({:assign_unanswered, id}, state),
     do: {:noreply, assigned(state, id, {:error, {:launcher_unavailable, :timeout}})}
@@ -1415,7 +1558,20 @@ defmodule Locus.Keeper do
   def handle_info({:EXIT, pid, reason}, %{acceptor: pid} = state),
     do: {:stop, {:shutdown, {:attach_listener_down, reason}}, state}
 
-  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+  # A writer that ended before its connection takes the connection with
+  # it, and every write it was handed and had not answered is answered
+  # now, so no caller waits on a writer that is gone.
+  def handle_info({:EXIT, pid, _reason}, state) do
+    case Enum.find(state.requests, fn {_ref, entry} -> entry.writer == pid end) do
+      {ref, entry} ->
+        refuse_all(entry.inflight)
+        state = put_entry(state, ref, %{entry | inflight: [], writer: nil})
+        if entry.conn, do: {:noreply, conn_gone(state, entry.conn)}, else: {:noreply, state}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info(message, state) do
     Prima.LoggerContext.unexpected(__MODULE__, message)
@@ -1472,7 +1628,8 @@ defmodule Locus.Keeper do
     %{
       entry
       | token: :redacted,
-        pending: {:redacted, IO.iodata_length(entry.pending)},
+        pending:
+          {:redacted, Enum.sum(for {_from, _kind, data} <- entry.pending, do: byte_size(data))},
         frames: {:redacted, byte_size(entry.frames)}
     }
   end
@@ -1828,8 +1985,15 @@ defmodule Locus.Keeper do
         released: false,
         attached: false,
         conn: nil,
+        writer: nil,
         frames: "",
+        owed: 0,
+        owing_since: nil,
+        ending: false,
+        drain_timer: nil,
+        exit: nil,
         pending: [],
+        inflight: [],
         control_open: extra.kind == :control,
         relay_open: false
       }
@@ -1939,10 +2103,20 @@ defmodule Locus.Keeper do
   defp on_reply({:error, nil, spawn_id, "unknown_spawn"}, state) when is_binary(spawn_id),
     do: released(state, spawn_id)
 
+  # A held spawn's exit reaches its owner after every frame its
+  # connection carried (`conn_gone/2`), and from the exit on an owner
+  # that takes nothing has its bound (`drain_bound/2`).
   defp on_reply({:exited, spawn_id, exit, memory}, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      notify(entry, ref, exited(entry, exit, memory))
-      state
+      case entry do
+        %{kind: kind, conn: conn} when kind in [:handle, :control] and conn != nil ->
+          entry = %{entry | exit: exited(entry, exit, memory), ending: true}
+          put_entry(state, ref, watch_drain(entry, ref))
+
+        _ ->
+          notify(entry, ref, exited(entry, exit, memory))
+          state
+      end
     end)
   end
 
@@ -2017,7 +2191,7 @@ defmodule Locus.Keeper do
   # asked of it, since cyfr-locus is retiring it already and an
   # `unknown_spawn` answer to a request naming it reads as its release.
   defp made_refused(state, ref, entry, spawn_id) do
-    entry = %{entry | spawn_id: spawn_id, from: nil, release_sent: true}
+    entry = %{entry | spawn_id: spawn_id, from: nil, release_sent: true, ending: true}
     %{put_entry(state, ref, entry) | spawns: Map.put(state.spawns, spawn_id, ref)}
   end
 
@@ -2112,10 +2286,11 @@ defmodule Locus.Keeper do
   end
 
   # A run's entry stays until its caller is done, so a relay connection
-  # that arrives after the report still reaches the caller. A long-lived
-  # spawn's owner hears the release once the relay's connection has
-  # delivered its last frames, or its bound passes. A spawn with a control
-  # channel is done at the report.
+  # that arrives after the report still reaches the caller. cyfr-locus
+  # reports a spawn released once its relay has ended, so what the relay
+  # wrote is all on a held connection: it is read to its end at once and
+  # handed to the owner without waiting for its word (`drain/3`), and only
+  # then the end of its streams, its exit and its release.
   defp released(state, spawn_id) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
       case entry do
@@ -2129,19 +2304,20 @@ defmodule Locus.Keeper do
             },
             else: forget_request(state, ref)
 
-        %{kind: :control} ->
+        %{conn: nil} ->
           retired(state, ref, entry)
 
-        %{kind: :handle, conn: nil} ->
-          retired(state, ref, entry)
+        %{kind: :control, conn: conn} ->
+          state = state |> drain(ref, conn) |> conn_gone(conn)
+          retired(state, ref, state.requests[ref])
 
-        %{kind: :handle} ->
-          Process.send_after(self(), {:drain, ref}, @drain_timeout_ms)
-
+        %{kind: :handle, conn: conn} ->
           %{
             put_entry(state, ref, %{entry | released: true})
             | spawns: Map.delete(state.spawns, spawn_id)
           }
+          |> drain(ref, conn)
+          |> conn_gone(conn)
       end
     end)
   end
@@ -2154,62 +2330,271 @@ defmodule Locus.Keeper do
   # ————— a held relay connection —————
 
   defp attached(state, ref, entry, conn) do
-    pending = IO.iodata_to_binary(entry.pending)
     :ok = hold(conn)
     notify(entry, ref, :attached)
-    entry = %{entry | conn: conn, attached: true, pending: []}
+    entry = watch_drain(%{entry | conn: conn, writer: writer(conn, ref), attached: true}, ref)
     state = %{put_entry(state, ref, entry) | conns: Map.put(state.conns, conn, ref)}
-
-    case write_stdin(conn, pending) do
-      :ok -> state
-      {:error, _reason} -> state |> received(conn) |> relay_fault(ref, conn)
-    end
+    put_entry(state, ref, write_held(entry))
   end
 
-  # The control bytes held for the runner go first, then the zero-length
-  # frame that opens the relay stream and ends nothing: the keeper sends
-  # none of the runner's relay bytes before it.
+  # The control bytes held for the runner go first, each answered to its
+  # caller once written, then the zero-length frame that opens the relay
+  # stream and ends nothing: the keeper sends none of the runner's relay
+  # bytes before it.
   defp control_attached(state, ref, entry, conn) do
-    pending = IO.iodata_to_binary(entry.pending)
     :ok = hold(conn)
     notify(entry, ref, :attached)
-    entry = %{entry | conn: conn, attached: true, pending: [], relay_open: true}
+    entry = %{entry | conn: conn, writer: writer(conn, ref), attached: true, relay_open: true}
+    entry = watch_drain(entry, ref)
     state = %{put_entry(state, ref, entry) | conns: Map.put(state.conns, conn, ref)}
 
-    case write(conn, [KeeperProtocol.frames(:control, pending), KeeperProtocol.end_frame(:relay)]) do
-      :ok -> state
-      {:error, _reason} -> write_failed(state, conn)
-    end
+    entry =
+      entry
+      |> write_held()
+      |> write(nil, :control, [KeeperProtocol.end_frame(:relay)])
+
+    put_entry(state, ref, entry)
   end
 
-  # Every connection this server holds is read as it arrives and written
-  # under the bound.
+  # A held connection is read one read at a time, of at most one frame
+  # (`@read_bytes`), and read again only once its owner has taken every
+  # frame of the last (`read_on/2`), so what its relay writes past that
+  # waits in the socket and the relay behind it; it is written under the
+  # bound. A failed write leaves the connection to be read to its end, so
+  # what it carried reaches the owner before its close (`write_failed/2`).
   defp hold(conn) do
     :inet.setopts(conn,
-      active: true,
+      active: :once,
+      buffer: @read_bytes,
+      exit_on_close: false,
       send_timeout: @relay_send_timeout_ms,
       send_timeout_close: true
     )
   end
 
-  defp write(conn, iodata), do: :gen_tcp.send(conn, iodata)
+  # Once the owner has taken every frame it was told, the next read, its
+  # spawn's end under way or not: what an ending spawn writes waits behind
+  # its owner's taking as any other, until the relay has ended and what it
+  # left is drained (`drain/3`). A connection that cannot be read again is
+  # gone.
+  defp read_on(state, ref) do
+    case state.requests[ref] do
+      %{conn: conn, released: false, owed: 0} when conn != nil ->
+        case :inet.setopts(conn, active: :once) do
+          :ok -> state
+          {:error, _closed} -> state |> received(conn) |> conn_gone(conn)
+        end
 
-  # A write to a held connection that failed, its bound among the ways:
-  # the connection is closed, and its spawn's owner hears so.
-  defp write_held(state, conn, iodata) do
-    case write(conn, iodata) do
-      :ok -> {:reply, :ok, state}
-      {:error, reason} -> {:reply, {:error, reason}, write_failed(state, conn)}
+      _ ->
+        state
     end
   end
 
-  # What the connection carried before the write failed reaches the owner
-  # before its close does: the frames already received for it are read, in
-  # order, and only then is it closed and forgotten.
+  # Once a held spawn's end is under way (its release asked, or its exit
+  # reported), its relay ends only once what it carries is read or its
+  # connection is closed. So an owner that owes its word and has taken
+  # nothing for the drain's bound loses what the connection has not read:
+  # the connection is closed, which ends the relay, and the spawn's exit
+  # and release follow as for any connection gone. One check at a time,
+  # each at the instant the owner's bound would pass.
+  defp watch_drain(%{ending: true, conn: conn, released: false, drain_timer: nil} = entry, ref)
+       when conn != nil do
+    wait =
+      if entry.owed > 0,
+        do: max(entry.owing_since + @drain_timeout_ms - now(), 0),
+        else: @drain_timeout_ms
+
+    %{entry | drain_timer: Process.send_after(self(), {:drain_bound, ref}, wait)}
+  end
+
+  defp watch_drain(entry, _ref), do: entry
+
+  defp drain_bound(state, ref) do
+    case state.requests[ref] do
+      %{conn: conn, released: false} = entry when conn != nil ->
+        entry = %{entry | drain_timer: nil}
+
+        if entry.owed > 0 and now() - entry.owing_since >= @drain_timeout_ms do
+          Logger.warning(
+            "[Locus.Keeper] a spawn's owner took nothing of what it was told for " <>
+              "#{@drain_timeout_ms} ms after its end began: its connection is closed and " <>
+              "what the connection had not read is lost"
+          )
+
+          state |> put_entry(ref, entry) |> conn_gone(conn)
+        else
+          put_entry(state, ref, watch_drain(entry, ref))
+        end
+
+      %{} = entry ->
+        put_entry(state, ref, %{entry | drain_timer: nil})
+
+      nil ->
+        state
+    end
+  end
+
+  # What an ended relay left on its connection, read to the connection's
+  # end and handed to the owner without its word: the read already
+  # received, then the socket's queue, which holds at most what the relay's
+  # socket buffers, since nothing writes to it any more.
+  defp drain(state, ref, conn) do
+    _ = :inet.setopts(conn, active: false)
+    state |> drain_received(ref, conn) |> drain_queue(ref, conn)
+  end
+
+  defp drain_received(state, ref, conn) do
+    receive do
+      {:tcp, ^conn, data} -> state |> take_frames(ref, conn, data) |> drain_received(ref, conn)
+    after
+      0 -> state
+    end
+  end
+
+  defp drain_queue(state, ref, conn) do
+    with ^ref <- state.conns[conn],
+         {:ok, data} <- :gen_tcp.recv(conn, 0, 0) do
+      state |> take_frames(ref, conn, data) |> drain_queue(ref, conn)
+    else
+      _ended -> state
+    end
+  end
+
+  # ————— writes —————
+
+  # At most this many callers' writes wait for one connection at once,
+  # held before its relay attaches or handed to its writer: a runner's
+  # control writer, its relay's and the two frames the client writes
+  # itself, a session's caller and the one before it that timed out. A
+  # write past them is refused at once, so callers that time out and come
+  # again pile nothing up behind a relay that does not read.
+  @max_waiting_writes 4
+
+  # A write made before the relay attaches waits for it with its caller.
+  defp hold_write(state, ref, entry, from, kind, data) do
+    if waiting(entry) >= @max_waiting_writes do
+      {:reply, written(kind, {:error, :busy}), state}
+    else
+      {:noreply, put_entry(state, ref, %{entry | pending: entry.pending ++ [{from, kind, data}]})}
+    end
+  end
+
+  defp write_through(state, ref, entry, from, kind, data) do
+    if waiting(entry) >= @max_waiting_writes do
+      {:reply, written(kind, {:error, :busy}), state}
+    else
+      {:noreply,
+       put_entry(state, ref, write(entry, from, kind, KeeperProtocol.frames(kind, data)))}
+    end
+  end
+
+  defp waiting(entry), do: length(entry.pending) + length(entry.inflight)
+
+  # The writes held for the relay, in the order they came, to the writer
+  # of the connection it attached.
+  defp write_held(entry) do
+    Enum.reduce(entry.pending, %{entry | pending: []}, fn {from, kind, data}, entry ->
+      write(entry, from, kind, KeeperProtocol.frames(kind, data))
+    end)
+  end
+
+  # Every write to a held connection is its writer's, a process of its own
+  # that writes them one at a time in the order they came and answers
+  # each caller once its bytes are written or refused: a relay that stops
+  # reading holds its writer and the callers waiting on it, never this
+  # server, which goes on reading every connection, and what waits to be
+  # written is what those callers wait with. A write goes a frame at a
+  # time, each waiting while the socket's queue is past its watermark, so
+  # once a write is answered the socket queues at most its last frame
+  # beyond the watermark. A write whose caller is gone, or whose call has
+  # timed out, before the writer begins it is not written. This server
+  # holds each caller it handed a write to until the writer says it is
+  # answered (`{:wrote, ...}`), so a writer that dies has every caller it
+  # left answered at once (`refuse_all/1`). The writer ends with this
+  # server, whatever its reason, and with its connection
+  # (`stop_writer/1`), answering every write still waiting as refused,
+  # which a closed connection refuses at once.
+  defp writer(conn, ref) do
+    server = self()
+
+    Kernel.spawn_link(fn ->
+      watch = Process.monitor(server)
+      write_loop(server, watch, ref, conn)
+    end)
+  end
+
+  defp write_loop(server, watch, ref, conn) do
+    receive do
+      {:write, from, kind, frames, by} ->
+        result = if waited?(from, by), do: write_frames(conn, frames), else: :gone
+        if from != nil and result != :gone, do: GenServer.reply(from, written(kind, result))
+        Kernel.send(server, {:wrote, ref, from, result})
+        write_loop(server, watch, ref, conn)
+
+      {:DOWN, ^watch, :process, ^server, _reason} ->
+        :ok
+
+      :stop ->
+        refuse_waiting()
+    end
+  end
+
+  # A write with no caller is the client's own; one whose caller still
+  # waits is made.
+  defp waited?(nil, _by), do: true
+  defp waited?({pid, _tag}, by), do: Process.alive?(pid) and now() < by
+
+  defp refuse_waiting do
+    receive do
+      {:write, from, kind, _frames, _by} ->
+        if from, do: GenServer.reply(from, written(kind, {:error, :closed}))
+        refuse_waiting()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp refuse_all(inflight) do
+    for {from, kind} <- inflight, do: GenServer.reply(from, written(kind, {:error, :closed}))
+    :ok
+  end
+
+  defp write_frames(_conn, []), do: :ok
+
+  defp write_frames(conn, [frame | frames]) do
+    case :gen_tcp.send(conn, frame) do
+      :ok -> write_frames(conn, frames)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp written(_kind, :ok), do: :ok
+  defp written(:stdin, {:error, _reason}), do: {:error, :stdin_closed}
+  defp written(_kind, {:error, reason}), do: {:error, reason}
+
+  # A caller's write is handed to the writer with the instant its call
+  # gives up, and is the entry's to answer until the writer says it is.
+  defp write(%{writer: writer} = entry, from, kind, frames) when is_list(frames) do
+    Kernel.send(writer, {:write, from, kind, frames, now() + @channel_send_timeout_ms})
+
+    if from,
+      do: %{entry | inflight: entry.inflight ++ [{from, kind}]},
+      else: entry
+  end
+
+  defp stop_writer(%{writer: writer}) when is_pid(writer), do: Kernel.send(writer, :stop)
+  defp stop_writer(_entry), do: :ok
+
+  # ————— reads —————
+
+  # A write that failed, its bound among the ways: a connection the
+  # failure closed is gone once what it delivered is read, and one still
+  # open is read to its end, where it is gone.
   defp write_failed(state, conn) do
-    state = received(state, conn)
-    :gen_tcp.close(conn)
-    conn_gone(state, conn)
+    case :inet.getopts(conn, [:active]) do
+      {:ok, _open} -> state
+      {:error, _closed} -> state |> received(conn) |> conn_gone(conn)
+    end
   end
 
   defp received(state, conn) do
@@ -2224,64 +2609,94 @@ defmodule Locus.Keeper do
     end
   end
 
-  # A zero-length frame would end the spawn's stdin, so no data sends none.
-  defp write_stdin(_conn, ""), do: :ok
+  defp on_held_frames(state, ref, conn, data),
+    do: state |> take_frames(ref, conn, data) |> read_on(ref)
 
-  defp write_stdin(conn, data) do
-    case write(conn, KeeperProtocol.frames(:stdin, data)) do
-      :ok -> :ok
-      {:error, _reason} -> {:error, :stdin_closed}
-    end
-  end
-
-  defp on_held_frames(state, ref, conn, data) do
+  defp take_frames(state, ref, conn, data) do
     entry = state.requests[ref]
 
-    case KeeperProtocol.parse_frames(entry.frames <> data) do
+    case KeeperProtocol.parse_frames(joined(entry.frames, data)) do
       {:ok, frames, rest} -> held_frames(state, ref, conn, %{entry | frames: rest}, frames)
       {:error, _reason} -> relay_fault(state, ref, conn)
     end
   end
 
-  defp held_frames(state, ref, _conn, entry, []), do: put_entry(state, ref, entry)
+  # One read's frames reach the owner as one message a stream, in the
+  # order the streams first come, each with that stream's payloads of the
+  # read joined, then the ends of streams the read carried: a read of the
+  # smallest frames costs the owner its bytes, never a message a frame.
+  # Every held spawn's relay carries its stdout and stderr; a spawn with a
+  # control channel's also carries the control stream and the relay
+  # stream. A frame on any other stream is its fault, after what came
+  # before it.
+  defp held_frames(state, ref, conn, entry, frames) do
+    {verdict, entry, pieces, ends} = gather(entry, frames, [], [])
 
-  defp held_frames(state, ref, conn, entry, [{stream, payload} | frames]) do
-    case held_frame(entry, ref, stream, payload) do
-      {:ok, entry} -> held_frames(state, ref, conn, entry, frames)
+    entry =
+      pieces
+      |> Enum.reverse()
+      |> Enum.reduce(entry, fn {stream, payloads}, entry ->
+        hand_over(entry, ref, {stream, IO.iodata_to_binary(Enum.reverse(payloads))})
+      end)
+
+    entry = Enum.reduce(Enum.reverse(ends), entry, &notify_entry(&2, ref, &1))
+
+    case verdict do
+      :ok -> put_entry(state, ref, entry)
       :fault -> relay_fault(put_entry(state, ref, entry), ref, conn)
     end
   end
 
-  # Every held spawn's relay carries its stdout and stderr; a spawn with a
-  # control channel's also carries the control stream and the relay
-  # stream. A frame on any other stream is its fault.
-  defp held_frame(entry, _ref, stream, "") when stream in [:stdout, :stderr], do: {:ok, entry}
+  defp gather(entry, [], pieces, ends), do: {:ok, entry, pieces, ends}
 
-  defp held_frame(entry, ref, stream, payload) when stream in [:stdout, :stderr],
-    do: {:ok, notify_entry(entry, ref, {stream, payload})}
+  defp gather(entry, [{stream, payload} | frames], pieces, ends) do
+    case held_frame(entry, stream, payload) do
+      :skip -> gather(entry, frames, pieces, ends)
+      {:piece, stream} -> gather(entry, frames, piece(pieces, stream, payload), ends)
+      {:end, entry, event} -> gather(entry, frames, pieces, [event | ends])
+      :fault -> {:fault, entry, pieces, ends}
+    end
+  end
 
-  defp held_frame(%{kind: :control, control_open: true} = entry, ref, :control, ""),
-    do: {:ok, notify_entry(%{entry | control_open: false}, ref, :control_closed)}
+  defp piece(pieces, stream, payload) do
+    case List.keyfind(pieces, stream, 0) do
+      {^stream, payloads} -> List.keyreplace(pieces, stream, 0, {stream, [payload | payloads]})
+      nil -> [{stream, [payload]} | pieces]
+    end
+  end
 
-  defp held_frame(%{kind: :control} = entry, _ref, :control, ""), do: {:ok, entry}
+  defp held_frame(_entry, stream, "") when stream in [:stdout, :stderr], do: :skip
 
-  defp held_frame(%{kind: :control} = entry, ref, :control, payload),
-    do: {:ok, notify_entry(entry, ref, {:control, payload})}
+  defp held_frame(_entry, stream, _payload) when stream in [:stdout, :stderr],
+    do: {:piece, stream}
 
-  defp held_frame(%{kind: :control, relay_open: true} = entry, ref, :relay, ""),
-    do: {:ok, notify_entry(%{entry | relay_open: false}, ref, :relay_closed)}
+  defp held_frame(%{kind: :control, control_open: true} = entry, :control, ""),
+    do: {:end, %{entry | control_open: false}, :control_closed}
 
-  defp held_frame(%{kind: :control} = entry, _ref, :relay, ""), do: {:ok, entry}
+  defp held_frame(%{kind: :control}, :control, ""), do: :skip
+  defp held_frame(%{kind: :control}, :control, _payload), do: {:piece, :control}
 
-  defp held_frame(%{kind: :control} = entry, ref, :relay, payload),
-    do: {:ok, notify_entry(entry, ref, {:relay, payload})}
+  defp held_frame(%{kind: :control, relay_open: true} = entry, :relay, ""),
+    do: {:end, %{entry | relay_open: false}, :relay_closed}
 
-  defp held_frame(_entry, _ref, _stream, _payload), do: :fault
+  defp held_frame(%{kind: :control}, :relay, ""), do: :skip
+  defp held_frame(%{kind: :control}, :relay, _payload), do: {:piece, :relay}
+  defp held_frame(_entry, _stream, _payload), do: :fault
 
   defp notify_entry(entry, ref, event) do
     notify(entry, ref, event)
     entry
   end
+
+  # A message's bytes handed to the owner are owed its word that it took
+  # them (`taken/1`) before the connection is read again; with no owner
+  # they are dropped and owe nothing.
+  defp hand_over(%{owner: owner} = entry, ref, event) when is_pid(owner) do
+    notify(entry, ref, event)
+    %{entry | owed: entry.owed + 1, owing_since: entry.owing_since || now()}
+  end
+
+  defp hand_over(entry, _ref, _event), do: entry
 
   # A relay at fault has its connection closed, and what follows is read
   # from the state without it. A long-lived spawn is released with no
@@ -2304,21 +2719,27 @@ defmodule Locus.Keeper do
     end
   end
 
-  # The relay's connection is gone: a spawn already retired is done, and a
-  # spawn with a control channel has its owner hear the channel and the
-  # relay closed, each once.
+  # The relay's connection is gone: a spawn with a control channel has its
+  # owner hear the channel and the relay closed, each once, and a held
+  # exit follows what the connection carried; a spawn already retired is
+  # done.
   defp conn_gone(state, conn) do
     {ref, conns} = Map.pop(state.conns, conn)
     state = %{state | conns: conns}
+    # A held connection is not closed for this server by its end (it
+    # holds `exit_on_close: false`), so it is closed here, which also
+    # ends its writer's wait.
+    :gen_tcp.close(conn)
 
     with_request(state, ref, fn ref, entry ->
-      entry = %{entry | conn: nil, frames: ""}
+      stop_writer(entry)
+      entry = %{entry | conn: nil, frames: "", owed: 0, owing_since: nil}
+      entry = if entry.kind == :control, do: streams_closed(entry, ref), else: entry
+      entry = if entry.exit, do: %{notify_entry(entry, ref, entry.exit) | exit: nil}, else: entry
 
-      cond do
-        entry.kind == :control -> put_entry(state, ref, streams_closed(entry, ref))
-        entry.released -> retired(put_entry(state, ref, entry), ref, entry)
-        true -> put_entry(state, ref, entry)
-      end
+      if entry.released,
+        do: retired(put_entry(state, ref, entry), ref, entry),
+        else: put_entry(state, ref, entry)
     end)
   end
 
@@ -2341,8 +2762,9 @@ defmodule Locus.Keeper do
   # retirement is reported.
   defp abandon(state, ref, entry) do
     state
-    |> put_entry(ref, %{entry | owner: nil, from: nil})
+    |> put_entry(ref, %{entry | owner: nil, from: nil, owed: 0, owing_since: nil})
     |> Map.update!(:tokens, &Map.delete(&1, entry.token))
+    |> read_on(ref)
     |> release_spawn(ref, 0)
   end
 
@@ -2373,8 +2795,13 @@ defmodule Locus.Keeper do
   defp forget_request(state, ref) do
     {entry, requests} = Map.pop(state.requests, ref)
     tell_heir(entry)
+    # A write held for a relay that never attached is refused at the end.
+    for {from, kind, _data} <- entry.pending,
+        do: GenServer.reply(from, written(kind, {:error, :closed}))
+
     Process.demonitor(entry.monitor, [:flush])
     if entry.conn, do: :gen_tcp.close(entry.conn)
+    stop_writer(entry)
 
     %{
       state
@@ -2411,7 +2838,8 @@ defmodule Locus.Keeper do
         case encode(%{type: :release, spawn_id: spawn_id, grace_ms: grace_ms}) do
           {:ok, line} ->
             _ = send_line(state, line)
-            put_entry(state, ref, %{entry | release_sent: true})
+            entry = %{entry | release_sent: true, ending: true}
+            put_entry(state, ref, watch_drain(entry, ref))
 
           # A grace past what cyfr-locus accepts, which it would refuse.
           {:error, :unencodable} ->
