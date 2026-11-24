@@ -1080,11 +1080,14 @@ defmodule Aqua.LoopTest do
 
           %{
             status: turn.status,
+            paused_reason: turn.paused_reason,
             recovery_attempts: turn.recovery_attempts,
+            recovery_limit: turn.recovery_limit,
+            launch_step_id: turn.launch_step_id,
             steps: steps,
             loop: holder,
             runner: live_pid(Aqua.Runner.whereis(turn.thread_id)),
-            recovery_plan: recovery_preview(ctx, turn, holder)
+            steer_pending: Tape.steer_pending?(ctx, turn)
           }
 
         {:error, reason} ->
@@ -1095,34 +1098,6 @@ defmodule Aqua.LoopTest do
   end
 
   defp live_pid(pid), do: if(is_pid(pid) and Process.alive?(pid), do: pid)
-
-  # RecoveryTable.plan_turn/3 takes the turn as it plans. Describe the
-  # intended action from the row instead of making that write in a diagnostic.
-  defp recovery_preview(ctx, turn, holder) do
-    cond do
-      Tape.terminal?(turn) -> :none
-      holder -> :held
-      turn.status == "accepted" -> :queue
-      turn.status == "paused" -> paused_recovery(ctx, turn)
-      Tape.unacknowledged_episode?(ctx, turn) -> :set_down_uncertain
-      turn.recovery_attempts >= turn.recovery_limit -> :end_uncertain
-      true -> :take_over_and_adopt
-    end
-  end
-
-  defp paused_recovery(ctx, %{paused_reason: "uncertain"} = turn) do
-    if Tape.steer_pending?(ctx, turn), do: :continue, else: :wait_for_sender
-  end
-
-  defp paused_recovery(ctx, turn) do
-    case turn.launch_step_id && Tape.step(ctx, turn.launch_step_id) do
-      {:ok, %{dispatch_state: "dispatched"} = step} ->
-        if Prima.TurnStep.unresolved(step) == :uncertain, do: :settle_launch, else: :continue
-
-      _ ->
-        :continue
-    end
-  end
 
   defp ended?(ctx, turn_id) do
     case Tape.turn(ctx, turn_id) do
