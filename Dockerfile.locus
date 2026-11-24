@@ -167,7 +167,7 @@ RUN --mount=type=bind,source=scripts/apt-key.sh,target=/tmp/apt-key.sh \
     build-essential \
     iptables \
     procps \
-    && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
+    && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
     && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-browser \
     && apt-get install -y --no-install-recommends chromium-headless-shell \
     && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before-browser - > /tmp/browser-brought \
