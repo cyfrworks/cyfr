@@ -15,7 +15,7 @@ defmodule Prima.RunnerControl do
   results, host-call bodies and vault fields go between the runner and
   CYFR over the host API (`Prima.HostAPI`), under the attempt's keys. What crosses
   here is what `c:Prima.WorkerAPI.start/3` was given, its sealed keys
-  opened, and what the service reports (`c:Prima.HostAPI.runner_exited/3`).
+  opened, and what the service reports (`c:Prima.HostAPI.runner_exited/4`).
   The channel carries no MAC: the keeper's process isolation is its
   boundary, and nothing on it authorizes anything — CYFR verifies the
   assignment when the runner attaches, and an attempt's keys sign and
@@ -73,7 +73,7 @@ defmodule Prima.RunnerControl do
       `runner` id it presented in its host calls (`t:runner_id/0`) and
       the attempts still `open` — attached or handed to it and not closed
       with CYFR, at most `max_open/0`. The service forwards it as
-      `c:Prima.HostAPI.runner_exited/3`, so the list has that report's
+      `c:Prima.HostAPI.runner_exited/4`, so the list has that report's
       shape. A runner that ends without one left the service to report
       what it knows the runner held.
 

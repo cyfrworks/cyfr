@@ -559,13 +559,16 @@ defmodule Opus.Attempt do
   Who holds an attempt: the worker service it was dispatched to (nil when
   the control plane holds it), that service's boot, and the runner that
   claimed it (nil to match any). `assigned?` is set by a report that is the
-  worker service's own word that it gave that runner the attempt.
+  worker service's own word that it gave that runner the attempt, and
+  `refusal` by one whose keeper refused that runner after the start was
+  answered: the refusal's code (`Prima.WorkerAPI.runner_refusal/1`).
   """
   @type holder :: %{
           required(:service_id) => String.t() | nil,
           required(:boot_id) => String.t(),
           required(:runner) => String.t() | nil,
-          optional(:assigned?) => boolean()
+          optional(:assigned?) => boolean(),
+          optional(:refusal) => String.t() | nil
         }
 
   @doc """
@@ -607,7 +610,9 @@ defmodule Opus.Attempt do
   attach: its runner ended before it took the run. This process alone
   answers an attach, and every effect needs that answer, so nothing of
   the run ran and an attach still on its way finds nothing to take. It
-  closes the run failed, or answers the row as it stands if that ended.
+  closes the run failed, saying so, and why in CYFR's words for the code
+  of the keeper's refusal of the runner, or answers the row as it stands
+  if that ended.
   """
   @spec stop_unclosed(String.t(), holder()) :: :ok
   def stop_unclosed(attempt, %{boot_id: boot_id} = holder)
@@ -819,11 +824,20 @@ defmodule Opus.Attempt do
     held? = is_nil(holder.runner) or state.claimed_by == holder.runner
 
     cond do
-      not dispatched? -> {:reply, :ok, state}
-      is_nil(state.claimed_by) and Map.get(holder, :assigned?, false) -> close_untaken(state)
-      not held? -> {:reply, :ok, state}
-      runner_ended?(state, holder) -> close_lost(state)
-      true -> {:stop, :normal, :ok, release_holds(state)}
+      not dispatched? ->
+        {:reply, :ok, state}
+
+      is_nil(state.claimed_by) and Map.get(holder, :assigned?, false) ->
+        close_untaken(state, Map.get(holder, :refusal))
+
+      not held? ->
+        {:reply, :ok, state}
+
+      runner_ended?(state, holder) ->
+        close_lost(state)
+
+      true ->
+        {:stop, :normal, :ok, release_holds(state)}
     end
   end
 
@@ -1131,8 +1145,17 @@ defmodule Opus.Attempt do
 
   # A row that ended first (a lapse of a claim written and never answered,
   # a cancel) is answered as it stands, never as a run of which nothing ran.
-  defp close_untaken(state) do
-    if row_live(state) == false, do: close_lost(state), else: refuse_run(state, @untaken)
+  defp close_untaken(state, refusal) do
+    if row_live(state) == false, do: close_lost(state), else: refuse_run(state, untaken(refusal))
+  end
+
+  # What a run its runner never took closes with: why, when the keeper's
+  # refusal of that runner names a code CYFR has words for.
+  defp untaken(code) do
+    case Prima.WorkerAPI.runner_refusal(code) do
+      nil -> @untaken
+      why -> "#{@untaken}: #{why}"
+    end
   end
 
   # A waiter that exited kills its run and lapses its row. The kill of a
