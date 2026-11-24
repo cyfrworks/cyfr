@@ -143,7 +143,7 @@ echo "groups:$(find /sys/fs/cgroup -mindepth 1 -type d | wc -l)"
 echo "cap:$(cat /sys/fs/cgroup/memory.max)"
 echo "tmpdir:$TMPDIR"
 %s mounts
-echo done`, sleeps[0], k.s.cfg.Kept.Root, k.s.self)
+echo done`, sleeps[0], k.s.cfg.Kept.Root, k.helper)
 	b, rcB := k.spawnKept(t, "b", script, path, uid)
 	rcB.readUntil(t, func() bool { return false })
 	stdout := string(rcB.got[frame.StreamStdout])

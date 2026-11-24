@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -33,28 +34,18 @@ import (
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
-	"github.com/cyfr/locus/keeper/internal/relay"
 	"github.com/cyfr/locus/keeper/internal/residue"
-	"github.com/cyfr/locus/keeper/internal/retire"
 	"github.com/cyfr/locus/keeper/internal/stage"
 )
 
-// TestMain lets the test binary stand in for cyfr-locus's helpers, which
-// the keeper under test starts as `<self> stage`, `<self> relay`,
-// `<self> retire` and `<self> home`, dispatched as main.go dispatches them. `<self> hold` and
-// `<self> mapped` are the memory tests' commands, `<self> fill` the relay's
-// end's, `<self> mounts` the space tests'.
+// TestMain gives the test binary the commands spawns run as `<helper> …`:
+// `hold` and `mapped` are the memory tests', `fill` the relay's end's,
+// `mounts` the space tests', `dial`, `ask` and `own` the network tests'.
+// The keeper under test starts its own helpers, `stage`, `relay`, `retire`
+// and `home`, from a plain build of cyfr-locus (keeperBinary).
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "stage":
-			os.Exit(stage.Main())
-		case "relay":
-			os.Exit(relay.Main())
-		case "retire":
-			os.Exit(retire.Main())
-		case "home":
-			os.Exit(home.HelperMain())
 		case "hold":
 			os.Exit(hold(os.Args[2:]))
 		case "mapped":
@@ -206,6 +197,43 @@ type keeper struct {
 	stop    chan struct{}
 	// guard is a routed keeper's stand-in guard, nil for a relay keeper.
 	guard *fakeRouteGuard
+	// helper is the test binary, executable by every uid: the commands
+	// spawns run (TestMain).
+	helper string
+}
+
+// keeperBuild is the plain build of cyfr-locus the keepers under test
+// start their helpers from, made once.
+var keeperBuild struct {
+	once sync.Once
+	path string
+	err  error
+}
+
+// keeperBinary builds cyfr-locus, the keeper's main package, statically and
+// without the race detector, as the image carries it: a space's waiter and
+// init then weigh in its group what they weigh in the image's, whatever
+// this test binary was built with.
+func keeperBinary(t *testing.T) string {
+	t.Helper()
+	keeperBuild.once.Do(func() {
+		dir, err := os.MkdirTemp("", "cyfr-locus-build-")
+		if err != nil {
+			keeperBuild.err = err
+			return
+		}
+		keeperBuild.path = filepath.Join(dir, "cyfr-locus")
+		cmd := exec.Command("go", "build", "-o", keeperBuild.path, "github.com/cyfr/locus/keeper")
+		cmd.Dir = filepath.Join("..", "..")
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			keeperBuild.err = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if keeperBuild.err != nil {
+		t.Fatal(keeperBuild.err)
+	}
+	return keeperBuild.path
 }
 
 // newKeeper is a keeper whose runner pool's spaces reach nothing but their
@@ -260,10 +288,10 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		t.Fatal(err)
 	}
 	// The pooled uids and the client user must be able to execute the
-	// helpers, which go test keeps in a directory only root can enter. A
-	// space sees the container's /opt and none of its /tmp, so the copy is
-	// kept there, and the space's files are built where the image builds
-	// them.
+	// keeper's binary and the test's helper, which go test keeps in a
+	// directory only root can enter. A space sees the container's /opt and
+	// none of its /tmp, so the copies are kept there, and the space's files
+	// are built where the image builds them.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -280,12 +308,15 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(bin, "cyfr-locus")
-	data, err := os.ReadFile(self)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(binary, data, 0o755); err != nil {
-		t.Fatal(err)
+	helper := filepath.Join(bin, "cyfr-locus-test")
+	for copy, from := range map[string]string{binary: keeperBinary(t), helper: self} {
+		data, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(copy, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	attachDir := filepath.Join(base, "attach")
 	if err := os.Mkdir(attachDir, 0o755); err != nil {
@@ -332,7 +363,7 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		keptOps:   map[int]*sync.Mutex{},
 		channel:   os.NewFile(uintptr(fds[0]), "channel"),
 	}
-	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{})}
+	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), helper: helper}
 	// The keeper's own end would end the test binary: a test that expects
 	// it sets its own.
 	s.exit = func(code int) { t.Errorf("the keeper ended %d", code) }
@@ -869,7 +900,7 @@ echo "fd4:$(readlink /proc/self/fd/4 | cut -c1-7)"
 if [ -e /proc/self/fd/5 ]; then echo fd5:open; else echo fd5:closed; fi
 "$TEST_BINARY" dial 127.0.0.1:1 10.0.0.1:80
 echo done`
-	_, uid, rc := k.spawn(t, "1", script, map[string]string{"TEST_BINARY": k.s.self}, true)
+	_, uid, rc := k.spawn(t, "1", script, map[string]string{"TEST_BINARY": k.helper}, true)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "done\n") })
 	stdout := string(rc.got[frame.StreamStdout])
 	id := strconv.Itoa(uid)

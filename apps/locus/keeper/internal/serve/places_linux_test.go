@@ -348,7 +348,7 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	}
 	k.s.handle(parsed(t, `{"v":4,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
 	k.expect(t, protocol.NewPlaced("pl"))
-	k.s.handleSpawn(keptRequest(t, k.attach, "pl", "exec "+k.s.self+" hold 4 60", path, uid, nil))
+	k.s.handleSpawn(keptRequest(t, k.attach, "pl", "exec "+k.helper+" hold 4 60", path, uid, nil))
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("spawn: %v", spawned)
