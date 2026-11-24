@@ -39,10 +39,18 @@ defmodule Locus.Application do
   output each role it serves holds (`Locus.Output`), and no other role's,
   the runtime (`Locus.Runtime.children/1`) when it is served, the builds service's
   listener when builds are served, and the backends service's children
-  (`Locus.Backends.children/0`) when backends are. When cyfr-locus's
-  channel is lost its client stops, everything started after it stops
-  with it, and a client that cannot come back ends the application, and
-  with it the release.
+  (`Locus.Backends.children/0`) when backends are.
+
+  The client of cyfr-locus is never restarted: its exit, for any reason,
+  a lost channel or its own fault, ends the tree, and with it the
+  application and the release. A client started again would open fd 3
+  anew with an empty account of the spawns cyfr-locus still holds for
+  the first, which sees no close (the client reads a duplicate of fd 3,
+  and the node still holds fd 3 itself), so every session, runner and
+  build those spawns served would be lost without their uids, places or
+  memory given back. The node's end is what cyfr-locus reads as its
+  client gone: it retires every spawn it holds, and the node started
+  after it begins with a true account.
   """
 
   use Application
@@ -75,11 +83,12 @@ defmodule Locus.Application do
     :ok = Locus.BuilderService.init_nonces()
     :ok = Locus.Backends.init_nonces()
 
-    Supervisor.start_link(children(roles, keeper?),
-      strategy: :rest_for_one,
-      name: Locus.Supervisor
-    )
+    Supervisor.start_link(children(roles, keeper?), [name: Locus.Supervisor] ++ tree_options())
   end
+
+  @doc "The options `Locus.Supervisor` is started with beside its name."
+  @spec tree_options() :: [Supervisor.option()]
+  def tree_options, do: [strategy: :rest_for_one, auto_shutdown: :any_significant]
 
   @typedoc "Which roles a service node serves."
   @type roles :: %{runtime: boolean(), builds: boolean(), backends: boolean()}
@@ -181,8 +190,12 @@ defmodule Locus.Application do
   end
 
   def children(roles, keeper?, _direct_launcher) do
-    served(roles, [build_slots()] ++ if(keeper?, do: [keeper(roles)], else: []))
+    served(roles, [build_slots()] ++ if(keeper?, do: [client(roles)], else: []))
   end
+
+  # The tree ends with the client, whatever its exit (`tree_options/0`).
+  defp client(roles),
+    do: Supervisor.child_spec(keeper(roles), restart: :temporary, significant: true)
 
   # The client of cyfr-locus, every role's: a runtime node's attaches its
   # runners' relays where the runtime's settings say

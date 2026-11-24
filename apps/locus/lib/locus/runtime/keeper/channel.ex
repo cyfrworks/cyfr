@@ -143,7 +143,8 @@ defmodule Locus.Runtime.Keeper.Channel do
       argv: argv,
       env: env,
       pool: @pool,
-      control: true
+      control: true,
+      heir: Map.get(spec, :heir)
     }
 
     with {:ok, client, bound, cpu_quota} <- client(adapter),

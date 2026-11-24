@@ -91,7 +91,9 @@ defmodule Locus.ApplicationTest do
                [Prima.Slots, Locus.Keeper | @runtime_output] ++ [Locus.Runtime.Supervisor]
 
       # Its runners' relays attach where the runtime's settings say.
-      assert {Locus.Keeper, opts} = Enum.at(App.children(@runtime, true, launcher), 1)
+      assert %{start: {Locus.Keeper, :start_link, [opts]}} =
+               Enum.at(App.children(@runtime, true, launcher), 1)
+
       assert opts[:attach_dir] == Locus.Runtime.Settings.pool!().attach_dir
 
       # A test boot holds no channel: its runtime runs on the direct keeper,
@@ -188,6 +190,65 @@ defmodule Locus.ApplicationTest do
   test "the running tree restarts a child with everything started after it" do
     # OTP's supervisor state record: {:state, name, strategy, ...}.
     assert Locus.Supervisor |> :sys.get_state() |> elem(2) == :rest_for_one
+  end
+
+  test "the keeper's client ending ends the tree, and no second client starts with an empty account" do
+    {peer, channel} = channel_pair()
+    attach_dir = Locus.Test.FakeKeeper.short_tmp_dir()
+    on_exit(fn -> File.rm_rf!(attach_dir) end)
+    test = self()
+
+    # The tree's own keeper child, started on a channel the test holds, and
+    # a child after it that says each time it starts.
+    [_slots, keeper] = App.children(@none, true)
+
+    keeper =
+      Supervisor.child_spec(keeper,
+        start: {__MODULE__, :start_client, [test, channel, attach_dir]}
+      )
+
+    after_it = %{
+      id: :after_the_client,
+      start: {Agent, :start_link, [fn -> send(test, {:started, self()}) end]}
+    }
+
+    {:ok, tree} = Supervisor.start_link([keeper, after_it], tree_options())
+    Process.unlink(tree)
+    tree_down = Process.monitor(tree)
+    assert_receive {:client, client}
+    assert_receive {:started, _first}
+
+    Process.exit(client, :kill)
+
+    assert_receive {:DOWN, ^tree_down, :process, ^tree, _reason}, 5_000
+    refute_received {:client, _second}
+    refute_received {:started, _second}
+    :socket.close(peer)
+  end
+
+  @doc false
+  def start_client(test, channel, attach_dir) do
+    {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
+    send(test, {:client, client})
+    # A second client would find the channel closed with the first.
+    _ = :socket.setopt(channel, {:otp, :controlling_process}, client)
+    {:ok, client}
+  end
+
+  defp tree_options, do: App.tree_options()
+
+  defp channel_pair do
+    dir = Locus.Test.FakeKeeper.short_tmp_dir()
+    path = Path.join(dir, "channel.sock")
+    {:ok, listener} = :socket.open(:local, :stream)
+    :ok = :socket.bind(listener, %{family: :local, path: path})
+    :ok = :socket.listen(listener)
+    {:ok, client} = :socket.open(:local, :stream)
+    :ok = :socket.connect(client, %{family: :local, path: path})
+    {:ok, ours} = :socket.accept(listener)
+    :socket.close(listener)
+    File.rm_rf!(dir)
+    {ours, client}
   end
 
   test "the build slots take their caps from the builder's settings and refuse, never queue" do

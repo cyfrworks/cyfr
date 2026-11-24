@@ -15,7 +15,8 @@ defmodule Locus.BuilderServiceTest do
   sources or its toolchain) leaves no place. After it, the answer is lines: a result, or the
   refusal the build ended with, its diagnostics bounded. A deadline reached
   mid-build ends the build's process group; a client that leaves ends its
-  build within a bound and its slot goes back; the keeper's memory answers
+  build within a bound and its slot goes back, under the keeper only once
+  cyfr-locus reports the build's spawn released; the keeper's memory answers
   are the wire's `memory` and `unavailable`. A build that waits for room
   in the builds count ends by the deadline its request set, and one whose
   client leaves while it waits ends at once.
@@ -24,6 +25,7 @@ defmodule Locus.BuilderServiceTest do
   # Serves on the application's build slots and, in places, as its keeper.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
   import Prima.Test.Wait
 
   alias Prima.{BuilderProtocol, Slots}
@@ -914,6 +916,39 @@ defmodule Locus.BuilderServiceTest do
       conn = await_line(conn, fn line -> match?({:refusal, {:unavailable, _}}, line) end)
       Wire.close(conn)
       wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
+    end
+
+    test "a build whose client left holds its slot until cyfr-locus reports its spawn released, " <>
+           "however long past the cancel's bound that takes",
+         %{port: port} do
+      fake = keeper!(:normal)
+      :ok = FakeKeeper.hold_releases(fake, self())
+      {script, file} = lingering()
+      body = Wire.body(Wire.request(script))
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn)
+      conn = await_line(conn, {:progress, :output, "running"})
+      os_pids = pids_in(file)
+      Wire.close(conn)
+
+      # The cancel asks cyfr-locus to end the spawn, which it does not yet.
+      assert_receive {:release_held, _spawn_id}, 10_000
+
+      log =
+        capture_log(fn ->
+          # sleep-ok: past the service's fixed 15 s bound for a cancelled build to end, which no event marks.
+          Process.sleep(16_000)
+        end)
+
+      assert %{active: 1} = Slots.status(@slots)
+      assert Enum.all?(os_pids, &alive?/1)
+      assert log =~ "its slot is held until cyfr-locus releases it"
+
+      # cyfr-locus ends it and reports it released: only then is the slot free.
+      :ok = FakeKeeper.carry_releases(fake)
+      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
     end
   end
 

@@ -104,9 +104,12 @@ defmodule Locus.BuilderService do
     close is seen only by asking), and a line that cannot be written, or
     not within the time left, says the same. The build is cancelled
     (`Locus.Executor.cancel/1`), which takes it out of its wait for room,
-    or closes its relay and ends its processes with no grace; the service
-    waits up to #{@cancel_ms} ms for that, kills the build process if it
-    has not ended, and releases the slot. Nothing more is written.
+    or closes its relay and asks for its processes' end with no grace;
+    the build process ends once they are gone, which under cyfr-locus is
+    its `released` (`Locus.Keeper`), and the slot goes back then and never
+    before. A build not ended within #{@cancel_ms} ms is logged, cancelled
+    again, which reaches its run wherever the first cancel was taken, and
+    still waited for. Nothing more is written.
   - **The connection's process killed** (the listener stopping, a crash):
     the link ends the build process, whose executor's own watch ends the
     build (the keeper's client releases a dead caller's spawn, the direct
@@ -492,6 +495,9 @@ defmodule Locus.BuilderService do
 
   # The client is gone: end the build, and return only once it has ended,
   # so the slot this process holds goes back after the build's processes.
+  # The build process is the run's reader, which alone hears cyfr-locus
+  # say they are gone: it is never killed, since its death would free the
+  # slot on no word of cyfr-locus's.
   defp abandon(conn, %{build: build, monitor: monitor} = s) do
     Logger.warning("[Locus.BuilderService] the client left; its build is cancelled")
     Locus.Executor.cancel(build)
@@ -500,8 +506,12 @@ defmodule Locus.BuilderService do
       {:DOWN, ^monitor, :process, _build, _reason} -> :ok
     after
       @cancel_ms ->
-        Process.unlink(build)
-        Process.exit(build, :kill)
+        Logger.error(
+          "[Locus.BuilderService] a cancelled build has not ended within #{@cancel_ms} ms; " <>
+            "it is cancelled again, and its slot is held until cyfr-locus releases it"
+        )
+
+        Locus.Executor.cancel(build)
 
         receive do
           {:DOWN, ^monitor, :process, _build, _reason} -> :ok

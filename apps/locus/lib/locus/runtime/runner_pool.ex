@@ -42,15 +42,18 @@ defmodule Locus.Runtime.RunnerPool do
   clean completion, before the pool hears it. The pool never waits on the
   keeper for a place.
 
-  A tainted runner leaves the pool once the keeper reports it retired
-  or, failing that, at the retirement bound; its handle is stopped then.
-  A runner its keeper has not retired within its release's grace and the
-  bound is dropped as gone, with an error naming it, and its assignee, if
-  it still had one, hears `{:gone, :retire_bound}`: what is left of its
-  process is its keeper's to end, and the pool stops waiting for a report
-  that is not coming. A keeper that fails takes the pool with it
-  through their common supervisor, and every busy runner's assignee
-  hears `{:gone, _}` first.
+  A tainted runner leaves the pool only once the keeper reports it
+  retired, its handle stopped then: what a runner holds, its uid and its
+  place, is given back on the keeper's word alone. One its keeper has not
+  retired within its release's grace and the retirement bound is said so
+  once, with an error naming it, and its assignee, if it still had one,
+  hears `{:gone, :retire_bound}`; the runner stays, tainted, until the
+  report. The pool is every runner's heir (`Locus.Launcher`), so a runner
+  whose handle dies, its owner gone with it, is held the same way: said
+  so once, its assignee told `{:gone, {:handle_down, reason}}`, and
+  tainted until its release reaches the pool. A keeper that fails takes
+  the pool with it through their common supervisor, and every busy
+  runner's assignee hears `{:gone, _}` first.
 
   ## A keeper that refuses runners
 
@@ -93,8 +96,8 @@ defmodule Locus.Runtime.RunnerPool do
   was started with, default none), `:supervisor` (the `DynamicSupervisor`
   the handles run under), `:command` (`t:Locus.Runtime.Release.command/0`, default
   this boot's), `:retire_bound_ms` (how long past a release's grace the
-  pool waits for the keeper to retire the runner, default
-  #{@retire_bound_ms}), `:name` (default `#{inspect(__MODULE__)}`).
+  pool waits for the keeper to retire the runner before it says so,
+  default #{@retire_bound_ms}), `:name` (default `#{inspect(__MODULE__)}`).
   """
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -276,36 +279,61 @@ defmodule Locus.Runtime.RunnerPool do
   end
 
   # A runner its keeper has not retired within its release's grace and the
-  # bound is dropped. A timer of a runner retired since, or of an earlier
+  # bound is said so once and kept: only the keeper's report gives back
+  # what it holds. A timer of a runner retired since, or of an earlier
   # release, names a ref no held entry carries, and is ignored.
   def handle_info({:retire_due, pid, ref}, state) do
     case state.runners[pid] do
       %{state: ending, retire_timer: ^ref} = entry when ending in [:tainted, :retiring] ->
         Logger.error(
           "[Locus.Runtime.RunnerPool] runner #{entry.id} was not retired by its keeper " <>
-            "within the retirement bound; dropped"
+            "within the retirement bound; held until it is"
         )
 
-        state = told(state, pid, entry, {:gone, :retire_bound})
-        _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
-
-        {:noreply, refill_later(forget(state, pid))}
+        # Its timer has fired and is kept, so a later taint arms none.
+        {:noreply, told(state, pid, entry, {:gone, :retire_bound})}
 
       _ ->
         {:noreply, state}
     end
   end
 
+  # The keeper's word, to the runner's heir, that nothing of it is left.
+  # A runner whose handle died leaves the pool on it; one whose handle
+  # lives leaves on the handle's own `:released`, which follows, and the
+  # word is kept for a handle that dies before it tells.
+  def handle_info({_launcher, {:heir, {__MODULE__, id}}, :released}, state) do
+    case Enum.find(state.runners, fn {_pid, entry} -> entry.id == id end) do
+      nil -> {:noreply, state}
+      {pid, %{down: true}} -> {:noreply, refill(forget(state, pid))}
+      {pid, entry} -> {:noreply, put_runner(state, pid, %{entry | released: true})}
+    end
+  end
+
   def handle_info(:refill, state), do: {:noreply, refill(%{state | refill_scheduled: false})}
 
+  # A handle that died leaves its runner to the keeper, which releases a
+  # dead owner's spawn: the runner is held, tainted, until that release
+  # reaches the pool as its heir. One refused after it was made keeps its
+  # place among the runners ahead until then.
   def handle_info({:DOWN, _monitor, :process, pid, reason}, state) do
     case state.runners[pid] do
       nil ->
         {:noreply, state}
 
-      entry ->
-        if entry.execution_id, do: tell(state, pid, {:gone, {:handle_down, reason}})
+      %{released: true} ->
         {:noreply, refill_later(forget(state, pid))}
+
+      entry ->
+        Logger.error(
+          "[Locus.Runtime.RunnerPool] runner #{entry.id}'s handle ended " <>
+            "(#{Prima.LogFilter.inspect_reason(reason)}); held until its keeper retires it"
+        )
+
+        state = told(state, pid, entry, {:gone, {:handle_down, reason}})
+        entry = %{state.runners[pid] | down: true, idle_timer: nil}
+        entry = if entry.state == :refused, do: entry, else: %{entry | state: :tainted}
+        {:noreply, refill_later(put_runner(state, pid, entry))}
     end
   end
 
@@ -506,7 +534,7 @@ defmodule Locus.Runtime.RunnerPool do
         })
       )
 
-    spec = %{runner: id, argv: state.command.argv, env: env}
+    spec = %{runner: id, argv: state.command.argv, env: env, heir: {self(), {__MODULE__, id}}}
 
     case DynamicSupervisor.start_child(
            state.supervisor,
@@ -527,7 +555,12 @@ defmodule Locus.Runtime.RunnerPool do
            athanor: nil,
            execution_id: nil,
            idle_timer: nil,
-           retire_timer: nil
+           retire_timer: nil,
+           # Its handle died, and the keeper's release reaches the pool as
+           # the runner's heir.
+           down: false,
+           # The keeper's release reached the pool as the runner's heir.
+           released: false
          }}
 
       {:error, reason} ->

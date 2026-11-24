@@ -26,7 +26,10 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   one whose command it could not run: its place stays the spawn's and its
   owner hears its release only once `release_made/1` frees it. `refused/1`
   counts the spawns it refused. It holds a runner to the `:memory_bytes`
-  of the pool's keeper options, or to none.
+  of the pool's keeper options, or to none. As the keeper's client does, it
+  releases a runner whose owner dies with no grace, and tells a spec's
+  `heir`, `{pid, tag}`, `{Locus.Runtime.Test.ScriptedKeeper, {:heir, tag},
+  :released}` once the runner is released, whoever owns it then.
 
   It keeps places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"),
   named by the keeper options' `:name` (options that name no keeper keep
@@ -427,7 +430,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   # freed.
   def handle_call({:spawn, spec, owner}, _from, %{refusing: {:made, reason}} = state) do
     ref = make_ref()
-    made = %{ref: ref, owner: owner, place: spec.runner}
+    made = %{ref: ref, owner: owner, place: spec.runner, heir: Map.get(spec, :heir)}
 
     {:reply, {:refused_made, ref, reason},
      %{
@@ -450,9 +453,14 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     keeper = self()
 
     {:ok, runner} =
-      GenServer.start_link(__MODULE__.Runner, %{owner: owner, ref: ref, keeper: keeper})
+      GenServer.start_link(__MODULE__.Runner, %{
+        owner: owner,
+        ref: ref,
+        keeper: keeper,
+        heir: Map.get(spec, :heir)
+      })
 
-    entry = %{ref: ref, spec: spec, runner: runner, owner: owner}
+    entry = %{ref: ref, spec: spec, runner: runner, owner: owner, monitor: Process.monitor(owner)}
     places = named(state.places, spec.runner)
     {:reply, {:ok, ref, runner}, %{state | spawns: [entry | state.spawns], places: places}}
   end
@@ -467,6 +475,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     places =
       Enum.reduce(state.made, state.places, fn made, places ->
         Kernel.send(made.owner, {__MODULE__, made.ref, :released})
+        tell_heir(made)
         Map.delete(places, made.place)
       end)
 
@@ -493,9 +502,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   # An owner gone before a spawn named its place has the place dropped; a
-  # place a spawn named is freed at that spawn's release alone.
+  # place a spawn named is freed at that spawn's release alone. A runner
+  # whose owner died is released with no grace.
   @impl GenServer
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    for %{monitor: ^monitor, runner: runner} <- state.spawns,
+        do: Kernel.send(runner, {:released, 0})
+
     places =
       Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
 
@@ -534,6 +547,12 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       _none -> places
     end
   end
+
+  @doc false
+  def tell_heir(%{heir: {pid, tag}}) when is_pid(pid),
+    do: Kernel.send(pid, {__MODULE__, {:heir, tag}, :released})
+
+  def tell_heir(_spawn), do: :ok
 
   defmodule Runner do
     @moduledoc false
@@ -608,6 +627,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       notify(state, {:exited, {:status, status}})
       freed(state)
       notify(state, :released)
+      Locus.Runtime.Test.ScriptedKeeper.tell_heir(state)
       %{state | ended: true}
     end
 

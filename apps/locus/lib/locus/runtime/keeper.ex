@@ -70,8 +70,17 @@ defmodule Locus.Runtime.Keeper do
   restarted with it.
   """
 
-  @typedoc "What a runner is started with: its id, which names its place too, its argv and the environment beside the keeper's own."
-  @type spec :: %{runner: String.t(), argv: [String.t()], env: %{String.t() => String.t()}}
+  @typedoc """
+  What a runner is started with: its id, which names its place too, its
+  argv, the environment beside the keeper's own, and its `heir`, told of
+  its release whoever then owns it (`Locus.Launcher`).
+  """
+  @type spec :: %{
+          required(:runner) => String.t(),
+          required(:argv) => [String.t()],
+          required(:env) => %{String.t() => String.t()},
+          optional(:heir) => {pid(), term()}
+        }
 
   @typedoc "A keeper's handle on one runner, kept by the process that spawned it."
   @type channel :: term()

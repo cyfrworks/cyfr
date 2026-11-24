@@ -11,9 +11,11 @@ defmodule Locus.Runtime.RunnerPoolTest do
   relay and a kill to tainted, released and gone, and a clean completion
   whose place the keeper did not make warm again to tainted as it is
   heard, never handed to a take queued right after it; a runner its keeper
-  never retires, busy or idle, dropped at the retirement bound and a
-  retirement answered, one retired in time left alone by the bound's
-  timer; every busy runner offered a
+  has not retired, busy or idle, said so once at the retirement bound and
+  held, tainted, until its keeper retires it, one retired in time left
+  alone by the bound's timer, and one whose handle died held until its
+  keeper's release reaches the pool as the runner's heir; every busy
+  runner offered a
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
   with the pool backing off, refusing a take with the keeper's account
@@ -110,6 +112,24 @@ defmodule Locus.Runtime.RunnerPoolTest do
   end
 
   @unretired "was not retired by its keeper within the retirement bound"
+
+  # The runner `pid` stays the pool's, being ended, for all of `ms`: read
+  # every 100 ms, it is there each time.
+  defp assert_until_held(pool, pid, ms),
+    do: held_until(pool, pid, System.monotonic_time(:millisecond) + ms)
+
+  defp held_until(pool, pid, deadline) do
+    assert %{state: ending} = Enum.find(Runners.runners(pool), &(&1.pid == pid)),
+           "the runner left the pool before its keeper retired it"
+
+    assert ending in [:tainted, :retiring]
+
+    if System.monotonic_time(:millisecond) < deadline do
+      # sleep-ok: nothing is awaited; the runner is read again a tenth of a second later.
+      Process.sleep(100)
+      held_until(pool, pid, deadline)
+    end
+  end
 
   # The pool's status read once the keeper has refused `refused` spawns
   # and the pool has heard of every one: it holds no runner, fresh, idle,
@@ -694,7 +714,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert Enum.count(ScriptedKeeper.releases(keeper), &match?({_, 0}, &1)) == 2
   end
 
-  test "a busy runner its keeper never retires is dropped at the retirement bound, and the retirement answers",
+  test "a busy runner its keeper has not retired is said so once at the retirement bound and held until it is",
        %{keeper: keeper} do
     pool = start_pool!(keeper, pool_size: 0, retire_bound_ms: 200)
     serve!(pool)
@@ -702,21 +722,29 @@ defmodule Locus.Runtime.RunnerPoolTest do
     spawn = spawn_of(keeper, pid)
 
     never_retired(spawn, fn ->
-      log = capture_log(fn -> assert :ok = Runners.retire_busy(pool, 5_000) end)
+      log =
+        capture_log(fn ->
+          assert :ok = RunnerPool.taint(pool, pid, 0)
+          assert_receive {RunnerPool, ^pid, {:gone, :retire_bound}}, 5_000
+          # Ten times the bound: the runner is still the pool's, and the
+          # bound is not said again.
+          assert_until_held(pool, pid, 2_000)
+        end)
 
-      assert log =~ "runner #{id} #{@unretired}"
+      assert length(String.split(log, "runner #{id} #{@unretired}")) == 2
       assert {id, 0} in ScriptedKeeper.releases(keeper)
-      refute Enum.any?(Runners.runners(pool), &(&1.pid == pid))
-      refute Process.alive?(pid)
-      assert_received {RunnerPool, ^pid, {:gone, :retire_bound}}
-
-      # Nothing is left being ended: answered at once.
-      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
-      assert :ok = Runners.retire_busy(pool, 5_000)
+      assert Process.alive?(pid)
+      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
     end)
+
+    # The keeper retires it: only then does it leave the pool.
+    wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to leave once retired")
+    refute Process.alive?(pid)
+    assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+    assert :ok = Runners.retire_busy(pool, 5_000)
   end
 
-  test "an idle runner its keeper never retires at its TTL is dropped at the retirement bound",
+  test "an idle runner its keeper has not retired at its TTL is held past the retirement bound until it is",
        %{keeper: keeper} do
     pool = start_pool!(keeper, pool_size: 0, idle_ttl_ms: 100, retire_bound_ms: 200)
     serve!(pool)
@@ -733,15 +761,44 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
       log =
         capture_log(fn ->
-          wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to be dropped")
+          wait_until(fn -> ScriptedKeeper.releases(keeper) == [{id, 0}] end, 5_000)
+          assert_until_held(pool, pid, 2_000)
         end)
 
-      assert [{^id, 0}] = ScriptedKeeper.releases(keeper)
       assert log =~ "runner #{id} #{@unretired}"
-      refute Process.alive?(pid)
+      assert Process.alive?(pid)
       refute_received {RunnerPool, ^pid, {:gone, _}}
-      assert :ok = Runners.retire_busy(pool, 5_000)
     end)
+
+    wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to leave once retired")
+    refute Process.alive?(pid)
+  end
+
+  test "a runner whose handle dies is held, tainted, until its keeper's release reaches the pool as its heir",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    wait_until(fn -> counts(pool).fresh == 1 end)
+    [%{pid: pid, id: id}] = Runners.runners(pool)
+    spawn = spawn_of(keeper, pid)
+
+    never_retired(spawn, fn ->
+      log =
+        capture_log(fn ->
+          Process.exit(pid, :kill)
+          wait_until(fn -> counts(pool).tainted == 1 end, 5_000, "the runner to be held tainted")
+          # A runner is spawned ahead in its stead, and the dead one's stays
+          # the pool's while the keeper holds it.
+          wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 1} end)
+          assert_until_held(pool, pid, 1_000)
+        end)
+
+      assert log =~ "runner #{id}"
+      assert [%{heir: {^pool, _tag}}] = for(s <- spawns(keeper), s.owner == pid, do: s.spec)
+    end)
+
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0} end, 5_000)
+    refute Enum.any?(Runners.runners(pool), &(&1.pid == pid))
   end
 
   describe "a keeper that refuses runners" do

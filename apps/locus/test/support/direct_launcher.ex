@@ -1261,8 +1261,8 @@ defmodule Locus.DirectLauncher.Runner do
     do: :ok
 
   @impl Locus.Runtime.Keeper
-  def spawn(%{argv: argv, env: env}) do
-    spec = %{argv: argv, env: env, pool: "runner", control: true}
+  def spawn(%{argv: argv, env: env} = runner) do
+    spec = %{argv: argv, env: env, pool: "runner", control: true, heir: Map.get(runner, :heir)}
 
     case DirectLauncher.spawn([janitor: __MODULE__], spec) do
       {:ok, handle} -> {:ok, handle, []}
