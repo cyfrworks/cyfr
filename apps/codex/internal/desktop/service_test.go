@@ -242,9 +242,12 @@ func TestTheChoosersTokenIsMainsHeaderAlone(t *testing.T) {
 	} {
 		for _, path := range []string{"/bootstrap/state", "/bootstrap/connect", "/bootstrap/approve", "/bootstrap/docker",
 			"/bootstrap/start", "/bootstrap/setup", "/bootstrap/open", "/bootstrap/folder"} {
-			if w := a.request(context.Background(), path, map[string]string{}, c.edit); w.Code != c.code {
+			// Bounded: a request taken would wait at a pick or a setup.
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			if w := a.request(ctx, path, map[string]string{}, c.edit); w.Code != c.code {
 				t.Errorf("%s at %s answered %d, want %d: %s", name, path, w.Code, c.code, w.Body)
 			}
+			cancel()
 		}
 	}
 	a.quiet(t)
