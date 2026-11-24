@@ -32,8 +32,9 @@ func TestIdentityOnlyIsTheSpawnsIDAlone(t *testing.T) {
 	}
 }
 
-// Outside a namespace of its own the stage says so, whatever uid it is
-// asked about: the test runs in the namespace it was started in.
+// Outside a namespace of its own the stage refuses to go on, whatever uid
+// it is asked about: the test runs in the namespace it was started in, and
+// every spawn's stage runs in one of its own.
 func TestOwnNamespaceIsNotTheTestsOwn(t *testing.T) {
 	uidMap, err := os.ReadFile("/proc/self/uid_map")
 	if err != nil {
@@ -42,8 +43,7 @@ func TestOwnNamespaceIsNotTheTestsOwn(t *testing.T) {
 	if strings.Count(strings.TrimSpace(string(uidMap)), "\n") != 0 || strings.HasSuffix(strings.TrimSpace(string(uidMap)), " 1") {
 		t.Skipf("the test runs in a user namespace mapping %q", uidMap)
 	}
-	isolated, err := ownNamespace(30101, 30101)
-	if err != nil || isolated {
-		t.Fatalf("ownNamespace = %t, %v", isolated, err)
+	if err := ownNamespace(30101, 30101); err == nil {
+		t.Fatal("ownNamespace accepted the test's own namespace")
 	}
 }

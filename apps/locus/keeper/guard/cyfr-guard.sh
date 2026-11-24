@@ -5,139 +5,123 @@
 # cyfr-guard: the egress guard of a Locus island. docker-compose.yml runs
 # one for the builds island (locus-builds-guard) and one for the backends
 # island (locus-backends-guard), each from the Locus image, holding
-# NET_ADMIN and no other capability. The island's service shares this
-# container's network namespace (`network_mode: service:`), so every packet
-# a build or a backend sends is judged by the rules installed here, in the
-# OUTPUT chain of both address families, and the island starts only once
-# this container is healthy: healthy means the ready file is present, the
-# static rules it records are still installed and every admission the
-# guard holds is too, and the ready file is written only once every rule
-# is in. A rule that cannot be installed ends the
-# guard with an error naming it, before the ready file exists, so the
-# island never starts behind a guard that holds fewer rules than these.
+# NET_ADMIN and no other capability, in a namespace whose net.ipv4.ip_forward
+# is 1 and net.ipv4.icmp_ratelimit 0 (compose's sysctls; the guard refuses
+# to start otherwise). The island's service shares this container's network
+# namespace (`network_mode: service:`), and starts only once this container
+# is healthy: healthy means the ready file is present, the static rules it
+# records are still installed and every route the guard holds is too, and
+# the ready file is written only once every rule is in. A rule that cannot
+# be installed ends the guard with an error naming it, before the ready
+# file exists, so the island never starts behind a guard that holds fewer
+# rules than these.
 #
-# A packet of a connection the kernel already tracks, such as a reply to a
-# connection cyfr opened to the island or the rest of one a rule below let
-# through, passes (CYFR_GUARD_KNOWN), but for a uid whose row names its
-# hosts: rule 5's chain judges every packet of such a uid again, with the
-# resolver and the private hosts passing for it there too, since the
-# kernel tracks a connection by its addresses and ports alone and state
-# one uid left would otherwise serve another that reuses them.
-# CYFR_GUARD_KNOWN comes before the metadata, control-plane, local and
-# private rules below without opening what they refuse: the kernel keeps a
-# connection's tracking only once its first packet has passed every hook,
-# and a first packet these rules refuse (OUTPUT is the only filter here)
-# discards its unconfirmed entry, so a tracked connection is one whose first
-# packet these rules admitted for its sender (the resolver, the private
-# hosts, the island service's own loopback, a public host) or one that came
-# into the namespace from outside, as a connection cyfr opens to the
-# island does. Reusing a tracked tuple reaches only a destination one of
-# those first packets reached, and a uid's own list still judges each of
-# its packets.
+# Every build and every program's session runs in a space of its own, with
+# its own network namespace, which the keeper makes; nothing of a space
+# reaches this namespace's loopback, the island's service or another space.
+# A routed space's one way out is its route (apps/locus/keeper/guard): a
+# veth pair whose guard's end is sp<slot> here, a /30 of the route range,
+# and the route's own chains, which `route` installs and `unroute` removes.
+# The route range is the first IPv4 /16 of 10.0.0.0/8, from 10.213.0.0/16
+# on, that overlaps none of this namespace's routes and none of the private
+# hosts' addresses; with none free the guard ends naming every overlap.
 #
-# What the rules refuse, for a new connection, in this order. The metadata and
-# private rows are Prima.Cidr's address table (`Prima.Cidr.address_table/0`),
-# the one the control plane's own outbound calls are held to, written into
-# this script between its BEGIN and END lines by `mix cyfr.gen.guard_table`;
-# the rest are the island's own:
-#   1. every metadata address: link-local, the clouds' metadata endpoints
-#      and every IPv6 form embedding one (METADATA_V4, METADATA_V6);
-#   2. the control plane: cyfr's fixed address on the default network
-#      (CYFR_GUARD_CONTROL_PLANE) and every subnet of this namespace's own
-#      interfaces, which hold cyfr's address on the island's network, the
-#      island's gateway and the island itself;
-#   3. from the island's spawn uids (CYFR_GUARD_POOL: every range its
-#      keeper runs a spawn under, its pool and, on the backends island, the
-#      kept folders' uids, one rule per range), every address of this
-#      namespace, so a spawn reaches no listener of another spawn on the
-#      shared loopback, nor the island's service, except Docker's resolver
-#      at 127.0.0.11:53;
-#   4. every private address (PRIVATE_V4, PRIVATE_V6: loopback, RFC 1918,
-#      CGNAT, the reserved and multicast ranges, unique-local and every
-#      IPv6 form embedding a private IPv4 address), except the island's
-#      service's own loopback, which rule 3 already holds the spawns off,
-#      and the addresses the private hosts CYFR_PRIVATE_EGRESS_TARGETS
-#      names resolve to, which are the deployment's own registries and MCP
-#      servers. A name that does not resolve when the guard starts is logged
-#      and opens nothing; the guard resolves again when it restarts.
-#   5. from a spawn uid whose program's row names its hosts, every address
-#      but the ones its keeper admitted for it (CYFR_GUARD_HOSTS jumps to
-#      the uid's own chain, CYFR_GUARD_U<uid>, which returns each admitted
-#      address and refuses the rest). The rules before this one stand for
-#      it as for every spawn: an admitted address that is metadata, the
-#      control plane or private is still refused, and the resolver and the
-#      private hosts still pass, so a row's list narrows the public rule
-#      and never widens it.
-# Everything else, the public Internet, passes. A refusal answers the
-# sender at once with an administratively-prohibited ICMP, which the
-# sender sees as EHOSTUNREACH (EACCES over IPv6), never a timeout.
+# A space's packet leaving through its route is judged, every packet of it,
+# by its route's chain (CYFR_GUARD_R<slot>), in this order:
+#   1. its source must be the route's inner address, else it is dropped;
+#   2. another space, through another sp interface, is refused;
+#   3. every metadata address (METADATA_V4: link-local, the clouds' metadata
+#      endpoints), the control plane (cyfr's fixed address on the default
+#      network, CYFR_GUARD_CONTROL_PLANE) and every subnet of this
+#      namespace's own interfaces (cyfr's island address, the island's
+#      gateway and the island itself) are refused (CYFR_GUARD_REFUSE);
+#   4. the addresses the private hosts CYFR_PRIVATE_EGRESS_TARGETS names
+#      resolve to, the deployment's own registries and MCP servers, pass;
+#      a name that does not resolve when the guard starts is logged and
+#      opens nothing, and the guard resolves again when it restarts;
+#   5. every other private address (PRIVATE_V4: loopback, RFC 1918, CGNAT,
+#      the reserved and multicast ranges) is refused (CYFR_GUARD_PRIVATE);
+#   6. a route of reach `island` passes everything else, the public
+#      Internet; a route of reach `hosts` passes the addresses its keeper
+#      admitted for it and refuses every other.
+# What passes leaves masqueraded as this namespace's own address, and a
+# connection it opens takes the route's mark as it is made, and never
+# after: CONNMARK sets it only on a connection that carries no mark yet
+# (through CYFR_GUARD_P<slot>; a route's mark is its own identity, a
+# number the guard never gives twice in its life), so no route overwrites
+# another's, an unreplied entry's included. A packet into a space
+# passes only as a reply of a connection carrying its own route's mark,
+# and a withdrawn route leaves no connection in the kernel's table (the
+# control removes them as it removes the pair), so a later route that took
+# its address inherits nothing of it. IPv6 has no route: a space's IPv6
+# packet, and any packet a space sends to this namespace itself, is refused.
+# A refusal answers the sender at once with an administratively-prohibited
+# ICMP, which it sees as EHOSTUNREACH, never a timeout: the namespace's
+# ICMP rate limit is off, so every refusal is answered.
 #
-# Docker's resolver takes a spawn's query at 127.0.0.11:53 through a NAT
-# rule of its own, so the packet the filter sees carries the rewritten
-# port: the exception matches the connection's original destination.
+# The namespace's own processes (the island's service, its keeper, this
+# guard) are held as before (CYFR_GUARD, in OUTPUT): a packet of a tracked
+# connection passes, and a new one is refused the metadata, the control
+# plane and the island's subnets, and every private address but the
+# namespace's loopback and the private hosts. What it sends into a space is
+# refused, the ICMP that answers a space's refused packet apart.
 #
 #   cyfr-guard         install the rules, write the ready file, then serve
 #                      the island's keeper its control on the socket
-#                      CYFR_GUARD_CONTROL names (`cyfr-locus guard-control`,
-#                      apps/locus/keeper/guard), or sleep where it names none.
-#                      The control greets each connection naming the
-#                      network namespace these rules judge (as
-#                      /proc/self/ns/net links to it), and a keeper in
-#                      another namespace takes no answer from it and refuses
-#                      every spawn: a guard that restarted took a new
-#                      namespace while the service still runs in the old
-#                      one, where no admission of its would hold.
-#   cyfr-guard admit <uid> [address…]
-#                      the control's: give the spawn uid exactly these
-#                      addresses under rule 5, replacing what it held (no
-#                      address refuses it every public one), recording the
-#                      admission (ADMITTED/<uid>, its addresses one a line)
-#                      before any rule that admits; a change that fails at
-#                      any step leaves the uid refused every public address
-#                      (recorded so where the record can be written) and
-#                      exits 1
-#   cyfr-guard clear <uid>
-#                      the control's: return the uid to the island's rule
-#                      and drop its record; a clear that fails leaves the
-#                      uid refused every public address and exits 1
-#   cyfr-guard check   the health probe: the ready file is present, both
-#                      rule tables can be read, their static rules are the
-#                      ones the file recorded when they were installed (no
-#                      admission records them again), every spawn range has
-#                      its rules among them, and every admission the guard
-#                      recorded is installed exactly, its uid's chain and
-#                      the jump to it in both families, with no chain or
-#                      jump of a uid it did not admit
-#   cyfr-guard rules   print the rules it would install, one command a line,
-#                      and install none
+#                      CYFR_GUARD_CONTROL names (`cyfr-locus guard-control
+#                      <socket> <range>`, apps/locus/keeper/guard). The
+#                      control greets each connection naming the network
+#                      namespace these rules judge, and a keeper in another
+#                      namespace takes no answer from it.
+#   cyfr-guard route <iface> <inner> <mark> island
+#   cyfr-guard route <iface> <inner> <mark> hosts <address…>
+#                      the control's: install the chains of the route whose
+#                      guard's end is <iface> and space's address <inner>,
+#                      with the connection mark <mark>, and record them
+#                      (ROUTES/<iface>) as installed; only IPv4 addresses
+#                      are installed, IPv6 having no route. A route that
+#                      fails at any step is removed whole and exits 1
+#   cyfr-guard unroute <iface>
+#                      the control's: remove the route's chains and record;
+#                      a route already gone is removed; exits 1 where a
+#                      part could not be removed
+#   cyfr-guard check   the health probe: the ready file is present, every
+#                      rule table can be read, the static rules are the
+#                      ones the file recorded when they were installed, and
+#                      every route the guard recorded is installed as it was
+#                      recorded, with no chain or jump of a route it holds
+#                      no record of
+#   cyfr-guard rules   print the static rules it would install, one command
+#                      a line, and install none
 #
 # Environment:
-#   CYFR_GUARD_POOL              the island's spawn uids: every range its
-#                                keeper runs a spawn under, `<first>-<last>`,
-#                                comma-separated
 #   CYFR_GUARD_CONTROL_PLANE     cyfr's fixed address on the default network
 #   CYFR_PRIVATE_EGRESS_TARGETS  the private hosts, addresses or CIDRs the
 #                                deployment's own outbound calls may reach,
 #                                comma-separated (configuration-guide.md)
 #   CYFR_GUARD_CONTROL           the control's socket, on a volume the
-#                                island's service mounts read-only; unset,
-#                                the island takes no list and no uid is
-#                                ever admitted
+#                                island's service mounts read-only
 #
-# The admissions change only under the lock on LOCK, which `admit` and
-# `clear` take whole and `check` takes shared, and each change writes its
+# The routes change only under the lock on LOCK, which `route` and
+# `unroute` take whole and `check` takes shared, and each change writes its
 # record before it answers, so the probe compares the chains installed
-# with what the guard admitted, never with a snapshot a later change took.
+# with what the guard recorded, never with a snapshot a later change took.
 set -eu
 
 READY_DIR=/run/cyfr-guard
 READY="$READY_DIR/ready"
 LOCK="$READY_DIR/lock"
-ADMITTED="$READY_DIR/admitted"
+ROUTES="$READY_DIR/routes"
+TARGETS="$READY_DIR/targets"
+RANGE="$READY_DIR/range"
 CHAIN=CYFR_GUARD
-HOSTS=CYFR_GUARD_HOSTS
 KNOWN=CYFR_GUARD_KNOWN
-UID_CHAIN=CYFR_GUARD_U
+REFUSE=CYFR_GUARD_REFUSE
+PRIVATE=CYFR_GUARD_PRIVATE
+OUT=CYFR_GUARD_ROUTES
+IN=CYFR_GUARD_REPLIES
+ROUTE_CHAIN=CYFR_GUARD_R
+PASS_CHAIN=CYFR_GUARD_P
 # Set by `cyfr-guard rules` alone, never from the environment.
 PRINT_ONLY=
 
@@ -309,92 +293,71 @@ log() { echo "[cyfr-guard] $*" >&2; }
 # the ready file nor the probe ever holds a digest of a table that could
 # not be read. The dump's timestamps and the packet counters it prints
 # beside each built-in chain's policy are left out, since both move while
-# the rules stand, and so are the admissions (the uids' chains and the
-# jumps to them), which `admissions_installed` holds to the guard's record.
+# the rules stand, and so are the routes (their chains and the jumps to
+# them), which `routes_installed` holds to the guard's record.
 digest() {
   v4="$(iptables-save -t filter)" || { log "error: iptables-save failed"; return 1; }
   v6="$(ip6tables-save -t filter)" || { log "error: ip6tables-save failed"; return 1; }
   sum="$(printf '%s\n%s\n' "$v4" "$v6" | sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' \
-    -e "/^:${UID_CHAIN}[0-9]+ /d" -e "/^-A ${UID_CHAIN}[0-9]+ /d" -e "/^-A ${HOSTS} /d" | sha256sum | cut -d' ' -f1)"
+    -e "/^:(${ROUTE_CHAIN}|${PASS_CHAIN})[0-9]+ /d" -e "/^-A (${ROUTE_CHAIN}|${PASS_CHAIN})[0-9]+ /d" \
+    -e "/^-A (${OUT}|${IN}) /d" | sha256sum | cut -d' ' -f1)"
   case "$sum" in
     ????????????????????????????????????????????????????????????????) printf '%s\n' "$sum" ;;
     *) log "error: no digest of the rules"; return 1 ;;
   esac
 }
 
+# The namespace's forwarding and ICMP rate limit, as a route needs them.
+check_sysctls() {
+  forward="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" || forward=""
+  ratelimit="$(cat /proc/sys/net/ipv4/icmp_ratelimit 2>/dev/null)" || ratelimit=""
+  [ "$forward" = 1 ] || { log "error: net.ipv4.ip_forward is '$forward' in this namespace, not 1: the guard's compose service sets it (sysctls)"; return 1; }
+  [ "$ratelimit" = 0 ] || { log "error: net.ipv4.icmp_ratelimit is '$ratelimit' in this namespace, not 0: the guard's compose service sets it (sysctls)"; return 1; }
+}
+
 check() {
   [ -f "$READY" ] || { log "not ready: $READY is absent"; exit 1; }
   exec 9>"$LOCK"
   flock -s -w 2 9 || { log "not ready: the rules are changing"; exit 1; }
+  check_sysctls || exit 1
   recorded="$(cat "$READY")"
   installed="$(digest)" || { log "not ready: a rule table could not be read"; exit 1; }
   [ "$recorded" = "$installed" ] || { log "not ready: the rules installed are not the ones recorded"; exit 1; }
-  # The digest proves the rules unchanged since they were recorded; this
-  # proves they are the ones for every range the island spawns under.
-  ranges="$(spawn_ranges)" || exit 1
-  v4rules="$(iptables -w 5 -S "$CHAIN")" || { log "not ready: the IPv4 rules could not be read"; exit 1; }
-  for range in $ranges; do
-    case "$v4rules" in
-      *"--uid-owner $range -m addrtype --dst-type LOCAL -j REJECT"*) ;;
-      *) log "not ready: no rule holds spawns $range off this namespace"; exit 1 ;;
-    esac
-  done
-  admissions_installed || exit 1
+  range="$(cat "$RANGE")"
+  iptables -w 5 -t nat -C POSTROUTING -s "$range" ! -o sp+ -j MASQUERADE 2>/dev/null \
+    || { log "not ready: the routes' masquerade for $range is not installed"; exit 1; }
+  routes_installed || exit 1
 }
 
-# The uids the guard admitted, one a line, from their records.
-admitted_uids() {
-  [ -d "$ADMITTED" ] || return 0
-  for record in "$ADMITTED"/*; do
-    [ -f "$record" ] && basename "$record"
-  done | sort -n
+# What the kernel holds of the route whose guard's end is $1: its two
+# chains and the jumps to them, as iptables lists them.
+route_text() {
+  slot="${1#sp}"
+  r4="$(iptables -w 5 -S "$ROUTE_CHAIN$slot" 2>/dev/null)" || return 1
+  p4="$(iptables -w 5 -S "$PASS_CHAIN$slot" 2>/dev/null)" || return 1
+  out="$(iptables -w 5 -S "$OUT")" || return 1
+  in="$(iptables -w 5 -S "$IN")" || return 1
+  printf '%s\n%s\n' "$r4" "$p4"
+  printf '%s\n' "$out" | grep -e "^-A $OUT -i $1 " || true
+  printf '%s\n' "$in" | grep -e "^-A $IN -o $1 " || true
 }
 
-# Whether every admission the guard recorded is installed exactly, in both
-# families, and no uid it did not admit has a chain or a jump: answers 1,
+# Whether every route the guard recorded is installed exactly as recorded,
+# and no route it holds no record of has a chain or a jump: answers 1,
 # naming what differs, otherwise.
-admissions_installed() {
-  uids="$(admitted_uids)"
-  for family in 4 6; do
-    if [ "$family" = 4 ]; then tool=iptables reject=icmp-admin-prohibited bits=32
-    else tool=ip6tables reject=icmp6-adm-prohibited bits=128; fi
-    listed="$("$tool" -w 5 -S)" || { log "not ready: the $tool rules could not be read"; return 1; }
-    chains="$(printf '%s\n' "$listed" | sed -n "s/^-N \(${UID_CHAIN}[0-9][0-9]*\)$/\1/p" | sort)"
-    want_chains="$(for uid in $uids; do echo "$UID_CHAIN$uid"; done | sort)"
-    [ "$chains" = "$want_chains" ] || { log "not ready: the $tool chains of uids are not the ones the guard admitted"; return 1; }
-    jumps="$(printf '%s\n' "$listed" | grep "^-A $HOSTS " | sort)"
-    want_jumps="$(for uid in $uids; do echo "-A $HOSTS -m owner --uid-owner $uid -j $UID_CHAIN$uid"; done | sort)"
-    [ "$jumps" = "$want_jumps" ] || { log "not ready: the $tool jumps to uids' chains are not the ones the guard admitted"; return 1; }
-    for uid in $uids; do
-      chain="$UID_CHAIN$uid"
-      want="$(echo "-N $chain"
-        while IFS= read -r address; do
-          case "$address" in
-            *:*) [ "$family" = 6 ] && echo "-A $chain -d $address/$bits -j RETURN" ;;
-            ?*) [ "$family" = 4 ] && echo "-A $chain -d $address/$bits -j RETURN" ;;
-          esac
-        done < "$ADMITTED/$uid"
-        echo "-A $chain -j REJECT --reject-with $reject")"
-      have="$(printf '%s\n' "$listed" | grep -e "^-N $chain\$" -e "^-A $chain ")"
-      [ "$have" = "$want" ] || { log "not ready: uid $uid's admission is not installed as the guard admitted it ($tool)"; return 1; }
-    done
-  done
-}
-
-# The island's spawn uid ranges, CYFR_GUARD_POOL's comma-separated
-# `<first>-<last>` entries, one a line; a malformed or empty list ends the
-# guard naming it.
-spawn_ranges() {
-  list="${CYFR_GUARD_POOL:?names the island spawn uids as <first>-<last>, comma-separated}"
-  ranges="$(printf '%s' "$list" | tr ',' ' ')"
-  [ -n "$ranges" ] || { log "error: CYFR_GUARD_POOL names no range"; return 1; }
-  for range in $ranges; do
-    case "$range" in
-      *[!0-9-]* | -* | *- | *-*-* | [!0-9]*) log "error: CYFR_GUARD_POOL holds '$range', not <first>-<last>"; return 1 ;;
-      *-*) ;;
-      *) log "error: CYFR_GUARD_POOL holds '$range', not <first>-<last>"; return 1 ;;
-    esac
-    echo "$range"
+routes_installed() {
+  recorded=""
+  if [ -d "$ROUTES" ]; then
+    recorded="$(for record in "$ROUTES"/sp*; do [ -f "$record" ] && basename "$record"; done | grep -E '^sp[0-9]+$' | sort || true)"
+  fi
+  listed="$(iptables -w 5 -S)" || { log "not ready: the IPv4 rules could not be read"; return 1; }
+  chains="$(printf '%s\n' "$listed" | sed -n -E "s/^-N (${ROUTE_CHAIN}|${PASS_CHAIN})([0-9]+)$/sp\2/p" | sort -u)"
+  jumps="$(printf '%s\n' "$listed" | sed -n -E -e "s/^-A ${OUT} -i (sp[0-9]+) .*/\1/p" -e "s/^-A ${IN} -o (sp[0-9]+) .*/\1/p" | sort -u)"
+  [ "$chains" = "$recorded" ] || { log "not ready: the routes' chains are not the routes the guard recorded"; return 1; }
+  [ "$jumps" = "$recorded" ] || { log "not ready: the jumps to routes are not the routes the guard recorded"; return 1; }
+  for iface in $recorded; do
+    have="$(route_text "$iface")" || { log "not ready: route $iface could not be read"; return 1; }
+    [ "$have" = "$(cat "$ROUTES/$iface")" ] || { log "not ready: route $iface is not installed as the guard recorded it"; return 1; }
   done
 }
 
@@ -412,12 +375,12 @@ v6() {
 # An address or CIDR's family: 6 where it holds a colon, else 4.
 family() { case "$1" in *:*) echo 6 ;; *) echo 4 ;; esac; }
 
-# The IPv4 subnets of this namespace's interfaces other than the
-# loopback, from the kernel's routing table: each on-link route's
-# destination and mask, hexadecimal and little-endian there, as
-# `<address>/<prefix length>`.
-own_v4_subnets() {
-  awk '
+# The IPv4 destinations of this namespace's routes, the default route and
+# the routes' own pairs apart, from the kernel's routing table, as
+# `<address>/<prefix length>`; with `on-link`, the on-link routes of
+# interfaces other than the loopback alone: the namespace's own subnets.
+v4_routes() {
+  awk -v onlink="${1:-}" '
     function octets(h) {
       return sprintf("%d.%d.%d.%d", hex(substr(h, 7, 2)), hex(substr(h, 5, 2)), hex(substr(h, 3, 2)), hex(substr(h, 1, 2)))
     }
@@ -434,8 +397,8 @@ own_v4_subnets() {
       }
       return n
     }
-    NR > 1 && $1 != "lo" && $2 != "00000000" && $3 == "00000000" { print octets($2) "/" ones($8) }
-  ' /proc/net/route
+    NR > 1 && $1 != "lo" && $8 != "00000000" && (onlink == "" || $3 == "00000000") && $1 !~ /^sp[0-9]+$/ { print octets($2) "/" ones($8) }
+  ' /proc/net/route | sort -u
 }
 
 # The IPv6 subnets of this namespace's interfaces other than the loopback,
@@ -448,7 +411,7 @@ own_v6_subnets() {
       for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1
       return n
     }
-    $10 != "lo" && $2 != "00" && $5 == "00000000000000000000000000000000" && substr($1, 1, 2) != "ff" {
+    $10 != "lo" && $10 !~ /^sp[0-9]+$/ && $2 != "00" && $5 == "00000000000000000000000000000000" && substr($1, 1, 2) != "ff" {
       p = ""
       for (i = 1; i <= 32; i += 4) p = p (i > 1 ? ":" : "") substr($1, i, 4)
       print p "/" hex($2)
@@ -475,44 +438,58 @@ private_targets() {
   done
 }
 
+# The route range: the first /16 of 10.0.0.0/8, from 10.213.0.0/16 on and
+# round to 10.212.0.0/16, that overlaps none of the IPv4 routes and private
+# hosts given, one an argument (an address is its /32). It logs each /16
+# passed over and what it overlaps, and with none free ends naming them all.
+route_range() {
+  printf '%s\n' "$@" | awk '
+    function num(a,    p) { split(a, p, "."); return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4] }
+    /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {
+      split($0, c, "/"); bits = (c[2] == "" ? 32 : c[2]) + 0
+      size = 2 ^ (32 - bits); first = num(c[1]); first -= first % size
+      n++; lo[n] = first; hi[n] = first + size - 1; name[n] = $0
+    }
+    END {
+      for (k = 0; k < 256; k++) {
+        b = (213 + k) % 256; start = (10 * 256 + b) * 65536; end = start + 65535; hit = ""
+        for (i = 1; i <= n; i++) if (lo[i] <= end && start <= hi[i]) hit = hit (hit == "" ? "" : ", ") name[i]
+        if (hit == "") { print "10." b ".0.0/16"; exit 0 }
+        printf "[cyfr-guard] 10.%d.0.0/16 overlaps %s: the routes take another range\n", b, hit > "/dev/stderr"
+        all = all (all == "" ? "" : "; ") "10." b ".0.0/16: " hit
+      }
+      printf "[cyfr-guard] error: no /16 of 10.0.0.0/8 is free for the routes of the spaces: the routes of this namespace and the private hosts overlap every one (%s)\n", all > "/dev/stderr"
+      exit 1
+    }
+  '
+}
+
 add_rules() {
-  ranges="$(spawn_ranges)" || exit 1
   control_plane="${CYFR_GUARD_CONTROL_PLANE:?names the fixed address of cyfr on the default network}"
   [ "$(family "$control_plane")" = 4 ] || { log "error: CYFR_GUARD_CONTROL_PLANE is '$control_plane', not an IPv4 address"; exit 1; }
+  [ -n "$PRINT_ONLY" ] || check_sysctls || exit 1
+  targets="$(private_targets)"
+  v4targets="$(for t in $targets; do [ "$(family "$t")" = 4 ] && echo "$t"; done || true)"
+  subnets="$(v4_routes on-link)"
+  # shellcheck disable=SC2046,SC2086 # one argument per route and target
+  range="$(route_range $(v4_routes) $v4targets)" || exit 1
+  log "routes take $range"
 
+  # The namespace's own processes: OUTPUT.
   v4 -N "$CHAIN"
   v6 -N "$CHAIN"
-  v4 -N "$HOSTS"
-  v6 -N "$HOSTS"
-  v4 -N "$KNOWN"
-  v6 -N "$KNOWN"
   v4 -A OUTPUT -j "$CHAIN"
   v6 -A OUTPUT -j "$CHAIN"
-  v4 -A "$CHAIN" -m conntrack ! --ctstate NEW -j "$KNOWN"
-  v6 -A "$CHAIN" -m conntrack ! --ctstate NEW -j "$KNOWN"
-
-  # A tracked connection's packet: the resolver and the private hosts
-  # pass, a listed uid's goes through its own chain (rule 5), and every
-  # other passes.
-  targets="$(private_targets)"
-  v4 -A "$KNOWN" -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT
-  for address in $targets; do
-    if [ "$(family "$address")" = 6 ]; then v6 -A "$KNOWN" -d "$address" -j ACCEPT
-    else v4 -A "$KNOWN" -d "$address" -j ACCEPT; fi
-  done
-  v4 -A "$KNOWN" -j "$HOSTS"
-  v6 -A "$KNOWN" -j "$HOSTS"
-  v4 -A "$KNOWN" -j ACCEPT
-  v6 -A "$KNOWN" -j ACCEPT
-
-  # 1. metadata
-  for range in $METADATA_V4; do v4 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp-admin-prohibited; done
-  for range in $METADATA_V6; do v6 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp6-adm-prohibited; done
-
-  # 2. the control plane: cyfr's fixed address, and every subnet this
-  # namespace sits on, cyfr's island address among them
+  # Into a space, nothing but the ICMP that answers its refused packets.
+  v4 -A "$CHAIN" -o sp+ -p icmp -m conntrack --ctstate RELATED -j ACCEPT
+  v4 -A "$CHAIN" -o sp+ -j REJECT --reject-with icmp-admin-prohibited
+  v6 -A "$CHAIN" -o sp+ -j REJECT --reject-with icmp6-adm-prohibited
+  v4 -A "$CHAIN" -m conntrack ! --ctstate NEW -j ACCEPT
+  v6 -A "$CHAIN" -m conntrack ! --ctstate NEW -j ACCEPT
+  for cidr in $METADATA_V4; do v4 -A "$CHAIN" -d "$cidr" -j REJECT --reject-with icmp-admin-prohibited; done
+  for cidr in $METADATA_V6; do v6 -A "$CHAIN" -d "$cidr" -j REJECT --reject-with icmp6-adm-prohibited; done
   v4 -A "$CHAIN" -d "$control_plane/32" -j REJECT --reject-with icmp-admin-prohibited
-  for subnet in $(own_v4_subnets); do
+  for subnet in $subnets; do
     log "island subnet $subnet"
     v4 -A "$CHAIN" -d "$subnet" -j REJECT --reject-with icmp-admin-prohibited
   done
@@ -520,34 +497,34 @@ add_rules() {
     log "island subnet $subnet"
     v6 -A "$CHAIN" -d "$subnet" -j REJECT --reject-with icmp6-adm-prohibited
   done
-
-  # 3. the spawns' reach into this namespace: the resolver alone, for
-  # every range
-  for range in $ranges; do
-    v4 -A "$CHAIN" -m owner --uid-owner "$range" -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j RETURN
-    v4 -A "$CHAIN" -m owner --uid-owner "$range" -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-admin-prohibited
-    v6 -A "$CHAIN" -m owner --uid-owner "$range" -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp6-adm-prohibited
-  done
-
-  # 4. the service's own loopback, for a uid of no spawn range (rule 3 has
-  # refused the spawns theirs), and the deployment's private hosts, then
-  # every other private address
-  outside=""
-  for range in $ranges; do outside="$outside -m owner ! --uid-owner $range"; done
-  # shellcheck disable=SC2086 # one match per range, word-split on purpose
-  v4 -A "$CHAIN" -o lo $outside -j RETURN
-  # shellcheck disable=SC2086
-  v6 -A "$CHAIN" -o lo $outside -j RETURN
+  v4 -A "$CHAIN" -o lo -j RETURN
+  v6 -A "$CHAIN" -o lo -j RETURN
   for address in $targets; do
     if [ "$(family "$address")" = 6 ]; then v6 -A "$CHAIN" -d "$address" -j RETURN
     else v4 -A "$CHAIN" -d "$address" -j RETURN; fi
   done
-  for range in $PRIVATE_V4; do v4 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp-admin-prohibited; done
-  for range in $PRIVATE_V6; do v6 -A "$CHAIN" -d "$range" -j REJECT --reject-with icmp6-adm-prohibited; done
+  for cidr in $PRIVATE_V4; do v4 -A "$CHAIN" -d "$cidr" -j REJECT --reject-with icmp-admin-prohibited; done
+  for cidr in $PRIVATE_V6; do v6 -A "$CHAIN" -d "$cidr" -j REJECT --reject-with icmp6-adm-prohibited; done
 
-  # 5. the spawns whose rows name their hosts: each admitted uid's chain
-  v4 -A "$CHAIN" -j "$HOSTS"
-  v6 -A "$CHAIN" -j "$HOSTS"
+  # The spaces: FORWARD, INPUT and the masquerade. A route's chain jumps to
+  # the first two for what every space is refused.
+  v4 -N "$REFUSE"
+  v4 -N "$PRIVATE"
+  v4 -N "$OUT"
+  v4 -N "$IN"
+  for cidr in $METADATA_V4; do v4 -A "$REFUSE" -d "$cidr" -j REJECT --reject-with icmp-admin-prohibited; done
+  v4 -A "$REFUSE" -d "$control_plane/32" -j REJECT --reject-with icmp-admin-prohibited
+  for subnet in $subnets; do v4 -A "$REFUSE" -d "$subnet" -j REJECT --reject-with icmp-admin-prohibited; done
+  for cidr in $PRIVATE_V4; do v4 -A "$PRIVATE" -d "$cidr" -j REJECT --reject-with icmp-admin-prohibited; done
+  v4 -A FORWARD -i sp+ -j "$OUT"
+  v4 -A FORWARD -i sp+ -j REJECT --reject-with icmp-admin-prohibited
+  v4 -A FORWARD -o sp+ -j "$IN"
+  v4 -A FORWARD -o sp+ -j REJECT --reject-with icmp-admin-prohibited
+  v4 -A INPUT -i sp+ -j REJECT --reject-with icmp-admin-prohibited
+  v6 -A FORWARD -i sp+ -j REJECT --reject-with icmp6-adm-prohibited
+  v6 -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited
+  v6 -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited
+  v4 -t nat -A POSTROUTING -s "$range" ! -o sp+ -j MASQUERADE
 }
 
 # Records the static rules now installed in the ready file, once, as the
@@ -558,148 +535,137 @@ record() {
   mv "$READY.tmp" "$READY"
 }
 
-# A uid of one of the spawn ranges, or 1.
-spawn_uid() {
+# A route's guard's end, sp<slot>, or 1.
+route_iface() {
   case "$1" in
-    "" | *[!0-9]* | 0*) log "error: '$1' is not a uid"; return 1 ;;
+    sp[0-9] | sp[1-9][0-9] | sp[1-9][0-9][0-9] | sp[1-9][0-9][0-9][0-9] | sp[1-9][0-9][0-9][0-9][0-9]) return 0 ;;
   esac
-  for range in $(spawn_ranges); do
-    [ "$1" -ge "${range%-*}" ] && [ "$1" -le "${range#*-}" ] && return 0
-  done
-  log "error: uid $1 is no spawn's of this island"
+  log "error: '$1' is no route's interface"
   return 1
 }
 
-# Installs one family's chain for uid in one transaction: each address
-# returned, every other refused, and the jump to it once.
-uid_chain() {
-  family="$1" uid="$2"
-  shift 2
-  chain="CYFR_GUARD_U$uid"
-  if [ "$family" = 4 ]; then tool=iptables reject=icmp-admin-prohibited bits=32
-  else tool=ip6tables reject=icmp6-adm-prohibited bits=128; fi
-  {
-    echo "*filter"
-    echo ":$chain - [0:0]"
-    for address in "$@"; do echo "-A $chain -d $address/$bits -j RETURN"; done
-    echo "-A $chain -j REJECT --reject-with $reject"
-    "$tool" -w 5 -C "$HOSTS" -m owner --uid-owner "$uid" -j "$chain" 2>/dev/null \
-      || echo "-A $HOSTS -m owner --uid-owner $uid -j $chain"
-    echo "COMMIT"
-  } | "${tool}-restore" -w 5 --noflush || { log "error: $tool: the rules of uid $uid failed"; return 1; }
+# A dotted IPv4 address, or 1.
+dotted() {
+  case "$1" in
+    *[!0-9.]* | *..* | .* | *.) ;;
+    *.*.*.*.*) ;;
+    *.*.*.*) return 0 ;;
+  esac
+  log "error: '$1' is not an IPv4 address"
+  return 1
 }
 
-# Removes one family's chain of uid, and the jump to it, in one transaction.
-uid_unchain() {
-  family="$1" uid="$2"
-  chain="CYFR_GUARD_U$uid"
-  if [ "$family" = 4 ]; then tool=iptables; else tool=ip6tables; fi
-  "$tool" -w 5 -S "$chain" >/dev/null 2>&1 || return 0
+# Removes every chain and jump of the route whose guard's end is $1, and
+# its record, in one transaction; a route already gone is removed.
+remove_route() {
+  iface="$1"
+  slot="${iface#sp}"
+  out="$(iptables -w 5 -S "$OUT")" && in="$(iptables -w 5 -S "$IN")" \
+    || { log "error: the routes' jumps could not be read"; return 1; }
   {
     echo "*filter"
-    "$tool" -w 5 -C "$HOSTS" -m owner --uid-owner "$uid" -j "$chain" 2>/dev/null \
-      && echo "-D $HOSTS -m owner --uid-owner $uid -j $chain"
-    echo "-F $chain"
-    echo "-X $chain"
+    printf '%s\n' "$out" | grep -e "^-A $OUT -i $iface " | sed 's/^-A /-D /' || true
+    printf '%s\n' "$in" | grep -e "^-A $IN -o $iface " | sed 's/^-A /-D /' || true
+    for chain in "$ROUTE_CHAIN$slot" "$PASS_CHAIN$slot"; do
+      iptables -w 5 -S "$chain" >/dev/null 2>&1 && echo "-F $chain"
+    done
+    for chain in "$ROUTE_CHAIN$slot" "$PASS_CHAIN$slot"; do
+      iptables -w 5 -S "$chain" >/dev/null 2>&1 && echo "-X $chain"
+    done
     echo "COMMIT"
-  } | "${tool}-restore" -w 5 --noflush || { log "error: $tool: clearing uid $uid failed"; return 1; }
+  } | iptables-restore -w 5 --noflush || { log "error: route $iface's rules could not be removed"; return 1; }
+  rm -f "${ROUTES:?}/${iface:?}" || { log "error: route $iface's record could not be dropped"; return 1; }
 }
 
-# A failed admission leaves the uid refused every public address, whatever
-# step failed: the record is written before any rule that admits, and every
-# failure from there on takes refuse_all before the guard answers. A uid
-# whose other session still runs is then refused too, which is what its
-# keeper counts on when it leaves a failed change in place (it clears only
-# a uid no session holds).
-admit() {
-  uid="$1"
-  shift
-  spawn_uid "$uid" || exit 1
-  exec 9>"$LOCK"
-  flock 9
-  v4list="" v6list=""
+route() {
+  iface="$1" inner="$2" mark="$3" reach="$4"
+  shift 4
+  route_iface "$iface" || exit 1
+  dotted "$inner" || exit 1
+  case "$mark" in
+    "" | *[!0-9]* | 0*) log "error: '$mark' is not a mark"; exit 1 ;;
+  esac
+  [ "$mark" -le 4294967295 ] || { log "error: '$mark' is not a mark"; exit 1; }
+  case "$reach" in
+    island) [ $# -eq 0 ] || { log "error: a route of the island's reach names no addresses"; exit 1; } ;;
+    hosts) [ $# -ge 1 ] || { log "error: a route of reach hosts names its addresses"; exit 1; } ;;
+    *) log "error: '$reach' is no reach"; exit 1 ;;
+  esac
+  v4list=""
   for address in "$@"; do
     case "$address" in
-      *:*[!0-9a-f:.]* | *[!0-9a-f:.]*:*) valid="" ;;
-      *:*) valid=6 ;;
-      *[!0-9.]*) valid="" ;;
-      *.*.*.*) valid=4 ;;
-      *) valid="" ;;
-    esac
-    case "$valid" in
-      4) v4list="$v4list $address" ;;
-      6) v6list="$v6list $address" ;;
-      *) log "error: '$address' is not an address"; refuse_all "$uid"; exit 1 ;;
+      *:*) ;;
+      *) dotted "$address" || exit 1; v4list="$v4list $address" ;;
     esac
   done
-  remember "$uid" "$@" || { refuse_all "$uid"; exit 1; }
-  # shellcheck disable=SC2086 # one argument per address
-  if uid_chain 4 "$uid" $v4list && uid_chain 6 "$uid" $v6list; then
-    log "uid $uid admitted to$v4list$v6list"
-    return 0
-  fi
-  refuse_all "$uid"
-  exit 1
-}
-
-# Leaves uid refused every public address, recorded so.
-refuse_all() {
-  uid_chain 4 "$1" || log "error: uid $1 could not be refused every IPv4 address"
-  uid_chain 6 "$1" || log "error: uid $1 could not be refused every IPv6 address"
-  remember "$1" || true
-}
-
-# Records uid's admission: the addresses it may reach, one a line, none
-# for a uid refused every public address.
-remember() {
-  uid="$1"
-  shift
-  mkdir -p "$ADMITTED" || { log "error: the admissions' record could not be made"; return 1; }
-  printf '%s\n' "$@" | sed '/^$/d' > "$ADMITTED/$uid.tmp" && mv "$ADMITTED/$uid.tmp" "$ADMITTED/$uid" \
-    || { log "error: uid $uid's admission could not be recorded"; return 1; }
-}
-
-clear_uid() {
-  uid="$1"
-  spawn_uid "$uid" || exit 1
   exec 9>"$LOCK"
   flock 9
-  failed=""
-  uid_unchain 4 "$uid" || failed=1
-  uid_unchain 6 "$uid" || failed=1
-  if [ -n "$failed" ]; then
-    refuse_all "$uid"
+  r="$ROUTE_CHAIN${iface#sp}" p="$PASS_CHAIN${iface#sp}"
+  remove_route "$iface" || exit 1
+  if {
+    echo "*filter"
+    echo ":$r - [0:0]"
+    echo ":$p - [0:0]"
+    echo "-A $p -m connmark --mark 0 -j CONNMARK --set-mark $mark"
+    echo "-A $p -j ACCEPT"
+    echo "-A $r ! -s $inner/32 -j DROP"
+    echo "-A $r -o sp+ -j REJECT --reject-with icmp-admin-prohibited"
+    echo "-A $r -j $REFUSE"
+    while IFS= read -r target; do
+      if [ -n "$target" ] && [ "$(family "$target")" = 4 ]; then echo "-A $r -d $target -j $p"; fi
+    done < "$TARGETS"
+    echo "-A $r -j $PRIVATE"
+    if [ "$reach" = island ]; then
+      echo "-A $r -j $p"
+    else
+      for address in $v4list; do echo "-A $r -d $address/32 -j $p"; done
+      echo "-A $r -j REJECT --reject-with icmp-admin-prohibited"
+    fi
+    echo "-A $OUT -i $iface -j $r"
+    echo "-A $IN -o $iface -m connmark --mark $mark -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+    echo "COMMIT"
+  } | iptables-restore -w 5 --noflush; then :; else
+    log "error: route $iface's rules failed"
+    remove_route "$iface" || true
     exit 1
   fi
-  rm -f "$ADMITTED/$uid" || { log "error: uid $uid's record could not be dropped"; refuse_all "$uid"; exit 1; }
-  log "uid $uid cleared"
+  mkdir -p "$ROUTES" && route_text "$iface" > "$ROUTES/$iface.tmp" && mv "$ROUTES/$iface.tmp" "$ROUTES/$iface" \
+    || { log "error: route $iface could not be recorded"; remove_route "$iface" || true; exit 1; }
+  log "route $iface for $inner ($reach$v4list) installed, mark $mark"
+}
+
+unroute() {
+  route_iface "$1" || exit 1
+  exec 9>"$LOCK"
+  flock 9
+  remove_route "$1" || exit 1
+  log "route $1 removed"
 }
 
 install_rules() {
-  rm -f "$READY"
-  rm -rf "$ADMITTED"
+  rm -f "${READY:?}"
+  rm -rf "${ROUTES:?}"
+  mkdir -p "$READY_DIR" "$ROUTES"
   add_rules
-  mkdir -p "$READY_DIR" "$ADMITTED"
+  printf '%s\n' "$targets" | sed '/^$/d' > "$TARGETS"
+  printf '%s\n' "$range" > "$RANGE"
   record || exit 1
-  log "ready: every rule installed for spawns $(printf '%s' "$ranges" | tr '\n' ' ' | sed 's/ $//')"
+  log "ready: every rule installed, routes in $range"
 }
 
 case "${1:-}" in
   "")
     install_rules
-    if [ -n "${CYFR_GUARD_CONTROL:-}" ]; then
-      exec cyfr-locus guard-control "$CYFR_GUARD_CONTROL" "$CYFR_GUARD_POOL"
-    fi
-    exec sleep infinity
+    exec cyfr-locus guard-control "${CYFR_GUARD_CONTROL:?names the control socket the island's keeper reaches the guard on}" "$range"
     ;;
-  admit)
-    [ $# -ge 2 ] || { log "usage: cyfr-guard admit <uid> [address…]"; exit 2; }
+  route)
+    [ $# -ge 5 ] || { log "usage: cyfr-guard route <iface> <inner> <mark> island | hosts <address…>"; exit 2; }
     shift
-    admit "$@"
+    route "$@"
     ;;
-  clear)
-    [ $# -eq 2 ] || { log "usage: cyfr-guard clear <uid>"; exit 2; }
-    clear_uid "$2"
+  unroute)
+    [ $# -eq 2 ] || { log "usage: cyfr-guard unroute <iface>"; exit 2; }
+    unroute "$2"
     ;;
   check)
     check
@@ -709,7 +675,7 @@ case "${1:-}" in
     add_rules
     ;;
   *)
-    log "usage: cyfr-guard [admit <uid> [address…] | clear <uid> | check | rules]"
+    log "usage: cyfr-guard [route <iface> <inner> <mark> island | hosts <address…> | unroute <iface> | check | rules]"
     exit 2
     ;;
 esac

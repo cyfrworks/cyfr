@@ -17,7 +17,8 @@ defmodule Arca.StatusTransitions do
   revoke is never undone by a later mark; a tombstone is the store's own
   verb (`Arca.VaultStorage.tombstone/2`).
 
-  A profile is `revoked` from any status, and blocked at `needs_consent`
+  A profile is `revoked` from any status, by one of `Arca.ProfileStorage`'s
+  revocations, each naming its cause, and blocked at `needs_consent`
   from `active` or `needs_consent`. It is `active` again only from
   `needs_consent`, by the revision that re-consents it. Nothing leaves
   `revoked`: a revoked profile keeps its history and a new one takes its

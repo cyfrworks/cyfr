@@ -150,7 +150,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.flow-grant-owner")
 
       :ok =
-        Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), profile_id, :any, "revoked")
+        Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), profile_id)
 
       assert {:error, :profile_revoked} =
                Commit.grant(ctx, %{

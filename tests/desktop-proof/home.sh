@@ -131,9 +131,12 @@ chmod +x "$REL/bin/cyfr"
 #             nothing behind it that only records what reaches it, at an
 #             address the client alone is told: whatever reaches it is the
 #             client's, whatever headers it carries
+#   pair      separate's two, with dir.test a CYFR of its own too, its own
+#             account service, set up with a setup token of its own: two
+#             CYFRs of one account
 SHAPE=separate
 if [ -f "$(dirname "$SCRIPT")/home" ]; then SHAPE="$(tr -d '[:space:]' <"$(dirname "$SCRIPT")/home")"; fi
-case "$SHAPE" in separate | self | company) ;; *) fail "$(dirname "$SCRIPT")/home names no shape this driver makes: '$SHAPE'" ;; esac
+case "$SHAPE" in separate | self | company | pair) ;; *) fail "$(dirname "$SCRIPT")/home names no shape this driver makes: '$SHAPE'" ;; esac
 
 step "the run's authority and the CYFR ($SHAPE), from $IMAGE"
 browser_authority
@@ -143,7 +146,7 @@ LOG_SECRETS+=("$SETUP_TOKEN")
 browser_home "$X" x.test
 identity_directory x.test
 case "$SHAPE" in
-  separate)
+  separate | pair)
     DIR="$WORK/dir"
     browser_home "$DIR" dir.test
     identity_directory dir.test
@@ -156,6 +159,15 @@ case "$SHAPE" in
     ;;
 esac
 identity_reaches_directory "$X" "$DIRECTORY_HOST"
+SECOND_SETUP_TOKEN=""
+if [ "$SHAPE" = pair ]; then
+  # The second CYFR, its people's accounts at itself as self's x.test.
+  identity_reaches_directory "$DIR" dir.test
+  identity_env "$DIR" CYFR_REGISTRY_URL dir.test
+  SECOND_SETUP_TOKEN="$(openssl rand -hex 32)"
+  LOG_SECRETS+=("$SECOND_SETUP_TOKEN")
+  identity_env "$DIR" CYFR_SETUP_TOKEN "$SECOND_SETUP_TOKEN"
+fi
 if [ "$SHAPE" = company ]; then
   # The issuer: a certificate of the run's authority and a front at an
   # address of the run's own, forwarding to a port nothing listens on.
@@ -183,23 +195,26 @@ if [ "$SHAPE" = company ]; then
 fi
 
 step "starting them and their fronts"
-if [ "$SHAPE" = separate ]; then
-  server_start "$DIR"
-  identity_front_start "$DIR"
-fi
+case "$SHAPE" in
+  separate) server_start "$DIR" ;;
+  pair) identity_start "$DIR" ;;
+esac
+if [ -n "${DIR:-}" ]; then identity_front_start "$DIR"; fi
 identity_start "$X"
 identity_front_start "$X"
 if [ "$SHAPE" = company ]; then identity_front_start "$IDP"; fi
 
 # What the script and its proof get: the CYFR's address, its account
 # directory, the run's authority, the setup token, the worker service's
-# port and each front's control address. The app gets the address alone.
+# port and each front's control address, and in pair the second CYFR's
+# address and setup token. The app gets the address alone.
 cp "$BROWSER_AUTHORITY/authority.pem" "$FIXTURE/authority.pem"
 fronts=()
 for host in "${!IDENTITY_FRONTS[@]}"; do fronts+=("$host" "$(identity_front_control "$host")"); done
 python3 -I -c 'import json, sys; a = sys.argv; json.dump({"home": "https://x.test", "directory": "https://" + a[1], "setup_token": a[2],
-  "worker_port": int(a[4]), "fronts": dict(zip(a[5::2], a[6::2]))}, open(a[3], "w"))' \
-  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$FIXTURE/inputs.json" "$WORKER_PORT" "${fronts[@]}"
+  "worker_port": int(a[4]), "fronts": dict(zip(a[6::2], a[7::2])),
+  **({"second": "https://dir.test", "second_setup_token": a[5]} if a[5] else {})}, open(a[3], "w"))' \
+  "$DIRECTORY_HOST" "$SETUP_TOKEN" "$FIXTURE/inputs.json" "$WORKER_PORT" "$SECOND_SETUP_TOKEN" "${fronts[@]}"
 if [ -f "$(dirname "$SCRIPT")/proof.js" ]; then
   node "$HERE/pack.mjs" "$(dirname "$SCRIPT")/proof.js" "$FIXTURE/proof.asar"
 fi

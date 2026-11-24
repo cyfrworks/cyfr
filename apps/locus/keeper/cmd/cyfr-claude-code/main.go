@@ -35,6 +35,11 @@
 // run in its box: their asks are allowed and they are shown by name.
 // The driver keeps no account of calls: which post a result answers is
 // the result's own naming of the posts' uuids, which `idle` passes on.
+// A turn's error is said at its result, typed by what the result says
+// (driver.go's failure). A start, and a work's setting of CYFR's tools,
+// that the harness does not answer within answerWait end: the start ends
+// the driver, the work is refused. Its close closes the harness's input,
+// asks it to end with a TERM at 2 s and kills it at 5 s.
 //
 // The driver ends when its input ends (the session is closed), when the
 // harness ends but after `gone`, with the harness's status, and on a

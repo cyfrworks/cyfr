@@ -145,6 +145,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       kind: "owner",
       label: "default",
       status: status,
+      revoked_by: if(status == "revoked", do: "person"),
       inserted_at: now(),
       updated_at: now()
     })

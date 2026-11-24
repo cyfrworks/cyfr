@@ -27,12 +27,12 @@ const (
 	testKeptLast  = 39104
 )
 
-// keptKeeper is a bounded keeper that keeps homes under a root it makes
-// beside the scratch home root, as the shipped image does: owned by root
-// and the client's group, 1773.
+// keptKeeper is a routed bounded keeper that keeps homes under a root it
+// makes beside the scratch home root, as the shipped image does: owned by
+// root and the client's group, 1773.
 func keptKeeper(t *testing.T) *keeper {
 	t.Helper()
-	k := boundedKeeper(t)
+	k := routedKeeper(t)
 	root := filepath.Join(filepath.Dir(k.homes), "kept")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func ptySize(rows, cols uint64) *protocol.PtySize {
 // columns it asked for, its controlling terminal; its stdout frames carry
 // the terminal, and its stderr ends at once.
 func TestAPtySpawnRunsOnATerminal(t *testing.T) {
-	k := boundedKeeper(t)
+	k := routedKeeper(t)
 	req := spawnRequest(t, k.attach, "t1", `tty; [ -t 0 ] && [ -t 2 ] && echo isatty; stty size; IFS= read -r line; echo "got:$line"`, map[string]string{}, false, 64<<20)
 	req.Pty = ptySize(40, 120)
 	k.handleSpawn(t, req)
@@ -279,7 +279,7 @@ func TestAPtySpawnRunsOnATerminal(t *testing.T) {
 // A resize reaches a pty spawn's terminal: the command reads the new size,
 // and the keeper answers nothing.
 func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
-	k := boundedKeeper(t)
+	k := routedKeeper(t)
 	req := spawnRequest(t, k.attach, "t2", `stty size; read x; stty size`, map[string]string{}, false, 64<<20)
 	req.Pty = ptySize(24, 80)
 	k.handleSpawn(t, req)
@@ -290,7 +290,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":3,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":4,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}

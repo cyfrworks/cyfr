@@ -1,10 +1,14 @@
 {
-  "description": "The private messages between the CYFR app's main process and the cyfr program it starts (cyfr desktop-serve): one JSON object a line, on cyfr's stdout (cyfr to main) and its stdin (main to cyfr), each carrying version 2 and its type, and exactly its type's fields. cyfr binds 127.0.0.1:7340 before it sends ready, the chooser's address with the run token in its fragment; as the box's screen (cyfr screen shell) ready is the device's own pages' address, and the same messages follow. home names the CYFR selected, the account service's origin approved for it, its attempt, a whole number from 1, no larger than both sides read exactly, that cyfr gives each proposal of a run, and optionally the SOCKS proxy and resolver rules that reach it, and its setup: the setup token, 64 lowercase hexadecimal digits, of a CYFR on this computer that no one is set up at yet, which main on the passkey road opens at its setup page with that token in the address's fragment alone, and on the six-word road ignores, the device's pages making the first person there. Each side honours only its current attempt: main answers the last proposal it read, echoing home and attempt, home-ready once what it keeps is that CYFR's own or home-failed when that could not be, and cyfr takes an answer to the attempt waiting for it alone; an answer to any other changes nothing. home-failed is no lock: that attempt ends unopened. Only after home-ready does cyfr hand a page the CYFR's ticket. home is a proposal until opened, naming the same home and attempt, says cyfr committed it: until then main keeps to none and loads nothing of it, and a lock, a failure or a timeout leaves main able to take cyfr's next home; after it main keeps to that CYFR and takes no other. locked says the device locked, naming the CYFR cyfr holds committed, if any, with home's fields: main destroys its content windows and shows the chooser, and keeps to that CYFR, or none. A lock main begins ends at cyfr's next locked: a home or opened read before it belongs to before the lock and is dropped. main sends lock to lock, leave to lock and let go of the CYFR committed, which cyfr's next locked then names no more (main sends it only once it cleared what it kept of that CYFR), with its id, a whole number from 1, no larger than both sides read exactly, that main gives each departure of a run, and shutdown to end; cyfr answers a leave with left, naming its id, once it let go of that CYFR and ended every session of the device's there, after the locked its lock says: only the left of the departure main waits for ends it, and no locked, nor a left of another id, does; the end of cyfr's stdin ends it too. An end of cyfr sends no locked: main hears the end itself and forgets no sign-in at it. As the box's screen, the shell's last lock, at its end, says ending in place of locked, and the shell says nothing after it: main closes its windows at once and ends, as at cyfr's end, and opens nothing more for it; cyfr desktop-serve says nothing at its end. ending is the last message of a run: nothing follows it, not even the left of a leave that the last lock answered, so endings lists what main hears after such a leave. folder-picked is main's answer to the person's pick of a folder, the chooser's Change…, which main takes as a press and answers by asking the system: its path is the folder, spelled from a root on any system the app runs on (/, a drive's letter, a colon and a separator, or a share's two backslashes), or null where the person cancelled or the pick ended unanswered (the chooser left, its window closed, or a lock), and its epoch and pick, whole numbers from 0 no larger than both sides read exactly, which the chooser's address for the pick named: the time since a lock the chooser was shown in and the picks cyfr had answered before it; cyfr takes only the answer to the pick it would answer now, and one from before a lock or one answered already changes nothing; main sends one for each pick and none otherwise, and nothing else names a folder. external_pages are the pages the chooser may link to, Docker's own pages on installing it: main opens one in the person's browser on a press of the chooser's link, never in the app's window, and opens no other. account_services is the rule both sides hold a home's account service to: https, or plain http for a local CYFR alone (http://localhost, with its port) and only at exactly that CYFR's own origin, each origin in its one spelling: no default port, no leading zero in a port and none past 65535. A line that is not one object, lacks version or carries another, names a type its reader does not read, or has a field missing, unknown or of the wrong kind is refused with the reason named, by the side named in to.",
+  "description": "The private messages between the CYFR app's main process and the cyfr program it starts (cyfr desktop-serve): one JSON object a line, on cyfr's stdout (cyfr to main) and its stdin (main to cyfr), each carrying version 2 and its type, and exactly its type's fields. cyfr binds 127.0.0.1:7340 before it sends ready, the chooser's address with the run token in its fragment, and for the CYFR app rail, the rail's page's address with its read token in its fragment, which reads the list of CYFRs and authorizes nothing else; as the box's screen (cyfr screen shell) ready is the device's own pages' address, and the same messages follow. home names the CYFR selected, the account service's origin approved for it, its attempt, a whole number from 1, no larger than both sides read exactly, that cyfr gives each proposal of a run, and optionally the SOCKS proxy and resolver rules that reach it, and its setup: the setup token, 64 lowercase hexadecimal digits, of a CYFR on this computer that no one is set up at yet, which main on the passkey road opens at its setup page with that token in the address's fragment alone, and on the six-word road ignores, the device's pages making the first person there. Each side honours only its current attempt: main answers the last proposal it read, echoing home and attempt, home-ready, and cyfr takes an answer to the attempt waiting for it alone; an answer to any other changes nothing. Only after home-ready does cyfr hand a page the CYFR's ticket. home is a proposal until opened, naming the same home and attempt, says cyfr committed it: until then main keeps to none and loads nothing of it, and a lock, a failure or a timeout leaves main able to take cyfr's next home; after it main keeps to that CYFR and takes no other. locked says the device locked, naming the CYFR cyfr holds committed, if any, with home's fields: main destroys its content windows and shows the chooser, and keeps to that CYFR, or none. A lock main begins ends at cyfr's next locked: a home or opened read before it belongs to before the lock and is dropped. main sends lock to lock, leave to lock and let go of the CYFR committed, which cyfr's next locked then names no more (main sends it only once it cleared what it kept of that CYFR), with its id, a whole number from 1, no larger than both sides read exactly, that main gives each departure of a run, and shutdown to end; cyfr answers a leave with left, naming its id, once it let go of that CYFR and ended every session of the device's there, after the locked its lock says: only the left of the departure main waits for ends it, and no locked, nor a left of another id, does; the end of cyfr's stdin ends it too. An end of cyfr sends no locked: main hears the end itself and forgets no sign-in at it. As the box's screen, the shell's last lock, at its end, says ending in place of locked, and the shell says nothing after it: main closes its windows at once and ends, as at cyfr's end, and opens nothing more for it; cyfr desktop-serve says nothing at its end. ending is the last message of a run: nothing follows it, not even the left of a leave that the last lock answered, so endings lists what main hears after such a leave. main sends forget, naming a CYFR's origin, once the person confirmed Forget of it on this computer and main left it: cyfr marks it being forgotten, so nothing opens it, and asks main to erase each store it keeps of it, with erase, its id a whole number from 1 that cyfr gives each erase of a run, home the CYFR's origin and account, where present, an account service's origin whose ceremony storage at that CYFR is the store, and none for the CYFR's content storage; main answers each with erased, its id and ok, true once that store is empty and false where it could not be emptied; cyfr removes the CYFR from its list once every erase it asked for it is answered ok, keeps it unopenable while one is not, and asks again at the next forget or at its next start; an erased of an id not waiting changes nothing. folder-picked is main's answer to the person's pick of a folder, the chooser's Change…, which main takes as a press and answers by asking the system: its path is the folder, spelled from a root on any system the app runs on (/, a drive's letter, a colon and a separator, or a share's two backslashes), or null where the person cancelled or the pick ended unanswered (the chooser left, its window closed, or a lock), and its epoch and pick, whole numbers from 0 no larger than both sides read exactly, which the chooser's address for the pick named: the time since a lock the chooser was shown in and the picks cyfr had answered before it; cyfr takes only the answer to the pick it would answer now, and one from before a lock or one answered already changes nothing; main sends one for each pick and none otherwise, and nothing else names a folder. external_pages are the pages the chooser may link to, Docker's own pages on installing it: main opens one in the person's browser on a press of the chooser's link, never in the app's window, and opens no other. account_services is the rule both sides hold a home's account service to: https, or plain http for a local CYFR alone (http://localhost, with its port) and only at exactly that CYFR's own origin, each origin in its one spelling: no default port, no leading zero in a port and none past 65535. A line that is not one object, lacks version or carries another, names a type its reader does not read, or has a field missing, unknown or of the wrong kind is refused with the reason named, by the side named in to.",
   "version": 2,
   "go_to_main": [
     {
       "name": "the chooser is served",
       "message": {"version": 2, "type": "ready", "url": "http://127.0.0.1:7340/bootstrap/#token=Zm9vYmFyYmF6"}
+    },
+    {
+      "name": "the chooser and the rail are served (the CYFR app)",
+      "message": {"version": 2, "type": "ready", "url": "http://127.0.0.1:7340/bootstrap/#token=Zm9vYmFyYmF6", "rail": "http://127.0.0.1:7340/rail/#read=cmFpbHRva2Vu"}
     },
     {
       "name": "the box's screen's own pages are served (cyfr screen shell)",
@@ -41,16 +45,20 @@
     {
       "name": "cyfr let go of the CYFR main left",
       "message": {"version": 2, "type": "left", "id": 1}
+    },
+    {
+      "name": "main is asked to erase a CYFR's content storage",
+      "message": {"version": 2, "type": "erase", "id": 1, "home": "https://cyfr.example.com"}
+    },
+    {
+      "name": "main is asked to erase an account service's ceremony storage at a CYFR",
+      "message": {"version": 2, "type": "erase", "id": 2, "home": "https://cyfr.example.com", "account": "https://cyfr.run"}
     }
   ],
   "main_to_go": [
     {
       "name": "main made what it keeps the selected CYFR's",
       "message": {"version": 2, "type": "home-ready", "home": "https://cyfr.example.com", "attempt": 3}
-    },
-    {
-      "name": "main could not make what it keeps the selected CYFR's",
-      "message": {"version": 2, "type": "home-failed", "home": "https://cyfr.example.com", "attempt": 3}
     },
     {
       "name": "lock",
@@ -79,6 +87,18 @@
     {
       "name": "no folder picked",
       "message": {"version": 2, "type": "folder-picked", "path": null, "epoch": 2, "pick": 1}
+    },
+    {
+      "name": "the person forgot a CYFR on this computer",
+      "message": {"version": 2, "type": "forget", "home": "https://cyfr.example.com"}
+    },
+    {
+      "name": "main erased a store",
+      "message": {"version": 2, "type": "erased", "id": 1, "ok": true}
+    },
+    {
+      "name": "main could not erase a store",
+      "message": {"version": 2, "type": "erased", "id": 2, "ok": false}
     }
   ],
   "endings": [
@@ -134,7 +154,6 @@
     {"name": "home-ready for attempt none", "to": "go", "line": "{\"version\":2,\"type\":\"home-ready\",\"home\":\"https://cyfr.example.com\",\"attempt\":0}", "reason": "fields"},
     {"name": "home-ready with its attempt as a string", "to": "go", "line": "{\"version\":2,\"type\":\"home-ready\",\"home\":\"https://cyfr.example.com\",\"attempt\":\"3\"}", "reason": "fields"},
     {"name": "home-ready for a part of an attempt", "to": "go", "line": "{\"version\":2,\"type\":\"home-ready\",\"home\":\"https://cyfr.example.com\",\"attempt\":1.5}", "reason": "fields"},
-    {"name": "home-failed without its attempt", "to": "go", "line": "{\"version\":2,\"type\":\"home-failed\",\"home\":\"https://cyfr.example.com\"}", "reason": "fields"},
     {"name": "leave naming a CYFR", "to": "go", "line": "{\"version\":2,\"type\":\"leave\",\"id\":1,\"home\":\"https://cyfr.example.com\"}", "reason": "fields"},
     {"name": "leave without its id", "to": "go", "line": "{\"version\":2,\"type\":\"leave\"}", "reason": "fields"},
     {"name": "leave as departure none", "to": "go", "line": "{\"version\":2,\"type\":\"leave\",\"id\":0}", "reason": "fields"},
@@ -156,10 +175,19 @@
     {"name": "a pick's epoch that is null", "to": "go", "line": "{\"version\":2,\"type\":\"folder-picked\",\"epoch\":null,\"pick\":0,\"path\":null}", "reason": "fields"},
     {"name": "a pick's number that is null", "to": "go", "line": "{\"version\":2,\"type\":\"folder-picked\",\"epoch\":0,\"pick\":null,\"path\":null}", "reason": "fields"},
     {"name": "an answer to a proposal whose number is null", "to": "go", "line": "{\"version\":2,\"type\":\"home-ready\",\"home\":\"https://cyfr.example.com\",\"attempt\":null}", "reason": "fields"},
-    {"name": "an answer to a proposal past the largest whole number both sides read", "to": "go", "line": "{\"version\":2,\"type\":\"home-failed\",\"home\":\"https://cyfr.example.com\",\"attempt\":9007199254740992}", "reason": "fields"},
     {"name": "a pick naming which one", "to": "go", "line": "{\"version\":2,\"type\":\"folder-picked\",\"id\":\"f1\",\"epoch\":1,\"pick\":0,\"path\":null}", "reason": "fields"},
     {"name": "not an object", "to": "go", "line": "[1]", "reason": "shape"},
     {"name": "two objects on one line", "to": "go", "line": "{\"version\":2,\"type\":\"lock\"}{\"version\":2,\"type\":\"lock\"}", "reason": "shape"},
+    {"name": "forget without its CYFR", "to": "go", "line": "{\"version\":2,\"type\":\"forget\"}", "reason": "fields"},
+    {"name": "forget of an address that is not a CYFR's origin", "to": "go", "line": "{\"version\":2,\"type\":\"forget\",\"home\":\"https://cyfr.example.com/\"}", "reason": "fields"},
+    {"name": "forget naming a store", "to": "go", "line": "{\"version\":2,\"type\":\"forget\",\"home\":\"https://cyfr.example.com\",\"account\":\"https://cyfr.run\"}", "reason": "fields"},
+    {"name": "erased without its answer", "to": "go", "line": "{\"version\":2,\"type\":\"erased\",\"id\":1}", "reason": "fields"},
+    {"name": "erased with its answer as text", "to": "go", "line": "{\"version\":2,\"type\":\"erased\",\"id\":1,\"ok\":\"true\"}", "reason": "fields"},
+    {"name": "erased whose answer is null", "to": "go", "line": "{\"version\":2,\"type\":\"erased\",\"id\":1,\"ok\":null}", "reason": "fields"},
+    {"name": "erased without its id", "to": "go", "line": "{\"version\":2,\"type\":\"erased\",\"ok\":true}", "reason": "fields"},
+    {"name": "erased as erase none", "to": "go", "line": "{\"version\":2,\"type\":\"erased\",\"id\":0,\"ok\":true}", "reason": "fields"},
+    {"name": "erased naming a CYFR", "to": "go", "line": "{\"version\":2,\"type\":\"erased\",\"id\":1,\"ok\":true,\"home\":\"https://cyfr.example.com\"}", "reason": "fields"},
+    {"name": "erase, which cyfr sends, sent to it", "to": "go", "line": "{\"version\":2,\"type\":\"erase\",\"id\":1,\"home\":\"https://cyfr.example.com\"}", "reason": "type"},
     {"name": "no version", "to": "main", "line": "{\"type\":\"locked\"}", "reason": "version"},
     {"name": "the version before", "to": "main", "line": "{\"version\":1,\"type\":\"locked\"}", "reason": "version"},
     {"name": "another version", "to": "main", "line": "{\"version\":3,\"type\":\"locked\"}", "reason": "version"},
@@ -183,6 +211,13 @@
     {"name": "a setup that is not a setup token", "to": "main", "line": "{\"version\":2,\"type\":\"home\",\"home\":\"http://localhost:4000\",\"account\":\"http://localhost:4000\",\"attempt\":1,\"setup\":\"CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD\"}", "reason": "fields"},
     {"name": "a road, which a home no longer names", "to": "main", "line": "{\"version\":2,\"type\":\"home\",\"home\":\"http://localhost:4000\",\"account\":\"http://localhost:4000\",\"attempt\":1,\"road\":\"device\"}", "reason": "fields"},
     {"name": "a folder asked for by cyfr", "to": "main", "line": "{\"version\":2,\"type\":\"pick-folder\",\"id\":\"f1\",\"suggested\":\"/home/ada/cyfr\"}", "reason": "type"},
+    {"name": "erase without its id", "to": "main", "line": "{\"version\":2,\"type\":\"erase\",\"home\":\"https://cyfr.example.com\"}", "reason": "fields"},
+    {"name": "erase without its CYFR", "to": "main", "line": "{\"version\":2,\"type\":\"erase\",\"id\":1}", "reason": "fields"},
+    {"name": "erase of an address that is not a CYFR's origin", "to": "main", "line": "{\"version\":2,\"type\":\"erase\",\"id\":1,\"home\":\"https://cyfr.example.com/a\"}", "reason": "fields"},
+    {"name": "erase of an account service that is not an origin", "to": "main", "line": "{\"version\":2,\"type\":\"erase\",\"id\":1,\"home\":\"https://cyfr.example.com\",\"account\":\"https://cyfr.run/directory\"}", "reason": "fields"},
+    {"name": "erase as erase none", "to": "main", "line": "{\"version\":2,\"type\":\"erase\",\"id\":0,\"home\":\"https://cyfr.example.com\"}", "reason": "fields"},
+    {"name": "forget, which main sends, sent to it", "to": "main", "line": "{\"version\":2,\"type\":\"forget\",\"home\":\"https://cyfr.example.com\"}", "reason": "type"},
+    {"name": "ready with a rail naming nothing", "to": "main", "line": "{\"version\":2,\"type\":\"ready\",\"url\":\"http://127.0.0.1:7340/\",\"rail\":\"\"}", "reason": "fields"},
     {"name": "not an object", "to": "main", "line": "\"ready\"", "reason": "shape"}
   ]
 }

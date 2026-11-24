@@ -240,9 +240,15 @@ type rpc struct {
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 }
+
+// invalidRequest is the code Codex refuses a request with before it acts
+// on it (0.169.0: a steer of no active turn, of another turn, of a thread
+// it does not hold, or of an input that does not read).
+const invalidRequest = -32600
 
 // item is a thread item, as far as the driver reads one.
 type item struct {
@@ -350,6 +356,40 @@ func errorKind(raw json.RawMessage) string {
 	return "provider_error"
 }
 
+// limitSentence says a usage or rate limit, and when it lifts when Codex
+// named the reset of a limit it reached (reachedReset).
+func limitSentence(resets int64) string {
+	return "OpenAI Codex reported a usage or rate limit; " + brainwire.UntilWords(resets) + "."
+}
+
+// reachedReset is when the limits Codex reports reached all lift, by its
+// `account/rateLimits/updated` (0.169.0: `rateLimits` with a `primary` and
+// a `secondary` window, each null or its `usedPercent` and `resetsAt`, in
+// Unix seconds): the latest reset of a window used to 100 percent or past
+// it, or 0 when none is or it does not read.
+func reachedReset(params json.RawMessage) int64 {
+	type window struct {
+		Used   float64 `json:"usedPercent"`
+		Resets int64   `json:"resetsAt"`
+	}
+	var notice struct {
+		Limits struct {
+			Primary   *window `json:"primary"`
+			Secondary *window `json:"secondary"`
+		} `json:"rateLimits"`
+	}
+	if json.Unmarshal(params, &notice) != nil {
+		return 0
+	}
+	var latest int64
+	for _, w := range []*window{notice.Limits.Primary, notice.Limits.Secondary} {
+		if w != nil && w.Used >= 100 && w.Resets > latest {
+			latest = w.Resets
+		}
+	}
+	return latest
+}
+
 // signedOutSentence refuses a post and a listing while Codex has no
 // sign-in, as its account read answers. A key counts only once its login
 // stored it: the app-server does not use one from the environment.
@@ -367,6 +407,12 @@ const instructionsSentence = "OpenAI Codex did not take its changed instructions
 // cannot record: the stale record would hide the change after them.
 const unrecordedSentence = "OpenAI Codex's changed instructions could not be recorded in its folder, so the post was not written; check that the program's folder can be written."
 
+// steerUnknownSentence refuses a post Codex may have taken into the turn
+// under way: its steer was answered with an error that is no refusal of
+// the request, so the post is not written again, and a later start's
+// `held` says whether the thread holds it.
+const steerUnknownSentence = "OpenAI Codex answered the message sent during its turn with an error, so whether it took it is not known; it is not sent again."
+
 // unreadAccountSentence refuses a post while Codex's account read failed:
 // no sign-out.
 const unreadAccountSentence = "OpenAI Codex's account could not be read, so the post was not written; send it again."
@@ -382,7 +428,7 @@ func errorSentence(kind string) string {
 	case "authentication":
 		return "The account or key OpenAI Codex used was refused; check its sign-in on the program's terminal, or a key in its settings."
 	case "rate_limited":
-		return "OpenAI Codex reported a usage or rate limit; ask again later."
+		return limitSentence(0)
 	case "overloaded":
 		return "OpenAI Codex reported its provider overloaded; ask again later."
 	case "invalid_request":

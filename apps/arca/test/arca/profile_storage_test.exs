@@ -6,12 +6,14 @@ defmodule Arca.ProfileStorageTest do
   The profile table holds one active profile per identity: the second is
   refused by the schema's active-identity index, through the changeset's
   mapping, never raised. A source's live profiles are revoked together, in
-  the actor's athanor alone. A status moves only as the profile table of
+  the actor's athanor alone, as a removal's, and a profile already revoked
+  keeps its cause. A person's revocation is written by its own verb and
+  names the person. A status moves only as the profile table of
   `Arca.StatusTransitions` admits, in one conditional write: a revoked
-  profile never comes back, a `needs_consent` or `revoked` profile written
-  so again succeeds, and `active → active` is refused, since `active` comes
-  only by re-consent. The rows are written through
-  `Arca.Test.Writers.put_profile/1`.
+  profile never comes back, a `needs_consent` profile written so again
+  succeeds, `active → active` is refused, since `active` comes only by
+  re-consent, and no status write revokes, since a revocation names its
+  cause. The rows are written through `Arca.Test.Writers.put_profile/1`.
   """
   use ExUnit.Case, async: false
 
@@ -58,7 +60,10 @@ defmodule Arca.ProfileStorageTest do
       {:ok, blocked} =
         Writers.put_profile(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
 
-      {:ok, _gone} = Writers.put_profile(attrs(athanor, %{label: "gone", status: "revoked"}))
+      {:ok, gone} =
+        Writers.put_profile(
+          attrs(athanor, %{label: "gone", status: "revoked", revoked_by: "person"})
+        )
 
       {:ok, elsewhere} =
         Writers.put_profile(attrs(athanor, %{source_ref: "reagent:local.other-source"}))
@@ -69,6 +74,14 @@ defmodule Arca.ProfileStorageTest do
       assert {:ok, []} = ProfileStorage.list_for_source(actor, @source_ref)
       assert {:ok, %{status: "active"}} = ProfileStorage.get(actor, elsewhere.id)
       assert {:ok, []} = ProfileStorage.revoke_for_source(actor, @source_ref)
+
+      # The removal is the cause of what it revoked; the person's own
+      # revocation before it keeps theirs.
+      for id <- [owner.id, blocked.id],
+          do: assert({:ok, %{revoked_by: "removal"}} = ProfileStorage.get(actor, id))
+
+      assert {:ok, %{status: "revoked", revoked_by: "person"}} =
+               ProfileStorage.get(actor, gone.id)
     end
 
     test "an actor with no athanor is refused before any query" do
@@ -92,9 +105,9 @@ defmodule Arca.ProfileStorageTest do
             {"active", "needs_consent", :ok},
             {"needs_consent", "needs_consent", :ok},
             {"needs_consent", "active", :ok},
-            {"active", "revoked", :ok},
-            {"needs_consent", "revoked", :ok},
-            {"revoked", "revoked", :ok},
+            {"active", "revoked", {:error, :illegal_transition}},
+            {"needs_consent", "revoked", {:error, :illegal_transition}},
+            {"revoked", "revoked", {:error, :illegal_transition}},
             {"active", "active", {:error, :illegal_transition}},
             {"revoked", "active", {:error, :illegal_transition}},
             {"revoked", "needs_consent", {:error, :illegal_transition}}
@@ -128,7 +141,7 @@ defmodule Arca.ProfileStorageTest do
       profile = profile!(athanor, "needs_consent")
 
       # Revoked by another writer after the caller read it active.
-      assert :ok = ProfileStorage.transition(actor, profile.id, :any, "revoked")
+      assert :ok = ProfileStorage.revoke_by_person(actor, profile.id)
 
       assert {:error, :illegal_transition} =
                ProfileStorage.transition(actor, profile.id, "active", "needs_consent")
@@ -147,10 +160,10 @@ defmodule Arca.ProfileStorageTest do
                ProfileStorage.transition(actor, profile.id, "active", "bogus")
 
       assert {:error, :not_found} =
-               ProfileStorage.transition(other, profile.id, "active", "revoked")
+               ProfileStorage.transition(other, profile.id, "active", "needs_consent")
 
       assert {:error, :not_found} =
-               ProfileStorage.transition(actor, "prof_missing", "active", "revoked")
+               ProfileStorage.transition(actor, "prof_missing", "active", "needs_consent")
 
       assert {:error, :no_athanor} =
                ProfileStorage.transition(%Prima.Actor{}, profile.id, "active", "revoked")
@@ -167,8 +180,67 @@ defmodule Arca.ProfileStorageTest do
                  Prima.Actor.in_athanor(athanor),
                  "prof_any",
                  :any,
-                 "revoked"
+                 "needs_consent"
                )
+    end
+  end
+
+  describe "revoke_by_person/2" do
+    test "revokes from any status, naming the person, a removal's revocation among them", %{
+      athanor: athanor
+    } do
+      actor = Prima.Actor.in_athanor(athanor)
+
+      for status <- ["active", "needs_consent", "revoked"] do
+        profile = profile!(athanor, status)
+        assert :ok = ProfileStorage.revoke_by_person(actor, profile.id), status
+
+        assert {:ok, %{status: "revoked", revoked_by: "person"}} =
+                 ProfileStorage.get(actor, profile.id)
+      end
+    end
+
+    test "another athanor's row, a missing row and no athanor change nothing", %{
+      athanor: athanor
+    } do
+      actor = Prima.Actor.in_athanor(athanor)
+      profile = profile!(athanor, "active")
+
+      assert {:error, :not_found} =
+               ProfileStorage.revoke_by_person(
+                 Prima.Actor.in_athanor("#{athanor}_other"),
+                 profile.id
+               )
+
+      assert {:error, :not_found} = ProfileStorage.revoke_by_person(actor, "prof_missing")
+      assert {:error, :no_athanor} = ProfileStorage.revoke_by_person(%Prima.Actor{}, profile.id)
+      assert {:ok, %{status: "active", revoked_by: nil}} = ProfileStorage.get(actor, profile.id)
+    end
+  end
+
+  describe "a revocation's cause" do
+    test "no insert is revoked or names a cause: the changeset refuses both", %{
+      athanor: athanor
+    } do
+      for over <- [
+            %{status: "revoked"},
+            %{status: "revoked", revoked_by: "person"},
+            %{status: "revoked", revoked_by: "removal"},
+            %{revoked_by: "person"}
+          ] do
+        changeset =
+          Arca.Schemas.Profile.changeset(
+            %Arca.Schemas.Profile{},
+            attrs(athanor, Map.put(over, :id, "prof_changeset"))
+          )
+
+        refute changeset.valid?, inspect(over)
+      end
+
+      assert Arca.Schemas.Profile.changeset(
+               %Arca.Schemas.Profile{},
+               attrs(athanor, %{id: "prof_changeset"})
+             ).valid?
     end
   end
 
@@ -178,7 +250,8 @@ defmodule Arca.ProfileStorageTest do
         attrs(athanor, %{
           id: "prof_#{System.unique_integer([:positive])}",
           label: "l#{System.unique_integer([:positive])}",
-          status: status
+          status: status,
+          revoked_by: if(status == "revoked", do: "removal")
         })
       )
 

@@ -156,8 +156,8 @@ func asMeasured(t *testing.T, m map[string]any) protocol.Measured {
 func TestAPlaceIsPlacedAndItsIDAgainIsRefused(t *testing.T) {
 	k, client := placesKeeper(t)
 	write(t, client,
-		`{"v":3,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":3,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
+		`{"v":4,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":4,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
 	k.expect(t, protocol.NewPlaced("p"), protocol.NewError("p", "", protocol.CodeBadRequest))
 }
 
@@ -167,14 +167,14 @@ func TestAPlaceIsPlacedAndItsIDAgainIsRefused(t *testing.T) {
 func TestARefusedSpawnFreesItsPlace(t *testing.T) {
 	k, client := placesKeeper(t)
 	write(t, client,
-		`{"v":3,"type":"place","id":"p","kind":"build"}`,
-		`{"v":3,"type":"spawn","id":"s","place":"p","pool":"runner","argv":["true"],"memory_bytes":67108864,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
+		`{"v":4,"type":"place","id":"p","kind":"build"}`,
+		`{"v":4,"type":"spawn","id":"s","place":"p","pool":"runner","argv":["true"],"memory_bytes":67108864,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"`+testToken+`"}}`)
 	// This keeper enforces no bound: the spawn is refused for that, not for
 	// its place.
 	k.expect(t, protocol.NewPlaced("p"), protocol.NewError("s", "", protocol.CodeMemoryUnavailable))
-	write(t, client, `{"v":3,"type":"measure","id":"m","place":"p"}`)
+	write(t, client, `{"v":4,"type":"measure","id":"m","place":"p"}`)
 	k.expect(t, protocol.NewError("m", "", protocol.CodeUnmeasured))
-	write(t, client, `{"v":3,"type":"place","id":"p","kind":"build"}`)
+	write(t, client, `{"v":4,"type":"place","id":"p","kind":"build"}`)
 	k.expect(t, protocol.NewPlaced("p"))
 }
 
@@ -185,14 +185,14 @@ func TestARefusedSpawnFreesItsPlace(t *testing.T) {
 func TestADroppedPlaceIsGoneAndAnUnknownOneIsLeftAlone(t *testing.T) {
 	k, client := placesKeeper(t)
 	write(t, client,
-		`{"v":3,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":3,"type":"drop","place":"p"}`)
+		`{"v":4,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":4,"type":"drop","place":"p"}`)
 	k.expect(t, protocol.NewPlaced("p"))
 	write(t, client,
-		`{"v":3,"type":"drop","place":"q"}`,
-		`{"v":3,"type":"assign","id":"as","place":"q","kind":"run"}`,
-		`{"v":3,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":3,"type":"place","id":"q","kind":"warm"}`)
+		`{"v":4,"type":"drop","place":"q"}`,
+		`{"v":4,"type":"assign","id":"as","place":"q","kind":"run"}`,
+		`{"v":4,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":4,"type":"place","id":"q","kind":"warm"}`)
 	k.expect(t, protocol.NewError("as", "", protocol.CodeBadRequest), protocol.NewPlaced("p"), protocol.NewPlaced("q"))
 }
 
@@ -204,16 +204,16 @@ func TestAPlaceIsWhoseItsLastAssignSays(t *testing.T) {
 	clock := clockAt(t, time.Unix(1_800_000_000, 0))
 	readsAs(t, func(*cgroup.Group) (cgroup.Use, error) { return cgroup.Use{Bytes: 3 << 20}, nil })
 	write(t, client,
-		`{"v":3,"type":"place","id":"p","kind":"warm"}`,
-		`{"v":3,"type":"assign","id":"as-1","place":"p","kind":"run","athanor":"ath-1","subject":"run-1"}`,
-		`{"v":3,"type":"assign","id":"as-2","place":"p","kind":"warm","athanor":"ath-2"}`)
+		`{"v":4,"type":"place","id":"p","kind":"warm"}`,
+		`{"v":4,"type":"assign","id":"as-1","place":"p","kind":"run","athanor":"ath-1","subject":"run-1"}`,
+		`{"v":4,"type":"assign","id":"as-2","place":"p","kind":"warm","athanor":"ath-2"}`)
 	k.expect(t, protocol.NewPlaced("p"), protocol.NewAssigned("as-1"), protocol.NewAssigned("as-2"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("a", 32)})
 	k.s.read()()
 	clock.advance(250 * time.Millisecond)
 	write(t, client,
-		`{"v":3,"type":"drop","place":"p"}`,
-		`{"v":3,"type":"measure","id":"m","place":"p"}`)
+		`{"v":4,"type":"drop","place":"p"}`,
+		`{"v":4,"type":"measure","id":"m","place":"p"}`)
 	k.expect(t, protocol.NewMeasured("m", protocol.Whose{Kind: protocol.KindWarm, Athanor: "ath-2"}, protocol.Reading{Bytes: 3 << 20}, 250))
 }
 
@@ -238,7 +238,7 @@ func TestASlowReadDelaysNoMeasureAndNoOtherRequest(t *testing.T) {
 	readEvery = time.Millisecond
 	t.Cleanup(func() { readEvery = every })
 
-	write(t, client, `{"v":3,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
+	write(t, client, `{"v":4,"type":"place","id":"p","kind":"run","athanor":"ath-1"}`)
 	k.expect(t, protocol.NewPlaced("p"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("a", 32)})
 	stop, stopped := make(chan struct{}), make(chan struct{})
@@ -254,14 +254,14 @@ func TestASlowReadDelaysNoMeasureAndNoOtherRequest(t *testing.T) {
 	// The first reading was stored before the second read began.
 	whose := protocol.Whose{Kind: protocol.KindRun, Athanor: "ath-1"}
 	clock.advance(1500 * time.Millisecond)
-	write(t, client, `{"v":3,"type":"measure","id":"m1","place":"p"}`)
+	write(t, client, `{"v":4,"type":"measure","id":"m1","place":"p"}`)
 	k.expect(t, protocol.NewMeasured("m1", whose, protocol.Reading{Bytes: 5 << 20}, 1500))
-	write(t, client, `{"v":3,"type":"place","id":"q","kind":"warm"}`)
+	write(t, client, `{"v":4,"type":"place","id":"q","kind":"warm"}`)
 	k.expect(t, protocol.NewPlaced("q"))
-	write(t, client, `{"v":3,"type":"pool","id":"after","pool":"runner"}`)
+	write(t, client, `{"v":4,"type":"pool","id":"after","pool":"runner"}`)
 	k.expect(t, protocol.NewError("after", "", protocol.CodeUnknownPool))
 	clock.advance(time.Second)
-	write(t, client, `{"v":3,"type":"measure","id":"m2","place":"p"}`)
+	write(t, client, `{"v":4,"type":"measure","id":"m2","place":"p"}`)
 	k.expect(t, protocol.NewMeasured("m2", whose, protocol.Reading{Bytes: 5 << 20}, 2500))
 }
 
@@ -275,7 +275,7 @@ func TestAReadingOfASpawnGoneIsNotStored(t *testing.T) {
 		<-gate
 		return cgroup.Use{Bytes: 5 << 20}, nil
 	})
-	write(t, client, `{"v":3,"type":"place","id":"p","kind":"run"}`)
+	write(t, client, `{"v":4,"type":"place","id":"p","kind":"run"}`)
 	k.expect(t, protocol.NewPlaced("p"))
 	gone := &spawn{id: strings.Repeat("a", 32)}
 	k.spawnedIn(t, "p", gone)
@@ -295,13 +295,13 @@ func TestAReadingOfASpawnGoneIsNotStored(t *testing.T) {
 	delete(k.s.spawns, gone.id)
 	delete(k.s.places, gone.place)
 	k.s.mu.Unlock()
-	write(t, client, `{"v":3,"type":"place","id":"p","kind":"build"}`)
+	write(t, client, `{"v":4,"type":"place","id":"p","kind":"build"}`)
 	k.expect(t, protocol.NewPlaced("p"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("b", 32)})
 	release()
 	read()
 
-	write(t, client, `{"v":3,"type":"measure","id":"m","place":"p"}`)
+	write(t, client, `{"v":4,"type":"measure","id":"m","place":"p"}`)
 	k.expect(t, protocol.NewError("m", "", protocol.CodeUnmeasured))
 }
 
@@ -346,7 +346,7 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
-	k.s.handle(parsed(t, `{"v":3,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
+	k.s.handle(parsed(t, `{"v":4,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
 	k.expect(t, protocol.NewPlaced("pl"))
 	k.s.handleSpawn(keptRequest(t, k.attach, "pl", "exec "+k.s.self+" hold 4 60", path, uid, nil))
 	spawned := k.reply(t)
@@ -365,9 +365,9 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 
 	// The assign is answered and the drop is not: the next reply after the
 	// assign's is the measure's.
-	k.s.handle(parsed(t, `{"v":3,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
+	k.s.handle(parsed(t, `{"v":4,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
 	k.expect(t, protocol.NewAssigned("as"))
-	k.s.handle(parsed(t, `{"v":3,"type":"drop","place":"pl"}`))
+	k.s.handle(parsed(t, `{"v":4,"type":"drop","place":"pl"}`))
 	whose = protocol.Whose{Kind: protocol.KindTerminal, Athanor: "ath-2"}
 	sameReading := func(when string) {
 		t.Helper()
@@ -421,8 +421,8 @@ func TestAHeldReadDelaysNoOtherSpawnsReading(t *testing.T) {
 	t.Cleanup(func() { readEvery = every })
 
 	write(t, client,
-		`{"v":3,"type":"place","id":"p","kind":"run"}`,
-		`{"v":3,"type":"place","id":"q","kind":"build"}`)
+		`{"v":4,"type":"place","id":"p","kind":"run"}`,
+		`{"v":4,"type":"place","id":"q","kind":"build"}`)
 	k.expect(t, protocol.NewPlaced("p"), protocol.NewPlaced("q"))
 	k.spawnedIn(t, "p", &spawn{id: strings.Repeat("a", 32), group: held})
 	k.spawnedIn(t, "q", &spawn{id: strings.Repeat("b", 32), group: other})

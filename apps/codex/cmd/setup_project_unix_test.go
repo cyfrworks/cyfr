@@ -689,6 +689,37 @@ func TestSetupsWorkOutlivesWhoAskedDuringAStart(t *testing.T) {
 	}
 }
 
+// A cyfr killed while its reading's work runs (the app's 20 s departure
+// deadline, a kill of the system's) ends nothing itself: the kernel closes
+// the pipes it held, the work's stdin among them, which is the work's one
+// cancel, and the work ends with the docker it waited on. A run's start
+// goes on instead (TestSetupsWorkOutlivesWhoAskedDuringAStart).
+func TestAReadingsWorkEndsWithTheCyfrThatAskedForIt(t *testing.T) {
+	p := newWorkProject(t)
+	p.answer("info.block", "")
+	begin, err := preparer()(t.Context(), []string{workProbe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := p.blocked("info")
+	// What the kernel does for a cyfr killed: every pipe of its closed.
+	work.in.Close()
+	work.out.(io.Closer).Close()
+	ended := make(chan error, 1)
+	go func() { ended <- work.wait() }()
+	select {
+	case <-ended:
+	case <-time.After(20 * time.Second):
+		p.answer("info.release", "")
+		t.Fatal("the work outlived the cyfr that asked for it")
+	}
+	p.await("the docker that hung to be gone", func() bool { return syscall.Kill(pid, 0) != nil })
+}
+
 // A run, setup a person started, is never ended for its caller going: past
 // the bound a reading's work is killed at, its start goes on and finishes.
 func TestARunOutlivesTheBoundOfAReading(t *testing.T) {

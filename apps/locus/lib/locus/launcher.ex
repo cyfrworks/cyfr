@@ -84,9 +84,9 @@ defmodule Locus.Launcher do
   quarantined ones.
 
   A spec with `control: true` asks for a process whose control channel is
-  carried beside its stdio, as a runner of the runtime has one, and
-  `isolation: "netns"` for one in a network namespace of its own whose
-  relay is its only way out. Such a process is answered as soon as it is
+  carried beside its stdio, as a runner of the runtime has one, whose
+  space, its pool's, has its relay as its only way out. Such a process is
+  answered as soon as it is
   asked for, its spawn id, uid and pid following as the first event, and
   its owner hears `t:control_event/0` in place of `t:event/0`.
   `c:send_control/2` writes to its control channel, holding what it is
@@ -95,7 +95,7 @@ defmodule Locus.Launcher do
 
   `Locus.Executor.executor/0` names the implementation a node uses:
   `Locus.Keeper` where cyfr-locus runs, and the test environment's
-  unisolated launcher alone otherwise.
+  direct launcher, which makes no space, alone otherwise.
   """
 
   @typedoc "Whose a place is: its kind, and its athanor and subject where it has them."
@@ -107,8 +107,8 @@ defmodule Locus.Launcher do
 
   @typedoc """
   What a process is started with: its place, the memory and the CPU it is bounded
-  by, which every process has, `control` where it has a control channel, `isolation`
-  where its pool isolates it, a program's kept `home` with its bound and
+  by, which every process has, `control` where it has a control channel, a
+  program's kept `home` with its bound and
   `pty`, and `hosts`, the only hosts it may reach where its row names them.
   """
   @type spec :: %{
@@ -119,7 +119,6 @@ defmodule Locus.Launcher do
           required(:memory_bytes) => pos_integer(),
           required(:cpu_quota) => pos_integer(),
           optional(:control) => boolean(),
-          optional(:isolation) => String.t(),
           optional(:home) => String.t(),
           optional(:home_max_bytes) => pos_integer(),
           optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},

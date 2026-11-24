@@ -267,6 +267,10 @@ func startChrome(path, home string, b *browser, logging []string) (*chromeProces
 		return nil, err
 	}
 	b.agent = agent
+	if err := p.c.call(ctx, "", "Target.setAutoAttach", browserTargets, nil); err != nil {
+		p.kill()
+		return nil, fmt.Errorf("Chrome refused to show the windows pages open (%v)", err)
+	}
 	return p, nil
 }
 

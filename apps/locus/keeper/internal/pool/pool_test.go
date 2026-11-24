@@ -9,38 +9,39 @@ import (
 )
 
 func TestParseSpec(t *testing.T) {
-	spec, err := ParseSpec("backends:20001-20032")
+	spec, err := ParseSpec("backends:20001-20032:routed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec != (Spec{Name: "backends", First: 20001, Last: 20032}) || spec.Size() != 32 {
+	if spec != (Spec{Name: "backends", First: 20001, Last: 20032, Reach: ReachRouted}) || spec.Size() != 32 || !spec.Routed() {
 		t.Fatalf("spec = %+v size %d", spec, spec.Size())
 	}
 
-	isolated, err := ParseSpec("runner:30101-30108:netns")
+	relay, err := ParseSpec("runner:30101-30108:relay")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if isolated != (Spec{Name: "runner", First: 30101, Last: 30108, Isolated: true}) {
-		t.Fatalf("isolated spec = %+v", isolated)
+	if relay != (Spec{Name: "runner", First: 30101, Last: 30108, Reach: ReachRelay}) || relay.Routed() {
+		t.Fatalf("relay spec = %+v", relay)
 	}
 
 	for _, bad := range []string{
+		"backends:20001-20032",
 		"runner:30101-30108:",
-		"runner:30101-30108:net",
-		"runner:30101-30108:netns:netns",
-		"runner:30101:netns",
+		"runner:30101-30108:netns",
+		"runner:30101-30108:relay:relay",
+		"runner:30101:relay",
 		"",
 		"backends",
-		"backends:20001",
-		"Backends:1-2",
-		"backends:0-10",
-		"backends:10-9",
-		"backends:+1-2",
-		"backends:1-99999999999",
-		"backends:1-5000",
-		"backends:a-b",
-		":1-2",
+		"backends:20001:routed",
+		"Backends:1-2:routed",
+		"backends:0-10:routed",
+		"backends:10-9:routed",
+		"backends:+1-2:routed",
+		"backends:1-99999999999:routed",
+		"backends:1-5000:routed",
+		"backends:a-b:routed",
+		":1-2:routed",
 	} {
 		if _, err := ParseSpec(bad); err == nil {
 			t.Errorf("%q was accepted", bad)
