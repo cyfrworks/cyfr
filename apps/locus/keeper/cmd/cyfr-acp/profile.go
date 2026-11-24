@@ -26,7 +26,9 @@ type profile struct {
 	// args follow the row's own command to start the program's ACP server.
 	args []string
 	// minVersion is the first version the profile was probed at that does
-	// what it needs, as initialize's agentInfo.version names it.
+	// what it needs, as initialize's agentInfo.version names it; none
+	// (zeros) for a program that names no version there, whose version is
+	// its row's pin.
 	minVersion [3]int
 	// steer is how the program takes a message written while its turn
 	// runs (steer's kinds); with none a post mid-turn is answered `later`.
@@ -45,7 +47,8 @@ type profile struct {
 	// resumeNotFound and loadNotFound are the program's own answers for a
 	// session its folder lacks, each naming the session asked about, whole:
 	// a resume that says so is followed by a load, and only the load's
-	// answer reads as `gone`.
+	// answer reads as `gone`. A program that offers no resume has no
+	// resumeNotFound: a session goes on by its load alone.
 	resumeNotFound, loadNotFound func(e *rpcError, session string) bool
 	// serverList are the words after the row's command with which the
 	// program lists its MCP servers, the person's own, and serverNames
@@ -53,6 +56,16 @@ type profile struct {
 	// read. CYFR's server takes a name none of them has (relay.go).
 	serverList  []string
 	serverNames func(out []byte) ([]string, bool)
+	// namesOnce says the program's listing starts the servers it lists, so
+	// the name CYFR's server takes is read once, when a session is made,
+	// kept with the session's own record and used at every start that goes
+	// on with it, with no listing (relay.go).
+	namesOnce bool
+	// listsAtPrompt says the program's servers list their tools at a
+	// session's first prompt, not when the session is made: the start
+	// answers once the session does, and a native turn that ends with no
+	// listing ends with an error saying CYFR's tools did not reach it.
+	listsAtPrompt bool
 	// appends reads initialize's agentCapabilities: whether the program
 	// takes instructions for one process in a place of its own, which
 	// instructionsMeta builds as a session's `_meta`. Otherwise the
@@ -87,6 +100,10 @@ type profile struct {
 	// session being in a store of the program's own that holds more than
 	// it, its sign-in among it.
 	deletes bool
+	// forgetLoads says a forget of the session's files is confirmed by the
+	// program's load answering it lacks the session, in a process of the
+	// driver's own (forget.go).
+	forgetLoads bool
 	// counted is the accounting of a prompt's counts that read, and counts
 	// the wire's counts by the usage names each sums; a count of no name is
 	// one the program does not report, counted 0 under its accounting,
@@ -104,6 +121,12 @@ type profile struct {
 	// refusedSentence, where it is set, says a prompt's authentication
 	// error in the program's own terms.
 	signedOutSentence, refusedSentence string
+	// failure reads text that is a whole native turn's output, one message
+	// chunk and nothing else said or called, as the program's own report of
+	// a turn that failed, where the program ends such a turn as if it had
+	// answered: the wire's error type and CYFR's own sentence for it, or ""
+	// for text of any other form (driver.go's update and ended).
+	failure func(text string) (kind, words string)
 	// access is the choices the driver lists, each with its native mode.
 	access []brainwire.Access[nativeAccess]
 }
@@ -127,7 +150,7 @@ const (
 )
 
 // profiles are the programs the driver runs as, by the name it runs under.
-var profiles = map[string]*profile{antigravity.name: antigravity, opencode.name: opencode}
+var profiles = map[string]*profile{antigravity.name: antigravity, opencode.name: opencode, cursor.name: cursor}
 
 // antigravity is Antigravity's standalone CLI, `agy acp`, as probed at
 // 1.5.16. A session's files are its brain folder, its database and its
@@ -359,4 +382,155 @@ func agyServers(out []byte) ([]string, bool) {
 		}
 	}
 	return names, true
+}
+
+// cursor is Cursor's agent, `agent acp`, as probed at 2026.11.22-e9042b2,
+// fetched from Cursor's own archive by cyfr-fetch as a tree, its row
+// passing `--disable-auto-update` so it does not replace itself. It names
+// no version in initialize and offers no resume: a session goes on by its
+// load. Its sessions are its folders `acp-sessions/<id>/` under its
+// configuration folder, so a forget removes that folder and is confirmed by
+// its load answering it lacks the session. Its servers list their tools at
+// a session's first prompt. Its own listing of its servers starts each of
+// them, so the name of CYFR's server is read once, when a session is made,
+// and kept: a server the person adds later under that very name is
+// replaced by CYFR's in that session until a new one is made, its lack.
+// Its servers in `~/.cursor/mcp.json` wait for the person's approval on
+// the row's terminal (`agent mcp enable <name>`), since a session's folder
+// is its home, which reads that file as the folder's own: Cursor's rule;
+// a server CYFR hands it needs none. A message mid-turn is answered
+// `later`: a second prompt cancels the running one. Its prompts report no
+// usage. It ends a turn that failed as one that answered, its reason a
+// message chunk of its own: a turn whose whole output is one chunk of
+// exactly that form is read as an error, in CYFR's words; a turn that said
+// or did anything before it ends as it ended, Cursor's words its answer,
+// and a model whose whole answer is exactly that form is misread as a
+// failure, its lack.
+var cursor = &profile{
+	name:  "cyfr-cursor",
+	title: "Cursor",
+	args:  []string{"acp"},
+	steer: steerLater,
+	// Seen in Cursor 2026.11.22-e9042b2: crypto.randomUUID() names each.
+	sessionID: brainwire.IsUUID,
+	signedOut: -32000,
+	// Seen in Cursor 2026.11.22-e9042b2: -32602 "Invalid params" with
+	// data.message `Session "<id>" not found`, -32602 being any invalid
+	// parameter's, so the words are read whole.
+	loadNotFound: func(e *rpcError, session string) bool {
+		var data struct {
+			Message string `json:"message"`
+		}
+		return e.Code == -32602 && e.Message == "Invalid params" && json.Unmarshal(e.Data, &data) == nil &&
+			data.Message == `Session "`+session+`" not found`
+	},
+	// Seen in Cursor 2026.11.22-e9042b2: `agent mcp list` prints
+	// `<name>: <status>` a line, and starts each server neither disabled
+	// nor awaiting approval to read its status.
+	serverList:    []string{"mcp", "list"},
+	serverNames:   cursorServers,
+	namesOnce:     true,
+	listsAtPrompt: true,
+	// Seen in Cursor 2026.11.22-e9042b2: a server's call is announced kind
+	// other with an empty rawInput, then updated to
+	// {providerIdentifier, toolName, args}.
+	callArguments: func(rawInput json.RawMessage) []json.RawMessage {
+		var input struct {
+			Args json.RawMessage `json:"args"`
+		}
+		if json.Unmarshal(rawInput, &input) != nil || len(input.Args) == 0 {
+			return nil
+		}
+		return []json.RawMessage{input.Args}
+	},
+	stubKinds: map[string]bool{"other": true},
+	mcpCall: func(rawInput json.RawMessage) (string, string, bool) {
+		var input struct {
+			Server string `json:"providerIdentifier"`
+			Tool   string `json:"toolName"`
+		}
+		ok := json.Unmarshal(rawInput, &input) == nil && input.Server != "" && input.Tool != ""
+		return input.Server, input.Tool, ok
+	},
+	sessionFiles: func(home, session string) []homepath.Path {
+		return []homepath.Path{cursorPath(home, "acp-sessions", session)}
+	},
+	forgetLoads: true,
+	// Its prompts carry no usage: the accounting is never read.
+	counted:           "partial",
+	counts:            map[string][]string{},
+	signedOutSentence: "Cursor has no sign-in it can use; sign it in on the program's terminal, opened with the word `login`.",
+	failure:           cursorFailure,
+	access: []brainwire.Access[nativeAccess]{
+		{Choice: brainwire.Choice{ID: "full-access", Name: "Full access, no approvals"}, Native: nativeAccess{mode: "agent"}},
+	},
+}
+
+// cursorPath is a way down Cursor's configuration folder, where it keeps
+// its sessions: CURSOR_CONFIG_DIR when it is set, else XDG_CONFIG_HOME's
+// `cursor`, else the home's `.cursor`.
+func cursorPath(home string, steps ...string) homepath.Path {
+	if dir := os.Getenv("CURSOR_CONFIG_DIR"); strings.TrimSpace(dir) != "" {
+		return homepath.Path{Root: dir, Rel: filepath.Join(steps...)}
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(dir) != "" {
+		return homepath.Path{Root: dir, Rel: filepath.Join(append([]string{"cursor"}, steps...)...)}
+	}
+	return homepath.Path{Root: home, Rel: filepath.Join(append([]string{".cursor"}, steps...)...)}
+}
+
+// cursorNone is what `agent mcp list` prints when no server is configured.
+const cursorNone = "No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)"
+
+// cursorServers are the names `agent mcp list` prints, one `<name>:
+// <status>` a line. A name may hold `: ` itself, so every text before each
+// `: ` of a line, and the whole line, is a name taken: a name is only ever
+// read as taken too often, never as free.
+func cursorServers(out []byte) ([]string, bool) {
+	text := strings.TrimSpace(string(out))
+	if text == cursorNone {
+		return []string{}, true
+	}
+	if text == "" {
+		return nil, false
+	}
+	names := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		names = append(names, line)
+		for i := strings.Index(line, ": "); i >= 0; {
+			names = append(names, line[:i])
+			next := strings.Index(line[i+2:], ": ")
+			if next < 0 {
+				break
+			}
+			i += 2 + next
+		}
+	}
+	return names, true
+}
+
+// cursorFailureForm is the whole of a chunk Cursor 2026.11.22-e9042b2
+// writes for a turn that failed (its agent session's prompt handler): two
+// blank lines, then `Error: `, the error's type or a bracketed code, and
+// its message; or one of its sentences for an account that cannot go on.
+var cursorFailureForm = regexp.MustCompile(`^\n\n(?:Error: (?:(?:(?:[A-Za-z][A-Za-z0-9]*)?Error: )?\[([a-z_]+)\] |(?:[A-Za-z][A-Za-z0-9]*)?Error: )\S.*|(Please sign in to continue|Upgrade your plan to continue|Add a payment method to continue|Check your settings to continue))$`)
+
+// cursorFailure is a failed turn's error type and CYFR's sentence for it:
+// a sign-in refused or wanted is the account's, a service that could not
+// be reached the provider's, and any other failure Cursor's own.
+func cursorFailure(text string) (string, string) {
+	m := cursorFailureForm.FindStringSubmatch(text)
+	switch {
+	case m == nil:
+		return "", ""
+	case m[1] == "unauthenticated" || m[2] == "Please sign in to continue":
+		return "authentication", "Cursor's sign-in was refused; sign it in again on the program's terminal, opened with the word `login`."
+	case m[1] == "unavailable":
+		return "provider_error", "Cursor could not reach its service; ask again once the network is back."
+	}
+	return "provider_error", "Cursor reported that its turn failed."
 }

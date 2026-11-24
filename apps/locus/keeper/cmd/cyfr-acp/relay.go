@@ -8,8 +8,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/cyfr/locus/keeper/internal/homepath"
 )
 
 // CYFR's server takes no place of a server of the person's own: a program
@@ -21,6 +24,13 @@ import (
 // of the program's: the names are the program's answer. A program that
 // lists none the driver can read starts no session, since no name is then
 // known to leave the person's servers theirs.
+//
+// A program whose listing starts the servers it lists (profile's
+// namesOnce) is asked once, when a session is made: the name is kept with
+// the session, one file a session, `<home>/.cache/cyfr-acp/servers/<session>`,
+// beside its instructions record, and a start that goes on with the
+// session takes the kept name with no listing. A record that is lost, or
+// holds no name CYFR gives its server, is listed for again and kept anew.
 
 // relayServer is the name CYFR's server takes when no server of the
 // person's takes it.
@@ -80,5 +90,30 @@ func (d *driver) personsServers() ([]string, error) {
 		case <-deadline:
 			return nil, errors.New("it did not answer in time")
 		}
+	}
+}
+
+// relayName is the form of every name serverFor gives.
+var relayName = regexp.MustCompile(`^cyfr(-[1-9][0-9]{0,8})?$`)
+
+func serverPath(home, session string) homepath.Path {
+	return homepath.Path{Root: home, Rel: driverFolder + "/servers/" + session}
+}
+
+// keptServer is the name CYFR's server took when the session was made, or
+// "" where none is kept.
+func keptServer(home, session string) string {
+	held, err := homepath.ReadFile(serverPath(home, session))
+	if err != nil || !relayName.Match(held) {
+		return ""
+	}
+	return string(held)
+}
+
+// recordServer keeps the name CYFR's server takes in the session. One that
+// cannot be written is as a lost one: the next start lists again.
+func recordServer(home, session, name string) {
+	if keptServer(home, session) != name {
+		_ = homepath.WriteFile(serverPath(home, session), []byte(name))
 	}
 }

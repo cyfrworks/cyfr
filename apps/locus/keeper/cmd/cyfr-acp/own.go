@@ -96,29 +96,43 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawM
 				return err
 			}
 		}
-		if d.p.callArguments != nil {
-			for _, raw := range d.p.callArguments(rawInput) {
-				if v, ok := decoded(raw); ok {
-					call.arguments = append(call.arguments, v)
-				}
-			}
-		}
 		d.own[callID] = call
-		// A socket call that came before its update was first seen.
-		for i, arguments := range d.unclaimed {
-			if call.waits && call.shows(arguments) {
-				call.cyfr = true
-				call.arguments = nil
-				d.unclaimed = append(d.unclaimed[:i:i], d.unclaimed[i+1:]...)
-				break
-			}
+		d.learn(call, rawInput)
+	} else if call.waits && !call.cyfr && len(rawInput) > 0 {
+		// A call first announced with less than its input (Cursor's, empty)
+		// is read again from each update that shows more.
+		if server, tool, ok := d.p.mcpCall(rawInput); ok && mcpPart.MatchString(server) && mcpPart.MatchString(tool) {
+			call.name = "mcp:" + server + "/" + tool
 		}
+		d.learn(call, rawInput)
 	}
 	if status != "completed" && status != "failed" {
 		return nil
 	}
 	delete(d.own, callID)
 	return d.showOwn(call)
+}
+
+// learn keeps the argument objects a waiting call's input shows, each
+// once, and matches it to a socket call that came before its update
+// showed them.
+func (d *driver) learn(call *ownCall, rawInput json.RawMessage) {
+	if d.p.callArguments == nil || !call.waits || call.cyfr {
+		return
+	}
+	for _, raw := range d.p.callArguments(rawInput) {
+		if v, ok := decoded(raw); ok && !call.shows(v) {
+			call.arguments = append(call.arguments, v)
+		}
+	}
+	for i, arguments := range d.unclaimed {
+		if call.shows(arguments) {
+			call.cyfr = true
+			call.arguments = nil
+			d.unclaimed = append(d.unclaimed[:i:i], d.unclaimed[i+1:]...)
+			return
+		}
+	}
 }
 
 func (c *ownCall) shows(arguments any) bool {

@@ -68,6 +68,8 @@ import (
 // no session id it could name; FAKE_HOLD keeps running after its input ends, until a
 // TERM. Each cancel and TERM is logged in `$HOME/fake-acp.log`.
 //
+// FAKE_CURSOR makes it Cursor's (cursor_fake_test.go).
+//
 // FAKE_OPENCODE makes it OpenCode's ACP server instead, as `opencode acp`
 // 2.4.1 was probed: its initialize, `ses_` session ids kept in one store of
 // its own (`$HOME/.local/share/opencode/fake.db`, a line an id), a resume
@@ -100,6 +102,9 @@ const fakeEnv = "CYFR_FAKE_ACP"
 const stderrCanary = "FAKE-STDERR-CANARY Antigravity writes this to its stderr"
 
 func fakeACP() int {
+	if os.Getenv("FAKE_CURSOR") != "" {
+		return fakeCursor()
+	}
 	args := os.Args[1:]
 	if words := " " + strings.Join(args, " "); strings.HasSuffix(words, " mcp list") || strings.HasSuffix(words, " debug config --standalone") {
 		return fakeServers(strings.HasSuffix(words, " debug config --standalone"))
