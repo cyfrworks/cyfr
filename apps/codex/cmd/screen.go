@@ -124,11 +124,10 @@ var screenAppCmd = &cobra.Command{
 // screenAppArgs is the CYFR app's command line as this machine's screen
 // for the project in dir, which becomes the app's process (screenExec).
 // The route to the folder's CYFR comes with its proposal, as on a
-// desktop, and the app sets it on that CYFR's own stores. A folder that
-// cannot be read leaves the screen dark: its shell, reading the folder,
-// fails before it shows anything, the reason goes to the app's error
-// stream (the journal), the app ends itself once, and the launcher tries
-// again a second later.
+// desktop, and the app sets it on that CYFR's own stores. The folder is
+// read as This box is pressed, by the chooser or the person: one that
+// cannot be read is said there, beside the list, and pressing This box
+// again reads it again.
 func screenAppArgs(dir string) []string {
 	return []string{appProgram, "--screen-project=" + dir}
 }
