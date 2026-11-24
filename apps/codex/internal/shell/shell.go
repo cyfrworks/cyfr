@@ -881,6 +881,10 @@ func sentence(err error) string {
 	if errors.As(err, &locked) {
 		return string(locked)
 	}
+	var elsewhere elsewhereError
+	if errors.As(err, &elsewhere) {
+		return string(elsewhere)
+	}
 	var intent *IntentError
 	var dir *account.DirectoryRefusal
 	var refused *RefusedError
@@ -1503,8 +1507,7 @@ func (s *Shell) enroll(ctx context.Context, name string, wait time.Duration, use
 	case found.Directory != s.cfg.Directory:
 		// The account service this CYFR uses is the one approved for it;
 		// another the registry names is never contacted.
-		s.say("@%s's account is at the account service %s, not at %s, which this CYFR uses, so nothing was sent there. "+
-			"Add this device to an account at %s.", name, found.Directory, s.cfg.Directory, s.cfg.Directory)
+		s.say("%s Add this device to an account at %s.", s.elsewhere("@"+name+"'s account", found.Directory), s.cfg.Directory)
 		return
 	}
 	d := account.Directory{URL: found.Directory, Client: s.cfg.Client}
@@ -1640,14 +1643,33 @@ func (s *Shell) unlock(ctx context.Context, secret []byte) string {
 	return proof
 }
 
+// elsewhere is the sentence for whose account, at the account service at,
+// which is not the one this CYFR uses: nothing is sent there. Every road
+// that meets such an account says it in these words.
+func (s *Shell) elsewhere(whose, at string) string {
+	return fmt.Sprintf("%s is at the account service %s, not at %s, which this CYFR uses, so nothing was sent there.",
+		whose, at, s.cfg.Directory)
+}
+
+// elsewhereError refuses a connection to a CYFR whose account service is
+// not the one this machine's key's account is at: the key serves that one
+// account at every CYFR, and is never moved to another.
+type elsewhereError string
+
+func (e elsewhereError) Error() string { return string(e) }
+
 // connect opens the channel under key and holds both: the device is
-// unlocked from here until a lock. A device this CYFR has not certified
+// unlocked from here until a lock, at a CYFR whose account service is the
+// one the key's account is at. A device this CYFR has not certified
 // says hello first, dropping a certificate it holds that it will not
 // present; one whose standing ended here keeps no certificate, so its
 // next unlock says hello again.
 func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	if err := s.watched(); err != nil {
 		return err
+	}
+	if s.rec.Directory != "" && s.rec.Directory != s.cfg.Directory {
+		return elsewhereError(s.elsewhere("This device's account", s.rec.Directory))
 	}
 	if !s.current() {
 		return errLocked

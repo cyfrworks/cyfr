@@ -24,7 +24,11 @@ electron.dialog.showOpenDialog = async () => ({canceled: false, filePaths: [FOLD
 // was sent: no request line or header, a referrer among them, carries the
 // setup token. The record keeps each request's address as the engine holds
 // it, fragment and all, so it stays in the fixture and is not uploaded.
-const PARTITIONS = ["persist:cyfr-content", "persist:cyfr-account"]
+// The stores are the CYFR's own and its account service's, as main names
+// them (src/policy.js homePartition, accountPartition).
+const digest = (origin) => createHash("sha256").update(origin, "ascii").digest("hex")
+const PARTITIONS = [`persist:cyfr-home-v2-${digest(lib.HOME)}`,
+  `persist:cyfr-account-v2-${digest(lib.HOME)}-${digest(new URL(lib.DIRECTORY).origin)}`]
 const sessions = () => [electron.session.defaultSession, ...PARTITIONS.map((p) => electron.session.fromPartition(p))]
 if (lib.PHASE === "passkey") {
   electron.app.whenReady().then(() => Promise.all(sessions().map((ses, i) => ses.netLog.startLogging(path.join(FIXTURE, `netlog-${i}.json`)))))
