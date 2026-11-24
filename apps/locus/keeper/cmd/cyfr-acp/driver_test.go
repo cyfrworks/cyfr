@@ -863,7 +863,7 @@ func TestModelsAreListedWithOrWithoutASessionAndTheListingForgotten(t *testing.T
 	if len(databases)+len(brains) != 0 {
 		t.Fatalf("the listing session is forgotten: %v %v", databases, brains)
 	}
-	if records, err := os.ReadDir(listingRecords(s.home)); len(records) != 0 || (err != nil && !brainwire.Absent(err)) {
+	if records, err := os.ReadDir(filepath.Join(s.home, listingRecords)); len(records) != 0 || (err != nil && !brainwire.Absent(err)) {
 		t.Fatalf("no listing is left to forget: %v %v", records, err)
 	}
 	s.send(startCommand("", map[string]any{}, filesTool))
@@ -1090,9 +1090,9 @@ func TestAListingRemovesOnlyItsOwnSession(t *testing.T) {
 	}
 	live, dead := "11111111-0d7e-4b8e-9c1e-6b8b6f0a1d2e", "22222222-0d7e-4b8e-9c1e-6b8b6f0a1d2e"
 	liveDB, deadDB := made(live), made(dead)
-	_ = os.MkdirAll(listingRecords(s.home), 0o700)
+	_ = os.MkdirAll(filepath.Join(s.home, listingRecords), 0o700)
 	record := func(name, session string, hold bool) {
-		f, err := os.OpenFile(filepath.Join(listingRecords(s.home), name), os.O_CREATE|os.O_RDWR, 0o600)
+		f, err := os.OpenFile(filepath.Join(filepath.Join(s.home, listingRecords), name), os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1115,13 +1115,13 @@ func TestAListingRemovesOnlyItsOwnSession(t *testing.T) {
 	if _, err := os.Stat(liveDB); err != nil {
 		t.Fatalf("a live listing keeps its session: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(listingRecords(s.home), "live-listing")); err != nil {
+	if _, err := os.Stat(filepath.Join(filepath.Join(s.home, listingRecords), "live-listing")); err != nil {
 		t.Fatalf("a live listing keeps its record: %v", err)
 	}
 	if _, err := os.Lstat(deadDB); !brainwire.Absent(err) {
 		t.Fatalf("an interrupted listing's session is removed: %v", err)
 	}
-	records, _ := os.ReadDir(listingRecords(s.home))
+	records, _ := os.ReadDir(filepath.Join(s.home, listingRecords))
 	databases, _ := filepath.Glob(filepath.Join(cli, agySessionDatabases, "*.db"))
 	if len(records) != 1 || len(databases) != 1 {
 		t.Fatalf("the listing's own session and record are gone, the live one's alone stay: %v %v", records, databases)
@@ -1197,5 +1197,137 @@ func TestAnOwnToolIsShownWhileItRuns(t *testing.T) {
 	want := []string{"execute:start", "mcp:cyfr/files:start", "text", "execute:end", "mcp:cyfr/files:end"}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("each own tool starts while it runs and ends when it ends: %v", seen)
+	}
+}
+
+// A .cache that is a link takes nothing of the driver's elsewhere: a
+// listing makes no record through it, and a forget removes no record of
+// the instructions through it.
+func TestALinkedCacheIsNeverFollowed(t *testing.T) {
+	s := startDriver(t)
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(s.home, ".cache")); err != nil {
+		t.Fatal(err)
+	}
+	session := "5f0e6c0a-0d7e-4b8e-9c1e-6b8b6f0a1d2e"
+	record := filepath.Join(elsewhere, "cyfr-acp", "instructions", session)
+	_ = os.MkdirAll(filepath.Dir(record), 0o700)
+	_ = os.WriteFile(record, []byte("kept"), 0o600)
+	s.expect("hello")
+	s.send(map[string]any{"t": "forget", "id": "obx_1", "session": session})
+	if e := s.expect("refused"); !strings.Contains(e["reason"].(string), "link") {
+		t.Fatalf("a forget through a link is refused: %v", e)
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Fatalf("nothing is removed through the link: %v", err)
+	}
+	s.send(map[string]any{"t": "models", "id": "mdl_1"})
+	if e := s.expect("refused"); e["id"] != "mdl_1" {
+		t.Fatalf("a listing whose records would go through a link is refused: %v", e)
+	}
+	entries, _ := os.ReadDir(filepath.Join(elsewhere, "cyfr-acp"))
+	if len(entries) != 1 || entries[0].Name() != "instructions" {
+		t.Fatalf("no listing record or folder is made through the link: %v", entries)
+	}
+}
+
+// A listing record that is a link is never opened: its target's session id
+// is never trusted, and nothing is removed by it.
+func TestALinkedListingRecordIsNeverOpened(t *testing.T) {
+	s := startDriver(t)
+	cli := filepath.Join(s.home, ".gemini", "antigravity-cli")
+	victim := "33333333-0d7e-4b8e-9c1e-6b8b6f0a1d2e"
+	_ = os.MkdirAll(filepath.Join(cli, agySessionDatabases), 0o700)
+	db := filepath.Join(cli, agySessionDatabases, victim+".db")
+	_ = os.WriteFile(db, []byte("FAKE"), 0o600)
+	target := filepath.Join(t.TempDir(), "named")
+	_ = os.WriteFile(target, []byte(victim), 0o600)
+	_ = os.MkdirAll(filepath.Join(s.home, listingRecords), 0o700)
+	link := filepath.Join(filepath.Join(s.home, listingRecords), "linked")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	s.expect("hello")
+	s.send(map[string]any{"t": "models", "id": "mdl_1"})
+	s.expect("models")
+	if _, err := os.Stat(db); err != nil {
+		t.Fatalf("no session is removed by a linked record: %v", err)
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != victim {
+		t.Fatalf("the link's target is left as it was: %q %v", b, err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link is left: %v %v", info, err)
+	}
+}
+
+// inLoop runs f in the driver's own loop, as its socket's requests are run,
+// and answers what f answers: a look at what the driver holds.
+func inLoop[T any](s *wireSession, f func(d *driver) T) T {
+	answered := make(chan T, 1)
+	s.d.inbox <- func() error {
+		answered <- f(s.d)
+		return nil
+	}
+	return <-answered
+}
+
+// held is how many tool calls and socket calls the driver holds, and the
+// decoded arguments among them.
+func held(d *driver) [3]int {
+	arguments := len(d.unclaimed)
+	for _, call := range d.own {
+		arguments += len(call.arguments)
+	}
+	return [3]int{len(d.own), len(d.unclaimed), arguments}
+}
+
+// What the driver holds of a turn's tool calls does not grow through it: a
+// call is dropped when it ends, a call of CYFR's keeps no arguments once
+// matched, and the turn's end drops the rest.
+func TestNothingOfATurnsCallsIsHeldAfterThem(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_many", "trn_1", "many")
+	for e := s.next(); e["t"] != "text" || e["delta"] != "calls done. "; e = s.next() {
+	}
+	if sizes := inLoop(s, held); sizes != [3]int{} {
+		t.Fatalf("no ended call is held mid-turn: %v", sizes)
+	}
+	s.until("idle")
+	postText(s, "stp_read", "trn_2", "read it")
+	ask := s.until("ask")
+	if sizes := inLoop(s, held); sizes != [3]int{1, 0, 0} {
+		t.Fatalf("a matched call is held by its id alone until it ends: %v", sizes)
+	}
+	s.send(map[string]any{"t": "answer", "id": "stp_answer", "ask": ask[len(ask)-1]["ask"], "content": "x", "is_error": false})
+	s.until("idle")
+	if sizes := inLoop(s, held); sizes != [3]int{} {
+		t.Fatalf("nothing is held after the turn: %v", sizes)
+	}
+}
+
+// A call still open when the session closes is shown as the program's own
+// before the driver ends: one shown running ends, and one of a stub
+// server's kind, never matched, is shown start and end.
+func TestAHeldCallIsShownAtAStop(t *testing.T) {
+	s := startDriver(t)
+	startFresh(s, map[string]any{})
+	postText(s, "stp_hang", "trn_1", "hang")
+	var seen []string
+	for e := s.next(); e["t"] != "text" || e["delta"] != "hanging. "; e = s.next() {
+		if e["t"] == "own" {
+			seen = append(seen, e["name"].(string)+":"+e["phase"].(string))
+		}
+	}
+	_ = s.in.Close()
+	for e := range s.events {
+		if e["t"] == "own" {
+			seen = append(seen, e["name"].(string)+":"+e["phase"].(string))
+		}
+	}
+	s.exit()
+	if want := []string{"execute:start", "execute:end", "other:start", "other:end"}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("every call that ran is shown before the driver ends: %v", seen)
 	}
 }

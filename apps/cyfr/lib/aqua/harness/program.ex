@@ -86,8 +86,10 @@ defmodule Aqua.Harness.Program do
   at once, as is the notice of an answer the harness refused, and every
   other post and recovery prompt waits behind the held ones. Once an
   `idle` ends the native turn, each held is written again as it was, in
-  the order held, one at a time, and one answered `later` again waits for
-  the next idle; the turn is not done while one waits. A session that
+  the order first answered `later`, one at a time; one answered `later`
+  again stays first, and it and every one behind it wait for the next
+  idle, so none overtakes an earlier one. The turn is not done while one
+  waits. A session that
   ends meanwhile gives each back to the posts that wait, in order
   (`Aqua.Tape.uncarry/3`), so the next start does not name it pending and
   delivers it anew. A restart of CYFR while one is held loses that the
@@ -368,8 +370,9 @@ defmodule Aqua.Harness.Program do
       # its handle is where Stop looks (`Aqua.Loop`).
       phase: :unopened,
       outstanding: nil,
-      # The posts the driver answered `later`, in the order answered, each
-      # with whether the native turn it waits on is idle since (`held/2`).
+      # The posts the driver answered `later`, in the order first answered
+      # so, each with whether the native turn it waits on is idle since
+      # (`held/2`).
       later: [],
       fresh?: false,
       missed?: false,
@@ -987,7 +990,8 @@ defmodule Aqua.Harness.Program do
   # Each post answered `later` is held as it was written, its step and id
   # kept, after those held before it, none replacing another, until an
   # idle after its `later` says the native turn it waited on ended
-  # (`deliver/1`).
+  # (`deliver/1`). One answered `later` again as it is written again
+  # (`write_later/1`) goes back first, so none overtakes an earlier one.
   defp held(state, %{holds: holds}) do
     Enum.reduce(holds, state, fn
       :idle, state ->
@@ -996,11 +1000,14 @@ defmodule Aqua.Harness.Program do
       {:later, id}, state ->
         case state.outstanding do
           %{id: ^id, command: %{}} = delivery ->
-            %{
-              state
-              | outstanding: nil,
-                later: state.later ++ [%{delivery: delivery, rested?: false}]
-            }
+            hold = %{delivery: delivery, rested?: false}
+
+            later =
+              if delivery[:held?],
+                do: [hold | state.later],
+                else: state.later ++ [hold]
+
+            %{state | outstanding: nil, later: later}
 
           _not_this_post ->
             state
@@ -1097,16 +1104,15 @@ defmodule Aqua.Harness.Program do
   # The next command the rows say is owed, one at a time while the session
   # is ready, chosen from one view of them (`Arca.TurnStorage.brain_owed/2`):
   # a prompt a recovery owes, then a closed ask's result, then a post that
-  # waits. The posts answered `later` whose native turn is idle go first,
-  # in the order answered; while any is held a result is still written,
-  # and every other post and prompt waits behind them. A read that did
-  # not answer is never nothing owed.
-  defp deliver(%{phase: :ready, outstanding: nil} = state) do
-    case Enum.find_index(state.later, & &1.rested?) do
-      nil -> deliver_owed(state)
-      first -> write_later(state, first)
-    end
-  end
+  # waits. The posts answered `later` go first, in the order first
+  # answered so, each once its native turn is idle: one that still waits
+  # holds every one behind it. While any is held a result is still
+  # written, and every other post and prompt waits behind them. A read
+  # that did not answer is never nothing owed.
+  defp deliver(%{phase: :ready, outstanding: nil, later: [%{rested?: true} | _]} = state),
+    do: write_later(state)
+
+  defp deliver(%{phase: :ready, outstanding: nil} = state), do: deliver_owed(state)
 
   defp deliver(state), do: state
 
@@ -1124,12 +1130,12 @@ defmodule Aqua.Harness.Program do
     end
   end
 
-  # A held post, written again as it was, under its id. It leaves the hold
-  # before the write, so one that may have reached the driver keeps its
-  # step (`not_written/3`) and is never given back (`release/1`); one
-  # answered `later` again is held again, after the rest.
-  defp write_later(state, index) do
-    {%{delivery: delivery}, later} = List.pop_at(state.later, index)
+  # The first held post, written again as it was, under its id. It leaves
+  # the hold before the write, so one that may have reached the driver
+  # keeps its step (`not_written/3`) and is never given back
+  # (`release/1`); one answered `later` again is held again, first.
+  defp write_later(%{later: [%{delivery: delivery} | later]} = state) do
+    delivery = Map.put(delivery, :held?, true)
     state = %{state | later: later}
 
     case write(state, delivery.command) do

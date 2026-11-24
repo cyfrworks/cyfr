@@ -2306,19 +2306,19 @@ defmodule Aqua.ProgramTest do
       say(fake, row, %{"t" => "later", "id" => noticed.id})
       refute_receive {:session, "send", _wire, _fields}, 500
 
-      # After the idle both are written again, in the order answered, each
-      # once the last is answered; one answered later again waits for the
-      # next idle.
+      # After the idle both are written again, in the order first answered
+      # later, each once the last is answered; one answered later again
+      # stays first, and nothing behind it is written before the next idle.
       say(fake, row, idle(turn, [first.id]))
       assert sent() == steered_post
       say(fake, row, %{"t" => "later", "id" => steered.id})
-      assert sent() == notice
-      say(fake, row, accepted(noticed))
       refute_receive {:session, "send", _wire, _fields}, 500
-      say(fake, row, idle(turn, [noticed.id]))
+      say(fake, row, idle(turn, []))
       assert sent() == steered_post
       say(fake, row, accepted(steered))
-      say(fake, row, idle(turn, [steered.id]))
+      assert sent() == notice
+      say(fake, row, accepted(noticed))
+      say(fake, row, idle(turn, [steered.id, noticed.id]))
       assert :completed = Task.await(loop, 30_000)
 
       assert Enum.map(inputs(ctx, turn), &{&1.action, &1.message_id, &1.outcome}) == [

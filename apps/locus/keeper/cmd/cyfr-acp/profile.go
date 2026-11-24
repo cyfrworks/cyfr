@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
+	"github.com/cyfr/locus/keeper/internal/homepath"
 )
 
 // profile is what one program differs in under the one ACP driver: data,
@@ -60,11 +61,11 @@ type profile struct {
 	// mcpCall is the server and tool a tool_call's rawInput names when it
 	// is a call of an MCP server's, shown as `mcp:<server>/<tool>`.
 	mcpCall func(rawInput json.RawMessage) (server, tool string, ok bool)
-	// sessionRoot is the program's folder in the home, and sessionFiles the
-	// files under it that hold one session's content, every one a forget
-	// removes; nothing on the way from the root is followed through a link.
-	sessionRoot  func(home string) string
-	sessionFiles func(home, session string) []string
+	// sessionFiles are the files that hold one session's content, each a
+	// way down from the home, or from the folder the program is told to
+	// keep its files in, which internal/homepath walks following no link;
+	// every one a forget removes.
+	sessionFiles func(home, session string) []homepath.Path
 	// counted is the accounting of a prompt's counts that read.
 	counted string
 	// signedOutSentence refuses a post and a listing while signed out.
@@ -151,15 +152,13 @@ var antigravity = &profile{
 		ok := json.Unmarshal(rawInput, &input) == nil && input.ServerName != "" && input.ToolName != ""
 		return input.ServerName, input.ToolName, ok
 	},
-	sessionRoot: geminiHome,
-	sessionFiles: func(home, session string) []string {
-		cli := filepath.Join(geminiHome(home), "antigravity-cli")
-		return []string{
-			filepath.Join(cli, "brain", session),
-			filepath.Join(cli, agySessionDatabases, session+".db"),
-			filepath.Join(cli, agySessionDatabases, session+".db-wal"),
-			filepath.Join(cli, agySessionDatabases, session+".db-shm"),
-			filepath.Join(cli, "annotations", session+".pbtxt"),
+	sessionFiles: func(home, session string) []homepath.Path {
+		return []homepath.Path{
+			geminiPath(home, "antigravity-cli", "brain", session),
+			geminiPath(home, "antigravity-cli", agySessionDatabases, session+".db"),
+			geminiPath(home, "antigravity-cli", agySessionDatabases, session+".db-wal"),
+			geminiPath(home, "antigravity-cli", agySessionDatabases, session+".db-shm"),
+			geminiPath(home, "antigravity-cli", "annotations", session+".pbtxt"),
 		}
 	},
 	// Each session's title request is a model call of the program's own
@@ -171,10 +170,11 @@ var antigravity = &profile{
 	},
 }
 
-// geminiHome is where Antigravity keeps its sessions and its sign-in.
-func geminiHome(home string) string {
+// geminiPath is a way down Antigravity's folder: from GEMINI_HOME when it
+// is set, else from the home through `.gemini`.
+func geminiPath(home string, steps ...string) homepath.Path {
 	if dir := os.Getenv("GEMINI_HOME"); dir != "" {
-		return dir
+		return homepath.Path{Root: dir, Rel: filepath.Join(steps...)}
 	}
-	return filepath.Join(home, ".gemini")
+	return homepath.Path{Root: home, Rel: filepath.Join(append([]string{".gemini"}, steps...)...)}
 }

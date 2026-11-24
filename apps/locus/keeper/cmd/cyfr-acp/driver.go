@@ -753,6 +753,10 @@ func (d *driver) Ended() error {
 // closes, and Stop asks it to end and kills it at the bound. The tool
 // socket closes after the program has ended.
 func (d *driver) Close() {
+	if d.turn != nil {
+		// Shown before the program is stopped, whatever it writes after.
+		_ = d.flushOwn()
+	}
 	if d.h != nil {
 		var farewell [][]byte
 		if d.turn != nil && len(d.turn.open) > 0 && d.session != "" {

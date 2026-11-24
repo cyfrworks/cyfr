@@ -26,7 +26,16 @@ import (
 // still open when the native turn ends is shown then. A call of any other
 // kind is the program's own, shown from its start while it runs. A call
 // that cannot be told apart from another is shown as the program's own, so
-// none of a person's is ever hidden.
+// none of a person's is ever hidden. A tool of the person's that shows the
+// same arguments just before a call of CYFR's can be shown in that call's
+// place: that is the activity shown alone, since the gated call goes
+// through the socket whatever is shown.
+//
+// Nothing of this grows through a turn: a call is dropped when it ends, a
+// call of CYFR's keeps nothing but its id once matched, until its end, and
+// the turn's end drops the rest. A call still open when the turn ends, the
+// session closes or the program dies is shown as the program's own first,
+// so nothing that ran is missing from the activity.
 
 // ownCall is one of the program's tool calls, by its call id.
 type ownCall struct {
@@ -36,7 +45,7 @@ type ownCall struct {
 	// waits is a call of a stub server's kind, shown only at its end;
 	// started one shown from its start.
 	waits, started bool
-	cyfr, ended    bool
+	cyfr           bool
 }
 
 // acpKinds are the tool kinds ACP names; any other is shown as other.
@@ -93,15 +102,16 @@ func (d *driver) ownUpdate(callID, status, kind string, rawInput json.RawMessage
 		for i, arguments := range d.unclaimed {
 			if call.waits && call.shows(arguments) {
 				call.cyfr = true
+				call.arguments = nil
 				d.unclaimed = append(d.unclaimed[:i:i], d.unclaimed[i+1:]...)
 				break
 			}
 		}
 	}
-	if call.ended || (status != "completed" && status != "failed") {
+	if status != "completed" && status != "failed" {
 		return nil
 	}
-	call.ended = true
+	delete(d.own, callID)
 	return d.showOwn(call)
 }
 
@@ -124,7 +134,7 @@ func (d *driver) claim(arguments json.RawMessage) {
 	}
 	var open []*ownCall
 	for _, call := range d.own {
-		if call.waits && !call.ended && !call.cyfr && call.shows(v) {
+		if call.waits && !call.cyfr && call.shows(v) {
 			open = append(open, call)
 		}
 	}
@@ -133,6 +143,7 @@ func (d *driver) claim(arguments json.RawMessage) {
 		d.unclaimed = append(d.unclaimed, v)
 	case 1:
 		open[0].cyfr = true
+		open[0].arguments = nil
 	}
 }
 
@@ -149,20 +160,21 @@ func (d *driver) showOwn(call *ownCall) error {
 	return d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "end"))
 }
 
-// flushOwn shows each own call still open as the native turn ends, in the
-// order they were first seen.
+// flushOwn shows each own call still open, in the order they were first
+// seen, and drops everything held of the turn's calls.
 func (d *driver) flushOwn() error {
+	defer func() {
+		d.own = map[string]*ownCall{}
+		d.unclaimed = nil
+	}()
 	open := make([]*ownCall, 0, len(d.own))
 	for _, call := range d.own {
 		open = append(open, call)
 	}
 	sort.Slice(open, func(i, j int) bool { return open[i].seen < open[j].seen })
 	for _, call := range open {
-		if !call.ended {
-			call.ended = true
-			if err := d.showOwn(call); err != nil {
-				return err
-			}
+		if err := d.showOwn(call); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -49,6 +49,8 @@ import (
 //	stop:R    answers with the stop reason R
 //	rpcerr:C:M  answers with the JSON-RPC error C, its message M after a canary
 //	die       ends the process with status 3
+//	many      opens and ends forty calls of its own, then waits a moment before it replies
+//	hang      opens two calls that never end
 //	running   runs its own command and a person's server named cyfr, saying so while they run
 //	callsteer opens a call of CYFR's, takes a steer while it is open, then calls the socket
 //
@@ -308,6 +310,31 @@ func fakeACP() int {
 			given, _ := json.Marshal(map[string]any{"session": state.opened, "set": state.set, "prompt": params})
 			state.Unlock()
 			reply(string(given))
+		case strings.Contains(words, "many"):
+			// Forty calls of its own, half of a kind a stub server's call
+			// takes, each opened and ended.
+			for i := 0; i < 40; i++ {
+				kind := "execute"
+				if i%2 == 1 {
+					kind = "other"
+				}
+				call := map[string]any{"sessionUpdate": "tool_call", "toolCallId": fmt.Sprintf("call_many_%d", i), "status": "in_progress",
+					"kind": kind, "title": "Run x", "rawInput": map[string]any{"n": i, "toolSummary": "x"}}
+				update(call)
+				call["sessionUpdate"], call["status"] = "tool_call_update", "completed"
+				update(call)
+			}
+			chunk("calls done. ")
+			time.Sleep(500 * time.Millisecond) // sleep-ok: the turn stays open while the test looks at what the driver holds
+			reply("done")
+		case strings.Contains(words, "hang"):
+			// Two calls that never end: its own command and one of a stub
+			// server's kind.
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_hang_run", "status": "in_progress", "kind": "execute", "title": "Run x", "rawInput": map[string]any{}})
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_hang_other", "status": "in_progress", "kind": "other", "title": "Run y", "rawInput": map[string]any{"y": 1}})
+			chunk("hanging. ")
+			time.Sleep(5 * time.Second) // sleep-ok: a turn whose calls are still open when the session closes
+			reply("done")
 		case strings.Contains(words, "running"):
 			// Its own command, and a person's server named cyfr through its
 			// own call_mcp_tool, each running while the turn says so.
@@ -555,4 +582,12 @@ func fakeACP() int {
 			return 0
 		}
 	}
+}
+
+// geminiHome is where the stand-in, as Antigravity, keeps its sessions and its sign-in.
+func geminiHome(home string) string {
+	if dir := os.Getenv("GEMINI_HOME"); dir != "" {
+		return dir
+	}
+	return filepath.Join(home, ".gemini")
 }

@@ -9,9 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"path/filepath"
 
-	"github.com/cyfr/locus/keeper/internal/brainwire"
+	"github.com/cyfr/locus/keeper/internal/homepath"
 )
 
 // A program with no place for one process's instructions (profile's
@@ -30,12 +29,15 @@ import (
 
 const replacingWords = "Your current instructions, in place of any given earlier in this session:\n"
 
-// driverFolder is the driver's own folder in the home.
-func driverFolder(home string) string { return filepath.Join(home, ".cache", "cyfr-acp") }
+// driverFolder is the way down to the driver's own folder in the home.
+const driverFolder = ".cache/cyfr-acp"
 
-func instructionsFile(home, session string) string {
-	return filepath.Join(driverFolder(home), "instructions", session)
+func instructionsPath(home, session string) homepath.Path {
+	return homepath.Path{Root: home, Rel: driverFolder + "/instructions/" + session}
 }
+
+// instructionsFile is the record's path, for words.
+func instructionsFile(home, session string) string { return instructionsPath(home, session).String() }
 
 func digest(system string) string {
 	sum := sha256.Sum256([]byte(system))
@@ -44,26 +46,26 @@ func digest(system string) string {
 
 // wasHanded says whether the session was last handed `system`.
 func wasHanded(home, session, system string) bool {
-	last, err := os.ReadFile(instructionsFile(home, session))
+	last, err := homepath.ReadFile(instructionsPath(home, session))
 	return err == nil && string(last) == digest(system)
 }
 
 // clearHanded withdraws the session's record, removed or else emptied in
 // place, and says whether none stands.
 func clearHanded(home, session string) bool {
-	file := instructionsFile(home, session)
-	if err := os.Remove(file); err == nil || brainwire.Absent(err) {
+	record := instructionsPath(home, session)
+	if err := homepath.Remove(record); err == nil || homepath.Absent(err) {
 		return true
 	}
-	err := os.Truncate(file, 0)
-	return err == nil || brainwire.Absent(err)
+	f, err := homepath.OpenFile(record, os.O_WRONLY|os.O_TRUNC, 0, false)
+	if err != nil {
+		return homepath.Absent(err)
+	}
+	return f.Close() == nil
 }
 
 // recordHanded keeps that the session was handed `system`, after the last
 // record was cleared. One that cannot be written is as a lost one.
 func recordHanded(home, session, system string) {
-	file := instructionsFile(home, session)
-	if os.MkdirAll(filepath.Dir(file), 0o700) == nil {
-		_ = os.WriteFile(file, []byte(digest(system)), 0o600)
-	}
+	_ = homepath.WriteFile(instructionsPath(home, session), []byte(digest(system)))
 }

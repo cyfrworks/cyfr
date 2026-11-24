@@ -10,13 +10,13 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
+	"github.com/cyfr/locus/keeper/internal/homepath"
 )
 
 // A listing when no session runs is a session of the driver's own, made in
@@ -33,12 +33,22 @@ import (
 // taken without waiting: a record whose lock is held is a live listing's,
 // and is left alone.
 
-func listingFolder(home, boot string) string {
-	return filepath.Join(driverFolder(home), "listing", boot)
-}
+// listingRecords is the folder of the listings' records, one a listing,
+// and listingFolders that of their working folders.
+const (
+	listingRecords = driverFolder + "/listings"
+	listingFolders = driverFolder + "/listing"
+)
 
-// listingRecords is the folder of the listings' records, one a listing.
-func listingRecords(home string) string { return filepath.Join(driverFolder(home), "listings") }
+var errListingLinked = errors.New("a folder of the driver's own on the way to its listing is a link or no folder of this user's own, which CYFR does not follow")
+
+// reached is the driver's words for a way down its own folder that failed.
+func reached(err error, what string) error {
+	if homepath.Refused(err) {
+		return errListingLinked
+	}
+	return errors.New(what)
+}
 
 // oneOff is a program of a command's own, started for a few requests and
 // stopped after. Its errors are the driver's own sentences, never the
@@ -113,32 +123,46 @@ func (o *oneOff) close() { o.p.Stop() }
 // listOnce makes a listing session and answers what it offers, or says the
 // program is signed out, the one shape its profile names.
 func (d *driver) listOnce() (sessionAnswer, string, error) {
-	if err := d.forgetInterrupted(); err != nil {
+	records, err := homepath.Walk(d.home, listingRecords, true)
+	if err != nil {
+		return sessionAnswer{}, "", reached(err, "its listing records could not be reached")
+	}
+	defer records.Close()
+	if err := d.forgetInterrupted(records); err != nil {
 		return sessionAnswer{}, "", err
 	}
-	record, named, err := d.holdRecord()
+	record, err := holdRecord(records, d.c.Boot)
 	if err != nil {
-		return sessionAnswer{}, "", err
+		return sessionAnswer{}, "", reached(err, "its listing record could not be made")
 	}
 	// Removed while its lock is held, then released, unless its session
 	// could not be removed, which a later listing removes by it.
 	keep := false
 	defer func() {
 		if !keep {
-			_ = os.Remove(named)
+			_ = records.Remove(d.c.Boot)
 		}
 		record.Close()
 	}()
-	folder := listingFolder(d.home, d.c.Boot)
-	if os.RemoveAll(folder) != nil || os.MkdirAll(folder, 0o700) != nil {
+	folders, err := homepath.Walk(d.home, listingFolders, true)
+	if err != nil {
+		return sessionAnswer{}, "", reached(err, "its listing folder could not be made")
+	}
+	defer folders.Close()
+	if folders.RemoveAll(d.c.Boot) != nil {
 		return sessionAnswer{}, "", errors.New("its listing folder could not be made")
 	}
-	defer os.RemoveAll(folder)
+	folder, err := folders.Folder(d.c.Boot, true)
+	if err != nil {
+		return sessionAnswer{}, "", reached(err, "its listing folder could not be made")
+	}
+	folder.Close()
+	defer folders.RemoveAll(d.c.Boot)
 	o, err := d.openOneOff()
 	if err != nil {
 		return sessionAnswer{}, "", err
 	}
-	answer, err := o.call("session/new", map[string]any{"cwd": folder, "mcpServers": []any{}})
+	answer, err := o.call("session/new", map[string]any{"cwd": folder.Path(), "mcpServers": []any{}})
 	if err != nil {
 		o.close()
 		return sessionAnswer{}, "", err
@@ -165,53 +189,54 @@ func (d *driver) listOnce() (sessionAnswer, string, error) {
 	return listed, brainwire.SignedIn, nil
 }
 
-// holdRecord makes this listing's record and holds its lock. A record is
-// named in place only once locked, so no other listing takes an unlocked
-// one for an interrupted listing's.
-func (d *driver) holdRecord() (*os.File, string, error) {
-	folder := listingRecords(d.home)
-	failed := errors.New("its listing record could not be made")
-	if os.MkdirAll(folder, 0o700) != nil {
-		return nil, "", failed
-	}
-	making, named := filepath.Join(folder, "."+d.c.Boot), filepath.Join(folder, d.c.Boot)
-	f, err := os.OpenFile(making, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+// holdRecord makes the listing `boot`'s record in `records` and holds its
+// lock. A record is named in place only once locked, so no other listing
+// takes an unlocked one for an interrupted listing's.
+func holdRecord(records *homepath.Dir, boot string) (*os.File, error) {
+	making := "." + boot
+	f, err := records.Open(making, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, "", failed
+		return nil, err
 	}
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX) != nil || os.Rename(making, named) != nil {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		f.Close()
-		_ = os.Remove(making)
-		return nil, "", failed
+		_ = records.Remove(making)
+		return nil, err
 	}
-	return f, named, nil
+	if err := records.Rename(making, boot); err != nil {
+		f.Close()
+		_ = records.Remove(making)
+		return nil, err
+	}
+	return f, nil
 }
 
 // forgetInterrupted removes each interrupted listing's session and record,
-// under its record's lock; a record whose lock is held is a live listing's.
-func (d *driver) forgetInterrupted() error {
-	folder := listingRecords(d.home)
-	records, err := os.ReadDir(folder)
+// under its record's lock; a record whose lock is held is a live listing's,
+// and one that is a link or no file of this user's own is never opened.
+func (d *driver) forgetInterrupted(records *homepath.Dir) error {
+	names, err := records.Names()
 	if err != nil {
-		return nil
+		return errors.New("its listing records could not be read")
 	}
-	for _, entry := range records {
-		if strings.HasPrefix(entry.Name(), ".") {
+	for _, name := range names {
+		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		if err := d.forgetRecord(filepath.Join(folder, entry.Name())); err != nil {
+		f, err := records.Open(name, os.O_RDWR, 0)
+		if err != nil {
+			continue
+		}
+		err = d.forgetRecord(records, name, f)
+		f.Close()
+		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (d *driver) forgetRecord(name string) error {
-	f, err := os.OpenFile(name, os.O_RDWR, 0)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
+func (d *driver) forgetRecord(records *homepath.Dir, name string, f *os.File) error {
 	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 		return nil
 	}
@@ -224,6 +249,6 @@ func (d *driver) forgetRecord(name string) error {
 			return errors.New("an earlier listing's session could not be removed")
 		}
 	}
-	_ = os.Remove(name)
+	_ = records.Remove(name)
 	return nil
 }

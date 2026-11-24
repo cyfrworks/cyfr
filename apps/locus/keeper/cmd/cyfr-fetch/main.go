@@ -25,10 +25,10 @@
 // fetched and checked anew. The whole hash and not a prefix of it, so the
 // folder names the pin exactly, and a name of at most 193 bytes fits a
 // file name's 255. Every folder from $HOME/.local down to the version
-// folder is made 0700 when missing and must then be a folder of this
-// user's own and no link (checked after it is made, so a link raced in is
-// still seen); one that is not is refused, and nothing is fetched, written
-// or run. The program must be a regular executable file and no link; when
+// folder is made 0700 when missing and opened by its name in the last,
+// never through a link, and must be a folder of this user's own
+// (internal/homepath); one that is not is refused, and nothing is fetched,
+// written or run. The program must be a regular executable file and no link; when
 // it is, it is run with no network, and when it is anything else it is
 // refused. When it is missing the command takes an exclusive lock on the
 // version folder, so a second first run waits and then runs what the
@@ -67,7 +67,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -77,6 +76,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cyfr/locus/keeper/internal/homepath"
 )
 
 const (
@@ -198,9 +199,14 @@ type fetcher struct {
 }
 
 // install is the path of p's program in home, fetched there first when it
-// is not installed yet.
+// is not installed yet. Every folder on the way is reached by
+// internal/homepath, opened by name in the last and never through a link.
 func (f fetcher) install(home string, p program) (string, error) {
-	dir, shown := home, "~"
+	dir, err := homepath.Root(home)
+	if err != nil {
+		return "", fmt.Errorf("the home folder (~) %w, so nothing was fetched or run", reason(err))
+	}
+	shown := "~"
 	for _, step := range []struct{ name, role string }{
 		{".local", "The home folder's .local folder"},
 		{"share", "The .local/share folder"},
@@ -209,29 +215,27 @@ func (f fetcher) install(home string, p program) (string, error) {
 		{p.name, "The folder of " + p.name},
 		{p.version + "-" + p.sum, "The folder of " + p.name + " " + p.version},
 	} {
-		dir, shown = filepath.Join(dir, step.name), shown+"/"+step.name
-		if err := ownFolder(dir); err != nil {
-			return "", fmt.Errorf("%s (%s) %w, so nothing was fetched or run", step.role, shown, err)
+		shown += "/" + step.name
+		next, err := dir.Folder(step.name, true)
+		dir.Close()
+		if err != nil {
+			return "", fmt.Errorf("%s (%s) %w, so nothing was fetched or run", step.role, shown, reason(err))
 		}
+		dir = next
 	}
-	path := filepath.Join(dir, p.name)
-	if ok, err := installed(path, p, shown); err != nil {
+	defer dir.Close()
+	path := filepath.Join(dir.Path(), p.name)
+	if ok, err := installed(dir, p, shown); err != nil {
 		return "", err
 	} else if ok {
 		return path, nil
 	}
 	// The lock makes the sweep below safe: every temporary file in the
 	// folder belongs to a run that no longer holds it, and so has died.
-	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return "", fmt.Errorf("the folder of %s %s cannot be opened: %w", p.name, p.version, err)
-	}
-	lock := os.NewFile(uintptr(fd), dir)
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(dir.Fd()), syscall.LOCK_EX); err != nil {
 		return "", fmt.Errorf("the folder of %s %s cannot be locked: %w", p.name, p.version, err)
 	}
-	if ok, err := installed(path, p, shown); err != nil {
+	if ok, err := installed(dir, p, shown); err != nil {
 		return "", err
 	} else if ok {
 		return path, nil
@@ -244,71 +248,66 @@ func (f fetcher) install(home string, p program) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(download)
+	defer dir.Remove(download)
 	staged := download
 	if u, _ := url.Parse(p.url); strings.HasSuffix(u.Path, ".tar.gz") || strings.HasSuffix(u.Path, ".tgz") {
 		if staged, err = f.extract(dir, download, p); err != nil {
 			return "", err
 		}
-		defer os.Remove(staged)
-	} else if info, err := os.Stat(download); err != nil {
+		defer dir.Remove(staged)
+	} else if info, err := dir.Lstat(download); err != nil {
 		return "", err
-	} else if info.Size() > f.maxProgram {
+	} else if info.Size > f.maxProgram {
 		return "", fmt.Errorf("%s %s is larger than %d bytes, so nothing was installed", p.name, p.version, f.maxProgram)
 	}
-	if err := os.Chmod(staged, 0o755); err != nil {
+	program, err := dir.Open(staged, os.O_RDONLY, 0)
+	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(staged, path); err != nil {
+	err = program.Chmod(0o755)
+	program.Close()
+	if err != nil {
+		return "", err
+	}
+	if err := dir.Rename(staged, p.name); err != nil {
 		return "", fmt.Errorf("%s %s cannot be put in place: %w", p.name, p.version, err)
 	}
 	return path, nil
 }
 
-// ownFolder makes dir 0700 when it is missing and refuses it unless it is
-// then a folder of this user's own and no link.
-func ownFolder(dir string) error {
-	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("cannot be made (%w)", errors.Unwrap(err))
+// reason is what a folder on the way is, in the command's words.
+func reason(err error) error {
+	if homepath.Refused(err) {
+		return homepath.ErrNotOwn
 	}
-	// Looked at after the Mkdir, never through a link, so a link put in
-	// its place before or after is seen.
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return fmt.Errorf("cannot be read (%w)", errors.Unwrap(err))
-	}
-	owner, ok := info.Sys().(*syscall.Stat_t)
-	if !info.IsDir() || !ok || owner.Uid != uint32(os.Getuid()) {
-		return errors.New("is a link or not a folder of this user's own")
-	}
-	return nil
+	return fmt.Errorf("cannot be made or read (%w)", errors.Unwrap(err))
 }
 
-// installed is true when p's program is in place at path, a regular
+// installed is true when p's program is in place in dir, a regular
 // executable file, and false when nothing is there; anything else there is
 // refused. shown is its folder as the person reads it.
-func installed(path string, p program, shown string) (bool, error) {
-	info, err := os.Lstat(path)
+func installed(dir *homepath.Dir, p program, shown string) (bool, error) {
+	info, err := dir.Lstat(p.name)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case homepath.Absent(err):
 		return false, nil
 	case err != nil:
 		return false, err
-	case info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0:
+	case info.Mode.IsRegular() && info.Mode.Perm()&0o111 != 0:
 		return true, nil
 	}
 	return false, fmt.Errorf("the installed %s %s (%s/%s) is a link or not an executable file, so it is not run", p.name, p.version, shown, p.name)
 }
 
 // sweep removes the temporary files an interrupted run left in dir.
-func sweep(dir string) error {
-	entries, err := os.ReadDir(dir)
+func sweep(dir *homepath.Dir) error {
+	names, err := dir.Names()
 	if err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), tempPrefix) {
-			if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	for _, name := range names {
+		if strings.HasPrefix(name, tempPrefix) {
+			if err := dir.Remove(name); err != nil && !homepath.Absent(err) {
 				return err
 			}
 		}
@@ -316,9 +315,9 @@ func sweep(dir string) error {
 	return nil
 }
 
-// download is a temporary file in dir holding p's download, which matched
-// its SHA-512.
-func (f fetcher) download(dir string, p program) (string, error) {
+// download is a temporary file in dir, by its name, holding p's download,
+// which matched its SHA-512.
+func (f fetcher) download(dir *homepath.Dir, p program) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 	defer cancel()
 	client := *f.client
@@ -343,7 +342,7 @@ func (f fetcher) download(dir string, p program) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("fetching %s %s was answered %s, so nothing was installed", p.name, p.version, resp.Status)
 	}
-	tmp, err := os.CreateTemp(dir, tempPrefix+"*")
+	tmp, name, err := dir.CreateTemp(tempPrefix)
 	if err != nil {
 		return "", err
 	}
@@ -351,7 +350,7 @@ func (f fetcher) download(dir string, p program) (string, error) {
 	defer func() {
 		if !kept {
 			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
+			_ = dir.Remove(name)
 		}
 	}()
 	hash := sha512.New()
@@ -372,13 +371,13 @@ func (f fetcher) download(dir string, p program) (string, error) {
 		return "", err
 	}
 	kept = true
-	return tmp.Name(), nil
+	return name, nil
 }
 
-// extract is a temporary file in dir holding the one regular file of the
-// tar.gz archive at archive.
-func (f fetcher) extract(dir, archive string, p program) (string, error) {
-	in, err := os.Open(archive)
+// extract is a temporary file in dir, by its name, holding the one regular
+// file of the tar.gz archive named archive there.
+func (f fetcher) extract(dir *homepath.Dir, archive string, p program) (string, error) {
+	in, err := dir.Open(archive, os.O_RDONLY, 0)
 	if err != nil {
 		return "", err
 	}
@@ -402,7 +401,7 @@ func (f fetcher) extract(dir, archive string, p program) (string, error) {
 	case header.Size > f.maxProgram:
 		return "", refused(fmt.Sprintf("holds a program larger than %d bytes", f.maxProgram))
 	}
-	out, err := os.CreateTemp(dir, tempPrefix+"*")
+	out, name, err := dir.CreateTemp(tempPrefix)
 	if err != nil {
 		return "", err
 	}
@@ -410,7 +409,7 @@ func (f fetcher) extract(dir, archive string, p program) (string, error) {
 	defer func() {
 		if !kept {
 			_ = out.Close()
-			_ = os.Remove(out.Name())
+			_ = dir.Remove(name)
 		}
 	}()
 	if _, err := io.Copy(out, io.LimitReader(tr, f.maxProgram)); err != nil {
@@ -429,5 +428,5 @@ func (f fetcher) extract(dir, archive string, p program) (string, error) {
 		return "", err
 	}
 	kept = true
-	return out.Name(), nil
+	return name, nil
 }
