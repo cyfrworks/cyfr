@@ -35,16 +35,19 @@ import (
 // Two surfaces the driver cannot hold at their start, so their first reads
 // are Chrome's own. A service worker answers no command until it runs
 // (page.go): it sends the person's language and reads their zone, but its
-// script reads Chrome's en-US as its navigator.language and Intl's locale
-// until it is told the locale once it runs, and that told refused is said
-// in the driver's log. A shared worker attaches to the browser, not to the
-// page that made it, and holding the browser's attachments would hold
-// every window a page opens where no window's attachment sees it: so a
-// shared worker is never attached; it sends the person's language, reads
-// their zone and its process's locale, but reads Chrome's en-US as its
-// navigator.language and navigator.languages, and names itself as the
-// headless shell. Values the person never reported are absent and leave
-// Chrome's own: the image's en-US and UTC.
+// script reads Chrome's en-US as its navigator.language and Intl's locale,
+// and Chrome's own brands and hints (agent.go), until it is told the
+// locale and named once it runs, and that told refused is said in the
+// driver's log. A shared worker attaches to the browser, not to the page
+// that made it, and holding the browser's attachments would hold every
+// window a page opens where no window's attachment sees it: so a shared
+// worker is never attached; it sends the person's language, reads their
+// zone and its process's locale, but reads Chrome's en-US as its
+// navigator.language and navigator.languages, and Chrome's own brands and
+// hints, and its own requests send no Sec-CH-UA. The User-Agent of both
+// is the browser's from their first read.
+// Values the person never reported are absent and leave Chrome's own: the
+// image's en-US and UTC.
 type person struct {
 	Locale   string
 	TimeZone string

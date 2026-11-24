@@ -15,16 +15,31 @@ import (
 
 // The headless shell names itself HeadlessChrome: in its User-Agent, its
 // Sec-CH-UA client hints and navigator.userAgentData's brands, which a
-// site may read to turn a headless browser away. At its start the driver
-// reads what the shell says of itself, its User-Agent and its client
-// hints as a page of the reserved origin reads them, and every target it
-// attaches, a window, a frame of another process, a worker or a window a
-// page opened, is told before it runs to say the same with the
-// HeadlessChrome entry taken out: Chrome in place of HeadlessChrome in the
-// User-Agent, and the shell's own brand and full-version lists without
-// their HeadlessChrome entry, nothing else added, removed or reordered. A
-// target Chrome refuses to name that way is not let run (page.go). Nothing
-// else a page reads is changed by it.
+// site may read to turn a headless browser away. Before Chrome starts, the
+// driver runs the shell once on a throwaway profile and reads what it says
+// of itself, its User-Agent and its client hints as a page of the reserved
+// origin reads them (ownName, main.go). Chrome is then started by that
+// User-Agent with Chrome in place of HeadlessChrome, by its own switch,
+// which every window, frame and worker reads and sends from its first
+// read (a service worker's measured with the shell alone under that
+// switch, since no page the driver shows can register one). Every target
+// the driver attaches, a window, a frame of another process or a worker,
+// is told before it runs to say the same, with the shell's own brand and
+// full-version lists without their HeadlessChrome entry and its other
+// hints as the shell gave them, nothing else added, removed or reordered.
+// A target Chrome refuses to name that way is not let run (page.go).
+//
+// No switch names the brands, and the User-Agent switch blanks the
+// high-entropy hints of the running Chrome (measured on the image's
+// Chromium 156), so a target the driver does not name reads HeadlessChrome
+// among its brands, and an architecture, bitness, form factors and every
+// full version that are blank. There are three: a service worker until it
+// is named once it runs, and always a shared worker, whose own requests
+// send no Sec-CH-UA (person.go), and a window a page opens, whose requests
+// send HeadlessChrome in Sec-CH-UA: Chrome attaches no such window to its
+// opener's session, and the browser's own attachments, which would, break
+// a window a page opens (person.go). Nothing else a page reads is changed
+// by it.
 
 // headless is the product name the shell gives itself.
 const headless = "HeadlessChrome"
@@ -64,9 +79,11 @@ const readHints = `navigator.userAgentData.getHighEntropyValues(["architecture",
 
 // agentOf is the override every target is given: the shell's own
 // User-Agent with Chrome in place of HeadlessChrome, and its own client
-// hints with their HeadlessChrome entries taken out.
+// hints with their HeadlessChrome entries taken out. The User-Agent is a
+// name, since Chrome is started by it: not blank, printable ASCII with no
+// control character, and holding the HeadlessChrome product token.
 func agentOf(userAgent string, own hints) (map[string]any, error) {
-	if userAgent == "" || len(own.Brands) == 0 || len(own.FullVersionList) == 0 {
+	if len(own.Brands) == 0 || len(own.FullVersionList) == 0 || !agentName(userAgent) {
 		return nil, errors.New("Chrome named no User-Agent or brands")
 	}
 	without := func(list []brand) []brand {
@@ -100,9 +117,24 @@ func agentOf(userAgent string, own hints) (map[string]any, error) {
 	}, nil
 }
 
+// agentName says whether userAgent is a name agentOf takes.
+func agentName(userAgent string) bool {
+	if strings.TrimSpace(userAgent) == "" || !strings.Contains(userAgent, headless+"/") {
+		return false
+	}
+	for i := 0; i < len(userAgent); i++ {
+		if userAgent[i] < 0x20 || userAgent[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // ownAgent reads the shell's client hints in a target of its own, a blank
 // page of the reserved origin the driver answers itself, so nothing
-// leaves the box, and closes it; and answers the override (agentOf).
+// leaves the box, and answers the override (agentOf). The target is left
+// open: the shell it runs in is the reading's own, which ends with it
+// (ownName).
 func ownAgent(ctx context.Context, c *cdp, userAgent string) (map[string]any, error) {
 	var target struct {
 		TargetID string `json:"targetId"`
@@ -110,9 +142,6 @@ func ownAgent(ctx context.Context, c *cdp, userAgent string) (map[string]any, er
 	if err := c.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &target); err != nil {
 		return nil, err
 	}
-	defer func() {
-		_ = c.call(context.WithoutCancel(ctx), "", "Target.closeTarget", map[string]any{"targetId": target.TargetID}, nil)
-	}()
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}

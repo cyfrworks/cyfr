@@ -44,10 +44,10 @@ defmodule Aqua.FacadeTest do
     stream_texts: 1,
     strip_attachment_name: 1,
     thread_state: 2,
+    threads: 2,
     today: 1,
     virtual_tool_catalog: 0,
-    workspace: 2,
-    workspaces: 1
+    workspace: 2
   ]
 
   test "the root answers exactly its roster" do

@@ -123,6 +123,9 @@ export interface State {
   posture: Posture | null;
   // The person's preferences document, as the shell last told it.
   prefs: Item;
+  // How the person's CYFR stands (`system.changes`, one whole status), or
+  // null before it is read and once it is no longer granted.
+  system: Item | null;
 }
 
 // A stream's state besides live (the delivery contract, `canvas.catalog`):
@@ -133,8 +136,8 @@ export interface Delivery {
   at: string | null;
 }
 
-export const STREAMS = ["runs.changes", "schedules.changes", "schedule_runs.changes"];
-// The field that names an item of each stream.
+export const STREAMS = ["runs.changes", "schedules.changes", "schedule_runs.changes", "system.changes"];
+// The field that names an item of each stream; the status names none.
 const KEYS: Record<string, string> = {
   "runs.changes": "execution_id",
   "schedules.changes": "schedule_id",
@@ -172,6 +175,7 @@ export const EMPTY: State = {
   covered: [],
   posture: null,
   prefs: {},
+  system: null,
 };
 
 // Opens the canvas's streams and hands `onChange` each new state. Calls
@@ -311,13 +315,15 @@ export function hidden(state: State): string[] {
   return WIDGETS.filter((widget) => !isShown(state.prefs, widget));
 }
 
-// A first step the desktop offers: one of CYFR's own pages, and the field
-// of the preferences' `desktop` that hides it.
+// A first step the desktop offers: one of CYFR's own pages, the field of
+// the preferences' `desktop` that hides it, and, for a step CYFR can see
+// taken, whether it is.
 export interface Step {
   page: string;
   field: string;
   title: string;
   text: string;
+  done?: (state: State) => boolean;
 }
 
 // The first steps, in the order they are offered.
@@ -327,6 +333,7 @@ export const STEPS: Step[] = [
     field: "hide_aqua_setup",
     title: "Set up Aqua",
     text: "Aqua makes apps for you and runs them.",
+    done: (state) => state.system?.model_connected === true,
   },
   {
     page: "desktops",
@@ -336,15 +343,17 @@ export const STEPS: Step[] = [
   },
 ];
 
-// The first steps: each offered, in order, until the person hides it, and
-// the hidden ones, which "Getting started" offers again. Opening a step's
-// page hides nothing: one tap carries one verb to the shell, so the tap
-// that opens the page cannot also write the preferences.
+// The first steps: each offered, in order, until the person hides it or
+// it is done, and the hidden ones not done, which "Getting started" offers
+// again. Opening a step's page hides nothing: one tap carries one verb to
+// the shell, so the tap that opens the page cannot also write the
+// preferences.
 export function firstSteps(state: State): { offered: Step[]; hidden: Step[] } {
   const kept = deskFields(state.prefs);
+  const open = STEPS.filter((step) => !step.done?.(state));
   return {
-    offered: STEPS.filter((step) => kept[step.field] !== true),
-    hidden: STEPS.filter((step) => kept[step.field] === true),
+    offered: open.filter((step) => kept[step.field] !== true),
+    hidden: open.filter((step) => kept[step.field] === true),
   };
 }
 
@@ -423,6 +432,8 @@ export function fold(state: State, stream: string, item: Item, revision: number 
       return { ...next, schedules: keepSchedule(next.schedules, item) };
     case "schedule_runs.changes":
       return { ...next, scheduleRuns: keepScheduleRun(next.scheduleRuns, item) };
+    case "system.changes":
+      return { ...next, system: item };
     default:
       return next;
   }
@@ -470,6 +481,7 @@ export function delivered(state: State, stream: string, kind: Delivery["state"],
   if (stream === "runs.changes") return { ...cleared, runs: [] };
   if (stream === "schedules.changes") return { ...cleared, schedules: new Map() };
   if (stream === "schedule_runs.changes") return { ...cleared, scheduleRuns: [] };
+  if (stream === "system.changes") return { ...cleared, system: null };
   return cleared;
 }
 

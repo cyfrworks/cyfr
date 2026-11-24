@@ -433,6 +433,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
              ~s(#aqua-panel-more[data-aqua-menu-toggle][aria-controls="aqua-panel-pane-menu"][aria-expanded="false"])
            )
 
+    assert has_element?(
+             panel,
+             ~s(#aqua-panel-more[aria-label="This thread's menu"][title="This thread's menu"])
+           )
+
     pane = child!(panel, "aqua-panel-pane")
     menu = ~s(#aqua-panel-pane-menu[hidden])
 
@@ -581,7 +586,61 @@ defmodule PrismWeb.AquaPanelLiveTest do
   # The state a listed workspace thread's row reads, beside its title.
   defp row_state(workspace), do: "#aqua-panel-work-#{workspace.id} button > span:nth-child(2)"
 
-  test "the panel lists the workspace threads going, waiting on the person and finished but unread; one opens at its layer, and a finished one leaves once read",
+  # A thread's last activity `minutes` before now, as a post then would
+  # have left it.
+  defp active_at!(thread, minutes) do
+    at = DateTime.add(DateTime.utc_now(), -minutes * 60, :second)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(t in Arca.Schemas.Thread, where: t.id == ^thread.id),
+        set: [last_message_at: at]
+      )
+  end
+
+  # The ids of the rows `selector` matches in `view`, in the order drawn.
+  defp drawn(view, selector, prefix) do
+    view
+    |> element(selector)
+    |> render()
+    |> then(&Regex.scan(~r/id="#{prefix}([^"]+)"/, &1, capture: :all_but_first))
+    |> List.flatten()
+  end
+
+  test "a workspace thread not archived stays listed however many newer threads of another kind there are",
+       %{conn: conn, me: me} do
+    finished = workspace!(me, "Older work")
+    _post = finished!(me, finished)
+    active_at!(finished, 10_000)
+
+    # 200 daily threads, each newer than the workspace thread.
+    now = DateTime.utc_now()
+
+    days =
+      for n <- 1..200 do
+        at = DateTime.add(now, -n * 60, :second)
+
+        %{
+          id: Prima.UUID7.generate_id("thread"),
+          athanor_id: me.athanor_id,
+          kind: "daily",
+          day: Date.add(Date.utc_today(), -n),
+          title: Date.to_iso8601(Date.add(Date.utc_today(), -n)),
+          created_by: me.user_id,
+          last_message_at: at,
+          inserted_at: at,
+          updated_at: at
+        }
+      end
+
+    {200, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, days)
+
+    {panel, _html} = open_panel(desktop!(conn))
+
+    assert drawn(panel, "#aqua-panel-works", "aqua-panel-work-") == [finished.id]
+  end
+
+  test "the panel lists every workspace thread not archived, the latest activity first, whatever its state or what is read; one opens at its layer",
        %{conn: conn, mine: mine, me: me} do
     going = workspace!(me, "Going")
     waiting = workspace!(me, "Waiting")
@@ -591,23 +650,38 @@ defmodule PrismWeb.AquaPanelLiveTest do
     read = workspace!(me, "Finished read")
     seen = finished!(me, read)
     :ok = Aqua.mark_read(me, read.id, seen.seq)
+    shelved = workspace!(me, "Shelved")
+    _post = finished!(me, shelved)
+    {:ok, _} = Threads.archive(Sanctum.Context.actor(me), shelved.id)
+
+    for {thread, minutes} <- [{read, 1}, {going, 2}, {waiting, 3}, {unread, 4}, {shelved, 0}],
+        do: active_at!(thread, minutes)
 
     {panel, _html} = open_panel(desktop!(conn))
+
+    assert drawn(panel, "#aqua-panel-works", "aqua-panel-work-") ==
+             Enum.map([read, going, waiting, unread], & &1.id)
 
     assert has_element?(panel, ~s(#aqua-panel-work-#{going.id}[data-state="open"]), "Going")
     assert has_element?(panel, row_state(going), "Working")
     assert has_element?(panel, row_state(waiting), "Needs you")
     assert has_element?(panel, row_state(unread), "Finished")
     assert has_element?(panel, ~s(#aqua-panel-work-#{unread.id} [aria-label="1 new"]))
-    refute has_element?(panel, "#aqua-panel-work-#{read.id}")
+    assert has_element?(panel, row_state(read), "Finished")
+    refute has_element?(panel, "#aqua-panel-work-#{shelved.id}")
 
     # The waiting-on-crew list is gone.
     refute has_element?(panel, "#aqua-panel-pending")
 
-    # Read on another device, the finished one leaves this panel's list.
+    # Read on another device, the finished one stays, nothing new in it.
     [last | _] = Enum.reverse(Threads.messages(Sanctum.Context.actor(me), unread.id))
     :ok = Aqua.mark_read(me, unread.id, last.seq)
-    wait_until(fn -> not has_element?(panel, "#aqua-panel-work-#{unread.id}") end)
+
+    wait_until(fn ->
+      not has_element?(panel, ~s(#aqua-panel-work-#{unread.id} [aria-label="1 new"]))
+    end)
+
+    assert has_element?(panel, row_state(unread), "Finished")
 
     # One opens at its layer: the page moves there and the panel gives way.
     panel |> element("#aqua-panel-work-#{waiting.id} button") |> render_click()
@@ -618,7 +692,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel keeps one Aqua says needs the person listed as waiting on them, and one stopped or in error until it is read",
+  test "the panel keeps one Aqua says needs the person listed as waiting on them, and one stopped or in error once it is read",
        %{conn: conn, me: me} do
     me = %{me | origin: :interactive}
     actor = Sanctum.Context.actor(me)
@@ -667,19 +741,71 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert has_element?(panel, ~s(#aqua-panel-work-#{broken.id}[data-state="error"]))
     assert has_element?(panel, row_state(broken), "Error")
 
-    # Read, the stopped and the broken one leave; the one that needs the
-    # person stays.
+    # Read, all three stay, nothing new in any.
     for workspace <- [waiting, stopped, broken] do
       [last | _] = Enum.reverse(Threads.messages(actor, workspace.id))
       :ok = Aqua.mark_read(me, workspace.id, last.seq)
     end
 
-    wait_until(fn ->
-      not has_element?(panel, "#aqua-panel-work-#{stopped.id}") and
-        not has_element?(panel, "#aqua-panel-work-#{broken.id}")
-    end)
+    wait_until(fn -> not has_element?(panel, ~s(#aqua-panel-works [aria-label="1 new"])) end)
 
     assert has_element?(panel, row_state(waiting), "Needs you")
+    assert has_element?(panel, row_state(stopped), "Stopped")
+    assert has_element?(panel, row_state(broken), "Error")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "All threads opens the whole list in the panel: daily, workspace, shared and archived ones, each marked, and the search narrows it by title",
+       %{conn: conn, me: me, team: team} do
+    today = today!(me)
+    going = workspace!(me, "Going")
+    shelved = workspace!(me, "Shelved")
+    _post = finished!(me, shelved)
+    {:ok, _} = Threads.archive(Sanctum.Context.actor(me), shelved.id)
+
+    {panel, _html} = open_panel(desktop!(conn))
+    refute has_element?(panel, "#aqua-panel-threads")
+
+    panel |> element("#aqua-panel-all-threads") |> render_click()
+
+    assert has_element?(panel, ~s(#aqua-panel-thread-#{today.id}[data-kind="daily"]))
+    assert has_element?(panel, ~s(#aqua-panel-thread-#{going.id}[data-kind="workspace"]), "Going")
+
+    assert has_element?(
+             panel,
+             ~s(#aqua-panel-thread-#{shelved.id}[data-kind="workspace"][data-archived="true"]),
+             "Archived"
+           )
+
+    assert has_element?(panel, ~s(#aqua-panel-thread-#{team.id}[data-kind="shared"]), team.title)
+    refute has_element?(panel, ~s(#aqua-panel-thread-#{going.id}[data-archived="true"]))
+
+    panel |> form("#aqua-panel-threads-search", %{"title" => "sHEL"}) |> render_change()
+
+    assert drawn(panel, "#aqua-panel-threads", "aqua-panel-thread-") == [shelved.id]
+
+    panel |> form("#aqua-panel-threads-search", %{"title" => ""}) |> render_change()
+    assert has_element?(panel, "#aqua-panel-thread-#{team.id}")
+
+    # A thread of the athanor chosen is shown here, and the list gives way.
+    panel |> element("#aqua-panel-thread-#{today.id} button") |> render_click()
+    refute has_element?(panel, "#aqua-panel-threads")
+    on_thread!(child!(panel, "aqua-panel-pane"), today.id)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a shared thread chosen from All threads opens in Chat", %{conn: conn, team: team} do
+    view = desktop!(conn)
+    overlay = child!(view, "chat-overlay")
+    {panel, _html} = open_panel(view)
+
+    panel |> element("#aqua-panel-all-threads") |> render_click()
+    panel |> element("#aqua-panel-thread-#{team.id} button") |> render_click()
+
+    wait_until(fn -> has_element?(overlay, "#chat-sheet") end)
+    wait_until(fn -> find_live_child(overlay, "chat-thread-" <> team.id) != nil end)
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -1414,11 +1540,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  test "the panel offers no list of threads, no new thread and no delete; a crew member's thread is reached from its room, and Today returns",
+  test "the panel offers no new thread and no delete; a crew member's thread is reached from its room, and Today returns",
        %{conn: conn, me: me} do
     actor = Sanctum.Context.actor(me)
     today = today!(me)
-    {:ok, child} = Threads.crew_thread(actor, today.id, "builder")
+    # A member the crew holds: the room lists its standing members' threads.
+    member = Cyfr.Test.SeedBundle.seat_member()
+    {:ok, child} = Threads.crew_thread(actor, today.id, member)
 
     {panel, html} = open_panel(desktop!(conn))
     refute has_element?(panel, "#aqua-panel-sheet select")
@@ -1432,7 +1560,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     pane = on_thread!(child!(panel, "aqua-panel-pane"), today.id)
     pane |> element(~s([id$="-crew-#{child.id}"])) |> render_click()
     on_thread!(pane, child.id)
-    assert has_element?(panel, "#aqua-panel-day-name", "builder's thread")
+    assert has_element?(panel, "#aqua-panel-day-name", member <> "'s thread")
     refute has_element?(panel, "#aqua-panel-day-before")
 
     panel |> element("#aqua-panel-today") |> render_click()

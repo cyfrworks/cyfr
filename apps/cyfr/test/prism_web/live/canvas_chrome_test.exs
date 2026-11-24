@@ -222,7 +222,7 @@ defmodule PrismWeb.CanvasChromeTest do
              ~s(#canvas-frame-#{tile.id}[data-canvas-window="6800 800 3000 7000"])
            )
 
-    refute has_element?(view, ~s(#canvas-frame-#{window.id} [aria-label="Tincture controls"]))
+    refute has_element?(view, ~s(#canvas-frame-#{window.id} [aria-label="App controls"]))
   end
 
   test "each control of a title bar reaches the shell and changes what its app stands as", %{

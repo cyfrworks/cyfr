@@ -86,13 +86,23 @@ defmodule PrismWeb.ComponentsLiveTest do
     {view, render(view)}
   end
 
+  test "the apps are grouped under Apps, a word a person reads", %{conn: conn, ctx: ctx} do
+    {:ok, _} = Compendium.Scaffold.create(ctx, "shelf-app", "tincture", "0.1.0")
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {view, _html} = mount_athanor(conn, "/components")
+
+    assert has_element?(view, "h3", "Apps")
+    refute render(view) =~ ~r/>\s*Tinctures\s*</
+  end
+
   test "a bundled copy wears its badge, offers Reset and no Remove", %{conn: conn} do
     {_view, html} = expanded_html(conn)
 
     assert html =~ "shelf-tool"
     assert html =~ ~r/>\s*bundled\s*</
-    assert html =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
-    refute html =~ "Remove reagent:local.shelf-tool:1.0.0?"
+    assert html =~ "Reset shelf-tool 1.0.0 to the shipped version?"
+    refute html =~ "Remove shelf-tool 1.0.0?"
+    refute html =~ ~r/data-confirm="[^"]*reagent:/
   end
 
   test "Reset restores the shipped bytes over an edit", %{conn: conn, ctx: ctx} do
@@ -101,6 +111,7 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     {view, _html} = expanded_html(conn)
     render_click(view, "reset", %{"ref" => "reagent:local.shelf-tool:1.0.0"})
+    assert render(view) =~ "Reset shelf-tool 1.0.0 to the shipped version"
 
     # The edit is gone; the copy matches the shipped version again, and a
     # fresh mount agrees.
@@ -251,12 +262,12 @@ defmodule PrismWeb.ComponentsLiveTest do
     render_click(view, "pull", %{"ref" => "reagent:local.shelf-tool:1.1.0"})
 
     # The copy lands, registered, and the page shows it as the latest
-    # version with nothing left to update to.
-    Prima.Test.Wait.wait_until(fn ->
-      render(view) =~ "Pulled reagent:local.shelf-tool:1.1.0"
-    end)
+    # version with nothing left to update to, named as a person reads it:
+    # by its name and version, never its reference.
+    Prima.Test.Wait.wait_until(fn -> render(view) =~ "Pulled shelf-tool 1.1.0" end)
 
     html = render(view)
+    refute html =~ "Pulled reagent:"
     refute html =~ "Update to"
     assert html =~ "1.1.0"
 
@@ -558,7 +569,7 @@ defmodule PrismWeb.ComponentsLiveTest do
   test "a grant announced on the registry's topic leaves the expanded row as it reads",
        %{conn: conn, ctx: ctx} do
     {view, html} = expanded_html(conn)
-    assert html =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
+    assert html =~ "Reset shelf-tool 1.0.0 to the shipped version?"
 
     actor = Sanctum.Context.actor(ctx)
 
@@ -571,7 +582,7 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     # Heard and handled before the render below answers.
     _ = :sys.get_state(view.pid)
-    assert render(view) =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
+    assert render(view) =~ "Reset shelf-tool 1.0.0 to the shipped version?"
 
     Cyfr.Test.Sandbox.end_views()
   end
@@ -591,7 +602,7 @@ defmodule PrismWeb.ComponentsLiveTest do
       render_click(view, "toggle_expand", %{"ref" => @ref})
 
       # The expand's other read answered: the row is open on its versions.
-      assert render(view) =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
+      assert render(view) =~ "Reset shelf-tool 1.0.0 to the shipped version?"
       assert_plan_refused(view)
 
       Cyfr.Test.Sandbox.end_views()
