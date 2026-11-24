@@ -109,6 +109,13 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 
 func (d *driver) Process() *brainwire.Process { return d.h }
 
+// Deadline is none: Codex's answers are bounded by the holder's clock
+// alone.
+func (d *driver) Deadline() <-chan time.Time { return nil }
+
+// Expired is never called, with no deadline.
+func (d *driver) Expired() error { return nil }
+
 func (d *driver) running() bool { return d.h != nil && d.starting == nil && d.session != "" }
 
 // nextID is a request id of the driver's: unique to the process, so no

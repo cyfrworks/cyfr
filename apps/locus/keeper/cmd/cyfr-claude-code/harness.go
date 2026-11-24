@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf16"
 
@@ -340,6 +341,30 @@ func errorKind(err string) string {
 	return "provider_error"
 }
 
+// answerWait bounds the harness's answer to a start (its `initialize` and
+// its `mcp_status`) and to a work's `mcp_set_servers`, the answers the
+// driver holds a command for, as listingWait bounds a listing's: 2.1.323
+// answers each within a second (aq-drivers), and a start's first fetch of
+// the program is a listing's. A var, so a test can shorten it.
+var answerWait = listingWait
+
+// toolsLateSentence refuses a work whose tools the harness did not start
+// within answerWait.
+func toolsLateSentence() string {
+	return fmt.Sprintf("Claude Code did not start CYFR's tools within %d seconds, so the work was not begun; send it again.", int(answerWait/time.Second))
+}
+
+// unsendableSentence is the driver's words for a turn whose request the
+// API refused for a message of the session's own history: a previous
+// message id it does not take (2.1.323 ended every later turn of such a
+// session so, its request's 400, aq-drivers cl-c5). Nothing the person
+// sent was invalid, and the session cannot go on.
+const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this session cannot go on; nothing you sent was refused."
+
+// unsendableWords are the API's words, in a failed result's `result`, for
+// that refusal; they are read there alone, never in what the model said.
+const unsendableWords = "diagnostics.previous_message_id"
+
 // refusalSentence is the driver's words for a turn the model refused to
 // answer and kept to (a result whose stop is `refusal`, 2.1.323): no
 // request of the person's was invalid, so it is said as what it is.
@@ -410,6 +435,7 @@ type harnessLine struct {
 	Response        json.RawMessage `json:"response"`
 	APIErrorStatus  *int            `json:"api_error_status"`
 	StopReason      string          `json:"stop_reason"`
+	Result          json.RawMessage `json:"result"`
 	RateLimitInfo   json.RawMessage `json:"rate_limit_info"`
 }
 

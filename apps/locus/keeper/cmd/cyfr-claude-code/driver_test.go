@@ -556,6 +556,39 @@ func TestAnOwnCallItsTurnEndedWithoutIsForgottenWithTheTurn(t *testing.T) {
 	}
 }
 
+// A start the harness does not answer within answerWait ends the driver,
+// saying why on its standard error; a work whose tools it does not start
+// within it is refused in the driver's words. Neither waits on the
+// holder's clock alone.
+func TestAnAnswerTheHarnessDoesNotGiveInTimeEndsTheWait(t *testing.T) {
+	was := answerWait
+	answerWait = 300 * time.Millisecond
+	t.Cleanup(func() { answerWait = was })
+	t.Run("start", func(t *testing.T) {
+		t.Setenv("FAKE_SILENT", "initialize")
+		s := startDriver(t)
+		s.expect("hello")
+		s.send(map[string]any{"t": "start", "gen": 3, "config": map[string]any{}, "system": "be brief"})
+		select {
+		case code := <-s.done:
+			if code != 1 || !strings.Contains(s.stderr.String(), "Claude Code did not answer its start in time") {
+				t.Fatalf("the driver ends with 1, saying why on its standard error: %d %q", code, s.stderr.String())
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("a start the harness never answered went on")
+		}
+	})
+	t.Run("tools", func(t *testing.T) {
+		t.Setenv("FAKE_SILENT", "tools")
+		s := startDriver(t)
+		startFresh(s, map[string]any{})
+		s.send(map[string]any{"t": "work", "id": "stp_work", "work": "trn_1", "tools": []any{filesTool}})
+		if e := s.expect("refused"); e["id"] != "stp_work" || e["reason"] != toolsLateSentence() {
+			t.Fatalf("the work is refused in the driver's words: %v", e)
+		}
+	})
+}
+
 func TestAnErrorAnswerIsTheToolsError(t *testing.T) {
 	s := startDriver(t)
 	startFresh(s, map[string]any{})
@@ -640,6 +673,7 @@ func TestATurnsErrorIsTypedByWhatItsResultSays(t *testing.T) {
 		"overloaded": {"overloaded", "Claude Code reported its provider overloaded; ask again later."},
 		"refusing":   {"invalid_request", refusalSentence},
 		"limited":    {"rate_limited", "Claude Code reported a rate limit; it lifts at 11:16 UTC on 24 November 2026."},
+		"poisoned":   {"invalid_request", unsendableSentence},
 	} {
 		t.Run(words, func(t *testing.T) {
 			s := startDriver(t)

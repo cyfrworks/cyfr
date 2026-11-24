@@ -61,7 +61,8 @@ import (
 // the same name for the process's life. Each ask of an MCP tool names its
 // server, `mcp_server`, by name and source, and its call, `tool_use_id`.
 // FAKE_STATUS answers `mcp_status` with an error (`error`) or a success
-// that lists no servers (`unlisted`).
+// that lists no servers (`unlisted`). FAKE_SILENT leaves `initialize`
+// (`initialize`) or `mcp_set_servers` (`tools`) unanswered.
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -227,11 +228,17 @@ func fakeClaude() int {
 			write(map[string]any{"type": "user", "parent_tool_use_id": nil, "message": map[string]any{"role": "user", "content": []any{
 				map[string]any{"type": "tool_result", "tool_use_id": "toolu_own", "content": "FOLDER-CANARY " + fmt.Sprint(decision["behavior"])}}}})
 			reply(uuids, "ran it")
-		case strings.Contains(words, "overloaded"), strings.Contains(words, "refusing"), strings.Contains(words, "limited"):
+		case strings.Contains(words, "overloaded"), strings.Contains(words, "refusing"), strings.Contains(words, "limited"), strings.Contains(words, "poisoned"):
 			kind, status, stop := "server_error", any(529), "stop_sequence"
+			said := "API Error: HARNESS-WORDS"
 			switch {
 			case strings.Contains(words, "refusing"):
 				kind, status, stop = "invalid_request", nil, "refusal"
+			case strings.Contains(words, "poisoned"):
+				// As 2.1.323 ended every turn of a session whose history the
+				// API refused (aq-drivers cl-c5): the request's 400 and its words.
+				kind, status = "unknown", 400
+				said = "API Error: 400 messages.3.content.0: diagnostics.previous_message_id: String should match pattern '^msg_' (starts with `msg_`) HARNESS-WORDS"
 			case strings.Contains(words, "limited"):
 				// Its shape as T3 Code reads it from a subscription's session
 				// (ClaudeAdapterV2.ts, isClaudeBlockedAssistantRateLimit): a
@@ -240,9 +247,9 @@ func fakeClaude() int {
 				kind, status = "rate_limit", 429
 			}
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": kind, "message": map[string]any{"id": "msg_err", "stop_reason": stop, "content": []any{
-				map[string]any{"type": "text", "text": "API Error: HARNESS-WORDS"}}}})
+				map[string]any{"type": "text", "text": said}}}})
 			write(map[string]any{"type": "result", "subtype": "success", "is_error": true, "api_error_status": status, "terminal_reason": "api_error", "stop_reason": stop,
-				"num_turns": 1, "uuid": "result-err", "user_message_uuids": uuids, "result": "API Error: HARNESS-WORDS", "usage": map[string]any{}})
+				"num_turns": 1, "uuid": "result-err", "user_message_uuids": uuids, "result": said, "usage": map[string]any{}})
 		case strings.Contains(words, "rate"):
 			write(map[string]any{"type": "assistant", "parent_tool_use_id": nil, "error": "rate_limit", "message": map[string]any{"id": "msg_err", "content": []any{
 				map[string]any{"type": "text", "text": "API Error: please run /login HARNESS-WORDS"}}}})
@@ -380,6 +387,9 @@ func fakeClaude() int {
 				id := message["request_id"]
 				switch request["subtype"] {
 				case "initialize":
+					if os.Getenv("FAKE_SILENT") == "initialize" {
+						break
+					}
 					initialized, _ = json.Marshal(request)
 					answer := map[string]any{
 						"models": []any{
@@ -409,6 +419,9 @@ func fakeClaude() int {
 					}
 					write(map[string]any{"type": "control_response", "response": answer})
 				case "mcp_set_servers":
+					if os.Getenv("FAKE_SILENT") == "tools" {
+						break
+					}
 					servers, _ := request["servers"].(map[string]any)
 					serversMu.Lock()
 					dynamic = ""

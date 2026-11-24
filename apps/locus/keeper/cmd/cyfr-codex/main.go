@@ -30,8 +30,12 @@
 // `accepted` once Codex answers that it took it, which is no durable
 // delivery. A call of CYFR's tool
 // (`item/tool/call`) is held and shown as an `ask`, and an `answer`
-// answers it by its request's id. There is no interrupt: Stop closes the
-// session, and Codex's own `turn/interrupt` is never sent. A start runs
+// answers it by its request's id. A steer Codex answers with an error
+// other than a refusal of the request may have been taken, so its post is
+// refused and never written again. Stop is the session's close: a native
+// turn under way is first sent Codex's own `turn/interrupt`, then the
+// harness's input closes, a TERM follows at 2 s and a kill at 5 s
+// (brainwire's Process.Stop). A start runs
 // the thread in the access it names, one of those `models` lists
 // (accessChoices: Full access, no approvals, Codex's own sandbox off and
 // asking for nothing), or in the first when it names none; a start naming
