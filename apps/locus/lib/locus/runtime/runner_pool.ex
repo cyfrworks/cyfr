@@ -395,26 +395,14 @@ defmodule Locus.Runtime.RunnerPool do
       nil ->
         {:noreply, state}
 
+      # The start hears its runner's handle ended; why is the pool's own
+      # log line's (`handle_down/4`).
       %{waiter: waiter} = entry when waiter != nil ->
-        handle_info(
-          {:DOWN, nil, :process, pid, reason},
-          answer(state, pid, entry, {:error, {:spawn_failed, {:handle_down, reason}}})
-        )
-
-      %{released: true} = entry ->
-        {:noreply, released(state, pid, entry)}
+        state = answer(state, pid, entry, {:error, {:spawn_failed, :handle_down}})
+        {:noreply, handle_down(state, pid, state.runners[pid], reason)}
 
       entry ->
-        Logger.error(
-          "[Locus.Runtime.RunnerPool] runner #{entry.id}'s handle ended " <>
-            "(#{Prima.LogFilter.inspect_reason(reason)}); held until its keeper retires it"
-        )
-
-        state = told(state, pid, entry, {:gone, {:handle_down, reason}})
-        entry = %{state.runners[pid] | down: true, idle_timer: nil}
-        entry = if entry.state == :refused, do: entry, else: %{entry | state: :tainted}
-        fence(state, entry.id)
-        {:noreply, refill_later(put_runner(state, pid, entry))}
+        {:noreply, handle_down(state, pid, entry, reason)}
     end
   end
 
@@ -567,6 +555,22 @@ defmodule Locus.Runtime.RunnerPool do
   defp on_event(:released, pid, entry, state) do
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
     released(state, pid, entry)
+  end
+
+  defp handle_down(state, pid, %{released: true} = entry, _reason),
+    do: released(state, pid, entry)
+
+  defp handle_down(state, pid, entry, reason) do
+    Logger.error(
+      "[Locus.Runtime.RunnerPool] runner #{entry.id}'s handle ended " <>
+        "(#{Prima.LogFilter.inspect_reason(reason)}); held until its keeper retires it"
+    )
+
+    state = told(state, pid, entry, {:gone, {:handle_down, reason}})
+    entry = %{state.runners[pid] | down: true, idle_timer: nil}
+    entry = if entry.state == :refused, do: entry, else: %{entry | state: :tainted}
+    fence(state, entry.id)
+    refill_later(put_runner(state, pid, entry))
   end
 
   # The keeper released the runner, freeing its uid: a refusal the pool
