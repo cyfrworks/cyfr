@@ -53,8 +53,9 @@ type pageChrome struct {
 	// historyError fails every read of a window's navigation history.
 	historyError bool
 	// refuseChildNaming refuses the naming of every target attached to a
-	// window's session (agent.go).
-	refuseChildNaming bool
+	// window's session or to the browser's (agent.go); holdChildNaming
+	// answers none; refuseChildRun refuses to let one run.
+	refuseChildNaming, holdChildNaming, refuseChildRun bool
 	// loaders holds each frame's document's loader, which a request it
 	// makes is reported with; callerOrigin, the Origin a frame's caller
 	// sends when it is not the frame's document's, as a sandboxed frame's.
@@ -443,7 +444,11 @@ func (f *pageChrome) serve(commands io.Reader) {
 		case "Emulation.setUserAgentOverride", "Network.setUserAgentOverride":
 			f.mu.Lock()
 			refuse := f.refuseChildNaming && strings.HasPrefix(m.SessionID, "C")
+			hold := f.holdChildNaming && strings.HasPrefix(m.SessionID, "C")
 			f.mu.Unlock()
+			if hold {
+				continue
+			}
 			if refuse {
 				f.write(map[string]any{"id": m.ID, "sessionId": m.SessionID,
 					"error": map[string]any{"code": -32000, "message": "Not allowed"}})
@@ -455,8 +460,16 @@ func (f *pageChrome) serve(commands io.Reader) {
 			reply(map[string]any{})
 		case "Runtime.runIfWaitingForDebugger":
 			f.mu.Lock()
-			f.order = append(f.order, "run "+m.SessionID)
+			refuseRun := f.refuseChildRun && strings.HasPrefix(m.SessionID, "C")
+			if !refuseRun {
+				f.order = append(f.order, "run "+m.SessionID)
+			}
 			f.mu.Unlock()
+			if refuseRun {
+				f.write(map[string]any{"id": m.ID, "sessionId": m.SessionID,
+					"error": map[string]any{"code": -32000, "message": "Not allowed"}})
+				continue
+			}
 			reply(map[string]any{})
 			f.runs <- m.SessionID
 		case "Target.getTargetInfo":
@@ -2115,5 +2128,128 @@ func ranWithin(t *testing.T, f *pageChrome, what string) string {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("%s was never let run", what)
 		return ""
+	}
+}
+
+// closedWithin waits for the driver to close target, failing t when it has
+// not within a few seconds, and answers what it closed by then.
+func closedWithin(t *testing.T, f *pageChrome, target string) []string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		closed := append([]string(nil), f.closed...)
+		f.mu.Unlock()
+		for _, c := range closed {
+			if c == target {
+				return closed
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s was never closed; the driver closed %v", target, closed)
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded poll of the fake's record of closes
+	}
+}
+
+// A window of the driver's that closes, by its own close or by every
+// window's, closes first every window opened from it and from those, and
+// forgets them; another window of the driver's, and what was opened from
+// it, stay until it closes.
+func TestClosingAWindowClosesTheWindowsOpenedFromIt(t *testing.T) {
+	r := newPageRig(t)
+	defer r.close()
+	r.b.agent = map[string]any{"userAgent": "Mozilla/5.0 Chrome/156.0.8078.79"}
+	for i, win := range []string{"thr_01", "thr_02"} {
+		if shown := r.h.put(i+1, win, testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+			t.Fatalf("the put in %s answered %v", win, shown)
+		}
+		r.f.navigated()
+	}
+	popup := r.f.attachToBrowser("page", "T1")
+	ranWithin(t, r.f, "the window the first window opened")
+	inner := r.f.attachToBrowser("page", "X"+popup)
+	ranWithin(t, r.f, "the window that window opened")
+	other := r.f.attachToBrowser("page", "T2")
+	ranWithin(t, r.f, "the window the second window opened")
+	r.h.send(map[string]any{"t": "req", "id": 3, "win": "thr_01", "op": "close", "args": map[string]any{}})
+	if closed := r.h.response(3); fmt.Sprint(closed["ok"]) != "map[closed:true]" {
+		t.Fatalf("the close answered %v", closed)
+	}
+	r.f.mu.Lock()
+	closed := strings.Join(r.f.closed, " ")
+	r.f.mu.Unlock()
+	want := map[string]bool{"X" + popup + " X" + inner + " T1": true, "X" + inner + " X" + popup + " T1": true}
+	if !want[closed] {
+		t.Fatalf("closing the first window closed %q", closed)
+	}
+	r.b.mu.Lock()
+	opened, windows := len(r.b.opened), len(r.b.windows)
+	r.b.mu.Unlock()
+	if opened != 1 || windows != 1 {
+		t.Fatalf("the driver holds %d opened windows and %d of its own after the first closed", opened, windows)
+	}
+	r.h.send(map[string]any{"t": "req", "id": 4, "op": "close_all", "args": map[string]any{}})
+	r.h.response(4)
+	r.f.mu.Lock()
+	closed = strings.Join(r.f.closed, " ")
+	r.f.mu.Unlock()
+	if !strings.HasSuffix(closed, " X"+other+" T2") {
+		t.Fatalf("closing every window closed %q", closed)
+	}
+	r.b.mu.Lock()
+	opened = len(r.b.opened)
+	r.b.mu.Unlock()
+	if opened != 0 {
+		t.Fatalf("the driver holds %d opened windows after every window closed", opened)
+	}
+}
+
+// Nothing the browser's attachment holds stays held: a target is named and
+// let run within the bound, or closed by a bound of its own. A shared
+// worker Chrome refuses to name or to run is closed; a window a page
+// opened whose naming Chrome does not answer within the bound, or whose
+// run it refuses, is closed; one whose opener is gone is closed, not let
+// run unnamed.
+func TestNothingTheBrowsersAttachmentHoldsStaysHeld(t *testing.T) {
+	for _, c := range []struct {
+		what, kind string
+		opener     bool
+		set        func(f *pageChrome)
+	}{
+		{"a shared worker Chrome refuses to name", "shared_worker", false, func(f *pageChrome) { f.refuseChildNaming = true }},
+		{"a shared worker Chrome refuses to run", "shared_worker", false, func(f *pageChrome) { f.refuseChildRun = true }},
+		{"a window whose naming is never answered", "page", true, func(f *pageChrome) { f.holdChildNaming = true }},
+		{"a window Chrome refuses to run", "page", true, func(f *pageChrome) { f.refuseChildRun = true }},
+		{"a window whose opener is gone", "page", false, func(*pageChrome) {}},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			r := newPageRig(t)
+			defer r.close()
+			r.b.agent = map[string]any{"userAgent": "Mozilla/5.0 Chrome/156.0.8078.79"}
+			r.b.attachWait = 300 * time.Millisecond
+			if shown := r.h.put(1, "thr_01", testRoot, "index.html", testSite, 64); shown["ok"] == nil {
+				t.Fatalf("the put answered %v", shown)
+			}
+			r.f.navigated()
+			r.f.mu.Lock()
+			c.set(r.f)
+			r.f.mu.Unlock()
+			opener := ""
+			switch {
+			case c.opener:
+				opener = "T1"
+			case c.kind == "page":
+				opener = "T9"
+			}
+			target := "X" + r.f.attachToBrowser(c.kind, opener)
+			closedWithin(t, r.f, target)
+			r.f.mu.Lock()
+			order := strings.Join(r.f.order, ", ")
+			r.f.mu.Unlock()
+			if strings.Contains(order, "run "+strings.TrimPrefix(target, "X")) {
+				t.Fatalf("%s ran before it was closed: %s", target, order)
+			}
+		})
 	}
 }

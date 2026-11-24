@@ -455,12 +455,13 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 			var attached struct {
 				SessionID  string `json:"sessionId"`
 				TargetInfo struct {
-					Type string `json:"type"`
+					TargetID string `json:"targetId"`
+					Type     string `json:"type"`
 				} `json:"targetInfo"`
 			}
 			if json.Unmarshal(ev.params, &attached) == nil && attached.SessionID != "" {
 				children[attached.SessionID] = true
-				go b.attachChild(w, attached.SessionID, attached.TargetInfo.Type)
+				go b.attachChild(w, attached.SessionID, attached.TargetInfo.Type, attached.TargetInfo.TargetID)
 			}
 		case "Target.detachedFromTarget":
 			var detached struct {
@@ -505,18 +506,19 @@ func (b *browser) serveSession(w *window, session, kind string, events *watch) {
 // requests for the reserved origin are failed. Its session is served from
 // before the first step, so whatever a step that took pauses is answered
 // though a later step fail; what no step pauses fails inside Chrome.
-func (b *browser) attachChild(w *window, session, kind string) {
-	ctx, cancel := context.WithTimeout(context.Background(), opWait)
+func (b *browser) attachChild(w *window, session, kind, target string) {
+	ctx, cancel := context.WithTimeout(context.Background(), b.attachWait)
 	defer cancel()
 	// A service worker answers its network's commands only once it runs,
 	// so it is named after it is let run, and one that cannot be named
 	// then, as one that has ended cannot, runs as the shell names it: the
 	// one limit. Every other target is named before it runs, and one
-	// Chrome refuses to name is not let run: a window it opened is closed,
-	// and the window's next action says so.
+	// Chrome refuses to name, or does not name within the bound, is not let
+	// run: a window it opened is closed, and the window's next action says
+	// so. A window it opened whose run is refused is closed too.
 	if kind != "service_worker" {
 		if err := b.name(ctx, session, kind); err != nil {
-			b.refused(ctx, w, session, kind)
+			b.refused(w, kind, target)
 			return
 		}
 	}
@@ -529,7 +531,10 @@ func (b *browser) attachChild(w *window, session, kind string) {
 		go b.serveSession(w, session, sessionForeign, b.c.watch(session, intercepted))
 		_ = b.c.call(ctx, session, "Fetch.enable", fetchPatterns, nil)
 	}
-	_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
+	if err := b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil); err != nil && kind == "page" {
+		b.closeTarget(target)
+		return
+	}
 	if kind == "service_worker" {
 		if err := b.name(ctx, session, kind); err != nil {
 			fmt.Fprintf(b.log, "cyfr-browser: a service worker of window %s was not named once it ran: %v\n", w.name, err)
@@ -544,18 +549,21 @@ func (b *browser) attachChild(w *window, session, kind string) {
 var browserTargets = map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
 	"filter": []map[string]any{{"type": "page"}, {"type": "shared_worker"}}}
 
-// attachedToBrowser sets up a target the browser's attachment holds. A
-// window a page opened belongs to its opener's window, or to the window
-// the window that opened it belongs to, and is set up as another of that
-// window's targets (attachChild): named before it runs, its reserved
-// origin's requests failed, and closed when Chrome refuses to name it. A
-// shared worker is named and let run; one Chrome refuses to name is not
-// let run, which the driver's log says. A window the driver made, or one
-// no window of the driver's opened, is let run as it is: the driver's own
-// is named on its own session (browser.go).
+// attachedToBrowser sets up a target the browser's attachment holds, within
+// the attachment's bound; none stays held. A window a page opened belongs
+// to its opener's window, or to the window the window that opened it
+// belongs to, and is set up as another of that window's targets
+// (attachChild): named before it runs, its reserved origin's requests
+// failed, and closed when Chrome refuses to name or run it. One whose
+// opener is no window of the driver's, or is gone, is closed. A shared
+// worker is named and let run, and closed when Chrome refuses either,
+// which the driver's log says: its pages read the worker's error and go
+// on. A window with no opener is the driver's own, named on its own
+// session (browser.go): it is let run, and closed when Chrome refuses.
 func (b *browser) attachedToBrowser(params json.RawMessage) {
 	var attached struct {
 		SessionID  string `json:"sessionId"`
+		Waiting    bool   `json:"waitingForDebugger"`
 		TargetInfo struct {
 			TargetID string `json:"targetId"`
 			Type     string `json:"type"`
@@ -582,19 +590,28 @@ func (b *browser) attachedToBrowser(params json.RawMessage) {
 		b.mu.Unlock()
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), opWait)
+		ctx, cancel := context.WithTimeout(context.Background(), b.attachWait)
 		defer cancel()
+		run := func() {
+			if err := b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil); err != nil {
+				fmt.Fprintf(b.log, "cyfr-browser: a %s was not let run, so it was closed: %v\n", info.Type, err)
+				b.closeTarget(info.TargetID)
+			}
+		}
 		switch {
+		case info.Type == "page" && info.OpenerID != "" && opener == nil:
+			b.closeTarget(info.TargetID)
 		case opener != nil:
-			b.attachChild(opener, session, "page")
+			b.attachChild(opener, session, "page", info.TargetID)
 		case info.Type == "shared_worker":
 			if err := b.name(ctx, session, info.Type); err != nil {
-				fmt.Fprintf(b.log, "cyfr-browser: a shared worker was not named, so it was not let run: %v\n", err)
+				fmt.Fprintf(b.log, "cyfr-browser: a shared worker was not named, so it was closed: %v\n", err)
+				b.closeTarget(info.TargetID)
 				return
 			}
-			_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
-		default:
-			_ = b.c.call(ctx, session, "Runtime.runIfWaitingForDebugger", nil, nil)
+			run()
+		case attached.Waiting:
+			run()
 		}
 	}()
 }
@@ -605,19 +622,39 @@ var errUnnamed = &failure{"unnamed", "The browser could not name a frame, worker
 
 // refused marks w unnamed for a target Chrome refused to name, and closes
 // it when it is a window, which can be closed apart from its opener.
-func (b *browser) refused(ctx context.Context, w *window, session, kind string) {
+func (b *browser) refused(w *window, kind, target string) {
 	w.mu.Lock()
 	w.unnamed = true
 	w.mu.Unlock()
 	if kind == "page" {
-		var info struct {
-			TargetInfo struct {
-				TargetID string `json:"targetId"`
-			} `json:"targetInfo"`
+		b.closeTarget(target)
+	}
+}
+
+// closeTarget closes target, by a bound of its own, so a close that follows
+// a lapsed one is still sent, and forgets it as a window a page opened.
+func (b *browser) closeTarget(target string) {
+	b.mu.Lock()
+	delete(b.opened, target)
+	b.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+	defer cancel()
+	_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": target}, nil)
+}
+
+// closeOpened closes every window opened from window w, and from those,
+// and forgets them.
+func (b *browser) closeOpened(w *window) {
+	b.mu.Lock()
+	var targets []string
+	for target, opener := range b.opened {
+		if opener == w {
+			targets = append(targets, target)
 		}
-		if b.c.call(ctx, session, "Target.getTargetInfo", nil, &info) == nil && info.TargetInfo.TargetID != "" {
-			_ = b.c.call(ctx, "", "Target.closeTarget", map[string]any{"targetId": info.TargetInfo.TargetID}, nil)
-		}
+	}
+	b.mu.Unlock()
+	for _, target := range targets {
+		b.closeTarget(target)
 	}
 }
 
