@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,9 +76,10 @@ type appRoad interface {
 	closesTheBox() (stop, start []string)
 }
 
-// staged is an installer fetch verified: file, its sha256 sum, in dir,
-// the folder of its own fetch made.
-type staged struct{ dir, file, sum string }
+// staged is release target's installer fetch verified: file, its sha256
+// sum, in dir, the folder of its own fetch made; a road whose installer
+// fetches for itself (Homebrew) stages no file.
+type staged struct{ target, dir, file, sum string }
 
 // remove removes the folder fetch made.
 func (s *staged) remove() {
@@ -108,7 +110,7 @@ func fetchInstaller(ctx context.Context, out io.Writer, target, goos, goarch str
 	}
 	dir, err := os.MkdirTemp("", "cyfr-update-")
 	if err == nil {
-		s := &staged{dir: dir, file: filepath.Join(dir, release.PackageName(target, goos, goarch)), sum: sum}
+		s := &staged{target: target, dir: dir, file: filepath.Join(dir, release.PackageName(target, goos, goarch)), sum: sum}
 		if err = os.WriteFile(s.file, data, 0o600); err == nil {
 			return s, nil
 		}
@@ -126,8 +128,8 @@ func appIs(answered string) string {
 	return "the CYFR app is release " + answered
 }
 
-// updateApp brings the installed CYFR app to release target through this
-// machine's road (appRoadHere), in the order whose every refusal leaves a
+// updateApp brings the installed CYFR app to release target through road,
+// in the order whose every refusal leaves a
 // working app: the installer is verified, then the elevation is taken,
 // then the running app is closed, then the installer replaces it, then
 // the release the app's own cyfr answers is read, and the app is opened
@@ -141,8 +143,7 @@ func appIs(answered string) string {
 // Anything but release target answered after the installer is a refusal:
 // the CYFR the folder holds is not touched. again is the command the
 // person runs to try again.
-func updateApp(ctx context.Context, out io.Writer, before, target, again string) error {
-	road := appRoadHere()
+func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target, again string) error {
 	if road == nil {
 		return errors.New("cyfr update has no installer for the CYFR app on this system; nothing was changed")
 	}
@@ -244,12 +245,16 @@ const (
 // askAppToQuit ends the CYFR app this account runs: the installed app is
 // started with --quit, which asks a running one to end and says so, again
 // every quarter second until it says none runs, all within appQuitWithin.
-// It answers whether one ran. The app ends only on its own act, as it ends
-// on any other close: what the page was doing is left as a quit leaves it.
+// It answers whether one ran; with no app installed none runs. The app
+// ends only on its own act, as it ends on any other close: what the page
+// was doing is left as a quit leaves it.
 func askAppToQuit() (bool, error) {
 	app, err := installedApp()
 	if err != nil {
 		return false, err
+	}
+	if _, err := os.Stat(app); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
 	}
 	deadline := time.Now().Add(appQuitWithin)
 	ran := false

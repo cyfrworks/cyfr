@@ -235,6 +235,13 @@ func runFakeBrew(dir, args string) int {
 			return 3
 		}
 		fmt.Println("cyfr " + strings.TrimSpace(string(v)))
+	case "info --cask --json=v2 cyfr":
+		to, err := os.ReadFile(filepath.Join(dir, "offers"))
+		sum, serr := os.ReadFile(filepath.Join(dir, "sha256"))
+		if err != nil || serr != nil {
+			return 3
+		}
+		fmt.Printf("{\"formulae\":[],\"casks\":[{\"token\":\"cyfr\",\"version\":%q,\"sha256\":%q}]}\n", strings.TrimSpace(string(to)), strings.TrimSpace(string(sum)))
 	case "list --cask cyfr", "update":
 	case "upgrade --cask cyfr":
 		to, err := os.ReadFile(filepath.Join(dir, "upgrade-to"))

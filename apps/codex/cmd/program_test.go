@@ -86,6 +86,11 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 		s.handed = append(s.handed, append([]string{path}, args...))
 		return s.handStatus, s.handErr
 	}
+	// No test closes or opens an app of the machine it runs on.
+	savedQuit, savedReopen := quitApp, reopenApp
+	t.Cleanup(func() { quitApp, reopenApp = savedQuit, savedReopen })
+	quitApp = func() (bool, error) { return false, nil }
+	reopenApp = func() error { return errors.New("a test opened the installed app") }
 	return s
 }
 
@@ -399,9 +404,22 @@ func fakeBrew(t *testing.T, installed, upgradeTo string) string {
 	if err := errors.Join(
 		os.WriteFile(filepath.Join(dir, "version"), []byte(installed+"\n"), 0644),
 		os.WriteFile(filepath.Join(dir, "upgrade-to"), []byte(upgradeTo+"\n"), 0644),
+		os.WriteFile(filepath.Join(dir, "offers"), []byte(upgradeTo+"\n"), 0644),
+		os.WriteFile(filepath.Join(dir, "sha256"), []byte(caskSum+"\n"), 0644),
 	); err != nil {
 		t.Fatal(err)
 	}
+	// The release's signed checksums name the cask's sum for the Mac's
+	// installer, and the app's own cyfr answers the release brew installed.
+	savedSum, savedRelease := appPackageSum, machine.appRelease
+	t.Cleanup(func() { appPackageSum, machine.appRelease = savedSum, savedRelease })
+	appPackageSum = func(_ context.Context, v, goos, goarch string) (string, error) {
+		if goos != "darwin" || goarch != runtime.GOARCH {
+			return "", fmt.Errorf("the sum of %s's installer for %s/%s was asked", v, goos, goarch)
+		}
+		return caskSum, nil
+	}
+	machine.appRelease = func() string { return strings.TrimSpace(read(t, filepath.Join(dir, "version"))) }
 	standInLink(t, filepath.Join(dir, "brew"))
 	t.Setenv(fakeBrewDir, dir)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -541,18 +559,45 @@ func TestUpdateThroughHomebrew(t *testing.T) {
 	if err != nil || len(s.handed) != 1 || !slices.Equal(s.handed[0], []string{want, want, "update", "--continue-as", "0.10.0"}) {
 		t.Fatalf("cyfr update through brew answered %v, handovers %v:\n%s", err, s.handed, out)
 	}
-	if got := brewLog(dir); got != "list --cask cyfr\nupdate\nupgrade --cask cyfr\nlist --cask --versions cyfr\n--prefix" {
+	if got := brewLog(dir); got != "list --cask cyfr\nupdate\ninfo --cask --json=v2 cyfr\nupgrade --cask cyfr\nlist --cask --versions cyfr\n--prefix" {
 		t.Errorf("brew ran:\n%s", got)
 	}
 	if len(s.fetched) != 0 || read(t, s.self) != "old cyfr" {
 		t.Errorf("a cask install downloaded %v or replaced its program itself", s.fetched)
 	}
 
+	// A tap that still offers the old release changes nothing.
 	s = newProgramScenario(t, "0.9.0", "0.10.0")
-	fakeBrew(t, "0.9.0", "0.9.0")
+	dir = fakeBrew(t, "0.9.0", "0.9.0")
 	caskInstalled = restore
-	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "the cyfr cask is still 0.9.0, not 0.10.0; your CYFR was not touched") || len(s.handed) != 0 {
+	if _, err := s.run(updateOptions{}); err == nil || !strings.HasPrefix(err.Error(), "Homebrew's tap offers cyfr 0.9.0, not 0.10.0; nothing was changed") || len(s.handed) != 0 {
+		t.Errorf("a tap on the old release answered %v, handovers %v", err, s.handed)
+	}
+	if got := brewLog(dir); got != "list --cask cyfr\nupdate\ninfo --cask --json=v2 cyfr" {
+		t.Errorf("brew ran for a tap on the old release:\n%s", got)
+	}
+
+	// brew that exits cleanly on the old release is not taken for the new.
+	s = newProgramScenario(t, "0.9.0", "0.10.0")
+	dir = fakeBrew(t, "0.9.0", "0.9.0")
+	writeFile(t, filepath.Join(dir, "offers"), "0.10.0\n")
+	caskInstalled = restore
+	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "brew exited cleanly but the cyfr cask is still 0.9.0, not 0.10.0.") ||
+		!strings.Contains(err.Error(), "the CYFR app is release 0.9.0, and your CYFR was not touched") || len(s.handed) != 0 {
 		t.Errorf("brew left on the old release answered %v, handovers %v", err, s.handed)
+	}
+
+	// A tap whose cask names other bytes than the release's signed
+	// installer changes nothing: brew never upgrades.
+	s = newProgramScenario(t, "0.9.0", "0.10.0")
+	dir = fakeBrew(t, "0.9.0", "0.10.0")
+	caskInstalled = restore
+	writeFile(t, filepath.Join(dir, "sha256"), strings.Repeat("0", 64))
+	if _, err := s.run(updateOptions{}); err == nil || err.Error() != "Homebrew's cyfr cask names other bytes than release 0.10.0's signed installer for this Mac; nothing was changed and CYFR runs as it did" || len(s.handed) != 0 {
+		t.Errorf("a cask of other bytes answered %v, handovers %v", err, s.handed)
+	}
+	if got := brewLog(dir); got != "list --cask cyfr\nupdate\ninfo --cask --json=v2 cyfr" {
+		t.Errorf("brew ran for a cask of other bytes:\n%s", got)
 	}
 
 	s = newProgramScenario(t, "0.9.0", "0.10.0")
@@ -573,6 +618,10 @@ func TestUpdateThroughHomebrew(t *testing.T) {
 		t.Errorf("--version naming the tap's release answered %v, handovers %v", err, s.handed)
 	}
 }
+
+// caskSum is the sha256 the fake brew's cask names and the release's
+// signed checksums name for the Mac's installer.
+const caskSum = "5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e"
 
 // handoverDir is where the handover scenario (TestMain) finds the program
 // file it replaces and writes what the program it hands over to saw.
