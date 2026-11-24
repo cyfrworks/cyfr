@@ -269,7 +269,7 @@ func (s *Service) updateNow() updateRead {
 		offer := s.update.offer.UpdateOffer
 		out.Offer = &offer
 	}
-	out.Running = s.update.running || (s.UpdateRuns != nil && s.UpdateRuns(""))
+	out.Running = s.update.running || s.updateRuns()
 	out.Seq = 2 * (s.update.seq + 1)
 	if out.Running {
 		out.Seq++
@@ -343,11 +343,7 @@ func (s *Service) StartUpdate(id uint64) {
 	}
 	s.update.started = id
 	s.update.refused = ""
-	project := ""
-	if p.Step == "stack" {
-		project = p.Dir
-	}
-	if s.UpdateRuns != nil && s.UpdateRuns(project) {
+	if s.updateRuns() {
 		s.update.refused = "Another update is changing CYFR on this computer, so nothing was started. Once it has finished, open Update CYFR again."
 		s.voidOffer()
 		return
@@ -371,9 +367,23 @@ func (s *Service) StartUpdate(id uint64) {
 	}()
 }
 
+// updateRuns is whether an update runs, under s.mu, by the locks it
+// holds: cyfr update's, and for an offer of this computer's own CYFR the
+// stack's of its folder, so the page and the yes ask the same.
+func (s *Service) updateRuns() bool {
+	project := ""
+	if p := s.update.offer; p != nil && p.Step == "stack" {
+		project = p.Dir
+	}
+	return s.UpdateRuns != nil && s.UpdateRuns(project)
+}
+
 // beginRun makes the record anew and starts plan's run with it as its
-// output.
+// output; a run that does not start leaves the last update's record as it
+// was, its time too.
 func (s *Service) beginRun(p UpdatePlan) (func() error, error) {
+	last, lastErr := os.ReadFile(s.UpdateRecord)
+	lastInfo, _ := os.Stat(s.UpdateRecord)
 	if err := os.Remove(s.UpdateRecord); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.New("The record of the last update could not be replaced (" + err.Error() + "); nothing was changed.")
 	}
@@ -382,7 +392,13 @@ func (s *Service) beginRun(p UpdatePlan) (func() error, error) {
 		return nil, errors.New("The update's record could not be made (" + err.Error() + "); nothing was changed.")
 	}
 	defer f.Close()
-	return s.BeginUpdate(p, f)
+	wait, err := s.BeginUpdate(p, f)
+	if err != nil && lastErr == nil && lastInfo != nil {
+		if os.WriteFile(s.UpdateRecord, last, 0o600) == nil {
+			_ = os.Chtimes(s.UpdateRecord, lastInfo.ModTime(), lastInfo.ModTime())
+		}
+	}
+	return wait, err
 }
 
 // UpdateClosed is main's update-closed: the window is gone, and with it

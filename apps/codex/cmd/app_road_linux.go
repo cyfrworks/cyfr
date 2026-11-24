@@ -31,13 +31,18 @@ func (debRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*sta
 
 // elevate takes sudo's login, refusing an account that may not
 // administer this machine before anything asks (mayAdminister,
-// unlockSudo); the login is forgotten once the update is done.
+// unlockSudo); the login is forgotten once the update is done. Not
+// asking, it is one check that sudo would ask nothing, which takes and
+// lets go of nothing: the run's own elevation does that.
 func (debRoad) elevate(out io.Writer, again string, ask bool) (func(), error) {
 	if err := mayAdminister([]string{"apt-get install -y ./" + appPackage + "_RELEASE.deb"}, out, again); err != nil {
 		return nil, err
 	}
-	if !ask && !machine.passwordless() {
-		return nil, sudoNeedsATerminal(again)
+	if !ask {
+		if !machine.passwordless() {
+			return nil, sudoNeedsATerminal(again)
+		}
+		return func() {}, nil
 	}
 	if err := unlockSudo(out, again); err != nil {
 		var refused passwordRefused

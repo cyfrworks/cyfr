@@ -374,6 +374,40 @@ func TestAnUpdateRunsWhileItsLockIsHeld(t *testing.T) {
 	}
 }
 
+// The page and the yes ask the same locks: with this computer's own
+// CYFR's change offered, the stack's lock of its folder, held by an
+// update run at a terminal, shows the update running and no yes.
+func TestThePageReadsTheLockTheYesAsks(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(t, t.TempDir(), offline())
+	newUpdating(t, a, UpdatePlan{UpdateOffer: UpdateOffer{App: "0.0.2", Target: "0.0.2", Step: "stack"}, Dir: dir})
+	a.UpdateRuns = func(project string) bool { return project == dir }
+	if got := a.shown(t, offeredAs(1)); !got.Running {
+		t.Fatalf("with its folder's lock held the page shows %+v", got)
+	}
+}
+
+// A yes whose run cannot start leaves the last update's record as it was,
+// its time too.
+func TestAYesThatCannotStartKeepsTheLastRecord(t *testing.T) {
+	a := newApp(t, t.TempDir(), offline())
+	u := newUpdating(t, a, appPlan)
+	u.refuse = errors.New("The update could not be started apart from this app (Access is denied.); nothing was changed. Run 'cyfr update' in a terminal instead")
+	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	if err := os.WriteFile(a.UpdateRecord, []byte("The CYFR app is release 0.0.1.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(a.UpdateRecord, at, at); err != nil {
+		t.Fatal(err)
+	}
+	a.shown(t, offeredAs(1))
+	a.StartUpdate(1)
+	got := a.shown(t, func(r updateRead) bool { return r.Refused != "" })
+	if got.Record != "The CYFR app is release 0.0.1.\n" || got.At != "2026-11-25 12:00 UTC" {
+		t.Fatalf("a yes that started nothing left the record %q at %s", got.Record, got.At)
+	}
+}
+
 // A yes while an update runs, by its locks, cyfr update's or the stack's
 // of the CYFR the offer changes, starts nothing and leaves the record as
 // it was: the page says why.

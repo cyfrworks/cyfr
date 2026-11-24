@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -133,10 +134,29 @@ func TestTheDebRoadAsksNothingForTheAppsPage(t *testing.T) {
 	if m.authenticated != 0 || out.Len() != 0 {
 		t.Fatalf("the road asked for a password %d times and said %q", m.authenticated, out.String())
 	}
-	m.passwordless = true
+	// A login sudo holds now: one check, which takes and lets go of
+	// nothing, so the run the page offers finds it still there.
+	asked := 0
+	machine.passwordless = func() bool { asked++; return true }
 	let, err := (debRoad{}).elevate(&out, "cyfr update --version 0.10.0", false)
-	if err != nil || m.authenticated != 0 {
-		t.Fatalf("with sudo asking nothing the road answered %v, asked %d times", err, m.authenticated)
+	if err != nil || m.authenticated != 0 || asked != 1 {
+		t.Fatalf("with sudo asking nothing the road answered %v, asked for a password %d times, sudo %d times", err, m.authenticated, asked)
 	}
 	let()
+	if m.forgotten != 0 {
+		t.Fatalf("the page's check forgot sudo's login %d times", m.forgotten)
+	}
+}
+
+// Opening Update CYFR leaves a login sudo holds where it is: the yes it
+// offers is not refused for the offer's own check.
+func TestOpeningUpdateCYFRLeavesSudosLoginAlone(t *testing.T) {
+	newAppScenario(t, "1.0.0", "1.1.0", "1.0.0")
+	appRoadHere = func() appRoad { return debRoad{} }
+	held := true
+	machine.passwordless = func() bool { return held }
+	machine.forget = func() { held = false }
+	if p := windowOffer(context.Background(), t.TempDir(), ""); p.Step != "app" || !held {
+		t.Fatalf("offered %+v, sudo's login held %v", p, held)
+	}
 }

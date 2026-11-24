@@ -73,8 +73,8 @@ type updateOptions struct {
 	// handover.
 	noInteractive bool
 	// offer and confirmed are the CYFR app's page's (--offer, --confirmed):
-	// the change shown and none made, and the digest of the change shown,
-	// passed on at the handover.
+	// the change shown and none made, and the confirmation of the change
+	// shown; neither takes the program step.
 	offer     bool
 	confirmed string
 }
@@ -218,9 +218,6 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	args := []string{path, "update", "--continue-as", target}
 	if o.yes {
 		args = append(args, "--yes")
-	}
-	if o.confirmed != "" {
-		args = append(args, "--confirmed", o.confirmed)
 	}
 	if o.noInteractive {
 		args = append(args, "--no-interactive")

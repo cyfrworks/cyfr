@@ -2,8 +2,9 @@
 // The page's one read token, from the address main loaded, kept for this
 // window alone: the address keeps no copy of it. updated is main's word
 // that the update this page started opened the app again: the page says
-// how that update ended, as it does for one it saw run; opened any other
-// way, the last update's record is there on request.
+// how that update ended, as it does for one its own yes started and it
+// saw run; any other record, one a terminal's update left among them, is
+// there on request.
 const fragment = new URLSearchParams(location.hash.slice(1))
 if (fragment.get("read")) {
   sessionStorage.setItem("read", fragment.get("read"))
@@ -17,7 +18,7 @@ const $ = (id) => document.getElementById(id)
 // offer shown by its number: the page starts nothing itself.
 function show(r) {
   const o = r.offer
-  if (r.running) watched = true
+  if (r.running && pressed) watched = true
   const ended = watched && !r.running ? r.outcome ?? "" : ""
   $("status").textContent = r.running ? "CYFR is being updated." : ended || (o ? "" : "Reading the newest release…")
   $("status").hidden = $("status").textContent === ""
@@ -55,6 +56,8 @@ function show(r) {
   }
 }
 let focused = null
+let pressed = false
+$("yes").addEventListener("click", () => { pressed = true })
 // Escape is Close, wherever the focus is.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") location.assign("/update/close")
