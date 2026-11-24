@@ -1124,14 +1124,23 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp emit(s, text), do: %{s | seq: s.seq + 1, lines: [{s.seq + 1, text} | s.lines]}
 
-  defp reply(st, server, _s, "initialize", _params),
-    do:
-      {:ok,
-       %{
-         "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
-         "capabilities" => Map.new(offers(st, server), &{&1, %{}}),
-         "serverInfo" => %{"name" => "scripted", "version" => "1"}
-       }}
+  # A program set to refuse its `initialize` (`set(fake,
+  # :refuse_initialize, %{row_id => words})`) answers it with a JSON-RPC
+  # error of those words.
+  defp reply(st, server, _s, "initialize", _params) do
+    case Map.get(st, :refuse_initialize, %{}) do
+      %{^server => words} ->
+        {:error, %{"code" => -32_000, "message" => words}}
+
+      _initialized ->
+        {:ok,
+         %{
+           "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
+           "capabilities" => Map.new(offers(st, server), &{&1, %{}}),
+           "serverInfo" => %{"name" => "scripted", "version" => "1"}
+         }}
+    end
+  end
 
   defp reply(st, server, s, "resources/" <> _ = method, params),
     do: offered(st, server, s, "resources", method, params)

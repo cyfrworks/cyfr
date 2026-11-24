@@ -3146,4 +3146,141 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
   end
+
+  # A scroll a turn proposed waits for the person: the pane draws its
+  # result row as a card under its turn, showing the name, description and
+  # body a save writes, and Save as scroll writes exactly those from the
+  # person's own session, or says why it did not.
+  describe "a scroll a turn proposed" do
+    # A proposal's result row as the loop writes it (`Aqua.Loop`): a model's
+    # `tool_result`, or a page's `page_result`, `proposed`.
+    defp proposed!(here, thread, proposal, kind \\ "tool_result") do
+      {:ok, row} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: kind,
+          status: "proposed",
+          content: Jason.encode!(proposal),
+          payload: %{
+            "tool_call_id" => "c1",
+            "name" => "aqua",
+            "is_error" => false,
+            "proposal" => proposal
+          }
+        })
+
+      row
+    end
+
+    defp card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
+
+    test "its card shows what Save as scroll writes, and a save writes exactly that",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      proposal = %{
+        "name" => "fern-care",
+        "description" => "How the fern is kept",
+        "content" => "Water it weekly.\nTurn it monthly.",
+        "against" => "none"
+      }
+
+      row = proposed!(here, thread, proposal)
+      pane = open_pane(conn, athanor, thread)
+
+      assert pane |> element(card(row, "name")) |> render() =~ "fern-care"
+      assert pane |> element(card(row, "description")) |> render() =~ "How the fern is kept"
+
+      assert pane |> element(card(row, "content")) |> render() =~
+               "Water it weekly.\nTurn it monthly."
+
+      assert {:error, {:not_found, "Scroll", "fern-care"}} =
+               Compendium.Providers.Aqua.handle(here, %{
+                 "action" => "skill_get",
+                 "name" => "fern-care"
+               })
+
+      pane |> element(card(row, "save")) |> render_click()
+
+      assert pane |> element(card(row, "saved")) |> render() =~ "Saved as a scroll."
+      refute has_element?(pane, card(row, "save"))
+
+      assert {:ok,
+              %{
+                description: "How the fern is kept",
+                content: "Water it weekly.\nTurn it monthly."
+              }} =
+               Compendium.Providers.Aqua.handle(here, %{
+                 "action" => "skill_get",
+                 "name" => "fern-care"
+               })
+
+      # A change proposed over a scroll that changed since is refused, in
+      # the sentence the card shows, and nothing is written.
+      stale =
+        proposed!(here, thread, %{
+          "name" => "fern-care",
+          "description" => "How the fern stays green",
+          "content" => "Water it weekly.\nTurn it monthly.",
+          "against" => Prima.Digest.sha256("an older manifest")
+        })
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        thread_id: thread.id,
+        athanor_id: athanor.id,
+        kind: :message,
+        data: stale
+      })
+
+      pane |> element(card(stale, "save")) |> render_click()
+
+      assert pane |> element(card(stale, "refused")) |> render() =~
+               "changed since Aqua proposed this"
+
+      assert {:ok, %{description: "How the fern is kept"}} =
+               Compendium.Providers.Aqua.handle(here, %{
+                 "action" => "skill_get",
+                 "name" => "fern-care"
+               })
+    end
+
+    # The pane reads the thread's proposals as such: one behind more than
+    # the pane's window of newer results, and one a page's call made, each
+    # has its card while its row can be seen.
+    test "a proposal has its card behind many newer results, and a page's proposal has one",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      actor = Sanctum.Context.actor(here)
+
+      older =
+        proposed!(here, thread, %{
+          "name" => "older-way",
+          "description" => "d",
+          "content" => "c",
+          "against" => "none"
+        })
+
+      for n <- 1..501 do
+        {:ok, _result} =
+          Threads.append(actor, thread.id, %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            kind: "tool_result",
+            content: "result #{n}",
+            payload: %{"tool_call_id" => "c#{n}", "name" => "files", "is_error" => false}
+          })
+      end
+
+      paged =
+        proposed!(
+          here,
+          thread,
+          %{"name" => "paged-way", "description" => "d", "content" => "c", "against" => "none"},
+          "page_result"
+        )
+
+      pane = open_pane(conn, athanor, thread)
+
+      assert pane |> element(card(older, "name")) |> render() =~ "older-way"
+      assert pane |> element(card(paged, "name")) |> render() =~ "paged-way"
+    end
+  end
 end

@@ -492,6 +492,55 @@ defmodule Aqua.Providers.WorkspaceTest do
                Enum.sort([a, b])
     end
 
+    # An opening names its scrolls as a crew request does: read by name
+    # under the opener's actor, kept as read in the opening, and read after
+    # the ask in the workspace thread's scroll frame. A name this athanor
+    # has no scroll of opens nothing.
+    test "an opening carries the scrolls it names, read after the ask; an unknown one opens nothing",
+         %{ctx: ctx, daily: daily} do
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "skill_create",
+          "name" => "fern-care",
+          "description" => "How the fern is kept",
+          "content" => "Water it weekly."
+        })
+
+      assert {:error,
+              {:invalid_argument, "workspace.open: this athanor has no scroll named \"nowhere\""}} =
+               open(ctx, daily, %{"scrolls" => ["nowhere"]})
+
+      assert Threads.list(actor(ctx), kind: "workspace") == []
+      assert records(ctx, "workspace_open") == []
+
+      script!([reply("Working on it.")])
+      workspace = open!(ctx, daily, %{"scrolls" => ["fern-care"]})
+      [opening] = Enum.filter(rows(ctx, workspace.id), &(&1.kind == "opening"))
+
+      assert %{
+               "scrolls" => [
+                 %{"name" => "fern-care", "body" => "Water it weekly.", "files" => []}
+               ]
+             } =
+               Tape.payload(opening)
+
+      assert {:ok, %{"applied" => 1}} = drain(ctx)
+      %{turn_id: turn_id} = Enum.find(rows(ctx, workspace.id), &(&1.id == opening.id))
+      await_status(ctx, turn_id, "completed")
+
+      mark = Aqua.Reader.mark(workspace.id)
+      [first] = chats(@model)
+
+      assert [%{"role" => "user", "content" => [%{"text" => text} | _]}] =
+               first.input["params"]["messages"]
+
+      assert String.ends_with?(
+               text,
+               "write the moon report\n\n⟦#{mark} scroll \"fern-care\"⟧\nWater it weekly.\n" <>
+                 "⟦#{mark} end⟧"
+             )
+    end
+
     test "a thread, a post or a workspace thread of another athanor is not found, and nothing is written",
          %{ctx: ctx, daily: daily} do
       other = person!()

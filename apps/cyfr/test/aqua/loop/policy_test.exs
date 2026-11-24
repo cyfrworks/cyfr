@@ -376,4 +376,37 @@ defmodule Aqua.Loop.PolicyTest do
     {:ok, {_module, %{operations: operations}}} = Sanctum.Catalog.lookup(tool)
     Enum.find(operations, &(&1.action == action))
   end
+
+  # What each answer is to the model that asked: a scroll read by name,
+  # CYFR's own words, or what an outside source returned, which the
+  # browser's page text and a program's output are though both are
+  # catalog actions, as is any family not named.
+  test "each call's answer is a scroll, CYFR's own, or outside" do
+    rows = [
+      {:scroll, "aqua.skill_get", %{"name" => "research"}},
+      {:own, "aqua.get", %{"name" => "component-guide"}},
+      {:own, "aqua.skill_list", %{}},
+      {:own, "notes.read", %{"name" => "todo"}},
+      {:own, "crew.ask", %{"member" => "planner", "task" => "t"}},
+      {:own, "thread.post", %{"text" => "t"}},
+      {:own, "threads.read", %{"thread" => "thr_1"}},
+      {:own, "workspace.list", %{}},
+      {:own, "schedule.list", %{}},
+      {:own, "ui", %{"action" => "navigate"}},
+      {:own, "request_setup.open", %{}},
+      {:outside, "gh__search", %{"q" => "x"}},
+      {:outside, "gh__resources", %{"method" => "list"}},
+      {:outside, "files.read", %{"path" => "a"}},
+      {:outside, "http.get", %{"url" => "https://example.com/"}},
+      {:outside, "browser.read", %{}},
+      {:outside, "program.start", %{"program" => "gh"}},
+      {:outside, "execution.run", %{"reference" => "component:local.app:1.0.0"}},
+      {:outside, "component.search", %{"query" => "x"}},
+      {:outside, "vault.list", %{}}
+    ]
+
+    for {class, name, args} <- rows do
+      assert Policy.answer_of(resolve!(name, args)) == class, name
+    end
+  end
 end
