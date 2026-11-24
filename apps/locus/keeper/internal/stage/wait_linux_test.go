@@ -67,12 +67,20 @@ func recycleUnderTheWaiter(t *testing.T) {
 	syscall.CloseOnExec(waitExitFD)
 	syscall.CloseOnExec(waitExitFD + 1)
 	// The namespace's own /proc, at the one place the space's profile lets
-	// a proc be mounted, gives the namespace's next pid to set.
+	// a proc be mounted, gives the namespace's next pid to set. It is
+	// mounted on a tmpfs of this mount namespace's own, so nothing of it is
+	// left in the container's files for another test to find.
 	proc := filepath.Join(Root, "proc")
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(proc, 0o755); err != nil {
+	if err := os.MkdirAll(Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", Root, "tmpfs", 0, "mode=0755"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(proc, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := unix.Mount("proc", proc, "proc", 0, ""); err != nil {
