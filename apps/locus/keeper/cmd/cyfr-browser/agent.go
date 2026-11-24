@@ -21,7 +21,8 @@ import (
 // origin reads them (ownName, main.go). Chrome is then started by that
 // User-Agent with Chrome in place of HeadlessChrome, by its own switch,
 // which every window, frame and worker reads and sends from its first
-// read. Every target the driver attaches, a window, a frame of another
+// read (a service worker's measured with the shell alone under that
+// switch, since no page the driver shows can register one). Every target the driver attaches, a window, a frame of another
 // process, a worker or a window a page opened, is told before it runs to
 // say the same, with the shell's own brand and full-version lists without
 // their HeadlessChrome entry and its other hints as the shell gave them,
@@ -29,10 +30,11 @@ import (
 // name that way is not let run (page.go). No switch names the brands, and
 // the User-Agent switch blanks the high-entropy hints of the running
 // Chrome (measured on the image's Chromium 156): a target the driver does
-// not name reads HeadlessChrome among its brands and in its Sec-CH-UA, and
-// an architecture, bitness, form factors and full versions that are blank,
-// a service worker until it is named once it runs and a shared worker
-// always (person.go). Nothing else a page reads is changed by it.
+// not name reads HeadlessChrome among its brands, and an architecture,
+// bitness, form factors and every full version that are blank, a service
+// worker until it is named once it runs and a shared worker always, whose
+// own requests send no Sec-CH-UA (person.go). Nothing else a page reads is
+// changed by it.
 
 // headless is the product name the shell gives itself.
 const headless = "HeadlessChrome"

@@ -44,7 +44,8 @@ import (
 // worker is never attached; it sends the person's language, reads their
 // zone and its process's locale, but reads Chrome's en-US as its
 // navigator.language and navigator.languages, and Chrome's own brands and
-// hints. The User-Agent of both is the browser's from their first read.
+// hints, and its own requests send no Sec-CH-UA. The User-Agent of both
+// is the browser's from their first read.
 // Values the person never reported are absent and leave Chrome's own: the
 // image's en-US and UTC.
 type person struct {
