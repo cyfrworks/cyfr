@@ -92,14 +92,17 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     # A refresh of the tinctures, and a shelf program's Close.
     "live/shell_live.ex" => {2, [{"live/shell_live.ex", :deliver}]},
     # A model catalyst's install, answered to the page; each open
-    # editor's options, and what the person's MCP servers offer, answered
-    # to the agents section itself.
+    # editor's options; the person's MCP servers asked, each answer sent
+    # to the section as it lands and the batch's end; and the judgement of
+    # what a turn would hand, answered to the agents section itself.
     "live/aqua_live/agents_component.ex" =>
-      {3,
+      {4,
        [
          {"live/aqua_live.ex", :catalyst_installed},
          {"live/aqua_live/agents_component.ex", :brain_options},
-         {"live/aqua_live/agents_component.ex", :offerings}
+         {"live/aqua_live/agents_component.ex", :offered},
+         {"live/aqua_live/agents_component.ex", :offerings},
+         {"live/aqua_live/agents_component.ex", :judgement}
        ]},
     # A brain's one `models` call after its grant, and the one task out at
     # a time, which is a program's listing a press asked for or a Sign in's

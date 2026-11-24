@@ -54,17 +54,20 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   verbs come off that read.
 
   The soul's card holds what Aqua and every crew member may use, one
-  block in groups (`PrismWeb.AquaLive.Catalog.groups/4`): each of CYFR's
+  block in groups (`PrismWeb.AquaLive.Catalog.groups/5`): each of CYFR's
   tool families, Search, Scrolls (`ScrollsComponent`, rendered inside its
-  group) and each MCP server of the athanor. An entry's switch adds or
-  takes off its one key, and a group's adds or takes off its keys in one
-  `update`, each decided on the list as it is at the write. The page
-  renders the block from what CYFR holds and asks nobody for it: the
-  servers' names come from their rows (`mcp_servers.list`), and what each
-  offers comes after the render (`Aqua.offerings/3`), asked again after
-  every write of the list and on Ask again, so a reason a turn would give
-  follows the list as it stands. Aqua's grant, which any switch moves, is
-  said once at the block's top. The Browser group's switch is the
+  group) and each MCP server of the athanor. A switch, an entry's or a
+  group's, carries the state the person chose and writes only keys this
+  page lists for the athanor and the list can hold, a group's in one
+  `update`. The page renders the block from what CYFR holds and asks
+  nobody for it: the servers' names come from their rows
+  (`mcp_servers.list`); after the render each server that is on is asked
+  once what it offers (`Aqua.offerings/3`), and its group fills in when
+  its own answer comes. Why a turn would not hand each entry, and whether
+  Aqua's grant covers the list as the next turn's start holds it to, is
+  judged from the answers held, again after every write of the list; the
+  grant, when the next turn would refuse for it, is said once at the
+  block's top. The Browser group's switch is the
   person's browser setting, read and written through the `browser` tool
   as the person: the browser's own actions follow it, so the group leaves
   them out. While either of Aqua's browsers, the person's or the second
@@ -101,7 +104,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:refused, [])
      |> assign(:tool_actions, nil)
      |> assign(:servers, [])
-     |> assign(:offerings, nil)
+     # Each MCP server's own answer as it came (its listing, or :silent),
+     # the servers asked and not yet answered, and why a turn would not
+     # hand each entry of the list, judged from the answers held.
+     |> assign(:answers, %{})
+     |> assign(:asking, MapSet.new())
+     |> assign(:judgement, nil)
      |> assign(:browser, nil)
      |> assign(:model_status, %{})
      |> assign(:brain_options, %{})
@@ -144,6 +152,17 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         socket,
         &{:noreply, &1 |> load_agents() |> assign(:loaded, true)}
       )
+
+    {:ok, socket}
+  end
+
+  # One MCP server's own answer, as it lands (`ask_servers/1`), in the
+  # focus it was asked in.
+  def update(%{offered: {tag, name, listing}}, socket) do
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
+        CyfrWeb.ContextGuard.guard(socket, &{:noreply, &1 |> answered(name, listing) |> judge()})
+      end)
 
     {:ok, socket}
   end
@@ -387,73 +406,47 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
-  # Offer one tool to the soul, or take it off: a `tool.action`, or the
-  # provider's own `native_search`. The direction is read from the soul's
-  # list as it is NOW, just before the write, never the copy this page
-  # loaded, and the edit names the one tool, which the `aqua` door adds to
-  # or takes off the list as it stands when the write lands, so a toggle
-  # made elsewhere at the same moment on another tool is kept.
-  def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket)
-      when is_binary(key) do
+  # One entry's switch, set to what the person chose: on adds its key to
+  # the list as it stands when the write lands, off takes it off, so a
+  # switch pressed in two tabs means the same in both. Only a key this
+  # page lists for the athanor is written; any other changes nothing.
+  def handle_event(
+        "editor_toggle_capability",
+        %{"name" => name, "key" => key, "on" => on},
+        socket
+      )
+      when is_binary(key) and on in ["true", "false"] do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      ctx = socket.assigns.context
+      if key in shown_keys(socket.assigns),
+        do: write_tools(socket, name, on, [key]),
+        else: {:noreply, socket}
+    end)
+  end
 
-      result =
-        with {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
-          edit = if key in (agent.tools || []), do: "tools_remove", else: "tools_add"
-          call_aqua(ctx, %{"action" => "update", "name" => name, edit => [key]})
-        end
-
-      case result do
-        {:ok, _} ->
-          send(self(), {:refresh, :agents})
-          {:noreply, socket}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+  # A group's switch, set to what the person chose: on adds every key the
+  # group can set, off takes them all off, in one `update`.
+  def handle_event("group_toggle", %{"group" => id, "on" => on}, socket)
+      when is_binary(id) and on in ["true", "false"] do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case shown_group(socket, id) do
+        %{keys: [_ | _] = keys} -> write_tools(socket, "aqua", on, keys)
+        _nothing_to_set -> {:noreply, socket}
       end
     end)
   end
 
-  # A group's switch: every key it switches on the list, or off when the
-  # list holds them all, in one `update`, decided on the list as it is
-  # now, never the copy this page loaded.
-  def handle_event("group_toggle", %{"group" => id}, socket) when is_binary(id) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      ctx = socket.assigns.context
-
-      result =
-        with %{keys: [_ | _] = keys} <- shown_group(socket, id),
-             {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => "aqua"}) do
-          tools = agent.tools || []
-
-          edit =
-            if Catalog.switch(keys, tools) == :on,
-              do: %{"tools_remove" => keys},
-              else: %{"tools_add" => keys -- tools}
-
-          call_aqua(ctx, Map.merge(%{"action" => "update", "name" => "aqua"}, edit))
-        else
-          _no_such_group -> {:ok, :nothing}
-        end
-
-      case result do
-        {:ok, _} ->
-          send(self(), {:refresh, :agents})
-          {:noreply, socket}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
-      end
-    end)
-  end
-
-  # Read the servers' rows again and ask every MCP server that is on what
-  # it offers.
+  # Read the servers' rows again and ask each MCP server that is on and
+  # has not answered, the ones that were silent among them; one already
+  # being asked is not asked twice.
   def handle_event("offerings_again", _params, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       {:noreply,
-       socket |> assign(:servers, mcp_servers(socket.assigns.context)) |> ask_offerings()}
+       socket
+       |> assign(:servers, mcp_servers(socket.assigns.context))
+       |> update(:answers, &Map.reject(&1, fn {_name, answer} -> answer == :silent end))
+       |> settle_answers()
+       |> ask_servers()
+       |> judge()}
     end)
   end
 
@@ -656,18 +649,20 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_async(:brain_options, {:exit, _reason}, socket), do: {:noreply, socket}
 
-  # What the servers offer, as the latest ask read it, in the focus it
-  # was asked in. An ask that crashed leaves what was shown until the next
-  # write of the list asks again.
-  def handle_async(:offerings, {:ok, {tag, offerings}}, socket),
+  # The servers' asks end with the batch; each answer came on its own.
+  def handle_async(:offerings, _ended, socket), do: {:noreply, socket}
+
+  # Why a turn would not hand each entry, and whether the grant covers the
+  # list, judged from the answers held, in the focus it was asked in.
+  def handle_async(:judgement, {:ok, {tag, judgement}}, socket),
     do:
       CyfrWeb.ContextGuard.deliver(
         socket,
         tag,
-        &{:noreply, assign(&1, :offerings, offerings)}
+        &{:noreply, assign(&1, :judgement, judgement)}
       )
 
-  def handle_async(:offerings, {:exit, _reason}, socket), do: {:noreply, socket}
+  def handle_async(:judgement, {:exit, _reason}, socket), do: {:noreply, socket}
 
   # ============================================================================
   # The roster
@@ -751,7 +746,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> ensure_tool_actions_loaded()
     |> assign(:browser, browser_status(ctx))
     |> assign(:servers, mcp_servers(ctx))
-    |> ask_offerings()
+    |> settle_answers()
+    |> ask_servers()
+    |> judge()
   end
 
   # The athanor's MCP servers as their rows stand, asking none of them: a
@@ -769,23 +766,103 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  # What each MCP server that is on offers, asked after the render and
-  # again after every write of the list; a later ask's answer replaces an
-  # earlier one's, whichever ends first.
-  defp ask_offerings(%{assigns: %{soul: %{"tools" => tools}}} = socket) do
-    %{context: ctx, servers: servers} = socket.assigns
-    asked = for %{name: name, enabled: true} <- servers || [], do: name
-    tag = CyfrWeb.ContextGuard.capture(socket)
-    start_async(socket, :offerings, fn -> {tag, Aqua.offerings(ctx, tools, asked)} end)
+  # Ask each MCP server that is on, has not answered and is not being
+  # asked already what it offers, each in its own read, after the render:
+  # each answer comes back on its own as it lands (`update/2`'s
+  # `offered`), so a silent server holds no other's group.
+  defp ask_servers(%{assigns: %{soul: %{"tools" => tools}}} = socket) do
+    %{context: ctx, servers: servers, answers: answers, asking: asking, myself: myself} =
+      socket.assigns
+
+    names =
+      for %{name: name, enabled: true} <- servers || [],
+          not Map.has_key?(answers, name),
+          not MapSet.member?(asking, name),
+          do: name
+
+    if names == [] do
+      socket
+    else
+      tag = CyfrWeb.ContextGuard.capture(socket)
+      view = self()
+
+      socket
+      |> assign(:asking, MapSet.union(asking, MapSet.new(names)))
+      |> start_async(:offerings, fn ->
+        names
+        |> Task.async_stream(&{&1, Aqua.offerings(ctx, tools, [&1])},
+          ordered: false,
+          timeout: :infinity,
+          max_concurrency: 10
+        )
+        |> Enum.each(fn {:ok, {name, %{listings: listings}}} ->
+          Phoenix.LiveView.send_update(view, myself, offered: {tag, name, List.first(listings)})
+        end)
+      end)
+    end
   end
 
-  defp ask_offerings(socket), do: socket
+  defp ask_servers(socket), do: socket
+
+  defp answered(socket, name, listing) do
+    socket
+    |> update(:asking, &MapSet.delete(&1, name))
+    |> update(:answers, &Map.put(&1, name, listing || :silent))
+  end
+
+  # Only the answers of servers that are on stay: one turned off or gone
+  # since offers nothing to switch on.
+  defp settle_answers(%{assigns: %{servers: servers}} = socket) do
+    on = for %{name: name, enabled: true} <- servers || [], do: name
+    update(socket, :answers, &Map.take(&1, on))
+  end
+
+  # Why a turn would not hand each entry of the list, and whether the grant
+  # covers it, from the answers held: the answered servers read again,
+  # which answer from what they hold, one judgement at a time.
+  defp judge(%{assigns: %{soul: %{"tools" => tools}}} = socket) do
+    %{context: ctx, answers: answers} = socket.assigns
+    answered = for {name, %{}} <- answers, do: name
+    tag = CyfrWeb.ContextGuard.capture(socket)
+
+    socket
+    |> cancel_async(:judgement)
+    |> start_async(:judgement, fn -> {tag, Aqua.offerings(ctx, tools, answered)} end)
+  end
+
+  defp judge(socket), do: socket
+
+  # The soul's list with `keys` added or taken off, as the person chose.
+  defp write_tools(socket, name, on, keys) do
+    edit = if on == "true", do: "tools_add", else: "tools_remove"
+
+    case call_aqua(socket.assigns.context, %{"action" => "update", "name" => name, edit => keys}) do
+      {:ok, _} ->
+        send(self(), {:refresh, :agents})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+    end
+  end
+
+  # Every key the page lists for this athanor and can set.
+  defp shown_keys(assigns) do
+    {own, servers} = shown_groups(assigns)
+    Enum.flat_map(own ++ servers, & &1.keys)
+  end
 
   # The groups the block shows now: CYFR's own, then the servers'.
   defp shown_groups(assigns) do
     tools = (assigns.soul && assigns.soul["tools"]) || []
 
-    Catalog.groups(assigns.tool_actions || [], assigns.servers, assigns.offerings, tools)
+    Catalog.groups(
+      assigns.tool_actions || [],
+      assigns.servers,
+      assigns.answers,
+      (assigns.judgement && assigns.judgement.unhanded) || %{},
+      tools
+    )
   end
 
   defp shown_group(socket, id) do
@@ -1688,6 +1765,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         terminal={panel_terminal(@terminal, @soul["name"])}
         browser={@browser}
         groups={shown_groups(assigns)}
+        grant_moved={match?(%{grant: :to_give_again}, @judgement)}
         servers_read={@servers != nil}
         context={@context}
         provenance={@provenance}
@@ -1870,6 +1948,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   attr :terminal, :any, default: nil
   attr :browser, :map, default: nil
   attr :groups, :any, default: {[], []}
+  attr :grant_moved, :boolean, default: false
   attr :servers_read, :boolean, default: true
   attr :context, :any, default: nil
   attr :provenance, :map, default: %{}
@@ -2399,7 +2478,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         tools={@tools}
         browser={@browser}
         athanor={@athanor}
-        grant={@model_status && elem(@model_status, 0)}
+        grant={grant_shown(@model_status, @grant_moved)}
         context={@context}
         provenance={@provenance}
         servers_read={@servers_read}
@@ -2530,6 +2609,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp grant_state?(state), do: state in @grant_states
 
+  # The crew's grant as Aqua's next turn would meet it: its own state, or,
+  # on a brain that reads ready, a grant the list has moved past, which
+  # the turn's start refuses for (`Aqua.Loop.Turn.consented/4`).
+  defp grant_shown({:ready, _brain}, true), do: :consent_stale
+  defp grant_shown({state, _brain}, _moved), do: state
+  defp grant_shown(_none, _moved), do: nil
+
   @doc """
   One group of what Aqua may use (`t:PrismWeb.AquaLive.Catalog.group/0`): a
   disclosure whose summary names the group and how much of it is on, the
@@ -2555,7 +2641,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       assigns
       |> assign(:on, switch_state(assigns.group, assigns.tools, assigns.switch))
       |> assign(:summary, summary_words(assigns.group, assigns.tools, assigns.switch))
-      |> assign(:not_handed, Enum.count(assigns.group.entries, & &1.why))
+      |> assign(
+        :not_handed,
+        Enum.count(assigns.group.entries, &(&1.why not in [nil, :unlistable, :per_thread]))
+      )
       |> assign(:server, server_of(assigns.group))
 
     ~H"""
@@ -2622,10 +2711,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                 <input
                   type="checkbox"
                   checked={entry.key in @tools}
+                  disabled={entry.why == :unlistable}
                   phx-click="editor_toggle_capability"
                   phx-target={@target}
                   phx-value-name={@agent}
                   phx-value-key={entry.key}
+                  phx-value-on={to_string(entry.key not in @tools)}
                   class={[
                     "rounded bg-gray-900 border-gray-600",
                     (entry.description || entry.why) && "mt-0.5"
@@ -2685,7 +2776,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           disabled={is_nil(@switch) and (@group.keys == [] or @group.state == :asking)}
           phx-click={if @switch, do: @switch.event, else: "group_toggle"}
           phx-value-group={@group.id}
-          phx-value-on={@switch && to_string(not @switch.on)}
+          phx-value-on={to_string(@on != :on)}
           phx-target={@target}
           class={[
             "min-w-12 shrink-0 rounded px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50",
@@ -2760,7 +2851,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   attr :kind, :atom, required: true
 
-  # An entry's kind, as a turn's policy reads it.
+  # An entry's kind: a CYFR action's as a turn's policy reads it, a
+  # server's offering by what it is.
+  defp kind_tag(%{kind: kind} = assigns) when kind in [:tool, :resources, :prompts] do
+    ~H"""
+    <span class="inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] font-medium text-gray-300">
+      {kind_label(@kind)}
+    </span>
+    """
+  end
+
   defp kind_tag(%{kind: kind} = assigns) when kind in [:read, :write, :execute, :destructive] do
     ~H"""
     <span class={[
@@ -2783,6 +2883,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp kind_label(:write), do: "Write"
   defp kind_label(:execute), do: "Execute"
   defp kind_label(:destructive), do: "Destructive"
+  defp kind_label(:tool), do: "Tool"
+  defp kind_label(:resources), do: "Resources"
+  defp kind_label(:prompts), do: "Prompts"
 
   # The terminal in the panel where its Sign in was pressed.
   defp panel_terminal(%{panel: panel} = terminal, panel), do: terminal

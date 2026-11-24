@@ -3400,7 +3400,8 @@ defmodule PrismWeb.AquaLiveTest do
         |> with_target("#aqua-agents")
         |> render_click("editor_toggle_capability", %{
           "name" => "explorer",
-          "key" => "storage.list"
+          "key" => "storage.list",
+          "on" => "true"
         })
 
       assert html =~ "A crew member is offered the soul&#39;s tools and has none of its own"
@@ -4150,7 +4151,11 @@ defmodule PrismWeb.AquaLiveTest do
       # A toggle on the soul's card keeps it…
       view
       |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "storage.write"})
+      |> render_click("editor_toggle_capability", %{
+        "name" => "aqua",
+        "key" => "storage.write",
+        "on" => "true"
+      })
 
       want = Enum.sort(["storage.write", "vault.list" | shipped])
       assert {:ok, %{"tools" => ^want}} = get_agent(ctx, "aqua")
@@ -4165,7 +4170,11 @@ defmodule PrismWeb.AquaLiveTest do
 
       view
       |> with_target("#aqua-agents")
-      |> render_click("editor_toggle_capability", %{"name" => "aqua", "key" => "storage.write"})
+      |> render_click("editor_toggle_capability", %{
+        "name" => "aqua",
+        "key" => "storage.write",
+        "on" => "false"
+      })
 
       want = Enum.sort(["vault.get", "vault.list" | shipped])
       assert {:ok, %{"tools" => ^want}} = get_agent(ctx, "aqua")
@@ -4317,18 +4326,209 @@ defmodule PrismWeb.AquaLiveTest do
 
       Cyfr.Test.Sandbox.end_views()
     end
+
+    # A switch writes only a key this page lists for the athanor, and
+    # means what the person chose: a press in a tab that still shows the
+    # old state is the same choice, not its undoing.
+    test "a switch writes only what the page lists, set to what the person chose",
+         %{conn: conn, ctx: ctx} do
+      {:ok, %{"tools" => before}} = get_agent(ctx, "aqua")
+      {view, _html} = mount_athanor(conn, "/aqua")
+      {other, _html} = mount_athanor(conn, "/aqua")
+
+      view
+      |> with_target("#aqua-agents")
+      |> render_click("editor_toggle_capability", %{
+        "name" => "aqua",
+        "key" => "absent:read",
+        "on" => "true"
+      })
+
+      assert {:ok, %{"tools" => ^before}} = get_agent(ctx, "aqua")
+
+      search = "#aqua-group-search-switch"
+      on? = "native_search" in before
+      view |> element(search) |> render_click()
+      other |> element(search) |> render_click()
+      assert {:ok, %{"tools" => after_both}} = get_agent(ctx, "aqua")
+      assert "native_search" in after_both == not on?
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A grant given while a server did not expose a listed tool still
+    # loads once the server exposes it, and the next turn's start refuses
+    # for it: the block says so, from the start's own comparison.
+    test "a server exposing more than its grant covers asks for the grant again on the page",
+         %{conn: conn, ctx: ctx} do
+      soul_on_open!(ctx)
+      offering_server!(ctx, "gh", ["search"], config: %{"tool_patterns" => ["other"]})
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "tools_add" => ["gh:search"]
+        })
+
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+      grant!(ctx, Prima.AgentRef.soul_ref(), %{selections: []})
+      line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_stale"])
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled(fn -> has_element?(view, "#aqua-group-server-gh[data-state=answered]") end, "gh")
+      render_async(view, 5_000)
+      refute has_element?(view, line)
+      Cyfr.Test.Sandbox.end_views()
+
+      {:ok, _} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+          config_json: Jason.encode!(%{"tool_patterns" => ["other", "search"]})
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      settled(
+        fn ->
+          render_async(view, 5_000)
+          has_element?(view, line, "changed since you granted it")
+        end,
+        "the grant asked again"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Each server's group fills in as its own answer comes: one held server
+    # keeps no answered one waiting, and a write meanwhile asks it no
+    # second time.
+    test "an answered server's group fills in while another is still asked",
+         %{conn: conn, ctx: ctx} do
+      {:ok, hold} = Agent.start_link(fn -> true end)
+      offering_server!(ctx, "docs", ["search"])
+      offering_server!(ctx, "held", ["read"], hold: hold)
+      docs = "#aqua-group-server-docs"
+      held = "#aqua-group-server-held"
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      assert_receive {:holding, "held", stub}, 5_000
+
+      settled(
+        fn ->
+          has_element?(view, docs <> ~s([data-state="answered"] [data-key="docs:search"]))
+        end,
+        "docs answered while held is asked"
+      )
+
+      assert has_element?(view, held <> ~s([data-state="asking"]))
+
+      view |> element(entry_box(docs, "docs:search")) |> render_click()
+      settled(fn -> has_element?(view, entry_box(docs, "docs:search") <> "[checked]") end, "on")
+      assert has_element?(view, held <> ~s([data-state="asking"]))
+      refute_received {:holding, "held", _second}
+
+      :ok = Agent.update(hold, fn _ -> false end)
+      send(stub, :go)
+
+      settled(
+        fn -> has_element?(view, held <> ~s([data-state="answered"] [data-key="held:read"])) end,
+        "held answered"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A server turned off is asked nothing and offers nothing to switch on:
+    # what the list names of it stays, to be switched off, while another
+    # server is still being asked.
+    test "a server turned off after it answered offers only what is on, to switch off",
+         %{conn: conn, ctx: ctx} do
+      {:ok, hold} = Agent.start_link(fn -> true end)
+      offering_server!(ctx, "docs", ["search", "fetch"])
+      offering_server!(ctx, "held", ["read"], hold: hold)
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "tools_add" => ["docs:search"]
+        })
+
+      docs = "#aqua-group-server-docs"
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled(fn -> has_element?(view, docs <> ~s([data-state="answered"])) end, "answered")
+
+      {:ok, _} =
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "docs", %{enabled: false})
+
+      send(view.pid, {:refresh, :agents})
+      settled(fn -> has_element?(view, docs <> ~s([data-state="off"])) end, "turned off")
+      assert entries(view, docs) == [{"docs:search", true}]
+
+      :ok = Agent.update(hold, fn _ -> false end)
+      for {:holding, "held", stub} <- drain_holding(), do: send(stub, :go)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # A group's switch sets what the list can hold; an entry the list
+    # cannot name says why on its own line, and a name that holds what
+    # reads as a thread's mark is each turn's to decide. Each server entry
+    # carries its kind.
+    test "a group's switch sets what the list can hold, and each entry that cannot says why",
+         %{conn: conn, ctx: ctx} do
+      marked = "cyfr-AAAAAAAAAAAAAAAA"
+      offering_server!(ctx, "ns", ["read", "ns:read", marked])
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => "aqua",
+          "tools_add" => ["ns:" <> marked]
+        })
+
+      {:ok, %{"tools" => before}} = get_agent(ctx, "aqua")
+      group = "#aqua-group-server-ns"
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      settled(
+        fn ->
+          render_async(view, 5_000)
+          has_element?(view, group <> ~s( [data-key="ns:#{marked}"] [data-reason="per_thread"]))
+        end,
+        "each turn decides"
+      )
+
+      unlistable = group <> ~s( [data-key="ns:ns:read"])
+      assert has_element?(view, unlistable <> " input[disabled]")
+      assert has_element?(view, unlistable <> ~s( [data-reason="unlistable"]))
+      assert has_element?(view, group <> ~s( [data-key="ns:read"]), "Tool")
+      assert has_element?(view, group <> ~s( [data-key="ns:@resources"]), "Resources")
+
+      view |> element(group <> "-switch") |> render_click()
+      assert {:ok, %{"tools" => after_switch}} = get_agent(ctx, "aqua")
+      assert after_switch == Enum.sort(before ++ ~w(ns:@prompts ns:@resources ns:read))
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   # `name`, an MCP server of the athanor's over HTTP that declares tools,
-  # resources and prompts and lists `tools` by name. Silent, it answers
-  # nothing, and its client gives up on it after half a second.
+  # resources and prompts and lists `tools` by name, its configuration
+  # `:config`. Silent, it answers nothing, and its client gives up on it
+  # after half a second. Held, while the Agent `:hold` holds true, each
+  # request tells the test `{:holding, name, pid}` and waits for `:go`.
   defp offering_server!(ctx, name, tools, opts \\ []) do
     stub = Cyfr.Test.HTTPStub.open()
     silent? = Keyword.get(opts, :silent, false)
+    hold = Keyword.get(opts, :hold)
+    test = self()
 
     Cyfr.Test.HTTPStub.stub(stub, "POST", "/" <> name, fn conn ->
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
       body = Jason.decode!(raw)
+
+      if hold && Agent.get(hold, & &1) do
+        send(test, {:holding, name, self()})
+        receive do: (:go -> :ok)
+      end
 
       if silent? do
         # Past the client's half second, so it never reads this.
@@ -4368,10 +4568,25 @@ defmodule PrismWeb.AquaLiveTest do
         cap: 0,
         name: name,
         url: "http://127.0.0.1:#{stub.port}/#{name}",
-        config_json: Jason.encode!(if(silent?, do: %{"timeout_ms" => 500}, else: %{}))
+        config_json:
+          Jason.encode!(
+            Map.merge(
+              if(silent?, do: %{"timeout_ms" => 500}, else: %{}),
+              Keyword.get(opts, :config, %{})
+            )
+          )
       })
 
     on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+  end
+
+  # The held requests a scripted server has told the test of so far.
+  defp drain_holding(held \\ []) do
+    receive do
+      {:holding, _name, _stub} = holding -> drain_holding([holding | held])
+    after
+      0 -> held
+    end
   end
 
   # Each entry of a group, by its key, in the page's order, with whether

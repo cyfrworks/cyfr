@@ -29,8 +29,8 @@ defmodule PrismWeb.AquaLive.CatalogTest do
     }
   end
 
-  defp server_groups(servers, offerings, tools) do
-    {_own, groups} = Catalog.groups([], servers, offerings, tools)
+  defp server_groups(servers, answers, reasons, tools) do
+    {_own, groups} = Catalog.groups([], servers, answers, reasons, tools)
     Map.new(groups, &{&1.title, &1})
   end
 
@@ -43,7 +43,7 @@ defmodule PrismWeb.AquaLive.CatalogTest do
 
     tools = ["docs:fetch", "quiet:ask", "parked:read", "gone:search", "files.read"]
 
-    asking = server_groups(servers, nil, tools)
+    asking = server_groups(servers, %{}, %{}, tools)
     assert Map.keys(asking) == ["docs", "gone", "parked", "quiet"]
     assert asking["docs"].state == :asking
     assert asking["quiet"].keys == ["quiet:ask"]
@@ -54,9 +54,13 @@ defmodule PrismWeb.AquaLive.CatalogTest do
       server_groups(
         servers,
         %{
-          listings: [listing("docs", ["search", "@prompts", "fetch", "@resources", "two__parts"])],
-          unhanded: %{"docs:two__parts" => :name, "gone:search" => :unlisted}
+          "docs" =>
+            listing("docs", ["search", "@prompts", "fetch", "@resources", "two__parts", "ns:x"]),
+          "quiet" => :silent,
+          # An answer a server gave before it was turned off offers nothing.
+          "parked" => listing("parked", ["read", "write"])
         },
+        %{"docs:two__parts" => :name, "gone:search" => :unlisted},
         tools ++ ["docs:two__parts", "docs:dropped"]
       )
 
@@ -67,12 +71,20 @@ defmodule PrismWeb.AquaLive.CatalogTest do
     # list names that it no longer offers.
     assert Enum.map(docs.entries, &{&1.key, &1.name, &1.kind}) == [
              {"docs:fetch", "fetch", :tool},
+             {"docs:ns:x", "ns:x", :tool},
              {"docs:search", "search", :tool},
              {"docs:two__parts", "two__parts", :tool},
-             {"docs:@resources", "Resources", :resources},
-             {"docs:@prompts", "Prompts", :prompts},
+             {"docs:@resources", "All its resources", :resources},
+             {"docs:@prompts", "All its prompts", :prompts},
              {"docs:dropped", "dropped", :tool}
            ]
+
+    # A tool the list cannot name says so, and its group's switch leaves
+    # it out.
+    assert Enum.find(docs.entries, &(&1.key == "docs:ns:x")).why == :unlistable
+    refute "docs:ns:x" in docs.keys
+    assert answered["parked"].state == :off
+    assert [%{key: "parked:read"}] = answered["parked"].entries
 
     # A tool reads as its server wrote it, without the line CYFR puts
     # before it for a model.
@@ -87,9 +99,9 @@ defmodule PrismWeb.AquaLive.CatalogTest do
 
     # Rows that cannot be read are not an athanor with none.
     assert %{"docs" => %{state: :unread}, "gone" => %{state: :unread}} =
-             server_groups(nil, nil, tools)
+             server_groups(nil, %{}, %{}, tools)
 
-    assert server_groups(nil, nil, ["files.read"]) == %{}
+    assert server_groups(nil, %{}, %{}, ["files.read"]) == %{}
   end
 
   test "CYFR's own groups: families by title, Search and Scrolls among them" do
@@ -99,7 +111,7 @@ defmodule PrismWeb.AquaLive.CatalogTest do
       {"native_search", []}
     ]
 
-    {groups, []} = Catalog.groups(own, [], nil, [])
+    {groups, []} = Catalog.groups(own, [], %{}, %{}, [])
 
     assert Enum.map(groups, &{&1.id, &1.title}) == [
              {"family-aqua", Aqua.tool_title("aqua")},
