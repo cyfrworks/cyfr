@@ -1917,7 +1917,10 @@ defmodule Cyfr.Boundaries do
     # runs once they approve it (`request_preview/4`). A run with no grant
     # to stand on, and a setup plan, say why: never granted or revoked
     # (`ungranted/2`), and a setup plan reads ready only where the head
-    # stands for the release a run would start (`head_stands/4`).
+    # stands for the release a run would start (`head_stands/4`). A setup
+    # plan says what a shipped component's newer version adds to its grant
+    # and whether the update grants it (`update_adds/4`), before the
+    # person presses Update.
     # Every other confirmed operation is decided inside the Sanctum module
     # that owns its data (vault, shares, api keys, pairing, directory),
     # while a program row is written by Emissary's provider through Arca,
@@ -1941,6 +1944,7 @@ defmodule Cyfr.Boundaries do
       row_binding: 3,
       tincture_grant: 2,
       ungranted: 2,
+      update_adds: 4,
       waiting_confirmations: 1
     ],
     # The assistant reads which named accounts an app's own ingress binds

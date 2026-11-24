@@ -156,6 +156,8 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   use PrismWeb, :live_component
 
+  import PrismWeb.ConsentWords, only: [kind_heading: 1, field_label: 2, placement_label: 1]
+
   alias PrismWeb.Ops
 
   import Prism.ConsentChoices,
@@ -2642,18 +2644,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp unresolved_sentence(%{reason: reason}),
     do: "Its dependencies cannot be resolved (#{reason}). Try again once they are installed."
 
-  defp kind_heading("credential"), do: "Vault entries it receives"
-  defp kind_heading("egress"), do: "Network"
-  defp kind_heading("storage"), do: "Files"
-  defp kind_heading("tools"), do: "Tools"
-  defp kind_heading("tool_servers"), do: "Tool servers"
-  defp kind_heading("limits"), do: "Limits"
-  defp kind_heading("frame"), do: "Its frame"
-  defp kind_heading("streams"), do: "Streams it listens to"
-  defp kind_heading("system_actions"), do: "System actions it may call"
-  defp kind_heading("controls"), do: "Controls you can tap"
-  defp kind_heading(kind), do: kind
-
   # One binding in one sentence: the app or the dependency that uses it,
   # the entry and whose it is, the account, where its value may go and
   # whether the component reads it.
@@ -2809,59 +2799,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp subject_label("*"), do: "— any subject"
   defp subject_label(subject) when is_binary(subject), do: "— for #{subject}"
   defp subject_label(_none), do: "— its own"
-
-  # A canvas is read by what it reads: its streams are the rows below.
-  defp placement_label("canvas"), do: "Can be a canvas, which reads the streams listed here"
-  defp placement_label(placement) when is_binary(placement), do: "Placed: #{placement}"
-  defp placement_label(_none), do: "Placed: where the shell places it"
-
-  @doc """
-  Preview rows in one line a kind, as this sheet heads and names them
-  ("Streams it listens to: system.changes"), in the sheet's order of
-  kinds: what a page outside the sheet says of a grant, such as what an
-  update adds to it.
-  """
-  @spec summary([map()]) :: [String.t()]
-  def summary(rows) when is_list(rows) do
-    kinds = Enum.map(Prima.ConsentPreview.kinds(), &Atom.to_string/1)
-
-    rows
-    |> Enum.group_by(& &1["kind"])
-    |> Enum.sort_by(fn {kind, _rows} ->
-      Enum.find_index(kinds, &(&1 == kind)) || length(kinds)
-    end)
-    |> Enum.map(fn {kind, rows} ->
-      "#{kind_heading(kind)}: #{rows |> Enum.flat_map(&row_names/1) |> Enum.uniq() |> Enum.join(", ")}"
-    end)
-  end
-
-  defp row_names(%{"kind" => kind, "values" => values}) when kind in ["egress", "storage"] do
-    for {field, list} <- values,
-        is_list(list),
-        list != [],
-        do: "#{field_label(kind, field)} #{Enum.join(list, ", ")}"
-  end
-
-  defp row_names(%{"kind" => "tools", "values" => %{"tools" => tools}}), do: tools
-  defp row_names(%{"kind" => "system_actions", "values" => %{"actions" => actions}}), do: actions
-
-  defp row_names(%{"kind" => "controls", "values" => %{"controls" => controls}}),
-    do: Enum.map(controls, &"“#{&1["label"]}”")
-
-  defp row_names(%{"kind" => "frame", "values" => values}) do
-    List.wrap(values["capabilities"]) ++
-      if(values["placement"], do: [placement_label(values["placement"])], else: [])
-  end
-
-  defp row_names(%{"values" => %{"name" => name}}) when is_binary(name), do: [name]
-  defp row_names(_row), do: []
-
-  defp field_label("egress", "domains"), do: "Talks to"
-  defp field_label("egress", "methods"), do: "Methods"
-  defp field_label("egress", "schemes"), do: "Schemes"
-  defp field_label("egress", "private_ips"), do: "Private networks"
-  defp field_label("storage", "paths"), do: "Paths"
-  defp field_label("storage", "actions"), do: "Actions"
 
   defp limit_lines(values) do
     for field <- Enum.map(Prima.Limits.fields(), &Atom.to_string/1),

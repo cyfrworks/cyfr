@@ -1071,7 +1071,7 @@ defmodule PrismWeb.ComponentsLive do
   defp update_adds(plan, newer_ref) when is_binary(newer_ref) do
     with %{version: version, adds: [_ | _] = adds, revised: revised} <- plan_field(plan, :update),
          true <- version == shipped_version(newer_ref) do
-      added = adds |> PrismWeb.ConsentSheetComponent.summary() |> Enum.join("; ")
+      added = adds |> PrismWeb.ConsentWords.summary() |> Enum.join("; ")
 
       if revised do
         {"Updating to #{version} adds to its grant: #{added}", "It adds to its grant: #{added}."}
