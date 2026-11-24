@@ -444,7 +444,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
     {:ok, refused, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
-    assert_receive {RunnerPool, ^refused, {:gone, {:refused, :memory_unavailable}}}
+
+    assert_receive {RunnerPool, ^refused,
+                    {:gone, {:refused, %{reason: "memory_unavailable", message: _}}}}
 
     assert %{places: ScriptedKeeper.places(keeper), spawned: Enum.count(spawns(keeper))} == %{
              places: %{},
@@ -1054,7 +1056,15 @@ defmodule Locus.Runtime.RunnerPoolTest do
       serve!(pool)
 
       {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
-      assert_receive {RunnerPool, ^pid, {:gone, {:refused, :memory_unavailable}}}
+      # Its assignee hears the keeper's own code and sentence for it.
+      assert_receive {RunnerPool, ^pid,
+                      {:gone,
+                       {:refused,
+                        %{
+                          reason: "memory_unavailable",
+                          message: "the scripted keeper refuses (memory_unavailable)"
+                        }}}}
+
       assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
       assert Runners.runners(pool) == []
 

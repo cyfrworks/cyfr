@@ -711,11 +711,17 @@ defmodule Opus.HostTest do
       runner = Keyword.get(opts, :runner, fixture.runner)
 
       body =
-        AttemptFixtures.body("runner_exited", %{
-          "member" => Keyword.get(opts, :member, fixture.member),
-          "runner" => runner,
-          "attempts" => Keyword.get(opts, :attempts, [fixture.attempt])
-        })
+        AttemptFixtures.body(
+          "runner_exited",
+          Map.merge(
+            %{
+              "member" => Keyword.get(opts, :member, fixture.member),
+              "runner" => runner,
+              "attempts" => Keyword.get(opts, :attempts, [fixture.attempt])
+            },
+            Keyword.get(opts, :args, %{})
+          )
+        )
 
       fields = %{
         service: service,
@@ -799,6 +805,54 @@ defmodule Opus.HostTest do
       assert %{"ok" => true} = report(fixture)
       assert %{status: "failed", error_message: @untaken} = row(fixture)
       assert terminal_events(fixture) == events
+    end
+
+    test "a run its runner never took, the keeper having refused that runner, says why in CYFR's words" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      assert %{"ok" => true} = report(fixture, args: %{"refusal" => "capacity"})
+
+      said = @untaken <> ": there was no room for another run"
+      assert {:error, ^said} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: ^said} = row(fixture)
+    end
+
+    test "a refusal's code CYFR has no words for names no reason" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      assert %{"ok" => true} = report(fixture, args: %{"refusal" => "sentinel_code"})
+      assert {:error, @untaken} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: @untaken} = row(fixture)
+    end
+
+    test "a report carrying words of its own for a refusal is lost, and none of them is shown" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      for refusal <- [
+            "The sentinel words a report wrote.",
+            %{"reason" => "capacity", "message" => "The sentinel words a report wrote."},
+            "Not A Code",
+            7
+          ] do
+        assert %{"error" => "lost"} = report(fixture, args: %{"refusal" => refusal})
+      end
+
+      assert %{status: "running", error_message: nil} = row(fixture)
     end
 
     test "answers the lapse at once for a runner whose claim was written and never answered" do

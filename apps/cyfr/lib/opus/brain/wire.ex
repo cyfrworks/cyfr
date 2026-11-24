@@ -3,7 +3,7 @@
 
 defmodule Opus.Brain.Wire do
   @moduledoc """
-  The brain wire, version 5, the holder's side (`Opus.Brain`): one JSON
+  The brain wire, version 6, the holder's side (`Opus.Brain`): one JSON
   object per line over a brain driver's `run` session, commands from the
   holder and events from the driver. `tests/fixtures/brain_wire.json` binds
   this module and every driver's side (`apps/locus/keeper/internal/brainwire`,
@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 5
+  @version 6
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -57,6 +57,10 @@ defmodule Opus.Brain.Wire do
     "document" => ~w(application/pdf)
   }
   @native ~w(text said own ask usage idle error)
+  # What a driver's `ending` may say of its end, its own finding and never
+  # the program's words (`endings/0`).
+  @endings ~w(unanswered servers_unlisted refused outdated unsupported ended unrunnable
+              unreadable unfit broken)
 
   @commands %{
     "start" =>
@@ -122,7 +126,8 @@ defmodule Opus.Brain.Wire do
     "models" =>
       {~w(t id models access), ~w(account),
        %{"id" => :id, "models" => :models, "access" => :choices, "account" => :signed_in}},
-    "forgot" => {~w(t id session), [], %{"id" => :id, "session" => :id}}
+    "forgot" => {~w(t id session), [], %{"id" => :id, "session" => :id}},
+    "ending" => {~w(t why), [], %{"why" => :why}}
   }
 
   @typedoc "A command or an event as it reads: its JSON object, string keys."
@@ -198,6 +203,14 @@ defmodule Opus.Brain.Wire do
   """
   @spec native() :: [String.t()]
   def native, do: @native
+
+  @doc """
+  What a driver's `ending`, the last line of a driver that ends of
+  itself, may name in `why`: its own finding, never the program's words,
+  which `Opus.Brain` hands its attendant as the end's reason.
+  """
+  @spec endings() :: [String.t()]
+  def endings, do: @endings
 
   @doc "Whether `name` is as long as a tool's name may be: 1 to 128 bytes."
   @spec tool_name?(term()) :: boolean()
@@ -430,6 +443,7 @@ defmodule Opus.Brain.Wire do
   defp of_type?(:account, value), do: value in @accounts
   defp of_type?(:signed_in, value), do: value == "signed_in"
   defp of_type?(:signed_out, value), do: value == "signed_out"
+  defp of_type?(:why, value), do: value in @endings
 
   defp of_type?(:config, value) when is_map(value),
     do:

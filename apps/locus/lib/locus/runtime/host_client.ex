@@ -554,7 +554,11 @@ defmodule Locus.Runtime.HostClient do
 
   @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
-  that its runner `runner` exited while it held `attempts`. Every attempt
+  that its runner `runner` exited while it held `attempts`, and with
+  `refusal`, the code of the keeper's refusal of that runner after its
+  start was answered, when CYFR has words for it
+  (`Prima.WorkerAPI.runner_refusal/1`): any other is sent as none, which
+  CYFR reads as no reason. Every attempt
   one runner holds was issued by one member, so the report names that
   member (`at`) and is posted at its address; a member that is not the one
   named lapses nothing. The report is signed with the service's dispatch
@@ -565,18 +569,26 @@ defmodule Locus.Runtime.HostClient do
           %{member: String.t(), host_url: String.t()},
           String.t(),
           String.t(),
-          [String.t()]
+          [String.t()],
+          String.t() | nil
         ) :: :ok | {:error, term()}
-  def runner_exited(%Locus.Runtime.Credentials{} = credentials, at, boot, runner, attempts)
-      when is_binary(boot) and is_binary(runner) and is_list(attempts) do
-    body =
-      Jason.encode!(
-        WorkerWire.request_body(:runner_exited, %{
-          "member" => at.member,
-          "runner" => runner,
-          "attempts" => attempts
-        })
+  def runner_exited(
+        %Locus.Runtime.Credentials{} = credentials,
+        at,
+        boot,
+        runner,
+        attempts,
+        refusal
       )
+      when is_binary(boot) and is_binary(runner) and is_list(attempts) do
+    args = %{"member" => at.member, "runner" => runner, "attempts" => attempts}
+
+    args =
+      if Prima.WorkerAPI.runner_refusal(refusal),
+        do: Map.put(args, "refusal", refusal),
+        else: args
+
+    body = Jason.encode!(WorkerWire.request_body(:runner_exited, args))
 
     try = fn ->
       report = %{

@@ -156,6 +156,13 @@ func (s *wireSession) expect(t string) map[string]any {
 	return e
 }
 
+// why is what the driver's ending, its last line, tells the holder.
+func (s *wireSession) why() any {
+	s.t.Helper()
+	got := s.until("ending")
+	return got[len(got)-1]["why"]
+}
+
 // until gathers events up to and including the first of type t.
 func (s *wireSession) until(t string) []map[string]any {
 	s.t.Helper()
@@ -895,8 +902,8 @@ func TestAStartCodexCannotHonourEndsTheDriver(t *testing.T) {
 }
 
 // A start naming an access the driver does not list, fresh or resuming,
-// ends it with 2 before it starts any app-server, writing no line and
-// saying why on its standard error. The harness's command names nothing
+// ends it with 2 before it starts any app-server, writing only its
+// ending, `unfit`, and saying why on its standard error. The harness's command names nothing
 // here, so a start of it would say it did not start, as the listed
 // access's does.
 func TestAStartNamingAnAccessCodexDoesNotListEndsTheDriver(t *testing.T) {
@@ -913,8 +920,12 @@ func TestAStartNamingAnAccessCodexDoesNotListEndsTheDriver(t *testing.T) {
 		if status := s.end(); status != 2 {
 			t.Fatalf("%s: the driver ends with 2: %d", name, status)
 		}
+		var after []map[string]any
 		for e := range s.events {
-			t.Fatalf("%s: the driver writes no line after its hello: %v", name, e)
+			after = append(after, e)
+		}
+		if len(after) != 1 || after[0]["t"] != "ending" || after[0]["why"] != "unfit" {
+			t.Fatalf("%s: the driver writes only its ending, unfit, after its hello: %v", name, after)
 		}
 		if got := s.stderr.String(); got != "cyfr-codex: "+unlistedAccess+"\n" {
 			t.Fatalf("%s: the driver says why, and starts nothing: %q", name, got)
@@ -923,7 +934,8 @@ func TestAStartNamingAnAccessCodexDoesNotListEndsTheDriver(t *testing.T) {
 	s := startDriverWith(t, t.TempDir(), []string{filepath.Join(t.TempDir(), "no-such-harness")})
 	s.expect("hello")
 	s.send(map[string]any{"t": "start", "gen": 0, "config": map[string]any{"access": "full-access"}})
-	if status := s.end(); status != 1 || !strings.Contains(s.stderr.String(), "cyfr-codex: the harness did not start") {
+	if status := s.end(); status != 1 || !strings.Contains(s.stderr.String(), "cyfr-codex: the harness did not start") ||
+		s.why() != "unrunnable" {
 		t.Fatalf("the listed access starts the harness (a positive control): %d %q", status, s.stderr.String())
 	}
 }
@@ -1018,8 +1030,8 @@ func TestAResumeOfASessionThatIsNoThreadIDIsGoneAndStartsNothing(t *testing.T) {
 }
 
 // A resume Codex refuses in words other than a missing rollout's is no
-// proof the thread is gone: the driver ends, writes no `gone`, and the
-// thread is there for the next start to resume.
+// proof the thread is gone: the driver ends, writes no `gone`, only its
+// ending, `refused`, and the thread is there for the next start to resume.
 func TestAResumeCodexRefusesOtherwiseEndsTheDriverAndLeavesTheThread(t *testing.T) {
 	s := startDriver(t)
 	session := startFresh(s, map[string]any{})
@@ -1032,6 +1044,10 @@ func TestAResumeCodexRefusesOtherwiseEndsTheDriverAndLeavesTheThread(t *testing.
 	refused := startDriverIn(t, s.home)
 	refused.expect("hello")
 	refused.send(map[string]any{"t": "start", "gen": 4, "session": session, "config": map[string]any{}})
+	ending := refused.expect("ending")
+	if ending["why"] != "refused" {
+		t.Fatalf("a resume refused in other words ends saying refused: %v", ending)
+	}
 	select {
 	case e, ok := <-refused.events:
 		if ok {

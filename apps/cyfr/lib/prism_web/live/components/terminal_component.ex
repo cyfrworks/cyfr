@@ -57,7 +57,7 @@ defmodule PrismWeb.TerminalComponent do
   # What the frame sends while the session it shows is being closed, which
   # answers nothing until its close has.
   @asked_of_session ~w(terminal_input terminal_written terminal_resize terminal_keep terminal_close)
-  @endings [:exited, :closed, :idle, :row_changed, :standing, :unanswered]
+  @endings [:exited, :restarted, :closed, :idle, :row_changed, :standing, :unanswered]
 
   @doc false
   def on_mount(:default, _params, _session, socket) do
@@ -313,6 +313,12 @@ defmodule PrismWeb.TerminalComponent do
   @doc "What the frame says when its session ended for `reason`."
   @spec ended_text(term()) :: String.t()
   def ended_text(:exited), do: "The program ended."
+
+  def ended_text(:restarted),
+    do:
+      "The program stopped because CYFR restarted the part that runs programs. " <>
+        "Open it again to go on."
+
   def ended_text(:closed), do: "The program was closed."
   def ended_text(:idle), do: "The program ended after a day with no one watching it."
 
