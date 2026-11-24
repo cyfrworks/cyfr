@@ -104,6 +104,15 @@ defmodule Prima.WorkerAPI do
   @refusal_members ~w(reason message)
   @reason ~r/\A[a-z][a-z0-9_]{0,63}\z/
   @max_message_bytes 1024
+  # The keeper's refusals of a runner that a run's failure names, by code
+  # (`runner_refusal/1`): CYFR's words, never the keeper's.
+  @runner_refusals %{
+    "capacity" => "there was no room for another run",
+    "memory_unavailable" => "its memory and CPU could not be bounded where it would run",
+    "exec_failed" => "it could not be started",
+    "guard_unavailable" => "its network access could not be confirmed",
+    "hosts_unresolved" => "a host it reaches did not resolve to an address"
+  }
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
 
@@ -200,25 +209,30 @@ defmodule Prima.WorkerAPI do
       else: :error
   end
 
-  @doc """
-  The `t:refusal/0` its JSON spells (`refusal_to_wire/1`), `nil` for none,
-  or `:error` for anything else: a member missing or extra, a reason that
-  is no code, or a message `valid_refusal_message?/1` refuses. A status
-  carries one, and so does a worker service's report of a runner the
-  keeper refused after its start was answered (`c:Prima.HostAPI.runner_exited/4`).
-  """
-  @spec read_refusal(term()) :: {:ok, refusal() | nil} | :error
-  def read_refusal(nil), do: {:ok, nil}
+  defp read_refusal(nil), do: {:ok, nil}
 
-  def read_refusal(%{} = wire) do
-    refusal = %{reason: wire["reason"], message: wire["message"]}
-
-    if Enum.sort(Map.keys(wire)) == Enum.sort(@refusal_members) and refusal?(refusal),
-      do: {:ok, refusal},
+  defp read_refusal(%{} = refusal) do
+    if Enum.sort(Map.keys(refusal)) == Enum.sort(@refusal_members),
+      do: {:ok, %{reason: refusal["reason"], message: refusal["message"]}},
       else: :error
   end
 
-  def read_refusal(_wire), do: :error
+  defp read_refusal(_refusal), do: :error
+
+  @doc """
+  What a run its runner never took says of the keeper's refusal of that
+  runner, by the refusal's code (`t:refusal/0`'s `reason`), which a worker
+  service's report carries and nothing beside it
+  (`c:Prima.HostAPI.runner_exited/4`): a sentence of CYFR's own for each
+  code of this list, and `nil` for any other, which the run's failure
+  names no reason for. A service sends no code outside the list.
+  """
+  @spec runner_refusal(term()) :: String.t() | nil
+  def runner_refusal(code), do: Map.get(@runner_refusals, code)
+
+  @doc "Whether `code` is a refusal's code a report may carry: a code's shape, of the list or not."
+  @spec refusal_code?(term()) :: boolean()
+  def refusal_code?(code), do: is_binary(code) and Regex.match?(@reason, code)
 
   @doc """
   `status` as its JSON answer spells it, every member a string, which
@@ -240,11 +254,9 @@ defmodule Prima.WorkerAPI do
     }
   end
 
-  @doc "`refusal` as its JSON spells it, which `read_refusal/1` reads back; `nil` for none."
-  @spec refusal_to_wire(refusal() | nil) :: %{String.t() => String.t()} | nil
-  def refusal_to_wire(nil), do: nil
+  defp refusal_to_wire(nil), do: nil
 
-  def refusal_to_wire(%{reason: reason, message: message}),
+  defp refusal_to_wire(%{reason: reason, message: message}),
     do: %{"reason" => reason, "message" => message}
 
   @doc """

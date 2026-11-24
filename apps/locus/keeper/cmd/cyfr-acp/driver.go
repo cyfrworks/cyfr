@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -256,6 +257,11 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 		return brainwire.Fail(1, brainwire.WhyUnrunnable, "the driver has no working folder: "+err.Error())
 	}
 	servers, err := d.personsServers()
+	if errors.Is(err, brainwire.ErrNotStarted) {
+		// The listing is the program's first run: Spawn has said why on the
+		// driver's standard error, and its command is what to check.
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")
+	}
 	if err != nil {
 		return brainwire.Fail(1, brainwire.WhyServersUnlisted, d.p.title+" did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own: "+err.Error())
 	}
@@ -455,8 +461,11 @@ func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case stageInitialize:
 		var init initialized
-		if m.Error != nil || json.Unmarshal(m.Result, &init) != nil {
+		if m.Error != nil {
 			return brainwire.Fail(1, brainwire.WhyRefused, d.p.title+" refused to start its ACP server")
+		}
+		if json.Unmarshal(m.Result, &init) != nil {
+			return brainwire.Fail(1, brainwire.WhyUnreadable, d.p.title+" answered its initialize in a way the driver cannot read")
 		}
 		d.caps = agentCapabilities{}
 		_ = json.Unmarshal(init.Capabilities, &d.caps)

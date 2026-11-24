@@ -564,16 +564,16 @@ defmodule Prima.HostAPI do
   named alone that no runner took is closed failed at once. A report
   speaks for its own boot only: another boot of the
   same service lapses nothing, and neither does a member the report's
-  `member` does not name. `refusal` is the keeper's own code and sentence
-  (`t:Prima.WorkerAPI.refusal/0`) when it refused the runner after the
-  service answered its start, which an attempt the runner never took
-  closes with; `nil` otherwise.
+  `member` does not name. `refusal` is the code of the keeper's refusal
+  of the runner after the service answered its start
+  (`Prima.WorkerAPI.runner_refusal/1`), whose sentence an attempt the
+  runner never took closes with; `nil` otherwise.
   """
   @callback runner_exited(
               report :: WorkerAuth.dispatch(),
               runner :: String.t(),
               attempts :: [String.t()],
-              refusal :: Prima.WorkerAPI.refusal() | nil
+              refusal :: String.t() | nil
             ) ::
               :ok | {:error, :unavailable}
 end

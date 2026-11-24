@@ -288,8 +288,26 @@ func TestHelloNamesTheProgramsDriverAndAnUnknownNameIsRefused(t *testing.T) {
 	if status := s.end(); status != 0 {
 		t.Fatalf("an input that ends ends the driver with 0: %d", status)
 	}
-	if status := run("cyfr-acp", []string{"agy"}); status != 2 {
-		t.Fatalf("a name no profile has ends with 2: %d", status)
+	// Off a terminal, a name no profile has ends as every end does, its
+	// hello then its ending, unrunnable.
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, stdout := os.Stdin, os.Stdout
+	os.Stdin, os.Stdout = inR, outW
+	status := run("cyfr-acp", []string{"agy"})
+	os.Stdin, os.Stdout = stdin, stdout
+	_ = outW.Close()
+	_ = inW.Close()
+	written, _ := io.ReadAll(outR)
+	lines := strings.Split(strings.TrimSpace(string(written)), "\n")
+	if status != 2 || len(lines) != 2 || lines[1] != `{"t":"ending","why":"unrunnable"}` {
+		t.Fatalf("a name no profile has ends with 2, saying unrunnable: %d %q", status, lines)
 	}
 }
 
@@ -796,6 +814,44 @@ func TestAnInitializeThatDoesNotQualifyIsRefused(t *testing.T) {
 				t.Fatalf("the holder is told %s alone: %s", why, s.output())
 			}
 		})
+	}
+}
+
+// A profile whose program cannot be run ends the driver unrunnable, though
+// its first run is the listing of its MCP servers: what to check is its
+// command, never its servers.
+func TestAProgramThatCannotBeRunIsUnrunnable(t *testing.T) {
+	for _, p := range []*profile{antigravity, opencode} {
+		t.Run(p.title, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("GEMINI_HOME", "")
+			missing := filepath.Join(t.TempDir(), "no-such-program")
+			s := startDriverWith(t, p, home, func(d *driver) { d.harnessCommand = []string{missing} })
+			s.expect("hello")
+			s.send(startCommand("", map[string]any{}, filesTool))
+			if status := s.exit(); status != 1 || strings.Contains(s.stderr.String(), "MCP servers") {
+				t.Fatalf("the start ends, naming no servers: %d %q", status, s.stderr.String())
+			}
+			if why := s.why(); why != "unrunnable" {
+				t.Fatalf("the holder is told unrunnable: %v", why)
+			}
+		})
+	}
+}
+
+// An initialize the program answered with a result the driver cannot read
+// is no refusal of the program's: the holder is told unreadable.
+func TestAnInitializeThatDoesNotReadIsUnreadable(t *testing.T) {
+	t.Setenv("FAKE_INIT_UNREADABLE", "1")
+	s := startDriver(t)
+	s.expect("hello")
+	s.send(startCommand("", map[string]any{}, filesTool))
+	if status := s.exit(); status != 1 || strings.Contains(s.output(), `"started"`) {
+		t.Fatalf("the start ends with 1 and no started: %d %s", status, s.output())
+	}
+	if why := s.why(); why != "unreadable" {
+		t.Fatalf("the holder is told unreadable: %v", why)
 	}
 }
 

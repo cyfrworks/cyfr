@@ -566,7 +566,7 @@ defmodule Locus.Runtime.HostClientTest do
              ScriptedHost.requests(host)
   end
 
-  test "a report of a runner the keeper refused carries the keeper's code and sentence", %{
+  test "a report of a runner the keeper refused carries the refusal's code alone", %{
     host: host
   } do
     {:ok, credentials} =
@@ -580,16 +580,32 @@ defmodule Locus.Runtime.HostClientTest do
 
     at = %{member: host.member, host_url: host.url}
 
-    refusal = %{
-      reason: "uid_exhausted",
-      message: "cyfr-locus refused to start a runner (uid_exhausted)"
-    }
-
     assert :ok =
-             HostClient.runner_exited(credentials, at, "boot_x", "runner_1", ["att_1"], refusal)
+             HostClient.runner_exited(
+               credentials,
+               at,
+               "boot_x",
+               "runner_1",
+               ["att_1"],
+               "capacity"
+             )
 
-    assert [%{op: "runner_exited", args: %{"refusal" => wire}}] = ScriptedHost.requests(host)
-    assert Prima.WorkerAPI.read_refusal(wire) == {:ok, refusal}
+    assert [%{op: "runner_exited", args: %{"refusal" => "capacity"}}] =
+             ScriptedHost.requests(host)
+
+    # A code CYFR has no words for is sent as none.
+    assert :ok =
+             HostClient.runner_exited(
+               credentials,
+               at,
+               "boot_x",
+               "runner_1",
+               ["att_1"],
+               "uid_busy"
+             )
+
+    assert [_, %{op: "runner_exited", args: args}] = ScriptedHost.requests(host)
+    refute Map.has_key?(args, "refusal")
   end
 
   describe "a runner's client" do

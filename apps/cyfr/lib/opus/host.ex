@@ -139,9 +139,9 @@ defmodule Opus.Host do
 
   `runner_exited/2` takes a report's header (`Prima.WorkerAuth.report_header/3`)
   and its JSON body, `{"v": 1, "op": "runner_exited", "args": {"member":
-  boot, "runner": id, "attempts": [ids], "refusal"?: refusal}}`, and
-  answers JSON; `refusal`, when present, reads as
-  `Prima.WorkerAPI.read_refusal/1` reads one, or the report is lost. The header must
+  boot, "runner": id, "attempts": [ids], "refusal"?: code}}`, and
+  answers JSON; `refusal`, when present, is a code
+  (`Prima.WorkerAPI.refusal_code?/1`), or the report is lost. The header must
   verify under the dispatch key of the worker service it names
   (`Prima.WorkerAuth.verify_report/4`), which only that worker service
   holds, and its `member` must be this member's boot, since every attempt
@@ -288,7 +288,8 @@ defmodule Opus.Host do
          true <- is_binary(member) and member != "",
          true <- is_binary(runner) and runner != "" and is_list(attempts),
          true <- Enum.all?(attempts, &(is_binary(&1) and &1 != "")),
-         {:ok, refusal} <- WorkerAPI.read_refusal(args["refusal"]) do
+         refusal = args["refusal"],
+         true <- refusal == nil or WorkerAPI.refusal_code?(refusal) do
       {:ok, %{member: member, runner: runner, refusal: refusal}, Enum.uniq(attempts)}
     else
       _ -> {:error, :lost}

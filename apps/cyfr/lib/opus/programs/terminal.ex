@@ -44,8 +44,9 @@ defmodule Opus.Programs.Terminal do
     * `:exited`: the program exited, or the service no longer runs it
       (its answer says so, or it could not be read for a minute);
     * `:restarted`: the service it ran on started again (a read refused
-      for a stale boot, or the box syncing the owner again once the
-      session stood), after which a turn's session stays to answer its
+      for a stale boot, or the box syncing the owner again under another
+      boot once the session stood; a sync under the same boot leaves it
+      going on under the new grant), after which a turn's session stays to answer its
       last output and its ending, as after `:exited`;
     * `:closed`: `close/2` was accepted, carried out by this process
       whether or not the caller still waits, and the box said the place
@@ -502,11 +503,18 @@ defmodule Opus.Programs.Terminal do
     do: finish(state, :row_changed)
 
   # A new grant before the session stands is the one its open is made
-  # under (the box synced the owner again for a service that restarted);
-  # once it stands, the service the session ran on is not the one it runs
-  # on now, so its program is gone.
+  # under (the box synced the owner again for a service that restarted).
+  # Once it stands, one under the same boot is a sync the service kept the
+  # session through (the athanor's ceiling moved, say): it goes on under
+  # the new grant, its reader too. One under another boot is a service
+  # that started again, so its program is gone.
   def handle_info({Opus.Programs, :owner, grant}, %{session: nil} = state),
     do: {:noreply, %{state | grant: grant}}
+
+  def handle_info({Opus.Programs, :owner, %{boot: boot} = grant}, %{grant: %{boot: boot}} = state) do
+    if state.reader, do: send(state.reader, {:grant, grant})
+    {:noreply, %{state | grant: grant}}
+  end
 
   def handle_info({Opus.Programs, :owner, _grant}, state), do: finish(state, :restarted)
 
@@ -845,6 +853,15 @@ defmodule Opus.Programs.Terminal do
     :ok
   end
 
+  # The reader waits for the owner's taking of the last output, under the
+  # grant the terminal holds now.
+  defp read_on(terminal, grant, session, last) do
+    receive do
+      {:grant, grant} -> read_on(terminal, grant, session, last)
+      :taken -> read(terminal, grant, session, last, 0)
+    end
+  end
+
   # The reader: one output at a time, each naming the last chunk it was
   # answered, so a lost answer is replayed, and the next asked for only
   # once the owner has taken the last. A service that does not answer is
@@ -856,11 +873,7 @@ defmodule Opus.Programs.Terminal do
         last = if chunks == [], do: after_seq, else: List.last(chunks).seq
         send(terminal, {:read, output, running})
 
-        if running do
-          receive do
-            :taken -> read(terminal, grant, session, last, 0)
-          end
-        end
+        if running, do: read_on(terminal, grant, session, last)
 
       {:error, {:refused, _code, _boot} = refused} ->
         send(terminal, {:read_failed, refused})

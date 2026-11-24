@@ -237,6 +237,29 @@ func Serve(c *Conn, d Driver, in io.Reader, stop <-chan os.Signal) int {
 	}
 }
 
+// Usage ends a driver run with no harness it can drive, saying how it is
+// run: on a terminal that alone, and off one as every end, `unrunnable`.
+func Usage(name, usage string) int {
+	if isTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	return Unserved(NewConn(name, os.Stdout, os.Stderr), Fail(2, WhyUnrunnable, usage))
+}
+
+// Unserved ends a driver that cannot serve the wire at all, as Serve ends
+// one: its hello, then its ending, its reason on standard error alone.
+func Unserved(c *Conn, end Fatal) int {
+	e := end.ending()
+	if e.reason != "" {
+		fmt.Fprintf(c.ErrOut, "%s: %s\n", c.name, e.reason)
+	}
+	if err := c.Emit(NewEvent("hello").Set("v", Version).Set("driver", c.name).Set("boot", c.Boot)); err == nil {
+		_ = c.Emit(NewEvent("ending").Set("why", e.why.code))
+	}
+	return e.status
+}
+
 func command(d Driver, line []byte) error {
 	if line == nil {
 		return Fail(2, WhyBroken, "a command past the wire's bound")
@@ -255,16 +278,14 @@ func command(d Driver, line []byte) error {
 // TERM.
 func Main(name string, args []string, newDriver func(command []string, c *Conn, home string) Driver) int {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: %s HARNESS [ARG]...\n", name)
-		return 2
+		return Usage(name, fmt.Sprintf("usage: %s HARNESS [ARG]...", name))
 	}
 	if isTerminal(int(os.Stdin.Fd())) {
 		return runUnchanged(name, args)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: no home: %v\n", name, err)
-		return 1
+		return Unserved(NewConn(name, os.Stdout, os.Stderr), Fail(1, WhyUnrunnable, "no home: "+err.Error()))
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, unix.SIGTERM, unix.SIGHUP)

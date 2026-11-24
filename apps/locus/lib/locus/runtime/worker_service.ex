@@ -521,8 +521,8 @@ defmodule Locus.Runtime.WorkerService do
   # A runner gone with its subtree assigned is reported holding the
   # subtree's root and every child it said it started: the attempts the
   # service knows it held. CYFR lapses the ones still running. One the
-  # keeper refused is reported with the keeper's code and sentence, which
-  # a run its runner never took closes with.
+  # keeper refused is reported with its refusal's code, which a run its
+  # runner never took is worded by (`Prima.WorkerAPI.runner_refusal/1`).
   defp gone(state, pid, reason) do
     case Map.get(state.assigned, pid) do
       nil ->
@@ -535,7 +535,7 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  defp refusal({:refused, %{reason: _, message: _} = refusal}), do: refusal
+  defp refusal({:refused, %{reason: code}}), do: code
   defp refusal(_reason), do: nil
 
   # A child the runner said it started joins what the service holds for

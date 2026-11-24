@@ -8,6 +8,8 @@ package brainwire
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -65,4 +67,32 @@ func TestEveryEndNamesAWhyTheWireReads(t *testing.T) {
 		}
 	}()
 	_ = Fail(1, Why{}, "no code")
+}
+
+// A driver started with no harness to drive, off a terminal, ends as every
+// other end does: its hello, then its ending, unrunnable, and its usage on
+// standard error alone.
+func TestADriverWithNoHarnessEndsUnrunnable(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, stdout := os.Stdin, os.Stdout
+	os.Stdin, os.Stdout = inR, outW
+	status := Main("cyfr-test", nil, nil)
+	os.Stdin, os.Stdout = stdin, stdout
+	_ = outW.Close()
+	_ = inW.Close()
+	written, _ := io.ReadAll(outR)
+	lines := strings.Split(strings.TrimSpace(string(written)), "\n")
+	if status != 2 || len(lines) != 2 || lines[1] != `{"t":"ending","why":"unrunnable"}` {
+		t.Fatalf("hello, then the ending alone, and 2: %d %q", status, lines)
+	}
+	if !strings.HasPrefix(lines[0], `{"t":"hello"`) {
+		t.Fatalf("the first line is its hello: %q", lines[0])
+	}
 }

@@ -172,7 +172,9 @@ defmodule Opus.Brain do
   `{:exited, why}` when its last line, an `ending`, said why: one of
   `Opus.Brain.Wire.endings/0` as an atom, the driver's own finding), when
   the service it ran on started again (`:restarted`: a read refused for a
-  stale boot, or the box syncing the owner again), when the service could
+  stale boot, or the box syncing the owner again under another boot; a
+  sync under the same boot leaves the session going on under the new
+  grant), when the service could
   not be read for a minute (`:unavailable`), and after a write whose
   answer did not come (`:interrupted`). Its attendant's exit
   ends it too. However it ends, killed included, the box closes its
@@ -1154,8 +1156,15 @@ defmodule Opus.Brain do
   def handle_info({Opus.Programs, :stand_down, _key}, state),
     do: {:stop, :normal, ended(state, :row_changed)}
 
-  # A new grant means the box synced the owner again: the service the
-  # session ran on is not the one it runs on now.
+  # A new grant means the box synced the owner again. Under the boot the
+  # session was held under, the service kept it, the athanor's ceiling
+  # alone having moved, say: it goes on under the new grant, its reader
+  # too. Under another, the service the session ran on started again.
+  def handle_info({Opus.Programs, :owner, %{boot: boot} = grant}, %{grant: %{boot: boot}} = state) do
+    if state.reader, do: send(state.reader, {:grant, grant})
+    {:noreply, %{state | grant: grant}}
+  end
+
   def handle_info({Opus.Programs, :owner, _grant}, state),
     do: {:stop, :normal, ended(state, :restarted)}
 
@@ -1325,6 +1334,15 @@ defmodule Opus.Brain do
     %{state | reader: reader}
   end
 
+  # The reader waits for the holder's word to read on, under the grant the
+  # holder holds now.
+  defp await_go(holder, grant, session) do
+    receive do
+      {:grant, grant} -> await_go(holder, grant, session)
+      {:go, after_seq} -> reader(holder, grant, session, after_seq, 0)
+    end
+  end
+
   # The reader: one read at a time, each past the last line the attendant
   # took, so a lost answer is read again by the same `after`, and the next
   # only once the holder says. A service that does not answer is asked
@@ -1333,10 +1351,7 @@ defmodule Opus.Brain do
     case Session.recv(grant, session, after_seq, @recv_wait_ms) do
       {:ok, answer} ->
         send(holder, {:read, self(), answer})
-
-        receive do
-          {:go, after_seq} -> reader(holder, grant, session, after_seq, 0)
-        end
+        await_go(holder, grant, session)
 
       {:error, {:refused, _code, _boot} = refused} ->
         send(holder, {:read_failed, self(), refused})
@@ -1352,6 +1367,14 @@ defmodule Opus.Brain do
 
   # ---------------------------------------------------------------------------
   # Lines
+
+  # A driver's `ending` is its last line: what it writes after one is
+  # read past and acted on in nothing, until its process ends.
+  defp lines(%{ending: why} = state, %{lines: [_ | _] = lines}) when why != nil do
+    last = List.last(lines).seq
+    send(state.reader, {:go, last})
+    {:noreply, %{state | after: last}}
+  end
 
   defp lines(state, %{dropped: dropped}) when dropped > 0,
     do: {:stop, :normal, ended(state, :dropped)}
@@ -1391,7 +1414,10 @@ defmodule Opus.Brain do
   defp decode([%{seq: seq, text: text} | rest], state, events) do
     with {:ok, event} <- Wire.decode(text),
          {:ok, applied} <- apply_event(state, seq, event) do
-      decode(rest, applied, [{seq, event} | events])
+      # Nothing after an `ending` is read: the batch ends there.
+      if event["t"] == "ending",
+        do: {:ok, Enum.reverse([{seq, event} | events]), applied},
+        else: decode(rest, applied, [{seq, event} | events])
     else
       {:error, :too_large} -> {:error, :too_large, state}
       {:error, _unreadable_or_unknown} -> {:error, :unreadable, state}

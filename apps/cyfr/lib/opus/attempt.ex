@@ -561,14 +561,14 @@ defmodule Opus.Attempt do
   claimed it (nil to match any). `assigned?` is set by a report that is the
   worker service's own word that it gave that runner the attempt, and
   `refusal` by one whose keeper refused that runner after the start was
-  answered: the keeper's own code and sentence.
+  answered: the refusal's code (`Prima.WorkerAPI.runner_refusal/1`).
   """
   @type holder :: %{
           required(:service_id) => String.t() | nil,
           required(:boot_id) => String.t(),
           required(:runner) => String.t() | nil,
           optional(:assigned?) => boolean(),
-          optional(:refusal) => Prima.WorkerAPI.refusal() | nil
+          optional(:refusal) => String.t() | nil
         }
 
   @doc """
@@ -610,9 +610,9 @@ defmodule Opus.Attempt do
   attach: its runner ended before it took the run. This process alone
   answers an attach, and every effect needs that answer, so nothing of
   the run ran and an attach still on its way finds nothing to take. It
-  closes the run failed, saying so, and why with the keeper's sentence
-  when the keeper refused the runner, or answers the row as it stands if
-  that ended.
+  closes the run failed, saying so, and why in CYFR's words for the code
+  of the keeper's refusal of the runner, or answers the row as it stands
+  if that ended.
   """
   @spec stop_unclosed(String.t(), holder()) :: :ok
   def stop_unclosed(attempt, %{boot_id: boot_id} = holder)
@@ -1149,10 +1149,14 @@ defmodule Opus.Attempt do
     if row_live(state) == false, do: close_lost(state), else: refuse_run(state, untaken(refusal))
   end
 
-  # What a run its runner never took closes with: the keeper's own
-  # sentence after it when it refused that runner.
-  defp untaken(nil), do: @untaken
-  defp untaken(%{message: message}), do: "#{@untaken}: #{message}"
+  # What a run its runner never took closes with: why, when the keeper's
+  # refusal of that runner names a code CYFR has words for.
+  defp untaken(code) do
+    case Prima.WorkerAPI.runner_refusal(code) do
+      nil -> @untaken
+      why -> "#{@untaken}: #{why}"
+    end
+  end
 
   # A waiter that exited kills its run and lapses its row. The kill of a
   # runner that attached is counted before the attempt gives back its slot,
