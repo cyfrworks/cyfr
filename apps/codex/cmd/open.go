@@ -65,9 +65,6 @@ func openOnDisplay(address string, noOpen bool, out io.Writer) bool {
 // terminal that reads the sequence (hyperlinkFor); the address as it is
 // otherwise.
 func hyperlink(out io.Writer, address string) string {
-	if w, ok := out.(*syncWriter); ok {
-		out = w.w
-	}
 	f, ok := out.(*os.File)
 	return hyperlinkFor(address, ok && term.IsTerminal(int(f.Fd())), runtime.GOOS, os.Getenv)
 }

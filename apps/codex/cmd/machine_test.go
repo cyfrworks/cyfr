@@ -165,8 +165,9 @@ const (
 const fakeDockerAnswers = "CYFR_CMD_TEST_FAKE_DOCKER"
 
 // fakeRecord marks a run of this test binary as a curl or an sh a test put
-// on PATH only to see that nothing runs it: it appends its name and
-// arguments, as one line, to the file the variable names, and runs nothing.
+// on PATH only to see that nothing runs it, or as the installed CYFR app
+// cyfr setup opens: it appends its name and arguments, as one line, to the
+// file the variable names, and runs nothing.
 const fakeRecord = "CYFR_CMD_TEST_FAKE_RECORD"
 
 // fakeBrewDir marks a run of this test binary as the brew fakeBrew put on
@@ -174,11 +175,11 @@ const fakeRecord = "CYFR_CMD_TEST_FAKE_RECORD"
 const fakeBrewDir = "CYFR_CMD_TEST_FAKE_BREW"
 
 // runStandIn is this test binary run as the stand-in its name says, sudo,
-// sg, docker, brew, curl or sh, when the test that started it set that
+// sg, docker, brew, curl, sh or CYFR, when the test that started it set that
 // stand-in's record; ok is false for any other run.
 func runStandIn() (status int, ok bool) {
 	switch name := filepath.Base(os.Args[0]); {
-	case (name == "curl" || name == "sh") && os.Getenv(fakeRecord) != "":
+	case (name == "curl" || name == "sh" || name == "CYFR") && os.Getenv(fakeRecord) != "":
 		f, err := os.OpenFile(os.Getenv(fakeRecord), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return 3, true

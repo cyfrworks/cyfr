@@ -4,649 +4,104 @@
 package cmd
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"errors"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
-	"reflect"
-	"slices"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/cyfr/codex/internal/access"
-	"github.com/cyfr/codex/internal/setup"
 )
 
-// newSetupRun makes a new project with the fake engine and a session of
-// cyfr setup over them, on a machine whose Docker answers, its images not
-// pulled, ended with the test.
-func newSetupRun(t *testing.T) (*fakeStack, *setupSession, *bytes.Buffer) {
+// standInApp makes the installed CYFR app a stand-in at a path of its own
+// (runStandIn, as CYFR) that records how it was started, and answers the
+// record's file; display is whether this machine has a display.
+func standInApp(t *testing.T, display bool) string {
 	t.Helper()
-	newInitProject(t)
-	s := useFakeEngine(t)
-	standInMachine(t).reachable = true
-	ctx, cancel := context.WithCancel(context.Background())
-	out := &bytes.Buffer{}
-	sess := newSetupSession(ctx, setupOptions{noPull: true}, true, &syncWriter{w: out})
-	t.Cleanup(func() {
-		cancel()
-		if sess.begun() {
-			<-sess.finished
+	app := filepath.Join(t.TempDir(), "CYFR")
+	standInLink(t, app)
+	record := filepath.Join(t.TempDir(), "started")
+	t.Setenv(fakeRecord, record)
+	was, wasDisplay := installedApp, hasDisplay
+	installedApp = func() string { return app }
+	hasDisplay = func() bool { return display }
+	t.Cleanup(func() { installedApp, hasDisplay = was, wasDisplay })
+	return record
+}
+
+// cyfr setup starts the installed app with the working directory as the
+// folder it suggests, says so, and returns without waiting for it.
+func TestSetupOpensTheAppWithTheWorkingDirectory(t *testing.T) {
+	record := standInApp(t, true)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	out, err := runCommand(t, t.Context(), "setup")
+	if err != nil {
+		t.Fatalf("cyfr setup answered %v\n%s", err, out)
+	}
+	if want := "Opened the CYFR app, with " + dir + " to set CYFR up in under Or set up CYFR on this computer. An app that was open already is shown as it was.\n"; out != want {
+		t.Errorf("cyfr setup printed %q, want %q", out, want)
+	}
+	var started []byte
+	for closes := time.Now().Add(10 * time.Second); ; {
+		if started, err = os.ReadFile(record); err == nil && strings.HasSuffix(string(started), "\n") {
+			break
 		}
-	})
-	return s, sess, out
-}
-
-// awaitPhase waits for the session to reach phase, failing past a bound.
-func awaitPhase(t *testing.T, sess *setupSession, phase string) setup.State {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		st := sess.State()
-		if st.Phase == phase {
-			return st
+		if time.Now().After(closes) {
+			t.Fatalf("the app was not started within 10 s (%v)", err)
 		}
-		if st.Final() || time.Now().After(deadline) {
-			t.Fatalf("the run is %+v, want the phase %s", st, phase)
-		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // sleep-ok: a bounded wait for a program this test does not hold to write its record
+	}
+	if got, want := strings.Fields(string(started)), []string{"--setup-project=" + dir}; len(got) != 2 || filepath.Base(got[0]) != "CYFR" || got[1] != want[0] {
+		t.Errorf("the app was started as %q, want CYFR %s", started, want[0])
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("cyfr setup wrote %d entries in the working directory, want none", len(entries))
 	}
 }
 
-// ended waits for the run's end and answers its state.
-func ended(t *testing.T, sess *setupSession) setup.State {
-	t.Helper()
-	select {
-	case <-sess.finished:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("the run did not end: %+v", sess.State())
-	}
-	return sess.State()
-}
-
-// The pages ask nothing: the start writes .env as cyfr init writes it,
-// reached from this device, and starts CYFR; the pages move to its setup
-// link, the setup page at its address with .env's setup token in the
-// fragment.
-func TestSetupWritesEnvAndStartsCYFR(t *testing.T) {
-	s, sess, out := newSetupRun(t)
-	if err := sess.Start(); err != nil {
-		t.Fatal(err)
-	}
-	st := ended(t, sess)
-	want := setup.State{Phase: setup.PhaseDone, Address: "http://localhost:4000", SetupURL: "http://localhost:4000/setup#" + setupTokenOf(t)}
-	if !reflect.DeepEqual(st, want) {
-		t.Fatalf("the run ended %+v, want %+v\n%s", st, want, out)
-	}
-	if err := sess.result(); err != nil {
-		t.Errorf("CYFR up ends the process with %v", err)
-	}
-	if accessOf(t) != access.ModeLocal {
-		t.Errorf(".env is reached as %s", accessOf(t))
-	}
-	if s.starts != 1 || len(s.switches) != 0 || len(s.joins) != 0 {
-		t.Errorf("%d starts, %d switches and %d joins, want one start alone", s.starts, len(s.switches), len(s.joins))
-	}
-	if holder := s.held(); holder != "" {
-		t.Errorf("the run left the lock held by %s", holder)
-	}
-	if err := sess.Start(); !errors.Is(err, setup.ErrNotNow) {
-		t.Errorf("a second start answered %v", err)
-	}
-}
-
-// The steps a run shows are init's, in its order, then the start: the
-// images unless --no-pull; a run shows them from its start.
-func TestSetupNamesItsSteps(t *testing.T) {
-	for noPull, want := range map[bool][]string{
-		true:  {"files", "settings", "start"},
-		false: {"files", "settings", "images", "start"},
-	} {
-		if got := setupSteps(noPull); !slices.Equal(got, want) {
-			t.Errorf("no pull %v has the steps %v, want %v", noPull, got, want)
-		}
-	}
-	_, sess, _ := newSetupRun(t)
-	if err := sess.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if st := sess.State(); !slices.Equal(st.Steps, setupSteps(true)) {
-		t.Errorf("the run began %+v", st)
-	}
-	ended(t, sess)
-}
-
-// A start that fails shows why and offers it again, the only offer; the
-// start again that succeeds is done at the setup link.
-func TestSetupOffersTheStartAgain(t *testing.T) {
-	s, sess, out := newSetupRun(t)
-	s.startErr = errors.New("cyfr did not become healthy")
-	s.composeErr = errors.New("no compose here")
-	if err := sess.Start(); err != nil {
-		t.Fatal(err)
-	}
-	st := awaitPhase(t, sess, setup.PhaseProblem)
-	if st.Sentence != "cyfr did not become healthy" || !slices.Equal(st.Offers, []string{setup.OfferRetry}) || st.Step != setupStepStart {
-		t.Fatalf("the failed start shows %+v", st)
-	}
-	if err := sess.Choose("local"); !errors.Is(err, setup.ErrNotNow) {
-		t.Errorf("an offer not made answered %v", err)
-	}
-	s.startErr = nil
-	if err := sess.Choose(setup.OfferRetry); err != nil {
-		t.Fatal(err)
-	}
-	if st := ended(t, sess); st.Phase != setup.PhaseDone || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) || s.starts != 2 || len(s.switches) != 0 {
-		t.Fatalf("the start again ended %+v after %d starts and switches %+v\n%s", st, s.starts, s.switches, out)
-	}
-}
-
-// In a project whose .env exists, cyfr setup serves nothing and writes
-// nothing: it says the next step of the CYFR set up there, read under the
-// stack's lock as cyfr up reads it, and exits 0. While cyfr runs with no
-// one set up (the boot's not-set-up line and no set-up line after it),
-// the setup link, opened on a machine with a display; with its first
-// person, its address; with a log that cannot be read, the link alone;
-// while it is stopped, cyfr up first, then the setup link when it never
-// booted. A .env that says nothing of how
-// CYFR is reached is refused with its sentence.
-func TestSetupInASetUpProjectSaysTheNextStep(t *testing.T) {
-	const startedAt = "2026-10-28T00:01:02.123456789Z"
-	const marker = "[Cyfr] Not set up: no one is set up on this CYFR yet.\n"
-	const setUp = "[Cyfr] Set up: this CYFR has its first person.\n"
-	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	link := "https://cyfr.example.com/setup#" + token
+// Without the app installed, or without a display, cyfr setup refuses and
+// starts nothing.
+func TestSetupRefusesWithoutTheAppOrADisplay(t *testing.T) {
 	for _, c := range []struct {
-		name, container, log string
-		exit                 string
-		noDatabase           bool
-		want                 string
-		opened               []string
+		name    string
+		app     bool
+		display bool
+		want    string
 	}{
-		{name: "running, no one set up", container: "c0ffee", log: "booting\n" + marker,
-			want:   "Open " + link + " to set up its first person.\nOpened it in your browser.\n",
-			opened: []string{link}},
-		{name: "running, its first person set up", container: "c0ffee", log: "booting\n",
-			want: "CYFR is set up and has its first person. Open https://cyfr.example.com.\n"},
-		{name: "running, its first person set up since the boot", container: "c0ffee", log: "booting\n" + marker + setUp,
-			want: "CYFR is set up and has its first person. Open https://cyfr.example.com.\n"},
-		{name: "running, its log unread", container: "c0ffee", log: marker, exit: "1",
-			want:   "Open " + link + ".\nOpened it in your browser.\n",
-			opened: []string{link}},
-		{name: "stopped", want: "CYFR is already set up here. Next: cyfr up.\n"},
-		{name: "never booted", noDatabase: true,
-			want: "CYFR is already set up here. Next: cyfr up. Then open " + link + " to set up its first person.\n"},
+		{"no app", false, true, "cyfr setup opens the CYFR app, which is not installed here. Run cyfr init at a terminal."},
+		{"no app, no display", false, false, "cyfr setup opens the CYFR app, which is not installed here. Run cyfr init at a terminal."},
+		{"no display", true, false, "This machine has no display for the CYFR app. Run cyfr init here instead."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := newUpdateScenario(t, shippedCompose(t), nil)
-			s.edit(".env", scenarioEnv+"CYFR_SETUP_TOKEN="+token+"\n")
-			if c.noDatabase {
-				for _, name := range []string{"cyfr.db", "cyfr.db-wal", "cyfr.db-shm"} {
-					if err := os.Remove("data/" + name); err != nil {
-						t.Fatal(err)
-					}
-				}
+			record := standInApp(t, c.display)
+			if !c.app {
+				missing := filepath.Join(t.TempDir(), "CYFR")
+				installedApp = func() string { return missing }
 			}
-			s.answer("ps.out", c.container+"\n")
-			s.answer("inspect.out", startedAt+"\n")
-			s.answer("logs.out", c.log)
-			if c.exit != "" {
-				s.answer("logs.exit", c.exit)
+			t.Chdir(t.TempDir())
+			out, err := runCommand(t, t.Context(), "setup")
+			if err == nil || err.Error() != c.want {
+				t.Fatalf("cyfr setup answered %v (%q), want %q", err, out, c.want)
 			}
-			l := stubLauncher(t, true, nil)
-			before := read(t, ".env")
-			var out bytes.Buffer
-			if err := runSetup(context.Background(), setupOptions{}, &out); err != nil {
-				t.Fatalf("cyfr setup answered %v\n%s", err, out.String())
-			}
-			if out.String() != c.want {
-				t.Errorf("cyfr setup printed\n%s\nwant\n%s", out.String(), c.want)
-			}
-			if got := l.all(); !slices.Equal(got, c.opened) {
-				t.Errorf("cyfr setup opened %v, want %v", got, c.opened)
-			}
-			if read(t, ".env") != before || fileExists(setupURLFile) {
-				t.Error("cyfr setup in a set-up project wrote .env or served its pages")
-			}
-			if holder := s.engine.held(); holder != "" || s.engine.locks != 1 {
-				t.Errorf("the lock is held by %q after %d locks, want it taken once and released", holder, s.engine.locks)
-			}
-		})
-	}
-
-	t.Run("no CYFR_ACCESS", func(t *testing.T) {
-		newInitProject(t)
-		useFakeEngine(t)
-		if err := os.WriteFile(".env", []byte("CYFR_SECRET_KEY_BASE=kept\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		var out bytes.Buffer
-		if err := runSetup(context.Background(), setupOptions{noOpen: true}, &out); err == nil || err.Error() != access.Refuse("access_missing", nil).Message() {
-			t.Errorf("setup over a .env without CYFR_ACCESS answered %v", err)
-		}
-		if out.Len() != 0 {
-			t.Errorf("a refused setup printed %q", out.String())
-		}
-		nothingWritten(t, ".env", ".env.example")
-	})
-}
-
-// A start of the pages' run once another command has written .env is
-// refused, and nothing begins.
-func TestSetupRefusesAStartOnceSetUpMeanwhile(t *testing.T) {
-	s, sess, _ := newSetupRun(t)
-	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := sess.Start(); !errors.Is(err, errSetUpMeanwhile) {
-		t.Errorf("a start once .env exists answered %v", err)
-	}
-	if st := sess.State(); st.Phase != setup.PhaseReady || s.locks != 0 {
-		t.Errorf("the refused start began %+v", st)
-	}
-}
-
-// With no Docker this account can use, the start is refused with the way
-// on, at a terminal, and writes nothing: no .env, so cyfr setup and cyfr
-// init both still find a new project, and no step begins.
-func TestSetupWithoutDockerWritesNothing(t *testing.T) {
-	newInitProject(t)
-	s := useFakeEngine(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	out := &bytes.Buffer{}
-	sess := newSetupSession(ctx, setupOptions{noPull: true}, false, &syncWriter{w: out})
-	if err := sess.Start(); !errors.Is(err, errNoDocker) {
-		t.Fatalf("a start without Docker answered %v", err)
-	}
-	if want := "Docker is not ready for CYFR on this machine, so nothing was written. Run cyfr init, then cyfr up, at a terminal"; errNoDocker.Error() != want {
-		t.Errorf("the refusal says %q, want %q", errNoDocker, want)
-	}
-	if st := sess.State(); !reflect.DeepEqual(st, setup.State{Phase: setup.PhaseReady}) || s.locks != 0 || s.starts != 0 {
-		t.Errorf("the refused start began %+v, with %d locks and %d starts", st, s.locks, s.starts)
-	}
-	if out.Len() != 0 {
-		t.Errorf("the refused start printed %q", out.String())
-	}
-	nothingWritten(t, ".env.example")
-}
-
-// Docker that answered when the pages were served and stopped since is
-// asked again at the start: the same refusal, and nothing written.
-func TestSetupAsksDockerAgainAtTheStart(t *testing.T) {
-	s, sess, out := newSetupRun(t)
-	machine.reachable = func(context.Context) bool { return false }
-	if err := sess.Start(); !errors.Is(err, errNoDocker) {
-		t.Fatalf("a start once Docker stopped answered %v", err)
-	}
-	if st := sess.State(); !reflect.DeepEqual(st, setup.State{Phase: setup.PhaseReady}) || s.locks != 0 || s.starts != 0 {
-		t.Errorf("the refused start began %+v, with %d locks and %d starts", st, s.locks, s.starts)
-	}
-	if out.Len() != 0 {
-		t.Errorf("the refused start printed %q", out.String())
-	}
-	nothingWritten(t, ".env.example")
-}
-
-// Without a Docker this account can use, cyfr setup serves the pages
-// writing nothing, not its lock nor its address file, so they are found
-// at the address it prints; their start shows the refusal and they stay
-// at their welcome, and once it stops the folder is as it was found.
-func TestSetupPagesWithoutDockerWriteNothing(t *testing.T) {
-	newInitProject(t)
-	useFakeEngine(t)
-	standInMachine(t).reachable = false
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var out bytes.Buffer
-	printed := &syncWriter{w: &out}
-	done := make(chan error, 1)
-	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, printed) }()
-	c := pagesAt(t, printed, &out)
-	nothingWritten(t, ".env.example")
-	st, status := c.do(http.MethodPost, "/api/start", struct{}{})
-	if status != http.StatusUnprocessableEntity || !reflect.DeepEqual(st, setup.State{Sentence: errNoDocker.Error()}) {
-		t.Errorf("the start answered %d %+v, want %d and the refusal alone", status, st, http.StatusUnprocessableEntity)
-	}
-	if st, _ := c.do(http.MethodGet, "/api/state", nil); !reflect.DeepEqual(st, setup.State{Phase: setup.PhaseReady}) {
-		t.Errorf("the pages read %+v after the refusal, want the welcome", st)
-	}
-	cancel()
-	if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the new CYFR was written" {
-		t.Errorf("cyfr setup answered %v", err)
-	}
-	nothingWritten(t, ".env.example")
-}
-
-// pagesAt waits for the address cyfr setup prints and answers a client of
-// the pages it names.
-func pagesAt(t *testing.T, w *syncWriter, out *bytes.Buffer) *pagesClient {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		w.mu.Lock()
-		text := out.String()
-		w.mu.Unlock()
-		if rest, ok := strings.CutPrefix(text, "Setup is at "); ok {
-			if line, _, ok := strings.Cut(rest, "\n"); ok {
-				u, err := url.Parse(line)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return &pagesClient{t: t, base: u.Scheme + "://" + u.Host, token: u.Fragment}
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("cyfr setup printed no address: %q", text)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-// pagesClient drives a running cyfr setup over HTTP as its pages do.
-type pagesClient struct {
-	t     *testing.T
-	base  string
-	token string
-}
-
-// openPages waits for cyfr setup's address file and answers a client of
-// the pages it names.
-func openPages(t *testing.T) *pagesClient {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		data, err := os.ReadFile(setupURLFile)
-		if err == nil {
-			u, err := url.Parse(strings.TrimSpace(string(data)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return &pagesClient{t: t, base: u.Scheme + "://" + u.Host, token: u.Fragment}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("cyfr setup wrote no %s", setupURLFile)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-func (c *pagesClient) do(method, path string, body any) (setup.State, int) {
-	c.t.Helper()
-	var r io.Reader
-	if body != nil {
-		data, _ := json.Marshal(body)
-		r = bytes.NewReader(data)
-	}
-	req, err := http.NewRequest(method, c.base+path, r)
-	if err != nil {
-		c.t.Fatal(err)
-	}
-	req.Header.Set("X-Cyfr-Setup", c.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Origin", c.base)
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		c.t.Fatal(err)
-	}
-	defer res.Body.Close()
-	var st setup.State
-	json.NewDecoder(res.Body).Decode(&st)
-	return st, res.StatusCode
-}
-
-// await reads the state as the pages do until its phase is phase.
-func (c *pagesClient) await(phase string) setup.State {
-	c.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		st, _ := c.do(http.MethodGet, "/api/state", nil)
-		if st.Phase == phase {
-			return st
-		}
-		if time.Now().After(deadline) {
-			c.t.Fatalf("the pages read %+v, want the phase %s", st, phase)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// runSetupInBackground runs cyfr setup under ctx, on a machine whose
-// Docker answers, answering its end.
-func runSetupInBackground(t *testing.T, ctx context.Context, out io.Writer) <-chan error {
-	t.Helper()
-	standInMachine(t).reachable = true
-	done := make(chan error, 1)
-	go func() { done <- runSetup(ctx, setupOptions{noPull: true, noOpen: true}, out) }()
-	return done
-}
-
-func awaitEnd(t *testing.T, done <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(10 * time.Second):
-		t.Fatal("cyfr setup did not stop")
-		return nil
-	}
-}
-
-// cyfr setup serves its pages on loopback, writing their address to
-// .cyfr/setup.url and printing it, until the pages have read CYFR up;
-// then it stops serving, removes the address, keeping its lock's file,
-// and exits 0.
-func TestSetupServesThePagesUntilTheyReadCYFRUp(t *testing.T) {
-	newInitProject(t)
-	useFakeEngine(t)
-	var out bytes.Buffer
-	done := runSetupInBackground(t, context.Background(), &syncWriter{w: &out})
-	c := openPages(t)
-	if !strings.HasPrefix(c.base, "http://127.0.0.1:") || len(c.token) != 64 {
-		t.Fatalf("the address is %s#%s", c.base, c.token)
-	}
-	if info, err := os.Stat(setupURLFile); err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf("%s is %v (%v), want mode 0600", setupURLFile, info.Mode(), err)
-	}
-	if _, status := c.do(http.MethodPost, "/api/start", struct{}{}); status != http.StatusOK {
-		t.Fatalf("the start answered %d", status)
-	}
-	if st := c.await(setup.PhaseDone); st.Address != "http://localhost:4000" || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) {
-		t.Errorf("the pages read %+v", st)
-	}
-	if err := awaitEnd(t, done); err != nil {
-		t.Fatalf("cyfr setup ended with %v\n%s", err, out.String())
-	}
-	if _, err := http.Get(c.base + "/"); err == nil {
-		t.Errorf("the pages are still served")
-	}
-	if fileExists(setupURLFile) {
-		t.Errorf("cyfr setup left its address behind")
-	}
-	if !strings.Contains(out.String(), "Setup is at "+c.base+"/#"+c.token+"\n") {
-		t.Errorf("cyfr setup did not print its address:\n%s", out.String())
-	}
-}
-
-// With no page to read the end, cyfr setup stops serving a while after
-// it.
-func TestSetupStopsAWhileAfterAnEndNoPageReads(t *testing.T) {
-	newInitProject(t)
-	useFakeEngine(t)
-	saved := setupLinger
-	t.Cleanup(func() { setupLinger = saved })
-	setupLinger = 50 * time.Millisecond
-	done := runSetupInBackground(t, context.Background(), io.Discard)
-	c := openPages(t)
-	c.do(http.MethodPost, "/api/start", struct{}{})
-	if err := awaitEnd(t, done); err != nil {
-		t.Fatalf("cyfr setup ended with %v", err)
-	}
-	if accessOf(t) != access.ModeLocal {
-		t.Errorf("CYFR was not set up")
-	}
-}
-
-// Interrupted before the start, cyfr setup writes nothing and leaves
-// nothing; interrupted while a failed start waits for the person's choice,
-// it ends with the start's failure, .env written and CYFR not started.
-func TestSetupInterrupted(t *testing.T) {
-	t.Run("before the start", func(t *testing.T) {
-		newInitProject(t)
-		useFakeEngine(t)
-		ctx, cancel := context.WithCancel(context.Background())
-		done := runSetupInBackground(t, ctx, io.Discard)
-		openPages(t)
-		cancel()
-		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the new CYFR was written" {
-			t.Errorf("cyfr setup answered %v", err)
-		}
-		nothingWritten(t, ".cyfr", ".env.example")
-		if entries, _ := os.ReadDir(".cyfr"); len(entries) != 1 || entries[0].Name() != "setup.lock" {
-			t.Errorf(".cyfr holds %v, want the setup's lock alone", entries)
-		}
-	})
-	t.Run("while a failed start waits", func(t *testing.T) {
-		newInitProject(t)
-		s := useFakeEngine(t)
-		s.startErr = errors.New("cyfr did not become healthy")
-		s.composeErr = errors.New("no compose here")
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		done := runSetupInBackground(t, ctx, io.Discard)
-		c := openPages(t)
-		c.do(http.MethodPost, "/api/start", struct{}{})
-		c.await(setup.PhaseProblem)
-		cancel()
-		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted. cyfr did not become healthy" {
-			t.Errorf("cyfr setup answered %v", err)
-		}
-		if s.starts != 1 || accessOf(t) != access.ModeLocal {
-			t.Errorf("%d starts, CYFR reached as %s", s.starts, accessOf(t))
-		}
-	})
-}
-
-// One setup serves a project's pages: a second, started while the first
-// serves, is refused before it binds or writes anything, and the first's
-// address stays published until the first stops.
-func TestSetupRefusesASecondSetupInTheProject(t *testing.T) {
-	newInitProject(t)
-	useFakeEngine(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	first := runSetupInBackground(t, ctx, io.Discard)
-	c := openPages(t)
-	published, err := os.ReadFile(setupURLFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A second setup that serves is ended, and fails the test.
-	secondCtx, stopSecond := context.WithCancel(context.Background())
-	defer stopSecond()
-	var out bytes.Buffer
-	second := make(chan error, 1)
-	go func() { second <- runSetup(secondCtx, setupOptions{noPull: true, noOpen: true}, &syncWriter{w: &out}) }()
-	select {
-	case err = <-second:
-	case <-time.After(5 * time.Second):
-		stopSecond()
-		<-second
-		t.Fatalf("a second setup served beside the first:\n%s", out.String())
-	}
-	want := "Another cyfr setup is serving this project's pages, at the address in .cyfr/setup.url. Nothing was changed. Use those pages, or stop that cyfr setup and run this again"
-	if err == nil || err.Error() != want || out.Len() != 0 {
-		t.Fatalf("a second setup answered %v and printed %q, want %q and nothing printed", err, out.String(), want)
-	}
-	if now, err := os.ReadFile(setupURLFile); err != nil || string(now) != string(published) {
-		t.Errorf("the first setup's address is %q (%v), want %q", now, err, published)
-	}
-	if _, status := c.do(http.MethodGet, "/api/state", nil); status != http.StatusOK {
-		t.Errorf("the first setup's pages answered %d", status)
-	}
-	stop()
-	awaitEnd(t, first)
-	if fileExists(setupURLFile) {
-		t.Errorf("the first setup left its address behind")
-	}
-	// The lock goes with the setup that held it.
-	again, stopAgain := context.WithCancel(context.Background())
-	third := runSetupInBackground(t, again, io.Discard)
-	openPages(t)
-	stopAgain()
-	awaitEnd(t, third)
-}
-
-// On a machine with a display cyfr setup opens its pages in the default
-// browser after printing their address; with --no-open, or with no
-// display, it opens nothing and asks the person to open them. A launcher
-// that fails is said, and the pages are served all the same.
-func TestSetupOpensItsPagesOnADisplay(t *testing.T) {
-	for _, c := range []struct {
-		name            string
-		display, noOpen bool
-		launchErr       error
-		opened          bool
-		want            string
-	}{
-		{"a display", true, false, nil, true, "Opened it in your browser. It stops once CYFR is up.\n"},
-		{"--no-open", true, true, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
-		{"no display, --no-open", false, true, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
-		{"a launcher that fails", true, false, errors.New("no xdg-open to open it with"), false,
-			"Could not open a browser here (no xdg-open to open it with); open the address above.\nOpen it in a browser on this machine. It stops once CYFR is up.\n"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			newInitProject(t)
-			useFakeEngine(t)
-			// Docker answers, as the stand-in says on every system.
-			standInMachine(t).reachable = true
-			l := stubLauncher(t, c.display, c.launchErr)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			var out bytes.Buffer
-			done := make(chan error, 1)
-			go func() {
-				done <- runSetup(ctx, setupOptions{noPull: true, noOpen: c.noOpen}, &syncWriter{w: &out})
-			}()
-			p := openPages(t)
-			address := p.base + "/#" + p.token
-			cancel()
-			awaitEnd(t, done)
-			if !strings.HasPrefix(out.String(), "Setup is at "+address+"\n"+c.want) {
-				t.Errorf("cyfr setup printed:\n%s", out.String())
-			}
-			var want []string
-			if c.display && !c.noOpen {
-				want = []string{address}
-			}
-			if got := l.all(); !slices.Equal(got, want) {
-				t.Errorf("the launcher was handed %v, want %v", got, want)
+			if _, err := os.Stat(record); !os.IsNotExist(err) {
+				t.Errorf("cyfr setup started the app (%v)", err)
 			}
 		})
 	}
 }
 
-// Without a display and without --no-open, cyfr setup refuses before it
-// serves, writes or opens anything: its pages are for a device whose
-// launcher opens them, and cyfr init sets CYFR up at a terminal.
-func TestSetupRefusesWithoutADisplay(t *testing.T) {
-	newInitProject(t)
-	useFakeEngine(t)
-	l := stubLauncher(t, false, nil)
-	var out bytes.Buffer
-	err := runSetup(context.Background(), setupOptions{noPull: true}, &out)
-	if want := "This machine has no browser for cyfr setup's pages. Run cyfr init here instead."; err == nil || err.Error() != want {
-		t.Fatalf("cyfr setup answered %v, want %q", err, want)
+// The installed app is where each system's installer puts it.
+func TestInstalledAppIsTheInstallersPath(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", `C:\Users\ada\AppData\Local`)
+	got := installedApp()
+	want := map[string]string{
+		"darwin":  "/Applications/CYFR.app/Contents/MacOS/CYFR",
+		"windows": filepath.Join(`C:\Users\ada\AppData\Local`, "Programs", "cyfr-desktop", "CYFR.exe"),
+	}[runtime.GOOS]
+	if want == "" {
+		want = "/opt/cyfr/CYFR"
 	}
-	if out.Len() != 0 || len(l.all()) != 0 {
-		t.Errorf("the refused setup printed %q and opened %v", out.String(), l.all())
+	if got != want {
+		t.Errorf("the installed app is %q, want %q", got, want)
 	}
-	nothingWritten(t, ".env.example")
 }

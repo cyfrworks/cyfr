@@ -25,7 +25,7 @@ import {BrowserWindow, Menu, app, dialog, session, shell} from "electron"
 
 import {keptStorage} from "./owner.js"
 import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, printed, readHop, relyingParty, screenProject, unlistedSwitch} from "./policy.js"
+import {LOCALHOST_IS_IPV4, accountLoad, documentHeaders, grants, printed, readHop, relyingParty, screenProject, setupProject, unlistedSwitch} from "./policy.js"
 import {ABORTED, initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
@@ -109,6 +109,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     process.platform)
   if (screen === null) {
     say("refused: --screen-project names no project: give its absolute path, on Linux")
+    app.exit(2)
+    return
+  }
+  // The folder cyfr setup opened the app in, which the chooser suggests
+  // in place of ~/cyfr (cmd/setup.go).
+  const setup = setupProject(app.commandLine.hasSwitch("setup-project"), app.commandLine.getSwitchValue("setup-project"),
+    process.platform)
+  if (setup === null) {
+    say("refused: --setup-project names no folder: give its absolute path")
     app.exit(2)
     return
   }
@@ -524,7 +533,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function startCyfr() {
     child = screen
       ? spawn(cyfr, ["screen", "shell"], {cwd: screen, stdio: ["pipe", "pipe", "pipe"]})
-      : spawn(cyfr, ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
+      : spawn(cyfr, setup ? ["desktop-serve", setup] : ["desktop-serve"], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true})
     send = (type, fields) => {
       if (child.stdin.writable) child.stdin.write(toCyfr(type, fields))
     }

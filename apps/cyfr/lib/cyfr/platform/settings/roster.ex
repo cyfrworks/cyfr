@@ -243,7 +243,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_SETUP_TOKEN",
-     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and `cyfr setup` write into `.env` and nothing removes. It admits the installation's first person, its administrator, with their account, through the setup link (`/setup#<token>`) or the box's own screen, binding the installation to that account, and from then on it opens nothing; unset, setup opens nothing. A malformed value refuses the boot, which never prints it."},
+     "The installation's setup token, exactly 64 lowercase hexadecimal characters, which `cyfr init` and the CYFR app's setup write into `.env` and nothing removes. It admits the installation's first person, its administrator, with their account, through the setup link (`/setup#<token>`) or the box's own screen, binding the installation to that account, and from then on it opens nothing; unset, setup opens nothing. A malformed value refuses the boot, which never prints it."},
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",

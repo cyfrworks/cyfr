@@ -74,6 +74,14 @@ type workMessage struct {
 // maxWorkLine bounds one line the work writes.
 const maxWorkLine = 1 << 20
 
+// setupLockFile is the lock one setup of a folder holds while it runs, as
+// the run takes the stack's lock for each step it runs; setupStepStart is
+// the step a run begins after init's.
+const (
+	setupLockFile  = ".cyfr/setup.lock"
+	setupStepStart = "start"
+)
+
 var setupProjectCmd = &cobra.Command{
 	Use:    "setup-project probe | run DIR | look DIR | token DIR HOLDER",
 	Short:  "Do setup's work in a folder",

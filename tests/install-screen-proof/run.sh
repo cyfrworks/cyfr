@@ -10,8 +10,10 @@
 # answer shows CYFR on the screen, and `cyfr up`, and CYFR answers on its
 # port. Before that init, two of its refusals change nothing: a wrong
 # password at sudo's own prompt, and an account outside the sudo group. Before that `cyfr up`, the same terminal, older than the docker
-# group init joined, runs `cyfr setup`, whose pages set up and start a
-# second CYFR beside it, taken down again. Before init, this tree's CYFR
+# group init joined, runs `cyfr setup` in a labwc of its own on tty1,
+# which opens the installed CYFR app, whose setup screen, pressed on the
+# display, sets up and starts a second CYFR beside it through sg, taken
+# down again. Before init, this tree's CYFR
 # app's package is installed, so init's `cyfr screen on` finds the app of
 # its release and fetches none. After a reboot labwc and the CYFR app run
 # on tty1 as the screen and show the screen's own setup page (screen-setup.png): with the guest's isolated swtpm it asks
@@ -278,57 +280,64 @@ guest_reboot() {
   observe_start
 }
 
-# The setup pages' driver, on the guest: once cyfr setup in ~/setup-pages
-# publishes its address, it presses Set up CYFR as the pages do and reads
-# their state each second until the run ends; a start that fails waits for
-# the person's choice, so there it interrupts the pane's cyfr setup. It
-# prints the last state the pages read.
-SETUP_PAGES_DRIVER='f=~/setup-pages/.cyfr/setup.url
-for n in $(seq 1 120); do [ -s "$f" ] && break; sleep 1; done
-url=$(cat "$f") || exit 1
-base=${url%/#*} token=${url#*#} st=""
-curl -s --max-time 10 -X POST -H "X-Cyfr-Setup: $token" -H "Origin: $base" -H "Content-Type: application/json" -d "{}" "$base/api/start" >&2
-for n in $(seq 1 900); do
-  st=$(curl -s --max-time 5 -H "X-Cyfr-Setup: $token" "$base/api/state")
-  case $st in
-    *"\"phase\":\"done\""* | *"\"phase\":\"failed\""*) break ;;
-    *"\"phase\":\"problem\""*) tmux send-keys -t proof C-c; break ;;
-  esac
-  sleep 1
-done
-printf "%s\n" "$st"'
+# The app cyfr setup opens in ~/setup-here, as pgrep -f reads its main
+# process.
+SETUP_APP="^/opt/cyfr/CYFR --setup-project=/home/proof/setup-here\$"
 
-# setup_pages_before_the_group: the setup pages started from tty1's
-# terminal, which predates the account's docker group, set up and start a
-# second CYFR in ~/setup-pages. Its docker-compose.yml and .env.example are
-# ~/cyfr's, this tree's server and the box its own account service, which
-# the scaffold download keeps, so nothing reaches cyfr.run. It is taken
-# down, its networks with it, before ~/cyfr starts: both claim the compose
-# file's fixed subnets and container names.
-setup_pages_before_the_group() {
-  local driver
-  step "the setup pages, started from the terminal that started before the group"
-  guest_ssh 'mkdir ~/setup-pages && cd ~/setup-pages && cp ~/cyfr/docker-compose.yml . &&
+# Whether the account holds the docker group and the app's main process
+# does not: the app's setup reaches Docker only through sg.
+STALE_GROUP='gid=$(getent group docker | cut -d: -f3) && pid=$(pgrep -u proof -f -- "'"$SETUP_APP"'") &&
+  id -nG proof | tr " " "\n" | grep -qx docker && ! sed -n "s/^Groups:\t*//p" /proc/$pid/status | tr " " "\n" | grep -qx "$gid"'
+
+# setup_in_the_app_before_the_group: from tty1's terminal, which predates
+# the account's docker group, cyfr setup in ~/setup-here opens the
+# installed CYFR app, in a labwc that terminal starts on tty1 with a
+# session bus of its own, and the app's setup screen, pressed on the
+# guest's display as a person presses it, sets up and starts a second
+# CYFR there through the real sg and opens it at its first person's page. Its docker-compose.yml and .env.example
+# are ~/cyfr's, this tree's server and the box its own account service,
+# which the scaffold download keeps, so nothing reaches cyfr.run. The app
+# keeps what it keeps under a home of its own, removed with labwc, so the
+# power-on journey meets nothing of it; the CYFR is taken down, its
+# networks with it, before ~/cyfr starts: both claim the compose file's
+# fixed subnets and container names.
+setup_in_the_app_before_the_group() {
+  local status
+  step "cyfr setup opens the CYFR app, from the terminal that started before the group"
+  guest_ssh 'mkdir ~/setup-here ~/setup-home && cd ~/setup-here && cp ~/cyfr/docker-compose.yml . &&
     grep -vE "^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=" ~/cyfr/.env.example >.env.example &&
     grep -E "^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=" ~/cyfr/.env >>.env.example' \
-    >"$GUEST_DIR/setup-pages-project.txt" 2>&1 || fail "the setup pages' project was not made ($GUEST_DIR/setup-pages-project.txt)"
-  GUEST_SSH_TIMEOUT=1000 guest_ssh "$SETUP_PAGES_DRIVER" >"$GUEST_DIR/setup-pages-state.json" 2>"$GUEST_DIR/setup-pages-driver.txt" &
-  driver=$!
-  pane_step setup 'cd ~/setup-pages && cyfr setup --no-open --no-pull' 960
-  wait "$driver"
-  check "cyfr setup exits 0 (it exited $PANE_STATUS)" test "$PANE_STATUS" = 0
-  check "the pages read CYFR up at http://localhost:4000, with its setup link" python3 -I -c '
-import json, sys
-st = json.load(open(sys.argv[1]))
-sys.exit(0 if st["phase"] == "done" and st["address"] == "http://localhost:4000" and st["setup_url"].startswith("http://localhost:4000/setup#") else 1)' \
-    "$GUEST_DIR/setup-pages-state.json"
-  check "no step met a Docker this account may not use" sh -c '! grep -q "may not use the Docker daemon" "$1" "$2"' sh "$GUEST_DIR/transcript-setup.txt" "$GUEST_DIR/setup-pages-state.json"
+    >"$GUEST_DIR/setup-here-project.txt" 2>&1 || fail "the setup's project was not made ($GUEST_DIR/setup-here-project.txt)"
+  # The guest's virtio display has no 3D, as for the screen's service.
+  pane_type 'cd ~/setup-here && HOME=/home/proof/setup-home WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 dbus-run-session -- labwc -s "cyfr setup"; echo "setup exit status $?"' ||
+    fail "setup: the line was not typed"
+  screen_shows "Connect to a CYFR" 180 || { guest_screenshot setup-app-stuck.png || true; fail "the CYFR app did not show its first screen on tty1 within 180 s (setup-app-stuck.png)"; }
+  check "cyfr setup says it opened the CYFR app for ~/setup-here" pane_wait '^Opened the CYFR app, with /home/proof/setup-here to set CYFR up in under Or set up CYFR on this computer\.' 10
+  check "the app's process lacks the docker group the account has" guest_ssh "$STALE_GROUP"
+  screen_press "Or set up CYFR on this computer" || fail "Or set up CYFR on this computer was not on the display ($GUEST_DIR/screen-press.txt)"
+  check "the setup screen suggests the folder cyfr setup was run in" screen_shows "/home/proof/setup-here" 30
+  screen_shows "Set up and start" 120 || { guest_screenshot setup-app-stuck.png || true; fail "Set up and start was not offered within 120 s: Docker did not answer the app's setup (setup-app-stuck.png)"; }
+  guest_screenshot setup-app-ready.png || fail "the setup screen was not captured"
+  screen_press "Set up and start" || fail "Set up and start was not on the display ($GUEST_DIR/screen-press.txt)"
+  # Done, the app opens the CYFR it set up at its first person's page,
+  # the device's pages on Linux, which this journey leaves unanswered.
+  screen_shows "Add this device to my account" 960 || { guest_screenshot setup-app-stuck.png || true; fail "the app's setup did not end on the CYFR's first person's page within 960 s (setup-app-stuck.png)"; }
+  guest_screenshot setup-app-done.png || fail "the setup's end was not captured"
+  check "the app's setup opens the CYFR it set up at its first person's page" screen_shows "Set up CYFR" 10
+  check "CYFR answers at http://localhost:4000, from ~/setup-here's stack" guest_root \
+    "curl -s -o /dev/null --max-time 5 http://localhost:4000/ && [ \"\$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cyfr)\" = /home/proof/setup-here ]"
+  guest_ssh 'pkill -TERM -u proof -x labwc' || fail "labwc was not asked to end"
+  pane_converse 60 '^setup exit status [0-9]+' || fail "labwc did not end within 60 s of its TERM ($GUEST_DIR/transcript-setup.txt)"
+  status=$(grep -oE '^setup exit status [0-9]+' <<<"$PANE_SCREEN" | tail -n 1 | awk '{print $NF}')
+  pane_save transcript-setup.txt
+  check "labwc ends on its TERM with the app and its cyfr (it exited $status)" guest_ssh "[ '$status' = 0 ] && ! pgrep -u proof -f -- '^/opt/cyfr/'"
   pane_step_end setup
+  guest_ssh 'rm -rf ~/setup-home' || fail "the app's home for the setup was not removed"
   # The harness's SSH connection, kept open since before init, predates
   # the group too.
-  guest_ssh "sg docker -c 'cd ~/setup-pages && ~/.local/bin/cyfr down'" >"$GUEST_DIR/setup-pages-down.txt" 2>&1 ||
-    fail "cyfr down in ~/setup-pages failed ($GUEST_DIR/setup-pages-down.txt)"
-  guest_root 'docker network prune -f' || fail "the setup pages' networks were not removed ($GUEST_DIR/root.txt)"
+  guest_ssh "sg docker -c 'cd ~/setup-here && ~/.local/bin/cyfr down'" >"$GUEST_DIR/setup-here-down.txt" 2>&1 ||
+    fail "cyfr down in ~/setup-here failed ($GUEST_DIR/setup-here-down.txt)"
+  guest_root 'docker network prune -f' || fail "the setup's networks were not removed ($GUEST_DIR/root.txt)"
 }
 
 # The one line cyfr says just before sudo's own prompt.
@@ -429,7 +438,7 @@ box_install() {
   candidate_server_load
   account_settings
 
-  setup_pages_before_the_group
+  setup_in_the_app_before_the_group
 
   step "cyfr up in the terminal that started before the group"
   pane_step up 'cd ~/cyfr && cyfr up' 900
@@ -1082,7 +1091,7 @@ active" ]' sh "$GUEST_DIR/vt-after.txt"
   # The volume command names exactly the volumes of the stack it
   # uninstalls, those labelled with its compose project (cyfr, the
   # folder's name, every engine call's -p), and is absent when that stack
-  # has none. The setup pages' CYFR, taken down with cyfr down earlier,
+  # has none. The CYFR the app set up, taken down with cyfr down earlier,
   # keeps volumes of its own project on the guest.
   volume_command_names_the_volumes() {
     [ "$(uninstall_volume_names)" = "$(sort "$GUEST_DIR/stack-volumes.txt")" ]

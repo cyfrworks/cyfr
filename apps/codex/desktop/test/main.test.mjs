@@ -174,8 +174,9 @@ function fromPartition(partition) {
 }
 
 world.app = Object.assign(new EventEmitter(), {
-  commandLine: {getSwitchValue: (name) => name === "screen-project" ? world.screen ?? "" : "",
-    hasSwitch: (name) => name === "screen-project" && world.screen !== undefined, appendSwitch: (...a) => world.switches.push(a)},
+  commandLine: {getSwitchValue: (name) => ({"screen-project": world.screen, "setup-project": world.setup})[name] ?? "",
+    hasSwitch: (name) => ({"screen-project": world.screen, "setup-project": world.setup})[name] !== undefined,
+    appendSwitch: (...a) => world.switches.push(a)},
   enableSandbox() {}, requestSingleInstanceLock: () => true, configureWebAuthn() {},
   relaunch(options) { world.relaunched = options },
   whenReady: () => Promise.resolve(),
@@ -1585,6 +1586,28 @@ test("only an explicit project makes the app a screen; another switch value is r
     assert.ok(said.some((l) => l.startsWith("refused: --screen-project")), value)
   }
   world.exited = undefined
+})
+
+test("the folder cyfr setup opened the app in is the one its cyfr suggests; a switch naming no folder is refused", async () => {
+  const folder = process.platform === "win32" ? "C:\\Users\\ana\\setup-here" : "/home/ana/setup-here"
+  world.setup = folder
+  try {
+    await started(true)
+    assert.deepEqual(world.spawned, [["desktop-serve", folder]])
+    for (const value of ["", "setup-here", process.platform === "win32" ? "C:\\Users\\..\\ana" : "/home/ana/../bob"]) {
+      world.setup = value
+      world.exited = undefined
+      const said = await started(true)
+      assert.equal(world.exited, 2, value)
+      assert.deepEqual(world.spawned, [], value)
+      assert.ok(said.some((l) => l.startsWith("refused: --setup-project")), value)
+    }
+  } finally {
+    world.setup = undefined
+    world.exited = undefined
+  }
+  await started(true)
+  assert.deepEqual(world.spawned, [["desktop-serve"]], "no switch, ~/cyfr")
 })
 
 test("the screen's first page is the shell's own: a chooser there ends the app", ON_LINUX, async () => {

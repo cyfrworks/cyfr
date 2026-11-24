@@ -223,13 +223,24 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 
 /**
  * The switches the app takes on its command line: the selected CYFR's
- * route, which main relaunches itself with, and the box's screen's
- * project (screenProject). The route moves where traffic goes and nothing
- * more: the origin checks and certificate validation still decide what
- * loads. The engine takes every other switch, from opening a debugging
- * port to trusting any certificate, so the app refuses them all.
+ * route, which main relaunches itself with, the box's screen's project
+ * (screenProject) and the folder cyfr setup opened the app in
+ * (setupProject). The route moves where traffic goes and nothing more:
+ * the origin checks and certificate validation still decide what loads.
+ * The engine takes every other switch, from opening a debugging port to
+ * trusting any certificate, so the app refuses them all.
  */
-export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project"]
+export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project"]
+
+/**
+ * Whether `value` names a folder explicitly on `platform`: an absolute
+ * path (a drive's on Windows) with no "." or ".." in it to resolve.
+ */
+function explicitFolder(value, platform) {
+  const windows = platform === "win32"
+  if (!(windows ? /^[A-Za-z]:\\/.test(value) : value.startsWith("/"))) return false
+  return !value.split(windows ? /[\\/]/ : "/").some((p) => p === "." || p === "..")
+}
 
 /**
  * The project the app is the box's screen for, as `--screen-project`
@@ -240,8 +251,18 @@ export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project"
  */
 export function screenProject(present, value, platform) {
   if (!present) return ""
-  if (platform !== "linux" || !value.startsWith("/") || value.split("/").some((p) => p === "." || p === "..")) return null
-  return value
+  return platform === "linux" && explicitFolder(value, platform) ? value : null
+}
+
+/**
+ * The folder the chooser suggests for setting CYFR up on this computer,
+ * as `--setup-project` names it (cyfr setup gives its working directory):
+ * "" for none, so ~/cyfr, and null for a switch that names no folder
+ * explicitly, which the app refuses.
+ */
+export function setupProject(present, value, platform) {
+  if (!present) return ""
+  return explicitFolder(value, platform) ? value : null
 }
 
 /**
