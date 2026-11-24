@@ -418,3 +418,58 @@ func TestABoxsSelectionsStartLockedAndGiveACYFRElsewhereNothing(t *testing.T) {
 		t.Fatalf("a CYFR elsewhere got the box's folder: its work %v, %d readings, %d setup tokens", here, reads, b.tokens.Load())
 	}
 }
+
+// What This box's selection begins is that selection's own: its Work ends
+// as the box leaves it, as a selection of it that does not open ends (a
+// lock before main answered), and as the service ends, while the service,
+// its listener and the watches above it, goes on to open This box again.
+func TestThisBoxsWorkEndsWithItsSelection(t *testing.T) {
+	b := newOnBox(t)
+	works := make(chan *shell.Work, 8)
+	local := b.Local
+	b.Local = func(project string) (Local, error) {
+		l, err := local(project)
+		works <- l.Work
+		return l, err
+	}
+	ends := func(what string, w *shell.Work) {
+		t.Helper()
+		select {
+		case <-w.Context().Done():
+		case <-time.After(5 * time.Second):
+			t.Fatalf("This box's work outlived %s", what)
+		}
+	}
+	lives := func(what string, w *shell.Work) {
+		t.Helper()
+		if w.Context().Err() != nil {
+			t.Fatalf("This box's work ended %s", what)
+		}
+	}
+
+	b.openBox(t, localAddress)
+	w := <-works
+	lives("while it is open", w)
+	b.Leave(1)
+	b.next(t)
+	b.next(t)
+	ends("the departure from it", w)
+
+	done := b.connect(t, "/bootstrap/box", map[string]string{})
+	if m := b.next(t); m.Type != TypeHome {
+		t.Fatalf("This box proposed %+v", m)
+	}
+	w = <-works
+	b.Lock("Locked.")
+	if got := answered(t, done); got.Error == "" {
+		t.Fatalf("a selection a lock cut short answered %+v", got)
+	}
+	b.next(t)
+	ends("its selection that did not open", w)
+
+	b.openBox(t, localAddress)
+	w = <-works
+	lives("while it is open again", w)
+	b.End()
+	ends("the service's end", w)
+}
