@@ -77,10 +77,11 @@ container starts:
   and a window a page opened on a click, read navigator.userAgent as the
   User-Agent the shell gives itself, read by the shell alone, with Chrome
   in place of HeadlessChrome, and each one's public request sends it; all
-  but the shared worker read the page's brands and send no HeadlessChrome
-  in Sec-CH-UA, and the shared worker, never attached, reads Chrome's own
-  brands, HeadlessChrome among them, and blank high-entropy hints, and its
-  request sends no Sec-CH-UA. Chrome runs by the switch --user-agent
+  but the shared worker and the window a page opened read the page's
+  brands and send no HeadlessChrome in Sec-CH-UA. Those two, never
+  attached, read Chrome's own brands, HeadlessChrome among them, and blank
+  high-entropy hints; the shared worker's request sends no Sec-CH-UA, and
+  the window's sends HeadlessChrome in it. Chrome runs by the switch --user-agent
   naming that User-Agent. No page the driver shows can register a service
   worker, so the shell alone under that switch, on an origin of its own
   (agent-probe.mjs, in a container of the image), shows a service worker
@@ -985,15 +986,17 @@ def unheld_service_worker(image, agent):
            "high-entropy hints, its full versions among them", reading)
 
 
-# A page whose click opens a window, which reads navigator.userAgent and userAgentData's brand names, sends a public
-# request marked kind-popup-<token> and tells its opener, which titles itself with it.
+# A page whose click opens a window it writes into, which reads navigator.userAgent, userAgentData's brand names and its
+# high-entropy client hints, sends a public request marked kind-popup-<token> and tells its opener, which titles itself
+# with it.
 POPUP_KIND_PAGE = r"""<title>popup</title><body style='margin:0'><div style='width:100vw;height:100vh' onclick='popup()'></div>
 <script>const token = Math.random().toString(36).slice(2);
 addEventListener('message', e => { document.title = 'popup ' + JSON.stringify(Object.assign(e.data, {token})) });
 function popup() { const w = window.open('', '_blank'); if (!w) { document.title = 'popup {"blocked": true}'; return }
   w.document.write(`<script>fetch('https://example.com/?kind-popup-${token}', {mode: 'no-cors'}).catch(() => {});
-    opener.postMessage({agent: navigator.userAgent, brandNames: navigator.userAgentData ?
-      navigator.userAgentData.brands.map(b => b.brand) : null}, '*')<\/script>`); w.document.close() }</script>"""
+    navigator.userAgentData.getHighEntropyValues(['architecture', 'bitness', 'formFactors', 'fullVersionList',
+      'uaFullVersion']).then(hints => opener.postMessage({agent: navigator.userAgent,
+      brandNames: navigator.userAgentData.brands.map(b => b.brand), hints}, '*'))<\/script>`); w.document.close() }</script>"""
 
 
 def blank_hints(hints):
@@ -1068,8 +1071,8 @@ def browser_kind(stack, c, uid):
     text = as_home(stack, BROWSER_HOME, f"cat {log}", "Chrome's network log")
     as_home(stack, BROWSER_HOME, f"rm {log}", "the network log removed")
     sent = {} if offline else {win: request_headers(text, f"?{win}") for win in read}
-    print(f"measure: what a site reads of the browser's kind: {json.dumps({'page': read, 'popup': popup, 'requests': sent})}",
-          flush=True)
+    measured = {"page": read, "popup": popup, "requests": sent}
+    print(f"measure: what a site reads of the browser's kind: {json.dumps(measured)}", flush=True)
     if offline:
         print("skip: a public request's headers need the public network (CYFR_TEST_OFFLINE=1)", flush=True)
     for win, seen_by_page in read.items():
@@ -1150,18 +1153,20 @@ def browser_kind(stack, c, uid):
                f"the public request from {win} carries the person's language as its Accept-Language", sent)
     names = [b["brand"] for b in read["thr_kind_first"]["brands"]]
     marked = [] if offline else request_headers(text, f"?kind-popup-{popup.get('token')}")
-    expect(popup.get("agent") == agent and popup.get("brandNames") == names
-           and (offline or (marked and all(request.get("user-agent") == agent
-                                           and "HeadlessChrome" not in request.get("sec-ch-ua", "")
-                                           for request in marked))),
+    # Chrome attaches no window a page opens to its opener's session, so the driver never names one (agent.go).
+    expect(popup.get("agent") == agent and (offline or (marked and all(request.get("user-agent") == agent
+                                                                      for request in marked))),
            "a window a page opened on a click reads navigator.userAgent as the shell's own, Chrome in place of "
-           "HeadlessChrome, and the page's brands, and its public request sends that User-Agent and no "
-           "HeadlessChrome in Sec-CH-UA", [popup, marked, agent])
-    # What the shared worker reads of its brands and hints is asserted above.
+           "HeadlessChrome, and its public request sends it", [popup, marked, agent])
+    expect(popup.get("brandNames") == names + ["HeadlessChrome"] and blank_hints(popup.get("hints"))
+           and (offline or all("HeadlessChrome" in request.get("sec-ch-ua", "") for request in marked)),
+           "a window a page opened reads Chrome's own brands, HeadlessChrome among them, and blank high-entropy hints, "
+           "and its public request sends HeadlessChrome in Sec-CH-UA", [popup, marked, names])
+    # What the shared worker and the window a page opened read of their brands and hints is asserted above.
     checked = {win: dict(seen_by_page, shared={k: v for k, v in seen_by_page["shared"].items()
                                                if k not in ("brandNames", "hints")})
                for win, seen_by_page in read.items()}
-    expect("headless" not in json.dumps([checked, popup, sent]).lower(),
+    expect("headless" not in json.dumps([checked, sent]).lower(),
            "no page or request reads Headless in the User-Agent, the client hints or userAgentData, in the first "
            "window or a later one", [checked, sent])
     unheld_service_worker(stack.image, agent)
