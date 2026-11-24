@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
+	"github.com/cyfr/locus/keeper/internal/scrolls"
 )
 
 const driverName = "cyfr-codex"
@@ -46,6 +47,9 @@ type starting struct {
 	stage   string
 	request string
 	account string
+	// root is the folder of the scrolls placed for this start, named to
+	// Codex before the thread starts or resumes, or none.
+	root string
 }
 
 // waiting is the delivery the holder waits on Codex's answer for: the
@@ -100,6 +104,11 @@ type driver struct {
 	active string
 	own    map[string]string
 	asks   map[string]heldAsk
+	// The athanor's scrolls the driver places (scrolls.go): its folder,
+	// opened at the first it places, and what Codex said of its own skills
+	// for the coming start, its app-server then running for that start.
+	folder  *scrolls.Folder
+	listing *listing
 }
 
 func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Driver {
@@ -158,9 +167,15 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 // the driver does not list, and the harness's own tools, which Codex has
 // no switch for.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
-	if d.h != nil {
+	// The app-server a start's scrolls started to say what skills it has
+	// is this start's; any other running is not.
+	reuse := d.h != nil && d.listing != nil && d.listing.stage == "" && d.starting == nil && d.session == ""
+	if d.h != nil && !reuse {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
 	}
+	// The scrolls handed since the last start are this start's set, whether
+	// it runs or not: the next start is handed its own.
+	root := d.placed()
 	var config brainwire.Config
 	var pending []string
 	var tools []brainwire.Tool
@@ -192,15 +207,20 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 			return brainwire.Fail(2, brainwire.WhyBroken, "a start whose tools Codex cannot take: "+err.Error())
 		}
 	}
+	d.config = config
+	d.policy = access.Native
+	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, root: root}
+	if reuse {
+		// Its `initialize` was answered as it listed its skills.
+		return d.readAccount(d.starting)
+	}
 	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), appServer))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
 		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")
 	}
 	d.h = h
-	d.config = config
-	d.policy = access.Native
-	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, stage: "initialize"}
+	d.starting.stage = "initialize"
 	d.starting.request = d.nextID("initialize")
 	return d.h.Write(initializeLine(d.starting.request))
 }
@@ -355,6 +375,9 @@ func (d *driver) response(id string, m rpc) error {
 	if s := d.starting; s != nil && id == s.request {
 		return d.startStep(s, m)
 	}
+	if l := d.listing; l != nil && l.stage != "" && id == l.request {
+		return d.listStep(m)
+	}
 	w := d.waiting
 	if w == nil || id != w.request {
 		return nil
@@ -486,8 +509,26 @@ func accountOf(m rpc) string {
 	return brainwire.SignedIn
 }
 
+// readAccount asks for the sign-in, the start's step after `initialize`.
+func (d *driver) readAccount(s *starting) error {
+	s.stage = "account"
+	s.request = d.nextID("account")
+	return d.h.Write(request(s.request, "account/read", map[string]any{}))
+}
+
+// thread starts the start's thread or resumes it.
+func (d *driver) thread(s *starting) error {
+	s.stage = "thread"
+	s.request = d.nextID("thread")
+	if s.resume {
+		return d.h.Write(threadResume(s.request, s.session, s.system, d.config, d.policy))
+	}
+	return d.h.Write(threadStart(s.request, s.system, s.tools, d.config, d.policy))
+}
+
 // startStep is the start's handshake, one answer at a time: `initialize`,
-// then the sign-in read, then the thread started or resumed.
+// then the sign-in read, then the folder of the start's scrolls, when it
+// has one, then the thread started or resumed.
 func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case "initialize":
@@ -497,18 +538,21 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		if err := d.h.Write(initializedLine()); err != nil {
 			return err
 		}
-		s.stage = "account"
-		s.request = d.nextID("account")
-		return d.h.Write(request(s.request, "account/read", map[string]any{}))
+		return d.readAccount(s)
 	case "account":
 		s.account = accountOf(m)
 		d.signedIn = s.account == brainwire.SignedIn
-		s.stage = "thread"
-		s.request = d.nextID("thread")
-		if s.resume {
-			return d.h.Write(threadResume(s.request, s.session, s.system, d.config, d.policy))
+		if s.root != "" {
+			s.stage = "roots"
+			s.request = d.nextID("roots")
+			return d.h.Write(extraRootsLine(s.request, s.root))
 		}
-		return d.h.Write(threadStart(s.request, s.system, s.tools, d.config, d.policy))
+		return d.thread(s)
+	case "roots":
+		if m.Error != nil {
+			return brainwire.Fail(1, brainwire.WhyRefused, "OpenAI Codex refused the folder of the start's scrolls")
+		}
+		return d.thread(s)
 	case "thread":
 		if m.Error != nil {
 			// A thread the folder holds no rollout of, or an empty one, is
@@ -799,6 +843,7 @@ func (d *driver) Close() {
 	}
 	d.starting = nil
 	d.waiting = nil
+	d.listing = nil
 	d.session = ""
 	d.others = false
 	d.resumed = false

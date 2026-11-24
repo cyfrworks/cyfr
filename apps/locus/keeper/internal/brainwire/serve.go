@@ -157,6 +157,17 @@ func (c *Conn) RefuseSignedOut(id, reason string) error {
 // Accept answers the command `id`: the harness took it.
 func (c *Conn) Accept(id string) error { return c.Emit(NewEvent("accepted").Set("id", id)) }
 
+// Placed answers the scroll `id`: the driver's folder holds it, which its
+// program lists as `as`.
+func (c *Conn) Placed(id, as string) error {
+	return c.Emit(NewEvent("placed").Set("id", id).Set("as", as))
+}
+
+// Yielded answers the scroll `id`: it is not placed, since its program has
+// a skill or plugin of its own by that name, its places could not be read,
+// or the driver places none, and it keeps the model's harness's way.
+func (c *Conn) Yielded(id string) error { return c.Emit(NewEvent("yielded").Set("id", id)) }
+
 // Later answers the post `id`: it was not written, since the harness takes
 // a message only between its native turns, and it is still the holder's,
 // which writes it again once the native turn's `idle` has come.
@@ -186,12 +197,28 @@ type Driver interface {
 	Inbox() <-chan func() error
 }
 
+// Placer is a driver that puts the athanor's scrolls where its program
+// looks for skills (internal/scrolls). A driver that is not answers every
+// `scroll` `yielded`, so its scrolls keep the model's harness's way: the
+// index in its instructions, each read with `aqua.skill_get`.
+type Placer interface {
+	// Scroll handles one `scroll` command, answered `placed`, `yielded` or
+	// `refused` before the start it is handed for.
+	Scroll(id, name, description, body string) error
+	// Unplace removes what the driver placed; Serve calls it as it ends,
+	// on every way it ends.
+	Unplace()
+}
+
 // Serve speaks the wire on in and c's output until in ends, the harness
 // ends, or stop, each time closing the harness first, and answers the
 // status the driver ends with. Its first line is `hello`.
 func Serve(c *Conn, d Driver, in io.Reader, stop <-chan os.Signal) int {
 	if err := c.Emit(NewEvent("hello").Set("v", Version).Set("driver", c.name).Set("boot", c.Boot)); err != nil {
 		return 1
+	}
+	if p, ok := d.(Placer); ok {
+		defer p.Unplace()
 	}
 	commands := make(chan []byte)
 	go readLines(in, MaxLineBytes, commands)
@@ -208,7 +235,7 @@ func Serve(c *Conn, d Driver, in io.Reader, stop <-chan os.Signal) int {
 				d.Close()
 				return 0
 			}
-			err = command(d, line)
+			err = command(c, d, line)
 		case line := <-lines:
 			err = d.Line(line)
 		case <-exited:
@@ -260,13 +287,20 @@ func Unserved(c *Conn, end Fatal) int {
 	return e.status
 }
 
-func command(d Driver, line []byte) error {
+func command(c *Conn, d Driver, line []byte) error {
 	if line == nil {
 		return Fail(2, WhyBroken, "a command past the wire's bound")
 	}
 	t, members, err := ReadLine(line, Commands)
 	if err != nil {
 		return Fail(2, WhyBroken, fmt.Sprintf("a command the wire does not read (%v)", err))
+	}
+	if t == "scroll" {
+		p, ok := d.(Placer)
+		if !ok {
+			return c.Yielded(Str(members, "id"))
+		}
+		return p.Scroll(Str(members, "id"), Str(members, "name"), Str(members, "description"), Str(members, "body"))
 	}
 	return d.Command(t, members)
 }

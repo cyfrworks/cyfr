@@ -88,11 +88,15 @@ var accessChoices = []brainwire.Access[[]string]{
 }
 
 // harnessArgv is the harness's command line: its own command, then the
-// base, the session, the start's model and effort, its access's arguments
+// base, the folder of the scrolls it places for this process alone
+// (`--plugin-dir`, none when it places none), the session, the start's model and effort, its access's arguments
 // and the harness's own tools.
-func harnessArgv(command []string, session string, resume bool, config brainwire.Config, access []string) []string {
+func harnessArgv(command []string, pluginDir, session string, resume bool, config brainwire.Config, access []string) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)
+	if pluginDir != "" {
+		argv = append(argv, "--plugin-dir", pluginDir)
+	}
 	if resume {
 		argv = append(argv, "--resume", session)
 	} else {

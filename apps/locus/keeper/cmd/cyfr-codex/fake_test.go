@@ -45,6 +45,7 @@ import (
 //	history   replies with the items injected into the thread so far, by every process, as JSON
 //	noise     writes a line that is no JSON and one cut short, then replies
 //	die       ends the process with status 3
+//	roots     replies with the extra roots it was given and every method it was asked, in order, as JSON
 //
 // It refuses to start without `app-server` last, answers nothing before
 // `initialize`, writes a canary to its standard error, which the driver
@@ -58,7 +59,10 @@ import (
 // while FAKE_INJECT_FAIL is set or a turn runs.
 // A steer is refused as Codex refuses one it did not take (-32600) while
 // FAKE_STEER_REFUSE is set, and with an error of another code (-32603)
-// while FAKE_STEER_UNKNOWN is.
+// while FAKE_STEER_UNKNOWN is. `skills/list` answers the skills of
+// `$CODEX_HOME/skills` and `~/.agents/skills`, a folder a skill, and the one
+// built in, `imagegen`, or an error while FAKE_SKILLS_FAIL is set;
+// `skills/extraRoots/set` keeps its roots for the process.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -112,6 +116,10 @@ func fakeCodex() int {
 	}
 	ask := func(method string, params map[string]any) json.RawMessage { return <-call(method, params) }
 
+	// What the process was asked, in order, and the extra roots it keeps.
+	var methods []string
+	var roots []any
+	var methodsMu sync.Mutex
 	var thread struct {
 		sync.Mutex
 		id, model, instructions, policy, sandbox string
@@ -206,6 +214,11 @@ func fakeCodex() int {
 		case strings.Contains(words, "twice"):
 			say(turn, "msg_one", "One.")
 			say(turn, "msg_two", "Two.")
+		case strings.Contains(words, "roots"):
+			methodsMu.Lock()
+			given, _ := json.Marshal(map[string]any{"roots": roots, "methods": methods})
+			methodsMu.Unlock()
+			reply(turn, string(given))
 		case strings.Contains(words, "params"):
 			given, _ := json.Marshal(map[string]any{"thread": thread.opened, "turn": params})
 			reply(turn, string(given))
@@ -333,6 +346,11 @@ func fakeCodex() int {
 				write(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": message}})
 			}
 			str := func(name string) string { s, _ := m.Params[name].(string); return s }
+			if m.Method != "" {
+				methodsMu.Lock()
+				methods = append(methods, m.Method)
+				methodsMu.Unlock()
+			}
 			switch {
 			case m.Method == "" && len(m.ID) > 0:
 				answersMu.Lock()
@@ -359,6 +377,26 @@ func fakeCodex() int {
 				} else {
 					ok(map[string]any{"account": nil, "requiresOpenaiAuth": true})
 				}
+			case m.Method == "skills/list":
+				if os.Getenv("FAKE_SKILLS_FAIL") != "" {
+					fail(-32603, "HARNESS-WORDS the skills could not be read")
+					continue
+				}
+				skills := []any{map[string]any{"name": "imagegen", "scope": "system", "path": "/fake/imagegen/SKILL.md", "description": "", "enabled": true}}
+				for _, dir := range []string{filepath.Join(home, "skills"), filepath.Join(os.Getenv("HOME"), ".agents", "skills")} {
+					entries, _ := os.ReadDir(dir)
+					for _, e := range entries {
+						if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+							skills = append(skills, map[string]any{"name": e.Name(), "scope": "user", "path": filepath.Join(dir, e.Name(), "SKILL.md"), "description": "", "enabled": true})
+						}
+					}
+				}
+				ok(map[string]any{"data": []any{map[string]any{"cwd": "/", "errors": []any{}, "skills": skills}}})
+			case m.Method == "skills/extraRoots/set":
+				methodsMu.Lock()
+				roots, _ = m.Params["extraRoots"].([]any)
+				methodsMu.Unlock()
+				ok(map[string]any{})
 			case m.Method == "model/list":
 				if str("cursor") == "" {
 					ok(map[string]any{"data": []any{

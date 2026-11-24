@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	Version      = 6
+	Version      = 7
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -129,6 +129,8 @@ var Commands = map[string]Spec{
 		map[string]fieldType{"id": tID, "ask": tID, "content": tString, "is_error": tBoolean}},
 	"models": {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"forget": {[]string{"t", "id", "session"}, nil, map[string]fieldType{"id": tID, "session": tID}},
+	"scroll": {[]string{"t", "id", "name", "description", "body"}, nil,
+		map[string]fieldType{"id": tID, "name": tID, "description": tString, "body": tString}},
 }
 
 // Events are the messages a driver writes.
@@ -139,6 +141,8 @@ var Events = map[string]Spec{
 		map[string]fieldType{"session": tID, "fresh": tBoolean, "held": tIDs, "account": tAccount}},
 	"gone":     {[]string{"t"}, nil, map[string]fieldType{}},
 	"accepted": {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
+	"placed":   {[]string{"t", "id", "as"}, nil, map[string]fieldType{"id": tID, "as": tID}},
+	"yielded":  {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"later":    {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"refused": {[]string{"t", "id", "reason"}, []string{"account"},
 		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},

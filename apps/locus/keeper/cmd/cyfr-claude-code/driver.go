@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
+	"github.com/cyfr/locus/keeper/internal/scrolls"
 )
 
 const (
@@ -81,6 +82,10 @@ type driver struct {
 	awaiting map[string]awaited
 	requests int
 	results  int
+	// The athanor's scrolls the driver places (scrolls.go): its folder,
+	// opened at the first it places, and the set a coming start is handed.
+	folder  *scrolls.Folder
+	placing placing
 }
 
 func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Driver {
@@ -169,6 +174,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if d.h != nil {
 		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
 	}
+	// The scrolls handed since the last start are this start's set, whether
+	// it runs or not: the next start is handed its own.
+	pluginDir := d.placed()
 	var config brainwire.Config
 	var pending []string
 	var gen uint64
@@ -190,7 +198,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if !resume {
 		session = brainwire.NewUUID()
 	}
-	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, session, resume, config, access.Native))
+	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, pluginDir, session, resume, config, access.Native))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
 		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")

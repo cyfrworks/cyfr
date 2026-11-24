@@ -96,3 +96,43 @@ func TestADriverWithNoHarnessEndsUnrunnable(t *testing.T) {
 		t.Fatalf("the first line is its hello: %q", lines[0])
 	}
 }
+
+// placing is a driver that places every scroll and records its unplacing.
+type placing struct {
+	failing
+	unplaced int
+	c        *Conn
+}
+
+func (d *placing) Scroll(id, name, _, _ string) error { return d.c.Placed(id, "x:"+name) }
+func (d *placing) Unplace()                           { d.unplaced++ }
+
+// A driver that places no scroll answers each `yielded` without being
+// asked, so its scrolls keep the model's harness's way; one that places
+// answers each itself, and what it placed is removed once as it ends,
+// however it ends.
+func TestAScrollIsYieldedByADriverThatPlacesNoneAndUnplacedAtTheEnd(t *testing.T) {
+	scroll := `{"t":"scroll","id":"s1","name":"research","description":"d","body":"b"}` + "\n"
+	var out bytes.Buffer
+	c := NewConn("cyfr-test", &out, io.Discard)
+	if status := Serve(c, &failing{}, strings.NewReader(scroll), nil); status != 0 {
+		t.Fatalf("the input's end ends the driver: %d", status)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || lines[1] != `{"t":"yielded","id":"s1"}` {
+		t.Fatalf("hello, then the scroll yielded: %q", lines)
+	}
+	for name, input := range map[string]string{
+		"the input's end": scroll,
+		"an ending":       scroll + `{"t":"models","id":"m1"}` + "\n",
+	} {
+		out.Reset()
+		c = NewConn("cyfr-test", &out, io.Discard)
+		d := &placing{failing: failing{end: Fail(1, WhyBroken, "")}, c: c}
+		Serve(c, d, strings.NewReader(input), nil)
+		lines = strings.Split(strings.TrimSpace(out.String()), "\n")
+		if lines[1] != `{"t":"placed","id":"s1","as":"x:research"}` || d.unplaced != 1 {
+			t.Fatalf("%s: the placer answers and is unplaced once: %q %d", name, lines, d.unplaced)
+		}
+	}
+}
