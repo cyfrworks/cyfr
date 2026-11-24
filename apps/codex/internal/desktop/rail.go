@@ -148,25 +148,28 @@ func (s *Service) rail(w http.ResponseWriter, r *http.Request) {
 
 // railNow is the list as the rail shows it now: its folders' CYFRs and
 // those elsewhere, each by its address, in that address's order. Reading
-// it asks nothing of any CYFR or of Docker.
+// it asks nothing of any CYFR or of Docker. On a box's screen This box is
+// first, whatever the list holds, an unreadable list too: the CYFR its
+// folder names at this reading (boxAt), no address where that cannot be
+// read.
 func (s *Service) railNow() railList {
+	box, _ := s.boxAt()
 	list, err := s.Homes.Load()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := railList{CYFRs: []RailCYFR{}, Seq: s.listed + 1, Locked: s.Box != "" && s.boxLocked()}
 	if err != nil {
 		out.Error = "This computer's list of CYFRs could not be read (" + err.Error() + ")."
-		return out
-	}
-	box := s.boxHome(list)
-	for home, rec := range list.Homes {
-		if box != "" && home == box {
-			continue
+	} else {
+		for home, rec := range list.Homes {
+			if box != "" && home == box {
+				continue
+			}
+			out.CYFRs = append(out.CYFRs, RailCYFR{Home: home, Folder: rec.Project, Open: s.pages != nil && s.committed.Home == home,
+				Forgetting: rec.Forgetting, Failed: s.unerased[home]})
 		}
-		out.CYFRs = append(out.CYFRs, RailCYFR{Home: home, Folder: rec.Project, Open: s.pages != nil && s.committed.Home == home,
-			Forgetting: rec.Forgetting, Failed: s.unerased[home]})
+		slices.SortFunc(out.CYFRs, func(a, b RailCYFR) int { return strings.Compare(a.Home, b.Home) })
 	}
-	slices.SortFunc(out.CYFRs, func(a, b RailCYFR) int { return strings.Compare(a.Home, b.Home) })
 	if s.Box != "" {
 		out.CYFRs = append([]RailCYFR{{Home: box, Box: true, Folder: s.Box, Open: box != "" && s.pages != nil && s.committed.Home == box}}, out.CYFRs...)
 	}
@@ -200,11 +203,12 @@ type erasing struct {
 // asked to erase its content storage and each ceremony's storage the
 // entry recorded; once every one is erased the entry is removed. A CYFR
 // open, and one the list does not hold, are not forgotten. On a box's
-// screen This box's (boxHome) never is, and none is while the box is
-// locked (boxLocked), but the CYFR a departure from an unlocked device
-// just left (leftUnlocked), that once, and one being forgotten already.
-// Forget again
-// (Retry, or the next start's resume) asks for every erase again.
+// screen none is while the box is locked (boxLocked), nor the CYFR open,
+// nor This box, the CYFR its folder names at this reading (boxAt): where
+// the folder cannot be read, no entry of that folder is. One being
+// forgotten already was decided while the box was unlocked, and its
+// Retry, or its resume at the next start, goes on. Forget again (Retry,
+// or the next start's resume) asks for every erase again.
 func (s *Service) Forget(home string) {
 	s.mu.Lock()
 	open := s.pages != nil && s.committed.Home == home
@@ -213,13 +217,12 @@ func (s *Service) Forget(home string) {
 		return
 	}
 	if s.Box != "" {
+		box, read := s.boxAt()
 		list, err := s.Homes.Load()
 		s.mu.Lock()
-		left := s.leftUnlocked == home
-		s.leftUnlocked = ""
-		// One being forgotten already was decided: its Retry, or its resume
-		// at the next start, goes on whether locked or not.
-		refused := err != nil || home == s.boxHome(list) || s.boxLocked() && !left && !list.Homes[home].Forgetting
+		rec := list.Homes[home]
+		this := home == box || !read && rec.Project == s.Box
+		refused := err != nil || this || s.boxLocked() && !rec.Forgetting
 		if refused {
 			s.changed()
 		}

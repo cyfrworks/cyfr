@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,8 +35,10 @@ type onBox struct {
 	tokens atomic.Int32
 	// hangs holds every ask whether its CYFR answers until the asker ends.
 	hangs atomic.Bool
-	mu    sync.Mutex
-	log   []string
+	// unread is whether the folder cannot be read.
+	unread atomic.Bool
+	mu     sync.Mutex
+	log    []string
 }
 
 func newOnBox(t *testing.T) *onBox {
@@ -56,6 +59,9 @@ func newOnBox(t *testing.T) *onBox {
 	b.Local = func(project string) (Local, error) {
 		if project != boxFolder {
 			t.Errorf("the box read %s, not its folder", project)
+		}
+		if b.unread.Load() {
+			return Local{}, errors.New("its .env cannot be read")
 		}
 		return Local{Shell: shell.Config{Address: b.at.Load().(string), Client: offline(), Directory: account.DefaultDirectory,
 			SetupToken: func(context.Context) (string, http.RoundTripper) {
@@ -157,8 +163,8 @@ func TestEveryLockOnABoxHidesBeforeMainIsTold(t *testing.T) {
 }
 
 // This box is no row of the list: on a first start, with no entry, the
-// chooser presses it by itself and the rail shows it first with no
-// address; its press reads the folder now and opens the CYFR it names,
+// chooser presses it by itself and the rail shows it first, at the
+// address its folder names; its press reads the folder now and opens the CYFR it names,
 // waiting for it to answer rather than refusing; after a lock the last
 // selected is offered instead. A folder at a new address opens that address
 // as an entry of its own, the entry the old reading made left as it was
@@ -169,7 +175,7 @@ func TestThisBoxOpensWhatItsFolderNamesNow(t *testing.T) {
 	if got := b.post(t, "/bootstrap/state", map[string]string{}); got != (answer{ResumeBox: true}) {
 		t.Fatalf("a first start shows %+v", got)
 	}
-	if got := b.rail(t, 0).CYFRs; len(got) != 1 || got[0] != (RailCYFR{Box: true, Folder: boxFolder}) {
+	if got := b.rail(t, 0).CYFRs; len(got) != 1 || got[0] != (RailCYFR{Home: localAddress, Box: true, Folder: boxFolder}) {
 		t.Fatalf("a first start's rail shows %+v", got)
 	}
 	b.answers.Store(false)
@@ -205,7 +211,7 @@ func TestThisBoxOpensWhatItsFolderNamesNow(t *testing.T) {
 	unlockedAs(t, &open)
 	b.Forget(localAddress)
 	b.erases(t, 2)
-	// Not even as the CYFR a departure from its unlocked device just left.
+	// Not even once it is left, the box unlocked as it was.
 	b.Leave(2)
 	b.next(t)
 	b.next(t)
@@ -290,78 +296,86 @@ func unlockedAs(t *testing.T, open *atomic.Bool) {
 	t.Cleanup(func() { unlocked = was })
 }
 
-// On a box's screen the list is changed only while the box is unlocked:
-// the rail's read says locked while no CYFR's device is unlocked, every
-// lock telling it; a Forget while locked forgets nothing, and This box's
-// none ever. A CYFR open and unlocked forgets another; its own Forget,
-// which main sends once it left it, is the one the departure from its
-// unlocked device allows, once, and no lock after the departure lets it.
-func TestABoxForgetsOnlyWhileUnlocked(t *testing.T) {
+// On a box's screen the list is changed only while the box is unlocked,
+// and only for another CYFR than the one open and than This box: the
+// rail's read says locked while no CYFR's device is unlocked, every lock
+// and every unlock telling it. No permission outlives the unlock it rests
+// on: a departure from an unlocked CYFR, to Connect or with a second lock
+// on its way, leaves the box locked, and that CYFR's Forget is refused
+// like any other's.
+func TestABoxForgetsOnlyAnotherWhileUnlocked(t *testing.T) {
 	const work, other = "https://work.example.com", "https://other.example.com"
 	var open atomic.Bool
 	unlockedAs(t, &open)
 	b := newOnBox(t)
 	seed(t, b.Homes, other, shell.ClientRecord{Directory: account.DefaultDirectory})
+	seed(t, b.Homes, work, shell.ClientRecord{Directory: account.DefaultDirectory})
+	refused := func(why, home string) {
+		t.Helper()
+		b.Forget(home)
+		b.quiet(t)
+		if rec, _ := held(t, b.Homes, home); rec.Forgetting {
+			t.Fatalf("%s: %s was marked to be forgotten", why, home)
+		}
+	}
+
 	b.openBox(t, localAddress)
 	if list := b.rail(t, 0); !list.Locked {
 		t.Fatalf("a box locked reads %+v", list)
 	}
-	b.Forget(other)
-	b.quiet(t)
+	refused("while the box is locked", other)
 	open.Store(true)
-	seen := b.rail(t, 0).Seq
 	if list := b.rail(t, 0); list.Locked {
 		t.Fatalf("a box unlocked reads %+v", list)
 	}
-	b.Forget(localAddress)
-	b.quiet(t)
-	b.Forget(other)
-	b.erases(t, 1)
-	seen = b.rail(t, 0).Seq
+	refused("This box", localAddress)
+	seen := b.rail(t, 0).Seq
 	b.Lock("Locked.")
 	b.next(t)
 	if list := b.rail(t, seen); list.Seq == seen {
 		t.Fatal("the rail did not hear the lock")
 	}
 
-	// Its own Forget, once it was left unlocked.
-	seed(t, b.Homes, work, shell.ClientRecord{Directory: account.DefaultDirectory})
-	open.Store(false)
+	// The CYFR open, unlocked.
 	b.Leave(1)
 	b.next(t)
 	b.next(t)
-	done := b.connect(t, "/bootstrap/connect", map[string]string{"address": work, "kept": "true"})
-	b.next(t)
-	b.ready(work)
-	answered(t, done)
-	b.opened(t, work)
-	open.Store(true)
+	selectWork := func() {
+		t.Helper()
+		done := b.connect(t, "/bootstrap/connect", map[string]string{"address": work, "kept": "true"})
+		b.next(t)
+		b.ready(work)
+		answered(t, done)
+		b.opened(t, work)
+	}
+	selectWork()
+	refused("the CYFR open", work)
+
+	// Left for Connect, from unlocked: the chooser's state read, nothing
+	// confirmed, the box locked.
 	b.Leave(2)
 	b.next(t)
 	b.next(t)
 	open.Store(false)
-	b.Lock("Locked.")
-	b.next(t)
-	b.Forget(work)
-	b.quiet(t)
-	if rec, _ := held(t, b.Homes, work); rec.Forgetting {
-		t.Fatal("a lock after the departure let its Forget through")
-	}
+	b.post(t, "/bootstrap/state", map[string]string{})
+	refused("left for Connect", work)
 
-	done = b.connect(t, "/bootstrap/connect", map[string]string{"address": work, "kept": "true"})
-	b.next(t)
-	b.ready(work)
-	answered(t, done)
-	b.opened(t, work)
+	// Left while a second lock was on its way.
+	selectWork()
 	open.Store(true)
 	b.Leave(3)
-	b.next(t)
-	b.next(t)
+	b.Lock("Locked.")
 	open.Store(false)
-	b.Forget(work)
-	b.erases(t, 2)
-	b.Forget(work)
-	b.erases(t, 2)
+	for range 3 {
+		b.next(t)
+	}
+	refused("left with a second lock on its way", work)
+
+	// Another CYFR, the box unlocked at the CYFR open: forgotten.
+	selectWork()
+	open.Store(true)
+	b.Forget(other)
+	b.erases(t, 1)
 }
 
 // A box's selections start locked and nothing late of one publishes: This
@@ -472,4 +486,218 @@ func TestThisBoxsWorkEndsWithItsSelection(t *testing.T) {
 	lives("while it is open again", w)
 	b.End()
 	ends("the service's end", w)
+}
+
+// A departure in flight is waited for by the service's end: the shell it
+// left is still retiring its sessions (held here inside that shell's lock,
+// after the hide, where its CYFR's answers are awaited), and End returns
+// only once that retirement, and with it the work begun for that CYFR,
+// has ended.
+func TestTheEndWaitsForADepartureInFlight(t *testing.T) {
+	b := newOnBox(t)
+	var holding atomic.Bool
+	release := make(chan struct{})
+	b.Shell = func(c *shell.Config) {
+		hide := c.Restart
+		c.Restart = func() {
+			hide()
+			if holding.Load() {
+				<-release
+			}
+		}
+	}
+	b.openBox(t, localAddress)
+	w := b.here.Work
+	holding.Store(true)
+	left := make(chan struct{})
+	go func() {
+		b.Leave(1)
+		close(left)
+	}()
+	if m := b.next(t); m.Type != TypeLocked {
+		t.Fatalf("the departure said %+v", m)
+	}
+	ended := make(chan struct{})
+	go func() {
+		b.End()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+		t.Fatal("End returned while the CYFR left was still retiring its sessions")
+	case <-time.After(300 * time.Millisecond): // sleep-ok: End must still be waiting after a while, which nothing else shows
+	}
+	close(release)
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("End did not return once the departure retired")
+	}
+	if w.Context().Err() == nil {
+		t.Fatal("End returned before the work of the CYFR left ended")
+	}
+	<-left
+}
+
+// Every lock on a box is one step of the service's: the time since the
+// last lock ends, and main is told locked through the hide, in one hold,
+// so nothing of a selection begun after it is told before its locked; a
+// lock from the device's own page (Prism's Lock, at loopback /lock) is
+// that same step as the idle lock: each moves the epoch, and a chooser
+// request carrying the epoch before it publishes nothing.
+func TestEveryLockOnABoxIsOneStep(t *testing.T) {
+	b := newOnBox(t)
+	marking, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	held.Store(true)
+	b.Hide = func(tell func()) {
+		b.note("hidden")
+		if held.CompareAndSwap(true, false) {
+			close(marking)
+			<-release
+		}
+		tell()
+	}
+	locked := make(chan struct{})
+	go func() {
+		b.Lock("Locked.")
+		close(locked)
+	}()
+	<-marking
+	done := b.connect(t, "/bootstrap/box", map[string]string{"epoch": "1"})
+	time.Sleep(200 * time.Millisecond) // sleep-ok: a press must stay unpublished while the lock is told, which nothing else shows
+	b.quiet(t)
+	close(release)
+	<-locked
+	if m := b.next(t); m.Type != TypeLocked {
+		t.Fatalf("a press begun after the lock was told first: %+v", m)
+	}
+	if m := b.next(t); m.Type != TypeHome {
+		t.Fatalf("the press then proposed %+v", m)
+	}
+	b.ready(localAddress)
+	answered(t, done)
+	b.opened(t, localAddress)
+
+	// A CYFR elsewhere open: Prism's Lock and the idle lock alike.
+	const work = "https://work.example.com"
+	b.Leave(1)
+	b.next(t)
+	b.next(t)
+	sel := b.connect(t, "/bootstrap/connect", map[string]string{"address": work})
+	b.next(t)
+	b.ready(work)
+	answered(t, sel)
+	b.opened(t, work)
+	for name, lock := range map[string]func(){
+		"Prism's Lock":  func() { b.get("/lock") },
+		"the idle lock": func() { b.Lock("Locked after five minutes without use.") },
+	} {
+		before := b.post(t, "/bootstrap/state", map[string]string{}).Epoch
+		lock()
+		if m := b.next(t); m.Type != TypeLocked || m.Home != work {
+			t.Fatalf("%s said %+v", name, m)
+		}
+		if after := b.post(t, "/bootstrap/state", map[string]string{}).Epoch; after != before+1 {
+			t.Fatalf("%s moved the epoch from %d to %d", name, before, after)
+		}
+		got := b.post(t, "/bootstrap/connect", map[string]string{"address": work, "epoch": strconv.FormatUint(before, 10)})
+		if got.Error != lockedSentence {
+			t.Fatalf("after %s a request of the epoch before it answered %+v", name, got)
+		}
+	}
+}
+
+// This box is the CYFR its folder names at each reading, never the entry
+// made or admitted last: its folder at A, then B, then A again, the rail
+// shows A as This box and Forget, the box unlocked, keeps A and forgets B.
+// A list that cannot be read still shows This box; a folder that cannot be
+// read protects every entry set up in it.
+func TestThisBoxIsWhatItsFolderNamesNow(t *testing.T) {
+	const moved = "http://localhost:4402"
+	var open atomic.Bool
+	unlockedAs(t, &open)
+	b := newOnBox(t)
+	for i, at := range []string{localAddress, moved, localAddress} {
+		if i > 0 {
+			b.Leave(uint64(i))
+			b.next(t)
+			b.next(t)
+		}
+		b.at.Store(at)
+		b.openBox(t, at)
+	}
+	if rail := b.rail(t, 0).CYFRs; rail[0] != (RailCYFR{Home: localAddress, Box: true, Folder: boxFolder, Open: true}) {
+		t.Fatalf("after A, B, A the rail shows %+v", rail)
+	}
+	open.Store(true)
+	b.Forget(localAddress)
+	b.quiet(t)
+	if rec, _ := held(t, b.Homes, localAddress); rec.Forgetting {
+		t.Fatal("This box, as its folder names it now, was marked to be forgotten")
+	}
+	b.unread.Store(true)
+	b.Forget(moved)
+	b.quiet(t)
+	if rec, _ := held(t, b.Homes, moved); rec.Forgetting {
+		t.Fatal("an entry of a folder that cannot be read was marked to be forgotten")
+	}
+	b.unread.Store(false)
+	b.Forget(moved)
+	b.erases(t, 2) // its content and the ceremony its opening recorded
+
+	if err := os.WriteFile(string(b.Homes), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := b.rail(t, 0)
+	if got.Error == "" || len(got.CYFRs) != 1 || got.CYFRs[0].Home != localAddress || !got.CYFRs[0].Box {
+		t.Fatalf("a list that cannot be read shows %+v", got)
+	}
+}
+
+// A lock while the device's page of a CYFR elsewhere waits on that CYFR's
+// account service (its terms, up to 3 s) is taken at once: the page's read
+// holds nothing the lock needs, and the lock ends it.
+func TestALockDuringAnEnrolmentPageIsTakenAtOnce(t *testing.T) {
+	b := newOnBox(t)
+	b.openBox(t, localAddress)
+	b.answered(t)
+	drawn := codeShape.FindStringSubmatch(b.form("/passphrase", nil).Body.String())
+	if drawn == nil {
+		t.Fatal("no passphrase drawn")
+	}
+	b.form("/make", url.Values{"secret": {drawn[1]}, "again": {drawn[1]}})
+	b.Leave(1)
+	b.next(t)
+	b.next(t)
+	asked := make(chan struct{})
+	var once sync.Once
+	b.Client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		once.Do(func() { close(asked) })
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	const work = "https://work.example.com"
+	done := b.connect(t, "/bootstrap/connect", map[string]string{"address": work})
+	b.next(t)
+	b.ready(work)
+	answered(t, done)
+	b.opened(t, work)
+	read := make(chan struct{})
+	go func() {
+		b.get("/")
+		close(read)
+	}()
+	<-asked
+	b.said()
+	start := time.Now()
+	b.Lock("Locked.")
+	if took := time.Since(start); took > 500*time.Millisecond || b.said() != "hidden, locked" {
+		t.Fatalf("a lock during the page's wait took %v", took)
+	}
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		t.Fatal("the page went on waiting after the lock")
+	}
 }

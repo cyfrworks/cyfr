@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cyfr/codex/internal/account"
@@ -203,11 +204,11 @@ type Service struct {
 	unerased map[string]bool
 	// over is whether ending was said (Hide): nothing is said after it.
 	over bool
-	// leftUnlocked, on a box's screen, is the CYFR a departure left while
-	// its device was unlocked, whose own Forget, which main sends once it
-	// left it, that unlock still authorizes: once, and no longer than the
-	// next lock or selection.
-	leftUnlocked string
+	// leaving is the shell a departure detached and is retiring, whose
+	// lock is still a lock of this service's (lockStep), and departed is
+	// closed once that retirement has ended: End waits for it.
+	leaving  *shell.Shell
+	departed chan struct{}
 }
 
 type selection struct {
@@ -455,7 +456,6 @@ func (s *Service) begin(ctx context.Context, req request, home string) (context.
 	}
 	run, stop := context.WithCancel(ctx)
 	s.connecting, s.stop, s.began = true, stop, true
-	s.leftUnlocked = ""
 	return run, nil
 }
 
@@ -818,7 +818,10 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 // under s.mu.
 func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, l *Local, proposal Message) answer {
 	home := proposal.Home
-	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, s.sayLocked
+	// Every lock of this shell, the service's own or the shell's (its
+	// Lock page, its channel ending), reaches the one lock step.
+	var mine atomic.Pointer[shell.Shell]
+	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, func() { s.lockStep(mine.Load()) }
 	if s.Box != "" {
 		// The rail offers Forget only while the box is unlocked (railNow).
 		cfg.Opened = func() {
@@ -834,6 +837,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if err != nil {
 		return answer{Error: err.Error()}
 	}
+	mine.Store(sh)
 	ready := make(chan struct{}, 1)
 	s.mu.Lock()
 	if s.epoch != epoch {
@@ -917,20 +921,20 @@ func (s *Service) box(ctx context.Context, epoch uint64, req request) answer {
 	return s.openLocal(run, epoch, s.Box, &l, shell.Typed)
 }
 
-// boxHome is the entry of list This box shows (Box): of those set up in
-// its folder, the one made or admitted last, "" where none is or this is
-// no box's screen.
-func (s *Service) boxHome(list shell.HomeList) string {
-	home, at := "", uint64(0)
-	if s.Box == "" {
-		return ""
+// boxAt is the address This box's folder (Box) names now, read from its
+// files alone (Local: no Docker, nothing started), and whether it could be
+// read; "", false on a desktop. Which entry of the list is This box is
+// never guessed from the list: it is what the folder names at the reading.
+func (s *Service) boxAt() (string, bool) {
+	if s.Box == "" || s.Local == nil {
+		return "", false
 	}
-	for h, rec := range list.Homes {
-		if rec.Project == s.Box && (home == "" || rec.Generation > at) {
-			home, at = h, rec.Generation
-		}
+	l, err := s.Local(s.Box)
+	defer l.end()
+	if err != nil {
+		return "", false
 	}
-	return home
+	return l.Shell.Address, true
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system
@@ -1200,6 +1204,16 @@ func (s *Service) End() {
 	s.wake()
 	s.mu.Unlock()
 	s.lock("", false)
+	// A departure in flight is retiring the shell it left (Leave): the end
+	// waits for that retirement, which its own bounds end (the shell's
+	// lock: its sessions told within 5 s, its channel closed), and adds
+	// none of its own.
+	s.mu.Lock()
+	departed := s.departed
+	s.mu.Unlock()
+	if departed != nil {
+		<-departed
+	}
 }
 
 // Leave is main's leave numbered id: the device locks and lets go of the
@@ -1216,21 +1230,62 @@ func (s *Service) Leave(id uint64) {
 }
 
 // lock is Lock, which lets go of the CYFR open as well when leave says to
-// (main's leave): the list stays as it is.
+// (main's leave): the list stays as it is. Its one step (lockStep) is
+// reached through the open shell's lock, which hides first, or at once
+// where none is open.
 func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh, here, letGo := s.sh, s.here, leave || s.ended
-	// Read before the lock below locks it: the one fact a departure leaves.
-	s.leftUnlocked = ""
-	if leave && !s.ended && s.Box != "" && sh != nil && unlocked(sh) {
-		s.leftUnlocked = s.committed.Home
-	}
-	if s.Box != "" {
-		s.changed()
-	}
+	var departed chan struct{}
 	if leave {
 		s.sh, s.pages, s.here, s.committed = nil, nil, nil, Message{}
 		s.changed()
+		if sh != nil {
+			departed = make(chan struct{})
+			s.leaving, s.departed = sh, departed
+		}
+	}
+	s.mu.Unlock()
+	if departed != nil {
+		defer func() {
+			s.mu.Lock()
+			if s.departed == departed {
+				s.leaving, s.departed = nil, nil
+			}
+			s.mu.Unlock()
+			close(departed)
+		}()
+	}
+	// Everything begun for the CYFR here ends as the app lets go of it,
+	// once the lock's one entry has run (locked, hidden, the CYFR told),
+	// and on a panic in it too: the lock holds it from here.
+	if letGo {
+		defer here.end()
+	}
+	if sh != nil {
+		// The shell's lock hides the screen (Restart, lockStep) before it
+		// tells its CYFR, which every lock does.
+		sh.Lock(why)
+	} else {
+		s.lockStep(nil)
+	}
+}
+
+// lockStep is every lock's one step in the service, reached by the
+// service's own locks and by its shell's (Config.Restart): in one hold of
+// s.mu the time since the last lock ends, so every chooser request begun
+// in it, in discovery, awaiting approval or awaiting main's home-ready,
+// publishes nothing more, and main is told locked, naming the CYFR
+// committed, through the screen's hide where there is one (Hide), which
+// marks what it shows first and waits on nothing; at the service's end,
+// ending in its place, once, and nothing after it. Nothing of a later
+// selection can be told before it. A lock of a shell the service holds
+// no more, neither open nor being left, is no lock of the service's.
+func (s *Service) lockStep(from *shell.Shell) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if from != nil && from != s.sh && from != s.leaving {
+		return
 	}
 	s.epoch++
 	if s.stop != nil {
@@ -1241,36 +1296,15 @@ func (s *Service) lock(why string, leave bool) {
 		s.ready, s.selecting, s.current = nil, "", 0
 	}
 	s.wake()
-	s.mu.Unlock()
-	// Everything begun for the CYFR here ends as the app lets go of it,
-	// once the lock's one entry has run (locked, hidden, the CYFR told),
-	// and on a panic in it too: the lock holds it from here.
-	if letGo {
-		defer here.end()
+	if s.Box != "" {
+		s.changed()
 	}
-	if sh != nil {
-		// The shell says locked as it hides the screen (sayLocked), which
-		// every lock does.
-		sh.Lock(why)
-	} else {
-		s.sayLocked()
-	}
-}
-
-// sayLocked tells main the device locked, naming the CYFR committed, every
-// lock's message; on a box's screen once its hide began (Hide), and at the
-// service's end there it says ending, once, in its place.
-func (s *Service) sayLocked() {
-	s.mu.Lock()
-	m, ended, over := s.committed, s.ended, s.over
-	if ended && s.Hide != nil {
-		s.over = true
-	}
-	s.mu.Unlock()
+	m := s.committed
 	m.Type = TypeLocked
 	switch {
-	case ended && (s.Hide == nil || over):
-	case ended:
+	case s.ended && (s.Hide == nil || s.over):
+	case s.ended:
+		s.over = true
 		s.Hide(func() { s.Tell(Message{Type: TypeEnding}) })
 	case s.Hide != nil:
 		s.Hide(func() { s.Tell(m) })
