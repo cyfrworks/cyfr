@@ -137,8 +137,9 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 type restoreScenario struct {
 	*updateScenario
 	dir string
-	// env is .env as the snapshot holds it.
-	env []byte
+	// env is .env as the snapshot holds it, and live as the update left it
+	// in the project, the release's AppArmor profile named.
+	env, live []byte
 }
 
 // newRestoreScenario runs `cyfr update` over a SQLite cell, prepare given
@@ -160,6 +161,9 @@ func newRestoreScenario(t *testing.T, compose []byte, env map[string]string, pre
 	r := &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
 	var err error
 	if r.env, err = os.ReadFile(filepath.Join(r.dir, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	if r.live, err = os.ReadFile(filepath.Join(s.project, ".env")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(s.fake, "docker"), []byte(restoreFakeDocker), 0755); err != nil {
@@ -418,7 +422,7 @@ func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 		t.Fatalf("restore answered %v\n%s", err, out)
 	}
 	r.stoppedUndeclared()
-	r.configAsBefore(before, string(r.env))
+	r.configAsBefore(before, string(r.live))
 }
 
 // A storage root this person cannot write, as the image's entrypoint
@@ -592,7 +596,7 @@ func TestRestoreRefusesAScaffoldPathThroughALink(t *testing.T) {
 	if log := r.log(); log != nil {
 		t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
 	}
-	r.configAsBefore(compose, string(r.env))
+	r.configAsBefore(compose, string(r.live))
 	after := map[string]string{}
 	filepath.WalkDir(outside, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
@@ -619,7 +623,7 @@ func (r *restoreScenario) refusedAtTheStart(dir string) {
 	if log := r.log(); log != nil {
 		r.t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
 	}
-	r.configAsBefore(before, string(r.env))
+	r.configAsBefore(before, string(r.live))
 }
 
 // The live read runs the image's entrypoint, which hands the storage root
@@ -652,7 +656,7 @@ func TestRestoreChecksPermissionsAfterTheLiveRead(t *testing.T) {
 		t.Fatalf("restore answered %v\n%s", err, out)
 	}
 	r.stoppedUndeclared()
-	r.configAsBefore(before, string(r.env))
+	r.configAsBefore(before, string(r.live))
 	if got := read(t, filepath.Join(r.project, "keeper.seccomp.json")); got != keeper {
 		t.Error("a scaffold file was put back before the refusal")
 	}
@@ -981,7 +985,7 @@ func TestRestoreRefusesASnapshotItCannotInvert(t *testing.T) {
 			if log := r.log(); log != nil {
 				t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
 			}
-			r.configAsBefore(before, string(r.env))
+			r.configAsBefore(before, string(r.live))
 		})
 	}
 }
@@ -1517,7 +1521,7 @@ func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testin
 			if log := r.log(); log != nil {
 				t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
 			}
-			r.configAsBefore(before, string(r.env))
+			r.configAsBefore(before, string(r.live))
 		})
 	}
 }
@@ -1636,7 +1640,7 @@ func TestRestoreRefusesAComposeFileSetItCannotStage(t *testing.T) {
 				t.Fatalf("restore answered %v\n%s", err, out)
 			}
 			r.stoppedUndeclared()
-			r.configAsBefore(before, string(r.env))
+			r.configAsBefore(before, string(r.live))
 			if slices.ContainsFunc(r.log(), func(line string) bool { return strings.Contains(line, " config ") }) {
 				t.Errorf("the restore read a configuration it cannot stage:\n%s", strings.Join(r.log(), "\n"))
 			}
