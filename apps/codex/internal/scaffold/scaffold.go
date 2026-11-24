@@ -350,12 +350,6 @@ func HoldsManaged(dir string) bool {
 // so `cyfr update`, which pulls the image, refreshes it too.
 const SeccompProfile = "keeper.seccomp.json"
 
-// AppArmorProfile is the AppArmor profile cyfr-locus, which every Locus
-// service of docker-compose.yml runs under (apparmor=cyfr-locus). It ships
-// beside the compose file and follows the image it lets start, as
-// SeccompProfile does; cyfr loads it into this machine's kernel.
-const AppArmorProfile = "cyfr-locus.apparmor"
-
 // Guides are the guides the scaffold tarball ships at a project's root
 // (scripts/scaffold-tarball.sh's items), each managed, so `cyfr update`
 // refreshes it. `cyfr init` and `cyfr update` name them from here, and
@@ -372,12 +366,11 @@ var Guides = []string{
 
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
-// keeper's seccomp profile, the Locus AppArmor profile, and the shipped
-// Aqua soul and scrolls).
+// keeper's seccomp profile, and the shipped Aqua soul and scrolls).
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
 func IsManaged(path string) bool {
-	if path == SeccompProfile || path == AppArmorProfile || slices.Contains(Guides, path) {
+	if path == SeccompProfile || slices.Contains(Guides, path) {
 		return true
 	}
 	// Everything under wit/ is managed.

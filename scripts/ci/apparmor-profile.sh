@@ -6,7 +6,7 @@
 # runner, as `cyfr init` and `cyfr update` load it on a host:
 #   scripts/ci/apparmor-profile.sh
 #
-# It writes apps/locus/keeper/seccomp/cyfr-locus to
+# It writes apps/codex/internal/apparmor/cyfr-locus to
 # /etc/apparmor.d/cyfr-locus and loads it, through sudo. A runner whose
 # kernel enforces no AppArmor needs nothing: Docker ignores the option
 # there, and the script says so and changes nothing.
@@ -20,6 +20,6 @@ if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" != Y ]; then
   echo "AppArmor is off on this runner: the profile cyfr-locus is not needed here"
   exit 0
 fi
-sudo install -m 0644 apps/locus/keeper/seccomp/cyfr-locus /etc/apparmor.d/cyfr-locus
+sudo install -m 0644 apps/codex/internal/apparmor/cyfr-locus /etc/apparmor.d/cyfr-locus
 sudo apparmor_parser -r -W /etc/apparmor.d/cyfr-locus
 echo "the AppArmor profile cyfr-locus is loaded"

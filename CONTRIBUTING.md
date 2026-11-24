@@ -47,7 +47,7 @@ service. Besides the setup the next section names (the pinned
 with its compose plugin, `python3`, `openssl`, a host that allows
 unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime`
 service says why), on a host with AppArmor this checkout's profile
-`apps/locus/keeper/seccomp/cyfr-locus` loaded (the loop refuses before
+`apps/codex/internal/apparmor/cyfr-locus` loaded (the loop refuses before
 anything starts otherwise, naming the one command, and again after a
 change to that file), and a checkout of
 [cyfr.run](https://github.com/cyfrworks/cyfr.run) beside this one

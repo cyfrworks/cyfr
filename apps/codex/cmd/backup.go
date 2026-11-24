@@ -181,8 +181,7 @@ func needsRoot(managed []string) bool {
 
 // managedPresent answers the managed scaffold files (scaffold.IsManaged)
 // the working directory holds, sorted: the guides, the keeper's seccomp
-// profile, Locus's AppArmor profile and what is managed under wit/ and
-// aqua/. A backup holds every
+// profile and what is managed under wit/ and aqua/. A backup holds every
 // one or is not made, so a managed name that is there as something other
 // than a regular file refuses as update's fetchScaffold refuses one, and a
 // directory managed files may lie under (scaffold.HoldsManaged) that is
@@ -193,7 +192,7 @@ func managedPresent() ([]string, error) {
 		return fmt.Errorf("%s, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed", name)
 	}
 	var names []string
-	for _, name := range append(slices.Clone(scaffold.Guides), scaffold.SeccompProfile, scaffold.AppArmorProfile) {
+	for _, name := range append(slices.Clone(scaffold.Guides), scaffold.SeccompProfile) {
 		info, err := os.Lstat(name)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):

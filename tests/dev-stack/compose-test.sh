@@ -624,15 +624,15 @@ prepare() {
   cp "$ROOT/scripts/lib/run-names.sh" "$case_dir/scripts/lib/"
   cp "$stubs/image.sh" "$case_dir/scripts/image.sh"
   cp "$ROOT/docker-compose.yml" "$ROOT/docker-compose.dev.yml" "$ROOT/.env.example" "$case_dir/"
-  mkdir -p "$case_dir/apps/locus/keeper/seccomp"
-  cp "$ROOT/apps/locus/keeper/seccomp/cyfr-locus" "$case_dir/apps/locus/keeper/seccomp/"
+  mkdir -p "$case_dir/apps/codex/internal/apparmor"
+  cp "$ROOT/apps/codex/internal/apparmor/cyfr-locus" "$case_dir/apps/codex/internal/apparmor/"
   if [ "$4" != none ]; then
     printf '%s' "$3" >"$case_dir/.env"
     chmod "$4" "$case_dir/.env"
     cp -p "$case_dir/.env" "$case_dir/env.before"
   fi
   if [ -n "${5:-}" ]; then mkdir -p "$case_dir/data" && echo "$5" >"$case_dir/data/dev-stack.slot"; fi
-  if [ -n "${STACK_PROFILE:-}" ]; then echo "$STACK_PROFILE" >>"$case_dir/apps/locus/keeper/seccomp/cyfr-locus"; fi
+  if [ -n "${STACK_PROFILE:-}" ]; then echo "$STACK_PROFILE" >>"$case_dir/apps/codex/internal/apparmor/cyfr-locus"; fi
   case_project="cyfr-dev-$(run_names_seed "$case_dir")"
 }
 
@@ -1564,7 +1564,7 @@ case_unresolved() {
 case_apparmor() {
   local profile
   STACK_PROFILE="# a profile this machine has not loaded" stack "$1" apparmor "$complete" 0600 "" STUB_SERVER_STATUS=0
-  profile="$case_dir/apps/locus/keeper/seccomp/cyfr-locus"
+  profile="$case_dir/apps/codex/internal/apparmor/cyfr-locus"
   if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" != Y ]; then
     status_is 0
     return

@@ -157,7 +157,7 @@ die() {
 # one command that loads it; a process that is not root cannot list the
 # loaded profiles, and /etc/apparmor.d/cyfr-locus is what the host loads.
 apparmor() {
-  local profile="$ROOT/apps/locus/keeper/seccomp/cyfr-locus"
+  local profile="$ROOT/apps/codex/internal/apparmor/cyfr-locus"
   [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ] || return 0
   cmp -s "$profile" /etc/apparmor.d/cyfr-locus ||
     die "Locus runs under the AppArmor profile cyfr-locus, which this machine has not loaded as this checkout has it, so nothing was started. Run \`sudo sh -c 'install -m 0644 $profile /etc/apparmor.d/cyfr-locus && apparmor_parser -r -W /etc/apparmor.d/cyfr-locus'\`, then run scripts/dev-stack.sh again."

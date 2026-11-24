@@ -2,18 +2,22 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The AppArmor profile every Locus container runs under, on a host with
-# AppArmor (`security_opt: apparmor=cyfr-locus`). `cyfr init` writes it to
-# /etc/apparmor.d/cyfr-locus and loads it, and `cyfr update` does both again,
-# so it is loaded at every boot. Docker's default profile with four changes:
+# AppArmor (`security_opt: apparmor=cyfr-locus`). It is built into cyfr
+# (package apparmor): `cyfr init`, `update` and `up` write it to
+# /etc/apparmor.d/cyfr-locus and load it, so it is loaded at every boot,
+# and the keeper proves it at its own boot (cyfr-locus's stage.Confinement).
+# Docker's default profile with four changes:
 #   1. `userns,`: the keeper gives every spawn a user namespace of its own,
 #      and the spawn holds its capabilities inside it alone.
 #   2. In place of `deny mount,`: the mounts a stage makes while it builds
 #      its space's files under /var/lib/locus/space, and its pivot into them.
 #      Nothing else is mounted, by the keeper or by a space.
 #   3. The container runs with `systempaths=unconfined`, since a /proc that
-#      Docker has masked lets no one mount a fresh one: what Docker masked,
-#      and all of /proc/sys, are denied here instead, to the keeper and to
-#      every space.
+#      Docker has masked lets no one mount a fresh one: what Docker masks is
+#      denied here instead, no read, and what it makes read-only, no write,
+#      to the keeper and to every space (Docker's two lists are
+#      cyfr-locus's internal/stage/docker_paths.json, which its tests hold
+#      this profile to).
 #   4. `unix` and POSIX message queues, which the newer rule set refuses
 #      otherwise: a space's queues are its own IPC namespace's and end with
 #      it, and the keeper reads what a spawn left in the container's.
@@ -40,6 +44,7 @@ profile cyfr-locus flags=(attach_disconnected,mediate_deleted) {
   deny @{PROC}/* w,
   deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
   deny @{PROC}/sys/** w,
+  deny @{PROC}/bus/** w,
   deny @{PROC}/sysrq-trigger rwklx,
   deny @{PROC}/kcore rwklx,
   deny /sys/[^f]*/** wklx,
@@ -47,11 +52,12 @@ profile cyfr-locus flags=(attach_disconnected,mediate_deleted) {
   deny /sys/fs/[^c]*/** wklx,
   deny /sys/fs/c[^g]*/** wklx,
   deny /sys/fs/cg[^r]*/** wklx,
-  deny /sys/firmware/** rwklx,
-  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/firmware/{,**} rwklx,
+  deny /sys/devices/virtual/powercap/{,**} rwklx,
+  deny /sys/devices/system/cpu/cpu*/thermal_throttle/{,**} rwklx,
   deny /sys/kernel/security/** rwklx,
 
-  deny @{PROC}/{acpi,asound,scsi}/** rwklx,
+  deny @{PROC}/{acpi,asound,scsi}/{,**} rwklx,
   deny @{PROC}/{interrupts,keys,latency_stats,timer_list,timer_stats,sched_debug} rwklx,
 
   mount options=(rw,rprivate) -> /,

@@ -45,6 +45,8 @@ type standIn struct {
 	// profile in /etc/apparmor.d, nil none.
 	appArmor bool
 	profile  []byte
+	// input is what each applyInput gave root on its stdin.
+	input [][]byte
 }
 
 // The daemon's two refusals of a call, as docker writes them: its socket
@@ -119,6 +121,11 @@ func standInMachine(t *testing.T) *standIn {
 			s.prompt()
 		}
 		return s.authErr
+	}
+	machine.applyInput = func(commands []string, input []byte) error {
+		s.applied = append(s.applied, commands)
+		s.input = append(s.input, input)
+		return s.applyErr
 	}
 	machine.apply = func(commands []string) error {
 		s.applied = append(s.applied, commands)

@@ -62,14 +62,10 @@ ITEMS=(
 # names as ./keeper.seccomp.json, ships beside it under that name.
 PROFILE=apps/locus/keeper/seccomp/keeper.json
 PROFILE_NAME=keeper.seccomp.json
-# The AppArmor profile every Locus service runs under (apparmor=cyfr-locus),
-# which cyfr loads from beside docker-compose.yml, ships there under this name.
-APPARMOR_PROFILE=apps/locus/keeper/seccomp/cyfr-locus
-APPARMOR_PROFILE_NAME=cyfr-locus.apparmor
 # Every item is shipped or the script fails: a file renamed or removed
 # without this list following must not leave the tarball quietly short.
 MISSING=()
-for item in "${ITEMS[@]}" "$PROFILE" "$APPARMOR_PROFILE"; do
+for item in "${ITEMS[@]}" "$PROFILE"; do
   [ -e "$item" ] || MISSING+=("$item")
 done
 
@@ -85,7 +81,6 @@ fi
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 cp "$PROFILE" "$STAGE/$PROFILE_NAME"
-cp "$APPARMOR_PROFILE" "$STAGE/$APPARMOR_PROFILE_NAME"
 
 TAR_ITEMS=("${ITEMS[@]}")
 if [ -n "$VERSION" ]; then
@@ -133,5 +128,5 @@ if [ -n "$VERSION" ]; then
   done
 fi
 
-tar czf "$OUTPUT" "${TAR_ITEMS[@]}" -C seed aqua -C "$STAGE" "$PROFILE_NAME" "$APPARMOR_PROFILE_NAME"
+tar czf "$OUTPUT" "${TAR_ITEMS[@]}" -C seed aqua -C "$STAGE" "$PROFILE_NAME"
 echo "Created $OUTPUT ($(du -h "$OUTPUT" | cut -f1) compressed)"

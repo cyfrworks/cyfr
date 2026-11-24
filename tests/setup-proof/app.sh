@@ -176,7 +176,6 @@ seed() {
 local D=$1 PORT=$2 ADDR="http://localhost:$2"
 cp "$ROOT/docker-compose.yml" "$ROOT/Caddyfile" "$D/"
 cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$D/keeper.seccomp.json"
-cp "$ROOT/apps/locus/keeper/seccomp/cyfr-locus" "$D/cyfr-locus.apparmor"
 cat >"$D/docker-compose.override.yml" <<Y
 services:
   cyfr:

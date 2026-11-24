@@ -67,7 +67,7 @@
 # `security_opt: seccomp=./keeper.seccomp.json`,
 # apps/locus/keeper/seccomp/keeper.json shipped beside it); and on a host
 # with AppArmor, under the profile cyfr-locus
-# (apps/locus/keeper/seccomp/cyfr-locus, which `cyfr init` and `cyfr
+# (apps/codex/internal/apparmor/cyfr-locus, which `cyfr init` and `cyfr
 # update` load), with its system paths unmasked
 # (`systempaths=unconfined`). Without any of them, cyfr-locus refuses to
 # start, naming what to check. A runtime container's read-only root

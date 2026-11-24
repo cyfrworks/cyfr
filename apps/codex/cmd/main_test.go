@@ -71,6 +71,7 @@ func testMachine(system string) machineSeams {
 		appArmorProfile: func() ([]byte, error) { return nil, fs.ErrNotExist },
 		authenticate:    func() error { return refused },
 		apply:           func([]string) error { return refused },
+		applyInput:      func([]string, []byte) error { return refused },
 		forget:          func() {},
 	}
 }

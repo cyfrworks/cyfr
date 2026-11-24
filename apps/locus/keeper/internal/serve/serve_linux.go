@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -143,6 +144,14 @@ func Main(args []string) int {
 		log.Error("refusing to start: clearing the supplementary groups: %v", err)
 		return ExitConfig
 	}
+	enforced, err := stage.Confinement()
+	if err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
+	if !enforced {
+		log.Info("this host enforces no AppArmor, so nothing stands in the place of Docker's masks, which the container's system paths unmask: the keeper alone, never a space, may write /proc/sys")
+	}
 	if err := probeSpaces(self, cfg, accounts); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -266,7 +275,7 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 			"and, where AppArmor restricts them, kernel.apparmor_restrict_unprivileged_userns, which the profile below satisfies), "+
 			"and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json (/etc/cyfr/keeper.json in the image), which lets "+
 			"clone make them and a space mount its files, with its system paths unmasked (security_opt systempaths=unconfined), since a masked /proc "+
-			"lets no space mount its own, and, on a host with AppArmor, under the profile apps/locus/keeper/seccomp/cyfr-locus, which `cyfr init` and "+
+			"lets no space mount its own, and, on a host with AppArmor, under the profile apps/codex/internal/apparmor/cyfr-locus, which `cyfr init` and "+
 			"`cyfr update` load (security_opt apparmor=cyfr-locus)", spec.Name, spec.Reach, err)
 	}
 	devnull, err := os.Open(os.DevNull)
@@ -328,6 +337,9 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 	switch {
 	case err != nil:
 		return refuse(err)
+	case strings.Contains(string(reason), stage.PolicyRefusal):
+		_, sentence, _ := strings.Cut(string(reason), stage.PolicyRefusal)
+		return errors.New(sentence)
 	case len(reason) > 0:
 		return refuse(errors.New("the cloned stage: " + string(reason)))
 	case !ws.Exited() || ws.ExitStatus() != 0:

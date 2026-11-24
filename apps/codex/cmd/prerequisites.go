@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -75,6 +76,9 @@ type machineSeams struct {
 	appArmorProfile func() ([]byte, error)
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
+	// applyInput runs the commands as root through one sudo, input on
+	// their stdin.
+	applyInput func(commands []string, input []byte) error
 	// forget invalidates sudo's cached login.
 	forget func()
 }
@@ -169,6 +173,11 @@ var machine = machineSeams{
 	apply: func(commands []string) error {
 		cmd := exec.Command("sudo", "sh", "-c", strings.Join(commands, " && "))
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return cmd.Run()
+	},
+	applyInput: func(commands []string, input []byte) error {
+		cmd := exec.Command("sudo", "sh", "-c", strings.Join(commands, " && "))
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(input), os.Stdout, os.Stderr
 		return cmd.Run()
 	},
 	forget: func() { _ = exec.Command("sudo", "-k").Run() },

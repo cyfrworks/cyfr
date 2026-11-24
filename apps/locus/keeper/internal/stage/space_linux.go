@@ -312,6 +312,9 @@ func First(probe bool) int {
 		return fail("seccomp: %v", err)
 	}
 	if probe {
+		if err := probeQueue(); err != nil {
+			return fail("%v", err)
+		}
 		return 0
 	}
 	err = syscall.Exec(self, []string{"cyfr-locus", "stage", InitArg}, []string{})

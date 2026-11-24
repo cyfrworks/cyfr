@@ -1461,10 +1461,10 @@ defmodule Cyfr.StackShapeTest do
   # which Docker's default seccomp and AppArmor profiles deny. Every Locus
   # service runs under the keeper's seccomp profile, which the image
   # carries and a scaffolded project holds beside its compose file, where
-  # compose reads it, and under the AppArmor profile cyfr-locus, which the
-  # project holds beside it for `cyfr init` and `cyfr update` to load; a
-  # project without them does not start the service. The image makes the
-  # directory a space's files are built under.
+  # compose reads it, and under the AppArmor profile cyfr-locus, which cyfr
+  # carries and loads; a project without the one, or a host without the
+  # other, does not start the service. The image makes the directory a
+  # space's files are built under, which the profile lets a space mount.
   test "every Locus service runs under the keeper's seccomp and AppArmor profiles, shipped beside the compose file" do
     role = LocusRoles.role!(:runtime)
     compose = read!("docker-compose.yml")
@@ -1484,7 +1484,7 @@ defmodule Cyfr.StackShapeTest do
     dockerfile = read!("Dockerfile.locus")
     assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
     assert dockerfile =~ ~r{install -d -m 0755 -o root -g root #{Regex.escape(space_root())}$}m
-    profile = read!("apps/locus/keeper/seccomp/cyfr-locus")
+    profile = read!("apps/codex/internal/apparmor/cyfr-locus")
     assert profile =~ "mount fstype=tmpfs -> #{space_root()}/,"
     assert profile =~ "pivot_root oldroot=#{space_root()}/.old/ #{space_root()}/,"
 
@@ -1503,12 +1503,9 @@ defmodule Cyfr.StackShapeTest do
     entries = String.split(listing, "\n", trim: true)
     assert "docker-compose.yml" in entries
     assert "keeper.seccomp.json" in entries
-    assert "cyfr-locus.apparmor" in entries
 
     {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"], env: bare_env())
     assert profile == read!("apps/locus/keeper/seccomp/keeper.json")
-    {apparmor, 0} = System.cmd("tar", ["-xOzf", tarball, "cyfr-locus.apparmor"], env: bare_env())
-    assert apparmor == read!("apps/locus/keeper/seccomp/cyfr-locus")
   end
 
   # A child's environment: every inherited name unset but where it finds

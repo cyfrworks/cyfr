@@ -1,0 +1,26 @@
+{
+  "engine": "29.1.3",
+  "source": "github.com/moby/moby, tag docker-v29.1.3, daemon/pkg/oci/defaults.go",
+  "masked": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/interrupts",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware",
+    "/sys/devices/system/cpu/cpu*/thermal_throttle"
+  ],
+  "readonly": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+  ]
+}

@@ -97,14 +97,16 @@ x-locus-role: &locus-role
   # (the image's /etc/cyfr/keeper.json): Docker's default with those
   # clones and the space's mounts allowed and unshare and setns denied.
   # apparmor=cyfr-locus: on a host with AppArmor, the container runs under
-  # the profile cyfr-locus, cyfr-locus.apparmor beside this file, which
-  # `cyfr init` and `cyfr update` load: Docker's default with the user
-  # namespace allowed, the space's mounts under its new root allowed and no
-  # other mount. A host without AppArmor, Docker Desktop among them, ignores
-  # the option. systempaths=unconfined: a /proc that Docker has masked lets
-  # no space mount its own, so the container's system paths are unmasked;
-  # on a host with AppArmor the profile denies them again, and on one
-  # without, the keeper alone, never a space, may write /proc/sys. The
+  # the profile cyfr-locus, which cyfr carries and `cyfr init`, `update`
+  # and `up` load (`cyfr apparmor-profile` prints it): Docker's default with
+  # the user namespace allowed, the space's mounts under its new root
+  # allowed and no other mount. A host without AppArmor, Docker Desktop
+  # among them, ignores the option. systempaths=unconfined: a /proc that
+  # Docker has masked lets no space mount its own, so the container's system
+  # paths are unmasked; on a host with AppArmor the profile denies them
+  # again, and on one without, the keeper alone, never a space, may write
+  # /proc/sys. The keeper proves at its boot that the profile it needs is
+  # enforced, or that the host has no AppArmor. The
   # host must allow unprivileged user namespaces: user.max_user_namespaces
   # above 0. Without any of these cyfr-locus refuses to start, naming what
   # to check, and the container restart-loops.
