@@ -52,6 +52,7 @@ import http.client
 import json
 import os
 import secrets
+import shutil
 import sys
 import time
 import urllib.error
@@ -171,6 +172,11 @@ class Stack(imagesuite.Stack):
         super().__init__(project)
         self.image = image
         self.canary_dir = canary_dir
+        # The service names the keeper's seccomp profile beside the
+        # project's .env, which compose reads from the project directory, as
+        # a scaffolded project holds it.
+        shutil.copyfile(os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json"),
+                        os.path.join(self.project_dir, "keeper.seccomp.json"))
         # The directory first on the guard's PATH: empty, so the guard runs
         # the image's own tools, unless a test gives it one.
         self.guard_tools_dir = guard_tools_dir or imagesuite.temporary_directory("cyfr-guard-tools-", 0o755)

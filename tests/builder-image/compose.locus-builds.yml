@@ -28,7 +28,7 @@ services:
     pull_policy: never
     volumes:
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
-    entrypoint: ["cyfr-locus", "serve", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    entrypoint: ["cyfr-locus", "serve", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}:routed", "--home-root", "/var/lib/locus/homes", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     environment:
       - LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}
   locus-builds-guard:

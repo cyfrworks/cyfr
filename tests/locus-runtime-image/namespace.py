@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""Every runner of the Locus image runs in a user and network namespace of its own, proven on the kernel.
+"""Every runner of the Locus image runs in a relay space of its own, a user, network and IPC namespace, proven on the kernel.
 
-cyfr-locus serves the image's runner pool isolated, under the pool and
-isolation the role table names (stack.py reads them): it clones each
-runner's stage into a new user and network namespace, maps the
+cyfr-locus serves the image's runner pool as relay spaces, under the pool
+and reach the role table names (stack.py reads them): it clones each
+runner's stage into a new user, network and IPC namespace, maps the
 runner's pooled uid and gid to themselves from the parent side, places the
 stage in its cgroup, and only then releases it to drop every capability set
 and execute the runner. The clone needs the image's seccomp profile
@@ -20,13 +20,16 @@ runner's own uid, outside that namespace, may not):
 - `refusals`: the image under Docker's default seccomp profile refuses to
   serve, naming user.max_user_namespaces and
   kernel.apparmor_restrict_unprivileged_userns; under the profile a spawn
-  of the isolated pool without `isolation` is refused as bad_request.
+  of the relay pool naming hosts, which it could never reach, is refused
+  as bad_request, and so is one carrying `isolation`, which no request has.
 - `connect`: a keeper started from the image under the profile, whose
   client is a shell speaking the keeper protocol, spawns a command of the
-  isolated pool that dials the container's own loopback and its gateway:
+  relay pool that dials the container's own loopback and its gateway:
   both are unreachable from the command (no route exists), while the same
-  dial from the container's own namespace is answered.
-- `relay`: under the profile a spawn of the isolated pool gets its relay
+  dial from the container's own namespace is answered; the command has no
+  resolver either, its name lookup failing at once, and an IPC namespace
+  of its own.
+- `relay`: under the profile a spawn of the relay pool gets its relay
   on fd 4, carried as the keeper's stream 5: with a client that opens the
   stream, the runner's call on fd 4 arrives there and the answer reaches
   it; with one that never opens it, the runner writes to fd 4 and exits
@@ -118,7 +121,7 @@ from worker_auth import ATTEMPT_FIELDS  # noqa: E402
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 KEEPER_STEPS = ("refusals", "connect", "relay", "nested", "measure")
 STEPS = KEEPER_STEPS + ("spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
-POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['isolation']}"
+POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['reach']}"
 TOKEN = "0123456789abcdef" * 4
 # The place every spawn of the keeper steps but `measure` names.
 PLACE = "p1"
@@ -194,7 +197,7 @@ class IsolatedStack(Stack):
 
 
 def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
-    """cyfr-locus from the image under the shipped service's options, serving the isolated pool to a shell client."""
+    """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client."""
     args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
             *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
             "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
@@ -207,20 +210,18 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
 
 
 def place_line(place, kind="warm", athanor=None):
-    request = {"v": 3, "type": "place", "id": place, "kind": kind}
+    request = {"v": 4, "type": "place", "id": place, "kind": kind}
     if athanor:
         request["athanor"] = athanor
     return json.dumps(request)
 
 
-def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE,
-               memory_bytes=MEMORY_BYTES):
-    request = {"v": 3, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
-               "memory_bytes": memory_bytes, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}}
+def spawn_line(spawn_id, argv, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE,
+               memory_bytes=MEMORY_BYTES, **extra):
+    request = {"v": 4, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
+               "memory_bytes": memory_bytes, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}, **extra}
     if control:
         request["control"] = True
-    if isolated:
-        request["isolation"] = ROLE["isolation"]
     return json.dumps(request)
 
 
@@ -235,7 +236,7 @@ def replies(stdout):
 def after_placed(ran, step):
     """The replies the client read after its first, which must be the keeper's `placed` for the place its spawn names."""
     got = replies(ran.stdout)
-    expect(got[:1] == [{"v": 3, "type": "placed", "id": PLACE}],
+    expect(got[:1] == [{"v": 4, "type": "placed", "id": PLACE}],
            f"{step}: the keeper placed {PLACE} before the client sent the spawn naming it", {"replies": got, "stderr": ran.stderr[-2000:]})
     return got[1:]
 
@@ -244,14 +245,16 @@ def test_refusals(image):
     refused = keeper_run(image, "exec sleep 5", seccomp=False, timeout=60)
     expect(refused.returncode == 78 and "user.max_user_namespaces" in refused.stderr
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,
-           f"under Docker's default seccomp profile cyfr-locus refuses to serve the isolated pool, naming both settings (exit {refused.returncode})",
+           f"under Docker's default seccomp profile cyfr-locus refuses to serve the relay pool, naming both settings (exit {refused.returncode})",
            refused.stderr)
-    client = PLACE_FIRST + (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], isolated=False)}' >&3; "
-                            "read -r line <&3; echo \"reply:$line\"")
-    answered = keeper_run(image, client)
-    expect(after_placed(answered, "refusals") == [{"v": 3, "type": "error", "id": "1", "code": "bad_request"}],
-           "under the profile, a spawn of the isolated pool without isolation is refused as bad_request",
-           answered.stdout + answered.stderr)
+    for name, extra in [("naming hosts", {"hosts": ["api.example.com"]}), ("carrying isolation", {"isolation": "netns"})]:
+        client = PLACE_FIRST + (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], **extra)}' >&3; "
+                                "read -r line <&3; echo \"reply:$line\"")
+        answered = keeper_run(image, client)
+        got = after_placed(answered, "refusals")
+        expect(len(got) == 1 and got[0]["type"] == "error" and got[0]["code"] == "bad_request",
+               f"under the profile, a spawn of the relay pool {name} is refused as bad_request",
+               answered.stdout + answered.stderr)
 
 
 def test_connect(image):
@@ -260,25 +263,33 @@ def test_connect(image):
     # reader, since no client listens on the attach socket, so its exit
     # status is the answer. The client's shell, in the container's own
     # namespace, dials the same two first.
+    # Then it asks for a name, which no resolver of its own answers (the
+    # loopback is down), within a second, and it reads its IPC namespace,
+    # which is not the container's: exit 42 for all of it.
     command = ('n=0; for t in 127.0.0.1:9 "$TARGET:9"; do '
                'curl -sv --max-time 3 "http://$t/" 2>&1 | grep -q "Network is unreachable" && n=$((n+1)); done; '
+               'start=$(date +%s%N); getent hosts cyfr >/dev/null 2>&1 && exit 3; '
+               '[ $(( ($(date +%s%N) - start) / 1000000 )) -lt 1000 ] || exit 4; '
+               '[ "$(readlink /proc/self/ns/ipc)" != "$IPC" ] || exit 5; '
                '[ $n -eq 2 ] && exit 42; exit $n')
-    request = spawn_line("1", ["/bin/sh", "-c", command], env={"TARGET": "@ADDR@"})
+    request = spawn_line("1", ["/bin/sh", "-c", command], env={"TARGET": "@ADDR@", "IPC": "@IPC@"})
     assert "'" not in request
     client = ('addr=$(getent hosts "$(cat /etc/hostname)" | awk "{print \\$1; exit}"); '
               'for t in 127.0.0.1:9 "$addr:9"; do '
               'echo "own $t:$(curl -sv --max-time 3 "http://$t/" 2>&1 | grep -o "Connection refused\\|Network is unreachable" | head -n1)"; done; '
-              + PLACE_FIRST + f"printf '%s\\n' \"$(printf '%s' '{request}' | sed \"s/@ADDR@/$addr/\")\" >&3; "
+              'ipc=$(readlink /proc/self/ns/ipc); '
+              + PLACE_FIRST + f"printf '%s\\n' \"$(printf '%s' '{request}' | sed \"s/@ADDR@/$addr/; s/@IPC@/$ipc/\")\" >&3; "
               'read -r line <&3; echo "reply:$line"; read -r line <&3; echo "reply:$line"')
     ran = keeper_run(image, client)
     got = after_placed(ran, "connect")
     expect(len(got) == 2 and got[0]["type"] == "spawned" and POOL_FIRST <= got[0]["uid"] <= POOL_LAST,
-           "connect: under the profile the keeper serves and spawns a command of the isolated pool", ran.stdout + ran.stderr)
+           "connect: under the profile the keeper serves and spawns a command of the relay pool", ran.stdout + ran.stderr)
     own = re.findall(r"^own (\S+):(.*)$", ran.stdout, re.M)
     expect(len(own) == 2 and all(answer == "Connection refused" for _, answer in own),
            "connect: from the container's own namespace its loopback and its address answer (the dial is refused, not unreachable)", own)
     expect(got[1]["type"] == "exited" and got[1]["code"] == 42,
-           "connect: from the command's namespace neither the loopback nor the container's address is reachable: no route exists",
+           "connect: from the command's namespace neither the loopback nor the container's address is reachable (no route "
+           "exists), no name resolves at once, and its IPC namespace is its own",
            {"replies": got, "stdout": ran.stdout, "stderr": ran.stderr[-2000:]})
 
 
@@ -369,7 +380,7 @@ class Attach:
 
 
 def relay_session(image, command, opens, env=None):
-    """A spawn of the isolated pool running `command`, its relay served by this machine: the replies and what the relay carried."""
+    """A spawn of the relay pool running `command`, its relay served by this machine: the replies and what the relay carried."""
     attach = Attach()
     serving = threading.Thread(target=attach.serve, args=(opens,), daemon=True)
     serving.start()
@@ -380,7 +391,7 @@ def relay_session(image, command, opens, env=None):
                                 'for n in 1 2 3; do read -r line <&3; echo "reply:$line"; done')
         ran = keeper_run(image, client, mounts=[attach.mount])
         serving.join(60)
-        return after_placed(ran, "a spawn of the isolated pool with its relay"), attach.result, ran
+        return after_placed(ran, "a spawn of the relay pool with its relay"), attach.result, ran
     finally:
         attach.close()
 
@@ -390,7 +401,7 @@ def test_relay(image):
     # client opening stream 5 first, as the worker service does.
     got, carried, ran = relay_session(image, 'printf "call\\n" >&4; IFS= read -r a <&4; echo "got:$a"', opens=True)
     expect([r["type"] for r in got] == ["spawned", "exited", "released"] and got[1].get("code") == 0,
-           "relay: a spawn of the isolated pool whose client opens stream 5 runs to its exit", {"replies": got, "stderr": ran.stderr[-2000:]})
+           "relay: a spawn of the relay pool whose client opens stream 5 runs to its exit", {"replies": got, "stderr": ran.stderr[-2000:]})
     expect(carried and carried.get("got", {}).get(5) == b"call\n" and carried["got"].get(1) == b"got:answer\n" and 5 in carried["ended"],
            "relay: once the client opened stream 5, the runner's call on fd 4 arrives there, the client's answer reaches fd 4, and the stream ends",
            carried)
@@ -398,7 +409,7 @@ def test_relay(image):
     # runner that writes to its relay and exits, its end frame included.
     got, carried, ran = relay_session(image, 'printf "call\\n" >&4; echo done', opens=False)
     expect([r["type"] for r in got] == ["spawned", "exited", "released"] and got[1].get("code") == 0,
-           "relay: a spawn of the isolated pool whose client never opens stream 5 runs to its exit", {"replies": got, "stderr": ran.stderr[-2000:]})
+           "relay: a spawn of the relay pool whose client never opens stream 5 runs to its exit", {"replies": got, "stderr": ran.stderr[-2000:]})
     expect(carried and 5 not in carried.get("streams", [5]) and carried["got"].get(1) == b"done\n" and {1, 2, 4} <= set(carried["ended"]),
            "relay: a client that never opened stream 5 receives no frame on it, its end included, though the runner wrote to fd 4",
            carried)
@@ -432,7 +443,7 @@ def test_nested(image):
     detail = {"stdout": out, "stderr": (carried or {}).get("got", {}).get(2, b"").decode(errors="replace"), "replies": got,
               "keeper": ran.stderr[-2000:]}
     expect([r["type"] for r in got] == ["spawned", "exited", "released"] and got[1].get("code") == 0,
-           "nested: a spawn of the isolated pool runs the probe to its exit", detail)
+           "nested: a spawn of the relay pool runs the probe to its exit", detail)
     expect(facts.get("arch") in CLONE_NR, f"nested: the runner knows clone's number on {facts.get('arch')}", detail)
     expect(facts.get("process") == "ok", "nested: a runner's clone without a namespace flag makes a child (the probe's control)", detail)
     expect(facts.get("newuser") == "EPERM" and facts.get("newuser_newnet") == "EPERM",
@@ -481,7 +492,7 @@ WORK_TIMEOUT_MS = 120_000
 PLACES_CLIENT = r"""
 ask() {
   n=$((n + 1))
-  printf '{"v":3,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
+  printf '{"v":4,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
   while read -r line <&3; do
     echo "read:$1:$line"
     case "$line" in *"\"id\":\"m$n\","*) return 0 ;; esac
@@ -522,7 +533,7 @@ sid=$(printf '%s' "$line" | sed -n 's/.*"spawn_id":"\([0-9a-f]*\)".*/\1/p')
 [ -n "$sid" ] || exit 1
 @OWNERS@
 n=$((n + 1))
-printf '{"v":3,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":3,"type":"measure","id":"m%s","place":"%s"}\n' \
+printf '{"v":4,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":4,"type":"measure","id":"m%s","place":"%s"}\n' \
   "$sid" "$grace" "$n" "$place" >&3
 while read -r line <&3; do
   echo "read:release:$line"
@@ -545,7 +556,7 @@ def assigns():
     sent, before = {}, OWNERS[0][1:3]
     for step, kind, athanor, _ in OWNERS[1:]:
         if (kind, athanor) != before:
-            sent[step] = {"v": 3, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
+            sent[step] = {"v": 4, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
         before = (kind, athanor)
     return sent
 
@@ -620,14 +631,14 @@ def reading(reply, kind, athanor=None):
     """Whether `reply` answers its measure with a reading above zero of a place whose owner is `kind` and `athanor`, and nothing else."""
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 3, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
+    owner = {"v": 4, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(reply):
-    return isinstance(reply, dict) and reply == {"v": 3, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
+    return isinstance(reply, dict) and reply == {"v": 4, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
 
 
 def judge_places(read, detail):
@@ -635,15 +646,15 @@ def judge_places(read, detail):
     steps = {}
     for step, reply in read:
         steps.setdefault(step, []).append(reply)
-    expect(steps.get("placed") == [{"v": 3, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
+    expect(steps.get("placed") == [{"v": 4, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
            detail)
     spawned = (steps.get("spawned") or [None])[0]
     expect(isinstance(spawned, dict)
-           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 3, "type": "spawned", "id": "1"}
+           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 4, "type": "spawned", "id": "1"}
            and re.fullmatch(r"[0-9a-f]{32}", str(spawned.get("spawn_id"))) is not None
            and type(spawned.get("uid")) is int and POOL_FIRST <= spawned["uid"] <= POOL_LAST
            and type(spawned.get("pid")) is int and spawned["pid"] > 0,
-           "measure: the runner is spawned in its place, under a uid of the isolated pool", detail)
+           "measure: the runner is spawned in its place, under a uid of the relay pool", detail)
     ids = [reply.get("id") for step, reply in read
            if not step.endswith(".assign") and isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
     expect(ids == [f"m{n}" for n in range(1, len(ids) + 1)], "measure: every measure was answered once, under its own id, in the order sent",
@@ -651,7 +662,7 @@ def judge_places(read, detail):
     sent = assigns()
     for step, kind, athanor, what in OWNERS:
         if step in sent:
-            expect(steps.get(f"{step}.assign") == [{"v": 3, "type": "assigned", "id": sent[step]["id"]}],
+            expect(steps.get(f"{step}.assign") == [{"v": 4, "type": "assigned", "id": sent[step]["id"]}],
                    f"measure: before {step}, the keeper applied the assign of {kind} for {athanor} and answered it under its id, "
                    "and nothing else came before that answer", detail)
         got = steps.get(step, [])
@@ -668,7 +679,7 @@ def judge_places(read, detail):
     released = steps.get("release", [])
     end = next((n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") == "released"), None)
     measures = [n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
-    expect(end is not None and released[end] == {"v": 3, "type": "released", "spawn_id": spawned["spawn_id"]}
+    expect(end is not None and released[end] == {"v": 4, "type": "released", "spawn_id": spawned["spawn_id"]}
            and len(measures) == 1 and measures[0] < end and reading(released[measures[0]], kind, athanor),
            "measure: after its release, the runner's place is still read above zero, answered before its released", detail)
     after = steps.get("after", [])
@@ -846,6 +857,7 @@ def runner_facts(stack, runner):
               f"echo setgroups=$(cat /proc/{pid}/setgroups); echo cgroup=$(cat /proc/{pid}/cgroup); "
               f"grep -E \"^(Cap(Inh|Prm|Eff|Bnd|Amb)|NoNewPrivs|Groups):\" /proc/{pid}/status | tr -d \"\\t\" | sed \"s/:/=/\"; "
               f"echo net=$(readlink /proc/{pid}/ns/net); echo user=$(readlink /proc/{pid}/ns/user); "
+              f"echo ipc=$(readlink /proc/{pid}/ns/ipc); "
               f"echo interfaces=$(tail -n +3 /proc/{pid}/net/dev | cut -d: -f1 | tr -d \" \" | tr \"\\n\" \" \"); "
               f"echo routes=$(tail -n +2 /proc/{pid}/net/route | wc -l); "
               f"for fd in /proc/{pid}/fd/*; do echo \"fd=${{fd##*/}} $(readlink $fd)\"; done")
@@ -862,8 +874,9 @@ def runner_facts(stack, runner):
 
 def service_namespaces(stack):
     beam = stack.service_beam_pid()
-    out = stack.as_uid(SERVICE_UID, f"readlink /proc/{beam}/ns/net; readlink /proc/{beam}/ns/user; readlink /proc/{beam}/fd/3").stdout.split()
-    return {"net": out[0], "user": out[1], "channel": out[2]} if len(out) == 3 else None
+    out = stack.as_uid(SERVICE_UID, f"readlink /proc/{beam}/ns/net; readlink /proc/{beam}/ns/user; readlink /proc/{beam}/ns/ipc; "
+                                    f"readlink /proc/{beam}/fd/3").stdout.split()
+    return {"net": out[0], "user": out[1], "ipc": out[2], "channel": out[3]} if len(out) == 4 else None
 
 
 def assert_isolated(stack, runner, label):
@@ -897,8 +910,10 @@ def test_network(stack):
     expect(own is not None, "the service's namespaces are read", own)
     for runner in stack.runner_processes():
         facts = runner_facts(stack, runner)
-        expect(facts.get("net") and facts.get("net") != own["net"] and facts.get("user") != own["user"],
-               f"network: runner uid {runner['uid']} has a network and a user namespace of its own", {"runner": facts, "service": own})
+        expect(facts.get("net") and facts.get("net") != own["net"] and facts.get("user") != own["user"]
+               and facts.get("ipc") and facts.get("ipc") != own["ipc"],
+               f"network: runner uid {runner['uid']} has a network, a user and an IPC namespace of its own",
+               {"runner": facts, "service": own})
         expect(facts.get("interfaces") == "lo" and facts.get("routes") == "0",
                f"network: runner uid {runner['uid']}'s namespace holds the loopback alone and no route", facts)
 

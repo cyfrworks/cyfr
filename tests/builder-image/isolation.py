@@ -24,20 +24,21 @@
   deployment that lacks it would be, the service answers every build
   `unavailable`, naming the option, and runs nothing: no build is ever run
   without its memory bound (tests/builder-image/memory.py proves the bound).
-- The builder listens in the namespace of its egress guard, the image under
-  test holding NET_ADMIN alone, and a build leaves only through the guard's
-  rules: its connections to cyfr's name on the builds network and to
-  cyfr's fixed endpoint address (a stand-in answers both to a container
-  outside the guard), to the metadata and link-local addresses of both
-  families, to other private addresses (RFC 1918, CGNAT, benchmarking, a
-  NAT64 form of a private address) and to the island's own loopback are
-  refused at once, and its datagrams to an IPv4 and an IPv6 multicast
-  group are refused as they are sent, each counted on the guard's own
-  rule; the resolver and the public registry are reached (the registry
-  step is skipped, with its reason, under CYFR_TEST_OFFLINE=1).
-- A build's listener on the shared loopback is reached by the container's
-  root and refused to a concurrent build of another uid, on the loopback,
-  on `::1` and on the island's own address.
+- Every build runs in a space of its own, a user, network and IPC
+  namespace, with its own loopback and one route, its guard's. The
+  builder listens in the namespace of its egress guard, the image under
+  test holding NET_ADMIN alone, and a build leaves only through its
+  route's rules: its connections to cyfr's name on the builds network and
+  to cyfr's fixed endpoint address (a stand-in answers both to a container
+  outside the guard), to the IPv4 metadata addresses, to other private
+  addresses (RFC 1918, CGNAT, benchmarking) and to the island's own
+  address are refused at once, each counted on the guard's own rule; IPv6
+  has no route out of a space; its names are answered by the guard on the
+  space's own 127.0.0.11:53; and the public registry is reached (skipped,
+  with its reason, under CYFR_TEST_OFFLINE=1).
+- A build's listener on its own loopback is its own: the container's root
+  and a concurrent build of another uid find nothing there, and the other
+  build listens on the same port at the same time, reaching its own.
 - A guard started with an ip6tables that fails writes no ready file, never
   turns healthy, names the rule that failed, and the builder behind it is
   never started.
@@ -173,17 +174,17 @@ set -u
 mkdir -p dist
 getent hosts cyfr > dist/cyfr.txt 2>&1; echo "status=$?" >> dist/cyfr.txt
 node probe.js targets "cyfr:4000" "@STAND_IN_V4@:4000" "[@STAND_IN_V6@]:4000" "@ENDPOINT@:4000" "169.254.169.254:80" \
-  "100.100.100.200:80" "192.0.0.192:80" "[fd00:ec2::254]:80" "[fe80::1%eth0]:80" "10.1.2.3:80" "100.64.0.1:80" \
-  "198.18.0.1:80" "[64:ff9b::a01:203]:80" "127.0.0.11:53" "127.0.0.1:1" @REGISTRY@ > dist/egress.txt 2>&1
-node dgram.js targets "224.0.0.1:9" "[ff0e::1]:9" > dist/dgram.txt 2>&1
+  "100.100.100.200:80" "192.0.0.192:80" "[fd00:ec2::254]:80" "10.1.2.3:80" "100.64.0.1:80" \
+  "198.18.0.1:80" "[64:ff9b::a01:203]:80" "@OWN@:@PORT@" "127.0.0.11:53" "127.0.0.1:1" @REGISTRY@ > dist/egress.txt 2>&1
 if [ -n "@REGISTRY@" ]; then
   curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry.npmjs.org/ > dist/registry.txt 2>&1
 fi
 """
 
-# A build that listens on the shared loopback, on every address, and waits
-# for a concurrent build to try it; and that build, which tries the
-# loopback, `::1` and the island's own address.
+# A build that listens on its own loopback, on every address, and waits
+# for a concurrent build to try that port; and that build, which tries the
+# port on its own loopback and `::1`, then listens on it itself and reaches
+# its own listener.
 SIBLING_PORT = 47331
 SIBLING_LISTENER = r"""
 set -eu
@@ -197,33 +198,16 @@ SIBLING_INTRUDER = r"""
 set -u
 mkdir -p dist
 id -u > dist/uid.txt
-node probe.js targets "127.0.0.1:@PORT@" "[::1]:@PORT@" "@OWN@:@PORT@" > dist/sibling.txt 2>&1
+node probe.js targets "127.0.0.1:@PORT@" "[::1]:@PORT@" > dist/sibling.txt 2>&1
+node -e "require('http').createServer((q, s) => s.end('own ' + process.getuid())).listen(@PORT@, '::')" > dist/listener.log 2>&1 &
+sleep 1
+curl -sS --max-time 3 http://127.0.0.1:@PORT@/ > dist/own.txt 2>&1
+kill %1
 """.replace("@PORT@", str(SIBLING_PORT))
-
-
-# A probe of one datagram per target, run by node under a spawn's uid: for
-# each `host:port` after the argument `targets` (an IPv6 host in
-# brackets), the code the send answers with, or `sent`. A TCP connect to a
-# multicast group is refused by the kernel before any rule sees it, so a
-# group is probed with a datagram; the guard's rule drops it, which the
-# send answers EPERM, since no ICMP error answers a multicast destination.
-DGRAM_PROBE = r"""
-const dgram = require("dgram");
-(async () => {
-  const lines = [];
-  for (const target of process.argv.slice(process.argv.indexOf("targets") + 1)) {
-    const at = target.lastIndexOf(":");
-    const host = target.slice(0, at).replace(/^\[|\]$/g, "");
-    const code = await new Promise((resolve) => {
-      const socket = dgram.createSocket(host.includes(":") ? "udp6" : "udp4");
-      socket.on("error", (error) => { socket.close(); resolve(error.code || String(error)); });
-      socket.send("probe", Number(target.slice(at + 1)), host, (error) => { socket.close(); resolve(error ? error.code || String(error) : "sent"); });
-    });
-    lines.push(`${target}=${code}`);
-  }
-  console.log(lines.join("\n"));
-})();
-"""
+# A space has no IPv6 route: an IPv6 connection never leaves it. Its own
+# loopback with nothing listening refuses at once.
+UNROUTED = ("ENETUNREACH",)
+OWN_NOTHING = ("ECONNREFUSED",)
 
 
 def pool_user(uid):
@@ -416,35 +400,31 @@ def test_egress(stack):
     registry = "" if offline else "registry.npmjs.org:443"
     stand_in_v4, stand_in_v6 = stand_in_addresses(stack)
     expect(stand_in_v4 and stand_in_v6, "the stand-in holds an address of each family on the builds network", [stand_in_v4, stand_in_v6])
+    own = island_address(stack)
     before = stack.guard_counters()
     script = (EGRESS.replace("@ENDPOINT@", ENDPOINT_ADDRESS).replace("@REGISTRY@", registry)
-              .replace("@STAND_IN_V4@", stand_in_v4).replace("@STAND_IN_V6@", stand_in_v6))
-    status, answer = stack.build(tincture(script, {"probe.js": CONNECT_PROBE, "dgram.js": DGRAM_PROBE}), "javascript", "tincture")
+              .replace("@STAND_IN_V4@", stand_in_v4).replace("@STAND_IN_V6@", stand_in_v6)
+              .replace("@OWN@", own).replace("@PORT@", str(PORT)))
+    status, answer = stack.build(tincture(script, {"probe.js": CONNECT_PROBE}), "javascript", "tincture")
     expect(status == 200, "the egress probe build succeeds", brief(answer))
     after = stack.guard_counters()
     codes = fields(output_file(answer, "egress.txt"))
-    datagrams = fields(output_file(answer, "dgram.txt"))
-    detail = {"codes": codes, "datagrams": datagrams, "cyfr": output_file(answer, "cyfr.txt"),
-              "registry": output_file(answer, "registry.txt")}
+    detail = {"codes": codes, "cyfr": output_file(answer, "cyfr.txt"), "registry": output_file(answer, "registry.txt")}
     expect(codes.get("cyfr:4000") in REFUSED and codes.get(f"{stand_in_v4}:4000") in REFUSED
-           and codes.get(f"[{stand_in_v6}]:4000") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED,
-           "a build's connections to cyfr:4000, to cyfr's address of each family on the builds network and to cyfr's fixed "
-           "endpoint address are refused by the guard", detail)
+           and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED and codes.get(f"{own}:{PORT}") in REFUSED,
+           "a build's connections to cyfr:4000, to cyfr's address on the builds network, to cyfr's fixed endpoint address "
+           "and to the island's own address are refused by the guard", detail)
     expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED
            and codes.get("192.0.0.192:80") in REFUSED,
            "a build's connections to the IPv4 metadata addresses are refused", detail)
-    expect(codes.get("[fd00:ec2::254]:80") in REFUSED and codes.get("[fe80::1%eth0]:80") not in (None, "connected"),
-           "a build's connections to the IPv6 metadata and link-local addresses are refused", detail)
-    expect(codes.get("10.1.2.3:80") in REFUSED, "a build's connection to another private address is refused", detail)
-    expect(codes.get("100.64.0.1:80") in REFUSED and codes.get("198.18.0.1:80") in REFUSED
-           and codes.get("[64:ff9b::a01:203]:80") in REFUSED,
-           "a build's connections to a CGNAT address, a benchmarking address and the NAT64 form of a private address are refused",
-           detail)
-    expect(datagrams.get("224.0.0.1:9") == "EPERM" and datagrams.get("[ff0e::1]:9") == "EPERM",
-           "a build's datagrams to an IPv4 and an IPv6 multicast group are refused as they are sent", detail)
-    expect(codes.get("127.0.0.1:1") in REFUSED, "a build's connection to the island's loopback is refused", detail)
+    expect(codes.get("10.1.2.3:80") in REFUSED and codes.get("100.64.0.1:80") in REFUSED and codes.get("198.18.0.1:80") in REFUSED,
+           "a build's connections to another private, a CGNAT and a benchmarking address are refused", detail)
+    expect(all(codes.get(t) in UNROUTED for t in [f"[{stand_in_v6}]:4000", "[fd00:ec2::254]:80", "[64:ff9b::a01:203]:80"]),
+           "a build's IPv6 connections, metadata, cyfr's and a NAT64 form of a private address among them, have no route "
+           "out of its space", detail)
+    expect(codes.get("127.0.0.1:1") in OWN_NOTHING, "a build's own loopback holds nothing of anyone else's", detail)
     expect(codes.get("127.0.0.11:53") == "connected" and "status=0" in (output_file(answer, "cyfr.txt") or ""),
-           "a build reaches Docker's resolver, over TCP and for cyfr's name", detail)
+           "a build's names are answered on its own 127.0.0.11:53, over TCP and for cyfr's name", detail)
     if offline:
         print("skip: registry.npmjs.org:443 is not reached from a build: CYFR_TEST_OFFLINE=1 says this host has no public network",
               flush=True)
@@ -452,56 +432,58 @@ def test_egress(stack):
         expect(codes.get("registry.npmjs.org:443") == "connected" and output_file(answer, "registry.txt") == "200",
                "a build reaches the public registry", detail)
 
-    # Each refusal, and the resolver's exception, was the guard's own rule:
-    # that rule's counter rose while the build ran. The island's subnets are
-    # matched as networks, since the guard logs them in full and
-    # ip6tables-save prints them compressed.
+    # Each refusal was the guard's own rule for every space: that rule's
+    # counter rose while the build ran.
     rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after}
     matched = {fragment: any(count > 0 for rule, count in rose.items() if fragment in rule)
-               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", "-d 192.0.0.192/32", f"-d {ENDPOINT_ADDRESS}/32",
-                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8", "-d 100.64.0.0/10",
-                                "-d 198.18.0.0/15", "-d 64:ff9b::a00:0/104", "-d 224.0.0.0/4", "-d ff00::/8",
-                                "--dst-type LOCAL -j REJECT", "--ctorigdst 127.0.0.11"]}
-    for address in (stand_in_v4, stand_in_v6):
-        matched[f"the island subnet holding {address}"] = island_rule_counted(rose, subnets, address)
-    expect(all(matched.values()), "each refusal and the resolver's exception counted on the guard's own rule", {"rose": rose, "matched": matched})
+               for fragment in ["CYFR_GUARD_REFUSE -d 169.254.0.0/16", "CYFR_GUARD_REFUSE -d 100.100.100.200/32",
+                                "CYFR_GUARD_REFUSE -d 192.0.0.192/32", f"CYFR_GUARD_REFUSE -d {ENDPOINT_ADDRESS}/32",
+                                "CYFR_GUARD_PRIVATE -d 10.0.0.0/8", "CYFR_GUARD_PRIVATE -d 100.64.0.0/10",
+                                "CYFR_GUARD_PRIVATE -d 198.18.0.0/15"]}
+    matched["the island subnet holding cyfr"] = island_rule_counted(rose, subnets, stand_in_v4)
+    expect(all(matched.values()), "each refusal counted on the guard's own rule", {"rose": rose, "matched": matched})
+    answered = None
+    for _ in range(100):
+        answered = re.search(r"route sp\d+ of spawn \S+ withdrawn; it answered [1-9]\d* names", stack.guard_logs())
+        if answered:
+            break
+        time.sleep(0.1)
+    expect(answered, "the build's route, withdrawn at its end, answered its names", stack.guard_logs()[-2000:])
 
 
-def test_sibling_loopback(stack):
+def test_own_loopback(stack):
     results = {}
 
     def build(name, script):
         results[name] = stack.build(tincture(script, {"probe.js": CONNECT_PROBE}), "javascript", "tincture")
 
-    own = island_address(stack)
     listener = threading.Thread(target=build, args=("listener", SIBLING_LISTENER))
     listener.start()
-    control = None
+    # The listening build is running once its pool uid has a process.
     for _ in range(150):
-        control = stack.exec(f"curl -sS --max-time 2 http://127.0.0.1:{SIBLING_PORT}/")
-        if control.returncode == 0 and control.stdout.startswith("sibling "):
+        if stack.pool_processes():
             break
         time.sleep(0.1)
-    expect(control is not None and control.stdout.startswith("sibling "),
-           "a build's listener on the shared loopback answers the container's root", control and control.stdout + control.stderr)
-    before = stack.guard_counters()
-    build("intruder", SIBLING_INTRUDER.replace("@OWN@", own))
+    time.sleep(1)
+    control = stack.exec(f"curl -sS --max-time 2 http://127.0.0.1:{SIBLING_PORT}/ 2>&1; echo status=$?")
+    expect("status=7" in control.stdout, "the container's root finds nothing on the build's port: the listener is in its space",
+           control.stdout)
+    build("intruder", SIBLING_INTRUDER)
     listener.join()
-    after = stack.guard_counters()
 
     status, answer = results["intruder"]
-    expect(status == 200, "the intruding build succeeds", brief(answer))
+    expect(status == 200, "the other build succeeds", brief(answer))
     expect(results["listener"][0] == 200, "the listening build completes undisturbed", brief(results["listener"][1]))
     listening_uid = (output_file(results["listener"][1], "uid.txt") or "").strip()
     intruding_uid = (output_file(answer, "uid.txt") or "").strip()
     codes = fields(output_file(answer, "sibling.txt"))
-    detail = {"codes": codes, "listener": listening_uid, "intruder": intruding_uid, "control": control.stdout}
-    expect(listening_uid and intruding_uid and listening_uid != intruding_uid and control.stdout == f"sibling {listening_uid}",
-           "the two builds ran under different uids, and the listener was the first's", detail)
-    expect(all(codes.get(target) in REFUSED for target in [f"127.0.0.1:{SIBLING_PORT}", f"[::1]:{SIBLING_PORT}", f"{own}:{SIBLING_PORT}"]),
-           "the other build's connections to the listener, on the loopback, on ::1 and on the island's own address, are refused", detail)
-    rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after if "--dst-type LOCAL -j REJECT" in rule}
-    expect(sum(rose.values()) >= 3, "each refusal counted on the guard's loopback rule for the island's uids", rose)
+    own = (output_file(answer, "own.txt") or "").strip()
+    detail = {"codes": codes, "listener": listening_uid, "intruder": intruding_uid, "own": own}
+    expect(listening_uid and intruding_uid and listening_uid != intruding_uid,
+           "the two builds ran at once under different uids", detail)
+    expect(all(codes.get(target) in OWN_NOTHING for target in [f"127.0.0.1:{SIBLING_PORT}", f"[::1]:{SIBLING_PORT}"]),
+           "the other build finds nothing on that port of its own loopback, on 127.0.0.1 and ::1", detail)
+    expect(own == f"own {intruding_uid}", "the other build listens on the same port at once and reaches its own listener", detail)
 
 
 def test_guard_failure(image, canary):
@@ -613,7 +595,10 @@ def test_guard_unreadable(image, canary):
 def test_no_bound_no_build(stack):
     stack.up(writable_cgroups=False)
     options = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]["SecurityOpt"]
-    expect(options == ["no-new-privileges:true"], "the service is started without the writable-cgroups=true option", options)
+    expect(options[0] == "no-new-privileges:true" and len(options) == 2 and options[1].startswith("seccomp=")
+           and not any("writable-cgroups" in o for o in options),
+           "the service is started without the writable-cgroups=true option, under the keeper's seccomp profile",
+           [o[:60] for o in options])
     expect(all(toolchain["available"] for toolchain in stack.health["toolchains"].values()),
            "it starts and answers health as the shipped service does", stack.health)
 
@@ -635,7 +620,7 @@ def main(image):
         test_build_identity(stack)
         test_concurrent_trees(stack)
         test_egress(stack)
-        test_sibling_loopback(stack)
+        test_own_loopback(stack)
         test_no_survivors(stack)
         test_residue(stack)
         test_no_bound_no_build(stack)
