@@ -1401,6 +1401,13 @@ jobs:
       - name: Build isolation, uid reuse, and the refusal without the option
         run: python3 tests/builder-image/isolation.py cyfr-locus:smoke
 
+      # The release's boot check on this run's image (scripts/ci/image-boots.sh,
+      # which release.yml's images job runs on a tag): the Locus image behind
+      # its builds island's guard, as compose starts it, healthy by its own
+      # probe.
+      - name: The Locus image boots as the release checks it
+        run: scripts/ci/image-boots.sh cyfr-locus cyfr-locus:smoke
+
       # Every case: the keeper's own bound in the running service, and a
       # hostile JavaScript, Rust build.rs, process-tree and home-filling
       # build each ended at its 1 GiB bound as the wire's `memory` class
