@@ -159,13 +159,14 @@ esac
 release_of() { "$CARRIED" --version 2>/dev/null | sed -n '1s/^cyfr version //p' | tr -d '\r'; }
 
 # The installed app's main processes, by the system's own ids: its
-# executable with no engine --type, which its helpers carry.
+# executable with no engine --type, which its helpers carry, alone or with
+# --updated, as the update Update CYFR started opens it again.
 app_pids() {
   if [ "$OS" = windows ]; then
     pwsh -NoProfile -NonInteractive -Command \
       "Get-CimInstance Win32_Process -Filter \"Name='CYFR.exe'\" | Where-Object { \$_.ExecutablePath -eq '$(cygpath -w "$APP")' -and \$_.CommandLine -notmatch '--type=' } | ForEach-Object { \$_.ProcessId }" | tr -d '\r'
   else
-    pgrep -x -f "$APP"
+    pgrep -x -f "$APP( --updated)?"
   fi
 }
 first_pid() { app_pids | sort -n | head -1; }
