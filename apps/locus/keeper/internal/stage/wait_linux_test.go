@@ -62,6 +62,10 @@ func TestTheWaiterNeverSignalsAPidItReaped(t *testing.T) {
 // runs the waiter on a short-lived child, lets the waiter reap it, gives
 // its pid to a process that records a SIGUSR1, and sends the waiter one.
 func recycleUnderTheWaiter(t *testing.T) {
+	// The exit word's pipe ends when this process closes its write end:
+	// no process it starts holds either end.
+	syscall.CloseOnExec(waitExitFD)
+	syscall.CloseOnExec(waitExitFD + 1)
 	// The namespace's own /proc, at the one place the space's profile lets
 	// a proc be mounted, gives the namespace's next pid to set.
 	proc := filepath.Join(Root, "proc")
@@ -130,7 +134,7 @@ func recycleUnderTheWaiter(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(marks, "got")); err == nil {
 		t.Errorf("the waiter passed its signal to pid %d, given to another process after it reaped its init", pid)
 	}
-	_ = os.NewFile(4, "exit-word").Close()
+	_ = os.NewFile(waitExitFD+1, "exit-word").Close()
 	select {
 	case <-ended:
 	case <-time.After(5 * time.Second):
