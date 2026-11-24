@@ -377,10 +377,28 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
 
       wait_until(fn -> ScriptedHost.requests(context.host, "runner_exited") != [] end, 5_000)
 
-      assert [%{args: %{"attempts" => held}}] =
+      assert [%{args: %{"attempts" => held} = args}] =
                ScriptedHost.requests(context.host, "runner_exited")
 
       assert Enum.sort(held) == Enum.sort([root.attempt, "att_child"])
+      refute Map.has_key?(args, "refusal")
+    end
+
+    # The pool tells a runner's assignee the keeper's refusal of it
+    # (`Locus.Runtime.RunnerPool`, "A keeper that refuses runners").
+    test "a runner the keeper refused after the start was answered is reported with its refusal",
+         context do
+      {root, runner} = started!(context)
+      refusal = %{reason: "uid_exhausted", message: "the scripted keeper refuses (uid_exhausted)"}
+      send(WorkerService, {Locus.Runtime.RunnerPool, runner.owner, {:gone, {:refused, refusal}}})
+
+      wait_until(fn -> ScriptedHost.requests(context.host, "runner_exited") != [] end, 5_000)
+
+      assert [%{args: %{"attempts" => [attempt], "refusal" => wire}}] =
+               ScriptedHost.requests(context.host, "runner_exited")
+
+      assert attempt == root.attempt
+      assert WorkerAPI.read_refusal(wire) == {:ok, refusal}
     end
 
     test "a cancelled child the runner's exit leaves out is reported with its root", context do

@@ -44,7 +44,7 @@ defmodule Locus.Runtime.WorkerService do
   every attempt one runner holds was issued by one member, and no other
   lapses them — naming that member and the runner the service assigned,
   never the one an `exit` names, and signed with the
-  service's dispatch key (`Locus.Runtime.HostClient.runner_exited/5`). The report
+  service's dispatch key (`Locus.Runtime.HostClient.runner_exited/6`). The report
   names every attempt the service assigned that runner: the subtree's
   root, then every child the runner said it started, then what its `exit`
   lists that the service does not hold. A runner leaves a cancelled child
@@ -520,18 +520,23 @@ defmodule Locus.Runtime.WorkerService do
 
   # A runner gone with its subtree assigned is reported holding the
   # subtree's root and every child it said it started: the attempts the
-  # service knows it held. CYFR lapses the ones still running.
-  defp gone(state, pid, _reason) do
+  # service knows it held. CYFR lapses the ones still running. One the
+  # keeper refused is reported with the keeper's code and sentence, which
+  # a run its runner never took closes with.
+  defp gone(state, pid, reason) do
     case Map.get(state.assigned, pid) do
       nil ->
         state
 
       assignment ->
         state
-        |> report(assignment.runner, assignment, [])
+        |> report(assignment.runner, assignment, [], refusal(reason))
         |> forget(pid)
     end
   end
+
+  defp refusal({:refused, %{reason: _, message: _} = refusal}), do: refusal
+  defp refusal(_reason), do: nil
 
   # A child the runner said it started joins what the service holds for
   # it, unless it would take the subtree's root and every child it started
@@ -674,12 +679,14 @@ defmodule Locus.Runtime.WorkerService do
 
   # A report of the end of `runner`, which held `assignment` and whose
   # `exit` listed `open`, runs in a process of its own beside the service,
-  # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/5`
+  # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/6`
   # bounds it. The service holds each report it starts, linked, from the
   # callback that starts it until the report ends (`:reports`, by pid), so
   # no report is in flight that the service does not hold, and none
   # outlives the service.
-  defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open) do
+  defp report(state, runner, assignment, open, refusal \\ nil)
+
+  defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open, refusal) do
     {attempts, left_out} = named(assignment, open)
 
     pid =
@@ -695,7 +702,7 @@ defmodule Locus.Runtime.WorkerService do
           )
         end
 
-        case HostClient.runner_exited(credentials, assignment.at, boot, runner, attempts) do
+        case HostClient.runner_exited(credentials, assignment.at, boot, runner, attempts, refusal) do
           :ok ->
             :ok
 

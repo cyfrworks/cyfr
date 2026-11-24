@@ -66,7 +66,8 @@ defmodule Locus.Runtime.RunnerPool do
   A runner the keeper refuses to start (`{:refused, reason}` from its
   handle: no process of it ever ran, so there is nothing to retire) leaves
   the pool at once, and its assignee, if it had one, hears
-  `{:gone, {:refused, reason}}`. One the keeper refused after it made
+  `{:gone, {:refused, refusal}}`, the keeper's own code and sentence for
+  it (`c:Locus.Runtime.Keeper.refusal/1`). One the keeper refused after it made
   something of it (`{:refused, reason, :release_follows}`) is told of the
   same way but stays, `refused`, until the keeper reports it released:
   never handed out, counted `tainted` in `status/1` and asked no
@@ -478,19 +479,19 @@ defmodule Locus.Runtime.RunnerPool do
   # A spawn whose answer never came may still have been written: its
   # handle is stopped, and the runner held as a dead handle's is.
   defp on_event({:refused, {:keeper_unavailable, :timeout} = reason}, pid, entry, state) do
-    state = told(state, pid, entry, {:gone, {:refused, reason}})
+    state = told(state, pid, entry, {:gone, {:refused, state.keeper.refusal(reason)}})
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
     refused(state, reason)
   end
 
   defp on_event({:refused, reason}, pid, entry, state) do
-    state = told(state, pid, entry, {:gone, {:refused, reason}})
+    state = told(state, pid, entry, {:gone, {:refused, state.keeper.refusal(reason)}})
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
     refused(forget(state, pid), reason)
   end
 
   defp on_event({:refused, reason, :release_follows}, pid, entry, state) do
-    state = told(state, pid, entry, {:gone, {:refused, reason}})
+    state = told(state, pid, entry, {:gone, {:refused, state.keeper.refusal(reason)}})
     refused(put_runner(state, pid, %{state.runners[pid] | state: :refused}), reason)
   end
 

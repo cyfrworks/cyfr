@@ -968,6 +968,26 @@ defmodule PrismWeb.ProgramsLiveTest do
     assert output!(second, session) == "still\r\n"
   end
 
+  test "the frame says when the part that runs programs restarted, and how to go on",
+       %{conn: conn, athanor: athanor} do
+    fake = controller!()
+    _row = driven_row!(athanor)
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    session = open!(view, "claude")
+    ready!(view, session)
+
+    Scripted.restart(fake, "bb_again")
+
+    assert eventually(fn ->
+             has_element?(
+               view,
+               ~s([data-test="terminal-ended"]),
+               "The program stopped because CYFR restarted the part that runs programs. " <>
+                 "Open it again to go on."
+             )
+           end)
+  end
+
   test "the frame says when its program ended, and that a session no longer running is gone",
        %{conn: conn, athanor: athanor} do
     fake = controller!()

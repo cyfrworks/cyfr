@@ -42,8 +42,10 @@ defmodule Opus.Programs.Terminal do
   It ends, and only then:
 
     * `:exited`: the program exited, or the service no longer runs it
-      (its answer says so, the service was started again, or it could
-      not be read for a minute);
+      (its answer says so, or it could not be read for a minute);
+    * `:restarted`: the service it ran on started again (a read refused
+      for a stale boot, or the box syncing the owner again once the
+      session stood), which a turn's session meets as `:exited`;
     * `:closed`: `close/2` was accepted, carried out by this process
       whether or not the caller still waits, and the box said the place
       is back;
@@ -420,6 +422,9 @@ defmodule Opus.Programs.Terminal do
       else: finish(state, :exited)
   end
 
+  def handle_info({:read_failed, {:refused, :stale_boot, _boot}}, state),
+    do: finish(state, :restarted)
+
   def handle_info({:read_failed, _reason}, state), do: finish(state, :exited)
 
   # The browser's session lives as long as the process that holds it,
@@ -502,7 +507,7 @@ defmodule Opus.Programs.Terminal do
   def handle_info({Opus.Programs, :owner, grant}, %{session: nil} = state),
     do: {:noreply, %{state | grant: grant}}
 
-  def handle_info({Opus.Programs, :owner, _grant}, state), do: finish(state, :exited)
+  def handle_info({Opus.Programs, :owner, _grant}, state), do: finish(state, :restarted)
 
   # The reader ends of itself once it has read the program's end. One
   # that dies otherwise leaves nothing reading the session, so it ends as
@@ -576,18 +581,19 @@ defmodule Opus.Programs.Terminal do
 
   defp listed?(state, principal), do: yours?(state, principal)
 
-  # How a session ends. A turn's whose program exited by itself closes its
-  # session and lets its owner go, as every ending does, and stays to
-  # answer its last output and its ending until its turn ends or stops
-  # it; every other ending stops the process, whose `terminate/2` does
-  # the same.
-  defp finish(%{turn_id: turn_id, ended: nil} = state, :exited) when turn_id != nil do
-    state = state |> stop_reader() |> ended(:exited)
+  # How a session ends. A turn's whose program exited by itself, or whose
+  # service started again, closes its session and lets its owner go, as
+  # every ending does, and stays to answer its last output and its ending
+  # until its turn ends or stops it; every other ending stops the
+  # process, whose `terminate/2` does the same.
+  defp finish(%{turn_id: turn_id, ended: nil} = state, reason)
+       when turn_id != nil and reason in [:exited, :restarted] do
+    state = state |> stop_reader() |> ended(reason)
     if state.session, do: close_session(state)
     if state.grant, do: Opus.Programs.release(state.owner)
     with {timer, _token} <- state.idle, do: Process.cancel_timer(timer)
 
-    state = %{state | session: nil, grant: nil, idle: nil, ended: :exited}
+    state = %{state | session: nil, grant: nil, idle: nil, ended: reason}
     {:noreply, answer_waiters(state)}
   end
 

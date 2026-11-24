@@ -698,6 +698,15 @@ defmodule Opus.Programs.TerminalTest do
       assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: :exited}, 2_000
     end
 
+    test "when the service it ran on started again, telling whoever is attached so",
+         %{ctx: ctx, row: row, fake: fake} do
+      {id, _session} = start!(ctx, row)
+      {:ok, _} = Programs.attach(ctx, id)
+      Scripted.restart(fake, "bb_again")
+      assert_receive {Opus.Programs, ^id, {:ended, :restarted}}, 3_000
+      assert_receive %Cyfr.Bus.Program{kind: :ended, session: ^id, reason: :restarted}, 2_000
+    end
+
     # A reader that died left the session listed and unread for good.
     test "when nothing can read it any more, and is closed", %{ctx: ctx, row: row} do
       {id, session} = start!(ctx, row)

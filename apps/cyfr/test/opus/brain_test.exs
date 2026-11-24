@@ -1181,6 +1181,25 @@ defmodule Opus.BrainTest do
       refute_sent()
     end
 
+    test "a driver that says why it ends ends the session with that why, never its words",
+         %{fake: fake, row: row, brain: {_pid, ref}} do
+      say(fake, row, %{"t" => "ending", "why" => "servers_unlisted"})
+      Scripted.end_sessions(fake, row.id)
+      assert_receive {Brain, ^ref, {:ended, {:exited, :servers_unlisted}}}, 5_000
+    end
+
+    test "an ending outside the wire's endings is a line that does not read",
+         %{fake: fake, row: row, brain: {_pid, ref}} do
+      say(fake, row, %{"t" => "ending", "why" => "ENOENT /home/person/.config"})
+      assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
+    end
+
+    test "a service that started again ends the session as restarted, not as the driver's exit",
+         %{fake: fake, brain: {_pid, ref}} do
+      Scripted.restart(fake, "bb_again")
+      assert_receive {Brain, ^ref, {:ended, :restarted}}, 5_000
+    end
+
     test "the holder's death closes its session, and the next opens a driver that has heard nothing",
          %{fake: fake, row: row, binding: binding, brain: {pid, _ref}} do
       [{first, _}] = running_sessions(fake, row)

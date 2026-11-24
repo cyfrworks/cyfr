@@ -21,13 +21,82 @@ import (
 
 // Fatal ends the driver with a status: the protocol was broken (2), or the
 // harness ended or could not run (its status, or 1). Its reason goes to
-// the driver's standard error, never to the wire.
-type Fatal struct {
-	Status int
-	Reason string
+// the driver's standard error, never to the wire, since it may carry a
+// system's words, a path or the program's own; the wire is told only its
+// Why, in an `ending` event, which the holder words for the person. Only
+// Fail makes one, and it takes a Why, so no end goes unworded.
+type Fatal interface {
+	error
+	ending() *ending
 }
 
-func (e *Fatal) Error() string { return e.Reason }
+type ending struct {
+	status int
+	why    Why
+	reason string
+}
+
+func (e *ending) Error() string   { return e.reason }
+func (e *ending) ending() *ending { return e }
+
+// Fail ends the driver with `status`, the holder told `why` and the
+// driver's standard error `reason` ("" for none: one said there already).
+func Fail(status int, why Why, reason string) Fatal {
+	if why.code == "" {
+		panic("brainwire: an end with no Why")
+	}
+	return &ending{status, why, reason}
+}
+
+// Why is what a driver's end says the person reads, as the wire's
+// `ending` names it: one of the Whys below and no other, since only this
+// package makes one. Each is the driver's own finding, never the
+// program's words.
+type Why struct{ code string }
+
+var (
+	// WhyUnanswered: the program did not answer its start, or CYFR's
+	// tools did not reach it, within the driver's bound.
+	WhyUnanswered = Why{"unanswered"}
+	// WhyServersUnlisted: the program did not list its MCP servers, so no
+	// name for CYFR's could be chosen beside the person's own.
+	WhyServersUnlisted = Why{"servers_unlisted"}
+	// WhyRefused: the program refused to start its server or a session.
+	WhyRefused = Why{"refused"}
+	// WhyOutdated: the program's version is older than the first the
+	// driver drives.
+	WhyOutdated = Why{"outdated"}
+	// WhyUnsupported: the program named no version the driver reads, another
+	// protocol, or lacks what the driver needs to go on with a session.
+	WhyUnsupported = Why{"unsupported"}
+	// WhyEnded: the program's process ended, or no longer took its input.
+	WhyEnded = Why{"ended"}
+	// WhyUnrunnable: the program could not be run, or the driver could not
+	// make what it runs in.
+	WhyUnrunnable = Why{"unrunnable"}
+	// WhyUnreadable: the program answered in a way the driver cannot use:
+	// a line past its bound, or a start that names no session it can.
+	WhyUnreadable = Why{"unreadable"}
+	// WhyUnfit: the program does not take the model, effort or access the
+	// work chose for it.
+	WhyUnfit = Why{"unfit"}
+	// WhyBroken: the driver and its holder did not read each other: a
+	// command the wire does not read or does not allow, or an output that
+	// could not be written.
+	WhyBroken = Why{"broken"}
+)
+
+// Whys are the codes an `ending` may name, in the wire's order.
+var Whys = []Why{WhyUnanswered, WhyServersUnlisted, WhyRefused, WhyOutdated, WhyUnsupported,
+	WhyEnded, WhyUnrunnable, WhyUnreadable, WhyUnfit, WhyBroken}
+
+func whyCodes() []string {
+	codes := make([]string, len(Whys))
+	for i, w := range Whys {
+		codes[i] = w.code
+	}
+	return codes
+}
 
 // Conn is a driver's side of the wire: the holder's events go out on it.
 type Conn struct {
@@ -47,10 +116,10 @@ func NewConn(name string, out, errOut io.Writer) *Conn {
 func (c *Conn) Emit(e *Event) error {
 	line, err := EncodeEvent(e)
 	if err != nil {
-		return &Fatal{1, err.Error()}
+		return Fail(1, WhyBroken, err.Error())
 	}
 	if _, err := c.out.Write(append(line, '\n')); err != nil {
-		return &Fatal{1, "its output: " + err.Error()}
+		return Fail(1, WhyBroken, "its output: "+err.Error())
 	}
 	return nil
 }
@@ -152,24 +221,29 @@ func Serve(c *Conn, d Driver, in io.Reader, stop <-chan os.Signal) int {
 			d.Close()
 			return 0
 		}
-		var fatal *Fatal
+		var fatal Fatal
 		if errors.As(err, &fatal) {
-			if fatal.Reason != "" {
-				fmt.Fprintf(c.ErrOut, "%s: %s\n", c.name, fatal.Reason)
+			end := fatal.ending()
+			if end.reason != "" {
+				fmt.Fprintf(c.ErrOut, "%s: %s\n", c.name, end.reason)
 			}
+			// The holder reads the end's Why before the process ends, and
+			// before its harness is closed, however long that takes; an
+			// output that no longer takes it ends the driver the same.
+			_ = c.Emit(NewEvent("ending").Set("why", end.why.code))
 			d.Close()
-			return fatal.Status
+			return end.status
 		}
 	}
 }
 
 func command(d Driver, line []byte) error {
 	if line == nil {
-		return &Fatal{2, "a command past the wire's bound"}
+		return Fail(2, WhyBroken, "a command past the wire's bound")
 	}
 	t, members, err := ReadLine(line, Commands)
 	if err != nil {
-		return &Fatal{2, fmt.Sprintf("a command the wire does not read (%v)", err)}
+		return Fail(2, WhyBroken, fmt.Sprintf("a command the wire does not read (%v)", err))
 	}
 	return d.Command(t, members)
 }

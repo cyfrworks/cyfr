@@ -540,7 +540,7 @@ defmodule Locus.Runtime.HostClientTest do
       )
 
     at = %{member: host.member, host_url: host.url}
-    assert :ok = HostClient.runner_exited(credentials, at, "boot_x", "runner_1", ["att_1"])
+    assert :ok = HostClient.runner_exited(credentials, at, "boot_x", "runner_1", ["att_1"], nil)
 
     assert [%{op: "runner_exited", args: args, caller: report, header: header}] =
              ScriptedHost.requests(host)
@@ -560,10 +560,32 @@ defmodule Locus.Runtime.HostClientTest do
     stranger = %{credentials | dispatch_key: :crypto.strong_rand_bytes(32)}
 
     assert {:error, :lost} =
-             HostClient.runner_exited(stranger, at, "boot_x", "runner_1", ["att_1"])
+             HostClient.runner_exited(stranger, at, "boot_x", "runner_1", ["att_1"], nil)
 
     assert [_, {:refused, "runner_exited", :bad_mac}, {:refused, "runner_exited", :bad_mac}] =
              ScriptedHost.requests(host)
+  end
+
+  test "a report of a runner the keeper refused carries the keeper's code and sentence", %{
+    host: host
+  } do
+    {:ok, credentials} =
+      Locus.Runtime.Credentials.load(
+        service_id: "wrk_local",
+        service_key: Base.encode16(worker_key(host, "wrk_local"), case: :lower),
+        host_url: host.url,
+        bind: "127.0.0.1",
+        port: 0
+      )
+
+    at = %{member: host.member, host_url: host.url}
+    refusal = %{reason: "uid_exhausted", message: "cyfr-locus refused to start a runner (uid_exhausted)"}
+
+    assert :ok =
+             HostClient.runner_exited(credentials, at, "boot_x", "runner_1", ["att_1"], refusal)
+
+    assert [%{op: "runner_exited", args: %{"refusal" => wire}}] = ScriptedHost.requests(host)
+    assert Prima.WorkerAPI.read_refusal(wire) == {:ok, refusal}
   end
 
   describe "a runner's client" do

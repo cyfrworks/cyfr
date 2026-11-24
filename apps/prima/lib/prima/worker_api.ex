@@ -13,7 +13,7 @@ defmodule Prima.WorkerAPI do
   (`Prima.WorkerAuth.request_header/3`); the worker service verifies it
   (`Prima.WorkerAuth.verify_request/4`), refuses a request addressed to
   another worker service and refuses a nonce it has already seen. It reports each runner's exit to CYFR itself
-  (`c:Prima.HostAPI.runner_exited/3`).
+  (`c:Prima.HostAPI.runner_exited/4`).
 
   A request whose answer is lost is retried as `retry/1` says: `kill` and
   `status` again, `start` never — its assignment's claim window bounds it,
@@ -200,15 +200,25 @@ defmodule Prima.WorkerAPI do
       else: :error
   end
 
-  defp read_refusal(nil), do: {:ok, nil}
+  @doc """
+  The `t:refusal/0` its JSON spells (`refusal_to_wire/1`), `nil` for none,
+  or `:error` for anything else: a member missing or extra, a reason that
+  is no code, or a message `valid_refusal_message?/1` refuses. A status
+  carries one, and so does a worker service's report of a runner the
+  keeper refused after its start was answered (`c:Prima.HostAPI.runner_exited/4`).
+  """
+  @spec read_refusal(term()) :: {:ok, refusal() | nil} | :error
+  def read_refusal(nil), do: {:ok, nil}
 
-  defp read_refusal(%{} = refusal) do
-    if Enum.sort(Map.keys(refusal)) == Enum.sort(@refusal_members),
-      do: {:ok, %{reason: refusal["reason"], message: refusal["message"]}},
+  def read_refusal(%{} = wire) do
+    refusal = %{reason: wire["reason"], message: wire["message"]}
+
+    if Enum.sort(Map.keys(wire)) == Enum.sort(@refusal_members) and refusal?(refusal),
+      do: {:ok, refusal},
       else: :error
   end
 
-  defp read_refusal(_refusal), do: :error
+  def read_refusal(_wire), do: :error
 
   @doc """
   `status` as its JSON answer spells it, every member a string, which
@@ -230,9 +240,11 @@ defmodule Prima.WorkerAPI do
     }
   end
 
-  defp refusal_to_wire(nil), do: nil
+  @doc "`refusal` as its JSON spells it, which `read_refusal/1` reads back; `nil` for none."
+  @spec refusal_to_wire(refusal() | nil) :: %{String.t() => String.t()} | nil
+  def refusal_to_wire(nil), do: nil
 
-  defp refusal_to_wire(%{reason: reason, message: message}),
+  def refusal_to_wire(%{reason: reason, message: message}),
     do: %{"reason" => reason, "message" => message}
 
   @doc """
@@ -262,7 +274,7 @@ defmodule Prima.WorkerAPI do
   Stop an execution a runner of this worker service runs. For a subtree
   root, the kill ends the runner: the worker service terminates the
   runner's process and reports its exit
-  (`c:Prima.HostAPI.runner_exited/3`). For a child, the kill ends the
+  (`c:Prima.HostAPI.runner_exited/4`). For a child, the kill ends the
   child's process inside the runner (`Prima.RunnerControl`'s
   `cancel_child`), and the runner keeps running the rest of its subtree.
   Either kill taints the runner: it is never assigned again, and is

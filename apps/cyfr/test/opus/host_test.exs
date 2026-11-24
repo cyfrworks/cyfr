@@ -711,11 +711,17 @@ defmodule Opus.HostTest do
       runner = Keyword.get(opts, :runner, fixture.runner)
 
       body =
-        AttemptFixtures.body("runner_exited", %{
-          "member" => Keyword.get(opts, :member, fixture.member),
-          "runner" => runner,
-          "attempts" => Keyword.get(opts, :attempts, [fixture.attempt])
-        })
+        AttemptFixtures.body(
+          "runner_exited",
+          Map.merge(
+            %{
+              "member" => Keyword.get(opts, :member, fixture.member),
+              "runner" => runner,
+              "attempts" => Keyword.get(opts, :attempts, [fixture.attempt])
+            },
+            Keyword.get(opts, :args, %{})
+          )
+        )
 
       fields = %{
         service: service,
@@ -799,6 +805,43 @@ defmodule Opus.HostTest do
       assert %{"ok" => true} = report(fixture)
       assert %{status: "failed", error_message: @untaken} = row(fixture)
       assert terminal_events(fixture) == events
+    end
+
+    test "a run its runner never took, the keeper having refused that runner, says the keeper's sentence" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      sentence = "cyfr-locus refused to start a runner (uid_exhausted)"
+      refusal = %{"reason" => "uid_exhausted", "message" => sentence}
+      assert %{"ok" => true} = report(fixture, args: %{"refusal" => refusal})
+
+      said = @untaken <> ": " <> sentence
+      assert {:error, ^said} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: ^said} = row(fixture)
+    end
+
+    test "a report whose refusal does not read is lost, and fails nothing" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          attach: false
+        )
+
+      for refusal <- [
+            %{"reason" => "Not A Code", "message" => "m"},
+            %{"reason" => "refused", "message" => "two\nlines"},
+            %{"reason" => "refused"},
+            "cyfr-locus refused"
+          ] do
+        assert %{"error" => "lost"} = report(fixture, args: %{"refusal" => refusal})
+      end
+
+      assert %{status: "running"} = row(fixture)
     end
 
     test "answers the lapse at once for a runner whose claim was written and never answered" do

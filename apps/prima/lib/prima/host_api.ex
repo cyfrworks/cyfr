@@ -9,7 +9,7 @@ defmodule Prima.HostAPI do
 
   ## A runner's calls
 
-  Every callback but `c:runner_exited/3` answers a runner, for one attempt
+  Every callback but `c:runner_exited/4` answers a runner, for one attempt
   it runs. The call is signed with that attempt's call key
   (`Prima.WorkerAuth.host_call_header/3`), and its body and answer are
   sealed with the attempt's seal key (`Prima.WorkerAuth.seal_call/5`).
@@ -27,7 +27,7 @@ defmodule Prima.HostAPI do
 
   ## The worker service's report
 
-  `c:runner_exited/3` answers a worker service. The report is signed with
+  `c:runner_exited/4` answers a worker service. The report is signed with
   that worker service's own dispatch key (`Prima.WorkerAuth.report_header/3`)
   and verified with `Prima.WorkerAuth.verify_report/4`, so it speaks only
   for the runners of the worker service it names. Its `args` name the
@@ -564,12 +564,16 @@ defmodule Prima.HostAPI do
   named alone that no runner took is closed failed at once. A report
   speaks for its own boot only: another boot of the
   same service lapses nothing, and neither does a member the report's
-  `member` does not name.
+  `member` does not name. `refusal` is the keeper's own code and sentence
+  (`t:Prima.WorkerAPI.refusal/0`) when it refused the runner after the
+  service answered its start, which an attempt the runner never took
+  closes with; `nil` otherwise.
   """
   @callback runner_exited(
               report :: WorkerAuth.dispatch(),
               runner :: String.t(),
-              attempts :: [String.t()]
+              attempts :: [String.t()],
+              refusal :: Prima.WorkerAPI.refusal() | nil
             ) ::
               :ok | {:error, :unavailable}
 end

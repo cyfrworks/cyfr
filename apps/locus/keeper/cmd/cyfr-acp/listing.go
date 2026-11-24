@@ -74,7 +74,7 @@ func (d *driver) openOneOff() (*oneOff, error) {
 		switch {
 		case answer.Error != nil || json.Unmarshal(answer.Result, &init) != nil:
 			err = errors.New("it refused to start")
-		case json.Unmarshal(init.Capabilities, &caps) != nil || qualify(d.p, init, caps) != "":
+		case json.Unmarshal(init.Capabilities, &caps) != nil || unqualified(d.p, init, caps):
 			err = errors.New("it is no version CYFR drives")
 		}
 	}
