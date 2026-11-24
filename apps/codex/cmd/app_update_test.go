@@ -275,6 +275,13 @@ func TestUpdateOfTheAppRefusesAtEachStep(t *testing.T) {
 			a.road.becomes, a.road.backTo, a.road.finishErr = "", "", errors.New("the swap was refused")
 		}, []string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update", "quit", "replace installer 1.1.0", "go back"},
 			"; the CYFR app's own cyfr answers no release, and the CYFR app before it could not be put back (the swap was refused); your CYFR was not touched. Install release 1.1.0 from "},
+		{"whether the box's screen runs goes unread", func(a *appScenario) {
+			a.road.box = true
+			machine.screenService = func() (bool, bool, error) {
+				return true, false, errors.New("systemctl is-active cyfr-screen gave no answer (it ran past its bound)")
+			}
+		}, []string{"the program 1.1.0", "fetch 1.1.0", "elevate cyfr update"},
+			"cyfr update could not tell whether this machine's screen runs (systemctl is-active cyfr-screen gave no answer (it ran past its bound)); nothing was changed and CYFR runs as it did. Run 'cyfr update' again"},
 		{"another update runs", func(a *appScenario) {
 			unlock, err := lockUpdate()
 			if err != nil {
@@ -405,7 +412,7 @@ func TestUpdateOnTheBoxStopsItsScreenAroundTheInstaller(t *testing.T) {
 // commands logged in the road's log as they run: stop answers stopErr,
 // start startErr.
 func (a *appScenario) boxStandIn(stopErr, startErr error) {
-	machine.screenService = func() (bool, bool) { return true, true }
+	machine.screenService = func() (bool, bool, error) { return true, true, nil }
 	machine.apply = func(commands []string) error {
 		a.machine.applied = append(a.machine.applied, commands)
 		switch {

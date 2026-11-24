@@ -362,6 +362,38 @@ func TestTheMachineHoldsTheAppItsOwnCyfrAnswers(t *testing.T) {
 	}
 }
 
+// systemctl printing the screen service's state is an answer, an absent
+// unit's "inactive" among them; a systemctl that prints none, or that
+// cannot be run, gives no answer, which is never taken for a stopped
+// screen.
+func TestTheMachineTellsAnUnreadScreenFromAStoppedOne(t *testing.T) {
+	for _, c := range []struct {
+		name, systemctl string
+		active, unread  bool
+	}{
+		{"it runs", "echo active", true, false},
+		{"it is stopped", "echo inactive; exit 3", false, false},
+		{"no such unit", "echo inactive; exit 4", false, false},
+		{"no bus to ask", "echo 'Failed to connect to system scope bus via local transport' >&2; exit 1", false, true},
+		{"no systemctl", "", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			if c.systemctl != "" {
+				script := "#!/bin/sh\ncase \"$1\" in is-enabled) exit 1 ;; esac\n" + c.systemctl + "\n"
+				if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, active, err := realMachine.screenService()
+			if active != c.active || (err != nil) != c.unread {
+				t.Errorf("screenService answered active %v, %v; want active %v, unread %v", active, err, c.active, c.unread)
+			}
+		})
+	}
+}
+
 // What `screen on` refuses, it refuses before it writes or runs anything.
 func TestScreenOnRefuses(t *testing.T) {
 	for name, c := range map[string]struct {

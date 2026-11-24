@@ -187,9 +187,18 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 		return errors.New("cyfr update was interrupted before the CYFR app was closed; nothing was changed and CYFR runs as it did")
 	}
 
+	// Whether the box's screen runs decides how the app is closed and
+	// whether its screen is started again: a read with no answer replaces
+	// nothing.
 	stop, start := road.closesTheBox()
-	_, box := machine.screenService()
-	box = box && stop != nil
+	box := false
+	if stop != nil {
+		_, active, err := machine.screenService()
+		if err != nil {
+			return fmt.Errorf("cyfr update could not tell whether this machine's screen runs (%v); nothing was changed and CYFR runs as it did. Run '%s' again", err, again)
+		}
+		box = active
+	}
 	ran := false
 	if box {
 		fmt.Fprintln(out, "Stopping this machine's screen, so its launcher does not start the old CYFR app again while it is replaced...")

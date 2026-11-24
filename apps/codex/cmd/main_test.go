@@ -63,7 +63,7 @@ func testMachine(system string) machineSeams {
 		running:        func() bool { return false },
 		groups:         func(context.Context, string) []string { return nil },
 		displayManager: func() bool { return false },
-		screenService:  func() (bool, bool) { return false, false },
+		screenService:  func() (bool, bool, error) { return false, false, nil },
 		system:         func() string { return system },
 		passwordless:   func() bool { return false },
 		terminal:       func() bool { return false },
