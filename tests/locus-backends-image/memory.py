@@ -125,8 +125,9 @@ def bounds_each_program(stack):
 
     hog, sibling = c.tool(HOG, "probe__whoami"), c.tool(SIBLING, "probe__whoami")
     container = container_limit(stack)
+    hogged = stack.outside(hog)
     for name, who in [("hog", hog), ("sibling", sibling)]:
-        path, limit = cgroup_limit(stack, who["pid"])
+        path, limit = cgroup_limit(stack, stack.outside(who)["pid"])
         expect(path not in ("", "/") and limit == str(BOUND),
                f"the {name} backend runs in a cgroup of its own bounded at {BOUND} bytes", [path, limit])
     expect(container.isdigit() and int(container) > BOUND,
@@ -139,7 +140,7 @@ def bounds_each_program(stack):
     status, answer = c.call(HOG, "probe__hog", {"bytes": BOUND * 2})
     expect(status == 200 and answer.get("ended") == "before_answer",
            "a call past the bound ends the session before the program answers", answer)
-    eventually(lambda: not any(p["pid"] == hog["pid"] for p in stack.processes()),
+    eventually(lambda: not any(p["pid"] == hogged["pid"] for p in stack.processes()),
                "the kernel to end the process at its bound")
 
     crashed = eventually(lambda: (lambda p: p if p["restarts"] >= 1 and p["sessions"] == 0 else None)(
@@ -148,11 +149,14 @@ def bounds_each_program(stack):
            "the program's status counts the crash, names the kill and runs nothing", crashed)
     initialized = client.initializations
     again = c.tool(HOG, "probe__whoami")
-    expect(again["pid"] != hog["pid"] and client.initializations == initialized + 1 and client.resumed is False,
-           "the next call starts the program again under a new process, initialized afresh", again)
+    # A pid namespace's number may be the ended one's again: the container's
+    # numbering tells the two processes apart.
+    restarted = stack.outside(again)
+    expect(restarted and restarted["pid"] != hogged["pid"] and client.initializations == initialized + 1
+           and client.resumed is False, "the next call starts the program again under a new process, initialized afresh", again)
     expect(c.program(HOG)["status"] == "running", "the program runs again")
-    expect(cgroup_limit(stack, again["pid"])[1] == str(BOUND), "the restarted process is bounded again")
-    leftover = [p for p in stack.under_uid(hog["uid"]) if hog["uid"] != again["uid"] or p["pid"] == hog["pid"]]
+    expect(cgroup_limit(stack, restarted["pid"])[1] == str(BOUND), "the restarted process is bounded again")
+    leftover = [p for p in stack.under_uid(hog["uid"]) if hog["uid"] != again["uid"] or p["pid"] == hogged["pid"]]
     expect(not leftover, "nothing of the killed process's uid outlives it but what the restart started", leftover)
 
     expect(c.tool(SIBLING, "probe__whoami")["pid"] == sibling["pid"], "the sibling runs on untouched")
@@ -160,7 +164,7 @@ def bounds_each_program(stack):
     status, answer, _ = c.sync(OWN, [probe(memory_bytes=ROW_BOUND)])
     expect(status == 200, "a program whose row names its own bound is synced", answer)
     own = c.tool(OWN, "probe__whoami")
-    expect(cgroup_limit(stack, own["pid"])[1] == str(ROW_BOUND),
+    expect(cgroup_limit(stack, stack.outside(own)["pid"])[1] == str(ROW_BOUND),
            f"a row's own bound, {ROW_BOUND} bytes, bounds its process in place of the service's", own)
     wait_healthy(stack.base)
     expect(c.renew([{**HOG}, {**SIBLING}, {**OWN}])[0] == 200, "the service answers throughout")

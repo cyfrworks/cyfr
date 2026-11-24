@@ -217,7 +217,7 @@ func TestInitRunsTheRealSudo(t *testing.T) {
 			}
 			want := []string{"-n -v", "-v"}
 			if c.ran {
-				want = append(want, "sh -c apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose-v2 apparmor && systemctl enable --now docker && usermod -aG docker "+currentAccount(t))
+				want = append(want, "/bin/sh -c PATH="+rootPath+"; export PATH; apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose-v2 apparmor && systemctl enable --now docker && usermod -aG docker "+currentAccount(t))
 			}
 			want = append(want, "-k")
 			if lines := strings.Split(strings.TrimSuffix(string(got), "\n"), "\n"); !slices.Equal(lines, want) {

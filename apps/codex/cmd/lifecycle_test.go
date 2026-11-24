@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/sigstore/sigstore-go/pkg/root"
@@ -159,7 +160,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 			t.Errorf("the shipped template assigns %s, which a local home's head omits", key)
 		}
 	}
-	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
+	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar, appArmorEnv} {
 		if v, assigned := f.value(key); !assigned || v != "" || len(f.assignments(key)) != 1 {
 			t.Errorf("the shipped template does not assign %s empty on one line (%q, assigned: %v)", key, v, assigned)
 		}
@@ -277,7 +278,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 		added = append(added, c.key)
 	}
 	// The template carries the builds URL; init mints the key beside it.
-	if want := []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, buildsKeyVar}; !slices.Equal(added, want) {
+	if want := []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, appArmorEnv, buildsKeyVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
@@ -379,7 +380,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	otherKey := hex.EncodeToString(workerKey(rootBytes, "wrk_other"))
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
 	const setupToken = "5e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75"
-	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\nCYFR_SETUP_TOKEN=" + setupToken + "\n"
+	base := "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\nCYFR_SETUP_TOKEN=" + setupToken + "\nCYFR_LOCUS_APPARMOR=" + apparmor.ProfileName + "\n"
 	// builds is .env.example's builds URL, which builds are on with.
 	const builds = "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"
 
@@ -511,7 +512,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		{
 			name:  "no line for any key: each is appended, and no builds URL is builds off",
 			body:  "CYFR_HOST=localhost",
-			added: []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, corsOriginsVar},
+			added: []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, corsOriginsVar, appArmorEnv},
 			kept:  map[string]string{"CYFR_HOST": "localhost"},
 		},
 		{

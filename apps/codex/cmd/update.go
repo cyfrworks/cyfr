@@ -30,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
@@ -58,10 +59,10 @@ The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what cha
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, one without a schema fingerprint (any release's before the fingerprint was carried), or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported. Then read the schema fingerprint of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse one other than the manifest's or an answer that does not read.
-3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
+3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses. Then, on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the AppArmor profile built into this cyfr, by its name, which carries its content, offer it as 'cyfr init' does, before anything is changed: declined, the stack runs on as it was.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data.
+6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would; an update killed in that time leaves the start of the old stack to the next cyfr command that takes the lock, which says so. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -350,10 +351,14 @@ type updater struct {
 	// holds every file of it that it manages.
 	scaffold scaffoldRelease
 	// retired are the settings .env loses at the switch (planEnv), and
-	// envChanged whether the switch removed them, so a revert puts .env
-	// back from the snapshot.
+	// envChanged whether the switch changed .env, removing them or naming
+	// the release's AppArmor profile, so a revert puts .env back from the
+	// snapshot.
 	retired    []string
 	envChanged bool
+	// oldAppArmor is the AppArmor profile .env named before the switch,
+	// which the machine loses once the release runs (retireAppArmor).
+	oldAppArmor string
 	// offlineEnv are the settings each offline eval sets in its one-off
 	// container: a restore's lifts its own bar (restoreBarrier).
 	offlineEnv []string
@@ -390,6 +395,16 @@ func (u *updater) run() error {
 		}
 	}
 
+	// The release's profile is offered before anything is changed, so a
+	// person who declines it keeps the running stack and its release; sudo's
+	// login, once asked, is kept for the removal of the profile it replaces.
+	held, err := offerAppArmor(u.ctx, u.out, "cyfr update")
+	if held {
+		defer machine.forget()
+	}
+	if err != nil {
+		return err
+	}
 	// A join waiting for approval would enrol the machine while the stack
 	// is down for the update, so it is cancelled first.
 	if err := u.engine.CancelWaitingJoin(u.ctx); err != nil {
@@ -456,6 +471,7 @@ func (u *updater) run() error {
 	if err := u.up(); err != nil {
 		return u.stopAfterSwitch(err)
 	}
+	retireAppArmor(u.out, u.oldAppArmor)
 	u.report()
 	if u.ctx.Err() != nil {
 		fmt.Fprintln(u.out, "An interrupt arrived during the switch; the switch and the start ran to their end, so the stack is not left half-switched.")
@@ -1468,6 +1484,18 @@ func (u *updater) writeScaffold() error {
 		return fmt.Errorf("Writing the scaffold files failed (%v)", err)
 	}
 	fmt.Fprintf(u.out, "Scaffold files updated (%s, wit/, aqua/).\n", strings.Join(scaffold.Guides, ", "))
+	// The release's compose file names its profile through .env, which the
+	// snapshot holds as it stood, for a revert to put back.
+	held, err := access.ReadEnvValues(".env")
+	if err != nil {
+		return fmt.Errorf("Reading .env failed (%v)", err)
+	}
+	if u.oldAppArmor = held[appArmorEnv]; u.oldAppArmor != apparmor.ProfileName {
+		u.envChanged = true
+		if err := access.EditEnvFile(".env", map[string]string{appArmorEnv: apparmor.ProfileName}, nil); err != nil {
+			return fmt.Errorf("Naming release %s's AppArmor profile in .env failed (%v)", u.version, err)
+		}
+	}
 	if len(u.retired) == 0 {
 		return nil
 	}

@@ -23,8 +23,8 @@ defmodule Opus.Programs.Definition do
     * the config holds no key but `config_keys/0`;
     * the command meets `Prima.LocusBackends.check_command/1`: text beyond
       whitespace, at most `Prima.LocusBackends.max_command_bytes/0` bytes,
-      no NUL byte and no `vault:` — every process on the service can read
-      a command line, so a credential never goes in one;
+      no NUL byte and no `vault:` — every process of the program's own
+      session can read its command line, so a credential never goes in one;
     * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of the
       wire's reserved names (`Prima.LocusBackends.reserved_env_names/0`:
       `PATH HOME USER LOGNAME SHELL TMPDIR PWD`), nor prefixed with one of
@@ -93,7 +93,7 @@ defmodule Opus.Programs.Definition do
 
   # The command runs as `/bin/sh -c command` (Locus.Backends.Backend), so a
   # vault-bound name the shell expands puts the disclosed value in a child's
-  # argv, which every process on the backends service can read. The forms
+  # argv, which every process of the program's own session can read. The forms
   # that compute a value at run time can expand any name. A
   # backslash-newline is joined before the shell reads a word, so it is
   # joined here too.
@@ -127,9 +127,8 @@ defmodule Opus.Programs.Definition do
     Regex.match?(~r/\$\{?#{Regex.escape(key)}(?![A-Za-z0-9_])/, text)
   end
 
-  @exposed "on the command line, where every process on the backends service, other " <>
-             "athanors' programs included, can read it; the safe route is to let the " <>
-             "program read it from its environment"
+  @exposed "on the command line, where every process of the program's own session " <>
+             "can read it; the safe route is to let the program read it from its environment"
 
   defp warning({:expands, var}) do
     "The command expands #{var}, a vault-bound env name: the value is placed #{@exposed}."
@@ -483,8 +482,8 @@ defmodule Opus.Programs.Definition do
 
       {:error, :vault_reference} ->
         invalid(
-          "config.command names a vault entry — command lines are visible to every " <>
-            "process on the backends service; pass it through config.env instead"
+          "config.command names a vault entry — a command line is visible to every " <>
+            "process of its session; pass it through config.env instead"
         )
     end
   end
