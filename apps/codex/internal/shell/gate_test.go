@@ -93,7 +93,7 @@ func wholeState(t *testing.T, b *box) string {
 	add("confirm", asJSON(s.confirm))
 	add("passkey", asJSON(s.passkey))
 	add("proof", fmt.Sprintf("%x", s.proof))
-	for _, file := range []string{b.record, filepath.Join(b.dir, "client.json"), filepath.Join(b.dir, "attempt.json")} {
+	for _, file := range []string{b.record, filepath.Join(b.dir, "homes.json"), filepath.Join(b.dir, "attempt.json")} {
 		raw, err := os.ReadFile(file)
 		add(filepath.Base(file), fmt.Sprint(string(raw), os.IsNotExist(err)))
 	}

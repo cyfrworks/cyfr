@@ -218,7 +218,7 @@ defmodule Aqua.TurnReadThreadsTest do
       turn = accept!(ctx, daily, "@aqua read the fares file")
 
       script!([
-        calls([{"r1", "file.read", %{"path" => "data/fares.txt"}}]),
+        calls([{"r1", "file", %{"action" => "read", "path" => "data/fares.txt"}}]),
         reply("I could not read it.")
       ])
 
@@ -241,7 +241,7 @@ defmodule Aqua.TurnReadThreadsTest do
       turn = accept!(ctx, daily, "@aqua show that run's logs")
 
       script!([
-        calls([{"g1", "execution.logs", %{"execution_id" => logged}}]),
+        calls([{"g1", "execution", %{"action" => "logs", "execution_id" => logged}}]),
         reply("I could not read them.")
       ])
 
@@ -1019,7 +1019,7 @@ defmodule Aqua.TurnReadThreadsTest do
       script!(
         [
           calls([
-            {"f1", "files.read", %{"path" => "data/fares.txt"}},
+            {"f1", "files", %{"action" => "read", "path" => "data/fares.txt"}},
             {"s1", "thread", %{"action" => "search", "q" => "plumber"}}
           ]),
           reply("They rise on Monday.")
@@ -1060,7 +1060,10 @@ defmodule Aqua.TurnReadThreadsTest do
       # app's answer brings it.
       script!(
         [
-          calls([{"c1", "execution.run", %{"reference" => reading <> ":1.0.0", "input" => %{}}}]),
+          calls([
+            {"c1", "execution",
+             %{"action" => "run", "reference" => reading <> ":1.0.0", "input" => %{}}}
+          ]),
           {:hold, self()},
           %{"read" => "the fares rise on Monday"},
           calls([{"s1", "thread", %{"action" => "search", "q" => "plumber"}}]),
@@ -1111,7 +1114,7 @@ defmodule Aqua.TurnReadThreadsTest do
         calls([{"e1", "thread", %{"action" => "events", "thread" => gone.id}}]),
         calls([{"h1", "http", %{"action" => "get", "url" => "https://fares.example/today"}}]),
         {:error, failure},
-        calls([{"l1", "execution.list", %{}}]),
+        calls([{"l1", "execution", %{"action" => "list"}}]),
         calls([{"s1", "thread", %{"action" => "search", "q" => "plumber"}}]),
         reply("The fetch failed.")
       ])
@@ -1230,7 +1233,10 @@ defmodule Aqua.TurnReadThreadsTest do
     script!(
       [
         calls([{"e1", "thread", %{"action" => "events", "thread" => gone.id}}]),
-        calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+        calls([
+          {"c1", "execution",
+           %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}}
+        ]),
         {:hold, self()},
         %{"answered" => true},
         reply("Launched.")

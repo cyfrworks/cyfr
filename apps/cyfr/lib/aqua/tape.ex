@@ -637,9 +637,9 @@ defmodule Aqua.Tape do
   def brain_pending(%Context{} = ctx, turn),
     do: TurnStorage.brain_pending(Sanctum.Context.actor(ctx), turn.id)
 
-  @doc "The key of a turn's host `program.start` (`Arca.TurnStorage.brain_start_key/1`)."
-  @spec brain_start_key(String.t()) :: String.t()
-  defdelegate brain_start_key(turn_id), to: TurnStorage
+  @doc "The key of the step that admits a turn's harness (`Arca.TurnStorage.admission_key/1`)."
+  @spec admission_key(String.t()) :: String.t()
+  defdelegate admission_key(turn_id), to: TurnStorage
 
   @doc "The key of a program brain's ask (`Arca.TurnStorage.brain_ask_key/2`)."
   @spec brain_ask_key(String.t(), String.t()) :: String.t()

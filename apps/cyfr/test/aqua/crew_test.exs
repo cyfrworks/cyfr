@@ -1737,7 +1737,9 @@ defmodule Aqua.CrewTest do
   test "a member's turn runs a granted component under the soul's tools, as Aqua",
        %{ctx: ctx, room: room} do
     app = quiet_app!(ctx)
-    run = call("r1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}})
+
+    run =
+      call("r1", "execution", %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}})
 
     start_supervised!(
       {ScriptedWorker,

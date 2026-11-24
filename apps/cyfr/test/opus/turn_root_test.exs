@@ -383,6 +383,7 @@ defmodule Opus.TurnRootTest do
       before = roots()
       {claim, started} = claim!(ctx, turn, tick_ms: 50)
       assert keepers() == [claim.keeper]
+      launch = launch!(ctx, started)
 
       assert {:error, _} =
                TurnRoot.pause(ctx, claim.execution_id,
@@ -390,10 +391,10 @@ defmodule Opus.TurnRootTest do
                  turn_id: turn.id,
                  fence: started.fence + 1,
                  reason: "launch",
-                 launch_step_id: launch!(ctx, started)
+                 launch_step_id: launch
                )
 
-      {:ok, before: before, claim: claim, started: started}
+      {:ok, before: before, claim: claim, started: started, launch: launch}
     end
 
     test "keeps the claim's own keeper renewing, and a retried pause stops it", %{
@@ -434,8 +435,16 @@ defmodule Opus.TurnRootTest do
       turn: turn,
       before: before,
       claim: claim,
-      started: started
+      started: started,
+      launch: launch
     } do
+      # The launch the refused pause named never ran: a turn completes only
+      # once nothing of it is open (`TurnStorage.finish/4`).
+      {:ok, _} =
+        TurnStorage.close_step(Sanctum.Context.actor(ctx), launch, "skipped", %{
+          fence: started.fence
+        })
+
       {:ok, _} =
         TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "completed", %{
           grant: :stored,

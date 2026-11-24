@@ -94,7 +94,7 @@ defmodule Arca.TurnInputsStorageTest do
         purpose: "brain",
         tool: "program",
         action: "start",
-        idempotency_key: TurnStorage.brain_start_key(turn.id),
+        idempotency_key: TurnStorage.admission_key(turn.id),
         dispatch_state: state,
         fence: turn.fence,
         call: %{
@@ -105,6 +105,20 @@ defmodule Arca.TurnInputsStorageTest do
       })
 
     step
+  end
+
+  # The program took its work: the admitted start closes, as the loop
+  # closes it on the program's acceptance (`Aqua.Loop`), and nothing of the
+  # turn is open for its end.
+  defp took!(actor, turn) do
+    {:ok, steps} = TurnStorage.steps(actor, turn.id)
+
+    for %{dispatch_state: "dispatched"} = start <- steps,
+        start.idempotency_key == TurnStorage.admission_key(turn.id) do
+      {:ok, _} = TurnStorage.close_step(actor, start.id, "ok", %{fence: turn.fence})
+    end
+
+    :ok
   end
 
   # The turn paused around a launch it handed to a person.
@@ -281,6 +295,7 @@ defmodule Arca.TurnInputsStorageTest do
     assert {:error, :call_pending} = finish(actor, turn, "completed")
     assert {:ok, _} = commit(actor, daily, turn, %{answered: [later_step.id], busy: false})
     assert progress(daily)["owed"] == []
+    took!(actor, turn)
     assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
   end
 
@@ -538,6 +553,7 @@ defmodule Arca.TurnInputsStorageTest do
     {:ok, _} =
       commit(actor, daily, turn, %{accepted: [joined_step.id], answered: [joined_step.id]})
 
+    took!(actor, turn)
     assert {:ok, %{status: "completed"}} = finish(actor, turn, "completed")
   end
 
@@ -826,6 +842,7 @@ defmodule Arca.TurnInputsStorageTest do
     {:ok, _} =
       commit(actor, daily, next, %{boot: "boot-2", answered: [answered.id], busy: false})
 
+    took!(actor, next)
     assert {:ok, %{status: "completed"}} = finish(actor, next, "completed")
     assert {:ok, %{due_ms: nil, expired?: false}} = TurnStorage.brain_silence(actor, daily.id)
   end
@@ -837,6 +854,7 @@ defmodule Arca.TurnInputsStorageTest do
     {:ok, _} = commit(actor, daily, turn, %{accepted: [first.id], busy: true})
     backdate!(daily, @silence + 1)
     {:ok, _} = commit(actor, daily, turn, %{answered: [first.id], busy: false})
+    took!(actor, turn)
     {:ok, _} = finish(actor, turn, "completed")
 
     next = running!(actor, daily)

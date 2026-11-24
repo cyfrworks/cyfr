@@ -115,7 +115,7 @@ func newDesktopService(ctx context.Context, device, folder string, tell func(des
 	}
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
-		Clients:     shell.ClientFile(filepath.Join(device, "client.json")),
+		Homes:       shell.Homes(filepath.Join(device, "homes.json")),
 		Record:      filepath.Join(device, "holder.json"),
 		Client:      &http.Client{},
 		DisplayName: host,
