@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/shell"
 )
 
@@ -102,7 +103,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 	ready := read()
 	url, _ := ready["url"].(string)
 	token, ok := strings.CutPrefix(url, "http://127.0.0.1:7340/bootstrap/#token=")
-	if ready["type"] != "ready" || ready["version"] != float64(1) || !ok || len(token) != 43 {
+	if ready["type"] != "ready" || ready["version"] != float64(desktop.Version) || !ok || len(token) != 43 {
 		t.Fatalf("ready was %v", ready)
 	}
 	chooser := func() (*http.Response, error) {
@@ -126,7 +127,7 @@ func TestDesktopServeSaysReadyHoldsItsPortAndEndsOnShutdown(t *testing.T) {
 		t.Fatalf("the device folder is %v (%v)", info, err)
 	}
 	connecting := connectHeld(t, address(), token)
-	if _, err := io.WriteString(inW, `{"version":1,"type":"shutdown"}`+"\n"); err != nil {
+	if _, err := io.WriteString(inW, `{"version":2,"type":"shutdown"}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	select {

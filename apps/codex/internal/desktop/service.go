@@ -778,7 +778,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 		work = s.here.Work
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh, Work: work}
-	s.Tell(Message{Type: TypeOpened, Home: home})
+	s.Tell(Message{Type: TypeOpened, Home: home, Attempt: proposal.Attempt})
 	s.committed = proposal
 	return s.opened(home)
 }
@@ -1059,6 +1059,19 @@ func (s *Service) End() {
 	s.lock("", false)
 }
 
+// Leave is main's leave numbered id: the device locks and lets go of the
+// CYFR open, every session of the device's there ended, and only then is
+// main told left, with id.
+func (s *Service) Leave(id uint64) {
+	s.lock("", true)
+	s.mu.Lock()
+	ended := s.ended
+	s.mu.Unlock()
+	if !ended {
+		s.Tell(Message{Type: TypeLeft, ID: id})
+	}
+}
+
 // lock is Lock, which lets go of the CYFR open as well when leave says to
 // (main's leave): the list stays as it is.
 func (s *Service) lock(why string, leave bool) {
@@ -1124,7 +1137,7 @@ func (s *Service) Run(in io.Reader) error {
 		case TypeLock:
 			s.Lock("Locked.")
 		case TypeLeave:
-			s.lock("", true)
+			s.Leave(m.ID)
 		case TypeShutdown:
 			s.End()
 			return nil

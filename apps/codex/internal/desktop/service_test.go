@@ -527,11 +527,11 @@ func TestEveryEndOfMainsMessagesLocksAndSaysNoLock(t *testing.T) {
 		said     int
 		refused  bool
 	}{
-		{"lock, then the pipe's end", `{"version":1,"type":"lock"}` + "\n", 1, false},
-		{"shutdown, unread after", `{"version":1,"type":"shutdown"}` + "\n" + `{"version":1,"type":"lock"}` + "\n", 0, false},
+		{"lock, then the pipe's end", `{"version":2,"type":"lock"}` + "\n", 1, false},
+		{"shutdown, unread after", `{"version":2,"type":"shutdown"}` + "\n" + `{"version":2,"type":"lock"}` + "\n", 0, false},
 		{"a line that is not main's", `{"type":"lock"}` + "\n", 0, true},
 		{"a line past the bound", strings.Repeat("x", MaxLine+2) + "\n", 0, true},
-		{"a pick's answer", `{"version":1,"type":"folder-picked","path":null,"epoch":0,"pick":0}` + "\n", 0, false},
+		{"a pick's answer", `{"version":2,"type":"folder-picked","path":null,"epoch":0,"pick":0}` + "\n", 0, false},
 		{"the pipe's end alone", "", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -771,7 +771,8 @@ func TestARememberedCYFRResumesOnce(t *testing.T) {
 }
 
 // Main's leave (Connect to another CYFR, sent once main cleared what it
-// kept) lets go of the CYFR open, locked and named in no locked, for a
+// kept) lets go of the CYFR open, locked and named in no locked, answered
+// left with its id once it let go, for a
 // Connect to the next, which is then the one remembered. No page of cyfr's
 // can do it.
 func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
@@ -801,11 +802,14 @@ func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 		main.Close()
 		<-ran
 	})
-	if _, err := io.WriteString(main, `{"version":1,"type":"leave"}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"leave","id":1}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if m := a.next(t); m.Type != TypeLocked || m.Home != "" {
 		t.Fatalf("main heard %+v, not a lock keeping to none", m)
+	}
+	if m := a.next(t); m != (Message{Type: TypeLeft, ID: 1}) {
+		t.Fatalf("main heard %+v, not its leave answered", m)
 	}
 	a.quiet(t)
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Next != "" || got.Resume != "" || got.Home != first {
@@ -1479,7 +1483,7 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 	if m := a.next(t); m.Type != TypeHome || m.Attempt != 1 {
 		t.Fatalf("main heard %+v", m)
 	}
-	if _, err := io.WriteString(main, `{"version":1,"type":"home-failed","home":"`+home+`","attempt":1}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"home-failed","home":"`+home+`","attempt":1}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := answered(t, done), (answer{Home: home, Notice: "uncleared"}); got != want {
@@ -1496,7 +1500,7 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 	if m := a.next(t); m.Type != TypeHome || m.Attempt != 2 {
 		t.Fatalf("the next Connect proposed %+v", m)
 	}
-	if _, err := io.WriteString(main, `{"version":1,"type":"home-ready","home":"`+home+`","attempt":2}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"home-ready","home":"`+home+`","attempt":2}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if got := answered(t, again); got.Next != "/" {
@@ -1681,7 +1685,7 @@ func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
 	if !waiting(wait) {
 		t.Fatal("the wait answered before main did")
 	}
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
 		t.Fatalf("the pick answered %+v", got)
 	}
@@ -1689,7 +1693,7 @@ func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
 		t.Fatalf("the chooser was shown %+v after the pick", got)
 	}
 	wait = a.awaitFolder(context.Background(), 1, nil)
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":1,"path":null}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":1,"path":null}`)
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 2 {
 		t.Fatalf("a cancelled pick answered %+v", got)
 	}
@@ -1701,7 +1705,7 @@ func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
 func TestAWaitBehindMainsAnswerAnswersAtOnce(t *testing.T) {
 	a := newApp(t, t.TempDir(), nil)
 	a.Folder = "/home/ada/cyfr"
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
 	if got := folderAnswer(t, a.awaitFolder(context.Background(), 0, nil)); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
 		t.Fatalf("answered %+v", got)
 	}
@@ -1735,7 +1739,7 @@ func TestAPickWaitsOnThePersonUnbounded(t *testing.T) {
 	if !waiting(wait) {
 		t.Fatal("the wait ended at the bound")
 	}
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" {
 		t.Fatalf("answered %+v", got)
 	}
@@ -1779,7 +1783,7 @@ func TestMainsFolderPickedNamesTheFolder(t *testing.T) {
 	go func() { ran <- a.Run(in) }()
 	t.Cleanup(func() { main.Close(); <-ran })
 	wait := a.awaitFolder(context.Background(), 0, nil)
-	if _, err := io.WriteString(main, `{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere","epoch":0,"pick":0}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"folder-picked","path":"/home/ada/elsewhere","epoch":0,"pick":0}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {

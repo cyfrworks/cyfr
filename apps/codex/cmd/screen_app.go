@@ -156,7 +156,7 @@ func (a *screenApp) show(lock func(why string)) error {
 			a.mu.Lock()
 			if m.Home == a.home.Home && m.Attempt == a.attempt && !a.answered && !a.over {
 				a.answered = true
-				_ = a.to.Queue(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home})
+				_ = a.to.Queue(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home, Attempt: a.attempt})
 			}
 			a.mu.Unlock()
 		case desktop.TypeHomeFailed:
@@ -166,9 +166,14 @@ func (a *screenApp) show(lock func(why string)) error {
 			if current {
 				return errors.New("the app could not keep to the CYFR here")
 			}
-		case desktop.TypeLock, desktop.TypeLeave:
+		case desktop.TypeLock:
 			// main waits for locked, which the lock's hide says.
 			lock("Locked.")
+		case desktop.TypeLeave:
+			// The screen keeps to its one CYFR: a leave is a lock, answered
+			// once the lock ended the device's sessions there.
+			lock("Locked.")
+			_ = a.to.Queue(desktop.Message{Type: desktop.TypeLeft, ID: m.ID})
 		case desktop.TypeShutdown:
 			return nil
 		}

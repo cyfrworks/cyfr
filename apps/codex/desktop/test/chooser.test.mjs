@@ -270,7 +270,7 @@ const CHOOSER = LOOPBACK + "/bootstrap/"
 const at = (url, showing, over = {}) => ({type: "navigate", window: "content", url, target: "top", asker: "top", showing, by: showing, ...over})
 const open = [{type: "ready", url: CHOOSER + "#token=t"},
   {type: "home", message: {type: "home", home: HOME, account: ACCOUNT, attempt: 1}},
-  {type: "taken", taken: true}, {type: "opened", home: HOME}]
+  {type: "taken", taken: true}, {type: "opened", home: HOME, message: {type: "opened", home: HOME, attempt: 1}}]
 const locked = {type: "locked", message: {type: "locked", home: HOME, account: ACCOUNT}}
 
 // Every notice, by name: its words, and what main observed that makes it

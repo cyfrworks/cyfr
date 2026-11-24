@@ -194,37 +194,37 @@ func TestScreenApp_ReadyIsTheFirstMessage(t *testing.T) {
 // 1; opened for the current attempt's home-ready alone, once; a lock's
 // locked naming no CYFR, then home again as the next attempt; a stale
 // home-ready or home-failed changes nothing, and leave is a lock that
-// leaves no CYFR named; the current attempt's home-failed ends the shell;
+// leaves no CYFR named, answered left once it ran; the current attempt's home-failed ends the shell;
 // main's shutdown and the end of its pipe end it; a line that is not
 // main's message ends it refused.
 func TestScreenApp_WhatMainSays(t *testing.T) {
 	const home = "http://localhost:4000"
 	ready := func(n int) string {
-		return `{"version":1,"type":"home-ready","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
+		return `{"version":2,"type":"home-ready","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
 	}
 	failed := func(n int) string {
-		return `{"version":1,"type":"home-failed","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
+		return `{"version":2,"type":"home-failed","home":"` + home + `","attempt":` + strconv.Itoa(n) + `}`
 	}
-	const lock, leave = `{"version":1,"type":"lock"}`, `{"version":1,"type":"leave"}`
+	const lock, leave = `{"version":2,"type":"lock"}`, `{"version":2,"type":"leave","id":1}`
 	for name, c := range map[string]struct {
 		lines   []string
 		locks   []string
 		said    []string
 		refused bool
 	}{
-		"opened once": {lines: []string{ready(1), ready(1)}, said: []string{"opened"}},
+		"opened once": {lines: []string{ready(1), ready(1)}, said: []string{"opened 1"}},
 		"a lock proposes again": {lines: []string{ready(1), lock, ready(1), failed(1), ready(2)}, locks: []string{"Locked."},
-			said: []string{"opened", "locked", "home 2", "opened"}},
+			said: []string{"opened 1", "locked", "home 2", "opened 2"}},
 		"a stale home-ready": {lines: []string{lock, ready(1)}, locks: []string{"Locked."},
 			said: []string{"locked", "home 2"}},
 		"leave names no CYFR": {lines: []string{leave, ready(1), ready(2)}, locks: []string{"Locked."},
-			said: []string{"locked", "home 2", "opened"}},
-		"another CYFR's home-ready": {lines: []string{`{"version":1,"type":"home-ready","home":"https://other.example","attempt":1}`}},
+			said: []string{"locked", "home 2", "left", "opened 2"}},
+		"another CYFR's home-ready": {lines: []string{`{"version":2,"type":"home-ready","home":"https://other.example","attempt":1}`}},
 		"the current home-failed": {lines: []string{lock, failed(2), lock}, locks: []string{"Locked."},
 			said: []string{"locked", "home 2"}, refused: true},
-		"shutdown":       {lines: []string{`{"version":1,"type":"shutdown"}`, lock}},
+		"shutdown":       {lines: []string{`{"version":2,"type":"shutdown"}`, lock}},
 		"the pipe's end": {},
-		"not a message":  {lines: []string{`{"version":1,"type":"unlock"}`}, refused: true},
+		"not a message":  {lines: []string{`{"version":2,"type":"unlock"}`}, refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sink := &lineSink{}
@@ -259,7 +259,7 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	a.end()
 	a.hide()
 	a.hide()
-	if _, err := io.WriteString(answer, `{"version":1,"type":"home-ready","home":"http://localhost:4000","attempt":1}`+"\n"); err != nil {
+	if _, err := io.WriteString(answer, `{"version":2,"type":"home-ready","home":"http://localhost:4000","attempt":1}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	answer.Close()
