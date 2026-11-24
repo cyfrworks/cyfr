@@ -131,6 +131,8 @@ const offered = () => [...servers.entries()].flatMap(([name, s]) => s.tools.map(
 // ---- A turn ----
 let active = null;
 let steered = null;
+// The message a turn's reply streams under, one id for each message.
+let messageId = null;
 const usage = (text) => ({ inputTokens: 12, outputTokens: text.length + 1, thoughtTokens: 3, cachedReadTokens: 5, totalTokens: 21 + text.length });
 
 function finish(result) {
@@ -143,12 +145,13 @@ function reply(text) {
   update({ sessionUpdate: 'session_info_update', _meta: { 'opencode/retry': { attempt: 2, error: { type: 'provider.transport', message: 'FAKE-FOLDER-CANARY a retry' } } } });
   update({ sessionUpdate: 'session_info_update', _meta: { 'opencode/retry': null } });
   const half = Math.ceil(text.length / 2);
-  const messageId = `msg_${crypto.randomBytes(12).toString('hex')}`;
+  messageId ??= `msg_${crypto.randomBytes(12).toString('hex')}`;
   for (const piece of [text.slice(0, half), text.slice(half)]) {
     update({ sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: piece } });
   }
   session.history[session.history.length - 1].agent += text;
   save();
+  messageId = null;
   update({ sessionUpdate: 'usage_update', used: 20 + text.length, size: 200000, cost: { amount: 0, currency: 'USD' } });
   finish({ stopReason: 'end_turn', usage: usage(text), _meta: {} });
 }
@@ -176,7 +179,8 @@ async function turn(words, texts, earlier) {
     const said = (called.result?.content || []).map((b) => b.text).join('');
     reply(called.result?.isError ? `CYFR refused: ${said}` : `The file says: ${said}`);
   } else if (words.includes('slow')) {
-    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Starting' } });
+    messageId = `msg_${crypto.randomBytes(12).toString('hex')}`;
+    update({ sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text: 'Starting' } });
     const steer = await Promise.race([new Promise((resolve) => { steered = resolve; }), new Promise((resolve) => setTimeout(() => resolve(null), 20000))]);
     steered = null;
     reply(steer === null ? ' No steer came.' : ` Read the steer: ${steer}`);
