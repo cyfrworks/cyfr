@@ -5939,6 +5939,50 @@ defmodule Aqua.ProgramTest do
       refute_received {:offered, _path, "resources/" <> _, _params}
     end
 
+    # A turn taken over after its server came back declaring resources is
+    # rebuilt under its pinned grant: it reads the servers again for what
+    # it hands, is handed nothing beyond the grant and asks nothing; the
+    # comparison that asks is the next turn's start.
+    @tag harness: :api
+    test "a turn taken over after its server came back declaring resources is handed none " <>
+           "and asks nothing, and the next turn's start asks",
+         %{ctx: ctx, thread: thread} do
+      {:ok, offers} = Agent.start_link(fn -> ["tools"] end)
+      offering!(ctx, offers: fn -> Agent.get(offers, & &1) end)
+      offer!(ctx, ["docs:@resources"])
+
+      turn =
+        api_turn!(ctx, thread, "read them", [
+          {:hold, self()},
+          answer("Read them."),
+          answer("Read them.")
+        ])
+
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+
+      # Declared now, by the client connected again, and the turn's loop
+      # gone: another takes the turn over.
+      Agent.update(offers, fn _ -> ["tools", "resources"] end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+      quiet!(loop.pid)
+      Task.shutdown(loop, :brutal_kill)
+
+      assert {:ok, [{:adopt, _taken}]} =
+               Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      assert :completed = Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
+      assert handed_offerings(last_chat_tools()) == []
+      assert not_handed(ctx, turn) == %{"docs:@resources" => :ungranted}
+      stop_supervised!(ScriptedWorker)
+
+      turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+    end
+
     # A server CYFR cannot connect to at a turn's start costs the person no
     # prompt: the turn starts without what it would offer, said where a
     # missing server's tools are said, and the grant given stands, so its
@@ -6328,6 +6372,18 @@ defmodule Aqua.ProgramTest do
       Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "tools_add" => keys})
 
     consent_again!(ctx)
+  end
+
+  # The tools the last request of the scripted catalyst carried.
+  defp last_chat_tools do
+    params =
+      for(
+        %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+        do: params
+      )
+      |> List.last()
+
+    params["tools"]
   end
 
   # The tools the first request of the scripted catalyst carried.

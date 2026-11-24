@@ -1200,7 +1200,20 @@ defmodule Emissary.External.Server do
 
     with {:ok, result, state} <- request(state, "initialize", params),
          {:ok, state} <- notify(state, "notifications/initialized") do
-      {:ok, %{state | offers: declared(result)}}
+      {:ok, declared_anew(state, declared(result))}
+    end
+  end
+
+  # What an initialize declares replaces all the process declared before:
+  # what it does not declare is empty, so a replacement that offers no tools
+  # leaves none of its predecessor's, in this process or in the athanor's
+  # listing.
+  defp declared_anew(state, offers) do
+    if :tools in offers or state.tools == [] do
+      %{state | offers: offers}
+    else
+      tools_changed(state.athanor_id)
+      %{state | offers: offers, tools: []}
     end
   end
 

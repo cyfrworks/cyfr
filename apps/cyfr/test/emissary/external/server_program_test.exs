@@ -201,6 +201,27 @@ defmodule Emissary.External.ServerProgramTest do
     refute_received {:invoke, "resources/read", _fields}
   end
 
+  # An initialize replaces all its process declared: a replacement that
+  # declares resources alone has no tools, whatever its predecessor listed.
+  test "a replacement that declares resources alone leaves no tool of its predecessor's",
+       %{ctx: ctx, fake: fake, row: row} do
+    Scripted.set(fake, :offers, %{row.id => ["tools", "resources"]})
+    assert {:ok, [_ | _]} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+    assert_receive {:session, "open", _wire, _fields}, 2_000
+
+    Scripted.end_sessions(fake, row.id)
+    Scripted.set(fake, :offers, %{row.id => ["resources"]})
+
+    assert {:ok, %{"contents" => [_]}} =
+             Emissary.External.Server.offering(pid, {:resources, :read, "file:///notes"})
+
+    assert_received {:session, "open", _wire, _fields}
+
+    assert {:ok, %{tools: [], declared: [:resources]}} =
+             Emissary.External.Server.offerings(row.name, ctx.athanor_id)
+  end
+
   test "a program that declares neither is never asked for them", %{ctx: ctx, row: row} do
     assert {:ok, _tools} = Servers.ensure_started(row, ctx)
     pid = server_pid(ctx, row)
