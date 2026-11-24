@@ -417,17 +417,18 @@ window() {
   fi
 
   # Close (Tab from the yes), then B the newest, Update CYFR again.
-  key Tab && key Return
-  within 20 untitled "Update CYFR"
-  echo "$B" >"$dir/latest"
-  if press_rail_update && within 60 titled "release $B" && key Return &&
-    within 60 not_alive "$before" && within 120 running && within 60 answers && [ "$(release_of)" = "$B" ] &&
-    within 60 titled "Update CYFR" && says "Updating the CYFR app to release $B" && says "The CYFR app is release $B." &&
-    [ ! -s "$docker" ]; then
+  local step=closed
+  if key Tab && key Return && within 20 untitled "Update CYFR" && echo "$B" >"$dir/latest" &&
+    step=opened && press_rail_update && within 60 titled "release $B" &&
+    step=pressed && key Return &&
+    step=closed-by-update && within 60 not_alive "$before" &&
+    step=reopened && within 120 running && within 60 answers && [ "$(release_of)" = "$B" ] &&
+    step=record && within 60 titled "Update CYFR" && says "Updating the CYFR app to release $B" && says "The CYFR app is release $B." &&
+    step=docker && [ ! -s "$docker" ]; then
     after=$(first_pid)
     pass window_update "the app at $A ($before) closed and opened again at $B ($after), Update CYFR open on the record; no docker call"
   else
-    fail window_update "the app $(alive "$before" && echo 'still runs' || echo 'is gone'), its cyfr answers '$(release_of)', docker heard '$(cat "$docker")'; the record: $(tail -8 "$RECORD" 2>/dev/null)"
+    fail window_update "not $step: the app $(alive "$before" && echo 'still runs' || echo 'is gone'), its cyfr answers '$(release_of)', docker heard '$(cat "$docker")'; the windows: $(windows_said | tr '\n' ';'); the record: $(tail -8 "$RECORD" 2>/dev/null | tr '\n' ';')"
     return
   fi
 
