@@ -2017,19 +2017,19 @@ func TestAWindowAPageOpensIsNamedBeforeItRuns(t *testing.T) {
 	}
 	r.f.navigated()
 	popup := r.f.attachToBrowser("page", "T1")
-	if run := <-r.f.runs; run != popup {
+	if run := ranWithin(t, r.f, "the window the page opened"); run != popup {
 		t.Fatalf("%s ran in place of the window the page opened, %s", run, popup)
 	}
 	inner := r.f.attachToBrowser("page", "X"+popup)
-	if run := <-r.f.runs; run != inner {
+	if run := ranWithin(t, r.f, "the window the opened window opened"); run != inner {
 		t.Fatalf("%s ran in place of the window the opened window opened, %s", run, inner)
 	}
 	own := r.f.attachToBrowser("page", "")
-	if run := <-r.f.runs; run != own {
+	if run := ranWithin(t, r.f, "a window with no opener"); run != own {
 		t.Fatalf("%s ran in place of a window with no opener, %s", run, own)
 	}
 	shared := r.f.attachToBrowser("shared_worker", "")
-	if run := <-r.f.runs; run != shared {
+	if run := ranWithin(t, r.f, "the shared worker"); run != shared {
 		t.Fatalf("%s ran in place of the shared worker %s", run, shared)
 	}
 	r.f.mu.Lock()
@@ -2102,5 +2102,18 @@ func TestAWindowAPageOpensThatCannotBeNamedIsClosed(t *testing.T) {
 	r.f.mu.Unlock()
 	if failure["code"] != "unnamed" || closed != "X"+popup {
 		t.Fatalf("the window's next action answered %v, and the driver closed %q", read, closed)
+	}
+}
+
+// ranWithin answers the next target the driver let run, failing t when
+// none runs within a few seconds.
+func ranWithin(t *testing.T, f *pageChrome, what string) string {
+	t.Helper()
+	select {
+	case run := <-f.runs:
+		return run
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s was never let run", what)
+		return ""
 	}
 }
