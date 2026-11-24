@@ -401,25 +401,29 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // again as it is resized, the on-screen keyboard's too.
   function ensureFrame() {
     if (frame && !frame.isDestroyed()) return frame
-    frame = new BaseWindow({width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, backgroundColor: "#071013",
+    const f = new BaseWindow({width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, backgroundColor: "#071013",
       ...(screen ? {frame: false} : {})})
-    frame.on("resize", layout)
-    frame.on("closed", () => {
-      frame = null
-      if (!closingFrame) on({type: "quit"})
+    frame = f
+    f.on("resize", layout)
+    f.on("closed", () => {
+      if (frame === f) frame = null
+      if (!retired.has(f)) on({type: "quit"})
     })
-    if (screen) frame.maximize()
-    frame.show()
-    return frame
+    if (screen) f.maximize()
+    f.show()
+    return f
   }
-  let closingFrame = false
+  // The frames main closed itself, whose close is no quit.
+  const retired = new WeakSet()
   function closeFrame() {
-    closingFrame = true
     const f = frame
     frame = null
     if (rail && !rail.webContents.isDestroyed()) rail.webContents.close()
     rail = null
-    if (f && !f.isDestroyed()) f.destroy()
+    if (f && !f.isDestroyed()) {
+      retired.add(f)
+      f.destroy()
+    }
   }
 
   // Where the content is: the window's content area beside the rail.
@@ -687,6 +691,11 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       w.destroy()
     }
     dropContent()
+    // On the box's screen a lock is confirmed by the compositor's list of
+    // windows: every window shown at the lock closed (internal/wayland).
+    // So the content's close closes the app's window too, and what shows
+    // next, the locked screen's page among them, comes up in a fresh one.
+    if (screen) closeFrame()
   }
 
   // A departure's teardown: every page closed has gone, and the

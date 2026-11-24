@@ -2142,6 +2142,28 @@ test("on the screen a lost page locks, a failed load shows the shell's page, and
 })
 
 
+// On the box's screen a lock is confirmed by the compositor's list of
+// windows, every window shown at the lock closed (internal/wayland): the
+// lock closes the app's window, which ends nothing of the app, and the
+// locked screen's page comes up in a fresh one, whose own close is still
+// the app's end.
+test("on the screen a lock closes the app's window, ending nothing, and the locked page shows in a fresh one", ON_LINUX, async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  const before = frame()
+  child.say({type: "locked"})
+  await turns()
+  assert.ok(before.isDestroyed(), "the window shown at the lock is closed, for the compositor to confirm the hide")
+  assert.deepEqual(world.endedSelf, [], "its close ends nothing")
+  assert.notEqual(frame(), before, "a fresh window")
+  assert.ok(!frame().isDestroyed())
+  assert.equal(content().webContents.url, SHELL_PAGE, "showing the locked screen's page")
+  frame().emit("closed")
+  await turns()
+  assert.equal(world.endedSelf.length, 1, "the fresh window's own close is the app's end")
+})
+
 test("on the screen cyfr's end ends the app's process in its own turn, after its sentence, with no quit and no exit of the engine's", ON_LINUX, async () => {
   const said = await screenStarted()
   assert.ok(await opens())
