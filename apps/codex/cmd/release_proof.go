@@ -3,10 +3,11 @@
 
 //go:build releaseproof
 
-// The Compose proof's update cases (tests/compose-proof/run.sh) build cyfr
-// with this tag: a candidate has no release on GitHub, so `cyfr update`
-// reads each release's manifest and scaffold from a folder fixed at the
-// build, never from the network. The release refuses every binary built
+// The Compose proof's update cases (tests/compose-proof/run.sh) and the
+// native app's update proof (tests/desktop-proof/native/update.sh) build
+// cyfr with this tag: a candidate has no release on GitHub, so `cyfr
+// update` reads each release's manifest, scaffold and app installer from a
+// folder fixed at the build, never from the network. The release refuses every binary built
 // with a tag or holding this file (scripts/ci/release-binary-check.sh, a
 // post hook of each build in .goreleaser.yml), and a build without the tag
 // fetches every release verified (release_proof_off_test.go).
@@ -15,9 +16,12 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
@@ -29,8 +33,9 @@ import (
 const releaseProofMarker = "cyfr release proof build: it reads releases from a local folder, unsigned"
 
 // proofReleases is the folder of the releases this build updates between,
-// set at the build (-ldflags -X): VERSION/release.json and
-// VERSION/cyfr-scaffold.tar.gz for each, unsigned.
+// set at the build (-ldflags -X): VERSION/release.json,
+// VERSION/cyfr-scaffold.tar.gz, and the app's installers by their release
+// names with VERSION/checksums.txt naming their sums, for each, unsigned.
 var proofReleases string
 
 func init() {
@@ -43,6 +48,30 @@ func init() {
 			return nil, fmt.Errorf("the proof's release %s: %w", version, err)
 		}
 		return release.ParseManifest(data)
+	}
+	appPackageSum = func(_ context.Context, version, goos, goarch string) (string, error) {
+		name := release.PackageName(version, goos, goarch)
+		data, err := os.ReadFile(filepath.Join(proofReleases, version, "checksums.txt"))
+		if err != nil {
+			return "", fmt.Errorf("the proof's checksums %s: %w", version, err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if fields := strings.Fields(line); len(fields) == 2 && fields[1] == name {
+				return fields[0], nil
+			}
+		}
+		return "", fmt.Errorf("%w: the proof's checksums %s name no %s", release.ErrUnverified, version, name)
+	}
+	fetchAppPackage = func(_ context.Context, version, goos, goarch, want string) ([]byte, error) {
+		name := release.PackageName(version, goos, goarch)
+		data, err := os.ReadFile(filepath.Join(proofReleases, version, name))
+		if err != nil {
+			return nil, fmt.Errorf("the proof's installer %s: %w", name, err)
+		}
+		if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != want {
+			return nil, fmt.Errorf("%w: the proof's %s is not the sum its checksums name", release.ErrUnverified, name)
+		}
+		return data, nil
 	}
 	fetchScaffold = func(version string) (scaffoldRelease, error) {
 		data, err := os.ReadFile(filepath.Join(proofReleases, version, "cyfr-scaffold.tar.gz"))

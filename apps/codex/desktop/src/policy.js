@@ -265,13 +265,14 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 /**
  * The switches the app takes on its command line: the selected CYFR's
  * route, which main relaunches itself with, the box's screen's project
- * (screenProject) and the folder cyfr setup opened the app in
- * (setupProject). The route moves where traffic goes and nothing more:
+ * (screenProject), the folder cyfr setup opened the app in
+ * (setupProject) and --quit, which asks the app this account runs to end
+ * (app.js). The route moves where traffic goes and nothing more:
  * the origin checks and certificate validation still decide what loads.
  * The engine takes every other switch, from opening a debugging port to
  * trusting any certificate, so the app refuses them all.
  */
-export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project"]
+export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project", "quit"]
 
 /**
  * Whether `value` names a folder explicitly on `platform`, as the system
