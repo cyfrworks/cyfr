@@ -333,8 +333,8 @@ def test_residue(stack):
         f"/tmp/{TAG}": "ok", f"/var/tmp/{TAG}": "ok", f"/dev/shm/{TAG}": "ok", f"/run/{TAG}": "ok",
         f"{RUN_DIR}/{TAG}": "ENOENT", f"{HOME_ROOT}/{TAG}": "EROFS", f"{HOME_ROOT}/{TAG}-tree/": "EROFS",
     }, "outside its home a build writes only its space's own /tmp, /var/tmp, /dev/shm and /run", planted)
-    expect(all(planted[kind] == "ok" for kind in ("shm", "sem", "msg")) and planted["mqueue"] == "EACCES",
-           "a build can create System V IPC objects, and a POSIX message queue is refused it", planted)
+    expect(all(planted[kind] == "ok" for kind in ("shm", "sem", "msg", "mqueue")),
+           "a build can create System V IPC objects and a POSIX message queue", planted)
 
     status, answer = stack.build(tincture(f"mkdir -p dist && /canary/canary probe {TAG} {paths} > dist/probe.json"),
                                  "javascript", "tincture")

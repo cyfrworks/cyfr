@@ -40,7 +40,7 @@ import (
 
 // TestMain gives the test binary the commands spawns run as `<helper> …`:
 // `hold` and `mapped` are the memory tests', `fill` the relay's end's,
-// `mounts` the space tests', `dial`, `ask` and `own` the network tests'.
+// `mounts` and `queue` the space tests', `dial`, `ask` and `own` the network tests'.
 // The keeper under test starts its own helpers, `stage`, `relay`, `retire`
 // and `home`, from a plain build of cyfr-locus (keeperBinary).
 func TestMain(m *testing.M) {
@@ -60,6 +60,8 @@ func TestMain(m *testing.M) {
 			os.Exit(fill())
 		case "mounts":
 			os.Exit(tryMounts())
+		case "queue":
+			os.Exit(queue(os.Args[2:]))
 		}
 	}
 	os.Exit(m.Run())

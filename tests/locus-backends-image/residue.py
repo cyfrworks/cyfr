@@ -11,13 +11,11 @@ and driven only by requests signed as CYFR signs them (harness.py):
   is read-only there and holds its own home alone, and neither the kept
   homes' root, the release's run directory nor the container's mqueue
   mount is in its space.
-- The System V shared memory, semaphore set and message queue it makes
-  (tests/fixtures/residue-canary.go) are its space's own: the space has an
-  IPC namespace of its own, the container's holds none of them, and the
-  namespace, every object in it, is gone with the space's last process. A
-  POSIX message queue it would open by name is refused (EACCES): the
-  container's AppArmor profile lets a process read a queue's attributes
-  alone.
+- The System V shared memory, semaphore set and message queue and the
+  POSIX message queue it opens by name (tests/fixtures/residue-canary.go)
+  are its space's own: the space has an IPC namespace of its own, the
+  container's holds none of them, and the namespace, every object in it,
+  is gone with the space's last process.
 - Nothing of the space outlives it but its home, which is gone, with every
   process of its uid, once its owner is released, before a second owner
   runs under the same uid, who finds nothing the first left; and the
@@ -130,8 +128,7 @@ def main():
             f"{KEPT_ROOT}/{TAG}": "ENOENT",
         }, "outside its home a program writes only its space's own /tmp, /var/tmp, /dev/shm and /run", planted)
         for kind in IPC:
-            want = "EACCES" if kind == "mqueue" else "ok"
-            expect(planted[kind] == want, f"the backend's {kind} object is answered {want}", planted)
+            expect(planted[kind] == "ok", f"the backend leaves a {kind} object", planted)
         mounted = c.tool(owner_of("first"), "probe__run", {"argv": ["touch", MOUNT_QUEUE]})
         expect(mounted["status"] != 0, "the container's mqueue mount is not in the backend's space", mounted)
 
@@ -140,8 +137,7 @@ def main():
         # namespace holds none of them.
         found = canary(c, owner_of("first"), "probe")
         for kind in IPC:
-            want = "absent" if kind == "mqueue" else "present"
-            expect(found[kind] == want, f"the backend's {kind} object is {want} in its space", found)
+            expect(found[kind] == "present", f"the backend finds its {kind} object in its space", found)
         leader = [p for p in stack.under_uid(UID) if p["cmd"].strip() == PROBE]
         expect(len(leader) == 1, "the first owner's program runs, as the container numbers it", leader)
         space = ipc_namespace(stack, leader[0]["pid"])

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -74,6 +75,38 @@ func regexpFind(pattern, s string) string {
 		return ""
 	}
 	return m[1]
+}
+
+// queue is the space tests' POSIX message queue command: `queue make NAME`
+// makes the queue and prints `made` once it holds it, then holds it until
+// it is ended;
+// `queue open NAME` opens it and prints `open` or the errno's name.
+func queue(args []string) int {
+	if len(args) != 2 {
+		return 2
+	}
+	// The call takes the name without the slash the C library strips.
+	name, err := unix.BytePtrFromString(strings.TrimPrefix(args[1], "/"))
+	if err != nil {
+		return 2
+	}
+	flags := unix.O_RDONLY
+	if args[0] == "make" {
+		flags = unix.O_CREAT | unix.O_EXCL | unix.O_RDWR
+	}
+	fd, _, errno := unix.Syscall6(unix.SYS_MQ_OPEN, uintptr(unsafe.Pointer(name)), uintptr(flags), 0o600, 0, 0, 0)
+	switch {
+	case errno != 0:
+		fmt.Println(unix.ErrnoName(errno))
+	case args[0] == "make":
+		fmt.Println("made")
+		time.Sleep(time.Hour) // sleep-ok: the queue is held until the test ends the session
+		_ = unix.Close(int(fd))
+	default:
+		fmt.Println("open")
+		_ = unix.Close(int(fd))
+	}
+	return 0
 }
 
 // pidsOf answers the pids, as this test's namespace numbers them, of the
@@ -362,4 +395,38 @@ func TestAKeptCloseEndsWhatTheCommandLeftInItsTurn(t *testing.T) {
 		t.Fatalf("the closed session said %q", got)
 	}
 	k.releasedPair(t, id)
+}
+
+// A space's POSIX message queue is its own: a session makes one and opens
+// it again, another session of the same folder and uid finds none of that
+// name, and once the first has ended no later session finds it.
+func TestASpacesMessageQueueIsItsOwn(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-queue")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	maker, rc := k.spawnKept(t, "q", fmt.Sprintf(`%s queue make /l7-queue & sleep 0.3; %s queue open /l7-queue; wait`,
+		k.helper, k.helper), path, uid)
+	rc.readUntil(t, func() bool {
+		return strings.Contains(string(rc.got[frame.StreamStdout]), "open\n") || rc.ended[frame.StreamStdout]
+	})
+	if got := string(rc.got[frame.StreamStdout]); got != "made\nopen\n" {
+		t.Fatalf("the session could not make and open a queue of its own: %q", got)
+	}
+	look := func(id string) string {
+		other, orc := k.spawnKept(t, id, k.helper+" queue open /l7-queue", path, uid)
+		orc.readUntil(t, func() bool { return false })
+		k.releasedPair(t, other)
+		return string(orc.got[frame.StreamStdout])
+	}
+	if got := look("b"); got != "ENOENT\n" {
+		t.Fatalf("another session of the folder opened the queue: %q", got)
+	}
+	k.release(t, maker)
+	k.releasedPair(t, maker)
+	if got := look("c"); got != "ENOENT\n" {
+		t.Fatalf("a later session opened the ended session's queue: %q", got)
+	}
 }
