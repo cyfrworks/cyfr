@@ -6,6 +6,7 @@ name: Codex CI (cyfr CLI)
 # Vet, test, and build the Go CLI on every change. security.yml only runs
 # govulncheck; this gives the CLI a real green-build + test signal at PR time.
 # desktop-native builds, installs and smokes the CYFR app around it.
+# release-rehearsal runs the release's GoReleaser on its six installers.
 # screen-idle holds the device screen's idle lock against the app's engine.
 
 on:
@@ -33,8 +34,10 @@ on:
       # screen, tests/desktop-proof/screen/app.sh; screen-idle the
       # screen's idle check, tests/desktop-proof/screen/idle.sh.
       - 'tests/desktop-proof/**'
-      # The macOS legs install the cask the release writes.
+      # The macOS legs install the cask the release writes, and
+      # release-rehearsal runs GoReleaser on .goreleaser.yml.
       - 'scripts/ci/homebrew-cask.sh'
+      - 'tests/ci-release-rehearsal.sh'
       # The app bundles the account pages' sign-in reader
       # (apps/codex/desktop/src/policy.js).
       - 'apps/cyfr/assets/account/**'
@@ -56,6 +59,7 @@ on:
       - 'tests/fixtures/**'
       - 'tests/desktop-proof/**'
       - 'scripts/ci/homebrew-cask.sh'
+      - 'tests/ci-release-rehearsal.sh'
       - 'apps/cyfr/assets/account/**'
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'
@@ -302,6 +306,34 @@ jobs:
 
       - name: A page that plays does not hold the lock off
         run: bash tests/desktop-proof/screen/idle.sh
+
+  release-rehearsal:
+    # GoReleaser's release on .goreleaser.yml with stand-ins for the six
+    # installers, the scaffold and the manifest, publishing nothing
+    # (tests/ci-release-rehearsal.sh): the installers are summed by their
+    # digests, and a missing one fails before any upload. The GoReleaser
+    # is release.yml's (tests/ci-release-graph.py holds it so).
+    name: The release's packaging rehearsed
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: 'v2.18.3'
+          install-only: true
+
+      - name: Rehearse the release's packaging
+        run: bash tests/ci-release-rehearsal.sh
 
   desktop-native:
     # The CYFR app, Electron around this module's cyfr, on each platform it

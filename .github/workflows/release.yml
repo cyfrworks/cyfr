@@ -3,8 +3,12 @@
 
 # The one workflow a release tag starts. It verifies the tagged commit once,
 # with every check a change to main runs, and publishes nothing unless all
-# six pass: the CLI release and its provenance, the CYFR app's Linux
-# package beside it, and the cyfr and cyfr-locus images.
+# six pass: the CLI release and its provenance, the CYFR app's six
+# installers beside it (a DEB for Linux, a signed and notarised DMG for
+# macOS and an MSI for Windows, each for amd64 and arm64, each built,
+# installed and smoked on a runner of its own system and architecture),
+# the Homebrew cask written from the DMGs, and the cyfr and cyfr-locus
+# images.
 name: Release
 # A release tag is MAJOR.MINOR.PATCH, or the same with a SemVer
 # pre-release (0.6.0-alpha.1). GitHub's filter patterns admit more than
@@ -298,13 +302,7 @@ jobs:
         run: bash tests/desktop-proof/native/linux.sh "$RUNNER_TEMP/package/cyfr-desktop_${GITHUB_REF_NAME}_linux_${ARCH}.deb"
 
       - name: The installed cyfr is the tag's
-        run: |
-          set -euo pipefail
-          installed=$(/usr/bin/cyfr --version)
-          if [ "${installed%%$'\n'*}" != "cyfr version $GITHUB_REF_NAME" ]; then
-            echo "::error::the package's cyfr says [$installed], not cyfr version $GITHUB_REF_NAME"
-            exit 1
-          fi
+        run: bash tests/desktop-proof/native/installed-version.sh /usr/bin/cyfr "$GITHUB_REF_NAME"
 
       - name: Upload the package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -314,11 +312,160 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The CYFR app's Mac packages, Apple silicon's and Intel's, signed,
+  # notarised, stapled, checked, installed and smoked on each
+  # architecture's runner, with the installed cyfr the tag's
+  # (desktop-mac.yml). The repository's Apple inputs reach this job alone,
+  # each by its name, and in it the one step that signs.
+  mac-package:
+    needs: [version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    if: github.repository == 'cyfrworks/cyfr'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-mac.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+
+  # cyfr for the Windows packages, built by GoReleaser as the release
+  # builds the archives', on Linux: GoReleaser runs each build's post hook,
+  # the bash binary check, which Windows cannot start ("not a valid Win32
+  # application", measured on windows-11-arm), and the check reads a
+  # binary of any target without running it.
+  windows-cyfr:
+    needs: [version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    if: github.repository == 'cyfrworks/cyfr'
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      GOOS: windows
+      GOARCH: ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    steps:
+      # GoReleaser reads the version from the tag, which needs the history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache: false
+
+      # GoReleaser copies the binary only into a folder that exists.
+      - name: Make the folder cyfr is built into
+        run: mkdir -p "$RUNNER_TEMP/cyfr"
+
+      # --single-target builds for GOOS and GOARCH.
+      - name: Build cyfr as the release builds it
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: 'v2.18.3'
+          args: build --single-target --clean --output ${{ runner.temp }}/cyfr/cyfr.exe
+          workdir: apps/codex
+
+      - name: Upload cyfr
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cyfr-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cyfr/cyfr.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # The CYFR app's Windows package, an MSI for the person alone, unsigned
+  # until there is a Windows identity (build.mjs names where it would sign),
+  # built on each architecture's own runner around that cyfr, installed
+  # there as a person installs it with its cyfr on PATH, smoked, the
+  # installed cyfr the tag's, removed with its cyfr off PATH again
+  # (tests/desktop-proof/native/windows.ps1), and uploaded. No cache, read
+  # or written.
+  windows-package:
+    needs: [windows-cyfr, version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    if: github.repository == 'cyfrworks/cyfr'
+    # Codex CI's job for the same package is bounded at 30.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - {arch: amd64, runner: windows-latest}
+          - {arch: arm64, runner: windows-11-arm}
+    env:
+      ARCH: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The smoke runs under Git Bash, which reads a script with rewritten
+      # line ends as other commands.
+      - name: Keep line ends as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Download cyfr
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cyfr
+
+      # The package guard (scripts/check-package.mjs) runs inside the build.
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          cd apps/codex/desktop
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/build.mjs --cyfr "$RUNNER_TEMP/cyfr/cyfr.exe" --version "$GITHUB_REF_NAME" --arch "$ARCH" --out "$RUNNER_TEMP/package"
+
+      - name: Install the package
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 install "$env:RUNNER_TEMP/package/cyfr-desktop_$($env:GITHUB_REF_NAME)_windows_$($env:ARCH).msi"
+
+      - name: Smoke the installed app
+        run: bash tests/desktop-proof/native/smoke.sh "$APP"
+
+      - name: The installed cyfr is the tag's
+        run: bash tests/desktop-proof/native/installed-version.sh "$CYFR" "$GITHUB_REF_NAME"
+
+      - name: Remove the package
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 remove "$env:RUNNER_TEMP/package/cyfr-desktop_$($env:GITHUB_REF_NAME)_windows_$($env:ARCH).msi"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cyfr-desktop-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/package/cyfr-desktop_${{ github.ref_name }}_windows_${{ matrix.arch }}.msi
+          if-no-files-found: error
+          retention-days: 1
+
   # Each image's multi-arch manifest, made from this run's scanned digests
   # alone, and attested by the digest of the manifest the version tag names.
   # A release that is not a pre-release also moves :latest to it.
   merge:
-    needs: [images, linux-package]
+    needs: [images, linux-package, mac-package, windows-package]
     if: github.repository == 'cyfrworks/cyfr'
     timeout-minutes: 5
     permissions:
@@ -394,9 +541,11 @@ jobs:
   # images' digests go into the scaffold's compose, the scaffold is built
   # and hashed, and only then is the manifest written, checked and signed.
   release:
-    needs: [version, merge, linux-package, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    needs: [version, merge, linux-package, mac-package, windows-package, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
-    timeout-minutes: 10
+    # It downloads the six installers, near a gigabyte, and GoReleaser
+    # uploads them again with the archives.
+    timeout-minutes: 25
     permissions:
       contents: write
       id-token: write
@@ -443,6 +592,30 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cyfr-desktop-linux-arm64
+          path: ${{ runner.temp }}/packages
+
+      - name: Download the amd64 Mac package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-desktop-darwin-amd64
+          path: ${{ runner.temp }}/packages
+
+      - name: Download the arm64 Mac package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-desktop-darwin-arm64
+          path: ${{ runner.temp }}/packages
+
+      - name: Download the amd64 Windows package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-desktop-windows-amd64
+          path: ${{ runner.temp }}/packages
+
+      - name: Download the arm64 Windows package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cyfr-desktop-windows-arm64
           path: ${{ runner.temp }}/packages
 
       # The scaffold's compose names each image as <version>@<digest>; the
@@ -498,6 +671,23 @@ jobs:
       - name: Write the release note
         run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release/notes.md"
 
+      # The cask installs CYFR.app from the DMG for the Mac's architecture
+      # and links its cyfr, each DMG named by the sha256 of its own bytes.
+      # Outside the checkout, so GoReleaser finds the tree as the tag left
+      # it; the tap step below pushes it.
+      - name: Write the Homebrew cask
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cask"
+          bash scripts/ci/homebrew-cask.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/packages" 'https://github.com/cyfrworks/cyfr/releases/download/#{version}' > "$RUNNER_TEMP/cask/cyfr.rb"
+
+      # Before anything is published: the folder GoReleaser sums and
+      # attaches holds exactly the six installers at the tag's version, and
+      # the cask names each DMG at the release's download folder by that
+      # file's digest, installing CYFR.app and linking its cyfr alone.
+      - name: The installers are the six and the cask names the DMGs
+        run: python3 -I tests/ci-release-graph.py --installers "$RUNNER_TEMP/packages" --version "$GITHUB_REF_NAME" --cask "$RUNNER_TEMP/cask/cyfr.rb"
+
       - name: Run GoReleaser
         id: goreleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -507,10 +697,9 @@ jobs:
           workdir: apps/codex
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           # Where .goreleaser.yml's release finds release.json and its bundle.
           RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release
-          # Where it finds the CYFR app's Linux packages, to sum and attach.
+          # Where it finds the CYFR app's six installers, to sum and attach.
           RELEASE_PACKAGES_DIR: ${{ runner.temp }}/packages
 
       - name: Attest build provenance
@@ -527,10 +716,10 @@ jobs:
           checksum_file=$(echo "$ARTIFACTS" | jq -r '.[] | select(.type=="Checksum") | .path')
           echo "hashes=$(cat "apps/codex/$checksum_file" | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      # Push the generated Homebrew cask to the tap as a separate, non-fatal step.
-      # GoReleaser generates the cask (skip_upload) but does not push it, so a
-      # flaky tap push (e.g. a transient GitHub 500) can never fail the release or
-      # skip the attestation/SLSA steps above. Plain git is used instead of the
+      # Push the cask written above to the tap as a separate, non-fatal step,
+      # after the release it names is published, so a flaky tap push (e.g. a
+      # transient GitHub 500) can never fail the release or skip the
+      # attestation/SLSA steps above. Plain git is used instead of the
       # contents REST API, and continue-on-error keeps the job green. A
       # pre-release never reaches the tap: brew installs the release it names.
       - name: Publish Homebrew cask to tap
@@ -547,13 +736,11 @@ jobs:
               exit 0
               ;;
           esac
-          # GoReleaser (skip_upload) writes the cask under dist/. -print -quit
-          # stops at the first match; `|| true` lets a missing dist fall through
-          # to the skip branch instead of aborting under `set -e`.
-          CASK_SRC="$(find apps/codex/dist -type f -name 'cyfr.rb' -print -quit 2>/dev/null || true)"
-          if [ -z "$CASK_SRC" ]; then
-            echo "::warning::No generated cask found under apps/codex/dist; skipping tap update."
-            exit 0
+          # The cask the release checked before it published.
+          CASK_SRC="$RUNNER_TEMP/cask/cyfr.rb"
+          if [ ! -s "$CASK_SRC" ]; then
+            echo "::error::No cask at $CASK_SRC; the tap is not updated."
+            exit 1
           fi
 
           workdir="$(mktemp -d)"

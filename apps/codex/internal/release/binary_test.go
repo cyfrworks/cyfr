@@ -331,8 +331,9 @@ func TestFetchPackageRefusesAPackageChangedAfterItsSumWasRead(t *testing.T) {
 	}
 }
 
-// The release sums, and attaches, exactly the packages FetchPackage asks
-// for by name.
+// The release sums, and attaches, exactly the CYFR app's six installers:
+// the packages FetchPackage asks for by name, and the Mac and Windows
+// installers beside them.
 func TestTheReleaseShipsTheNamesFetchPackageAsks(t *testing.T) {
 	raw, err := os.ReadFile("../../.goreleaser.yml")
 	if err != nil {
@@ -351,7 +352,11 @@ func TestTheReleaseShipsTheNamesFetchPackageAsks(t *testing.T) {
 		t.Fatal(err)
 	}
 	const version = "0.9.0-rc.1"
-	want := []string{PackageName(version, "amd64"), PackageName(version, "arm64")}
+	want := []string{
+		PackageName(version, "amd64"), PackageName(version, "arm64"),
+		"cyfr-desktop_" + version + "_darwin_amd64.dmg", "cyfr-desktop_" + version + "_darwin_arm64.dmg",
+		"cyfr-desktop_" + version + "_windows_amd64.msi", "cyfr-desktop_" + version + "_windows_arm64.msi",
+	}
 	for where, list := range map[string]files{"checksum": config.Checksum, "release": config.Release} {
 		var got []string
 		for _, f := range list.Extra {
