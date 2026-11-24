@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,14 @@ func init() {
 	// hands over to checks it is (updateProgram).
 	updateCmd.Flags().String("continue-as", "", "")
 	_ = updateCmd.Flags().MarkHidden("continue-as")
+	// The CYFR app's Update CYFR page (cmd/app_window.go): --offer prints
+	// the change to the CYFR in the directory as JSON and makes none;
+	// --confirmed makes the change only where it is still the one whose
+	// digest the page showed, in place of --yes.
+	updateCmd.Flags().Bool("offer", false, "")
+	_ = updateCmd.Flags().MarkHidden("offer")
+	updateCmd.Flags().String("confirmed", "", "")
+	_ = updateCmd.Flags().MarkHidden("confirmed")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -71,6 +80,8 @@ The update holds the stack's lock from before its first docker call to its end, 
 		o.version, _ = cmd.Flags().GetString("version")
 		o.yes, _ = cmd.Flags().GetBool("yes")
 		o.continueAs, _ = cmd.Flags().GetString("continue-as")
+		o.offer, _ = cmd.Flags().GetBool("offer")
+		o.confirmed, _ = cmd.Flags().GetString("confirmed")
 		o.noInteractive = flagNoInteractive
 		return runUpdate(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), o)
 	},
@@ -237,6 +248,8 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		ctx = context.Background()
 	}
 	switch {
+	case o.offer:
+		// The change is this program's own to show: no program step.
 	case o.continueAs == "":
 		finished, err := updateProgram(ctx, out, o)
 		if finished || err != nil {
@@ -250,7 +263,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		fmt.Fprintf(out, "There is no CYFR in this directory, so the update ends with the program: it holds no compose file (%s). To update a CYFR, run 'cyfr update' in its directory, the one that holds its docker-compose.yml.\n", strings.Join(access.ComposeMainFiles, ", "))
 		return nil
 	}
-	return runHomeUpdate(ctx, out, errOut, o.yes)
+	return runHomeUpdate(ctx, out, errOut, o)
 }
 
 // runHomeUpdate is `cyfr update`'s home step in the working directory: the
@@ -263,7 +276,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 // step's failure would. The switch and the start are one step that is
 // never cut short: an interrupt during it is reported once the start has
 // answered.
-func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
+func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) error {
 	v := version.Version
 	if !release.IsVersion(v) {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
@@ -280,7 +293,10 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("cyfr update needs docker on PATH to update the stack; nothing was changed")
 	}
-	if done, err := u.offer(yes); done || err != nil {
+	if o.offer {
+		return u.showChange()
+	}
+	if done, err := u.offer(o.yes, o.confirmed); done || err != nil {
 		return err
 	}
 
@@ -487,54 +503,100 @@ func (u *updater) fetchManifest() error {
 	return nil
 }
 
-// offer shows what the update changes and asks to make it, answering done
-// when the update ends here: a home whose compose file names this
-// release's digests on every managed line already is left alone, with no
+// change is what the update changes, as offer shows it, read-only: none
+// is the sentence for a home whose compose file names this release's
+// digests on every managed line already, which is left alone, with no
 // stop and no snapshot; a home on a newer release than this cyfr is
 // refused, since the update would start older code over a database the
-// newer release migrated; and a change not confirmed is not made. yes
-// makes the change without asking; with no terminal to ask on and no yes,
-// the change is shown and not made.
-func (u *updater) offer(yes bool) (bool, error) {
+// newer release migrated, and so are an .env every start refuses and a
+// database another schema built.
+func (u *updater) change() (text, none string, err error) {
 	plan := u.compose
 	if plan.onRelease() {
-		fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.\n", u.version)
-		return true, nil
+		return "", fmt.Sprintf("This CYFR is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.", u.version), nil
 	}
 	from := plan.homeRelease()
 	if err := u.refuseNewer(from, "is on"); err != nil {
-		return true, fmt.Errorf("%w. Nothing was changed", err)
+		return "", "", fmt.Errorf("%w. Nothing was changed", err)
 	}
 	// .env is refused as every start refuses it before its first docker
 	// call, the schema read's included.
 	if fileExists(".env") {
 		if err := access.CheckEnvFile(".env"); err != nil {
-			return true, engineFailure(err)
+			return "", "", engineFailure(err)
 		}
 	}
 	if err := u.readSchema(); err != nil {
-		return true, err
+		return "", "", err
 	}
 
+	var b strings.Builder
 	if from != "" {
-		fmt.Fprintf(u.out, "\nThis CYFR is on release %s; this cyfr is release %s.\n", from, u.version)
+		fmt.Fprintf(&b, "\nThis CYFR is on release %s; this cyfr is release %s.\n", from, u.version)
 	} else {
-		fmt.Fprintf(u.out, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
+		fmt.Fprintf(&b, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
 	}
-	fmt.Fprintf(u.out, "Updating it stops the stack, snapshots it into backups/, switches these images to release %s and starts it:\n", u.version)
+	fmt.Fprintf(&b, "Updating it stops the stack, snapshots it into backups/, switches these images to release %s and starts it:\n", u.version)
 	for _, line := range plan.managed {
 		if line.value != line.replacement {
-			fmt.Fprintf(u.out, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
+			fmt.Fprintf(&b, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
 		}
 	}
 	if len(plan.overrides) > 0 {
-		fmt.Fprintln(u.out, "Image lines left as written (not managed by cyfr update):")
+		fmt.Fprintln(&b, "Image lines left as written (not managed by cyfr update):")
 		for _, line := range plan.overrides {
-			fmt.Fprintf(u.out, "  %s: %s\n", line.service, line.value)
+			fmt.Fprintf(&b, "  %s: %s\n", line.service, line.value)
 		}
 	}
-	fmt.Fprintf(u.out, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
-	if yes {
+	fmt.Fprintf(&b, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
+	return b.String(), "", nil
+}
+
+// changeDigest is the digest of a change as change words it, which the
+// CYFR app's page shows and --confirmed names.
+func changeDigest(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// shownChange is --offer's answer, its output's last line, in JSON: the change, or the
+// sentence for a home with nothing to update.
+type shownChange struct {
+	Change  string `json:"change,omitempty"`
+	Current string `json:"current,omitempty"`
+}
+
+// showChange prints the change as --offer answers it, making none; a
+// refusal is its error, as the update's own would be.
+func (u *updater) showChange() error {
+	text, none, err := u.change()
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(u.out).Encode(shownChange{Change: text, Current: none})
+}
+
+// offer shows what the update changes and asks to make it, answering done
+// when the update ends here (change): a home on this release already is
+// left alone and a change not confirmed is not made. yes makes the change
+// without asking; confirmed, the digest of the change the CYFR app's page
+// showed, makes it only where it is still that change, so the change made
+// is the one the person saw; with no terminal to ask on and neither, the
+// change is shown and not made.
+func (u *updater) offer(yes bool, confirmed string) (bool, error) {
+	text, none, err := u.change()
+	if none != "" {
+		fmt.Fprintln(u.out, none)
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	fmt.Fprint(u.out, text)
+	switch {
+	case confirmed != "" && changeDigest(text) != confirmed:
+		return true, errors.New("What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now")
+	case confirmed != "" || yes:
 		return false, nil
 	}
 	if !askTerminal() {

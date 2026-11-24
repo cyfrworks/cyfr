@@ -73,6 +73,11 @@ type updateOptions struct {
 	// noInteractive is the global --no-interactive, passed on at the
 	// handover.
 	noInteractive bool
+	// offer and confirmed are the CYFR app's page's (--offer, --confirmed):
+	// the change shown and none made, and the digest of the change shown,
+	// passed on at the handover.
+	offer     bool
+	confirmed string
 }
 
 // handedOver is the status of the new program the program step ran to
@@ -132,32 +137,21 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	// settled says whether the app needs nothing for target.
 	settled := func(target string) bool { return !appThere || app == target }
 
-	target := o.version
-	if target == "" {
-		if !release.IsVersion(current) {
-			fmt.Fprintf(out, "This cyfr is a development build (%s), which cyfr update does not replace.\n", current)
-			return false, nil
-		}
-		lookup, cancel := context.WithTimeout(ctx, 30*time.Second)
-		latest, err := latestRelease(lookup)
-		cancel()
-		switch {
-		case errors.Is(err, release.ErrNoRelease):
-			fmt.Fprintf(out, "No release of CYFR is published yet, so this cyfr (%s) stays.\n", current)
-			return false, nil
-		case err != nil:
-			return false, fmt.Errorf("cyfr update could not look up the newest release (%v); nothing was changed", err)
-		case latest == current && settled(latest):
-			fmt.Fprintf(out, "cyfr %s is the newest release.\n", current)
-			return false, nil
-		case latest != current && !release.IsNewer(latest, current):
-			fmt.Fprintf(out, "cyfr %s is newer than the newest release, %s, so it stays.\n", current, latest)
-			return false, nil
-		}
-		target = latest
-	} else if target == current && settled(target) {
+	target, latest, none, err := updateTarget(ctx, current, o.version, settled)
+	switch none {
+	case devBuild:
+		fmt.Fprintf(out, "This cyfr is a development build (%s), which cyfr update does not replace.\n", current)
+	case noReleaseYet:
+		fmt.Fprintf(out, "No release of CYFR is published yet, so this cyfr (%s) stays.\n", current)
+	case onNewest:
+		fmt.Fprintf(out, "cyfr %s is the newest release.\n", current)
+	case pastNewest:
+		fmt.Fprintf(out, "cyfr %s is newer than the newest release, %s, so it stays.\n", current, latest)
+	case onExact:
 		fmt.Fprintf(out, "This cyfr is release %s already.\n", current)
-		return false, nil
+	}
+	if none != 0 || err != nil {
+		return false, err
 	}
 	again := "cyfr update"
 	if o.version != "" {
@@ -226,6 +220,9 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	if o.yes {
 		args = append(args, "--yes")
 	}
+	if o.confirmed != "" {
+		args = append(args, "--confirmed", o.confirmed)
+	}
 	if o.noInteractive {
 		args = append(args, "--no-interactive")
 	}
@@ -237,6 +234,51 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 		return false, handedOver{status}
 	}
 	return true, nil
+}
+
+// noTarget is why cyfr update has no release to go to: this program is a
+// development build, no release is published, it is the newest release
+// already, newer than the newest, or the exact release asked for.
+type noTarget int
+
+const (
+	devBuild noTarget = iota + 1
+	noReleaseYet
+	onNewest
+	pastNewest
+	onExact
+)
+
+// updateTarget is the release cyfr update goes to from this program's
+// release current: exact, --version's, else the newest (release.Latest),
+// taken only when release.IsNewer says it is newer than current; settled
+// says whether the installed app needs nothing for a release. none says
+// why there is no target, and latest is the newest release where it was
+// read; err is a newest that could not be looked up.
+func updateTarget(ctx context.Context, current, exact string, settled func(string) bool) (target, latest string, none noTarget, err error) {
+	if exact != "" {
+		if exact == current && settled(exact) {
+			return "", "", onExact, nil
+		}
+		return exact, "", 0, nil
+	}
+	if !release.IsVersion(current) {
+		return "", "", devBuild, nil
+	}
+	lookup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	latest, err = latestRelease(lookup)
+	cancel()
+	switch {
+	case errors.Is(err, release.ErrNoRelease):
+		return "", "", noReleaseYet, nil
+	case err != nil:
+		return "", "", 0, fmt.Errorf("cyfr update could not look up the newest release (%v); nothing was changed", err)
+	case latest == current && settled(latest):
+		return "", latest, onNewest, nil
+	case latest != current && !release.IsNewer(latest, current):
+		return "", latest, pastNewest, nil
+	}
+	return latest, latest, 0, nil
 }
 
 // isInstalledAppCyfr is whether the program at path, its links resolved,
