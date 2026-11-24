@@ -660,7 +660,9 @@ defmodule Cyfr.StackShapeTest do
   # cyfr, a listener on the control plane's two addresses (cyfr's name on
   # the island's network and its fixed endpoint address), which the suite
   # proves refused; and it enables IPv6 on the island's network, so the
-  # guard's IPv6 rules are met by routed packets.
+  # guard's IPv6 rules are met by routed packets. The builds overlay fixes
+  # the island network's IPv4 subnet and the stand-in's address on it,
+  # where it also stands in for core's host API, which the guard is given.
   defp expected_overlays(release, roles) do
     [runtime, builds, backends] = Enum.map([:runtime, :builds, :backends], &role(roles, &1))
 
@@ -676,9 +678,27 @@ defmodule Cyfr.StackShapeTest do
              "entrypoint" => chosen_pool_argv(release, builds, "BUILD_POOL"),
              "environment" => ["LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}"]
            },
-           builds.guard => guard_overlay("BUILDER_IMAGE", builds),
-           "cyfr-stand-in" => stand_in_overlay("BUILDER_IMAGE", release, builds)
-         }, %{builds.network => %{"enable_ipv6" => true}}},
+           builds.guard =>
+             Map.update!(
+               guard_overlay("BUILDER_IMAGE", builds),
+               "environment",
+               &(&1 ++ ["CYFR_GUARD_HOST_API=172.16.237.7:4000"])
+             ),
+           "cyfr-stand-in" =>
+             put_in(
+               stand_in_overlay("BUILDER_IMAGE", release, builds),
+               ["networks", builds.network, "ipv4_address"],
+               "172.16.237.7"
+             )
+         },
+         %{
+           builds.network => %{
+             "enable_ipv6" => true,
+             "ipam" => %{
+               "config" => [%{"subnet" => "172.16.237.0/24", "ip_range" => "172.16.237.128/25"}]
+             }
+           }
+         }},
       "tests/locus-backends-image/compose.locus-backends.yml" =>
         {:backends,
          %{
