@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -277,5 +278,53 @@ func TestAnApprovalEndingAndARenewalBothStand(t *testing.T) {
 	}
 	if c := listOf(t, f).Homes[a]; c.Directory != "" || !strings.Contains(string(c.Certificate), `"n": 2`) {
 		t.Fatalf("a change was lost: %+v", c)
+	}
+}
+
+// A write that failed leaves the selection bound as it was: an admission
+// the list's folder refused to save fails and says so, and its retry,
+// once the folder takes it, is saved.
+func TestAFailedWriteIsWrittenByItsRetry(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("the folder's mode refuses no write here")
+	}
+	const home = "https://a.example.com"
+	dir := t.TempDir()
+	f := Homes(filepath.Join(dir, "homes.json"))
+	sel, err := f.Select(home, "https://cyfr.run", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sel.Commit(""); err != nil {
+		t.Fatal(err)
+	}
+	set := func() error {
+		return sel.Update(func(c *ClientRecord) bool {
+			c.ClientID, c.Certificate = "admitted", json.RawMessage(`{"expires_at":100}`)
+			return true
+		})
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if set() == nil {
+		t.Fatal("an admission the folder refused to save answered that it was saved")
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := listOf(t, f).Homes[home]; got.ClientID != "" {
+		t.Fatalf("the refused admission is on disk: %+v", got)
+	}
+	if err := set(); err != nil {
+		t.Fatal(err)
+	}
+	got := listOf(t, f).Homes[home]
+	var cert struct {
+		ExpiresAt int `json:"expires_at"`
+	}
+	if got.ClientID != "admitted" || json.Unmarshal(got.Certificate, &cert) != nil || cert.ExpiresAt != 100 {
+		t.Fatalf("the retry saved %+v", got)
 	}
 }

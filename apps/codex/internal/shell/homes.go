@@ -295,12 +295,15 @@ func (s *Selection) Load() (ClientRecord, error) {
 // last wrote it (bound): to the entry the list holds, or, where it holds
 // none and the change is an admission (a client and the certificate this
 // CYFR issued it), as the entry it adds. An admission moves the list's
-// count, and the selection is bound to its own write.
+// count, and the selection is bound to its own write once that write is
+// on disk: a write that failed leaves it bound as it was, so a retry
+// writes.
 func (s *Selection) Update(change func(*ClientRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	change(&s.rec)
-	return s.file.Update(func(l *HomeList) bool {
+	var written *ClientRecord
+	err := s.file.Update(func(l *HomeList) bool {
 		if l.at(s.home) != s.bound {
 			return false
 		}
@@ -319,15 +322,24 @@ func (s *Selection) Update(change func(*ClientRecord) bool) error {
 				cur.Generation = l.Generations
 			}
 			l.Homes[s.home] = cur
-			s.bound, s.rec.Generation = cur.Generation, cur.Generation
+			written = &cur
 			return true
 		case s.rec.ClientID != "" && len(s.rec.Certificate) != 0:
-			s.rec = l.add(s.home, s.rec)
-			s.bound = s.rec.Generation
+			added := l.add(s.home, s.rec)
+			written = &added
 			return true
 		}
 		return false
 	})
+	if err == nil && written != nil {
+		s.bind(*written)
+	}
+	return err
+}
+
+// bind binds the selection to its entry as its own write left it on disk.
+func (s *Selection) bind(written ClientRecord) {
+	s.bound, s.rec.Generation = written.Generation, written.Generation
 }
 
 // Commit writes the selection once the app opened it: its entry is added
@@ -342,6 +354,7 @@ func (s *Selection) Commit(ceremony string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var refused error
+	var added *ClientRecord
 	err := s.file.Update(func(l *HomeList) bool {
 		if l.at(s.home) != s.bound {
 			refused = fmt.Errorf("this computer's list changed at %s meanwhile", s.home)
@@ -362,7 +375,7 @@ func (s *Selection) Commit(ceremony string) error {
 				rec.Directory = s.rec.Directory
 			}
 			cur = l.add(s.home, rec)
-			s.rec.Generation, s.bound = cur.Generation, cur.Generation
+			added = &cur
 		}
 		if ceremony != "" && !slices.Contains(cur.Ceremonies, ceremony) {
 			cur.Ceremonies = append(cur.Ceremonies, ceremony)
@@ -371,6 +384,9 @@ func (s *Selection) Commit(ceremony string) error {
 		l.Last = s.home
 		return true
 	})
+	if err == nil && added != nil {
+		s.bind(*added)
+	}
 	return errors.Join(err, refused)
 }
 
