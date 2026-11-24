@@ -28,7 +28,7 @@ import {BrowserWindow, session} from "electron"
 
 import {answerWith, armWindow, signOutOfPrism} from "../account.js"
 import {DIRECTORY, HOME, NAME, OUT, PROBE, arm, atBootstrap, childOfThis, content, contentAt, harvest, history,
-  client, inputs, js, literal, load, opens, passkeys, rail, refused, row, run, said, secondClient, section, seen, sessionCookie,
+  client, inputs, js, judged, literal, load, opens, passkeys, rail, refused, row, run, said, secondClient, section, seen, sessionCookie,
   sessionMark, waitFor} from "../lib.js"
 
 // B, its account service its own.
@@ -257,11 +257,14 @@ async function pairPhase() {
   // a_again: A on the rail opens A again, signed in under the very session
   // it had, asking nothing.
   const aMark = (await markIn(HOME)).mark
-  await select(HOME)
-  const again = await prismAt(HOME)
-  const aMarkAgain = await sessionMark(again)
-  row("a_again", aMarkAgain?.digest === aMark?.digest && aMarkAgain?.expires === aMark?.expires && again.webContents.session === contentStore(HOME),
-    "A on the rail opens A again, signed in under the session it had", {aMark, aMarkAgain})
+  let again
+  await judged("a_again", "A on the rail opens A again, signed in under the session it had", async () => {
+    await select(HOME)
+    again = await prismAt(HOME)
+    const aMarkAgain = await sessionMark(again)
+    return [aMarkAgain?.digest === aMark?.digest && aMarkAgain?.expires === aMark?.expires && again.webContents.session === contentStore(HOME),
+      {aMark, aMarkAgain}]
+  })
 
   // read_only: the rail's page holds its read credential alone, in no
   // address, and cyfr refuses that credential every change.
