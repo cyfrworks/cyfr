@@ -22,7 +22,7 @@
       "byte_cost": 2.8,
       "keeper_read_bytes": 65541,
       "keeper_read_copies": 3,
-      "relay_queue_bytes": 212992,
+      "relay_queue_bytes": 233167,
       "socket_queue_bytes": 4194304
     }
   },

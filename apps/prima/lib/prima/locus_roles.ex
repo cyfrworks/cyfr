@@ -169,7 +169,7 @@ defmodule Prima.LocusRoles do
       byte_cost: 2.8,
       keeper_read_bytes: 65_541,
       keeper_read_copies: 3,
-      relay_queue_bytes: 212_992,
+      relay_queue_bytes: 233_167,
       socket_queue_bytes: 4_194_304
     }
   }

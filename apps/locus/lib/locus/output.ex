@@ -103,10 +103,17 @@ defmodule Locus.Output do
       own, at most four callers' writes a connection, waiting for its
       relay to attach or in its writer, each within its request's bound; a
       fifth is refused at once (`Locus.Keeper`).
-    * **A relay connection's kernel queue**, every role: the relay's unix
-      socket send buffer, 212,992 bytes (Linux's `net.core.wmem_default`),
-      one a spawn: runtime 1,703,936 bytes, builds 3,407,872, backends
-      23,855,104 at the defaults.
+    * **A relay connection's kernel queue**, every role: what the kernel
+      holds on the relay's unix socket while its reader takes nothing,
+      233,167 bytes, one a spawn: runtime 1,865,336 bytes, builds
+      3,730,672, backends 26,114,704 at the defaults. The socket's send
+      buffer is Linux's `net.core.wmem_default`, 212,992 bytes, but the
+      kernel admits a write while what it has queued is under that buffer,
+      so the queue ends past it by part of one write: measured by writing
+      frames of 65,541 bytes, the most the relay writes at once, into a
+      unix stream socket whose reader never reads until the write would
+      block, which held 233,167 bytes on Linux 7.0 (smaller writes hold
+      less: 180,224 bytes at 4 KiB).
     * **An ending spawn's frames**, every role: what a spawn's relay
       carries between its release being asked, or its leader's exit
       reported, and the relay's end, while cyfr-locus kills its processes
@@ -117,7 +124,7 @@ defmodule Locus.Output do
       connection closed, which ends the relay (`Locus.Keeper`). Only once
       the relay has ended is what it left on the connection read to the
       end and handed to the owner at once, without its word: at most the
-      relay's socket queue and one read, 278,533 bytes, one a spawn being
+      relay's socket queue and one read, 298,708 bytes, one a spawn being
       released.
     * **The piece a runtime holder reads ahead of the count**, the
       runtime: each poster, fetch and own call holds the piece its
