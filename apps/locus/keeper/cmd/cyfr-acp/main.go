@@ -51,9 +51,9 @@
 //
 // A `forget` removes the session's files the profile names and proves them
 // absent. What a program keeps of every session in one index of its own
-// stays (Antigravity: each conversation's title and summary, in
-// antigravity-cli/conversation_summaries.db and jetbox_summaries_proto.pb),
-// since CYFR never writes a program's database.
+// stays (Antigravity: each session's title and summary, in its index under
+// antigravity-cli, antigravity_words.go), since CYFR never writes a
+// program's database.
 //
 // Stop is the session's close: a prompt running is first cancelled in
 // ACP's way (`session/cancel`), then the program's input closes, a TERM

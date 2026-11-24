@@ -718,7 +718,7 @@ func TestForgetRemovesTheNamedFilesAndLeavesTheRest(t *testing.T) {
 	}()
 	cli := filepath.Join(s.home, ".gemini", "antigravity-cli")
 	named := func(id string) []string {
-		return []string{filepath.Join(cli, "brain", id), filepath.Join(cli, "conversations", id+".db"),
+		return []string{filepath.Join(cli, "brain", id), filepath.Join(cli, agySessionDatabases, id+".db"),
 			filepath.Join(cli, "annotations", id+".pbtxt"), instructionsFile(s.home, id)}
 	}
 	for _, name := range named(first) {
@@ -737,7 +737,7 @@ func TestForgetRemovesTheNamedFilesAndLeavesTheRest(t *testing.T) {
 			t.Fatalf("the forgotten session's file is gone: %s %v", name, err)
 		}
 	}
-	for _, name := range append(named(second)[:3], filepath.Join(cli, "conversation_summaries.db")) {
+	for _, name := range append(named(second)[:3], filepath.Join(cli, agySummaryIndex)) {
 		if _, err := os.Stat(name); err != nil {
 			t.Fatalf("another session's files and the program's index stay: %v", err)
 		}
@@ -852,10 +852,10 @@ func TestModelsAreListedWithOrWithoutASessionAndTheListingForgotten(t *testing.T
 		!reflect.DeepEqual(listing["access"], []any{map[string]any{"id": "full-access", "name": "Full access, no approvals"}}) {
 		t.Fatalf("the listing names each model, its efforts and the access: %v", listing)
 	}
-	conversations, _ := filepath.Glob(filepath.Join(s.home, ".gemini", "antigravity-cli", "conversations", "*.db"))
+	databases, _ := filepath.Glob(filepath.Join(s.home, ".gemini", "antigravity-cli", agySessionDatabases, "*.db"))
 	brains, _ := filepath.Glob(filepath.Join(s.home, ".gemini", "antigravity-cli", "brain", "*"))
-	if len(conversations)+len(brains) != 0 {
-		t.Fatalf("the listing session is forgotten: %v %v", conversations, brains)
+	if len(databases)+len(brains) != 0 {
+		t.Fatalf("the listing session is forgotten: %v %v", databases, brains)
 	}
 	if _, err := os.Stat(listingRecord(s.home)); !brainwire.Absent(err) {
 		t.Fatalf("no listing is left to forget: %v", err)

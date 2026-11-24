@@ -31,9 +31,9 @@ import (
 // answer). It reaches CYFR's tools as Antigravity's server would, through
 // the socket its session's `cyfr` entry names (`--socket NAME`), listing
 // once a session answered, and keeps each session's files under its
-// GEMINI_HOME, `.gemini` in the home: `brain/<id>/`, `conversations/<id>.db`
+// GEMINI_HOME, `.gemini` in the home: `brain/<id>/`, its database by its id
 // and `annotations/<id>.pbtxt`, with each id added to the one index of
-// every session, `conversation_summaries.db`. A prompt's last text picks
+// every session (antigravity_words.go). A prompt's last text picks
 // what the turn does:
 //
 //	slow      streams a first part, waits for a second prompt, then replies naming it
@@ -74,7 +74,7 @@ func fakeACP() int {
 	fmt.Fprintln(os.Stderr, stderrCanary)
 	home := os.Getenv("HOME")
 	cli := filepath.Join(geminiHome(home), "antigravity-cli")
-	for _, dir := range []string{"brain", "conversations", "annotations"} {
+	for _, dir := range []string{"brain", agySessionDatabases, "annotations"} {
 		_ = os.MkdirAll(filepath.Join(cli, dir), 0o700)
 	}
 	logLine := func(what string) {
@@ -208,14 +208,14 @@ func fakeACP() int {
 	files := func(id string) {
 		_ = os.MkdirAll(filepath.Join(cli, "brain", id, ".system_generated", "logs"), 0o700)
 		_ = os.WriteFile(filepath.Join(cli, "brain", id, ".system_generated", "logs", "transcript.jsonl"), []byte("FAKE-TRANSCRIPT\n"), 0o600)
-		_ = os.WriteFile(filepath.Join(cli, "conversations", id+".db"), []byte("FAKE-DB"), 0o600)
+		_ = os.WriteFile(filepath.Join(cli, agySessionDatabases, id+".db"), []byte("FAKE-DB"), 0o600)
 		_ = os.WriteFile(filepath.Join(cli, "annotations", id+".pbtxt"), []byte("FAKE-ANNOTATION"), 0o600)
-		index, _ := os.OpenFile(filepath.Join(cli, "conversation_summaries.db"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		index, _ := os.OpenFile(filepath.Join(cli, agySummaryIndex), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		fmt.Fprintln(index, id)
 		index.Close()
 	}
 	exists := func(id string) bool {
-		_, err := os.Stat(filepath.Join(cli, "conversations", id+".db"))
+		_, err := os.Stat(filepath.Join(cli, agySessionDatabases, id+".db"))
 		return err == nil
 	}
 

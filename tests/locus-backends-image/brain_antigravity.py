@@ -93,7 +93,9 @@ FILES = {
 SYSTEM = "You are a crew member of this athanor."
 WORK = "trn_brain_1"
 CLI = ".gemini/antigravity-cli"
-SHARED = (f"{CLI}/conversation_summaries.db", f"{CLI}/jetbox_summaries_proto.pb")
+# The program's index of every session, by the names fake-acp.mjs keeps it
+# under, as Antigravity does.
+SHARED = (f"{CLI}/*_summaries.db", f"{CLI}/*_summaries_proto.pb")
 SIGNIN = ".gemini/oauth_creds.json"
 LISTED = [("gemini-4-neon", ["low", "medium", "high", "xhigh"]), ("gemini-3.8-flash", ["low", "medium", "high"]),
           ("gpt-oss-120b-medium", [])]
@@ -169,7 +171,7 @@ def home_has(c, path):
 
 
 def session_files(session):
-    return (f"{CLI}/brain/{session}", f"{CLI}/conversations/{session}.db", f"{CLI}/annotations/{session}.pbtxt")
+    return (f"{CLI}/brain/{session}", f"{CLI}/*/{session}.db", f"{CLI}/annotations/{session}.pbtxt")
 
 
 def fresh_turn(d, work, post, words):
@@ -214,7 +216,7 @@ def main():
                "the listing is the session's models, each with the efforts it has a variant of, the driver's one "
                "access and the sign-in", listed)
         eventually(lambda: not harnesses(stack), "the listing's program to end")
-        expect(home_has(c, SHARED[0]) and not home_has(c, f"{CLI}/conversations/*.db")
+        expect(home_has(c, SHARED[0]) and not home_has(c, f"{CLI}/*/*.db")
                and not home_has(c, f"{CLI}/brain/*") and not home_has(c, f"{CLI}/annotations/*"),
                "the listing's session is gone from the folder, and the index the program keeps of it stays")
 

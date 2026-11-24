@@ -70,11 +70,10 @@ var profiles = map[string]*profile{antigravity.name: antigravity}
 const relayServer = "cyfr"
 
 // antigravity is Antigravity's standalone CLI, `agy acp`, as probed at
-// 1.5.16. A session's files are its brain folder, its conversation database
-// and its annotations, each named by the session's id. Each conversation's
-// title and summary are also kept in the program's one index of every
-// session (antigravity-cli/conversation_summaries.db and
-// jetbox_summaries_proto.pb), which CYFR never writes: a forget leaves them,
+// 1.5.16. A session's files are its brain folder, its database and its
+// annotations, each named by the session's id. Each session's title and
+// summary are also kept in the program's one index of every session
+// (antigravity_words.go), which CYFR never writes: a forget leaves them,
 // Antigravity's lack.
 var antigravity = &profile{
 	name:       "cyfr-antigravity",
@@ -120,9 +119,9 @@ var antigravity = &profile{
 		cli := filepath.Join(geminiHome(home), "antigravity-cli")
 		return []string{
 			filepath.Join(cli, "brain", session),
-			filepath.Join(cli, "conversations", session+".db"),
-			filepath.Join(cli, "conversations", session+".db-wal"),
-			filepath.Join(cli, "conversations", session+".db-shm"),
+			filepath.Join(cli, agySessionDatabases, session+".db"),
+			filepath.Join(cli, agySessionDatabases, session+".db-wal"),
+			filepath.Join(cli, agySessionDatabases, session+".db-shm"),
 			filepath.Join(cli, "annotations", session+".pbtxt"),
 		}
 	},
