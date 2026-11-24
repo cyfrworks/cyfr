@@ -33,6 +33,8 @@ import {LOCALHOST_IS_IPV4, accountLoad, accountPartition, documentHeaders, grant
 import {ABORTED, DEPARTURE_MS, initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
+/** How long a killed cyfr has to exit before a fresh one starts all the same. */
+export const RESTART_WAIT_MS = 5_000
 // How long the app's end waits for a clear or a flush under way.
 const END_WAITS_MS = 5000
 // The rail's width, at the window's left.
@@ -720,12 +722,27 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
 
   // A fresh cyfr in place of one that did not answer a departure in time:
   // what it says from here is the old one's no more.
+  // A cyfr not trusted to have let go is killed outright, and the fresh one
+  // starts only once it has exited: until then it holds the port the fresh
+  // one listens on. A kill the system has not completed in RESTART_WAIT_MS
+  // starts the fresh one all the same, which says so if it cannot listen.
+  // Nothing starts once the app is ending.
   function restartCyfr() {
     const old = child
     child = null
     clearTimeout(readiness)
-    if (old && old.exitCode === null) old.kill()
-    startCyfr()
+    if (!old || old.exitCode !== null || old.signalCode !== null) return startCyfr()
+    let started = false
+    const start = () => {
+      if (started) return
+      started = true
+      clearTimeout(bound)
+      if (state.name !== "ended") startCyfr()
+    }
+    const bound = setTimeout(start, RESTART_WAIT_MS)
+    bound.unref?.()
+    old.once("exit", start)
+    old.kill("SIGKILL")
   }
 
   function startCyfr() {

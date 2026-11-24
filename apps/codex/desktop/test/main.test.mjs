@@ -314,8 +314,8 @@ world.powerMonitor = new EventEmitter()
 function cyfr() {
   const child = new EventEmitter()
   Object.assign(child, {
-    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, killed: false,
-    kill() { child.killed = true }
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null, killed: false,
+    kill(signal = "SIGTERM") { child.killed = signal }
   })
   child.heard = []
   // What main writes it, in the order of everything main does (log).
@@ -370,7 +370,7 @@ mock.module("node:child_process", {exports: {spawn: (_program, args, options) =>
   world.spawnedIn.push(options.cwd ?? null)
   return (child = cyfr())
 }}})
-const {startApp} = await import("../src/app.js")
+const {RESTART_WAIT_MS, startApp} = await import("../src/app.js")
 
 // A turn of the event loop: what main does on a line or an event is done.
 const settled = () => new Promise((resolve) => setImmediate(resolve))
@@ -884,15 +884,17 @@ test("a departure cyfr does not answer in time ends that cyfr and starts a fresh
     assert.equal(world.spawned.length, 1)
     mock.timers.tick(1)
     await turns()
-    assert.ok(old.killed, "the cyfr that did not let go is ended")
-    assert.deepEqual(world.spawned, [["desktop-serve"], ["desktop-serve"]], "and a fresh one started")
-    assert.notEqual(child, old)
+    assert.equal(old.killed, "SIGKILL", "the cyfr that did not let go is killed outright")
+    assert.equal(world.spawned.length, 1, "no fresh one while the old one holds the port")
     assert.ok(said.some((line) => /did not let go/.test(line)), said.join("; "))
     old.say({type: "left", id: 1})
     old.say({type: "ready", url: READY, rail: RAIL})
     old.proposes(PORT_A)
-    old.emit("exit", null, "SIGTERM")
+    old.exitCode = null
+    old.emit("exit", null, "SIGKILL")
     await turns()
+    assert.deepEqual(world.spawned, [["desktop-serve"], ["desktop-serve"]], "a fresh one once the old one exited")
+    assert.notEqual(child, old)
     assert.equal(content(), undefined, "nothing of the old one's lines")
     assert.ok(!live().some((w) => w.webContents.url.startsWith("data:")), "and its exit ends nothing")
     assert.deepEqual(child.heard, [], "nothing answered to them")
@@ -904,6 +906,33 @@ test("a departure cyfr does not answer in time ends that cyfr and starts a fresh
     assert.deepEqual(world.cleared, [])
   } finally {
     mock.timers.reset()
+  }
+})
+
+test("a killed cyfr that never exits is given RESTART_WAIT_MS, then a fresh one starts all the same; none once the app is ending", async () => {
+  for (const quit of [false, true]) {
+    await signedIn()
+    const old = child
+    mock.timers.enable({apis: ["setTimeout"]})
+    try {
+      select(PORT_B)
+      await turns()
+      mock.timers.tick(DEPARTURE_MS)
+      await turns()
+      assert.equal(old.killed, "SIGKILL")
+      if (quit) {
+        world.app.emit("before-quit", {preventDefault() {}})
+        await turns()
+      }
+      mock.timers.tick(RESTART_WAIT_MS - 1)
+      await turns()
+      assert.equal(world.spawned.length, 1, "not before the wait is up")
+      mock.timers.tick(1)
+      await turns()
+      assert.equal(world.spawned.length, quit ? 1 : 2, quit ? "none once the app is ending" : "a fresh one, the wait up")
+    } finally {
+      mock.timers.reset()
+    }
   }
 })
 

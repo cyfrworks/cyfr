@@ -278,18 +278,18 @@ async function passkeyPhase() {
   row("sign_out", signedOutToWays(out) && out.signOuts.length === 1 && out.signOuts[0].status === 302,
     "Prism's Sign out ends the session, and the chooser shows both ways on", lockDetail(out))
 
-  // signed_out_root: the CYFR opens to no one after that: its root, given
-  // the content window, is sent to sign in, which main refuses, and the
-  // chooser shows the ways on again; the old cookie opens nothing.
+  // signed_out_root: the CYFR opens to no one after that: the old cookie
+  // is sent from its root to sign in; and the chooser, whose view keeps
+  // nothing, loads no page of the CYFR (its sign-in is main's to open in
+  // the CYFR's own view): main refuses the root there and the chooser
+  // stays with the ways on.
   const root = HOME + "/"
-  const decidedBefore = decisions.length
   await js(out.back.webContents, `location.assign(${literal(root)}); 1`)
-  const sentBack = await waitFor(() => decisions.slice(decidedBefore).find((d) => d.name === "will-redirect" && d.main &&
-    d.url.startsWith(HOME + "/login")), "the CYFR sending the signed-out to sign in")
+  const chooserRefused = await decided(out.back.webContents, root, false, "main's decision on the CYFR's root in the chooser")
   await bothWays()
   const oldCookie = await opens(out.cookie)
-  row("signed_out_root", sentBack.prevented && refused(oldCookie),
-    "after signing out the CYFR sends its root to sign in, and the chooser shows the ways on", {sentBack, oldCookie})
+  row("signed_out_root", chooserRefused && refused(oldCookie),
+    "after signing out the old cookie is sent from the CYFR's root to sign in, and the chooser loads no page of the CYFR", {chooserRefused, oldCookie})
 
   // sign_in_again: from the chooser's passkey button a fresh assertion
   // signs in again, under a new session.
