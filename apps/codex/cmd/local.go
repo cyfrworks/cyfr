@@ -302,7 +302,7 @@ func (f *localFolder) look(ctx context.Context, args ...string) (folderLook, err
 		return folderLook{}, &shell.Unbound{Sentence: unread(f.dir, errNoReading)}
 	case end.Look.Bound != f.opened:
 		return folderLook{}, &shell.Unbound{Moved: true, Lasting: true, Sentence: fmt.Sprintf(
-			"The settings of the CYFR in %s changed after it was opened here, so nothing was sent to it. Quit CYFR and open it again.", f.dir)}
+			"The settings of the CYFR in %s changed after it was opened here, so nothing was sent to it. Press Connect on the left, then choose this CYFR again: on a box's screen, This box.", f.dir)}
 	case end.Look.Refused != "":
 		return folderLook{}, &shell.Unbound{Sentence: end.Look.Refused, Lasting: end.Look.Lasting}
 	case end.Look.Container.ID == "":
