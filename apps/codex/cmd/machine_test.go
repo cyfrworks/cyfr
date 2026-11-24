@@ -41,6 +41,10 @@ type standIn struct {
 	prompt                   func()
 	// refused is what docker writes where it does not answer.
 	refused string
+	// appArmor is the kernel enforcing AppArmor, and profile the cyfr-locus
+	// profile in /etc/apparmor.d, nil none.
+	appArmor bool
+	profile  []byte
 }
 
 // The daemon's two refusals of a call, as docker writes them: its socket
@@ -102,6 +106,13 @@ func standInMachine(t *testing.T) *standIn {
 	}
 	machine.passwordless = func() bool { return s.passwordless }
 	machine.terminal = func() bool { return !s.noTerminal }
+	machine.appArmor = func() bool { return s.appArmor }
+	machine.appArmorProfile = func() ([]byte, error) {
+		if s.profile == nil {
+			return nil, fs.ErrNotExist
+		}
+		return s.profile, nil
+	}
 	machine.authenticate = func() error {
 		s.authenticated++
 		if s.prompt != nil {

@@ -993,6 +993,7 @@ project_new() {
     cp "$ROOT/docker-compose.yml" "$WORK/docker-compose.yml"
     cp "$HERE/compose.yml" "$WORK/docker-compose.override.yml"
     cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$WORK/keeper.seccomp.json"
+    cp "$ROOT/apps/locus/keeper/seccomp/cyfr-locus" "$WORK/cyfr-locus.apparmor"
     cp "$ROOT/.env.example" "$WORK/.env.example"
   fi
   cli_ok init init --no-interactive --no-pull

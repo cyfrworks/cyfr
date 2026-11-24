@@ -42,6 +42,7 @@ func TestIsManaged(t *testing.T) {
 		"identity-guide.md",
 		"devices-guide.md",
 		"keeper.seccomp.json",
+		"cyfr-locus.apparmor",
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
@@ -164,6 +165,49 @@ func TestShippedProfileIsManaged(t *testing.T) {
 	}
 	if !strings.Contains(string(compose), "      - seccomp=./"+SeccompProfile+"\n") {
 		t.Errorf("docker-compose.yml does not name ./%s", SeccompProfile)
+	}
+}
+
+// TestShippedAppArmorProfileIsManaged binds the AppArmor profile the
+// scaffold tarball packs beside docker-compose.yml to the managed set and
+// to the profile every Locus service of the compose file names: one shipped
+// but not managed would stay behind the image `cyfr update` pulls.
+func TestShippedAppArmorProfileIsManaged(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
+	if err != nil {
+		t.Fatalf("read scaffold-tarball.sh: %v", err)
+	}
+	script := string(raw)
+	source := regexp.MustCompile(`(?m)^APPARMOR_PROFILE=(\S+)$`).FindStringSubmatch(script)
+	name := regexp.MustCompile(`(?m)^APPARMOR_PROFILE_NAME=(\S+)$`).FindStringSubmatch(script)
+	if source == nil || name == nil {
+		t.Fatal("scaffold-tarball.sh names no APPARMOR_PROFILE and APPARMOR_PROFILE_NAME")
+	}
+	if source[1] != "apps/locus/keeper/seccomp/cyfr-locus" || name[1] != AppArmorProfile {
+		t.Errorf("the tarball ships %s as %s, want apps/locus/keeper/seccomp/cyfr-locus as %s", source[1], name[1], AppArmorProfile)
+	}
+	for _, line := range []string{
+		`for item in "${ITEMS[@]}" "$PROFILE" "$APPARMOR_PROFILE"; do`,
+		`cp "$APPARMOR_PROFILE" "$STAGE/$APPARMOR_PROFILE_NAME"`,
+		`-C "$STAGE" "$PROFILE_NAME" "$APPARMOR_PROFILE_NAME"`,
+	} {
+		if !strings.Contains(script, line) {
+			t.Errorf("scaffold-tarball.sh lacks %s", line)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, source[1])); err != nil {
+		t.Errorf("the profile the tarball ships: %v", err)
+	}
+	if !IsManaged(AppArmorProfile) {
+		t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", AppArmorProfile)
+	}
+	compose, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	if !strings.Contains(string(compose), "      - apparmor=cyfr-locus\n") {
+		t.Error("docker-compose.yml names no apparmor=cyfr-locus")
 	}
 }
 

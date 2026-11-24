@@ -39,7 +39,7 @@ The program or its link stays when this directory holds it, or holds what it res
 
 CYFR never asks for, reads or keeps a password. When the screen service, the app or the link is to go, an account outside the sudo and admin groups is refused before anything is shown or asked, with those commands as one sudo line for whoever administers the machine. Otherwise, after the question and before the stack stops, CYFR says whose password sudo will ask for, when it will ask, and sudo asks in its own prompt; a refused password changes nothing, and so does a sudo that needs a password with no terminal to ask at.
 
-It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr and this machine's device key. It ends by naming each by its path, and the command that removes the volumes.
+It leaves every file in this directory as cyfr down leaves it (the compose file, the Caddyfile, .env, .gitignore, the guides, .cyfr/, data/, backups/), the stack's volumes, this program's settings files in ~/.cyfr, this machine's device key and this machine's AppArmor profile cyfr-locus, which every CYFR on it shares. It ends by naming each by its path, and the commands that remove the volumes and the profile.
 
 Each step is said as it is done; when one fails, the command says what is already gone and what is still here.`,
 	Example: "  cyfr uninstall\n  cyfr uninstall --yes",
@@ -99,6 +99,9 @@ type uninstallPlan struct {
 	// device is this account's device folder, its key and the CYFR it
 	// connects to, which stays; "" when there is none.
 	device string
+	// appArmor is whether this machine keeps the AppArmor profile
+	// cyfr-locus, which every CYFR on it shares, so it stays.
+	appArmor bool
 }
 
 // readUninstallPlan reads what an uninstall of the CYFR in the working
@@ -158,6 +161,9 @@ func readUninstallPlan() (*uninstallPlan, error) {
 			}
 		}
 	}
+	if _, err := machine.appArmorProfile(); err == nil && machine.system() == "linux" {
+		p.appArmor = true
+	}
 	if device, err := shell.DeviceFolder(); err == nil {
 		if _, err := os.Lstat(device); err == nil {
 			p.device = device
@@ -213,6 +219,9 @@ func (p *uninstallPlan) show(out io.Writer) {
 	}
 	if p.device != "" {
 		fmt.Fprintf(out, "  this account's device key, %s\n", p.device)
+	}
+	if p.appArmor {
+		fmt.Fprintln(out, "  this machine's AppArmor profile cyfr-locus, which every CYFR on it shares")
 	}
 	if p.cask {
 		fmt.Fprintln(out, "  this program, which Homebrew installed: remove it with 'brew uninstall --cask cyfr'")
@@ -293,9 +302,9 @@ const appRemoval = "apt-get remove -y " + appPackage
 // linkRemoval is the root command that removes the link onto PATH.
 func linkRemoval() string { return shellQuote([]string{"rm", "-f", "--", usrLocalLink}) }
 
-// left names what the uninstall left, each by its path, and the one
-// command it gives, the volumes' removal: it never prints a command that
-// removes a file or a folder.
+// left names what the uninstall left, each by its path, and the commands
+// it gives, the volumes' removal and the AppArmor profile's: it never
+// prints a command that removes a file or a folder of the person's.
 func (p *uninstallPlan) left(volumes []string) string {
 	var b strings.Builder
 	b.WriteString("CYFR is uninstalled. Left as they were:\n")
@@ -316,6 +325,9 @@ func (p *uninstallPlan) left(volumes []string) string {
 	}
 	if len(volumes) > 0 {
 		fmt.Fprintf(&b, "  the stack's volumes, which this command removes:\n    docker volume rm %s\n", shellQuote(volumes))
+	}
+	if p.appArmor {
+		fmt.Fprintf(&b, "  this machine's AppArmor profile cyfr-locus, which every CYFR on it shares and this command removes:\n    %s\n", appArmorRemoval)
 	}
 	return b.String()
 }

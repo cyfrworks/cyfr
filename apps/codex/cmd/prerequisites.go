@@ -68,6 +68,11 @@ type machineSeams struct {
 	// authenticate is sudo's own password prompt on this terminal; it
 	// runs no command.
 	authenticate func() error
+	// appArmor is whether the kernel enforces AppArmor profiles.
+	appArmor func() bool
+	// appArmorProfile is the cyfr-locus profile this machine keeps in
+	// /etc/apparmor.d, an error where it has none or it cannot be read.
+	appArmorProfile func() ([]byte, error)
 	// apply runs the commands as root through one sudo.
 	apply func(commands []string) error
 	// forget invalidates sudo's cached login.
@@ -151,6 +156,11 @@ var machine = machineSeams{
 		f.Close()
 		return true
 	},
+	appArmor: func() bool {
+		raw, err := os.ReadFile("/sys/module/apparmor/parameters/enabled")
+		return err == nil && strings.TrimSpace(string(raw)) == "Y"
+	},
+	appArmorProfile: func() ([]byte, error) { return os.ReadFile(appArmorTarget) },
 	authenticate: func() error {
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
