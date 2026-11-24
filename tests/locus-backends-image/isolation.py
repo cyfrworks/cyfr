@@ -336,7 +336,10 @@ def test_guard_death(image):
         took = time.monotonic() - killed
         expect(gone and took < 2.0, f"the keeper killed the routed session, daemon included, {took:.2f} s after the guard's "
                "control died (the poll's own cost included)", took)
-        expect("routed spaces are killed" in stack.logs(), "the keeper says it killed the routed spaces", stack.logs()[-2000:])
+        # The keeper says so once every group it killed is empty, which
+        # comes just after the processes are seen gone.
+        expect(eventually(lambda: "routed spaces are killed" in stack.logs(), "the keeper to say it killed the routed spaces"),
+               "the keeper says it killed the routed spaces")
     finally:
         stack.down()
 
