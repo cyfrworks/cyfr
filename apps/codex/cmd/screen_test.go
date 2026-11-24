@@ -175,6 +175,35 @@ func TestScreenOnTakesTheAppThatAnswersThisRelease(t *testing.T) {
 	}
 }
 
+// On arm64 `screen on` runs as on amd64: it reads the sum of the app's
+// package for arm64, which a release carries beside amd64's, and fetches
+// that package after the yes.
+func TestScreenOnRunsOnArm64(t *testing.T) {
+	s := screenProject(t)
+	s.arch, s.installed = "arm64", nil
+	savedVersion, savedSum, savedFetch := version.Version, appPackageSum, fetchAppPackage
+	t.Cleanup(func() { version.Version, appPackageSum, fetchAppPackage = savedVersion, savedSum, savedFetch })
+	version.Version = "0.6.0"
+	named := sha256.Sum256([]byte("the app"))
+	var asked []string
+	appPackageSum = func(_ context.Context, v, arch string) (string, error) {
+		asked = append(asked, "sum "+v+" "+arch)
+		return hex.EncodeToString(named[:]), nil
+	}
+	fetchAppPackage = func(_ context.Context, v, arch, want string) ([]byte, error) {
+		asked = append(asked, "fetch "+v+" "+arch)
+		return []byte("the app"), nil
+	}
+	askInput = strings.NewReader("yes\n")
+	var out bytes.Buffer
+	if err := screenOn(context.Background(), true, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !slices.Equal(asked, []string{"sum 0.6.0 arm64", "fetch 0.6.0 arm64"}) || len(s.applied) != 1 {
+		t.Fatalf("asked %q, applied %q:\n%s", asked, s.applied, out.String())
+	}
+}
+
 // The app's package is fetched only from a release: signed checksums that
 // cannot be read, and a development build with no app installed at it, are
 // refused before anything is asked, downloaded or written; a package that
@@ -338,7 +367,7 @@ func TestScreenOnRefuses(t *testing.T) {
 	}{
 		"no terminal":     {func(*standIn) { askTerminal = func() bool { return false } }, "`cyfr screen` runs at a terminal"},
 		"another system":  {func(s *standIn) { s.supported = false }, "`cyfr screen` runs at a terminal"},
-		"arm64":           {func(s *standIn) { s.arch = "arm64" }, "`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64"},
+		"riscv64":         {func(s *standIn) { s.arch = "riscv64" }, "`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS on amd64 or arm64"},
 		"a desktop":       {func(s *standIn) { s.displayManager = true }, "This machine's display manager has the screen."},
 		"no project here": {func(*standIn) { _ = os.Remove("docker-compose.yml") }, "There is no CYFR in this directory."},
 		"no .env":         {func(*standIn) { _ = os.Remove(".env") }, "There is no CYFR in this directory."},
