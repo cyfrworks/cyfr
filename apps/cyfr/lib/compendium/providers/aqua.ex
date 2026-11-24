@@ -90,7 +90,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "list",
-          "List aqua",
+          "List Aqua, its crew and its guides",
           [
             Arg.new("detail", :boolean,
               description:
@@ -107,7 +107,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "get",
-          "Get aqua",
+          "Read Aqua, a crew member or a guide",
           [
             Arg.new("name", :string,
               required: true,
@@ -121,7 +121,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "create",
-          "Create aqua",
+          "Add a crew member",
           [
             Arg.new("name", :string,
               required: true,
@@ -162,7 +162,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "update",
-          "Update aqua",
+          "Change Aqua or a crew member",
           [
             Arg.new("name", :string,
               required: true,
@@ -246,7 +246,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "delete",
-          "Delete aqua",
+          "Remove a crew member",
           [
             Arg.new("name", :string,
               required: true,
@@ -262,7 +262,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "reset",
-          "Reset aqua",
+          "Restore Aqua's shipped files",
           [
             Arg.new("name", :string,
               description:
@@ -278,11 +278,11 @@ defmodule Compendium.Providers.Aqua do
           consent: :interactive,
           permission: :component_manage
         ),
-        Operation.new("aqua", "status", "Status aqua", [],
+        Operation.new("aqua", "status", "Where each of Aqua's files came from", [],
           kind: :read,
           planes: [:external, :in_chain]
         ),
-        Operation.new("aqua", "skill_list", "Skill list aqua", [],
+        Operation.new("aqua", "skill_list", "List scrolls", [],
           kind: :read,
           planes: [:external, :in_chain],
           recovery: :replay_safe
@@ -290,7 +290,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "skill_get",
-          "Skill get aqua",
+          "Read a scroll",
           [
             Arg.new("name", :string,
               required: true,
@@ -305,7 +305,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "skill_create",
-          "Skill create aqua",
+          "Write a new scroll",
           [
             Arg.new("name", :string,
               required: true,
@@ -332,7 +332,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "skill_update",
-          "Skill update aqua",
+          "Change a scroll",
           [
             Arg.new("name", :string,
               required: true,
@@ -357,7 +357,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "skill_delete",
-          "Skill delete aqua",
+          "Remove a scroll",
           [
             Arg.new("name", :string,
               required: true,
@@ -373,7 +373,7 @@ defmodule Compendium.Providers.Aqua do
         Operation.new(
           "aqua",
           "skill_reset",
-          "Skill reset aqua",
+          "Restore a shipped scroll",
           [
             Arg.new("name", :string,
               required: true,

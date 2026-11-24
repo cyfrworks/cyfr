@@ -491,6 +491,13 @@ defmodule PrismWeb.ProgramsLiveTest do
     end
 
     assert cells.("claude") == [{"home", "kept"}, {"status", "—"}, {"tools", "—"}]
+
+    assert has_element?(
+             view,
+             ~s(tr[phx-value-name="claude"]),
+             "driven by a person or a crew member"
+           )
+
     assert [{"home", "scratch"}, {"status", status}, {"tools", "0"}] = cells.("piped")
     refute status in ["", "—"]
   end
@@ -691,6 +698,26 @@ defmodule PrismWeb.ProgramsLiveTest do
            end)
 
     assert {:ok, []} = Opus.Programs.running(person(user, athanor))
+  end
+
+  # A program whose sessions kept ending in a crash is not started again
+  # until its row changes: retrying is no use, so the page names what was
+  # to be run, its command's first word and never an argument, which can
+  # hold a key, and where to change it.
+  test "Open of a program that kept failing names its command and where to change it",
+       %{conn: conn, athanor: athanor} do
+    fake = controller!()
+    _row = driven_row!(athanor)
+    Scripted.refuse_once(fake, "open", "program_failed")
+
+    {view, _html} = mount_athanor(conn, "/programs", athanor)
+    view |> element("tr[phx-value-name=claude]") |> render_click()
+    view |> form("form#open-claude", %{"terminal_args" => ""}) |> render_submit()
+    answered(view)
+
+    assert flash(view, "error") ==
+             "Failed to open claude: its command (npx) could not be run. " <>
+               "Change it on the Programs page."
   end
 
   test "a program Aqua started is listed as Aqua's, closed here, and never shown here",

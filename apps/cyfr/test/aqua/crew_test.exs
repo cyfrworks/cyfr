@@ -1456,7 +1456,7 @@ defmodule Aqua.CrewTest do
     assert {:ok, %{"applied" => 1}} = drain(ctx)
     reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request.id))
     assert %{outcome: "failed", content: content} = reply
-    assert content =~ "options.effort"
+    assert content =~ "model does not take the option effort as it is set"
   end
 
   test "a request from another sender queues as its own turn while the same sender steers, and one reply answers every request it steered",
@@ -2213,7 +2213,7 @@ defmodule Aqua.CrewTest do
         ] do
       assert %{
                "type" => "text",
-               "text" => "The file #{name} (#{media}) is attached, and this brain cannot read it."
+               "text" => "The file #{name} (#{media}) is attached, and this model cannot read it."
              } in blocks
     end
 

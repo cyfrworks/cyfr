@@ -29,7 +29,7 @@ defmodule Emissary.External.ServerSupervisor do
       do:
         {:error,
          {:invalid_argument,
-          "'#{config[:name]}' is a driven program: a person or a brain runs it, not MCP"}},
+          "'#{config[:name]}' is a driven program: a person or a crew member runs it, not MCP"}},
       else: ensure_mcp_started(config)
   end
 

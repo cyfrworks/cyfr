@@ -84,6 +84,20 @@ defmodule Opus.Programs.Definition do
 
   def validate(_config), do: invalid("config must be an object")
 
+  @doc """
+  What a command runs, as a person is told it: its first word that is not
+  a variable's assignment, or nil for none. Never an argument or an
+  assignment's value, either of which can hold a key.
+  """
+  @spec command_word(term()) :: String.t() | nil
+  def command_word(command) when is_binary(command) do
+    command
+    |> String.split()
+    |> Enum.find(&(not Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*=/, &1)))
+  end
+
+  def command_word(_command), do: nil
+
   @doc "The vault entry names a definition's env templates reference, sorted and unique."
   @spec entry_names(term()) :: [String.t()]
   def entry_names(%{"env" => %{} = env}),

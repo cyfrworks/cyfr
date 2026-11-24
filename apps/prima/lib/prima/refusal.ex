@@ -744,6 +744,16 @@ defmodule Prima.Refusal do
       {:setup_required,
        "#{member}'s program is signed out. Sign it in, or choose another, on the Aqua page."}
 
+  # A program whose sessions kept failing is not started again until its
+  # row changes (`Opus.Programs.start/3`): the person changes its command,
+  # named by the word it runs and never an argument, which can hold a key.
+  defp row({:command_failed, word}) when is_binary(word),
+    do:
+      {:setup_required, "its command (#{word}) could not be run. Change it on the Programs page."}
+
+  defp row({:command_failed, nil}),
+    do: {:setup_required, "its command could not be run. Change it on the Programs page."}
+
   # A program brain whose start the backends refused for want of room: each
   # running program holds a place until its turn's work ends.
   defp row({:program_full, member}) when is_binary(member),

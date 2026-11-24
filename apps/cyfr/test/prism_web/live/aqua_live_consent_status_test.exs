@@ -41,11 +41,12 @@ defmodule PrismWeb.AquaLiveConsentStatusTest do
     assert html =~ ~s(id="aqua-consent-drift-agent:local.aqua")
 
     assert html =~
-             "What uses-remote uses changed since this athanor consented — a capability, a " <>
-               "brain or a component it calls — so it cannot run until you consent again."
+             "What uses-remote uses changed since this athanor consented — a capability, the " <>
+               "model it runs on or a component it calls — so it cannot run until you consent again."
 
     refute html =~ "install"
-    assert html =~ "notes.keep"
+    assert html =~ "(#{Aqua.action_title("notes", "keep")})"
+    refute html =~ "notes.keep"
     assert [_, _] = Regex.scan(~r/Re-consent/, html)
     refute html =~ "Consent status unavailable"
   end

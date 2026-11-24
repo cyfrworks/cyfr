@@ -1581,7 +1581,7 @@ defmodule PrismWeb.ProgramsLive do
   defp bytes(_n, fallback), do: fallback
 
   defp endpoint(%{mark: "mcp"}), do: "MCP (backends service)"
-  defp endpoint(%{mark: "driven"}), do: "driven by a person or a brain"
+  defp endpoint(%{mark: "driven"}), do: "driven by a person or a crew member"
   defp endpoint(server), do: server[:url]
 
   defp driven?(%{transport: "program", mark: "driven"}), do: true

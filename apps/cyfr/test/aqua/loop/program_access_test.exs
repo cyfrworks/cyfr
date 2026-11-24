@@ -67,7 +67,7 @@ defmodule Aqua.Loop.ProgramAccessTest do
       script!([reply("never sent")])
 
       {thread, turn} = accept!(ctx, room, "writer", "what is in notes?")
-      sentence = "the brain does not take options.access as it was set"
+      sentence = "Writer's model does not take the option access as it is set"
       assert Aqua.Loop.run(ctx: ctx, turn_id: turn.id) == {:failed, sentence}
 
       {:ok, ended} = Tape.turn(ctx, turn.id)
