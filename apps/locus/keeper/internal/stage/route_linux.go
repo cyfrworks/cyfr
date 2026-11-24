@@ -6,8 +6,10 @@
 package stage
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -22,6 +24,10 @@ import (
 // RouteGo is the one byte the keeper writes on RouteFD once the guard has
 // admitted the space's route.
 const RouteGo = 'g'
+
+// addrGenModeNone is IN6_ADDR_GEN_MODE_NONE: the kernel makes no IPv6
+// address on the link.
+const addrGenModeNone = 1
 
 // nameSockets brings the namespace's loopback up and binds a UDP and a
 // listening TCP socket at 127.0.0.11:53.
@@ -107,6 +113,123 @@ func handRouteUp(fd int) error {
 		case n != 1 || word[0] != RouteGo:
 			return errors.New("the keeper did not confirm the route")
 		}
-		return nil
+		return stillLinks()
+	}
+}
+
+// stillLinks makes the space's network still before its command starts.
+// The guard's inner end comes up with an IPv6 link-local address whose
+// duplicate address detection ends a second or two later, and the address
+// changing then is a change of the namespace's network under a command
+// already running: Chrome, for one, fails its requests in flight with
+// net::ERR_NETWORK_CHANGED. A space has no IPv6 route out, so every link
+// but the loopback is given no IPv6 address at all: the kernel generates
+// none on it, and the one it made is removed now, while the stage still
+// holds NET_ADMIN, before the command runs.
+func stillLinks() error {
+	links, err := syscall.NetlinkRIB(unix.RTM_GETLINK, unix.AF_UNSPEC)
+	if err != nil {
+		return fmt.Errorf("the space's links: %w", err)
+	}
+	msgs, err := syscall.ParseNetlinkMessage(links)
+	if err != nil {
+		return fmt.Errorf("the space's links: %w", err)
+	}
+	others := map[int32]bool{}
+	for _, m := range msgs {
+		if m.Header.Type != unix.RTM_NEWLINK || len(m.Data) < unix.SizeofIfInfomsg {
+			continue
+		}
+		index := int32(binary.NativeEndian.Uint32(m.Data[4:8]))
+		if binary.NativeEndian.Uint32(m.Data[8:12])&unix.IFF_LOOPBACK != 0 {
+			continue
+		}
+		others[index] = true
+		mode := attr(unix.IFLA_INET6_ADDR_GEN_MODE, []byte{addrGenModeNone})
+		body := make([]byte, unix.SizeofIfInfomsg)
+		binary.NativeEndian.PutUint32(body[4:8], uint32(index))
+		body = append(body, attr(unix.IFLA_AF_SPEC, attr(unix.AF_INET6, mode))...)
+		if err := request(unix.RTM_SETLINK, body); err != nil {
+			return fmt.Errorf("link %d's IPv6 addresses: %w", index, err)
+		}
+	}
+	addrs, err := syscall.NetlinkRIB(unix.RTM_GETADDR, unix.AF_INET6)
+	if err != nil {
+		return fmt.Errorf("the space's addresses: %w", err)
+	}
+	if msgs, err = syscall.ParseNetlinkMessage(addrs); err != nil {
+		return fmt.Errorf("the space's addresses: %w", err)
+	}
+	for _, m := range msgs {
+		if m.Header.Type != unix.RTM_NEWADDR || len(m.Data) < unix.SizeofIfAddrmsg || m.Data[0] != unix.AF_INET6 ||
+			!others[int32(binary.NativeEndian.Uint32(m.Data[4:8]))] {
+			continue
+		}
+		attrs, err := syscall.ParseNetlinkRouteAttr(&m)
+		if err != nil {
+			return fmt.Errorf("the space's addresses: %w", err)
+		}
+		body := append([]byte(nil), m.Data[:unix.SizeofIfAddrmsg]...)
+		for _, a := range attrs {
+			if a.Attr.Type == unix.IFA_ADDRESS {
+				body = append(body, attr(unix.IFA_ADDRESS, a.Value)...)
+			}
+		}
+		if err := request(unix.RTM_DELADDR, body); err != nil && !errors.Is(err, unix.EADDRNOTAVAIL) {
+			return fmt.Errorf("an IPv6 address of link %d: %w", binary.NativeEndian.Uint32(m.Data[4:8]), err)
+		}
+	}
+	return nil
+}
+
+// attr is one netlink attribute of kind holding data, padded to its
+// alignment.
+func attr(kind uint16, data []byte) []byte {
+	size := unix.SizeofRtAttr + len(data)
+	b := make([]byte, (size+unix.RTA_ALIGNTO-1) & ^(unix.RTA_ALIGNTO-1))
+	binary.NativeEndian.PutUint16(b[0:2], uint16(size))
+	binary.NativeEndian.PutUint16(b[2:4], kind)
+	copy(b[unix.SizeofRtAttr:], data)
+	return b
+}
+
+// request sends one route netlink request in the space's namespace and
+// reads its acknowledgement.
+func request(kind uint16, body []byte) error {
+	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	msg := make([]byte, unix.SizeofNlMsghdr, unix.SizeofNlMsghdr+len(body))
+	msg = append(msg, body...)
+	binary.NativeEndian.PutUint32(msg[0:4], uint32(len(msg)))
+	binary.NativeEndian.PutUint16(msg[4:6], kind)
+	binary.NativeEndian.PutUint16(msg[6:8], unix.NLM_F_REQUEST|unix.NLM_F_ACK)
+	binary.NativeEndian.PutUint32(msg[8:12], 1)
+	if err := unix.Sendto(fd, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return err
+	}
+	buf := make([]byte, 8192)
+	for {
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		replies, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return err
+		}
+		for _, r := range replies {
+			if r.Header.Type == unix.NLMSG_ERROR && len(r.Data) >= 4 {
+				if code := int32(binary.NativeEndian.Uint32(r.Data[0:4])); code != 0 {
+					return unix.Errno(-code)
+				}
+				return nil
+			}
+		}
 	}
 }

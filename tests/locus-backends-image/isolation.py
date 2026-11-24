@@ -265,6 +265,35 @@ def test_own_loopback(stack, c, listener, other):
            {"listener": again, "other": theirs})
 
 
+# The command's first instruction records the space's IPv6 addresses and
+# IPv4 routes, as the kernel lists them in the space's own /proc/net.
+STILL_COMMAND = ("sh -c 'cat /proc/net/if_inet6 /proc/net/route > \"$HOME/network-at-start\"; "
+                 "exec node /probe/probe-backend.mjs'")
+# Past an IPv6 address's duplicate address detection, which ends one to two
+# seconds after its link comes up.
+STILL_FOR_S = 5
+
+
+def test_still_network(c):
+    """A space's network is whole and still before its command starts: what the command found at its first instruction
+    is what the space holds seconds later, and no link but the loopback has an IPv6 address to change."""
+    owner = owner_of("still")
+    status, answer, _ = c.sync(owner, [{"name": "probe", "command": STILL_COMMAND, "env": {}}])
+    expect(status == 200, f"{owner['athanor']} is synced", answer)
+    c.tool(owner, "probe__whoami")
+    started = time.monotonic()
+    at_start = c.tool(owner, "probe__run", {"argv": ["cat", "network-at-start"]})
+    time.sleep(max(0, STILL_FOR_S - (time.monotonic() - started)))  # past any address's detection
+    later = c.tool(owner, "probe__run", {"argv": ["cat", "/proc/net/if_inet6", "/proc/net/route"]})
+    addresses = [line.split() for line in (at_start.get("stdout") or "").splitlines() if len(line.split()) == 6]
+    expect(at_start["status"] == 0 and later["status"] == 0 and at_start["stdout"] == later["stdout"],
+           f"what the command found at its start is what its space holds {STILL_FOR_S} s later",
+           {"at start": at_start, "later": later})
+    expect([a[5] for a in addresses] == ["lo"], "at the command's start only the loopback has an IPv6 address",
+           addresses)
+    c.release([owner])
+
+
 def test_kept_sessions(stack, c):
     """Two sessions of one kept folder, under one uid, each with its own loopback."""
     status, answer, _ = c.sync(KEPT_OWNER, [probe(home="kept")])
@@ -497,6 +526,7 @@ def main():
         test_egress(stack, c, ALPHA)
         test_own_loopback(stack, c, ALPHA, BETA)
         test_kept_sessions(stack, c)
+        test_still_network(c)
 
         # ————— retirement —————
         daemon = c.tool(ALPHA, "probe__spawn_daemon")["pid"]
