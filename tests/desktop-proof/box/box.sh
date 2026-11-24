@@ -51,10 +51,11 @@
 # proof/cells.sh): a resolver file naming dir.test's front, that address
 # among its private egress targets, and the run's authority loaded into
 # its node, the file and the authority mounted into its cyfr. dir.test's
-# front stands on the gateway address of This box's own Docker network,
-# which the compose file fixes, so This box's container reaches it there
-# as everyone on this machine's network does; x.test's front stands on a
-# loopback address of the run's own (tests/identity-proof/front.sh).
+# front stands on the address of Docker's default bridge on this machine,
+# which This box's container reaches through its own network's gateway and
+# everyone on this machine's network reaches directly; x.test's front
+# stands on a loopback address of the run's own
+# (tests/identity-proof/front.sh).
 #
 # Usage: bash tests/desktop-proof/box/box.sh DEB IMAGE
 #   DEB    the cyfr-desktop package of this machine's architecture, which
@@ -86,7 +87,7 @@ if [ "${1:-}" = --inside ]; then
   # is its own here and there, and in the docker group by the socket's.
   getent group docker >/dev/null || groupadd docker
   groupmod -o -g "$DOCKER_GID" docker
-  other=$(getent passwd "$PROOF_UID" | cut -d: -f1)
+  other=$(getent passwd "$PROOF_UID" | cut -d: -f1) || other=""
   [ -z "$other" ] || userdel "$other" || true
   useradd -m -u "$PROOF_UID" proof
   usermod -aG docker proof
@@ -212,8 +213,8 @@ if [ "${1:-}" = --session ]; then
   rm -f "$OUT/six"
   push "Your name, yours for life" || broke "the setup page's name could not be pressed"
   typed boxperson && key Tab && typed "$WORDS" && key Tab && typed "$WORDS" && key Return || broke "wtype did not type"
-  within 60 sees "I saved it" || broke "the setup page did not show the recovery code"
-  push "I saved it" || broke "I saved it could not be pressed"
+  within 60 sees "saved it" || broke "the setup page did not show the recovery code"
+  push "saved it" || broke "I saved it could not be pressed"
   within 60 sh -c 'python3 -I -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"identifier\") else 1)" ~/.cyfr/device/holder.json 2>/dev/null' ||
     broke "the box's key names no account"
   ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["identifier"])' ~/.cyfr/device/holder.json)
@@ -345,9 +346,9 @@ RUN="${PROOF_RUN_PREFIX:-}cyfr-box-$$"
 CLIENT="$RUN-client"
 CELLS="$RUN-cell"
 BOXDIR="$WORK/$RUN"
-# The gateway of This box's default network (docker-compose.yml fixes its
-# subnet), where dir.test's front stands.
-GATEWAY=172.16.230.1
+# Docker's default bridge on this machine, where dir.test's front stands.
+GATEWAY="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')"
+[[ "$GATEWAY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Docker's default bridge has no IPv4 gateway" >&2; exit 1; }
 mkdir -p "$FIX/out" "$KEEP" "$BOXDIR"
 
 compose_box() { (cd "$BOXDIR" && timeout 300 docker compose --project-name "$(basename "$BOXDIR")" --project-directory "$BOXDIR" \

@@ -13,9 +13,10 @@ nothing of a page's insides.
                            the passphrase a box without a chip shows once;
                            exits 1 when no line shows six
 A picture or a tesseract that fails exits 2, so that no failed read
-passes for words not shown. Words are read on the output's grey and on
-its inverse, twice its size, which reads the app's light words on its
-dark pages; a word is compared by its letters and digits alone."""
+passes for words not shown. Words are read on the output's grey, on its
+inverse and on its bright pixels alone, twice its size: the app's light
+words on its dark pages and white on its buttons' colour alike; a word is
+compared by its letters and digits alone."""
 
 import os
 import subprocess
@@ -54,7 +55,9 @@ def words(img, scale=2):
     line) in output pixels."""
     grey = img.convert("L").resize((img.width * scale, img.height * scale), Image.LANCZOS)
     found = []
-    for n, variant in enumerate((grey, ImageOps.invert(grey))):
+    # The grey, its inverse, and its bright pixels alone, black on white
+    # (white on a coloured button).
+    for n, variant in enumerate((grey, ImageOps.invert(grey), grey.point(lambda v: 0 if v > 200 else 255))):
         for text, x, y, w, h, line in tesseract(variant):
             found.append((text, x // scale, y // scale, (x + w) // scale, (y + h) // scale, (n,) + line))
     return found
