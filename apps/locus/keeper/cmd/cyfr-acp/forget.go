@@ -23,10 +23,12 @@ import (
 // program's own session/delete, in a process of the driver's own, proved
 // by the program's load answering it does not have the session: only then
 // is it forgotten, and a delete the program refuses or does not answer is
-// a forget that failed. Where its sessions are its files but its load is
-// what shows one absent (Cursor), the files are removed, proved absent, and
-// the program's load, in a process of the driver's own, must answer that it
-// lacks the session. Its records of instructions and of its server's name
+// a forget that failed. Where its sessions are its files and its load can
+// witness one absent too (Cursor), the files are removed and proved
+// absent, and the program's load, in a process of the driver's own, must
+// answer that it lacks the session or that it is signed out, which leaves
+// the proof standing; a load that finds the session, or fails another way,
+// is a forget that failed. Its records of instructions and of its server's name
 // are removed either way.
 
 // sessionFiles are every file of the session the forget removes, each a
@@ -76,7 +78,7 @@ func (d *driver) removeSession(session string) error {
 		if err != nil {
 			return errors.New(d.p.title + " did not start to show the session gone: " + err.Error())
 		}
-		err = d.loadsNone(o, session)
+		err = d.loadsNone(o, session, true)
 		o.close()
 		return err
 	}
@@ -93,24 +95,30 @@ func (d *driver) deleteIn(o *oneOff, session string) error {
 	case answer.Error != nil:
 		return errors.New(d.p.title + " refused to delete the session, so it is still there")
 	}
-	if d.loadsNone(o, session) != nil {
+	if d.loadsNone(o, session, false) != nil {
 		return errors.New(d.p.title + " did not show the session gone after deleting it, so it may still be there")
 	}
 	return nil
 }
 
-// loadsNone asks the program o runs to load the session: only its
-// not-found answer shows the session gone.
-func (d *driver) loadsNone(o *oneOff, session string) error {
+// loadsNone asks the program o runs to load the session: its not-found
+// answer shows the session gone, and, where the session's files were proved
+// absent already (filesProved), so does its signed-out answer, which says
+// nothing of the session; any other answer is a forget that failed.
+func (d *driver) loadsNone(o *oneOff, session string, filesProved bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = d.home
 	}
 	answer, err := o.call("session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}})
-	if err != nil || answer.Error == nil || !d.p.loadNotFound(answer.Error, session) {
-		return errors.New(d.p.title + " did not show the session gone after its files were removed, so it may still be there")
+	switch {
+	case err != nil || answer.Error == nil:
+	case d.p.loadNotFound(answer.Error, session):
+		return nil
+	case filesProved && answer.Error.Code == d.p.signedOut:
+		return nil
 	}
-	return nil
+	return errors.New(d.p.title + " did not show the session gone after its files were removed, so it may still be there")
 }
 
 // removeFiles removes each of the session's files, once every one was

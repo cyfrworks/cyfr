@@ -190,7 +190,7 @@ func TestCursorsFailedTurnIsAnErrorOnlyWhenItIsAllTheTurnSaid(t *testing.T) {
 		"fail":      {"provider_error", "Cursor could not reach its service; ask again once the network is back."},
 		"unauth":    {"authentication", "Cursor's sign-in was refused; sign it in again on the program's terminal, opened with the word `login`."},
 		"signin":    {"authentication", "Cursor's sign-in was refused; sign it in again on the program's terminal, opened with the word `login`."},
-		"exhausted": {"provider_error", "Cursor reported that its turn failed."},
+		"exhausted": {"rate_limited", "Cursor reported a usage or rate limit; ask again later."},
 	} {
 		t.Run(words, func(t *testing.T) {
 			got := turn(t, words)
@@ -225,14 +225,16 @@ func TestCursorsFailureFormIsExact(t *testing.T) {
 		"\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh": "provider_error",
 		"\n\nError: [unauthenticated] Backend rejected authentication.":                               "authentication",
 		"\n\nError: ConnectError: [internal] x":                                                       "provider_error",
-		"\n\nError: Error: x":                                                                         "provider_error",
-		"\n\nUpgrade your plan to continue":                                                           "provider_error",
-		"\n\nPlease sign in to continue":                                                              "authentication",
-		"Error: RetriableError: [unavailable] x":                                                      "",
-		"\n\nError: [unavailable] x\nmore":                                                            "",
-		"\n\nError: a sentence":                                                                       "",
-		"\n\nError: ":                                                                                 "",
-		"\n\nPlease sign in to continue.":                                                             "",
+		"\n\nError: ConnectError: [resource_exhausted] x":                                             "rate_limited",
+		"\n\nError: Error: x":                    "provider_error",
+		"\n\nUpgrade your plan to continue":      "rate_limited",
+		"\n\nAdd a payment method to continue":   "provider_error",
+		"\n\nPlease sign in to continue":         "authentication",
+		"Error: RetriableError: [unavailable] x": "",
+		"\n\nError: [unavailable] x\nmore":       "",
+		"\n\nError: a sentence":                  "",
+		"\n\nError: ":                            "",
+		"\n\nPlease sign in to continue.":        "",
 	} {
 		if got, _ := cursorFailure(text); got != kind {
 			t.Fatalf("%q reads %q, not %q", text, got, kind)
@@ -313,12 +315,36 @@ func TestCursorForgetRemovesTheSessionsFolderAndItsLoadConfirms(t *testing.T) {
 		t.Fatalf("its load confirmed the forget: %v", cursorLog(s.home))
 	}
 
-	t.Setenv("FAKE_LOAD_STILL", "1")
-	k := startCursor(t, s.home)
-	k.expect("hello")
-	k.send(map[string]any{"t": "forget", "id": "fgt_2", "session": other})
-	if e := k.next(); e["t"] != "refused" || !strings.Contains(fmt.Sprint(e["reason"]), "did not show the session gone") {
-		t.Fatalf("a load that still finds the session fails the forget: %v", e)
+	for env, label := range map[string]string{"FAKE_LOAD_STILL": "a load that still finds the session", "FAKE_LOAD_ERROR": "a load that fails another way"} {
+		t.Run(label, func(t *testing.T) {
+			t.Setenv(env, "1")
+			k := startCursor(t, s.home)
+			k.expect("hello")
+			k.send(map[string]any{"t": "forget", "id": "fgt_2", "session": other})
+			if e := k.next(); e["t"] != "refused" || !strings.Contains(fmt.Sprint(e["reason"]), "did not show the session gone") ||
+				strings.Contains(fmt.Sprint(e), "HARNESS-WORDS") {
+				t.Fatalf("%s fails the forget, in the driver's words: %v", label, e)
+			}
+		})
+	}
+}
+
+// Signed out, Cursor's load says nothing of the session: a forget stands on
+// its folder removed and read absent, and the load's signed-out answer
+// undoes nothing already proved.
+func TestCursorForgetWhileSignedOutStandsOnTheFoldersAbsence(t *testing.T) {
+	s := startCursor(t, "")
+	session := freshCursor(s)
+	s.end()
+	t.Setenv("FAKE_SIGNED_OUT", "1")
+	f := startCursor(t, s.home)
+	f.expect("hello")
+	f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
+	if e := f.next(); e["t"] != "forgot" || e["session"] != session {
+		t.Fatalf("the session is forgotten: %v", e)
+	}
+	if _, err := os.Lstat(sessionFolder(s.home, session)); !os.IsNotExist(err) || countOf(s.home, "load "+session) != 1 {
+		t.Fatalf("its folder is gone and its load was asked: %v %v", err, cursorLog(s.home))
 	}
 }
 

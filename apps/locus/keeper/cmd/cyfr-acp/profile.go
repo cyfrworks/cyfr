@@ -101,8 +101,9 @@ type profile struct {
 	// it, its sign-in among it.
 	deletes bool
 	// forgetLoads says a forget of the session's files is confirmed by the
-	// program's load answering it lacks the session, in a process of the
-	// driver's own (forget.go).
+	// program's load, in a process of the driver's own (forget.go): its
+	// answer that it lacks the session, or that it is signed out, which
+	// leaves the files' proved absence standing.
 	forgetLoads bool
 	// counted is the accounting of a prompt's counts that read, and counts
 	// the wire's counts by the usage names each sums; a count of no name is
@@ -389,8 +390,12 @@ func agyServers(out []byte) ([]string, bool) {
 // passing `--disable-auto-update` so it does not replace itself. It names
 // no version in initialize and offers no resume: a session goes on by its
 // load. Its sessions are its folders `acp-sessions/<id>/` under its
-// configuration folder, so a forget removes that folder and is confirmed by
-// its load answering it lacks the session. Its servers list their tools at
+// configuration folder, and it keeps no index of them elsewhere, so a
+// forget removes that folder and reads it absent, which proves it; its
+// load answering it lacks the session is a second witness where it can
+// give one, and a load answered signed out undoes nothing already proved,
+// while a load that finds the session, or fails another way, fails the
+// forget. Its servers list their tools at
 // a session's first prompt. Its own listing of its servers starts each of
 // them, so the name of CYFR's server is read once, when a session is made,
 // and kept: a server the person adds later under that very name is
@@ -521,7 +526,9 @@ var cursorFailureForm = regexp.MustCompile(`^\n\n(?:Error: (?:(?:(?:[A-Za-z][A-Z
 
 // cursorFailure is a failed turn's error type and CYFR's sentence for it:
 // a sign-in refused or wanted is the account's, a service that could not
-// be reached the provider's, and any other failure Cursor's own.
+// be reached the provider's, a usage limit or a plan to upgrade a limit's,
+// with no time since Cursor names none, and any other failure Cursor's
+// own.
 func cursorFailure(text string) (string, string) {
 	m := cursorFailureForm.FindStringSubmatch(text)
 	switch {
@@ -531,6 +538,9 @@ func cursorFailure(text string) (string, string) {
 		return "authentication", "Cursor's sign-in was refused; sign it in again on the program's terminal, opened with the word `login`."
 	case m[1] == "unavailable":
 		return "provider_error", "Cursor could not reach its service; ask again once the network is back."
+	case m[1] == "resource_exhausted" || m[2] == "Upgrade your plan to continue":
+		// Cursor names no time the limit lifts.
+		return "rate_limited", "Cursor reported a usage or rate limit; " + brainwire.UntilWords(0) + "."
 	}
 	return "provider_error", "Cursor reported that its turn failed."
 }

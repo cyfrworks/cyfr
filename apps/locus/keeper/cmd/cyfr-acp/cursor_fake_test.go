@@ -52,7 +52,7 @@ import (
 //
 // FAKE_SIGNED_OUT answers sessions -32000; FAKE_NO_LIST never lists;
 // FAKE_NO_LOAD offers no load; FAKE_LOAD_STILL answers a load of a session
-// whose files are gone as found; FAKE_HOLD keeps running after its input
+// whose files are gone as found; FAKE_LOAD_ERROR answers every load -32603; FAKE_HOLD keeps running after its input
 // ends, until a TERM. Run with `mcp list` it prints FAKE_SERVERS as Cursor
 // does, a comma between each, and FAKE_SERVERS_FAIL prints nothing.
 func fakeCursor() int {
@@ -296,6 +296,9 @@ func fakeCursor() int {
 					"sessionCapabilities": map[string]any{"list": map[string]any{}}},
 					"authMethods": []any{map[string]any{"id": "cursor_login", "name": "Cursor Login"}}})
 			case signedOut && (m.Method == "session/new" || m.Method == "session/load" || m.Method == "session/list"):
+				if m.Method == "session/load" {
+					logLine("load " + str("sessionId"))
+				}
 				failWith(m.ID, -32000, "Authentication required", map[string]any{"message": "Authentication required. Please run 'agent login' first."})
 			case m.Method == "session/new":
 				id := brainwire.NewUUID()
@@ -307,6 +310,9 @@ func fakeCursor() int {
 				state.Unlock()
 				opened(m.Params)
 				answer(m.ID, sessionResult(id))
+			case m.Method == "session/load" && os.Getenv("FAKE_LOAD_ERROR") != "":
+				logLine("load " + str("sessionId"))
+				failWith(m.ID, -32603, "Internal error", map[string]any{"message": "HARNESS-WORDS the store is locked"})
 			case m.Method == "session/load":
 				id := str("sessionId")
 				logLine("load " + id)
