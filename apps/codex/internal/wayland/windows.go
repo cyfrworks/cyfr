@@ -47,13 +47,17 @@ const (
 // or no longer is, says why, and from then on that is all it says: it
 // confirms nothing. Nothing that holds the list waits on the socket: each
 // read and each write has its deadline, and the writes are made outside
-// the list's lock.
+// the list's lock. A write waits its turn for no longer than its own
+// deadline, and a round trip's callback is numbered in the turn that
+// writes it, so the numbers reach the compositor in order, as it requires
+// of every new object.
 type Windows struct {
 	conn *Conn
 	// name is the manager's global, whose removal ends the list.
 	name uint32
-	// wmu orders the writes and their deadlines.
-	wmu sync.Mutex
+	// turn is held by the one write under way: the writes and their
+	// deadlines are made one at a time, in the order they take it.
+	turn chan struct{}
 
 	mu sync.Mutex
 	// shown is each window shown now, by the number it has while it lives.
@@ -80,7 +84,8 @@ type window struct {
 // end. It returns once the compositor has listed them, or has failed to
 // within its bound, which the list then says.
 func ListWindows(ctx context.Context) *Windows {
-	w := &Windows{shown: map[uint32]*window{}, syncs: map[uint32]chan []*window{}, next: firstSync, changed: make(chan struct{})}
+	w := &Windows{turn: make(chan struct{}, 1), shown: map[uint32]*window{}, syncs: map[uint32]chan []*window{}, next: firstSync,
+		changed: make(chan struct{})}
 	socket, err := Socket()
 	if err != nil {
 		w.err = err
@@ -161,12 +166,52 @@ func (w *Windows) list() error {
 
 // send writes one request within talkWithin, never under the list's lock.
 func (w *Windows) send(object, opcode uint32, body []byte) error {
-	w.wmu.Lock()
-	defer w.wmu.Unlock()
-	if err := w.conn.SetWriteDeadline(time.Now().Add(talkWithin)); err != nil {
+	release, err := w.wait(time.Now().Add(talkWithin))
+	if err != nil {
 		return err
 	}
+	defer release()
 	return w.conn.Send(object, opcode, body)
+}
+
+// wait takes the turn to write, and gives the write that follows what is
+// left until deadline: an error where the turn did not come by then.
+func (w *Windows) wait(deadline time.Time) (release func(), err error) {
+	queued := time.NewTimer(time.Until(deadline))
+	defer queued.Stop()
+	select {
+	case w.turn <- struct{}{}:
+	case <-queued.C:
+		return nil, errors.New("the compositor's connection was not free to write to")
+	}
+	release = func() { <-w.turn }
+	if err := w.conn.SetWriteDeadline(deadline); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+// roundTrip asks the compositor for a round trip, by deadline: what it
+// shows as the round trip's done arrives comes on the channel. Its
+// callback is numbered in the turn that writes it.
+func (w *Windows) roundTrip(deadline time.Time) (chan []*window, error) {
+	release, err := w.wait(deadline)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	w.mu.Lock()
+	id, done := w.next, make(chan []*window, 1)
+	w.next++
+	w.syncs[id] = done
+	w.mu.Unlock()
+	if err := w.conn.Send(Display, DisplaySync, Words(id)); err != nil {
+		// A number taken and not written would leave a gap in the next.
+		w.fail(err)
+		return nil, err
+	}
+	return done, nil
 }
 
 // read takes each event as it comes: the wait for one to begin is
@@ -266,23 +311,27 @@ func (w *Windows) change() {
 	w.changed = make(chan struct{})
 }
 
-// Mark is what the list showed as a hide began, to be confirmed gone.
+// Mark is what the list showed as a hide began, to be confirmed gone by
+// its deadline.
 type Mark struct {
-	w       *Windows
-	windows []*window
-	after   uint64
-	err     error
+	w        *Windows
+	windows  []*window
+	after    uint64
+	within   time.Duration
+	deadline time.Time
+	err      error
 }
 
 // Mark marks the windows the list shows now, as far as it has read, with
-// no wait on the compositor: Closed makes the mark current first.
-func (w *Windows) Mark() Mark {
+// no wait on the compositor, to be confirmed gone within: Closed makes the
+// mark current first.
+func (w *Windows) Mark(within time.Duration) Mark {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.err != nil {
 		return Mark{err: w.unread(w.err)}
 	}
-	m := Mark{w: w, after: w.announced}
+	m := Mark{w: w, after: w.announced, within: within, deadline: time.Now().Add(within)}
 	for _, s := range w.shown {
 		m.windows = append(m.windows, s)
 	}
@@ -293,29 +342,26 @@ func (w *Windows) unread(err error) error {
 	return fmt.Errorf("the compositor's list of windows cannot be read: %w", err)
 }
 
-// Closed waits, for at most within, until the compositor has closed every
-// window of the mark: nil once it has, and otherwise how many it still
-// shows, or why the list cannot say, which is never a yes. First, one
+// Closed waits, until the mark's deadline and no longer, until the
+// compositor has closed every window of the mark: nil once it has, and
+// otherwise how many it still shows, or why the list cannot say, which is
+// never a yes. Every wait on its way ends at that deadline: the turn to
+// write, the write and the compositor's answers. First, one
 // round trip with the compositor makes the mark current: a window
 // announced before it, after the mark was taken, was in transit as it
 // was, and is marked too. A window the app opens once told of the hide
 // would be marked as well were it announced before the round trip's end,
 // and the hide then unconfirmed; the app's making of a window takes far
 // longer than a round trip.
-func (m Mark) Closed(within time.Duration) error {
+func (m Mark) Closed() error {
 	if m.err != nil {
 		return m.err
 	}
-	w := m.w
-	deadline := time.NewTimer(within)
+	w, within := m.w, m.within
+	deadline := time.NewTimer(time.Until(m.deadline))
 	defer deadline.Stop()
-	w.mu.Lock()
-	id, done := w.next, make(chan []*window, 1)
-	w.next++
-	w.syncs[id] = done
-	w.mu.Unlock()
-	if err := w.send(Display, DisplaySync, Words(id)); err != nil {
-		w.fail(err)
+	done, err := w.roundTrip(m.deadline)
+	if err != nil {
 		return w.unread(err)
 	}
 	marked := m.windows

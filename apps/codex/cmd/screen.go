@@ -486,8 +486,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	windows := wayland.ListWindows(ctx)
 	defer windows.Close()
 	hiding := func() func() error {
-		mark := windows.Mark()
-		return func() error { return mark.Closed(screenHideWithin) }
+		return windows.Mark(screenHideWithin).Closed
 	}
 	var ln net.Listener
 	browser, err := newScreenApp(in, out, local, hiding, func(why error) { endScreenApp(appProgram, ln, why) })
