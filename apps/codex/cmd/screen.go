@@ -120,23 +120,15 @@ var screenAppCmd = &cobra.Command{
 }
 
 // screenAppArgs is the CYFR app's command line as this machine's screen
-// for the project in dir, which becomes the app's process (screenExec):
-// --screen-project, and the engine's route to the folder's CYFR where it
-// takes one (localRoute), read at each start, since the engine takes a
-// route only as it starts: the app never starts itself again on the route
-// its shell names (desktop/src/states.js), its launcher does, through
-// this. A folder that cannot be read starts the app on none; its shell,
-// reading the same folder, fails before it shows anything, so the screen
-// stays dark: the reason goes to the app's error stream (the journal),
-// the app ends itself once, and the launcher tries again a second later.
+// for the project in dir, which becomes the app's process (screenExec).
+// The route to the folder's CYFR comes with its proposal, as on a
+// desktop, and the app sets it on that CYFR's own stores. A folder that
+// cannot be read leaves the screen dark: its shell, reading the folder,
+// fails before it shows anything, the reason goes to the app's error
+// stream (the journal), the app ends itself once, and the launcher tries
+// again a second later.
 func screenAppArgs(dir string) []string {
-	args := []string{appProgram, "--screen-project=" + dir}
-	if read, err := readFolder(dir); err == nil {
-		if proxy, resolver := localRoute(read.Mode); proxy != "" {
-			args = append(args, "--proxy-server="+proxy, "--host-resolver-rules="+resolver)
-		}
-	}
-	return args
+	return []string{appProgram, "--screen-project=" + dir}
 }
 
 func init() {

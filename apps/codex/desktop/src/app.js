@@ -141,13 +141,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     return
   }
 
-  const route = {
-    proxy: app.commandLine.getSwitchValue("proxy-server"),
-    resolver: app.commandLine.getSwitchValue("host-resolver-rules")
-  }
-  // Not a route of a CYFR's, so not part of the one main was started on.
-  if (!route.resolver) app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
-  let state = initial(accountRoad, route, screen)
+  app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
+  let state = initial(accountRoad, screen)
   let child = null
   let frame = null // the app's one window, holding the rail and the content
   let rail = null // the rail's view
@@ -198,16 +193,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.root) openHome(effect.root.home, effect.root.path, effect.root.setup)
     if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession())
     if (effect.back) back(chooserAddress(effect.back))
-    if (effect.relaunch) {
-      say("starting again with the CYFR's route")
-      const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
-      if (effect.relaunch.proxy) args.push(`--proxy-server=${effect.relaunch.proxy}`, `--host-resolver-rules=${effect.relaunch.resolver}`)
-      ending(() => {
-        if (child && child.exitCode === null) child.kill()
-        app.relaunch({args})
-        app.exit(0)
-      })
-    }
+    if (effect.prepare) prepare(effect.prepare)
     if (effect.end) {
       say(`cyfr ended: ${effect.end}`)
       if (child && child.exitCode === null) child.kill()
@@ -248,7 +234,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.deliver && content) {
       const {url} = effect.deliver
       // The engine settles the call after its landing when it succeeds;
-      // it may reject before one, with no did-fail-load.
+      // it may reject before one, with no did-fail-load. The content's
+      // store carries its CYFR's route since it was proposed (prepare).
       const ended = () => on({type: "load-ended", url})
       content.webContents.loadURL(url).then(ended, ended)
       // That load's navigation has started by now, and been heard.
@@ -371,6 +358,44 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     ses.setPermissionCheckHandler((_wc, permission) => grants(permission))
     ses.setDevicePermissionHandler(() => false)
     ses.setDisplayMediaRequestHandler((_request, callback) => callback({}))
+  }
+
+  // The selected CYFR's route, its proxy ("" for none), set on each store
+  // that loads it before the store's first load there (routed): its pages
+  // load only through that proxy, which is asked for every name, and the
+  // app's other stores are left as they are. A CYFR's proposal sets it
+  // (prepare), so the store showing when cyfr proposes it carries it before
+  // home-ready, and every store made after carries it before it loads.
+  // A store never given a route keeps the system's settings, as a browser
+  // does, and one given a route goes back to them when none is selected.
+  let route = ""
+  const routes = new WeakMap() // a session: {proxy, set, done}
+  const unrouted = {proxy: "", set: Promise.resolve(), done: true}
+  function routed(ses) {
+    const was = routes.get(ses) ?? unrouted
+    if (was.proxy === route) return was
+    const r = {proxy: route, done: false}
+    r.set = ses.setProxy(route ? {mode: "fixed_servers", proxyRules: route} : {mode: "system"}).then(() => { r.done = true })
+    routes.set(ses, r)
+    return r
+  }
+  // load, once ses carries the route: at once where it does already, and
+  // never where the route could not be set.
+  function whenRouted(ses, load) {
+    const r = routed(ses)
+    if (r.done) return load()
+    r.set.then(load, () => say("not loaded: the CYFR's route could not be set"))
+  }
+
+  // cyfr proposed home: its route set on the store showing (the chooser's,
+  // which goes on to that CYFR's pages on the six-word road) and the
+  // account window's, then home-ready, under the cyfr run that proposed it.
+  function prepare({home, attempt, proxy}) {
+    route = proxy
+    const answer = ofThisRun()
+    const live = [contentSession, accountWindow?.webContents.session].filter(Boolean)
+    Promise.all(live.map((ses) => routed(ses).set))
+      .then(answer(() => send("home-ready", {home, attempt})), () => say(`not ready for ${home}: its route could not be set`))
   }
 
   // A kept storage, given its rules before anything loads in it, once.
@@ -578,7 +603,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     frame.contentView.addChildView(v)
     layout()
-    contents.loadURL(address).catch(() => {})
+    whenRouted(ses, () => contents.loadURL(address).catch(() => {}))
   }
 
   // The CYFR at `home`, opened at `path` in its own kept storage, which
@@ -597,7 +622,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     const memory = !contentKept
     setImmediate(() => {
       if (!v || content !== v) return
-      if (memory) v.webContents.loadURL(address).catch(() => {})
+      if (memory) whenRouted(v.webContents.session, () => v.webContents.loadURL(address).catch(() => {}))
       else openContent(address, freshSession())
     })
   }
@@ -642,7 +667,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         endHop()
       }
     })
-    w.loadURL(address)
+    whenRouted(ses, () => w.loadURL(address))
   }
 
   function message(text) {
@@ -727,7 +752,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     children.add(w)
     w.on("closed", () => children.delete(w))
     confine(w.webContents, "child")
-    w.loadURL(url)
+    whenRouted(contentSession, () => w.loadURL(url))
   }
 
   function endHop() {

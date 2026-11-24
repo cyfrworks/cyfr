@@ -60,6 +60,9 @@ function reset({relaunch = false} = {}) {
   world.heldPages = []
   world.connections = []
   world.closingConnections = () => Promise.resolve()
+  // Each store's route as set, in order: [partition, its config].
+  world.proxies = []
+  world.settingProxy = () => Promise.resolve()
   world.popups = []
   world.boxes = []
   world.messageBox = async () => ({response: 0})
@@ -271,6 +274,11 @@ function fromPartition(partition) {
         }
       }),
       async clearCache() { world.step("cache cleared") },
+      // Its route, once the test lets it be set (settingProxy).
+      setProxy(config) {
+        world.proxies.push([partition, config])
+        return world.settingProxy(partition, config)
+      },
       // Its connections closed, once the test lets them (closingConnections).
       closeAllConnections() {
         world.connections.push(partition)
@@ -1266,10 +1274,7 @@ test("the app's end never waits without end on a clear or a flush", async () => 
       child.say({type: "locked", home: PORT_A, account: ACCOUNT})
     }]]) {
     for (const [how, end, ended] of [
-      ["quit", () => world.app.emit("before-quit", {preventDefault() {}}), () => world.quit],
-      ["relaunch", () => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
-        () => !!world.relaunched]]) {
-      if (how === "relaunch" && name === "a lock's clear") continue // no proposal is taken while locking
+      ["quit", () => world.app.emit("before-quit", {preventDefault() {}}), () => world.quit]]) {
       await started(true)
       hang()
       await act()
@@ -1623,18 +1628,38 @@ test("a frame asking the top frame to go to the sign-in route is refused and ope
   assert.equal(live().length, 1, "no account window")
 })
 
-test("a CYFR rerouted is a relaunch only after the content closed, and signs nobody out", async () => {
+// A CYFR reached by its proxy (a folder's, over its tailnet) has the
+// proxy set on the store showing before main answers home-ready, since on
+// the six-word road that store goes on to the CYFR's pages, and on its own
+// kept store before that store's first load; nothing closes or starts
+// again for it, and the rail's store keeps the system's settings.
+test("a CYFR's route is set on its own stores before anything of it loads, and on no other", async () => {
+  const ROUTE = {mode: "fixed_servers", proxyRules: "socks5://127.0.0.1:1055"}
   await started(true)
-  child.proposes(HOME)
+  const chooser = content().webContents.session.partition
+  let release
+  world.settingProxy = () => new Promise((resolve) => { release = resolve })
+  const attempt = child.proposes(HOME, {proxy: ROUTE.proxyRules})
   await settled()
-  world.cleared = []
-  const page = content()
-  child.proposes("https://bob.example", {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
+  await settled()
+  assert.deepEqual(world.proxies, [[chooser, ROUTE]])
+  assert.ok(!child.heard.some((m) => m.type === "home-ready"), "no home-ready before the route is set")
+  release()
   await settled()
   await settled()
-  assert.ok(page.destroyed)
-  signedNobodyOut()
-  assert.ok(world.relaunched?.args.includes("--proxy-server=socks5://127.0.0.1:1055"))
+  assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === HOME && m.attempt === attempt))
+  child.say({type: "opened", home: HOME, attempt})
+  await settled()
+  await settled()
+  assert.deepEqual(world.proxies.at(-1), [contentStore(HOME), ROUTE])
+  assert.deepEqual(world.loads.filter((l) => l.url.startsWith(HOME)), [], "nothing of the CYFR loaded before its store's route")
+  release()
+  await settled()
+  await settled()
+  assert.ok(world.loads.some((l) => l.url.startsWith(HOME)), "its page loads once its store carries the route")
+  assert.ok(!world.proxies.some(([partition]) => partition === RAIL_SESSION), "the rail's store keeps the system's settings")
+  assert.equal(world.relaunched, null)
+  assert.equal(world.exited, undefined)
 })
 
 test("cyfr's own locked naming a CYFR main never kept to leaves it keeping to none", async () => {
@@ -1874,7 +1899,7 @@ test("a lock over a chooser that is keeping a notice leaves the notice there, un
   assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
 })
 
-test("with no route localhost is 127.0.0.1 alone, and that is no route a CYFR is restarted for", async () => {
+test("localhost is 127.0.0.1 alone, the app's whole run", async () => {
   await started(false)
   assert.deepEqual(world.switches, [["host-resolver-rules", "MAP localhost 127.0.0.1"]])
   world.relaunched = null
@@ -1883,17 +1908,6 @@ test("with no route localhost is 127.0.0.1 alone, and that is no route a CYFR is
   await settled()
   assert.equal(world.relaunched, null)
   assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === "http://localhost:4000" && m.attempt === 1))
-})
-
-test("started on a route main keeps that route's rules alone", async () => {
-  const bare = world.app.commandLine.getSwitchValue
-  world.app.commandLine.getSwitchValue = (name) => (name === "host-resolver-rules" ? "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" : "")
-  try {
-    await started(false)
-    assert.deepEqual(world.switches, [])
-  } finally {
-    world.app.commandLine.getSwitchValue = bare
-  }
 })
 
 // ---- the folder CYFR is set up in on this computer ----
@@ -2204,8 +2218,6 @@ test("on the screen every end of the app is its one end, and none is the engine'
     "the shell's ending": [() => child.say({type: "ending"}), "cyfr ended: the screen shell is ending"],
     "the system's quit": [() => world.app.quit(), null],
     "the window closed": [() => frame().emit("closed"), null],
-    "a route the app was not started on": [() => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
-      "cyfr ended: it named a route the app was not started on, which the screen's launcher starts it on"],
     "a CYFR this app does not open": [() => child.say({type: "home", home: "not an address", account: ACCOUNT, attempt: 9}),
       "cyfr ended: it named a CYFR this app does not open"],
     "a CYFR it was not keeping to opened": [() => child.say({type: "opened", home: "https://other.example", attempt: 1}),

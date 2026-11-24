@@ -27,8 +27,7 @@
 //              it. Its deadline (DEPARTURE_MS) passed first, main does not
 //              trust that cyfr to have let go: it ends it and starts a
 //              fresh one, which opens nothing by itself (`unleft`)
-//   ended      cyfr is gone, the app quits or starts again on another
-//              route; nothing opens again
+//   ended      cyfr is gone and the app quits; nothing opens again
 //
 // A lock is the device's, never the computer's: the app does not lock
 // when the computer locks or sleeps, when a page is lost (it is shown
@@ -134,13 +133,14 @@
 //                            storage, or with setup its setup page, the
 //                            token in the fragment alone
 //   send {type, fields}      a message to cyfr
+//   prepare {home, attempt, proxy}  set that CYFR's route (its proxy,
+//                            none when empty) on every store that loads
+//                            it, then answer home-ready
 //   chooser {notices}        open the content at the chooser; with
 //                            connect, connecting to that CYFR; with way
 //                            "setup", at setting up on this computer
 //   back {notices}           show the chooser in the content window as it
 //                            stands, its session as it is
-//   relaunch {proxy, resolver}  once forgotten, or the wait for it is up
-//                            (never on the box's screen)
 //   end {why}                kill cyfr and tell the person (never on the
 //                            box's screen)
 //   quit                     once forgotten, or the wait for it is up,
@@ -166,8 +166,8 @@ import {absolute} from "./process.js"
 export const DEPARTURE_MS = 20_000
 
 /** The state main starts in. */
-export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
-  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
+export function initial(accountRoad, screen = "") {
+  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", returning: null,
     notices: [], picks: 0, picking: 0, pickFor: null, leaves: 0, seen: 0}
 }
 
@@ -311,10 +311,6 @@ function sentToSignIn(s, e) {
   return signIn(to) && !signIn(from) && (!!e.redirect || from?.origin === kept(s).home)
 }
 
-// A home naming a CYFR on another route than main's: main must start
-// again with it before it keeps to it.
-const rerouted = (s, m) => (m.proxy ?? "") !== s.route.proxy || (m.resolver ?? "") !== s.route.resolver
-
 // A lock from state s: the content closes at once. cyfr is told, unless
 // it said locked itself (`heard`, its message): that is then the barrier
 // passed and the device's session ended, which is forgotten.
@@ -359,7 +355,7 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
-    railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
+    railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", returning: null, notices: s.notices,
     picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
   if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
   const taken = step(next, {type: "home", message: s.wanted})
@@ -368,7 +364,7 @@ function settle(s) {
 
 // The chooser's state after a departure: main keeps to none.
 const chooserOf = (s) => ({name: "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL, railURL: s.railURL,
-  home: "", account: "", route: s.route, returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
+  home: "", account: "", returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
   leaves: s.leaves, seen: s.seen})
 
 /**
@@ -413,14 +409,8 @@ function advance(s, e) {
       if (!["chooser", "proposed"].includes(s.name) || !homeMessage(m)) {
         return stopped(s, "it named a CYFR this app does not open")
       }
-      if (rerouted(s, m)) {
-        // The screen's app is started on its CYFR's route by its launcher
-        // (cmd/screen.go, cyfr screen app), never by itself.
-        return s.screen ? stopped(s, "it named a route the app was not started on, which the screen's launcher starts it on")
-          : ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      }
       return {state: {...s, name: "proposed", home: m.home, account: m.account, attempt: m.attempt, seen, setup: m.setup ?? "", returning: null},
-        do: [{say: `home: ${m.home}`}, {send: {type: "home-ready", fields: {home: m.home, attempt: m.attempt}}}]}
+        do: [{say: `home: ${m.home}`}, {prepare: {home: m.home, attempt: m.attempt, proxy: m.proxy ?? ""}}]}
     }
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
@@ -454,7 +444,7 @@ function advance(s, e) {
     // itself: the chooser it shows says why (unleft), so it resumes none.
     case "late":
       if (s.name !== "locking" || !s.departing || e.id !== s.departing) return same(s)
-      return {state: {...initial(s.accountRoad, s.route, s.screen), notices: adding(s.notices, "unleft")},
+      return {state: {...initial(s.accountRoad, s.screen), notices: adding(s.notices, "unleft")},
         do: [{say: "cyfr did not let go of the CYFR left in time: starting it again"}, {restart: true}]}
     // cyfr asks for a store of a CYFR it forgets to be erased; never the
     // open one's, which cyfr does not forget.

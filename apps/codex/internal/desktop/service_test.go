@@ -982,12 +982,12 @@ func TestALocalCYFROnItsTailnetNamesItsRoute(t *testing.T) {
 	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
 	a.Local = func(string) (Local, error) {
 		return Local{Shell: shell.Config{Address: home, Client: offline(), Directory: account.DefaultDirectory},
-			Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+			Proxy:   "socks5://127.0.0.1:1055",
 			Answers: func(context.Context) error { return nil }}, nil
 	}
 	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": home})
 	want := Message{Type: TypeHome, Home: home, Account: account.DefaultDirectory, Attempt: 1,
-		Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"}
+		Proxy: "socks5://127.0.0.1:1055"}
 	if m := a.next(t); m != want {
 		t.Fatalf("main heard %+v", m)
 	}
@@ -2265,7 +2265,7 @@ func TestTheFolderSetUpIsOfferedAfterTheAppStartsAgain(t *testing.T) {
 	a.Setup = func(context.Context, string, func(string)) error { return nil }
 	local := func(string) (Local, error) {
 		return Local{Shell: shell.Config{Address: "http://box.example.test:4000", Directory: account.DefaultDirectory},
-			Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+			Proxy:   "socks5://127.0.0.1:1055",
 			Answers: func(context.Context) error { return nil }}, nil
 	}
 	a.Local = local

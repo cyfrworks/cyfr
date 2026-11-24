@@ -140,13 +140,13 @@ func (a *localApp) form(path string, fields url.Values) string {
 }
 
 // open presses Connect at typed and takes it to the device's pages, main
-// told the engine's route there, proxy and resolver, when there is one.
+// told the engine's route there, its proxy, when there is one.
 func (a *localApp) open(typed, home string, route ...string) {
 	a.t.Helper()
 	a.proposed++
 	want := desktop.Message{Type: desktop.TypeHome, Home: home, Account: home, Attempt: a.proposed, Setup: a.setup}
-	if len(route) == 2 {
-		want.Proxy, want.Resolver = route[0], route[1]
+	if len(route) == 1 {
+		want.Proxy = route[0]
 	}
 	done := make(chan chooserAnswer, 1)
 	go func() { done <- a.chooser("/bootstrap/connect", map[string]string{"address": typed}) }()
@@ -881,7 +881,7 @@ func TestEveryAccessModeIsReachedOnThisComputer(t *testing.T) {
 		route []string
 	}{
 		{access.ModePublic, nil},
-		{access.ModeTailnet, []string{"socks5://127.0.0.1:1055", "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"}},
+		{access.ModeTailnet, []string{"socks5://127.0.0.1:1055"}},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
 			s := newLocalStack(t)

@@ -52,18 +52,9 @@ import (
 
 // The engine's route to a CYFR with tailnet access from the computer it
 // runs on, for CYFR's own pages alone: its SOCKS5 proxy on loopback, the
-// one way to that name, and the resolver rules, so that no name is looked
-// up past it.
-const (
-	localProxy    = "socks5://127.0.0.1:1055"
-	localResolver = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"
-)
-
-// localhostIsIPv4 is the engine's resolver rule elsewhere: localhost is
-// 127.0.0.1 alone, where Docker publishes a local CYFR, and never ::1,
-// where any other program may listen on the same port
-// (desktop/src/policy.js LOCALHOST_IS_IPV4).
-const localhostIsIPv4 = "MAP localhost 127.0.0.1"
+// one way to that name. The engine asks the proxy for each name, and
+// looks none of them up itself.
+const localProxy = "socks5://127.0.0.1:1055"
 
 const directoryVar = "CYFR_DIRECTORY_URL"
 
@@ -164,13 +155,12 @@ func openFolder(work *shell.Work, dir, holder string) (*localFolder, localReadin
 }
 
 // localRoute is the engine's route to a CYFR of access mode on the
-// computer it runs on: a tailnet one's proxy and resolver rules, none for
-// any other.
-func localRoute(mode string) (proxy, resolver string) {
+// computer it runs on: a tailnet one's proxy, none for any other.
+func localRoute(mode string) string {
 	if mode == access.ModeTailnet {
-		return localProxy, localResolver
+		return localProxy
 	}
-	return "", ""
+	return ""
 }
 
 // readLocal is the CYFR set up in dir, as the screen and the CYFR app open
@@ -185,7 +175,7 @@ func readLocal(work *shell.Work, dir, holder string) (desktop.Local, error) {
 	}
 	client := &http.Client{Transport: f.transport(nil)}
 	l := desktop.Local{Work: work}
-	l.Proxy, l.Resolver = localRoute(read.Mode)
+	l.Proxy = localRoute(read.Mode)
 	l.Shell = shell.Config{
 		Address:    read.Address,
 		Client:     client,
