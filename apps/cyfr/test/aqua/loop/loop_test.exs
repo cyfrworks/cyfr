@@ -101,9 +101,13 @@ defmodule Aqua.LoopTest do
   @model "catalyst:local.claude"
   @step_cap "Aqua stopped: it reached the most steps one turn may take. Send a message to go on."
 
-  setup do
+  # Give ended!/2 its full wait after earlier waits, before ExUnit kills
+  # the test or the sandbox drops the connection the snapshot reads.
+  @turn_end_test_timeout 240_000
+
+  setup tags do
     Arca.Cache.init()
-    Cyfr.Test.Sandbox.setup!()
+    Cyfr.Test.Sandbox.setup!(Map.take(tags, [:ownership_timeout]))
 
     # The test's storage is the tree of an athanor minted for it alone,
     # under the partition's storage root: nothing else names the tree, and
@@ -750,6 +754,7 @@ defmodule Aqua.LoopTest do
   @write %{"action" => "write", "path" => "data/x.md", "content" => "y"}
 
   for {name, title} <- [{"aqua", "Aqua"}, {"reader", "Reader"}] do
+    @tag timeout: @turn_end_test_timeout, ownership_timeout: @turn_end_test_timeout
     test "#{title} runs a read, a catalog write and a hand's write it is offered",
          %{ctx: ctx, thread: daily} do
       name = unquote(name)
@@ -820,6 +825,7 @@ defmodule Aqua.LoopTest do
   # A soul whose file still lists its tools under `tool_policy:` is refused
   # whole: posted to in the thread it last answered, its turn never runs and
   # says why where the person reads it.
+  @tag timeout: @turn_end_test_timeout, ownership_timeout: @turn_end_test_timeout
   test "a soul whose file holds tool_policy, posted to where it last answered, ends its turn " <>
          "unrun with the line that says what to change, and dispatches nothing",
        %{ctx: ctx, thread: thread} do
@@ -860,6 +866,7 @@ defmodule Aqua.LoopTest do
 
   # The soul's list names one action an entry: a file that names a tool's
   # actions as a wildcard is refused whole, and the line names the entry.
+  @tag timeout: @turn_end_test_timeout, ownership_timeout: @turn_end_test_timeout
   test "a soul whose tools list holds a wildcard, posted to where it last answered, ends its " <>
          "turn unrun with the line that names the entry, and dispatches nothing",
        %{ctx: ctx, thread: thread} do
@@ -1587,6 +1594,7 @@ defmodule Aqua.LoopTest do
   # runner started after it takes the turn over. The browser is turned off
   # too: a click decided again would be refused in the browser's words,
   # where a skipped one is never decided.
+  @tag timeout: @turn_end_test_timeout, ownership_timeout: @turn_end_test_timeout
   test "a turn taken over with a post waiting skips the calls its response still proposed, " <>
          "and its model answers the post",
        %{ctx: ctx, thread: thread} do
@@ -1941,6 +1949,7 @@ defmodule Aqua.LoopTest do
   # post that round; once the step opened (the control), the step carries it.
   for checkpoint <- [:drained, :opened] do
     @tag checkpoint: checkpoint
+    @tag timeout: @turn_end_test_timeout, ownership_timeout: @turn_end_test_timeout
     test "a takeover answers a later post after #{checkpoint}",
          %{ctx: ctx, thread: thread, checkpoint: checkpoint} do
       script!([{:probe, self()}, reply("hello"), reply("I read the later post")])
