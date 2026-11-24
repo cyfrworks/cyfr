@@ -204,9 +204,10 @@ mkdir -p dist
 id -u > dist/uid.txt
 node probe.js targets "127.0.0.1:@PORT@" "[::1]:@PORT@" > dist/sibling.txt 2>&1
 node -e "require('http').createServer((q, s) => s.end('own ' + process.getuid())).listen(@PORT@, '::')" > dist/listener.log 2>&1 &
+listener=$!
 sleep 1
 curl -sS --max-time 3 http://127.0.0.1:@PORT@/ > dist/own.txt 2>&1
-kill %1
+kill "$listener"
 """.replace("@PORT@", str(SIBLING_PORT))
 # A space has no IPv6 route: an IPv6 connection never leaves it. Its own
 # loopback with nothing listening refuses at once.

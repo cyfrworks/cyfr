@@ -870,14 +870,15 @@ def guard_counters(saved):
 
 
 def backend_environ(stack, pid, uid):
-    """The environment of process `pid`, of uid `uid`, as `NAME=value` lines, read as the container's root.
+    """The environment of process `pid`, of uid `uid`, as `NAME=value` lines, read by the observer (`Stack.observe`).
 
-    A program runs in a space of its own, a user namespace its keeper made:
-    a process of its uid outside that namespace may not read its /proc
-    entries (that takes CAP_SYS_PTRACE in the program's namespace), and the
-    container's root, the namespace's owner, may.
+    A program runs in a space of its own, a user namespace its keeper made.
+    Its /proc environ is readable only from inside that space by its own
+    uid, or with CAP_SYS_PTRACE: the same uid outside the space may not
+    read it, and neither may the container's root, which holds no such
+    capability.
     """
-    return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user="0"),
+    return read_output(stack.observe(f"tr '\\0' '\\n' < /proc/{pid}/environ"),
                        f"the environment of pid {pid}, uid {uid}")
 
 
@@ -1152,6 +1153,11 @@ class Stack(imagesuite.Stack):
     def exec(self, script, user=None, target=None):
         user_args = ["-u", user] if user else []
         return run("docker", "exec", *user_args, target or self.container, "sh", "-c", script, check=False)
+
+    def observe(self, script):
+        """`script` run as root with every capability (`docker exec --privileged`), the observer's alone: the service
+        and its spaces keep the shipped settings."""
+        return run("docker", "exec", "--privileged", "-u", "0", self.container, "sh", "-c", script, check=False)
 
     def processes(self, target=None):
         """Every process in the container: pid, session, uids, capability sets, no_new_privs and command line."""

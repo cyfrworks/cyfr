@@ -303,6 +303,7 @@ def test_names(image):
     try:
         stack.up()
         c = stack.controller()
+        expect(c.hello()[0] == 200 and c.reconcile([])[0] == 200, "the service is greeted and reconciled")
         owner = owner_of("names")
         sync_probe(c, owner)
         asked = f"session-{secrets.token_hex(4)}.l5.test"
@@ -320,6 +321,7 @@ def test_guard_death(image):
     try:
         stack.up()
         c = stack.controller()
+        expect(c.hello()[0] == 200 and c.reconcile([])[0] == 200, "the service is greeted and reconciled")
         owner = owner_of("guard-dies")
         sync_probe(c, owner)
         daemon = c.tool(owner, "probe__spawn_daemon")["pid"]

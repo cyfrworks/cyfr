@@ -72,7 +72,7 @@ type fakeRouteGuard struct {
 	mu     sync.Mutex
 	conn   uint64
 	calls  []routeCall
-	routes map[string]*os.File
+	routes map[string]*answering
 	// refuse refuses every admit; hold, when set, is waited on inside each
 	// admit before it answers; before runs inside each admit before it
 	// answers, as a connection's end that comes just then would.
@@ -113,17 +113,16 @@ func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns,
 	if refuse {
 		return guard.Route{}, errors.New("refused")
 	}
-	answering, err := dupFile(udp, "names")
+	a, err := answerNames(udp, spawnID)
 	if err != nil {
 		return guard.Route{}, err
 	}
 	g.mu.Lock()
 	if g.routes == nil {
-		g.routes = map[string]*os.File{}
+		g.routes = map[string]*answering{}
 	}
-	g.routes[spawnID] = answering
+	g.routes[spawnID] = a
 	g.mu.Unlock()
-	go answerNames(answering, spawnID)
 	return guard.Route{Conn: conn}, nil
 }
 
@@ -145,8 +144,8 @@ func (g *fakeRouteGuard) Clear(spawnID string, r guard.Route) error {
 		g.refuseClears--
 		return errors.New("refused: the guard could not remove the whole route, and tries again")
 	}
-	if f := g.routes[spawnID]; f != nil {
-		f.Close()
+	if a := g.routes[spawnID]; a != nil {
+		a.stop()
 		delete(g.routes, spawnID)
 	}
 	return nil
@@ -206,22 +205,39 @@ func checkSpaceDescriptors(netns, udp, tcp *os.File) error {
 	return nil
 }
 
-// answerNames answers every datagram on udp with "answer:<spawn id>" until
-// it is closed.
-func answerNames(udp *os.File, spawnID string) {
+// answering is one route's names in the fake, as the guard's are: the
+// socket is taken before the goroutine that reads it starts, and stop
+// returns only once that goroutine is done.
+type answering struct {
+	pc   net.PacketConn
+	done chan struct{}
+}
+
+// answerNames answers every datagram on a copy of udp with
+// "answer:<spawn id>" until stopped.
+func answerNames(udp *os.File, spawnID string) (*answering, error) {
 	pc, err := net.FilePacketConn(udp)
 	if err != nil {
-		return
+		return nil, err
 	}
-	defer pc.Close()
-	buf := make([]byte, 512)
-	for {
-		_, from, err := pc.ReadFrom(buf)
-		if err != nil {
-			return
+	a := &answering{pc: pc, done: make(chan struct{})}
+	go func() {
+		defer close(a.done)
+		buf := make([]byte, 512)
+		for {
+			_, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc.WriteTo([]byte("answer:"+spawnID), from)
 		}
-		_, _ = pc.WriteTo([]byte("answer:"+spawnID), from)
-	}
+	}()
+	return a, nil
+}
+
+func (a *answering) stop() {
+	_ = a.pc.Close()
+	<-a.done
 }
 
 // A routed space's command starts only once the guard has admitted its
