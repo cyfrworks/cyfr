@@ -214,7 +214,7 @@ untitled() { ! titled "$1"; }
 # Every visible window's title and rectangle on Windows, owned ones such as
 # Update CYFR's among them, which UI Automation lists under their owner.
 windows_titles() {
-  powershell.exe -NoProfile -NonInteractive -Command '
+  pwsh -NoProfile -NonInteractive -Command '
     Add-Type @"
 using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;
 public static class W {
@@ -281,7 +281,7 @@ press_rail_update() {
         for (const t of [\$.kCGEventLeftMouseDown, \$.kCGEventLeftMouseUp]) {
           \$.CGEventPost(\$.kCGHIDEventTap, \$.CGEventCreateMouseEvent(null, t, p, \$.kCGMouseButtonLeft)); delay(0.1) }" ;;
     windows)
-      powershell.exe -NoProfile -NonInteractive -Command '
+      pwsh -NoProfile -NonInteractive -Command '
         Add-Type @"
 using System; using System.Runtime.InteropServices;
 public static class U {
@@ -337,7 +337,7 @@ key() {
     windows)
       local send='~'
       [ "$1" = Escape ] && send='{ESC}'
-      powershell.exe -NoProfile -NonInteractive -Command \
+      pwsh -NoProfile -NonInteractive -Command \
         "\$s = New-Object -ComObject WScript.Shell; if (-not \$s.AppActivate('Update CYFR')) { exit 1 }; Start-Sleep -Milliseconds 300; \$s.SendKeys('$send')" ;;
   esac
 }
@@ -346,7 +346,7 @@ key() {
 # whose installer refuses an older release over a newer one.
 reinstall() {
   if [ "$OS" = windows ] && [ -n "${2:-}" ]; then
-    powershell.exe -NoProfile -NonInteractive -Command \
+    pwsh -NoProfile -NonInteractive -Command \
       "\$p = Start-Process msiexec.exe -ArgumentList '/x', '\"$(cygpath -w "$2")\"', '/qn', '/norestart' -Wait -PassThru; exit \$p.ExitCode" || return 1
   fi
   install_package "$1"
