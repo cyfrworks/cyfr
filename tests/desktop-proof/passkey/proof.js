@@ -18,14 +18,16 @@
 import {readFileSync, writeFileSync} from "node:fs"
 import path from "node:path"
 
-import {BrowserWindow} from "electron"
+import {createHash} from "node:crypto"
+
+import {BrowserWindow, session} from "electron"
 
 import {accountAndDevice, accountAt, accountWindow, answerWith, armWindow, bothWays, devicePrism, held, lockDevice,
   offered, passkeyFor, signOutOfPrism, signedInPrism, startSignIn, toSignIn, usePasskey} from "../account.js"
-import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
+import {DIRECTORY, HOME, LOOPBACK, NAME, OUT, appWindows, arm, childOfFrame, rail, atBootstrap, atHome, bare, childOfThis, content, contentAt, decided,
   decisions, fault, frontLength, harvest, history, inputs, js, judged, literal, load, lockDetail, opens, pageKilled, passkeys,
   reachedSince, refused, row, run, section, seen, sessionCookie, sessionMark, shownAgain, signOutsSince, signedOutToWays,
-  submit, throughComputerLock, toldUnanswered, unansweredLoad, unclearable, UNCLEARED, undisturbed, waitFor} from "../lib.js"
+  submit, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 const OTHER = "desk-b"
 // The session the first launch left, as its mark alone (sessionMark).
@@ -168,7 +170,7 @@ async function passkeyPhase() {
   const listed = await waitFor(() => js(w.webContents, `document.querySelector('[data-test="pairing-waiting-code"]')?.textContent.trim() || null`),
     "the passkey waiting in Your devices")
   await js(w.webContents, `document.querySelector('[data-test="pairing-approve"]').click(); 1`)
-  const approve = await waitFor(() => appWindows().find((x) => x.getParentWindow() === w && x.webContents.getURL().startsWith(LOOPBACK + "/passkey")),
+  const approve = await waitFor(() => appWindows().find((x) => childOfFrame(x) && x.webContents.getURL().startsWith(LOOPBACK + "/passkey")),
     "the device's approval window")
   await waitFor(() => js(approve.webContents, `!!document.querySelector('form[action="/passkey/decide"]')`), "the approval page")
   const shownThere = await js(approve.webContents, `document.querySelector("p.code")?.textContent.trim() || null`)
@@ -276,18 +278,18 @@ async function passkeyPhase() {
   row("sign_out", signedOutToWays(out) && out.signOuts.length === 1 && out.signOuts[0].status === 302,
     "Prism's Sign out ends the session, and the chooser shows both ways on", lockDetail(out))
 
-  // signed_out_root: the CYFR opens to no one after that: its root, given
-  // the content window, is sent to sign in, which main refuses, and the
-  // chooser shows the ways on again; the old cookie opens nothing.
+  // signed_out_root: the CYFR opens to no one after that: the old cookie
+  // is sent from its root to sign in; and the chooser, whose view keeps
+  // nothing, loads no page of the CYFR (its sign-in is main's to open in
+  // the CYFR's own view): main refuses the root there and the chooser
+  // stays with the ways on.
   const root = HOME + "/"
-  const decidedBefore = decisions.length
   await js(out.back.webContents, `location.assign(${literal(root)}); 1`)
-  const sentBack = await waitFor(() => decisions.slice(decidedBefore).find((d) => d.name === "will-redirect" && d.main &&
-    d.url.startsWith(HOME + "/login")), "the CYFR sending the signed-out to sign in")
+  const chooserRefused = await decided(out.back.webContents, root, false, "main's decision on the CYFR's root in the chooser")
   await bothWays()
   const oldCookie = await opens(out.cookie)
-  row("signed_out_root", sentBack.prevented && refused(oldCookie),
-    "after signing out the CYFR sends its root to sign in, and the chooser shows the ways on", {sentBack, oldCookie})
+  row("signed_out_root", chooserRefused && refused(oldCookie),
+    "after signing out the old cookie is sent from the CYFR's root to sign in, and the chooser loads no page of the CYFR", {chooserRefused, oldCookie})
 
   // sign_in_again: from the chooser's passkey button a fresh assertion
   // signs in again, under a new session.
@@ -318,30 +320,39 @@ async function passkeyPhase() {
     cancelled === "The passkey was not used. Try again when you are ready." && who,
   "the app offers both accounts' passkeys; Cancel signs no one in, and choosing @desk-a signs in as @desk-a", {offered: offeredBoth, cancelled})
 
-  // account_offline: with the account service unreachable (its front takes
-  // every connection down), the account pages' worker opens the sign-in
-  // from the copy it stored in this run, and that copy carries main's
-  // policy: the engine reports it refusing a frame there.
+  // account_unavailable: with the account service unreachable (its front
+  // takes every connection down), the account window's page does not
+  // load and main ends the hop, closing that window; the CYFR's sign-in
+  // page stays as it was, and once the service answers again its Sign in
+  // opens the account page, which no worker controls: in the app no
+  // worker serves a stored copy (worker-src 'none').
   out = await signOutOfPrism(w)
   const service = new URL(DIRECTORY).hostname
-  const toService = await toSignIn()
-  await fault(service, "down")
-  const downFrom = (await seen(service)).length
-  await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
-  a = await waitFor(() => {
-    const w = accountWindow()
-    return w && !w.webContents.isLoading() && w.webContents.getURL().startsWith(DIRECTORY + "/account/sign") ? w : null
-  }, "the account window with the account service unreachable")
-  const byWorker = await js(a.webContents, `!!navigator.serviceWorker.controller && !!document.querySelector("#use-passkey")`)
-  const kept = await frameRefusal(a, DIRECTORY + "/account/devices")
-  const asked = (await seen(service)).slice(downFrom).filter((r) => r.path === "/account/sign")
-  const unanswered = asked.length > 0 && asked.every((r) => r.fault === "down" && r.status === null)
-  await fault(service, "none")
-  a.close()
-  await waitFor(() => !accountWindow(), "the account window closed")
-  row("account_offline", byWorker && unanswered && kept.refusedByMain,
-    "with the account service unreachable the account window opens the copy its worker stored, and that copy still carries main's refusal of a frame",
-    {byWorker, asked: asked.map((r) => ({status: r.status, fault: r.fault})), ...kept})
+  await judged("account_unavailable",
+    "with the account service unreachable main closes the account window whose page did not load, the sign-in page stays, and once the service answers its Sign in opens the account page, no worker in it",
+    async () => {
+      const toService = await toSignIn()
+      await fault(service, "down")
+      const downFrom = (await seen(service)).length
+      let closedByMain = false
+      try {
+        await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+        await waitFor(async () => (await seen(service)).slice(downFrom).some((r) => r.path === "/account/sign"), "the account page asked for")
+        closedByMain = await waitFor(() => !accountWindow(), "the account window closed by main", 30_000).catch(() => false)
+      } finally {
+        await fault(service, "none")
+      }
+      const asked = (await seen(service)).slice(downFrom).filter((r) => r.path === "/account/sign")
+      const unanswered = asked.length > 0 && asked.every((r) => r.fault === "down" && r.status === null)
+      const stays = content() === toService && toService.webContents.getURL().startsWith(HOME + "/login")
+      await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+      a = await accountAt(["ask"])
+      const noWorker = await js(a.webContents, `!navigator.serviceWorker.controller`)
+      a.close()
+      await waitFor(() => !accountWindow(), "the account window closed")
+      return [closedByMain && unanswered && stays && noWorker,
+        {closedByMain, asked: asked.map((r) => ({status: r.status, fault: r.fault})), stays, noWorker}]
+    })
   w = content()
 
   // account_window: the account window holds the account service's sign-in
@@ -407,11 +418,19 @@ async function passkeyPhase() {
     "the recovery code adds a passkey in the account window, which returns to the sign-in and signs in with it", {added: fresh.length})
 
   // wrong_window: an answer made for another browser's sign-in, given to
-  // the content window, signs no one in: the CYFR binds it to the browser
-  // that asked. This is the CYFR's binding holding in the app.
+  // the CYFR's sign-in page in the app (opened by the chooser's Sign in
+  // with your passkey, in the CYFR's own view), signs no one in: the CYFR
+  // binds it to the browser that asked. This is the CYFR's binding holding
+  // in the app.
   out = await signOutOfPrism(w)
   const other = await otherBrowserAnswer(fresh[0])
-  await js(content().webContents, `location.assign(${literal(other)}); 1`)
+  // The page reads an answer as it loads: given to the sign-in page showing,
+  // the answer changes the fragment alone, so the page is loaded again
+  // with it.
+  const page = await toSignIn()
+  await js(page.webContents, `location.assign(${literal(other)}); 1`)
+  await waitFor(() => page.webContents.getURL() === other, "the other browser's answer in the address")
+  page.webContents.reload()
   w = await contentAt((u) => u.startsWith(HOME + "/login"), "the sign-in page with the other browser's answer")
   const refusedAnswer = await waitFor(() => js(w.webContents, `document.querySelector('[data-test="sign-in-error"]')?.textContent.trim() || null`),
     "the sign-in's refusal")
@@ -465,21 +484,28 @@ async function keptPhase() {
       cookie = kept
       return [toldUnanswered({cookie, ...detail}, true), detail]
     })
-  await judged("try_again", "Try again asks cyfr, then for the CYFR's root, and Prism opens signed in as before", async () => {
+  // On the passkey road the chooser is in a view of its own, in memory;
+  // Try again there opens the CYFR's root in a view of the CYFR's own
+  // store, Prism shown again.
+  let back = null
+  await judged("try_again", "Try again asks cyfr, then for the CYFR's root, and Prism opens signed in as before, in the CYFR's own store", async () => {
     const pressedAt = history.length
     const frontAt = await frontLength()
+    const chooser = content()
     // When the chooser asked cyfr, by the engine's loads made by then.
     let connectAt = null
-    const ses = w.webContents.session
+    const ses = chooser.webContents.session
     ses.webRequest.onBeforeRequest({urls: [LOOPBACK + "/bootstrap/connect"]}, (_details, callback) => {
       connectAt ??= history.length
       callback({})
     })
-    let back
     try {
-      await js(w.webContents, `document.querySelector("#again").click(); 1`)
-      back = await waitFor(async () => !w.isDestroyed() && atHome(w.webContents.getURL()) && !w.webContents.isLoading() &&
-        js(w.webContents, `!!document.querySelector(".phx-connected")`), "Prism after Try again", 30_000).catch(() => false)
+      await js(chooser.webContents, `document.querySelector("#again").click(); 1`)
+      back = await waitFor(async () => {
+        const v = content()
+        return v && v !== chooser && atHome(v.webContents.getURL()) && !v.webContents.isLoading() &&
+          await js(v.webContents, `!!document.querySelector(".phx-connected")`) ? v : null
+      }, "Prism after Try again", 30_000).catch(() => null)
     } finally {
       ses.webRequest.onBeforeRequest(null)
     }
@@ -488,27 +514,28 @@ async function keptPhase() {
     const asked = history.slice(pressedAt).find((url) => !url.startsWith(LOOPBACK + "/")) ?? null
     const askedFirst = connectAt !== null && !history.slice(pressedAt, connectAt).some((url) => !url.startsWith(LOOPBACK + "/"))
     const answered = (await reachedSince(new URL(HOME).hostname, frontAt)).find((r) => r.method === "GET" && r.path === "/")?.status ?? null
-    return [askedFirst && asked === HOME + "/" && answered !== null && back === true && cookie !== null && (await sessionCookie(w)) === cookie,
-      {askedFirst, asked: asked && bare(asked), answered, back}]
+    const own = !!back && back.webContents.session === keptSession()
+    return [askedFirst && asked === HOME + "/" && answered !== null && own && cookie !== null && (await sessionCookie(back)) === cookie,
+      {askedFirst, asked: asked && bare(asked), answered, back: !!back, own}]
   })
-  await choosersWord(w)
+  await choosersWord(back)
   return "quit"
 }
 
 // What the chooser says on main's behalf is main's alone to decide.
 // chooser_refused: Prism's page in `w` cannot send the window to the
-// chooser with a notice, by a navigation, by a redirect of a load of the
-// CYFR's or by its history, whose entry before this one is the chooser's
-// that main showed for the failure. The redirect is the engine's answer in
-// the CYFR's place (the session's request hook, which the app does not
-// use): the front sends a load to https alone.
-// chooser_history: the engine's own move in that history, which asks main
-// nothing, brings that entry back, and it says nothing of the failure.
+// chooser with a notice, by a navigation or by a redirect of a load of the
+// CYFR's, and its history holds no entry of the chooser's to go back to:
+// on the passkey road the chooser showed the failure in a view of its own,
+// and Try again opened the CYFR in a new view of the CYFR's own store. The
+// redirect is the engine's answer in the CYFR's place (the session's
+// request hook, which the app does not use): the front sends a load to
+// https alone.
 async function choosersWord(w) {
   const to = `${LOOPBACK}/bootstrap/#road=passkey&notice=unanswered`
   const hop = "/proof-chooser"
   await judged("chooser_refused",
-    "Prism's page cannot send the window to the chooser, by a navigation, a redirect or its history: main refuses each and the page stays",
+    "Prism's page cannot send the window to the chooser, by a navigation or a redirect, and its history holds no chooser to go back to: main refuses each and the page stays",
     async () => {
       const wc = w.webContents
       await js(wc, "window.proofStays = true; 1")
@@ -529,28 +556,12 @@ async function choosersWord(w) {
         wc.session.webRequest.onBeforeRequest(null)
       }
       if (redirected.prevented !== true) return [false, {navigated, redirected: redirected.prevented}]
-      const backAt = decisions.length
-      await js(wc, "window.history.back(); 1")
-      const byHistory = await waitFor(() => decisions.slice(backAt).find((d) => d.window === wc.id && d.name === "will-navigate" && d.main &&
-        atBootstrap(d.url)), "main's decision on the page's move back to the chooser", 30_000)
       await waitFor(() => !wc.isLoading(), "the window at rest")
       const stayed = await js(wc, "window.proofStays === true")
-      return [byHistory.prevented === true && stayed === true && atHome(wc.getURL()),
-        {navigated, redirected: redirected.prevented, byHistory: byHistory.prevented, stayed, url: bare(wc.getURL()), asked: history.slice(from).map(bare)}]
+      const entries = wc.navigationHistory.getAllEntries().map((e) => e.url)
+      return [stayed === true && atHome(wc.getURL()) && entries.length > 0 && entries.every(atHome),
+        {navigated, redirected: redirected.prevented, stayed, url: bare(wc.getURL()), entries: entries.map(bare), asked: history.slice(from).map(bare)}]
     })
-
-  await judged("chooser_history", "the history brings back the chooser's entry of a failure with no notice and no Try again", async () => {
-    w.webContents.navigationHistory.goBack()
-    const shows = await waitFor(async () => {
-      if (!atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
-      const at = await js(w.webContents, `(() => ({type: performance.getEntriesByType("navigation")[0].type,
-        ways: document.querySelector("#words").getClientRects().length > 0,
-        words: document.querySelector("#notice").textContent,
-        again: document.querySelector("#again").getClientRects().length > 0}))()`)
-      return at.ways ? at : null
-    }, "the chooser by the history", 30_000)
-    return [shows.type === "back_forward" && shows.ways && shows.words === "" && shows.again === false, shows]
-  })
 }
 
 async function closedPhase() {
@@ -574,42 +585,83 @@ async function closedPhase() {
 async function leftPhase() {
   const w = await stillSignedIn("kept_after_loss", "launched again after cyfr's loss, the app is still signed in")
 
-  // another_uncleared, another: signed out, with marks of the proof's own
-  // in the kept storage (signing out drops the session's cookie itself).
-  // While the engine cannot clear, Connect to another CYFR does not
-  // advance: the ways on again, saying so, the marks still there. Once it
-  // can, main clears them and only then is the CYFR left: the form, main
-  // keeping to it no more, and nothing of it in the storage.
+  // left: with marks of the proof's own in the CYFR's kept storage,
+  // Connect on the rail leaves the CYFR open: the chooser's form shows, the
+  // marks are still kept, and main keeps to that CYFR no more.
   await plant(w)
-  const out = await signOutOfPrism(w)
-  const planted = await storageOf(out.back.webContents.session)
-  const stayed = await unclearable(out.back, async () => {
-    await js(out.back.webContents, `document.querySelector("#another").click(); 1`)
-    await waitFor(() => content() && content() !== out.back, "another chooser")
-    const at = await bothWays()
-    return {at, words: await js(at.webContents, `document.querySelector("#notice").textContent`)}
-  })
-  const still = await storageOf(stayed.at.webContents.session)
-  const marked = (got) => got.cookies.includes(MARK) && got.local === "kept"
-  row("another_uncleared", stayed.words === UNCLEARED && marked(planted) && marked(still),
-    "Connect to another CYFR does not advance past a clear that failed, and says so", {words: stayed.words, planted, still})
-
-  await js(stayed.at.webContents, `document.querySelector("#another").click(); 1`)
-  const form = await waitFor(async () => {
-    const at = content()
-    if (!at || at === stayed.at || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
-    return await js(at.webContents, `document.querySelector("#address").getClientRects().length > 0`) ? at : null
-  }, "the chooser's form")
+  const kept = keptSession()
+  const planted = await storageOf(kept)
+  await press("/rail/connect")
+  const form = await chooserForm(w)
   const away = HOME + "/?from=left"
   await js(form.webContents, `location.assign(${literal(away)}); 1`)
   const leftRefused = await decided(form.webContents, away, false, "main's decision on the CYFR left")
-  const gone = await storageOf(form.webContents.session)
-  row("another", signedOutToWays(out) && leftRefused && gone.cookies.length === 0 && gone.local === null,
-    "signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more",
-    {leftRefused, gone})
+  const still = await storageOf(kept)
+  const marked = (got) => got.cookies.includes(MARK) && got.local === "kept"
+  row("left", marked(planted) && marked(still) && leftRefused,
+    "Connect on the rail leaves the CYFR open: its sign-in stays kept on this computer, and main keeps to it no more",
+    {planted, still, leftRefused})
+
+  // forget_unerased: while the engine cannot clear, Forget in the row's
+  // menu, confirmed, leaves the CYFR on the rail as not forgotten, its
+  // marks still there; forgot: forgotten again once it can, nothing of it
+  // is kept and the rail lists it no more.
+  answerWith((buttons) => buttons.indexOf("Forget"))
+  await judged("forget_unerased", "Forget that could not erase leaves the CYFR on the rail, not forgotten, and its sign-in as it was", async () => {
+    const failed = await unclearableSession(kept, async () => {
+      await press("/rail/menu?cyfr=" + encodeURIComponent(HOME))
+      return waitFor(() => railRow(HOME).then((r) => r?.failed ? r : null), "the rail's row not forgotten")
+    })
+    const unerased = await storageOf(kept)
+    return [failed.failed && marked(unerased), {failed, unerased}]
+  })
+  await press("/rail/menu?cyfr=" + encodeURIComponent(HOME))
+  await waitFor(() => railRow(HOME).then((r) => r ? null : true), "the rail without the CYFR")
+  const gone = await storageOf(kept)
+  row("forgot", gone.cookies.length === 0 && gone.local === null,
+    "Forget again erases all this computer kept of the CYFR, and the rail lists it no more", {gone})
   // system_quit: the system ends the app at the chooser.
   return {system: ["system_quit",
     "ended by the system at the chooser, the app quits, and never from inside the engine's before-quit"]}
+}
+
+// The CYFR's kept content storage (src/policy.js homePartition).
+const keptSession = () => session.fromPartition(`persist:cyfr-home-v2-${createHash("sha256").update(HOME, "ascii").digest("hex")}`)
+
+// A press on the rail: its own top frame going to `path`, which main
+// answers; a row's menu is answered by the proof's stand-in for the
+// person (lib.js menuPicks), Forget first.
+async function press(path) {
+  const r = await waitFor(() => rail(), "the rail")
+  await js(r.webContents, `location.assign(${literal(path)}); 1`)
+}
+
+// The rail's row of the CYFR at `address`, as the rail shows it, or null.
+async function railRow(address) {
+  const r = rail()
+  if (!r) return null
+  return js(r.webContents, `(() => { const a = [...document.querySelectorAll("#cyfrs a")].find((x) => x.title === ${literal(address)})
+    return a ? {failed: a.classList.contains("failed"), forgetting: a.classList.contains("gone")} : null })()`)
+}
+
+// The chooser's form in a content other than `before`.
+function chooserForm(before) {
+  return waitFor(async () => {
+    const at = content()
+    if (!at || at === before || at.webContents.isLoading() || !atBootstrap(at.webContents.getURL())) return null
+    return await js(at.webContents, `document.querySelector("#address").getClientRects().length > 0`) ? at : null
+  }, "the chooser's form")
+}
+
+// `act` done while the engine cannot clear `ses`.
+async function unclearableSession(ses, act) {
+  const own = ses.clearStorageData
+  ses.clearStorageData = () => Promise.reject(new Error("the proof: nothing can be cleared"))
+  try {
+    return await act()
+  } finally {
+    ses.clearStorageData = own
+  }
 }
 
 const MARK = "proof_left"

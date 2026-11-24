@@ -8,14 +8,17 @@
 // computer's device enrolled on the six-word road, the one device that
 // can approve a passkey made in the account window.
 
-import {generateKeyPairSync, randomBytes} from "node:crypto"
+import {createHash, generateKeyPairSync, randomBytes} from "node:crypto"
 
 import {BrowserWindow, dialog, session} from "electron"
 
 import {DIRECTORY, HOME, LOOPBACK, NAME, arm, atBootstrap, atDevice, atHome, content, contentAt, harvest, js, literal,
   load, lockedOut, log, openCYFR, section, secondClient, submit, waitFor} from "./lib.js"
 
-export const ACCOUNT_PARTITION = "persist:cyfr-account"
+// The account window's kept storage: the CYFR's and its account
+// service's own (src/policy.js accountPartition).
+const digest = (origin) => createHash("sha256").update(origin, "ascii").digest("hex")
+export const ACCOUNT_PARTITION = `persist:cyfr-account-v2-${digest(HOME)}-${digest(new URL(DIRECTORY).origin)}`
 
 // ---- the person's answer in the app's "Sign in as" dialog ----
 
@@ -78,8 +81,10 @@ const AUTHENTICATOR = {protocol: "ctap2", transport: "internal", hasResidentKey:
  */
 export async function armWindow(w, credentials = [...held.values()]) {
   const wc = w.webContents
-  w.show()
-  w.focus()
+  // A view of the app's window has no show or focus of its own: its page
+  // is focused.
+  w.show?.()
+  w.focus?.()
   wc.focus()
   const cdp = wc.debugger
   if (!cdp.isAttached()) {
@@ -124,12 +129,12 @@ export async function toSignIn() {
   return at
 }
 
-/** The chooser with both ways on and the way to another CYFR, in sight. */
+/** The chooser with both ways on in sight. */
 export async function bothWays() {
   return waitFor(async () => {
     const w = content()
     if (!w || w.webContents.isLoading() || !atBootstrap(w.webContents.getURL())) return null
-    return await js(w.webContents, `["#passkey", "#words", "#another"].every((id) => document.querySelector(id).getClientRects().length > 0)`) ? w : null
+    return await js(w.webContents, `["#passkey", "#words"].every((id) => document.querySelector(id).getClientRects().length > 0)`) ? w : null
   }, "the chooser with both ways on")
 }
 

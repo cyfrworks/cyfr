@@ -27,7 +27,7 @@ import {createHash} from "node:crypto"
 import {appendFileSync, readFileSync, readdirSync, writeFileSync} from "node:fs"
 import path from "node:path"
 
-import {BrowserWindow, app, net, powerMonitor, session} from "electron"
+import {BaseWindow, BrowserWindow, Menu, app, net, powerMonitor, session} from "electron"
 
 import {startApp} from "../../apps/codex/desktop/src/app.js"
 import {js} from "./act.mjs"
@@ -107,14 +107,61 @@ export const text = (wc) => js(wc, "document.body ? document.body.innerText : ''
 
 export let client = null // the person's second client, the proof's own window
 
+// A row's menu on the rail, which main draws with Electron's own: the
+// person's pick is stood in for here, its first item, with what it
+// offered recorded.
+export const menus = []
+Menu.buildFromTemplate = (template) => ({popup() {
+  menus.push(template.map((item) => item.label))
+  log(`menu: offered ${JSON.stringify(menus.at(-1))}, picked ${template[0]?.label}`)
+  setImmediate(() => template[0]?.click?.())
+}})
+
+/**
+ * Whether window `w` is a child of the app's window. The engine answers a
+ * child's parent with an object of its own, never the frame itself, so
+ * the two are told by id.
+ */
+export const childOfFrame = (w) => !!frame() && w.getParentWindow()?.id === frame().id
+
 export function appWindows() {
   return BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w !== client)
 }
 
-// The content window: the app's one window with no parent showing a page
-// of the device or the CYFR.
+/** The app's one window, which holds the rail and the content as views. */
+export function frame() {
+  return BaseWindow.getAllWindows().find((w) => !w.isDestroyed() && !(w instanceof BrowserWindow)) ?? null
+}
+
+// Each view of the app's window as the proofs read a window: one object
+// for each view, so two reads of the same view are the same. Its page is
+// the one it had when first read: a closed view answers none.
+const asWindows = new WeakMap()
+function asWindow(view) {
+  if (!asWindows.has(view)) {
+    const wc = view.webContents
+    asWindows.set(view, {view, webContents: wc, getParentWindow: () => null, getBounds: () => view.getBounds(),
+      isDestroyed: () => wc.isDestroyed(),
+      isVisible: () => !wc.isDestroyed() && !!frame()?.isVisible() && frame().contentView.children.includes(view)})
+  }
+  return asWindows.get(view)
+}
+
+/** The views of the app's window, the rail's and the content's. */
+export function views() {
+  const f = frame()
+  return f ? f.contentView.children.filter((v) => v.webContents && !v.webContents.isDestroyed()).map(asWindow) : []
+}
+
+/** The rail's view: the list of CYFRs beside the content. */
+export function rail() {
+  return views().find((w) => w.webContents.getURL().startsWith(LOOPBACK + "/rail/"))
+}
+
+// The content: the view of the app's window showing a page of the device
+// or the CYFR.
 export function content() {
-  return appWindows().find((w) => !w.getParentWindow() && /^https?:/.test(w.webContents.getURL()))
+  return views().find((w) => /^https?:/.test(w.webContents.getURL()) && !w.webContents.getURL().startsWith(LOOPBACK + "/rail/"))
 }
 
 export async function contentAt(test, what) {
@@ -171,14 +218,14 @@ export async function fault(host, mode, fields = {}) {
 
 export let probes = 0
 
-// Whether the session cookie `value` still opens a page of the CYFR, asked
-// from a session of the proof's own holding that cookie alone.
-export async function opens(value) {
+// Whether the session cookie `value` still opens a page of the CYFR at
+// `at`, asked from a session of the proof's own holding that cookie alone.
+export async function opens(value, at = HOME) {
   const probe = session.fromPartition(`proof-probe-${++probes}`)
   probe.setUserAgent(PROBE)
-  await probe.cookies.set({url: HOME, name: "_cyfr_key", value, secure: true})
+  await probe.cookies.set({url: at, name: "_cyfr_key", value, secure: true})
   return new Promise((resolve, reject) => {
-    const r = net.request({url: HOME + "/", session: probe, useSessionCookies: true, redirect: "manual"})
+    const r = net.request({url: at + "/", session: probe, useSessionCookies: true, redirect: "manual"})
     r.on("redirect", (status, _method, location) => {
       resolve({status, location, opens: false})
       r.abort()
@@ -193,10 +240,10 @@ export async function opens(value) {
 }
 
 // A probe's answer is a refusal when the CYFR sends it to its sign-in.
-export const refused = (answer) => !answer.opens && [302, 303].includes(answer.status) && new URL(answer.location, HOME).pathname === "/login"
+export const refused = (answer, at = HOME) => !answer.opens && [302, 303].includes(answer.status) && new URL(answer.location, at).pathname === "/login"
 
-export async function sessionCookie(w) {
-  const cookies = await w.webContents.session.cookies.get({url: HOME, name: "_cyfr_key"})
+export async function sessionCookie(w, at = HOME) {
+  const cookies = await w.webContents.session.cookies.get({url: at, name: "_cyfr_key"})
   return cookies[0]?.value ?? null
 }
 
@@ -418,27 +465,36 @@ export const UNANSWERED = `The CYFR at ${HOME} did not answer.`
 
 // A page of the CYFR asked for in `w` while its front takes nothing: what
 // failed, as main said it and as the front saw it, and what the person
-// then has in that window.
+// then has: the chooser, in that same view where the content's storage is
+// memory's (the six-word road) and in a view of its own otherwise (the
+// passkey road, whose view keeps the CYFR's sign-in), and that sign-in,
+// read from the store `w` used.
 export async function unansweredLoad(w) {
   const host = new URL(HOME).hostname
   const page = "/threads"
-  const cookie = await sessionCookie(w)
+  const ses = w.webContents.session
+  const stored = async () => (await ses.cookies.get({url: HOME, name: "_cyfr_key"}))[0]?.value ?? null
+  const cookie = await stored()
   const from = await frontLength()
   const saidBefore = said.length
   let out
   await fault(host, "down")
   try {
     await js(w.webContents, `location.assign(${literal(`${page}?q=${MARKER}#${MARKER}`)}); 1`)
+    let shown = null
     const shows = await waitFor(async () => {
-      if (w.isDestroyed() || !atBootstrap(w.webContents.getURL()) || w.webContents.isLoading()) return null
-      const at = await js(w.webContents, `(() => { const inSight = (id) => {
+      const v = content()
+      if (!v || !atBootstrap(v.webContents.getURL()) || v.webContents.isLoading()) return null
+      const at = await js(v.webContents, `(() => { const inSight = (id) => {
         const e = document.querySelector(id); return !!e && e.getClientRects().length > 0 }
         return {words: inSight("#notice") ? document.querySelector("#notice").textContent : "",
           again: inSight("#again"), onward: inSight("#words")} })()`)
+      shown = v
       return at.words && at.onward ? at : null
     }, "the chooser after a load that failed", 30_000).catch((e) => ({why: e.message}))
-    out = {...shows, visible: !w.isDestroyed() && w.isVisible(), window: content() === w,
-      same: cookie !== null && (await sessionCookie(w)) === cookie, cookie,
+    out = {...shows, visible: !!shown && shown.isVisible(), view: shown === w ? "same" : shown ? "own" : null,
+      inStore: !!shown && shown.webContents.session === ses,
+      same: cookie !== null && (await stored()) === cookie, cookie,
       failed: said.slice(saidBefore).some((l) => l.startsWith("unanswered:")) &&
         (await reachedSince(host, from)).some((r) => r.path === page && r.fault === "down"),
       locks: said.slice(saidBefore).filter((l) => l.startsWith("locked:")), signOuts: await signOutsSince(from)}
@@ -447,25 +503,14 @@ export async function unansweredLoad(w) {
   }
   return {...out, opens: !!cookie && (await opens(cookie)).opens}
 }
+// On the six-word road the chooser is in the same view, its storage
+// memory's; on the passkey road in a view of its own, never the store
+// that keeps the sign-in.
 export const toldUnanswered = (out, again) => out.failed && out.words === UNANSWERED && out.onward && out.again === again &&
-  out.visible && out.window && out.same && out.opens && out.locks.length === 0 && out.signOuts.length === 0
+  out.visible && (again ? out.view === "own" && !out.inStore : out.view === "same") && out.same && out.opens &&
+  out.locks.length === 0 && out.signOuts.length === 0
 
 // The sentence a clear that failed leaves on the chooser.
-export const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
-
-// `act` done while the engine cannot clear the content's storage, which
-// window `w` holds.
-export async function unclearable(w, act) {
-  const ses = w.webContents.session
-  const own = ses.clearStorageData
-  ses.clearStorageData = () => Promise.reject(new Error("the proof: nothing can be cleared"))
-  try {
-    return await act()
-  } finally {
-    ses.clearStorageData = own
-  }
-}
-
 // The computer locked and asleep, as the system tells every program, while
 // Prism shows in `w`: what of the session it changed.
 export async function throughComputerLock(w) {
@@ -509,8 +554,8 @@ export function reloaded(w) {
 
 // What tells one session cookie from another, and when it ends, with
 // nothing of the cookie itself.
-export async function sessionMark(w) {
-  const [cookie] = await w.webContents.session.cookies.get({url: HOME, name: "_cyfr_key"})
+export async function sessionMark(w, at = HOME) {
+  const [cookie] = await w.webContents.session.cookies.get({url: at, name: "_cyfr_key"})
   return cookie ? {digest: createHash("sha256").update(cookie.value).digest("hex").slice(0, 16), expires: cookie.expirationDate ?? null} : null
 }
 
@@ -547,10 +592,11 @@ export const history = []
 export const decisions = []
 // An address as a row's detail keeps it, scrubbed before it is cut short.
 export const bare = (url) => scrub(url).split("#")[0].slice(0, 120)
-app.on("browser-window-created", (_event, win) => {
-  const wc = win.webContents
+// Every page's, a window's or a view's of the app's one window: the rail
+// and the content are views, which no browser-window-created announces.
+app.on("web-contents-created", (_event, wc) => {
   const id = wc.id
-  log(`window ${id} created${win.getParentWindow() ? ` with parent ${win.getParentWindow().webContents.id}` : ""}`)
+  log(`page ${id} created (${wc.getType()})`)
   wc.on("did-start-navigation", (details) => {
     if (details.isMainFrame) history.push(details.url)
     if (details.isMainFrame) log(`window ${id} starts ${bare(details.url)}`)
@@ -666,9 +712,9 @@ function systemEnds(name, what) {
 // its fragment, its headings and its notices; never its text, which may
 // show a recovery code, a passphrase or a new key.
 export async function where() {
-  const all = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed())
+  const all = [...BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()), ...views()]
   return Promise.all(all.map(async (w) => ({
-    window: w === client ? "second client" : w.getParentWindow() ? "child" : "app",
+    window: w === client ? "second client" : w.getParentWindow() ? "child" : w === rail() ? "rail" : "app",
     url: bare(w.webContents.getURL()),
     shows: await Promise.race([js(w.webContents, `({headings: [...document.querySelectorAll("h1, h2")].map((h) => h.textContent.trim().slice(0, 120)),
       notices: [...document.querySelectorAll("#notice, .notice, .error, #refused-text")].map((n) => n.textContent.trim().slice(0, 240)).filter(Boolean)})`)
@@ -691,7 +737,8 @@ export function run(name, phases, options = {}) {
     // Main closes in the same turn it says the lock in.
     if (line.startsWith("locked: ")) {
       historyAtLock.push(history.length)
-      queueMicrotask(() => closedAtLock.push(appWindows().every((w) => !/^https?:/.test(w.webContents.getURL()))))
+      queueMicrotask(() => closedAtLock.push([...appWindows(), ...views()].every((w) => !/^https?:/.test(w.webContents.getURL()) ||
+        w.webContents.getURL().startsWith(LOOPBACK + "/rail/"))))
     }
     log(`app: ${line}`)
   }})
