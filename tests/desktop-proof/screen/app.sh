@@ -17,7 +17,10 @@
 #   lost closes the window that was shown, timed from the loss, and a new
 #   one shows the shell's page (the app sits under the shell's watches);
 #   the keyboard killed locks the screen in the same way and is shown
-#   again; cyfr killed ends the app by its own SIGKILL (exit 137 to the
+#   again; a lock the app cannot answer (its main stopped) is not
+#   confirmed by labwc's list within 2 s, so cyfr ends the app from
+#   outside, saying why in the system's log, its window closes then, and
+#   the launcher's next start is locked; cyfr killed ends the app by its own SIGKILL (exit 137 to the
 #   launcher), saying why and that it ended itself, and the launcher's
 #   next start is locked again; the app killed ends its cyfr within 5 s,
 #   and the next start is locked too, with one screen shell running; a
@@ -252,6 +255,35 @@ PY
     verdict FAIL "after the app was killed: its cyfr $(kill -0 "$shell" 2>/dev/null && echo 'still runs' || echo ended), $(shells) screen shells, $(starts) starts"
   fi
 
+  # A lock the app cannot answer: its main process stopped, as a main
+  # thread stuck in a toolkit call is, its window still shown. The hide is
+  # the compositor's to confirm, never the app's (cmd/screen_app.go): not
+  # confirmed within 2 s, cyfr ends the app from outside, saying why in the
+  # system's log, and the window closes then; the launcher starts the app
+  # again, and its next start shows the locked screen.
+  within 30 sh -c 'pgrep -u proof -x swayidle >/dev/null'
+  was=$(shown | head -n 1)
+  main=$(pgrep -u proof -o -f -- "$app")
+  before=$(starts)
+  kill -STOP "$main"
+  since=$(date +%s.%N)
+  pkill -u proof -x swayidle
+  if [ -n "$was" ] && within 20 closed "$was" && within 60 started $((before + 1)) && within 30 window && within 30 painted; then
+    took=$(python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$(closedAt "$was")" "$since")
+    gap=$(python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$(awk -v h="$was" '$1 == "open" && $2 > h { print $3; exit }' "$OUT/toplevels")" "$(closedAt "$was")")
+    end=$(grep '^ended' "$OUT/launches" | tail -n 1)
+    said=$(grep -a -o "The lock's hide was not confirmed within 2s.*" /run/syslog.txt 2>/dev/null | tail -n 1)
+    if [ "$took" -lt $((HIDE_MS + 1000)) ] && [ "$end" = "ended 137" ] && [ -n "$said" ]; then
+      verdict PASS "an app deaf to the lock (its main stopped) is ended from outside: its window closed $took ms after the lock, the next start's window opened $gap ms after that and shows the locked screen, the launcher saw $end, and cyfr said in the system's log: $said"
+      echo "deaf app's lock to window closed: $took ms; closed to the next window: $gap ms" >>"$OUT/timing"
+    else
+      verdict FAIL "an app deaf to the lock: its window closed $took ms after the lock (bound $((HIDE_MS + 1000)) ms), the launcher saw ${end:-nothing}, the system's log says ${said:-nothing}: $(held | tr '\n' ' ')"
+    fi
+  else
+    verdict FAIL "an app deaf to the lock (its main stopped) was not ended: the window shown (${was:-none}) $(closed "${was:-none}" && echo closed || echo 'still shows'), $(starts) starts: $(held | tr '\n' ' ')"
+    kill -CONT "$main" 2>/dev/null
+  fi
+
   touch "$OUT/stop"
   pkill -f -- "$app" 2>/dev/null
   within 30 sh -c '! pgrep -u proof -f -- "^/opt/cyfr/CYFR" >/dev/null'
@@ -313,6 +345,15 @@ docker run -d --init --name "$BOX" ${HEAVY_CHECK_CPUS:+--cpuset-cpus "$HEAVY_CHE
 docker exec "$BOX" bash /fixture/app.sh --inside >"$WORK/prepare.log" 2>&1 ||
   { tail -n 30 "$WORK/prepare.log"; echo "FAIL prepare: the package, labwc, wvkbd or swayidle was not installed"; exit 1; }
 docker exec -d -u proof "$BOX" python3 -s /fixture/login1.py || exit 1
+# The system's log, as journald takes it on the box: what is sent to
+# /dev/log, kept whole.
+docker exec -d "$BOX" python3 -I -c 'import os, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind("/dev/log")
+os.chmod("/dev/log", 0o666)
+with open("/run/syslog.txt", "ab", 0) as f:
+    while True:
+        f.write(s.recv(65536) + b"\n")' || exit 1
 
 said=$(docker exec -u proof -e HOME=/home/proof "$BOX" bash /fixture/app.sh --case)
 echo "$said"

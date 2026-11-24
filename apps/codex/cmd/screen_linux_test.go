@@ -176,3 +176,72 @@ func TestScreenOnInstallsOnlyThePackageItChecked(t *testing.T) {
 		})
 	}
 }
+
+// TestScreenEndParentHelper is a process and its child for
+// TestScreenEndParent: as "parent" it runs itself again as "child" and
+// ends when it does, unless ended before; as "child" it ends its parent
+// where its parent is CYFR_SCREEN_END_PROGRAM, writing first's mark and
+// what it answered beside it.
+func TestScreenEndParentHelper(t *testing.T) {
+	dir := os.Getenv("CYFR_SCREEN_END_DIR")
+	switch os.Getenv("CYFR_SCREEN_END_ROLE") {
+	case "parent":
+		child := exec.Command(os.Args[0], "-test.run=^TestScreenEndParentHelper$")
+		child.Env = append(os.Environ(), "CYFR_SCREEN_END_ROLE=child")
+		_ = child.Run()
+	case "child":
+		err := screenEndParent(os.Getenv("CYFR_SCREEN_END_PROGRAM"), func() {
+			_ = os.WriteFile(filepath.Join(dir, "first"), nil, 0o600)
+		})
+		answer := "ended"
+		if err != nil {
+			answer = err.Error()
+		}
+		_ = os.WriteFile(filepath.Join(dir, "answer"), []byte(answer), 0o600)
+	default:
+		t.Skip("run by TestScreenEndParent")
+	}
+}
+
+// The shell ends its parent by the kernel only where that parent is the
+// installed app's program, and runs first before; any other parent goes
+// on, nothing run, and the answer says what the parent was.
+func TestScreenEndParent(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, program string
+		ended         bool
+	}{
+		{"its parent is the program", self, true},
+		{"its parent is another", "/opt/cyfr/CYFR", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			parent := exec.Command(os.Args[0], "-test.run=^TestScreenEndParentHelper$")
+			parent.Env = append(os.Environ(), "CYFR_SCREEN_END_ROLE=parent", "CYFR_SCREEN_END_DIR="+dir, "CYFR_SCREEN_END_PROGRAM="+c.program)
+			began := time.Now()
+			err := parent.Run()
+			// The child answers after its parent's end.
+			var answer []byte
+			for deadline := time.Now().Add(10 * time.Second); len(answer) == 0 && time.Now().Before(deadline); {
+				answer, _ = os.ReadFile(filepath.Join(dir, "answer"))
+				time.Sleep(10 * time.Millisecond) // sleep-ok: polls the child's answer, bounded
+			}
+			_, firstErr := os.Stat(filepath.Join(dir, "first"))
+			status, _ := parent.ProcessState.Sys().(syscall.WaitStatus)
+			killed := status.Signaled() && status.Signal() == syscall.SIGKILL
+			if killed != c.ended || (firstErr == nil) != c.ended {
+				t.Fatalf("the parent ended by SIGKILL: %v (%v, after %v), first ran: %v, the child answered %q", killed, err, time.Since(began), firstErr == nil, answer)
+			}
+			if c.ended && string(answer) != "ended" {
+				t.Fatalf("the child answered %q", answer)
+			}
+			if !c.ended && !strings.Contains(string(answer), "not the installed app") {
+				t.Fatalf("the child answered %q", answer)
+			}
+		})
+	}
+}

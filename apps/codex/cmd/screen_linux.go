@@ -4,6 +4,9 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
+	"log/syslog"
 	"os"
 	"os/exec"
 	"syscall"
@@ -37,4 +40,40 @@ func screenChild(c *exec.Cmd) *exec.Cmd {
 // launcher's own child, whose end the launcher sees as the app's.
 func screenExec(args []string) error {
 	return syscall.Exec(args[0], args, os.Environ())
+}
+
+// screenEndParent ends this process's parent by the kernel, after first,
+// where the parent is program: the parent is named by a pidfd, which no
+// later process takes, and checked to be this process's parent still as it
+// is read, so neither another process nor a parent that went is ended.
+func screenEndParent(program string, first func()) error {
+	parent := os.Getppid()
+	fd, err := unix.PidfdOpen(parent, 0)
+	if err != nil {
+		return fmt.Errorf("its parent could not be named: %w", err)
+	}
+	defer unix.Close(fd)
+	if os.Getppid() != parent {
+		return errors.New("its parent ended")
+	}
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", parent))
+	if err != nil {
+		return fmt.Errorf("its parent's program could not be read: %w", err)
+	}
+	if exe != program {
+		return fmt.Errorf("its parent is %s, not the installed app", exe)
+	}
+	first()
+	return unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
+}
+
+// screenSay says line on this process's standard error and in the
+// system's log as cyfr-screen, the name the screen's session logs under
+// (cmd/screen/session.sh).
+func screenSay(line string) {
+	fmt.Fprintln(os.Stderr, line)
+	if l, err := syslog.New(syslog.LOG_ERR|syslog.LOG_USER, "cyfr-screen"); err == nil {
+		_ = l.Err(line)
+		_ = l.Close()
+	}
 }
