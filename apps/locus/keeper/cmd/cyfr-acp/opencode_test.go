@@ -305,7 +305,8 @@ func TestTheRelayTakesNoNameOfThePersonsServers(t *testing.T) {
 			s := startDriverWith(t, p, home)
 			s.expect("hello")
 			s.send(startCommand("", map[string]any{}, filesTool))
-			if status := s.exit(); status == 0 || !strings.Contains(s.stderr.String(), "did not list its MCP servers") {
+			if status := s.exit(); status == 0 || !strings.Contains(s.stderr.String(), "did not list its MCP servers") ||
+				s.why() != "servers_unlisted" {
 				t.Fatalf("a start with the person's servers unknown ends, saying why: %d %s", status, s.stderr.String())
 			}
 		})

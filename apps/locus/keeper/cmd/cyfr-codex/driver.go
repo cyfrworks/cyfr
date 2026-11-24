@@ -149,7 +149,7 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 	case "forget":
 		return d.forget(str("id"), str("session"))
 	}
-	return &brainwire.Fatal{Status: 2, Reason: "a command of no kind"}
+	return brainwire.Fail(2, brainwire.WhyBroken, "a command of no kind")
 }
 
 // start starts Codex's app-server, and in it a new thread with the start's
@@ -159,7 +159,7 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 // no switch for.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
 	if d.h != nil {
-		return &brainwire.Fatal{Status: 2, Reason: "a start while the harness runs"}
+		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
 	}
 	var config brainwire.Config
 	var pending []string
@@ -174,10 +174,10 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	access, listed := brainwire.Choose(accessChoices, config.Access)
 	if !listed {
-		return &brainwire.Fatal{Status: 2, Reason: unlistedAccess}
+		return brainwire.Fail(2, brainwire.WhyUnfit, unlistedAccess)
 	}
 	if config.HarnessTools != nil {
-		return &brainwire.Fatal{Status: 2, Reason: "a start names the harness's own tools, which Codex has no switch for"}
+		return brainwire.Fail(2, brainwire.WhyBroken, "a start names the harness's own tools, which Codex has no switch for")
 	}
 	session := str("session")
 	resume := session != ""
@@ -189,13 +189,13 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if !resume {
 		var err error
 		if dynamic, err = dynamicTools(tools); err != nil {
-			return &brainwire.Fatal{Status: 2, Reason: "a start whose tools Codex cannot take: " + err.Error()}
+			return brainwire.Fail(2, brainwire.WhyBroken, "a start whose tools Codex cannot take: "+err.Error())
 		}
 	}
 	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), appServer))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
-		return &brainwire.Fatal{Status: 1}
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")
 	}
 	d.h = h
 	d.config = config
@@ -330,7 +330,7 @@ func (d *driver) listed(id string, listing []json.RawMessage, account string) er
 
 func (d *driver) Line(line []byte) error {
 	if line == nil {
-		return &brainwire.Fatal{Status: 1, Reason: "a line of the harness's past its bound"}
+		return brainwire.Fail(1, brainwire.WhyUnreadable, "a line of the harness's past its bound")
 	}
 	var m rpc
 	if json.Unmarshal(line, &m) != nil {
@@ -492,7 +492,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case "initialize":
 		if m.Error != nil {
-			return &brainwire.Fatal{Status: 1, Reason: "OpenAI Codex refused to start its app-server"}
+			return brainwire.Fail(1, brainwire.WhyRefused, "OpenAI Codex refused to start its app-server")
 		}
 		if err := d.h.Write(initializedLine()); err != nil {
 			return err
@@ -518,7 +518,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 				d.Close()
 				return d.c.Emit(brainwire.NewEvent("gone"))
 			}
-			return &brainwire.Fatal{Status: 1, Reason: "OpenAI Codex refused to start the session"}
+			return brainwire.Fail(1, brainwire.WhyRefused, "OpenAI Codex refused to start the session")
 		}
 		var r struct {
 			Model  string `json:"model"`
@@ -528,7 +528,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		}
 		_ = json.Unmarshal(m.Result, &r)
 		if !brainwire.IsUUID(r.Thread.ID) || (s.resume && r.Thread.ID != s.session) {
-			return &brainwire.Fatal{Status: 1, Reason: "OpenAI Codex started no thread the driver can name"}
+			return brainwire.Fail(1, brainwire.WhyUnreadable, "OpenAI Codex started no thread the driver can name")
 		}
 		d.starting = nil
 		d.session = r.Thread.ID
@@ -778,7 +778,7 @@ func (d *driver) Ended() error {
 	if status == 0 {
 		status = 1
 	}
-	return &brainwire.Fatal{Status: status, Reason: "the harness ended"}
+	return brainwire.Fail(status, brainwire.WhyEnded, "the harness ended")
 }
 
 // Close closes the harness, if one runs: the thread is Codex's to keep in

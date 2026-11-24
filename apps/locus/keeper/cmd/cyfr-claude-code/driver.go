@@ -125,7 +125,7 @@ func (d *driver) Inbox() <-chan func() error { return nil }
 func (d *driver) Expired() error {
 	now := time.Now()
 	if !d.startDue.IsZero() && !now.Before(d.startDue) {
-		return &brainwire.Fatal{Status: 1, Reason: fmt.Sprintf("Claude Code did not answer its start in time (%s)", answerWait)}
+		return brainwire.Fail(1, brainwire.WhyUnanswered, fmt.Sprintf("Claude Code did not answer its start in time (%s)", answerWait))
 	}
 	for request, a := range d.awaiting {
 		if now.Before(a.due) {
@@ -157,7 +157,7 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 	case "forget":
 		return d.forget(str("id"), str("session"))
 	}
-	return &brainwire.Fatal{Status: 2, Reason: "a command of no kind"}
+	return brainwire.Fail(2, brainwire.WhyBroken, "a command of no kind")
 }
 
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
@@ -167,7 +167,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 		d.Close()
 	}
 	if d.h != nil {
-		return &brainwire.Fatal{Status: 2, Reason: "a start while the harness runs"}
+		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
 	}
 	var config brainwire.Config
 	var pending []string
@@ -179,7 +179,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	access, listed := brainwire.Choose(accessChoices, config.Access)
 	if !listed {
-		return &brainwire.Fatal{Status: 2, Reason: unlistedAccess}
+		return brainwire.Fail(2, brainwire.WhyUnfit, unlistedAccess)
 	}
 	session := str("session")
 	resume := session != ""
@@ -193,7 +193,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, session, resume, config, access.Native))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
-		return &brainwire.Fatal{Status: 1}
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")
 	}
 	d.h = h
 	d.gen = gen
@@ -422,7 +422,7 @@ func controlAnswer(raw json.RawMessage) (control, bool) {
 
 func (d *driver) Line(line []byte) error {
 	if line == nil {
-		return &brainwire.Fatal{Status: 1, Reason: "a line of the harness's past its bound"}
+		return brainwire.Fail(1, brainwire.WhyUnreadable, "a line of the harness's past its bound")
 	}
 	var l harnessLine
 	if json.Unmarshal(line, &l) != nil {
@@ -464,7 +464,7 @@ func (d *driver) controlResponse(l harnessLine) error {
 	}
 	if answer.RequestID == initID && d.starting != nil && !d.starting.initialized {
 		if answer.Subtype != "success" {
-			return &brainwire.Fatal{Status: 1, Reason: "Claude Code refused to start the session"}
+			return brainwire.Fail(1, brainwire.WhyRefused, "Claude Code refused to start the session")
 		}
 		// CYFR's server is named once the person's own are known.
 		d.starting.initialized = true
@@ -476,7 +476,7 @@ func (d *driver) controlResponse(l harnessLine) error {
 		// not to replace one of theirs, so nothing is set.
 		listed, ok := listedServers(answer.Response)
 		if answer.Subtype != "success" || !ok {
-			return &brainwire.Fatal{Status: 1, Reason: "Claude Code did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own"}
+			return brainwire.Fail(1, brainwire.WhyServersUnlisted, "Claude Code did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own")
 		}
 		d.server = serverFor(listed)
 		d.startDue = time.Time{}
@@ -742,9 +742,9 @@ func (d *driver) dropSession() error {
 	d.h.Stop()
 	d.h = nil
 	if reason := removeSession(d.home, session); reason != "" {
-		return &brainwire.Fatal{Status: 1, Reason: "a session the model's API refuses could not be removed: " + reason}
+		return brainwire.Fail(1, brainwire.WhyEnded, "a session the model's API refuses could not be removed: "+reason)
 	}
-	return &brainwire.Fatal{Status: 1, Reason: "the model's API refuses this session's history, so it was removed"}
+	return brainwire.Fail(1, brainwire.WhyEnded, "the model's API refuses this session's history, so it was removed")
 }
 
 // failure is the type and the driver's words of a turn that ended in
@@ -829,7 +829,7 @@ func (d *driver) Ended() error {
 	if status == 0 {
 		status = 1
 	}
-	return &brainwire.Fatal{Status: status, Reason: "the harness ended"}
+	return brainwire.Fail(status, brainwire.WhyEnded, "the harness ended")
 }
 
 // Close closes the harness, if one runs.

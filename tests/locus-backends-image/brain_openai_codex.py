@@ -38,8 +38,9 @@ with exactly its members.
   leaves, and leaves another thread's and the sign-in; the running thread
   is not forgotten.
 - Every command line the vectors refuse (their `refuse` lines from the
-  holder) ends the driver with no line written, and so does a start naming
-  an access the driver does not list, fresh or resuming.
+  holder) ends the driver, its one line its `ending`, `broken`; a start
+  naming an access the driver does not list, fresh or resuming, ends it
+  with `unfit`.
 - Nothing of the harness's standard error, its folder, its sign-in or its
   account reaches a line of the driver's.
 - On a terminal, the driver runs the harness's command unchanged: the
@@ -56,7 +57,7 @@ import uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import ROOT, Stack, eventually, expect, owner_of, probe, require_docker  # noqa: E402
+from harness import ROOT, Stack, ending, eventually, expect, owner_of, probe, require_docker  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "fixtures", "brain_wire.json"), encoding="utf-8") as _vectors:
     VECTORS = json.load(_vectors)
@@ -294,8 +295,8 @@ def main():
             r.expect("hello", "a driver to refuse a command")
             status, answer = c.send(OWNER, r.session, [refused["line"]])
             expect(status == 200, f"the line is written: {refused['name']}", answer)
-            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-            expect(not running and lines == [], f"the driver ends on it and writes nothing: {refused['name']}", lines)
+            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: False, r.after, timeout_s=TIMEOUT_S)
+            expect(not running and lines == [ending("broken")], f"the driver ends on it and writes only its ending, broken: {refused['name']}", lines)
             r.close()
         for key, start in (("brain-unlisted-access", {"t": "start", "gen": 7, "config": {"access": "workspace-write"}, "tools": [FILES]}),
                            ("brain-unlisted-access-resumed", {"t": "start", "gen": 7, "session": other, "config": {"access": "default"}})):
@@ -303,8 +304,8 @@ def main():
             r.expect("hello", f"{key}: a driver to refuse an unlisted access")
             status, answer = c.send(OWNER, r.session, [json.dumps(start)])
             expect(status == 200, f"{key}: the start is written", answer)
-            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: got, r.after, timeout_s=TIMEOUT_S)
-            expect(not running and lines == [], f"{key}: a start naming an access the driver does not list ends it and writes nothing", lines)
+            lines, _after, running = c.lines_until(OWNER, r.session, lambda got: False, r.after, timeout_s=TIMEOUT_S)
+            expect(not running and lines == [ending("unfit")], f"{key}: a start naming an access the driver does not list ends it and writes only its ending, unfit", lines)
             r.close()
 
         # ————— nothing of stderr, the folder, the sign-in or the account —————
