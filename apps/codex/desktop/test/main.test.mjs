@@ -56,6 +56,7 @@ function reset({relaunch = false} = {}) {
   world.app.removeAllListeners()
   world.powerMonitor.removeAllListeners()
   world.quit = false
+  world.quitHeld = false
   world.menus = []
   world.spawnedIn = []
 }
@@ -184,10 +185,11 @@ world.app = Object.assign(new EventEmitter(), {
     return world.profile
   },
   exit(code) { world.exited = code },
+  // A quit held (quitHeld) never finishes, whatever holds it.
   quit() {
     const event = {prevented: false, preventDefault() { this.prevented = true }}
     world.app.emit("before-quit", event)
-    if (!event.prevented) world.quit = true
+    if (!event.prevented && !world.quitHeld) world.quit = true
   }
 })
 world.powerMonitor = new EventEmitter()
@@ -850,6 +852,7 @@ test("a quit the system begins is never answered from inside the engine's before
 })
 
 const BOUND = 5000
+const QUIT_BOUND = 5000
 
 test("the app's end never waits without end on a clear, a take or a flush, and keeps clear before record", async () => {
   const stuck = () => new Promise(() => {})
@@ -1586,6 +1589,33 @@ test("on the screen a lost page locks, a failed load shows the shell's page, and
   assert.ok(world.quit, "the app quits, to be started again locked")
 })
 
+
+test("on the screen a quit that does not finish by itself ends by the engine's hard exit within its bound, said", ON_LINUX, async () => {
+  const said = await screenStarted()
+  assert.ok(await opens())
+  await give(content())
+  // cyfr's end closes every window first, so what holds the quit is no
+  // window of main's.
+  world.quitHeld = true
+  world.exited = undefined
+  mock.timers.enable({apis: ["setTimeout"]})
+  try {
+    child.say({type: "ending"})
+    await settled()
+    await settled()
+    await settled()
+    assert.ok(said.includes("cyfr ended: the screen shell is ending"), said.join("\n"))
+    assert.equal(world.quit, false, "the quit is held")
+    mock.timers.tick(QUIT_BOUND - 1)
+    assert.equal(world.exited, undefined, "the quit has its bound")
+    mock.timers.tick(1)
+    assert.equal(world.exited, 0, "and no more")
+    assert.ok(said.includes(`the quit did not finish by itself within ${QUIT_BOUND / 1000} s: the app exits`), said.join("\n"))
+  } finally {
+    mock.timers.reset()
+    world.exited = undefined
+  }
+})
 
 test("on the screen a failed load of the shell's own page locks, and so does a confirmation lost or failed", ON_LINUX, async () => {
   await screenStarted()

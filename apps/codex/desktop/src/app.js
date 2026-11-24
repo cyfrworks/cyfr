@@ -31,6 +31,9 @@ import {ABORTED, initial, kept, step} from "./states.js"
 const READY_WITHIN_MS = 20_000
 // How long the app's end waits for a clear, a take or a flush under way.
 const END_WAITS_MS = 5000
+// On the screen, how long a quit asked for may take before the app exits
+// all the same.
+const QUIT_WITHIN_MS = 5000
 const ACCOUNT_PARTITION = "persist:cyfr-account"
 const CONTENT_PARTITION = "persist:cyfr-content"
 
@@ -196,6 +199,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         }
         quitting = true
         app.quit()
+        // On the screen the app's end is what lets its launcher start it
+        // again, locked: a quit that does not finish by itself, whatever
+        // holds it open, ends by the engine's hard exit, said.
+        if (screen) {
+          setTimeout(() => {
+            say(`the quit did not finish by itself within ${QUIT_WITHIN_MS / 1000} s: the app exits`)
+            app.exit(0)
+          }, QUIT_WITHIN_MS)
+        }
       })
     }
     if (effect.hop) startHop(effect.hop.url, effect.hop.kind)

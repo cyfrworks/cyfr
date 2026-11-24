@@ -102,6 +102,36 @@ if [ "${1:-}" = --session ]; then
   shown() { awk '$1 == "open" { w[$2] = 1 } $1 == "closed" { delete w[$2] } END { for (h in w) print h }' "$OUT/toplevels"; }
   closedAt() { awk -v h="$1" '$1 == "closed" && $2 == h { print $3; exit }' "$OUT/toplevels"; }
   closed() { [ -n "$(closedAt "$1")" ]; }
+  # What the screen's account runs and what labwc shows, for a row whose
+  # end did not come: each process with its state and where it waits.
+  held() {
+    echo "processes: $(ps -u proof -o pid=,ppid=,stat=,wchan:24=,args= | cut -c 1-200 | tr '\n' '|')"
+    echo "windows shown: $(shown | tr '\n' ' ')$(wlrctl toplevel find title:CYFR >/dev/null 2>&1 && echo '(one titled CYFR)')"
+  }
+  # cyfr killed, the Nth time: the app ends 0, saying cyfr ended, and the
+  # launcher's next start shows the locked screen. An end that has not come
+  # 3 s after the kill is held: what holds it is read then, while it still
+  # does, and printed beside the verdict, as is the app's own line when its
+  # quit ended by its bound (app.js, QUIT_WITHIN_MS).
+  cyfr_killed() {
+    local n=$1 why end bounded
+    pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$'
+    rm -f "$OUT/held"
+    within 3 sh -c "[ \$(grep -c '^ended' $OUT/launches) -ge $n ]" || held >"$OUT/held"
+    if within 30 sh -c "[ \$(grep -c '^ended' $OUT/launches) -ge $n ]" && within 60 started $((n + 1)) && within 30 window; then
+      why=$(grep '^CYFR: cyfr ended: ' "$OUT/app.log" | sed -n "${n}p" | cut -c 7-)
+      end=$(grep '^ended' "$OUT/launches" | sed -n "${n}p")
+      bounded=$(grep -c '^CYFR: the quit did not finish by itself' "$OUT/app.log")
+      if [ "$end" = "ended 0" ] && [ -n "$why" ]; then
+        verdict PASS "cyfr killed ($n) ends the app ($end; it said: $why), and the next start shows the locked screen again; quits ended by their bound so far: $bounded"
+      else
+        verdict FAIL "cyfr killed ($n) ended the app as $end, saying ${why:-nothing}: it must end 0 saying cyfr ended: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
+      fi
+    else
+      verdict FAIL "cyfr killed ($n) did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ') $(held | tr '\n' ' ')"
+    fi
+    [ ! -s "$OUT/held" ] || echo "HELD cyfr killed ($n): the end had not come 3 s after the kill: $(tr '\n' ' ' <"$OUT/held")" >>"$OUT/verdict"
+  }
   newer() { awk -v h="$1" '$1 == "open" && $2 > h { found = 1 } END { exit !found }' "$OUT/toplevels"; }
   # A lock the shell made: the window shown closes within HIDE_MS of SINCE
   # (this machine's clock), and a newer window shows the shell's page,
@@ -210,18 +240,7 @@ PY
     verdict FAIL "the keyboard killed: the window shown (${was:-none}) $(closed "${was:-none}" && echo "closed after $(cat "$OUT/took") ms, the bound $HIDE_MS" || echo 'did not close'), the keyboard $(keyboard && echo shown || echo 'not shown'), $(pgrep -c -u proof -x wvkbd-mobintl) running: $(grep -a 'keyboard' "$OUT/app.log" | tail -n 3 | tr '\n' ' ')"
   fi
 
-  pkill -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$'
-  if within 30 grep -q '^ended' "$OUT/launches" && within 60 started 2 && within 30 window; then
-    why=$(grep -m 1 '^CYFR: cyfr ended: ' "$OUT/app.log" | cut -c 7-)
-    first=$(grep -m 1 '^ended' "$OUT/launches")
-    if [ "$first" = "ended 0" ] && [ -n "$why" ]; then
-      verdict PASS "cyfr killed ends the app ($first; it said: $why), and the next start shows the locked screen again"
-    else
-      verdict FAIL "cyfr killed ended the app as $first, saying ${why:-nothing}: it must end 0 saying cyfr ended: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
-    fi
-  else
-    verdict FAIL "cyfr killed did not end the app, or it did not start again: $(tail -n 5 "$OUT/app.log" | tr '\n' ' ')"
-  fi
+  cyfr_killed 1
 
   shell=$(pgrep -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$')
   pkill -KILL -u proof -o -f -- '^/opt/cyfr/CYFR --screen-project='
