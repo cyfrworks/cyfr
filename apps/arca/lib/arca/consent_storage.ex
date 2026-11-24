@@ -1301,28 +1301,28 @@ defmodule Arca.ConsentStorage do
   end
 
   @doc """
-  Whether the grant of the name-level `source_ref` in the actor's athanor
-  was revoked by its person: the newest revoked owner profile of the
-  source names the person as its cause. A grant never made, and one whose
-  newest revocation was the removal of the component's last version, are
-  not. `profiles/2` lists no revoked profile, so a source it answers none
-  for is one of these.
+  Whether the default grant of the name-level `source_ref` in the actor's
+  athanor stands revoked by its person: the source's latest owner profile
+  labelled `default`, by its creation, is revoked and names the person.
+  Its older rows are history and decide nothing, and no other label's
+  profile decides it. A default never made, one standing, and one the
+  removal of the component's last version revoked are not.
   """
   @spec revoked_by_person?(Prima.Actor.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
   def revoked_by_person?(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.revoked_by_person?", fn ->
-      cause =
+      latest =
         from(p in Arca.Schemas.Profile,
-          where: p.source_ref == ^source_ref and p.kind == "owner" and p.status == "revoked",
-          order_by: [desc: p.updated_at, desc: p.id],
+          where: p.source_ref == ^source_ref and p.kind == "owner" and p.label == "default",
+          order_by: [desc: p.inserted_at, desc: p.id],
           limit: 1,
-          select: p.revoked_by
+          select: {p.status, p.revoked_by}
         )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.Repo.one()
 
-      {:ok, cause == "person"}
+      {:ok, latest == {"revoked", "person"}}
     end)
   end
 

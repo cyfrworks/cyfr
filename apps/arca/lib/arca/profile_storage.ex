@@ -128,10 +128,10 @@ defmodule Arca.ProfileStorage do
 
   @doc """
   Revoke a profile as its person does (`profile.revoke`): from any status,
-  recording the person as the cause, in one conditional write. A row
-  already revoked, by a removal or by the person, is the person's
-  revocation after it. A row the athanor does not hold is
-  `{:error, :not_found}`.
+  recording the person as the cause, in one conditional write. A row a
+  removal revoked is the person's revocation after it; a row its person
+  already revoked is left as it is, its time included, and answers `:ok`.
+  A row the athanor does not hold is `{:error, :not_found}`.
   """
   @spec revoke_by_person(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :database_error}
@@ -141,50 +141,62 @@ defmodule Arca.ProfileStorage do
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_by_person", fn ->
       case Arca.Repo.update_all(
-             from(p in Profile, where: p.id == ^id and p.status in ^from)
+             from(p in Profile,
+               where:
+                 p.id == ^id and p.status in ^from and
+                   not (p.status == "revoked" and p.revoked_by == "person")
+             )
              |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: [status: "revoked", revoked_by: "person", updated_at: DateTime.utc_now()]
            ) do
         {1, _} -> :ok
-        {0, _} -> {:error, :not_found}
+        {0, _} -> revoked_by_person(athanor_id, id)
       end
     end)
   end
 
   def revoke_by_person(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
+  # Why the person's revoke changed nothing: the row was theirs already,
+  # or the athanor holds no such row.
+  defp revoked_by_person(athanor_id, id) do
+    theirs? =
+      from(p in Profile,
+        where: p.id == ^id and p.status == "revoked" and p.revoked_by == "person"
+      )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+      |> Arca.Repo.exists?()
+
+    if theirs?, do: :ok, else: {:error, :not_found}
+  end
+
   @doc """
   Revoke every profile of a name-level source ref that is not already
-  revoked, within the actor's athanor, in one transaction, recording the
-  removal of the component's last version as the cause: this is what that
-  removal does, and nothing else calls it. A profile already revoked keeps
-  its cause, so a grant its person revoked stays theirs through a removal.
-  Answers the ids it revoked. Consent revisions and vault entries are
-  untouched: a revoked profile keeps its history.
+  revoked, within the actor's athanor, in one conditional write, recording
+  the removal of the component's last version as the cause: this is what
+  that removal does, and nothing else calls it. Only a row not revoked at
+  the write is revoked, so a profile already revoked keeps its cause, a
+  person's revocation committed while the removal runs among them, and a
+  grant its person revoked stays theirs through a removal. Answers the ids
+  it revoked. Consent revisions and vault entries are untouched: a revoked
+  profile keeps its history.
   """
   @spec revoke_for_source(Prima.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
   def revoke_for_source(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_for_source", fn ->
-      Arca.Repo.transaction(fn ->
-        ids =
-          from(p in Profile,
-            where: p.source_ref == ^source_ref and p.status != "revoked",
-            order_by: p.id,
-            select: p.id
-          )
-          |> Arca.QueryHelpers.where_athanor(athanor_id)
-          |> Arca.Repo.all()
-
-        from(p in Profile, where: p.id in ^ids)
+      {_count, ids} =
+        from(p in Profile,
+          where: p.source_ref == ^source_ref and p.status != "revoked",
+          select: p.id
+        )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.Repo.update_all(
           set: [status: "revoked", revoked_by: "removal", updated_at: DateTime.utc_now()]
         )
 
-        ids
-      end)
+      {:ok, Enum.sort(ids)}
     end)
     |> Arca.Data.project()
   end

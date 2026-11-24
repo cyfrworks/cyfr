@@ -200,6 +200,18 @@ defmodule Arca.ProfileStorageTest do
       end
     end
 
+    test "a revocation its person already made is left as it is, its time included", %{
+      athanor: athanor
+    } do
+      actor = Prima.Actor.in_athanor(athanor)
+      profile = profile!(athanor, "active")
+      assert :ok = ProfileStorage.revoke_by_person(actor, profile.id)
+      {:ok, revoked} = ProfileStorage.get(actor, profile.id)
+
+      assert :ok = ProfileStorage.revoke_by_person(actor, profile.id)
+      assert {:ok, ^revoked} = ProfileStorage.get(actor, profile.id)
+    end
+
     test "another athanor's row, a missing row and no athanor change nothing", %{
       athanor: athanor
     } do
@@ -219,19 +231,28 @@ defmodule Arca.ProfileStorageTest do
   end
 
   describe "a revocation's cause" do
-    test "is held to the row by the changeset: a revoked row names one, no other row any", %{
+    test "no insert is revoked or names a cause: the changeset refuses both", %{
       athanor: athanor
     } do
-      assert {:error, {:invalid, %{revoked_by: _}}} =
-               Writers.put_profile(attrs(athanor, %{label: "a", status: "revoked"}))
+      for over <- [
+            %{status: "revoked"},
+            %{status: "revoked", revoked_by: "person"},
+            %{status: "revoked", revoked_by: "removal"},
+            %{revoked_by: "person"}
+          ] do
+        changeset =
+          Arca.Schemas.Profile.changeset(
+            %Arca.Schemas.Profile{},
+            attrs(athanor, Map.put(over, :id, "prof_changeset"))
+          )
 
-      assert {:error, {:invalid, %{revoked_by: _}}} =
-               Writers.put_profile(
-                 attrs(athanor, %{label: "b", status: "revoked", revoked_by: "bogus"})
-               )
+        refute changeset.valid?, inspect(over)
+      end
 
-      assert {:error, {:invalid, %{revoked_by: _}}} =
-               Writers.put_profile(attrs(athanor, %{label: "c", revoked_by: "person"}))
+      assert Arca.Schemas.Profile.changeset(
+               %Arca.Schemas.Profile{},
+               attrs(athanor, %{id: "prof_changeset"})
+             ).valid?
     end
   end
 

@@ -15,8 +15,9 @@ defmodule Arca.Schemas.Profile do
   `revoked_by` is who revoked the profile: `person`, by `profile.revoke`,
   or `removal`, when its component's last version was removed. A revoked
   row names one and no other row names any (the `profiles_revoked_by_cause`
-  CHECK); there is no default, so a revocation that names no cause is
-  refused.
+  CHECK); there is no default. A profile is never created revoked and no
+  insert names a cause: the changeset refuses both, and only
+  `Arca.ProfileStorage`'s two revocations write them.
   """
 
   use Ecto.Schema
@@ -90,21 +91,14 @@ defmodule Arca.Schemas.Profile do
     |> unique_constraint(@identity)
   end
 
-  # A revoked row names its cause, and no other row names one.
+  # A profile is created standing: its revocation, and the cause it names,
+  # are written by a revocation alone.
   defp validate_revocation(changeset) do
-    case {get_field(changeset, :status), get_field(changeset, :revoked_by)} do
-      {"revoked", cause} when cause in @revocation_causes ->
-        changeset
-
-      {"revoked", _cause} ->
-        add_error(changeset, :revoked_by, "must name who revoked it")
-
-      {_status, nil} ->
-        changeset
-
-      {_status, _cause} ->
-        add_error(changeset, :revoked_by, "names a revocation of no revoked row")
-    end
+    changeset
+    |> validate_exclusion(:status, ["revoked"], message: "a profile is never created revoked")
+    |> validate_change(:revoked_by, fn :revoked_by, _cause ->
+      [revoked_by: "is written by a revocation alone"]
+    end)
   end
 
   @doc """

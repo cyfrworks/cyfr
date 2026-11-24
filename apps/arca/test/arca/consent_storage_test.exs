@@ -857,6 +857,42 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "mint_profile_with_revision/4 and a revocation" do
+    test "never mints a profile revoked, nor one naming a cause", %{athanor: athanor} do
+      for over <- [
+            %{status: "revoked", revoked_by: "removal"},
+            %{status: "revoked", revoked_by: "person"},
+            %{status: "revoked"},
+            %{revoked_by: "person"}
+          ] do
+        id = "prof_minted_#{System.unique_integer([:positive])}"
+
+        profile =
+          Map.merge(
+            %{
+              id: id,
+              athanor_id: athanor,
+              source_ref: "reagent:local.storage-test",
+              kind: "owner",
+              label: "mint-#{System.unique_integer([:positive])}",
+              status: "active"
+            },
+            over
+          )
+
+        assert {:error, _refused} =
+                 ConsentStorage.mint_profile_with_revision(
+                   profile,
+                   consent_attrs(athanor, id, 1),
+                   []
+                 ),
+               inspect(over)
+
+        assert {:error, :not_found} = ProfileStorage.get(Prima.Actor.in_athanor(athanor), id)
+      end
+    end
+  end
+
   describe "revoked_by_person?/2" do
     test "answers whether the source's newest owner revocation was its person's, " <>
            "in the actor's athanor alone",

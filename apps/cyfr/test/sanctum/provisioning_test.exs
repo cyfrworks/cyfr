@@ -395,14 +395,34 @@ defmodule Sanctum.ProvisioningTest do
       in_athanor
     end
 
-    # The person's revoke, as `profile.revoke` takes it from them.
-    defp person_revokes!(ctx, source_ref) do
-      {:ok, [%{id: id}]} = Sanctum.Consent.profiles(ctx, source_ref)
+    # The person's revoke of the profile labelled `label`, as
+    # `profile.revoke` takes it from them.
+    defp person_revokes!(ctx, source_ref, label \\ "default") do
+      {:ok, profiles} = Sanctum.Consent.profiles(ctx, source_ref)
+      %{id: id} = Enum.find(profiles, &(&1.label == label))
+      revoke_by_id!(ctx, id)
+      id
+    end
 
+    defp revoke_by_id!(ctx, id) do
       {:ok, %{status: "revoked"}} =
         Sanctum.Provider.handle("profile", ctx, %{"action" => "revoke", "profile_id" => id})
+    end
 
-      id
+    # The person's own grant of foo under `label`, through the consent walk.
+    defp person_grants!(ctx, label) do
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @foo, label: label})
+      decisions = %{ref: @foo, label: label}
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+      {:ok, _committed} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
     end
 
     # Every version of foo gone from the athanor's tree, as a reset of the
@@ -501,6 +521,36 @@ defmodule Sanctum.ProvisioningTest do
       assert {:ok, _} = Filler.install_shipped(ctx, @foo)
 
       stays_revoked!(ctx)
+    end
+
+    test "stays revoked when another label's grant stood and the component is removed and " <>
+           "installed again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "revoked-work")
+      person_grants!(ctx, "work")
+      person_revokes!(ctx, @foo)
+      removed!(ctx)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      stays_revoked!(ctx)
+    end
+
+    test "the newest default decides: one granted again and then removed is minted at an " <>
+           "install, whatever its person does to the older one",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "regranted")
+      older = person_revokes!(ctx, @foo)
+      person_grants!(ctx, "default")
+      removed!(ctx)
+
+      # The person revokes the older default again: it was theirs already.
+      revoke_by_id!(ctx, older)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      assert {:ok, [%{label: "default", kind: :owner, status: :active}]} =
+               Sanctum.Consent.profiles(ctx, @foo)
     end
 
     test "a removal's revocation is not the person's, and an install grants it again",
