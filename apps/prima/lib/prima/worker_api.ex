@@ -93,8 +93,9 @@ defmodule Prima.WorkerAPI do
   letters, digits and underscores (`memory_unavailable` where the keeper
   cannot bound a runner's memory and CPU), and `message`, a sentence for the
   operator naming what the deployment lacks. While it refuses, a `start`
-  no fresh or idle runner can take is refused `unavailable` with the same
-  sentence.
+  no fresh or idle runner can take asks the keeper for a runner and waits
+  for that spawn: it is refused `unavailable` with the keeper's sentence
+  for that spawn, or given the runner.
   """
   @type refusal :: %{reason: String.t(), message: String.t()}
 

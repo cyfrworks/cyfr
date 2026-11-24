@@ -55,9 +55,10 @@ func reached(err error, what string) error {
 // program's or the system's words, since a refusal carries them to the
 // wire.
 type oneOff struct {
-	p        *brainwire.Process
-	n        int
-	deadline <-chan time.Time
+	p *brainwire.Process
+	n int
+	// wait bounds each request's answer, each its own.
+	wait time.Duration
 }
 
 func (d *driver) openOneOff() (*oneOff, error) {
@@ -65,7 +66,7 @@ func (d *driver) openOneOff() (*oneOff, error) {
 	if err != nil {
 		return nil, err
 	}
-	o := &oneOff{p: p, deadline: time.After(d.answerWait)}
+	o := &oneOff{p: p, wait: d.answerWait}
 	answer, err := o.call("initialize", initializeParams())
 	if err == nil {
 		var init initialized
@@ -84,10 +85,11 @@ func (d *driver) openOneOff() (*oneOff, error) {
 	return o, nil
 }
 
-// call writes one request and reads to its answer; the program's requests
-// meanwhile are answered as a session's are, and its notifications are no
-// one's.
+// call writes one request and reads to its answer, within a bound of its
+// own; the program's requests meanwhile are answered as a session's are,
+// and its notifications are no one's.
 func (o *oneOff) call(method string, params any) (rpc, error) {
+	deadline := time.After(o.wait)
 	o.n++
 	if err := o.p.Write(request(o.n, method, params)); err != nil {
 		return rpc{}, errors.New("it ended before it was asked")
@@ -112,7 +114,7 @@ func (o *oneOff) call(method string, params any) (rpc, error) {
 			}
 		case <-o.p.Done:
 			return rpc{}, errors.New("it ended before it answered")
-		case <-o.deadline:
+		case <-deadline:
 			return rpc{}, errors.New("it did not answer in time")
 		}
 	}
@@ -120,20 +122,27 @@ func (o *oneOff) call(method string, params any) (rpc, error) {
 
 func (o *oneOff) close() { o.p.Stop() }
 
+// listing is what a listing session offered: its answer, and each model's
+// efforts where the profile reads them by selecting the model.
+type listing struct {
+	answer  sessionAnswer
+	efforts map[string][]string
+}
+
 // listOnce makes a listing session and answers what it offers, or says the
 // program is signed out, the one shape its profile names.
-func (d *driver) listOnce() (sessionAnswer, string, error) {
+func (d *driver) listOnce() (listing, string, error) {
 	records, err := homepath.Walk(d.home, listingRecords, true)
 	if err != nil {
-		return sessionAnswer{}, "", reached(err, "its listing records could not be reached")
+		return listing{}, "", reached(err, "its listing records could not be reached")
 	}
 	defer records.Close()
 	if err := d.forgetInterrupted(records); err != nil {
-		return sessionAnswer{}, "", err
+		return listing{}, "", err
 	}
 	record, err := holdRecord(records, d.c.Boot)
 	if err != nil {
-		return sessionAnswer{}, "", reached(err, "its listing record could not be made")
+		return listing{}, "", reached(err, "its listing record could not be made")
 	}
 	// Removed while its lock is held, then released, unless its session
 	// could not be removed, which a later listing removes by it.
@@ -146,47 +155,78 @@ func (d *driver) listOnce() (sessionAnswer, string, error) {
 	}()
 	folders, err := homepath.Walk(d.home, listingFolders, true)
 	if err != nil {
-		return sessionAnswer{}, "", reached(err, "its listing folder could not be made")
+		return listing{}, "", reached(err, "its listing folder could not be made")
 	}
 	defer folders.Close()
 	if folders.RemoveAll(d.c.Boot) != nil {
-		return sessionAnswer{}, "", errors.New("its listing folder could not be made")
+		return listing{}, "", errors.New("its listing folder could not be made")
 	}
 	folder, err := folders.Folder(d.c.Boot, true)
 	if err != nil {
-		return sessionAnswer{}, "", reached(err, "its listing folder could not be made")
+		return listing{}, "", reached(err, "its listing folder could not be made")
 	}
 	folder.Close()
 	defer folders.RemoveAll(d.c.Boot)
 	o, err := d.openOneOff()
 	if err != nil {
-		return sessionAnswer{}, "", err
+		return listing{}, "", err
 	}
 	answer, err := o.call("session/new", map[string]any{"cwd": folder.Path(), "mcpServers": []any{}})
 	if err != nil {
 		o.close()
-		return sessionAnswer{}, "", err
+		return listing{}, "", err
 	}
 	if answer.Error != nil {
 		o.close()
 		if answer.Error.Code == d.p.signedOut {
-			return sessionAnswer{}, brainwire.SignedOut, nil
+			return listing{}, brainwire.SignedOut, nil
 		}
-		return sessionAnswer{}, "", errors.New("it refused to open a session to list them")
+		return listing{}, "", errors.New("it refused to open a session to list them")
 	}
 	var listed sessionAnswer
 	_ = json.Unmarshal(answer.Result, &listed)
 	// A session CYFR cannot name is no positive answer, nor one it can
 	// forget.
-	if !brainwire.IsUUID(listed.SessionID) {
+	if !d.p.sessionID(listed.SessionID) {
 		o.close()
-		return sessionAnswer{}, "", errors.New("it opened no session CYFR can name")
+		return listing{}, "", errors.New("it opened no session CYFR can name")
 	}
 	_, _ = record.WriteString(listed.SessionID)
+	out := listing{answer: listed}
+	if d.p.selectEfforts {
+		out.efforts = o.selectEach(listed)
+	}
 	_, _ = o.call("session/close", map[string]any{"sessionId": listed.SessionID})
+	var gone error
+	if d.p.deletes {
+		gone = d.deleteIn(o, listed.SessionID)
+	}
 	o.close()
-	keep = d.removeSession(listed.SessionID) != nil
-	return listed, brainwire.SignedIn, nil
+	keep = gone != nil || d.removeFiles(listed.SessionID) != nil
+	return out, brainwire.SignedIn, nil
+}
+
+// selectEach selects each model the listing session offers in turn and
+// reads the efforts the session then offers for it. A model whose
+// selection is not answered is listed with none.
+func (o *oneOff) selectEach(answer sessionAnswer) map[string][]string {
+	efforts := map[string][]string{}
+	model := option(answer.Options, "model")
+	if model == nil {
+		return efforts
+	}
+	for _, c := range model.choices() {
+		efforts[c.value] = []string{}
+		m, err := o.call("session/set_config_option", map[string]any{"sessionId": answer.SessionID, "configId": model.ID, "value": c.value})
+		if err != nil {
+			return efforts
+		}
+		var selected sessionAnswer
+		if m.Error == nil && json.Unmarshal(m.Result, &selected) == nil {
+			efforts[c.value] = selectedEfforts(selected.Options)
+		}
+	}
+	return efforts
 }
 
 // holdRecord makes the listing `boot`'s record in `records` and holds its
@@ -244,7 +284,7 @@ func (d *driver) forgetRecord(records *homepath.Dir, name string, f *os.File) er
 	if err != nil {
 		return errors.New("an earlier listing's record could not be read")
 	}
-	if session := strings.TrimSpace(string(held)); brainwire.IsUUID(session) {
+	if session := strings.TrimSpace(string(held)); d.p.sessionID(session) {
 		if err := d.removeSession(session); err != nil {
 			return errors.New("an earlier listing's session could not be removed")
 		}

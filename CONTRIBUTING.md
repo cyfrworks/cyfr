@@ -262,8 +262,8 @@ same worktree refuses, naming the run that holds it.
     reports the night to GitHub (the nightly, below).
 
   Codex CI's `desktop-native` job builds the CYFR app's package from the
-  tree's `cyfr` on Linux amd64 and arm64, macOS and Windows, installs it
-  as a person does (DEB, DMG, MSI) and runs
+  tree's `cyfr` on Linux, macOS and Windows, each on amd64 and arm64,
+  installs it as a person does (DEB, DMG, MSI) and runs
   `tests/desktop-proof/native/smoke.sh` against the installed app with no
   CYFR server and no signing credentials: the refused switches,
   startup with the window on the screen and the chooser on
@@ -273,11 +273,24 @@ same worktree refuses, naming the run that holds it.
   names what the smoke leaves to the real-CYFR proofs and to a person at
   the machine.
 
-  On Linux that install and smoke are `tests/desktop-proof/native/linux.sh`,
-  which Release's `linux-package` job runs too, on the package the tag
-  publishes. A tag whose package fails publishes no release, no
-  checksums and no image tag; the images job may already have pushed
-  the images by digest, which no tag names.
+  That install and smoke are `tests/desktop-proof/native/linux.sh`,
+  `mac.sh` and `windows.ps1`, which Release runs too on the six
+  installers the tag publishes (`linux-package`, `mac-package` through
+  `desktop-mac.yml`, which alone receives the Apple inputs, and
+  `windows-package`). The macOS legs also install, upgrade and remove the
+  Homebrew cask the release writes from the DMGs
+  (`tests/desktop-proof/native/brew-tap.sh`), and Codex CI's
+  `release-rehearsal` runs the release's GoReleaser on stand-ins for the
+  six (`tests/ci-release-rehearsal.sh`). Release's `installers` job is
+  the one check before anything is published: it takes the six, writes
+  the cask from the DMGs, checks them together and hands that set on to
+  the merge of the images and the CLI release, which both need it, and
+  the job that installs each package reads its app and `cyfr` as built
+  for its architecture (`tests/desktop-proof/native/installed-machine.sh`).
+  A tag whose installer fails, or whose installers or cask that check
+  refuses, publishes no release, no checksums, no cask and no image tag;
+  the images job may already have pushed the images by digest, which no
+  tag names.
 
   On Linux the same job runs `tests/desktop-proof/screen/app.sh` on the
   package: the app as the box's screen (`--screen-project`) under Ubuntu

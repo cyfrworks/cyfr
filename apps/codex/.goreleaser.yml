@@ -43,12 +43,17 @@ checksum:
   # not just attached beside it.
   extra_files:
     - glob: cyfr-scaffold.tar.gz
-    # The CYFR app's Linux packages, which the release workflow builds
-    # outside the checkout: release.FetchPackage takes one only as the
-    # signed checksums name it. An unset RELEASE_PACKAGES_DIR or a missing
-    # package fails the release.
+    # The CYFR app's six installers, which the release workflow builds
+    # outside the checkout: cyfr takes one only as the signed checksums name
+    # it. An unset RELEASE_PACKAGES_DIR or a missing installer fails the
+    # checksums, before anything is uploaded; the release attaches the same
+    # six below.
     - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_linux_amd64.deb"
     - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_linux_arm64.deb"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_darwin_amd64.dmg"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_darwin_arm64.dmg"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_windows_amd64.msi"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_windows_arm64.msi"
 
 signs:
   # Repeated up to three times, as release.yml signs release.json, and for
@@ -67,27 +72,6 @@ signs:
     artifacts: checksum
     output: true
 
-homebrew_casks:
-  - repository:
-      owner: cyfrworks
-      name: homebrew-cyfr
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: "https://cyfr.run"
-    description: "CLI for the CYFR sandboxed WASM runtime"
-    binaries:
-      - cyfr
-    # Binaries are cosign-signed but not Apple-notarized, so macOS Gatekeeper
-    # would quarantine them. Strip the quarantine xattr on install.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cyfr"]
-          end
-    # Generate the cask into dist/ but do not push it — the release workflow
-    # pushes it in a separate, non-fatal step.
-    skip_upload: true
-
 # The release's notes are the tag's written note, which the release
 # workflow hands GoReleaser (--release-notes) in place of a list of
 # commits. The changelog step is what reads that file, so it is never
@@ -104,6 +88,10 @@ release:
     - glob: cyfr-scaffold.tar.gz
     - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_linux_amd64.deb"
     - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_linux_arm64.deb"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_darwin_amd64.dmg"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_darwin_arm64.dmg"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_windows_amd64.msi"
+    - glob: "{{ .Env.RELEASE_PACKAGES_DIR }}/cyfr-desktop_{{ .Version }}_windows_arm64.msi"
     # Publish the installer as a release asset, pinned to its tag. `cyfr
     # update` runs no installer: it verifies the archive itself against the
     # signed checksums.txt (internal/release.FetchBinary).
