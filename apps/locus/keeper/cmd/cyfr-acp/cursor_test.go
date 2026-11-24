@@ -209,6 +209,7 @@ func TestCursorsFailedTurnIsAnErrorOnlyWhenItIsAllTheTurnSaid(t *testing.T) {
 		"failthen":     "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh and more",
 		"lookalike":    "\n\nError: a plain sentence of the model's",
 		"imagefirst":   "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh",
+		"emptyfirst":   "\n\nError: RetriableError: [unavailable] getaddrinfo EAI_AGAIN agentn.global.api5.cursor.sh",
 	} {
 		t.Run(words, func(t *testing.T) {
 			got := turn(t, words)
@@ -422,45 +423,63 @@ func TestCursorsTurnThatCalledCYFRIsNoFailure(t *testing.T) {
 	}
 }
 
-// Cursor's configuration folder is reached from the program's folder alone,
-// following no link: one CURSOR_CONFIG_DIR or XDG_CONFIG_HOME names
-// through a link, or outside the program's folder, is refused, and its
-// sessions stay; one inside it is where the forget removes them.
-func TestCursorsConfiguredFolderIsReachedFromItsOwnFolderAlone(t *testing.T) {
-	outside := t.TempDir()
+// A sessions folder CYFR will not walk, one CURSOR_CONFIG_DIR or
+// XDG_CONFIG_HOME names outside the program's folder or through a link, is
+// judged before Cursor is asked for anything: the start, a listing and a
+// forget are each refused with the one sentence, no session is made, and a
+// session already there stays. One inside the program's folder is where
+// the forget removes the session.
+func TestCursorsFolderCYFRWillNotWalkRefusesEverything(t *testing.T) {
+	const sentence = "Cursor keeps its sessions in a folder CURSOR_CONFIG_DIR or XDG_CONFIG_HOME names outside the program's own folder or through a link, which CYFR does not reach; name a folder inside the program's own, or none, in the program's settings."
 	for label, c := range map[string]struct {
 		variable string
-		value    func(home string) string
-		words    string
+		value    func(home, outside string) string
 	}{
-		"CURSOR_CONFIG_DIR through a link": {"CURSOR_CONFIG_DIR", func(home string) string { return linkedOut(t, home, outside, "cfg") }, "is a link"},
-		"CURSOR_CONFIG_DIR outside":        {"CURSOR_CONFIG_DIR", func(string) string { return outside }, "outside the program's own folder"},
-		"XDG_CONFIG_HOME through a link":   {"XDG_CONFIG_HOME", func(home string) string { return linkedOut(t, home, outside, "xdg") }, "is a link"},
-		"XDG_CONFIG_HOME outside":          {"XDG_CONFIG_HOME", func(string) string { return outside }, "outside the program's own folder"},
+		"CURSOR_CONFIG_DIR through a link": {"CURSOR_CONFIG_DIR", func(home, outside string) string { return linkedOut(t, home, outside, "cfg") }},
+		"CURSOR_CONFIG_DIR outside":        {"CURSOR_CONFIG_DIR", func(_, outside string) string { return outside }},
+		"XDG_CONFIG_HOME through a link":   {"XDG_CONFIG_HOME", func(home, outside string) string { return linkedOut(t, home, outside, "xdg") }},
+		"XDG_CONFIG_HOME outside":          {"XDG_CONFIG_HOME", func(_, outside string) string { return outside }},
 	} {
 		t.Run(label, func(t *testing.T) {
-			home := t.TempDir()
-			value := c.value(home)
-			s := startCursor(t, home)
-			t.Setenv(c.variable, value)
-			session := freshCursor(s)
-			s.end()
-			f := startCursor(t, home)
-			t.Setenv(c.variable, value)
-			f.expect("hello")
-			f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
-			if e := f.next(); e["t"] != "refused" || !strings.Contains(fmt.Sprint(e["reason"]), c.words) {
-				t.Fatalf("the forget is refused, saying why: %v", e)
+			home, outside := t.TempDir(), t.TempDir()
+			value := c.value(home, outside)
+			session := brainwire.NewUUID()
+			planted := filepath.Join(value, "acp-sessions", session)
+			if c.variable == "XDG_CONFIG_HOME" {
+				planted = filepath.Join(value, "cursor", "acp-sessions", session)
 			}
-			found := 0
-			_ = filepath.WalkDir(outside, func(path string, _ os.DirEntry, _ error) error {
-				if strings.HasSuffix(path, string(filepath.Separator)+filepath.Join(session, "store.db")) {
-					found++
-				}
-				return nil
-			})
-			if found != 1 {
-				t.Fatalf("the session outside stays: %d", found)
+			if err := os.MkdirAll(planted, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(planted, "store.db"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			opened := func() *wireSession {
+				s := startCursor(t, home)
+				t.Setenv(c.variable, value)
+				s.expect("hello")
+				return s
+			}
+			st := opened()
+			st.send(startCommand("", map[string]any{}, filesTool))
+			if why := st.why(); why != "unrunnable" || !strings.Contains(st.stderr.String(), sentence) {
+				t.Fatalf("the start is refused with the sentence: %v %s", why, st.stderr.String())
+			}
+			m := opened()
+			m.send(map[string]any{"t": "models", "id": "mdl_1"})
+			if e := m.next(); e["t"] != "refused" || e["reason"] != sentence {
+				t.Fatalf("a listing is refused with the sentence: %v", e)
+			}
+			m.end()
+			f := opened()
+			f.send(map[string]any{"t": "forget", "id": "fgt_1", "session": session})
+			if e := f.next(); e["t"] != "refused" || e["reason"] != sentence {
+				t.Fatalf("a forget is refused with the sentence: %v", e)
+			}
+			f.end()
+			sessions, _ := filepath.Glob(filepath.Join(filepath.Dir(planted), "*"))
+			if len(sessions) != 1 || countOf(home, "servers") != 0 || countOf(home, "load") != 0 {
+				t.Fatalf("no session was made or asked for, and the one there stays: %v %v", sessions, cursorLog(home))
 			}
 		})
 	}
@@ -607,4 +626,24 @@ func TestOtherProgramsForgetsLookAtNoServerRecord(t *testing.T) {
 			t.Fatalf("the forget stands: %v", e)
 		}
 	})
+}
+
+// Where the program names a call's server, a call of another server's with
+// the same arguments is the person's own and is shown, and only the call
+// of the server the driver named its own is CYFR's.
+func TestCursorsCallOfAnotherServerWithTheSameArgumentsIsTheirs(t *testing.T) {
+	s := startCursor(t, "")
+	freshCursor(s)
+	postText(s, "stp_1", "trn_1", "samecall")
+	ask := s.expect("ask")
+	if err := os.WriteFile(filepath.Join(s.home, "go-on"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.send(map[string]any{"t": "answer", "id": "ans_1", "ask": ask["ask"], "content": "x", "is_error": false})
+	got := s.until("idle")
+	own := ofType(got, "own")
+	if len(own) != 2 || own[0]["name"] != "mcp:notes/files" || own[0]["phase"] != "start" || own[1]["name"] != "mcp:notes/files" ||
+		own[1]["phase"] != "end" || saidOf(got) != "the tool answered x" {
+		t.Fatalf("the person's call is shown as theirs, and CYFR's is none of the program's own: %v", got)
+	}
 }

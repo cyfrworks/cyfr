@@ -185,6 +185,9 @@ func (d *driver) forget(id, session string) error {
 	if d.h != nil && (d.session == session || (d.starting != nil && d.starting.session == session)) {
 		return d.c.Refuse(id, "That session runs now; it is closed before it is forgotten.")
 	}
+	if err := d.folderRefused(); err != nil {
+		return d.c.Refuse(id, capital(err.Error())+".")
+	}
 	if err := d.removeSession(session); err != nil {
 		return d.c.Refuse(id, capital(err.Error())+".")
 	}

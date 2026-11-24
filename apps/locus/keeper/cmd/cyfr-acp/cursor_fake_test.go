@@ -46,6 +46,9 @@ import (
 //	failthen    writes the failure, then a word more
 //	askfirst    calls CYFR's `files`, then writes the failure
 //	imagefirst  writes an image chunk, then the failure
+//	emptyfirst  writes an empty text chunk, then the failure
+//	samecall    calls CYFR's `files`, then shows a person's server's call of
+//	            the same arguments before CYFR's
 //	lookalike   writes a chunk of nearly the failure's form
 //	call        calls CYFR's `files` as Cursor does, after its permission question
 //	theirs      calls a person's server `notes`, its tool `echo`
@@ -233,6 +236,35 @@ func fakeCursor() int {
 			var result toolsock.Result
 			_ = toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(`{"path":"a"}`)}, &result)
 			chunk(failure)
+		case words == "emptyfirst":
+			chunk("")
+			chunk(failure)
+		case words == "samecall":
+			// CYFR's call reaches the socket first, then a call of the
+			// person's server with the same arguments is shown before
+			// Cursor updates CYFR's: Sol's order. The person's call waits
+			// for the test to have read the ask ($HOME/go-on).
+			results := make(chan toolsock.Result, 1)
+			go func() {
+				var result toolsock.Result
+				_ = toolsock.Ask(state.socket, toolsock.Request{Op: "call", Name: "files", Arguments: json.RawMessage(`{"path":"a"}`)}, &result)
+				results <- result
+			}()
+			for i := 0; i < 500; i++ {
+				if _, err := os.Stat(filepath.Join(home, "go-on")); err == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded wait for the test's own file, read by a poll
+			}
+			for _, c := range []struct{ id, server string }{{"call-notes", "notes"}, {"call-cyfr", state.server}} {
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": c.id, "title": "MCP: tool", "kind": "other", "status": "pending", "rawInput": map[string]any{}})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": c.id, "title": c.server + ": files",
+					"rawInput": map[string]any{"providerIdentifier": c.server, "toolName": "files", "args": map[string]any{"path": "a"}}})
+			}
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call-notes", "status": "completed"})
+			result := <-results
+			update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "call-cyfr", "status": "completed"})
+			chunk("the tool answered " + result.Text)
 		case words == "imagefirst":
 			update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo="}})
 			chunk(failure)

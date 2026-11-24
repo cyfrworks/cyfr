@@ -156,6 +156,15 @@ func newDriver(p *profile, command []string, c *brainwire.Conn, home string) *dr
 
 func (d *driver) Process() *brainwire.Process { return d.h }
 
+// folderRefused is why the folder the program keeps its sessions in is not
+// one CYFR walks (profile's checkFolder), or nil.
+func (d *driver) folderRefused() error {
+	if d.p.checkFolder == nil {
+		return nil
+	}
+	return d.p.checkFolder(d.home)
+}
+
 func (d *driver) Inbox() <-chan func() error { return d.inbox }
 
 // Deadline is when the start's awaited answer, or the stub's listing, is
@@ -261,6 +270,9 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	cwd, err := os.Getwd()
 	if err != nil {
 		return brainwire.Fail(1, brainwire.WhyUnrunnable, "the driver has no working folder: "+err.Error())
+	}
+	if err := d.folderRefused(); err != nil {
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, capital(err.Error())+".")
 	}
 	d.server = ""
 	if resume && d.p.namesOnce {
@@ -402,6 +414,9 @@ func (d *driver) writePrompt(id string, blocks []brainwire.Block) (*prompt, stri
 func (d *driver) models(id string) error {
 	if d.h != nil && !d.running() {
 		return d.c.Refuse(id, "The harness is starting: its models are listed once it has started.")
+	}
+	if err := d.folderRefused(); err != nil {
+		return d.c.Refuse(id, capital(err.Error())+".")
 	}
 	// A program whose efforts are read by selecting each model lists them
 	// in a listing session of the driver's own even while one runs, whose
@@ -646,17 +661,12 @@ func (d *driver) update(params json.RawMessage) error {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
-		if json.Unmarshal(u.Content, &block) != nil {
-			return nil
-		}
-		if block.Type != "text" {
-			// A chunk that is not text is no text of the turn's, and yet
-			// something the turn said.
+		// Every chunk is something the turn said, one that is no text, or
+		// empty text, among them: only a turn's one chunk can be the
+		// program's report of its failure.
+		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
 			d.output++
 			return d.release()
-		}
-		if block.Text == "" {
-			return nil
 		}
 		if d.p.failure != nil && d.output == 0 {
 			if kind, _ := d.p.failure(block.Text); kind != "" {

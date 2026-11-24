@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -16,7 +17,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // A program that is a tree of files, as Cursor's agent is: one top folder
@@ -326,5 +329,63 @@ func TestARunInterruptedAfterItsInstallLeavesNothingForLong(t *testing.T) {
 	}
 	if n := names(t, version); len(n) != 1 || n[0] != "agy" || o.hits.Load() != 1 {
 		t.Fatalf("the download and the staging are gone, and nothing was fetched again: %v %d", n, o.hits.Load())
+	}
+}
+
+// A run that waited on the lock while another installed, the other
+// interrupted after its rename, sweeps what that run left before it
+// returns: nothing of the download stays.
+func TestARunThatWaitedSweepsWhatAnInterruptedInstallLeft(t *testing.T) {
+	archive := tree(t)
+	o := serveFiles(t, map[string][]byte{"/cli.tar.gz": archive})
+	home := t.TempDir()
+	p := o.pinnedTree("/cli.tar.gz", archive)
+	version := folder(home, p.sum)
+	mustMkdir(t, version)
+	first, err := os.Open(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := syscall.Flock(int(first.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	var info syscall.Stat_t
+	if err := syscall.Fstat(int(first.Fd()), &info); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := o.fetcher(io.Discard).install(home, p)
+		done <- err
+	}()
+	// A bounded wait for the kernel to list the second run's lock as
+	// blocked on the folder; sleep-ok: /proc/locks has no notification.
+	waiting := fmt.Sprintf(":%d ", info.Ino)
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		locks, _ := os.ReadFile("/proc/locks")
+		if strings.Contains(string(locks), "-> FLOCK") && strings.Contains(string(locks), waiting) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second run never waited on the folder's lock")
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: polling /proc/locks
+	}
+	// The first run, interrupted after its rename: its tree in place, its
+	// download beside it.
+	mustMkdir(t, filepath.Join(version, "agy"))
+	if err := os.WriteFile(filepath.Join(version, "agy", "cursor-agent"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(version, tempPrefix+"0123456789abcdef"), archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = syscall.Flock(int(first.Fd()), syscall.LOCK_UN)
+	if err := <-done; err != nil {
+		t.Fatalf("the second run runs the first's install: %v", err)
+	}
+	if n := names(t, version); len(n) != 1 || n[0] != "agy" || o.hits.Load() != 0 {
+		t.Fatalf("nothing of the download stays, and nothing was fetched: %v %d", n, o.hits.Load())
 	}
 }

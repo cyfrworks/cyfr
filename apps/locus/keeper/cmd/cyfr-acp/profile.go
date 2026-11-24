@@ -97,6 +97,11 @@ type profile struct {
 	// every one a forget removes. An error says, in the driver's words, why
 	// they are not reached, and nothing is removed.
 	sessionFiles func(home, session string) ([]homepath.Path, error)
+	// checkFolder, where it is set, says why the folder the program keeps
+	// its sessions in is not one CYFR will walk, before the program is
+	// asked for anything: a start, a listing and a forget are refused with
+	// its sentence.
+	checkFolder func(home string) error
 	// deletes says a forget rests on the program's own session/delete,
 	// proved by its load's not-found answer after it (forget.go), the
 	// session being in a store of the program's own that holds more than
@@ -467,6 +472,7 @@ var cursor = &profile{
 		return []homepath.Path{folder}, nil
 	},
 	forgetLoads: true,
+	checkFolder: cursorFolder,
 	// Its prompts carry no usage: the accounting is never read.
 	counted:           "partial",
 	counts:            map[string][]string{},
@@ -479,11 +485,8 @@ var cursor = &profile{
 
 // cursorPath is a way down Cursor's configuration folder, where it keeps
 // its sessions: CURSOR_CONFIG_DIR when it is set, else XDG_CONFIG_HOME's
-// `cursor`, else the home's `.cursor`, as Cursor finds it. The way is
-// walked from the home, each step by its name and following no link, so a
-// configured folder reached through a link is refused there, and one that
-// is not inside the home is refused here: the driver reaches nothing of
-// the person's beyond the program's own folder.
+// `cursor`, else the home's `.cursor`, as Cursor finds it, walked from the
+// home. One not inside the home is refused (cursorFolder).
 func cursorPath(home string, steps ...string) (homepath.Path, error) {
 	folder := filepath.Join(home, ".cursor")
 	if dir := os.Getenv("CURSOR_CONFIG_DIR"); strings.TrimSpace(dir) != "" {
@@ -496,14 +499,48 @@ func cursorPath(home string, steps ...string) (homepath.Path, error) {
 	}
 	rel, err := filepath.Rel(filepath.Clean(home), filepath.Clean(folder))
 	if err != nil || !filepath.IsLocal(rel) && rel != "." {
-		return homepath.Path{}, errCursorOutside
+		return homepath.Path{}, errCursorFolder
 	}
 	return homepath.Path{Root: home, Rel: filepath.Join(append([]string{rel}, steps...)...)}, nil
 }
 
-// errCursorOutside refuses a forget whose sessions Cursor keeps outside
-// the program's folder.
-var errCursorOutside = errors.New("Cursor keeps its sessions in a folder CURSOR_CONFIG_DIR or XDG_CONFIG_HOME names outside the program's own folder, which CYFR does not reach, so nothing was removed")
+// cursorFolder judges Cursor's sessions folder before Cursor is asked for
+// anything (profile's checkFolder): it must be inside the home, and every
+// folder of it that is there must be one of this user's own, reached
+// through no link, since a forget walks it so; one not made yet is
+// Cursor's to make. A folder CYFR will not walk refuses the start, a
+// listing and a forget alike, so no session is made that CYFR could not
+// remove.
+func cursorFolder(home string) error {
+	folder, err := cursorPath(home, "acp-sessions")
+	if err != nil {
+		return err
+	}
+	dir, err := homepath.Root(folder.Root)
+	if err != nil {
+		return errCursorFolder
+	}
+	defer func() { dir.Close() }()
+	for _, step := range strings.Split(filepath.ToSlash(folder.Rel), "/") {
+		if step == "" || step == "." {
+			continue
+		}
+		next, err := dir.Folder(step, false)
+		switch {
+		case homepath.Absent(err):
+			return nil
+		case err != nil:
+			return errCursorFolder
+		}
+		dir.Close()
+		dir = next
+	}
+	return nil
+}
+
+// errCursorFolder is the one sentence for a sessions folder CYFR will not
+// walk.
+var errCursorFolder = errors.New("Cursor keeps its sessions in a folder CURSOR_CONFIG_DIR or XDG_CONFIG_HOME names outside the program's own folder or through a link, which CYFR does not reach; name a folder inside the program's own, or none, in the program's settings")
 
 // cursorNone is what `agent mcp list` prints when no server is configured.
 const cursorNone = "No MCP servers configured (expected in .cursor/mcp.json or ~/.cursor/mcp.json)"

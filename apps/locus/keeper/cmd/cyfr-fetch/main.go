@@ -282,6 +282,10 @@ func (f fetcher) install(home string, p program) (string, error) {
 	if ok, err := installed(dir, p, shown); err != nil {
 		return "", err
 	} else if ok {
+		// Another run installed it while this one waited: what that run
+		// left beside it, interrupted after its rename, is swept by
+		// whoever holds the lock.
+		_ = sweep(dir)
 		return path, nil
 	}
 	if err := sweep(dir); err != nil {
