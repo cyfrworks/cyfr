@@ -350,12 +350,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // forgotten, and erased told. Off the passkey road nothing is kept on
   // disk, so there is nothing to erase.
   function erase({id, home, account}) {
+    const answer = ofThisRun()
     const done = forgetting.then(() => {
       if (!accountRoad) return true
       return clear(account ? kept_(accountPartition(home, account), "account") : kept_(homePartition(home)))
     })
     forgetting = done.then(() => {}, () => {})
-    done.then((ok) => send("erased", {id, ok}), () => send("erased", {id, ok: false}))
+    done.then(answer((ok) => send("erased", {id, ok})), answer(() => send("erased", {id, ok: false})))
   }
 
   // ---- the window owner: every window and view the app has is made here ----
@@ -692,11 +693,12 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // connections of the sessions they used, live sockets among them, are
   // closed; then parted, with the departure's id.
   function part(id) {
+    const release = ofThisRun()
     const {pages, sessions} = closing
     closing = {pages: [], sessions: new Set()}
     Promise.all(pages)
       .then(() => Promise.all([...sessions].map((ses) => ses.closeAllConnections())))
-      .then(() => on({type: "parted", id}), () => {})
+      .then(release(() => on({type: "parted", id})), () => {})
   }
 
   // ---- the account road: a hop, its window, its return ----
@@ -756,6 +758,16 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // ---- cyfr ----
 
   let send = () => {}
+  // An answer belongs to the cyfr run that asked: a teardown or an erase
+  // begun under a cyfr that has since ended (a restart, a loss) releases
+  // nothing and answers nobody, whatever its id, as ids start again with
+  // each run.
+  function ofThisRun() {
+    const run = child
+    return (act) => (...args) => {
+      if (run && child === run) act(...args)
+    }
+  }
   let readiness = null
   let quitting = false
 

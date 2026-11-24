@@ -1015,6 +1015,76 @@ test("Forget of the CYFR open leaves it first: forget is sent only once cyfr lef
 
 // cyfr asking for the store of `home`, or of its account service
 // `account` for it, to be erased, as erase `id`.
+// An answer belongs to the cyfr run that asked: a teardown or an erase
+// begun under a cyfr that has ended, held past the fresh cyfr's start,
+// releases nothing of the fresh run's departure and answers nobody, though
+// the fresh run's ids start again at 1.
+test("a teardown begun under a cyfr that has ended releases nothing of the fresh cyfr's departure of the same id", async () => {
+  await signedIn()
+  const held = []
+  world.closingConnections = () => new Promise((end) => held.push(end))
+  const old = child
+  mock.timers.enable({apis: ["setTimeout"]})
+  try {
+    assert.ok(select(PORT_B).prevented)
+    await turns()
+    const before = held.length
+    assert.ok(before > 0, "the old run's teardown is held")
+    mock.timers.tick(DEPARTURE_MS)
+    await turns()
+    assert.equal(old.killed, "SIGKILL")
+    old.emit("exit", null, "SIGKILL")
+    await turns()
+    child.say({type: "ready", url: READY, rail: RAIL})
+    await turns()
+    assert.ok(await opens())
+    assert.ok(select(PORT_B).prevented)
+    await turns()
+    assert.ok(held.length > before, "the fresh run's teardown is held too")
+    assert.deepEqual(leaves().at(-1), {version: VERSION, type: "leave", id: 1}, "the fresh run's departure is id 1 again")
+    child.say({type: "left", id: 1})
+    await turns()
+    held.slice(0, before).forEach((end) => end())
+    await turns(6)
+    assert.equal(content(), undefined, "the old run's teardown released nothing")
+    held.slice(before).forEach((end) => end())
+    await turns(6)
+    assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B), "the fresh run's own teardown does")
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test("an erase begun under a cyfr that has ended answers nobody, and the fresh cyfr's erase of the same id is answered alone", async () => {
+  await signedIn()
+  const pending = []
+  world.clearing = () => new Promise((end) => pending.push(end))
+  const old = child
+  erases(1, PORT_A)
+  await turns()
+  assert.equal(pending.length, 1)
+  mock.timers.enable({apis: ["setTimeout"]})
+  try {
+    assert.ok(select(PORT_B).prevented)
+    mock.timers.tick(DEPARTURE_MS)
+    assert.equal(old.killed, "SIGKILL")
+    old.emit("exit", null, "SIGKILL")
+    await turns()
+    child.say({type: "ready", url: READY, rail: RAIL})
+    erases(1, PORT_B)
+    await turns()
+    pending[0]()
+    await turns(8)
+    assert.equal(pending.length, 2, "the fresh run's erase is still being done")
+    assert.deepEqual(erasedAnswers(), [], "the old run's erase answers nobody")
+    pending[1]()
+    await turns(8)
+    assert.deepEqual(erasedAnswers(), [{version: VERSION, type: "erased", id: 1, ok: true}], "the fresh run's own erase is answered")
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 const erases = (id, home, account) => child.say({type: "erase", id, home, ...(account ? {account} : {})})
 const erasedAnswers = () => child.heard.filter((m) => m.type === "erased")
 const cookie = (value) => ({name: "_cyfr_key", domain: "cyfr.example.com", value})
