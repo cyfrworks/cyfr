@@ -10,7 +10,7 @@
 # uninstall`) signals this process alone. Whenever it ends, at that stop's
 # SIGTERM or because labwc ended by itself, it ends its login session, and
 # logind stops every process in it: labwc, its D-Bus, the launcher, `cyfr
-# screen shell` and Chrome. After a stop the service stays stopped; after
+# screen shell` and the CYFR app. After a stop the service stays stopped; after
 # labwc's own end Restart= starts the screen again, in a new session. A
 # refused end is said in the journal, through logger alone, so what the
 # session's programs print stays where it was, and this process exits 1,
@@ -26,7 +26,7 @@
 end() {
     trap '' TERM HUP INT
     loginctl --no-ask-password terminate-session self && exit 0
-    logger -t cyfr-screen -p user.err "loginctl could not end the screen's login session, so its processes, Chrome among them, still run"
+    logger -t cyfr-screen -p user.err "loginctl could not end the screen's login session, so its processes, the CYFR app among them, still run"
     exit 1
 }
 trap end TERM HUP INT

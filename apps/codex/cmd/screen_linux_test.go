@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +25,7 @@ import (
 // standard error, and exits 1, so the service shows it failed.
 func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 	const stays = "echo $$ >\"$BIN/compositor\"\nexec sleep 60"
-	const refused = "-t cyfr-screen -p user.err loginctl could not end the screen's login session, so its processes, Chrome among them, still run\n"
+	const refused = "-t cyfr-screen -p user.err loginctl could not end the screen's login session, so its processes, the CYFR app among them, still run\n"
 	for _, c := range []struct {
 		name, compositor, loginctl string
 		stop                       bool
@@ -105,6 +107,71 @@ func TestScreenSessionEndsItsLoginSession(t *testing.T) {
 			}
 			if got, _ := os.ReadFile(filepath.Join(bin, "logger.ran")); string(got) != c.logged {
 				t.Errorf("logger ran as %q, want %q", got, c.logged)
+			}
+		})
+	}
+}
+
+// Root installs only the package cyfr checked: the commands copy the
+// account's file where the account cannot write and check the copy
+// against the sum the release's signed checksums named before apt is
+// handed it, so a file changed after the fetch is never installed. What
+// root staged is gone on every way out, and a copy, a check or an apt
+// that fails, or an interrupt, ends the commands before anything of the
+// screen is installed. Run here as written, as this account, the
+// programs that change the machine stand-ins.
+func TestScreenOnInstallsOnlyThePackageItChecked(t *testing.T) {
+	const after = "apt-get install -y --no-install-recommends labwc wvkbd swayidle\ngetent group tss\nthe unit\n" +
+		"systemctl daemon-reload\nsystemctl disable getty@tty1\nsystemctl enable cyfr-screen\n"
+	for _, c := range []struct {
+		name, body, apt, ran string
+		installed            bool
+	}{
+		{"the package fetched", "the app", "", "apt-get update\napt-get install the app\n" + after, true},
+		{"a package put in its place", "another program", "", "apt-get update\n", false},
+		{"a copy that fails", "", "", "apt-get update\n", false},
+		{"apt refusing the package", "the app", "exit 100", "apt-get update\napt-get install the app\n", false},
+		{"an interrupt during apt", "the app", "kill -INT $PPID; sleep 1; exit 130", "apt-get update\napt-get install the app\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			standInMachine(t)
+			dir, bin, staged := t.TempDir(), t.TempDir(), t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, screenDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256([]byte("the app"))
+			if c.body != "" {
+				if err := os.WriteFile(filepath.Join(dir, screenAppFile), []byte(c.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range map[string]string{
+				"apt-get": "case \"$3\" in\n*.deb) cat \"$3\" >\"$BIN/handed\"; echo 'apt-get install the app' >>\"$BIN/ran\"; " + c.apt + " ;;\n" +
+					"*) echo \"apt-get $*\" >>\"$BIN/ran\" ;;\nesac",
+				"getent":    "echo \"getent $*\" >>\"$BIN/ran\"; exit 2",
+				"systemctl": "echo \"systemctl $*\" >>\"$BIN/ran\"",
+				// The service's unit is not written into /etc here.
+				"install": "case \"$4\" in /etc/*) echo 'the unit' >>\"$BIN/ran\"; exit 0 ;; esac\nexec /usr/bin/install \"$@\"",
+			} {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commands := screenCommands(dir, "alice", hex.EncodeToString(sum[:]))
+			sh := exec.Command("/bin/sh", "-c", strings.Join(commands, " && "))
+			sh.Env = append(os.Environ(), "PATH="+bin+":/usr/bin:/bin", "BIN="+bin, "TMPDIR="+staged)
+			said, err := sh.CombinedOutput()
+			if (err == nil) != c.installed {
+				t.Errorf("the commands ended with %v, want installed %v:\n%s", err, c.installed, said)
+			}
+			if got := read(t, filepath.Join(bin, "ran")); got != c.ran {
+				t.Errorf("ran:\n%s\nwant:\n%s", got, c.ran)
+			}
+			if got, _ := os.ReadFile(filepath.Join(bin, "handed")); c.body == "another program" && got != nil || c.apt == "" && c.installed && string(got) != "the app" {
+				t.Errorf("apt was handed %q", got)
+			}
+			if left, _ := os.ReadDir(staged); len(left) != 0 {
+				t.Errorf("root's staging left %v", left)
 			}
 		})
 	}

@@ -6,7 +6,6 @@ package cmd
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"strconv"
@@ -58,6 +57,22 @@ func (a *appSide) next(want string) map[string]any {
 		a.t.Fatalf("the shell never said %s", want)
 	}
 	return nil
+}
+
+// until skips what the shell says until a message of type want.
+func (a *appSide) until(want string) map[string]any {
+	a.t.Helper()
+	for deadline := time.After(10 * time.Second); ; {
+		select {
+		case m := <-a.said:
+			if m["type"] == want {
+				return m
+			}
+		case <-deadline:
+			a.t.Fatalf("the shell never said %s", want)
+			return nil
+		}
+	}
 }
 
 func (a *appSide) send(line string) {
@@ -145,7 +160,7 @@ func TestScreenApp_AWriteToMainThatFailsEndsTheShow(t *testing.T) {
 		t.Fatal(err)
 	}
 	shown := make(chan error, 1)
-	go func() { shown <- a.show(context.Background(), func(string) {}) }()
+	go func() { shown <- a.show(func(string) {}) }()
 	select {
 	case err := <-shown:
 		if err == nil || !strings.Contains(err.Error(), "could not be written") {
@@ -166,7 +181,7 @@ func TestScreenApp_ReadyIsTheFirstMessage(t *testing.T) {
 		home: desktop.Message{Type: desktop.TypeHome, Home: "http://localhost:4000", Account: "https://cyfr.run"}}
 	a.hide()
 	a.hide()
-	if err := a.show(context.Background(), func(string) { a.hide() }); err != nil {
+	if err := a.show(func(string) { a.hide() }); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{desktop.TypeReady, "home 1"}
@@ -217,7 +232,7 @@ func TestScreenApp_WhatMainSays(t *testing.T) {
 				home: desktop.Message{Type: desktop.TypeHome, Home: home, Account: "https://cyfr.run"}}
 			var locks []string
 			// The shell's lock hides, every time, through the app (Restart).
-			err := a.show(context.Background(), func(why string) { locks = append(locks, why); a.hide() })
+			err := a.show(func(why string) { locks = append(locks, why); a.hide() })
 			if (err != nil) != c.refused || strings.Join(locks, "|") != strings.Join(c.locks, "|") {
 				t.Fatalf("show answered %v, locking %q", err, locks)
 			}
@@ -239,7 +254,7 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	sink := &lineSink{}
 	a := &screenApp{in: in, to: desktop.NewWriter(sink, nil), home: home}
 	shown := make(chan error, 1)
-	go func() { shown <- a.show(context.Background(), func(string) { a.hide() }) }()
+	go func() { shown <- a.show(func(string) { a.hide() }) }()
 	sink.said(t, 2)
 	a.end()
 	a.hide()
@@ -260,7 +275,7 @@ func TestScreenApp_ItsLastLockSaysEndingAndNothingFollows(t *testing.T) {
 	b := &screenApp{in: strings.NewReader(""), to: desktop.NewWriter(early, nil), home: home}
 	b.end()
 	b.hide()
-	if err := b.show(context.Background(), func(string) { b.hide() }); err != nil {
+	if err := b.show(func(string) { b.hide() }); err != nil {
 		t.Fatal(err)
 	}
 	if said := early.said(t, 1); len(said) != 0 {

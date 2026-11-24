@@ -472,7 +472,7 @@ func TestUpdateLeavesAPackagesProgramToThePackage(t *testing.T) {
 				target, again = c.options.version, again+" --version "+c.options.version
 			}
 			_, err := s.run(c.options)
-			want := "This cyfr, " + s.self + ", belongs to the package cyfr-desktop, so nothing was changed: install the package of release " + target + " from " + releasesPage + "/tag/" + target + ", then run '" + again + "' to update CYFR here"
+			want := "This cyfr, " + s.self + ", belongs to the package cyfr-desktop, so nothing was changed: install the package cyfr-desktop of release " + target + " from " + releasesPage + "/tag/" + target + ", then run '" + again + "' to update CYFR here"
 			if err == nil || err.Error() != want {
 				t.Errorf("cyfr update answered %v, want %q", err, want)
 			}

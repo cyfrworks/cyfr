@@ -92,10 +92,9 @@ func quietScreen() map[string]string {
 	return map[string]string{
 		"pkill": "exit 0",
 		// No screen's test asks this machine's Docker.
-		"docker":               "exit 1",
-		"wvkbd-mobintl":        "exec /bin/sleep 600", // sleep-ok: a stand-in child that runs until the shell ends it
-		"swayidle":             swayidleHears,
-		"google-chrome-stable": "exec /bin/sleep 30", // sleep-ok: a stand-in child that runs until the shell ends it
+		"docker":        "exit 1",
+		"wvkbd-mobintl": "exec /bin/sleep 600", // sleep-ok: a stand-in child that runs until the shell ends it
+		"swayidle":      swayidleHears,
 	}
 }
 
@@ -415,6 +414,8 @@ type runningScreen struct {
 	t     *testing.T
 	ended chan error
 	done  chan struct{}
+	// app is the CYFR app's main process, the shell's browser.
+	app *appSide
 	// address is where this test's own listener serves the pages.
 	address func() string
 	// offered is whether a page read meanwhile offered the screen's use.
@@ -432,10 +433,11 @@ func startScreen(t *testing.T) *runningScreen {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	listen, address := ownListener()
-	s := &runningScreen{t: t, ended: make(chan error, 1), done: make(chan struct{}), address: address}
+	app, in, out := newAppSide(t)
+	s := &runningScreen{t: t, ended: make(chan error, 1), done: make(chan struct{}), address: address, app: app}
 	go func() {
 		defer close(s.done)
-		s.ended <- runScreenShell(ctx, listen, chromeBrowser)
+		s.ended <- runScreenShell(ctx, listen, in, out)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -712,11 +714,11 @@ func TestScreenShellHelper(t *testing.T) {
 		t.Skip("run by TestScreenShell_AKilledShellLeavesNoChildBehind")
 	}
 	listen, _ := ownListener()
-	_ = runScreenShell(context.Background(), listen, chromeBrowser)
+	_ = runScreenShell(context.Background(), listen, os.Stdin, os.Stdout)
 }
 
-// A shell killed outright leaves no keyboard, suspend watch or Chrome
-// behind: each ends with it.
+// A shell killed outright leaves no keyboard or suspend watch behind:
+// each ends with it.
 func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 	screenProject(t)
 	screenCompositor(t, idletest.Options{})
@@ -724,7 +726,7 @@ func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin, pids := t.TempDir(), t.TempDir()
-	children := []string{"wvkbd-mobintl", "swayidle", "google-chrome-stable"}
+	children := []string{"wvkbd-mobintl", "swayidle"}
 	for _, name := range children {
 		script := "echo $$ >" + filepath.Join(pids, name) + "\nexec /bin/sleep 60\n"
 		if name == "swayidle" {
@@ -739,6 +741,12 @@ func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 	}
 	shell := exec.Command(os.Args[0], "-test.run=^TestScreenShellHelper$")
 	shell.Env = append(os.Environ(), "CYFR_SCREEN_SHELL_HELPER=1", "PATH="+bin+":/usr/bin:/bin")
+	// main's pipe stays open, as main does, until the shell is killed.
+	main, err := shell.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer main.Close()
 	if err := shell.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -773,37 +781,21 @@ func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 }
 
 // A folder that names another CYFR than the one the screen opened ends
-// the screen's shell, which its launcher starts again on that reading,
-// and Chrome is given localhost as 127.0.0.1 alone.
+// the screen's shell, which its launcher starts again on that reading.
 func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
 	screenProject(t)
 	screenCompositor(t, idletest.Options{})
 	if err := os.MkdirAll(screenDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	chromed := filepath.Join(t.TempDir(), "chrome.args")
-	programs := quietScreen()
-	// sleep-ok: a stand-in child that runs until the shell ends it
-	programs["google-chrome-stable"] = `echo "$@" >` + chromed + `; exec /bin/sleep 30`
-	screenPrograms(t, programs)
+	screenPrograms(t, quietScreen())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	listen, address := ownListener()
+	app, in, out := newAppSide(t)
 	ended := make(chan error, 1)
-	go func() { ended <- runScreenShell(ctx, listen, chromeBrowser) }()
-	for {
-		if raw, err := os.ReadFile(chromed); err == nil && strings.HasSuffix(string(raw), "\n") {
-			if !strings.Contains(string(raw), "--host-resolver-rules=MAP localhost 127.0.0.1") {
-				t.Errorf("Chrome was started with %s", raw)
-			}
-			break
-		}
-		select {
-		case err := <-ended:
-			t.Fatalf("the screen ended first: %v", err)
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	go func() { ended <- runScreenShell(ctx, listen, in, out) }()
+	app.next("ready")
 	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4322\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -837,7 +829,7 @@ func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	app, in, out := newAppSide(t)
 	listen, _ := ownListener()
 	ended := make(chan error, 1)
-	go func() { ended <- runScreenShell(context.Background(), listen, appBrowser(in, out)) }()
+	go func() { ended <- runScreenShell(context.Background(), listen, in, out) }()
 
 	if ready := app.next("ready"); ready["url"] != shell.Origin+"/" {
 		t.Fatalf("ready named %v", ready["url"])

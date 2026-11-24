@@ -778,10 +778,10 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 		}
 	}
 	// .env holds the new head now, CYFR started as it says or on this
-	// machine only: the screen follows it, and a CYFR no one is set up on
-	// is set up at the new address. One someone is set up on needs nothing
-	// more said: the preview listed what changes.
-	screenErr := followScreen()
+	// machine only: a CYFR no one is set up on is set up at the new
+	// address. One someone is set up on needs nothing more said: the
+	// preview listed what changes, and the screen reads the folder each
+	// time it starts.
 	if len(p.AddressChanges) > 0 {
 		values, _ := access.ReadEnvValues(".env")
 		switch {
@@ -791,7 +791,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, out 
 			setupNext(out, p.New)
 		}
 	}
-	return errors.Join(err, screenErr)
+	return err
 }
 
 // lookupDomain resolves domain as this machine resolves names; tests stand

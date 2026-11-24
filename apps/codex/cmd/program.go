@@ -165,6 +165,14 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	return true, nil
 }
 
+// installPackage is the instruction that brings a package of CYFR's, pkg,
+// to release target: the one a package's own cyfr cannot follow itself,
+// which `cyfr update` gives for a cyfr a package installed and the screen
+// for an app of another release than its folder's.
+func installPackage(pkg, target string) string {
+	return fmt.Sprintf("install the package %s of release %s from %s/tag/%s", pkg, target, releasesPage, target)
+}
+
 // packageOf is the package of this system's that installed the program at
 // path, its links resolved, as the system's package records say (dpkg's,
 // on Linux), or "" when none did. Such a program never rewrites or removes
@@ -236,7 +244,7 @@ func replaceSelf(ctx context.Context, out io.Writer, target string, exact bool) 
 		if exact {
 			again += " --version " + target
 		}
-		return "", fmt.Errorf("This cyfr, %s, belongs to the package %s, so nothing was changed: install the package of release %s from %s/tag/%s, then run '%s' to update CYFR here", self, owner, target, releasesPage, target, again)
+		return "", fmt.Errorf("This cyfr, %s, belongs to the package %s, so nothing was changed: %s, then run '%s' to update CYFR here", self, owner, installPackage(owner, target), again)
 	}
 	fmt.Fprintf(out, "Downloading and verifying release %s for %s/%s...\n", target, runtime.GOOS, runtime.GOARCH)
 	fetch, cancel := context.WithTimeout(ctx, fetchBinaryTimeout)

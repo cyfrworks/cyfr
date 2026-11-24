@@ -18,14 +18,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
-	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/holder"
+	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/shell"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -33,14 +33,26 @@ import (
 var screenFiles embed.FS
 
 const (
-	screenDir     = ".cyfr/screen"
-	screenUnit    = "/etc/systemd/system/cyfr-screen.service"
-	screenAptLine = "/etc/apt/apt.conf.d/52cyfr-screen"
-	// screenPolicy is Chrome's managed policy on this machine: no password
-	// saving or autofill, so a PIN or passphrase is never offered to
-	// Google Password Manager, and no extensions.
-	screenPolicy = "/etc/opt/chrome/policies/managed/cyfr-screen.json"
-	chromeDeb    = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+	screenDir  = ".cyfr/screen"
+	screenUnit = "/etc/systemd/system/cyfr-screen.service"
+	// appPackage is the CYFR app's Linux package (desktop/scripts/build.mjs),
+	// the screen's browser, which the launcher runs.
+	appPackage = "cyfr-desktop"
+	// screenAppFile is where `cyfr screen on` keeps the app's package it
+	// fetched, the account's alone, until the command ends.
+	screenAppFile = screenDir + "/" + appPackage + ".deb"
+)
+
+// appCyfr is the cyfr inside the CYFR app's package, the one that runs the
+// screen's shell (desktop/scripts/build.mjs); a variable so tests stand in
+// for it.
+var appCyfr = "/opt/cyfr/resources/cyfr"
+
+// appPackageSum and fetchAppPackage are release.PackageChecksum and
+// release.FetchPackage, variables so tests stand in for the release.
+var (
+	appPackageSum   = release.PackageChecksum
+	fetchAppPackage = release.FetchPackage
 )
 
 // screenPath is a project path the service's unit can hold as it is.
@@ -49,7 +61,7 @@ var screenPath = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
 var screenCmd = &cobra.Command{
 	Use:   "screen",
 	Short: "Show CYFR on this machine's own screen, or stop showing it",
-	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR.",
+	Long:  "Show CYFR full-screen on this machine's own screen at power-on, with no desktop, on Ubuntu 26.04 LTS on amd64. The screen sets CYFR up with your name and a PIN (a passphrase on a machine without a TPM chip): it makes your account, with this box its first device, and shows your recovery code, or adds the box to the account you have once a device of yours approves it; then it opens Prism. It locks after five minutes without input, whatever is playing on it, at a suspend and from its Lock, and unlocks with the PIN. It never starts or stops CYFR. The CYFR app is what shows it: `cyfr screen on` installs the app's package of this cyfr's release where the app's own cyfr answers no such release: the commands it shows install the package the release's signed checksums name, downloaded only after the yes.",
 }
 
 var screenOnCmd = &cobra.Command{
@@ -85,24 +97,15 @@ var screenOffCmd = &cobra.Command{
 
 var screenShellCmd = &cobra.Command{
 	Use:    "shell",
-	Short:  "Run this machine's screen: its pages, Chrome, keyboard and idle lock (the screen's service runs it)",
+	Short:  "Run this machine's screen: its pages, keyboard and idle lock, for the CYFR app that started it (the app runs it)",
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		browse := chromeBrowser
-		if screenForApp {
-			browse = appBrowser(os.Stdin, os.Stdout)
-		}
-		return runScreenShell(cmd.Context(), shell.ListenLoopback, browse)
+		return runScreenShell(cmd.Context(), shell.ListenLoopback, os.Stdin, os.Stdout)
 	},
 }
 
-// screenForApp is `cyfr screen shell --app`: the CYFR app's main process
-// started this shell, and is its browser (screenApp).
-var screenForApp bool
-
 func init() {
-	screenShellCmd.Flags().BoolVar(&screenForApp, "app", false, "the CYFR app started this shell and shows its pages, talking to it over stdin and stdout")
 	screenCmd.AddCommand(screenOnCmd, screenOffCmd, screenShellCmd)
 	rootCmd.AddCommand(screenCmd)
 }
@@ -152,7 +155,11 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 	if err := screenAdministrator("cyfr screen on"); err != nil {
 		return err
 	}
-	commands := screenCommands(dir, account)
+	sum, err := screenAppSum(ctx)
+	if err != nil {
+		return err
+	}
+	commands := screenCommands(dir, account, sum)
 	fmt.Fprintln(out, "These commands show CYFR on this machine's own screen, as root:")
 	for _, c := range commands {
 		fmt.Fprintf(out, "  %s\n", c)
@@ -167,8 +174,18 @@ func screenOn(ctx context.Context, confirm bool, out io.Writer) error {
 			return errDeclined
 		}
 	}
-	// The files the commands install are written once sudo has the login,
-	// so a refusal leaves the project as it was.
+	// Nothing is downloaded or written before the yes. The package is
+	// fetched before sudo asks, so a slow download outlasts no login, and
+	// removed as the command ends; the files the commands install are
+	// written once sudo has the login, so a refusal leaves the project as
+	// it was.
+	if sum != "" {
+		app, err := screenFetchApp(ctx, out, sum)
+		defer app.remove()
+		if err != nil {
+			return err
+		}
+	}
 	defer machine.forget()
 	if err := unlockSudo(out, "cyfr screen on"); err != nil {
 		return err
@@ -219,48 +236,125 @@ func screenSite() (string, string, error) {
 	return dir, account.Username, nil
 }
 
+// screenAppSum is the sha256 the signed checksums of this cyfr's release
+// name for the CYFR app's package for this machine, read before anything is
+// asked, downloaded or written, or "" where the machine holds the app of
+// this release already (machine.appRelease). A development build, with no
+// release to read, is refused.
+func screenAppSum(ctx context.Context) (string, error) {
+	if machine.appRelease() == version.Version {
+		return "", nil
+	}
+	if !release.IsVersion(version.Version) {
+		return "", fmt.Errorf("This cyfr is a development build (%s), so there is no release of the CYFR app to download for it, and this machine has none installed at it. Install the CYFR app's package built with this cyfr, then run `cyfr screen on` again", version.Version)
+	}
+	sum, err := appPackageSum(ctx, version.Version, machine.arch())
+	if err != nil {
+		return "", fmt.Errorf("The signed checksums of release %s could not be read for the CYFR app, so nothing was installed (%v). Run `cyfr screen on` again", version.Version, err)
+	}
+	return sum, nil
+}
+
+// fetchedApp is the CYFR app's package `cyfr screen on` fetched into
+// screenAppFile, once the person said yes; the zero fetchedApp is none.
+type fetchedApp struct {
+	fetched bool
+	// made are the folders the fetch made, removed with the file when the
+	// command ends, so the project is left as it was unless the screen's
+	// files were written into them since.
+	made []string
+}
+
+// screenFetchApp downloads the CYFR app's package of this cyfr's release
+// for this machine into screenAppFile, mode 0600, its bytes kept only once
+// their sha256 is sum, the one screenAppSum read.
+func screenFetchApp(ctx context.Context, out io.Writer, sum string) (fetchedApp, error) {
+	app := fetchedApp{fetched: true}
+	for _, d := range []string{filepath.Dir(screenDir), screenDir} {
+		if !fileExists(d) {
+			if err := os.Mkdir(d, 0o700); err != nil {
+				return app, fmt.Errorf("cyfr screen could not make %s (%v)", d, err)
+			}
+			app.made = append([]string{d}, app.made...)
+		}
+	}
+	fmt.Fprintf(out, "Downloading the CYFR app, release %s for %s, and checking it against the release's signed checksums.\n", version.Version, machine.arch())
+	data, err := fetchAppPackage(ctx, version.Version, machine.arch(), sum)
+	if err != nil {
+		return app, fmt.Errorf("The CYFR app could not be downloaded, so nothing was installed (%v). Run `cyfr screen on` again", err)
+	}
+	if err := writeFileAtomic(screenAppFile, data, 0o600); err != nil {
+		return app, fmt.Errorf("cyfr screen could not keep the CYFR app's package in %s (%v)", screenAppFile, err)
+	}
+	return app, nil
+}
+
+// remove removes the fetched package, and the folders the fetch made that
+// nothing else was written into since.
+func (a fetchedApp) remove() {
+	if a.fetched {
+		_ = os.Remove(screenAppFile)
+	}
+	for _, d := range a.made {
+		_ = os.Remove(d)
+	}
+}
+
 // screenCommands are the commands `cyfr screen on` runs, the packages'
-// only if needed.
-func screenCommands(dir, account string) []string {
-	base, chrome := machine.installed("labwc") && machine.installed("wvkbd") && machine.installed("swayidle"), machine.installed("google-chrome-stable")
+// only if needed: app is the sha256 of the CYFR app's package fetched into
+// the project, or "" where the machine has it. The package is the
+// account's file, so root copies it where the account cannot write, and
+// apt installs that copy only once root has checked it against app: a
+// package changed after the fetch is never installed. That copy is
+// stageApp's alone.
+func screenCommands(dir, account, app string) []string {
+	base := machine.installed("labwc") && machine.installed("wvkbd") && machine.installed("swayidle")
 	var commands []string
-	if !base || !chrome {
+	if !base || app != "" {
 		commands = append(commands, "apt-get update")
+	}
+	if app != "" {
+		commands = append(commands, stageApp(filepath.Join(dir, screenAppFile), app))
 	}
 	if !base {
 		commands = append(commands, "apt-get install -y --no-install-recommends labwc wvkbd swayidle")
-	}
-	if !chrome {
-		commands = append(commands,
-			"deb=$(mktemp --suffix=.deb)",
-			"echo 'Downloading Chrome from Google (about 110 MB)'",
-			"curl -fL --progress-bar -o \"$deb\" "+chromeDeb,
-			"apt-get install -y \"$deb\"",
-			"rm -f \"$deb\"")
 	}
 	files := shellQuote([]string{filepath.Join(dir, screenDir)})
 	return append(commands,
 		// The TPM's resource manager is the tss group's: the screen's
 		// account joins it, where there is one, to keep its PIN in the chip.
 		"{ ! getent group tss >/dev/null || usermod -aG tss "+shellQuote([]string{account})+"; }",
-		"install -m 0644 "+files+"/52cyfr-screen "+screenAptLine,
-		"install -D -m 0644 "+files+"/cyfr-screen-policy.json "+screenPolicy,
 		"install -m 0644 "+files+"/cyfr-screen.service "+screenUnit,
 		"systemctl daemon-reload",
 		"systemctl disable getty@tty1",
 		"systemctl enable cyfr-screen")
 }
 
+// stageApp is the one command that installs the CYFR app's package from
+// the account's file at path, whose sha256 is sum: root's copy in a folder
+// of its own, checked, handed to apt. The folder is that command's alone,
+// a subshell whose exit removes it on every way out, the copy, the check
+// or apt failing, an interrupt, or apt done, so nothing staged outlives
+// it; it runs before anything of the screen is installed, so a failure
+// leaves no part of the screen behind.
+func stageApp(path, sum string) string {
+	deb := "\"$d/" + appPackage + ".deb\""
+	return "( trap 'rm -rf \"$d\"' EXIT && trap 'exit 1' INT TERM HUP && d=$(mktemp -d) && chmod 0755 \"$d\"" +
+		" && install -m 0644 " + shellQuote([]string{path}) + " " + deb +
+		" && echo '" + sum + "  '" + deb + " | sha256sum --check --strict --quiet" +
+		" && apt-get install -y " + deb + " )"
+}
+
 // screenOffCommands give this machine's screen back to its login prompt,
 // as root: `cyfr screen off` and `cyfr uninstall` run them.
 var screenOffCommands = []string{
 	"{ systemctl disable --now cyfr-screen || true; }",
-	"rm -f " + screenUnit + " " + screenAptLine + " " + screenPolicy,
+	"rm -f " + screenUnit,
 	"systemctl daemon-reload",
 	"systemctl enable --now getty@tty1",
 }
 
-// screenOff leaves the packages, Chrome's profile and the project.
+// screenOff leaves the packages, the CYFR app's among them, and the project.
 func screenOff(out io.Writer) error {
 	if !askTerminal() || !machine.supported() {
 		return errors.New("`cyfr screen` runs at a terminal on Ubuntu 26.04 LTS, as your own account")
@@ -283,35 +377,12 @@ func screenOff(out io.Writer) error {
 	return nil
 }
 
-// followScreen rewrites the screen's files of the project in the working
-// directory, when it has them, after a change of address: the shell reads
-// the new head when the screen next starts.
-func followScreen() error {
-	if !fileExists(screenDir) {
-		return nil
-	}
-	dir, account, err := screenSite()
-	if err == nil {
-		err = writeScreenFiles(dir, account)
-	}
-	if err != nil {
-		return fmt.Errorf("cyfr could not rewrite this machine's screen files %s (%v). Run `cyfr screen on` to rewrite them", screenDir, err)
-	}
-	return nil
-}
-
 // writeScreenFiles renders the embedded files into the project, naming
-// this program, the directory and the account: `cyfr screen on` and a
-// change of address (cyfr access) rewrite them.
+// the directory and the account, which `cyfr screen on` writes. They hold
+// nothing of how CYFR is reached: the shell reads that from the folder
+// each time it starts.
 func writeScreenFiles(dir, account string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	if !screenPath.MatchString(self) {
-		return fmt.Errorf("the cyfr program's path %q is not one of letters, digits and / . _ - alone", self)
-	}
-	fill := strings.NewReplacer("@CYFR@", self, "@DIR@", dir, "@ACCOUNT@", account)
+	fill := strings.NewReplacer("@DIR@", dir, "@ACCOUNT@", account)
 	if err := os.MkdirAll(screenDir, 0o700); err != nil {
 		return err
 	}
@@ -347,17 +418,19 @@ const (
 	suspendLocked = "Locked as this device went to sleep."
 )
 
-// runScreenShell is the screen's session inside labwc: the shell's pages on
-// loopback (listen takes their address), the on-screen keyboard, the
-// watches that lock it (screenWatches) and the browser browse gives on
-// those pages (screenBrowser), shown once the keyboard and the watches
-// are up (screenWatches.watch). While the keyboard or those watches are
-// not known to work it runs on locked, its page saying why.
-// The browser's end locks; this process's own end (SIGTERM, SIGINT,
-// SIGHUP) locks before it exits. Any lock hides what is on the screen
-// first (the browser's hide), then ends the sessions at the home, so no
-// page of the unlocked session outlives it.
-func runScreenShell(ctx context.Context, listen func() (net.Listener, error), browse func(dir string, l desktop.Local) (screenBrowser, error)) error {
+// runScreenShell is the screen's session inside labwc, which the CYFR app
+// started in the project's folder (desktop/src/app.js): the shell's pages
+// on loopback (listen takes their address), the on-screen keyboard, the
+// watches that lock it (screenWatches), and the app as the browser on
+// those pages (screenApp), reading its main process's messages from in
+// and writing its own to out, told the pages once the keyboard and the
+// watches are up (screenWatches.watch). While the keyboard or those
+// watches are not known to work it runs on locked, its page saying why.
+// main's end, which ends its pipe, locks and ends the shell; this
+// process's own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any
+// lock hides what is on the screen first (the app's hide), then ends the
+// sessions at the home, so no page of the unlocked session outlives it.
+func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -373,7 +446,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()
-	browser, err := browse(dir, local)
+	browser, err := newScreenApp(in, out, local)
 	if err != nil {
 		return err
 	}
@@ -391,6 +464,9 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	watches := newScreenWatches(screenIdle, nil)
 	cfg := local.Shell
 	cfg.DisplayName, cfg.Restart = host, browser.hide
+	// Read as each page is drawn: a `cyfr update` of the folder at the same
+	// address leaves this shell running, and its next lock page says so.
+	cfg.Warning = func() string { return releaseApart(dir, version.Version) }
 	cfg.Record = filepath.Join(device, "holder.json")
 	cfg.Clients = shell.ClientFile(filepath.Join(device, "client.json"))
 	cfg.Unwatched = watches.Unwatched
@@ -433,10 +509,8 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	case <-ctx.Done():
 	}
 
-	browsing, stopBrowsing := context.WithCancel(ctx)
-	defer stopBrowsing()
 	shown := make(chan error, 1)
-	go func() { shown <- browser.show(browsing, sh.Lock) }()
+	go func() { shown <- browser.show(sh.Lock) }()
 
 	var ended error
 	select {
@@ -449,8 +523,43 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), br
 	// The last lock hides as the screen's end, after which nothing shows.
 	browser.end()
 	sh.Lock("")
-	stopBrowsing()
 	return ended
+}
+
+// releaseApart is what the screen's page says where the app's cyfr, which
+// runs this shell (release ours), is another release than the one the
+// folder's compose file is set to, read there and not from a container:
+// `cyfr update` moves the folder and the program that ran it, never the
+// app. The instruction is the one installPackage gives, which brings the
+// app to the folder's release whether the cyfr on PATH is the package's
+// own, whose `cyfr screen on` finds its own release installed, or one of
+// its own. "" where they agree, or where either is no release.
+func releaseApart(dir, ours string) string {
+	set := folderRelease(dir)
+	if !release.IsVersion(ours) || set == "" || set == ours {
+		return ""
+	}
+	return fmt.Sprintf("This screen's CYFR app is release %s and the CYFR in %s is set to release %s, so the screen may not work as it should. To bring the app to release %s, %s.", ours, dir, set, set, installPackage(appPackage, set))
+}
+
+// folderRelease is the release the compose file in dir runs CYFR at
+// (sharedRelease), "" without one.
+func folderRelease(dir string) string {
+	for _, name := range access.ComposeMainFiles {
+		path := filepath.Join(dir, name)
+		if !fileExists(path) {
+			continue
+		}
+		return sharedRelease(func(yield func(string, string) bool) {
+			for _, image := range imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet}) {
+				repository, tag, _ := splitImageReference(image)
+				if !yield(repository, tag) {
+					return
+				}
+			}
+		})
+	}
+	return ""
 }
 
 // screenClaim takes the shell's listener, then selects the CYFR in dir in
@@ -475,80 +584,3 @@ func screenClaim(listen func() (net.Listener, error), dir string) (net.Listener,
 // sigUSR1 is Linux's SIGUSR1, named by number so this file builds where
 // the screen never runs: the screen runs on Ubuntu alone.
 const sigUSR1 = syscall.Signal(10)
-
-// chromeBrowser is Chrome as the screen's browser, on the shell's pages
-// in dir's profile, by l's route.
-func chromeBrowser(dir string, l desktop.Local) (screenBrowser, error) {
-	profile := "--user-data-dir=" + filepath.Join(dir, screenDir, "chrome")
-	args := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions",
-		"--ozone-platform=wayland", profile, "--app=" + shell.Origin + "/"}
-	if l.Proxy != "" {
-		args = append(args, "--proxy-server="+l.Proxy, "--host-resolver-rules="+l.Resolver)
-	} else {
-		args = append(args, "--host-resolver-rules="+localhostIsIPv4)
-	}
-	// A Chrome a killed shell left behind still shows its pages: it ends
-	// before this shell starts its own, on the lock page.
-	_ = exec.Command("pkill", "-f", "--", profile).Run()
-	return &screenChrome{args: args}, nil
-}
-
-// appBrowser is the CYFR app as the screen's browser, its messages read
-// from in and written to out.
-func appBrowser(in io.Reader, out io.Writer) func(string, desktop.Local) (screenBrowser, error) {
-	return func(_ string, l desktop.Local) (screenBrowser, error) { return newScreenApp(in, out, l) }
-}
-
-// screenChrome is the one Chrome the screen runs.
-type screenChrome struct {
-	args []string
-	mu   sync.Mutex
-	proc *os.Process
-}
-
-// run runs Chrome on the shell's pages until it exits or ctx ends.
-func (c *screenChrome) run(ctx context.Context) error {
-	cmd := screenChild(exec.CommandContext(ctx, "google-chrome-stable", c.args...))
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	c.proc = cmd.Process
-	c.mu.Unlock()
-	_ = cmd.Wait()
-	c.mu.Lock()
-	c.proc = nil
-	c.mu.Unlock()
-	return nil
-}
-
-// show runs Chrome on the shell's pages, again a second after each exit,
-// which locks: the proof its page held is gone with it.
-func (c *screenChrome) show(ctx context.Context, lock func(string)) error {
-	for ctx.Err() == nil {
-		if err := c.run(ctx); err != nil {
-			return fmt.Errorf("Chrome did not start (%v)", err)
-		}
-		if ctx.Err() == nil {
-			lock("Locked because the browser closed.")
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(time.Second):
-		}
-	}
-	return nil
-}
-
-// end changes nothing: Chrome's loop ends with the show's context, and
-// the last hide ends Chrome.
-func (c *screenChrome) end() {}
-
-// hide ends Chrome, whose loop starts it again on the lock page.
-func (c *screenChrome) hide() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.proc != nil {
-		_ = c.proc.Signal(syscall.SIGTERM)
-	}
-}

@@ -6,7 +6,6 @@ package cmd
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,24 +16,8 @@ import (
 	"github.com/cyfr/codex/internal/shell"
 )
 
-// screenBrowser is what shows the screen shell's pages: Chrome, which the
-// shell starts, or the CYFR app, which started the shell.
-type screenBrowser interface {
-	// show shows the shell's pages until ctx ends or the browser has
-	// ended for good, locking the shell through lock (shell.Shell.Lock)
-	// where the browser asks it to or ended: an error where it could not
-	// show them.
-	show(ctx context.Context, lock func(why string)) error
-	// hide hides what is on the screen and shows a fresh lock page
-	// (shell.Config.Restart). It returns at once, waiting on nothing.
-	hide()
-	// end says the screen is ending: the next hide is its last, and
-	// nothing shows after it.
-	end()
-}
-
 // screenApp is the CYFR app as the screen's browser: its main process
-// started `cyfr screen shell --app` in the screen's folder and talks to it
+// started `cyfr screen shell` in the screen's folder and talks to it
 // over its stdin and stdout, in the messages of internal/desktop. The
 // shell's first message, on every start, is ready with its own pages'
 // address, once the watches have first worked or failed; then it proposes
@@ -130,7 +113,7 @@ func (a *screenApp) end() {
 // message to it could not be written, locking the shell through lock
 // (shell.Shell.Lock) where main asks it to: an error where main could not
 // keep to the CYFR, has gone, or said what is not a message.
-func (a *screenApp) show(_ context.Context, lock func(why string)) error {
+func (a *screenApp) show(lock func(why string)) error {
 	a.mu.Lock()
 	if a.last {
 		// Ending before it showed anything: there is nothing to tell.
