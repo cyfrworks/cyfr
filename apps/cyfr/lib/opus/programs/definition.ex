@@ -219,6 +219,18 @@ defmodule Opus.Programs.Definition do
       name: "openai-codex",
       title: "OpenAI Codex",
       command: "cyfr-codex npx -y @openai/codex@0.169.0"
+    },
+    # Antigravity is no npm package: `cyfr-fetch` fetches Google's release of
+    # it at its version, checked against its SHA-512, into the row's folder.
+    %{
+      name: "antigravity",
+      title: "Antigravity",
+      command:
+        "cyfr-antigravity cyfr-fetch agy 1.5.16 " <>
+          "amd64=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-x64/cli_linux_x64.tar.gz" <>
+          "#3dee9f26e298156db673f6ce2a0f5dfed5b30006e04ceb9809c68070e7b717587b33a3da0f8bc2eda45af81a50bc8b14c82b28ae5832bcfe3e7fd49397117b31 " <>
+          "arm64=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-arm/cli_linux_arm64.tar.gz" <>
+          "#23c193151499a4986fd5fa0d8132665cc8ffbad6cc0b3ff4fd53a2cb68abb76b149a992b836d53063443cd89add335f14d8134fb02abdcecbf6e1eaef6c53d33"
     }
   ]
 

@@ -1844,6 +1844,44 @@ defmodule Locus.KeeperTest do
       assert FakeKeeper.places(fake) == %{}
     end
 
+    test "a spawn whose caller gave up on it before it was written is never written, and its heir hears none started",
+         %{name: name, fake: fake, client: client} do
+      tag = %{
+        ledger: make_ref(),
+        session: {make_ref(), "ss_gave_up"},
+        athanor: "ath_gave_up",
+        memory_bytes: 268_435_456,
+        home_id: nil
+      }
+
+      heir = self()
+      place = place!(name)
+
+      # The client takes nothing while the caller waits: the spawn is still
+      # queued when its caller stops waiting for it.
+      :ok = :sys.suspend(client)
+
+      asked =
+        Task.async(fn ->
+          Keeper.spawn(name, %{
+            argv: ["/bin/sh", "-c", "exec sleep 30"],
+            env: %{},
+            place: place,
+            pool: "backends",
+            memory_bytes: 268_435_456,
+            cpu_quota: 100_000,
+            heir: {heir, tag}
+          })
+        end)
+
+      assert {:error, {:launcher_unavailable, :timeout}} = Task.await(asked, 20_000)
+      :ok = :sys.resume(client)
+
+      assert_receive {Keeper, {:heir, ^tag}, :released}, 5_000
+      assert Keeper.fence(name, tag) == :none
+      assert requests(fake, "spawn") == []
+    end
+
     test "a keeper that is gone answers as unavailable" do
       assert {:error, {:launcher_unavailable, :noproc}} =
                Keeper.spawn(:no_such_keeper, %{

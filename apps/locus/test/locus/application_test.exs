@@ -185,9 +185,88 @@ defmodule Locus.ApplicationTest do
     end
   end
 
-  test "the running tree restarts a child with everything started after it" do
-    # OTP's supervisor state record: {:state, name, strategy, ...}.
-    assert Locus.Supervisor |> :sys.get_state() |> elem(2) == :rest_for_one
+  test "the running tree restarts nothing" do
+    # OTP's supervisor state record: {:state, name, strategy, children,
+    # dynamics, intensity, ...}.
+    state = :sys.get_state(Locus.Supervisor)
+    assert {elem(state, 2), elem(state, 5)} == {:one_for_one, 0}
+  end
+
+  test "the build slots, the keeper's client or the runner pool ending ends the node's tree, " <>
+         "once, and nothing of it starts again" do
+    settings = Locus.Runtime.Settings.pool!()
+
+    for holder <- [Locus.BuildSlots, Locus.Keeper, Locus.Runtime.RunnerPool] do
+      test = self()
+
+      # A runtime node's tree as it ships, under cyfr-locus: its children's
+      # specs and order and its supervisors' options, each child's start
+      # alone replaced by a stand-in that says it started.
+      tree = for spec <- App.children(@runtime, true), do: stand_in(spec, test, settings)
+      {:ok, root} = Supervisor.start_link(tree, App.tree_options())
+      Process.unlink(root)
+      down = Process.monitor(root)
+      started = started(%{})
+      assert Map.has_key?(started, holder)
+
+      Process.exit(Map.fetch!(started, holder), :kill)
+
+      assert_receive {:DOWN, ^down, :process, ^root, _reason},
+                     5_000,
+                     "the tree to end with #{inspect(holder)}"
+
+      refute_received {:started, _id, _pid}
+      refute_received {:DOWN, ^down, :process, ^root, _again}
+    end
+  end
+
+  # A child of the shipped tree with its start replaced; a supervisor of
+  # the runtime's with its own options over its children's stand-ins.
+  defp stand_in(spec, test, settings) do
+    spec = Supervisor.child_spec(spec, [])
+
+    case spec.id do
+      Locus.Runtime.Supervisor ->
+        children =
+          for child <- Locus.Runtime.children(:service, settings),
+              do: stand_in(child, test, settings)
+
+        %{
+          spec
+          | start:
+              {Supervisor, :start_link, [children, Locus.Runtime.supervisor_options(:service)]}
+        }
+
+      Locus.Runtime.WorkerService.Tree ->
+        children =
+          for child <- Locus.Runtime.service_tree(settings), do: stand_in(child, test, settings)
+
+        %{
+          spec
+          | start:
+              {Supervisor, :start_link, [children, Locus.Runtime.supervisor_options(:worker)]}
+        }
+
+      id ->
+        %{spec | start: {__MODULE__, :start_stand_in, [test, id]}}
+    end
+  end
+
+  @doc false
+  def start_stand_in(test, id) do
+    {:ok, pid} = Agent.start_link(fn -> :ok end)
+    send(test, {:started, id, pid})
+    {:ok, pid}
+  end
+
+  # Every stand-in that said it started, by its child's id: a supervisor
+  # starts its children before its start returns, so each has said so.
+  defp started(acc) do
+    receive do
+      {:started, id, pid} -> started(Map.put(acc, id, pid))
+    after
+      0 -> acc
+    end
   end
 
   test "the build slots take their caps from the builder's settings and refuse, never queue" do

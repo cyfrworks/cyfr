@@ -26,7 +26,18 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   one whose command it could not run: its place stays the spawn's and its
   owner hears its release only once `release_made/1` frees it. `refused/1`
   counts the spawns it refused. It holds a runner to the `:memory_bytes`
-  of the pool's keeper options, or to none.
+  of the pool's keeper options, or to none. As the keeper's client does, it
+  releases a runner whose owner dies with no grace, and tells a spec's
+  `heir`, `{pid, tag}`, `{Locus.Runtime.Test.ScriptedKeeper, {:heir, tag},
+  :released}` once the runner is released, whoever owns it then.
+  `fence/2` answers `:pending` while it holds a runner of an heir's tag,
+  its release still to come, and `:none` otherwise, refusing every later
+  spawn of that tag. `placing/2` holds every place from then on,
+  unanswered (`held_places/1`), and `spawning/2` makes every spawn from
+  then on and leaves it unanswered, as a keeper's client that wrote a
+  spawn whose answer did not come in time: its caller gives up after
+  #{2_000} ms, as the client's caller does, and the runner is released
+  then.
 
   It keeps places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"),
   named by the keeper options' `:name` (options that name no keeper keep
@@ -123,11 +134,51 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
         }
   def places(keeper), do: GenServer.call(keeper, :places)
 
+  # How long a spawn's caller waits for its answer.
+  @spawn_wait_ms 2_000
+
+  @doc "How `keeper` answers every place from now on: `:held`, answering none, or `:answered`."
+  @spec placing(atom(), :held | :answered) :: :ok
+  def placing(keeper, how), do: GenServer.call(keeper, {:placing, how})
+
+  @doc "The ids of every place `keeper` holds unanswered, oldest first."
+  @spec held_places(atom()) :: [String.t()]
+  def held_places(keeper), do: GenServer.call(keeper, :held_places)
+
+  @doc "How `keeper` answers every spawn from now on: `:held`, making it and answering none, or `:answered`."
+  @spec spawning(atom(), :held | :answered) :: :ok
+  def spawning(keeper, how), do: GenServer.call(keeper, {:spawning, how})
+
+  @impl Locus.Runtime.Keeper
+  def fence(tag, opts) do
+    case Keyword.fetch(opts, :name) do
+      {:ok, keeper} -> GenServer.call(keeper, {:fence, tag})
+      :error -> :none
+    end
+  end
+
   @impl Locus.Runtime.Keeper
   def spawn(%{env: %{"KEEPER" => name}} = spec) do
     keeper = String.to_existing_atom(name)
 
-    case GenServer.call(keeper, {:spawn, spec, self()}) do
+    answer =
+      try do
+        GenServer.call(keeper, {:spawn, spec, self()}, @spawn_wait_ms)
+      catch
+        # Unanswered, as the keeper's client's caller gives up: the spawn
+        # is abandoned, and its runner released if it was made.
+        :exit, {:timeout, _call} ->
+          GenServer.cast(keeper, {:abandon, self()})
+          :unanswered
+      end
+
+    spawned(answer, keeper)
+  end
+
+  defp spawned(:unanswered, _keeper), do: {:error, {:keeper_unavailable, :timeout}}
+
+  defp spawned(answer, keeper) do
+    case answer do
       {:ok, ref, runner} ->
         {:ok, %{ref: ref, keeper: keeper, runner: runner}, [{:spawned, nil}, :attached]}
 
@@ -149,8 +200,11 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def memory_bytes(opts), do: Keyword.get(opts, :memory_bytes)
 
   @impl Locus.Runtime.Keeper
-  def refusal(reason),
+  def refusal(reason) when is_atom(reason),
     do: %{reason: to_string(reason), message: "the scripted keeper refuses (#{reason})"}
+
+  def refusal(_reason),
+    do: %{reason: "unavailable", message: "the scripted keeper did not answer"}
 
   @doc """
   Refuse every spawn from now on with `reason`, or with `reason` once it is
@@ -363,7 +417,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
        held: [],
        # Each spawn refused once it was made, until it is freed: its ref,
        # its owner and its place.
-       made: []
+       made: [],
+       placing: :answered,
+       held_places: [],
+       spawning: :answered,
+       # The refs of the spawns freed, and the heir tags fenced.
+       freed: MapSet.new(),
+       fences: %{}
      }}
   end
 
@@ -371,12 +431,34 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call({:place, id, _whose}, _from, state) when is_map_key(state.places, id),
     do: {:reply, {:error, :bad_request}, state}
 
+  def handle_call({:place, id, _whose} = place, from, %{placing: :held} = state),
+    do: {:noreply, %{state | held_places: state.held_places ++ [{from, id, place}]}}
+
   def handle_call({:place, id, whose}, {owner, _tag}, state) do
     place = %{whose: whose, spawned: false, owner: Process.monitor(owner)}
     {:reply, :ok, %{state | places: Map.put(state.places, id, place)}}
   end
 
   def handle_call(:places, _from, state), do: {:reply, state.places, state}
+
+  def handle_call({:placing, how}, _from, state), do: {:reply, :ok, %{state | placing: how}}
+
+  def handle_call(:held_places, _from, state),
+    do: {:reply, Enum.map(state.held_places, fn {_from, id, _place} -> id end), state}
+
+  def handle_call({:spawning, how}, _from, state), do: {:reply, :ok, %{state | spawning: how}}
+
+  # A tag is pending while a runner of it, made, has not been freed.
+  def handle_call({:fence, tag}, _from, state) do
+    held? =
+      Enum.any?(state.spawns, fn entry ->
+        match?(%{heir: {_pid, ^tag}}, entry.spec) and not MapSet.member?(state.freed, entry.ref)
+      end) or Enum.any?(state.made, &match?(%{heir: {_pid, ^tag}}, &1))
+
+    if held?,
+      do: {:reply, :pending, state},
+      else: {:reply, :none, %{state | fences: Map.put(state.fences, tag, true)}}
+  end
 
   def handle_call({:assign, place, whose, until}, from, %{assigning: :held} = state) do
     wait = max(until - System.monotonic_time(:millisecond), 0)
@@ -414,6 +496,8 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   def handle_call({:freed, ref}, _from, state) do
+    state = %{state | freed: MapSet.put(state.freed, ref)}
+
     case Enum.find(state.spawns, &(&1.ref == ref)) do
       %{spec: %{runner: place}} ->
         {:reply, :ok, %{state | places: Map.delete(state.places, place)}}
@@ -423,11 +507,18 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     end
   end
 
+  # A spawn of a fenced tag is refused before it is made.
+  def handle_call({:spawn, %{heir: {_pid, tag}} = spec, _owner}, _from, state)
+      when is_map_key(state.fences, tag) do
+    state = %{state | refused: state.refused + 1, places: Map.delete(state.places, spec.runner)}
+    {:reply, {:refused, make_ref(), :fenced}, state}
+  end
+
   # A spawn refused once it was made keeps the place it named until it is
   # freed.
   def handle_call({:spawn, spec, owner}, _from, %{refusing: {:made, reason}} = state) do
     ref = make_ref()
-    made = %{ref: ref, owner: owner, place: spec.runner}
+    made = %{ref: ref, owner: owner, place: spec.runner, heir: Map.get(spec, :heir)}
 
     {:reply, {:refused_made, ref, reason},
      %{
@@ -450,11 +541,29 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     keeper = self()
 
     {:ok, runner} =
-      GenServer.start_link(__MODULE__.Runner, %{owner: owner, ref: ref, keeper: keeper})
+      GenServer.start_link(__MODULE__.Runner, %{
+        owner: owner,
+        ref: ref,
+        keeper: keeper,
+        heir: Map.get(spec, :heir)
+      })
 
-    entry = %{ref: ref, spec: spec, runner: runner, owner: owner}
+    entry = %{
+      ref: ref,
+      spec: spec,
+      runner: runner,
+      owner: owner,
+      monitor: Process.monitor(owner),
+      answered: state.spawning != :held
+    }
+
     places = named(state.places, spec.runner)
-    {:reply, {:ok, ref, runner}, %{state | spawns: [entry | state.spawns], places: places}}
+    state = %{state | spawns: [entry | state.spawns], places: places}
+
+    case state.spawning do
+      :held -> {:noreply, state}
+      :answered -> {:reply, {:ok, ref, runner}, state}
+    end
   end
 
   def handle_call({:refuse, reason}, _from, state), do: {:reply, :ok, %{state | refusing: reason}}
@@ -467,6 +576,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     places =
       Enum.reduce(state.made, state.places, fn made, places ->
         Kernel.send(made.owner, {__MODULE__, made.ref, :released})
+        tell_heir(made)
         Map.delete(places, made.place)
       end)
 
@@ -480,7 +590,15 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
     {:stop, {:shutdown, :channel_lost}, :ok, state}
   end
 
+  # A caller that gave up on its spawn: a runner made for it is released.
   @impl GenServer
+  def handle_cast({:abandon, owner}, state) do
+    for %{owner: ^owner, answered: false, runner: runner} <- state.spawns,
+        do: Kernel.send(runner, {:released, 0})
+
+    {:noreply, state}
+  end
+
   def handle_cast({:release, ref, grace_ms}, state) do
     case Enum.find(state.spawns, &(&1.ref == ref)) do
       nil ->
@@ -493,9 +611,13 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   # An owner gone before a spawn named its place has the place dropped; a
-  # place a spawn named is freed at that spawn's release alone.
+  # place a spawn named is freed at that spawn's release alone. A runner
+  # whose owner died is released with no grace.
   @impl GenServer
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
+    for %{monitor: ^monitor, runner: runner} <- state.spawns,
+        do: Kernel.send(runner, {:released, 0})
+
     places =
       Map.reject(state.places, fn {_id, place} -> place.owner == monitor and not place.spawned end)
 
@@ -534,6 +656,12 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       _none -> places
     end
   end
+
+  @doc false
+  def tell_heir(%{heir: {pid, tag}}) when is_pid(pid),
+    do: Kernel.send(pid, {__MODULE__, {:heir, tag}, :released})
+
+  def tell_heir(_spawn), do: :ok
 
   defmodule Runner do
     @moduledoc false
@@ -608,6 +736,7 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
       notify(state, {:exited, {:status, status}})
       freed(state)
       notify(state, :released)
+      Locus.Runtime.Test.ScriptedKeeper.tell_heir(state)
       %{state | ended: true}
     end
 

@@ -178,12 +178,14 @@ defmodule Prima.MCP.Protocol do
   The value a request's `Mcp-Name` header must carry, or `nil` when the method
   does not name a subject.
 
-  `tools/call` uses `params.name`; `resources/read` uses `params.uri`.
-  This server does not implement or advertise prompts/get.
+  `tools/call` and `prompts/get` use `params.name`; `resources/read` uses
+  `params.uri`, as the specification's standard request headers list them.
+  This server serves no `prompts/get`; its client sends one to a server's
+  prompts (`Emissary.External.Server`).
   """
   @spec named_subject(term()) :: String.t() | nil
-  def named_subject(%{"method" => "tools/call", "params" => %{"name" => name}})
-      when is_binary(name),
+  def named_subject(%{"method" => method, "params" => %{"name" => name}})
+      when method in ["tools/call", "prompts/get"] and is_binary(name),
       do: name
 
   def named_subject(%{"method" => "resources/read", "params" => %{"uri" => uri}})

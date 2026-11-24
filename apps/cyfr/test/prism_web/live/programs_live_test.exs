@@ -399,9 +399,9 @@ defmodule PrismWeb.ProgramsLiveTest do
   end
 
   # An upstream that refuses the connect with an error quoting the
-  # Authorization header it was sent: at `tools/list` for a current peer,
-  # and at `initialize` for one that answers the current probe as a legacy
-  # peer does.
+  # Authorization header it was sent: at `server/discover` for a current
+  # peer, and at `initialize` for one that answers the current probe as a
+  # legacy peer does.
   defp echo_upstream(stub, era) do
     HTTPStub.stub(stub, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -409,7 +409,7 @@ defmodule PrismWeb.ProgramsLiveTest do
       [auth] = Plug.Conn.get_req_header(conn, "authorization")
 
       case {era, request["method"]} do
-        {:legacy, "tools/list"} ->
+        {:legacy, "server/discover"} ->
           Plug.Conn.resp(conn, 400, "Bad Request")
 
         _echoed ->

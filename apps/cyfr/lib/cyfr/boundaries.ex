@@ -391,8 +391,8 @@ defmodule Cyfr.Boundaries do
           "under the turn's context and asking only the servers its list names: their " <>
           "tools with the digest of the revision each was read from " <>
           "(`list_external_tools/2`), so a turn hands one only while the grant covers " <>
-          "it as the gate will decide its call (`Aqua.Loop.Turn.tools/3`); what each " <>
-          "exposes, which a turn's start holds the grant to (`tool_patterns/2`); and " <>
+          "it as the gate will decide its call (`Aqua.Loop.Turn.tools/4`), and what each " <>
+          "exposes, which a turn's start holds the grant to from the same reading; and " <>
           "the names a proxied call never carries to its server (`host_stamped/0`), " <>
           "which no tool it hands may name. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
