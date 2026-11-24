@@ -5834,6 +5834,106 @@ defmodule Aqua.ProgramTest do
       end
     end
 
+    # What a grant gives a server's tools is what the server exposed when
+    # it was given: exposure widened or narrowed since, its digest the same,
+    # the turn's start asks for the grant again, never handing a tool the
+    # person was not shown.
+    test "an exposure widened or narrowed since the grant refuses the turn's start",
+         %{ctx: ctx, thread: thread} do
+      served!(ctx, HTTPStub.open(), "gh", [search_tool()],
+        config: %{"tool_patterns" => ["other"]}
+      )
+
+      offer!(ctx, ["gh:search"])
+
+      for exposed <- [["other", "search"], ["other"]] do
+        {:ok, _} =
+          Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+            config_json: Jason.encode!(%{"tool_patterns" => exposed})
+          })
+
+        turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
+        assert {:failed, _} = Task.await(run(ctx, turn), 60_000), inspect(exposed)
+        assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+        assert model_rounds(ctx, turn) == 0
+        stop_supervised!(ScriptedWorker)
+
+        # Given again for what the server exposes now, as the sheet showed it.
+        consent_again!(ctx)
+      end
+    end
+
+    # A reissue writes what it compared: a server's endpoint changed
+    # between its two preparations (a narrowed grant prepares twice) is
+    # never written under the moved digest.
+    test "a credential-only reissue of a narrowed grant whose server moved between its " <>
+           "preparations asks for the whole consent and changes nothing",
+         %{ctx: ctx} do
+      stub = HTTPStub.open()
+      served!(ctx, stub, "gh", [search_tool()])
+      route!(stub, "/gh-moved", [search_tool()])
+      offer!(ctx, ["gh:search"])
+      narrowed!(ctx)
+
+      {:ok, %{profile_id: profile_id}} =
+        Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      {:ok, before, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: Prima.AgentRef.soul_ref()})
+
+      after_read!(self(), &(&1[:source] == "mcp_servers"), fn ->
+        {:ok, _} =
+          Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "gh", %{
+            url: "http://127.0.0.1:#{stub.port}/gh-moved"
+          })
+      end)
+
+      assert Sanctum.Consent.Commit.grant(ctx, %{
+               profile_id: profile_id,
+               bindings: [],
+               expected_consent_revision: plan.expected_consent_revision
+             }) == {:error, :grant_requires_full_commit}
+
+      assert {:ok, ^before, _refs} =
+               Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+    end
+
+    # A server's definitions are handed under the digest of the revision
+    # they were read from: one read from a revision the grant does not
+    # cover is not handed, whatever the server's row says by the time the
+    # turn compares.
+    test "a server's definitions read from a revision the grant does not cover are not handed",
+         %{ctx: ctx} do
+      stub = HTTPStub.open()
+      {:ok, hold} = Agent.start_link(fn -> false end)
+      served!(ctx, stub, "gh", [search_tool("Revision A's search")], path: "/a")
+      route!(stub, "/b", [search_tool("Revision B's search")])
+      served!(ctx, stub, "slow", [%{search_tool() | "name" => "probe"}], hold: hold)
+      offer!(ctx, ["gh:search", "slow:probe"])
+      actor = Sanctum.Context.actor(ctx)
+
+      # gh serves revision B, and slow is read again, its answer held.
+      {:ok, _} =
+        Arca.McpServerStorage.update(actor, "gh", %{url: "http://127.0.0.1:#{stub.port}/b"})
+
+      :ok = Emissary.External.ServerSupervisor.stop("slow", ctx.athanor_id)
+      Agent.update(hold, fn _ -> true end)
+      {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+      offered = Aqua.Offered.resolve(["gh:search", "slow:probe"], {:ok, false})
+      handing = Task.async(fn -> Aqua.Loop.Turn.tools(ctx, offered, authority) end)
+      assert_receive {:holding, slow}, 10_000
+
+      # Revision A again, the grant's, before the turn compares.
+      {:ok, _} =
+        Arca.McpServerStorage.update(actor, "gh", %{url: "http://127.0.0.1:#{stub.port}/a"})
+
+      send(slow, :go)
+
+      {tools, unhanded} = Task.await(handing, 30_000)
+      refute Enum.any?(tools, &(&1["name"] == "gh__search"))
+      assert unhanded == %{"gh:search" => :ungranted}
+    end
+
     # Re-issuing Aqua's grant for a credential carries what the old grant
     # held and nothing more: a grant given before its consent took the
     # list's servers names none, and a reissue that would add one asks for
@@ -5874,6 +5974,24 @@ defmodule Aqua.ProgramTest do
   # answered with what it was asked.
   defp served!(ctx, stub, name, tools, opts \\ []) do
     path = Keyword.get(opts, :path, "/" <> name)
+    route!(stub, path, tools, Keyword.get(opts, :hold))
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: name,
+        url: "http://127.0.0.1:#{stub.port}#{path}",
+        config_json: Jason.encode!(Keyword.get(opts, :config, %{}))
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+    row
+  end
+
+  # `stub` answers at `path` as a server listing `tools`. With `hold`, an
+  # Agent's flag, each listing asked while the flag is up tells the test
+  # it is held, `{:holding, pid}`, and answers once sent `:go`.
+  defp route!(stub, path, tools, hold \\ nil) do
     test = self()
 
     HTTPStub.stub(stub, "POST", path, fn conn ->
@@ -5883,6 +6001,11 @@ defmodule Aqua.ProgramTest do
       result =
         case body["method"] do
           "tools/list" ->
+            if hold && Agent.get(hold, & &1) do
+              send(test, {:holding, self()})
+              receive do: (:go -> :ok)
+            end
+
             %{"tools" => tools}
 
           "tools/call" ->
@@ -5897,17 +6020,6 @@ defmodule Aqua.ProgramTest do
         Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
       )
     end)
-
-    {:ok, row} =
-      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
-        cap: 0,
-        name: name,
-        url: "http://127.0.0.1:#{stub.port}#{path}",
-        config_json: Jason.encode!(Keyword.get(opts, :config, %{}))
-      })
-
-    on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
-    row
   end
 
   # A server of the athanor's that no list names: asking it anything fails
@@ -6051,7 +6163,11 @@ defmodule Aqua.ProgramTest do
       %{tool.("wordy") | "description" => String.duplicate("x", 16_384)},
       padded,
       %{tool.("bare_result") | "inputSchema" => %{"type" => "object", "required" => ["result"]}},
-      %{tool.("bare_action") | "inputSchema" => %{"type" => "object", "required" => ["action"]}}
+      %{tool.("bare_action") | "inputSchema" => %{"type" => "object", "required" => ["action"]}},
+      %{
+        tool.("composed_action")
+        | "inputSchema" => %{"type" => "object", "allOf" => [%{"required" => ["action"]}]}
+      }
     ])
 
     for {name, path} <- [{"a__b", "/ab"}, {"ends_", "/ends"}, {"mcp", "/mcp"}],
@@ -6075,7 +6191,8 @@ defmodule Aqua.ProgramTest do
       "gh:wordy" => :uncarried,
       "gh:big" => :uncarried,
       "gh:bare_result" => :uncarried,
-      "gh:bare_action" => :uncarried
+      "gh:bare_action" => :uncarried,
+      "gh:composed_action" => :uncarried
     }
 
   # Another person's athanor, ready for a turn, with a thread of theirs.
@@ -6092,6 +6209,33 @@ defmodule Aqua.ProgramTest do
   # Aqua's grant as one given before its consent took the list's servers
   # would hold it: its policy names no tool server.
   defp serverless_grant!(ctx), do: hand_granted!(ctx, fn _servers -> nil end)
+
+  # Aqua's consent given again narrowed: one of the tools it grants of
+  # CYFR's own left out, so its head holds a narrowing a reissue keeps.
+  defp narrowed!(ctx) do
+    soul = Prima.AgentRef.soul_ref()
+    {:ok, %{profile_id: profile_id}} = Opus.authority_for(ctx, :default, soul)
+    {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
+    tools = Jason.decode!(head.resolved_policy)["nodes"][soul]["edges"]["@ingress"]["tools"]
+
+    decisions = %{
+      ref: soul,
+      selections: [],
+      subset: %{soul => %{"tools" => tl(Enum.sort(tools))}}
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: soul})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
 
   # Aqua's grant with its tool servers as `edit` makes them, as a grant
   # given another way would hold them; nil names none.

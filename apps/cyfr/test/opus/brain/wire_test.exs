@@ -125,6 +125,9 @@ defmodule Opus.Brain.WireTest do
       assert byte_size(Wire.stub_argument(tool)) == vector["stub_argument_bytes"], name
       assert Wire.tools_bytes([tool]) == vector["tools_bytes"], name
       assert Wire.carried?(tool) == vector["carried"], name
+
+      if names = vector["names"],
+        do: assert(Enum.sort(Wire.named_properties(tool["parameters"])) == Enum.sort(names), name)
     end
 
     for %{"name" => name, "pads" => pads} = list <- tools["lists"] do

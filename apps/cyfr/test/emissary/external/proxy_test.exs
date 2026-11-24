@@ -575,6 +575,47 @@ defmodule Emissary.External.ProxyTest do
     end
   end
 
+  describe "a server's configuration" do
+    # The 27-bit hash the supervisor once compared by calls two of every
+    # few thousand configurations alike: a pair found here, one standing,
+    # the other's start is never handed its process.
+    test "two configurations a short hash calls alike are two: a start of one is never " <>
+           "handed the other's process",
+         %{ctx: ctx} do
+      {:ok, row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "hashed",
+          url: "http://127.0.0.1:9/p0"
+        })
+
+      config =
+        &Emissary.External.Servers.server_config(%{row | url: "http://127.0.0.1:9/p#{&1}"}, ctx)
+
+      short = fn c ->
+        :erlang.phash2(
+          {c[:id], c[:transport], c[:epoch], c[:url], c[:headers] || %{}, c[:command],
+           c[:env] || %{}, c[:timeout_ms], c[:home_id]}
+        )
+      end
+
+      {first, second} =
+        Enum.reduce_while(1..1_000_000, %{}, fn n, seen ->
+          hash = short.(config.(n))
+
+          case seen do
+            %{^hash => m} -> {:halt, {m, n}}
+            _ -> {:cont, Map.put(seen, hash, n)}
+          end
+        end)
+
+      start_supervised!({Emissary.External.Server, config.(first)})
+
+      assert Emissary.External.ServerSupervisor.ensure_started(config.(second)) ==
+               {:error, :configuration_moved}
+    end
+  end
+
   describe "the listing's cache" do
     # A server changed its tools while a listing that began before was
     # still reading another server: that listing is never kept over the

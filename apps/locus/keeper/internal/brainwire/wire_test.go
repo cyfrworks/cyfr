@@ -39,6 +39,7 @@ type wireVectors struct {
 			Tool              map[string]any `json:"tool"`
 			Description       []any          `json:"description"`
 			Pad               int            `json:"pad"`
+			Names             *[]string      `json:"names"`
 			StubArgumentBytes int            `json:"stub_argument_bytes"`
 			ToolsBytes        int            `json:"tools_bytes"`
 			Carried           bool           `json:"carried"`
@@ -260,6 +261,14 @@ func TestEachToolAndListTheVectorsMeasureIsCarriedAsTheySay(t *testing.T) {
 		}
 		if Carried(raw) != c.Carried {
 			t.Fatalf("%s is carried: %v, the vectors say %v", c.Name, !c.Carried, c.Carried)
+		}
+		if c.Names != nil {
+			got := namedProperties(tool.Parameters)
+			if len(got) != 0 || len(*c.Names) != 0 {
+				if !reflect.DeepEqual(sorted(got), sorted(*c.Names)) {
+					t.Fatalf("%s names %v, the vectors say %v", c.Name, got, *c.Names)
+				}
+			}
 		}
 	}
 	for _, l := range v.Tools.Lists {

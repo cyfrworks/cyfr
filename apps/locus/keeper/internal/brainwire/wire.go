@@ -409,28 +409,12 @@ func Carried(raw json.RawMessage) bool {
 	return err == nil && len(arg) <= MaxStubArgument
 }
 
-// carriedProperties is whether parameters name none of uncarried: among
-// their properties, when an object, nor their required, when a list,
-// since a schema may require an argument it does not declare.
+// carriedProperties is whether parameters name none of uncarried
+// (namedProperties).
 func carriedProperties(parameters json.RawMessage) bool {
-	var m map[string]json.RawMessage
-	if json.Unmarshal(parameters, &m) != nil {
-		return true
-	}
 	named := map[string]bool{}
-	var properties map[string]json.RawMessage
-	if json.Unmarshal(m["properties"], &properties) == nil {
-		for name := range properties {
-			named[name] = true
-		}
-	}
-	var required []any
-	if json.Unmarshal(m["required"], &required) == nil {
-		for _, name := range required {
-			if s, ok := name.(string); ok {
-				named[s] = true
-			}
-		}
+	for _, name := range namedProperties(parameters) {
+		named[name] = true
 	}
 	for _, name := range uncarried {
 		if named[name] {
@@ -438,6 +422,32 @@ func carriedProperties(parameters json.RawMessage) bool {
 		}
 	}
 	return true
+}
+
+// namedProperties are the argument names parameters name at their top:
+// those their properties declare, when an object, and those their
+// required lists, when a list.
+func namedProperties(parameters json.RawMessage) []string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(parameters, &m) != nil {
+		return nil
+	}
+	var names []string
+	var properties map[string]json.RawMessage
+	if json.Unmarshal(m["properties"], &properties) == nil {
+		for name := range properties {
+			names = append(names, name)
+		}
+	}
+	var required []any
+	if json.Unmarshal(m["required"], &required) == nil {
+		for _, name := range required {
+			if s, ok := name.(string); ok {
+				names = append(names, s)
+			}
+		}
+	}
+	return names
 }
 
 // StubArgument is a tool as the stub's one argument: its name,
