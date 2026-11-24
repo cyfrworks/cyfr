@@ -376,6 +376,8 @@ defmodule Aqua.Loop.ProgramAccessTest do
   # program's driver.
   defp backends! do
     fake = Scripted.start(self(), @root)
+    # A start's scrolls are answered `yielded` as they are written (`sent/1`).
+    Process.put(:scrolls_fake, fake)
     _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
     assert_receive {:control, "reconcile", _message, _fields}, 2_000
     fake
@@ -385,8 +387,17 @@ defmodule Aqua.Loop.ProgramAccessTest do
 
   # The next command the holder wrote to the driver.
   defp sent(timeout \\ 10_000) do
-    assert_receive {:session, "send", %{"lines" => [line]}, _fields}, timeout
-    Jason.decode!(line)
+    assert_receive {:session, "send", %{"lines" => [line]}, fields}, timeout
+
+    case Jason.decode!(line) do
+      %{"t" => "scroll", "id" => id} ->
+        yielded = Jason.encode!(%{"t" => "yielded", "id" => id})
+        Scripted.write(Process.get(:scrolls_fake), fields.server, yielded)
+        sent(timeout)
+
+      command ->
+        command
+    end
   end
 
   # The driver's session opens for `row` and says hello once it stands;

@@ -162,6 +162,7 @@ async function turn(turnId, params) {
 }
 
 let turns = Promise.resolve();
+let extraRoots = [];
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
   const ok = (result) => out({ id: message.id, result });
@@ -185,6 +186,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         : { account: null, requiresOpenaiAuth: true });
     case 'model/list':
       return ok({ data: MODELS, nextCursor: null });
+    // The skills it has: the one built in, as Codex 0.169.0 lists its own;
+    // an extra root is kept for the process, as Codex keeps one.
+    case 'skills/list':
+      return ok({ data: [{ cwd: process.cwd(), errors: [], skills: [{ name: 'imagegen', scope: 'system', path: '/fake/imagegen/SKILL.md', description: '', enabled: true }] }] });
+    case 'skills/extraRoots/set':
+      extraRoots = message.params.extraRoots;
+      return ok({});
     case 'thread/start': {
       const p = message.params;
       thread = { id: crypto.randomUUID(), model: p.model, dynamicTools: p.dynamicTools || [], approvalPolicy: p.approvalPolicy, sandbox: p.sandbox,

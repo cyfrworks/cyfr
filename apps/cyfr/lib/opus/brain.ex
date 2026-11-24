@@ -49,7 +49,8 @@ defmodule Opus.Brain do
 
   One command is written at a time, after the driver's `hello`: the next
   only once the driver has answered the last (`started` or `gone`,
-  `accepted` or `refused`, and for a `post` also `later`, which leaves the
+  `accepted` or `refused`, a `scroll` `placed`, `yielded` or `refused`,
+  and for a `post` also `later`, which leaves the
   post the attendant's to write again). A `later` that answers anything
   but the post written last ends the session, as a line that does not
   read does. Whether a command reaches the driver is decided
@@ -91,7 +92,9 @@ defmodule Opus.Brain do
   The veto is the attendant's and only ever withdraws: the stored step is
   the proof.
 
-  A `start` names the binding's generation; a `work` and a `post` name the
+  A `scroll` is written only while no harness runs, before the start it is
+  handed for, under the proof a start needs. A `start` names the
+  binding's generation; a `work` and a `post` name the
   binding's turn as their work; an `answer` answers an ask the driver
   showed for the binding's turn and that has not been answered.
 
@@ -294,6 +297,13 @@ defmodule Opus.Brain do
   @doc "The most bytes one line to a program's driver may hold, a command's whole line."
   @spec max_line_bytes() :: pos_integer()
   def max_line_bytes, do: Wire.max_line_bytes()
+
+  @doc """
+  Whether the wire takes `command` as a line, so a write of it is never
+  refused as one the driver would not read.
+  """
+  @spec writable?(map()) :: boolean()
+  def writable?(command), do: match?({:ok, _line}, Wire.encode(command))
 
   @doc "Whether `name` is as long as the wire holds a tool's name to (`Opus.Brain.Wire`)."
   @spec tool_name?(term()) :: boolean()
@@ -1459,6 +1469,13 @@ defmodule Opus.Brain do
        when t in ["accepted", "refused"],
        do: {:ok, %{state | outstanding: nil}}
 
+  defp answered(%{outstanding: {"scroll", id}} = state, %{"t" => t, "id" => id})
+       when t in ["placed", "yielded"],
+       do: {:ok, %{state | outstanding: nil}}
+
+  # A scroll's answer is a scroll's alone.
+  defp answered(_state, %{"t" => t}) when t in ["placed", "yielded"], do: {:error, :unreadable}
+
   defp answered(%{outstanding: {"post", id}} = state, %{"t" => "later", "id" => id}),
     do: {:ok, %{state | outstanding: nil}}
 
@@ -1515,8 +1532,12 @@ defmodule Opus.Brain do
   # harness runs and of the binding's session generation, every delivery
   # once one does, a work and a post of the binding's turn, an answer to an
   # ask shown for it and not yet answered.
-  defp in_turn(%{harness: harness}, _binding, %{"t" => "start"}) when harness != :none,
-    do: {:error, :running}
+  defp in_turn(%{harness: harness}, _binding, %{"t" => t})
+       when t in ["start", "scroll"] and harness != :none,
+       do: {:error, :running}
+
+  # A start's scrolls are written before it, under its proof.
+  defp in_turn(_state, _binding, %{"t" => "scroll"}), do: :ok
 
   defp in_turn(_state, binding, %{"t" => "start", "gen" => gen}),
     do: if(gen == binding.generation, do: :ok, else: {:error, :not_this_generation})

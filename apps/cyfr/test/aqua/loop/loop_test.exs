@@ -328,7 +328,7 @@ defmodule Aqua.LoopTest do
       {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
       # What moves by itself is handed apart, and the model reads it with
       # the instructions in one system prompt (`Aqua.Harness.Api`).
-      prompt = Aqua.Prompt.system(spec.system, spec.facts)
+      prompt = Aqua.Prompt.system(spec.system, spec.scrolls, spec.facts)
 
       assert prompt =~ "## Open requests"
       assert prompt =~ "- #{request.id} to planner, asked by aqua"

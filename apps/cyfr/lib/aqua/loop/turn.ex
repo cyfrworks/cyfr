@@ -70,6 +70,10 @@ defmodule Aqua.Loop.Turn do
     :capabilities,
     :request_cap,
     :system,
+    # The athanor's scrolls the turn hands its harness (`Aqua.Prompt`'s
+    # `scrolls`): the model's harness indexes them in its system prompt, a
+    # program's driver places them where its program looks for skills.
+    :scrolls,
     # What of the prompt moves by itself (`Aqua.Prompt`): a program is
     # handed it with its first post, and its instructions alone as
     # `system`; an API request's `system` holds both.
@@ -178,7 +182,7 @@ defmodule Aqua.Loop.Turn do
           where: Aqua.Prompt.where(ctx, thread)
         )
 
-      {:ok, %{spec | system: prompt.instructions, facts: prompt.facts}}
+      {:ok, %{spec | system: prompt.instructions, scrolls: prompt.scrolls, facts: prompt.facts}}
     end
   end
 

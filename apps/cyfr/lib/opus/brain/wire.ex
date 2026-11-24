@@ -21,7 +21,7 @@ defmodule Opus.Brain.Wire do
   read.
   """
 
-  @version 6
+  @version 7
   @max_line_bytes 1_048_576
   @max_id_bytes 256
   @max_list 1_000
@@ -62,6 +62,11 @@ defmodule Opus.Brain.Wire do
   @endings ~w(unanswered servers_unlisted refused outdated unsupported ended unrunnable
               unreadable unfit broken)
 
+  # Why a driver says it yielded a scroll (`yields/0`): its program has a
+  # skill or plugin of its own by that name, or the places it looks could
+  # not be read. A driver that places none says neither.
+  @yields ~w(own unread)
+
   @commands %{
     "start" =>
       {~w(t gen config), ~w(session system pending tools),
@@ -81,7 +86,10 @@ defmodule Opus.Brain.Wire do
       {~w(t id ask content is_error), [],
        %{"id" => :id, "ask" => :id, "content" => :string, "is_error" => :boolean}},
     "models" => {~w(t id), [], %{"id" => :id}},
-    "forget" => {~w(t id session), [], %{"id" => :id, "session" => :id}}
+    "forget" => {~w(t id session), [], %{"id" => :id, "session" => :id}},
+    "scroll" =>
+      {~w(t id name description body), [],
+       %{"id" => :id, "name" => :id, "description" => :string, "body" => :string}}
   }
 
   @events %{
@@ -91,6 +99,8 @@ defmodule Opus.Brain.Wire do
        %{"session" => :id, "fresh" => :boolean, "held" => :ids, "account" => :account}},
     "gone" => {~w(t), [], %{}},
     "accepted" => {~w(t id), [], %{"id" => :id}},
+    "placed" => {~w(t id as), [], %{"id" => :id, "as" => :id}},
+    "yielded" => {~w(t id), ~w(why), %{"id" => :id, "why" => :yield}},
     "later" => {~w(t id), [], %{"id" => :id}},
     "refused" =>
       {~w(t id reason), ~w(account),
@@ -203,6 +213,10 @@ defmodule Opus.Brain.Wire do
   """
   @spec native() :: [String.t()]
   def native, do: @native
+
+  @doc "Why a driver may say it yielded a scroll."
+  @spec yields() :: [String.t()]
+  def yields, do: @yields
 
   @doc """
   What a driver's `ending`, the last line of a driver that ends of
@@ -444,6 +458,7 @@ defmodule Opus.Brain.Wire do
   defp of_type?(:signed_in, value), do: value == "signed_in"
   defp of_type?(:signed_out, value), do: value == "signed_out"
   defp of_type?(:why, value), do: value in @endings
+  defp of_type?(:yield, value), do: value in @yields
 
   defp of_type?(:config, value) when is_map(value),
     do:

@@ -39,6 +39,7 @@ defmodule Opus.Brain.WireTest do
     assert v["media_types"] == Wire.media_types()
     assert v["native"] == Wire.native()
     assert v["endings"] == Wire.endings()
+    assert v["yields"] == Wire.yields()
   end
 
   test "every message is the vectors', and its example reads", %{vectors: v} do

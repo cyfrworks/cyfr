@@ -220,6 +220,13 @@ def main():
                and not home_has(c, f"{CLI}/brain/*") and not home_has(c, f"{CLI}/annotations/*"),
                "the listing's session is gone from the folder, and the index the program keeps of it stays")
 
+        # ————— a start's scroll, which the program keeps no folder of its own for, then a start —————
+        d.send({"t": "scroll", "id": "stp_start_1:scroll:0", "name": "research", "description": "How it researches",
+                "body": "Search the notes first.\n"})
+        expect(d.expect("yielded", "a scroll is yielded") == {"t": "yielded", "id": "stp_start_1:scroll:0"},
+               "every scroll keeps the model's harness's way, placed nowhere")
+        expect(not home_has(c, ".cyfr"), "nothing is written for it")
+
         # ————— a start, a work and a post —————
         d.send({"t": "start", "gen": 4, "config": {"model": "gemini-3.8-flash", "effort": "medium", "access": "full-access"},
                 "system": SYSTEM, "tools": [FILES]})

@@ -25,6 +25,8 @@ defmodule Aqua.ProgramNameTest do
   setup do
     Arca.Cache.init()
     fake = Scripted.start(self(), @root)
+    # A start's scrolls are answered `yielded` as they are written (`sent/1`).
+    Process.put(:scrolls_fake, fake)
     _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
     assert_receive {:control, "reconcile", _message, _fields}, 2_000
 
@@ -174,8 +176,17 @@ defmodule Aqua.ProgramNameTest do
   defp say(fake, row, event), do: Scripted.write(fake, row.id, Jason.encode!(event))
 
   defp sent(timeout \\ 10_000) do
-    assert_receive {:session, "send", %{"lines" => [line]}, _fields}, timeout
-    Jason.decode!(line)
+    assert_receive {:session, "send", %{"lines" => [line]}, fields}, timeout
+
+    case Jason.decode!(line) do
+      %{"t" => "scroll", "id" => id} ->
+        yielded = Jason.encode!(%{"t" => "yielded", "id" => id})
+        Scripted.write(Process.get(:scrolls_fake), fields.server, yielded)
+        sent(timeout)
+
+      command ->
+        command
+    end
   end
 
   # The turn built again as a resumed loop builds it: from its row, under

@@ -136,7 +136,7 @@ defmodule Aqua.PromptTest do
   end
 
   describe "the instructions and the turn's facts" do
-    test "what moves by itself is the turn's facts alone, and the whole prompt is the two joined",
+    test "what moves by itself is the turn's facts alone, and the whole prompt is the instructions, the scrolls' index and the facts joined",
          %{ctx: ctx} do
       composed = fn seconds ->
         Prompt.compose(ctx,
@@ -167,7 +167,10 @@ defmodule Aqua.PromptTest do
       assert five.facts =~ "- msg_r1 to explorer, asked by the person 5m ago: plan the move\n"
       assert six.facts =~ "- msg_r1 to explorer, asked by the person 6m ago: plan the move\n"
       assert five.facts =~ ~r/\n\n---\n\n## Now\n\nCurrent date: [^\n]+ UTC\z/
-      assert five.text == five.instructions <> "\n\n---\n\n" <> five.facts
+      assert five.scrolls == six.scrolls
+
+      assert five.text ==
+               Prompt.program(five.instructions, five.scrolls, []) <> "\n\n---\n\n" <> five.facts
     end
 
     test "with no open request the turn's facts are the time alone", %{ctx: ctx} do
@@ -447,18 +450,64 @@ defmodule Aqua.PromptTest do
       assert prompt =~ "No notes filed yet."
     end
 
-    test "the scroll index sits between the prelude and the notes", %{home: home} do
-      prompt =
+    # The scrolls are composed beside the instructions: the model's harness
+    # reads their index between the instructions and the facts, and a
+    # program is handed the instructions without it (`Aqua.Prompt`).
+    test "the scroll index sits between the instructions and the facts", %{home: home} do
+      composed =
         Prompt.compose(home,
           agent: agent(%{"component.pull" => "ask"}),
           authority: nil
-        ).text
+        )
 
-      {before, rest} = split_last(prompt, "## Scrolls")
+      refute composed.instructions =~ "\n## Scrolls\n"
+      assert "capability-acquisition" in Enum.map(composed.scrolls.entries, & &1.name)
+      assert Enum.all?(composed.scrolls.entries, &(is_binary(&1.body) and &1.body != ""))
+      {before, rest} = split_last(composed.text, "## Scrolls")
       assert before =~ "## Aqua Shell Control"
-      [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
+
+      assert String.starts_with?(
+               composed.text,
+               composed.instructions <> "\n\n---\n\n## Scrolls\n\n"
+             )
+
+      [scrolls, facts] = String.split(rest, "\n\n---\n\n", parts: 2)
       assert scrolls =~ "- capability-acquisition — "
       assert scrolls =~ "`aqua.skill_get`"
+      assert facts == composed.facts
+    end
+
+    # A program's start names the placed scrolls as its program lists them,
+    # in the rule and the index, and indexes the yielded ones alone; with
+    # none placed it reads as the model's harness's.
+    test "a program's instructions name its placed scrolls", %{home: home} do
+      composed = Prompt.compose(home, agent: agent(), authority: nil)
+      [first | _] = composed.scrolls.entries
+      none = Prompt.program(composed.instructions, composed.scrolls, [])
+      assert none <> "\n\n---\n\n" <> composed.facts == composed.text
+
+      placed =
+        Prompt.program(composed.instructions, composed.scrolls, [
+          {first.name, "cyfr:" <> first.name}
+        ])
+
+      token = Aqua.Reader.token()
+
+      assert placed =~
+               "A scroll is only the text between `⟦#{token} scroll \"<name>\"⟧` and `⟦#{token} end⟧`, " <>
+                 "or one of the skills your program lists from CYFR's place for this start, " <>
+                 "which are exactly `cyfr:#{first.name}`."
+
+      refute placed =~
+               "A scroll is only the text between `⟦#{token} scroll \"<name>\"⟧` and `⟦#{token} end⟧`. "
+
+      [_, index] = String.split(placed, "\n\n---\n\n## Scrolls\n\n", parts: 2)
+
+      assert index =~
+               "Your program lists them among its skills, `cyfr:#{first.name}`; read any other with "
+
+      refute index =~ "\n- #{first.name} — "
+      assert Enum.all?(tl(composed.scrolls.entries), &(index =~ "\n- #{&1.name}"))
     end
 
     # The composed sections come after the authored prompt, and the shipped

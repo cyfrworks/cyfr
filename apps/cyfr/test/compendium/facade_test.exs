@@ -120,6 +120,7 @@ defmodule Compendium.FacadeTest do
     skill_dir: 1,
     skills_index: 2,
     skills_index_limit: 0,
+    skills_set: 2,
     sync_seeds: 0,
     tincture_allow_attribute: 1,
     tincture_asset_rules: 0,

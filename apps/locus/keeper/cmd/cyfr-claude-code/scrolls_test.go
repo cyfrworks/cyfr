@@ -101,6 +101,7 @@ func TestAStartsScrollsArePlacedAsAPluginForThatProcessAndGoAtTheEnd(t *testing.
 // driver reads there goes nowhere.
 func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *testing.T) {
 	secret := "PLUGIN-RECORD-CANARY"
+	whys := map[string]string{"recorded": "own", "in its folder": "own", "a record that does not read": "unread", "a record that is a link": "unread"}
 	for name, plant := range map[string]func(home string){
 		"recorded": func(home string) {
 			plantFile(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"),
@@ -127,8 +128,8 @@ func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *tes
 		plant(s.home)
 		s.expect("hello")
 		for _, answer := range handScrolls(s, "research", "web") {
-			if answer["t"] != "yielded" {
-				t.Fatalf("%s: every scroll yields: %v", name, answer)
+			if answer["t"] != "yielded" || answer["why"] != whys[name] {
+				t.Fatalf("%s: every scroll yields, saying why: %v", name, answer)
 			}
 		}
 		started(s, map[string]any{})

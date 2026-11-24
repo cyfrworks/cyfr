@@ -163,10 +163,12 @@ func (c *Conn) Placed(id, as string) error {
 	return c.Emit(NewEvent("placed").Set("id", id).Set("as", as))
 }
 
-// Yielded answers the scroll `id`: it is not placed, since its program has
-// a skill or plugin of its own by that name, its places could not be read,
-// or the driver places none, and it keeps the model's harness's way.
-func (c *Conn) Yielded(id string) error { return c.Emit(NewEvent("yielded").Set("id", id)) }
+// Yielded answers the scroll `id`: it is not placed, and keeps the model's
+// harness's way. `why` is YieldOwn or YieldUnread, or empty for a driver
+// that places none.
+func (c *Conn) Yielded(id, why string) error {
+	return c.Emit(NewEvent("yielded").Set("id", id).SetOptional("why", why))
+}
 
 // Later answers the post `id`: it was not written, since the harness takes
 // a message only between its native turns, and it is still the holder's,
@@ -298,7 +300,7 @@ func command(c *Conn, d Driver, line []byte) error {
 	if t == "scroll" {
 		p, ok := d.(Placer)
 		if !ok {
-			return c.Yielded(Str(members, "id"))
+			return c.Yielded(Str(members, "id"), "")
 		}
 		return p.Scroll(Str(members, "id"), Str(members, "name"), Str(members, "description"), Str(members, "body"))
 	}

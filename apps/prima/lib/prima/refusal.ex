@@ -1807,6 +1807,15 @@ defmodule Prima.Refusal do
     end
   end
 
+  # A scroll of the start its program's driver could not put where its
+  # program looks for skills: nothing started, so no start runs with part
+  # of the athanor's scrolls (`Aqua.Harness.Program`).
+  defp harness(member, {:scroll_unplaced, name}) when is_binary(name),
+    do:
+      {:unavailable,
+       "#{member} could not start: the scroll \"#{name}\" could not be put among its " <>
+         "program's skills."}
+
   defp harness(member, :work_refused),
     do: {:conflict, "#{member} could not be given this work."}
 

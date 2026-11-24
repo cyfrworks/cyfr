@@ -48,7 +48,9 @@ const pluginsRecordBytes = 4 << 20
 // first scroll, whether every scroll yields, and closed by the start.
 type placing struct {
 	begun bool
-	yield bool
+	// yield is why every scroll yields: brainwire.YieldOwn or
+	// brainwire.YieldUnread, or empty when they are placed.
+	yield string
 }
 
 // Scroll places one scroll of the coming start, or yields it.
@@ -61,10 +63,16 @@ func (d *driver) Scroll(id, name, description, body string) error {
 	}
 	if !d.placing.begun {
 		theirs, err := ownPlugin(d.home, scrolls.PluginName)
-		d.placing = placing{begun: true, yield: theirs || err != nil}
+		d.placing = placing{begun: true}
+		switch {
+		case err != nil:
+			d.placing.yield = brainwire.YieldUnread
+		case theirs:
+			d.placing.yield = brainwire.YieldOwn
+		}
 	}
-	if d.placing.yield {
-		return d.c.Yielded(id)
+	if d.placing.yield != "" {
+		return d.c.Yielded(id, d.placing.yield)
 	}
 	if d.folder == nil {
 		folder, err := scrolls.Open(d.home, d.c.Boot)

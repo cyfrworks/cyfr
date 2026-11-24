@@ -422,6 +422,48 @@ defmodule Opus.BrainTest do
       assert :ok = Brain.write(brain, binding, post(binding, "stp_second"))
     end
 
+    # A start's scrolls are written before it, each once the last is
+    # answered, and only while no harness runs.
+    test "writes a start's scrolls before it, each answered placed or yielded",
+         %{fake: fake, row: row, binding: binding} do
+      brain = opened!(fake, row, binding)
+
+      for {id, answer} <- [
+            {"stp_s:scroll:0", %{"t" => "placed", "as" => "cyfr:research"}},
+            {"stp_s:scroll:1", %{"t" => "yielded"}}
+          ] do
+        assert :ok = Brain.write(brain, binding, scroll(id))
+        assert %{"t" => "scroll", "id" => ^id} = sent()
+        assert Brain.write(brain, binding, scroll("stp_s:scroll:9")) == {:error, :busy}
+        say(fake, row, Map.put(answer, "id", id))
+        {_boot, [{seq, _answer}]} = batch(brain)
+        :ok = Brain.read_on(brain, "boot-one", seq)
+      end
+
+      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => %{}})
+      assert %{"t" => "start"} = sent()
+
+      say(fake, row, %{
+        "t" => "started",
+        "session" => "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30",
+        "fresh" => true,
+        "held" => []
+      })
+
+      {_boot, [{seq, _started}]} = batch(brain)
+      :ok = Brain.read_on(brain, "boot-one", seq)
+      assert Brain.write(brain, binding, scroll("stp_s:scroll:2")) == {:error, :running}
+      refute_sent()
+    end
+
+    test "a scroll's answer to another command ends it", %{fake: fake, row: row, binding: binding} do
+      {_pid, ref} = brain = opened!(fake, row, binding)
+      assert :ok = Brain.write(brain, binding, %{"t" => "start", "gen" => 0, "config" => %{}})
+      assert %{"t" => "start"} = sent()
+      say(fake, row, %{"t" => "yielded", "id" => "stp_start"})
+      assert_receive {Brain, ^ref, {:ended, :unreadable}}, 5_000
+    end
+
     test "a post answered later is answered: an ask's answer is written straight after it",
          %{fake: fake, row: row, binding: binding} do
       brain = started!(fake, row, binding)
@@ -518,6 +560,9 @@ defmodule Opus.BrainTest do
                {:error, :not_this_work}
     end
   end
+
+  defp scroll(id),
+    do: %{"t" => "scroll", "id" => id, "name" => "research", "description" => "d", "body" => "b"}
 
   describe "what is known of the account" do
     test "a start's account member sets and clears it, and a refused post's sets it",

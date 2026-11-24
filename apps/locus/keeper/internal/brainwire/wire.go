@@ -87,6 +87,7 @@ const (
 	tSignedIn
 	tSignedOut
 	tWhy
+	tYield
 )
 
 // Spec is one message: the members it always carries, those it may, and
@@ -115,6 +116,18 @@ var mediaTypes = map[string][]string{
 	"image":    {"image/jpeg", "image/png", "image/gif", "image/webp"},
 	"document": {"application/pdf"},
 }
+
+// yields are why a driver says it yielded a scroll: its program has a
+// skill or plugin of its own by that name (YieldOwn), or the places it
+// looks could not be read (YieldUnread). A driver that places none says
+// neither.
+var yields = []string{YieldOwn, YieldUnread}
+
+const (
+	YieldOwn    = "own"
+	YieldUnread = "unread"
+)
+
 var nativeEvents = []string{"text", "said", "own", "ask", "usage", "idle", "error"}
 
 // Commands are the messages the holder writes.
@@ -142,7 +155,7 @@ var Events = map[string]Spec{
 	"gone":     {[]string{"t"}, nil, map[string]fieldType{}},
 	"accepted": {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"placed":   {[]string{"t", "id", "as"}, nil, map[string]fieldType{"id": tID, "as": tID}},
-	"yielded":  {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
+	"yielded":  {[]string{"t", "id"}, []string{"why"}, map[string]fieldType{"id": tID, "why": tYield}},
 	"later":    {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"refused": {[]string{"t", "id", "reason"}, []string{"account"},
 		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},
@@ -322,6 +335,8 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return OneOf(raw, []string{SignedOut})
 	case tWhy:
 		return OneOf(raw, whyCodes())
+	case tYield:
+		return OneOf(raw, yields)
 	}
 	return false
 }

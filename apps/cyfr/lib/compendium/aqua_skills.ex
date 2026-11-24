@@ -144,6 +144,9 @@ defmodule Compendium.AquaSkills do
   defp string(value) when is_binary(value), do: value
   defp string(_value), do: ""
 
+  # What an index entry holds of a scroll.
+  @entry [:name, :title, :description]
+
   @doc """
   Every scroll as name, title and the one line its manifest describes it
   with, sorted by name, and whether a harness carries it. Only a
@@ -174,25 +177,45 @@ defmodule Compendium.AquaSkills do
           {:ok, %{entries: Enum.flat_map(names, &entry(ctx, &1)), more: 0}}
 
         n when is_integer(n) ->
-          {kept, more} = carried(ctx, names, n, [])
+          {kept, more} = carried(ctx, names, n, [], @entry)
           {:ok, %{entries: kept, more: more}}
       end
     end
   end
 
-  defp carried(_ctx, names, 0, kept), do: {Enum.reverse(kept), length(names)}
-  defp carried(_ctx, [], _left, kept), do: {Enum.reverse(kept), 0}
-
-  defp carried(ctx, [name | names], left, kept) do
-    case entry(ctx, name) do
-      [%{carried: true} = entry] -> carried(ctx, names, left - 1, [entry | kept])
-      _past_or_unread -> carried(ctx, names, left, kept)
+  @doc """
+  The scrolls a turn hands its harness (`work.scrolls`): the index as
+  `index/2` cuts it to `limit`, each scroll with its body as stored, and
+  the count of the names not read.
+  """
+  @spec set(Context.t(), pos_integer()) ::
+          {:ok,
+           %{
+             entries: [%{name: String.t(), description: String.t(), body: String.t()}],
+             more: non_neg_integer()
+           }}
+          | {:error, term()}
+  def set(%Context{} = ctx, limit) when is_integer(limit) and limit > 0 do
+    with {:ok, entries} <- Arca.list_typed(Sanctum.Context.actor(ctx), AquaPath.skills_root()) do
+      names = Enum.sort(for {name, :dir} <- entries, AquaPath.valid_name?(name), do: name)
+      {kept, more} = carried(ctx, names, limit, [], [:name, :description, :body])
+      {:ok, %{entries: Enum.map(kept, &Map.delete(&1, :carried)), more: more}}
     end
   end
 
-  defp entry(ctx, name) do
+  defp carried(_ctx, names, 0, kept, _fields), do: {Enum.reverse(kept), length(names)}
+  defp carried(_ctx, [], _left, kept, _fields), do: {Enum.reverse(kept), 0}
+
+  defp carried(ctx, [name | names], left, kept, fields) do
+    case entry(ctx, name, fields) do
+      [%{carried: true} = entry] -> carried(ctx, names, left - 1, [entry | kept], fields)
+      _past_or_unread -> carried(ctx, names, left, kept, fields)
+    end
+  end
+
+  defp entry(ctx, name, fields \\ @entry) do
     case read(ctx, name) do
-      {:ok, scroll} -> [Map.take(scroll, [:name, :title, :description, :carried])]
+      {:ok, scroll} -> [Map.take(scroll, [:carried | fields])]
       {:error, _unread} -> []
     end
   end

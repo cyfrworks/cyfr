@@ -84,8 +84,8 @@ func TestAStartsScrollsAreAnExtraRootAndOnesNamedLikeCodexsOwnYield(t *testing.T
 	before := map[string]map[string]string{"codex": tree(t, codexSkills), "agents": tree(t, agentsSkills)}
 	s.expect("hello")
 	answers := handScrolls(s, "research", "imagegen", "web")
-	got := []any{answers[0]["t"], answers[1]["t"], answers[2]["t"], answers[2]["as"]}
-	if !reflect.DeepEqual(got, []any{"yielded", "yielded", "placed", "web"}) {
+	got := []any{answers[0]["t"], answers[0]["why"], answers[1]["t"], answers[1]["why"], answers[2]["t"], answers[2]["as"]}
+	if !reflect.DeepEqual(got, []any{"yielded", "own", "yielded", "own", "placed", "web"}) {
 		t.Fatalf("a scroll named like one of Codex's skills yields and another is placed by its name: %v", answers)
 	}
 	started(s, map[string]any{})
@@ -143,8 +143,8 @@ func TestAListingThatDoesNotAnswerYieldsEveryScroll(t *testing.T) {
 	s := startDriver(t)
 	s.expect("hello")
 	for _, answer := range handScrolls(s, "research", "web") {
-		if answer["t"] != "yielded" {
-			t.Fatalf("every scroll yields: %v", answer)
+		if answer["t"] != "yielded" || answer["why"] != "unread" {
+			t.Fatalf("every scroll yields, its listing unread: %v", answer)
 		}
 	}
 	started(s, map[string]any{})

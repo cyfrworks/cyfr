@@ -548,7 +548,7 @@ defmodule Aqua.Harness.Api do
       model: spec.model,
       # The turn's instructions and the facts that move by themselves, which
       # the engine hands apart, are one system prompt of one request here.
-      system: Aqua.Prompt.system(state.work.system, state.work.facts),
+      system: Aqua.Prompt.system(state.work.system, state.work.scrolls, state.work.facts),
       messages: messages,
       tools: spec.tools,
       capabilities: spec.capabilities,

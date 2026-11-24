@@ -25,8 +25,13 @@ defmodule Aqua.Harness.Program do
   A turn whose agent names a program row opens with the host's
   `program.start` of that row, which `open/1` answers for the loop to
   decide as a model's `program.start` is decided. Opened again with that
-  step admitted, it starts this process, which opens a session, starts
-  or resumes the harness with the turn's instructions and configuration
+  step admitted, it starts this process, which opens a session, hands the
+  driver the turn's scrolls one at a time, each placed where its program
+  looks for skills or yielded (a scroll the driver could not write ends
+  the work naming it, with nothing started), starts or resumes the
+  harness with the turn's instructions, which name the placed scrolls as
+  its program lists them and index the rest (`Aqua.Prompt.program/3`),
+  and configuration
   and sets the turn's work (`work`, with the turn's tools); the loop is
   told when the work is taken (`{:took, ...}`). Every start names the
   turn's tools too, a resume's among them: a harness that keeps its
@@ -180,7 +185,7 @@ defmodule Aqua.Harness.Program do
   # The kinds of row a fresh session's context carries: the thread's posts.
   @context_kinds ~w(text opening report nudge pointer turn_aborted)
   # The phases of a start, which lasts until the work is taken.
-  @starting [:opening, :starting, :started, :working]
+  @starting [:opening, :scrolling, :starting, :started, :working]
   # The batch's effects that are events of the one writer
   # (`Arca.TurnStorage.commit_events/3`), by the event each is.
   @written %{said: :text, asks: :ask, accepted: :took, refused: :refused, usage: :usage}
@@ -374,6 +379,16 @@ defmodule Aqua.Harness.Program do
       # so, each with whether the native turn it waits on is idle since
       # (`held/2`).
       later: [],
+      # The start's scrolls still to hand, the one handed last, and those
+      # its driver placed, each its name and the name its program lists it
+      # by (`write_scrolls/1`).
+      to_place: [],
+      scrolling: nil,
+      placed: [],
+      # The start's scrolls its driver kept out because its program has its
+      # own by their names or its places could not be read: said in the
+      # turn's activity. A driver that places none keeps none so.
+      kept: [],
       fresh?: false,
       missed?: false,
       facts?: false,
@@ -553,6 +568,79 @@ defmodule Aqua.Harness.Program do
   # start would leave a kept session behind, and a resume naming none
   # would leave the posts it holds unreconciled, so the work ends with
   # nothing written.
+  # Every start is handed the turn's scrolls first, one `scroll` at a time
+  # and each answered before the next: `placed` where its program looks for
+  # skills, `yielded` to the model's harness's way, or `refused`, which
+  # ends the work naming the scroll with nothing started, so no start runs
+  # with part of the set. Then the start, whose instructions name the
+  # placed as its program lists them and index the rest
+  # (`Aqua.Prompt.program/3`); those yielded for a program's own of their
+  # names, or for places its driver could not read, are said in the turn's
+  # activity.
+  # A start the wire would not take (an option, its instructions or its
+  # tools) is refused before its scrolls, so it writes nothing.
+  defp write_scrolls(%{work: work} = state) do
+    if Opus.Brain.writable?(start_command(work, nil, [], work.system)),
+      do: scrolls(state),
+      else:
+        fail(shut(state), refused(work, {:start_unfit, work.config |> Map.keys() |> Enum.sort()}))
+  end
+
+  defp scrolls(%{work: work} = state),
+    do:
+      scroll(%{
+        state
+        | phase: :scrolling,
+          placed: [],
+          kept: [],
+          to_place: Enum.with_index(work.scrolls.entries)
+      })
+
+  defp scroll(%{to_place: []} = state) do
+    case state.kept do
+      [] -> write_start(state)
+      kept -> state |> tell({:activity, {:yielded, kept}}) |> write_start()
+    end
+  end
+
+  defp scroll(%{to_place: [{entry, i} | rest], work: work} = state) do
+    id = "#{work.start}:scroll:#{i}"
+
+    command = %{
+      "t" => "scroll",
+      "id" => id,
+      "name" => entry.name,
+      "description" => entry.description,
+      "body" => entry.body
+    }
+
+    case write(state, command) do
+      :ok -> %{state | to_place: rest, scrolling: {id, entry.name}}
+      {:error, :unreadable} -> fail(shut(state), refused(work, {:scroll_unplaced, entry.name}))
+      {:error, reason} -> write_failed(state, reason)
+    end
+  end
+
+  # The scroll handed last is answered: the next is handed, or the start.
+  defp on_scrolls(%{phase: :scrolling, scrolling: {id, name}, work: work} = state, effects) do
+    cond do
+      as = List.keyfind(effects.placed, id, 0) ->
+        scroll(%{state | scrolling: nil, placed: state.placed ++ [{name, elem(as, 1)}]})
+
+      yielded = List.keyfind(effects.yielded, id, 0) ->
+        kept = if elem(yielded, 1), do: state.kept ++ [name], else: state.kept
+        scroll(%{state | scrolling: nil, kept: kept})
+
+      Enum.any?(effects.refused, &(&1["id"] == id)) ->
+        fail(shut(state), refused(work, {:scroll_unplaced, name}))
+
+      true ->
+        state
+    end
+  end
+
+  defp on_scrolls(state, _effects), do: state
+
   defp write_start(%{work: work} = state) do
     with {:ok, %{session: session}} <- Tape.brain(work.guest, state.thread_id),
          {:ok, pending} <- pending(work, session) do
@@ -572,16 +660,12 @@ defmodule Aqua.Harness.Program do
   # that takes each work's (Claude Code) reads them from the `work`.
   defp write_start(%{work: work} = state, session, pending) do
     command =
-      %{
-        "t" => "start",
-        "gen" => work.generation,
-        "config" => work.config,
-        "system" => work.system,
-        "session" => session,
-        "pending" => if(pending != [], do: pending),
-        "tools" => work.tools
-      }
-      |> reject_nil()
+      start_command(
+        work,
+        session,
+        pending,
+        Aqua.Prompt.program(work.system, work.scrolls, state.placed)
+      )
 
     case write(state, command) do
       :ok ->
@@ -604,6 +688,19 @@ defmodule Aqua.Harness.Program do
       {:error, reason} ->
         write_failed(state, reason)
     end
+  end
+
+  defp start_command(work, session, pending, system) do
+    %{
+      "t" => "start",
+      "gen" => work.generation,
+      "config" => work.config,
+      "system" => system,
+      "session" => session,
+      "pending" => if(pending != [], do: pending),
+      "tools" => work.tools
+    }
+    |> reject_nil()
   end
 
   defp write_work(%{work: work} = state) do
@@ -741,6 +838,8 @@ defmodule Aqua.Harness.Program do
       gone?: false,
       accepted: [],
       refused: [],
+      placed: [],
+      yielded: [],
       idle: nil,
       # The batch's `later`s and idles, in the order of its lines.
       holds: [],
@@ -790,6 +889,14 @@ defmodule Aqua.Harness.Program do
     acc = %{acc | refused: acc.refused ++ [event]}
     if input?(outstanding, id), do: put_commit(acc, :refused, id), else: acc
   end
+
+  # A scroll's answers: where its program lists it, or that it keeps the
+  # model's harness's way (`on_scrolls/2`); nothing of either is written.
+  defp effect(%{"t" => "placed", "id" => id, "as" => as}, acc, _work, _work_id, _outstanding),
+    do: %{acc | placed: acc.placed ++ [{id, as}]}
+
+  defp effect(%{"t" => "yielded", "id" => id} = event, acc, _work, _work_id, _outstanding),
+    do: %{acc | yielded: acc.yielded ++ [{id, event["why"]}]}
 
   # A post the harness takes only between its native turns, which waits
   # for the idle that ends the one it runs: nothing of it is written.
@@ -921,6 +1028,7 @@ defmodule Aqua.Harness.Program do
   defp act(state, effects) do
     state
     |> on_started(effects)
+    |> on_scrolls(effects)
     |> on_answers(effects)
     |> held(effects)
     |> on_errors(effects)
@@ -928,7 +1036,7 @@ defmodule Aqua.Harness.Program do
     |> deliver()
   end
 
-  defp on_started(%{phase: :opening} = state, %{hello?: true}), do: write_start(state)
+  defp on_started(%{phase: :opening} = state, %{hello?: true}), do: write_scrolls(state)
 
   defp on_started(%{phase: :starting} = state, %{gone?: true}), do: start_over(state)
 
@@ -1079,7 +1187,7 @@ defmodule Aqua.Harness.Program do
              "#{work.title} no longer had its record of this thread, so it " <>
                "starts over from the thread's posts."
            ) do
-      write_start(%{state | work: %{work | generation: generation}, phase: :opening})
+      write_scrolls(%{state | work: %{work | generation: generation}, phase: :opening})
     else
       {:error, _reason} -> fail(shut(state), refused(work, {:start_failed, :over}))
     end

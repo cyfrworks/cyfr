@@ -124,8 +124,11 @@ func (d *driver) listStep(m rpc) error {
 // of its name, ignoring case, which errs toward Codex's own, or did not
 // say what it has.
 func (d *driver) place(s *heldScroll) error {
-	if d.listing.unread || d.listing.names[strings.ToLower(s.name)] {
-		return d.c.Yielded(s.id)
+	if d.listing.unread {
+		return d.c.Yielded(s.id, brainwire.YieldUnread)
+	}
+	if d.listing.names[strings.ToLower(s.name)] {
+		return d.c.Yielded(s.id, brainwire.YieldOwn)
 	}
 	if d.folder == nil {
 		folder, err := scrolls.Open(d.home, d.c.Boot)

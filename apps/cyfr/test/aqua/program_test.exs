@@ -78,6 +78,9 @@ defmodule Aqua.ProgramTest do
   setup do
     Arca.Cache.init()
     fake = Scripted.start(self(), @root)
+    # A start's scrolls are answered `yielded` as they are written unless a
+    # test answers them itself (`sent_line/1`).
+    Process.put(:scrolls_fake, fake)
     _controller = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
     assert_receive {:control, "reconcile", _message, _fields}, 2_000
 
@@ -406,9 +409,16 @@ defmodule Aqua.ProgramTest do
         String.split(start["system"], "\n\n---\n\n## Runtime Context\n\n", parts: 2)
 
       # The start hands the turn's instructions delivered: the rule's
-      # stand-in made the thread's mark.
+      # stand-in made the thread's mark, and with every scroll yielded, the
+      # index of them all after the instructions.
       assert opening == briefing(Aqua.Reader.mark(thread.id))
-      assert start["system"] == Aqua.Reader.deliver(spec.system, Aqua.Reader.mark(thread.id))
+
+      assert start["system"] ==
+               Aqua.Reader.deliver(
+                 Aqua.Prompt.program(spec.system, spec.scrolls, []),
+                 Aqua.Reader.mark(thread.id)
+               )
+
       assert context =~ "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned."
       assert context =~ "\n- research — "
       refute start["system"] =~ "tidy notes.md"
@@ -603,7 +613,12 @@ defmodule Aqua.ProgramTest do
 
       # The start hands the turn's instructions delivered: the rule's
       # stand-in made the thread's mark.
-      assert start["system"] == Aqua.Reader.deliver(spec.system, Aqua.Reader.mark(thread.id))
+      # Every scroll yielded, the index of them all follows the instructions.
+      assert start["system"] ==
+               Aqua.Reader.deliver(
+                 Aqua.Prompt.program(spec.system, spec.scrolls, []),
+                 Aqua.Reader.mark(thread.id)
+               )
 
       assert work == %{
                "t" => "work",
@@ -1561,8 +1576,8 @@ defmodule Aqua.ProgramTest do
       second = delta!()
 
       assert [first, second] == [
-               streamed(turn, fence, "msg_1", 0, {0, 5}, "notes.md "),
-               streamed(turn, fence, "msg_1", 0, {0, 6}, "holds three lines.")
+               streamed(turn, fence, "msg_1", 0, {0, line(ctx, 5)}, "notes.md "),
+               streamed(turn, fence, "msg_1", 0, {0, line(ctx, 6)}, "holds three lines.")
              ]
 
       viewer = Aqua.Loop.Stream.new() |> Aqua.Loop.Stream.advance(fence)
@@ -1583,7 +1598,7 @@ defmodule Aqua.ProgramTest do
       assert Aqua.Loop.Stream.texts(Aqua.Loop.Stream.landed(viewer, landed)) == []
 
       say(fake, row, text(turn, "msg_2", "and then"))
-      assert delta!() == streamed(turn, fence, "msg_2", 1, {0, 8}, "and then")
+      assert delta!() == streamed(turn, fence, "msg_2", 1, {0, line(ctx, 8)}, "and then")
       say(fake, row, idle(turn, [input.id]))
 
       assert_receive %Cyfr.Bus.ThreadEvent{kind: :delta_abandoned, data: abandoned}, 10_000
@@ -1608,7 +1623,7 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       say(fake, row, text(turn, "msg_1", "Starting"))
       {:ok, open} = Tape.turn(ctx, turn.id)
-      assert delta!() == streamed(turn, open.fence, "msg_1", 0, {0, 5}, "Starting")
+      assert delta!() == streamed(turn, open.fence, "msg_1", 0, {0, line(ctx, 5)}, "Starting")
 
       stop = fn ->
         monitor = Process.monitor(loop.pid)
@@ -1638,7 +1653,7 @@ defmodule Aqua.ProgramTest do
       say(fake, row, accepted(input))
       say(fake, row, text(turn, "msg_1", "Starting"))
       {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
-      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 5}, "Starting")
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, line(ctx, 5)}, "Starting")
 
       say(fake, row, %{
         "t" => "error",
@@ -1675,7 +1690,7 @@ defmodule Aqua.ProgramTest do
 
       # One process announces each in order, so the first announced after
       # the start's is the open work's.
-      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, 9}, "mine")
+      assert delta!() == streamed(turn, fence, "msg_1", 0, {0, line(ctx, 9)}, "mine")
       assert activity!() == [start_entry(:done), own_entry("Read", :running)]
       say(fake, row, %{said(turn, "msg_other", "said for other work") | "work" => "trn_other"})
       say(fake, row, Map.delete(said(turn, "msg_none", "said for no work"), "work"))
@@ -4629,8 +4644,13 @@ defmodule Aqua.ProgramTest do
       refute second["system"] =~ "## Open requests"
       refute second["system"] =~ "Current date:"
 
+      next_spec = spec!(ctx, next)
+
       assert second["system"] ==
-               Aqua.Reader.deliver(spec!(ctx, next).system, Aqua.Reader.mark(thread.id))
+               Aqua.Reader.deliver(
+                 Aqua.Prompt.program(next_spec.system, next_spec.scrolls, []),
+                 Aqua.Reader.mark(thread.id)
+               )
 
       post = sent()
       [input] = inputs(ctx, next)
@@ -4933,7 +4953,7 @@ defmodule Aqua.ProgramTest do
           holder = Opus.Brain.whereis(ctx.athanor_id, thread.id)
 
           Prima.Test.Wait.wait_until(
-            fn -> :sys.get_state(holder).handed == 6 end,
+            fn -> :sys.get_state(holder).handed == line(ctx, 6) end,
             10_000,
             "the line before them to be handed"
           )
@@ -6246,6 +6266,210 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  # The athanor's scrolls reach either harness its own way (T5): the
+  # model's harness indexes them in its one system prompt between the
+  # instructions and the facts; a program's driver is written one `scroll`
+  # a scroll, each body as stored, before its `start`, and the start's
+  # instructions name the placed ones as the program lists them and index
+  # the rest. Another athanor's scroll reaches neither.
+  describe "the athanor's scrolls" do
+    @tag harness: :api
+    test "are indexed on the model's harness", %{ctx: ctx, thread: thread} do
+      {other, _thread} = second_athanor!()
+      own_scroll!(other, "faraway-xq", "OTHER-ATHANOR-SCROLL")
+      own_scroll!(ctx, "fern-care", "Water it weekly.")
+      turn = api_turn!(ctx, thread, "hello", [answer("Hi.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      spec = spec!(ctx, turn)
+
+      [system] =
+        for %{input: %{"operation" => "chat", "params" => params}} <- ScriptedWorker.calls(),
+            do: params["system"]
+
+      mark = Aqua.Reader.mark(thread.id)
+
+      assert system ==
+               Aqua.Reader.deliver(
+                 Aqua.Prompt.system(spec.system, spec.scrolls, spec.facts),
+                 mark
+               )
+               |> String.replace(~r/Current date: [^\n]*\z/, fn _ -> clock(system) end)
+
+      [instructions, rest] = String.split(system, "\n\n---\n\n## Scrolls\n\n", parts: 2)
+      assert instructions =~ "## Runtime Context"
+      assert rest =~ "\n- fern-care — How fern-care is kept\n"
+      assert rest =~ ~r/\n\n---\n\n## Now\n\nCurrent date: /
+      refute system =~ "faraway-xq"
+    end
+
+    @tag harness: :program
+    test "are each written to a program's driver before its start, its instructions naming the placed",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      {other, _thread} = second_athanor!()
+      own_scroll!(other, "faraway-xq", "OTHER-ATHANOR-SCROLL")
+      own_scroll!(ctx, "fern-care", "Water it weekly.")
+      own_scroll!(ctx, "tidy-up", "Put things back.")
+      turn = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+
+      {scrolls, start} =
+        scrolled!(fake, row, fn
+          %{"name" => "fern-care", "id" => id} ->
+            %{"t" => "placed", "id" => id, "as" => "cyfr:fern-care"}
+
+          %{"id" => id} ->
+            %{"t" => "yielded", "id" => id}
+        end)
+
+      spec = spec!(ctx, turn)
+      mark = Aqua.Reader.mark(thread.id)
+
+      # Every scroll the turn hands, by name, each as stored, one a line,
+      # and none of another athanor's.
+      assert Enum.map(scrolls, & &1["name"]) == Enum.map(spec.scrolls.entries, & &1.name)
+      assert "fern-care" in Enum.map(scrolls, & &1["name"])
+
+      for scroll <- scrolls do
+        {:ok, stored} = Compendium.skill(ctx, scroll["name"])
+
+        assert Map.take(scroll, ~w(t name description body)) ==
+                 %{
+                   "t" => "scroll",
+                   "name" => stored.name,
+                   "description" => stored.description,
+                   "body" => stored.body
+                 }
+      end
+
+      refute Jason.encode!(scrolls) =~ "OTHER-ATHANOR-SCROLL"
+      refute Jason.encode!(scrolls) =~ "faraway-xq"
+
+      # The start's instructions: the rule names the placed scroll as the
+      # program lists it, the index the yielded ones alone.
+      assert %{"t" => "start"} = start
+
+      assert start["system"] ==
+               Aqua.Reader.deliver(
+                 Aqua.Prompt.program(spec.system, spec.scrolls, [{"fern-care", "cyfr:fern-care"}]),
+                 mark
+               )
+
+      assert start["system"] =~
+               "A scroll is only the text between `⟦#{mark} scroll \"<name>\"⟧` and `⟦#{mark} end⟧`, " <>
+                 "or one of the skills your program lists from CYFR's place for this start, " <>
+                 "which are exactly `cyfr:fern-care`."
+
+      [_instructions, index] =
+        String.split(start["system"], "\n\n---\n\n## Scrolls\n\n", parts: 2)
+
+      assert index =~
+               "Your program lists them among its skills, `cyfr:fern-care`; read any other with "
+
+      assert index =~ "\n- research — "
+      refute index =~ "\n- fern-care"
+
+      say(fake, row, started([]))
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Hi."))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    @tag harness: :program
+    test "every one yielded leave a program's instructions as the model's harness's",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      own_scroll!(ctx, "tidy-up", "Put things back.")
+      turn = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      {scrolls, start} = scrolled!(fake, row, &%{"t" => "yielded", "id" => &1["id"]})
+      spec = spec!(ctx, turn)
+      mark = Aqua.Reader.mark(thread.id)
+      assert scrolls != []
+
+      assert start["system"] ==
+               Aqua.Reader.deliver(spec.system <> scroll_index(spec), mark)
+
+      refute start["system"] =~ "CYFR's place"
+      say(fake, row, started([]))
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    # A scroll kept out for a program's own of its name is said in the
+    # turn's activity; one a driver that places none yields is not.
+    @tag harness: :program
+    test "kept out for a program's own name, is said in the turn's activity",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      own_scroll!(ctx, "fern-care", "Water it weekly.")
+      own_scroll!(ctx, "tidy-up", "Put things back.")
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+      turn = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+
+      {_scrolls, _start} =
+        scrolled!(fake, row, fn
+          %{"name" => "research", "id" => id} -> %{"t" => "yielded", "id" => id, "why" => "own"}
+          %{"id" => id} -> %{"t" => "yielded", "id" => id}
+        end)
+
+      kept = %{
+        tool: "Scrolls read from CYFR: research",
+        sentence:
+          "The program has its own by these names, or where it keeps its own could not be read.",
+        status: :done,
+        preview: nil
+      }
+
+      assert Enum.find_value(1..3, fn _ -> kept in activity!() end)
+      say(fake, row, started([]))
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    @tag harness: :program
+    test "one its driver could not write ends the work naming it, and nothing starts",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      own_scroll!(ctx, "tidy-up", "Put things back.")
+      turn = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      Process.delete(:scrolls_fake)
+      first = sent()
+      assert %{"t" => "scroll"} = first
+
+      say(fake, row, %{
+        "t" => "refused",
+        "id" => first["id"],
+        "reason" => "The scroll could not be written."
+      })
+
+      sentence =
+        ~s(Aqua could not start: the scroll "#{first["name"]}" could not be put among its program's skills.)
+
+      assert {:failed, ^sentence} = Task.await(loop, 30_000)
+      refute_receive {:session, "send", %{"lines" => [_line]}, _fields}, 200
+      assert {:ok, %{error: ^sentence}} = Tape.turn(ctx, turn.id)
+    end
+  end
+
   # What each answer is, on both harnesses: a scroll read by name in the
   # thread's scroll frame, an outside server's answer in its outside frame,
   # a note and a refusal as CYFR's own words, unframed. The person's post,
@@ -7506,6 +7730,37 @@ defmodule Aqua.ProgramTest do
       "gh:bare_action" => :uncarried,
       "gh:composed_action" => :uncarried
     }
+
+  # The number a session's line `seq` has once its start's scrolls are
+  # answered: every line after the hello comes after one answer a scroll
+  # the athanor keeps (`sent_line/1`).
+  defp line(ctx, seq) when seq >= 2 do
+    {:ok, %{entries: entries}} = Compendium.skills_set(ctx, Compendium.skills_index_limit())
+    seq + length(entries)
+  end
+
+  defp line(_ctx, seq), do: seq
+
+  # A scroll of the athanor's, written as the person writes one.
+  defp own_scroll!(ctx, name, body) do
+    {:ok, _} =
+      Cyfr.Test.AquaTool.call(ctx, %{
+        "action" => "skill_create",
+        "name" => name,
+        "description" => "How #{name} is kept",
+        "content" => body
+      })
+  end
+
+  # The scrolls' index as the model's harness reads it: every scroll the
+  # turn hands, by name and line.
+  defp scroll_index(spec) do
+    Aqua.Prompt.system("", spec.scrolls, "")
+    |> String.replace_suffix("\n\n---\n\n", "")
+  end
+
+  # The clock line a prompt ends with, as it was read.
+  defp clock(system), do: Regex.run(~r/Current date: [^\n]*\z/, system) |> hd()
 
   # Another person's athanor, ready for a turn, with a thread of theirs.
   defp second_athanor! do
@@ -8783,8 +9038,39 @@ defmodule Aqua.ProgramTest do
   defp sent(timeout \\ 10_000), do: timeless(Jason.decode!(sent_line(timeout)))
 
   defp sent_line(timeout \\ 10_000) do
-    assert_receive {:session, "send", %{"lines" => [line]}, _fields}, timeout
-    line
+    assert_receive {:session, "send", %{"lines" => [line]}, fields}, timeout
+
+    case Process.get(:scrolls_fake) && Jason.decode!(line) do
+      %{"t" => "scroll", "id" => id} ->
+        Scripted.write(
+          Process.get(:scrolls_fake),
+          fields.server,
+          Jason.encode!(%{"t" => "yielded", "id" => id})
+        )
+
+        sent_line(timeout)
+
+      _command ->
+        line
+    end
+  end
+
+  # The start's scrolls as the holder writes them, each answered by
+  # `answer`, which takes the line and answers the event, and then the start.
+  defp scrolled!(fake, row, answer) do
+    Process.delete(:scrolls_fake)
+    scrolled(fake, row, answer, [])
+  end
+
+  defp scrolled(fake, row, answer, scrolls) do
+    case sent() do
+      %{"t" => "scroll"} = scroll ->
+        say(fake, row, answer.(scroll))
+        scrolled(fake, row, answer, scrolls ++ [scroll])
+
+      command ->
+        {scrolls, command}
+    end
   end
 
   defp timeless(%{"context" => blocks} = command) do
@@ -9062,6 +9348,8 @@ defmodule Aqua.ProgramTest do
 
   # The attendant committed the session's lines through `seq`.
   defp committed!(ctx, thread, seq, boot \\ nil) do
+    seq = line(ctx, seq)
+
     Prima.Test.Wait.wait_until(
       fn ->
         case TurnStorage.brain(Sanctum.Context.actor(ctx), thread.id) do

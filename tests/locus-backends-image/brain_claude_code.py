@@ -190,7 +190,12 @@ def main():
                "nothing of an account the harness does not name", listed)
         eventually(lambda: not harnesses(stack), "the listing's harness to end")
 
-        # ————— a start, a work and a post —————
+        # ————— a start's scroll, placed as a plugin of its own, then a start, a work and a post —————
+        folder = f".cyfr/scrolls/{hello['boot']}"
+        d.send({"t": "scroll", "id": "stp_start_1:scroll:0", "name": "research", "description": "How it researches",
+                "body": "Search the notes first.\n"})
+        expect(d.expect("placed", "a scroll is placed") == {"t": "placed", "id": "stp_start_1:scroll:0", "as": "cyfr:research"},
+               "a placed scroll is named as Claude Code lists it")
         d.send({"t": "start", "gen": 4, "config": {"model": "fake-haiku", "effort": "high", "harness_tools": ["Bash", "Read"]},
                 "system": SYSTEM})
         started = d.expect("started", "a fresh start answers started")
@@ -244,9 +249,13 @@ def main():
         expect(own == [("mcp__cyfr__echo_env", "start"), ("mcp__cyfr__echo_env", "end"),
                        ("mcp__mine__echo_env", "start"), ("mcp__mine__echo_env", "end")],
                "each call of theirs is shown as the program's own tool by name", own)
+        expect(home_has(c, f"{folder}/skills/research/SKILL.md") and home_has(c, f"{folder}/.claude-plugin/plugin.json"),
+               "the folder is a plugin holding the scroll while the driver runs")
         seen += d.lines
         d.close()
         eventually(lambda: not harnesses(stack), "the closed session's harness to end")
+        eventually(lambda: not home_has(c, folder) and not home_has(c, f"{folder}.lock"),
+                   "the driver's folder and its lock to go at its end")
 
         # ————— a new process resumes the session, with other flags —————
         d = Driver(c, "brain-two")

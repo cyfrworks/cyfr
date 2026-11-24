@@ -74,6 +74,7 @@ defmodule Aqua.Harness do
           required(:spec) => Turn.t(),
           required(:admitted) => map() | nil,
           required(:tools) => [map()],
+          required(:scrolls) => Aqua.Prompt.scrolls(),
           required(:active_ms) => (-> non_neg_integer()),
           required(:history) => ((map() -> boolean()), [map()] -> {:ok, map()} | {:error, term()}),
           optional(atom()) => term()
@@ -96,7 +97,8 @@ defmodule Aqua.Harness do
           | {:text, map()}
           | {:ask, [map()]}
           | {:usage, [map()]}
-          | {:activity, {:own, String.t(), String.t()} | :idle | :session_ended}
+          | {:activity,
+             {:own, String.t(), String.t()} | {:yielded, [String.t()]} | :idle | :session_ended}
           | {:end, finish()}
 
   @callback open(work()) :: {:ok, handle(), facts()} | {:admit, map()} | {:end, finish()}

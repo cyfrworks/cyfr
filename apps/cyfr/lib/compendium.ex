@@ -651,6 +651,10 @@ defmodule Compendium do
   @spec skill_bound() :: %{bytes: pos_integer(), description: pos_integer()}
   def skill_bound, do: %{bytes: AquaSkills.max_bytes(), description: AquaSkills.max_description()}
 
+  @doc "The scrolls a turn hands its harness, with their bodies (`Compendium.AquaSkills.set/2`)."
+  @spec skills_set(Context.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
+  defdelegate skills_set(ctx, limit), to: AquaSkills, as: :set
+
   @doc "The most skills a prompt lists (`Compendium.AquaSkills.index_limit/0`)."
   @spec skills_index_limit() :: pos_integer()
   defdelegate skills_index_limit(), to: AquaSkills, as: :index_limit

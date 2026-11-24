@@ -204,6 +204,12 @@ def main():
         expect(listing_store["sessions"] == {} and listing_store["signin"]["provider"] == "probe",
                "the program deleted the listing's session from its store, and its sign-in stays", listing_store)
 
+        # ————— a start's scroll, which the program keeps no folder of its own for, then a start —————
+        d.send({"t": "scroll", "id": "stp_start_1:scroll:0", "name": "research", "description": "How it researches",
+                "body": "Search the notes first.\n"})
+        expect(d.expect("yielded", "a scroll is yielded") == {"t": "yielded", "id": "stp_start_1:scroll:0"},
+               "every scroll keeps the model's harness's way, placed nowhere")
+
         # ————— a start, a work and a post —————
         d.send({"t": "start", "gen": 4, "config": {"model": "probe/think", "effort": "medium", "access": "full-access"},
                 "system": SYSTEM, "tools": [FILES]})

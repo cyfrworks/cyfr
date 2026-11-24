@@ -1129,6 +1129,7 @@ defmodule Aqua.Loop do
       title: title(state),
       config: config(spec),
       system: spec.system,
+      scrolls: spec.scrolls,
       facts: spec.facts,
       tools: spec.tools,
       active_ms: fn -> Clock.read(state.clock) end,
@@ -2607,6 +2608,24 @@ defmodule Aqua.Loop do
   defp native(%State{} = state, {:own, name, phase}), do: own_activity(state, name, phase)
   defp native(%State{} = state, :idle), do: settle_own(state)
   defp native(%State{} = state, :session_ended), do: settle_own(state)
+
+  # A program's start whose driver kept these scrolls out of its program's
+  # skills, since the program has its own by their names or the driver
+  # could not read where it keeps them (`Aqua.Harness.Program`): one entry,
+  # done, naming them, each read from CYFR with `aqua.skill_get`.
+  defp native(%State{} = state, {:yielded, names}) do
+    entry = %{
+      tool: "Scrolls read from CYFR: " <> Enum.join(names, ", "),
+      sentence:
+        "The program has its own by these names, or where it keeps its own could not be read.",
+      status: :done,
+      preview: nil
+    }
+
+    activity = state.activity ++ [entry]
+    announce(state, :tool_activity, activity)
+    %{state | activity: activity}
+  end
 
   # A program brain's own tool, by the name its attendant gives, running
   # from its start to its end: an entry of the same list, worded as a tool
