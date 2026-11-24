@@ -192,19 +192,43 @@ titled() {
 }
 untitled() { ! titled "$1"; }
 
-# A click on the rail's foot, Update CYFR: 36 points from the app's
-# window's left, 45 from its content's bottom.
+# What the app's windows are, for a row that failed: each one's title,
+# place and size.
+windows_said() {
+  case "$OS" in
+    linux)
+      local w
+      for w in $(xdotool search --name 'CYFR' 2>/dev/null); do
+        echo "$(xdotool getwindowname "$w") $(xdotool getwindowgeometry "$w" | tr '\n' ' ')"
+      done ;;
+    darwin) osascript -e 'tell application "System Events" to tell process "CYFR" to get {name, position, size} of every window' 2>&1 ;;
+    windows)
+      powershell.exe -NoProfile -NonInteractive -Command \
+        "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { \$_.Current.Name + ' ' + \$_.Current.BoundingRectangle }" | tr -d '\r' ;;
+  esac
+}
+
+# A click on the rail's foot, Update CYFR, once the app's window is placed
+# at the screen's corner at 1000 by 700, which a runner's screen holds
+# whole: 36 points from its left, 45 from its content's bottom.
 press_rail_update() {
   case "$OS" in
     linux)
       local W X Y WIDTH HEIGHT SCREEN
-      W=$(xdotool search --name '^CYFR$' | head -1) || return 1
+      # The app's window is the visible one: the engine keeps a hidden one
+      # of the same title.
+      W=$(xdotool search --onlyvisible --name '^CYFR$' | tail -1)
+      [ -n "$W" ] || return 1
+      xdotool windowmove --sync "$W" 0 0 && xdotool windowsize --sync "$W" 1000 700 || return 1
       eval "$(xdotool getwindowgeometry --shell "$W")"
       xdotool mousemove --sync $((X + 36)) $((Y + HEIGHT - 45)) click 1 ;;
     darwin)
       local at
       at=$(osascript -e 'tell application "System Events" to tell process "CYFR"
         set frontmost to true
+        set position of window "CYFR" to {0, 30}
+        set size of window "CYFR" to {1000, 700}
+        delay 1
         set {x, y} to position of window "CYFR"
         set {w, h} to size of window "CYFR"
         return ((x + 36) as text) & " " & ((y + h - 45) as text)
@@ -221,6 +245,7 @@ public static class U {
   [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
   [DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool r);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out R r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref P p);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
@@ -228,6 +253,7 @@ public static class U {
 }
 "@
         $h = [U]::FindWindow($null, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
+        [void][U]::MoveWindow($h, 0, 0, 1000, 700, $true); Start-Sleep -Milliseconds 500
         [void][U]::SetForegroundWindow($h); $r = New-Object U+R; [void][U]::GetClientRect($h, [ref]$r)
         $p = New-Object U+P; $p.X = 36; $p.Y = $r.B - 45; [void][U]::ClientToScreen($h, [ref]$p)
         [void][U]::SetCursorPos($p.X, $p.Y); Start-Sleep -Milliseconds 100
@@ -240,7 +266,8 @@ key() {
   case "$OS" in
     linux)
       local W
-      W=$(xdotool search --name '^Update CYFR' | head -1) || return 1
+      W=$(xdotool search --onlyvisible --name '^Update CYFR' | tail -1)
+      [ -n "$W" ] || return 1
       xdotool windowfocus --sync "$W" && xdotool key --clearmodifiers "$1" ;;
     darwin)
       local code=36
@@ -378,7 +405,7 @@ window() {
   if [ -n "$before" ] && press_rail_update && within 60 titled "release $U"; then
     pass window_opened "the rail's foot opened Update CYFR offering $U"
   else
-    fail window_opened "no Update CYFR offering $U opened: the app's windows say '$(titled x; echo $?)': $(tail -5 "$LOGS/app-window.log")"
+    fail window_opened "no Update CYFR offering $U opened; the app's windows: $(windows_said | tr '\n' ';')"
     return
   fi
 
