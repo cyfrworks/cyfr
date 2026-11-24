@@ -141,7 +141,7 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
       reload_registry(athanor.id)
     end)
 
-    {:ok, conn: conn, ctx: ctx}
+    {:ok, conn: conn, ctx: ctx, user: user}
   end
 
   # A tincture version in the athanor's tree and its component row,
@@ -296,4 +296,67 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
     {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
     assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
   end
+
+  # The desktop's two overlays, each once it has reported in to the shell.
+  defp overlays!(view) do
+    panel = find_live_child(view, "aqua-panel")
+    chat = find_live_child(view, "chat-overlay")
+    render(panel)
+    render(chat)
+    _ = render(view)
+    {panel, chat}
+  end
+
+  describe "the shell's key threads" do
+    test "without a ref opens Aqua's panel on the whole list of the person's threads",
+         %{conn: conn} do
+      view = shell!(conn)
+      {panel, chat} = overlays!(view)
+      refute has_element?(panel, "#aqua-panel-threads")
+
+      render_hook(view, "shell_key", %{"key" => "threads"})
+
+      wait_until(fn -> has_element?(panel, "#aqua-panel-threads") end, 5_000, "All threads")
+      refute has_element?(chat, "#chat-sheet")
+    end
+
+    test "with a ref opens a shared thread the person sits in in Chat, and any other in the " <>
+           "panel, which reads it under the person's own athanor",
+         %{conn: conn, ctx: ctx, user: user} do
+      {:ok, plans} = Arca.Test.Days.thread(Sanctum.Context.actor(ctx))
+      {:ok, team} = Sanctum.SharedThreads.create(user.user_id, "Team")
+      stranger = test_user()
+      {:ok, theirs} = Sanctum.SharedThreads.create(stranger.user_id, "Not the person's")
+
+      view = shell!(conn)
+      {panel, chat} = overlays!(view)
+
+      render_hook(view, "shell_key", %{"key" => "threads", "ref" => team.id})
+
+      wait_until(
+        fn -> find_live_child(chat, "chat-thread-" <> team.id) != nil end,
+        5_000,
+        "the shared thread in Chat"
+      )
+
+      refute has_element?(panel, "#aqua-panel-sheet")
+
+      render_hook(view, "shell_key", %{"key" => "threads", "ref" => plans.id})
+
+      wait_until(
+        fn -> match?(%{id: id} when id == plans.id, panel_thread(panel)) end,
+        5_000,
+        "the athanor's thread in the panel"
+      )
+
+      # A shared thread the person does not sit in is no seat of theirs:
+      # it is not opened in Chat, and the panel finds nothing of theirs by it.
+      render_hook(view, "shell_key", %{"key" => "threads", "ref" => theirs.id})
+      _ = render(panel)
+      refute find_live_child(chat, "chat-thread-" <> theirs.id)
+      refute match?(%{id: id} when id == theirs.id, panel_thread(panel))
+    end
+  end
+
+  defp panel_thread(panel), do: :sys.get_state(panel.pid).socket.assigns.thread
 end

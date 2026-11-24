@@ -15,8 +15,7 @@ defmodule PrismWeb.AquaPanelLive do
   header names the day shown by its date
   (`PrismWeb.DisplayHelpers.day_name/1`), its back control goes to the nearest
   earlier day that has a thread (`Arca.ThreadStorage.adjacent_day/3`),
-  and its forward control and Today return. There is no list of threads
-  to choose from.
+  and its forward control and Today return.
 
   The button carries how many of today's posts the person has not seen
   (`Arca.ThreadStorage.unread/2`), none while today has no thread. It is
@@ -40,14 +39,20 @@ defmodule PrismWeb.AquaPanelLive do
   is reached from its room. While the athanor's seeding has not finished
   the panel says so and offers to try it again (`athanor.provision`).
 
-  The panel lists the person's workspace threads (`Aqua.workspaces/1`):
-  each still going, each waiting on them and each whose work ended with
-  posts they have not seen, by its title, its state
+  The panel lists the person's workspace threads not archived, the latest
+  activity first, whatever their state and whatever they have read, from
+  their list of threads (`Aqua.threads/2`): each by its title, its state
   (`PrismWeb.DisplayHelpers.work_state/1`) and how many posts are new. One
-  whose work ended that they have read leaves by itself. The list is read
-  when the panel opens and again, while it is open, when the person's list
-  announces a workspace thread (a crew member's thread under one announces
-  it too).
+  stays until it is archived. Its All threads control opens the whole
+  list inside the panel: the daily, workspace and shared threads, an
+  archived one marked, with a box that narrows it to the threads whose
+  title holds what is typed (`Aqua.threads/2`'s `title:`, matched over
+  every thread of theirs). A thread of the athanor chosen there is
+  reached as any thread here is; a shared one opens in Chat, which the
+  desktop opens at it. Both lists are read when they open and again,
+  while the panel is open, when the person's list announces a workspace
+  thread or a removal (a crew member's thread under one announces it
+  too).
 
   A workspace thread is not shown in the panel: it opens as its own layer
   over the desktop (`PrismWeb.WorkspaceLive`). Asked for one, from the
@@ -60,7 +65,8 @@ defmodule PrismWeb.AquaPanelLive do
   The desktop opens it for a canvas's `settings` of `aqua`, on today's
   thread, or at the thread a `ref` names: any thread of the person's
   athanor, an earlier day's or a crew member's included, and a workspace
-  thread at its layer.
+  thread at its layer; and for its page key `threads` without a `ref`,
+  on All threads.
 
   A page may ask it about something it shows (`Cyfr.Bus.AquaAsk`, on the
   page's own topic the session names, `aqua_ask`): a closed panel opens on
@@ -139,6 +145,7 @@ defmodule PrismWeb.AquaPanelLive do
       |> assign(:unread, 0)
       |> assign(:earlier, false)
       |> assign(:works, [])
+      |> assign(:all, nil)
       |> assign(:pane, nil)
       |> assign(:room, session["room"])
       |> assign(:room_feed, room_feed)
@@ -348,17 +355,46 @@ defmodule PrismWeb.AquaPanelLive do
 
   defp close_menu(socket), do: push_event(socket, "aqua:close_menu", %{})
 
-  # The person's workspace threads as the list shows them, read under the
-  # panel's context; a read that fails keeps what was shown.
+  # The person's workspace threads not archived, from their list of
+  # threads read under the panel's context; a read that fails keeps what
+  # was shown.
   defp read_works(socket) do
-    case Aqua.workspaces(socket.assigns.context) do
-      {:ok, works} -> assign(socket, :works, works)
+    case Aqua.threads(socket.assigns.context, title: nil) do
+      {:ok, threads} ->
+        assign(socket, :works, for(%{kind: :workspace, archived: false} = t <- threads, do: t))
+
+      {:error, _unread} ->
+        socket
+    end
+  end
+
+  # All threads, open: the whole list, narrowed to the title typed, read
+  # under the panel's context; a read that fails keeps what was shown.
+  defp read_all(%{assigns: %{all: %{title: title}}} = socket) do
+    case Aqua.threads(socket.assigns.context, title: title) do
+      {:ok, threads} -> assign(socket, :all, %{title: title, threads: threads})
       {:error, _unread} -> socket
     end
   end
 
-  defp read_works_if_open(%{assigns: %{open: true}} = socket), do: read_works(socket)
+  defp read_all(socket), do: socket
+
+  defp read_works_if_open(%{assigns: %{open: true}} = socket),
+    do: socket |> read_works() |> read_all()
+
   defp read_works_if_open(socket), do: socket
+
+  defp show_all(socket), do: read_all(assign(socket, :all, %{title: nil, threads: []}))
+
+  # What a typed title asks: nil for nothing but spaces.
+  defp asked_title(text) when is_binary(text) do
+    case String.trim(text) do
+      "" -> nil
+      _typed -> text
+    end
+  end
+
+  defp asked_title(_text), do: nil
 
   # Whether a daily thread has an earlier day to step back to.
   defp earlier?(socket, %{kind: "daily", day: %Date{} = day}),
@@ -399,7 +435,8 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   def handle_event("close", _params, socket) do
-    {:noreply, socket |> assign(:open, false) |> assign(:pane, nil) |> remember()}
+    {:noreply,
+     socket |> assign(:open, false) |> assign(:pane, nil) |> assign(:all, nil) |> remember()}
   end
 
   def handle_event("toggle", params, %{assigns: %{open: true}} = socket),
@@ -446,6 +483,41 @@ defmodule PrismWeb.AquaPanelLive do
       nil -> {:noreply, socket}
     end
   end
+
+  def handle_event("all_threads", _params, %{assigns: %{all: nil}} = socket),
+    do: {:noreply, show_all(socket)}
+
+  def handle_event("all_threads", _params, socket), do: {:noreply, assign(socket, :all, nil)}
+
+  def handle_event("search_threads", params, %{assigns: %{all: %{}}} = socket) do
+    title = asked_title(params["title"])
+    {:noreply, socket |> assign(:all, %{socket.assigns.all | title: title}) |> read_all()}
+  end
+
+  def handle_event("search_threads", _params, socket), do: {:noreply, socket}
+
+  # A thread chosen from All threads, read under the panel's context: one
+  # of the athanor is reached as any thread here is, and a shared one the
+  # list holds opens in Chat, which the desktop opens at it.
+  def handle_event(
+        "choose_thread",
+        %{"id" => id},
+        %{assigns: %{all: %{threads: listed}}} = socket
+      )
+      when is_binary(id) do
+    case own_thread(socket, id) do
+      %{} = thread ->
+        {:noreply, socket |> assign(:all, nil) |> reach(thread)}
+
+      nil ->
+        if Enum.any?(listed, &(&1.kind == :shared and &1.id == id)) and socket.parent_pid,
+          do: send(socket.parent_pid, {:open_chat, id})
+
+        {:noreply, assign(socket, :all, nil)}
+    end
+  end
+
+  def handle_event("choose_thread", _params, socket), do: {:noreply, socket}
 
   # A seeding that failed is tried again by the person; the line says how
   # it went.
@@ -539,6 +611,20 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   def handle_info(:open, socket), do: {:noreply, socket}
+
+  # The desktop opens the panel on All threads (its page key `threads`):
+  # a closed panel opens on today's thread, as the button does, with the
+  # whole list over it.
+  def handle_info(:threads, %{assigns: %{phase: :ready}} = socket) do
+    socket =
+      if socket.assigns.open,
+        do: socket,
+        else: socket |> open_on(nil) |> remember()
+
+    {:noreply, show_all(socket)}
+  end
+
+  def handle_info(:threads, socket), do: {:noreply, socket}
 
   # The desktop opens the panel at a thread (a canvas's `settings` of
   # `aqua` with a `ref`): any thread of the person's athanor, read under
@@ -775,8 +861,8 @@ defmodule PrismWeb.AquaPanelLive do
             aria-controls="aqua-panel-pane-menu"
             aria-expanded="false"
             phx-mounted={JS.ignore_attributes(["aria-expanded"])}
-            aria-label="This thread's model and usage"
-            title="This thread's model and usage"
+            aria-label="This thread's menu"
+            title="This thread's menu"
             class="aqua-panel-ghost"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -845,8 +931,8 @@ defmodule PrismWeb.AquaPanelLive do
           {@notice}
         </p>
 
-        <%!-- The workspace threads still going, waiting on the person or
-              holding posts they have not seen; each opens at its layer. --%>
+        <%!-- The workspace threads not archived, whatever their state; each
+              opens at its layer. --%>
         <ul
           :if={@works != []}
           id="aqua-panel-works"
@@ -878,6 +964,76 @@ defmodule PrismWeb.AquaPanelLive do
             </button>
           </li>
         </ul>
+
+        <button
+          id="aqua-panel-all-threads"
+          type="button"
+          phx-click="all_threads"
+          aria-expanded={to_string(@all != nil)}
+          aria-controls={@all && "aqua-panel-threads"}
+          class="flex min-h-6 w-full shrink-0 items-center border-b border-border-default px-3 text-left text-xs text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:text-text-primary"
+        >
+          All threads
+        </button>
+
+        <%!-- Every thread of the person's: the athanor's daily and workspace
+              threads, an archived one marked, and the shared threads they
+              sit in, narrowed by a title typed. --%>
+        <section
+          :if={@all}
+          id="aqua-panel-threads"
+          aria-label="All threads"
+          class="flex max-h-[45%] shrink-0 flex-col border-b border-border-default"
+        >
+          <form
+            id="aqua-panel-threads-search"
+            phx-change="search_threads"
+            phx-submit="search_threads"
+            class="shrink-0 px-3 py-1"
+          >
+            <input
+              type="search"
+              name="title"
+              value={@all.title}
+              placeholder="Find a thread by its title"
+              aria-label="Find a thread by its title"
+              autocomplete="off"
+              phx-debounce="200"
+              class="w-full rounded-[7px] border border-border-default bg-transparent px-2 py-0.5 text-xs text-text-primary placeholder:text-text-muted focus-visible:border-border-focus focus-visible:outline-none"
+            />
+          </form>
+          <p :if={@all.threads == []} class="px-3 py-1 text-xs text-text-muted">
+            No thread has that title.
+          </p>
+          <ul class="min-h-0 overflow-y-auto py-0.5">
+            <li
+              :for={listed <- @all.threads}
+              id={"aqua-panel-thread-" <> listed.id}
+              data-kind={to_string(listed.kind)}
+              data-archived={to_string(listed.archived)}
+            >
+              <button
+                type="button"
+                phx-click="choose_thread"
+                phx-value-id={listed.id}
+                class="flex min-h-6 w-full min-w-0 items-center gap-1.5 px-3 text-left text-xs text-text-secondary hover:text-text-primary"
+              >
+                <span class="min-w-0 truncate font-semibold">{listed_name(listed)}</span>
+                <span :if={listed_kind(listed)} class="shrink-0 text-text-muted">
+                  {listed_kind(listed)}
+                </span>
+                <span :if={listed.archived} class="shrink-0 text-text-muted">Archived</span>
+                <span
+                  :if={listed.unread > 0}
+                  class="shelf-end-count shrink-0"
+                  aria-label={"#{listed.unread} new"}
+                >
+                  {listed.unread}
+                </span>
+              </button>
+            </li>
+          </ul>
+        </section>
 
         {live_render(@socket, PrismWeb.ThreadPaneLive,
           id: "aqua-panel-pane",
@@ -917,6 +1073,22 @@ defmodule PrismWeb.AquaPanelLive do
   defp thread_name(%{kind: "daily", day: day}), do: day_name(day)
   defp thread_name(%{kind: "crew", agent: agent}), do: "#{agent}'s thread"
   defp thread_name(%{title: title}), do: title
+
+  # A thread of All threads by its name: a daily thread by its day's date
+  # in words, a shared one with no title as what it is.
+  defp listed_name(%{kind: :daily, title: title}) do
+    case Date.from_iso8601(title || "") do
+      {:ok, day} -> day_name(day)
+      {:error, _not_a_date} -> title
+    end
+  end
+
+  defp listed_name(%{kind: :shared, title: nil}), do: "A shared thread"
+  defp listed_name(%{title: title}), do: title
+
+  defp listed_kind(%{kind: :shared}), do: "Shared"
+  defp listed_kind(%{kind: :workspace, state: state}), do: work_state(state)
+  defp listed_kind(_daily), do: nil
 
   @doc "The id of the panel's own system layer, beside the page's."
   @spec layer_id() :: String.t()

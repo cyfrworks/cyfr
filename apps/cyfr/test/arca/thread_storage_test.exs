@@ -158,6 +158,87 @@ defmodule Arca.ThreadStorageTest do
     end
   end
 
+  describe "a title" do
+    # Workspace threads of `actor`'s athanor, written as the store writes
+    # them, the first `minutes_back` minutes before now and each next one a
+    # minute older.
+    defp titled!(actor, titles, minutes_back) do
+      now = DateTime.utc_now()
+
+      rows =
+        for {title, i} <- Enum.with_index(titles) do
+          at = DateTime.add(now, -(minutes_back + i) * 60, :second)
+
+          %{
+            id: Prima.UUID7.generate_id("thread"),
+            athanor_id: actor.athanor_id,
+            kind: "workspace",
+            workspace_state: "open",
+            title: title,
+            created_by: actor.user_id,
+            last_message_at: at,
+            inserted_at: at,
+            updated_at: at
+          }
+        end
+
+      {_count, _} = Arca.Repo.insert_all(Arca.Schemas.Thread, rows)
+      rows
+    end
+
+    # The thread's last activity back where its row was written, after a
+    # post moved it.
+    defp active_at!(row) do
+      Arca.Schemas.Thread
+      |> Arca.Repo.get!(row.id)
+      |> Ecto.Changeset.change(last_message_at: row.last_message_at)
+      |> Arca.Repo.update!()
+    end
+
+    test "is found by its text folded to lower case, in no post's body and past the list's " <>
+           "limit, a daily thread's by its date, and never in another athanor",
+         %{ctx: ctx} do
+      [moon] = titled!(ctx, ["Moon Report"], 1_000)
+      newer = titled!(ctx, for(n <- 1..200, do: "Newer #{n}"), 0)
+      {:ok, _} = Threads.append(ctx, moon.id, %{author: "aqua", sent_by: "aqua", content: "hi"})
+      active_at!(moon)
+      {:ok, daily} = Days.thread(ctx)
+
+      other = user_actor("local|idp|carol", "ath_b")
+      [theirs] = titled!(other, ["Moon Report"], 0)
+
+      # The list's window is the 200 newest; the moon is older than all.
+      refute moon.id in Enum.map(Threads.list(ctx), & &1.id)
+
+      assert [%{id: id, title: "Moon Report"}] = Threads.list(ctx, title: "mOOn rep")
+      assert id == moon.id
+      assert [%{id: ^id}] = Threads.list(ctx, title: "moon", kind: "workspace", archived: false)
+      assert Threads.list(ctx, title: "moon", kind: "daily") == []
+      assert Threads.list(ctx, title: "moon", archived: true) == []
+
+      assert [%{id: theirs_id}] = Threads.list(other, title: "moon")
+      assert theirs_id == theirs.id
+
+      assert [%{id: daily_id}] = Threads.list(ctx, title: Date.to_iso8601(daily.day))
+      assert daily_id == daily.id
+
+      # Every match before the limit, the latest activity first.
+      found = Threads.list(ctx, title: "newer", limit: 3)
+      assert Enum.map(found, & &1.id) == newer |> Enum.take(3) |> Enum.map(& &1.id)
+    end
+
+    test "is plain text: no character of it is a pattern", %{ctx: ctx} do
+      [sale] = titled!(ctx, ["50%_off!"], 0)
+      _plain = titled!(ctx, ["500 off", "5 of 0"], 1)
+
+      assert [%{id: id}] = Threads.list(ctx, title: "%_")
+      assert id == sale.id
+      assert [%{id: ^id}] = Threads.list(ctx, title: "0%_O")
+      assert Threads.list(ctx, title: "5%") == []
+      assert Threads.list(ctx, title: "_") |> Enum.map(& &1.id) == [id]
+    end
+  end
+
   describe "the read mark" do
     test "moves forward only, never past the last message, and answers where it stands", %{
       ctx: ctx

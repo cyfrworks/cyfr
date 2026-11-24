@@ -124,6 +124,15 @@ defmodule PrismWeb.ShellLive do
   and the canvas is decided anew. The page key `aqua_setup` opens Aqua's
   setup, the Aqua page at `?setup=1`, as the overlay over the desktop.
 
+  The key `threads` opens the person's threads, from a desktop's
+  `settings` and from a desktop address with `?shell=threads&ref=<id>`
+  (the palette's threads), handed here as `shell_key`: without a `ref`,
+  Aqua's panel on All threads; with one, a shared thread the person sits
+  in opens in the chat, decided by a read under their seat
+  (`Sanctum.SharedThreads.active_seat?/2`), and any other id in Aqua's
+  panel, which reads it under the person's own athanor. The panel asks
+  for a shared thread its list holds the same way (`{:open_chat, ref}`).
+
   A canvas frame is a page like any tincture's: its messages over the
   port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
   as `frame_verb`. Its handshake hands it its bearer and its `canvas`
@@ -769,9 +778,14 @@ defmodule PrismWeb.ShellLive do
 
   # The chooser of desktops, opened by its key from the shelf or from a
   # desktop address (`?shell=desktops`, the palette's), as a desktop's
-  # `settings` opens it.
+  # `settings` opens it; and the person's threads, by the key `threads`
+  # from a desktop address (`?shell=threads&ref=<id>`, the palette's), as
+  # the `settings` of `threads` opens them.
   def handle_event("shell_key", %{"key" => "desktops"}, socket),
     do: {:noreply, open_chooser(socket)}
+
+  def handle_event("shell_key", %{"key" => "threads"} = params, socket),
+    do: {:noreply, settings(socket, "threads", params["ref"])}
 
   def handle_event("choose_desktop", %{"ref" => ref}, socket) when is_binary(ref),
     do: {:noreply, choose_desktop(socket, ref)}
@@ -1643,6 +1657,23 @@ defmodule PrismWeb.ShellLive do
 
   # The shell's chooser of desktops, over the canvas.
   defp settings(socket, "desktops", _ref), do: open_chooser(socket)
+
+  # The person's threads: without a `ref` Aqua's panel on All threads;
+  # with one, a shared thread the person sits in opens in the chat, read
+  # under their seat, and any other id in the panel, which reads it under
+  # their own athanor and opens on today's thread when it names none of
+  # theirs.
+  defp settings(%{assigns: %{aqua_panel: pid}} = socket, "threads", nil) when is_pid(pid) do
+    send(pid, :threads)
+    socket
+  end
+
+  defp settings(socket, "threads", ref) when is_binary(ref) do
+    case Sanctum.SharedThreads.active_seat?(socket.assigns.context.user_id, ref) do
+      {:ok, true} -> settings(socket, "chat", ref)
+      _not_seated -> settings(socket, "aqua", ref)
+    end
+  end
 
   # Aqua's setup, a section of the Aqua page at its own address, opened as
   # the overlay over the desktop like any of Prism's pages.
@@ -3391,6 +3422,11 @@ defmodule PrismWeb.ShellLive do
 
   def handle_info({:aqua_panel, pid}, socket) when is_pid(pid),
     do: {:noreply, assign(socket, :aqua_panel, pid)}
+
+  # Aqua's panel asks for a shared thread its list of threads holds: the
+  # chat opens at it, read under the person's own seat.
+  def handle_info({:open_chat, ref}, socket) when is_binary(ref),
+    do: {:noreply, settings(socket, "chat", ref)}
 
   def handle_info({:deliver, tag, message}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))

@@ -197,4 +197,60 @@ defmodule PrismWeb.CommandPaletteTest do
 
     assert to == "/a/#{route}/?shell=desktops"
   end
+
+  # A workspace thread of `athanor_id` titled `title`, as the store writes one.
+  defp thread!(athanor_id, title) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("thread")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.Thread, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          kind: "workspace",
+          workspace_state: "done",
+          title: title,
+          created_by: Prima.Author.system(),
+          last_message_at: now,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  test "a typed title lists the person's thread, which opens through the desktop's threads key, and another athanor's never",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    other = test_user()
+    theirs = Sanctum.Test.People.athanor!(other.user_id)
+
+    mine = thread!(athanor.id, "Moon Report")
+    not_mine = thread!(theirs.id, "Moon Report too")
+
+    {view, _html} = mount_athanor(conn, "/settings")
+    view |> with_target("#command-palette") |> render_click("toggle", %{})
+    view |> element("#command-palette input") |> render_keyup(%{"value" => "mOOn rep"})
+
+    assert has_element?(
+             view,
+             ~s(#command-palette button[phx-value-to="/?shell=threads&ref=#{mine}"]),
+             "Moon Report"
+           )
+
+    refute has_element?(view, ~s(#command-palette [phx-value-to*="#{not_mine}"]))
+
+    route = Sanctum.Tenancy.Athanors.route_slug(athanor)
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view
+             |> element(~s(#command-palette button[phx-value-to="/?shell=threads&ref=#{mine}"]))
+             |> render_click()
+
+    assert to == "/a/#{route}/?shell=threads&ref=#{mine}"
+  end
 end
