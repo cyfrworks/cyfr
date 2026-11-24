@@ -319,11 +319,12 @@ setup_in_the_app_before_the_group() {
   screen_shows "Set up and start" 120 || { guest_screenshot setup-app-stuck.png || true; fail "Set up and start was not offered within 120 s: Docker did not answer the app's setup (setup-app-stuck.png)"; }
   guest_screenshot setup-app-ready.png || fail "the setup screen was not captured"
   screen_press "Set up and start" || fail "Set up and start was not on the display ($GUEST_DIR/screen-press.txt)"
-  # Done, the app opens the CYFR it set up at its first person's page,
-  # the device's pages on Linux, which this journey leaves unanswered.
-  screen_shows "Add this device to my account" 960 || { guest_screenshot setup-app-stuck.png || true; fail "the app's setup did not end on the CYFR's first person's page within 960 s (setup-app-stuck.png)"; }
+  # Done, the app leaves its setup screen for the CYFR it set up, at its
+  # first person's page, the device's pages on Linux, which this journey
+  # leaves unanswered; a setup that fails stays on its screen, saying why.
+  screen_shows_not "Set up CYFR on this computer" 960 || { guest_screenshot setup-app-stuck.png || true; fail "the app's setup did not leave its screen within 960 s (setup-app-stuck.png)"; }
+  check "the app's setup opens the CYFR it set up at its first person's page" screen_shows "Set up CYFR" 30
   guest_screenshot setup-app-done.png || fail "the setup's end was not captured"
-  check "the app's setup opens the CYFR it set up at its first person's page" screen_shows "Set up CYFR" 10
   check "CYFR answers at http://localhost:4000, from ~/setup-here's stack" guest_root \
     "curl -s -o /dev/null --max-time 5 http://localhost:4000/ && [ \"\$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cyfr)\" = /home/proof/setup-here ]"
   guest_ssh 'pkill -TERM -u proof -x labwc' || fail "labwc was not asked to end"
