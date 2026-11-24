@@ -29,7 +29,8 @@
 # read passes for words not shown.
 # Words are read on the display's grey, on its inverse and on its bright
 # pixels alone, twice its size: light text on dark, dark on light and
-# white on colour alike. A key is a uniform
+# white on colour alike; dark words on a light box on a dark page, the
+# CYFR app's main button, in that box alone. A key is a uniform
 # grey box in the display's bottom third, its label cropped to its own
 # bright pixels and read alone. Digits, words and Enter read reliably;
 # single letters do not (i, l and j read as l or |; g as q; y as v; p as
@@ -85,7 +86,36 @@ def words(img, scale=2):
     for n, variant in enumerate((grey, ImageOps.invert(grey), grey.point(lambda v: 0 if v > 200 else 255))):
         for text, x, y, w, h, line in tesseract(variant, 11):
             found.append((text, x // scale, y // scale, (x + w) // scale, (y + h) // scale, (n,) + line))
+    # Dark words on a light box drawn on a dark page, a button the app
+    # draws so, tesseract passes over in every variant above: each such
+    # box is read alone, as one line.
+    for b, (x0, y0, x1, y1) in enumerate(light_boxes(img)):
+        inner = grey.crop((x0 * scale, y0 * scale, x1 * scale, y1 * scale))
+        for text, x, y, w, h, line in tesseract(ImageOps.expand(inner, border=20, fill=255), 7):
+            x, y = x - 20 + x0 * scale, y - 20 + y0 * scale
+            found.append((text, x // scale, y // scale, (x + w) // scale, (y + h) // scale, (3, f"box{b}") + line[1:]))
     return found
+
+
+def light_boxes(img, least=(40, 20)):
+    """Each light box on the display at least `least` wide and high: its
+    top edge and left edge light from its top left corner, as a button's
+    are, where its words are not."""
+    px = img.convert("L").load()
+    W, H = img.size
+    boxes = []
+    for y in range(0, H, 2):
+        for x in range(0, W, 2):
+            if px[x, y] <= 200 or any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in boxes):
+                continue
+            x1, y1 = x, y
+            while x1 + 1 < W and px[x1 + 1, y] > 200:
+                x1 += 1
+            while y1 + 1 < H and px[x, y1 + 1] > 200:
+                y1 += 1
+            if x1 - x >= least[0] and y1 - y >= least[1]:
+                boxes.append((x, y, x1, y1))
+    return boxes
 
 
 def plain(text):
