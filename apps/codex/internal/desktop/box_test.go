@@ -30,6 +30,8 @@ type onBox struct {
 	*app
 	at      atomic.Value
 	answers atomic.Bool
+	// tokens counts the reads of the folder's setup token.
+	tokens atomic.Int32
 	mu      sync.Mutex
 	log     []string
 }
@@ -53,7 +55,11 @@ func newOnBox(t *testing.T) *onBox {
 		if project != boxFolder {
 			t.Errorf("the box read %s, not its folder", project)
 		}
-		return Local{Shell: shell.Config{Address: b.at.Load().(string), Client: offline(), Directory: account.DefaultDirectory},
+		return Local{Shell: shell.Config{Address: b.at.Load().(string), Client: offline(), Directory: account.DefaultDirectory,
+			SetupToken: func(context.Context) (string, http.RoundTripper) {
+				b.tokens.Add(1)
+				return strings.Repeat("cd", 32), nil
+			}},
 			Answers: func(context.Context) error {
 				if b.answers.Load() {
 					return nil
@@ -84,8 +90,8 @@ func (b *onBox) said() string {
 func (b *onBox) openBox(t *testing.T, home string) {
 	t.Helper()
 	done := b.connect(t, "/bootstrap/box", map[string]string{})
-	if m := b.next(t); m.Type != TypeHome || m.Home != home {
-		t.Fatalf("This box proposed %+v, not %s", m, home)
+	if m := b.next(t); m.Type != TypeHome || m.Home != home || m.Setup != "" {
+		t.Fatalf("This box proposed %+v, not %s with no setup token", m, home)
 	}
 	b.ready(home)
 	if got := answered(t, done); got.Next != "/" {
@@ -345,4 +351,51 @@ func TestABoxForgetsOnlyWhileUnlocked(t *testing.T) {
 	b.erases(t, 2)
 	b.Forget(work)
 	b.erases(t, 2)
+}
+
+// A box's selections start locked and nothing late of one publishes: This
+// box opened shows the device's own page, unlocked by nothing and handing
+// no ticket on; a press answered after a lock opens nothing; and its
+// setup token is read only at the device's first hello, never at the
+// press. A CYFR elsewhere gets nothing of the box's folder: no work begun
+// for it, no setup token, the folder unread.
+func TestABoxsSelectionsStartLockedAndGiveACYFRElsewhereNothing(t *testing.T) {
+	b := newOnBox(t)
+	b.openBox(t, localAddress)
+	if page := b.answered(t); b.sh.Unlocked() || strings.Contains(page, "data-to=") {
+		t.Fatalf("This box opened unlocked, or handed a ticket on:\n%s", page)
+	}
+	if n := b.tokens.Load(); n != 0 {
+		t.Fatalf("This box's press read its setup token %d times", n)
+	}
+	b.Leave(1)
+	b.next(t)
+	b.next(t)
+
+	done := b.connect(t, "/bootstrap/box", map[string]string{})
+	b.next(t)
+	b.Lock("Locked.")
+	b.next(t)
+	b.ready(localAddress)
+	if got := answered(t, done); got.Next != "" {
+		t.Fatalf("a press answered after a lock opened: %+v", got)
+	}
+	b.quiet(t)
+
+	reads := 0
+	read := b.Local
+	b.Local = func(project string) (Local, error) { reads++; return read(project) }
+	done = b.connect(t, "/bootstrap/connect", map[string]string{"address": "https://work.example.com"})
+	if m := b.next(t); m.Type != TypeHome || m.Setup != "" || m.Proxy != "" {
+		t.Fatalf("a CYFR elsewhere was proposed %+v", m)
+	}
+	b.ready("https://work.example.com")
+	answered(t, done)
+	b.opened(t, "https://work.example.com")
+	b.Service.mu.Lock()
+	here := b.here
+	b.Service.mu.Unlock()
+	if here != nil || reads != 0 || b.tokens.Load() != 0 {
+		t.Fatalf("a CYFR elsewhere got the box's folder: its work %v, %d readings, %d setup tokens", here, reads, b.tokens.Load())
+	}
 }

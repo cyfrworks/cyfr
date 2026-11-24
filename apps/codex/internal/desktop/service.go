@@ -777,8 +777,11 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 	if err != nil {
 		return answer{Error: "This computer cannot open the CYFR in " + project + ": " + err.Error() + "."}
 	}
+	// This box's first person is made at the device's pages, which read
+	// the token themselves at their first hello: its proposal carries none,
+	// and its press asks nothing of the CYFR or Docker.
 	setup := ""
-	if l.Shell.SetupToken != nil {
+	if l.Shell.SetupToken != nil && !l.waits {
 		setup, _ = l.Shell.SetupToken(run)
 	}
 	cfg := l.Shell
