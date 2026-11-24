@@ -45,7 +45,7 @@ host=(
   scripts/janitor.sh scripts/nightly.sh scripts/stage.sh scripts/stages.tsv
   tests/contain-test.sh tests/heavy-check-test.sh tests/run-names-test.sh tests/stage-test.sh
   tests/image-test.sh tests/image-stub.sh tests/janitor-test.sh
-  scripts/apt-key.sh tests/apt-key-test.sh tests/apt-key-release
+  scripts/apt-key.sh tests/apt-key-test.sh tests/apt-key-archive.py tests/apt-key-release
   tests/handle-proof/run.sh
   tests/install-screen-proof/prepare.sh tests/install-screen-proof/base-image.sh
   tests/install-screen-proof/lib.sh

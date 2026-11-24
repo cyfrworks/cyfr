@@ -63,6 +63,9 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE = os.path.join(ROOT, ".github", "workflows", "release.yml")
 TEST = os.path.join(ROOT, ".github", "workflows", "test.yml")
+WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+ACTIONS = os.path.join(ROOT, ".github", "actions")
+IMAGE_BUILD = "./.github/actions/image-build"
 GORELEASER = os.path.join(ROOT, "apps", "codex", ".goreleaser.yml")
 COMPOSE = os.path.join(ROOT, "docker-compose.yml")
 MIX_EXS = os.path.join("apps", "prima", "mix.exs")
@@ -486,6 +489,58 @@ def check_apt_layers(dockerfiles):
         if not stage or not re.search(r"^ARG APT_REFRESH\b", text[stage[-1] : layer.start()], re.MULTILINE):
             return f"{path}'s apt-get upgrade layer does not read an ARG APT_REFRESH of its own stage"
     return None
+
+
+# Every image build in CI but release.yml's (check_build holds that one) is
+# made through the one action, .github/actions/image-build, whose build
+# reads APT_REFRESH from the archive's key as release.yml's does: no step
+# of another workflow or composite action uses build-push-action or
+# bake-action or runs a build of its own.
+BUILD_ACTIONS = ("docker/build-push-action", "docker/bake-action")
+BUILD_RUN = re.compile(r"\b(docker\s+(buildx\s+)?build|docker\s+image\s+build|buildx\s+bake)\b")
+
+
+def check_ci_builds(workflows, actions):
+    for name, doc in sorted(workflows.items()):
+        if name == "release.yml":
+            continue
+        for job_name, job in (doc.get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                where = f"{name} {job_name}: '{step.get('name', step.get('uses', 'a step'))}'"
+                if any(a in str(step.get("uses", "")) for a in BUILD_ACTIONS) or BUILD_RUN.search(str(step.get("run", ""))):
+                    return f"{where} builds an image other than through {IMAGE_BUILD}"
+    for name, doc in sorted(actions.items()):
+        steps = (doc.get("runs") or {}).get("steps") or []
+        for step in steps:
+            builds = any(a in str(step.get("uses", "")) for a in BUILD_ACTIONS) or BUILD_RUN.search(str(step.get("run", "")))
+            if name != "image-build" and builds:
+                return f"the {name} action's '{step.get('name', 'a step')}' builds an image other than through {IMAGE_BUILD}"
+    image_build = actions.get("image-build")
+    if image_build is None:
+        return f"there is no {IMAGE_BUILD} action"
+    job = {"steps": (image_build.get("runs") or {}).get("steps") or []}
+    builds = steps_using(job, "docker/build-push-action")
+    if len(builds) != 1 or any(BUILD_RUN.search(str(s.get("run", ""))) for s in job["steps"]):
+        return f"{IMAGE_BUILD} does not build once, through build-push-action"
+    reason = check_apt_refresh(job, builds[0].get("with") or {})
+    return f"{IMAGE_BUILD}: {reason}" if reason else None
+
+
+def ci_build_sources():
+    import yaml
+
+    workflows, actions = {}, {}
+    for entry in sorted(os.listdir(WORKFLOWS)):
+        if entry.endswith((".yml", ".yaml")):
+            with open(os.path.join(WORKFLOWS, entry)) as f:
+                workflows[entry] = yaml.safe_load(f) or {}
+    for entry in sorted(os.listdir(ACTIONS)):
+        for file in ("action.yml", "action.yaml"):
+            path = os.path.join(ACTIONS, entry, file)
+            if os.path.exists(path):
+                with open(path) as f:
+                    actions[entry] = yaml.safe_load(f) or {}
+    return workflows, actions
 
 
 def arg_above_stage(text):
@@ -3122,6 +3177,56 @@ MUTANTS = [
     ("a RELEASE_MANIFEST_DIR that is not the manifest's", manifest_dir_elsewhere),
 ]
 
+# Mutants of CI's image builds, each refused by check_ci_builds.
+def locus_built_plainly(workflows, actions):
+    step = next(s for s in workflows["test.yml"]["jobs"]["locus-image"]["steps"] if s.get("uses") == IMAGE_BUILD)
+    step.pop("uses")
+    step.pop("with")
+    step["run"] = "docker build -f Dockerfile.locus -t cyfr-locus:ci ."
+
+
+def app_built_by_build_push(workflows, actions):
+    step = next(s for s in workflows["test.yml"]["jobs"]["app-image"]["steps"] if s.get("uses") == IMAGE_BUILD)
+    step["uses"] = "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
+    step["with"] = {"context": ".", "file": "Dockerfile", "load": True, "tags": "cyfr:push"}
+
+
+def arm64_built_by_buildx(workflows, actions):
+    step = next(s for s in workflows["locus-arm64.yml"]["jobs"]["pinned-programs"]["steps"] if s.get("uses") == IMAGE_BUILD)
+    step.pop("uses")
+    step.pop("with")
+    step["run"] = "docker buildx build --load -f Dockerfile.locus -t cyfr-locus:ci ."
+
+
+def image_build_dated(workflows, actions):
+    step = next(s for s in actions["image-build"]["runs"]["steps"] if s.get("id") == "apt-key")
+    step["run"] = step["run"].replace("$(scripts/apt-key.sh)", "$(date -u +%F)")
+
+
+def image_build_without_key(workflows, actions):
+    build = next(s for s in actions["image-build"]["runs"]["steps"] if "build-push-action" in str(s.get("uses")))
+    del build["with"]["build-args"]
+
+
+def image_build_twice(workflows, actions):
+    steps = actions["image-build"]["runs"]["steps"]
+    steps.append({"name": "Build again", "shell": "bash", "run": "docker build -f Dockerfile ."})
+
+
+def another_action_builds(workflows, actions):
+    actions["planted"] = {"runs": {"using": "composite", "steps": [{"uses": "docker/build-push-action@v7"}]}}
+
+
+CI_BUILD_MUTANTS = [
+    ("Test's Locus image made with a plain docker build", locus_built_plainly),
+    ("Test's app image made with build-push-action", app_built_by_build_push),
+    ("the arm64 Locus image made with docker buildx build", arm64_built_by_buildx),
+    ("the action's key the UTC date", image_build_dated),
+    ("the action's build without APT_REFRESH", image_build_without_key),
+    ("the action building a second time with no key", image_build_twice),
+    ("another action that builds an image", another_action_builds),
+]
+
 # Mutants of test.yml's static job, each refused by check_static.
 TEST_MUTANTS = [
     ("no switch to the containerd image store", no_store_switch("static")),
@@ -3155,6 +3260,11 @@ def graph_mode():
     if reason is not None:
         print(f"FAIL: {reason}")
         return 1
+    ci_workflows, ci_actions = ci_build_sources()
+    reason = check_ci_builds(ci_workflows, ci_actions)
+    if reason is not None:
+        print(f"FAIL: {reason}")
+        return 1
     with open(GORELEASER) as f:
         goreleaser = yaml.safe_load(f)
     reason = check_goreleaser(goreleaser) or check_ignored(CHECKOUT_WRITES)
@@ -3183,6 +3293,13 @@ def graph_mode():
             failures.append(f"a mutant changed nothing: test.yml, {name}")
         elif check_static(wf) is None:
             failures.append(f"a mutant of test.yml was accepted: {name}")
+    for name, mutate in CI_BUILD_MUTANTS:
+        mutated = copy.deepcopy((ci_workflows, ci_actions))
+        mutate(*mutated)
+        if mutated == (ci_workflows, ci_actions):
+            failures.append(f"a mutant changed nothing: CI's image builds, {name}")
+        elif check_ci_builds(*mutated) is None:
+            failures.append(f"a mutant of CI's image builds was accepted: {name}")
     for name, mutate in GORELEASER_MUTANTS:
         config = copy.deepcopy(goreleaser)
         mutate(config)
@@ -3247,7 +3364,7 @@ def graph_mode():
         f"{helper_versions} versions, its tag on a HEAD that declares the version, its proof, its tag of the proved commit "
         f"and its pushes pass, under {range_locale()}; "
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
-        f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
+        f"test.yml, {len(CI_BUILD_MUTANTS)} of CI's image builds, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
         f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh, {len(RELEASE_NOTE_MUTANTS)} of "
         f"release-note.sh and {4 * len(files)} of the Dockerfiles, "
         f"{vectors} manifest vectors, {scaffold_refused} versions, {forms} scaffold argument forms and "

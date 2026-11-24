@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# scripts/apt-key.sh against saved InRelease files, with a stand-in curl
-# and apt-get on PATH: the key holds still when Debian signs the same
-# indexes again and moves when a package does, the archive is read from
-# the three suites' exact URLs, and the guard refuses lists other than
-# the key's. It needs bash, sed and sha256sum, and no network or Docker.
+# scripts/apt-key.sh against saved InRelease files, a stand-in archive
+# (tests/apt-key-archive.py) and a stand-in apt-get on PATH: the key holds
+# still when Debian signs the same indexes again and moves when a package
+# does, the archive is read from the three suites' exact URLs through a
+# mirror's redirect and only as release files, and the guard refuses
+# lists other than the key's and any value but 0, a date or a key. It needs bash, curl, python3, sed and sha256sum, and no
+# network beyond 127.0.0.1, nor Docker.
 #
 # tests/apt-key-release holds real InRelease files from
 # snapshot.debian.org, cut to their header, their SHA256 lines for main's
@@ -72,29 +74,20 @@ refused "is the suite 'forky', not one of trixie trixie-updates trixie-security"
 sed '/^SHA256:/,/^[^ ]/{/^ /d}' "$F/trixie.InRelease" >"$S/empty.InRelease"
 refused 'has no SHA256 lines' "$S/empty.InRelease" "$F/trixie-updates.InRelease" "$F/trixie-security.InRelease"
 
-# A stand-in curl serving the saved files by URL, and failing every URL
-# when CURL_FAILS is set.
-mkdir -p "$S/bin"
-cat >"$S/bin/curl" <<'STUB'
-#!/usr/bin/env bash
-out= url=
-while [ "$#" -gt 0 ]; do
-  case $1 in
-    -o) out=$2; shift 2 ;;
-    --retry|--retry-delay|--connect-timeout|--max-time) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-echo "$url" >>"$STUB_DIR/curl.calls"
-[ -z "${CURL_FAILS:-}" ] || { echo "curl: (6) Could not resolve host" >&2; exit 6; }
-case $url in
-  https://deb.debian.org/debian/dists/trixie/InRelease) cp "$FIXTURES/trixie.InRelease" "$out" ;;
-  https://deb.debian.org/debian/dists/trixie-updates/InRelease) cp "$FIXTURES/trixie-updates.InRelease" "$out" ;;
-  https://deb.debian.org/debian-security/dists/trixie-security/InRelease) cp "$FIXTURES/trixie-security.InRelease" "$out" ;;
-  *) exit 22 ;;
-esac
-STUB
+# The stand-in archive (tests/apt-key-archive.py), read by the real curl
+# through APT_KEY_MIRROR.
+SRV="$S/srv"
+mkdir -p "$SRV" "$S/bin"
+python3 -I "$ROOT/tests/apt-key-archive.py" "$SRV" "$F" &
+server_pid=$!
+trap 'kill "$server_pid" 2>/dev/null; rm -rf "$S"' EXIT
+for _ in $(seq 1 100); do [ -s "$SRV/port" ] && break; sleep 0.1; done
+[ -s "$SRV/port" ] || { echo "FAIL: the stand-in archive did not start" >&2; exit 1; }
+MIRROR="http://127.0.0.1:$(cat "$SRV/port")"
+answers() { rm -f "$SRV/log" "$SRV/asked"; printf '%s\n' "$@" >"$SRV/answers"; }
+read_archive() { status=0; APT_KEY_MIRROR="$MIRROR" "$KEY" >"$S/out" 2>"$S/err" || status=$?; }
+asked() { grep -c "^$1\$" "$SRV/log" || :; }
+
 # A stand-in apt-get whose each update writes the lists the next line of
 # $STUB_DIR/serve names into APT_KEY_LISTS, under apt's own names: saved
 # (the key's), next (the archive a moment later), or fail.
@@ -112,24 +105,43 @@ cp "$FIXTURES/trixie.InRelease" "$APT_KEY_LISTS/deb.debian.org_debian_dists_trix
 cp "$FIXTURES/trixie-updates.InRelease" "$APT_KEY_LISTS/deb.debian.org_debian_dists_trixie-updates_InRelease"
 cp "$FIXTURES/$security" "$APT_KEY_LISTS/deb.debian.org_debian-security_dists_trixie-security_InRelease"
 STUB
-chmod +x "$S/bin/curl" "$S/bin/apt-get"
+chmod +x "$S/bin/apt-get"
 export PATH="$S/bin:$PATH" STUB_DIR="$S/stub" FIXTURES="$F" APT_KEY_LISTS="$S/lists" APT_KEY_WAIT=0
-fresh() { rm -rf "$S/stub" "$S/lists"; mkdir -p "$S/stub" "$S/lists"; printf '%s\n' "$@" >"$S/stub/serve"; }
+fresh() { rm -rf "$S/stub" "$S/lists"; mkdir -p "$S/stub" "$S/lists"; : >"$S/stub/apt.calls"; printf '%s\n' "$@" >"$S/stub/serve"; }
 
 begin "the archive is read from the three suites' URLs and keyed as the saved files are"
-fresh saved
-[ "$("$KEY")" = "$SAVED" ] || fail 'the archive read gave another key'
-printf '%s\n' https://deb.debian.org/debian/dists/trixie/InRelease \
-  https://deb.debian.org/debian/dists/trixie-updates/InRelease \
-  https://deb.debian.org/debian-security/dists/trixie-security/InRelease >"$S/want"
-diff "$S/want" "$S/stub/curl.calls" >/dev/null || fail "read $(tr '\n' ' ' <"$S/stub/curl.calls")"
+answers release
+read_archive
+[ "$status" = 0 ] && [ "$(cat "$S/out")" = "$SAVED" ] || fail "exited $status with $(cat "$S/out" "$S/err")"
+printf '%s\n' /debian/dists/trixie/InRelease /debian/dists/trixie-updates/InRelease \
+  /debian-security/dists/trixie-security/InRelease >"$S/want"
+diff "$S/want" "$SRV/log" >/dev/null || fail "read $(tr '\n' ' ' <"$SRV/log")"
 
-begin "an archive that cannot be read fails naming the file, with no key printed"
-fresh saved
-status=0
-CURL_FAILS=1 "$KEY" >"$S/out" 2>"$S/err" || status=$?
+begin "a mirror's redirect to its delivery network is followed to the release file"
+answers redirect
+read_archive
+[ "$status" = 0 ] && [ "$(cat "$S/out")" = "$SAVED" ] || fail "exited $status with $(cat "$S/out" "$S/err")"
+[ "$(asked /cdn/trixie-security)" = 1 ] || fail "read $(tr '\n' ' ' <"$SRV/log")"
+
+begin "a page that is no release file is a failed read: tried again, then the read fails naming the file"
+answers page
+read_archive
 [ "$status" = 69 ] && [ ! -s "$S/out" ] || fail "exited $status and printed $(cat "$S/out")"
-grep -qxF "apt-key: could not read https://deb.debian.org/debian/dists/trixie/InRelease from Debian's archive" "$S/err" ||
+[ "$(asked /debian/dists/trixie/InRelease)" = 5 ] || fail "asked $(asked /debian/dists/trixie/InRelease) times"
+grep -qxF "apt-key: could not read $MIRROR/debian/dists/trixie/InRelease from Debian's archive" "$S/err" ||
+  fail "said $(cat "$S/err")"
+
+begin "a page once, then the release file, is read on the next try"
+answers page release
+read_archive
+[ "$status" = 0 ] && [ "$(cat "$S/out")" = "$SAVED" ] || fail "exited $status with $(cat "$S/out" "$S/err")"
+
+begin "an archive that answers an error is tried again, then the read fails naming the file"
+answers fail
+read_archive
+[ "$status" = 69 ] && [ ! -s "$S/out" ] || fail "exited $status and printed $(cat "$S/out")"
+[ "$(asked /debian/dists/trixie/InRelease)" = 5 ] || fail "asked $(asked /debian/dists/trixie/InRelease) times"
+grep -qxF "apt-key: could not read $MIRROR/debian/dists/trixie/InRelease from Debian's archive" "$S/err" ||
   fail "said $(cat "$S/err")"
 
 guard() { status=0; "$KEY" --update "$1" >"$S/out" 2>"$S/err" || status=$?; updates=$(wc -l <"$S/stub/apt.calls"); }
@@ -174,6 +186,15 @@ for buster in 0 2026-11-24; do
   fresh next
   guard "$buster"
   [ "$status" = 0 ] && [ "$updates" = 1 ] || fail "$buster: exited $status after $updates updates"
+done
+
+begin "any other value fails the layer naming it, with no update"
+for wrong in '' 0801af08 2026-11-2 "${SAVED}0" "${SAVED^^}" ' 0'; do
+  fresh saved
+  guard "$wrong"
+  [ "$status" = 65 ] && [ "$updates" = 0 ] || fail "'$wrong': exited $status after $updates updates"
+  grep -qxF "apt-key: APT_REFRESH is '$wrong': not 0, a date (YYYY-MM-DD) or an archive key" "$S/err" ||
+    fail "'$wrong': said $(cat "$S/err")"
 done
 
 begin "a wrong argument count is usage"
