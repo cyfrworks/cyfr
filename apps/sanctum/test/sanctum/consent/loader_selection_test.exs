@@ -671,7 +671,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
                Loader.row_binding(ctx, consent, row)
 
       # Revoked, the damaged row is no candidate, and the lender lends.
-      set_profile!(ctx, "prof-claude-twin", status: "revoked")
+      set_profile!(ctx, "prof-claude-twin", status: "revoked", revoked_by: "person")
 
       assert {:selection, "default", {:ok, %{entry_id: "vault-anthropic"}}} =
                Loader.row_binding(ctx, consent, row)

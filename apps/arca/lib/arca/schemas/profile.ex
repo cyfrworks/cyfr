@@ -9,7 +9,14 @@ defmodule Arca.Schemas.Profile do
   compare-and-swap.
 
   `changeset/2` is where a row is held to the profile vocabulary — kind,
-  status, and the label grammar — so every insert meets one rule.
+  status, the revocation's cause and the label grammar — so every insert
+  meets one rule.
+
+  `revoked_by` is who revoked the profile: `person`, by `profile.revoke`,
+  or `removal`, when its component's last version was removed. A revoked
+  row names one and no other row names any (the `profiles_revoked_by_cause`
+  CHECK); there is no default, so a revocation that names no cause is
+  refused.
   """
 
   use Ecto.Schema
@@ -20,6 +27,7 @@ defmodule Arca.Schemas.Profile do
   @kinds ~w(owner public)
   # The status vocabulary is the profile table's in `Arca.StatusTransitions`.
   @statuses Arca.StatusTransitions.statuses(:profiles)
+  @revocation_causes ~w(person removal)
   @required [:id, :athanor_id, :source_ref, :kind, :label, :status]
   @identity [:athanor_id, :source_ref, :label, :kind]
 
@@ -32,6 +40,7 @@ defmodule Arca.Schemas.Profile do
     field :kind, :string, default: "owner"
     field :label, :string, default: "default"
     field :status, :string, default: "active"
+    field :revoked_by, :string
     field :head_consent_id, :string
 
     timestamps(type: :utc_datetime_usec)
@@ -40,6 +49,10 @@ defmodule Arca.Schemas.Profile do
   @doc "Every status a profile row can carry (`Arca.StatusTransitions.statuses(:profiles)`)."
   @spec statuses() :: [String.t()]
   def statuses, do: @statuses
+
+  @doc "Who can have revoked a profile: its person, or a removal of its component."
+  @spec revocation_causes() :: [String.t()]
+  def revocation_causes, do: @revocation_causes
 
   @doc """
   A profile row about to be inserted.
@@ -61,6 +74,7 @@ defmodule Arca.Schemas.Profile do
     |> validate_required(@required)
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:status, @statuses)
+    |> validate_revocation()
     |> validate_change(:label, fn :label, label ->
       case check_label(label) do
         :ok -> []
@@ -74,6 +88,23 @@ defmodule Arca.Schemas.Profile do
     # and raise on the other.
     |> unique_constraint(@identity, name: :profiles_active_identity_index)
     |> unique_constraint(@identity)
+  end
+
+  # A revoked row names its cause, and no other row names one.
+  defp validate_revocation(changeset) do
+    case {get_field(changeset, :status), get_field(changeset, :revoked_by)} do
+      {"revoked", cause} when cause in @revocation_causes ->
+        changeset
+
+      {"revoked", _cause} ->
+        add_error(changeset, :revoked_by, "must name who revoked it")
+
+      {_status, nil} ->
+        changeset
+
+      {_status, _cause} ->
+        add_error(changeset, :revoked_by, "names a revocation of no revoked row")
+    end
   end
 
   @doc """

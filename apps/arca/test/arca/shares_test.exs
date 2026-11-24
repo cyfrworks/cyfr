@@ -343,12 +343,7 @@ defmodule Arca.SharesTest do
       revoked = bound!(bob.athanor.id, share.id)
 
       :ok =
-        Arca.ProfileStorage.transition(
-          Prima.Actor.in_athanor(bob.athanor.id),
-          revoked.id,
-          ["active"],
-          "revoked"
-        )
+        Arca.ProfileStorage.revoke_by_person(Prima.Actor.in_athanor(bob.athanor.id), revoked.id)
 
       assert {:ok, %{share_ids: [share_id], blocked: blocked}} =
                Shares.revoke(terry.actor, share.id, "needs_consent")

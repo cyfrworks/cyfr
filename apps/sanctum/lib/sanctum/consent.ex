@@ -213,14 +213,16 @@ defmodule Sanctum.Consent do
 
   @doc """
   Why the name-level `source_ref` has no profile a run could stand on,
-  once `profiles/2` lists none: `:revoked` when its person granted it and
-  revoked the grant, `:no_grant` when nobody has granted it. A store that
-  could not answer is `{:error, :unavailable}`, never a cause.
+  once `profiles/2` lists none: `:revoked` when its person revoked the
+  grant (`Arca.ConsentStorage.revoked_by_person?/2`), `:no_grant` when
+  nobody has granted it or the removal of the component's last version
+  ended the grant. A store that could not answer is
+  `{:error, :unavailable}`, never a cause.
   """
   @spec ungranted(Sanctum.Context.t(), String.t()) ::
           {:ok, :no_grant | :revoked} | {:error, :unavailable | :no_athanor}
   def ungranted(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
-    case Arca.ConsentStorage.revoked_owner?(Sanctum.Context.actor(ctx), source_ref) do
+    case Arca.ConsentStorage.revoked_by_person?(Sanctum.Context.actor(ctx), source_ref) do
       {:ok, true} -> {:ok, :revoked}
       {:ok, false} -> {:ok, :no_grant}
       {:error, :no_athanor} -> {:error, :no_athanor}
@@ -379,8 +381,10 @@ defmodule Sanctum.Consent do
   @doc """
   Revoke every profile of a name-level `source_ref` in the caller's
   athanor, in one transaction — what removing the last version of a
-  component does to the grants made for it. Consent history and vault
-  entries remain. Answers the ids revoked.
+  component does to the grants made for it, recorded as that removal's
+  (`Arca.ProfileStorage.revoke_for_source/2`); a grant its person had
+  revoked keeps their mark. Consent history and vault entries remain.
+  Answers the ids revoked.
   """
   @spec revoke_source(Sanctum.Context.t(), String.t()) ::
           {:ok, %{revoked: [String.t()]}} | {:error, :unavailable | :no_athanor}

@@ -244,12 +244,7 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
     :ok =
-      Arca.ProfileStorage.transition(
-        Sanctum.Context.actor(ctx),
-        claude_profile.id,
-        :any,
-        "revoked"
-      )
+      Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), claude_profile.id)
 
     assert {:error, revoked} = Opus.authority_for(ctx, :default, "catalyst:local.claude")
     assert {:ok, :absent} = Aqua.ConsentStatus.classify_refusal(revoked)

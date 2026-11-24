@@ -516,14 +516,19 @@ defmodule Sanctum.Test.ConsentFixtures do
     :ok
   end
 
+  # A profile seeded revoked is its person's revocation, as `profile.revoke`
+  # writes one.
   defp profile_attrs(%Context{} = ctx, profile) do
+    status = Atom.to_string(Map.get(profile, :status, :active))
+
     %{
       id: profile.id,
       athanor_id: ctx.athanor_id,
       source_ref: profile.source_ref,
       kind: Atom.to_string(profile.kind),
       label: Map.get(profile, :label, "default"),
-      status: Atom.to_string(Map.get(profile, :status, :active))
+      status: status,
+      revoked_by: if(status == "revoked", do: "person")
     }
   end
 

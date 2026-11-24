@@ -9,6 +9,15 @@ defmodule Sanctum.Consent.Bootstrap do
   a new athanor, and the person revokes each like any other consent
   (`profile.revoke`).
 
+  A grant its person revoked stays revoked: the walk mints over it on no
+  path (the fill, an update, an install, the boot's seed sync), and the
+  source is skipped `:revoked`, until the person consents again. That
+  holds when the component is removed and installed again too. A grant
+  the removal of the component's last version revoked
+  (`Compendium.Cascade`) is not the person's: the component installed
+  again is minted as at first. Which of the two the newest revocation of
+  the source's owner profile was is `Sanctum.Consent.ungranted/2`'s.
+
   For every executable local component without a profile, mints an owner
   profile and a revision-1 consent whose blob grants each closure node its
   manifest-declared caps (the empty ask when a manifest declares none):
@@ -325,6 +334,9 @@ defmodule Sanctum.Consent.Bootstrap do
           {:skip, :not_vouched}
         end
 
+      :revoked ->
+        {:skip, :revoked}
+
       {:claimed, nil} ->
         {:skip, :already_bootstrapped}
 
@@ -348,10 +360,21 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
+  # A source with no live profile is claimed still when its person revoked
+  # its grant: the one place the walk decides that, for every path that
+  # mints.
   defp claimed(ctx, source_ref) do
     case Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), source_ref) do
-      {:ok, []} -> :unclaimed
+      {:ok, []} -> ungranted(ctx, source_ref)
       {:ok, existing} -> {:claimed, default_owner(existing)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ungranted(ctx, source_ref) do
+    case Sanctum.Consent.ungranted(ctx, source_ref) do
+      {:ok, :no_grant} -> :unclaimed
+      {:ok, :revoked} -> :revoked
       {:error, reason} -> {:error, reason}
     end
   end
