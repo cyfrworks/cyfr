@@ -19,6 +19,7 @@ defmodule Aqua.Loop.FlushTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
+  alias Cyfr.Test.StoreRefusal
   alias Sanctum.Consent.{Bootstrap}
 
   @soul "agent:local.aqua"
@@ -260,6 +261,27 @@ defmodule Aqua.Loop.FlushTest do
     assert ["error"] = Enum.map(flush_calls, & &1.outcome)
     assert :none = Aqua.Notes.pinned(ctx)
     assert {:error, _} = Aqua.Notes.read(ctx, "about-you")
+  end
+
+  test "a flush whose answer could not be kept ends the loop unwritten, and nothing after it " <>
+         "runs",
+       %{ctx: ctx, thread: thread} do
+    turn = accept_large!(ctx, thread)
+    StoreRefusal.refuse_insert!("turn_steps", [{"purpose", "flush"}, {"kind", "tool"}])
+
+    script!([
+      round_one(),
+      %{"entries" => []},
+      flush_reply([keep("n1", "plan", "the plan")]),
+      reply("the story so far"),
+      reply("done")
+    ])
+
+    assert {:unwritten, _} = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert for(%{kind: "model"} = step <- steps, do: {step.purpose, step.dispatch_state}) ==
+             [{"chat", "closed"}, {"flush", "dispatched"}]
   end
 
   test "a summary that fails after a flush keeps the note and the turn goes on", %{

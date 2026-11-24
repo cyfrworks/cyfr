@@ -61,6 +61,7 @@ defmodule Aqua.ProgramTest do
   alias Arca.TurnStorage
   alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Cyfr.Test.ScriptedWorker
+  alias Cyfr.Test.StoreRefusal
 
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
@@ -91,7 +92,7 @@ defmodule Aqua.ProgramTest do
   end
 
   # The loop's own waits, which read nothing (`Aqua.Loop`).
-  @quiet [:harness_wait, :awaiting, :collect, :model_wait]
+  @quiet [:harness_wait, :awaiting, :collect]
 
   # A loop told that its thread moved reads its rows (`Aqua.Loop`): held or
   # killed in that read, it would take the test's one shared connection
@@ -499,7 +500,7 @@ defmodule Aqua.ProgramTest do
                action: "start",
                dispatch_state: "closed",
                outcome: "ok",
-               idempotency_key: TurnStorage.brain_start_key(turn.id),
+               idempotency_key: TurnStorage.admission_key(turn.id),
                message_id: start_step.message_id,
                usage: %{
                  "models" => %{"m" => counts()},
@@ -1852,6 +1853,47 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "the program's asks" do
+    test "an ask is compared by its whole name against the tools handed, before it resolves: " <>
+           "an action spelled into a handed tool's name, and an unhanded ask the resolver " <>
+           "would refuse, are both refused as not handed",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "list the programs")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      offered = Enum.map(spec!(ctx, turn).tools, & &1["name"])
+      assert "program" in offered
+      refute "program.list" in offered
+      refute "vault" in offered
+
+      # The resolver reads `program.list` as the handed `program` tool's
+      # list, and refuses `vault`'s null argument (`Aqua.Loop.Binding`).
+      asks = [
+        {"ask-1", "program.list", %{}, "program.list is not one of the tools this work has"},
+        {"ask-2", "vault", %{"action" => "list", "path" => nil},
+         "vault is not one of the tools this work has"}
+      ]
+
+      decided =
+        for {ask, name, arguments, _words} <- asks do
+          say(fake, row, ask(turn, ask, name, arguments))
+          assert %{"t" => "answer", "ask" => ^ask, "is_error" => true} = sent()
+          step = step_by_key(ctx, turn, TurnStorage.brain_ask_key(turn.id, ask))
+          [told | _] = Enum.reverse(inputs(ctx, turn))
+          say(fake, row, accepted(told))
+          {ask, step.dispatch_state, step.outcome, step.error}
+        end
+
+      assert decided ==
+               for({ask, _name, _arguments, words} <- asks, do: {ask, "closed", "denied", words})
+
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
     test "an ask of the open turn is a step the loop decides and runs, answered with its result; one of a tool not offered is refused",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "list the programs")
@@ -1925,7 +1967,7 @@ defmodule Aqua.ProgramTest do
       {:ok, steps} = Tape.steps(ctx, turn)
 
       assert Enum.map(steps, & &1.idempotency_key) == [
-               TurnStorage.brain_start_key(turn.id),
+               TurnStorage.admission_key(turn.id),
                "0:post:#{turn.message_id}",
                TurnStorage.brain_ask_key(turn.id, "ask-1"),
                "0:answer:#{result.id}",
@@ -4193,7 +4235,6 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "no turn waits for good" do
-    @unkept "Aqua stopped: CYFR could not keep what it said. Send a message to go on."
     @unstarted "Aqua could not start."
 
     test "a program that never says hello ends its start once the silence runs out, and " <>
@@ -4245,17 +4286,17 @@ defmodule Aqua.ProgramTest do
       refute_receive {:session, "open", _wire, _fields}, 1_000
     end
 
-    test "a batch that could not be kept ends the turn saying so, nothing of it shown and " <>
+    test "a batch that could not be kept ends the loop unwritten, nothing of it shown and " <>
            "nothing written again",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop, input: input} = working!(ctx, thread, row, fake, turn)
-      refuse_insert!("messages", "content", "never kept")
+      StoreRefusal.refuse_insert!("messages", [{"content", "never kept"}])
       say(fake, row, said(turn, "msg_1", "never kept"))
 
-      assert {:failed, @unkept} = Task.await(loop, 15_000)
-      assert {:ok, %{status: "failed", error: @unkept}} = Tape.turn(ctx, turn.id)
-      assert system_lines(ctx, thread, turn) == [@unkept]
+      assert {:unwritten, _} = Task.await(loop, 15_000)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      assert system_lines(ctx, thread, turn) == []
       assert said_rows(ctx, thread, turn) == []
       assert [%{id: id}] = inputs(ctx, turn)
       assert id == input.id
@@ -4263,14 +4304,14 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "open", _wire, _fields}
     end
 
-    test "a delivery that fails once ends the turn, which its post's deletion could otherwise " <>
-           "leave with no event to retry on",
+    test "a delivery that fails once ends the loop unwritten, which its post's deletion could " <>
+           "otherwise leave with no event to retry on",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop} = working!(ctx, thread, row, fake, turn)
       workspace = workspace!(ctx, thread)
       id = Prima.UUID7.generate_id("msg")
-      refuse_insert!("turn_steps", "idempotency_key", "0:post:#{id}")
+      StoreRefusal.refuse_insert!("turn_steps", [{"idempotency_key", "0:post:#{id}"}])
 
       {:ok, %{message: joined}} =
         TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
@@ -4286,13 +4327,14 @@ defmodule Aqua.ProgramTest do
         })
 
       :ok = Tape.announce(ctx, thread.id, :message, joined)
-      assert {:failed, @unkept} = Task.await(loop, 15_000)
-      assert system_lines(ctx, thread, turn) == [@unkept]
+      assert {:unwritten, _} = Task.await(loop, 15_000)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      assert system_lines(ctx, thread, turn) == []
       assert running_sessions(fake, row) == []
       refute_received {:session, "send", _wire, _fields}
     end
 
-    test "a failed read of what is owed ends the turn, never read as nothing owed",
+    test "a failed read of what is owed ends the loop unwritten, never read as nothing owed",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop} = working!(ctx, thread, row, fake, turn)
@@ -4315,12 +4357,14 @@ defmodule Aqua.ProgramTest do
 
       true = :erlang.resume_process(loop.pid)
 
-      assert {:failed, @unkept} = Task.await(loop, 15_000)
-      assert system_lines(ctx, thread, turn) == [@unkept]
+      assert {:unwritten, _} = Task.await(loop, 15_000)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      assert system_lines(ctx, thread, turn) == []
       assert running_sessions(fake, row) == []
     end
 
-    test "a failed read of what the program asked ends the turn, never read as nothing asked",
+    test "a failed read of what the program asked ends the loop unwritten, never read as " <>
+           "nothing asked",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "work on it")
       %{loop: loop} = working!(ctx, thread, row, fake, turn)
@@ -4333,8 +4377,9 @@ defmodule Aqua.ProgramTest do
       fail_read_once!(loop.pid)
       true = :erlang.resume_process(loop.pid)
 
-      assert {:failed, @unkept} = Task.await(loop, 15_000)
-      assert system_lines(ctx, thread, turn) == [@unkept]
+      assert {:unwritten, _} = Task.await(loop, 15_000)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      assert system_lines(ctx, thread, turn) == []
       assert running_sessions(fake, row) == []
     end
 
@@ -4457,6 +4502,7 @@ defmodule Aqua.ProgramTest do
       line = "#{@title} stopped before it finished."
       assert {:failed, ^line} = Task.await(loop, 30_000)
       assert system_lines(ctx, thread, turn) == [line]
+      assert open_steps(ctx, turn) == []
       refute_received {:session, "open", %{"mode" => "run"}, _fields}
       refute_received {:session, "send", _wire, _fields}
     end
@@ -4998,7 +5044,7 @@ defmodule Aqua.ProgramTest do
 
     test "a start whose taking could not be written ends the loop unwritten, never completed",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      refuse_insert!("messages", "content", "#{@title} started")
+      StoreRefusal.refuse_insert!("messages", [{"content", "#{@title} started"}])
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       started!(fake, row)
@@ -5011,7 +5057,7 @@ defmodule Aqua.ProgramTest do
            "end not written either",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       line = "#{@title} could not start."
-      refuse_insert!("messages", [{"kind", "system"}, {"content", line}])
+      StoreRefusal.refuse_insert!("messages", [{"kind", "system"}, {"content", line}])
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       opened!(fake, row, "boot-one")
@@ -5029,7 +5075,7 @@ defmodule Aqua.ProgramTest do
     test "a start whose taking could not be written while an ask's call ran ends the loop " <>
            "unwritten though the call's outcome then paused it, which stays uncertain",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      refuse_insert!("messages", "content", "#{@title} started")
+      StoreRefusal.refuse_insert!("messages", [{"content", "#{@title} started"}])
       turn = accept!(ctx, thread, row, "work on it")
       loop = run(ctx, turn)
       opened!(fake, row, "boot-one")
@@ -5079,19 +5125,26 @@ defmodule Aqua.ProgramTest do
       _ = :sys.get_state(attendant)
 
       # The attendant's next read of what is owed is held once it found no
-      # result, until the result and then a post have committed, or for at
-      # most two seconds: a read that holds the turn's row keeps both out
-      # until it ends.
+      # result, until the result and then a post have committed or are kept
+      # out by it (`held_out!/2`): a read that holds the turn's row keeps
+      # both out until it ends. A hold the test did not end fails it.
       gate = spawn(fn -> receive(do: (:open -> :ok)) end)
       between!(attendant, gate)
       GenServer.cast(attendant, :moved)
-      assert_receive :between, 10_000
+      assert_receive {:between, holding?}, 10_000
 
-      {:ok, held} = Tape.turn(ctx, turn.id)
-      {:ok, dispatched} = Tape.mark_dispatched(ctx, held, step_by_key(ctx, turn, key))
-      {:ok, _} = Tape.close_step(ctx, held, dispatched, "ok", %{result: %{content: "listed"}})
-      _steer = steer!(ctx, thread, turn, "and this")
+      writer =
+        Task.async(fn ->
+          {:ok, held} = Tape.turn(ctx, turn.id)
+          {:ok, dispatched} = Tape.mark_dispatched(ctx, held, step_by_key(ctx, turn, key))
+          {:ok, _} = Tape.close_step(ctx, held, dispatched, "ok", %{result: %{content: "listed"}})
+          steer!(ctx, thread, turn, "and this")
+        end)
+
+      held_out!(writer.pid, holding?)
       send(gate, :open)
+      assert_receive :released, 10_000
+      %{} = Task.await(writer, 10_000)
 
       true = :erlang.resume_process(loop.pid)
       assert %{"t" => "answer", "ask" => "ask-1"} = sent()
@@ -5141,9 +5194,378 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  # One table over both harnesses (`Aqua.Harness`): each row runs once on a
+  # scripted catalyst (`Aqua.Harness.Api`) and once on a scripted driver
+  # (`Aqua.Harness.Program`), and both meet one expectation: what a person
+  # sees of the turn (each shown row's kind, sender and text), each ask's
+  # decision and result, the turn's end and its usage. Only the audits
+  # differ, asserted apart: one admitted `program.start` with its inputs, or
+  # one model step per round.
+  describe "one table over both harnesses" do
+    @tag harness: :api
+    test "text, on the model's harness", %{ctx: ctx, thread: thread} do
+      turn = api_turn!(ctx, thread, "hello", [answer("Hi.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:text, ctx)
+      assert model_rounds(ctx, turn) == 1
+    end
+
+    @tag harness: :program
+    test "text, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, said(turn, "msg_1", "Hi."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:text, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:text)
+    end
+
+    @tag harness: :api
+    test "an allowed and a denied ask, on the model's harness", %{ctx: ctx, thread: thread} do
+      script = [
+        asking([
+          {"ask-1", "program", %{"action" => "list"}},
+          {"ask-2", "vault", %{"action" => "list"}}
+        ]),
+        answer("Listed.")
+      ]
+
+      turn = api_turn!(ctx, thread, "list them", script)
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:asks, ctx)
+      assert model_rounds(ctx, turn) == 2
+    end
+
+    @tag harness: :program
+    test "an allowed and a denied ask, on a program",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "list them")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-1", "program", %{"action" => "list"}))
+      listed = sent()
+      say(fake, row, %{"t" => "accepted", "id" => listed["id"]})
+      say(fake, row, ask(turn, "ask-2", "vault", %{"action" => "list"}))
+      refused = sent()
+      say(fake, row, %{"t" => "accepted", "id" => refused["id"]})
+      say(fake, row, said(turn, "msg_1", "Listed."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:asks, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:asks)
+    end
+
+    @tag harness: :api
+    test "a steer, on the model's harness", %{ctx: ctx, thread: thread} do
+      turn =
+        api_turn!(ctx, thread, "first", [{:probe, self()}, answer("First."), answer("Both.")])
+
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      _steer = steer!(ctx, thread, turn, "and this")
+      send(loop.pid, {:moved, turn.id})
+      send(model, :continue)
+      assert :completed = Task.await(loop, 60_000)
+      assert outcome(ctx, thread, turn) == expected(:steer, ctx)
+      assert model_rounds(ctx, turn) == 2
+    end
+
+    @tag harness: :program
+    test "a steer, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "first")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      _steer = steer!(ctx, thread, turn, "and this")
+      say(fake, row, accepted(input))
+      steered = sent()
+      say(fake, row, %{"t" => "accepted", "id" => steered["id"]})
+      say(fake, row, said(turn, "msg_1", "First."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, said(turn, "msg_2", "Both."))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id, steered["id"]]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:steer, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:steer)
+    end
+
+    @tag harness: :api
+    test "a launch, on the model's harness", %{ctx: ctx, thread: thread} do
+      app = quiet_app!(ctx)
+      launch = %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}
+
+      script = [
+        asking([{"ask-1", "execution", launch}]),
+        {:output, %{"ran" => true}},
+        answer("Ran it.")
+      ]
+
+      turn = api_turn!(ctx, thread, "run the app", script, [app])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:launch, ctx)
+      assert model_rounds(ctx, turn) == 2
+    end
+
+    @tag harness: :program
+    test "a launch, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      app = quiet_app!(ctx)
+      start_supervised!({ScriptedWorker, ref: [app], script: [{:output, %{"ran" => true}}]})
+      turn = accept!(ctx, thread, row, "run the app")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      launch = %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}
+      say(fake, row, ask(turn, "ask-1", "execution", launch))
+      ran = sent()
+      say(fake, row, %{"t" => "accepted", "id" => ran["id"]})
+      say(fake, row, said(turn, "msg_1", "Ran it."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:launch, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:launch)
+    end
+
+    @tag harness: :api
+    test "Stop, on the model's harness", %{ctx: ctx, thread: thread} do
+      turn = api_turn!(ctx, thread, "work on it", [{:probe, self()}, answer("Never.")])
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+      stop!(ctx, turn, loop)
+      assert outcome(ctx, thread, turn) == expected(:stop, ctx)
+      assert model_steps(ctx, turn) == [{"chat", "closed", "error", "stopped"}]
+    end
+
+    @tag harness: :program
+    test "Stop, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      stop!(ctx, turn, loop)
+      assert outcome(ctx, thread, turn) == expected(:stop, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:stop)
+    end
+
+    @tag harness: :api
+    test "a lost harness, on the model's harness", %{ctx: ctx, thread: thread} do
+      turn = api_turn!(ctx, thread, "work on it", [{:probe, self()}, answer("Never.")])
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+
+      [{_loop, {Aqua.Harness.Api, harness}}] =
+        Registry.lookup(Aqua.RunnerRegistry, {:turn, turn.id})
+
+      Process.exit(harness, :kill)
+      assert {:failed, _} = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:lost, ctx)
+      # The step its killed harness had open is closed lost as the turn ends.
+      assert model_steps(ctx, turn) ==
+               [{"chat", "closed", "error", "Aqua stopped before it finished."}]
+
+      assert open_steps(ctx, turn) == []
+    end
+
+    @tag harness: :program
+    test "a lost harness, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      attendant = attendant!(ctx, turn)
+      _ = :sys.get_state(attendant)
+      Process.exit(attendant, :kill)
+      assert {:failed, _} = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:lost, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:lost)
+      assert open_steps(ctx, turn) == []
+    end
+
+    @tag harness: :program
+    test "a lost program's delivery in flight is settled as its turn ends, nothing of it left " <>
+           "open",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "work on it")
+      %{loop: loop} = working!(ctx, thread, row, fake, turn)
+      attendant = attendant!(ctx, turn)
+
+      # A post is handed over and not yet taken when the attendant goes.
+      _steer = steer!(ctx, thread, turn, "and this")
+      assert %{"t" => "post"} = sent()
+      _ = :sys.get_state(attendant)
+      Process.exit(attendant, :kill)
+
+      assert {:failed, _} = Task.await(loop, 30_000)
+      assert open_steps(ctx, turn) == []
+
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert for(%{kind: "input"} = step <- steps, do: step.dispatch_state) ==
+               ["closed", "uncertain"]
+    end
+
+    @tag harness: :api
+    test "a loop whose harness its Stop stopped writes nothing after it", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      turn = api_turn!(ctx, thread, "work on it", [{:probe, self()}, answer("Never.")])
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+
+      [{_loop, {Aqua.Harness.Api, harness}}] =
+        Registry.lookup(Aqua.RunnerRegistry, {:turn, turn.id})
+
+      id = {__MODULE__, :after_exit, make_ref()}
+      config = %{loop: loop.pid, harness: harness, test: self()}
+      :ok = :telemetry.attach(id, [:arca, :repo, :query], &__MODULE__.after_exit/4, config)
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      stop!(ctx, turn, loop)
+      :telemetry.detach(id)
+      refute_received {:after_exit, _query}
+    end
+
+    @tag harness: :api
+    test "a retried answer whose first step's close is not kept ends the loop unwritten: " <>
+           "both steps stay open for the recovery of a loop that died",
+         %{ctx: ctx, thread: thread} do
+      StoreRefusal.refuse_update!("turn_steps", [{"error", "rate_limited"}])
+      refusal = %{"type" => "rate_limited", "message" => "slow down"}
+      turn = api_turn!(ctx, thread, "try it", [{:refuse, refusal}, answer("Done.")])
+      assert {:unwritten, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert for(%{kind: "model"} = step <- steps, do: step.dispatch_state) ==
+               ["dispatched", "dispatched"]
+    end
+
+    @tag harness: :api
+    test "a done the loop has not yet finished on ends nothing a later round still owes: a " <>
+           "steer's retry keeps its turn open through the retry's delay",
+         %{ctx: ctx, thread: thread} do
+      refusal = %{"type" => "rate_limited", "message" => "slow down"}
+
+      turn =
+        api_turn!(ctx, thread, "first", [
+          {:hold, self()},
+          answer("First."),
+          {:refuse, refusal},
+          answer("Second.")
+        ])
+
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, player, _child}, 30_000
+      harness = api_harness!(turn)
+
+      # The loop is held before its harness's done reaches it, and finishes
+      # only once the harness waits out the retry's delay of a later round.
+      quiet!(loop.pid)
+      true = :erlang.suspend_process(loop.pid)
+      send(player, :continue)
+      in_function!(harness, {Aqua.Harness.Api, :rest, 1}, "the harness to be done")
+
+      # A steer, and the loop's word that the rows moved, which the held
+      # loop cannot pass on.
+      steer!(ctx, thread, turn, "and this")
+      send(harness, :moved)
+      in_function!(harness, {Aqua.Harness.Api, :pause, 3}, "the retry's delay")
+      true = :erlang.resume_process(loop.pid)
+
+      assert :completed = Task.await(loop, 60_000)
+
+      assert for({"text", "aqua", text} <- outcome(ctx, thread, turn).shown, do: text) ==
+               ["First.", "Second."]
+    end
+
+    @tag harness: :api
+    test "a recovery whose close of a model step that died is not kept ends the loop unwritten",
+         %{ctx: ctx, thread: thread} do
+      turn = api_turn!(ctx, thread, "work on it", [{:probe, self()}, answer("Never.")])
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+      quiet!(loop.pid)
+      Task.shutdown(loop, :brutal_kill)
+      StoreRefusal.refuse_update!("turn_steps", [{"error", "not reproducible"}])
+
+      assert {:ok, [{:adopt, _taken}]} =
+               Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      assert {:unwritten, _} =
+               Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+    end
+
+    @tag harness: :api
+    test "every harness is handed the turn's instructions and the facts that move apart, on " <>
+           "either pin",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      api = api_turn!(ctx, thread, "hello", [answer("Hi.")])
+      assert :completed = Task.await(run(ctx, api), 60_000)
+
+      program = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, program)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, program)
+      say(fake, row, accepted(input))
+      say(fake, row, idle(program, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+
+      for turn <- [api, program] do
+        spec = spec!(ctx, turn)
+        assert spec.facts =~ "Current date:"
+        refute spec.system =~ "Current date:"
+      end
+    end
+
+    @tag harness: :api
+    test "a refusal, on the model's harness", %{ctx: ctx, thread: thread} do
+      refusal = %{"type" => "provider_error", "message" => "The provider refused it."}
+      turn = api_turn!(ctx, thread, "try it", [{:refuse, refusal}])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:refusal, ctx)
+      assert model_steps(ctx, turn) == [{"chat", "closed", "error", "The provider refused it."}]
+    end
+
+    @tag harness: :program
+    test "a refusal, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "try it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      say(fake, row, %{
+        "t" => "error",
+        "gen" => 0,
+        "work" => turn.id,
+        "type" => "provider_error",
+        "message" => "The provider refused it."
+      })
+
+      assert {:failed, _} = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:refusal, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:refusal)
+    end
+  end
+
   describe "an external tool's ask" do
     test "one no turn offers is decided denied and answered as an error, one with a null " <>
-           "argument is refused before it runs, and the turn completes",
+           "argument too, by its name before it resolves, and the turn completes",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
       turn = accept!(ctx, thread, row, "search for it")
       loop = run(ctx, turn)
@@ -5183,8 +5605,7 @@ defmodule Aqua.ProgramTest do
                "t" => "answer",
                "id" => answered.id,
                "ask" => "ask-2",
-               "content" =>
-                 "github__search: the argument q is null; leave it out or give it a value",
+               "content" => "github__search is not one of the tools this work has",
                "is_error" => true
              }
 
@@ -5589,7 +6010,7 @@ defmodule Aqua.ProgramTest do
   # ---------------------------------------------------------------------------
   # Rows
 
-  defp start_step(ctx, turn), do: step_by_key(ctx, turn, TurnStorage.brain_start_key(turn.id))
+  defp start_step(ctx, turn), do: step_by_key(ctx, turn, TurnStorage.admission_key(turn.id))
 
   defp step_by_key(ctx, turn, key) do
     {:ok, steps} = Tape.steps(ctx, turn)
@@ -5892,8 +6313,9 @@ defmodule Aqua.ProgramTest do
   end
 
   # The attendant's first read of the results it owes that finds none is
-  # held there, in the attendant, until `gate` ends or two seconds pass;
-  # the test is told once it is held.
+  # held there, in the attendant, until `gate` ends; the test is told once
+  # it is held, whether the read holds a transaction, and how the hold
+  # ended: `:released` by the gate, or `:expired` after ten seconds.
   defp between!(attendant, gate) do
     id = {__MODULE__, :between, make_ref()}
     config = %{id: id, attendant: attendant, gate: gate, test: self()}
@@ -5906,21 +6328,298 @@ defmodule Aqua.ProgramTest do
     if self() == attendant and results_read?(metadata) do
       :telemetry.detach(config.id)
       monitor = Process.monitor(config.gate)
-      send(config.test, :between)
+      send(config.test, {:between, Arca.Repo.in_transaction?()})
 
       receive do
-        {:DOWN, ^monitor, :process, _pid, _reason} -> :ok
+        {:DOWN, ^monitor, :process, _pid, _reason} -> send(config.test, :released)
       after
-        # sleep-ok: the bound over a read that holds the writers out
-        2_000 -> Process.demonitor(monitor, [:flush])
+        # sleep-ok: the bound over a hold the test never ended, which it fails
+        10_000 ->
+          Process.demonitor(monitor, [:flush])
+          send(config.test, :expired)
       end
     end
+  end
+
+  # Waits until `writer` has ended, or waits for the store a held read
+  # keeps from it: the test's one shared connection, held by the read's
+  # transaction (`holding?`), keeps every writer at its checkout until the
+  # read ends.
+  defp held_out!(writer, holding?) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        case Process.info(writer, :current_function) do
+          nil -> true
+          {:current_function, {DBConnection.Holder, :checkout_call, 5}} -> holding?
+          _running -> false
+        end
+      end,
+      10_000,
+      "the writes to land or to wait for the held read"
+    )
   end
 
   defp results_read?(%{query: query, result: {:ok, %{num_rows: 0}}}),
     do: query =~ ~r/result_message_id"? IN \(SELECT/
 
   defp results_read?(_metadata), do: false
+
+  # A turn of Aqua's on the model's harness, its catalyst playing `script`.
+  defp api_turn!(ctx, thread, text, script, refs \\ []) do
+    ScriptedWorker.fresh_limits!(ctx, [@model | refs])
+    start_supervised!({ScriptedWorker, ref: [@model | refs], script: script})
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
+        turn: %{agent: "aqua", requested_by: ctx.user_id, model: @model_id}
+      })
+
+    turn
+  end
+
+  # A model's answer and its asks, counted as a program's usage is
+  # (`usage/2`), under the same model's name.
+  defp answer(text),
+    do: %{
+      "content" => [%{"type" => "text", "text" => text}],
+      "stop_reason" => "end_turn",
+      "model" => "m",
+      "usage" => counts()
+    }
+
+  defp asking(asks),
+    do: %{
+      "content" =>
+        for {id, name, args} <- asks do
+          %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => args}
+        end,
+      "stop_reason" => "tool_call",
+      "model" => "m",
+      "usage" => counts()
+    }
+
+  # What a person sees of a turn, what its asks were decided and answered,
+  # how it ended and what it used.
+  defp outcome(ctx, thread, turn) do
+    {:ok, ended} = Tape.turn(ctx, turn.id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    shown =
+      from(m in Arca.Schemas.Message,
+        where: m.athanor_id == ^ctx.athanor_id and m.thread_id == ^thread.id,
+        where: m.turn_id == ^turn.id and m.kind in ^drawn_kinds(),
+        order_by: [asc: m.seq],
+        select: {m.kind, m.sent_by, m.content}
+      )
+      |> Arca.Repo.all()
+
+    asks =
+      for %{kind: kind} = step <- steps,
+          kind not in ["model", "input"],
+          step.idempotency_key != TurnStorage.admission_key(turn.id) do
+        {:ok, result} = Tape.message(ctx, step.result_message_id)
+        # The rows a listing names are the test's own.
+        # Its decision is what it records: whether its dispatch began (its
+        # start's time), how it closed and the refusal's words.
+        {step.tool, step.action, step.started_at != nil, step.dispatch_state, step.outcome,
+         step.error, as_compared(result.content)}
+      end
+
+    %{
+      shown: shown,
+      asks: asks,
+      ended: {ended.status, ended.error},
+      usage: Tape.usage(ctx, thread.id)
+    }
+  end
+
+  # A result as the table compares it: a launch's run by what it says of
+  # the run, and the rows a listing names by their kind.
+  defp as_compared(content) do
+    case Jason.decode(content) do
+      {:ok, %{"execution_id" => _} = run} -> Map.take(run, ["status", "result", "component_type"])
+      _other -> Regex.replace(~r/mcp_[0-9a-f-]{36}/, content, "mcp_*")
+    end
+  end
+
+  defp expected(:text, _ctx),
+    do: %{
+      shown: [{"text", "person", "hello"}, {"text", "aqua", "Hi."}],
+      asks: [],
+      ended: {"completed", nil},
+      usage: %{input: 10, output: 4, models: ["m"], accounting: :complete}
+    }
+
+  defp expected(:asks, _ctx),
+    do: %{
+      shown: [{"text", "person", "list them"}, {"text", "aqua", "Listed."}],
+      asks: [
+        {"program", "list", true, "closed", "ok", nil,
+         ~s({\n  "programs": [\n    {\n      "command": "cyfr-claude-code npx -y ) <>
+           ~s(@anthropic-ai/claude-code@2.1.323",\n      "id": "mcp_*",\n      ) <>
+           ~s("name": "claude-code",\n      "epoch": 1\n    }\n  ]\n})},
+        {"vault", "list", false, "closed", "denied",
+         "vault is not one of the tools this work has",
+         "vault is not one of the tools this work has"}
+      ],
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+
+  defp expected(:steer, _ctx),
+    do: %{
+      shown: [
+        {"text", "person", "first"},
+        {"text", "person", "and this"},
+        {"text", "aqua", "First."},
+        {"text", "aqua", "Both."}
+      ],
+      asks: [],
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+
+  defp expected(:launch, _ctx),
+    do: %{
+      shown: [{"text", "person", "run the app"}, {"text", "aqua", "Ran it."}],
+      asks: [
+        {"execution", "run", true, "closed", "ok", nil,
+         %{"status" => "completed", "result" => %{"ran" => true}, "component_type" => "reagent"}}
+      ],
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+
+  defp expected(:stop, _ctx),
+    do: %{
+      shown: [{"text", "person", "work on it"}, {"turn_aborted", "aqua", "stopped"}],
+      asks: [],
+      ended: {"cancelled", "stopped"},
+      usage: %{input: 0, output: 0, models: [], accounting: :unavailable}
+    }
+
+  defp expected(:lost, _ctx),
+    do: %{
+      shown: [
+        {"text", "person", "work on it"},
+        {"system", "aqua", "Aqua stopped before it finished."}
+      ],
+      asks: [],
+      ended: {"failed", "Aqua stopped before it finished."},
+      usage: %{input: 0, output: 0, models: [], accounting: :unavailable}
+    }
+
+  defp expected(:refusal, _ctx),
+    do: %{
+      shown: [
+        {"text", "person", "try it"},
+        {"system", "aqua", "Aqua could not answer: The provider refused it."}
+      ],
+      asks: [],
+      ended: {"failed", "Aqua could not answer: The provider refused it."},
+      usage: %{input: 0, output: 0, models: [], accounting: :unavailable}
+    }
+
+  # A query the loop makes once its harness is gone.
+  @doc false
+  def after_exit(_event, _measured, meta, %{loop: loop, harness: harness, test: test}) do
+    if self() == loop and not Process.alive?(harness), do: send(test, {:after_exit, meta.query})
+    :ok
+  end
+
+  # Stop, as the runner makes it: the turn's work stops, and its end is
+  # written by the Stop.
+  defp stop!(ctx, turn, loop) do
+    {:ok, open} = Tape.turn(ctx, turn.id)
+    assert {:ok, aborted} = Aqua.Loop.abort(ctx, open, "stopped", waiting_out(loop))
+    {:ok, _} = Tape.finish(ctx, aborted, "cancelled", %{error: "stopped"})
+  end
+
+  # What the pane draws of a thread (`PrismWeb.ThreadPaneLive`): its posts,
+  # the server's nudges and the line a stopped turn leaves.
+  defp drawn_kinds, do: Arca.ThreadStorage.post_kinds() ++ ["nudge", "turn_aborted"]
+
+  # The harness's audits, apart: the program's start admitted once, no
+  # model step, and what it was handed, each delivery recorded once in
+  # order with the row it carried; or one model step per round.
+  defp admitted_once!(ctx, turn) do
+    {:ok, steps} = Tape.steps(ctx, turn)
+    [start] = Enum.filter(steps, &(&1.idempotency_key == TurnStorage.admission_key(turn.id)))
+
+    assert {start.tool, start.action, start.dispatch_state, start.outcome} ==
+             {"program", "start", "closed", "ok"}
+
+    refute Enum.any?(steps, &(&1.kind == "model"))
+
+    for %{kind: "input"} = step <- steps do
+      {:ok, carried} = Tape.message(ctx, step.message_id)
+      {step.action, step.outcome, carried.kind, as_compared(carried.content)}
+    end
+  end
+
+  # What the program was handed, as its audit reads it (`admitted_once!/2`).
+  defp delivered(:text), do: [{"post", "ok", "text", "hello"}]
+
+  defp delivered(:steer),
+    do: [{"post", "ok", "text", "first"}, {"post", "ok", "text", "and this"}]
+
+  defp delivered(:stop), do: [{"post", "ok", "text", "work on it"}]
+  defp delivered(:lost), do: [{"post", "ok", "text", "work on it"}]
+  defp delivered(:refusal), do: [{"post", "ok", "text", "try it"}]
+
+  # The deliveries of a row whose asks were answered: the post, then each
+  # ask's answer, each the result row the table compares.
+  defp delivered(row) when row in [:asks, :launch] do
+    %{shown: [{"text", "person", post} | _], asks: asks} = expected(row, nil)
+
+    [{"post", "ok", "text", post}] ++
+      for {_tool, _action, _started?, _closed, _outcome, _error, result} <- asks,
+          do: {"answer", "ok", "tool_result", result}
+  end
+
+  defp model_rounds(ctx, turn) do
+    {:ok, steps} = Tape.steps(ctx, turn)
+    Enum.count(steps, &(&1.kind == "model"))
+  end
+
+  # What of a turn is still proposed or dispatched: nothing, once it ended.
+  defp open_steps(ctx, turn) do
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    for %{dispatch_state: open} = step <- steps,
+        open in ["proposed", "dispatched"],
+        do: {step.kind, step.purpose, step.tool, step.action, open}
+  end
+
+  # The model's steps of a turn, as its audit reads them: each one's
+  # purpose, how far it got and how it closed.
+  defp model_steps(ctx, turn) do
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    for %{kind: "model"} = step <- steps,
+        do: {step.purpose, step.dispatch_state, step.outcome, step.error}
+  end
+
+  # The model's harness of a turn, as its loop holds it in its registration.
+  defp api_harness!(turn) do
+    [{_loop, {Aqua.Harness.Api, harness}}] =
+      Registry.lookup(Aqua.RunnerRegistry, {:turn, turn.id})
+
+    harness
+  end
+
+  # Waits until `pid` sits in `function`, with nothing in its mailbox.
+  defp in_function!(pid, function, label) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        Process.info(pid, [:current_function, :message_queue_len]) ==
+          [current_function: function, message_queue_len: 0]
+      end,
+      10_000,
+      label
+    )
+  end
 
   # The turn's harness, as its loop holds it in its registration.
   defp attendant!(_ctx, turn) do
@@ -5993,41 +6692,6 @@ defmodule Aqua.ProgramTest do
       Arca.ThreadStorage.forget_sessions(Sanctum.Context.actor(ctx), row.id)
 
     Opus.Brain.forgotten(ctx.athanor_id, forgotten)
-  end
-
-  # The store refuses an insert into `table` whose `column` is `value`, or
-  # whose every column of `columns` holds its value. The trigger and
-  # function are transactional test state.
-  defp refuse_insert!(table, column, value), do: refuse_insert!(table, [{column, value}])
-
-  defp refuse_insert!(table, columns) do
-    pg = Enum.map_join(columns, " AND ", fn {column, value} -> "NEW.#{column} = '#{value}'" end)
-    sqlite = pg
-
-    statements = %{
-      Ecto.Adapters.Postgres => [
-        """
-        CREATE FUNCTION test_insert_refusal() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          IF #{pg} THEN RAISE EXCEPTION 'test insert refused'; END IF;
-          RETURN NEW;
-        END $$
-        """,
-        """
-        CREATE TRIGGER test_insert_refusal BEFORE INSERT ON #{table}
-        FOR EACH ROW EXECUTE FUNCTION test_insert_refusal()
-        """
-      ],
-      Ecto.Adapters.SQLite3 => [
-        """
-        CREATE TRIGGER test_insert_refusal BEFORE INSERT ON #{table}
-        WHEN #{sqlite}
-        BEGIN SELECT RAISE(ABORT, 'test insert refused'); END
-        """
-      ]
-    }
-
-    statements |> Map.fetch!(Arca.Repo.__adapter__()) |> Enum.each(&Arca.Repo.query!/1)
   end
 
   # The next read of the steps fails, once, in `reader`: the table is away
