@@ -13,6 +13,17 @@ defmodule Emissary.External.Proxy do
   it instead is the consent a chain's authority holds, which
   `consent_candidates/1` describes.
 
+  A server's resources and prompts, when it declares them, are two more
+  names of it, its reserved names `server:@resources` and `server:@prompts`
+  (`Prima.ToolPattern.reserved?/1`), granted only by naming them. What a
+  server exposes now is one answer (`exposure/2`): the tools its
+  configuration's patterns select and the reserved name of each offering it
+  declares, which a call's resolution, a consent candidate and a turn's
+  start all read. A turn's listing (`list_external_tools/2`) hands each as
+  a definition of CYFR's own, `method` its verb, and its call is the
+  server's read: what the server returns is its answer, each binary named
+  by its type and size and never inlined.
+
   This module is the one implementation of `Sanctum.Proxy`, the port the
   operation table asks about proxied tools through; `Cyfr.Application`
   installs it at boot. It is the one surface module that implements a
@@ -32,6 +43,9 @@ defmodule Emissary.External.Proxy do
   require Logger
 
   @external_tools_cache_ttl :timer.seconds(30)
+
+  # A server's reserved names, each the offering it names.
+  @reserved %{"@prompts" => :prompts, "@resources" => :resources}
 
   # ============================================================================
   # External Tool Discovery (called by Sanctum.Providers.System)
@@ -61,8 +75,8 @@ defmodule Emissary.External.Proxy do
 
       :miss ->
         tools =
-          for {_server, _digest, tools} <- read_servers(ctx, fn _server -> true end),
-              tool <- tools,
+          for {server, _digest, %{tools: tools}} <- read_servers(ctx, fn _server -> true end),
+              tool <- shaped(server, tools),
               do: tool
 
         # A listing stored after a fresher one, read after the change it
@@ -75,35 +89,86 @@ defmodule Emissary.External.Proxy do
   end
 
   @doc """
-  The tool patterns each named server of the caller's athanor exposes, as
-  its configuration names them, from its row: no server is started.
+  What each named server of the caller's athanor exposes now
+  (`exposure/2`): the tool patterns its configuration names, from its row,
+  and the reserved name of each offering it declares, read from the
+  process serving that row, started when none runs. A server that does not
+  answer declares nothing.
   """
   @impl Sanctum.Proxy
   @spec tool_patterns(Context.t(), [String.t()]) ::
           {:ok, %{String.t() => [String.t()]}} | {:error, term()}
   def tool_patterns(%Context{} = ctx, server_names) when is_list(server_names) do
     with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
+      named = Enum.filter(servers, &(&1.name in server_names))
+
       exposing =
-        for server <- servers,
-            server.name in server_names,
-            into: %{},
-            do: {server.name, Sanctum.ToolServerDigest.tool_patterns(server)}
+        named
+        |> Task.async_stream(&exposure(&1, declared_or_none(&1, ctx)),
+          max_concurrency: 10,
+          timeout: 15_000,
+          on_timeout: :kill_task
+        )
+        |> Enum.zip(named)
+        |> Map.new(fn
+          {{:ok, exposed}, server} -> {server.name, exposed}
+          {{:exit, _reason}, server} -> {server.name, exposure(server, [])}
+        end)
 
       {:ok, exposing}
     end
   end
 
+  # What a server exposes now: the tool patterns its configuration names,
+  # which select among its tools alone, and the reserved name of each
+  # offering in `declared`, which only naming it matches
+  # (`Prima.ToolPattern`). The one answer of what a server exposes: a call's
+  # resolution (`reachable/5`), a consent candidate and a turn's start
+  # (`tool_patterns/2`) read it.
+  defp exposure(server, declared) do
+    reserved = for {name, offering} <- @reserved, offering in declared, do: name
+    own_patterns(server) ++ reserved
+  end
+
+  # A server's configured patterns, which select among its tools: one
+  # naming a reserved name selects none, since no tool takes one.
+  defp own_patterns(server),
+    do:
+      Enum.reject(Sanctum.ToolServerDigest.tool_patterns(server), &Prima.ToolPattern.reserved?/1)
+
+  # What an enabled server declares it offers beside its tools, read from
+  # the process serving this row's configuration, started when none runs.
+  defp declared(server, ctx) do
+    if server.enabled do
+      with {:ok, %{declared: declared}} <- read_server(server, ctx), do: {:ok, declared}
+    else
+      {:ok, []}
+    end
+  end
+
+  defp declared_or_none(server, ctx) do
+    case declared(server, ctx) do
+      {:ok, declared} -> declared
+      {:error, _reason} -> []
+    end
+  end
+
   @doc """
   Each of the caller's athanor's servers named `server_names` that
-  answers, with its tools as `list_external_tools/1` shapes them and the
-  consent digest of the configuration they were read from, read now and
-  kept nowhere: no other server is started or asked.
+  answers, with its tools as `list_external_tools/1` shapes them, then a
+  definition of CYFR's own for each of its reserved names it declares
+  (`server:@resources`, `server:@prompts`), and the consent digest of the
+  configuration they were read from, read now and kept nowhere: no other
+  server is started or asked.
   """
   @impl Sanctum.Proxy
   @spec list_external_tools(Context.t(), [String.t()]) :: [Sanctum.Proxy.server_listing()]
   def list_external_tools(%Context{} = ctx, server_names) when is_list(server_names) do
-    for {server, digest, tools} <- read_servers(ctx, &(&1.name in server_names)),
-        do: %{server_name: server.name, server_digest: digest, tools: tools}
+    for {server, digest, %{tools: tools, declared: declared}} <-
+          read_servers(ctx, &(&1.name in server_names)) do
+      reserved = for offering <- declared, do: reserved_entry(server, offering)
+      %{server_name: server.name, server_digest: digest, tools: shaped(server, tools) ++ reserved}
+    end
   end
 
   @doc """
@@ -164,7 +229,7 @@ defmodule Emissary.External.Proxy do
   end
 
   defp describe_candidate(server, ctx) do
-    patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+    patterns = own_patterns(server)
 
     digest =
       case Sanctum.ToolServerDigest.from_server(server) do
@@ -178,9 +243,9 @@ defmodule Emissary.External.Proxy do
         _ -> nil
       end
 
-    {tool_names, descriptions_digest} =
-      case server.enabled && Servers.ensure_started(server, ctx) do
-        {:ok, tools} ->
+    {tool_names, descriptions_digest, declared} =
+      case server.enabled && read_server(server, ctx) do
+        {:ok, %{tools: tools, declared: declared}} ->
           matched =
             Enum.filter(tools, fn tool ->
               Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool["name"] || ""))
@@ -192,10 +257,10 @@ defmodule Emissary.External.Proxy do
               :unavailable -> nil
             end
 
-          {Enum.map(matched, & &1["name"]) |> Enum.sort(), descriptions}
+          {Enum.map(matched, & &1["name"]) |> Enum.sort(), descriptions, declared}
 
         _ ->
-          {[], nil}
+          {[], nil, []}
       end
 
     %{
@@ -204,7 +269,7 @@ defmodule Emissary.External.Proxy do
       enabled: server.enabled,
       server_digest: digest,
       record: record,
-      tool_patterns: patterns,
+      tool_patterns: exposure(server, declared),
       tool_names: tool_names,
       descriptions_digest: descriptions_digest
     }
@@ -227,9 +292,9 @@ defmodule Emissary.External.Proxy do
   end
 
   # Each enabled tool server of the athanor `listed?` keeps, read now: its
-  # row, the consent digest of that row (nil when it has none), and its
-  # tools as the listing shapes them, read from the process serving that
-  # very row's configuration.
+  # row, the consent digest of that row (nil when it has none), and what it
+  # offers (`Emissary.External.Server.offerings/2`), read from the process
+  # serving that very row's configuration.
   defp read_servers(%Context{} = ctx, listed?) do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
@@ -243,8 +308,8 @@ defmodule Emissary.External.Proxy do
           ordered: false
         )
         |> Enum.flat_map(fn
-          {:ok, {server, {:ok, tools}}} ->
-            [{server, row_digest(server), shaped(server, tools)}]
+          {:ok, {server, {:ok, offerings}}} ->
+            [{server, row_digest(server), offerings}]
 
           {:ok, {_server, {:error, reason}}} ->
             Logger.warning(
@@ -268,15 +333,15 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  # The tools of the process started for this row's configuration: still
-  # the one registered once they are read, so they are that process's,
-  # never a replacement's another revision started meanwhile.
+  # What the process started for this row's configuration offers: still
+  # the one registered once it is read, so it is that process's, never a
+  # replacement's another revision started meanwhile.
   defp read_server(server, ctx) do
     with {:ok, pid} <-
            Emissary.External.ServerSupervisor.ensure_started(Servers.server_config(server, ctx)),
-         {:ok, tools} <- Emissary.External.Server.get_tools(server.name, ctx.athanor_id) do
+         {:ok, offerings} <- Emissary.External.Server.offerings(server.name, ctx.athanor_id) do
       case Registry.lookup(Emissary.External.ServerRegistry, {server.name, ctx.athanor_id}) do
-        [{^pid, _digest}] -> {:ok, tools}
+        [{^pid, _digest}] -> {:ok, offerings}
         _replaced -> {:error, :configuration_moved}
       end
     end
@@ -290,7 +355,7 @@ defmodule Emissary.External.Proxy do
   end
 
   defp shaped(server, tools) do
-    patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+    patterns = own_patterns(server)
 
     tools
     |> Enum.filter(fn tool ->
@@ -325,6 +390,50 @@ defmodule Emissary.External.Proxy do
       }
     end)
   end
+
+  # The definition a server's reserved name is handed under: CYFR's own
+  # words and schema, `method` its verb, since a proxied call never carries
+  # `action` to its server (`Sanctum.Proxy.host_stamped/0`).
+  defp reserved_entry(server, :resources),
+    do: %{
+      "name" => "#{server.name}:@resources",
+      "description" =>
+        "The resources of the person's MCP server '#{server.name}'. `list` names them, " <>
+          "with the templates that make their uris; `read` reads the one `uri` names. A " <>
+          "binary resource is named by its type and size, not read out.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "method" => %{"type" => "string", "enum" => ["list", "read"]},
+          "uri" => %{"type" => "string", "description" => "The resource `read` reads."}
+        },
+        "required" => ["method"]
+      },
+      "annotations" => %{"readOnlyHint" => true, "destructiveHint" => false}
+    }
+
+  defp reserved_entry(server, :prompts),
+    do: %{
+      "name" => "#{server.name}:@prompts",
+      "description" =>
+        "The prompts of the person's MCP server '#{server.name}'. `list` names them and " <>
+          "the arguments each takes; `get` gets the one `name` names, filled with its " <>
+          "`arguments`, as the messages it is, each with its role.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "method" => %{"type" => "string", "enum" => ["list", "get"]},
+          "name" => %{"type" => "string", "description" => "The prompt `get` gets."},
+          "arguments" => %{
+            "type" => "object",
+            "additionalProperties" => %{"type" => "string"},
+            "description" => "The prompt's arguments, each by its name."
+          }
+        },
+        "required" => ["method"]
+      },
+      "annotations" => %{"readOnlyHint" => true, "destructiveHint" => false}
+    }
 
   # ============================================================================
   # External Tool Dispatch (called by the gate on a table miss)
@@ -371,7 +480,7 @@ defmodule Emissary.External.Proxy do
       [server_name, remote_tool] ->
         case server_row(ctx, server_name, Keyword.get(opts, :server)) do
           {:ok, server} ->
-            reachable(server, server_name, remote_tool, plane)
+            reachable(server, ctx, server_name, remote_tool, plane)
 
           {:error, :not_found} ->
             {:error, :not_external}
@@ -386,8 +495,27 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  defp reachable(server, server_name, remote_tool, plane) do
-    patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+  # A reserved name is exposed only by what the server declares, read from
+  # its process; a tool's only by its configuration's patterns.
+  defp reachable(server, ctx, server_name, remote_tool, plane) do
+    with {:ok, declared} <- declared_for(server, ctx, remote_tool) do
+      exposed?(server, declared, server_name, remote_tool, plane)
+    end
+  end
+
+  defp declared_for(server, ctx, remote_tool) do
+    if Prima.ToolPattern.reserved?(remote_tool) do
+      case declared(server, ctx) do
+        {:ok, declared} -> {:ok, declared}
+        {:error, _reason} -> {:error, {:unavailable, "Server '#{server.name}'"}}
+      end
+    else
+      {:ok, []}
+    end
+  end
+
+  defp exposed?(server, declared, server_name, remote_tool, plane) do
+    patterns = exposure(server, declared)
 
     cond do
       not server.enabled ->
@@ -727,9 +855,16 @@ defmodule Emissary.External.Proxy do
         # The process started from THIS row's configuration is the one
         # called — never a lookup by name that a replacement in between
         # could answer with another revision's process.
-        pid
-        |> Emissary.External.Server.call_tool(remote_tool, upstream_args(args))
-        |> classified()
+        case request_of(remote_tool, upstream_args(args)) do
+          {:tool, name, arguments} ->
+            pid |> Emissary.External.Server.call_tool(name, arguments) |> classified()
+
+          {:error, reason} ->
+            {:error, reason}
+
+          asked ->
+            pid |> Emissary.External.Server.offering(asked) |> answered() |> classified()
+        end
 
       # Another configuration's process stands under the name: the call was
       # admitted for a revision no process serves, so it is refused as a
@@ -751,6 +886,83 @@ defmodule Emissary.External.Proxy do
   # The arguments a server sees: the guest's own, without what the host
   # stamped (`Sanctum.Proxy.host_stamped/0`).
   defp upstream_args(args), do: Map.drop(args, Sanctum.Proxy.host_stamped())
+
+  # What a call of `remote_tool` asks its server: a tool's call, or the
+  # read a reserved name's `method` names (`reserved_entry/2`).
+  defp request_of("@resources", %{"method" => "list"}), do: {:resources, :list}
+
+  defp request_of("@resources", %{"method" => "read", "uri" => uri}) when is_binary(uri),
+    do: {:resources, :read, uri}
+
+  defp request_of("@resources", _args),
+    do: {:error, {:invalid_argument, "A server's resources take method list, or read with a uri"}}
+
+  defp request_of("@prompts", %{"method" => "list"}), do: {:prompts, :list}
+
+  defp request_of("@prompts", %{"method" => "get", "name" => name} = args) when is_binary(name) do
+    case Map.get(args, "arguments", %{}) do
+      %{} = arguments -> {:prompts, :get, name, arguments}
+      _other -> request_of("@prompts", %{})
+    end
+  end
+
+  defp request_of("@prompts", _args),
+    do:
+      {:error,
+       {:invalid_argument,
+        "A server's prompts take method list, or get with a name and its arguments"}}
+
+  defp request_of(tool, args), do: {:tool, tool, args}
+
+  # A read's answer as a model is given it: the server's own, each binary
+  # named by its type and size and never inlined, a resource's `blob` and a
+  # message's image or audio `data`, an embedded resource's among them.
+  defp answered({:ok, %{} = answer}) do
+    {:ok,
+     answer
+     |> update_list("contents", &unblobbed/1)
+     |> update_list("messages", fn
+       %{"content" => %{} = content} = message -> %{message | "content" => unblobbed(content)}
+       message -> message
+     end)}
+  end
+
+  defp answered(answer), do: answer
+
+  defp update_list(map, key, fun) do
+    case map do
+      %{^key => items} when is_list(items) -> %{map | key => Enum.map(items, fun)}
+      _none -> map
+    end
+  end
+
+  defp unblobbed(%{"resource" => %{} = resource} = content),
+    do: %{content | "resource" => unblobbed(resource)}
+
+  defp unblobbed(%{} = content) do
+    case content do
+      %{"blob" => blob} when is_binary(blob) ->
+        named(content, "blob", blob)
+
+      %{"type" => type, "data" => data} when type in ["image", "audio"] and is_binary(data) ->
+        named(content, "data", data)
+
+      _text ->
+        content
+    end
+  end
+
+  defp unblobbed(content), do: content
+
+  defp named(content, key, encoded) do
+    bytes =
+      case Base.decode64(encoded, ignore: :whitespace) do
+        {:ok, decoded} -> byte_size(decoded)
+        :error -> byte_size(encoded)
+      end
+
+    content |> Map.delete(key) |> Map.put("bytes", bytes)
+  end
 
   # An upstream call's refusal in the table's terms. A reason the gate
   # knows (`Sanctum.Refusals.known?/1`) passes as it is — an

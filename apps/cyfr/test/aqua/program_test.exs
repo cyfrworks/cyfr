@@ -5628,6 +5628,51 @@ defmodule Aqua.ProgramTest do
       assert {:ok, [_ | _]} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx), tool: "gh:search")
     end
 
+    # A server's resources and prompts, on in the list and granted, are
+    # handed as two tools, and each ask is the server's read or get, made
+    # once through the gate, its answer the ask's result.
+    @tag harness: :api
+    test "a server's resources and prompts, on the model's harness", %{ctx: ctx, thread: thread} do
+      offering!(ctx)
+      turn = api_turn!(ctx, thread, "read them", [asking(offering_asks()), answer("Read them.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert outcome(ctx, thread, turn) == expected(:offerings, ctx)
+      assert model_rounds(ctx, turn) == 2
+      assert handed_offerings(chat_tools()) == ["docs__prompts", "docs__resources"]
+      assert offered_reads() == offering_reads()
+      assert server_calls(ctx, turn) == offering_calls()
+    end
+
+    @tag harness: :program
+    test "a server's resources and prompts, on a program",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      offering!(ctx)
+      turn = accept!(ctx, thread, row, "read them")
+      loop = run(ctx, turn)
+      %{start: start, work: work} = started!(fake, row)
+      assert handed_offerings(start["tools"]) == ["docs__prompts", "docs__resources"]
+      assert handed_offerings(work["tools"]) == ["docs__prompts", "docs__resources"]
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+
+      for {id, name, args} <- offering_asks() do
+        say(fake, row, ask(turn, id, name, args))
+        answered = sent()
+        say(fake, row, %{"t" => "accepted", "id" => answered["id"]})
+      end
+
+      say(fake, row, said(turn, "msg_1", "Read them."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:offerings, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:offerings)
+      assert offered_reads() == offering_reads()
+      assert server_calls(ctx, turn) == offering_calls()
+    end
+
     # An entry that is off, that its server no longer lists or whose
     # server's configuration moved since the grant is not handed, and an
     # ask of it is refused as unhanded, its server never called.
@@ -5863,6 +5908,32 @@ defmodule Aqua.ProgramTest do
       end
     end
 
+    # What a grant gives a server's resources is what the server declared
+    # when it was given: one that declares them only after the grant has
+    # the turn's start ask for the grant again, before any is read.
+    test "a server that declares its resources after the grant refuses the turn's start",
+         %{ctx: ctx, thread: thread} do
+      {:ok, offers} = Agent.start_link(fn -> ["tools"] end)
+      offering!(ctx, fn -> Agent.get(offers, & &1) end)
+      offer!(ctx, ["docs:@resources"])
+
+      # Not declared: the grant names none of them, the start stands and
+      # they are not handed.
+      turn = api_turn!(ctx, thread, "read them", [answer("Nothing to read.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+      assert not_handed(ctx, turn) == %{"docs:@resources" => :unlisted}
+      stop_supervised!(ScriptedWorker)
+
+      # Declared now, by the process started again.
+      Agent.update(offers, fn _ -> ["tools", "resources"] end)
+      :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+      turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
+      assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
+      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert model_rounds(ctx, turn) == 0
+      refute_received {:offered, _path, "resources/" <> _, _params}
+    end
+
     # A reissue writes what it compared: a server's endpoint changed
     # between its two preparations (a narrowed grant prepares twice) is
     # never written under the moved digest.
@@ -5988,7 +6059,8 @@ defmodule Aqua.ProgramTest do
     row
   end
 
-  # `stub` answers at `path` as a server listing `tools`. With `hold`, an
+  # `stub` answers at `path` as a server declaring tools and listing
+  # `tools`. With `hold`, an
   # Agent's flag, each listing asked while the flag is up tells the test
   # it is held, `{:holding, pid}`, and answers once sent `:go`.
   defp route!(stub, path, tools, hold \\ nil) do
@@ -6000,6 +6072,9 @@ defmodule Aqua.ProgramTest do
 
       result =
         case body["method"] do
+          "server/discover" ->
+            %{"capabilities" => %{"tools" => %{}}}
+
           "tools/list" ->
             if hold && Agent.get(hold, & &1) do
               send(test, {:holding, self()})
@@ -6036,6 +6111,127 @@ defmodule Aqua.ProgramTest do
 
     on_exit(fn -> Emissary.External.ServerSupervisor.stop("unasked", ctx.athanor_id) end)
   end
+
+  # `docs`, a server of the athanor's over HTTP, declaring `offers.()`
+  # (resources and prompts unless given) through `server/discover`, its tools
+  # `search` when it offers tools; each request it is made is told to the
+  # test as `{:offered, path, method, params}` and each read answered as
+  # `offering_answer/2` answers it. On Aqua's list with no other server's
+  # entry, and granted, unless `offers` is given.
+  defp offering!(ctx, offers \\ nil) do
+    stub = HTTPStub.open()
+    test = self()
+    declared = offers || fn -> ["resources", "prompts"] end
+
+    HTTPStub.stub(stub, "POST", "/docs", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+      params = Map.delete(body["params"] || %{}, "_meta")
+      send(test, {:offered, "/docs", body["method"], params})
+
+      result =
+        case body["method"] do
+          "server/discover" -> %{"capabilities" => Map.new(declared.(), &{&1, %{}})}
+          "tools/list" -> %{"tools" => [search_tool()]}
+          method -> offering_answer(method, params)
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+      )
+    end)
+
+    {:ok, _} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "docs",
+        url: "http://127.0.0.1:#{stub.port}/docs"
+      })
+
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id) end)
+
+    if offers == nil do
+      unasked!(ctx)
+      offer!(ctx, ["docs:@resources", "docs:@prompts"])
+    end
+  end
+
+  defp offering_answer("resources/list", _params),
+    do: %{"resources" => [%{"uri" => "file:///readme", "name" => "readme"}]}
+
+  defp offering_answer("resources/templates/list", _params),
+    do: %{"resourceTemplates" => [%{"uriTemplate" => "file:///{path}", "name" => "file"}]}
+
+  defp offering_answer("resources/read", %{"uri" => uri}),
+    do: %{"contents" => [%{"uri" => uri, "mimeType" => "text/plain", "text" => "read " <> uri}]}
+
+  defp offering_answer("prompts/list", _params), do: %{"prompts" => [%{"name" => "greet"}]}
+
+  defp offering_answer("prompts/get", %{"name" => name, "arguments" => arguments}),
+    do: %{
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => %{"type" => "text", "text" => "#{name} #{arguments["who"]}"}
+        }
+      ]
+    }
+
+  defp offering_asks,
+    do: [
+      {"ask-1", "docs__resources", %{"method" => "list"}},
+      {"ask-2", "docs__resources", %{"method" => "read", "uri" => "file:///readme"}},
+      {"ask-3", "docs__prompts", %{"method" => "list"}},
+      {"ask-4", "docs__prompts",
+       %{"method" => "get", "name" => "greet", "arguments" => %{"who" => "me"}}}
+    ]
+
+  # The reads each ask is: what the server was asked after its discovery,
+  # each once.
+  defp offering_reads,
+    do: [
+      {"resources/list", %{}},
+      {"resources/templates/list", %{}},
+      {"resources/read", %{"uri" => "file:///readme"}},
+      {"prompts/list", %{}},
+      {"prompts/get", %{"name" => "greet", "arguments" => %{"who" => "me"}}}
+    ]
+
+  # What `docs` was asked beside its discovery, in order: never
+  # initialized, never asked for tools it does not declare.
+  defp offered_reads do
+    for {:offered, "/docs", method, params} <- drain(:offered),
+        method != "server/discover",
+        do: {method, params}
+  end
+
+  defp drain(tag) do
+    receive do
+      message when elem(message, 0) == tag -> [message | drain(tag)]
+    after
+      0 -> []
+    end
+  end
+
+  defp offering_calls,
+    do: [
+      {"docs:@resources", "tool_server", "completed"},
+      {"docs:@resources", "tool_server", "completed"},
+      {"docs:@prompts", "tool_server", "completed"},
+      {"docs:@prompts", "tool_server", "completed"}
+    ]
+
+  # The names of a server's reserved entries among `tools` a harness was
+  # handed.
+  defp handed_offerings(tools),
+    do:
+      tools
+      |> Enum.map(& &1["name"])
+      |> Enum.filter(&String.starts_with?(&1, "docs__"))
+      |> Enum.sort()
 
   defp search_tool(words \\ "Search the person's code"),
     do: %{
@@ -7145,6 +7341,30 @@ defmodule Aqua.ProgramTest do
       usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
     }
 
+  defp expected(:offerings, _ctx) do
+    answers = [
+      {"docs:@resources",
+       Map.merge(
+         offering_answer("resources/list", %{}),
+         offering_answer("resources/templates/list", %{})
+       )},
+      {"docs:@resources", offering_answer("resources/read", %{"uri" => "file:///readme"})},
+      {"docs:@prompts", offering_answer("prompts/list", %{})},
+      {"docs:@prompts",
+       offering_answer("prompts/get", %{"name" => "greet", "arguments" => %{"who" => "me"}})}
+    ]
+
+    %{
+      shown: [{"text", "person", "read them"}, {"text", "aqua", "Read them."}],
+      asks:
+        for {tool, result} <- answers do
+          {tool, nil, true, "closed", "ok", nil, Jason.encode!(result, pretty: true)}
+        end,
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+  end
+
   defp expected(:unhanded, _ctx),
     do: %{
       shown: [{"text", "person", "search for it"}, {"text", "aqua", "None of them."}],
@@ -7236,7 +7456,7 @@ defmodule Aqua.ProgramTest do
 
   # The deliveries of a row whose asks were answered: the post, then each
   # ask's answer, each the result row the table compares.
-  defp delivered(row) when row in [:asks, :launch, :server] do
+  defp delivered(row) when row in [:asks, :launch, :server, :offerings] do
     %{shown: [{"text", "person", post} | _], asks: asks} = expected(row, nil)
 
     [{"post", "ok", "text", post}] ++

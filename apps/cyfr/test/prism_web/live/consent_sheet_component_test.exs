@@ -760,6 +760,39 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     defp changes(html), do: texts(html, ~s([data-test="server-changes"] li))
 
+    # A server's resources and prompts are granted only by naming them, so
+    # the sheet names each apart from its tools, and says that the tools'
+    # `*` covers neither.
+    test "names a server's resources and prompts apart from its tools, and its * as neither" do
+      for {patterns, lines} <- [
+            {["*", "@prompts", "@resources"],
+             [
+               "Its tools matching: * (neither its resources nor its prompts)",
+               "Its resources",
+               "Its prompts"
+             ]},
+            {["issues.*"], ["Its tools matching: issues.*"]},
+            {["@resources"], ["Its tools matching: none", "Its resources"]}
+          ] do
+        rows = [put_in(server_row("sha256:held", @held), ["values", "tool_patterns"], patterns)]
+
+        html =
+          sheet(
+            %{
+              source_ref: @server_ref,
+              candidates: [],
+              needs: [],
+              dependency_needs: [],
+              rows: rows,
+              head_tool_servers: [%{name: "github", digest: "sha256:held", record: @held}]
+            },
+            preview: keyed_preview(rows)
+          )
+
+        assert texts(html, ~s([data-test="server-grants"])) == lines, inspect(patterns)
+      end
+    end
+
     test "names a moved address" do
       html = server_card(%{@held | "address" => "https://mcp.elsewhere.example/v1"})
 

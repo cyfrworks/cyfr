@@ -345,6 +345,9 @@ defmodule Emissary.MCP.RouterTest do
 
         result =
           case body["method"] do
+            "server/discover" ->
+              %{"capabilities" => %{"tools" => %{}}}
+
             # An upstream schema with an `action` enum of its own, which
             # is not a CYFR action.
             "tools/list" ->
@@ -550,6 +553,9 @@ defmodule Emissary.MCP.RouterTest do
 
         result =
           case body["method"] do
+            "server/discover" ->
+              %{"capabilities" => %{"tools" => %{}}}
+
             "tools/list" ->
               %{
                 "tools" =>

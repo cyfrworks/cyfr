@@ -47,11 +47,14 @@ defmodule Emissary.External.ServerSseTest do
   end
 
   # A stream opens with whatever field its server writes first; this one
-  # names its events, as the common servers do.
+  # names its events, as the common servers do. Its result answers both its
+  # discovery, declaring tools, and its listing of them.
   defp result_event(id, tools) do
-    payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => %{"tools" => tools}})
+    payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => listing(tools)})
     "id: #{id}\r\nevent: message\r\ndata: " <> payload
   end
+
+  defp listing(tools), do: %{"capabilities" => %{"tools" => %{}}, "tools" => tools}
 
   @tool %{"name" => "probe", "description" => "d", "inputSchema" => %{"type" => "object"}}
 
@@ -77,7 +80,7 @@ defmodule Emissary.External.ServerSseTest do
 
       # Pretty-printed JSON: one event whose payload spans many data: lines.
       folded =
-        %{"jsonrpc" => "2.0", "id" => id, "result" => %{"tools" => [@tool]}}
+        %{"jsonrpc" => "2.0", "id" => id, "result" => listing([@tool])}
         |> Jason.encode!(pretty: true)
         |> String.split("\n")
         |> Enum.map_join("\r\n", &("data: " <> &1))

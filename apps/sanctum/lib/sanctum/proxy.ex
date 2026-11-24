@@ -87,9 +87,11 @@ defmodule Sanctum.Proxy do
   An external tool server as a grant may name it: its `name`, the
   `server_digest` a grant binds to and the `record` it records
   (`Sanctum.ToolServerDigest`'s, each `nil` when its configuration cannot
-  be digested), the `tool_patterns` the operator exposes and, when the server
-  answered, the `tool_names` matched and a `descriptions_digest` over
-  their descriptions.
+  be digested), the `tool_patterns` it exposes now (those the operator's
+  configuration names, and the reserved name of each of its resources and
+  prompts it declares, `@resources` and `@prompts`, which only naming them
+  matches: `Prima.ToolPattern`) and, when the server answered, the
+  `tool_names` matched and a `descriptions_digest` over their descriptions.
   """
   @type tool_server_candidate :: %{
           required(:name) => String.t(),
@@ -109,7 +111,9 @@ defmodule Sanctum.Proxy do
   @doc """
   Resolve `name` as a proxied `server:tool` a caller on `plane` may call:
   the server present in the caller's athanor and enabled, the tool one
-  its patterns expose, and the plane one the server is reachable from.
+  it exposes (`c:tool_patterns/2`: its patterns select a tool, and a
+  reserved name, `@resources` or `@prompts`, is exposed while the server
+  declares that offering), and the plane one the server is reachable from.
   `opts[:server]` is the server row the caller already judged, which the
   target then names; without it the row is read once.
   """
@@ -118,9 +122,10 @@ defmodule Sanctum.Proxy do
 
   @doc """
   Run the call `target` names from `plane`: the call an admitted
-  `c:resolve/4` answer names. `opts` carries what an in-chain call is
-  admitted under: `:execution_id`, `:step`, `:hold` and
-  `:retention_class`.
+  `c:resolve/4` answer names, a tool's call or, for a reserved name, the
+  read its `method` names of the server's resources or prompts. `opts`
+  carries what an in-chain call is admitted under: `:execution_id`,
+  `:step`, `:hold` and `:retention_class`.
   """
   @callback dispatch(target(), Context.t(), args :: map(), plane(), opts :: keyword()) ::
               {:ok, map()} | {:error, reason()}
@@ -141,9 +146,11 @@ defmodule Sanctum.Proxy do
   @callback list_external_tools(Context.t()) :: [map()]
 
   @typedoc """
-  One server's listing: its tools, named `server:tool`, and the consent
-  digest of the configuration they were read from (nil when it has none),
-  so a definition is judged under the revision it came from.
+  One server's listing: its tools, named `server:tool`, then a definition
+  of each of its reserved names it declares (`server:@resources`,
+  `server:@prompts`), and the consent digest of the configuration they were
+  read from (nil when it has none), so a definition is judged under the
+  revision it came from.
   """
   @type server_listing :: %{
           server_name: String.t(),
@@ -160,8 +167,10 @@ defmodule Sanctum.Proxy do
 
   @doc """
   The tool patterns each of the caller's athanor's servers named
-  `server_names` exposes now, as its configuration names them, read from
-  its row and starting no server; a server the athanor does not hold is
+  `server_names` exposes now: those its configuration names, read from its
+  row, and the reserved name of each of its resources and prompts it
+  declares, read from the server, which is started when it is not; one that
+  does not answer declares none, and a server the athanor does not hold is
   absent. What a consent narrows a grant's patterns by, and what a turn's
   start holds the grant to (`Aqua.Loop`).
   """

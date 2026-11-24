@@ -139,6 +139,61 @@ defmodule Emissary.External.ServerProgramTest do
              Emissary.External.Server.call_tool(pid, "pulls", %{})
   end
 
+  # A program states what it offers in `initialize`'s answer: one with no
+  # tools connects and is never asked for them, and its resources and
+  # prompts are listed, read and got.
+  test "a program that declares resources and prompts and no tools connects, and they are " <>
+         "listed, read and got",
+       %{ctx: ctx, fake: fake, row: row} do
+    Scripted.set(fake, :offers, %{row.id => ["resources", "prompts"]})
+    assert {:ok, []} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+
+    assert {:ok,
+            %{
+              "resources" => [%{"uri" => "file:///readme"}],
+              "resourceTemplates" => [%{"uriTemplate" => "file:///{path}"}]
+            }} = Emissary.External.Server.offering(pid, {:resources, :list})
+
+    assert {:ok, %{"contents" => [%{"text" => "read file:///notes"}]}} =
+             Emissary.External.Server.offering(pid, {:resources, :read, "file:///notes"})
+
+    assert {:ok, %{"prompts" => [%{"name" => "greet"}]}} =
+             Emissary.External.Server.offering(pid, {:prompts, :list})
+
+    assert {:ok, %{"messages" => [%{"role" => "user", "content" => %{"text" => "greet me"}}]}} =
+             Emissary.External.Server.offering(pid, {:prompts, :get, "greet", %{"who" => "me"}})
+
+    assert_receive {:invoke, "initialize", _fields}
+    refute_received {:invoke, "tools/list", _fields}
+  end
+
+  # A reinitialize opens the program's session again, which resumes while
+  # its process runs and is then not initialized again: what the program
+  # declared at its start still stands, and its tools are listed.
+  test "a reinitialize whose program's session resumes keeps what the program declared",
+       %{ctx: ctx, row: row} do
+    assert {:ok, tools} = Servers.ensure_started(row, ctx)
+    assert {:ok, :ready} = Emissary.External.Server.reinitialize(row.name, ctx.athanor_id)
+    assert {:ok, ^tools} = Emissary.External.Server.get_tools(row.name, ctx.athanor_id)
+    assert Enum.map(tools, & &1["name"]) == @tools
+  end
+
+  test "a program that declares neither is never asked for them", %{ctx: ctx, row: row} do
+    assert {:ok, _tools} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+
+    for {asked, offering} <- [{{:resources, :list}, "resources"}, {{:prompts, :list}, "prompts"}] do
+      assert {:error, {:invalid_argument, sentence}} =
+               Emissary.External.Server.offering(pid, asked)
+
+      assert sentence =~ "declares no #{offering}"
+    end
+
+    refute_received {:invoke, "resources/" <> _, _fields}
+    refute_received {:invoke, "prompts/" <> _, _fields}
+  end
+
   # A key narrowed to a program's tool names it as discovery lists it,
   # `<row>:<tool>`, compared as written (`Sanctum.ApiKey.admit_tool/2`).
   describe "a key narrowed to a program's tool" do

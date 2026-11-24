@@ -15,23 +15,34 @@ defmodule Prima.ToolPattern do
   Used for consent tool expansion and external
   tool-server `tool_patterns`. External MCP tool names often carry no dot
   segments; for those, grants are exact names or `"*"` by construction.
+
+  A name that begins with `@` is reserved (`reserved?/1`): a server's
+  resources and prompts, `@resources` and `@prompts`, which no MCP tool's
+  name can spell. It is matched only by naming it, never by `"*"` or a
+  `prefix.*`, so no pattern a grant held before a reserved name existed
+  covers one.
   """
 
   @doc """
   Whether `value` matches `pattern` under the grammar. An invalid pattern
-  matches nothing.
+  matches nothing, and a reserved name only itself.
   """
   @spec matches?(String.t(), String.t()) :: boolean()
-  def matches?("*", value) when is_binary(value), do: true
+  def matches?("*", value) when is_binary(value), do: not reserved?(value)
 
   def matches?(pattern, value) when is_binary(pattern) and is_binary(value) do
     cond do
       not valid?(pattern) -> false
       pattern == value -> true
+      reserved?(value) -> false
       String.ends_with?(pattern, ".*") -> String.starts_with?(value, dot_prefix(pattern))
       true -> false
     end
   end
+
+  @doc "Whether `name` is a reserved name, one that begins with `@`."
+  @spec reserved?(String.t()) :: boolean()
+  def reserved?(name) when is_binary(name), do: String.starts_with?(name, "@")
 
   @doc """
   Whether `pattern` is well-formed: `"*"`, a non-empty literal without `*`,
@@ -51,9 +62,10 @@ defmodule Prima.ToolPattern do
   def valid?(_), do: false
 
   @doc """
-  Expand `patterns` against a catalog of concrete names: `"*"` takes the
-  whole catalog, `prefix.*` its dot-boundary matches, an exact name only
-  itself and only if the catalog contains it. Unknown or invalid patterns
+  Expand `patterns` against a catalog of concrete names, each taking what
+  it matches (`matches?/2`): `"*"` the whole catalog but its reserved
+  names, `prefix.*` its dot-boundary matches, an exact name only itself
+  and only if the catalog contains it. Unknown or invalid patterns
   expand to nothing — a consent blob may hold entries for tools that no
   longer exist, and an expansion is an allowlist, so dropping them is the
   fail-safe direction.
@@ -63,20 +75,7 @@ defmodule Prima.ToolPattern do
   def expand(patterns, catalog) when is_list(patterns) and is_list(catalog) do
     patterns
     |> Enum.flat_map(fn pattern ->
-      cond do
-        pattern == "*" ->
-          catalog
-
-        is_binary(pattern) and String.ends_with?(pattern, ".*") and valid?(pattern) ->
-          Enum.filter(catalog, &String.starts_with?(&1, dot_prefix(pattern)))
-
-        # Validate exact patterns as well as globs, consistently with matches?/2.
-        valid?(pattern) and pattern in catalog ->
-          [pattern]
-
-        true ->
-          []
-      end
+      if valid?(pattern), do: Enum.filter(catalog, &matches?(pattern, &1)), else: []
     end)
     |> Enum.uniq()
     |> Enum.sort()
