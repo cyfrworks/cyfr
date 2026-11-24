@@ -103,6 +103,11 @@ if [ "${1:-}" = --session ]; then
   started() { [ "$(starts)" -ge "$1" ]; }
   window() { wlrctl toplevel find title:CYFR; }
   shells() { pgrep -u proof -c -f -- '^/opt/cyfr/resources/cyfr screen shell$'; }
+  # The Nth start is locked, with one screen shell: it is ready, its window
+  # shows and one screen shell runs. Every start is locked: the page ready
+  # names is the shell's own, drawn locked (cmd/screen_app.go).
+  one_shell() { [ "$(shells)" = 1 ]; }
+  locked_start() { within 60 started "$1" && within 30 window && within 30 one_shell; }
   # The windows labwc shows now, by its handles, and whether one closed.
   shown() { awk '$1 == "open" { w[$2] = 1 } $1 == "closed" { delete w[$2] } END { for (h in w) print h }' "$OUT/toplevels"; }
   closedAt() { awk -v h="$1" '$1 == "closed" && $2 == h { print $3; exit }' "$OUT/toplevels"; }
@@ -171,35 +176,6 @@ colours = {px(x, y) for y in range(0, h // 2, 7) for x in range(0, w, 7)}
 sys.exit(0 if corners and len(colours) > 2 else 1)
 PY
   }
-  # The output shows the shell's page as the first start showed it: of
-  # the pixels that are not the page's background above the keyboard, as
-  # the first start's picture has them, more than 90 % are the same now.
-  # An empty window, a blank output or another page fails; the shell's
-  # page is what the locked screen shows on a box whose CYFR does not
-  # answer, as this smoke's does not.
-  shellPage() {
-    grim -t ppm "$OUT/now.ppm" 2>/dev/null && python3 -I - "$OUT/shell-page.ppm" "$OUT/now.ppm" <<'PY'
-import sys
-def read(path):
-    data = open(path, "rb").read()
-    head, rest = data.split(b"\n", 3)[:3], data.split(b"\n", 3)[3]
-    w, h = map(int, head[1].split())
-    return w, h, rest
-w, h, kept = read(sys.argv[1])
-w2, h2, now = read(sys.argv[2])
-if (w, h) != (w2, h2):
-    sys.exit(1)
-page = bytes((11, 20, 24))
-marks = same = 0
-for y in range(0, h * 6 // 10, 2):
-    for x in range(0, w, 2):
-        i = (y * w + x) * 3
-        if kept[i:i + 3] != page:
-            marks += 1
-            same += kept[i:i + 3] == now[i:i + 3]
-sys.exit(0 if marks > 200 and same > marks * 0.9 else 1)
-PY
-  }
   # The keyboard as the output shows it: the bottom of the output is not
   # the page's but the keyboard's, the window maximized above it, in more
   # than two colours. A keyboard process that shows no surface fails.
@@ -246,10 +222,6 @@ PY
   if within 10 keyboard; then verdict PASS "the keyboard is shown below the window as it appears"; else verdict FAIL "no keyboard shown as the window appeared"; fi
   if within 30 painted; then
     verdict PASS "the page is painted, and the window covers the output"
-    # The shell's page as the first start shows it, once its painting has
-    # settled: what a later start must show again (shellPage).
-    sleep 2 # sleep-ok: lets the page's first paint settle before it is kept
-    grim -t ppm "$OUT/shell-page.ppm" 2>/dev/null
   else
     verdict FAIL "the page is not painted, or the window does not cover the output"
   fi
@@ -282,7 +254,7 @@ PY
 
   shell=$(pgrep -u proof -f -- '^/opt/cyfr/resources/cyfr screen shell$')
   pkill -KILL -u proof -o -f -- '^/opt/cyfr/CYFR --screen-project='
-  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && within 60 started 3 && within 30 window && within 30 sh -c '[ "$(pgrep -u proof -c -f -- "^/opt/cyfr/resources/cyfr screen shell\$")" = 1 ]'; then
+  if within 5 sh -c "! kill -0 $shell 2>/dev/null" && locked_start 3; then
     verdict PASS "the app killed ends its cyfr within 5 s, and the next start is locked, with one screen shell"
   else
     verdict FAIL "after the app was killed: its cyfr $(kill -0 "$shell" 2>/dev/null && echo 'still runs' || echo ended), $(shells) screen shells, $(starts) starts"
@@ -293,11 +265,11 @@ PY
   # the compositor's to confirm, never the app's (cmd/screen_app.go): not
   # confirmed within 2 s, cyfr ends the app from outside, then says why in
   # the system's log, and the window closes then; the launcher starts the
-  # app again, and its next start shows the shell's page (shellPage). On
-  # this headless runner the row tells that window's close, its time, the
-  # launcher's 137, this run's line in the log and the page shown after;
-  # it cannot tell what a person's eye would of the frozen frame, nor a PIN
-  # page, which needs a CYFR that answers (tests/install-screen-proof).
+  # app again, locked, as the app killed's row asks (locked_start). Its own
+  # are that window's close and its time, the launcher's 137, this run's
+  # line in the log and a fresh start; it cannot tell what a person's eye
+  # would of the frozen frame, nor a PIN page, which needs a CYFR that
+  # answers (tests/install-screen-proof).
   deaf_app() {
     local n=$1 was main before logged took gap end said
     within 30 sh -c 'pgrep -u proof -x swayidle >/dev/null'
@@ -309,19 +281,19 @@ PY
     kill -STOP "$main"
     since=$(date +%s.%N)
     pkill -u proof -x swayidle
-    if [ -n "$was" ] && within 20 closed "$was" && within 60 started $((before + 1)) && within 30 window && within 30 shellPage; then
+    if [ -n "$was" ] && within 20 closed "$was" && locked_start $((before + 1)); then
       took=$(python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$(closedAt "$was")" "$since")
       gap=$(python3 -I -c 'import sys; print(round((float(sys.argv[1]) - float(sys.argv[2])) * 1000))' "$(awk -v h="$was" '$1 == "open" && $2 > h { print $3; exit }' "$OUT/toplevels")" "$(closedAt "$was")")
       end=$(grep '^ended' "$OUT/launches" | tail -n 1)
       said=$(grep -a -o "The lock's hide was not confirmed within 2s.*" /run/syslog.txt 2>/dev/null | sed -n "$((${logged:-0} + 1))p")
       if [ "$took" -lt $((HIDE_MS + 1000)) ] && [ "$end" = "ended 137" ] && [ -n "$said" ]; then
-        verdict PASS "an app deaf to the lock ($n, its main stopped) is ended from outside: its window closed $took ms after the lock, the next start's window opened $gap ms after that and shows the shell's page again, the launcher saw $end, and cyfr said in the system's log, in this run: $said"
+        verdict PASS "an app deaf to the lock ($n, its main stopped) is ended from outside: its window closed $took ms after the lock, the next start's window opened $gap ms after that, locked, with one screen shell, the launcher saw $end, and cyfr said in the system's log, in this run: $said"
         echo "deaf app's lock ($n) to window closed: $took ms; closed to the next window: $gap ms" >>"$OUT/timing"
       else
         verdict FAIL "an app deaf to the lock ($n): its window closed $took ms after the lock (bound $((HIDE_MS + 1000)) ms), the launcher saw ${end:-nothing}, the system's log says in this run ${said:-nothing}: $(held | tr '\n' ' ')"
       fi
     else
-      verdict FAIL "an app deaf to the lock ($n, its main stopped) was not ended, or its next start does not show the shell's page: the window shown (${was:-none}) $(closed "${was:-none}" && echo closed || echo 'still shows'), $(starts) starts: $(held | tr '\n' ' ')"
+      verdict FAIL "an app deaf to the lock ($n, its main stopped) was not ended, or its next start is not locked with one screen shell: the window shown (${was:-none}) $(closed "${was:-none}" && echo closed || echo 'still shows'), $(starts) starts: $(held | tr '\n' ' ')"
       kill -CONT "$main" 2>/dev/null
     fi
   }
