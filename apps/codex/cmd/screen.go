@@ -124,8 +124,10 @@ var screenAppCmd = &cobra.Command{
 // takes one (localRoute), read at each start, since the engine takes a
 // route only as it starts: the app never starts itself again on the route
 // its shell names (desktop/src/states.js), its launcher does, through
-// this. A folder that cannot be read starts the app on none, and its
-// shell, reading the same folder, says why on the screen.
+// this. A folder that cannot be read starts the app on none; its shell,
+// reading the same folder, fails before it shows anything, so the screen
+// stays dark: the reason goes to the app's error stream (the journal),
+// the app ends itself once, and the launcher tries again a second later.
 func screenAppArgs(dir string) []string {
 	args := []string{appProgram, "--screen-project=" + dir}
 	if read, err := readFolder(dir); err == nil {
