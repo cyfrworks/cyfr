@@ -5911,9 +5911,12 @@ defmodule Aqua.ProgramTest do
     end
 
     # What a grant gives a server's resources is what the server declared
-    # when it was given: one that declares them only after the grant has
-    # the turn's start ask for the grant again, before any is read.
-    test "a server that declares its resources after the grant refuses the turn's start",
+    # when it was given. CYFR's client holds a connected server's
+    # declaration until it connects again: one that, connected again after
+    # the grant, declares its resources has the turn's start ask for the
+    # grant again, before any is read.
+    test "a server CYFR connects to again after the grant, declaring its resources now, " <>
+           "refuses the turn's start",
          %{ctx: ctx, thread: thread} do
       {:ok, offers} = Agent.start_link(fn -> ["tools"] end)
       offering!(ctx, offers: fn -> Agent.get(offers, & &1) end)
@@ -5926,7 +5929,7 @@ defmodule Aqua.ProgramTest do
       assert not_handed(ctx, turn) == %{"docs:@resources" => :unlisted}
       stop_supervised!(ScriptedWorker)
 
-      # Declared now, by the process started again.
+      # Declared now, by the client connected again.
       Agent.update(offers, fn _ -> ["tools", "resources"] end)
       :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
       turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
@@ -5936,17 +5939,21 @@ defmodule Aqua.ProgramTest do
       refute_received {:offered, _path, "resources/" <> _, _params}
     end
 
-    # A server that does not answer at a turn's start costs the person no
+    # A server CYFR cannot connect to at a turn's start costs the person no
     # prompt: the turn starts without what it would offer, said where a
     # missing server's tools are said, and the grant given stands, so its
-    # resources are offered again, nothing asked, once it answers.
-    test "a server silent at a turn's start: the turn starts without its offerings and asks " <>
-           "nothing, and they are offered again once it answers",
+    # resources are offered again, nothing asked, once CYFR connects to it.
+    # A peer that goes quiet behind a client still connected is another
+    # case: its declaration stands, and the call that reaches it fails as
+    # any call does.
+    test "a server CYFR cannot connect to at a turn's start: the turn starts without its " <>
+           "offerings and asks nothing, and they are offered again once it connects",
          %{ctx: ctx, thread: thread} do
       {:ok, silent} = Agent.start_link(fn -> false end)
       offering!(ctx, silent: silent)
 
-      # Granted while it answered; silent now, its next connect its first.
+      # Granted while it answered; silent now, and the client's next
+      # connect, its first since, finds it so.
       Agent.update(silent, fn _ -> true end)
       :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
       turn = api_turn!(ctx, thread, "read them", [answer("It does not answer.")])
@@ -5961,7 +5968,7 @@ defmodule Aqua.ProgramTest do
 
       stop_supervised!(ScriptedWorker)
 
-      # Answering again, at the next turn's first connect.
+      # Answering again, at the client's next connect.
       Agent.update(silent, fn _ -> false end)
       :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
 

@@ -465,11 +465,26 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  # A reserved name is exposed only by what the server declares, read from
-  # its process; a tool's only by its configuration's patterns.
+  # What the row says is judged first, the server enabled and reachable
+  # from the caller's plane, so a refused call starts nothing; then a
+  # reserved name is exposed only by what the server declares, read from
+  # its process, and a tool only by its configuration's patterns.
   defp reachable(server, ctx, server_name, remote_tool, plane) do
-    with {:ok, declared} <- declared_for(server, ctx, remote_tool) do
-      exposed?(server, declared, server_name, remote_tool, plane)
+    cond do
+      not server.enabled ->
+        {:error, {:invalid_argument, "Server '#{server_name}' is disabled"}}
+
+      plane == :external and not console_reachable?(server) ->
+        {:error,
+         {:invalid_argument,
+          "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
+            "only from inside a chain — set \"console\": true in the " <>
+            "server's config to call it from the console"}}
+
+      true ->
+        with {:ok, declared} <- declared_for(server, ctx, remote_tool) do
+          exposed?(server, declared, server_name, remote_tool)
+        end
     end
   end
 
@@ -484,27 +499,12 @@ defmodule Emissary.External.Proxy do
     end
   end
 
-  defp exposed?(server, declared, server_name, remote_tool, plane) do
-    patterns = exposure(server, declared)
-
-    cond do
-      not server.enabled ->
-        {:error, {:invalid_argument, "Server '#{server_name}' is disabled"}}
-
-      not Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, remote_tool)) ->
+  defp exposed?(server, declared, server_name, remote_tool) do
+    if Enum.any?(exposure(server, declared), &Prima.ToolPattern.matches?(&1, remote_tool)),
+      do: {:ok, %{server: server, server_name: server_name, remote_tool: remote_tool}},
+      else:
         {:error,
          {:invalid_argument, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}}
-
-      plane == :external and not console_reachable?(server) ->
-        {:error,
-         {:invalid_argument,
-          "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
-            "only from inside a chain — set \"console\": true in the " <>
-            "server's config to call it from the console"}}
-
-      true ->
-        {:ok, %{server: server, server_name: server_name, remote_tool: remote_tool}}
-    end
   end
 
   @doc """

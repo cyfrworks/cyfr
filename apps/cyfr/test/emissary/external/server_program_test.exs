@@ -179,6 +179,28 @@ defmodule Emissary.External.ServerProgramTest do
     assert Enum.map(tools, & &1["name"]) == @tools
   end
 
+  # A call is held to what the process it is sent to declared: a program
+  # whose process ended is started again by the call, and its replacement,
+  # declaring tools alone, is never sent a read of resources.
+  test "a call its program's replacement does not declare is refused, never sent to it",
+       %{ctx: ctx, fake: fake, row: row} do
+    Scripted.set(fake, :offers, %{row.id => ["resources"]})
+    assert {:ok, []} = Servers.ensure_started(row, ctx)
+    pid = server_pid(ctx, row)
+    assert_receive {:session, "open", _wire, _fields}, 2_000
+
+    Scripted.end_sessions(fake, row.id)
+    Scripted.set(fake, :offers, %{row.id => ["tools"]})
+
+    assert {:error, {:invalid_argument, sentence}} =
+             Emissary.External.Server.offering(pid, {:resources, :read, "file:///notes"})
+
+    assert sentence =~ "declares no resources"
+    # The replacement was opened and initialized, and asked nothing else.
+    assert_received {:session, "open", _wire, _fields}
+    refute_received {:invoke, "resources/read", _fields}
+  end
+
   test "a program that declares neither is never asked for them", %{ctx: ctx, row: row} do
     assert {:ok, _tools} = Servers.ensure_started(row, ctx)
     pid = server_pid(ctx, row)

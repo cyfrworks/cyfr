@@ -536,8 +536,9 @@ defmodule Aqua.Loop do
                fire_of(turn)
            ) do
       with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
-           # The list's servers read once for the turn: what its start holds
-           # the grant to and what it hands are of that one reading.
+           # The list's servers read once for each start of the turn's loop:
+           # what it holds the grant to and what it hands are of that one
+           # reading.
            reading = servers_read(ctx, snapshot.agent.tools),
            :ok <- consented_release(ctx, claim.authority, snapshot, reading),
            # A server's line that no longer stands as its turn first starts
@@ -687,9 +688,12 @@ defmodule Aqua.Loop do
 
   # The list's servers as Sanctum's port reads them now, asking only those
   # its entries name (`Sanctum.Proxy`'s `list_external_tools/2`): each that
-  # answers with what it exposes and offers, read once for the turn. A
-  # server that does not answer, or that the athanor no longer holds, is
-  # absent and exposes nothing.
+  # answers with what it exposes and offers, read once for each start of
+  # the turn's loop. A turn taken over or recovered reads them again and
+  # uses that reading for the grant, the list and what it hands alike, so
+  # the three still agree, and what it hands is within the grant either
+  # way. A server that does not answer, or that the athanor no longer
+  # holds, is absent and exposes nothing.
   defp servers_read(ctx, tools) do
     case tools |> outside_entries() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() do
       [] -> []

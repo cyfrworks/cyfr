@@ -688,6 +688,39 @@ defmodule Emissary.External.ServerEraTest do
       refute_received {:asked, "prompts/" <> _, _named}
     end
 
+    # A server that lists resources and has no handler for their templates
+    # answers the templates' list -32601: no templates, not no resources.
+    test "a templates' list answered as an unknown method is an empty one",
+         %{stub: stub, url: url} do
+      HTTPStub.expect(stub, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+
+        case body["method"] do
+          "server/discover" ->
+            discovered(conn, body, %{"resources" => %{}})
+
+          "resources/list" ->
+            answered(conn, body, %{"resources" => [%{"uri" => "file:///a", "name" => "a"}]})
+
+          "resources/templates/list" ->
+            json(conn, %{
+              "jsonrpc" => "2.0",
+              "id" => body["id"],
+              "error" => %{"code" => -32601, "message" => "Method not found"}
+            })
+        end
+      end)
+
+      {pid, {:ok, []}} = connect(url, "templateless-peer")
+
+      assert Server.offering(pid, {:resources, :list}) ==
+               {:ok,
+                %{
+                  "resources" => [%{"uri" => "file:///a", "name" => "a"}],
+                  "resourceTemplates" => []
+                }}
+    end
+
     test "a listing of resources past 20 pages is refused in its sentence", %{
       stub: stub,
       url: url

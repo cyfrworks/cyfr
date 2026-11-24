@@ -881,6 +881,21 @@ defmodule Emissary.External.ProxyTest do
       refute_received {:asked, "/plain", "prompts/" <> _, _params}
     end
 
+    # A console call is refused by the row's own opt-in before anything
+    # is started: a chain-only server is never connected for it, so the
+    # person's program is never launched by a call that is refused.
+    test "a console call to a chain-only server's resources is refused, starting nothing",
+         %{ctx: ctx} do
+      offering!(ctx, HTTPStub.open(), "docs", "/docs", ["resources"])
+
+      assert {:error, {:invalid_argument, sentence}} =
+               Proxy.resolve("docs:@resources", ctx, :external)
+
+      assert sentence =~ "reachable only from inside a chain"
+      assert Registry.lookup(Emissary.External.ServerRegistry, {"docs", ctx.athanor_id}) == []
+      refute_received {:asked, "/docs", _method, _params}
+    end
+
     test "two athanors with a server of one name: each reads only its own", %{ctx: ctx} do
       stub = HTTPStub.open()
       offering!(ctx, stub, "docs", "/mine", ["resources"])

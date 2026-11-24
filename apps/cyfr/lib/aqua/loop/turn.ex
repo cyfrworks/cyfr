@@ -87,8 +87,9 @@ defmodule Aqua.Loop.Turn do
   Build the spec for `turn` as `ctx` (the actor's external-plane context).
   `opts`: `:authority` (the turn's pinned authority, required),
   `:excerpt?` (read the room excerpt the turn's options name) and
-  `:reading` (the turn's one reading of its list's servers, which its
-  start held the grant to: `tools/4`).
+  `:reading` (the reading of its list's servers this start of the turn's
+  loop held the grant to: `tools/4`; a turn rebuilt without it reads them
+  again).
 
   A catalyst brain's own grant is the one the turn's row pinned with its
   start (`brain_pin/5`), and nothing else: a turn whose row pins none

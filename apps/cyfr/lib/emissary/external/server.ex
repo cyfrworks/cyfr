@@ -469,7 +469,10 @@ defmodule Emissary.External.Server do
   # (`{:tool, name, arguments}`) or a read of the server's resources or
   # prompts (`t:offering/0`), each only of a server that declared it.
   # `attempt` counts the times the service refused this call before
-  # running it.
+  # running it. What is checked is what the process the call is sent to
+  # declared: a program's session the call itself opens may be a new
+  # process of the program, initialized afresh, so the offering is checked
+  # again once it is open, before anything is written to it.
   defp dispatch_call(state, from, {asked, _attempt} = call) do
     state = ensure_ready(state)
     offering = offering_of(asked)
@@ -479,7 +482,7 @@ defmodule Emissary.External.Server do
         {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
 
       offering not in state.offers ->
-        {:reply, {:error, {:invalid_argument, "#{state.name} declares no #{offering}"}}, state}
+        {:reply, undeclared(state, offering), state}
 
       map_size(state.in_flight) >= @max_in_flight ->
         {:reply,
@@ -490,10 +493,7 @@ defmodule Emissary.External.Server do
       state.transport == :program ->
         case ensure_session(state) do
           {:ok, state} ->
-            case start_call(state, from, call) do
-              {:noreply, state} -> {:noreply, start_reader(state)}
-              reply -> reply
-            end
+            start_program_call(state, from, call, offering)
 
           {:error, reason, state} ->
             {:reply, {:error, mask_credentials(failure_sentence(reason), state)}, state}
@@ -503,6 +503,22 @@ defmodule Emissary.External.Server do
         start_call(state, from, call)
     end
   end
+
+  # A program's call starts on the session it opened only when the process
+  # behind that session declared the call's offering.
+  defp start_program_call(state, from, call, offering) do
+    if offering in state.offers do
+      case start_call(state, from, call) do
+        {:noreply, state} -> {:noreply, start_reader(state)}
+        reply -> reply
+      end
+    else
+      {:reply, undeclared(state, offering), state}
+    end
+  end
+
+  defp undeclared(state, offering),
+    do: {:error, {:invalid_argument, "#{state.name} declares no #{offering}"}}
 
   defp offering_of({:tool, _name, _arguments}), do: :tools
   defp offering_of(asked), do: elem(asked, 0)
@@ -839,9 +855,10 @@ defmodule Emissary.External.Server do
   end
 
   defp read_offering(state, {:resources, :list}) do
+    listing = {state.name, "resources/templates/list", "resourceTemplates"}
+
     with {:ok, resources, state} <- read_listing(state, {"resources/list", "resources"}),
-         {:ok, templates, _state} <-
-           read_listing(state, {"resources/templates/list", "resourceTemplates"}),
+         {:ok, templates, _state} <- list_pages(state, listing, &templates_page/2),
          do: {:ok, %{"resources" => resources, "resourceTemplates" => templates}}
   end
 
@@ -868,10 +885,31 @@ defmodule Emissary.External.Server do
   # One request of a read, from its task: the server's answer, or why not.
   defp read_request(state, method, params) do
     {request_id, state} = next_request_id(state)
+    body = Message.encode_request(request_id, method, params)
 
-    case answer(state, Message.encode_request(request_id, method, params)) do
+    case answered(state, body, upstream(state, body)) do
       {:ok, result} -> {:ok, result, state}
       refused -> refused
+    end
+  end
+
+  # A page of a server's resource templates. A server that lists resources
+  # and has no handler for their templates answers this one request as a
+  # method it does not know (-32601): it has no templates, which takes
+  # nothing from its resources.
+  defp templates_page(state, params) do
+    {request_id, state} = next_request_id(state)
+    body = Message.encode_request(request_id, "resources/templates/list", params)
+
+    case upstream(state, body) do
+      {:ok, %Message{type: :error, error: %{"code" => -32_601}}} ->
+        {:ok, %{"resourceTemplates" => []}, state}
+
+      reply ->
+        case answered(state, body, reply) do
+          {:ok, result} -> {:ok, result, state}
+          refused -> refused
+        end
     end
   end
 
@@ -881,8 +919,10 @@ defmodule Emissary.External.Server do
 
   # One request's round trip, from a call's task: the server's result, or
   # why not, as it answered.
-  defp answer(state, body) do
-    case upstream(state, body) do
+  defp answer(state, body), do: answered(state, body, upstream(state, body))
+
+  defp answered(state, body, reply) do
+    case reply do
       # An upstream server asking for more input is refused, deliberately.
       #
       # `input_required` is how a server requests sampling, elicitation or
