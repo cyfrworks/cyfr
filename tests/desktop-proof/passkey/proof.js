@@ -415,11 +415,13 @@ async function passkeyPhase() {
     "the recovery code adds a passkey in the account window, which returns to the sign-in and signs in with it", {added: fresh.length})
 
   // wrong_window: an answer made for another browser's sign-in, given to
-  // the content window, signs no one in: the CYFR binds it to the browser
-  // that asked. This is the CYFR's binding holding in the app.
+  // the CYFR's sign-in page in the app (opened by the chooser's Sign in
+  // with your passkey, in the CYFR's own view), signs no one in: the CYFR
+  // binds it to the browser that asked. This is the CYFR's binding holding
+  // in the app.
   out = await signOutOfPrism(w)
   const other = await otherBrowserAnswer(fresh[0])
-  await js(content().webContents, `location.assign(${literal(other)}); 1`)
+  await js((await toSignIn()).webContents, `location.assign(${literal(other)}); 1`)
   w = await contentAt((u) => u.startsWith(HOME + "/login"), "the sign-in page with the other browser's answer")
   const refusedAnswer = await waitFor(() => js(w.webContents, `document.querySelector('[data-test="sign-in-error"]')?.textContent.trim() || null`),
     "the sign-in's refusal")
