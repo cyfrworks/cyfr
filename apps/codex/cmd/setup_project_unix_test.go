@@ -907,9 +907,10 @@ func TestAFirstPersonWhereOnlySetupsWorkReachesDocker(t *testing.T) {
 			}
 			p.publishing(p.project, cyfr.port, logNotSetUp)
 			a := newLocalApp(t, p.project)
+			token, _ := parseEnvFile(readEnv(t, p.project)).value(setupTokenVar)
+			a.setup = token
 			a.open(home, home)
 			a.makeAccount()
-			token, _ := parseEnvFile(readEnv(t, p.project)).value(setupTokenVar)
 			admission, _ := helloOf(t, cyfr)["admission"].(map[string]any)
 			if token == "" || admission["setup"] != token {
 				t.Fatalf("the first hello carries no token of that folder's")

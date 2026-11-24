@@ -31,7 +31,7 @@ import (
 	"github.com/cyfr/codex/internal/shell"
 )
 
-// app is a Service as the app's cyfr runs it, over a client record and a
+// app is a Service as the app's cyfr runs it, over a list of CYFRs and a
 // key record of its own, with the messages it sends main collected and
 // the directory each CYFR names set by the test.
 type app struct {
@@ -48,7 +48,7 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 	a.directory.Store(account.DefaultDirectory)
 	a.Service = &Service{
 		Token:       "the-run-token",
-		Clients:     shell.ClientFile(filepath.Join(dir, "client.json")),
+		Homes:       shell.Homes(filepath.Join(dir, "homes.json")),
 		Record:      filepath.Join(dir, "holder.json"),
 		Client:      client,
 		DisplayName: "laptop",
@@ -75,7 +75,7 @@ func newApp(t *testing.T, dir string, client *http.Client) *app {
 }
 
 // setupGone waits, within 10 s, for a setup begun to have ended: its work
-// writes the client record into the test's folder after the stand-in
+// writes the list into the test's folder after the stand-in
 // setup returns (remember), and is gone once the state says done or
 // failed, which it sets last. A setup the test left running fails it.
 func (a *app) setupGone(t *testing.T) {
@@ -280,9 +280,8 @@ func TestACYFROnTheDefaultDirectoryOpensOnceMainIsReady(t *testing.T) {
 	if w := a.get("/"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Set up CYFR") {
 		t.Fatalf("the device's pages are not served: %d %s", w.Code, w.Body)
 	}
-	c, err := a.Clients.Load()
-	if err != nil || c.Home != "https://cyfr.example.com" || c.Directory != account.DefaultDirectory || c.Project != "" {
-		t.Fatalf("remembered %+v, %v", c, err)
+	if home, c := a.last(t); home != "https://cyfr.example.com" || c.Directory != account.DefaultDirectory || c.Project != "" {
+		t.Fatalf("remembered %s as %+v", home, c)
 	}
 	if got := a.post(t, "/bootstrap/connect", map[string]string{"address": "another.example.com"}); got.Error == "" {
 		t.Fatalf("a second CYFR was selected in one run: %+v", got)
@@ -397,20 +396,18 @@ func TestAnotherDirectoryIsApprovedBeforeAnythingContactsIt(t *testing.T) {
 	back.quiet(t)
 }
 
-// A failed or unfinished selection leaves the account's record as it
-// was: the device's screen keeps its working client until another CYFR
-// admits this device.
-func TestASelectionThatDidNotSucceedLeavesTheRecord(t *testing.T) {
+// A failed or unfinished selection leaves the list as it was, and one
+// opened adds its own entry beside the others: the device's screen keeps
+// its working client whatever the app selects.
+func TestASelectionThatDidNotSucceedLeavesTheList(t *testing.T) {
 	dir := t.TempDir()
 	working := shell.ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}
-	if err := shell.ClientFile(filepath.Join(dir, "client.json")).Save(working); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := os.ReadFile(filepath.Join(dir, "client.json"))
+	seed(t, shell.Homes(filepath.Join(dir, "homes.json")), localAddress, working)
+	before, _ := os.ReadFile(filepath.Join(dir, "homes.json"))
 	unchanged := func(when string) {
 		t.Helper()
-		if after, _ := os.ReadFile(filepath.Join(dir, "client.json")); string(after) != string(before) {
-			t.Fatalf("%s the record became %s", when, after)
+		if after, _ := os.ReadFile(filepath.Join(dir, "homes.json")); string(after) != string(before) {
+			t.Fatalf("%s the list became %s", when, after)
 		}
 	}
 
@@ -432,7 +429,10 @@ func TestASelectionThatDidNotSucceedLeavesTheRecord(t *testing.T) {
 	if got := answered(t, answer); got.Next != "/" {
 		t.Fatalf("answered %+v", got)
 	}
-	unchanged("after a selection opened but never admitted,")
+	l, err := opened.Homes.Load()
+	if err != nil || !sameEntry(l.Homes[localAddress], working) || l.Homes["https://cyfr.example.com"].ClientID != "" || l.Last != "https://cyfr.example.com" {
+		t.Fatalf("after a selection opened but never admitted, the list is %+v (%v)", l, err)
+	}
 }
 
 // A lock while the app waits for main's home-ready ends that selection:
@@ -527,11 +527,11 @@ func TestEveryEndOfMainsMessagesLocksAndSaysNoLock(t *testing.T) {
 		said     int
 		refused  bool
 	}{
-		{"lock, then the pipe's end", `{"version":1,"type":"lock"}` + "\n", 1, false},
-		{"shutdown, unread after", `{"version":1,"type":"shutdown"}` + "\n" + `{"version":1,"type":"lock"}` + "\n", 0, false},
+		{"lock, then the pipe's end", `{"version":2,"type":"lock"}` + "\n", 1, false},
+		{"shutdown, unread after", `{"version":2,"type":"shutdown"}` + "\n" + `{"version":2,"type":"lock"}` + "\n", 0, false},
 		{"a line that is not main's", `{"type":"lock"}` + "\n", 0, true},
 		{"a line past the bound", strings.Repeat("x", MaxLine+2) + "\n", 0, true},
-		{"a pick's answer", `{"version":1,"type":"folder-picked","path":null,"epoch":0,"pick":0}` + "\n", 0, false},
+		{"a pick's answer", `{"version":2,"type":"folder-picked","path":null,"epoch":0,"pick":0}` + "\n", 0, false},
 		{"the pipe's end alone", "", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -703,7 +703,7 @@ func TestASecondConnectWhileOneIsInFlightIsRefused(t *testing.T) {
 // unopened, and the next Connect goes on.
 func TestAConnectThatFailsAfterHomeReadyLeavesTheServiceFree(t *testing.T) {
 	dir := t.TempDir()
-	record := filepath.Join(dir, "client.json")
+	record := filepath.Join(dir, "homes.json")
 	a := newApp(t, dir, offline())
 	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "cyfr.example.com"})
 	a.next(t)
@@ -754,10 +754,7 @@ func TestAnOpenCYFRAnswersEveryChooserAlike(t *testing.T) {
 // given none.
 func TestARememberedCYFRResumesOnce(t *testing.T) {
 	dir := t.TempDir()
-	record := shell.ClientFile(filepath.Join(dir, "client.json"))
-	if err := record.Save(shell.ClientRecord{Home: "https://cyfr.example.com", Directory: account.DefaultDirectory}); err != nil {
-		t.Fatal(err)
-	}
+	seed(t, shell.Homes(filepath.Join(dir, "homes.json")), "https://cyfr.example.com", shell.ClientRecord{Directory: account.DefaultDirectory})
 	a := newApp(t, dir, offline())
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Resume != "https://cyfr.example.com" || got.Home != "https://cyfr.example.com" {
 		t.Fatalf("the chooser shows %+v", got)
@@ -774,7 +771,8 @@ func TestARememberedCYFRResumesOnce(t *testing.T) {
 }
 
 // Main's leave (Connect to another CYFR, sent once main cleared what it
-// kept) lets go of the CYFR open, locked and named in no locked, for a
+// kept) lets go of the CYFR open, locked and named in no locked, answered
+// left with its id once it let go, for a
 // Connect to the next, which is then the one remembered. No page of cyfr's
 // can do it.
 func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
@@ -804,11 +802,14 @@ func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 		main.Close()
 		<-ran
 	})
-	if _, err := io.WriteString(main, `{"version":1,"type":"leave"}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"leave","id":1}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if m := a.next(t); m.Type != TypeLocked || m.Home != "" {
 		t.Fatalf("main heard %+v, not a lock keeping to none", m)
+	}
+	if m := a.next(t); m != (Message{Type: TypeLeft, ID: 1}) {
+		t.Fatalf("main heard %+v, not its leave answered", m)
 	}
 	a.quiet(t)
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Next != "" || got.Resume != "" || got.Home != first {
@@ -818,8 +819,8 @@ func TestConnectToAnotherLeavesTheCYFROpen(t *testing.T) {
 		t.Fatal("the device's pages of the CYFR left are still served")
 	}
 	open(a, second)
-	if c, err := a.Clients.Load(); err != nil || c.Home != second {
-		t.Fatalf("launch would open %+v (%v), not the CYFR chosen last", c, err)
+	if home, _ := a.last(t); home != second {
+		t.Fatalf("launch would open %s, not the CYFR chosen last", home)
 	}
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Home != second {
 		t.Fatalf("the chooser names %+v", got)
@@ -850,15 +851,13 @@ const (
 	localAddress = "http://localhost:4000"
 )
 
-// rememberLocal is a over a client record that selects a folder on this
-// computer, whose CYFR's settings name directory and which answers while
+// rememberLocal is a over a list whose CYFR selected last is a folder on
+// this computer, whose CYFR's settings name directory and which answers while
 // running holds.
 func rememberLocal(t *testing.T, dir, directory string, running *atomic.Bool) *app {
 	t.Helper()
 	a := newApp(t, dir, offline())
-	if err := a.Clients.SelectProject(localFolder); err != nil {
-		t.Fatal(err)
-	}
+	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
 	a.Local = func(project string) (Local, error) {
 		if project != localFolder {
 			t.Errorf("the app read %s, not the folder remembered", project)
@@ -874,14 +873,47 @@ func rememberLocal(t *testing.T, dir, directory string, running *atomic.Bool) *a
 	return a
 }
 
+// record is the list of CYFRs as its file holds it.
 func (a *app) record(t *testing.T) string {
 	t.Helper()
-	c, err := a.Clients.Load()
+	raw, err := os.ReadFile(string(a.Homes))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// last is the CYFR the list holds as selected last, and its entry.
+func (a *app) last(t *testing.T) (string, shell.ClientRecord) {
+	t.Helper()
+	l, err := a.Homes.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(c)
-	return string(raw)
+	return l.Last, l.Homes[l.Last]
+}
+
+// seed adds rec to the list f at home, as the CYFR selected last.
+func seed(t *testing.T, f shell.Homes, home string, rec shell.ClientRecord) {
+	t.Helper()
+	if err := f.Update(func(l *shell.HomeList) bool {
+		l.Generations++
+		rec.Generation = l.Generations
+		l.Homes[home] = rec
+		l.Last = home
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sameEntry is whether two entries hold the same standing, whatever their
+// numbers.
+func sameEntry(a, b shell.ClientRecord) bool {
+	a.Generation, b.Generation = 0, 0
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
 }
 
 // The folder remembered opens on one press: its address is in the
@@ -941,9 +973,7 @@ func TestARememberedLocalCYFROpensOnOnePress(t *testing.T) {
 func TestALocalCYFROnItsTailnetNamesItsRoute(t *testing.T) {
 	const home = "https://box.tail9f3a3c.ts.net"
 	a := newApp(t, t.TempDir(), offline())
-	if err := a.Clients.SelectProject(localFolder); err != nil {
-		t.Fatal(err)
-	}
+	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
 	a.Local = func(string) (Local, error) {
 		return Local{Shell: shell.Config{Address: home, Client: offline(), Directory: account.DefaultDirectory},
 			Proxy: "socks5://127.0.0.1:1055", Resolver: "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
@@ -1064,9 +1094,7 @@ func TestOnlyTheRememberedFolderOpensOverPlainHTTP(t *testing.T) {
 // CYFR elsewhere still goes on.
 func TestAFolderThatCannotBeReadLeavesConnect(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
-	if err := a.Clients.SelectProject(localFolder); err != nil {
-		t.Fatal(err)
-	}
+	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
 	a.Local = func(string) (Local, error) { return Local{}, errors.New("no .env") }
 	if got := a.post(t, "/bootstrap/state", map[string]string{}); got.Error != "The app cannot read the CYFR in /home/ada/cyfr (no .env)." {
 		t.Fatalf("the chooser shows %+v", got)
@@ -1079,15 +1107,14 @@ func TestAFolderThatCannotBeReadLeavesConnect(t *testing.T) {
 	answered(t, done)
 }
 
-// The chooser shown again offers the CYFR open, which the record names
-// only once it admitted this device: never the one the record still holds.
-func TestTheChooserOffersTheCYFROpenNotTheRecords(t *testing.T) {
-	for _, held := range []shell.ClientRecord{{Project: localFolder}, {Home: "https://first.example.com", Directory: account.DefaultDirectory}} {
+// The chooser shown again offers the CYFR open, never the one selected
+// last before it.
+func TestTheChooserOffersTheCYFROpenNotTheLastBefore(t *testing.T) {
+	for home, held := range map[string]shell.ClientRecord{localAddress: {Project: localFolder},
+		"https://first.example.com": {Directory: account.DefaultDirectory}} {
 		a := newApp(t, t.TempDir(), offline())
 		held.ClientID, held.Certificate = "pcl_held", json.RawMessage(`{"held":1}`)
-		if err := a.Clients.Save(held); err != nil {
-			t.Fatal(err)
-		}
+		seed(t, a.Homes, home, held)
 		done := a.connect(t, "/bootstrap/connect", map[string]string{"address": "second.example.com"})
 		a.next(t)
 		a.ready("https://second.example.com")
@@ -1111,9 +1138,7 @@ func TestConnectTakesEverySpellingOfTheFoldersAddress(t *testing.T) {
 		{localAddress, "http://localhost:4000/"},
 	} {
 		a := newApp(t, t.TempDir(), offline())
-		if err := a.Clients.SelectProject(localFolder); err != nil {
-			t.Fatal(err)
-		}
+		seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
 		a.Local = func(string) (Local, error) {
 			return Local{Shell: shell.Config{Address: tc.home, Client: offline(), Directory: account.DefaultDirectory},
 				Answers: func(context.Context) error { return nil }}, nil
@@ -1136,9 +1161,7 @@ func TestConnectTakesEverySpellingOfTheFoldersAddress(t *testing.T) {
 // earlier reading opens nothing, and the chooser says the one it has now.
 func TestAnAddressFromAnEarlierReadingOpensNothing(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
-	if err := a.Clients.SelectProject(localFolder); err != nil {
-		t.Fatal(err)
-	}
+	seed(t, a.Homes, localAddress, shell.ClientRecord{Project: localFolder})
 	now := localAddress
 	a.Local = func(string) (Local, error) {
 		return Local{Shell: shell.Config{Address: now, Client: offline(), Directory: account.DefaultDirectory},
@@ -1319,8 +1342,8 @@ func TestConnectOfAnOpenCYFRTakesItsOwnAddressAlone(t *testing.T) {
 }
 
 // A folder remembered never resumes at launch: the chooser has its address
-// and nothing to connect by itself, also once another CYFR was chosen over
-// it, which the record keeps the folder under.
+// and nothing to connect by itself. A CYFR elsewhere chosen after it is the
+// one selected last, which the next launch resumes.
 func TestAFolderNeverResumes(t *testing.T) {
 	var running atomic.Bool
 	running.Store(true)
@@ -1339,7 +1362,7 @@ func TestAFolderNeverResumes(t *testing.T) {
 	first.End()
 	again := newApp(t, dir, offline())
 	again.Local = first.Local
-	if got := again.post(t, "/bootstrap/state", map[string]string{}); got != want {
+	if got := again.post(t, "/bootstrap/state", map[string]string{}); got != (answer{Home: elsewhere, Resume: elsewhere}) {
 		t.Fatalf("the launch after another CYFR was chosen shows %+v", got)
 	}
 	again.quiet(t)
@@ -1460,15 +1483,15 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 	if m := a.next(t); m.Type != TypeHome || m.Attempt != 1 {
 		t.Fatalf("main heard %+v", m)
 	}
-	if _, err := io.WriteString(main, `{"version":1,"type":"home-failed","home":"`+home+`","attempt":1}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"home-failed","home":"`+home+`","attempt":1}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := answered(t, done), (answer{Home: home, Notice: "uncleared"}); got != want {
 		t.Fatalf("answered %+v", got)
 	}
 	a.quiet(t)
-	if c, err := a.Clients.Load(); err != nil || c.Home != "" {
-		t.Fatalf("remembered %+v, %v", c, err)
+	if home, _ := a.last(t); home != "" {
+		t.Fatalf("remembered %s", home)
 	}
 	if w := a.get("/"); w.Code != http.StatusSeeOther {
 		t.Fatal("a failed attempt served the device's pages")
@@ -1477,7 +1500,7 @@ func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
 	if m := a.next(t); m.Type != TypeHome || m.Attempt != 2 {
 		t.Fatalf("the next Connect proposed %+v", m)
 	}
-	if _, err := io.WriteString(main, `{"version":1,"type":"home-ready","home":"`+home+`","attempt":2}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"home-ready","home":"`+home+`","attempt":2}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if got := answered(t, again); got.Next != "/" {
@@ -1662,7 +1685,7 @@ func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
 	if !waiting(wait) {
 		t.Fatal("the wait answered before main did")
 	}
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
 		t.Fatalf("the pick answered %+v", got)
 	}
@@ -1670,7 +1693,7 @@ func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
 		t.Fatalf("the chooser was shown %+v after the pick", got)
 	}
 	wait = a.awaitFolder(context.Background(), 1, nil)
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":1,"path":null}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":1,"path":null}`)
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 2 {
 		t.Fatalf("a cancelled pick answered %+v", got)
 	}
@@ -1682,7 +1705,7 @@ func TestTheChooserShowsTheFolderMainsAnswerNames(t *testing.T) {
 func TestAWaitBehindMainsAnswerAnswersAtOnce(t *testing.T) {
 	a := newApp(t, t.TempDir(), nil)
 	a.Folder = "/home/ada/cyfr"
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
 	if got := folderAnswer(t, a.awaitFolder(context.Background(), 0, nil)); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
 		t.Fatalf("answered %+v", got)
 	}
@@ -1716,7 +1739,7 @@ func TestAPickWaitsOnThePersonUnbounded(t *testing.T) {
 	if !waiting(wait) {
 		t.Fatal("the wait ended at the bound")
 	}
-	folderPicked(t, a, `{"version":1,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
+	folderPicked(t, a, `{"version":2,"type":"folder-picked","epoch":0,"pick":0,"path":"/home/ada/elsewhere"}`)
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" {
 		t.Fatalf("answered %+v", got)
 	}
@@ -1760,7 +1783,7 @@ func TestMainsFolderPickedNamesTheFolder(t *testing.T) {
 	go func() { ran <- a.Run(in) }()
 	t.Cleanup(func() { main.Close(); <-ran })
 	wait := a.awaitFolder(context.Background(), 0, nil)
-	if _, err := io.WriteString(main, `{"version":1,"type":"folder-picked","path":"/home/ada/elsewhere","epoch":0,"pick":0}`+"\n"); err != nil {
+	if _, err := io.WriteString(main, `{"version":2,"type":"folder-picked","path":"/home/ada/elsewhere","epoch":0,"pick":0}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	if got := folderAnswer(t, wait); got.Folder != "/home/ada/elsewhere" || got.Picks != 1 {
@@ -2051,7 +2074,7 @@ func TestALockEndsTheWaitForASetupsStep(t *testing.T) {
 
 // The CYFR set up opens on Open, or on the chooser that pressed Set up and
 // start as it ends, as a folder's CYFR opens: main told home, then opened,
-// at the device's pages while no one is set up there. Nothing opens while
+// with its setup token while no one is set up there. Nothing opens while
 // no CYFR is set up in the folder, or while its setup runs.
 func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 	a := newApp(t, t.TempDir(), offline())
@@ -2074,8 +2097,8 @@ func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 		t.Fatalf("the setup ended %+v", s)
 	}
 	done := a.connect(t, "/bootstrap/open", map[string]string{"run": "1"})
-	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress || m.Road != RoadDevice {
-		t.Fatalf("main heard %+v, not the CYFR set up at the device's pages", m)
+	if m := a.next(t); m.Type != TypeHome || m.Home != localAddress || m.Setup != "a-setup-token" {
+		t.Fatalf("main heard %+v, not the CYFR set up with its setup token", m)
 	}
 	a.ready(localAddress)
 	if got := answered(t, done); got.Next != "/" || got.Home != localAddress {
@@ -2084,13 +2107,13 @@ func TestTheCYFRSetUpOpensOnceDone(t *testing.T) {
 	a.opened(t, localAddress)
 }
 
-// The road follows the CYFR's state, not the press: after a relaunch,
-// Connect to the folder just set up opens at the device's pages while no
-// one is set up there, and on the road main offers once someone is.
-func TestAFolderOpensAtTheDevicesPagesWhileNoOneIsSetUpThere(t *testing.T) {
+// The setup token follows the CYFR's state, not the press: after a
+// relaunch, Connect to the folder just set up carries it while no one is
+// set up there, and none once someone is.
+func TestAFolderCarriesItsSetupTokenWhileNoOneIsSetUpThere(t *testing.T) {
 	for _, c := range []struct {
-		name, token, road string
-	}{{"no one set up", "a-setup-token", RoadDevice}, {"its first person set up", "", ""}} {
+		name, token string
+	}{{"no one set up", "a-setup-token"}, {"its first person set up", ""}} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setUp := new(atomic.Bool)
@@ -2110,18 +2133,18 @@ func TestAFolderOpensAtTheDevicesPagesWhileNoOneIsSetUpThere(t *testing.T) {
 			m := next.next(t)
 			next.ready(localAddress)
 			answered(t, done)
-			if m.Type != TypeHome || m.Road != c.road {
-				t.Fatalf("Connect after the relaunch proposed %+v, want road %q", m, c.road)
+			if m.Type != TypeHome || m.Setup != c.token {
+				t.Fatalf("Connect after the relaunch proposed %+v, want setup %q", m, c.token)
 			}
 		})
 	}
 }
 
-// A setup that finished while the record keeps another CYFR says so in
-// one sentence, and the folder it set up opens from the setup screen, its
-// folder chosen: Open CYFR is offered there for a folder set up already.
-// The record keeps one CYFR until the switcher's list replaces it.
-func TestASetupTheRecordCouldNotTakeSaysSoAndOpensFromItsFolder(t *testing.T) {
+// A setup that finished while the list holds another CYFR adds the folder
+// beside it, as the CYFR selected last, and the folder it set up opens from
+// the setup screen, its folder chosen: Open CYFR is offered there for a
+// folder set up already.
+func TestASetupBesideAnotherCYFRIsAddedAndOpensFromItsFolder(t *testing.T) {
 	var running atomic.Bool
 	running.Store(true)
 	dir := t.TempDir()
@@ -2143,21 +2166,22 @@ func TestASetupTheRecordCouldNotTakeSaysSoAndOpensFromItsFolder(t *testing.T) {
 	a.Setup = func(context.Context, string, func(string)) error { setUp.Store(true); return nil }
 	started := a.post(t, "/bootstrap/start", map[string]string{})
 	done := a.setupAfter(t, started.Setup.Seq)
-	want := "This app still remembers the CYFR in " + localFolder + ": to open this one later, choose " + other +
-		" under Or set up CYFR on this computer, then press Open CYFR."
-	if !done.Done || done.Unrecorded != want {
-		t.Fatalf("the setup ended %+v, want it done saying %q", done, want)
+	if !done.Done || done.Error != "" {
+		t.Fatalf("the setup ended %+v", done)
 	}
-	if c, _ := a.Clients.Load(); c.Project != localFolder {
-		t.Fatalf("the record names %+v", c)
+	if home, c := a.last(t); home != "http://localhost:4100" || c.Project != other {
+		t.Fatalf("the list's last is %s, %+v", home, c)
 	}
-	// The app started again: the CYFR remembered is offered, and the
+	if l, _ := a.Homes.Load(); l.Homes[localAddress].Project != localFolder {
+		t.Fatalf("the CYFR beside it is gone: %+v", l)
+	}
+	// The app started again: the CYFR set up last is offered, and the
 	// folder set up, once chosen, offers Open CYFR, which opens it.
 	a.End()
 	next := newApp(t, dir, offline())
 	next.Folder, next.Local = other, a.Local
 	shown := next.post(t, "/bootstrap/state", map[string]string{})
-	if shown.Home != localAddress || shown.Folder != other || !shown.Found {
+	if shown.Home != "http://localhost:4100" || shown.Folder != other || !shown.Found {
 		t.Fatalf("the app started again shows %+v", shown)
 	}
 	opening := next.connect(t, "/bootstrap/open", map[string]string{})
@@ -2337,18 +2361,6 @@ func TestEveryRequestAndMessageThatActsIsRefusedWhenStale(t *testing.T) {
 	// 1), with a CYFR elsewhere remembered (Resume): what the page shows.
 	shown := func(t *testing.T) (*app, *atomic.Int32) {
 		a := newApp(t, t.TempDir(), offline())
-		// A CYFR elsewhere that admitted this device: the record keeps it,
-		// and the setup below is not recorded.
-		sel, err := a.Clients.Select("https://cyfr.example.com", account.DefaultDirectory, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := sel.Update(func(c *shell.ClientRecord) bool {
-			c.ClientID, c.Certificate = "pcl_1", json.RawMessage(`{"a":1}`)
-			return true
-		}); err != nil {
-			t.Fatal(err)
-		}
 		a.Folder = localFolder
 		a.Local = func(string) (Local, error) {
 			return Local{Shell: shell.Config{Address: localAddress, Client: offline(), Directory: account.DefaultDirectory},
@@ -2358,6 +2370,9 @@ func TestEveryRequestAndMessageThatActsIsRefusedWhenStale(t *testing.T) {
 		a.Setup = func(context.Context, string, func(string)) error { runs.Add(1); return nil }
 		started := a.post(t, "/bootstrap/start", map[string]string{})
 		a.setupAfter(t, started.Setup.Seq)
+		// A CYFR elsewhere that admitted this device, selected last.
+		seed(t, a.Homes, "https://cyfr.example.com", shell.ClientRecord{Directory: account.DefaultDirectory,
+			ClientID: "pcl_1", Certificate: json.RawMessage(`{"a":1}`)})
 		a.FolderPicked(Message{Epoch: 0, Pick: 0})
 		a.Lock("Locked.")
 		a.next(t)
@@ -2563,5 +2578,40 @@ func TestLeavingEndsTheFolderWorkThoughTheHidePanics(t *testing.T) {
 	}()
 	if work.Context().Err() == nil {
 		t.Fatal("the folder's Work outlived the panicking lock that let go of it")
+	}
+}
+
+// A selection whose request ended while main's home-ready for it was also
+// waiting commits nothing, whichever the service reads first: last stays
+// the CYFR committed before it.
+func TestACancelledSelectionCommitsNothing(t *testing.T) {
+	const first, next = "https://a.example.com", "https://b.example.com"
+	dir := t.TempDir()
+	f := shell.Homes(filepath.Join(dir, "homes.json"))
+	seed(t, f, first, shell.ClientRecord{Directory: account.DefaultDirectory})
+	for range 64 {
+		sel, err := f.Select(next, account.DefaultDirectory, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &Service{Homes: f, Record: filepath.Join(dir, "holder.json")}
+		ctx, cancel := context.WithCancel(context.Background())
+		// Both pending before the selection reads either: main's answer
+		// and the request's end.
+		s.Tell = func(m Message) {
+			if m.Type == TypeHome {
+				s.ready <- true
+				cancel()
+			}
+		}
+		got := s.selectHome(ctx, 0, sel, shell.Config{Address: next, Client: offline()}, nil,
+			Message{Type: TypeHome, Home: next, Account: account.DefaultDirectory})
+		cancel()
+		if got.Next != "" || got.Error == "" {
+			t.Fatalf("a cancelled selection answered %+v", got)
+		}
+		if l, err := f.Load(); err != nil || l.Last != first || len(l.Homes) != 1 {
+			t.Fatalf("a cancelled selection moved the list to %+v (%v)", l, err)
+		}
 	}
 }

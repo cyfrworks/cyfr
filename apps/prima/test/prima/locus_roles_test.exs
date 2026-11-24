@@ -27,15 +27,22 @@ defmodule Prima.LocusRolesTest do
 
   @release_keys ~w(bin edge_address edge_caddy_address edge_ip_range edge_network edge_subnet
                    edge_tailscale_address endpoint_address endpoint_ip_range endpoint_network
-                   endpoint_subnet home_root image_role run_dir run_size uid user)
+                   endpoint_subnet home_root image_role memory run_dir run_size uid user)
   @role_keys ~w(container first_uid guard home_size isolation kept_first_uid kept_last_uid
-                kept_root kept_volume last_uid name network pool port profile service
+                kept_root kept_volume last_uid memory name network pool port profile service
                 user_prefix)
+  @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
+                          socket_queue_bytes)
+  @role_memory_keys ~w(answering fetch_head_bytes fetch_read_ahead_bytes fetch_read_bytes freed_segments_bytes unread)
 
-  # The file's spelling of a value of the module: atoms as their names,
-  # a uid range as its first and last uid.
+  # The file's spelling of a value of the module: atoms as their names, a
+  # map under its keys' names, a uid range as its first and last uid.
   defp spelled(nil), do: nil
   defp spelled(atom) when is_atom(atom), do: Atom.to_string(atom)
+
+  defp spelled(%{} = map) when not is_struct(map),
+    do: Map.new(map, fn {key, value} -> {to_string(key), spelled(value)} end)
+
   defp spelled(value), do: value
 
   defp spelled_release(release),
@@ -55,8 +62,13 @@ defmodule Prima.LocusRolesTest do
     assert @vectors |> Map.keys() |> Enum.sort() == ["comment", "release", "roles"]
     assert @vectors["release"] |> Map.keys() |> Enum.sort() == @release_keys
 
+    assert @vectors["release"]["memory"] |> Map.keys() |> Enum.sort() == @release_memory_keys
+
     for role <- @vectors["roles"] do
       assert role |> Map.keys() |> Enum.sort() == @role_keys, "#{role["name"]}'s keys"
+
+      assert role["memory"] |> Map.keys() |> Enum.sort() == @role_memory_keys,
+             "#{role["name"]}'s memory keys"
     end
 
     assert @vectors["release"] == spelled_release(LocusRoles.release())
@@ -171,6 +183,29 @@ defmodule Prima.LocusRolesTest do
     for {a, i} <- Enum.with_index(ranges), b <- Enum.drop(ranges, i + 1) do
       assert Range.disjoint?(a, b), "#{inspect(a)} and #{inspect(b)} overlap"
     end
+  end
+
+  # The backends role alone keeps output unread; only the runtime fetches
+  # for its runners, so only it names a fetch's figures and the segments
+  # its VM keeps of the largest answers it relays.
+  test "the backends role alone has an unread bound, the runtime alone a fetch's figures" do
+    for role <- LocusRoles.roles() do
+      memory = role.memory
+      assert is_integer(memory.answering) and memory.answering > 0, "#{role.name}'s answering"
+      assert memory.unread != nil == (role.name == :backends), "#{role.name}'s unread"
+
+      for figure <- [
+            :fetch_read_bytes,
+            :fetch_read_ahead_bytes,
+            :fetch_head_bytes,
+            :freed_segments_bytes
+          ] do
+        assert memory[figure] != nil == (role.name == :runtime), "#{role.name}'s #{figure}"
+      end
+    end
+
+    # A held byte costs at least itself.
+    assert LocusRoles.release().memory.byte_cost >= 1.0
   end
 
   test "every isolation is one the keeper knows, and the image serves one of the roles" do

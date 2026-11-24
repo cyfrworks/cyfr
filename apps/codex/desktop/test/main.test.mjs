@@ -17,6 +17,7 @@ import {PassThrough} from "node:stream"
 import {after, mock, test} from "node:test"
 
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
+import {VERSION} from "../src/process.js"
 
 const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_in.json", import.meta.url)))
 const HOME = signIn["home"]
@@ -205,7 +206,7 @@ function cyfr() {
   child.stdin.on("data", (chunk) => {
     for (const line of chunk.split("\n").filter(Boolean)) child.heard.push(JSON.parse(line))
   })
-  child.say = (m) => child.stdout.write(JSON.stringify({version: 1, ...m}) + "\n")
+  child.say = (m) => child.stdout.write(JSON.stringify({version: VERSION, ...m}) + "\n")
   child.attempts = 0
   // A proposal, numbered as cyfr numbers them: its number.
   child.proposes = (home, fields = {}) => {
@@ -285,7 +286,7 @@ async function opens(home = HOME) {
   await settled()
   await settled()
   if (!child.heard.some((m) => m.type === "home-ready" && m.home === home && m.attempt === attempt)) return false
-  child.say({type: "opened", home})
+  child.say({type: "opened", home, attempt: child.attempts})
   await settled()
   await settled()
   return true
@@ -315,7 +316,7 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
   const said = await started(false)
   child.proposes(HOME)
   await settled()
-  assert.deepEqual(child.heard.at(-1), {version: 1, type: "home-ready", home: HOME, attempt: 1})
+  assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "home-ready", home: HOME, attempt: 1})
   child.say({type: "locked"})
   await settled()
   await settled()
@@ -323,7 +324,7 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
   await settled()
   assert.deepEqual(child.heard.filter((m) => m.type === "home-ready").length, 2, "the same CYFR proposed again")
   assert.ok(!child.killed, said.join("\n"))
-  child.say({type: "opened", home: HOME})
+  child.say({type: "opened", home: HOME, attempt: child.attempts})
   child.proposes("https://bob.example")
   await settled()
   assert.ok(child.killed, "another proposal after a committed CYFR ends cyfr")
@@ -362,7 +363,7 @@ test("a lock closes the content and the ceremony before anything is awaited, and
   assert.ok(account, "the hop opened the account window")
   assert.ok(navigate(page, HOME + "/company-login").prevented)
   assert.ok(page.destroyed && account.destroyed, "both closed at once")
-  assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"}, "and cyfr told, before anything is awaited")
+  assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "lock"}, "and cyfr told, before anything is awaited")
   await settled()
   assert.equal(content(), undefined, "no chooser before cyfr's locked")
   await saysLocked()
@@ -379,7 +380,7 @@ test("signing out in Prism, and a kept sign-in that is over, show the chooser an
     assert.ok(redirected(page, url).prevented, name)
     assert.ok(page.destroyed, name)
     await settled()
-    assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"}, name)
+    assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "lock"}, name)
     await saysLocked()
     const chooser = content()
     assert.match(chooser.webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//, name)
@@ -513,7 +514,7 @@ test("nothing of a CYFR loads, and cyfr hears no home-ready, while the storage i
   assert.equal(ownerOnDisk(), "", "recorded only once cleared")
   cleared()
   await settled()
-  assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: PORT_B, attempt: 1}])
+  assert.deepEqual(child.heard, [{version: VERSION, type: "home-ready", home: PORT_B, attempt: 1}])
   assert.equal(ownerOnDisk(), PORT_B)
 })
 
@@ -531,7 +532,7 @@ test("a clear that fails opens nothing, keeps the old owner and says so", async 
     assert.equal(await opens(PORT_B), false, name)
     assert.deepEqual(world.loads, [], name)
     assert.ok(!child.killed, name)
-    assert.deepEqual(child.heard, [{version: 1, type: "home-failed", home: PORT_B, attempt: 1}], `${name}: cyfr is told, and nothing locks`)
+    assert.deepEqual(child.heard, [{version: VERSION, type: "home-failed", home: PORT_B, attempt: 1}], `${name}: cyfr is told, and nothing locks`)
     assert.equal(ownerOnDisk(), PORT_A, name)
     assert.ok(!chooser.destroyed, `${name}: the chooser stands, for cyfr's answer to say so`)
     assert.ok(navigate(chooser, PORT_B + "/").prevented, name)
@@ -566,7 +567,7 @@ test("a root is loaded only while the record says that CYFR owns the storage", a
   child.proposes(PORT_B)
   await settled()
   writeFileSync(path.join(world.profile, "content-owner"), PORT_A)
-  child.say({type: "opened", home: PORT_B})
+  child.say({type: "opened", home: PORT_B, attempt: child.attempts})
   await settled()
   assert.deepEqual(world.loads, [])
   assert.ok(child.killed)
@@ -594,10 +595,10 @@ test("an old clear acknowledges no selection but the current one: A, B, then A a
   held[0].end()
   await settled()
   assert.equal(held.length, 1, "and no second for the newer proposal")
-  assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: PORT_A, attempt: 3}])
+  assert.deepEqual(child.heard, [{version: VERSION, type: "home-ready", home: PORT_A, attempt: 3}])
   assert.equal(ownerOnDisk(), PORT_A)
   assert.ok(navigate(chooser, PORT_A + "/").prevented, "nothing of it before it is open")
-  child.say({type: "opened", home: PORT_A})
+  child.say({type: "opened", home: PORT_A, attempt: child.attempts})
   await settled()
   assert.deepEqual(world.loads, [{url: PORT_A + "/", cookies: []}])
   assert.equal(ownerOnDisk(), PORT_A, "the record names the CYFR that is open")
@@ -624,7 +625,7 @@ test("no proposal comes between the owner being recorded or read and its answer"
     }
     assert.equal(child.heard.at(-1).attempt, 2)
     assert.equal(ownerOnDisk(), PORT_B, "the last answered is the owner")
-    child.say({type: "opened", home: PORT_B})
+    child.say({type: "opened", home: PORT_B, attempt: child.attempts})
     await settled()
     assert.deepEqual(world.loads, [{url: PORT_B + "/", cookies: []}])
   }
@@ -639,7 +640,7 @@ test("a clear that fails under overlapping proposals fails the current one alone
   await settled()
   held[0].fail(new Error("no"))
   await settled()
-  assert.deepEqual(child.heard, [{version: 1, type: "home-failed", home: PORT_B, attempt: 2}])
+  assert.deepEqual(child.heard, [{version: VERSION, type: "home-failed", home: PORT_B, attempt: 2}])
   assert.ok(content(), "the chooser stands")
   assert.equal(ownerOnDisk(), "")
   world.clearing = () => Promise.resolve()
@@ -674,8 +675,8 @@ test("a kill between any two steps under overlapping proposals leaves no CYFR op
       await settled()
       kills.push(snapshot("answered"))
       // Whom main answered is whom cyfr may open.
-      assert.deepEqual(child.heard, [{version: 1, type: "home-ready", home: next.at(-1), attempt: child.attempts}], what)
-      child.say({type: "opened", home: next.at(-1)})
+      assert.deepEqual(child.heard, [{version: VERSION, type: "home-ready", home: next.at(-1), attempt: child.attempts}], what)
+      child.say({type: "opened", home: next.at(-1), attempt: child.attempts})
       await settled()
       await settled()
       kills.push(snapshot("after"))
@@ -724,9 +725,11 @@ test("Connect to another CYFR clears what was kept and only then has cyfr leave"
   assert.ok(!child.heard.some((m) => m.type === "leave"), "not before the clear")
   cleared()
   await settled()
-  assert.deepEqual(child.heard.at(-1), {version: 1, type: "leave"})
+  assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "leave", id: 1})
   assert.deepEqual(cookiesOnDisk(), [], "gone on disk before cyfr is told")
   await saysLocked({})
+  child.say({type: "left", id: 1})
+  await settled()
   assert.deepEqual(world.cleared, [CONTENT])
   assert.ok(navigate(content(), PORT_A + "/").prevented, "main keeps to A no more")
 })
@@ -824,7 +827,7 @@ test("Connect to another CYFR does not advance past a failed clear", async () =>
   navigate(chooser, ANOTHER)
   await settled()
   assert.ok(!child.heard.some((m) => m.type === "leave"), "cyfr still holds A")
-  assert.deepEqual(child.heard.at(-1), {version: 1, type: "lock"})
+  assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "lock"})
   await saysLocked({home: PORT_A, account: ACCOUNT})
   assert.match(content().webContents.url, /notice=uncleared$/)
   assert.equal(ownerOnDisk(), PORT_A)
@@ -975,7 +978,7 @@ test("closing the content window, and quitting, quit and sign nobody out", async
     await settled()
     await settled()
     assert.equal(world.quit, true)
-    assert.deepEqual(child.heard.at(-1), {version: 1, type: "shutdown"})
+    assert.deepEqual(child.heard.at(-1), {version: VERSION, type: "shutdown"})
     assert.ok(!child.heard.some((m) => m.type === "lock"))
     signedNobodyOut()
   }
@@ -1175,7 +1178,7 @@ test("opened and cyfr's locked read in one go leave cyfr running and the chooser
   await settled()
   assert.ok(navigate(content(), HOME + "/company-login").prevented, "nothing of it before it is open")
   assert.ok(!child.heard.some((m) => m.type === "lock"), "and so no lock of it")
-  child.say({type: "opened", home: HOME})
+  child.say({type: "opened", home: HOME, attempt: child.attempts})
   await saysLocked()
   assert.equal(child.killed, false)
   assert.match(content().webContents.url, /^http:\/\/127\.0\.0\.1:7340\/bootstrap\//)
@@ -1252,9 +1255,12 @@ async function hopped() {
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
   const account = live().find((w) => w.webContents.url === hop)
+  // The page's own navigation to the answer, as the engine raises it:
+  // did-start-navigation first, then will-navigate.
   const answer = () => {
     const back = {url: ANSWER, isMainFrame: true, initiator: account.webContents.mainFrame, prevented: false,
       preventDefault() { this.prevented = true }}
+    account.webContents.emit("did-start-navigation", {url: ANSWER, isMainFrame: true, isSameDocument: false})
     account.webContents.emit("will-navigate", back)
     assert.ok(back.prevented, "the account window does not load the return")
   }
@@ -1279,6 +1285,51 @@ test("an account window whose page is lost or failed to load ends the ceremony, 
     await settled()
     assert.ok(account.destroyed, `${end}: the ceremony ended`)
     assert.ok(!page.destroyed && page.webContents.url === HOME + "/login", end)
+  }
+})
+
+// Each way the account window's top frame reaches a page, as the pinned
+// engine reports it (measured on Electron 45.4.1 by a probe of the
+// recheck): the events it raises, in order, for a navigation to `url`.
+const ENGINE = {
+  "a history move": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a move within the page's history": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: true}],
+    ["did-navigate-in-page", {}, url, true]],
+  "a reload by main": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a reload by the page": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}],
+    ["will-frame-navigate", pageNavigation(w, url)], ["will-navigate", pageNavigation(w, url)]],
+  "a redirect": (w, url) => [["will-redirect", pageNavigation(w, url)]],
+}
+function pageNavigation(w, url) {
+  return {url, isMainFrame: true, initiator: w.webContents.mainFrame, prevented: false, preventDefault() { this.prevented = true }}
+}
+
+test("every way the account window reaches a page that takes a request is read by the one reader, and a refused one ends the ceremony", async () => {
+  const current = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const refused = {
+    "no request": `${ACCOUNT}/account/new`,
+    "an expired request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, expires_at: Date.now() - 1})}`,
+    "another CYFR's request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, audience: "https://bob.example", return: "https://bob.example/login"})}`,
+  }
+  for (const [how, events] of Object.entries(ENGINE)) {
+    for (const [why, url] of Object.entries(refused)) {
+      const {page} = await hopped()
+      const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+      for (const [name, ...args] of events(account, url)) account.webContents.emit(name, ...args)
+      await settled()
+      assert.ok(account.destroyed, `${how}, ${why}: the ceremony ended`)
+      assert.equal(page.webContents.url, HOME + "/login", `${how}, ${why}: nothing was delivered`)
+    }
+  }
+  // Its own page, as the reader reads it, stays: a reload of it by main or
+  // by the page, and a move within it.
+  for (const how of ["a reload by main", "a reload by the page", "a move within the page's history"]) {
+    await hopped()
+    const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+    const own = `${ACCOUNT}/account/new#name=&request=${fragment(current)}`
+    for (const [name, ...args] of ENGINE[how](account, own)) account.webContents.emit(name, ...args)
+    await settled()
+    assert.ok(!account.destroyed, `${how} of a page the reader reads: the ceremony goes on`)
   }
 })
 
@@ -1397,11 +1448,11 @@ test("Change… opens the system's folder dialog over the content window, never 
     assert.equal(world.dialogs.length, 1, "one pick at a time")
     world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
     await settled()
-    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: "/home/ada/elsewhere", epoch: 1, pick: 0}])
+    assert.deepEqual(folders(), [{version: VERSION, type: "folder-picked", path: "/home/ada/elsewhere", epoch: 1, pick: 0}])
     navigate(w, PICK)
     world.dialogs[1].answer({canceled: true, filePaths: []})
     await settled()
-    assert.deepEqual(folders().at(-1), {version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}, "cancelled")
+    assert.deepEqual(folders().at(-1), {version: VERSION, type: "folder-picked", path: null, epoch: 1, pick: 0}, "cancelled")
     assert.equal(content(), w, "the chooser stands")
     assert.deepEqual(world.fetched, [])
   }
@@ -1428,10 +1479,10 @@ test("a lock, or the chooser leaving, answers the pick with none at once, and th
     await started(false)
     navigate(content(), PICK)
     await end(content())
-    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}], name)
+    assert.deepEqual(folders(), [{version: VERSION, type: "folder-picked", path: null, epoch: 1, pick: 0}], name)
     world.dialogs[0].answer({canceled: false, filePaths: ["/home/ada/elsewhere"]})
     await settled()
-    assert.deepEqual(folders(), [{version: 1, type: "folder-picked", path: null, epoch: 1, pick: 0}], `${name}: the late folder is dropped`)
+    assert.deepEqual(folders(), [{version: VERSION, type: "folder-picked", path: null, epoch: 1, pick: 0}], `${name}: the late folder is dropped`)
   }
 })
 
@@ -1452,7 +1503,9 @@ test("Docker's page, linked from the chooser, opens in the person's browser and 
   assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
 })
 
-test("on macOS and Windows a CYFR just set up opens at the device's pages: main loads none of its own", async () => {
+const TOKEN = "cd".repeat(32)
+
+test("on macOS and Windows a CYFR no one is set up at opens at its setup page, the token in the fragment alone", async () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform"), argv = process.argv
   for (const system of ["darwin", "win32"]) {
     Object.defineProperty(process, "platform", {...platform, value: system})
@@ -1462,22 +1515,21 @@ test("on macOS and Windows a CYFR just set up opens at the device's pages: main 
     try {
       reset()
       // The road is the system's, as the app is started on it.
-      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: () => {}})
+      const said = []
+      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: (line) => said.push(line)})
       await settled()
       child.say({type: "ready", url: READY})
       await settled()
       assert.equal(content().webContents.url, READY + "&road=passkey", system)
-      const attempt = child.proposes(HOME, {road: "device"})
+      const attempt = child.proposes(HOME, {setup: TOKEN})
       await settled()
       await settled()
       assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === attempt), system)
-      child.say({type: "opened", home: HOME})
+      child.say({type: "opened", home: HOME, attempt: child.attempts})
       await settled()
       await settled()
-      assert.deepEqual(world.loads, [], `${system}: main loaded no page of the CYFR's`)
-      assert.ok(!navigate(content(), "http://127.0.0.1:7340/").prevented, `${system}: the chooser goes on to the device's pages`)
-      await give(content())
-      assert.equal(content().webContents.url, HOME + "/", `${system}: where the device's pages give the CYFR`)
+      assert.deepEqual(world.loads.map((l) => l.url), [`${HOME}/setup#${TOKEN}`], `${system}: the CYFR's setup page`)
+      assert.ok(!said.some((line) => line.includes(TOKEN)), `${system}: no line the app printed carries the token`)
     } finally {
       Object.defineProperty(process, "platform", platform)
       process.argv = argv

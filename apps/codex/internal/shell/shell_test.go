@@ -236,12 +236,13 @@ func ticketOf(t *testing.T, w *httptest.ResponseRecorder, home *fakeHome) string
 	return strings.TrimPrefix(loc, prefix)
 }
 
+// client is the box's entry in its list of CYFRs, as the file holds it.
 func (b *box) client() ClientRecord {
-	c, err := ClientFile(filepath.Join(b.dir, "client.json")).Load()
+	l, err := Homes(filepath.Join(b.dir, "homes.json")).Load()
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	return c
+	return l.Homes[b.shell.cfg.Address]
 }
 
 // A box without a chip refuses six digits and sets up with the generated
@@ -807,7 +808,7 @@ func TestChannel_ACertificateForAnotherAddressIsDroppedForAHello(t *testing.T) {
 	}
 	cert["audience"] = "https://cyfr-old.example"
 	raw, _ := json.Marshal(cert)
-	if err := ClientFile(filepath.Join(b.dir, "client.json")).Save(ClientRecord{ClientID: held.ClientID, Certificate: raw}); err != nil {
+	if err := b.shell.cfg.Clients.Update(func(c *ClientRecord) bool { c.Certificate = raw; return true }); err != nil {
 		t.Fatal(err)
 	}
 	home.mu.Lock()
@@ -1417,18 +1418,23 @@ func TestEnroll_AnAccountServiceOtherThanThisCYFRsIsNeverContacted(t *testing.T)
 }
 
 // A remote CYFR selected over a local project's working record that
-// refuses the device's first hello (4403) changes nothing in the record:
-// only an admission that succeeded replaces a working client.
+// refuses the device's first hello (4403) changes nothing in the list:
+// only an admission that succeeded adds the CYFR's entry.
 func TestSelection_ARefusedFirstHelloLeavesTheWorkingRecord(t *testing.T) {
 	home := newFakeHome(t)
 	// Someone is set up there already, and the door admits no one new.
 	home.mu.Lock()
 	home.setupUsed = true
 	home.mu.Unlock()
-	file := ClientFile(filepath.Join(t.TempDir(), "client.json"))
-	if err := file.Save(ClientRecord{Project: "/home/ada/cyfr", ClientID: "pcl_box", Certificate: json.RawMessage(`{"box":1}`)}); err != nil {
+	file := Homes(filepath.Join(t.TempDir(), "homes.json"))
+	box, err := file.SelectLocal("http://localhost:4000", "/home/ada/cyfr")
+	if err == nil {
+		err = box.Commit()
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
+	admit(t, box, "pcl_box", `{"box":1}`)
 	before, _ := os.ReadFile(string(file))
 	sel, err := file.Select(home.address(), home.accounts.URL(), true)
 	if err != nil {

@@ -92,6 +92,14 @@ defmodule Aqua.Loop.Policy do
 
   def replay_safe?(%Call{}), do: false
 
+  @doc """
+  The one call a note flush before a summary may make, `notes.keep`, by
+  its tool and action: the flush's request offers it alone, and an ask of
+  a flush's step runs only if it is this one (`Aqua.Loop`).
+  """
+  @spec flush_call() :: {String.t(), String.t()}
+  def flush_call, do: {"notes", "keep"}
+
   defp decide_offered(%Call{} = call, offered, opts) do
     case Map.get(offered, offered_key(call)) do
       "offered" -> offered(call, opts)

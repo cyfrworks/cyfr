@@ -611,6 +611,27 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert_receive {RunnerPool, ^pid, {:gone, {:protocol, :malformed}}}
   end
 
+  test "a runner's control bytes are taken once handled, and its relay bytes once its relay read them",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 0)
+    serve!(pool)
+    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    assert {:ok, _token} = assign(pid)
+    spawn = spawn_of(keeper, pid)
+    before = ScriptedKeeper.takings(spawn)
+
+    # The keeper reads the runner's next bytes only on these words.
+    complete(spawn, "exec_1", true)
+    wait_until(fn -> ScriptedKeeper.takings(spawn) == before + 1 end, 5_000, "the line taken")
+    ScriptedKeeper.write_relay(spawn, <<2::32, "[]">>)
+
+    wait_until(
+      fn -> ScriptedKeeper.takings(spawn) == before + 2 end,
+      5_000,
+      "the relay's bytes taken"
+    )
+  end
+
   test "a runner whose relay closes is retired: the service tells it why and ends the stream", %{
     keeper: keeper
   } do

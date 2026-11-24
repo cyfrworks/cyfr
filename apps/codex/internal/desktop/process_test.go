@@ -61,8 +61,9 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			o := c.Message
 			attempt, _ := o["attempt"].(float64)
-			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
-				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Road: str(o, "road")}
+			id, _ := o["id"].(float64)
+			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), ID: uint64(id), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
+				Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Setup: str(o, "setup")}
 			read, write := io.Pipe()
 			t.Cleanup(func() { read.Close() })
 			if err := NewWriter(write, nil).Queue(m); err != nil {
@@ -97,7 +98,8 @@ func TestCyfrReadsEachMessageFromMain(t *testing.T) {
 			var o map[string]any
 			_ = json.Unmarshal(c.Message, &o)
 			attempt, _ := o["attempt"].(float64)
-			if m.Type != o["type"] || m.Home != str(o, "home") || m.Attempt != uint64(attempt) {
+			id, _ := o["id"].(float64)
+			if m.Type != o["type"] || m.Home != str(o, "home") || m.Attempt != uint64(attempt) || m.ID != uint64(id) {
 				t.Fatalf("read %+v from %s", m, c.Message)
 			}
 			path, has := o["path"]
@@ -168,7 +170,7 @@ func TestWriter_QueueWaitsOnNoPeerAndKeepsTheOrder(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Queue waited for main to read")
 	}
-	_ = to.Queue(Message{Type: TypeOpened, Home: "https://x.example"})
+	_ = to.Queue(Message{Type: TypeOpened, Home: "https://x.example", Attempt: 1})
 	lines := bufio.NewScanner(read)
 	var types []string
 	for len(types) < 5 && lines.Scan() {

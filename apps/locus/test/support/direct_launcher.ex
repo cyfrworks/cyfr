@@ -139,7 +139,7 @@ defmodule Locus.DirectLauncher do
 
   defp launch(argv, env, paths, opts) do
     on_output = Keyword.get(opts, :on_output, fn _line -> :ok end)
-    deadline = System.monotonic_time(:millisecond) + Keyword.fetch!(opts, :timeout_ms)
+    deadline = Keyword.fetch!(opts, :deadline)
 
     port =
       Port.open({:spawn_executable, "/bin/sh"}, [
@@ -169,9 +169,9 @@ defmodule Locus.DirectLauncher do
     result =
       case collect(port, Log.new(), on_output, deadline) do
         {:exit, status} ->
-          read_output(status, paths.output, Keyword.fetch!(opts, :max_stdout_bytes))
+          hand_output(status, paths.output, opts)
 
-        ended when ended in [:timeout, :cancelled] ->
+        ended ->
           kill(os_pid)
           close(port)
           {:error, ended}
@@ -185,10 +185,13 @@ defmodule Locus.DirectLauncher do
   defp collect(port, log, on_output, deadline) do
     receive do
       {^port, {:data, data}} ->
-        collect(port, Log.add(log, data, on_output), on_output, deadline)
+        case Log.add(log, data, on_output) do
+          {:ok, log} -> collect(port, log, on_output, deadline)
+          {:error, reason} -> taker_failure(reason)
+        end
 
       {^port, {:exit_status, status}} ->
-        :ok = Log.finish(log, on_output)
+        _ = Log.finish(log, on_output)
         {:exit, status}
 
       {Locus.Executor, :cancel} ->
@@ -219,19 +222,45 @@ defmodule Locus.DirectLauncher do
     end
   end
 
-  defp read_output(status, output, max_bytes) do
+  defp taker_failure(reason) when reason in [:timeout, :cancelled], do: reason
+  defp taker_failure(reason), do: {:taker, reason}
+
+  # The command's stdout, read from its file a relay frame at a time, the
+  # next piece only once the last was taken, as the keeper's client reads
+  # a relay.
+  defp hand_output(status, output, opts) do
+    max_bytes = Keyword.fetch!(opts, :max_stdout_bytes)
+    on_stdout = Keyword.get(opts, :on_stdout, {nil, fn _piece, acc -> {:ok, acc} end})
+
     case File.stat(output) do
       {:ok, %File.Stat{size: size}} when size > max_bytes ->
         {:error, {:output_too_large, max_bytes}}
 
       {:ok, _} ->
-        case File.read(output) do
-          {:ok, stdout} -> {:ok, %{exit: {:status, status}, stdout: stdout}}
+        File.open(output, [:read, :binary, :raw], fn file -> hand(file, on_stdout, status) end)
+        |> case do
+          {:ok, result} -> result
           {:error, reason} -> {:error, {:spawn_failed, reason}}
         end
 
       {:error, reason} ->
         {:error, {:spawn_failed, reason}}
+    end
+  end
+
+  defp hand(file, {acc, take}, status) do
+    case IO.binread(file, Prima.KeeperProtocol.max_frame_bytes()) do
+      :eof ->
+        {:ok, %{exit: {:status, status}, taken: acc}}
+
+      {:error, reason} ->
+        {:error, {:spawn_failed, reason}}
+
+      piece ->
+        case take.(piece, acc) do
+          {:ok, acc} -> hand(file, {acc, take}, status)
+          {:error, reason} -> {:error, taker_failure(reason)}
+        end
     end
   end
 
@@ -281,6 +310,11 @@ defmodule Locus.DirectLauncher do
 
   @impl Locus.Launcher
   def send(%{server: child}, data), do: call(child, {:stdin, IO.iodata_to_binary(data)})
+
+  # A process's output reaches its owner through a port, which this
+  # launcher cannot pause: the owner's word is heard and nothing waits on it.
+  @impl Locus.Launcher
+  def taken(_handle), do: :ok
 
   @impl Locus.Launcher
   def send_control(%{server: child}, data),
@@ -1252,6 +1286,9 @@ defmodule Locus.DirectLauncher.Runner do
 
   @impl Locus.Runtime.Keeper
   def send_relay(channel, data), do: DirectLauncher.send_relay(channel, data)
+
+  @impl Locus.Runtime.Keeper
+  def taken(channel), do: DirectLauncher.taken(channel)
 
   @impl Locus.Runtime.Keeper
   def close_relay(channel), do: DirectLauncher.close_relay(channel)

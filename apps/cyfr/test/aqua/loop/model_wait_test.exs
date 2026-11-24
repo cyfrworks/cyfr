@@ -86,7 +86,7 @@ defmodule Aqua.Loop.ModelWaitTest do
     assert waited >= @consented_ms
     assert waited < 3 * @consented_ms
     {:ok, failed} = Tape.turn(ctx, turn.id)
-    assert failed.error =~ ~r/^Execution timeout after \d+ms$/
+    assert failed.error =~ ~r/^The model could not be reached: Execution timeout after \d+ms$/
 
     # The run was stopped at its budget, not by its watchdog, and the loop
     # asked for no kill.

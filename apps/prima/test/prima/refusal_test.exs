@@ -454,8 +454,6 @@ defmodule Prima.RefusalTest do
      "Aqua stopped before it finished (limit)."},
     {{:harness, "Aqua", {:silent, 30}}, :timeout,
      "Aqua said nothing for 30 minutes, so its work here ended."},
-    {{:harness, "Aqua", :write_failed}, :unavailable,
-     "Aqua stopped: CYFR could not keep what it said. Send a message to go on."},
     {{:harness, "Aqua", :forgotten}, :conflict,
      "Aqua stopped: its record of this thread was removed while it worked. Send a message to " <>
        "start over."},

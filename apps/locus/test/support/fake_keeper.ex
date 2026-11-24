@@ -16,6 +16,15 @@ defmodule Locus.Test.FakeKeeper do
   - `:capacity` — every spawn is refused with `capacity`
   - `:memory_unavailable` — every spawn is refused with `memory_unavailable`,
     as a keeper whose cgroup is not writable refuses a bounded spawn
+  - `{:stdout, bytes, test}` — a build's command is never run: its relay
+    sends `bytes` as its stdout, a frame at a time, each with a write of
+    its own, telling `test` `{:fake_relay, :sending, sent}` before each
+    write and `{:fake_relay, :sent, sent}` after it, as a relay is held by
+    a reader that does not take; a write that fails tells `test`
+    `{:fake_relay, :cut, sent}`, as a reader that closed its connection
+    cuts a relay. The leader is reported exited 0 and released only once
+    the stream ended either way, as cyfr-locus reports `released` only
+    once the relay has ended.
   - `{:exit, exited}` — the command is never run: the relay writes one log
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory`), killed at its bound or the container's among
@@ -34,6 +43,13 @@ defmodule Locus.Test.FakeKeeper do
     the token, reads the stdin the client sends and drops it, and sends
     the command's output. In every other mode a build's relay dials first
     and the command reads the stdin the client sends.
+  - `{:dial_after_release, test}` — a build's command is never run: its
+    relay dials only once the client has asked for the spawn's release,
+    then reads until the client closes its connection, telling `test`
+    `{:fake_relay, :closed, ms}`, the milliseconds it was open, or
+    `{:fake_relay, :held_open, ms}` once 3 s pass first, when it closes it
+    itself; only then is the leader reported killed and the spawn
+    released, as cyfr-locus reports `released` only once the relay ended.
   - `{:exec_failed, test}` — every spawn is refused with `exec_failed` under
     the spawn id the fake gave it, as cyfr-locus refuses one whose command
     it could not run after it made the spawn: the spawn's place stays the
@@ -530,6 +546,28 @@ defmodule Locus.Test.FakeKeeper do
     finish(conn, [frames(@stream_stderr, stderr), frames(@stream_stdout, stdout)])
   end
 
+  defp relay(fake, spawn_id, %{"pool" => "build"} = request, {:dial_after_release, test}, _dir) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        fake
+        |> GenServer.call(:requests)
+        |> Enum.any?(&(&1["type"] == "release" and &1["spawn_id"] == spawn_id))
+      end,
+      5_000,
+      "the client to ask for the release"
+    )
+
+    conn = dial(fake, request)
+    dialed = System.monotonic_time(:millisecond)
+    ended = until_closed(conn, dialed + 3_000)
+    send(test, {:fake_relay, ended, System.monotonic_time(:millisecond) - dialed})
+    :gen_tcp.close(conn)
+
+    killed = %{type: "exited", spawn_id: spawn_id, code: nil, signal: "SIGKILL", memory: nil}
+    :ok = GenServer.call(fake, {:send, killed})
+    :ok = GenServer.call(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+  end
+
   defp relay(fake, spawn_id, request, mode, dir) do
     input = Path.join(dir, "stdin")
     output = Path.join(dir, "stdout")
@@ -563,6 +601,17 @@ defmodule Locus.Test.FakeKeeper do
       {:exit, exited} ->
         exit_as(fake, spawn_id, conn, exited)
 
+      {:stdout, bytes, test} ->
+        stream(conn, frames(@stream_stdout, bytes), 0, test)
+        :gen_tcp.close(conn)
+
+        send(
+          fake,
+          {:send, %{type: "exited", spawn_id: spawn_id, code: 0, signal: nil, memory: nil}}
+        )
+
+        send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+
       _mode ->
         {exited, stdout, ""} = run(fake, spawn_id, request, conn, {dir, input, output})
         finish(conn, [frames(@stream_stdout, stdout)])
@@ -575,6 +624,29 @@ defmodule Locus.Test.FakeKeeper do
     finish(conn, [frames(@stream_stderr, "the command's last words\n")])
     send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
     send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+  end
+
+  # One frame a write, each told to the test before and after, until the
+  # stream's end or the reader's close.
+  defp stream(conn, [], sent, test) do
+    case :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")]) do
+      :ok -> send(test, {:fake_relay, :ended, sent})
+      {:error, _closed} -> send(test, {:fake_relay, :cut, sent})
+    end
+  end
+
+  defp stream(conn, [frame | frames], sent, test) do
+    send(test, {:fake_relay, :sending, sent})
+
+    case :gen_tcp.send(conn, frame) do
+      :ok ->
+        sent = sent + IO.iodata_length(frame)
+        send(test, {:fake_relay, :sent, sent})
+        stream(conn, frames, sent, test)
+
+      {:error, _closed} ->
+        send(test, {:fake_relay, :cut, sent})
+    end
   end
 
   # The relay's last frames, then the end of both streams.
@@ -734,6 +806,16 @@ defmodule Locus.Test.FakeKeeper do
       n ->
         {:ok, payload} = :gen_tcp.recv(conn, n, 5_000)
         read_stdin(conn, [payload | acc])
+    end
+  end
+
+  # Whatever the client sends is read and dropped until it closes the
+  # connection, or until `by`.
+  defp until_closed(conn, by) do
+    case :gen_tcp.recv(conn, 0, max(by - System.monotonic_time(:millisecond), 0)) do
+      {:ok, _bytes} -> until_closed(conn, by)
+      {:error, :timeout} -> :held_open
+      {:error, _closed} -> :closed
     end
   end
 
