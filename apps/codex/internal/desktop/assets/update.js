@@ -36,9 +36,19 @@ function show(r) {
   // its fewest words.
   document.title = r.running ? "Update CYFR — updating" : offered ? `Update CYFR — release ${o.target}`
     : o?.terminal ? "Update CYFR — needs a terminal" : "Update CYFR"
+  // Focus moves only when what it was on changes, the yes appearing or
+  // going, so a read landing never moves it under a key being pressed.
   const focus = offered ? yes : $("close")
-  if (document.activeElement !== focus) focus.focus()
+  if (focus !== focused) {
+    focused = focus
+    focus.focus()
+  }
 }
+let focused = null
+// Escape is Close, wherever the focus is.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") location.assign("/update/close")
+})
 async function watch() {
   let seen = 0
   for (;;) {

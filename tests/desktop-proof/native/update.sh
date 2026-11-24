@@ -46,7 +46,8 @@
 #                      opens again at B, a new process, with Update CYFR
 #                      open by itself on the record of the update to B; no
 #                      docker was called
-#   window_record      Close on that window removes the record it showed
+#   window_record      Close on that window (Escape) removes the record it
+#                      showed
 #   window_terminal    (Linux) where sudo would ask for a password, Update
 #                      CYFR offers no yes but the line to run in a terminal,
 #                      the app running on and no update begun
@@ -182,7 +183,7 @@ says() { [ -f "$RECORD" ] && grep -qF "$1" "$RECORD"; }
 # Whether a window of the app's has a title holding TEXT.
 titled() {
   case "$OS" in
-    linux) xdotool search --name 'CYFR' getwindowname %@ 2>/dev/null | grep -qF "$1" ;;
+    linux) xdotool search --name "$(printf '%s' "$1" | sed 's/[][\\.*^$+?(){}|]/\\&/g')" >/dev/null 2>&1 ;;
     darwin) osascript -e 'tell application "System Events" to get name of every window of (every process whose name is "CYFR")' 2>/dev/null | grep -qF "$1" ;;
     windows)
       powershell.exe -NoProfile -NonInteractive -Command \
@@ -261,7 +262,7 @@ public static class U {
   esac
 }
 
-# A key, Return or Tab, pressed in Update CYFR's window.
+# A key, Return or Escape, pressed in Update CYFR's window.
 key() {
   case "$OS" in
     linux)
@@ -271,7 +272,7 @@ key() {
       xdotool windowfocus --sync "$W" && xdotool key --clearmodifiers "$1" ;;
     darwin)
       local code=36
-      [ "$1" = Tab ] && code=48
+      [ "$1" = Escape ] && code=53
       osascript -e "tell application \"System Events\" to tell process \"CYFR\"
         set frontmost to true
         perform action \"AXRaise\" of (first window whose name starts with \"Update CYFR\")
@@ -279,7 +280,7 @@ key() {
       end tell" ;;
     windows)
       local send='~'
-      [ "$1" = Tab ] && send='{TAB}'
+      [ "$1" = Escape ] && send='{ESC}'
       powershell.exe -NoProfile -NonInteractive -Command \
         "\$s = New-Object -ComObject WScript.Shell; if (-not \$s.AppActivate('Update CYFR')) { exit 1 }; Start-Sleep -Milliseconds 300; \$s.SendKeys('$send')" ;;
   esac
@@ -416,9 +417,9 @@ window() {
     fail window_unverified "the app $(alive "$before" && echo still || echo 'no longer') runs, its cyfr answers '$(release_of)'; the record: $(tail -5 "$RECORD" 2>/dev/null)"
   fi
 
-  # Close (Tab from the yes), then B the newest, Update CYFR again.
+  # Close (Escape), then B the newest, Update CYFR again.
   local step=closed
-  if key Tab && key Return && within 20 untitled "Update CYFR" && echo "$B" >"$dir/latest" &&
+  if key Escape && within 20 untitled "Update CYFR" && echo "$B" >"$dir/latest" &&
     step=opened && press_rail_update && within 60 titled "release $B" &&
     step=pressed && key Return &&
     step=closed-by-update && within 60 not_alive "$before" &&
@@ -432,7 +433,7 @@ window() {
     return
   fi
 
-  if key Return && within 20 untitled "Update CYFR" && within 10 eval '[ ! -e "$RECORD" ]'; then
+  if key Escape && within 20 untitled "Update CYFR" && within 10 eval '[ ! -e "$RECORD" ]'; then
     pass window_record "Close removed the record it showed"
   else
     fail window_record "the record $([ -e "$RECORD" ] && echo stays || echo 'is gone'), Update CYFR $(titled "Update CYFR" && echo 'still shows' || echo closed)"
