@@ -28,7 +28,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   alias Sanctum.Tenancy.Athanors
 
   setup %{conn: conn} do
-    test_path = Path.join(System.tmp_dir!(), "aqua_panel_#{:rand.uniform(1_000_000)}")
+    test_path = Path.join(System.tmp_dir!(), "aqua_panel_#{System.unique_integer([:positive])}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 

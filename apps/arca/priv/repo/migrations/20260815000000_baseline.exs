@@ -1854,6 +1854,19 @@ defmodule Arca.Repo.Migrations.Baseline do
     vault_status = known("vault_entries_status_known", "status", credential_statuses)
     profile_status = known("profiles_status_known", "status", ~w(active needs_consent revoked))
 
+    # Who revoked a profile (`Arca.Schemas.Profile.revocation_causes/0`):
+    # its person, or the removal of its component's last version. A revoked
+    # row names one, and a row in any other status names none. NULL IN (...)
+    # is NULL, which a CHECK passes, so a revoked row's cause is required
+    # explicitly.
+    profile_revoked_by = %{
+      name: "profiles_revoked_by_cause",
+      expr:
+        "(status = 'revoked' AND revoked_by IS NOT NULL AND " <>
+          "revoked_by IN ('person', 'removal')) OR " <>
+          "(status != 'revoked' AND revoked_by IS NULL)"
+    }
+
     # A share's audience and statuses (`Arca.Schemas.Share`,
     # `Arca.StatusTransitions`), and the shared thread it names exactly
     # when its audience is one.
@@ -2007,12 +2020,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :kind, :string, null: false, default: "owner"
       add :label, :string, null: false, default: "default"
       add :status, :string, null: false, default: "active", check: if(sqlite?, do: profile_status)
+      add :revoked_by, :string, check: if(sqlite?, do: profile_revoked_by)
       add :head_consent_id, :string
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :profiles, [profile_status])
+    checked(sqlite?, :profiles, [profile_status, profile_revoked_by])
     create unique_index(:profiles, [:athanor_id, :id])
 
     create unique_index(:profiles, [:athanor_id, :source_ref, :label, :kind],

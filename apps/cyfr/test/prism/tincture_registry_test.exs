@@ -15,7 +15,7 @@ defmodule Prism.TinctureRegistryTest do
     athanor = Sanctum.TestContext.athanor!()
 
     # Create a temp tincture structure under an isolated storage root
-    base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{:rand.uniform(1_000_000)}")
+    base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
 

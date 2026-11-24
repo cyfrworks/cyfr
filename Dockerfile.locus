@@ -46,26 +46,30 @@
 # `unavailable`, and the runtime starts no runner and logs, both naming the
 # option; none runs unbounded.
 #
-# The runtime's runner pool is isolated (`runner:…:netns`): cyfr-locus
-# clones every runner into a user and network namespace of its own,
-# mapping only the runner's pooled uid and gid, whose loopback stays down,
-# so a runner holds no capability and reaches nothing but the descriptors
-# it inherited. The clone takes no capability of the container's, but two
-# things of the host and the engine: the host allows unprivileged user
-# namespaces (user.max_user_namespaces above 0, and where AppArmor
-# restricts them, kernel.apparmor_restrict_unprivileged_userns), and the
-# container runs under the seccomp profile /etc/cyfr/keeper.json carries,
-# Docker's default with clone allowed to make a user and network namespace
-# and unshare and setns denied (docker-compose.yml's locus-runtime
+# Every spawn runs in a space of its own: cyfr-locus clones it into a user,
+# network and IPC namespace mapping only its pooled uid and gid, so it
+# holds no capability and shares no loopback, abstract socket or System V
+# object with anything else. Each pool names its spaces' reach: the
+# runtime's runners are relay spaces (`runner:…:relay`), whose loopback
+# stays down and whose relay is their one way to anything; builds and
+# backends are routed spaces (`:routed`), each with its own loopback and
+# the one route its island's guard makes for it (`--guard`). The clone
+# takes no capability of the container's, but two things of the host and
+# the engine: the host allows unprivileged user namespaces
+# (user.max_user_namespaces above 0, and where AppArmor restricts them,
+# kernel.apparmor_restrict_unprivileged_userns), and the container runs
+# under the seccomp profile /etc/cyfr/keeper.json carries, Docker's default
+# with clone allowed to make a user, network and IPC namespace and unshare
+# and setns denied (docker-compose.yml's x-locus-role
 # `security_opt: seccomp=./keeper.seccomp.json`,
 # apps/locus/keeper/seccomp/keeper.json shipped beside it), since Docker's
 # own profile denies such a clone. Without either, cyfr-locus refuses to
-# start, naming both. The runtime container's read-only root carries the
+# start, naming both. A runtime container's read-only root carries the
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser and the
-# brain drivers cyfr-claude-code and cyfr-codex: static Go binaries, pinned
+# ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser, cyfr-fetch
+# and the brain drivers cyfr-claude-code, cyfr-codex and cyfr-acp: static Go binaries, pinned
 # to the Go release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS keeper
 WORKDIR /src
@@ -76,7 +80,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-stub ./cmd/cyfr-stub \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-browser ./cmd/cyfr-browser \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-claude-code ./cmd/cyfr-claude-code \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-codex ./cmd/cyfr-codex
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-codex ./cmd/cyfr-codex \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-acp ./cmd/cyfr-acp \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-fetch ./cmd/cyfr-fetch
 
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
@@ -310,6 +316,16 @@ COPY --from=keeper /out/cyfr-claude-code /opt/cyfr/bin/cyfr-claude-code
 # OpenAI Codex's driver, as a brain of CYFR's, the same way: it starts the
 # harness's app-server in the row's kept home and speaks its protocol.
 COPY --from=keeper /out/cyfr-codex /opt/cyfr/bin/cyfr-codex
+# The one driver of programs that speak the Agent Client Protocol, linked
+# under one name a program, the name it runs under picking its program
+# (cyfr-antigravity). Its harness reaches CYFR's tools through the stub in
+# socket mode, on a socket inside the session's own space.
+COPY --from=keeper /out/cyfr-acp /opt/cyfr/bin/cyfr-acp
+RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity
+# The pinned, checksummed fetch of a program that is not on npm into the
+# row's own folder, before it runs it (Antigravity's row): the image
+# carries no program.
+COPY --from=keeper /out/cyfr-fetch /opt/cyfr/bin/cyfr-fetch
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The egress guard the builds and backends islands run (docker-compose.yml's
 # locus-builds-guard and locus-backends-guard); iptables, installed above,
@@ -363,11 +379,12 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
         "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
-# `security_opt: [no-new-privileges, writable-cgroups=true]`, a read-only
-# root, `ipc: none` and the homes and /run/locus tmpfs mounts
-# (docker-compose.yml's locus-builds service). The backends service runs
-# the same image with the backends pool in its place (docker-compose.yml's
-# locus-backends service), and the runtime with the isolated runner pool
-# and the seccomp profile above (docker-compose.yml's locus-runtime
-# service).
-ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+# `security_opt: [no-new-privileges, writable-cgroups=true,
+# seccomp=keeper.json]`, a read-only root, `ipc: none`, the homes and
+# /run/locus tmpfs mounts, and the builds guard's control mounted read-only
+# at /run/cyfr-guard-control, behind that guard (docker-compose.yml's
+# locus-builds service). The backends service runs the same image with the
+# backends pool in its place (docker-compose.yml's locus-backends service),
+# and the runtime with the runner pool and no guard (docker-compose.yml's
+# locus-runtime service).
+ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016:routed", "--home-root", "/var/lib/locus/homes", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]

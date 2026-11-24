@@ -216,8 +216,11 @@ defmodule Arca.ConsentStorageTest do
           ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
         # The profile is minted active; it moves only to another status.
-        if status != "active",
-          do: :ok = ProfileStorage.transition(actor, profile.id, :any, status)
+        case status do
+          "active" -> :ok
+          "revoked" -> :ok = ProfileStorage.revoke_by_person(actor, profile.id)
+          status -> :ok = ProfileStorage.transition(actor, profile.id, :any, status)
+        end
 
         assert {:ok, second} =
                  ConsentStorage.insert_revision(
@@ -854,29 +857,86 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "revoked_owner?/2" do
-    test "tells a revoked grant from one never made, in the actor's athanor alone", %{
-      athanor: athanor
-    } do
+  describe "mint_profile_with_revision/4 and a revocation" do
+    test "never mints a profile revoked, nor one naming a cause", %{athanor: athanor} do
+      for over <- [
+            %{status: "revoked", revoked_by: "removal"},
+            %{status: "revoked", revoked_by: "person"},
+            %{status: "revoked"},
+            %{revoked_by: "person"}
+          ] do
+        id = "prof_minted_#{System.unique_integer([:positive])}"
+
+        profile =
+          Map.merge(
+            %{
+              id: id,
+              athanor_id: athanor,
+              source_ref: "reagent:local.storage-test",
+              kind: "owner",
+              label: "mint-#{System.unique_integer([:positive])}",
+              status: "active"
+            },
+            over
+          )
+
+        assert {:error, _refused} =
+                 ConsentStorage.mint_profile_with_revision(
+                   profile,
+                   consent_attrs(athanor, id, 1),
+                   []
+                 ),
+               inspect(over)
+
+        assert {:error, :not_found} = ProfileStorage.get(Prima.Actor.in_athanor(athanor), id)
+      end
+    end
+  end
+
+  describe "revoked_by_person?/2" do
+    test "answers whether any default owner profile of the source was ever revoked by its " <>
+           "person, in the actor's athanor alone",
+         %{athanor: athanor} do
       actor = Prima.Actor.in_athanor(athanor)
       source = "reagent:local.storage-test"
 
-      assert ConsentStorage.revoked_owner?(actor, source) == {:ok, false}
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, false}
 
-      _ = profile!(athanor, "prof_revoked")
-      assert ConsentStorage.revoked_owner?(actor, source) == {:ok, false}
+      _ = profile!(athanor, "prof_person")
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, false}
 
-      assert {:ok, ["prof_revoked"]} = ProfileStorage.revoke_for_source(actor, source)
-      assert ConsentStorage.revoked_owner?(actor, source) == {:ok, true}
-      assert ConsentStorage.revoked_owner?(actor, "reagent:local.other") == {:ok, false}
+      assert :ok = ProfileStorage.revoke_by_person(actor, "prof_person")
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, true}
+      assert ConsentStorage.revoked_by_person?(actor, "reagent:local.other") == {:ok, false}
 
       other = "ath_revoked_elsewhere"
       Arca.Test.Actor.ensure_athanor_row(other)
-      assert ConsentStorage.revoked_owner?(Prima.Actor.in_athanor(other), source) == {:ok, false}
+
+      assert ConsentStorage.revoked_by_person?(Prima.Actor.in_athanor(other), source) ==
+               {:ok, false}
+
+      # The person granted it again, and the removal of the component then
+      # revoked that grant: the person's no stands all the same.
+      _ = profile!(athanor, "prof_removed")
+      assert {:ok, ["prof_removed"]} = ProfileStorage.revoke_for_source(actor, source)
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, true}
+
+      # A source whose default was revoked only by a removal is not.
+      {:ok, removed} =
+        Writers.put_profile(%{
+          athanor_id: athanor,
+          source_ref: "reagent:local.removed-only",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      assert {:ok, [_]} = ProfileStorage.revoke_for_source(actor, removed.source_ref)
+      assert ConsentStorage.revoked_by_person?(actor, removed.source_ref) == {:ok, false}
     end
 
     test "a context with no athanor is refused" do
-      assert ConsentStorage.revoked_owner?(%Prima.Actor{}, "reagent:local.storage-test") ==
+      assert ConsentStorage.revoked_by_person?(%Prima.Actor{}, "reagent:local.storage-test") ==
                {:error, :no_athanor}
     end
   end
@@ -896,8 +956,16 @@ defmodule Arca.ConsentStorageTest do
       {:ok, consent} =
         ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), refs, nil)
 
-      if status != "active",
-        do: :ok = ProfileStorage.transition(Prima.Actor.in_athanor(athanor), id, :any, status)
+      case status do
+        "active" ->
+          :ok
+
+        "revoked" ->
+          :ok = ProfileStorage.revoke_by_person(Prima.Actor.in_athanor(athanor), id)
+
+        status ->
+          :ok = ProfileStorage.transition(Prima.Actor.in_athanor(athanor), id, :any, status)
+      end
 
       consent
     end
@@ -1299,8 +1367,11 @@ defmodule Arca.ConsentStorageTest do
 
       {:ok, consent} = ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), refs, nil)
 
-      if status != "active",
-        do: :ok = ProfileStorage.transition(actor(athanor), id, :any, status)
+      case status do
+        "active" -> :ok
+        "revoked" -> :ok = ProfileStorage.revoke_by_person(actor(athanor), id)
+        status -> :ok = ProfileStorage.transition(actor(athanor), id, :any, status)
+      end
 
       consent
     end

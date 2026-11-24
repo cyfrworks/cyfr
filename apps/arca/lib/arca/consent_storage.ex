@@ -1301,27 +1301,32 @@ defmodule Arca.ConsentStorage do
   end
 
   @doc """
-  Whether the actor's athanor holds a revoked owner profile of the
-  name-level `source_ref`: a grant its person made and revoked, told apart
-  from one never made. `profiles/2` lists no revoked profile, so a source
-  it answers none for is one of the two.
+  Whether any default owner profile of the name-level `source_ref` in the
+  actor's athanor was ever revoked by its person. Once a person has said
+  no to a component's default grant, only that person's own consent grants
+  it again; CYFR never does it for them, however many removals and
+  installs follow. A source whose default profiles were revoked only by
+  removals is not. No order is read: the answer is whether such a row
+  exists.
   """
-  @spec revoked_owner?(Prima.Actor.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
-  def revoked_owner?(%Prima.Actor{athanor_id: athanor_id}, source_ref)
+  @spec revoked_by_person?(Prima.Actor.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def revoked_by_person?(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.revoked_owner?", fn ->
-      revoked =
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.revoked_by_person?", fn ->
+      revoked? =
         from(p in Arca.Schemas.Profile,
-          where: p.source_ref == ^source_ref and p.kind == "owner" and p.status == "revoked"
+          where:
+            p.source_ref == ^source_ref and p.kind == "owner" and p.label == "default" and
+              p.status == "revoked" and p.revoked_by == "person"
         )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.Repo.exists?()
 
-      {:ok, revoked}
+      {:ok, revoked?}
     end)
   end
 
-  def revoked_owner?(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
+  def revoked_by_person?(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
 
   @doc """
   The head consent revision of a profile, fully decoded with its vault refs.

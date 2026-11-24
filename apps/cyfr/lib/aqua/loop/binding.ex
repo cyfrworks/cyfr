@@ -55,25 +55,30 @@ defmodule Aqua.Loop.Binding do
   # letters, digits, `_` and `-`, neither holding `__`, the server's not
   # ending in `_` and the tool's not beginning with one, so the name holds
   # exactly one `__` and splits there into one key. The server is not
-  # `mcp`, whose names Codex keeps for its own, and the tool is neither
-  # `resources` nor `prompts`, the spellings of a server's resources and
-  # prompts. The whole name is at most 64 characters, the least an API
+  # `mcp`, whose names Codex keeps for its own, and no tool is named
+  # `resources` or `prompts`: those spell a server's reserved names, its
+  # resources (`<server>:@resources`) and its prompts (`<server>:@prompts`),
+  # always. The whole name is at most 64 characters, the least an API
   # provider CYFR runs documents.
   @server ~r/\A(?!mcp\z)[A-Za-z0-9_-]*[A-Za-z0-9-]\z/
   @tool ~r/\A(?!(?:resources|prompts)\z)[A-Za-z0-9-][A-Za-z0-9_-]*\z/
+  @reserved %{"@resources" => "resources", "@prompts" => "prompts"}
+  @spelled Map.new(@reserved, fn {name, spelled} -> {spelled, name} end)
   @max_outside_name 64
 
   @doc """
   The name a model is handed an outside server's tool by, for its key
   `server:tool`: `server__tool`, when both names are of that grammar and
   the whole is at most 64 characters, so that one name spells one key on
-  every turn and thread; `:error` for any other key.
+  every turn and thread, and `server__resources` and `server__prompts` for
+  the server's reserved names; `:error` for any other key.
   """
   @spec outside_name(String.t()) :: {:ok, String.t()} | :error
   def outside_name(key) when is_binary(key) do
     with [server, tool] <- String.split(key, ":", parts: 2),
-         name = server <> "__" <> tool,
-         true <- outside?(server, tool, name) do
+         {:ok, spelled} <- spelled(tool),
+         name = server <> "__" <> spelled,
+         true <- outside?(server, name) do
       {:ok, name}
     else
       _ -> :error
@@ -87,19 +92,35 @@ defmodule Aqua.Loop.Binding do
   """
   @spec host_name(String.t()) :: {:ok, String.t()} | :error
   def host_name(name) when is_binary(name) do
-    with [server, tool] <- String.split(name, "__", parts: 2),
-         true <- outside?(server, tool, name) do
+    with [server, spelled] <- String.split(name, "__", parts: 2),
+         {:ok, tool} <- tool_of(spelled),
+         true <- outside?(server, name) do
       {:ok, server <> ":" <> tool}
     else
       _ -> :error
     end
   end
 
-  defp outside?(server, tool, name),
+  defp spelled(tool) do
+    case @reserved do
+      %{^tool => spelled} -> {:ok, spelled}
+      _tool -> if tool?(tool), do: {:ok, tool}, else: :error
+    end
+  end
+
+  defp tool_of(spelled) do
+    case @spelled do
+      %{^spelled => reserved} -> {:ok, reserved}
+      _tool -> if tool?(spelled), do: {:ok, spelled}, else: :error
+    end
+  end
+
+  defp tool?(tool), do: not String.contains?(tool, "__") and Regex.match?(@tool, tool)
+
+  defp outside?(server, name),
     do:
       String.length(name) <= @max_outside_name and not String.contains?(server, "__") and
-        not String.contains?(tool, "__") and Regex.match?(@server, server) and
-        Regex.match?(@tool, tool)
+        Regex.match?(@server, server)
 
   @doc """
   Resolve one model call. `opts`: `:tool_call_id`. Answers the call with

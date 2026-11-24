@@ -30,12 +30,22 @@ type post struct{ id, work string }
 
 type heldAsk struct{ arguments map[string]any }
 
-// starting is a start the harness has not answered yet.
+// awaited is a work whose tools request the harness has not answered: the
+// work's id, and when its answer is overdue.
+type awaited struct {
+	id  string
+	due time.Time
+}
+
+// starting is a start the harness has not answered yet: its `initialize`
+// answer, once read (`initialized`), waits for its `mcp_status` answer.
 type starting struct {
-	session string
-	resume  bool
-	pending []string
-	config  brainwire.Config
+	session     string
+	resume      bool
+	pending     []string
+	config      brainwire.Config
+	initialized bool
+	answer      json.RawMessage
 }
 
 type driver struct {
@@ -48,6 +58,8 @@ type driver struct {
 	gen      uint64
 	session  string
 	listing  json.RawMessage
+	// server is the name CYFR's server takes in the harness that runs.
+	server string
 	// What the native turns under way name: each post's line by its uuid,
 	// the work of the native turn under way and its message, the
 	// harness's own tools running, the asks of CYFR's tools it holds, and
@@ -56,9 +68,17 @@ type driver struct {
 	turnWork string
 	message  string
 	errored  bool
+	// errKind is the type of the errored message of the turn under way, and
+	// reached when the limit the harness last said rejected lifts, in Unix
+	// seconds, or 0.
+	errKind string
+	reached int64
+	// startDue is when the start's answer is overdue, zero when none is
+	// awaited; each tools request awaited has its own (awaited).
+	startDue time.Time
 	own      map[string]string
 	asks     map[string]heldAsk
-	awaiting map[string]string
+	awaiting map[string]awaited
 	requests int
 	results  int
 }
@@ -71,7 +91,7 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 		posts:          map[string]post{},
 		own:            map[string]string{},
 		asks:           map[string]heldAsk{},
-		awaiting:       map[string]string{},
+		awaiting:       map[string]awaited{},
 	}
 }
 
@@ -79,6 +99,45 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 // Commands
 
 func (d *driver) Process() *brainwire.Process { return d.h }
+
+// Deadline is when the first answer the driver awaits is overdue: the
+// start's, or a work's tools request's, each its own (answerWait), or nil
+// when it awaits none.
+func (d *driver) Deadline() <-chan time.Time {
+	first := d.startDue
+	for _, a := range d.awaiting {
+		if first.IsZero() || a.due.Before(first) {
+			first = a.due
+		}
+	}
+	if first.IsZero() {
+		return nil
+	}
+	return time.After(time.Until(first))
+}
+
+// Expired ends a start the harness did not answer in time, and refuses
+// each work whose tools it did not start in time; a late answer is then
+// read as one of no request.
+// Inbox is none: Claude Code's calls of CYFR's tools come on its own output.
+func (d *driver) Inbox() <-chan func() error { return nil }
+
+func (d *driver) Expired() error {
+	now := time.Now()
+	if !d.startDue.IsZero() && !now.Before(d.startDue) {
+		return &brainwire.Fatal{Status: 1, Reason: fmt.Sprintf("Claude Code did not answer its start in time (%s)", answerWait)}
+	}
+	for request, a := range d.awaiting {
+		if now.Before(a.due) {
+			continue
+		}
+		delete(d.awaiting, request)
+		if err := d.c.Refuse(a.id, toolsLateSentence()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 	str := func(name string) string { return brainwire.Str(members, name) }
@@ -142,6 +201,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	// A harness started to resume a session it holds no transcript of
 	// says so and ends at once, perhaps before this line reached it: what
 	// it wrote is read all the same, and its end decides.
+	d.startDue = time.Now().Add(answerWait)
 	d.h.WriteUnchecked(initializeLine(str("system")))
 	return nil
 }
@@ -170,11 +230,11 @@ func (d *driver) work(id string, raw json.RawMessage) error {
 	}
 	d.requests++
 	request := fmt.Sprintf("%s-%d", toolsID, d.requests)
-	line := setToolsLine(request, args)
+	line := setToolsLine(request, d.server, args)
 	if len(line) > brainwire.MaxLineBytes {
 		return d.c.Refuse(id, fmt.Sprintf("The tools are %d bytes as one line to the harness, past the %d one line carries.", len(line), brainwire.MaxLineBytes))
 	}
-	d.awaiting[request] = id
+	d.awaiting[request] = awaited{id: id, due: time.Now().Add(answerWait)}
 	return d.h.Write(line)
 }
 
@@ -389,6 +449,8 @@ func (d *driver) Line(line []byte) error {
 		if l.main() {
 			return d.toolResults(l.Message)
 		}
+	case "rate_limit_event":
+		d.reached = rejectedUntil(l.RateLimitInfo)
 	case "result":
 		return d.result(l)
 	}
@@ -400,15 +462,29 @@ func (d *driver) controlResponse(l harnessLine) error {
 	if !ok {
 		return nil
 	}
-	if answer.RequestID == initID && d.starting != nil {
+	if answer.RequestID == initID && d.starting != nil && !d.starting.initialized {
 		if answer.Subtype != "success" {
 			return &brainwire.Fatal{Status: 1, Reason: "Claude Code refused to start the session"}
 		}
+		// CYFR's server is named once the person's own are known.
+		d.starting.initialized = true
+		d.starting.answer = answer.Response
+		return d.h.Write(statusLine())
+	}
+	if answer.RequestID == statusID && d.starting != nil && d.starting.initialized {
+		// Without the person's servers listed, no name for CYFR's is known
+		// not to replace one of theirs, so nothing is set.
+		listed, ok := listedServers(answer.Response)
+		if answer.Subtype != "success" || !ok {
+			return &brainwire.Fatal{Status: 1, Reason: "Claude Code did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own"}
+		}
+		d.server = serverFor(listed)
+		d.startDue = time.Time{}
 		var response struct {
 			Models json.RawMessage `json:"models"`
 		}
-		_ = json.Unmarshal(answer.Response, &response)
 		s := d.starting
+		_ = json.Unmarshal(s.answer, &response)
 		d.starting = nil
 		d.session = s.session
 		d.listing = response.Models
@@ -420,9 +496,10 @@ func (d *driver) controlResponse(l harnessLine) error {
 			held = heldPosts(d.home, s.session, s.pending)
 		}
 		return d.c.Emit(brainwire.NewEvent("started").Set("session", s.session).Set("fresh", !s.resume).Set("held", held).
-			SetOptional("account", account(answer.Response)))
+			SetOptional("account", account(s.answer)))
 	}
-	if id, ok := d.awaiting[answer.RequestID]; ok {
+	if a, ok := d.awaiting[answer.RequestID]; ok {
+		id := a.id
 		delete(d.awaiting, answer.RequestID)
 		var response struct {
 			Errors map[string]any `json:"errors"`
@@ -442,6 +519,10 @@ func (d *driver) controlRequest(l harnessLine) error {
 		ToolName  string         `json:"tool_name"`
 		Input     map[string]any `json:"input"`
 		ToolUseID string         `json:"tool_use_id"`
+		Server    struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+		} `json:"mcp_server"`
 	}
 	// A call's numbers are passed on as the model wrote them.
 	decoder := json.NewDecoder(bytes.NewReader(l.Request))
@@ -453,10 +534,27 @@ func (d *driver) controlRequest(l harnessLine) error {
 	if request.Input == nil {
 		request.Input = map[string]any{}
 	}
-	name, ours := strings.CutPrefix(request.ToolName, toolPrefix)
-	if !ours {
-		// The harness's own tool runs in its box: allowed, and shown by its
-		// tool_use (assistant) by name only.
+	// An ask is CYFR's only when the harness names CYFR's server as the
+	// one it set; every other tool, a server's of the person's own among
+	// them, is the harness's own. This is the one decision of whose a call
+	// is: a tool named with CYFR's prefix is shown as the harness's own only
+	// here, once this says so (assistant waits for it).
+	name, prefixed := strings.CutPrefix(request.ToolName, toolPrefix(d.server))
+	if !prefixed || request.Server.Name != d.server || request.Server.Source != "dynamic" {
+		// The harness's own tool runs in its box: allowed, and shown by name
+		// only, from its tool_use (assistant) or, named as CYFR's are, from
+		// here, until its result or its turn's end. One named as CYFR's that
+		// asks nothing, as a tool the person allowed beforehand need not, is
+		// not shown at all.
+		if prefixed && request.ToolUseID != "" {
+			if _, shown := d.own[request.ToolUseID]; !shown {
+				own := ownName(request.ToolName)
+				d.own[request.ToolUseID] = own
+				if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", own).Set("phase", "start")); err != nil {
+					return err
+				}
+			}
+		}
 		return d.h.Write(allowLine(l.RequestID, request.Input))
 	}
 	arguments := callArguments(request.Input)
@@ -522,17 +620,22 @@ func (d *driver) assistant(l harnessLine) error {
 	if l.Error != nil {
 		// An errored message is the harness's own words about its account
 		// or its provider, a sign-in prompt among them: none of its text is
-		// passed on, only its type in the driver's words.
-		kind := errorKind(*l.Error)
+		// passed on. Its type is kept for the result that ends the turn,
+		// which says it with what the result adds (failure).
 		d.errored = true
-		return d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("type", kind).Set("message", errorSentence(kind)))
+		d.errKind = errorKind(*l.Error)
+		// The error ends the turn for its holder, and its own tools with it.
+		d.own = map[string]string{}
+		return nil
 	}
 	var text strings.Builder
 	for _, block := range message.Content {
 		switch {
 		case block.Type == "text":
 			text.WriteString(block.Text)
-		case block.Type == "tool_use" && !strings.HasPrefix(block.Name, toolPrefix) && block.Name != "":
+		// A tool named with CYFR's prefix may still be a server's of the
+		// person's: its permission says whose it is (controlRequest).
+		case block.Type == "tool_use" && !strings.HasPrefix(block.Name, toolPrefix(d.server)) && block.Name != "":
 			name := ownName(block.Name)
 			d.own[block.ID] = name
 			if err := d.c.Emit(brainwire.NewEvent("own").Set("gen", d.gen).SetOptional("work", d.turnWork).Set("name", name).Set("phase", "start")); err != nil {
@@ -574,9 +677,13 @@ func (d *driver) result(l harnessLine) error {
 	if d.starting != nil && l.noTranscript() {
 		d.h.Expected = true
 		d.starting = nil
+		d.startDue = time.Time{}
 		return d.c.Emit(brainwire.NewEvent("gone"))
 	}
 	work := d.workOf(l.UserMessageIDs)
+	// The native turn ended: none of its own tools runs any more, those it
+	// gave no result for among them, which Aqua settles at the idle.
+	d.own = map[string]string{}
 	d.results++
 	result := l.UUID
 	if !brainwire.IsID(result) {
@@ -596,15 +703,15 @@ func (d *driver) result(l harnessLine) error {
 	switch {
 	case strings.HasPrefix(l.Subtype, "error_max_"):
 		stop = stopLimit
-	case failed || (l.Subtype != "success" && l.Subtype != ""):
+	case failed || d.errored || l.StopReason == "refusal" || (l.Subtype != "success" && l.Subtype != ""):
 		stop = stopError
-		if !d.errored {
-			if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", "provider_error").Set("message", errorSentence("provider_error"))); err != nil {
-				return err
-			}
+		kind, message := d.failure(l)
+		if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", kind).Set("message", message)); err != nil {
+			return err
 		}
 	}
 	d.errored = false
+	d.errKind = ""
 	answered := []string{}
 	seen := map[string]bool{}
 	for _, uuid := range l.UserMessageIDs {
@@ -613,7 +720,74 @@ func (d *driver) result(l harnessLine) error {
 			answered = append(answered, p.id)
 		}
 	}
-	return d.c.Emit(brainwire.NewEvent("idle").Set("gen", d.gen).SetOptional("work", work).Set("answered", answered).Set("stop", stop))
+	if err := d.c.Emit(brainwire.NewEvent("idle").Set("gen", d.gen).SetOptional("work", work).Set("answered", answered).Set("stop", stop)); err != nil {
+		return err
+	}
+	if stop == stopError && unsendable(l) {
+		return d.dropSession()
+	}
+	return nil
+}
+
+// dropSession ends a session the model's API refuses for a message of its
+// own history, which every later turn of it would meet: the harness is
+// stopped, the session's transcript and plan files are removed as forget
+// removes them (removeSession), nothing else of the folder, and the driver
+// ends. The next start of the session finds no transcript and answers
+// `gone`, so Aqua forgets the session and starts the thread over from its
+// posts. Claude Code's own copy of that history is lost; the thread keeps
+// every post.
+func (d *driver) dropSession() error {
+	session := d.session
+	d.h.Stop()
+	d.h = nil
+	if reason := removeSession(d.home, session); reason != "" {
+		return &brainwire.Fatal{Status: 1, Reason: "a session the model's API refuses could not be removed: " + reason}
+	}
+	return &brainwire.Fatal{Status: 1, Reason: "the model's API refuses this session's history, so it was removed"}
+}
+
+// failure is the type and the driver's words of a turn that ended in
+// error, as its result says it (Claude Code 2.1.323, measured): a stop of
+// `refusal` is the model's refusal it kept to after its retry, whatever
+// the message's type; then the HTTP status the request ended with, which
+// types a 429 and a 529 when the message's type does not (a 529's is
+// `server_error`); a 400 the API gave for a message of the session's own
+// history (unsendableWords, in the failed result's own text alone); then
+// the errored message's own type; else the
+// provider's error. A rate limit says when it lifts once the harness said
+// (`rate_limit_event`).
+func (d *driver) failure(l harnessLine) (string, string) {
+	if l.StopReason == "refusal" {
+		return "invalid_request", refusalSentence
+	}
+	if unsendable(l) {
+		return "invalid_request", unsendableSentence
+	}
+	kind := d.errKind
+	if l.APIErrorStatus != nil {
+		switch *l.APIErrorStatus {
+		case 429:
+			kind = "rate_limited"
+		case 529:
+			kind = "overloaded"
+		}
+	}
+	if kind == "" {
+		kind = "provider_error"
+	}
+	if kind == "rate_limited" {
+		return kind, limitSentence(d.reached)
+	}
+	return kind, errorSentence(kind)
+}
+
+// unsendable is a failed result the model's API gave for a message of the
+// session's own history: a 400 whose result's own text, and nothing the
+// model said, names unsendableWords.
+func unsendable(l harnessLine) bool {
+	var said string
+	return l.APIErrorStatus != nil && *l.APIErrorStatus == 400 && json.Unmarshal(l.Result, &said) == nil && strings.Contains(said, unsendableWords)
 }
 
 // workOf is the work of the first post a line's uuids name, or none.
@@ -643,8 +817,12 @@ func (d *driver) Ended() error {
 	d.h = nil
 	d.starting = nil
 	d.listing = nil
+	d.server = ""
+	d.reached = 0
+	d.startDue = time.Time{}
+	d.own = map[string]string{}
 	d.asks = map[string]heldAsk{}
-	d.awaiting = map[string]string{}
+	d.awaiting = map[string]awaited{}
 	if expected {
 		return nil
 	}
@@ -660,4 +838,5 @@ func (d *driver) Close() {
 		d.h.Stop()
 		d.h = nil
 	}
+	d.own = map[string]string{}
 }

@@ -84,6 +84,9 @@ type driver struct {
 	// Whether the session's total holds a sub-agent's counts is not
 	// established, so from then on its usage is partial.
 	others bool
+	// reached is when the limits Codex last reported reached lift, in Unix
+	// seconds, or 0 (reachedReset).
+	reached int64
 	// resumed is set while a resumed thread has sent no usable total, one
 	// that carries counts: its first is partial, since it may end a stretch
 	// a sub-agent worked in whose total's event never committed, and
@@ -105,6 +108,16 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 }
 
 func (d *driver) Process() *brainwire.Process { return d.h }
+
+// Deadline is none: Codex's answers are bounded by the holder's clock
+// alone.
+func (d *driver) Deadline() <-chan time.Time { return nil }
+
+// Expired is never called, with no deadline.
+func (d *driver) Expired() error { return nil }
+
+// Inbox is none: Codex's calls of CYFR's tools come on its own output.
+func (d *driver) Inbox() <-chan func() error { return nil }
 
 func (d *driver) running() bool { return d.h != nil && d.starting == nil && d.session != "" }
 
@@ -374,8 +387,14 @@ func (d *driver) response(id string, m rpc) error {
 			d.waiting = nil
 			return d.c.Accept(w.id)
 		}
-		// The turn it named ended meanwhile: the post was not taken, and
-		// starts a turn of its own.
+		// Codex refuses a request it did not take as invalid (-32600): the
+		// turn it named ended meanwhile, or another runs, and the post
+		// starts a turn of its own. Any other error leaves whether it took
+		// the post unknown, and it is not written again.
+		if m.Error.Code != invalidRequest {
+			d.waiting = nil
+			return d.c.Refuse(w.id, steerUnknownSentence)
+		}
 		w.kind = "turn"
 		w.request = d.nextID("turn")
 		return d.h.Write(turnStart(w.request, d.session, w.input, w.uuid, d.config))
@@ -604,6 +623,11 @@ func (d *driver) notification(method string, params json.RawMessage) error {
 	if !d.running() {
 		return nil
 	}
+	// The account's limits name no thread.
+	if method == "account/rateLimits/updated" {
+		d.reached = reachedReset(params)
+		return nil
+	}
 	var n notice
 	ok := json.Unmarshal(params, &n) == nil
 	if ok && n.ThreadID != "" && n.ThreadID != d.session {
@@ -720,7 +744,11 @@ func (d *driver) completed(n notice) error {
 		if n.Turn.Status == "failed" {
 			kind = errorKind(n.Turn.Error)
 		}
-		if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", kind).Set("message", errorSentence(kind))); err != nil {
+		message := errorSentence(kind)
+		if kind == "rate_limited" {
+			message = limitSentence(d.reached)
+		}
+		if err := d.c.Emit(brainwire.NewEvent("error").Set("gen", d.gen).SetOptional("work", work).Set("type", kind).Set("message", message)); err != nil {
 			return err
 		}
 	}
@@ -754,10 +782,19 @@ func (d *driver) Ended() error {
 }
 
 // Close closes the harness, if one runs: the thread is Codex's to keep in
-// its folder, and the next start resumes it.
+// its folder, and the next start resumes it. A native turn under way is
+// first asked to stop in Codex's own way (`turn/interrupt`), which it
+// answers at once and keeps in the thread as interrupted (0.169.0), as
+// Stop's last line, written after its bounds are armed so a harness that
+// does not read holds neither; then its input closes, and Stop asks it to
+// end and kills it at the bound.
 func (d *driver) Close() {
 	if d.h != nil {
-		d.h.Stop()
+		var farewell [][]byte
+		if d.active != "" && d.session != "" {
+			farewell = append(farewell, request(d.nextID("interrupt"), "turn/interrupt", map[string]any{"threadId": d.session, "turnId": d.active}))
+		}
+		d.h.Stop(farewell...)
 		d.h = nil
 	}
 	d.starting = nil
@@ -765,6 +802,7 @@ func (d *driver) Close() {
 	d.session = ""
 	d.others = false
 	d.resumed = false
+	d.reached = 0
 	d.handing = ""
 	d.active = ""
 	d.turns = map[string]*turn{}

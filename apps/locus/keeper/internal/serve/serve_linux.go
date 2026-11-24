@@ -137,17 +137,15 @@ func Main(args []string) int {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
-	if cfg.Isolating() {
-		// An isolated stage keeps the keeper's supplementary groups, since
-		// its namespace denies setgroups: they are cleared here first.
-		if err := syscall.Setgroups([]int{}); err != nil {
-			log.Error("refusing to start: clearing the supplementary groups: %v", err)
-			return ExitConfig
-		}
-		if err := probeIsolation(self, cfg, accounts); err != nil {
-			log.Error("refusing to start: %v", err)
-			return ExitConfig
-		}
+	// A stage keeps the keeper's supplementary groups, since its namespace
+	// denies setgroups: they are cleared here first.
+	if err := syscall.Setgroups([]int{}); err != nil {
+		log.Error("refusing to start: clearing the supplementary groups: %v", err)
+		return ExitConfig
+	}
+	if err := probeSpaces(self, cfg, accounts); err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
 	}
 
 	s := &server{
@@ -174,25 +172,39 @@ func Main(args []string) int {
 			log.Error("refusing to start: reading this network namespace: %v", err)
 			return ExitConfig
 		}
-		s.guard = guard.NewClient(cfg.Guard, netns)
-		log.Info("egress: every spawn's is set at the guard on %s before it starts", cfg.Guard)
+		s.guard = guard.NewClient(cfg.Guard, netns, s.guardLost)
+		for _, spec := range cfg.Pools {
+			if spec.Routed() {
+				if err := s.proveGuard(spec); err != nil {
+					log.Error("refusing to start: %v", err)
+					return ExitConfig
+				}
+				break
+			}
+		}
+		log.Info("egress: every routed space's route is made by the guard on %s before it starts", cfg.Guard)
 	}
 	s.memory = delegateMemory(log)
 	return s.run()
 }
 
-// isolatedAttr is how the keeper starts the stage of an isolated spawn: in a
-// session of its own, killed if this keeper dies, cloned into a new user and
-// network namespace, which takes no capability of the keeper's own
-// namespace, and holding as ambient capabilities, inside that namespace
-// only, what the stage needs there to become the pooled ids and drop every
-// set. It keeps the keeper's ids until the keeper has mapped them.
-func isolatedAttr() *syscall.SysProcAttr {
+// spaceAttr is how the keeper starts every spawn's stage: in a session of
+// its own, killed if this keeper dies, cloned into a new user, network and
+// IPC namespace, which takes no capability of the keeper's own namespace,
+// and holding as ambient capabilities, inside that namespace only, what the
+// stage needs there to become the pooled ids, bring a routed space's
+// loopback up and bind its name sockets, and drop every set. It keeps the
+// keeper's ids until the keeper has mapped them. A pty spawn's stage takes
+// its terminal, on its stdin, as its controlling one.
+func spaceAttr(pty bool) *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
-		Setsid:      true,
-		Pdeathsig:   syscall.SIGKILL,
-		Cloneflags:  unix.CLONE_NEWUSER | unix.CLONE_NEWNET,
-		AmbientCaps: []uintptr{unix.CAP_SETUID, unix.CAP_SETGID, unix.CAP_SETPCAP},
+		Setsid:     true,
+		Setctty:    pty,
+		Ctty:       0,
+		Pdeathsig:  syscall.SIGKILL,
+		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
+		AmbientCaps: []uintptr{unix.CAP_SETUID, unix.CAP_SETGID, unix.CAP_SETPCAP,
+			unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE},
 	}
 }
 
@@ -224,26 +236,35 @@ func mapIDs(pid, uid, gid int) error {
 	return nil
 }
 
-// probeIsolation proves, before the keeper serves an isolated pool, that
-// this host lets it isolate a spawn: it clones a stage as it clones every
-// isolated spawn's, maps the first uid of the first isolated pool, and
-// waits for the stage to become it, drop every capability set and pass the
-// check a spawn's stage makes before it executes anything. A host that
-// refuses any step refuses the keeper, naming what to check.
-func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
-	var acct Account
-	var name string
+// probeSpaces proves, before the keeper serves, that this host gives each of
+// its pools' spawns its space: for every reach the keeper serves it clones a
+// stage as it clones every spawn's, maps the first uid of the first pool of
+// that reach, and waits for the stage to become it, bring up a routed
+// space's loopback and bind its name sockets, drop every capability set,
+// pass the check a spawn's stage makes before it executes anything and
+// install the space's filter. A host that refuses any step refuses the
+// keeper, naming what to check: there is no weaker space.
+func probeSpaces(self string, cfg Config, accounts map[int]Account) error {
+	probed := map[string]bool{}
 	for _, spec := range cfg.Pools {
-		if spec.Isolated {
-			acct, name = accounts[spec.First], spec.Name
-			break
+		if probed[spec.Reach] {
+			continue
+		}
+		probed[spec.Reach] = true
+		if err := probeSpace(self, spec, accounts[spec.First]); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// probeSpace is probeSpaces's proof for one pool's reach.
+func probeSpace(self string, spec pool.Spec, acct Account) error {
 	refuse := func(err error) error {
-		return fmt.Errorf("pool %s is isolated, and this host does not let cyfr-locus give a spawn a user and network namespace of its own: %w; "+
+		return fmt.Errorf("pool %s's spawns run in a space of their own, a user, network and IPC namespace (%s), and this host does not let cyfr-locus make one: %w; "+
 			"the host must allow unprivileged user namespaces (check user.max_user_namespaces, above 0, and, where AppArmor restricts them, "+
 			"kernel.apparmor_restrict_unprivileged_userns) and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json "+
-			"(/etc/cyfr/keeper.json in the image), which lets clone make them", name, err)
+			"(/etc/cyfr/keeper.json in the image), which lets clone make them", spec.Name, spec.Reach, err)
 	}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
@@ -265,7 +286,7 @@ func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
 		Dir:   "/",
 		Env:   []string{},
 		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd()},
-		Sys:   isolatedAttr(),
+		Sys:   spaceAttr(false),
 	})
 	specR.Close()
 	statusW.Close()
@@ -285,7 +306,7 @@ func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
 		reap()
 		return refuse(err)
 	}
-	probe, err := json.Marshal(stage.Probe{UID: acct.UID, GID: acct.GID})
+	probe, err := json.Marshal(stage.Probe{UID: acct.UID, GID: acct.GID, Routed: spec.Routed()})
 	if err == nil {
 		_, err = specW.Write(probe)
 	}
@@ -308,6 +329,107 @@ func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
 		return refuse(errors.New("the cloned stage: " + string(reason)))
 	case !ws.Exited() || ws.ExitStatus() != 0:
 		return refuse(fmt.Errorf("the cloned stage ended %v", ws))
+	}
+	return nil
+}
+
+// proveGuard proves, before a routed keeper serves, that its guard makes a
+// space's route: a probe stage of pool spec's first uid, in a space of its
+// own, hands its namespace and name sockets up; the guard admits a route
+// with them, and once the stage has ended, clears it. A guard that does
+// either otherwise, or none at all, refuses the keeper by name.
+func (s *server) proveGuard(spec pool.Spec) error {
+	refuse := func(err error) error {
+		return fmt.Errorf("pool %s's spaces are routed, and its guard on %s does not make a route: %w", spec.Name, s.cfg.Guard, err)
+	}
+	acct := s.accounts[spec.First]
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return err
+	}
+	defer devnull.Close()
+	specR, specW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer specW.Close()
+	statusR, statusW, err := os.Pipe()
+	if err != nil {
+		specR.Close()
+		return err
+	}
+	defer statusR.Close()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		specR.Close()
+		statusW.Close()
+		return err
+	}
+	stageRoute, keeperRoute := os.NewFile(uintptr(fds[0]), "probe-route"), os.NewFile(uintptr(fds[1]), "probe-route-keeper")
+	defer keeperRoute.Close()
+	pid, err := syscall.ForkExec(s.self, []string{"cyfr-locus", "stage", stage.ProbeArg}, &syscall.ProcAttr{
+		Dir:   "/",
+		Env:   []string{},
+		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd(), ^uintptr(0), stageRoute.Fd()},
+		Sys:   spaceAttr(false),
+	})
+	specR.Close()
+	statusW.Close()
+	stageRoute.Close()
+	if err != nil {
+		return refuse(fmt.Errorf("cloning its probe: %w", err))
+	}
+	reaped := false
+	reap := func() unix.WaitStatus {
+		var ws unix.WaitStatus
+		for !reaped {
+			if _, err := unix.Wait4(pid, &ws, 0, nil); !errors.Is(err, unix.EINTR) {
+				reaped = true
+			}
+		}
+		return ws
+	}
+	defer func() {
+		if !reaped {
+			_ = unix.Kill(pid, unix.SIGKILL)
+			reap()
+		}
+	}()
+	if err := mapIDs(pid, acct.UID, acct.GID); err != nil {
+		return refuse(err)
+	}
+	probe, err := json.Marshal(stage.Probe{UID: acct.UID, GID: acct.GID, Routed: true, Route: true})
+	if err == nil {
+		_, err = specW.Write(probe)
+	}
+	_ = specW.Close()
+	if err != nil {
+		return refuse(err)
+	}
+	_ = keeperRoute.SetReadDeadline(time.Now().Add(stageTimeout))
+	files, err := receiveRoute(keeperRoute)
+	if err != nil {
+		return refuse(fmt.Errorf("its probe's descriptors: %w", err))
+	}
+	id := randomHex(16)
+	r, err := s.guard.Admit(id, guard.ReachIsland, nil, files[0], files[1], files[2])
+	for _, f := range files {
+		_ = f.Close()
+	}
+	if err != nil {
+		return refuse(err)
+	}
+	if _, err := keeperRoute.Write([]byte{stage.RouteGo}); err != nil {
+		return refuse(err)
+	}
+	_ = statusR.SetReadDeadline(time.Now().Add(stageTimeout))
+	reason, _ := io.ReadAll(io.LimitReader(statusR, 4096))
+	ws := reap()
+	if len(reason) > 0 || !ws.Exited() || ws.ExitStatus() != 0 {
+		return refuse(fmt.Errorf("its probe ended %v: %s", ws, reason))
+	}
+	if err := s.guard.Clear(id, r); err != nil {
+		return refuse(fmt.Errorf("the probe route was not cleared: %w", err))
 	}
 	return nil
 }
@@ -366,6 +488,12 @@ type spawn struct {
 	// reading says a read of the spawn's group is out: no other starts
 	// until it returns.
 	reading atomic.Bool
+	// reach is the spawn's space's, its pool's (package pool).
+	reach string
+	// route is a routed spawn's route, set once the guard admitted it over
+	// a connection that had not ended, and nil again once withdrawn; s.mu
+	// guards it.
+	route *guard.Route
 	// pty is the keeper's own descriptor of the master of the spawn's
 	// pseudo-terminal, which a `resize` sets the size through; nil for a
 	// spawn without one. s.mu guards it once the spawn is in spawns, and
@@ -395,9 +523,9 @@ type server struct {
 	// memory makes the cgroups of memory-bounded spawns; nil where the
 	// keeper cannot, and a spawn asking for a bound is refused.
 	memory *cgroup.Manager
-	// guard holds each spawn's uid to what its request names it may reach
-	// (--guard); nil for a keeper without one, whose spawns name no hosts.
-	guard egressGuard
+	// guard makes each routed space's route (--guard); nil for a keeper
+	// whose pools are all relay pools.
+	guard routeGuard
 
 	// mu guards pools, spawns, places, unremoved and waiters, and is held
 	// across every fork, reap and signal, so a pid is never signalled after
@@ -411,7 +539,21 @@ type server struct {
 	// removes the group: until then its place stays, read as a live
 	// spawn's is, and a pooled uid stays out of its pool.
 	unremoved map[*spawn]*removal
-	waiters   map[int]*child
+	// routing holds every routed spawn from before its admit until its
+	// retirement ends, so the end of the guard's connection finds every
+	// space routed over it (guardLost); lostRoutes names each connection
+	// that ended, so an admit answered over one is never recorded.
+	routing    map[string]*spawn
+	lostRoutes map[uint64]bool
+	// uncleared holds every withdrawn spawn's route the guard has not yet
+	// said cleared, by spawn id, asked again at each sweep.
+	uncleared map[string]guard.Route
+	// exit ends the keeper (os.Exit in production) and groupKilled kills a
+	// spawn's group and answers whether it is empty (killGroup); tests set
+	// either.
+	exit        func(code int)
+	groupKilled func(sp *spawn) bool
+	waiters     map[int]*child
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
 	// retirement and a home request take, so none of them interleaves
@@ -799,21 +941,12 @@ func (s *server) handleSpawn(req *protocol.Request) {
 // answers the code it is refused with, or "" once it is spawned, and the
 // spawn it made in the place, nil when it is refused before it made one.
 func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
-	// A spawn is isolated exactly when its pool is: a client never takes a
-	// command for isolated that is not, nor starts one unisolated from a
-	// pool that isolates every spawn.
-	if spec, ok := s.poolSpec(req.Pool); ok && spec.Isolated != (req.Isolation == protocol.IsolationNetns) {
-		if spec.Isolated {
-			s.log.Warn("spawn %s refused: pool %s is isolated and the spawn does not ask for isolation %s", req.ID, req.Pool, protocol.IsolationNetns)
-		} else {
-			s.log.Warn("spawn %s refused: it asks for isolation, which pool %s does not give", req.ID, req.Pool)
-		}
-		return nil, protocol.CodeBadRequest
-	}
-	// A kept home and a pseudo-terminal are a program's, whose pool shares
-	// the keeper's namespaces.
-	if req.Isolation != "" && (req.HomeMode == protocol.HomeKept || req.Pty != nil) {
-		s.log.Warn("spawn %s refused: an isolated spawn takes no kept home and no pty", req.ID)
+	// A relay pool's space reaches nothing: it takes no hosts, and no kept
+	// home or terminal, which are a program's, whose pool is routed. A pool
+	// the keeper does not serve is refused below, as it always was.
+	spec, known := s.poolSpec(req.Pool)
+	if known && !spec.Routed() && (req.Hosts != nil || req.HomeMode == protocol.HomeKept || req.Pty != nil) {
+		s.log.Warn("spawn %s refused: pool %s's spaces reach nothing, and it names hosts, a kept home or a pty", req.ID, req.Pool)
 		return nil, protocol.CodeBadRequest
 	}
 	if s.memory == nil {
@@ -826,7 +959,7 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 		return nil, code
 	}
 	if req.HomeMode == protocol.HomeKept {
-		return s.startKeptSpawn(req, reach)
+		return s.startKeptSpawn(req, spec.Reach, reach)
 	}
 	s.mu.Lock()
 	p := s.pools[req.Pool]
@@ -838,7 +971,7 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 			if err != nil || c.Total() > 0 {
 				return true
 			}
-			found, err := residue.Find(s.roots, residue.SysvipcDir, uid)
+			found, err := residue.Find(s.roots, uid)
 			return err != nil || !found.Empty()
 		})
 	}
@@ -850,7 +983,7 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 		return nil, protocol.CodeCapacity
 	}
 
-	sp := &spawn{id: randomHex(16), pool: p, account: s.accounts[uid], retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), pool: p, account: s.accounts[uid], reach: spec.Reach, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	name, err := home.NewName(uid)
 	if err != nil {
@@ -859,11 +992,7 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 	}
 	sp.home = filepath.Join(s.cfg.HomeRoot, name)
 
-	if err := s.setEgress(uid, reach); err != nil {
-		s.log.Error("spawn %s on uid %d refused: its egress was not set at the guard: %v", req.ID, uid, err)
-		return sp, protocol.CodeGuardUnavailable
-	}
-	if code, err := s.launch(sp, req); err != nil {
+	if code, err := s.launch(sp, req, reach); err != nil {
 		s.log.Error("spawn %s on uid %d: %v", req.ID, uid, err)
 		return sp, code
 	}
@@ -877,16 +1006,17 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 	return sp, ""
 }
 
-// launch starts the stage as the spawn's uid, waits until it has executed
-// the command, and starts the relay as the client user holding the other
-// ends of the command's pipes and, when the request asks for a control
-// channel, the relay's end of its socketpair; the command's end goes to
-// the stage, which makes it the command's fd 3. An isolated spawn's stage
-// is cloned into a user and network namespace of its own instead, and
-// waits for its spec while the keeper maps its ids and places it in its
-// cgroup, in that order, before the spec releases it. It returns the error
-// code to reply with.
-func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
+// launch starts the spawn's stage, cloned into its space (spaceAttr), maps
+// its ids and places it in its cgroup, in that order, before its spec
+// releases it; a routed space's stage then hands up its namespace and name
+// sockets, and only once the guard has admitted its route (admitRoute) is
+// it told to go on. launch waits until the stage has executed the command,
+// and starts the relay as the client user holding the other ends of the
+// command's pipes and, when the request asks for a control channel, the
+// relay's end of its socketpair; the command's end goes to the stage, which
+// makes it the command's fd 3. A failure kills the stage, which has
+// executed nothing. It returns the error code to reply with.
+func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, error) {
 	var opened []*os.File
 	closeAll := func() {
 		for _, f := range opened {
@@ -933,21 +1063,25 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	}
 	// The control channel is one socketpair: commandCtl becomes the
 	// command's fd 3 (stage.ControlFD to the stage), relayCtl the relay's
-	// relay.ControlFD. An isolated spawn's relay is another: commandRelay
+	// relay.ControlFD. A relay space's relay is another: commandRelay
 	// becomes the command's fd 4 (stage.RelayFD), helperRelay the relay's
 	// relay.RelayFD, so control lines and relay frames never share a
-	// socket. The keeper keeps no end of either.
-	isolated := req.Isolation == protocol.IsolationNetns
-	var commandCtl, relayCtl, commandRelay, helperRelay *os.File
+	// socket. The keeper keeps no end of either. A routed space's route
+	// socket is a third, at the stage's stage.RouteFD, whose other end,
+	// keeperRoute, the keeper holds until the command executes.
+	relayed := sp.reach == pool.ReachRelay
+	var commandCtl, relayCtl, commandRelay, helperRelay, stageRoute, keeperRoute *os.File
 	if req.Control {
 		if commandCtl, relayCtl, err = socketpair("control"); err != nil {
 			return protocol.CodeInternal, err
 		}
 	}
-	if isolated {
+	if relayed {
 		if commandRelay, helperRelay, err = socketpair("relay"); err != nil {
 			return protocol.CodeInternal, err
 		}
+	} else if stageRoute, keeperRoute, err = socketpair("route"); err != nil {
+		return protocol.CodeInternal, err
 	}
 
 	// The spawn's group exists before its stage does, and the stage
@@ -976,6 +1110,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		Env:      req.Env,
 		Limits:   limits(sp.kept, req.Rlimits),
 		Control:  req.Control,
+		Reach:    sp.reach,
 		Cgroup:   group.Path(),
 	})
 	if err != nil {
@@ -1008,32 +1143,33 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		stdinW, stdoutR = masterIn, master
 		_ = stderrW.Close()
 	}
-	// A descriptor of ^0 is closed in the child: an isolated spawn without
-	// a control channel has no stage.ControlFD before its stage.RelayFD.
-	switch {
-	case commandCtl != nil:
+	// A descriptor of ^0 is closed in the child: a spawn without a control
+	// channel has no stage.ControlFD before its stage.RelayFD or
+	// stage.RouteFD.
+	if commandCtl != nil {
 		stageFiles = append(stageFiles, commandCtl.Fd())
 		stageOwned = append(stageOwned, commandCtl)
-	case isolated:
+	} else {
 		stageFiles = append(stageFiles, ^uintptr(0))
 	}
-	if isolated {
+	if relayed {
 		stageFiles = append(stageFiles, commandRelay.Fd())
 		stageOwned = append(stageOwned, commandRelay)
-	}
-	stageArgv := []string{"cyfr-locus", "stage"}
-	var leader *child
-	if isolated {
-		leader, err = s.startWith(s.self, stageArgv, nil, stageFiles, "/", isolatedAttr())
 	} else {
-		leader, err = s.startWith(s.self, stageArgv, nil, stageFiles, "/", &syscall.SysProcAttr{
-			Setsid:     true,
-			Setctty:    pty,
-			Ctty:       0,
-			Credential: &syscall.Credential{Uid: uint32(sp.account.UID), Gid: uint32(sp.account.GID), Groups: []uint32{}},
-			Pdeathsig:  syscall.SIGKILL,
-		})
+		stageFiles = append(stageFiles, stageRoute.Fd())
+		stageOwned = append(stageOwned, stageRoute)
 	}
+	if !relayed {
+		// From here the end of the guard's connection finds this spawn
+		// (guardLost); its retirement removes it.
+		s.mu.Lock()
+		if s.routing == nil {
+			s.routing = map[string]*spawn{}
+		}
+		s.routing[sp.id] = sp
+		s.mu.Unlock()
+	}
+	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, stageFiles, "/", spaceAttr(pty))
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -1041,14 +1177,18 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	for _, f := range stageOwned {
 		_ = f.Close()
 	}
-	// An isolated stage waits for its spec still holding the keeper's ids,
-	// which retirement under the pooled uid cannot end: it is killed here
-	// if the keeper cannot map it.
-	if isolated {
-		if err := mapIDs(leader.pid, sp.account.UID, sp.account.GID); err != nil {
+	// The stage waits for its spec still holding the keeper's ids, which
+	// retirement under the pooled uid cannot end, and, routed, for its
+	// route's word: it is killed here on every failure before the command
+	// executes.
+	started := false
+	defer func() {
+		if !started {
 			s.signalChild(leader, unix.SIGKILL)
-			return protocol.CodeInternal, err
 		}
+	}()
+	if err := mapIDs(leader.pid, sp.account.UID, sp.account.GID); err != nil {
+		return protocol.CodeInternal, err
 	}
 	if sp.group != nil {
 		if err := sp.group.Add(leader.pid); err != nil {
@@ -1061,6 +1201,11 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		return protocol.CodeExecFailed, err
 	}
 	_ = specW.Close()
+	if !relayed {
+		if code, err := s.admitRoute(sp, keeperRoute, e); err != nil {
+			return code, err
+		}
+	}
 	_ = statusR.SetReadDeadline(time.Now().Add(stageTimeout))
 	reason, err := io.ReadAll(io.LimitReader(statusR, 4096))
 	if err != nil {
@@ -1069,6 +1214,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	if len(reason) > 0 {
 		return protocol.CodeExecFailed, errors.New("stage: " + string(reason))
 	}
+	started = true
 
 	relaySpecR, relaySpecW, err := pipe()
 	if err != nil {
@@ -1079,7 +1225,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		return protocol.CodeInternal, err
 	}
 	opened = append(opened, devnull)
-	relaySpec, err := json.Marshal(relay.Spec{Path: req.Attach.Path, Token: req.Attach.Token, Control: req.Control, Relay: isolated})
+	relaySpec, err := json.Marshal(relay.Spec{Path: req.Attach.Path, Token: req.Attach.Token, Control: req.Control, Relay: relayed})
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -1087,10 +1233,10 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	switch {
 	case relayCtl != nil:
 		relayFiles = append(relayFiles, relayCtl.Fd())
-	case isolated:
+	case relayed:
 		relayFiles = append(relayFiles, ^uintptr(0))
 	}
-	if isolated {
+	if relayed {
 		relayFiles = append(relayFiles, helperRelay.Fd())
 	}
 	relayProc, err := s.start(s.self, []string{"cyfr-locus", "relay"}, helperEnviron(), relayFiles,
@@ -1203,6 +1349,9 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				paths = []string{sp.home}
 			}
 			clean := s.scrub(sp.account, grace, paths, "")
+			// Its processes are gone, or past every kill: its route carries
+			// nothing more.
+			s.withdrawRoute(sp)
 			// The relay's end is its own and its reader's: it has handed the
 			// reader the end of every stream, which closes once the spawn's
 			// processes are gone, or the reader has closed its connection.
@@ -1219,12 +1368,6 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			// to its pool only once the group is removed: the next spawn
 			// under the uid takes the group's name.
 			removed := s.removeSpawnGroup(sp)
-			// A clean uid's egress is cleared before the pool may give it to
-			// another spawn, whose own setting it would otherwise race; a
-			// quarantined one keeps its rules while anything of it remains.
-			if clean && removed {
-				s.clearEgress(uid)
-			}
 
 			s.mu.Lock()
 			switch {
@@ -1280,11 +1423,11 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 	}
 	delete(s.spawns, sp.id)
 	delete(s.places, sp.place)
+	delete(s.routing, sp.id)
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends
-// its processes and removes its IPC objects, its message queues and the
-// given paths; then the keeper looks for anything else the uid owns on the
+// its processes and removes its message queues and the given paths; then the keeper looks for anything else the uid owns on the
 // writable mounts and retires it again with what it found. It reports
 // whether the uid is clean.
 func (s *server) scrub(acct Account, grace time.Duration, paths []string, except string) bool {
@@ -1295,7 +1438,7 @@ func (s *server) scrub(acct Account, grace time.Duration, paths []string, except
 		if !s.waitClear(acct.UID) {
 			return false
 		}
-		found, err := residue.FindExcept(s.roots, residue.SysvipcDir, acct.UID, except)
+		found, err := residue.FindExcept(s.roots, acct.UID, except)
 		if err != nil {
 			s.log.Error("uid %d: looking for what it left: %v", acct.UID, err)
 			return false
@@ -1304,8 +1447,8 @@ func (s *server) scrub(acct Account, grace time.Duration, paths []string, except
 			return true
 		}
 		if pass == scrubPasses {
-			s.log.Warn("uid %d: %d entries (truncated: %t), %d IPC objects and %d message queues outlived retirement",
-				acct.UID, len(found.Paths), found.Truncated, len(found.IPC), len(found.Queues))
+			s.log.Warn("uid %d: %d entries (truncated: %t) and %d message queues outlived retirement",
+				acct.UID, len(found.Paths), found.Truncated, len(found.Queues))
 			return false
 		}
 		paths, grace = found.Paths, 0
@@ -1397,6 +1540,9 @@ func (s *server) sweep() {
 	}
 	s.mu.Unlock()
 	s.sweepKept()
+	if s.guard != nil {
+		s.retryClears()
+	}
 	for _, e := range todo {
 		if !s.scrub(s.accounts[e.uid], 0, nil, "") {
 			continue
@@ -1416,9 +1562,6 @@ func (s *server) sweep() {
 		if stays {
 			continue
 		}
-		// Its rules stood while anything of it remained; it is cleared
-		// before the pool gives it to another spawn.
-		s.clearEgress(e.uid)
 		s.mu.Lock()
 		_ = e.pool.Release(e.uid)
 		s.mu.Unlock()

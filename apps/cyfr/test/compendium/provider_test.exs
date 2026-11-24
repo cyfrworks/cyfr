@@ -79,7 +79,7 @@ defmodule Compendium.ProviderTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{:rand.uniform(100_000)}")
+    test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{System.unique_integer([:positive])}")
     File.mkdir_p!(test_dir)
     original_base_path = Application.fetch_env!(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)

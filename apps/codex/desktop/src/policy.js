@@ -4,15 +4,19 @@
 // What the app's windows may load, open and be granted: decisions on
 // addresses and headers alone, so each is tested without a window.
 //
-// Two kinds of session hold pages. A content session holds the device's
-// pages on loopback and, once cyfr opened it, the CYFR selected:
-// one kept across launches on the passkey road, as a browser's is, and
-// otherwise memory-only and new at each lock. The account session, kept across
-// launches, holds the selected CYFR's account service's sign-in page, its
-// page that makes an account and the sign-in's recovery continuation alone,
-// opened when a page of that CYFR hops there with a sign-in or
+// Three kinds of session hold pages. The app's own, in memory, holds the
+// rail and the chooser. A content session holds the device's pages on
+// loopback and, once cyfr opened it, the CYFR selected: on the passkey
+// road one kept across launches for each CYFR (homePartition), as a
+// browser's is, and otherwise memory-only and new at each lock. An
+// account session, kept across launches, one for each CYFR and account
+// service (accountPartition), holds that account service's sign-in page,
+// its page that makes an account and the sign-in's recovery continuation
+// alone, opened when a page of that CYFR hops there with a sign-in or
 // confirmation it issued; the answer comes back only to the session that
 // hopped.
+
+import {createHash} from "node:crypto"
 
 import {isHome} from "../../../cyfr/assets/account/encoding.js"
 import {parseFragment, readRequest} from "../../../cyfr/assets/account/sign_in.js"
@@ -31,6 +35,35 @@ const HOPS = {
   }},
 }
 const ACCOUNT_PAGES = [...Object.keys(HOPS), "/account/recover"]
+
+// An origin's name in a partition: the lowercase hex SHA-256 of its one
+// spelling, so two CYFRs differing in scheme, host or port never share
+// one, and a partition never changes its owner.
+const digest = (origin) => createHash("sha256").update(origin, "ascii").digest("hex")
+
+/** The kept content storage of the CYFR at `home`, on the passkey road. */
+export const homePartition = (home) => `persist:cyfr-home-v2-${digest(home)}`
+
+/** The kept storage of account service `account`'s ceremonies for the CYFR at `home`. */
+export const accountPartition = (home, account) => `persist:cyfr-account-v2-${digest(home)}-${digest(account)}`
+
+/**
+ * What a press on the rail asks of main, from the address the rail's page
+ * navigates to, which main answers and never loads: select or menu (the
+ * row's menu) of a CYFR, named by its origin, or connect or setup. Any
+ * other address is none (null).
+ */
+export function railPress(address) {
+  const u = parse(address)
+  if (!u || u.origin !== LOOPBACK || u.hash || u.username || u.password) return null
+  const act = {"/rail/select": "select", "/rail/menu": "menu", "/rail/connect": "connect", "/rail/setup": "setup"}[u.pathname]
+  if (!act) return null
+  const keys = [...u.searchParams.keys()]
+  if (act === "connect" || act === "setup") return u.search === "" ? {act} : null
+  const home = u.searchParams.get("cyfr")
+  return keys.length === 1 && keys[0] === "cyfr" && isHome(home) ? {act, home} : null
+}
+
 
 /** The address parsed, or null. */
 export function parse(address) {
@@ -66,9 +99,14 @@ export function contentNavigation({url, target, asker, showing}, state) {
   if (!u) return "block"
   if (target !== "top") return asker === "frame-outside" ? "block" : frameLoad(u, state)
   if (asker === "frame-inside" || asker === "frame-outside") return "block"
-  if (chooserPath(u)) return "block"
+  if (chooserPath(u) || railPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
-  if (!state.home) return "block"
+  // The chooser goes on to the device's pages alone: its view's storage is
+  // memory's, so a CYFR's page there, its sign-in above all, would be lost
+  // at the next start. Main opens the CYFR in its own view (states.js
+  // ACTS reopen).
+  const from = parse(showing)
+  if (!state.home || (from && chooserPath(from))) return "block"
   if (ceremony(u, state)) {
     return Object.hasOwn(HOPS, u.pathname) && state.accountRoad && asker === "top" &&
       parse(showing)?.origin === state.home ? "hop" : "block"
@@ -82,21 +120,24 @@ export function contentNavigation({url, target, asker, showing}, state) {
 // origin.
 function frameLoad(u, state) {
   if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
-  if (chooserPath(u)) return "block"
+  if (chooserPath(u) || railPath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home || ceremony(u, state)) return "block"
   return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
 }
 
-// Whether u is one of the chooser's addresses as cyfr reads them, which
-// is unescaped: main alone loads the chooser (its loads ask no policy), so
-// what it says on main's behalf comes with main's load and no other.
-function chooserPath(u) {
+// Whether u is one of the chooser's addresses, or the rail's, as cyfr
+// reads them, which is unescaped: main alone loads those pages (its loads
+// ask no policy), the rail in a view of its own, so what one says on
+// main's behalf comes with main's load and no other.
+const chooserPath = (u) => cyfrsOwn(u, "/bootstrap")
+const railPath = (u) => cyfrsOwn(u, "/rail")
+function cyfrsOwn(u, prefix) {
   if (u.origin !== LOOPBACK) return false
   try {
-    return decodeURIComponent(u.pathname).startsWith("/bootstrap")
+    return decodeURIComponent(u.pathname).startsWith(prefix)
   } catch {
-    return true // not readable here, and cyfr may read it as the chooser's
+    return true // not readable here, and cyfr may read it as the page's
   }
 }
 
@@ -216,7 +257,7 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
     out["Content-Security-Policy"] = [...csp, "worker-src 'none'"]
   } else {
     if (policies.length) out["Permissions-Policy"] = policies
-    out["Content-Security-Policy"] = [...csp, "frame-src 'none'"]
+    out["Content-Security-Policy"] = [...csp, "frame-src 'none'", "worker-src 'none'"]
   }
   return out
 }
@@ -224,13 +265,14 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 /**
  * The switches the app takes on its command line: the selected CYFR's
  * route, which main relaunches itself with, the box's screen's project
- * (screenProject) and the folder cyfr setup opened the app in
- * (setupProject). The route moves where traffic goes and nothing more:
+ * (screenProject), the folder cyfr setup opened the app in
+ * (setupProject) and --quit, which asks the app this account runs to end
+ * (app.js). The route moves where traffic goes and nothing more:
  * the origin checks and certificate validation still decide what loads.
  * The engine takes every other switch, from opening a debugging port to
  * trusting any certificate, so the app refuses them all.
  */
-export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project"]
+export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project", "quit"]
 
 /**
  * Whether `value` names a folder explicitly on `platform`, as the system

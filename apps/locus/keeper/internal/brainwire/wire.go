@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 4, a driver's side, for
-// every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex):
+// Package brainwire is the brain wire, version 5, a driver's side, for
+// every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex, cmd/cyfr-acp):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
 // from the holder on standard input, events go to it on standard output,
@@ -23,12 +23,13 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
 
 const (
-	Version      = 4
+	Version      = 5
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -137,6 +138,7 @@ var Events = map[string]Spec{
 		map[string]fieldType{"session": tID, "fresh": tBoolean, "held": tIDs, "account": tAccount}},
 	"gone":     {[]string{"t"}, nil, map[string]fieldType{}},
 	"accepted": {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
+	"later":    {[]string{"t", "id"}, nil, map[string]fieldType{"id": tID}},
 	"refused": {[]string{"t", "id", "reason"}, []string{"account"},
 		map[string]fieldType{"id": tID, "reason": tString, "account": tSignedOut}},
 	"text": {[]string{"t", "gen", "message", "delta"}, []string{"work"},
@@ -199,6 +201,18 @@ func StrictUnmarshal(data []byte, v any) error {
 		return ErrUnreadable
 	}
 	return nil
+}
+
+// UntilWords say when a limit a program reported lifts, `resets` its Unix
+// time in seconds: "it lifts at 11:16 UTC on 24 November 2026", or "ask
+// again later" when the program named none (0). The drivers' own words:
+// the person reads them in a turn's error, and their time zone is not the
+// box's to know, so the time is UTC.
+func UntilWords(resets int64) string {
+	if resets <= 0 {
+		return "ask again later"
+	}
+	return "it lifts at " + time.Unix(resets, 0).UTC().Format("15:04 UTC on 2 January 2006")
 }
 
 // Str is a member a read message holds as a string, or "".

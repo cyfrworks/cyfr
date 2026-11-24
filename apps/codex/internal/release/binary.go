@@ -33,7 +33,7 @@ const (
 	// the binary it holds, each far above what a release ships.
 	maxArchiveSize = 256 << 20
 	maxBinarySize  = 512 << 20
-	// maxPackageSize bounds the CYFR app's package, which carries its
+	// maxPackageSize bounds the CYFR app's installer, which carries its
 	// engine, as downloaded.
 	maxPackageSize = 512 << 20
 )
@@ -93,10 +93,17 @@ func ArchiveName(version, goos, goarch string) string {
 	return fmt.Sprintf("cyfr_%s_%s_%s.%s", version, goos, goarch, ext)
 }
 
-// PackageName is the CYFR app's Linux package the release ships for an
-// architecture, as .goreleaser.yml's extra files name it.
-func PackageName(version, goarch string) string {
-	return fmt.Sprintf("cyfr-desktop_%s_linux_%s.deb", version, goarch)
+// packageFormats are the CYFR app's installers by system, as
+// desktop/scripts/build.mjs makes them: a DEB for Linux, a DMG for macOS
+// and an MSI for Windows.
+var packageFormats = map[string]string{"linux": "deb", "darwin": "dmg", "windows": "msi"}
+
+// PackageName is the CYFR app's installer the release ships for a system
+// and an architecture, as desktop/scripts/build.mjs names it
+// (cyfr-desktop_VERSION_OS_ARCH.EXT). A system with no installer has a
+// name no release ships, so asking for it is refused as a missing entry.
+func PackageName(version, goos, goarch string) string {
+	return fmt.Sprintf("cyfr-desktop_%s_%s_%s.%s", version, goos, goarch, packageFormats[goos])
 }
 
 // BinaryName is the CLI's file name in its archive on goos.
@@ -124,18 +131,18 @@ func FetchBinary(ctx context.Context, version, goos, goarch string) ([]byte, err
 }
 
 // PackageChecksum answers the sha256 release version's signed checksums.txt
-// names for its CYFR app package for Linux on goarch (assetChecksum),
-// reading nothing else of the release. A release with no package for
-// goarch refuses with ErrUnverified.
-func PackageChecksum(ctx context.Context, version, goarch string) (string, error) {
-	return assetChecksum(ctx, version, PackageName(version, goarch))
+// names for its CYFR app installer for goos on goarch (assetChecksum),
+// reading nothing else of the release. A release with no installer for
+// them refuses with ErrUnverified.
+func PackageChecksum(ctx context.Context, version, goos, goarch string) (string, error) {
+	return assetChecksum(ctx, version, PackageName(version, goos, goarch))
 }
 
-// FetchPackage downloads release version's CYFR app package for Linux on
+// FetchPackage downloads release version's CYFR app installer for goos on
 // goarch and answers its bytes once their sha256 is want, the sum
 // PackageChecksum answered (fetchAsset).
-func FetchPackage(ctx context.Context, version, goarch, want string) ([]byte, error) {
-	return fetchAsset(ctx, version, PackageName(version, goarch), want, maxPackageSize)
+func FetchPackage(ctx context.Context, version, goos, goarch, want string) ([]byte, error) {
+	return fetchAsset(ctx, version, PackageName(version, goos, goarch), want, maxPackageSize)
 }
 
 // fetchVerified answers release version's asset, at most limit bytes, once

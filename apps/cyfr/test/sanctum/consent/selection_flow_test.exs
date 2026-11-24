@@ -511,7 +511,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     # A revoked lender is not offered and not accepted.
     :ok =
-      Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), lenders.work, :any, "revoked")
+      Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), lenders.work)
 
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
     [%{candidates: candidates}] = plan.dependency_needs
@@ -543,7 +543,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     # Revoking the lender's profile is one act that reaches every source
     # selecting it: the edge stays a selection no run can unseal.
     :ok =
-      Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), lenders.default, :any, "revoked")
+      Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), lenders.default)
 
     assert %{via: %{label: "default"}} = edge_vault(ctx, ref)
   end
@@ -1451,7 +1451,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert via_b.resources.vault.entry_id == work_id
 
     :ok =
-      Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), lenders.work, :any, "revoked")
+      Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), lenders.work)
 
     assert %{entry_id: ^home_id} = root_edge_vault(ctx, @role_a)
     assert %{via: %{label: "work"}} = root_edge_vault(ctx, @role_b)

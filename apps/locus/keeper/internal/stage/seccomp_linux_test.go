@@ -66,7 +66,7 @@ func TestRunnerFilterDecidesEveryCall(t *testing.T) {
 		"s390x": {audit: unix.AUDIT_ARCH_S390X, cloneFlags: 1, bigEndian: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			raw, err := runnerFilter(arch, calls)
+			raw, err := spaceFilter(arch, calls)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -221,7 +221,7 @@ func TestSeccompHelperProcess(t *testing.T) {
 		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 			t.Fatal(err)
 		}
-		if err := installRunnerFilter(); err != nil {
+		if err := installSpaceFilter(); err != nil {
 			t.Fatal(err)
 		}
 		t.Fatal(syscall.Exec(os.Args[0], os.Args, helperEnviron("filtered")))

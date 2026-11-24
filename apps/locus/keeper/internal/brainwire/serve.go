@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -87,6 +88,11 @@ func (c *Conn) RefuseSignedOut(id, reason string) error {
 // Accept answers the command `id`: the harness took it.
 func (c *Conn) Accept(id string) error { return c.Emit(NewEvent("accepted").Set("id", id)) }
 
+// Later answers the post `id`: it was not written, since the harness takes
+// a message only between its native turns, and it is still the holder's,
+// which writes it again once the native turn's `idle` has come.
+func (c *Conn) Later(id string) error { return c.Emit(NewEvent("later").Set("id", id)) }
+
 // Driver is one harness's side of a driver: Serve hands it each command
 // the wire read and each line of its harness's.
 type Driver interface {
@@ -101,6 +107,14 @@ type Driver interface {
 	Ended() error
 	// Close closes the harness, if one runs.
 	Close()
+	// Deadline is when an answer the driver waits on from its harness is
+	// overdue, or nil when it waits on none; Expired handles its passing.
+	Deadline() <-chan time.Time
+	Expired() error
+	// Inbox carries what the driver's own goroutines hand the loop (a
+	// harness's call of CYFR's tools through its socket, cmd/cyfr-acp),
+	// each run in the loop as a command is, or nil for none.
+	Inbox() <-chan func() error
 }
 
 // Serve speaks the wire on in and c's output until in ends, the harness
@@ -130,6 +144,10 @@ func Serve(c *Conn, d Driver, in io.Reader, stop <-chan os.Signal) int {
 			err = d.Line(line)
 		case <-exited:
 			err = d.Ended()
+		case <-d.Deadline():
+			err = d.Expired()
+		case handed := <-d.Inbox():
+			err = handed()
 		case <-stop:
 			d.Close()
 			return 0

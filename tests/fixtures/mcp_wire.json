@@ -67,9 +67,9 @@
       "headers": {"Mcp-Method": "tools/call", "Mcp-Name": "=?base64??="}
     },
     {
-      "why": "prompts/get names no subject: the server implements no prompts",
+      "why": "prompts/get names its prompt, as the specification's standard request headers list it",
       "request": {"method": "prompts/get", "params": {"name": "summarize"}},
-      "headers": {"Mcp-Method": "prompts/get", "Mcp-Name": null}
+      "headers": {"Mcp-Method": "prompts/get", "Mcp-Name": "summarize"}
     }
   ],
   "error_codes": {

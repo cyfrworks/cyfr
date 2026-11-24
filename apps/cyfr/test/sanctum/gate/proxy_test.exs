@@ -34,12 +34,15 @@ defmodule Sanctum.Gate.ProxyTest.Stub do
     do: [%{"name" => "stub:echo", "description" => "stub", "inputSchema" => %{}}]
 
   @impl true
-  def tool_patterns(_ctx, server_names),
-    do: {:ok, for(name <- server_names, name == "stub", into: %{}, do: {name, ["*"]})}
-
-  @impl true
   def list_external_tools(ctx, _server_names),
-    do: [%{server_name: "stub", server_digest: nil, tools: list_external_tools(ctx)}]
+    do: [
+      %{
+        server_name: "stub",
+        server_digest: nil,
+        tool_patterns: ["*"],
+        tools: list_external_tools(ctx)
+      }
+    ]
 end
 
 defmodule Sanctum.Gate.ProxyTest.Partial do
