@@ -34,6 +34,7 @@ For each script `home.sh` starts afresh, in the pairing proof's topology
 | `separate` | `x.test`, reading accounts at the account directory `dir.test` (`CYFR_DIRECTORY_SERVE=writer`) and names there |
 | `self` | `x.test` serving its own account pages: the CYFR and its account service share one origin |
 | `company` | `x.test` serving its own account pages and requiring a company sign-in (`CYFR_COMPANY_LOGIN=join`) at the OIDC issuer `idp.test`, a front with nothing behind it, which only records what reaches it. Only the client is told that front's address, so every request there is the client's and counts |
+| `pair` | `separate`'s two, with `dir.test` set up as a CYFR of its own too, its people's accounts at itself, with a setup token of its own: two CYFRs of one account. A CYFR's public address carries no port, so the two differ by name |
 
 Each has a setup token of the run's own.
 
@@ -253,6 +254,37 @@ page at that same origin, and the ceremony ends).
 The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it
 stays with both ways on, and with a notice to show it stays on either road
 until a way on is taken.
+
+## `pair/`: two CYFRs in one window (shape `pair`)
+
+The passkey road with two CYFRs: A, `x.test`, whose account service is
+`dir.test`, and B, `dir.test` itself. One account sets up both on the
+second client; the app's account window is given that account's passkey,
+as the person's platform keeps it. B's pages and A's sign-in ceremonies
+share `dir.test`'s origin, each in a store of its own. Each front records
+the names of the cookies each request carried, never their values, and
+when each upgrade's connection closed. Three launches: `pair`, ended by a
+kill while B is being selected; `selected`, ended by a kill while B is
+being erased; `resumed`, ended by the system.
+
+| Row | What holds | What the row observes |
+|---|---|---|
+| `two_set_up` | one account sets up both CYFRs | the second client at each CYFR's own page |
+| `a_signed_in` | Sign in with your passkey on A's chooser opens A's sign-in page in A's own view and store, and Prism opens signed in there | the view and its store; A's session cookie |
+| `b_signed_in` | Connect on the rail leaves A; B's sign-in opens in B's own view and store | as `a_signed_in`, at B |
+| `a_socket_first` | A's live socket is closed at A's server before the app's first request reaches B | A's front: each upgrade open at the press and when it closed; B's front: the app's first request after the press |
+| `apart` | each CYFR's store holds its own alone; B's pages, at A's account service's origin, carry nothing A's ceremonies keep there, and A's front sees nothing of B's | each store's cookies by name and site and its local storage at both origins; the cookie names each front saw on the app's requests |
+| `a_again` | A on the rail opens A again under the session it had, asking nothing | the session cookie's digest and expiry before and after; A's store |
+| `read_only` | the rail's page keeps its read credential alone, in no address, and `cyfr` refuses it every change | the rail's own requests with that credential, each 403; its session storage's keys; its address |
+| `sign_out_alone` | Sign out at A ends A's session alone | A's cookie refused; B's still opening B |
+| `kill_selecting` | killed while B is being selected, A left, the app opens A again by itself; both stay signed in | the view and store; each store's session against the first launch's mark, and each opening its CYFR; the rail |
+| `forget_resumed` | Forget of B, killed while B's store is erased, is finished at the next start; A is as it was | B's content and ceremony stores empty; A's marks and session; the rail without B |
+| `unleft` | a `cyfr` that does not let go of the CYFR left in 20 s is ended, and a fresh one opens nothing; A's sign-in is kept | the chooser's sentence no sooner than 20 s after the press; a fresh `cyfr` process; no load of A after the press; A's session |
+| `system_quit` | ended by the system at the chooser, the app quits, and never from inside the engine's `before-quit` | as `passkey/`'s |
+
+A late or a second `left`, which a `cyfr` that keeps to the wire never
+sends, are the app's own tests' (main.test.mjs, states.test.mjs), as are
+two CYFRs that differ by port alone.
 
 Every script with a `proof.js` has one row more, `unprinted`, in its
 `app-NAME.log`: nothing the app printed carries an address's fragment or

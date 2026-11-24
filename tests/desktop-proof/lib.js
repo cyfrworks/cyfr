@@ -208,14 +208,14 @@ export async function fault(host, mode, fields = {}) {
 
 export let probes = 0
 
-// Whether the session cookie `value` still opens a page of the CYFR, asked
-// from a session of the proof's own holding that cookie alone.
-export async function opens(value) {
+// Whether the session cookie `value` still opens a page of the CYFR at
+// `at`, asked from a session of the proof's own holding that cookie alone.
+export async function opens(value, at = HOME) {
   const probe = session.fromPartition(`proof-probe-${++probes}`)
   probe.setUserAgent(PROBE)
-  await probe.cookies.set({url: HOME, name: "_cyfr_key", value, secure: true})
+  await probe.cookies.set({url: at, name: "_cyfr_key", value, secure: true})
   return new Promise((resolve, reject) => {
-    const r = net.request({url: HOME + "/", session: probe, useSessionCookies: true, redirect: "manual"})
+    const r = net.request({url: at + "/", session: probe, useSessionCookies: true, redirect: "manual"})
     r.on("redirect", (status, _method, location) => {
       resolve({status, location, opens: false})
       r.abort()
@@ -230,10 +230,10 @@ export async function opens(value) {
 }
 
 // A probe's answer is a refusal when the CYFR sends it to its sign-in.
-export const refused = (answer) => !answer.opens && [302, 303].includes(answer.status) && new URL(answer.location, HOME).pathname === "/login"
+export const refused = (answer, at = HOME) => !answer.opens && [302, 303].includes(answer.status) && new URL(answer.location, at).pathname === "/login"
 
-export async function sessionCookie(w) {
-  const cookies = await w.webContents.session.cookies.get({url: HOME, name: "_cyfr_key"})
+export async function sessionCookie(w, at = HOME) {
+  const cookies = await w.webContents.session.cookies.get({url: at, name: "_cyfr_key"})
   return cookies[0]?.value ?? null
 }
 
@@ -531,8 +531,8 @@ export function reloaded(w) {
 
 // What tells one session cookie from another, and when it ends, with
 // nothing of the cookie itself.
-export async function sessionMark(w) {
-  const [cookie] = await w.webContents.session.cookies.get({url: HOME, name: "_cyfr_key"})
+export async function sessionMark(w, at = HOME) {
+  const [cookie] = await w.webContents.session.cookies.get({url: at, name: "_cyfr_key"})
   return cookie ? {digest: createHash("sha256").update(cookie.value).digest("hex").slice(0, 16), expires: cookie.expirationDate ?? null} : null
 }
 
