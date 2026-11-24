@@ -225,9 +225,11 @@ func geminiPath(home string, steps ...string) homepath.Path {
 // is its own steer request. It shows no MCP server's tool to its model as a
 // tool: CYFR's, like a person's, are called from JavaScript inside its own
 // tool `execute`, so the person sees `execute` running, and each of CYFR's
-// calls in it as an ask beside it. It takes no instructions for one process
-// that a resumed session reads again (it keeps those a session was made
-// with), so they lead a session's first prompt (instructions.go). Its
+// calls in it as an ask beside it. Its one place for a process's
+// instructions keeps those a session was made with, so CYFR's instructions
+// are its lack: they reach it as the opening of a session's first message,
+// not as its system text, and a change to them reaches a session already
+// made the same way, in its next message (instructions.go). Its
 // prompt's usage leaves out its title request and a sub-agent's work, and
 // names no cache writes. While its provider cannot be reached it retries
 // without end, saying so only in session_info_update notices, which the
