@@ -197,7 +197,9 @@ defmodule Opus.ProviderTest do
                {:error,
                 {:consent_required, %{cause: :no_grant, ref: "reagent:local.never-granted"}}}
 
-      {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "reagent:local.test-math")
+      # The person revokes it.
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, "reagent:local.test-math")
+      :ok = Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), profile_id)
 
       assert run(ctx, ref) ==
                {:error, {:consent_required, %{cause: :revoked, ref: "reagent:local.test-math"}}}

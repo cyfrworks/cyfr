@@ -9,7 +9,9 @@ defmodule Compendium.ScaffoldTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_scaffold_test_#{:rand.uniform(100_000)}")
+    test_dir =
+      Path.join(System.tmp_dir!(), "cyfr_scaffold_test_#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(test_dir)
     prev_base = Application.fetch_env!(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)

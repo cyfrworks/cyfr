@@ -23,6 +23,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -199,6 +200,18 @@ func StrictUnmarshal(data []byte, v any) error {
 		return ErrUnreadable
 	}
 	return nil
+}
+
+// UntilWords say when a limit a program reported lifts, `resets` its Unix
+// time in seconds: "it lifts at 11:16 UTC on 24 November 2026", or "ask
+// again later" when the program named none (0). The drivers' own words:
+// the person reads them in a turn's error, and their time zone is not the
+// box's to know, so the time is UTC.
+func UntilWords(resets int64) string {
+	if resets <= 0 {
+		return "ask again later"
+	}
+	return "it lifts at " + time.Unix(resets, 0).UTC().Format("15:04 UTC on 2 January 2006")
 }
 
 // Str is a member a read message holds as a string, or "".

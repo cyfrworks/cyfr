@@ -9,9 +9,8 @@ defmodule Prima.LocusRolesTest do
   run: no two roles share a name, a pool, a service, a container, a
   network, a user prefix, a port or a guard, and no guard is named as a
   service; their uid ranges are disjoint and none holds the release's uid;
-  every isolation is one the keeper knows; a role whose spawns share the
-  island's network has a guard and the runtime, whose runners have none,
-  has none; the image serves one of the roles; and each fixed address,
+  every reach is one the keeper knows; a routed role has a guard and the
+  runtime, whose runners reach nothing but their relays, has none; the image serves one of the roles; and each fixed address,
   the endpoint's loopback listener's on its network and its proxy
   listener's, Caddy's and Tailscale's on edge, lies in its subnet, outside
   the range the subnet's other containers draw from, and apart from the
@@ -19,7 +18,7 @@ defmodule Prima.LocusRolesTest do
   """
   use ExUnit.Case, async: true
 
-  alias Prima.{KeeperProtocol, LocusRoles}
+  alias Prima.LocusRoles
 
   @vectors Path.expand("../../../../tests/fixtures/locus_roles.json", __DIR__)
            |> File.read!()
@@ -28,8 +27,8 @@ defmodule Prima.LocusRolesTest do
   @release_keys ~w(bin edge_address edge_caddy_address edge_ip_range edge_network edge_subnet
                    edge_tailscale_address endpoint_address endpoint_ip_range endpoint_network
                    endpoint_subnet home_root image_role memory run_dir run_size uid user)
-  @role_keys ~w(container first_uid guard home_size isolation kept_first_uid kept_last_uid
-                kept_root kept_volume last_uid memory name network pool port profile service
+  @role_keys ~w(container first_uid guard home_size kept_first_uid kept_last_uid
+                kept_root kept_volume last_uid memory name network pool port profile reach service
                 user_prefix)
   @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
                           socket_queue_bytes)
@@ -101,17 +100,20 @@ defmodule Prima.LocusRolesTest do
     assert guards -- Enum.map(roles, & &1.service) == guards, "a guard is named as a service"
   end
 
-  # The runtime's runners have no network, so nothing of theirs leaves to
-  # be guarded; a build or a backend shares its island's network and
-  # leaves through the island's guard.
-  test "a role whose spawns share the island's network has a guard, and the runtime has none" do
+  # The runtime's runners reach nothing but their relays, so nothing of
+  # theirs leaves to be guarded; a build or a backend leaves through the
+  # route its island's guard makes for its space.
+  test "a routed role has a guard, and the runtime, a relay role, has none" do
     for role <- LocusRoles.roles() do
-      if role.isolation == nil do
+      if role.reach == "routed" do
         assert is_binary(role.guard) and role.guard != "", "#{role.name} has no guard"
       else
-        assert role.guard == nil, "#{role.name}'s isolated spawns need no guard"
+        assert role.guard == nil, "#{role.name}'s relay spaces need no guard"
       end
     end
+
+    assert Enum.map(LocusRoles.roles(), &{&1.name, &1.reach}) ==
+             [runtime: "relay", builds: "routed", backends: "routed"]
   end
 
   test "the endpoint's fixed address lies in its subnet, outside the range the other containers draw from" do
@@ -208,10 +210,9 @@ defmodule Prima.LocusRolesTest do
     assert LocusRoles.release().memory.byte_cost >= 1.0
   end
 
-  test "every isolation is one the keeper knows, and the image serves one of the roles" do
+  test "every reach is one the keeper knows, and the image serves one of the roles" do
     for role <- LocusRoles.roles() do
-      assert role.isolation == nil or role.isolation in KeeperProtocol.isolations(),
-             "#{role.name}'s isolation #{inspect(role.isolation)}"
+      assert role.reach in LocusRoles.reaches(), "#{role.name}'s reach #{inspect(role.reach)}"
     end
 
     assert LocusRoles.release().image_role in LocusRoles.names()

@@ -406,6 +406,7 @@ const FIELDS = {
     kind: exact,
     label: exact,
     status: exact,
+    revoked_by: exact,
     head_consent_id: minted(ADMISSION),
     inserted_at: clock,
     updated_at: clock,
@@ -895,7 +896,7 @@ async function main() {
     });
     const profileRow = (head) => ({
       id: profileId, athanor_id: person.athanor_id, source_ref: APP, kind: "owner", label: "default", status: "active",
-      head_consent_id: head, inserted_at: IN_WINDOW, updated_at: IN_WINDOW,
+      revoked_by: null, head_consent_id: head, inserted_at: IN_WINDOW, updated_at: IN_WINDOW,
     });
     // A consent row as the model holds it: the revision a commit of her
     // decisions writes, with what the owner's builders derive for them. A

@@ -93,10 +93,12 @@ def expected_service(name, base, dev, project, image):
         want["ports"] = [
             {"mode": "ingress", "host_ip": "127.0.0.1", "target": 4200, "published": published, "protocol": "tcp"}
         ]
+    if not name.endswith("-guard"):
+        # Every Locus service names the keeper's profile at its tracked path.
         want["security_opt"] = [
             f"seccomp=./{PROFILE}" if opt.startswith("seccomp=") else opt for opt in base["security_opt"]
         ]
-    elif name.endswith("-guard"):
+    if name.endswith("-guard"):
         island = name.removesuffix("-guard")
         address = dev["services"][name].get("networks", {}).get(island, {}).get("ipv4_address")
         want["environment"] = dict(base["environment"], CYFR_GUARD_CONTROL_PLANE=gateway(dev, island))
@@ -128,11 +130,12 @@ def shape(base_path, dev_path, checkout, project, image):
         diff(f"services.{name}", dev["services"][name], want, errors)
     for name in NETWORKS:
         diff(f"networks.{name}", dev["networks"][name], expected_network(name, base["networks"][name], dev, project), errors)
-    # The profile the runtime names is the checkout's, the one the scaffold
-    # ships as keeper.seccomp.json.
-    for opt in dev["services"][RUNTIME].get("security_opt", []):
-        if opt.startswith("seccomp=") and not os.path.isfile(os.path.join(checkout, opt.removeprefix("seccomp="))):
-            errors.append(f"{opt}: no such file in the checkout")
+    # The profile every Locus service names is the checkout's, the one the
+    # scaffold ships as keeper.seccomp.json.
+    for name in SERVICES:
+        for opt in dev["services"][name].get("security_opt", []):
+            if opt.startswith("seccomp=") and not os.path.isfile(os.path.join(checkout, opt.removeprefix("seccomp="))):
+                errors.append(f"{name}: {opt}: no such file in the checkout")
     return errors
 
 

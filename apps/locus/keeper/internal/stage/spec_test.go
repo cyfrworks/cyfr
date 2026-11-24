@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
@@ -23,6 +24,7 @@ func validSpec() Spec {
 		Argv:     []string{"/bin/sh", "-c", "npx -y pkg"},
 		Env:      map[string]string{"NODE_ENV": "production", "API_KEY": "k"},
 		Limits:   protocol.Ceilings,
+		Reach:    pool.ReachRouted,
 		Cgroup:   "/keeper-20007",
 	}
 }
@@ -67,6 +69,8 @@ func TestSpecValidationRefusals(t *testing.T) {
 		"the keeper's cgroup":  func(s *Spec) { s.Cgroup = "/keeper" },
 		"the root cgroup":      func(s *Spec) { s.Cgroup = "/" },
 		"no cgroup":            func(s *Spec) { s.Cgroup = "" },
+		"no reach":             func(s *Spec) { s.Reach = "" },
+		"an unknown reach":     func(s *Spec) { s.Reach = "netns" },
 	}
 	for name, mutate := range cases {
 		s := validSpec()

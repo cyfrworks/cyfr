@@ -419,7 +419,7 @@ defmodule Sanctum.VaultTest do
              }
 
       # A grant revoked is no longer a use.
-      :ok = Arca.ProfileStorage.transition(actor(ctx), first.id, :any, "revoked")
+      :ok = Arca.ProfileStorage.revoke_by_person(actor(ctx), first.id)
       assert used_by.() == %{bound.id => [use_of.(second)], unbound.id => []}
 
       # Grants that cannot be read leave every entry's uses unknown, never

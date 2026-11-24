@@ -10,10 +10,15 @@ and driven only by requests signed as CYFR signs them (harness.py):
   and the kept homes' root, neither of which it can list: /tmp, /var/tmp
   and /run are read-only, /dev/shm is absent and the release's run
   directory is closed to it.
-- What it does leave (tests/fixtures/residue-canary.go) — an entry in the
-  home root and one in the kept homes' root, a directory tree it made
-  unwritable, System V shared memory, a semaphore set, a message queue and
-  a POSIX message queue — is gone, with every process of its uid, once its
+- The System V shared memory, semaphore set and message queue and the
+  POSIX message queue it opens by name (tests/fixtures/residue-canary.go)
+  are its space's own: the space has an IPC namespace of its own, the
+  container's holds none of them, and the namespace, every object in it,
+  is gone with the space's last process.
+- What outlives the space — an entry in the home root and one in the kept
+  homes' root, a directory tree it made unwritable, and a POSIX message
+  queue made through the container's own mqueue mount, which is the
+  container's namespace — is gone, with every process of its uid, once its
   owner is released, before a second owner runs under the same uid; and the
   keeper logs no quarantine. The kept homes' root is searched like any
   writable mount when a pooled uid is scrubbed.
@@ -36,13 +41,15 @@ from harness import (  # noqa: E402
     HOME_ROOT, KEPT_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
     expect, owner_of, probe, require_docker, run,
 )
-from imagesuite import read_listing, run_name  # noqa: E402
+from imagesuite import read_listing, read_output, run_name  # noqa: E402
 
 UID = POOL_FIRST
 TAG = "locus-backends-residue"
 SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"{RUN_DIR}/{TAG}"]
 LEFT = [f"{HOME_ROOT}/{TAG}", f"{HOME_ROOT}/{TAG}-tree/", f"{KEPT_ROOT}/{TAG}"]
 IPC = ["shm", "sem", "msg", "mqueue"]
+# A queue made by its path in the container's mqueue mount, not by mq_open.
+MOUNT_QUEUE = f"/dev/mqueue/{TAG}-mount"
 
 
 def held_by_uid(stack):
@@ -65,6 +72,23 @@ def held_by_uid(stack):
         echo absent
       fi"""
     return read_listing(stack.exec(script), f"what the kernel holds for uid {UID}")
+
+
+def ipc_namespace(stack, pid):
+    """The IPC namespace of `pid`, `ipc:[inode]`, read by the observer from a command that exits 0."""
+    return read_output(stack.observe(f"readlink /proc/{pid}/ns/ipc"), f"the IPC namespace of pid {pid}").strip()
+
+
+def namespace_holders(stack, namespace):
+    """Every process of the container whose IPC namespace is `namespace` or that holds a descriptor of it, read by
+    the observer; a namespace no process holds is freed by the kernel with every object in it."""
+    script = f"""
+      for d in /proc/[0-9]*; do
+        for l in "$d/ns/ipc" "$d"/fd/*; do
+          [ "$(readlink "$l" 2>/dev/null)" = '{namespace}' ] && echo "${{d#/proc/}}"
+        done
+      done | sort -u"""
+    return read_output(stack.observe(script), f"the holders of {namespace}").split()
 
 
 def sync_probe(c, owner):
@@ -107,16 +131,30 @@ def main():
         }, "outside its home a program writes only into the home root and the kept homes' root", planted)
         for kind in IPC:
             expect(planted[kind] == "ok", f"the backend leaves a {kind} object", planted)
+        mounted = c.tool(owner_of("first"), "probe__run", {"argv": ["touch", MOUNT_QUEUE]})
+        expect(mounted["status"] == 0, "the backend makes a queue through the container's mqueue mount", mounted)
 
+        # The objects are its space's: the backend finds them, in an IPC
+        # namespace that is not the container's, and the container's own
+        # namespace holds none of them.
+        found = canary(c, owner_of("first"), "probe")
+        for kind in IPC:
+            expect(found[kind] == "present", f"the backend finds its {kind} object in its space", found)
+        space = ipc_namespace(stack, first["pid"])
+        expect(space and space != ipc_namespace(stack, 1), "the backend's space has an IPC namespace of its own", space)
         held = held_by_uid(stack)
+        expect(not any(line.startswith("/proc/sysvipc/") for line in held) and f"/dev/mqueue/{TAG}" not in held,
+               "the container's own namespace holds none of the space's IPC objects", held)
         expect(f"{HOME_ROOT}/{TAG}" in held and f"{HOME_ROOT}/{TAG}-tree" in held and f"{KEPT_ROOT}/{TAG}" in held
-               and f"/dev/mqueue/{TAG}" in held
-               and all(any(line.startswith(f"/proc/sysvipc/{t}:") for line in held) for t in ["shm", "sem", "msg"]),
-               "the kernel holds all of it for the uid", held)
+               and MOUNT_QUEUE in held,
+               "the kernel holds for the uid what outlives its space: its files and the mount's queue", held)
 
         status, _answer, _ = c.release([owner_of("first")])
         expect(status == 200, "the first owner is released")
         eventually(lambda: not stack.under_uid(UID), f"no process of uid {UID}")
+        expect(namespace_holders(stack, space) == [],
+               "no process holds the space's IPC namespace: it is gone with every object in it",
+               namespace_holders(stack, space))
         eventually(lambda: not held_by_uid(stack), f"nothing held by uid {UID}")
 
         second = sync_probe(c, owner_of("second"))
@@ -129,6 +167,8 @@ def main():
         }, "nothing the first owner left reaches the second", probed)
         for kind in IPC:
             expect(probed[kind] == "absent", f"no {kind} object reaches the second owner", probed)
+        queue = c.tool(owner_of("second"), "probe__run", {"argv": ["test", "-e", MOUNT_QUEUE]})
+        expect(queue["status"] == 1, "the queue made through the mount does not reach the second owner", queue)
         expect(held_by_uid(stack) == [second["home"]], "the uid holds the second owner's home and nothing else",
                held_by_uid(stack))
         logs = stack.logs()
@@ -140,8 +180,8 @@ def main():
                     "--tmpfs", f"{HOME_ROOT}:mode=1733",
                     "--tmpfs", f"{RUN_DIR}:uid={RELEASE_UID},gid={RELEASE_UID},mode=0700",
                     "--entrypoint", "cyfr-locus"]
-        command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}", "--home-root", HOME_ROOT, "--client-user",
-                   RELEASE_USER, "--", RELEASE_BIN, "start"]
+        command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}:{ROLE['reach']}", "--home-root", HOME_ROOT,
+                   "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", RELEASE_USER, "--", RELEASE_BIN, "start"]
         for n, (flags, refusal) in enumerate([
             (["--ipc", "none"], r"the root filesystem is writable"),
             (["--read-only", "--ipc", "none", "--tmpfs", "/tmp:mode=1777"], r"mount /tmp .* is writable by pooled uids"),

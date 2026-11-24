@@ -1568,10 +1568,10 @@ defmodule Locus.Runtime.RelayCountTest do
          %{host: host} do
       port = upstream!()
       attempt = attempt!(host, timeout_ms: 1_500) |> ScriptedKeeper.relayed!()
-      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/wide-head")
 
-      # Room for the calls' small answers, and none for the head.
+      # Room for the pin's answer and other small answers, and none for the head.
       held = fill!(65_536)
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/wide-head")
 
       assert {:ok, ref} =
                Endpoint.fetch(

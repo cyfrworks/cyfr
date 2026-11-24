@@ -147,7 +147,7 @@ defmodule Opus.AgentAuthorityTest do
     {:ok, [claude]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
-    :ok = Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), claude.id, :any, "revoked")
+    :ok = Arca.ProfileStorage.revoke_by_person(Sanctum.Context.actor(ctx), claude.id)
     refute Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
 
     assert {:error, {:setup_required, %{reason: "consent_moved"}}} =

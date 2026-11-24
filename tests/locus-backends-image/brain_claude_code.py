@@ -29,6 +29,11 @@ its message is one of the events, with exactly its members.
 - An ask of CYFR's tool is passed up with its arguments, held, and answered
   by an `answer`, which reaches the harness through `cyfr-stub` as the
   tool's result.
+- The MCP servers the person set up in the program itself (its folder's
+  `.claude.json`) stay beside CYFR's: their tools are listed beside CYFR's,
+  a call of one runs in their server with the model's own input and is
+  shown as the program's own tool, never asked of CYFR; one named `cyfr`
+  keeps its name, and CYFR's server takes another.
 - A new process, started resuming the session, holds it: its reply names
   the same session and the new flags; and `held` names the post its
   transcript holds and not one it never had.
@@ -140,6 +145,22 @@ def home_has(c, path):
     return word == "present"
 
 
+# The person's own servers, in the folder's `.claude.json` as Claude Code
+# keeps them: the probe program, once under a name of its own and once under
+# CYFR's server's name.
+THEIRS = {"mcpServers": {name: {"type": "stdio", "command": "node", "args": ["/probe/probe-backend.mjs"],
+                                "env": {"THEIR_SERVER": f"their {name}"}} for name in ("mine", "cyfr")}}
+
+
+def plant(c, path, text):
+    """Writes `text` to `path` in the brain row's folder, as the person would in the program's own terminal."""
+    client = c.mcp(OWNER, "probe", key="plant", home_id=HOME)
+    status, answer = client.call("run", {"argv": ["/bin/sh", "-c", 'printf %s "$1" > "$HOME/$2"', "sh", text, path]})
+    result = (answer or {}).get("result") or {}
+    expect(status == 200 and not result.get("isError") and json.loads(result["content"][0]["text"])["status"] == 0,
+           f"{path} is written in the folder", answer)
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: brain_claude_code.py IMAGE")
@@ -152,6 +173,7 @@ def main():
         expect(c.hello()[0] == 200, "the backends service is greeted")
         status, synced, _ = c.sync(OWNER, [PROGRAM, probe(home="kept")])
         expect(status == 200, "an owner of the brain row, kept, is synced", synced)
+        plant(c, ".claude.json", json.dumps(THEIRS))
 
         # ————— hello, and a listing with no harness running —————
         d = Driver(c, "brain-one")
@@ -206,6 +228,21 @@ def main():
         said = [e["text"] for e in answered if e["t"] == "said"]
         expect(answered[0] == {"t": "accepted", "id": "stp_answer_1"} and "The file says: three lines" in said,
                "the answer reaches the harness through cyfr-stub as the tool's result", answered)
+
+        # ————— the person's own servers stay beside CYFR's —————
+        d.send({"t": "post", "id": "stp_post_theirs", "work": WORK, "content": [{"type": "text", "text": "theirs"}]})
+        turn = d.until("idle")
+        expect(not any(e["t"] == "ask" for e in turn), "a call of a server of the person's own is never asked of CYFR", turn)
+        said = [e["text"] for e in turn if e["t"] == "said"]
+        expect(said == ["Tools: mcp__cyfr-2__files, mcp__cyfr__echo_env, mcp__mine__echo_env. "
+                        'mcp__cyfr__echo_env given {"name":"THEIR_SERVER"} answered their cyfr; '
+                        'mcp__mine__echo_env given {"name":"THEIR_SERVER"} answered their mine.'],
+               "their tools are listed beside CYFR's, one named cyfr keeps its name, and each call runs in their server "
+               "with the model's own input", said)
+        own = [(e["name"], e["phase"]) for e in turn if e["t"] == "own"]
+        expect(own == [("mcp__cyfr__echo_env", "start"), ("mcp__cyfr__echo_env", "end"),
+                       ("mcp__mine__echo_env", "start"), ("mcp__mine__echo_env", "end")],
+               "each call of theirs is shown as the program's own tool by name", own)
         seen += d.lines
         d.close()
         eventually(lambda: not harnesses(stack), "the closed session's harness to end")
@@ -236,7 +273,7 @@ def main():
 
         # ————— a start in Default mode, named or not, whole —————
         base = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                "--include-partial-messages", "--strict-mcp-config", "--permission-prompt-tool", "stdio"]
+                "--include-partial-messages", "--permission-prompt-tool", "stdio"]
         inputs = [{"file_path": "made.txt", "content": "x"}, {"command": "touch made.txt"}]
         allowed = [{"type": "control_response", "response": {"subtype": "success", "request_id": f"ask-{i}",
                     "response": {"behavior": "allow", "updatedInput": inputs[i - 1]}}} for i in (1, 2)]

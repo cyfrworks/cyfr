@@ -6,18 +6,19 @@ defmodule Cyfr.GuardTableTest do
   The island egress guard (`apps/locus/keeper/guard/cyfr-guard.sh`) holds
   `Prima.Cidr.address_table/0`, the table the control plane's own outbound
   calls are held to, and installs exactly it beside the island's own
-  rows: the control plane, the island's subnets, the spawns' reach into
-  the namespace, the service's own loopback, the deployment's private
-  hosts and the jump to the uids a network list holds, in the guard's
-  order.
+  rows, in the guard's order: for the namespace's own processes, the
+  control plane, the island's subnets, the service's own loopback and the
+  deployment's private hosts; and for the spaces, what every route is held
+  to (the metadata, the control plane and the island's subnets; then the
+  private rows), the jumps to each route's chain and to its replies, the
+  refusal of all else from or into a space, of both families, and the
+  masquerade of the route range the guard chose.
   """
 
   use ExUnit.Case, async: true
 
   alias Mix.Tasks.Cyfr.Gen.GuardTable
 
-  # Two spawn ranges, as the backends island's pool and kept folders.
-  @ranges ["61000-61009", "62001-62999"]
   @control_plane "172.16.230.2"
   @targets ["10.9.8.0/24", "fd12:3456::/64"]
 
@@ -32,7 +33,6 @@ defmodule Cyfr.GuardTableTest do
     {output, 0} =
       System.cmd("sh", [GuardTable.path(), "rules"],
         env: [
-          {"CYFR_GUARD_POOL", Enum.join(@ranges, ",")},
           {"CYFR_GUARD_CONTROL_PLANE", @control_plane},
           {"CYFR_PRIVATE_EGRESS_TARGETS", Enum.join(@targets, ",")}
         ],
@@ -43,58 +43,103 @@ defmodule Cyfr.GuardTableTest do
     rules = Enum.filter(lines, &String.match?(&1, ~r/^ip6?tables /))
 
     # The island's subnets are this host's, which the guard reads from the
-    # kernel and logs as it adds each.
+    # kernel and logs as it adds each, and so is the route range it chose
+    # beside them.
     subnets = for "[cyfr-guard] island subnet " <> subnet <- lines, do: subnet
+    [range] = for "[cyfr-guard] routes take " <> range <- lines, do: range
+    assert range =~ ~r{^10\.\d+\.0\.0/16$}
 
     %{metadata: metadata, private: private} = Prima.Cidr.address_table()
     private = Enum.reject(private, &(&1 in metadata))
+    v4_subnets = Enum.reject(subnets, &v6?/1)
 
     assert rules ==
              [
                "iptables -N CYFR_GUARD",
                "ip6tables -N CYFR_GUARD",
-               "iptables -N CYFR_GUARD_HOSTS",
-               "ip6tables -N CYFR_GUARD_HOSTS",
-               "iptables -N CYFR_GUARD_KNOWN",
-               "ip6tables -N CYFR_GUARD_KNOWN",
                "iptables -A OUTPUT -j CYFR_GUARD",
                "ip6tables -A OUTPUT -j CYFR_GUARD",
-               "iptables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j CYFR_GUARD_KNOWN",
-               "ip6tables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j CYFR_GUARD_KNOWN",
-               # A tracked connection's packet: the resolver and the private
-               # hosts pass, a listed uid's is judged by its own chain.
-               "iptables -A CYFR_GUARD_KNOWN -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j ACCEPT",
-               "iptables -A CYFR_GUARD_KNOWN -d 10.9.8.0/24 -j ACCEPT",
-               "ip6tables -A CYFR_GUARD_KNOWN -d fd12:3456::/64 -j ACCEPT",
-               "iptables -A CYFR_GUARD_KNOWN -j CYFR_GUARD_HOSTS",
-               "ip6tables -A CYFR_GUARD_KNOWN -j CYFR_GUARD_HOSTS",
-               "iptables -A CYFR_GUARD_KNOWN -j ACCEPT",
-               "ip6tables -A CYFR_GUARD_KNOWN -j ACCEPT"
+               # Into a space, nothing but the ICMP answering its refusals.
+               "iptables -A CYFR_GUARD -o sp+ -p icmp -m conntrack --ctstate RELATED -j ACCEPT",
+               "iptables -A CYFR_GUARD -o sp+ -j REJECT --reject-with icmp-admin-prohibited",
+               "ip6tables -A CYFR_GUARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+               "iptables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j ACCEPT",
+               "ip6tables -A CYFR_GUARD -m conntrack ! --ctstate NEW -j ACCEPT"
              ] ++
-               rejects(metadata) ++
+               rejects("CYFR_GUARD", metadata) ++
                [
                  "iptables -A CYFR_GUARD -d #{@control_plane}/32 -j REJECT --reject-with icmp-admin-prohibited"
                ] ++
-               rejects(Enum.reject(subnets, &v6?/1)) ++
-               rejects(Enum.filter(subnets, &v6?/1)) ++
-               Enum.flat_map(@ranges, fn range ->
-                 [
-                   "iptables -A CYFR_GUARD -m owner --uid-owner #{range} -m conntrack --ctorigdst 127.0.0.11 --ctorigdstport 53 -j RETURN",
-                   "iptables -A CYFR_GUARD -m owner --uid-owner #{range} -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-admin-prohibited",
-                   "ip6tables -A CYFR_GUARD -m owner --uid-owner #{range} -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp6-adm-prohibited"
-                 ]
-               end) ++
+               rejects("CYFR_GUARD", v4_subnets) ++
+               rejects("CYFR_GUARD", Enum.filter(subnets, &v6?/1)) ++
                [
-                 "iptables -A CYFR_GUARD -o lo #{outside()} -j RETURN",
-                 "ip6tables -A CYFR_GUARD -o lo #{outside()} -j RETURN",
+                 "iptables -A CYFR_GUARD -o lo -j RETURN",
+                 "ip6tables -A CYFR_GUARD -o lo -j RETURN",
                  "iptables -A CYFR_GUARD -d 10.9.8.0/24 -j RETURN",
                  "ip6tables -A CYFR_GUARD -d fd12:3456::/64 -j RETURN"
                ] ++
-               rejects(private) ++
+               rejects("CYFR_GUARD", private) ++
                [
-                 "iptables -A CYFR_GUARD -j CYFR_GUARD_HOSTS",
-                 "ip6tables -A CYFR_GUARD -j CYFR_GUARD_HOSTS"
+                 "iptables -N CYFR_GUARD_REFUSE",
+                 "iptables -N CYFR_GUARD_PRIVATE",
+                 "iptables -N CYFR_GUARD_ROUTES",
+                 "iptables -N CYFR_GUARD_REPLIES"
+               ] ++
+               rejects("CYFR_GUARD_REFUSE", Enum.reject(metadata, &v6?/1)) ++
+               [
+                 "iptables -A CYFR_GUARD_REFUSE -d #{@control_plane}/32 -j REJECT --reject-with icmp-admin-prohibited"
+               ] ++
+               rejects("CYFR_GUARD_REFUSE", v4_subnets) ++
+               rejects("CYFR_GUARD_PRIVATE", Enum.reject(private, &v6?/1)) ++
+               [
+                 "iptables -A FORWARD -i sp+ -j CYFR_GUARD_ROUTES",
+                 "iptables -A FORWARD -i sp+ -j REJECT --reject-with icmp-admin-prohibited",
+                 "iptables -A FORWARD -o sp+ -j CYFR_GUARD_REPLIES",
+                 "iptables -A FORWARD -o sp+ -j REJECT --reject-with icmp-admin-prohibited",
+                 "iptables -A INPUT -i sp+ -j REJECT --reject-with icmp-admin-prohibited",
+                 "ip6tables -A FORWARD -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+                 "ip6tables -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+                 "ip6tables -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited",
+                 "iptables -t nat -A POSTROUTING -s #{range} ! -o sp+ -j MASQUERADE"
                ]
+  end
+
+  # The route range is the first /16 of 10.0.0.0/8 from 10.213.0.0/16 on that
+  # no route of the namespace and no private host overlaps: one that does
+  # is passed over and logged naming what it overlaps.
+  test "the guard's route range passes over a /16 a private host overlaps, naming it" do
+    {output, 0} =
+      System.cmd("sh", [GuardTable.path(), "rules"],
+        env: [
+          {"CYFR_GUARD_CONTROL_PLANE", @control_plane},
+          {"CYFR_PRIVATE_EGRESS_TARGETS", "10.213.4.0/24,10.214.0.9"}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert output =~
+             "[cyfr-guard] 10.213.0.0/16 overlaps 10.213.4.0/24: the routes take another range"
+
+    assert output =~
+             "[cyfr-guard] 10.214.0.0/16 overlaps 10.214.0.9: the routes take another range"
+
+    assert [range] =
+             for("[cyfr-guard] routes take " <> range <- String.split(output, "\n"), do: range)
+
+    refute range in ["10.213.0.0/16", "10.214.0.0/16"]
+
+    {all, status} =
+      System.cmd("sh", [GuardTable.path(), "rules"],
+        env: [
+          {"CYFR_GUARD_CONTROL_PLANE", @control_plane},
+          {"CYFR_PRIVATE_EGRESS_TARGETS", "10.0.0.0/8"}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert status != 0
+    assert all =~ "error: no /16 of 10.0.0.0/8 is free for the routes of the spaces"
+    assert all =~ "10.213.0.0/16: 10.0.0.0/8"
   end
 
   test "the guard's table holds every range the island must refuse" do
@@ -120,17 +165,13 @@ defmodule Cyfr.GuardTableTest do
         do: row
   end
 
-  defp rejects(ranges) do
+  defp rejects(chain, ranges) do
     Enum.map(ranges, fn range ->
       if v6?(range),
-        do: "ip6tables -A CYFR_GUARD -d #{range} -j REJECT --reject-with icmp6-adm-prohibited",
-        else: "iptables -A CYFR_GUARD -d #{range} -j REJECT --reject-with icmp-admin-prohibited"
+        do: "ip6tables -A #{chain} -d #{range} -j REJECT --reject-with icmp6-adm-prohibited",
+        else: "iptables -A #{chain} -d #{range} -j REJECT --reject-with icmp-admin-prohibited"
     end)
   end
 
   defp v6?(range), do: String.contains?(range, ":")
-
-  # The service's own loopback is a uid's of no spawn range: one negated
-  # owner match per range.
-  defp outside, do: Enum.map_join(@ranges, " ", &"-m owner ! --uid-owner #{&1}")
 end

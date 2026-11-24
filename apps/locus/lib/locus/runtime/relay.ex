@@ -1519,7 +1519,7 @@ defmodule Locus.Runtime.Relay.Runner do
   network: it resolves no name and connects nowhere.
 
   The relay is the runner's file descriptor 4, the socket the keeper gives
-  every spawn of an isolated pool (`{:fd, fd}`), or, in the test build's
+  every spawn of a relay pool (`{:fd, fd}`), or, in the test build's
   direct keeper, a unix socket in the runner's home (`{:socket, path}`).
 
   `bind/2` binds the channel to the attempt the runner was assigned, and

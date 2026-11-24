@@ -9,6 +9,17 @@ defmodule Sanctum.Consent.Bootstrap do
   a new athanor, and the person revokes each like any other consent
   (`profile.revoke`).
 
+  The default grant of a source is claimed, and never minted by the fill,
+  an update, an install after a removal or the boot's seed sync, when the
+  source has a standing owner profile, or when any default owner profile
+  of the source in the athanor was ever revoked by its person
+  (`Sanctum.Consent.ungranted/2`); the source is then skipped `:revoked`.
+  Once a person has said no to a component's default grant, only that
+  person's own consent grants it again; CYFR never does it for them,
+  however many removals and installs follow. A source whose default
+  profiles were revoked only by removals (`Compendium.Cascade`) is minted
+  as before.
+
   For every executable local component without a profile, mints an owner
   profile and a revision-1 consent whose blob grants each closure node its
   manifest-declared caps (the empty ask when a manifest declares none):
@@ -325,6 +336,9 @@ defmodule Sanctum.Consent.Bootstrap do
           {:skip, :not_vouched}
         end
 
+      :revoked ->
+        {:skip, :revoked}
+
       {:claimed, nil} ->
         {:skip, :already_bootstrapped}
 
@@ -348,10 +362,21 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
+  # A source with no live profile is claimed still when its person revoked
+  # its grant: the one place the walk decides that, for every path that
+  # mints.
   defp claimed(ctx, source_ref) do
     case Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), source_ref) do
-      {:ok, []} -> :unclaimed
+      {:ok, []} -> ungranted(ctx, source_ref)
       {:ok, existing} -> {:claimed, default_owner(existing)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ungranted(ctx, source_ref) do
+    case Sanctum.Consent.ungranted(ctx, source_ref) do
+      {:ok, :no_grant} -> :unclaimed
+      {:ok, :revoked} -> :revoked
       {:error, reason} -> {:error, reason}
     end
   end

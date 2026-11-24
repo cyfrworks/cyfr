@@ -250,16 +250,33 @@ defmodule Aqua.RunnerTest do
     )
   end
 
-  defp lose_ownership(loss) do
+  # Ownership goes, and `retire` runs what it brings on: a runner that
+  # retires kills its loop's tree (`Aqua.Loop.Worker`), the loop, the
+  # turn's harness and the harness's call, wherever each has reached, and
+  # a test may kill the loop itself, whose tree the workers' server then
+  # kills. One killed in a database call takes the test's one shared
+  # connection with it, and an idle loop says nothing of its harness,
+  # which reads the turn's rows whenever it is told they moved. The test
+  # holds that connection itself from before ownership goes until every
+  # process of the loop's tree is confirmed dead, so none of them is in the
+  # store when it is killed: one that asks for it waits, and dies waiting.
+  # A runner that read or wrote after losing ownership would wait too, and
+  # fail the wait for its retirement.
+  defp lose_ownership(loss, loop, retire) do
     ownership =
       case loss do
         :lost -> :lost
         :expired -> {:held, 0}
       end
 
-    Arca.ControlPlane.record(ownership)
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    Arca.Repo.checkout(fn ->
+      Arca.ControlPlane.record(ownership)
+      retire.()
+      :ok = Aqua.Loop.Worker.stop(loop)
+    end)
   end
 
   defp tape_snapshot(ctx, thread_id, turn_ids) do
@@ -1432,15 +1449,17 @@ defmodule Aqua.RunnerTest do
 
         before = tape_snapshot(ctx, thread.id, [first, second])
         calls = ScriptedWorker.calls()
-        lose_ownership(unquote(loss))
 
-        if unquote(event) == :down do
-          Process.exit(pids.loop, :kill)
-          assert_receive {:DOWN, ^loop_ref, :process, _, :killed}, 5_000
-        end
+        lose_ownership(unquote(loss), pids.loop, fn ->
+          if unquote(event) == :down do
+            Process.exit(pids.loop, :kill)
+            assert_receive {:DOWN, ^loop_ref, :process, _, :killed}, 5_000
+          end
 
-        :ok = :sys.resume(pids.runner)
-        await_retired(pids.runner, runner_ref)
+          :ok = :sys.resume(pids.runner)
+          await_retired(pids.runner, runner_ref)
+        end)
+
         assert tape_snapshot(ctx, thread.id, [first, second]) == before
         assert ScriptedWorker.calls() == calls
         assert {:error, :control_plane_lost} = Runner.ensure(thread.id, ctx.athanor_id)
@@ -1498,9 +1517,12 @@ defmodule Aqua.RunnerTest do
         before = tape_snapshot(ctx, thread.id, [first])
         calls = ScriptedWorker.calls()
         runner_ref = Process.monitor(runner)
-        lose_ownership(unquote(loss))
-        send(runner, {:resume, first})
-        await_retired(runner, runner_ref)
+
+        lose_ownership(unquote(loss), nil, fn ->
+          send(runner, {:resume, first})
+          await_retired(runner, runner_ref)
+        end)
+
         assert tape_snapshot(ctx, thread.id, [first]) == before
         assert ScriptedWorker.calls() == calls
 
@@ -1538,15 +1560,17 @@ defmodule Aqua.RunnerTest do
         worker_refs = for pid <- [pids.loop, pids.call], do: Process.monitor(pid)
         before = tape_snapshot(ctx, thread.id, [turn_id])
         calls = ScriptedWorker.calls()
-        lose_ownership(unquote(loss))
 
-        send(
-          pids.runner,
-          Cyfr.Bus.Notify.new(Prima.Actor.in_athanor(ctx.athanor_id), :athanor_changed)
-        )
+        lose_ownership(unquote(loss), pids.loop, fn ->
+          send(
+            pids.runner,
+            Cyfr.Bus.Notify.new(Prima.Actor.in_athanor(ctx.athanor_id), :athanor_changed)
+          )
 
-        await_retired(pids.runner, runner_ref)
-        for ref <- worker_refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+          await_retired(pids.runner, runner_ref)
+          for ref <- worker_refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+        end)
+
         assert tape_snapshot(ctx, thread.id, [turn_id]) == before
         assert ScriptedWorker.calls() == calls
 
@@ -1700,10 +1724,13 @@ defmodule Aqua.RunnerTest do
       :ok = :sys.suspend(pids.runner)
       tag = make_ref()
       send(pids.runner, {:"$gen_call", {self(), tag}, request})
-      lose_ownership(unquote(loss))
-      :ok = :sys.resume(pids.runner)
-      assert_receive {^tag, {:error, :control_plane_lost}}, 5_000
-      await_retired(pids.runner, ref)
+
+      lose_ownership(unquote(loss), pids.loop, fn ->
+        :ok = :sys.resume(pids.runner)
+        assert_receive {^tag, {:error, :control_plane_lost}}, 5_000
+        await_retired(pids.runner, ref)
+      end)
+
       assert tape_snapshot(ctx, thread.id, [first, queued]) == before
       assert ScriptedWorker.calls() == calls
     end
@@ -1997,13 +2024,13 @@ defmodule Aqua.RunnerTest do
     before = tape_snapshot(ctx, thread.id, [turn.id, second])
     runner_ref = Process.monitor(runner)
     _ = :sys.get_state(runner)
-    lose_ownership(:lost)
-
     refs = for pid <- [holder, call], do: Process.monitor(pid)
-    idle!(holder)
-    Process.exit(holder, :kill)
-    for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
-    await_retired(runner, runner_ref)
+
+    lose_ownership(:lost, holder, fn ->
+      Process.exit(holder, :kill)
+      for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+      await_retired(runner, runner_ref)
+    end)
 
     assert tape_snapshot(ctx, thread.id, [turn.id, second]) == before
 

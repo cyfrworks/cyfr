@@ -112,6 +112,38 @@ compose() { compose_in "$RUN" "$D" "$@"; }
 # among them once it is made.
 PROJECTS="$RUN:$D"
 CLIENT_ID=
+# The secrets of each folder set up so far, its setup token among them,
+# which the one scrub withholds from all that is uploaded: read from each
+# folder's .env as build_upload begins, so a line written before any was
+# known is cut all the same.
+withhold() {
+  local e
+  for e in "$W"/*/.env; do
+    [ ! -f "$e" ] || sed -nE 's/^[A-Z0-9_]*(KEY|SECRET|TOKEN|ROOT|PASSWORD)[A-Z0-9_]*=//p' "$e"
+  done >>"$W/fixture/withheld"
+}
+# What CI uploads, built once by one step on every exit (cleanup) and for
+# first_passkey's verdict: OUT emptied, then every file the run kept (the
+# app's scrubbed output, the proof's records, the docker calls) through the
+# one scrub (tests/desktop-proof/scrub-kept.mjs), every secret collected
+# known to it before its first line is read. MET is how often it met one.
+# A step that cannot run or finish leaves OUT empty, and the run says so.
+build_upload() {
+  local said files
+  [ -z "$CLIENT_ID" ] || timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times >"$KEPT/docker-calls.txt" 2>/dev/null || true
+  withhold
+  find "$OUT" -mindepth 1 -delete 2>/dev/null || true
+  shopt -s nullglob; files=("$KEPT"/* "$W"/fixture/out/*); shopt -u nullglob
+  if said=$(node "$ROOT/tests/desktop-proof/scrub-kept.mjs" "$W/fixture/withheld" "$OUT" "${files[@]}" 2>&1); then
+    MET=$(sed -n 's/^met //p' <<<"$said")
+    echo "upload: $(sed -n 's/^built //p' <<<"$said")"
+  else
+    find "$OUT" -mindepth 1 -delete 2>/dev/null || true
+    MET=
+    echo "FAIL upload: what the run kept could not be scrubbed into $OUT, which is left empty: ${said##*$'\n'}"
+    return 1
+  fi
+}
 cleanup() {
   code=$?; trap - EXIT
   local left=""
@@ -262,38 +294,6 @@ work_left() { timeout "$1" docker exec "$CLIENT_ID" sh -c 'n=0; for p in /proc/[
   case "$(tr "\0" " " <$p/cmdline 2>/dev/null)" in *setup-project*) n=$((n+1));; esac; done; echo $n'; }
 # The stack's containers there, read within $1 seconds.
 stack_left() { (cd "$D" && timeout "$1" docker compose --project-name "$RUN" --project-directory "$D" -f docker-compose.yml -f docker-compose.override.yml ps -aq) | wc -l; }
-# The secrets of each folder set up so far, its setup token among them,
-# which the one scrub withholds from all that is uploaded: read from each
-# folder's .env as build_upload begins, so a line written before any was
-# known is cut all the same.
-withhold() {
-  local e
-  for e in "$W"/*/.env; do
-    [ ! -f "$e" ] || sed -nE 's/^[A-Z0-9_]*(KEY|SECRET|TOKEN|ROOT|PASSWORD)[A-Z0-9_]*=//p' "$e"
-  done >>"$W/fixture/withheld"
-}
-# What CI uploads, built once by one step on every exit (cleanup) and for
-# first_passkey's verdict: OUT emptied, then every file the run kept (the
-# app's scrubbed output, the proof's records, the docker calls) through the
-# one scrub (tests/desktop-proof/scrub-kept.mjs), every secret collected
-# known to it before its first line is read. MET is how often it met one.
-# A step that cannot run or finish leaves OUT empty, and the run says so.
-build_upload() {
-  local said files
-  [ -z "$CLIENT_ID" ] || timeout 30 docker exec "$CLIENT_ID" cat /tmp/docker-times >"$KEPT/docker-calls.txt" 2>/dev/null || true
-  withhold
-  find "$OUT" -mindepth 1 -delete 2>/dev/null || true
-  shopt -s nullglob; files=("$KEPT"/* "$W"/fixture/out/*); shopt -u nullglob
-  if said=$(node "$ROOT/tests/desktop-proof/scrub-kept.mjs" "$W/fixture/withheld" "$OUT" "${files[@]}" 2>&1); then
-    MET=$(sed -n 's/^met //p' <<<"$said")
-    echo "upload: $(sed -n 's/^built //p' <<<"$said")"
-  else
-    find "$OUT" -mindepth 1 -delete 2>/dev/null || true
-    MET=
-    echo "FAIL upload: what the run kept could not be scrubbed into $OUT, which is left empty: ${said##*$'\n'}"
-    return 1
-  fi
-}
 # One launch, one verdict: it failed if the app's exit status is not 0, past
 # its 600 s limit among them, if its output is still open 15 s after it
 # ended, if its log's scrub failed, or if it did not write that it passed,
