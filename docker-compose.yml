@@ -32,7 +32,7 @@
 #                 it is only with every rule installed.
 # Every Locus service runs under keeper.seccomp.json, shipped beside this
 # file, and on a host with AppArmor under the profile cyfr-locus, which
-# `cyfr init` and `cyfr update` load, on a host that allows unprivileged
+# cyfr carries and `cyfr init` and `cyfr update` load, on a host that allows unprivileged
 # user namespaces (x-locus-role).
 #                                  [locus-builds-guard: profile locus-builds]
 #   caddy      — TLS and the reverse proxy in front of a public home, on
@@ -97,8 +97,8 @@ x-locus-role: &locus-role
   # (the image's /etc/cyfr/keeper.json): Docker's default with those
   # clones and the space's mounts allowed and unshare and setns denied.
   # apparmor=cyfr-locus: on a host with AppArmor, the container runs under
-  # the profile cyfr-locus, which cyfr carries and `cyfr init`, `update`
-  # and `up` load (`cyfr apparmor-profile` prints it): Docker's default with
+  # the profile cyfr-locus, which cyfr carries and `cyfr init` and `update`
+  # load (`cyfr apparmor-profile` prints it): Docker's default with
   # the user namespace allowed, the space's mounts under its new root
   # allowed and no other mount. A host without AppArmor, Docker Desktop
   # among them, ignores the option. systempaths=unconfined: a /proc that
