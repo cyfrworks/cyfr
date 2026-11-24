@@ -28,7 +28,7 @@ import {BrowserWindow, session} from "electron"
 
 import {answerWith, armWindow, signOutOfPrism} from "../account.js"
 import {DIRECTORY, HOME, NAME, OUT, PROBE, arm, atBootstrap, childOfThis, content, contentAt, harvest, history,
-  inputs, js, literal, load, opens, passkeys, rail, refused, row, run, said, secondClient, section, seen, sessionCookie,
+  client, inputs, js, literal, load, opens, passkeys, rail, refused, row, run, said, secondClient, section, seen, sessionCookie,
   sessionMark, waitFor} from "../lib.js"
 
 // B, its account service its own.
@@ -128,7 +128,9 @@ async function connect(home, before) {
 
 // Sign in with your passkey on the chooser of `home`: the CYFR's own view
 // at its sign-in page, in its own store; its Sign in with your account in
-// the account window, given the account's passkey; Prism signed in.
+// the app's account window, found by the page it shows and given the
+// account's passkey; Prism signed in. Answers the content and the store
+// the ceremony used.
 async function signIn(home) {
   const chooser = await bothWays(home)
   await js(chooser.webContents, `document.querySelector("#passkey").click(); 1`)
@@ -137,13 +139,14 @@ async function signIn(home) {
   await waitFor(() => js(page.webContents, `!!document.querySelector(".phx-connected") && !!document.querySelector('[data-test="sign-in"]')`),
     `Sign in with your account at ${home}`)
   await js(page.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
-  const account = await waitFor(() => BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.webContents.session === accountStore(home)),
-    `the account window for ${home}`)
+  const account = await waitFor(() => BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x !== client &&
+    x.webContents.getURL().startsWith(ACCOUNT_OF[home] + "/account/")), `the account window for ${home}`)
+  const ceremony = account.webContents.session
   await section(account.webContents, ["ask"])
   await armWindow(account, [...passkeys.values()])
   await js(account.webContents, `document.querySelector("#use-passkey").click(); 1`)
   const w = await prismAt(home)
-  return {w, own}
+  return {w, own, ceremony}
 }
 
 // Marks of the proof's own in what `home`'s content store keeps.
@@ -216,7 +219,7 @@ async function pairPhase() {
   await connect(HOME)
   const a = await signIn(HOME)
   await plant(a.w, HOME)
-  await accountStore(HOME).cookies.set({url: SECOND, name: CEREMONY_MARK, value: "1", secure: true,
+  await a.ceremony.cookies.set({url: SECOND, name: CEREMONY_MARK, value: "1", secure: true,
     expirationDate: Math.floor(Date.now() / 1000) + 3600})
   const aCookie = await sessionCookie(a.w)
   row("a_signed_in", a.own && !!aCookie, "A's sign-in page opens in A's own view and store, and Prism opens signed in there", {own: a.own})
@@ -240,7 +243,7 @@ async function pairPhase() {
   // apart: each store holds its own CYFR's alone, and each front saw only
   // its own CYFR's cookies: B's pages, at the account service's origin,
   // never carry what A's sign-in ceremonies keep there.
-  const [aStore, bStore, aCeremony] = await Promise.all([storageOf(contentStore(HOME)), storageOf(contentStore(SECOND)), storageOf(accountStore(HOME))])
+  const [aStore, bStore, aCeremony] = await Promise.all([storageOf(contentStore(HOME)), storageOf(contentStore(SECOND)), storageOf(a.ceremony)])
   const bPages = (await appSeen(B_HOST)).filter((r) => r.at >= pressed && !r.path.startsWith("/account/") && !r.path.startsWith("/.well-known/"))
   const carried = bPages.filter((r) => (r.cookies ?? []).includes(CEREMONY_MARK) || (r.cookies ?? []).includes(MARK[HOME]))
   const aSaw = (await appSeen(A_HOST)).filter((r) => (r.cookies ?? []).includes(MARK[SECOND]))

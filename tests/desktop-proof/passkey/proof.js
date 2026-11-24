@@ -320,30 +320,36 @@ async function passkeyPhase() {
     cancelled === "The passkey was not used. Try again when you are ready." && who,
   "the app offers both accounts' passkeys; Cancel signs no one in, and choosing @desk-a signs in as @desk-a", {offered: offeredBoth, cancelled})
 
-  // account_offline: with the account service unreachable (its front takes
-  // every connection down), the account pages' worker opens the sign-in
-  // from the copy it stored in this run, and that copy carries main's
-  // policy: the engine reports it refusing a frame there.
+  // account_unavailable: with the account service unreachable (its front
+  // takes every connection down), the account window's page does not
+  // load and main ends the hop, closing that window; the CYFR's sign-in
+  // page stays as it was, and once the service answers again its Sign in
+  // opens the account page, which no worker controls: in the app no
+  // worker serves a stored copy (worker-src 'none').
   out = await signOutOfPrism(w)
   const service = new URL(DIRECTORY).hostname
   const toService = await toSignIn()
   await fault(service, "down")
   const downFrom = (await seen(service)).length
-  await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
-  a = await waitFor(() => {
-    const w = accountWindow()
-    return w && !w.webContents.isLoading() && w.webContents.getURL().startsWith(DIRECTORY + "/account/sign") ? w : null
-  }, "the account window with the account service unreachable")
-  const byWorker = await js(a.webContents, `!!navigator.serviceWorker.controller && !!document.querySelector("#use-passkey")`)
-  const kept = await frameRefusal(a, DIRECTORY + "/account/devices")
+  let closedByMain = false
+  try {
+    await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+    await waitFor(async () => (await seen(service)).slice(downFrom).some((r) => r.path === "/account/sign"), "the account page asked for")
+    closedByMain = await waitFor(() => !accountWindow(), "the account window closed by main", 30_000).catch(() => false)
+  } finally {
+    await fault(service, "none")
+  }
   const asked = (await seen(service)).slice(downFrom).filter((r) => r.path === "/account/sign")
   const unanswered = asked.length > 0 && asked.every((r) => r.fault === "down" && r.status === null)
-  await fault(service, "none")
+  const stays = content() === toService && toService.webContents.getURL().startsWith(HOME + "/login")
+  await js(toService.webContents, `document.querySelector('[data-test="sign-in"]').click(); 1`)
+  a = await accountAt(["ask"])
+  const noWorker = await js(a.webContents, `!navigator.serviceWorker.controller`)
   a.close()
   await waitFor(() => !accountWindow(), "the account window closed")
-  row("account_offline", byWorker && unanswered && kept.refusedByMain,
-    "with the account service unreachable the account window opens the copy its worker stored, and that copy still carries main's refusal of a frame",
-    {byWorker, asked: asked.map((r) => ({status: r.status, fault: r.fault})), ...kept})
+  row("account_unavailable", closedByMain && unanswered && stays && noWorker,
+    "with the account service unreachable main closes the account window whose page did not load, the sign-in page stays, and once the service answers its Sign in opens the account page, no worker in it",
+    {closedByMain, asked: asked.map((r) => ({status: r.status, fault: r.fault})), stays, noWorker})
   w = content()
 
   // account_window: the account window holds the account service's sign-in
