@@ -2241,6 +2241,20 @@ test("as the box's screen the app runs the screen shell in that project, in one 
   assert.deepEqual(w.bounds.at(-1), {x: RAIL_WIDTH, y: 0, width: 1280 - RAIL_WIDTH, height: 860}, "the content beside it")
 })
 
+// On the box's screen a proposal whose route cannot be set is failed as on
+// a desktop's six-word road: no home-ready goes, and the chooser, beside
+// the rail with the list, says why and offers that CYFR again.
+test("on the box's screen a route that cannot be set shows the chooser with the rail, saying why and offering that CYFR again", ON_LINUX, async () => {
+  await screenStarted()
+  world.settingProxy = () => Promise.reject(new Error("proxy refused"))
+  child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
+  await settled()
+  await settled()
+  assert.ok(!child.heard.some((m) => m.type === "home-ready"), "no home-ready for a route that was not set")
+  assert.equal(content().webContents.url, SCREEN_CHOOSER + "&notice=unrouted&retry=" + encodeURIComponent(HOME))
+  assert.equal(rail()?.webContents.url, RAIL, "the rail, with the list, beside it")
+})
+
 test("the box's screen asked by a launch of --quit is shown and goes on: its service is stopped instead", ON_LINUX, async () => {
   await screenStarted()
   const focused = frame().focused
