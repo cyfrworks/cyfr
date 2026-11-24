@@ -97,7 +97,7 @@ defmodule Opus.Host.ToolReadThreadsTest do
     end
 
     @impl true
-    def handle_call({:call_tool, tool, args}, _from, state) do
+    def handle_call({:call, {:tool, tool, args}}, _from, state) do
       send(state.test, {:called, tool, args})
       {:reply, state.answer, state}
     end

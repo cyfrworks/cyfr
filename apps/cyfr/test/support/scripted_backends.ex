@@ -39,11 +39,18 @@ defmodule Cyfr.Test.ScriptedBackends do
   `{:invoke, method, fields}`.
 
   Each session is a scripted MCP program, answering as a server over stdio
-  does: `initialize`, `tools/list` (the tools the test sets for its server
-  with `tools(fake, server_id, names)`: `search` unless set), paged one tool a page
-  under `nextCursor` unless `set(fake, :page_size, n)`, `tools/call`
-  (`found`) and `ping`; a cursor it never issued, a call of a tool it
-  does not list and any other method are answered with a JSON-RPC error.
+  does: `initialize`, declaring what the test sets for its server with
+  `set(fake, :offers, %{server_id => offers})` (`["tools"]` unless set;
+  `"resources"` and `"prompts"` beside it), `tools/list` (the tools the
+  test sets for its server with `tools(fake, server_id, names)`: `search`
+  unless set), paged one tool a page under `nextCursor` unless
+  `set(fake, :page_size, n)`, `tools/call` (`found`) and `ping`; for a
+  server offering them, `resources/list` (`file:///readme`),
+  `resources/templates/list` (`file:///{path}`), `resources/read` of any
+  uri (`read <uri>`), `prompts/list` (`greet`, taking `who`) and
+  `prompts/get` (`<name> <who>`); a cursor it never issued, a call of a
+  tool it does not list and any other method are answered with a
+  JSON-RPC error.
   Each answer is a line in its buffer that `recv` reads past `after`,
   waiting up to its `max_wait_ms`; a method the test sets `:silent` is
   never answered. A `terminal` session runs no script: it takes `input`
@@ -101,6 +108,7 @@ defmodule Cyfr.Test.ScriptedBackends do
              spent: MapSet.new(),
              closed: MapSet.new(),
              tools: %{},
+             offers: %{},
              hold: [],
              pool: 32,
              stderr_bytes: 0,
@@ -1110,14 +1118,20 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp emit(s, text), do: %{s | seq: s.seq + 1, lines: [{s.seq + 1, text} | s.lines]}
 
-  defp reply(_st, _server, _s, "initialize", _params),
+  defp reply(st, server, _s, "initialize", _params),
     do:
       {:ok,
        %{
          "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
-         "capabilities" => %{"tools" => %{}},
+         "capabilities" => Map.new(offers(st, server), &{&1, %{}}),
          "serverInfo" => %{"name" => "scripted", "version" => "1"}
        }}
+
+  defp reply(st, server, s, "resources/" <> _ = method, params),
+    do: offered(st, server, s, "resources", method, params)
+
+  defp reply(st, server, s, "prompts/" <> _ = method, params),
+    do: offered(st, server, s, "prompts", method, params)
 
   defp reply(st, server, _s, "tools/list", params) do
     names = listed(st, server)
@@ -1152,6 +1166,47 @@ defmodule Cyfr.Test.ScriptedBackends do
   # The program's tool names: the test's for its server (`search` unless
   # set).
   defp listed(st, server), do: Map.get(st.tools, server, ["search"])
+
+  # What the program declares: the test's for its server (its tools unless
+  # set).
+  defp offers(st, server), do: Map.get(st.offers, server, ["tools"])
+
+  # A resources or prompts method, answered only by a program that
+  # declares that offering.
+  defp offered(st, server, _s, offering, method, params) do
+    if offering in offers(st, server),
+      do: offering_reply(method, params),
+      else: {:error, %{"code" => -32_601, "message" => "Method not found: #{method}"}}
+  end
+
+  defp offering_reply("resources/list", _params),
+    do: {:ok, %{"resources" => [%{"uri" => "file:///readme", "name" => "readme"}]}}
+
+  defp offering_reply("resources/templates/list", _params),
+    do: {:ok, %{"resourceTemplates" => [%{"uriTemplate" => "file:///{path}", "name" => "file"}]}}
+
+  defp offering_reply("resources/read", %{"uri" => uri}),
+    do:
+      {:ok,
+       %{"contents" => [%{"uri" => uri, "mimeType" => "text/plain", "text" => "read " <> uri}]}}
+
+  defp offering_reply("prompts/list", _params),
+    do: {:ok, %{"prompts" => [%{"name" => "greet", "arguments" => [%{"name" => "who"}]}]}}
+
+  defp offering_reply("prompts/get", %{"name" => name} = params),
+    do:
+      {:ok,
+       %{
+         "messages" => [
+           %{
+             "role" => "user",
+             "content" => %{"type" => "text", "text" => "#{name} #{params["arguments"]["who"]}"}
+           }
+         ]
+       }}
+
+  defp offering_reply(method, _params),
+    do: {:error, %{"code" => -32_601, "message" => "Method not found: #{method}"}}
 
   defp cursor(start), do: Base.url_encode64("page:#{start}", padding: false)
 

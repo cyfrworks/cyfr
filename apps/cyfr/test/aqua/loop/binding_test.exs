@@ -98,13 +98,17 @@ defmodule Aqua.Loop.BindingTest do
 
   test "an outside tool's name spells one key, which it reads back as, and no other name " <>
          "holding __ is an outside tool's" do
+    # A server's resources and prompts are spelled `<server>__resources` and
+    # `<server>__prompts`, which no tool's name can take.
     for key <- [
           "github:search",
           "a-b:c_d",
           "_x:y_",
           "A1:-b",
           "MCP:x",
-          "gh:" <> String.duplicate("t", 60)
+          "gh:" <> String.duplicate("t", 60),
+          "a:@resources",
+          "a:@prompts"
         ] do
       assert {:ok, name} = Binding.outside_name(key), key
       assert Binding.host_name(name) == {:ok, key}, key
@@ -123,7 +127,8 @@ defmodule Aqua.Loop.BindingTest do
           "mcp:x",
           "a:resources",
           "a:prompts",
-          "a:@resources",
+          "a:@other",
+          "a:@",
           "a b:c",
           "a:b.c",
           "a:b/c",
@@ -138,8 +143,7 @@ defmodule Aqua.Loop.BindingTest do
           "a___b",
           "a__b__c",
           "mcp__x",
-          "a__resources",
-          "a__prompts",
+          "a__@resources",
           "__x",
           "x__",
           "gh__" <> String.duplicate("t", 61)

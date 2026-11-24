@@ -119,6 +119,9 @@ func (d *driver) Deadline() <-chan time.Time {
 // Expired ends a start the harness did not answer in time, and refuses
 // each work whose tools it did not start in time; a late answer is then
 // read as one of no request.
+// Inbox is none: Claude Code's calls of CYFR's tools come on its own output.
+func (d *driver) Inbox() <-chan func() error { return nil }
+
 func (d *driver) Expired() error {
 	now := time.Now()
 	if !d.startDue.IsZero() && !now.Before(d.startDue) {

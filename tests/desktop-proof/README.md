@@ -34,6 +34,7 @@ For each script `home.sh` starts afresh, in the pairing proof's topology
 | `separate` | `x.test`, reading accounts at the account directory `dir.test` (`CYFR_DIRECTORY_SERVE=writer`) and names there |
 | `self` | `x.test` serving its own account pages: the CYFR and its account service share one origin |
 | `company` | `x.test` serving its own account pages and requiring a company sign-in (`CYFR_COMPANY_LOGIN=join`) at the OIDC issuer `idp.test`, a front with nothing behind it, which only records what reaches it. Only the client is told that front's address, so every request there is the client's and counts |
+| `pair` | `separate`'s two, with `dir.test` set up as a CYFR of its own too, its people's accounts at itself, with a setup token of its own: two CYFRs of one account. A CYFR's public address carries no port, so the two differ by name |
 
 Each has a setup token of the run's own.
 
@@ -203,11 +204,11 @@ six-word road first: a passkey a browser makes is approved only on a
 device's own screen, so it is the trusted device for the passkey the
 account window makes. The app is launched four times (`run.sh`):
 `passkey`, killed right after a sign-in; `kept`, which then quits;
-`closed`, where `cyfr` is then lost; and `left`, signed out for another CYFR.
+`closed`, where `cyfr` is then lost; and `left`, where the CYFR is left from the rail and then forgotten.
 
 | Row | What holds | What the row observes |
 |---|---|---|
-| `first_open` | a CYFR just connected opens at its root; sent from there to sign in, main refuses that and the chooser shows both ways on | the navigation to the root; main's decision on the redirect; both ways and Connect to another CYFR in sight |
+| `first_open` | a CYFR just connected opens at its root; sent from there to sign in, main refuses that and the chooser shows both ways on | the navigation to the root; main's decision on the redirect; both ways in sight |
 | `device` | this computer's device is enrolled and opens Prism | Prism |
 | `device_lock` | the device's Lock ends its session, the app forgets it, and the chooser shows both ways on | the cookie before and after; none left in the content's session; no sign-out |
 | `passkeys_policy` | with a usable authenticator in the content window, both passkey calls in the CYFR's page and a frame are refused by the app's policy | each call's refusal naming the denied feature |
@@ -223,25 +224,22 @@ account window makes. The app is launched four times (`run.sh`):
 | `signed_out_root` | after signing out the CYFR opens to no one | its root given to the content window; main's refusal of the redirect to sign in; the ways on again; the old cookie refused |
 | `sign_in_again` | after signing out only a fresh assertion opens Prism | the sign-in page by the chooser's button; a new session; the old cookie refused |
 | `choose_cancel` | with two accounts' passkeys the app offers both; Cancel signs no one in; choosing @desk-a signs in as @desk-a | what the dialog offered; the page's refusal; Prism |
-| `account_offline` | with the account service unreachable the account window opens the copy its worker stored, and that copy still carries main's refusal of a frame | the service's front taking `down` and answering none of it; the worker controlling the page it served; the engine's report of main's policy refusing the frame |
+| `account_unavailable` | with the account service unreachable, main closes the account window whose page did not load, the CYFR's sign-in page stays, and once the service answers again its Sign in opens the account page; in the app no worker serves a stored copy | the service's front taking `down` and answering none of it; the account window gone; the content still at the sign-in page; the account page then shown with no worker controlling it |
 | `account_window` | main refuses a frame's load in the account window, and the CYFR's own page by navigation and by redirect, and either of those ends the ceremony | the engine's report of the policy main adds refusing that frame's address, apart from the account service's own policy, and nothing of it at the service's front; main's decisions; the window gone; nothing at the CYFR's front |
 | `recovery` | the recovery code adds a passkey in the account window's recovery page, which returns to the sign-in and signs in | the passkey added; Prism |
 | `wrong_window` | an answer made for another browser's sign-in signs no one in when given to the content window. This is the CYFR's binding of an answer to the browser that asked, holding in the app | the CYFR's refusal; the page's cookie opens nothing |
 | `kept_after_kill`, `kept_after_quit`, `kept_after_loss` | killed right after a sign-in, quit, or left by `cyfr`'s loss, the app opens Prism by itself when it is launched again, signed in as before | Prism with nothing pressed; the first launch's cookie by its digest, its end where it was; that cookie opening a page |
 | `renderer_killed` | a lost page is shown again and signs nobody out | as `connect/`'s |
 | `kept_policy` | in a kept session too, both passkey calls are refused by the app's policy | each call's refusal naming the denied feature |
-| `unanswered`, `try_again` | a page of the CYFR that did not load gives way to the chooser in the same window, naming the CYFR and offering it again; Try again asks `cyfr` first, then for the root, and opens Prism on the same sign-in | as `connect/`'s, with Try again in sight; the chooser's Connect before any load of the CYFR (a folder's CYFR refusing at it is the app's own tests', this client having no Docker); the first load of the CYFR after the press, and the front's request, the root; Prism connected under the same cookie |
-| `chooser_refused` | Prism's page cannot send the window to the chooser, with a notice or by going back to the failure's, by a navigation, a redirect of a load of the CYFR's or its history | main's decision on each, the redirect answered by the content session's request hook in the CYFR's place; the same document staying |
-| `chooser_history` | the engine's own move in the history, which asks main nothing, brings back the chooser's entry of a failure with no notice and no Try again | the document's navigation type, `back_forward`; the ways on in sight, no words and no Try again |
+| `unanswered`, `try_again` | a page of the CYFR that did not load gives way to the chooser in a view of its own, never the CYFR's store, naming the CYFR and offering it again; Try again asks `cyfr` first, then for the root, and opens Prism on the same sign-in in a view of the CYFR's own store | as `connect/`'s, with Try again in sight; the chooser's Connect before any load of the CYFR (a folder's CYFR refusing at it is the app's own tests', this client having no Docker); the first load of the CYFR after the press, and the front's request, the root; Prism connected under the same cookie |
+| `chooser_refused` | Prism's page cannot send the window to the chooser with a notice, by a navigation or a redirect of a load of the CYFR's, and its history holds no chooser's entry to go back to | main's decision on each, the redirect answered by the content session's request hook in the CYFR's place; the same document staying; every entry of the view's history the CYFR's |
 | `process_loss` | `cyfr`'s loss closes the content, tells the person and signs nobody out | the app's message; no sign-out; the cookie still opening a page |
 | `system_quit_lost`, `system_quit` | ended by the system, after `cyfr`'s loss or at the chooser, the app quits, and never from inside the engine's `before-quit`, from which a quit is lost | SIGTERM to the app's own process; the app's own quit asked after that event returned; the engine's `quit` within 20 s; the process then gone by itself within 30 s (`launch.sh`) |
-| `another_uncleared` | Connect to another CYFR does not advance past a clear that failed, and says so | the engine's clear made to fail; the ways on and the sentence; the proof's cookie and local storage item still kept |
-| `another` | signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more | those marks there before; no cookie of any site and no item of that origin after; the form; main's refusal of that CYFR's page |
+| `left` | Connect on the rail leaves the CYFR open: its sign-in stays kept on this computer, and main keeps to it no more | the proof's cookie and local storage item in the CYFR's kept storage before and after; the chooser's form; main's refusal of that CYFR's page |
+| `forget_unerased` | Forget that could not erase leaves the CYFR on the rail, not forgotten, and its sign-in as it was | the row's menu answered Forget and confirmed; the engine's clear made to fail; the rail's row marked so; the marks still kept |
+| `forgot` | Forget again erases all this computer kept of the CYFR, and the rail lists it no more | no cookie of any site and no item of that origin in its kept storage; the rail without the row |
 
-**`passkey-self/`** (shape `self`): `uncleared` (with the engine's clear
-made to fail the Connect opens nothing and locks nothing: the same
-chooser's form saying so, nothing of the CYFR loaded and `cyfr` running
-on), `same_origin_hop` (the sign-in opens
+**`passkey-self/`** (shape `self`): `same_origin_hop` (the sign-in opens
 the CYFR's own account page in the account window), `same_origin_sign_in`,
 `passkeys_policy` (Prism's page, at the account pages' own origin, refused
 both calls) and `home_paths` (the account window refuses the CYFR's own
@@ -252,12 +250,43 @@ page at that same origin, and the ceremony ends).
 | Row | What holds | What the row observes |
 |---|---|---|
 | `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser stays to send the person to a browser | the sentence's words and the chooser's way on, both in sight, with no move before it is pressed; no sign-out posted; no request starting a company sign-in and none at the issuer |
-| `notice_kept` | a reload and a second lock over the chooser that is keeping a notice leave the notice there | the words, staying, after each, the second lock's own beside them (Connect to another CYFR, the engine's clear made to fail) |
+| `notice_kept` | a reload over the chooser that is keeping a notice leaves the notice there | the words, staying, after it |
 | `device_road` | the device's page says the same once the CYFR refuses the device | the sentence on the device's page; the same two counts |
 
 The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it
 stays with both ways on, and with a notice to show it stays on either road
 until a way on is taken.
+
+## `pair/`: two CYFRs in one window (shape `pair`)
+
+The passkey road with two CYFRs: A, `x.test`, whose account service is
+`dir.test`, and B, `dir.test` itself. One account sets up both on the
+second client; the app's account window is given that account's passkey,
+as the person's platform keeps it. B's pages and A's sign-in ceremonies
+share `dir.test`'s origin, each in a store of its own. Each front records
+the names of the cookies each request carried, never their values, and
+when each upgrade's connection closed. Three launches: `pair`, ended by a
+kill while B is being selected; `selected`, ended by a kill while B is
+being erased; `resumed`, ended by the system.
+
+| Row | What holds | What the row observes |
+|---|---|---|
+| `two_set_up` | one account sets up both CYFRs | the second client at each CYFR's own page |
+| `a_signed_in` | Sign in with your passkey on A's chooser opens A's sign-in page in A's own view and store, and Prism opens signed in there | the view and its store; A's session cookie |
+| `b_signed_in` | Connect on the rail leaves A; B's sign-in opens in B's own view and store | as `a_signed_in`, at B |
+| `a_socket_first` | A's live socket is closed at A's server before the app's first request reaches B | A's front: each upgrade open at the press and when it closed; B's front: the app's first request after the press |
+| `apart` | each CYFR's store holds its own alone; B's pages, at A's account service's origin, carry nothing A's ceremonies keep there, and A's front sees nothing of B's | each store's cookies by name and site and its local storage at both origins; the cookie names each front saw on the app's requests |
+| `a_again` | A on the rail opens A again under the session it had, asking nothing | the session cookie's digest and expiry before and after; A's store |
+| `read_only` | the rail's page keeps its read credential alone, in no address, and `cyfr` refuses it every change | the rail's own requests with that credential, each 403; its session storage's keys; its address |
+| `sign_out_alone` | Sign out at A ends A's session alone | A's cookie refused; B's still opening B |
+| `kill_selecting` | killed while B is being selected, A left, the app opens A again by itself; both stay signed in | the view and store; each store's session against the first launch's mark, and each opening its CYFR; the rail |
+| `forget_resumed` | Forget of B, killed while B's store is erased, is finished at the next start; A is as it was | B's content and ceremony stores empty; A's marks and session; the rail without B |
+| `unleft` | a `cyfr` that does not let go of the CYFR left in 20 s is ended, and a fresh one opens nothing; A's sign-in is kept | the chooser's sentence no sooner than 20 s after the press; a fresh `cyfr` process; no load of A after the press; A's session |
+| `system_quit` | ended by the system at the chooser, the app quits, and never from inside the engine's `before-quit` | as `passkey/`'s |
+
+A late or a second `left`, which a `cyfr` that keeps to the wire never
+sends, are the app's own tests' (main.test.mjs, states.test.mjs), as are
+two CYFRs that differ by port alone.
 
 Every script with a `proof.js` has one row more, `unprinted`, in its
 `app-NAME.log`: nothing the app printed carries an address's fragment or

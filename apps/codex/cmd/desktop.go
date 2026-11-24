@@ -81,7 +81,7 @@ func runDesktopServe(ctx context.Context, listen func() (net.Listener, error), f
 		// so nothing is served on the port once this returns.
 		_ = ln.Close()
 	}()
-	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL()}); err != nil {
+	if err := to.Queue(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL()}); err != nil {
 		return err
 	}
 	ran := make(chan error, 1)
@@ -115,6 +115,7 @@ func newDesktopService(ctx context.Context, device, folder string, tell func(des
 	}
 	return &desktop.Service{
 		Token:       desktop.NewToken(),
+		ReadToken:   desktop.NewToken(),
 		Homes:       shell.Homes(filepath.Join(device, "homes.json")),
 		Record:      filepath.Join(device, "holder.json"),
 		Client:      &http.Client{},

@@ -690,50 +690,43 @@ defmodule Sanctum.Consent.Commit do
   defp narrowing_sentence("names " <> _ = why), do: why
   defp narrowing_sentence(why), do: "is refused: " <> why
 
-  # The caller's requested patterns, narrowed to what the server's own
-  # config permits. Nothing is taken verbatim.
+  # The caller's requested patterns, narrowed to what the server exposes
+  # now (the candidate's `tool_patterns`: its configuration's patterns and
+  # the reserved name of each offering it declares), each kept when one
+  # the server exposes covers it in the one grammar (`Prima.ToolPattern`).
+  # Nothing is taken verbatim.
   #
   # Narrowed at the PATTERN level, not by expanding against the live tool
   # catalogue: the catalog reports `tool_names: []` for a server it could
   # not reach, so expanding would silently collapse a legitimate grant to
   # nothing whenever the upstream is down.
   #
-  # A requested `"*"` means "whatever this server exposes", so it resolves
-  # to the config itself rather than being stored as `"*"` — the operator
-  # then sees the actual patterns on the consent sheet instead of a
-  # wildcard that reads far wider than the grant it can produce.
-  defp narrow_tool_patterns(nil, config), do: {:ok, config}
+  # A requested `"*"` means "whatever tools this server exposes", so it
+  # resolves to the patterns `"*"` covers of its exposure rather than being
+  # stored as `"*"` — the operator then sees the actual patterns on the
+  # consent sheet instead of a wildcard that reads far wider than the grant
+  # it can produce. A reserved name is granted only by naming it, so
+  # neither `"*"` nor an absent key, which asks for the configured set,
+  # grants a server's resources or prompts.
+  defp narrow_tool_patterns(nil, exposed), do: narrow_tool_patterns(["*"], exposed)
 
-  defp narrow_tool_patterns(requested, config) when is_list(requested) do
-    if "*" in requested do
-      {:ok, config}
-    else
-      {:ok,
-       requested
-       |> Enum.filter(fn pattern ->
-         is_binary(pattern) and Prima.ToolPattern.valid?(pattern) and
-           covered_by_config?(pattern, config)
-       end)
-       |> Enum.uniq()
-       |> Enum.sort()}
-    end
+  defp narrow_tool_patterns(requested, exposed) when is_list(requested) do
+    {:ok,
+     requested
+     |> Enum.flat_map(fn
+       "*" -> Enum.filter(exposed, &Prima.ToolPattern.matches?("*", &1))
+       pattern -> [pattern]
+     end)
+     |> Enum.filter(fn pattern ->
+       is_binary(pattern) and Prima.ToolPattern.valid?(pattern) and
+         Enum.any?(exposed, &Prima.ToolPattern.matches?(&1, pattern))
+     end)
+     |> Enum.uniq()
+     |> Enum.sort()}
   end
 
   # Reject non-list narrowing values; only an absent key uses the configured set.
-  defp narrow_tool_patterns(_not_a_list, _config), do: :error
-
-  defp covered_by_config?(pattern, config) do
-    Enum.any?(config, fn allowed ->
-      cond do
-        allowed == "*" -> true
-        allowed == pattern -> true
-        String.ends_with?(allowed, ".*") -> String.starts_with?(pattern, dot_prefix(allowed))
-        true -> false
-      end
-    end)
-  end
-
-  defp dot_prefix(pattern), do: String.trim_trailing(pattern, "*")
+  defp narrow_tool_patterns(_not_a_list, _exposed), do: :error
 
   # An agent source's tool servers are those its own tools name
   # (`Plan.declared_tool_servers/2`), shown and never chosen: decisions

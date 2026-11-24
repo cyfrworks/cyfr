@@ -511,6 +511,9 @@ defmodule Emissary.External.ProxyTest do
 
         result =
           case body["method"] do
+            "server/discover" ->
+              %{"capabilities" => %{"tools" => %{}}}
+
             "tools/list" ->
               %{"tools" => [%{"name" => "probe", "inputSchema" => %{"type" => "object"}}]}
 
@@ -625,6 +628,7 @@ defmodule Emissary.External.ProxyTest do
       stub = HTTPStub.open()
       test = self()
       {:ok, tools} = Agent.start_link(fn -> [%{"name" => "search", "inputSchema" => %{}}] end)
+      {:ok, gh_held} = Agent.start_link(fn -> true end)
 
       answer = fn conn, body, result ->
         conn
@@ -635,17 +639,38 @@ defmodule Emissary.External.ProxyTest do
         )
       end
 
+      # gh's first listing, the one its first connect asks, is held until
+      # the test lets it go, and answers what gh listed when it was asked.
       HTTPStub.stub(stub, "POST", "/gh", fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        answer.(conn, Jason.decode!(raw), %{"tools" => Agent.get(tools, & &1)})
+        body = Jason.decode!(raw)
+        listed = %{"tools" => Agent.get(tools, & &1)}
+
+        cond do
+          body["method"] == "server/discover" ->
+            answer.(conn, body, %{"capabilities" => %{"tools" => %{}}})
+
+          Agent.get_and_update(gh_held, &{&1, false}) ->
+            send(test, {:holding, :gh, self()})
+            receive do: (:go -> answer.(conn, body, listed))
+
+          true ->
+            answer.(conn, body, listed)
+        end
       end)
 
       HTTPStub.stub(stub, "POST", "/slow", fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test, {:holding, self()})
+        body = Jason.decode!(raw)
 
-        receive do
-          :go -> answer.(conn, Jason.decode!(raw), %{"tools" => [%{"name" => "probe"}]})
+        if body["method"] == "server/discover" do
+          answer.(conn, body, %{"capabilities" => %{"tools" => %{}}})
+        else
+          send(test, {:holding, :slow, self()})
+
+          receive do
+            :go -> answer.(conn, body, %{"tools" => [%{"name" => "probe"}]})
+          end
         end
       end)
 
@@ -665,26 +690,230 @@ defmodule Emissary.External.ProxyTest do
       on_exit(fn -> Proxy.invalidate_external_tools_cache(ctx) end)
       :ok = Proxy.invalidate_external_tools_cache(ctx)
       listing = Task.async(fn -> Proxy.list_external_tools(ctx) end)
-      assert_receive {:holding, slow}, 10_000
 
-      Prima.Test.Wait.wait_until(
-        fn -> Registry.lookup(Emissary.External.ServerRegistry, {"gh", ctx.athanor_id}) != [] end,
-        10_000,
-        "gh's process to start"
-      )
+      # Both servers are connecting for the listing, which alone asks them.
+      assert_receive {:holding, :gh, gh}, 10_000
+      assert_receive {:holding, :slow, slow}, 10_000
 
-      assert {:ok, [%{"name" => "search"}]} =
-               Emissary.External.Server.get_tools("gh", ctx.athanor_id)
-
-      # gh lists nothing now: it is started again, and the listing's
-      # cache dropped, as a refresh does.
+      # gh answers the listing, and lists nothing now: its process connects
+      # again once it has answered the listing's read, which reached it
+      # first, and the listing's cache is dropped, as a refresh does.
+      send(gh, :go)
       Agent.update(tools, fn _ -> [] end)
-      :ok = Emissary.External.ServerSupervisor.stop("gh", ctx.athanor_id)
+      assert {:ok, :ready} = Emissary.External.Server.reinitialize("gh", ctx.athanor_id)
+      assert {:ok, []} = Emissary.External.Server.get_tools("gh", ctx.athanor_id)
       :ok = Proxy.invalidate_external_tools_cache(ctx)
       send(slow, :go)
 
       assert "gh:search" in Enum.map(Task.await(listing, 30_000), & &1["name"])
       refute "gh:search" in Enum.map(Proxy.list_external_tools(ctx), & &1["name"])
+    end
+  end
+
+  describe "a server's resources and prompts" do
+    # `name`, a server of `ctx`'s athanor at `path` of `stub`, declaring
+    # `offers`, its tools `search` when it offers tools: each request it is
+    # made is told to the test by its path, and each read is answered as
+    # `offered/2` answers it.
+    defp offering!(ctx, stub, name, path, offers) do
+      test = self()
+
+      HTTPStub.stub(stub, "POST", path, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+        send(test, {:asked, path, body["method"], body["params"]})
+
+        result =
+          case body["method"] do
+            "server/discover" -> %{"capabilities" => Map.new(offers, &{&1, %{}})}
+            "tools/list" -> %{"tools" => [%{"name" => "search", "inputSchema" => %{}}]}
+            method -> offered(method, body["params"])
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end)
+
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: name,
+          url: "http://127.0.0.1:#{stub.port}#{path}"
+        })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+    end
+
+    @png Base.encode64(<<137, 80, 78, 71, 0, 1, 2, 3>>)
+
+    defp offered("resources/list", _params),
+      do: %{"resources" => [%{"uri" => "file:///readme", "name" => "readme"}]}
+
+    defp offered("resources/templates/list", _params),
+      do: %{"resourceTemplates" => [%{"uriTemplate" => "file:///{path}", "name" => "file"}]}
+
+    defp offered("resources/read", %{"uri" => uri}),
+      do: %{
+        "contents" => [
+          %{"uri" => uri, "mimeType" => "text/plain", "text" => "read " <> uri},
+          %{"uri" => uri <> ".png", "mimeType" => "image/png", "blob" => @png}
+        ]
+      }
+
+    defp offered("prompts/list", _params), do: %{"prompts" => [%{"name" => "greet"}]}
+
+    defp offered("prompts/get", %{"name" => name, "arguments" => arguments}),
+      do: %{
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => %{"type" => "text", "text" => "#{name} #{arguments["who"]}"}
+          },
+          %{
+            "role" => "assistant",
+            "content" => %{"type" => "image", "mimeType" => "image/png", "data" => @png}
+          }
+        ]
+      }
+
+    test "a server that declares them lists each beside its tools, under the revision's digest, " <>
+           "and exposes each by its reserved name",
+         %{ctx: ctx} do
+      offering!(ctx, HTTPStub.open(), "docs", "/docs", ["tools", "resources", "prompts"])
+      offering!(ctx, HTTPStub.open(), "plain", "/plain", ["tools"])
+
+      listings = Proxy.list_external_tools(ctx, ["docs", "plain"])
+
+      assert for(
+               %{server_name: name, tools: tools} <- listings,
+               into: %{},
+               do: {name, Enum.map(tools, & &1["name"]) |> Enum.sort()}
+             ) ==
+               %{
+                 "docs" => ["docs:@prompts", "docs:@resources", "docs:search"],
+                 "plain" => ["plain:search"]
+               }
+
+      {:ok, row} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "docs")
+      {:ok, digest} = Sanctum.ToolServerDigest.from_server(row)
+      assert [%{server_digest: ^digest}] = Enum.filter(listings, &(&1.server_name == "docs"))
+
+      assert for(
+               %{server_name: name, tool_patterns: exposed} <- listings,
+               into: %{},
+               do: {name, Enum.sort(exposed)}
+             ) ==
+               %{"docs" => ["*", "@prompts", "@resources"], "plain" => ["*"]}
+
+      # The athanor-wide listing is its tools alone. It is kept for a while
+      # under the athanor every test here shares: the one another test left
+      # is dropped first, and this one after.
+      on_exit(fn -> Proxy.invalidate_external_tools_cache(ctx) end)
+      :ok = Proxy.invalidate_external_tools_cache(ctx)
+      refute Enum.any?(Proxy.list_external_tools(ctx), &String.contains?(&1["name"], "@"))
+    end
+
+    test "a server's resources are listed and read, a binary named and not inlined, and its " <>
+           "prompts listed and got with their roles",
+         %{ctx: ctx} do
+      offering!(ctx, HTTPStub.open(), "docs", "/docs", ["resources", "prompts"])
+      read = &call(&1, ctx, chained(ctx, &2), :in_chain)
+
+      assert read.("docs:@resources", %{"method" => "list"}) ==
+               {:ok,
+                %{
+                  "resources" => [%{"uri" => "file:///readme", "name" => "readme"}],
+                  "resourceTemplates" => [%{"uriTemplate" => "file:///{path}", "name" => "file"}]
+                }}
+
+      assert read.("docs:@resources", %{"method" => "read", "uri" => "file:///readme"}) ==
+               {:ok,
+                %{
+                  "contents" => [
+                    %{
+                      "uri" => "file:///readme",
+                      "mimeType" => "text/plain",
+                      "text" => "read file:///readme"
+                    },
+                    %{"uri" => "file:///readme.png", "mimeType" => "image/png", "bytes" => 8}
+                  ]
+                }}
+
+      assert read.("docs:@prompts", %{"method" => "list"}) ==
+               {:ok, %{"prompts" => [%{"name" => "greet"}]}}
+
+      assert read.("docs:@prompts", %{
+               "method" => "get",
+               "name" => "greet",
+               "arguments" => %{"who" => "me"}
+             }) ==
+               {:ok,
+                %{
+                  "messages" => [
+                    %{"role" => "user", "content" => %{"type" => "text", "text" => "greet me"}},
+                    %{
+                      "role" => "assistant",
+                      "content" => %{"type" => "image", "mimeType" => "image/png", "bytes" => 8}
+                    }
+                  ]
+                }}
+
+      assert {:error, {:invalid_argument, _sentence}} =
+               read.("docs:@resources", %{"method" => "get"})
+
+      assert {:error, {:invalid_argument, _sentence}} =
+               read.("docs:@resources", %{"method" => "read"})
+    end
+
+    test "a server that declares neither exposes neither, and is never asked them", %{ctx: ctx} do
+      offering!(ctx, HTTPStub.open(), "plain", "/plain", ["tools"])
+
+      for name <- ["plain:@resources", "plain:@prompts"] do
+        assert {:error, {:invalid_argument, sentence}} = Proxy.resolve(name, ctx, :in_chain)
+        assert sentence =~ "is not exposed by server 'plain'"
+      end
+
+      refute_received {:asked, "/plain", "resources/" <> _, _params}
+      refute_received {:asked, "/plain", "prompts/" <> _, _params}
+    end
+
+    # A console call is refused by the row's own opt-in before anything
+    # is started: a chain-only server is never connected for it, so the
+    # person's program is never launched by a call that is refused.
+    test "a console call to a chain-only server's resources is refused, starting nothing",
+         %{ctx: ctx} do
+      offering!(ctx, HTTPStub.open(), "docs", "/docs", ["resources"])
+
+      assert {:error, {:invalid_argument, sentence}} =
+               Proxy.resolve("docs:@resources", ctx, :external)
+
+      assert sentence =~ "reachable only from inside a chain"
+      assert Registry.lookup(Emissary.External.ServerRegistry, {"docs", ctx.athanor_id}) == []
+      refute_received {:asked, "/docs", _method, _params}
+    end
+
+    test "two athanors with a server of one name: each reads only its own", %{ctx: ctx} do
+      stub = HTTPStub.open()
+      offering!(ctx, stub, "docs", "/mine", ["resources"])
+      their_id = "ath_theirs_#{System.unique_integer([:positive])}"
+      Arca.Test.Actor.athanor!(their_id)
+      theirs = %{ctx | athanor_id: their_id}
+      offering!(theirs, stub, "docs", "/theirs", ["resources"])
+
+      assert {:ok, %{"contents" => [_text, _png]}} =
+               call(
+                 "docs:@resources",
+                 ctx,
+                 chained(ctx, %{"method" => "read", "uri" => "file:///x"}),
+                 :in_chain
+               )
+
+      assert_received {:asked, "/mine", "resources/read", %{"uri" => "file:///x"}}
+      refute_received {:asked, "/theirs", _method, _params}
     end
   end
 
@@ -741,10 +970,10 @@ defmodule Emissary.External.ProxyTest do
     end
 
     @impl true
-    def handle_call({:call_tool, _tool, _args}, _from, {:refuse, reply} = answer),
+    def handle_call({:call, {:tool, _tool, _args}}, _from, {:refuse, reply} = answer),
       do: {:reply, {:error, reply}, answer}
 
-    def handle_call({:call_tool, _tool, _args}, _from, answer),
+    def handle_call({:call, {:tool, _tool, _args}}, _from, answer),
       do: {:reply, {:ok, answer}, answer}
   end
 
