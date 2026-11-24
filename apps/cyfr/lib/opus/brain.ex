@@ -287,6 +287,22 @@ defmodule Opus.Brain do
   @spec tool_name?(term()) :: boolean()
   def tool_name?(name), do: Wire.tool_name?(name)
 
+  @doc "Whether every harness carries `tool` whole (`Opus.Brain.Wire.carried?/1`)."
+  @spec carried?(term()) :: boolean()
+  def carried?(tool), do: Wire.carried?(tool)
+
+  @doc "The argument names a tool's parameters name (`Opus.Brain.Wire.named_properties/1`)."
+  @spec named_properties(map()) :: [String.t()]
+  def named_properties(parameters), do: Wire.named_properties(parameters)
+
+  @doc "The bytes `tools` take of their line (`Opus.Brain.Wire.tools_bytes/1`)."
+  @spec tools_bytes([map()]) :: non_neg_integer()
+  def tools_bytes(tools), do: Wire.tools_bytes(tools)
+
+  @doc "The most bytes a line's tools may take, and the most tools it may name."
+  @spec max_tools() :: %{bytes: pos_integer(), count: pos_integer()}
+  def max_tools, do: %{bytes: Wire.max_tools_bytes(), count: Wire.max_list()}
+
   @doc """
   Open the session of `binding`'s thread on its program row, for the
   calling process, which becomes its attendant: a new process of the

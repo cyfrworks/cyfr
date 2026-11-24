@@ -12,8 +12,9 @@ defmodule Aqua.Loop.Request do
   schema the guest offered; a catalog tool keeps its own, but for the
   account an `execution.run` names (`connection`), which lists the apps
   whose own profile binds named accounts and their names, never an
-  entry or a value; an external server's tool rides under its wire
-  name; the `ui` event and `request_setup` are always offered.
+  entry or a value; an outside server's tool rides under the one name its
+  key spells, as its server lists it, when every harness carries it
+  (`tools/2`); the `ui` event and `request_setup` are always offered.
 
   The messages are the projection shaped for the contract, each row in
   the words `Aqua.Reader` reads it in: what the reading agent said and the
@@ -153,18 +154,44 @@ defmodule Aqua.Loop.Request do
 
   @type tool :: %{String.t() => term()}
 
+  @typedoc """
+  Why an outside entry of the offered set (`server:tool`) is not handed:
+  its server does not list it now (`:unlisted`), the turn's grant does
+  not cover it under its server's current digest (`:ungranted`), its name
+  spells no one key (`:name`, `Aqua.Loop.Binding.outside_name/1`), some
+  harness would not carry its definition whole (`:uncarried`,
+  `Opus.Brain.carried?/1`, or a property no proxied call carries to
+  its server, `Sanctum.Proxy.host_stamped/0`), or the list's line was
+  full before it (`:past_the_line`).
+  """
+  @type unhanded :: :unlisted | :ungranted | :name | :uncarried | :past_the_line
+
   @doc """
   The tools a turn offers, from the member's offered set
-  (`t:Aqua.Offered.t/0`). `opts`:
-  `:external` (the external servers' tools as `%{name, description,
-  input_schema}`), `:accounts` (the apps a launch may name an account
-  of, `t:Aqua.Hands.launch_accounts/0`, which the `connection`
-  argument's description lists; absent or nil, as when they could not be
-  read, the declared description stands). Answers the contract's `tools`
-  list.
+  (`t:Aqua.Offered.t/0`): `tools/2`'s list.
   """
   @spec tool_definitions(map(), keyword()) :: [tool()]
-  def tool_definitions(offered, opts \\ []) when is_map(offered) do
+  def tool_definitions(offered, opts \\ []) when is_map(offered),
+    do: offered |> tools(opts) |> elem(0)
+
+  @doc """
+  The tools a turn offers, from the member's offered set
+  (`t:Aqua.Offered.t/0`), as the contract's `tools` list, and each
+  outside entry not handed with why (`t:unhanded/0`). `opts`:
+  `:external` (the outside servers' tools the turn may hand, as `%{name,
+  description, input_schema}`, `name` the entry's key), `:accounts` (the
+  apps a launch may name an account of, `t:Aqua.Hands.launch_accounts/0`,
+  which the `connection` argument's description lists; absent or nil, as
+  when they could not be read, the declared description stands).
+
+  An outside tool is handed under the one name its key spells
+  (`Aqua.Loop.Binding.outside_name/1`) only when every harness carries
+  its definition whole, so every harness is handed the same list: in key
+  order, while the list's tools fit their line (`Opus.Brain.max_tools/0`), and
+  none after the first that does not.
+  """
+  @spec tools(map(), keyword()) :: {[tool()], %{String.t() => unhanded()}}
+  def tools(offered, opts \\ []) when is_map(offered) do
     hands =
       for {tool, actions} <- offered_actions(offered),
           Aqua.Hands.hand?(tool),
@@ -172,18 +199,75 @@ defmodule Aqua.Loop.Request do
         hand_tool(tool, actions)
       end
 
-    external =
-      for tool <- Keyword.get(opts, :external, []) do
-        %{
-          "name" => Aqua.Loop.Binding.model_name(tool.name),
-          "description" => tool.description || "",
-          "parameters" => tool.input_schema || %{"type" => "object"}
-        }
-      end
-
     catalog = with_accounts(catalog_tools(offered), Keyword.get(opts, :accounts))
+    last = [@ui_schema, hand_tool("request_setup", ["open"])]
+    {outside, unhanded} = outside(Keyword.get(opts, :external, []), hands ++ catalog ++ last)
+    {hands ++ catalog ++ outside ++ last, unhanded}
+  end
 
-    hands ++ catalog ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"])]
+  # The outside tools handed beside `own`, CYFR's, in key order, and why
+  # each other is not. A tool joins a list of `own` and those before it as
+  # its share of the line, its stub argument and a comma
+  # (`Opus.Brain.tools_bytes/1`).
+  defp outside(entries, own) do
+    max = Opus.Brain.max_tools()
+    room = {max.bytes - Opus.Brain.tools_bytes(own), max.count - length(own)}
+
+    {handed, unhanded, _room} =
+      entries
+      |> Enum.sort_by(& &1.name)
+      |> Enum.reduce({[], %{}, room}, fn entry, {handed, unhanded, room} ->
+        case outside_tool(entry, room) do
+          {:ok, tool, room} -> {[tool | handed], unhanded, room}
+          {:error, reason, room} -> {handed, Map.put(unhanded, entry.name, reason), room}
+        end
+      end)
+
+    {Enum.reverse(handed), unhanded}
+  end
+
+  defp outside_tool(entry, room) do
+    with {:ok, name} <- outside_name(entry.name),
+         tool = %{
+           "name" => name,
+           "description" => entry.description || "",
+           "parameters" => entry.input_schema || %{"type" => "object"}
+         },
+         :ok <- carried_whole(tool) do
+      fit(tool, room)
+    else
+      {:error, reason} -> {:error, reason, room}
+    end
+  end
+
+  defp outside_name(key) do
+    case Aqua.Loop.Binding.outside_name(key) do
+      {:ok, name} -> {:ok, name}
+      :error -> {:error, :name}
+    end
+  end
+
+  # Carried whole by every harness, and naming no argument a proxied call
+  # leaves behind, declared or required (`Opus.Brain.named_properties/1`):
+  # one the model gives that its server never sees.
+  defp carried_whole(%{"parameters" => parameters} = tool) do
+    dropped =
+      is_map(parameters) and
+        Enum.any?(Sanctum.Proxy.host_stamped(), &(&1 in Opus.Brain.named_properties(parameters)))
+
+    if Opus.Brain.carried?(tool) and not dropped, do: :ok, else: {:error, :uncarried}
+  end
+
+  # A line once full stays full: no later tool is handed past the first
+  # that did not fit.
+  defp fit(_tool, :full), do: {:error, :past_the_line, :full}
+
+  defp fit(tool, {bytes, count}) do
+    share = Opus.Brain.tools_bytes([tool]) - 1
+
+    if share <= bytes and count > 0,
+      do: {:ok, tool, {bytes - share, count - 1}},
+      else: {:error, :past_the_line, :full}
   end
 
   # The account a launch names, described by the apps that bind one: the

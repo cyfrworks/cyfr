@@ -21,6 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -35,7 +38,22 @@ const (
 	SignedOut = "signed_out"
 	// uuidPrefix starts what a post's uuid is derived from.
 	uuidPrefix = "cyfr-brain-post\x00"
+	// What every harness carries of a tool whole (Carried): Claude Code
+	// keeps a description's first MaxDescription characters, counted as
+	// JavaScript counts them, in UTF-16 code units; its stub takes a tool
+	// as one argument of at most MaxStubArgument bytes; and its driver
+	// takes the stub's answer members (uncarried) out of every call's
+	// arguments.
+	MaxDescription  = 16384
+	MaxStubArgument = 131071
+	// MaxToolsBytes bounds a list of carried tools as the stub's
+	// arguments, each a JSON string in one array (ToolsBytes): three
+	// quarters of a line, the rest for what a line carries beside them, a
+	// start's instructions and the set Claude Code's driver wraps them in.
+	MaxToolsBytes = 786432
 )
+
+var uncarried = []string{"result", "error"}
 
 var (
 	ErrUnreadable = errors.New("unreadable")
@@ -375,6 +393,140 @@ func toolOK(raw json.RawMessage) bool {
 	var name string
 	return ofType(tString, m["name"]) && json.Unmarshal(m["name"], &name) == nil &&
 		len(name) >= 1 && len(name) <= 128 && ofType(tString, m["description"]) && ofType(tObject, m["parameters"])
+}
+
+// Carried is whether a tool a line carries is one every harness carries
+// whole: its description at most MaxDescription UTF-16 code units, its
+// parameters naming none of uncarried (carriedProperties), and at most
+// MaxStubArgument bytes as the stub's argument. A line may carry a tool
+// past these, which a driver refuses; the holder hands an outside
+// server's tool only when it is carried (Aqua.Loop.Request).
+func Carried(raw json.RawMessage) bool {
+	var t Tool
+	if !toolOK(raw) || json.Unmarshal(raw, &t) != nil ||
+		len(utf16.Encode([]rune(t.Description))) > MaxDescription || !carriedProperties(t.Parameters) {
+		return false
+	}
+	arg, err := StubArgument(t)
+	return err == nil && len(arg) <= MaxStubArgument
+}
+
+// carriedProperties is whether parameters name none of uncarried
+// (namedProperties).
+func carriedProperties(parameters json.RawMessage) bool {
+	named := map[string]bool{}
+	for _, name := range namedProperties(parameters) {
+		named[name] = true
+	}
+	for _, name := range uncarried {
+		if named[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// namedProperties are the argument names parameters name at their top:
+// those their properties declare, when an object, and those their
+// required lists, when a list, there or through what composes the top:
+// each schema of allOf, anyOf and oneOf, then and else, and a $ref into
+// the same document ("#" and a JSON pointer), each schema read once.
+func namedProperties(parameters json.RawMessage) []string {
+	var root any
+	if json.Unmarshal(parameters, &root) != nil {
+		return nil
+	}
+	var names []string
+	seen := map[string]bool{}
+	var walk func(schema any)
+	walk = func(schema any) {
+		m, ok := schema.(map[string]any)
+		if !ok {
+			return
+		}
+		key, _ := json.Marshal(m)
+		if seen[string(key)] {
+			return
+		}
+		seen[string(key)] = true
+		if properties, ok := m["properties"].(map[string]any); ok {
+			for name := range properties {
+				names = append(names, name)
+			}
+		}
+		if required, ok := m["required"].([]any); ok {
+			for _, name := range required {
+				if s, ok := name.(string); ok {
+					names = append(names, s)
+				}
+			}
+		}
+		for _, composing := range []string{"allOf", "anyOf", "oneOf"} {
+			if parts, ok := m[composing].([]any); ok {
+				for _, part := range parts {
+					walk(part)
+				}
+			}
+		}
+		for _, branch := range []string{"then", "else"} {
+			walk(m[branch])
+		}
+		if ref, ok := m["$ref"].(string); ok && strings.HasPrefix(ref, "#") {
+			walk(pointed(root, strings.TrimPrefix(ref, "#")))
+		}
+	}
+	walk(root)
+	return names
+}
+
+// pointed is the schema a same-document JSON pointer names ("" the
+// whole), nil for one naming nothing.
+func pointed(root any, pointer string) any {
+	if pointer == "" {
+		return root
+	}
+	if !strings.HasPrefix(pointer, "/") {
+		return nil
+	}
+	node := root
+	for _, segment := range strings.Split(pointer[1:], "/") {
+		segment = strings.ReplaceAll(strings.ReplaceAll(segment, "~1", "/"), "~0", "~")
+		switch n := node.(type) {
+		case map[string]any:
+			node = n[segment]
+		case []any:
+			index, err := strconv.Atoi(segment)
+			if err != nil || index < 0 || index >= len(n) {
+				return nil
+			}
+			node = n[index]
+		default:
+			return nil
+		}
+	}
+	return node
+}
+
+// StubArgument is a tool as the stub's one argument: its name,
+// description and parameters as the stub's inputSchema.
+func StubArgument(t Tool) ([]byte, error) {
+	return Marshal(map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Parameters})
+}
+
+// ToolsBytes is what tools take as the stub's arguments, each a JSON
+// string in one array, as Claude Code's driver sets them: a list of
+// carried tools takes at most MaxToolsBytes.
+func ToolsBytes(tools []Tool) (int, error) {
+	args := make([]string, 0, len(tools))
+	for _, t := range tools {
+		arg, err := StubArgument(t)
+		if err != nil {
+			return 0, err
+		}
+		args = append(args, string(arg))
+	}
+	line, err := Marshal(args)
+	return len(line), err
 }
 
 func idNameOK(raw json.RawMessage) bool {

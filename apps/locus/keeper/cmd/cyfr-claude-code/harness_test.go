@@ -107,6 +107,18 @@ func TestTheStubIsGivenByItsPath(t *testing.T) {
 	}
 }
 
+// A tool reaches the stub as the one argument the brain wire measures
+// (brainwire.StubArgument, which the wire's vectors check), escapes and
+// all.
+func TestAToolIsTheStubsArgumentTheWireMeasures(t *testing.T) {
+	tool := brainwire.Tool{Name: "gh__search", Description: "a\"b\\c\n\u2028<&>", Parameters: json.RawMessage(`{"type":"object"}`)}
+	arg, err := stubTool(tool)
+	want, werr := brainwire.StubArgument(tool)
+	if err != nil || werr != nil || arg != string(want) {
+		t.Fatalf("the stub is given %s, the wire measures %s (%v, %v)", arg, want, err, werr)
+	}
+}
+
 // A work with no tools of CYFR's sets no server, so the harness keeps no
 // stub of an earlier work's tools.
 func TestAWorkWithNoToolsSetsNoServer(t *testing.T) {

@@ -21,9 +21,13 @@ defmodule Compendium.AgentSource do
       offered (`Compendium.AquaAgent.under_soul/2`), that name tool
       actions (`tool.action`, one action an entry), which consent expands
       against the live catalog: a key no catalogued action matches
-      expands to nothing (`Prima.ToolPattern.expand/2`); and
+      expands to nothing (`Prima.ToolPattern.expand/2`);
       `native_search`, the provider's own search, which no catalog action
-      is and the consent carries by its name.
+      is and the consent carries by its name; and an outside server's
+      tool (`server:tool`), whose server the consent takes as one of the
+      grant's tool servers, with exactly the tools the list names of it
+      (`Sanctum.Consent.Plan.declared_tool_servers/2`), never a server
+      the person picks.
     * `dependencies.static` are the catalysts behind the tool families
       Aqua's tools name, its hands. No brain is one: a turn's model call
       runs under the brain's own grant (its key, network and limits),
