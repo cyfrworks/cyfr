@@ -46,13 +46,26 @@ type labwc struct {
 	ended   chan struct{}
 }
 
+// socketPath is a compositor's socket in a folder of the test's own, short
+// enough for every system: macOS refuses a socket path of 104 bytes or
+// more, which a test's own temporary folder can pass.
+func socketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "wayland-0")
+}
+
 func replay(t *testing.T, file string) *labwc {
 	t.Helper()
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &labwc{socket: filepath.Join(t.TempDir(), "wayland-0"), steps: make(chan struct{}, 8), failed: make(chan string, 8),
+	l := &labwc{socket: socketPath(t), steps: make(chan struct{}, 8), failed: make(chan string, 8),
 		synced: make(chan struct{}, 1024), ended: make(chan struct{}), sync: firstSync}
 	// The recording cut at its steps: what labwc sends in each, and what
 	// it is asked across them all, in order.
@@ -282,7 +295,7 @@ func TestWindows_ThatCannotBeRead(t *testing.T) {
 		t.Fatal("a compositor that is not there was read")
 	}
 
-	socket := filepath.Join(t.TempDir(), "wayland-0")
+	socket := socketPath(t)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +334,7 @@ func TestWindows_ThatCannotBeRead(t *testing.T) {
 // through, as the reader no longer reads: it waits on that write.
 func deafCompositor(t *testing.T, windows bool) (socket string, stalled <-chan struct{}) {
 	t.Helper()
-	socket = filepath.Join(t.TempDir(), "wayland-0")
+	socket = socketPath(t)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
