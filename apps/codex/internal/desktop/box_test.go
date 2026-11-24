@@ -7,9 +7,9 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,8 +34,8 @@ type onBox struct {
 	tokens atomic.Int32
 	// hangs holds every ask whether its CYFR answers until the asker ends.
 	hangs atomic.Bool
-	mu      sync.Mutex
-	log     []string
+	mu    sync.Mutex
+	log   []string
 }
 
 func newOnBox(t *testing.T) *onBox {
@@ -183,7 +183,7 @@ func TestThisBoxOpensWhatItsFolderNamesNow(t *testing.T) {
 	}
 	old, _ := held(t, b.Homes, localAddress)
 
-	const moved = "http://localhost:4001"
+	const moved = "http://localhost:4402"
 	b.Leave(1)
 	b.next(t)
 	b.next(t)
