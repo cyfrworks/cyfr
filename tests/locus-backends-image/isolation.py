@@ -48,7 +48,8 @@ Driven only by requests signed as CYFR signs them (harness.py):
   neither reaches the service's listener. Each lists and signals only its
   own processes, has a /tmp of its own, sees no other home, terminal or
   group, reads its own memory cap at the root of its cgroup tree and can
-  mount nothing.
+  mount nothing. Two terminal sessions of that folder, open at once, each
+  hold the space's first terminal and see no other.
 - A session's name lookup reaches an upstream resolver the suite runs
   (name-listener.mjs, beside the guard as its resolver's upstream), which
   hears the session's own name.
@@ -91,6 +92,11 @@ NO_CAPS = "0000000000000000"
 PROBE_TOOLS = ["echo_env", "exit", "fail", "hog", "read_environ", "read_path", "run", "signal", "spawn_daemon",
                "whoami"]
 OPEN = {"type": "open", "program": "probe", "key": "k", "mode": "run", "argv": []}
+# A terminal's command: it names its terminal and every terminal its space
+# lists, then waits for a line.
+TTY = {"name": "tty", "home": "kept", "env": {},
+       "command": """sh -c 'echo "tty=$(tty) pts=$(ls -A /dev/pts | tr "\\n" " ")."; read line' sh"""}
+OWN_TERMINAL = b"tty=/dev/pts/0 pts=0 ptmx .\r\n"
 
 
 def home_gone(stack, home):
@@ -311,9 +317,24 @@ def test_still_network(c):
     c.release([owner])
 
 
+def test_kept_terminals(c):
+    """Two terminal sessions of one kept folder, open at once: each holds its space's first terminal and lists no
+    other. Answers their sessions, still open."""
+    terminals = []
+    for key in ("tty-one", "tty-two"):
+        status, opened = c.open(KEPT_OWNER, "tty", key=key, mode="terminal", rows=24, cols=80, home_id=KEPT_ENTRY)
+        expect(status == 200 and opened.get("status") == "running", f"the terminal session {key} opens", opened)
+        terminals.append(opened["session"])
+    for session in terminals:
+        read, _after, running = c.output_until(KEPT_OWNER, session, lambda read: b"." in read)
+        expect(running and OWN_TERMINAL in read,
+               "a terminal session of the kept folder holds its own first terminal and lists no other", read)
+    return terminals
+
+
 def test_kept_spaces(stack, run_kept, sessions, uid):
     """Two sessions of one kept folder each list and signal only their own, have a /tmp of their own, see no other
-    home, terminal or group, read their own cap and can mount nothing."""
+    home, terminal or group, read their own cap and can mount nothing, while two terminals of the folder are open."""
     first, second = sessions
     expect(run_kept(first, ["sh", "-c", "echo first > /tmp/mine"])["status"] == 0, "the first session writes its /tmp")
     seen = run_kept(second, ["cat", "/tmp/mine"])
@@ -341,7 +362,7 @@ def test_kept_spaces(stack, run_kept, sessions, uid):
 
 def test_kept_sessions(stack, c):
     """Two sessions of one kept folder, under one uid, each with its own loopback."""
-    status, answer, _ = c.sync(KEPT_OWNER, [probe(home="kept")])
+    status, answer, _ = c.sync(KEPT_OWNER, [probe(home="kept"), TTY])
     expect(status == 200, "an owner of a kept program is synced", answer)
     sessions = [c.mcp(KEPT_OWNER, "probe", key=key, home_id=KEPT_ENTRY) for key in ("mcp", "second")]
 
@@ -357,7 +378,10 @@ def test_kept_sessions(stack, c):
     expect(all(KEPT_FIRST <= w["uid"] <= KEPT_LAST for w in whos) and whos[1]["uid"] == uid
            and whos[0]["pidns"] != whos[1]["pidns"] and all(stack.outside(w) for w in whos),
            "two sessions of the kept folder run under its one uid of the kept range, each in a space of its own", whos)
+    terminals = test_kept_terminals(c)
     test_kept_spaces(stack, run_kept, sessions, uid)
+    for session in terminals:
+        c.close(KEPT_OWNER, session)
     for session, word in zip(sessions, ("first", "second")):
         expect(run_kept(session, ["sh", "-c", listen_script(KEPT_PORT, word)])["status"] == 0,
                f"the {word} session listens on port {KEPT_PORT} of its own loopback")

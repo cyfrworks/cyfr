@@ -275,8 +275,8 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 			"and, where AppArmor restricts them, kernel.apparmor_restrict_unprivileged_userns, which the profile below satisfies), "+
 			"and the container must run under the seccomp profile apps/locus/keeper/seccomp/keeper.json (/etc/cyfr/keeper.json in the image), which lets "+
 			"clone make them and a space mount its files, with its system paths unmasked (security_opt systempaths=unconfined), since a masked /proc "+
-			"lets no space mount its own, and, on a host with AppArmor, under the profile apps/codex/internal/apparmor/cyfr-locus, which `cyfr init` and "+
-			"`cyfr update` load (security_opt apparmor=cyfr-locus)", spec.Name, spec.Reach, err)
+			"lets no space mount its own, and, on a host with AppArmor, under the profile cyfr-locus (security_opt apparmor=cyfr-locus), "+
+			"which `%s` loads", spec.Name, spec.Reach, err, stage.LoadProfile)
 	}
 	devnull, err := os.Open(os.DevNull)
 	if err != nil {
