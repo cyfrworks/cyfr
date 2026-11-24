@@ -582,7 +582,8 @@ func TestOwnToolsAreOwnAndCYFRsCallsAreNot(t *testing.T) {
 	for _, e := range ofType(s.until("idle"), "own") {
 		seen = append(seen, e["name"].(string)+":"+e["phase"].(string))
 	}
-	want := []string{"read:start", "read:end", "execute:start", "execute:end", "Run mine_tool:start", "Run mine_tool:end"}
+	want := []string{"read:start", "read:end", "execute:start", "execute:end", "Run mine_tool:start", "Run mine_tool:end",
+		"Run broken_tool:start", "Run broken_tool:end"}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("own tools by name, CYFR's left out: %v", seen)
 	}

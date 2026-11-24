@@ -576,10 +576,9 @@ func (d *driver) update(params json.RawMessage) error {
 	var u struct {
 		Kind    string `json:"sessionUpdate"`
 		Message string `json:"messageId"`
-		Content struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+		// A message chunk's content is one block, a tool call's a list of
+		// them: read as the kind says.
+		Content  json.RawMessage `json:"content"`
 		CallID   string          `json:"toolCallId"`
 		Status   string          `json:"status"`
 		ToolKind string          `json:"kind"`
@@ -591,7 +590,11 @@ func (d *driver) update(params json.RawMessage) error {
 	}
 	switch u.Kind {
 	case "agent_message_chunk":
-		if u.Content.Type != "text" || u.Content.Text == "" {
+		var block struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
 			return nil
 		}
 		id := u.Message
@@ -610,8 +613,8 @@ func (d *driver) update(params json.RawMessage) error {
 			}
 		}
 		d.message = id
-		d.text.WriteString(u.Content.Text)
-		return d.c.EmitText(d.event("text").Set("message", id), "delta", u.Content.Text)
+		d.text.WriteString(block.Text)
+		return d.c.EmitText(d.event("text").Set("message", id), "delta", block.Text)
 	case "tool_call", "tool_call_update":
 		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Title, u.RawInput)
 	}

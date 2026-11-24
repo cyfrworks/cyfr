@@ -321,7 +321,7 @@ COPY --from=keeper /out/cyfr-codex /opt/cyfr/bin/cyfr-codex
 # (cyfr-antigravity). Its harness reaches CYFR's tools through the stub in
 # socket mode, on a socket inside the session's own space.
 COPY --from=keeper /out/cyfr-acp /opt/cyfr/bin/cyfr-acp
-RUN ln /opt/cyfr/bin/cyfr-acp /opt/cyfr/bin/cyfr-antigravity
+RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity
 # The pinned, checksummed fetch of a program that is not on npm into the
 # row's own folder, before it runs it (Antigravity's row): the image
 # carries no program.

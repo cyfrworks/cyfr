@@ -277,9 +277,15 @@ func fakeACP() int {
 				update(call)
 				call["status"] = "in_progress"
 				update(call)
+				// Antigravity ends a call with its content, a list.
 				call["status"] = "completed"
+				call["content"] = []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "done"}}}
 				update(call)
 			}
+			// A call first seen already failed, its content given.
+			update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "call_failed", "status": "failed", "kind": "other",
+				"title": "Run broken_tool", "rawInput": map[string]any{},
+				"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "it failed"}}}})
 			reply("ran them")
 		case strings.Contains(words, "twice"):
 			update(map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": map[string]any{"type": "text", "text": "One."}})
