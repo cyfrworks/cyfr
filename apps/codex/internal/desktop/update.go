@@ -389,10 +389,12 @@ func (s *Service) beginRun(p UpdatePlan) (func() error, error) {
 
 // UpdateClosed is main's update-closed: the window is gone, so a record it
 // showed is removed, unless its update still runs; one it never showed
-// stays for the next open. The offer held goes with the page.
+// stays for the next open. The offer held, and why a yes started nothing,
+// go with the page.
 func (s *Service) UpdateClosed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.update.refused = ""
 	if s.update.shown && !s.update.running && (s.UpdateRuns == nil || !s.UpdateRuns(s.recordProjectNow())) {
 		_ = os.Remove(s.UpdateRecord)
 		s.update.shown = false

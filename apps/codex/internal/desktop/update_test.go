@@ -220,6 +220,10 @@ func TestARunThatCannotStartSaysWhy(t *testing.T) {
 	if len(u.begun) != 0 {
 		t.Fatal("the refused offer started on a second yes")
 	}
+	a.UpdateClosed()
+	if got := a.shown(t, offeredAs(2)); got.Refused != "" {
+		t.Fatalf("the refusal outlived its window: %+v", got)
+	}
 }
 
 // An offer is the CYFR's selected at a time: a lock drops it, and so does
