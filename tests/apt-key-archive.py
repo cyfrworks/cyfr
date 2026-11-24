@@ -17,16 +17,19 @@ import os
 import sys
 
 state, releases = sys.argv[1], sys.argv[2]
+# Each path served, with the suite whose release file it answers. A file's
+# name comes from this table alone, never from a request: the three files
+# are read once, before the server listens.
 SUITES = {
     "/debian/dists/trixie/InRelease": "trixie",
     "/debian/dists/trixie-updates/InRelease": "trixie-updates",
     "/debian-security/dists/trixie-security/InRelease": "trixie-security",
 }
-
-
-def release(suite):
+CDN = {"/cdn/" + suite: suite for suite in SUITES.values()}
+RELEASES = {}
+for suite in SUITES.values():
     with open(os.path.join(releases, suite + ".InRelease"), "rb") as f:
-        return f.read()
+        RELEASES[suite] = f.read()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -44,8 +47,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(os.path.join(state, "log"), "a") as log:
             log.write(self.path + "\n")
-        if self.path.startswith("/cdn/") and self.path[len("/cdn/") :] in SUITES.values():
-            return self.answer(200, release(self.path[len("/cdn/") :]))
+        if self.path in CDN:
+            return self.answer(200, RELEASES[CDN[self.path]])
         suite = SUITES.get(self.path)
         if suite is None:
             return self.answer(404, b"not found")
@@ -57,7 +60,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f.write(self.path + "\n")
         word = answers[min(n, len(answers) - 1)]
         if word == "release":
-            return self.answer(200, release(suite))
+            return self.answer(200, RELEASES[suite])
         if word == "redirect":
             return self.answer(
                 302, b"<html><body>302 Found</body></html>", [("Location", "/cdn/" + suite), ("Content-Type", "text/html")]
