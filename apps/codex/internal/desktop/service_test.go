@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1415,9 +1414,7 @@ func TestAnAnswerToAnEarlierAttemptChangesNothing(t *testing.T) {
 		t.Fatalf("the attempts were numbered %v and %d", attempts, current)
 	}
 	for _, stale := range []uint64{attempts[0], attempts[1], current + 1} {
-		a.HomeFailed(first, stale)
 		a.HomeReady(first, stale)
-		a.HomeFailed(second, stale)
 		a.HomeReady(second, stale)
 	}
 	a.HomeReady(second, current)
@@ -1437,9 +1434,9 @@ func TestAnAnswerToAnEarlierAttemptChangesNothing(t *testing.T) {
 	a.opened(t, first)
 }
 
-// A failure for a Connect that timed out, arriving while the next reads
+// An answer for a Connect that timed out, arriving while the next reads
 // its CYFR, locks nothing and ends nothing: that Connect proposes and opens.
-func TestALateFailureDuringTheNextDiscoveryChangesNothing(t *testing.T) {
+func TestALateAnswerDuringTheNextDiscoveryChangesNothing(t *testing.T) {
 	const first, second = "https://cyfr.example.com", "https://bob.example.com"
 	a := newApp(t, t.TempDir(), offline())
 	giveUp := a.cancellable(t, first)
@@ -1457,7 +1454,6 @@ func TestALateFailureDuringTheNextDiscoveryChangesNothing(t *testing.T) {
 	}
 	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": second})
 	<-reading
-	a.HomeFailed(first, timedOut.Attempt)
 	a.HomeReady(first, timedOut.Attempt)
 	a.quiet(t)
 	close(release)
@@ -1467,48 +1463,6 @@ func TestALateFailureDuringTheNextDiscoveryChangesNothing(t *testing.T) {
 	a.ready(second)
 	if got := answered(t, done); got.Next != "/" {
 		t.Fatalf("the Connect in discovery answered %+v", got)
-	}
-}
-
-// Main's home-failed for the attempt waiting ends it unopened and is no
-// lock: the chooser's answer names its sentence, main hears nothing, the
-// record stays and the next Connect goes on.
-func TestHomeFailedEndsItsAttemptAloneAndIsNoLock(t *testing.T) {
-	const home = "https://cyfr.example.com"
-	a := newApp(t, t.TempDir(), offline())
-	in, main := io.Pipe()
-	ran := make(chan error, 1)
-	go func() { ran <- a.Run(in) }()
-	t.Cleanup(func() {
-		main.Close()
-		<-ran
-	})
-	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": home})
-	if m := a.next(t); m.Type != TypeHome || m.Attempt != 1 {
-		t.Fatalf("main heard %+v", m)
-	}
-	if _, err := io.WriteString(main, `{"version":2,"type":"home-failed","home":"`+home+`","attempt":1}`+"\n"); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := answered(t, done), (answer{Home: home, Notice: "uncleared"}); got != want {
-		t.Fatalf("answered %+v", got)
-	}
-	a.quiet(t)
-	if home, _ := a.last(t); home != "" {
-		t.Fatalf("remembered %s", home)
-	}
-	if w := a.get("/"); w.Code != http.StatusSeeOther {
-		t.Fatal("a failed attempt served the device's pages")
-	}
-	again := a.connect(t, "/bootstrap/connect", map[string]string{"address": home})
-	if m := a.next(t); m.Type != TypeHome || m.Attempt != 2 {
-		t.Fatalf("the next Connect proposed %+v", m)
-	}
-	if _, err := io.WriteString(main, `{"version":2,"type":"home-ready","home":"`+home+`","attempt":2}`+"\n"); err != nil {
-		t.Fatal(err)
-	}
-	if got := answered(t, again); got.Next != "/" {
-		t.Fatalf("the next Connect answered %+v", got)
 	}
 }
 
@@ -2353,7 +2307,6 @@ func TestEveryRequestAndMessageThatActsIsRefusedWhenStale(t *testing.T) {
 	messages := map[string]generation{
 		TypeFolderPicked: carriesEpoch | carriesPicks,
 		TypeHomeReady:    carriesAttempt,
-		TypeHomeFailed:   carriesAttempt,
 	}
 	for _, typ := range fromMain {
 		if mainCarries[typ] != messages[typ] {
@@ -2434,12 +2387,10 @@ func TestEveryRequestAndMessageThatActsIsRefusedWhenStale(t *testing.T) {
 	}
 	// Answers to a proposal that is not the one waiting open nothing; the
 	// one waiting is TestAnAnswerToAnEarlierAttemptChangesNothing's.
-	for _, ready := range []bool{true, false} {
-		a, runs := shown(t)
-		before, record := a.post(t, "/bootstrap/state", map[string]string{}), a.record(t)
-		a.answered(localAddress, 7, ready)
-		unchanged(t, a, before, record, runs, fmt.Sprintf("an answer (ready %v) to no proposal", ready))
-	}
+	a, runs := shown(t)
+	before, record := a.post(t, "/bootstrap/state", map[string]string{}), a.record(t)
+	a.HomeReady(localAddress, 7)
+	unchanged(t, a, before, record, runs, "a home-ready to no proposal")
 }
 
 // A write to main that fails ends the service, the app being gone: with
@@ -2604,7 +2555,7 @@ func TestACancelledSelectionCommitsNothing(t *testing.T) {
 		// and the request's end.
 		s.Tell = func(m Message) {
 			if m.Type == TypeHome {
-				s.ready <- true
+				s.ready <- struct{}{}
 				cancel()
 			}
 		}

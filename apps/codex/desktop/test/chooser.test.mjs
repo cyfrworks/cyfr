@@ -5,7 +5,8 @@
 // run over the elements its own page has. It stays while it has a notice to
 // show, with its way on, and moves on by itself only when it has none. On
 // the passkey road it opens the CYFR remembered by itself, and otherwise
-// shows both ways on and the way to another CYFR.
+// shows both ways on. Main's address may name a CYFR the rail selected,
+// which it connects to, or the way to set up CYFR on this computer.
 
 import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
@@ -22,8 +23,8 @@ assert.ok(script && page, "the chooser's script and page")
 const HOME = "https://cyfr.example.com"
 const COMPANY = "This CYFR requires company sign-in. Open its address in a browser to continue. The CYFR app does not support company sign-in yet."
 const PASSKEY = HOME + "/login"
-const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
-const UNFORGOTTEN = "The app locked, and could not clear the sign-in it kept on this computer. To clear it, press Connect to another CYFR, which clears it first."
+const UNFORGOTTEN = "The app locked, and could not clear the sign-in it kept on this computer. To clear it, forget this CYFR on this computer from its menu on the left."
+const UNLEFT = "The CYFR you left did not let go in time, so the app started again and opened nothing. Choose a CYFR on the left to open it."
 const OPEN = {cyfr: HOME, next: "/"}
 // The passkey road, as main says it in the chooser's address.
 const ROAD = "#token=t&road=passkey"
@@ -74,13 +75,13 @@ const reload = (went) => chooser("", OPEN, OPEN, new URL(went.address, "http://1
   {type: "reload", saved: went.entry})
 
 test("with a notice to show the chooser stays, says it, and offers its way on to the device's pages", async () => {
-  for (const [notice, words] of [["company", COMPANY], ["uncleared", UNCLEARED], ["company,uncleared", `${COMPANY} ${UNCLEARED}`],
+  for (const [notice, words] of [["company", COMPANY], ["unleft", UNLEFT], ["company,unleft", `${COMPANY} ${UNLEFT}`],
     ["nothing-it-knows,company", COMPANY]]) {
     const {$, went} = await chooser(notice, OPEN)
     assert.deepEqual(went.byItself, [], notice)
     assert.equal($("notice").textContent, words)
     assert.deepEqual([$("choose").hidden, $("road").hidden, $("words").hidden], [true, false, false], notice)
-    assert.deepEqual([$("passkey").hidden, $("either").hidden, $("another").hidden], [true, true, true],
+    assert.deepEqual([$("passkey").hidden, $("either").hidden], [true, true],
       "no passkey road where cyfr offers none")
     assert.equal($("open").textContent, HOME)
     $("words").onclick()
@@ -89,11 +90,11 @@ test("with a notice to show the chooser stays, says it, and offers its way on to
 })
 
 test("a reload of a chooser that stays keeps its notice, and its address never keeps the token", async () => {
-  const first = await chooser("company,uncleared", OPEN)
+  const first = await chooser("company,unleft", OPEN)
   assert.doesNotMatch(first.went.address, /token/)
   const again = await reload(first.went)
   assert.deepEqual(again.went.byItself, [], "the reload did not move on")
-  assert.equal(again.$("notice").textContent, `${COMPANY} ${UNCLEARED}`)
+  assert.equal(again.$("notice").textContent, `${COMPANY} ${UNLEFT}`)
   assert.equal((await chooser("", OPEN)).went.address, "/bootstrap/", "with none, the bare address")
 })
 
@@ -106,11 +107,11 @@ test("with no notice to show the chooser moves on by itself", async () => {
   }
 })
 
-test("on the passkey road the chooser stays with both ways on and the way to another CYFR, a notice or none", async () => {
+test("on the passkey road the chooser stays with both ways on, a notice or none", async () => {
   for (const notice of ["", "company"]) {
     const {$, went} = await chooser(notice, OPEN, OPEN, ROAD + (notice ? `&notice=${notice}` : ""))
     assert.deepEqual(went.byItself, [], notice)
-    assert.deepEqual([$("road").hidden, $("passkey").hidden, $("either").hidden, $("another").hidden], [false, false, false, false], notice)
+    assert.deepEqual([$("road").hidden, $("passkey").hidden, $("either").hidden], [false, false, false], notice)
     assert.equal($("notice").textContent, notice ? COMPANY : "")
     assert.deepEqual(went.asked, [], "it connects nothing by itself")
     $("passkey").onclick()
@@ -168,7 +169,7 @@ test("Try again loads nothing until a Connect at that CYFR answered with a way o
 })
 
 test("Try again shows only where main says the CYFR did not answer, and after a reload there", async () => {
-  for (const notice of ["", "company", "uncleared"]) {
+  for (const notice of ["", "company", "unleft"]) {
     const {$} = await chooser("", OPEN, OPEN, ROAD + (notice ? `&notice=${notice}` : ""))
     assert.equal($("again").hidden, true, notice)
   }
@@ -226,12 +227,22 @@ test("with a notice to show the chooser connects nothing by itself", async () =>
   assert.deepEqual(went.byItself, [])
 })
 
-test("Connect to another CYFR is asked of main, and cyfr is asked nothing", async () => {
-  const {$, went} = await chooser("", OPEN, OPEN, ROAD)
-  $("another").fire("click")
-  await settled()
-  assert.deepEqual(went.pressed, ["/bootstrap/another"])
-  assert.deepEqual(went.asked, [])
+test("a CYFR main's address names is connected to, in place of the one remembered, and the address keeps none", async () => {
+  const BOB = "https://bob.example:8443"
+  for (const hash of [`#token=t&connect=${encodeURIComponent(BOB)}`, `${ROAD}&connect=${encodeURIComponent(BOB)}`]) {
+    const {$, went} = await chooser("", {cyfr: HOME, resume: HOME}, {cyfr: BOB}, hash)
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: BOB}]], hash)
+    assert.equal($("address").value, BOB)
+    assert.equal(went.address, "/bootstrap/", "the address keeps none")
+    const again = await reload(went)
+    assert.deepEqual(again.went.asked, [], "a reload connects nothing")
+  }
+})
+
+test("set up, as main's address names it, opens at setting up on this computer", async () => {
+  const {$, went} = await chooser("", {}, OPEN, "#token=t&way=setup", {docker: [{docker: {ready: true}}]})
+  assert.deepEqual([$("choose").hidden, $("setup").hidden], [true, false])
+  assert.deepEqual(went.asked, [["/bootstrap/docker", {}]])
 })
 
 test("with no CYFR open a notice shows on Connect, and a Connect the person makes goes on", async () => {
@@ -244,12 +255,13 @@ test("with no CYFR open a notice shows on Connect, and a Connect the person make
   assert.deepEqual(went.byItself, ["/"])
 })
 
-test("an answer to a Connect whose clear failed says the sentence on the form and goes nowhere", async () => {
+test("an answer to a Connect that names its CYFR beside an error says the error on the form and goes nowhere", async () => {
+  const UNPREPARED = "The app did not get ready to open " + HOME + ". Connect again."
   for (const hash of ["#token=t", ROAD]) {
-    const {$, went} = await chooser("", {cyfr: HOME}, {cyfr: HOME, notice: "uncleared"}, hash)
+    const {$, went} = await chooser("", {cyfr: HOME}, {cyfr: HOME, error: UNPREPARED}, hash)
     $("connect").fire("submit")
     await settled()
-    assert.equal($("notice").textContent, UNCLEARED, hash)
+    assert.equal($("notice").textContent, UNPREPARED, hash)
     assert.deepEqual([$("choose").hidden, $("road").hidden], [false, true], "Connect again")
     assert.deepEqual([went.byItself, went.pressed], [[], []], hash)
     assert.equal(went.stored.get("token"), "t", "and a reload still has the run token")
@@ -268,16 +280,17 @@ const ACCOUNT = "https://cyfr.run"
 const LOOPBACK = "http://127.0.0.1:7340"
 const CHOOSER = LOOPBACK + "/bootstrap/"
 const at = (url, showing, over = {}) => ({type: "navigate", window: "content", url, target: "top", asker: "top", showing, by: showing, ...over})
-const open = [{type: "ready", url: CHOOSER + "#token=t"},
-  {type: "home", message: {type: "home", home: HOME, account: ACCOUNT, attempt: 1}},
-  {type: "taken", taken: true}, {type: "opened", home: HOME, message: {type: "opened", home: HOME, attempt: 1}}]
+const ready = {type: "ready", url: CHOOSER + "#token=t", message: {type: "ready", url: CHOOSER + "#token=t", rail: LOOPBACK + "/rail/#read=r"}}
+const open = [ready, {type: "home", message: {type: "home", home: HOME, account: ACCOUNT, attempt: 1}},
+  {type: "opened", home: HOME, message: {type: "opened", home: HOME, attempt: 1}}]
 const locked = {type: "locked", message: {type: "locked", home: HOME, account: ACCOUNT}}
 
 // Every notice, by name: its words, and what main observed that makes it
 // load the chooser with it.
 const NOTICES = {
   company: {words: COMPANY, observed: [at(HOME + "/company-login", HOME + "/login"), locked]},
-  uncleared: {words: UNCLEARED, observed: [at(CHOOSER + "another", CHOOSER), {type: "forgot", cleared: false}, locked]},
+  unleft: {words: UNLEFT, observed: [{type: "navigate", window: "rail", url: LOOPBACK + "/rail/select?cyfr=https%3A%2F%2Fbob.example",
+    target: "top", asker: "top", showing: LOOPBACK + "/rail/", by: LOOPBACK + "/rail/"}, {type: "late", id: 1}, ready]},
   unforgotten: {words: UNFORGOTTEN, observed: [locked, {type: "forgot", cleared: false}]},
   unanswered: {words: UNANSWERED, observed: [{type: "load-failed", code: -106, url: HOME + "/threads"}]}
 }
@@ -530,10 +543,9 @@ test("a Start refused because the folder changed shows the folder now and its se
   assert.deepEqual(went.asked.filter(([p]) => p === "/bootstrap/start").map(([, b]) => b), [{picks: 1, run: 0}, {picks: 2, run: 0}])
 })
 
-test("a refused Open of the CYFR set up says why, the clear that failed included", async () => {
+test("a refused Open of the CYFR set up says why", async () => {
   const done = {folder: "/home/ada/cyfr", setup: {run: 1, folder: "/home/ada/cyfr", steps: [], done: true, seq: 2}}
-  for (const [answered, words] of [[{cyfr: "http://localhost:4000", notice: "uncleared"}, UNCLEARED],
-    [{error: "CYFR locked. Connect again."}, "CYFR locked. Connect again."], [{}, "CYFR did not open."]]) {
+  for (const [answered, words] of [[{error: "CYFR locked. Connect again."}, "CYFR locked. Connect again."], [{}, "CYFR did not open."]]) {
     const {$, went} = await chooser("", done, {}, ROAD, {setup: {"/bootstrap/open": [answered]}})
     $("go").fire("click")
     await settled()

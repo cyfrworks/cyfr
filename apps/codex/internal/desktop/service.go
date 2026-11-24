@@ -80,9 +80,9 @@ func (l *Local) take() *Local {
 // directory approved for this CYFR before, goes on at once; any other is
 // shown whole beside the CYFR's address and goes on only once the person
 // approves it, and a decline contacts nothing there. Selecting sends main
-// home, numbered, and waits for that number's home-ready or home-failed;
-// only then are the device's pages, and the ticket they hand over, served,
-// and only after a home-ready. An answer to any other number is none.
+// home, numbered, and waits for that number's home-ready; only then are
+// the device's pages, and the ticket they hand over, served. An answer to
+// any other number is none.
 //
 // With a CYFR open, a Connect at that CYFR's own address is the press of
 // the chooser's passkey way on or its Try again (again), and one at any
@@ -146,7 +146,7 @@ type Service struct {
 	// answer changes anything.
 	attempts  uint64
 	current   uint64
-	ready     chan bool
+	ready     chan struct{}
 	selecting string
 	sh        *shell.Shell
 	pages     *shell.Server
@@ -345,13 +345,12 @@ var chooserRoutes = map[string]struct {
 
 // mainCarries is what each message of main's that answers something
 // carries of what it answers, as chooserRoutes says it of a request: the
-// folder-picked answer to the pick the chooser asked for, home-ready and
-// home-failed to the proposal waiting. A lock, a leave and a shutdown
+// folder-picked answer to the pick the chooser asked for, home-ready to
+// the proposal waiting. A lock, a leave and a shutdown
 // answer nothing, and always act.
 var mainCarries = map[string]generation{
 	TypeFolderPicked: carriesEpoch | carriesPicks,
 	TypeHomeReady:    carriesAttempt,
-	TypeHomeFailed:   carriesAttempt,
 }
 
 // generation names what a request or message carries of what it was
@@ -397,10 +396,8 @@ func (s *Service) stale(req request) *answer {
 var chooserBound = 60 * time.Second
 
 const (
-	// noticeUncleared is the chooser's sentence for a clear that failed.
-	noticeUncleared = "uncleared"
-	lockedSentence  = "CYFR locked. Connect again."
-	busySentence    = "This app is connecting already. Wait for it to finish."
+	lockedSentence = "CYFR locked. Connect again."
+	busySentence   = "This app is connecting already. Wait for it to finish."
 )
 
 // begin takes the one Connect a time for req at home, or answers why not,
@@ -463,8 +460,7 @@ type request struct {
 // Once a CYFR is open, Next is the device's pages. Resume, before any
 // Connect of this run, is the remembered CYFR elsewhere, which a chooser
 // on the passkey road connects by itself; a folder's is never Resume.
-// Notice names a sentence of the chooser's own, the one main's notices
-// name. Folder is where CYFR would be set up on this computer, after
+// Folder is where CYFR would be set up on this computer, after
 // Picks of main's answers to a pick, Found whether a CYFR is set up there
 // already, and Docker whether Docker answers there.
 type answer struct {
@@ -478,7 +474,6 @@ type answer struct {
 	Confirm string        `json:"confirm,omitempty"`
 	Next    string        `json:"next,omitempty"`
 	Resume  string        `json:"resume,omitempty"`
-	Notice  string        `json:"notice,omitempty"`
 	Error   string        `json:"error,omitempty"`
 	// ended is the service's end, met by a wait: answered 503.
 	ended bool
@@ -757,7 +752,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if err != nil {
 		return answer{Error: err.Error()}
 	}
-	ready := make(chan bool, 1)
+	ready := make(chan struct{}, 1)
 	s.mu.Lock()
 	if s.epoch != epoch {
 		s.mu.Unlock()
@@ -769,10 +764,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	s.Tell(proposal)
 	s.mu.Unlock()
 	select {
-	case ok := <-ready:
-		if !ok {
-			return answer{Home: home, Notice: noticeUncleared}
-		}
+	case <-ready:
 	case <-run.Done():
 		if !s.live(epoch) {
 			return answer{Error: lockedSentence}
@@ -1042,24 +1034,14 @@ func (s *Service) openFolder(ctx context.Context, epoch uint64, req request) ans
 
 // HomeReady is main's home-ready for an attempt at home: the one waiting,
 // or nothing.
-func (s *Service) HomeReady(home string, attempt uint64) { s.answered(home, attempt, true) }
-
-// HomeFailed is main's home-failed for an attempt at home: the one waiting
-// ends unopened, with no lock, or nothing.
-func (s *Service) HomeFailed(home string, attempt uint64) { s.answered(home, attempt, false) }
-
-func (s *Service) answered(home string, attempt uint64, ready bool) {
+func (s *Service) HomeReady(home string, attempt uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	answers := TypeHomeFailed
-	if ready {
-		answers = TypeHomeReady
-	}
-	if s.stale(request{Home: home, Attempt: attempt, carries: mainCarries[answers]}) != nil {
+	if s.stale(request{Home: home, Attempt: attempt, carries: mainCarries[TypeHomeReady]}) != nil {
 		return
 	}
 	select {
-	case s.ready <- ready:
+	case s.ready <- struct{}{}:
 	default:
 	}
 }
@@ -1159,8 +1141,6 @@ func (s *Service) Run(in io.Reader) error {
 		switch m.Type {
 		case TypeHomeReady:
 			s.HomeReady(m.Home, m.Attempt)
-		case TypeHomeFailed:
-			s.HomeFailed(m.Home, m.Attempt)
 		case TypeLock:
 			s.Lock("Locked.")
 		case TypeLeave:

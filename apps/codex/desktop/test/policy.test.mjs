@@ -179,7 +179,7 @@ test("the account window's document frames nothing, keeping its own policies, wh
   // the next visit's document with that response, or with its kept copy.
   for (const resourceType of ["mainFrame", "subFrame", "xhr", "other"]) {
     const got = documentHeaders("account", resourceType, {"Content-Security-Policy": ["script-src 'self'"]})
-    assert.deepEqual(got["Content-Security-Policy"], ["script-src 'self'", "frame-src 'none'"], resourceType)
+    assert.deepEqual(got["Content-Security-Policy"], ["script-src 'self'", "frame-src 'none'", "worker-src 'none'"], resourceType)
     assert.ok(!("Permissions-Policy" in got), resourceType)
   }
 })

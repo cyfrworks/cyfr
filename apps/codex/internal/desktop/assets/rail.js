@@ -9,27 +9,61 @@ const list = document.getElementById("cyfrs")
 const said = document.getElementById("said")
 // A press is a navigation to an address main alone answers: the rail
 // changes nothing itself.
-const go = (path, home) => location.assign(path + "?cyfr=" + encodeURIComponent(home))
+const go = (path, address) => location.assign(path + "?cyfr=" + encodeURIComponent(address))
 // The hue a CYFR's tile takes, from its whole address: two CYFRs whose
 // names begin alike are still told apart.
-function hue(home) {
+function hue(address) {
   let h = 0
-  for (const c of home) h = (h * 31 + c.codePointAt(0)) >>> 0
+  for (const c of address) h = (h * 31 + c.codePointAt(0)) >>> 0
   return h % 360
 }
-// What a tile names: the host's first label and its port when it has
-// one, or the folder of a CYFR on this computer; its initials are the
-// first letters of that name's words, or its first two letters.
-function named(c) {
+// What each row is called, shortest first: a CYFR elsewhere by its host's
+// first label, then more of its host, then its port and its scheme, the
+// whole address last; a CYFR on this computer by its folder's name, then
+// more of the folder's path. labels picks for each row the shortest that
+// no other row reads too, so two rows never differ by colour alone.
+function names(c) {
   const u = new URL(c.cyfr)
-  const base = c.folder ? c.folder.split(/[\\/]/).filter(Boolean).pop() : u.hostname.split(".")[0]
-  const name = base + (!c.folder && u.port ? ":" + u.port : "")
-  const words = base.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
-  const initials = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)
-  return {initials: initials.toUpperCase(), name}
+  if (c.folder) {
+    const parts = c.folder.split(/[\\/]/).filter(Boolean)
+    const out = []
+    for (let n = 1; n <= parts.length; n++) out.push(parts.slice(-n).join("/"))
+    return [...out, c.cyfr]
+  }
+  const labels = u.hostname.split(".")
+  const out = []
+  for (let n = 1; n <= labels.length; n++) out.push(labels.slice(0, n).join("."))
+  if (u.port) out.push(u.host)
+  return [...out, c.cyfr]
 }
-function row(c) {
-  const {initials, name} = named(c)
+function labels(cyfrs) {
+  const choices = cyfrs.map(names)
+  const at = cyfrs.map(() => 0)
+  for (;;) {
+    const shown = choices.map((c, i) => c[at[i]])
+    let moved = false
+    for (const name of new Set(shown)) {
+      const same = shown.flatMap((other, i) => other === name ? [i] : [])
+      if (same.length < 2) continue
+      // Those with a shorter name still to give go on first, so a row
+      // keeps a short name while another can still be told apart from it.
+      const shorter = same.filter((i) => at[i] + 2 < choices[i].length)
+      const go = (shorter.length ? shorter : same).filter((i) => at[i] + 1 < choices[i].length)
+      for (const i of go) at[i]++
+      moved ||= go.length > 0
+    }
+    if (!moved) return shown
+  }
+}
+// A label may break after a dot, a slash or a colon, never inside a word.
+const breakable = (name) => name.replace(/([./:])/g, "$1\u200b")
+// A tile's initials: the first letters of its first name's words, or its
+// first two letters.
+function initials(c) {
+  const words = names(c)[0].split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)).toUpperCase()
+}
+function row(c, name) {
   const li = document.createElement("li")
   const a = document.createElement("a")
   a.className = "cyfr" + (c.forgetting ? " gone" : "") + (c.failed ? " failed" : "")
@@ -42,10 +76,10 @@ function row(c) {
   const tile = document.createElement("span")
   tile.className = "tile"
   tile.setAttribute("aria-hidden", "true")
-  tile.textContent = initials
+  tile.textContent = initials(c)
   const label = document.createElement("span")
   label.className = "name"
-  label.textContent = name
+  label.textContent = breakable(name)
   a.append(tile, label)
   // Its menu, which main draws: the context key, Shift+F10 or Delete,
   // a press held on a touch screen, or the pointer's other button.
@@ -64,7 +98,8 @@ function row(c) {
   return li
 }
 function show(answer) {
-  list.replaceChildren(...answer.cyfrs.map(row))
+  const shown = labels(answer.cyfrs)
+  list.replaceChildren(...answer.cyfrs.map((c, i) => row(c, shown[i])))
   said.textContent = answer.error || ""
 }
 async function watch() {

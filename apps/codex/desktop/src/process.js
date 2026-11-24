@@ -24,7 +24,6 @@ const FIELDS = {
   left: {required: ["id"]},
   erase: {required: ["id", "home"], optional: ["account"]},
   "home-ready": {required: ["home", "attempt"]},
-  "home-failed": {required: ["home", "attempt"]},
   lock: {required: []},
   leave: {required: ["id"]},
   shutdown: {required: []},
@@ -34,7 +33,7 @@ const FIELDS = {
 }
 
 const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "left", "erase"]
-const FROM_MAIN = ["home-ready", "home-failed", "lock", "leave", "shutdown", "folder-picked", "forget", "erased"]
+const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked", "forget", "erased"]
 
 /**
  * Whether `path` is a folder spelled from a root on any system the app

@@ -30,7 +30,7 @@ import (
 // a fresh shell's page, and proposes home again as the next attempt:
 // whatever main had of the last one, it takes the CYFR anew.
 // Only the current attempt is answered: a home-ready for another, or one
-// already answered, and a home-failed for another, change nothing. main's
+// already answered, changes nothing. main's
 // lock and leave, its shutdown and the end of its pipe are a lock of the
 // shell; the last two end it as well. Every message goes through the
 // writer's queue (desktop.Writer.Queue), so nothing the shell does waits
@@ -169,13 +169,6 @@ func (a *screenApp) show(lock func(why string)) error {
 				a.say(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home, Attempt: a.attempt})
 			}
 			a.mu.Unlock()
-		case desktop.TypeHomeFailed:
-			a.mu.Lock()
-			current := m.Home == a.home.Home && m.Attempt == a.attempt
-			a.mu.Unlock()
-			if current {
-				return errors.New("the app could not keep to the CYFR here")
-			}
 		case desktop.TypeLock:
 			// main waits for locked, which the lock's hide says.
 			lock("Locked.")

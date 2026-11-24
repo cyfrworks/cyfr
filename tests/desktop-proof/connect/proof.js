@@ -7,7 +7,7 @@
 // account service this computer approved.
 
 import {fromCause, processLoss} from "../bound.mjs"
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, frame, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
@@ -60,11 +60,11 @@ async function connectPhase() {
     "the run's camera and microphone are granted to a page by a browser that allows them", {control})
 
   // chooser: the app's first page, with nothing to tell and, on this
-  // road, no passkey and no other CYFR to go to.
+  // road, no passkey.
   let w = await contentAt(atBootstrap, "the chooser")
   const chooser = await waitFor(async () => {
     const c = await js(w.webContents, `({choose: !document.querySelector("#choose").hidden, notice: document.querySelector("#notice").textContent,
-      ways: ["#passkey", "#another"].filter((id) => document.querySelector(id).getClientRects().length > 0)})`)
+      ways: ["#passkey"].filter((id) => document.querySelector(id).getClientRects().length > 0)})`)
     return c.choose ? c : null
   }, "the chooser")
   row("chooser", chooser.notice === "" && chooser.ways.length === 0,
@@ -219,7 +219,7 @@ async function connectPhase() {
     i.dispatchEvent(new Event("input", {bubbles: true})); document.querySelector('#api-key-form button[type="submit"]').click() })()`)
   await waitFor(() => js(w.webContents, `!!document.querySelector('[data-test="confirm-device"]')`), "Confirm on this device")
   await js(w.webContents, `document.querySelector('[data-test="confirm-device"]').click()`)
-  const confirm = await waitFor(() => appWindows().find((x) => x.getParentWindow() === w && x.webContents.getURL().startsWith(LOOPBACK + "/confirm")),
+  const confirm = await waitFor(() => appWindows().find((x) => x.getParentWindow() === frame() && x.webContents.getURL().startsWith(LOOPBACK + "/confirm")),
     "the device's confirmation window")
   const confirmForm = () => js(confirm.webContents, `!!document.querySelector('form[action="/confirm/decide"]')`)
   await waitFor(confirmForm, "the confirmation page")

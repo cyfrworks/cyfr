@@ -38,7 +38,7 @@ const (
 	TypeReady = "ready"
 	// Home names the CYFR selected, the account service approved for it and
 	// how to reach it, as a numbered attempt; main answers the attempt it
-	// holds current, home-ready or home-failed, with its number.
+	// holds current, home-ready, with its number.
 	TypeHome = "home"
 	// Opened says cyfr committed the CYFR home proposed, naming it and its
 	// attempt: main holds it as selected from then on, and until then
@@ -65,10 +65,7 @@ const (
 // The messages the app's main process sends cyfr.
 const (
 	TypeHomeReady = "home-ready"
-	// HomeFailed says main could not make what it keeps that CYFR's own:
-	// the attempt it numbers opens nothing. It is no lock.
-	TypeHomeFailed = "home-failed"
-	TypeLock       = "lock"
+	TypeLock      = "lock"
 	// Leave locks and lets go of the CYFR committed, numbered by main as
 	// one departure of the run: main sends it once it cleared what it kept
 	// of that CYFR, and cyfr answers left with its id, after the locked
@@ -101,7 +98,6 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeLeft:         {required: []string{"id"}},
 	TypeErase:        {required: []string{"id", "home"}, optional: []string{"account"}},
 	TypeHomeReady:    {required: []string{"home", "attempt"}},
-	TypeHomeFailed:   {required: []string{"home", "attempt"}},
 	TypeLock:         {},
 	TypeLeave:        {required: []string{"id"}},
 	TypeShutdown:     {},
@@ -110,7 +106,7 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeErased:       {required: []string{"id", "ok"}},
 }
 
-var fromMain = []string{TypeHomeReady, TypeHomeFailed, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked, TypeForget, TypeErased}
+var fromMain = []string{TypeHomeReady, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked, TypeForget, TypeErased}
 
 // Message is one message in either direction. Path is a folder-picked
 // answer's folder, nil when none was picked. Attempt is a proposal's

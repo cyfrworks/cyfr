@@ -200,11 +200,11 @@ six-word road first: a passkey a browser makes is approved only on a
 device's own screen, so it is the trusted device for the passkey the
 account window makes. The app is launched four times (`run.sh`):
 `passkey`, killed right after a sign-in; `kept`, which then quits;
-`closed`, where `cyfr` is then lost; and `left`, signed out for another CYFR.
+`closed`, where `cyfr` is then lost; and `left`, where the CYFR is left from the rail and then forgotten.
 
 | Row | What holds | What the row observes |
 |---|---|---|
-| `first_open` | a CYFR just connected opens at its root; sent from there to sign in, main refuses that and the chooser shows both ways on | the navigation to the root; main's decision on the redirect; both ways and Connect to another CYFR in sight |
+| `first_open` | a CYFR just connected opens at its root; sent from there to sign in, main refuses that and the chooser shows both ways on | the navigation to the root; main's decision on the redirect; both ways in sight |
 | `device` | this computer's device is enrolled and opens Prism | Prism |
 | `device_lock` | the device's Lock ends its session, the app forgets it, and the chooser shows both ways on | the cookie before and after; none left in the content's session; no sign-out |
 | `passkeys_policy` | with a usable authenticator in the content window, both passkey calls in the CYFR's page and a frame are refused by the app's policy | each call's refusal naming the denied feature |
@@ -232,13 +232,11 @@ account window makes. The app is launched four times (`run.sh`):
 | `chooser_history` | the engine's own move in the history, which asks main nothing, brings back the chooser's entry of a failure with no notice and no Try again | the document's navigation type, `back_forward`; the ways on in sight, no words and no Try again |
 | `process_loss` | `cyfr`'s loss closes the content, tells the person and signs nobody out | the app's message; no sign-out; the cookie still opening a page |
 | `system_quit_lost`, `system_quit` | ended by the system, after `cyfr`'s loss or at the chooser, the app quits, and never from inside the engine's `before-quit`, from which a quit is lost | SIGTERM to the app's own process; the app's own quit asked after that event returned; the engine's `quit` within 20 s; the process then gone by itself within 30 s (`launch.sh`) |
-| `another_uncleared` | Connect to another CYFR does not advance past a clear that failed, and says so | the engine's clear made to fail; the ways on and the sentence; the proof's cookie and local storage item still kept |
-| `another` | signed out, Connect to another CYFR clears all that was kept of the CYFR left, and main keeps to it no more | those marks there before; no cookie of any site and no item of that origin after; the form; main's refusal of that CYFR's page |
+| `left` | Connect on the rail leaves the CYFR open: its sign-in stays kept on this computer, and main keeps to it no more | the proof's cookie and local storage item in the CYFR's kept storage before and after; the chooser's form; main's refusal of that CYFR's page |
+| `forget_unerased` | Forget that could not erase leaves the CYFR on the rail, not forgotten, and its sign-in as it was | the row's menu answered Forget and confirmed; the engine's clear made to fail; the rail's row marked so; the marks still kept |
+| `forgot` | Forget again erases all this computer kept of the CYFR, and the rail lists it no more | no cookie of any site and no item of that origin in its kept storage; the rail without the row |
 
-**`passkey-self/`** (shape `self`): `uncleared` (with the engine's clear
-made to fail the Connect opens nothing and locks nothing: the same
-chooser's form saying so, nothing of the CYFR loaded and `cyfr` running
-on), `same_origin_hop` (the sign-in opens
+**`passkey-self/`** (shape `self`): `same_origin_hop` (the sign-in opens
 the CYFR's own account page in the account window), `same_origin_sign_in`,
 `passkeys_policy` (Prism's page, at the account pages' own origin, refused
 both calls) and `home_paths` (the account window refuses the CYFR's own
@@ -249,7 +247,7 @@ page at that same origin, and the ceremony ends).
 | Row | What holds | What the row observes |
 |---|---|---|
 | `account_road` | the passkey signs in, the CYFR's company page closes it in the app, and the chooser stays to send the person to a browser | the sentence's words and the chooser's way on, both in sight, with no move before it is pressed; no sign-out posted; no request starting a company sign-in and none at the issuer |
-| `notice_kept` | a reload and a second lock over the chooser that is keeping a notice leave the notice there | the words, staying, after each, the second lock's own beside them (Connect to another CYFR, the engine's clear made to fail) |
+| `notice_kept` | a reload over the chooser that is keeping a notice leaves the notice there | the words, staying, after it |
 | `device_road` | the device's page says the same once the CYFR refuses the device | the sentence on the device's page; the same two counts |
 
 The chooser is `cyfr`'s own, with nothing stood in: on the passkey road it

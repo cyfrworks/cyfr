@@ -27,7 +27,7 @@ import {createHash} from "node:crypto"
 import {appendFileSync, readFileSync, readdirSync, writeFileSync} from "node:fs"
 import path from "node:path"
 
-import {BrowserWindow, app, net, powerMonitor, session} from "electron"
+import {BaseWindow, BrowserWindow, Menu, app, net, powerMonitor, session} from "electron"
 
 import {startApp} from "../../apps/codex/desktop/src/app.js"
 import {MARKER, scrub, scrubbed} from "./scrub.mjs"
@@ -106,14 +106,52 @@ export const text = (wc) => js(wc, "document.body ? document.body.innerText : ''
 
 export let client = null // the person's second client, the proof's own window
 
+// A row's menu on the rail, which main draws with Electron's own: the
+// person's pick is stood in for here, its first item, with what it
+// offered recorded.
+export const menus = []
+Menu.buildFromTemplate = (template) => ({popup() {
+  menus.push(template.map((item) => item.label))
+  log(`menu: offered ${JSON.stringify(menus.at(-1))}, picked ${template[0]?.label}`)
+  setImmediate(() => template[0]?.click?.())
+}})
+
 export function appWindows() {
   return BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w !== client)
 }
 
-// The content window: the app's one window with no parent showing a page
-// of the device or the CYFR.
+/** The app's one window, which holds the rail and the content as views. */
+export function frame() {
+  return BaseWindow.getAllWindows().find((w) => !w.isDestroyed() && !(w instanceof BrowserWindow)) ?? null
+}
+
+// Each view of the app's window as the proofs read a window: one object
+// for each view, so two reads of the same view are the same.
+const asWindows = new WeakMap()
+function asWindow(view) {
+  if (!asWindows.has(view)) {
+    asWindows.set(view, {view, webContents: view.webContents, getParentWindow: () => null, getBounds: () => view.getBounds(),
+      isDestroyed: () => view.webContents.isDestroyed(),
+      isVisible: () => !view.webContents.isDestroyed() && !!frame()?.isVisible() && frame().contentView.children.includes(view)})
+  }
+  return asWindows.get(view)
+}
+
+/** The views of the app's window, the rail's and the content's. */
+export function views() {
+  const f = frame()
+  return f ? f.contentView.children.filter((v) => v.webContents && !v.webContents.isDestroyed()).map(asWindow) : []
+}
+
+/** The rail's view: the list of CYFRs beside the content. */
+export function rail() {
+  return views().find((w) => w.webContents.getURL().startsWith(LOOPBACK + "/rail/"))
+}
+
+// The content: the view of the app's window showing a page of the device
+// or the CYFR.
 export function content() {
-  return appWindows().find((w) => !w.getParentWindow() && /^https?:/.test(w.webContents.getURL()))
+  return views().find((w) => /^https?:/.test(w.webContents.getURL()) && !w.webContents.getURL().startsWith(LOOPBACK + "/rail/"))
 }
 
 export async function contentAt(test, what) {
@@ -450,21 +488,6 @@ export const toldUnanswered = (out, again) => out.failed && out.words === UNANSW
   out.visible && out.window && out.same && out.opens && out.locks.length === 0 && out.signOuts.length === 0
 
 // The sentence a clear that failed leaves on the chooser.
-export const UNCLEARED = "The app could not clear the sign-in it kept on this computer, so it opened no other CYFR: try again."
-
-// `act` done while the engine cannot clear the content's storage, which
-// window `w` holds.
-export async function unclearable(w, act) {
-  const ses = w.webContents.session
-  const own = ses.clearStorageData
-  ses.clearStorageData = () => Promise.reject(new Error("the proof: nothing can be cleared"))
-  try {
-    return await act()
-  } finally {
-    ses.clearStorageData = own
-  }
-}
-
 // The computer locked and asleep, as the system tells every program, while
 // Prism shows in `w`: what of the session it changed.
 export async function throughComputerLock(w) {
@@ -665,9 +688,9 @@ function systemEnds(name, what) {
 // its fragment, its headings and its notices; never its text, which may
 // show a recovery code, a passphrase or a new key.
 export async function where() {
-  const all = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed())
+  const all = [...BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()), ...views()]
   return Promise.all(all.map(async (w) => ({
-    window: w === client ? "second client" : w.getParentWindow() ? "child" : "app",
+    window: w === client ? "second client" : w.getParentWindow() ? "child" : w === rail() ? "rail" : "app",
     url: bare(w.webContents.getURL()),
     shows: await Promise.race([js(w.webContents, `({headings: [...document.querySelectorAll("h1, h2")].map((h) => h.textContent.trim().slice(0, 120)),
       notices: [...document.querySelectorAll("#notice, .notice, .error, #refused-text")].map((n) => n.textContent.trim().slice(0, 240)).filter(Boolean)})`)
@@ -690,7 +713,8 @@ export function run(name, phases, options = {}) {
     // Main closes in the same turn it says the lock in.
     if (line.startsWith("locked: ")) {
       historyAtLock.push(history.length)
-      queueMicrotask(() => closedAtLock.push(appWindows().every((w) => !/^https?:/.test(w.webContents.getURL()))))
+      queueMicrotask(() => closedAtLock.push([...appWindows(), ...views()].every((w) => !/^https?:/.test(w.webContents.getURL()) ||
+        w.webContents.getURL().startsWith(LOOPBACK + "/rail/"))))
     }
     log(`app: ${line}`)
   }})
