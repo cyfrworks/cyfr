@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -743,5 +744,98 @@ func TestUninstallLeavesAndNamesTheDeviceKey(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(device, "holder.json")); err != nil {
 		t.Errorf("the device key is gone: %v", err)
+	}
+}
+
+// appBundleLayout makes, in dir, the CYFR app as this system's packaging
+// lays it out, and answers the bundle and the cyfr inside it.
+func appBundleLayout(t *testing.T, dir string) (bundle, cyfr string) {
+	t.Helper()
+	switch runtime.GOOS {
+	case "darwin":
+		bundle = filepath.Join(dir, "CYFR.app")
+		cyfr = filepath.Join(bundle, "Contents", "Resources", "cyfr")
+		writeFile(t, filepath.Join(bundle, "Contents", "MacOS", "CYFR"), "the app")
+	case "windows":
+		bundle, cyfr = dir, filepath.Join(dir, "resources", "cyfr.exe")
+		writeFile(t, filepath.Join(bundle, "CYFR.exe"), "the app")
+	default:
+		bundle, cyfr = dir, filepath.Join(dir, "resources", "cyfr")
+		writeFile(t, filepath.Join(bundle, "CYFR"), "the app")
+	}
+	writeFile(t, cyfr, "the app's cyfr")
+	return resolvedPath(t, bundle), resolvedPath(t, cyfr)
+}
+
+// The cyfr inside an app's bundle, wherever the bundle lies, is never
+// removed alone: removed alone, it breaks the app's signature, as cyfr
+// uninstall did on macOS and Windows. It stays, named with its app.
+func TestUninstallNeverRemovesTheCyfrInsideAnAppsBundle(t *testing.T) {
+	bundle, cyfr := appBundleLayout(t, t.TempDir())
+	savedSelf, savedLink, savedCask, savedMachine, savedCyfr := selfExecutable, usrLocalLink, caskInstalled, machine, appCyfr
+	t.Cleanup(func() {
+		selfExecutable, usrLocalLink, caskInstalled, machine, appCyfr = savedSelf, savedLink, savedCask, savedMachine, savedCyfr
+	})
+	selfExecutable = func() (string, error) { return cyfr, nil }
+	usrLocalLink = filepath.Join(t.TempDir(), "no-link")
+	caskInstalled = func() bool { return false }
+	elsewhere := filepath.Join(t.TempDir(), "cyfr")
+	appCyfr = func() (string, error) { return elsewhere, nil }
+	t.Chdir(t.TempDir())
+	p, err := readUninstallPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.self != "" || p.bundled != cyfr {
+		t.Fatalf("the plan removes %q and keeps %q as the app's, want %q kept", p.self, p.bundled, cyfr)
+	}
+	var out strings.Builder
+	p.show(&out)
+	if want := "  this program, " + cyfr + ", inside the CYFR app at " + bundle + ", which goes with the app alone\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("the plan does not say %q:\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), "  this program, "+cyfr+"\n") {
+		t.Errorf("the plan removes the app's cyfr:\n%s", out.String())
+	}
+}
+
+// The installed app this system's installer put there: on macOS the
+// uninstall removes its bundle whole, this program inside it with it; on
+// Windows it names Windows Installer's removal and removes nothing of it.
+func TestUninstallRemovesOrNamesTheInstalledApp(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("the DEB's app is the package tool's (TestUninstallLeavesAPackagesProgramToThePackage)")
+	}
+	bundle, cyfr := appBundleLayout(t, t.TempDir())
+	savedSelf, savedLink, savedCask, savedMachine, savedCyfr := selfExecutable, usrLocalLink, caskInstalled, machine, appCyfr
+	t.Cleanup(func() {
+		selfExecutable, usrLocalLink, caskInstalled, machine, appCyfr = savedSelf, savedLink, savedCask, savedMachine, savedCyfr
+	})
+	selfExecutable = func() (string, error) { return cyfr, nil }
+	usrLocalLink = filepath.Join(t.TempDir(), "no-link")
+	caskInstalled = func() bool { return false }
+	appCyfr = func() (string, error) { return cyfr, nil }
+	machine.appPresent = func() bool { return true }
+	t.Chdir(t.TempDir())
+	p, err := readUninstallPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	p.show(&out)
+	if runtime.GOOS == "darwin" {
+		if p.bundle != bundle || p.self != "" || p.msi {
+			t.Errorf("the plan removes the bundle %q and the program %q, msi %v; want the bundle %q alone", p.bundle, p.self, p.msi, bundle)
+		}
+		if want := "  the CYFR app, " + bundle + ", once it is closed, and this program inside it\n"; !strings.Contains(out.String(), want) {
+			t.Errorf("the plan does not say %q:\n%s", want, out.String())
+		}
+		return
+	}
+	if !p.msi || p.bundle != "" || p.self != "" {
+		t.Errorf("the plan names the MSI %v, removes the bundle %q and the program %q", p.msi, p.bundle, p.self)
+	}
+	if want := "  the CYFR app, which Windows Installer installed, and the cyfr inside it: remove CYFR in Windows' Settings, Apps, Installed apps\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("the plan does not say %q:\n%s", want, out.String())
 	}
 }
