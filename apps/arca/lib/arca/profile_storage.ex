@@ -128,10 +128,10 @@ defmodule Arca.ProfileStorage do
 
   @doc """
   Revoke a profile as its person does (`profile.revoke`): from any status,
-  recording the person as the cause, in one conditional write. A row a
-  removal revoked is the person's revocation after it; a row its person
-  already revoked is left as it is, its time included, and answers `:ok`.
-  A row the athanor does not hold is `{:error, :not_found}`.
+  recording the person as the cause, in one conditional write. A row
+  already revoked, by a removal or by the person, is the person's
+  revocation after it. A row the athanor does not hold is
+  `{:error, :not_found}`.
   """
   @spec revoke_by_person(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :database_error}
@@ -141,34 +141,17 @@ defmodule Arca.ProfileStorage do
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_by_person", fn ->
       case Arca.Repo.update_all(
-             from(p in Profile,
-               where:
-                 p.id == ^id and p.status in ^from and
-                   not (p.status == "revoked" and p.revoked_by == "person")
-             )
+             from(p in Profile, where: p.id == ^id and p.status in ^from)
              |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: [status: "revoked", revoked_by: "person", updated_at: DateTime.utc_now()]
            ) do
         {1, _} -> :ok
-        {0, _} -> revoked_by_person(athanor_id, id)
+        {0, _} -> {:error, :not_found}
       end
     end)
   end
 
   def revoke_by_person(%Prima.Actor{}, _id), do: {:error, :no_athanor}
-
-  # Why the person's revoke changed nothing: the row was theirs already,
-  # or the athanor holds no such row.
-  defp revoked_by_person(athanor_id, id) do
-    theirs? =
-      from(p in Profile,
-        where: p.id == ^id and p.status == "revoked" and p.revoked_by == "person"
-      )
-      |> Arca.QueryHelpers.where_athanor(athanor_id)
-      |> Arca.Repo.exists?()
-
-    if theirs?, do: :ok, else: {:error, :not_found}
-  end
 
   @doc """
   Revoke every profile of a name-level source ref that is not already

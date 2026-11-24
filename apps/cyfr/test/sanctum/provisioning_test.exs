@@ -536,21 +536,41 @@ defmodule Sanctum.ProvisioningTest do
       stays_revoked!(ctx)
     end
 
-    test "the newest default decides: one granted again and then removed is minted at an " <>
-           "install, whatever its person does to the older one",
+    test "stays revoked once its person revoked a default, though a newer default was " <>
+           "granted and removed, and the person revoked the older one again",
          %{bundle_dir: bundle_dir} do
       ctx = provisioned!(bundle_dir, "regranted")
       older = person_revokes!(ctx, @foo)
       person_grants!(ctx, "default")
       removed!(ctx)
-
-      # The person revokes the older default again: it was theirs already.
       revoke_by_id!(ctx, older)
 
       assert {:ok, _} = Filler.install_shipped(ctx, @foo)
 
-      assert {:ok, [%{label: "default", kind: :owner, status: :active}]} =
-               Sanctum.Consent.profiles(ctx, @foo)
+      stays_revoked!(ctx)
+    end
+
+    # The person's no stands over every removal and install that follow:
+    # the component waits, says its grant was revoked, and is granted by
+    # the person's own consent on the same path as before.
+    test "stays revoked after its person consented again and the component was removed and " <>
+           "installed again, until the person consents again",
+         %{bundle_dir: bundle_dir} do
+      ctx = provisioned!(bundle_dir, "consented-again")
+      person_revokes!(ctx, @foo)
+      person_grants!(ctx, "default")
+      assert {:ok, [%{label: "default", status: :active}]} = Sanctum.Consent.profiles(ctx, @foo)
+      removed!(ctx)
+
+      assert {:ok, _} = Filler.install_shipped(ctx, @foo)
+
+      stays_revoked!(ctx)
+
+      assert {:ok, %{consent: %{head_state: "revoked"}}} =
+               Compendium.Component.setup_plan(ctx, @foo)
+
+      person_grants!(ctx, "default")
+      assert {:ok, [%{label: "default", status: :active}]} = Sanctum.Consent.profiles(ctx, @foo)
     end
 
     test "a removal's revocation is not the person's, and an install grants it again",

@@ -200,18 +200,6 @@ defmodule Arca.ProfileStorageTest do
       end
     end
 
-    test "a revocation its person already made is left as it is, its time included", %{
-      athanor: athanor
-    } do
-      actor = Prima.Actor.in_athanor(athanor)
-      profile = profile!(athanor, "active")
-      assert :ok = ProfileStorage.revoke_by_person(actor, profile.id)
-      {:ok, revoked} = ProfileStorage.get(actor, profile.id)
-
-      assert :ok = ProfileStorage.revoke_by_person(actor, profile.id)
-      assert {:ok, ^revoked} = ProfileStorage.get(actor, profile.id)
-    end
-
     test "another athanor's row, a missing row and no athanor change nothing", %{
       athanor: athanor
     } do

@@ -894,8 +894,8 @@ defmodule Arca.ConsentStorageTest do
   end
 
   describe "revoked_by_person?/2" do
-    test "answers whether the source's newest owner revocation was its person's, " <>
-           "in the actor's athanor alone",
+    test "answers whether any default owner profile of the source was ever revoked by its " <>
+           "person, in the actor's athanor alone",
          %{athanor: athanor} do
       actor = Prima.Actor.in_athanor(athanor)
       source = "reagent:local.storage-test"
@@ -916,10 +916,23 @@ defmodule Arca.ConsentStorageTest do
                {:ok, false}
 
       # The person granted it again, and the removal of the component then
-      # revoked that grant: the newest revocation is the removal's.
+      # revoked that grant: the person's no stands all the same.
       _ = profile!(athanor, "prof_removed")
       assert {:ok, ["prof_removed"]} = ProfileStorage.revoke_for_source(actor, source)
-      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, false}
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, true}
+
+      # A source whose default was revoked only by a removal is not.
+      {:ok, removed} =
+        Writers.put_profile(%{
+          athanor_id: athanor,
+          source_ref: "reagent:local.removed-only",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      assert {:ok, [_]} = ProfileStorage.revoke_for_source(actor, removed.source_ref)
+      assert ConsentStorage.revoked_by_person?(actor, removed.source_ref) == {:ok, false}
     end
 
     test "a context with no athanor is refused" do

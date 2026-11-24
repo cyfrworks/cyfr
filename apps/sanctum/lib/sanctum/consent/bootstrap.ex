@@ -9,15 +9,16 @@ defmodule Sanctum.Consent.Bootstrap do
   a new athanor, and the person revokes each like any other consent
   (`profile.revoke`).
 
-  A default grant its person revoked stays revoked: the walk mints over it
-  on no path (the fill, an update, an install, the boot's seed sync), and
-  the source is skipped `:revoked`, until the person consents again. That
-  holds when the component is removed and installed again too. A default
-  grant the removal of the component's last version revoked
-  (`Compendium.Cascade`) is not the person's: the component installed
-  again is minted as at first. The source's latest default owner profile,
-  by its creation, decides which (`Sanctum.Consent.ungranted/2`); its
-  older rows and other labels' profiles do not.
+  The default grant of a source is claimed, and never minted by the fill,
+  an update, an install after a removal or the boot's seed sync, when the
+  source has a standing owner profile, or when any default owner profile
+  of the source in the athanor was ever revoked by its person
+  (`Sanctum.Consent.ungranted/2`); the source is then skipped `:revoked`.
+  Once a person has said no to a component's default grant, only that
+  person's own consent grants it again; CYFR never does it for them,
+  however many removals and installs follow. A source whose default
+  profiles were revoked only by removals (`Compendium.Cascade`) is minted
+  as before.
 
   For every executable local component without a profile, mints an owner
   profile and a revision-1 consent whose blob grants each closure node its

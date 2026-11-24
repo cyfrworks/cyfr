@@ -213,11 +213,12 @@ defmodule Sanctum.Consent do
 
   @doc """
   Why the name-level `source_ref` has no profile a run could stand on,
-  once `profiles/2` lists none: `:revoked` when its person revoked its
-  default grant, read from the latest default profile
-  (`Arca.ConsentStorage.revoked_by_person?/2`), `:no_grant` when nobody
-  has granted it or the removal of the component's last version ended
-  that grant. A store that could not answer is
+  once `profiles/2` lists none: `:revoked` when any default owner profile
+  of it was ever revoked by its person
+  (`Arca.ConsentStorage.revoked_by_person?/2`), since once a person has
+  said no to a component's default grant only that person's own consent
+  grants it again; `:no_grant` when nobody has granted it or its default
+  profiles were revoked only by removals. A store that could not answer is
   `{:error, :unavailable}`, never a cause.
   """
   @spec ungranted(Sanctum.Context.t(), String.t()) ::

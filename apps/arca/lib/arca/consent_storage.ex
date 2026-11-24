@@ -1301,28 +1301,28 @@ defmodule Arca.ConsentStorage do
   end
 
   @doc """
-  Whether the default grant of the name-level `source_ref` in the actor's
-  athanor stands revoked by its person: the source's latest owner profile
-  labelled `default`, by its creation, is revoked and names the person.
-  Its older rows are history and decide nothing, and no other label's
-  profile decides it. A default never made, one standing, and one the
-  removal of the component's last version revoked are not.
+  Whether any default owner profile of the name-level `source_ref` in the
+  actor's athanor was ever revoked by its person. Once a person has said
+  no to a component's default grant, only that person's own consent grants
+  it again; CYFR never does it for them, however many removals and
+  installs follow. A source whose default profiles were revoked only by
+  removals is not. No order is read: the answer is whether such a row
+  exists.
   """
   @spec revoked_by_person?(Prima.Actor.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
   def revoked_by_person?(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.revoked_by_person?", fn ->
-      latest =
+      revoked? =
         from(p in Arca.Schemas.Profile,
-          where: p.source_ref == ^source_ref and p.kind == "owner" and p.label == "default",
-          order_by: [desc: p.inserted_at, desc: p.id],
-          limit: 1,
-          select: {p.status, p.revoked_by}
+          where:
+            p.source_ref == ^source_ref and p.kind == "owner" and p.label == "default" and
+              p.status == "revoked" and p.revoked_by == "person"
         )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
-        |> Arca.Repo.one()
+        |> Arca.Repo.exists?()
 
-      {:ok, latest == {"revoked", "person"}}
+      {:ok, revoked?}
     end)
   end
 
