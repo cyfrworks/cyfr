@@ -1255,9 +1255,12 @@ async function hopped() {
   const hop = `${ACCOUNT}/account/sign#${fragment(request)}`
   assert.ok(navigate(page, hop).prevented, "the hop leaves the content window at the sign-in page")
   const account = live().find((w) => w.webContents.url === hop)
+  // The page's own navigation to the answer, as the engine raises it:
+  // did-start-navigation first, then will-navigate.
   const answer = () => {
     const back = {url: ANSWER, isMainFrame: true, initiator: account.webContents.mainFrame, prevented: false,
       preventDefault() { this.prevented = true }}
+    account.webContents.emit("did-start-navigation", {url: ANSWER, isMainFrame: true, isSameDocument: false})
     account.webContents.emit("will-navigate", back)
     assert.ok(back.prevented, "the account window does not load the return")
   }
@@ -1282,6 +1285,51 @@ test("an account window whose page is lost or failed to load ends the ceremony, 
     await settled()
     assert.ok(account.destroyed, `${end}: the ceremony ended`)
     assert.ok(!page.destroyed && page.webContents.url === HOME + "/login", end)
+  }
+})
+
+// Each way the account window's top frame reaches a page, as the pinned
+// engine reports it (measured on Electron 45.4.1 by a probe of the
+// recheck): the events it raises, in order, for a navigation to `url`.
+const ENGINE = {
+  "a history move": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a move within the page's history": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: true}],
+    ["did-navigate-in-page", {}, url, true]],
+  "a reload by main": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}]],
+  "a reload by the page": (w, url) => [["did-start-navigation", {url, isMainFrame: true, isSameDocument: false}],
+    ["will-frame-navigate", pageNavigation(w, url)], ["will-navigate", pageNavigation(w, url)]],
+  "a redirect": (w, url) => [["will-redirect", pageNavigation(w, url)]],
+}
+function pageNavigation(w, url) {
+  return {url, isMainFrame: true, initiator: w.webContents.mainFrame, prevented: false, preventDefault() { this.prevented = true }}
+}
+
+test("every way the account window reaches a page that takes a request is read by the one reader, and a refused one ends the ceremony", async () => {
+  const current = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  const refused = {
+    "no request": `${ACCOUNT}/account/new`,
+    "an expired request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, expires_at: Date.now() - 1})}`,
+    "another CYFR's request": `${ACCOUNT}/account/new#name=&request=${fragment({...current, audience: "https://bob.example", return: "https://bob.example/login"})}`,
+  }
+  for (const [how, events] of Object.entries(ENGINE)) {
+    for (const [why, url] of Object.entries(refused)) {
+      const {page} = await hopped()
+      const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+      for (const [name, ...args] of events(account, url)) account.webContents.emit(name, ...args)
+      await settled()
+      assert.ok(account.destroyed, `${how}, ${why}: the ceremony ended`)
+      assert.equal(page.webContents.url, HOME + "/login", `${how}, ${why}: nothing was delivered`)
+    }
+  }
+  // Its own page, as the reader reads it, stays: a reload of it by main or
+  // by the page, and a move within it.
+  for (const how of ["a reload by main", "a reload by the page", "a move within the page's history"]) {
+    await hopped()
+    const account = live().find((w) => w.webContents.url.startsWith(ACCOUNT + "/account/sign"))
+    const own = `${ACCOUNT}/account/new#name=&request=${fragment(current)}`
+    for (const [name, ...args] of ENGINE[how](account, own)) account.webContents.emit(name, ...args)
+    await settled()
+    assert.ok(!account.destroyed, `${how} of a page the reader reads: the ceremony goes on`)
   }
 })
 
@@ -1455,7 +1503,9 @@ test("Docker's page, linked from the chooser, opens in the person's browser and 
   assert.deepEqual(world.opened, [], "any other page, or a redirect, opens nothing")
 })
 
-test("on macOS and Windows a CYFR just set up opens at the device's pages: main loads none of its own", async () => {
+const TOKEN = "cd".repeat(32)
+
+test("on macOS and Windows a CYFR no one is set up at opens at its setup page, the token in the fragment alone", async () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform"), argv = process.argv
   for (const system of ["darwin", "win32"]) {
     Object.defineProperty(process, "platform", {...platform, value: system})
@@ -1465,22 +1515,21 @@ test("on macOS and Windows a CYFR just set up opens at the device's pages: main 
     try {
       reset()
       // The road is the system's, as the app is started on it.
-      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: () => {}})
+      const said = []
+      startApp({cyfr: "/opt/cyfr/resources/cyfr", say: (line) => said.push(line)})
       await settled()
       child.say({type: "ready", url: READY})
       await settled()
       assert.equal(content().webContents.url, READY + "&road=passkey", system)
-      const attempt = child.proposes(HOME, {road: "device"})
+      const attempt = child.proposes(HOME, {setup: TOKEN})
       await settled()
       await settled()
       assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === attempt), system)
       child.say({type: "opened", home: HOME, attempt: child.attempts})
       await settled()
       await settled()
-      assert.deepEqual(world.loads, [], `${system}: main loaded no page of the CYFR's`)
-      assert.ok(!navigate(content(), "http://127.0.0.1:7340/").prevented, `${system}: the chooser goes on to the device's pages`)
-      await give(content())
-      assert.equal(content().webContents.url, HOME + "/", `${system}: where the device's pages give the CYFR`)
+      assert.deepEqual(world.loads.map((l) => l.url), [`${HOME}/setup#${TOKEN}`], `${system}: the CYFR's setup page`)
+      assert.ok(!said.some((line) => line.includes(TOKEN)), `${system}: no line the app printed carries the token`)
     } finally {
       Object.defineProperty(process, "platform", platform)
       process.argv = argv

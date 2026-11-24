@@ -12,7 +12,10 @@
 //                 credential of served files and of a canvas's page, where
 //                 CyfrWeb.Plugs.ScrubTinctureCredentials redacts it too
 // An address is one with an origin or a path standing by itself, as the
-// fronts record one.
+// fronts record one. A credential a proof knows by its value, such as a
+// setup token, is cut wherever it stands, given to the scrub as `withheld`:
+// the setup proof builds what it uploads once, at its end, with every such
+// value it collected (scrub-kept.mjs).
 
 /** What a proof puts in an address's query and fragment to see that the app prints neither. */
 export const MARKER = "cyfr-proof-unprinted"
@@ -20,9 +23,10 @@ export const MARKER = "cyfr-proof-unprinted"
 const IN_PATH = /(\/+auth\/+passkey\/+complete\/+|\/+_s\/+|\/+_c\/+v1\/+(?!sdk\/))[^\s/?#"'`<>\\()[\]]+/g
 const AFTER_PATH = /((?:\b[a-z][a-z0-9+.-]*:\/\/|\bdata:|(?<![\w.:/~-])\/)[^\s"'`<>\\?#]*)([?#])[^\s"'`<>\\]*/gi
 
-/** `text` with every address in it cut at its query or fragment and without the credential in its path. */
-export function scrub(text) {
-  return String(text).replace(IN_PATH, "$1[REDACTED]").replace(AFTER_PATH, "$1$2")
+/** `text` without any of the values `withheld`, and with every address in it cut at its query or fragment and without the credential in its path. */
+export function scrub(text, withheld = []) {
+  const cut = withheld.reduce((t, v) => t.split(v).join("[WITHHELD]"), String(text))
+  return cut.replace(IN_PATH, "$1[REDACTED]").replace(AFTER_PATH, "$1$2")
 }
 
 /** The JSON of `value` with every string in it scrubbed. */

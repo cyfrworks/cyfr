@@ -679,10 +679,10 @@ func (s *Service) remembered() (string, Local, bool) {
 // openLocal selects the CYFR l, set up in project on this computer, with
 // the account service its own settings name: every open of a folder's
 // CYFR, whichever press or start led to it. The service takes l as it
-// opens it (selectHome), and l's holder ends it otherwise. Its road is
-// decided here, from what the folder's reading says: while no one is set
-// up there (its setup token is offered), it opens at the device's pages
-// on every system, where its first person is made.
+// opens it (selectHome), and l's holder ends it otherwise. While no one is
+// set up there, the folder's reading offers its setup token, which main is
+// told with the CYFR: on the passkey road its first person is made at the
+// CYFR's setup page, on the six-word road at the device's pages.
 func (s *Service) openLocal(run context.Context, epoch uint64, project string, l *Local) answer {
 	home := l.Shell.Address
 	found, ok := account.ServiceOf(home, l.Shell.Directory)
@@ -700,14 +700,12 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 	if err != nil {
 		return answer{Error: "This computer cannot open the CYFR in " + project + ": " + err.Error() + "."}
 	}
-	road := ""
+	setup := ""
 	if l.Shell.SetupToken != nil {
-		if token, _ := l.Shell.SetupToken(run); token != "" {
-			road = RoadDevice
-		}
+		setup, _ = l.Shell.SetupToken(run)
 	}
 	return s.selectHome(run, epoch, sel, l.Shell, l,
-		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver, Road: road})
+		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver, Setup: setup})
 }
 
 // selectRemote selects the CYFR elsewhere at home, with the account
