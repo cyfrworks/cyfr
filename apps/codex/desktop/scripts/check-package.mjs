@@ -22,7 +22,37 @@ import {extractFile, listPackage} from "@electron/asar"
 
 export const PROOF_MARKER = "CYFR_DESKTOP_PROOF_ONLY"
 
-export class Refused extends Error {}
+// The values no sentence may carry: what hide() was given, whole, line by
+// line and word by word (each run of four or more letters, digits, "+" or
+// "/" between other characters), so a value printed quoted, escaped,
+// wrapped or cut into its words is hidden all the same.
+let hidden = []
+
+/** Hide `values` (strings; empty ones ignored) in every later sentence. */
+export function hide(values) {
+  const parts = new Set(hidden)
+  for (const value of values) {
+    if (typeof value !== "string" || value === "") continue
+    parts.add(value)
+    for (const line of value.split(/\r?\n/)) if (line.trim().length >= 4) parts.add(line.trim())
+    for (const word of value.split(/[^A-Za-z0-9+/]+/)) if (word.length >= 4) parts.add(word)
+  }
+  hidden = [...parts].sort((a, b) => b.length - a.length)
+}
+
+/** `text` with every hidden value, and every part of one, as "***". */
+export function redact(text) {
+  let out = String(text)
+  for (const part of hidden) out = out.split(part).join("***")
+  return out
+}
+
+/** A refusal: its sentence never carries a hidden value. */
+export class Refused extends Error {
+  constructor(message) {
+    super(redact(message))
+  }
+}
 
 /** Every file under dir (links as files), as paths relative to it with "/". */
 export function filesOf(dir) {

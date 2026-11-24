@@ -4,6 +4,7 @@
 // Build the CYFR app's package for one platform:
 //
 //   node scripts/build.mjs --cyfr PATH --version VERSION --arch amd64|arm64 [--out DIR]
+//                          [--distribution [--rehearse]]
 //
 // The production entry (src/main.js) is bundled into one main.js; the
 // app is exactly app.asar/{package.json,main.js} beside the verified cyfr
@@ -14,11 +15,22 @@
 // The package is cyfr-desktop_VERSION_OS_ARCH, a DEB on Linux (installed
 // at /opt/cyfr/CYFR, the bundled cyfr linked as /usr/bin/cyfr, its
 // sandbox's AppArmor profile loaded), a DMG on macOS and an MSI on
-// Windows, for this machine's platform.
+// Windows, for this machine's platform. The MSI installs for the person
+// alone and puts its bundled cyfr on their PATH (msi-path.mjs).
+//
+// A pull request's build signs nothing. On macOS --distribution makes the
+// package a person downloads: signed with the Developer ID identity, the
+// provisioning profile that authorises the app's WebAuthn group embedded,
+// notarised and stapled, then checked (mac-sign.mjs, which names its
+// inputs). It refuses to finish without every input and never falls back
+// to an unsigned package. --rehearse signs with a self-made identity and
+// profile instead and notarises nothing; its DMG fails a release's check.
+// This process then owns the build (mac-distribution.mjs) and runs the
+// packing and signing as its worker, this script again with --worker
+// CONFIG, which no person passes. Windows packages are unsigned either way.
 
-import {execFileSync} from "node:child_process"
 import {createHash} from "node:crypto"
-import {chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync} from "node:fs"
+import {chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from "node:fs"
 import path from "node:path"
 import {fileURLToPath} from "node:url"
 import {parseArgs} from "node:util"
@@ -26,20 +38,70 @@ import {parseArgs} from "node:util"
 import {build as bundle} from "esbuild"
 import {Arch, Platform, build} from "electron-builder"
 
-import {checkPackage, filesOf} from "./check-package.mjs"
+import {Refused, checkPackage, filesOf} from "./check-package.mjs"
+import {distribute} from "./mac-distribution.mjs"
+import {APP_ID, signer, writeEntitlements} from "./mac-sign.mjs"
+import {say} from "./run.mjs"
+import {addCyfrToPath} from "./msi-path.mjs"
 
 // Every file the package installs is root's alone to change.
 process.umask(0o022)
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const {values} = parseArgs({options: {
-  cyfr: {type: "string"}, version: {type: "string"}, arch: {type: "string"}, out: {type: "string", default: path.join(root, "dist")}
+  cyfr: {type: "string"}, version: {type: "string"}, arch: {type: "string"}, out: {type: "string", default: path.join(root, "dist")},
+  distribution: {type: "boolean", default: false}, rehearse: {type: "boolean", default: false}, worker: {type: "string"}
 }})
-if (!values.cyfr || !values.version || !["amd64", "arm64"].includes(values.arch)) {
-  console.error("usage: node scripts/build.mjs --cyfr PATH --version VERSION --arch amd64|arm64 [--out DIR]")
+if (!values.cyfr || !values.version || !["amd64", "arm64"].includes(values.arch) || (values.rehearse && !values.distribution)) {
+  say("usage: node scripts/build.mjs --cyfr PATH --version VERSION --arch amd64|arm64 [--out DIR] [--distribution [--rehearse]]\n",
+    {to: process.stderr})
   process.exit(64)
 }
 
+// A refusal ends the build with its sentence; anything else is a fault.
+function refuse(e) {
+  if (!(e instanceof Refused)) throw e
+  say(`refused: ${e.message}\n`, {to: process.stderr})
+  process.exit(1)
+}
+
 const os = {linux: "linux", darwin: "darwin", win32: "windows"}[process.platform]
+const artifact = `cyfr-desktop_${values.version}_${os}_${values.arch}.\${ext}`
+const built = artifact.replace("${ext}", {linux: "deb", darwin: "dmg", windows: "msi"}[os])
+if (values.rehearse && os !== "darwin") {
+  refuse(new Refused("a rehearsal signs a Mac package, and this is not a Mac"))
+}
+// A Mac distribution: this process owns the build, its keychain, its
+// folder and its every printed line, and the worker packs and signs.
+if (values.distribution && os === "darwin" && !values.worker) {
+  process.on("uncaughtException", (e) => {
+    say(`${e?.stack ?? e}\n`, {to: process.stderr})
+    process.exit(1)
+  })
+  try {
+    await distribute({env: process.env, dest: path.join(path.resolve(values.out), built), rehearse: values.rehearse,
+      worker: {command: process.execPath, minutes: 50, args: [fileURLToPath(import.meta.url), "--cyfr", path.resolve(values.cyfr),
+        "--version", values.version, "--arch", values.arch, "--distribution", ...(values.rehearse ? ["--rehearse"] : [])]}})
+  } catch (e) {
+    refuse(e)
+  }
+  process.exit(0)
+}
+// The worker's part of a distribution, as its owner wrote it and on the
+// owner's word alone (ownerConfig): the phase, the identity's name, team
+// and group, the profile's path, the unlocked keychain's path, whether it
+// is a rehearsal, where its result goes and, for the DMG, the notarised
+// app.
+let signing = null
+if (values.worker) {
+  try {
+    signing = ownerConfig(values.worker, {distribution: values.distribution, os})
+  } catch (e) {
+    refuse(e)
+  }
+}
+// A Windows identity, once there is one, is given to electron-builder
+// here; until then nothing in the environment signs the Windows package.
+if (os === "windows") for (const name of ["CSC_LINK", "CSC_KEY_PASSWORD", "WIN_CSC_LINK", "WIN_CSC_KEY_PASSWORD"]) delete process.env[name]
 const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
 const electronVersion = pkg.devDependencies.electron
 const stage = path.join(values.out, "stage")
@@ -50,7 +112,9 @@ mkdirSync(app, {recursive: true})
 await bundle({
   entryPoints: [path.join(root, "src", "main.js")], outfile: path.join(app, "main.js"), bundle: true,
   platform: "node", format: "cjs", target: "node22", external: ["electron"], legalComments: "none",
-  define: {__CYFR_TOUCH_ID_GROUP__: JSON.stringify(process.env.CYFR_TOUCH_ID_GROUP ?? "")}
+  // Touch ID keeps passkeys in the WebAuthn group, which only a signed
+  // app whose profile authorises it may use.
+  define: {__CYFR_WEBAUTHN_GROUP__: JSON.stringify(signing?.group ?? "")}
 })
 writeFileSync(path.join(app, "package.json"), JSON.stringify({
   name: pkg.name, productName: "CYFR", version: values.version, description: pkg.description,
@@ -72,6 +136,22 @@ const staged = {
   helper: {name: executable, sha256: createHash("sha256").update(readFileSync(helper)).digest("hex")}
 }
 
+// A distribution's entitlements, beside the staged app; electron-builder
+// signs from the owner's keychain, and signs a pull request's build only
+// when told to, as a distribution's is. The owner notarises the app
+// between the two phases.
+let mac = {identity: null, category: "public.app-category.productivity"}
+const signed = {}
+if (signing) {
+  Object.assign(process.env, {CSC_KEYCHAIN: signing.keychain, CSC_FOR_PULL_REQUEST: "true"})
+  mac = {...mac, identity: signing.identity, type: "distribution", provisioningProfile: signing.profile,
+    sign: signer(writeEntitlements(stage, signing.team, signing.group), staged.helper.sha256, signed), notarize: false}
+  // The app phase stops at the signed app; the DMG phase makes the
+  // notarised app's image and signs it, packing and signing nothing again
+  // (electron-builder's prepackaged skips both).
+}
+const target = signing?.phase === "app" ? "dir" : {linux: "deb", darwin: "dmg", windows: "msi"}[os]
+
 // The Linux package's install script is electron-builder's own, which
 // links the app and loads its AppArmor profile, with the bundled cyfr
 // linked onto PATH after it.
@@ -81,12 +161,12 @@ writeFileSync(path.join(stage, "after-install.tpl"), template("after-install.tpl
 writeFileSync(path.join(stage, "after-remove.tpl"), template("after-remove.tpl") +
   "\nif [ \"$(readlink /usr/bin/cyfr)\" = '/opt/${sanitizedProductName}/resources/cyfr' ]; then rm -f /usr/bin/cyfr; fi\n")
 
-const artifact = `cyfr-desktop_${values.version}_${os}_${values.arch}.\${ext}`
 await build({
   targets: {linux: Platform.LINUX, darwin: Platform.MAC, windows: Platform.WINDOWS}[os]
-    .createTarget({linux: "deb", darwin: "dmg", windows: "msi"}[os], values.arch === "arm64" ? Arch.arm64 : Arch.x64),
+    .createTarget(target, values.arch === "arm64" ? Arch.arm64 : Arch.x64),
+  ...(signing?.phase === "dmg" ? {prepackaged: signing.app} : {}),
   config: {
-    appId: "run.cyfr.desktop",
+    appId: APP_ID,
     // The Linux package installs at /opt/<this>/, which is /opt/cyfr; the
     // app's name everywhere a person reads it stays CYFR.
     productName: os === "linux" ? "cyfr" : "CYFR",
@@ -120,7 +200,7 @@ await build({
       checkPackage(context.appOutDir, staged, os)
       // What is installed is root's alone to change, whatever this
       // machine's umask made of the copies.
-      if (os === "linux") execFileSync("chmod", ["-R", "go-w", context.appOutDir])
+      if (os === "linux") unwritableByOthers(context.appOutDir)
     },
     icon: path.join(stage, "icon.png"),
     linux: {executableName: "CYFR", category: "Network", maintainer: "CYFR Works Inc.",
@@ -131,10 +211,52 @@ await build({
         "libsecret-1-0", "libgbm1", "libasound2t64 | libasound2"],
       afterInstall: path.join(stage, "after-install.tpl"),
       afterRemove: path.join(stage, "after-remove.tpl")},
-    mac: {identity: null, category: "public.app-category.productivity"},
+    // A distribution build fails rather than leave the app or its DMG
+    // unsigned.
+    forceCodeSigning: signing !== null,
+    mac,
+    dmg: {sign: signing !== null, writeUpdateInfo: false},
     win: {executableName: "CYFR"},
-    msi: {oneClick: true, perMachine: false}
+    msi: {oneClick: true, perMachine: false},
+    msiProjectCreated: (project) => writeFileSync(project, addCyfrToPath(readFileSync(project, "utf8")))
   },
   publish: "never"
 })
-console.log(`built ${artifact.replace("${ext}", {linux: "deb", darwin: "dmg", windows: "msi"}[os])} in ${values.out}`)
+if (signing?.phase === "app") {
+  const signedApp = path.join(values.out, `mac${values.arch === "arm64" ? "-arm64" : ""}`, "CYFR.app")
+  writeFileSync(signing.result, JSON.stringify({helper: signed.helper ?? null, app: existsSync(signedApp) ? signedApp : null}))
+}
+say(`built ${signing?.phase === "app" ? "CYFR.app" : built} in ${values.out}\n`)
+
+// chmod -R go-w, in this process.
+function unwritableByOthers(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = path.join(dir, name)
+    const st = lstatSync(p)
+    if (st.isSymbolicLink()) continue
+    chmodSync(p, st.mode & 0o7755)
+    if (st.isDirectory()) unwritableByOthers(p)
+  }
+}
+
+/**
+ * The worker's configuration at `file`, refused unless the owner wrote it
+ * for this very process: a distribution on macOS, started by the process
+ * the configuration names, whose word (CYFR_BUILD_OWNER) it carries, and
+ * every field present and of its kind.
+ */
+function ownerConfig(file, {distribution, os}) {
+  if (!distribution || os !== "darwin") throw new Refused("--worker is a Mac distribution's own, started by its owner")
+  let config
+  try { config = JSON.parse(readFileSync(file, "utf8")) } catch { throw new Refused("the worker's configuration is not the owner's") }
+  const string = (v) => typeof v === "string" && v !== ""
+  const complete = config !== null && typeof config === "object" && !Array.isArray(config) &&
+    ["app", "dmg"].includes(config.phase) && string(config.owner) && Number.isInteger(config.ownerPid) &&
+    ["identity", "team", "group", "profile", "keychain", "result"].every((k) => string(config[k])) &&
+    typeof config.rehearsed === "boolean" && (config.phase === "app" || string(config.app))
+  if (!complete) throw new Refused("the worker's configuration is not complete")
+  if (process.env.CYFR_BUILD_OWNER !== config.owner || process.ppid !== config.ownerPid) {
+    throw new Refused("the worker was not started by its owner")
+  }
+  return config
+}
