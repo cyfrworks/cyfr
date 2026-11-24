@@ -140,10 +140,15 @@
 //                            the passkey road
 //   chooser {notices}        open the content at the chooser; with
 //                            connect, connecting to that CYFR; with way
-//                            "setup", at setting up on this computer
-//   back {notices, retry}    show the chooser in the content window as it
-//                            stands, its session as it is; with retry,
-//                            offering that CYFR again
+//                            "setup", at setting up on this computer;
+//                            with proxy, the route of the CYFR main
+//                            keeps to set on its store first, which goes
+//                            on to that CYFR's pages by the device's
+//                            (Try with words)
+//   back {notices, retry}    show the chooser, a document of main's load,
+//                            in the content window as it stands where its
+//                            store is memory's, the route taken off it
+//                            first; with retry, offering that CYFR again
 //   end {why}                kill cyfr and tell the person (never on the
 //                            box's screen)
 //   quit                     once forgotten, or the wait for it is up,
@@ -376,7 +381,10 @@ function settle(s) {
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", proxy: again ? s.before.proxy : "", returning: null, notices: s.notices,
     picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
-  return {state: next, do: [{chooser: s.notices}]}
+  const shown = {chooser: s.notices, ...(next.proxy ? {proxy: next.proxy} : {})}
+  if (!s.wanted) return {state: next, do: [shown]}
+  const taken = step(next, {type: "home", message: s.wanted})
+  return {state: taken.state, do: [shown, ...taken.do]}
 }
 
 // The chooser's state after a departure: main keeps to none.
