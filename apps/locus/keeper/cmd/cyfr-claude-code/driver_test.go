@@ -558,8 +558,10 @@ func TestAnOwnCallItsTurnEndedWithoutIsForgottenWithTheTurn(t *testing.T) {
 
 // A start the harness does not answer within answerWait ends the driver,
 // saying why on its standard error; a work whose tools it does not start
-// within it is refused in the driver's words. Neither waits on the
-// holder's clock alone.
+// within it is refused in the driver's words, each work at its own bound.
+// Neither waits on the holder's clock alone. It proves the driver's exit
+// and its reason; what the person reads of a start that failed is the
+// holder's.
 func TestAnAnswerTheHarnessDoesNotGiveInTimeEndsTheWait(t *testing.T) {
 	was := answerWait
 	answerWait = 300 * time.Millisecond
@@ -576,6 +578,19 @@ func TestAnAnswerTheHarnessDoesNotGiveInTimeEndsTheWait(t *testing.T) {
 			}
 		case <-time.After(20 * time.Second):
 			t.Fatal("a start the harness never answered went on")
+		}
+	})
+	t.Run("each work's tools", func(t *testing.T) {
+		t.Setenv("FAKE_SILENT", "later tools")
+		s := startDriver(t)
+		startFresh(s, map[string]any{})
+		s.send(map[string]any{"t": "work", "id": "stp_first", "work": "trn_1", "tools": []any{filesTool}})
+		s.send(map[string]any{"t": "work", "id": "stp_second", "work": "trn_1", "tools": []any{filesTool}})
+		if e := s.expect("accepted"); e["id"] != "stp_first" {
+			t.Fatalf("the answered work is accepted: %v", e)
+		}
+		if e := s.expect("refused"); e["id"] != "stp_second" || e["reason"] != toolsLateSentence() {
+			t.Fatalf("the work its harness did not answer is refused at its own bound: %v", e)
 		}
 	})
 	t.Run("tools", func(t *testing.T) {

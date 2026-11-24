@@ -781,14 +781,17 @@ func (d *driver) Ended() error {
 // Close closes the harness, if one runs: the thread is Codex's to keep in
 // its folder, and the next start resumes it. A native turn under way is
 // first asked to stop in Codex's own way (`turn/interrupt`), which it
-// answers at once and keeps in the thread as interrupted (0.169.0); then
-// its input closes, and Stop asks it to end and kills it at the bound.
+// answers at once and keeps in the thread as interrupted (0.169.0), as
+// Stop's last line, written after its bounds are armed so a harness that
+// does not read holds neither; then its input closes, and Stop asks it to
+// end and kills it at the bound.
 func (d *driver) Close() {
 	if d.h != nil {
+		var farewell [][]byte
 		if d.active != "" && d.session != "" {
-			d.h.WriteUnchecked(request(d.nextID("interrupt"), "turn/interrupt", map[string]any{"threadId": d.session, "turnId": d.active}))
+			farewell = append(farewell, request(d.nextID("interrupt"), "turn/interrupt", map[string]any{"threadId": d.session, "turnId": d.active}))
 		}
-		d.h.Stop()
+		d.h.Stop(farewell...)
 		d.h = nil
 	}
 	d.starting = nil

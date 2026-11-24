@@ -62,7 +62,8 @@ import (
 // server, `mcp_server`, by name and source, and its call, `tool_use_id`.
 // FAKE_STATUS answers `mcp_status` with an error (`error`) or a success
 // that lists no servers (`unlisted`). FAKE_SILENT leaves `initialize`
-// (`initialize`) or `mcp_set_servers` (`tools`) unanswered.
+// (`initialize`), every `mcp_set_servers` (`tools`), or every one after
+// the first (`later tools`) unanswered.
 //
 // Started with `--resume` of a session its folder does not hold, it ends
 // as 2.1.318 ended: a result of no turn naming the session, and exit 1,
@@ -201,6 +202,8 @@ func fakeClaude() int {
 	reply = func(uuids []string, text string) { replyWith(uuids, text, modelUsage) }
 	// What initialize asked, for `handed`.
 	var initialized []byte
+	// sets counts the driver's `mcp_set_servers`.
+	sets := 0
 	// The posts each turn is begun from; a turn that waits for the next
 	// post takes it here.
 	work := make(chan [2]string, 16)
@@ -419,7 +422,8 @@ func fakeClaude() int {
 					}
 					write(map[string]any{"type": "control_response", "response": answer})
 				case "mcp_set_servers":
-					if os.Getenv("FAKE_SILENT") == "tools" {
+					sets++
+					if silent := os.Getenv("FAKE_SILENT"); silent == "tools" || (silent == "later tools" && sets > 1) {
 						break
 					}
 					servers, _ := request["servers"].(map[string]any)

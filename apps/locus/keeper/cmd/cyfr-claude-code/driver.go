@@ -30,6 +30,13 @@ type post struct{ id, work string }
 
 type heldAsk struct{ arguments map[string]any }
 
+// awaited is a work whose tools request the harness has not answered: the
+// work's id, and when its answer is overdue.
+type awaited struct {
+	id  string
+	due time.Time
+}
+
 // starting is a start the harness has not answered yet: its `initialize`
 // answer, once read (`initialized`), waits for its `mcp_status` answer.
 type starting struct {
@@ -66,12 +73,12 @@ type driver struct {
 	// seconds, or 0.
 	errKind string
 	reached int64
-	// due is when the answer the driver holds a command for is overdue
-	// (Deadline), nil when it holds none.
-	due      <-chan time.Time
+	// startDue is when the start's answer is overdue, zero when none is
+	// awaited; each tools request awaited has its own (awaited).
+	startDue time.Time
 	own      map[string]string
 	asks     map[string]heldAsk
-	awaiting map[string]string
+	awaiting map[string]awaited
 	requests int
 	results  int
 }
@@ -84,7 +91,7 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 		posts:          map[string]post{},
 		own:            map[string]string{},
 		asks:           map[string]heldAsk{},
-		awaiting:       map[string]string{},
+		awaiting:       map[string]awaited{},
 	}
 }
 
@@ -93,21 +100,36 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 
 func (d *driver) Process() *brainwire.Process { return d.h }
 
-// Deadline is when the answer the driver holds a command for is overdue:
-// the start's, or a work's tools' (answerWait).
-func (d *driver) Deadline() <-chan time.Time { return d.due }
+// Deadline is when the first answer the driver awaits is overdue: the
+// start's, or a work's tools request's, each its own (answerWait), or nil
+// when it awaits none.
+func (d *driver) Deadline() <-chan time.Time {
+	first := d.startDue
+	for _, a := range d.awaiting {
+		if first.IsZero() || a.due.Before(first) {
+			first = a.due
+		}
+	}
+	if first.IsZero() {
+		return nil
+	}
+	return time.After(time.Until(first))
+}
 
 // Expired ends a start the harness did not answer in time, and refuses
 // each work whose tools it did not start in time; a late answer is then
 // read as one of no request.
 func (d *driver) Expired() error {
-	d.due = nil
-	if d.starting != nil {
+	now := time.Now()
+	if !d.startDue.IsZero() && !now.Before(d.startDue) {
 		return &brainwire.Fatal{Status: 1, Reason: fmt.Sprintf("Claude Code did not answer its start in time (%s)", answerWait)}
 	}
-	for request, id := range d.awaiting {
+	for request, a := range d.awaiting {
+		if now.Before(a.due) {
+			continue
+		}
 		delete(d.awaiting, request)
-		if err := d.c.Refuse(id, toolsLateSentence()); err != nil {
+		if err := d.c.Refuse(a.id, toolsLateSentence()); err != nil {
 			return err
 		}
 	}
@@ -176,8 +198,8 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	// A harness started to resume a session it holds no transcript of
 	// says so and ends at once, perhaps before this line reached it: what
 	// it wrote is read all the same, and its end decides.
+	d.startDue = time.Now().Add(answerWait)
 	d.h.WriteUnchecked(initializeLine(str("system")))
-	d.due = time.After(answerWait)
 	return nil
 }
 
@@ -209,8 +231,7 @@ func (d *driver) work(id string, raw json.RawMessage) error {
 	if len(line) > brainwire.MaxLineBytes {
 		return d.c.Refuse(id, fmt.Sprintf("The tools are %d bytes as one line to the harness, past the %d one line carries.", len(line), brainwire.MaxLineBytes))
 	}
-	d.awaiting[request] = id
-	d.due = time.After(answerWait)
+	d.awaiting[request] = awaited{id: id, due: time.Now().Add(answerWait)}
 	return d.h.Write(line)
 }
 
@@ -455,7 +476,7 @@ func (d *driver) controlResponse(l harnessLine) error {
 			return &brainwire.Fatal{Status: 1, Reason: "Claude Code did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own"}
 		}
 		d.server = serverFor(listed)
-		d.due = nil
+		d.startDue = time.Time{}
 		var response struct {
 			Models json.RawMessage `json:"models"`
 		}
@@ -474,9 +495,9 @@ func (d *driver) controlResponse(l harnessLine) error {
 		return d.c.Emit(brainwire.NewEvent("started").Set("session", s.session).Set("fresh", !s.resume).Set("held", held).
 			SetOptional("account", account(s.answer)))
 	}
-	if id, ok := d.awaiting[answer.RequestID]; ok {
+	if a, ok := d.awaiting[answer.RequestID]; ok {
+		id := a.id
 		delete(d.awaiting, answer.RequestID)
-		d.due = nil
 		var response struct {
 			Errors map[string]any `json:"errors"`
 		}
@@ -653,7 +674,7 @@ func (d *driver) result(l harnessLine) error {
 	if d.starting != nil && l.noTranscript() {
 		d.h.Expected = true
 		d.starting = nil
-		d.due = nil
+		d.startDue = time.Time{}
 		return d.c.Emit(brainwire.NewEvent("gone"))
 	}
 	work := d.workOf(l.UserMessageIDs)
@@ -764,10 +785,10 @@ func (d *driver) Ended() error {
 	d.listing = nil
 	d.server = ""
 	d.reached = 0
-	d.due = nil
+	d.startDue = time.Time{}
 	d.own = map[string]string{}
 	d.asks = map[string]heldAsk{}
-	d.awaiting = map[string]string{}
+	d.awaiting = map[string]awaited{}
 	if expected {
 		return nil
 	}

@@ -124,17 +124,28 @@ func (p *Process) WriteUnchecked(line []byte) {
 	_, _ = p.stdin.Write(append(line, '\n'))
 }
 
-// Stop closes the harness's input and waits for its end, then ends its
+// Stop writes the harness its last lines, `farewell` (Codex's
+// turn/interrupt), closes its input and waits for its end, then ends its
 // process group, so a server it started ends with it. A harness still
 // running termAfter later is asked to end, a TERM to its group (Claude Code
 // 2.1.323 and Codex 0.169.0 each end within a second of one, aq-drivers),
 // and one still running at closeWait is killed. Stop returns only once the
 // harness has ended, whichever way.
-func (p *Process) Stop() {
-	_ = p.stdin.Close()
+func (p *Process) Stop(farewell ...[]byte) {
 	pgid := p.cmd.Process.Pid
+	// Both bounds are armed before anything is written: a harness that
+	// never reads its input holds the write, never the bounds. The write
+	// ends once the harness does, its pipe's reader gone.
 	term := time.After(termAfter)
 	deadline := time.After(closeWait)
+	go func() {
+		for _, line := range farewell {
+			if _, err := p.stdin.Write(append(line, '\n')); err != nil {
+				break
+			}
+		}
+		_ = p.stdin.Close()
+	}()
 	for {
 		select {
 		case <-p.Lines:

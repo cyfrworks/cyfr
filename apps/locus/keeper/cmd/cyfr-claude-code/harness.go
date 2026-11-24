@@ -359,11 +359,10 @@ func toolsLateSentence() string {
 // message id it does not take (2.1.323 ended every later turn of such a
 // session so, its request's 400, aq-drivers cl-c5). Nothing the person
 // sent was invalid, and the session cannot go on: each turn of it is
-// refused so. What the person can do is move on from the thread:
-// archiving a crew member's thread retires it and the member's next job
-// opens a fresh one, and another thread of theirs starts a session of its
-// own.
-const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this thread's session cannot go on; nothing you sent was refused. Archive this thread and ask again in another one."
+// refused so. It names no action: none works in a daily thread and a
+// workspace thread alike (a daily thread's pane sends to today's same
+// thread, archived or not).
+const unsendableSentence = "Claude Code's session holds a message its model's API no longer takes, so this thread's session cannot go on; nothing you sent was refused."
 
 // unsendableWords are the API's words, in a failed result's `result`, for
 // that refusal; they are read there alone, never in what the model said.
