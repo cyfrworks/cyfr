@@ -322,7 +322,9 @@ jobs:
           - {name: Linux amd64, os: ubuntu-26.04, arch: amd64, exe: ''}
           - {name: Linux arm64, os: ubuntu-26.04-arm, arch: arm64, exe: ''}
           - {name: macOS arm64, os: macos-latest, arch: arm64, exe: ''}
+          - {name: macOS amd64, os: macos-15-intel, arch: amd64, exe: ''}
           - {name: Windows amd64, os: windows-latest, arch: amd64, exe: .exe}
+          - {name: Windows arm64, os: windows-11-arm, arch: arm64, exe: .exe}
     defaults:
       run:
         shell: bash
@@ -376,47 +378,25 @@ jobs:
         if: runner.os == 'Linux'
         run: bash tests/desktop-proof/screen/app.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_linux_${{ matrix.arch }}.deb
 
-      - name: Install the app (macOS)
+      # The scripts release.yml and desktop-mac.yml run on the packages
+      # they publish.
+      - name: Install and smoke the app (macOS)
         if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/cyfr-dmg" apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg
-          cp -R "$RUNNER_TEMP/cyfr-dmg/CYFR.app" /Applications/
-          hdiutil detach "$RUNNER_TEMP/cyfr-dmg"
-          echo "APP=/Applications/CYFR.app/Contents/MacOS/CYFR" >> "$GITHUB_ENV"
+        run: bash tests/desktop-proof/native/mac.sh apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg
 
-      # The MSI installs for this account alone, under its local programs
-      # folder, and must find exactly one CYFR.exe there, the name matched
-      # with its case: Windows matches a filter without it, and the bundled
-      # resources\cyfr.exe is another program.
       - name: Install the app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $msi = (Resolve-Path "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi").Path
-          $log = Join-Path $env:RUNNER_TEMP "cyfr-msi.log"
-          $install = Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec exited $($install.ExitCode)" }
-          $found = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter CYFR.exe -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq "CYFR.exe" })
-          if ($found.Count -ne 1) { throw "the MSI installed $($found.Count) CYFR.exe under $env:LOCALAPPDATA\Programs" }
-          "APP=$($found[0].FullName)" >> $env:GITHUB_ENV
-          pwsh -NoProfile -File tests/desktop-proof/native/windows-path.ps1 installed $found[0].DirectoryName
-          if ($LASTEXITCODE -ne 0) { throw "the MSI's cyfr is not on PATH" }
+        run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 install apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi
 
-      - name: Smoke the installed app
-        if: runner.os != 'Linux'
+      - name: Smoke the installed app (Windows)
+        if: runner.os == 'Windows'
         run: bash tests/desktop-proof/native/smoke.sh "$APP"
 
       - name: Uninstall the app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $msi = (Resolve-Path "apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi").Path
-          $log = Join-Path $env:RUNNER_TEMP "cyfr-msi-remove.log"
-          $remove = Start-Process msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
-          if ($remove.ExitCode -ne 0) { Get-Content $log -Tail 50; throw "msiexec /x exited $($remove.ExitCode)" }
-          pwsh -NoProfile -File tests/desktop-proof/native/windows-path.ps1 removed (Split-Path $env:APP)
-          if ($LASTEXITCODE -ne 0) { throw "the MSI's cyfr stayed on PATH" }
+        run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 remove apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi
 
       # A second build, signed for distribution with an identity and
       # profile of the rehearsal's own making: no Apple input is in a pull

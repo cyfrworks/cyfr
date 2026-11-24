@@ -97,11 +97,17 @@ fail() { CHECKS=$((CHECKS + 1)); FAILED=$((FAILED + 1)); echo "FAIL $1: $2"; }
 # A lookup that fails never reads as "not there": each below that looks for
 # what is gone, free or unsaid answers so only when it could look.
 
+# On Windows each lookup is PowerShell 7 (pwsh), which GitHub's Windows
+# runners carry for their own architecture: Windows PowerShell
+# (powershell.exe) runs under x64 emulation on Arm, where one call took 42
+# to 64 s on windows-11-arm against pwsh's 0.6 s, longer than the checks'
+# bounds.
+
 # Every running process as `PID PPID ARGS`, a line each; a zombie is none.
 # It fails when the system's list does.
 procs() {
   if [ "$OS" = windows ]; then
-    powershell.exe -NoProfile -NonInteractive -Command \
+    pwsh -NoProfile -NonInteractive -Command \
       '$ErrorActionPreference = "Stop"; Get-CimInstance Win32_Process | ForEach-Object { "{0} {1} {2}" -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }' | tr -d '\r'
   else
     ps -A -ww -o pid= -o ppid= -o stat= -o args= | awk '$3 !~ /^Z/ { $3 = ""; print }'
@@ -185,7 +191,7 @@ has_window() {
     windows)
       # MainWindowHandle is 0 unless a top-level window of it is visible. A
       # process that is not there is an error, never a handle to compare.
-      powershell.exe -NoProfile -NonInteractive -Command \
+      pwsh -NoProfile -NonInteractive -Command \
         "try { if ((Get-Process -Id $1 -ErrorAction Stop).MainWindowHandle.ToInt64() -ne 0) { exit 0 } } catch { }; exit 1" ;;
   esac
 }
