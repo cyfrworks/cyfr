@@ -299,12 +299,22 @@ public static class U {
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref P p);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
 }
 "@
         # The Arm runner image shows the first-run privacy page of Windows,
         # "Microsoft account", over the whole screen, above any topmost
-        # window: its process is ended first, on this disposable machine.
-        Get-Process | Where-Object { $_.MainWindowTitle -eq "Microsoft account" } | Stop-Process -Force -ErrorAction SilentlyContinue
+        # window: the process that owns it is ended and the window hidden
+        # first, on this disposable machine, each said.
+        for ($i = 0; $i -lt 5; $i++) {
+          $o = [U]::FindWindow([NullString]::Value, "Microsoft account"); if ($o -eq [IntPtr]::Zero) { break }
+          [uint32]$owner = 0; [void][U]::GetWindowThreadProcessId($o, [ref]$owner)
+          $name = (Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName
+          Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
+          [Console]::Error.WriteLine("update: the first-run page of Windows ($name, $owner) ended: " + $?)
+          [void][U]::ShowWindow($o, 0); Start-Sleep -Milliseconds 300
+        }
         $h = [U]::FindWindow([NullString]::Value, "CYFR"); if ($h -eq [IntPtr]::Zero) { exit 1 }
         # Above every other window, the runner agent window among them, which
         # a background process may not bring forward (SetForegroundWindow).
