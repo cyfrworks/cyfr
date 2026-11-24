@@ -242,20 +242,21 @@ type Row uint64
 // Typed is the beginning of a selection of an address a person typed.
 const Typed Row = 0
 
-// Row is the entry at home as a person pressed it: refused where the list
-// holds none there, or holds one being forgotten.
-func (f Homes) Row(home string) (Row, error) {
+// Row is the entry at home as a person pressed it, and its record as the
+// same reading holds it: refused where the list holds none there, or holds
+// one being forgotten.
+func (f Homes) Row(home string) (Row, ClientRecord, error) {
 	l, err := f.Load()
 	if err != nil {
-		return Typed, err
+		return Typed, ClientRecord{}, err
 	}
 	switch rec, held := l.Homes[home]; {
 	case !held:
-		return Typed, errUnkept
+		return Typed, ClientRecord{}, errUnkept
 	case rec.Forgetting:
-		return Typed, errForgetting(home)
+		return Typed, ClientRecord{}, errForgetting(home)
 	default:
-		return Row(rec.Generation), nil
+		return Row(rec.Generation), rec, nil
 	}
 }
 
