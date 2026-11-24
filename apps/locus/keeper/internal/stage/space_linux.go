@@ -6,7 +6,6 @@
 package stage
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -669,33 +669,27 @@ func Init() int {
 	return ws.ExitStatus()
 }
 
-// endTheRest sends SIGTERM to every child the space's init has, the
-// processes the command left to it, and reaps until none is left.
+// endTheRest asks every process left in the space to end: the init is its
+// pid namespace's first process, so one SIGTERM to pid -1 reaches each of
+// them, a process reparented to the init since included. It reaps what
+// ends, and asks again while any is left, until none is or the keeper's
+// own bound on the group ends them all.
 func endTheRest() {
-	entries, _ := os.ReadDir("/proc")
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == 1 {
-			continue
-		}
-		stat, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
-		if err != nil {
-			continue
-		}
-		// The parent's pid is the second field after the command's name,
-		// which ends at the last parenthesis.
-		fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
-		if len(fields) > 1 && fields[1] == "1" {
-			_ = unix.Kill(pid, unix.SIGTERM)
-		}
-	}
 	for {
-		_, err := unix.Wait4(-1, nil, 0, nil)
-		if errors.Is(err, unix.EINTR) {
-			continue
-		}
-		if err != nil {
-			return
+		_ = unix.Kill(-1, unix.SIGTERM)
+		deadline := time.Now().Add(endAgain)
+		for time.Now().Before(deadline) {
+			pid, err := unix.Wait4(-1, nil, unix.WNOHANG, nil)
+			switch {
+			case errors.Is(err, unix.EINTR):
+			case err != nil:
+				return
+			case pid == 0:
+				time.Sleep(10 * time.Millisecond) // sleep-ok: polls the reaping of what the signal ended
+			}
 		}
 	}
 }
+
+// endAgain is how often endTheRest asks again.
+const endAgain = 200 * time.Millisecond

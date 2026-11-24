@@ -430,3 +430,36 @@ func TestASpacesMessageQueueIsItsOwn(t *testing.T) {
 		t.Fatalf("a later session opened the ended session's queue: %q", got)
 	}
 }
+
+// A close asks every process of the space to end, until none is left: a
+// grandchild made after the first SIGTERM, and reparented to the space's
+// init once its parent ends, is asked too, before the close's bound.
+func TestAKeptCloseAsksEveryProcessLeftToEnd(t *testing.T) {
+	k := keptKeeper(t)
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_home-every")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	script := `cat > child.sh <<'X'
+trap 'sh grand.sh & sleep 0.5; exit 0' TERM
+while :; do sleep 0.05; done
+X
+cat > grand.sh <<'X'
+trap 'echo grand:asked; exit 0' TERM
+while :; do sleep 0.05; done
+X
+echo ready
+sh child.sh
+echo after`
+	id, rc := k.spawnKept(t, "e", script, path, uid)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	grace := int64(5000)
+	began := time.Now()
+	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: id, GraceMs: &grace})
+	rc.readUntil(t, func() bool { return false })
+	if got := string(rc.got[frame.StreamStdout]); got != "ready\ngrand:asked\n" || time.Since(began) > 4*time.Second {
+		t.Fatalf("the closed session said %q after %s", got, time.Since(began))
+	}
+	k.releasedPair(t, id)
+}
