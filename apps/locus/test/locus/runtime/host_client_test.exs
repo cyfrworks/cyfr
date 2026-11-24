@@ -602,6 +602,52 @@ defmodule Locus.Runtime.HostClientTest do
       assert {:ok, 401, _refusal} = HostClient.post_call(host.url, :renew, header, "tampered")
       assert :error = HostClient.post_call("http://127.0.0.1:9", :renew, header, sealed)
     end
+
+    test "post_call/5 asks its room once for the whole answer before it keeps any, and no room is an answer that did not arrive",
+         %{host: host} do
+      attempt = ScriptedHost.attempt!(host)
+      json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+      test = self()
+
+      posted = fn room ->
+        fields = call_fields(attempt)
+        {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+        {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+        HostClient.post_call(host.url, :renew, header, sealed, room: room)
+      end
+
+      asking = fn answer ->
+        fn bytes ->
+          send(test, {:asked, bytes})
+          answer
+        end
+      end
+
+      # An answer read in many pieces asks once, for the length it declares.
+      answer = :binary.copy("0123456789abcdef", 65_536)
+      ScriptedHost.script(host, "renew", {:raw, 200, answer})
+      assert {:ok, 200, ^answer} = posted.(asking.(:ok))
+      assert asked() == [byte_size(answer)]
+
+      # No room: a 200 answer is no answer, and a refusal keeps its status
+      # with none of its body, as one past the answer bound does.
+      assert :error = posted.(asking.(:full))
+      assert asked() == [byte_size(answer)]
+
+      refusal = ~s({"v":1,"error":"unknown_version"})
+      ScriptedHost.script(host, "renew", {:raw, 401, refusal})
+      assert {:ok, 401, ""} = posted.(asking.(:full))
+      assert asked() == [byte_size(refusal)]
+    end
+  end
+
+  # What a room was asked, in order.
+  defp asked do
+    receive do
+      {:asked, bytes} -> [bytes | asked()]
+    after
+      0 -> []
+    end
   end
 
   defp stop_supervised_pid(pid) do
@@ -924,6 +970,71 @@ defmodule Locus.Runtime.HostClientTest do
       assert [{:frame, <<?h, _::binary>>}, {:frame, <<?c, _::binary>>}] = events()
     end
 
+    test "a refusal asks its room once, whole, by the length it declares, as its reading begins, and no room halts it with nothing handed over",
+         %{client: client} do
+      test = self()
+      refusal = :binary.copy("r", 200_000)
+
+      head =
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n" <>
+          "content-length: #{byte_size(refusal)}\r\n\r\n"
+
+      # The host sends the refusal's first piece and holds the rest until
+      # the test lets it go: the room is asked before the rest arrives.
+      {port, host} =
+        raw_host!(fn socket ->
+          :gen_tcp.send(socket, head <> binary_part(refusal, 0, 1_000))
+
+          receive do
+            :rest ->
+              :gen_tcp.send(socket, binary_part(refusal, 1_000, byte_size(refusal) - 1_000))
+          end
+        end)
+
+      room = fn answer ->
+        fn bytes ->
+          send(test, {:asked, bytes})
+          answer
+        end
+      end
+
+      at = %{client | host_url: "http://127.0.0.1:#{port}"}
+      options = Map.put(options(sink()), :room, room.(:ok))
+      calling = Task.async(fn -> HostClient.attached_fetch(at, attached(), options) end)
+
+      assert_receive {:asked, 200_000}, 5_000
+      assert events() == []
+      send(host, :rest)
+      assert :ok = Task.await(calling, 10_000)
+      assert [{:refusal, _header, ^refusal}] = events()
+      assert asked() == []
+
+      {port, _host} = raw_host!(fn socket -> :gen_tcp.send(socket, head <> refusal) end)
+      at = %{client | host_url: "http://127.0.0.1:#{port}"}
+
+      assert :halted =
+               HostClient.attached_fetch(
+                 at,
+                 attached(),
+                 Map.put(options(sink()), :room, room.(:full))
+               )
+
+      assert asked() == [200_000]
+      assert events() == []
+    end
+
+    test "a sink that halts CYFR's refusal halts the answer", %{host: host, client: client} do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:error, {:guest_error, "destination_mismatch", "outside"}}
+      )
+
+      halting = sink(fn {:refusal, _header, _body} -> :halt end)
+      assert :halted = HostClient.attached_fetch(client, attached(), options(halting))
+      assert [{:refusal, _header, _body}] = events()
+    end
+
     test "a length the frames' split refuses, or a body ending inside a frame, is bad_frame", %{
       client: client
     } do
@@ -1067,5 +1178,52 @@ defmodule Locus.Runtime.HostClientTest do
 
     assert WorkerWire.error(:lost) |> Jason.encode!() |> Jason.decode!() ==
              %{"v" => 1, "error" => "lost"}
+  end
+end
+
+defmodule Locus.Runtime.HostClientPoolTest do
+  @moduledoc """
+  The HTTP client starts a pool of connections for each set of connect
+  options it is given, and keeps it: an attached fetch connects under the
+  host calls' options whatever its deadline, so fetches at many deadlines
+  start no pool each. It counts the client's pools, which any test may
+  start, so it runs alone.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Prima.AttachedRequest
+  alias Locus.Runtime.HostClient
+  alias Locus.Runtime.Test.ScriptedHost
+
+  test "attached fetches at different deadlines start no connection pool each" do
+    host = ScriptedHost.start!()
+    attempt = ScriptedHost.attempt!(host)
+    ScriptedHost.script(host, "attached_fetch", {:frames, [{:head, 200, []}, :end]})
+
+    fetch = fn within ->
+      request = %AttachedRequest{
+        call_id: AttachedRequest.call_id(:crypto.strong_rand_bytes(16)),
+        connection: "api_key",
+        method: "GET",
+        url: "https://api.example.com/v1/x",
+        headers: [],
+        body: "",
+        purpose: :fetch
+      }
+
+      HostClient.attached_fetch(attempt.client, request, %{
+        sink: fn _event -> :ok end,
+        max_response_size: 1_000,
+        deadline: System.system_time(:millisecond) + within
+      })
+    end
+
+    pools = fn -> DynamicSupervisor.count_children(Req.FinchSupervisor).active end
+
+    assert :ok = fetch.(10_000)
+    before = pools.()
+    for within <- [5_001, 6_002, 7_003], do: assert(:ok = fetch.(within))
+    assert pools.() == before
   end
 end

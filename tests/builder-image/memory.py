@@ -484,10 +484,12 @@ def mib(count):
 
 
 def brief(answer):
-    """A build's answer without its files, its error cut to its end."""
+    """A build's answer with each of its files by its size, its error cut to its end."""
     if not isinstance(answer, dict):
         return str(answer)[:900]
     answer = {key: value for key, value in answer.items() if key not in ("output_files", "outputs", "wasm_base64", "logs", "diagnostics")}
+    if "files" in answer:
+        answer["files"] = {path: f"{len(data)} bytes" for path, data in answer["files"].items()}
     if isinstance(answer.get("error"), str):
         answer["error"] = answer["error"][-500:]
     return json.dumps(answer)[:900]

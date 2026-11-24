@@ -39,6 +39,12 @@ defmodule Locus.Backends.Service do
      check its sequence again there (`stale_control`); its answer is
      encoded as `encode_answer/2` encodes it, and a status answer past
      `max_status_answer_bytes/0` is refused whole as `status_too_large`.
+     A status first asks the backends role's answering count
+     (`Locus.Output`) for the most its collection and its answer can hold
+     (`status_room/1`), before anything of it is collected; it names no
+     deadline, so it waits for none, and is refused `unavailable` when
+     the count has no room for it now. The request gives the room back
+     once its answer, or its refusal, is written.
 
   ## A session message, in order
 
@@ -63,7 +69,11 @@ defmodule Locus.Backends.Service do
      (`unknown_session` for one they do not hold) when it is of that
      session's mode (`bad_request` otherwise:
      `Prima.LocusBackends.mode_types/1`), so a `recv` or an `output` that
-     waits holds its session and nothing else.
+     waits holds its session and nothing else. The bytes a `recv` or an
+     `output` answers are granted by the backends role's answering count
+     (`Locus.Backends.Backend`, "Recv"), and the request returns the grant
+     once its answer is written or did not encode; a request that dies
+     frees it by dying.
 
   ## A close, in order
 
@@ -144,6 +154,9 @@ defmodule Locus.Backends.Service do
 
   defp owners(%Plug.Conn{assigns: %{service_opts: opts}}), do: Keyword.get(opts, :owners, Owners)
 
+  defp output(%Plug.Conn{assigns: %{service_opts: opts}}),
+    do: Keyword.get_lazy(opts, :output, fn -> Locus.Output.server(:backends) end)
+
   defp key(%Plug.Conn{assigns: %{service_opts: opts}}) do
     case Keyword.get_lazy(opts, :key, &Locus.Config.backends_key/0) do
       key when byte_size(key) == 32 -> {:ok, key}
@@ -193,8 +206,17 @@ defmodule Locus.Backends.Service do
          {:ok, body, conn} <- body(conn, LocusBackends.max_control_bytes()),
          :ok <- hashed(conn, :control, body_hash, body),
          {:ok, message} <- readable(conn, LocusBackends.read_control(body)),
-         :ok <- named_lifetime(conn, message, fields.boot, boot),
-         {:ok, answer} <- applied(conn, fields, message, open_env(key, fields, message, boot)) do
+         :ok <- named_lifetime(conn, message, fields.boot, boot) do
+      roomed(conn, message, fn ->
+        applied_answer(conn, fields, message, open_env(key, fields, message, boot))
+      end)
+    else
+      {:refused, conn, refusal} -> refuse(conn, refusal)
+    end
+  end
+
+  defp applied_answer(conn, fields, message, open_env) do
+    with {:ok, answer} <- applied(conn, fields, message, open_env) do
       case LocusBackends.encode_answer(message.type, answer) do
         {:ok, text} ->
           answer(conn, 200, text)
@@ -209,6 +231,48 @@ defmodule Locus.Backends.Service do
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
     end
+  end
+
+  # A status's room is asked for whole, before the owners collect any of
+  # it, and held by this request until the answer or its refusal is
+  # written. A status carries no deadline: the ask's is now, so it waits
+  # for no room.
+  defp roomed(conn, %{type: :status, owners: owners}, answer) do
+    now = System.monotonic_time(:millisecond)
+
+    case Locus.Output.reserve(output(conn), status_room(length(owners)), now) do
+      {:ok, grant} ->
+        try do
+          answer.()
+        after
+          Locus.Output.return(grant)
+        end
+
+      :full ->
+        refuse(conn, :unavailable)
+    end
+  end
+
+  defp roomed(_conn, _message, answer), do: answer.()
+
+  @doc """
+  The most a status naming `owners` owners holds from its collection to
+  its written answer, in bytes. Each owner reports at most
+  `Prima.LocusBackends.max_programs/0` programs, each a scratch program's
+  stderr tail of at most `Prima.LocusBackends.stderr_tail_bytes/0` bytes:
+  a byte of it is reported as at most three (one that is not UTF-8 is
+  U+FFFD) and encoded in the answer as at most six (a control byte's
+  `\\u00XX`), seven between them. Beside its tail a program's name, error
+  and members are held as text and as JSON within 1 KiB, an owner's
+  within 2 KiB (its athanor and server, at most 256 bytes each), and the
+  answer's own members within 1 KiB. One owner, as CYFR names, is
+  7,359,488 bytes; past three the role's answering bound (26 MiB) cannot
+  hold it, and the status is refused `unavailable`.
+  """
+  @spec status_room(non_neg_integer()) :: pos_integer()
+  def status_room(owners) when is_integer(owners) and owners >= 0 do
+    program = 7 * LocusBackends.stderr_tail_bytes() + 1_024
+    owners * (LocusBackends.max_programs() * program + 2_048) + 1_024
   end
 
   defp known(_conn, {:ok, key}), do: {:ok, key}
@@ -299,17 +363,28 @@ defmodule Locus.Backends.Service do
          {:ok, message} <- readable(conn, LocusBackends.read_session(body)),
          :ok <- named(conn, message, invoke),
          {:ok, answer} <- served(conn, invoke, message) do
-      case LocusBackends.encode_session_answer(message.type, answer) do
-        {:ok, text} ->
-          answer(conn, 200, text)
-
-        {:error, _unencodable} ->
-          Logger.error("[Locus.Backends.Service] a #{message.type} answer did not encode")
-          refuse(conn, :internal)
-      end
+      {grant, answer} = Map.pop(answer, :grant)
+      written(conn, message.type, answer, grant)
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
     end
+  end
+
+  # A recv's or an output's grant of the answering count (`Locus.Output`)
+  # is this request's while its answer is encoded and written: once the
+  # write has returned, or the answer did not encode, its bytes are gone
+  # and the grant goes back.
+  defp written(conn, type, answer, grant) do
+    case LocusBackends.encode_session_answer(type, answer) do
+      {:ok, text} ->
+        answer(conn, 200, text)
+
+      {:error, _unencodable} ->
+        Logger.error("[Locus.Backends.Service] a #{type} answer did not encode")
+        refuse(conn, :internal)
+    end
+  after
+    if grant, do: Locus.Output.return(grant)
   end
 
   defp owner(conn, invoke) do

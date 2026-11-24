@@ -23,8 +23,11 @@ defmodule Locus.KeeperEnvTest do
     Keeper.run(
       name,
       %{argv: ["/bin/sh", "-c", script], env: %{}, stdin: ""},
-      [place: place, timeout_ms: 10_000, max_stdout_bytes: 1_000_000] ++
-        Keyword.take(opts, [:memory_bytes])
+      [
+        place: place,
+        deadline: System.monotonic_time(:millisecond) + 10_000,
+        max_stdout_bytes: 1_000_000
+      ] ++ Keyword.take(opts, [:memory_bytes])
     )
   end
 

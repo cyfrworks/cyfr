@@ -43,6 +43,26 @@ defmodule Prima.Digest do
     Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
   end
 
+  @typedoc "A SHA-256 begun and moved on over some chunks, not yet spelled."
+  @opaque sha256_state :: :crypto.hash_state()
+
+  @doc """
+  A running SHA-256, begun: `sha256_update/2` moves it on with each chunk
+  in order, and `sha256_final/1` spells it as `sha256/1` spells the whole,
+  for a producer that hashes bytes as they pass and never holds them all.
+  """
+  @spec sha256_init() :: sha256_state()
+  def sha256_init, do: :crypto.hash_init(:sha256)
+
+  @doc "A running SHA-256 moved on by the next chunk."
+  @spec sha256_update(sha256_state(), iodata()) :: sha256_state()
+  def sha256_update(state, chunk), do: :crypto.hash_update(state, chunk)
+
+  @doc "A running SHA-256 ended, formatted `sha256:<lowercase hex>`."
+  @spec sha256_final(sha256_state()) :: String.t()
+  def sha256_final(state),
+    do: "sha256:" <> Base.encode16(:crypto.hash_final(state), case: :lower)
+
   @doc """
   SHA-256 over a chunk sequence, formatted `sha256:<lowercase hex>`.
 
@@ -53,9 +73,8 @@ defmodule Prima.Digest do
   @spec sha256_stream(Enumerable.t()) :: String.t()
   def sha256_stream(chunks) do
     chunks
-    |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
-    |> :crypto.hash_final()
-    |> then(&("sha256:" <> Base.encode16(&1, case: :lower)))
+    |> Enum.reduce(sha256_init(), &sha256_update(&2, &1))
+    |> sha256_final()
   end
 
   @doc """

@@ -469,7 +469,7 @@ defmodule Compendium.CanvasTest do
     test "a refused, failed or timed-out build, or one that publish refuses, allocates and " <>
            "publishes nothing",
          %{ctx: ctx} do
-      log = ["src/App.tsx(3,1): error TS2304: Cannot find name 'x'."]
+      log = ["output: src/App.tsx(3,1): error TS2304: Cannot find name 'x'."]
 
       cases = [
         {{:refuse, {:failed, {:status, 2}}, log},

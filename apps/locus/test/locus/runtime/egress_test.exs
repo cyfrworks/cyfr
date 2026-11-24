@@ -56,10 +56,8 @@ defmodule Locus.Runtime.EgressTest do
     assert connection(pinned)[:receive_timeout] == 30_000
   end
 
-  test "the caller's protocols, transport options and timeout ride along", %{
-    host: host,
-    client: client
-  } do
+  test "the caller's protocols and timeout ride along, and the socket reads at most 64 KiB at a time",
+       %{host: host, client: client} do
     ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"})
 
     assert {:ok, pinned} = Egress.pin(client, "http://public.test/")
@@ -72,7 +70,8 @@ defmodule Locus.Runtime.EgressTest do
       )
 
     assert opts[:connect_options][:protocols] == [:http1]
-    assert opts[:connect_options][:transport_opts] == [verify: :verify_none]
+    assert opts[:connect_options][:transport_opts] == Egress.transport_opts()
+    assert Egress.transport_opts()[:buffer] == 65_536
     assert opts[:receive_timeout] == 5
   end
 

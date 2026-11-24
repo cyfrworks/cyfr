@@ -10,12 +10,14 @@ defmodule Cyfr.Test.LocusService do
   The umbrella starts the Locus application beside CYFR, and a node whose
   environment was never read serves no builds (`Locus.Application`).
   `serve!/0`, run once by `test_helper.exs`, gives it the builds key and
-  starts its listener (`Locus.Application.listener/1`) under
-  `Locus.Supervisor`, where the builds run through `Locus.DirectLauncher`,
-  the one executor the test build knows beside cyfr-locus: as this
-  machine's user, with no uid or memory bound of their own. `stop!/0`, run
-  when the suite ends, takes both away again, so a suite that runs after
-  this one in the same VM finds Locus as it started.
+  starts the builds role's count (`Locus.Output`) and its listener
+  (`Locus.Application.listener/1`) under `Locus.Supervisor`, as a node
+  serving builds starts them, where the builds run through
+  `Locus.DirectLauncher`, the one executor the test build knows beside
+  cyfr-locus: as this machine's user, with no uid or memory bound of
+  their own. `stop!/0`, run when the suite ends, takes them away again,
+  so a suite that runs after this one in the same VM finds Locus as it
+  started.
 
   Builds stay disabled on this server until a test asks for them:
   `configure!/0`, from a test's `setup`, points
@@ -33,12 +35,13 @@ defmodule Cyfr.Test.LocusService do
   # The suite's builds key: 32 bytes, as the service and this server each
   # hold it. Test-only; no deployment holds it.
   @key :binary.copy(<<0x4C>>, 32)
+  @count {Locus.Output, :builds}
   @listener __MODULE__.Listener
 
   @doc """
-  Serve builds from the running Locus application: the key installed and
-  the listener started on a port of the system's choosing. Answers the
-  service's base URL.
+  Serve builds from the running Locus application: the key installed, and
+  the role's count and the listener started, the listener on a port of the
+  system's choosing. Answers the service's base URL.
   """
   @spec serve!() :: String.t()
   def serve! do
@@ -49,8 +52,12 @@ defmodule Cyfr.Test.LocusService do
 
     {Bandit, opts} = Locus.Application.listener(ip: {127, 0, 0, 1}, port: 0, startup_log: false)
 
-    spec = Supervisor.child_spec({Bandit, opts}, id: @listener)
+    start!(Supervisor.child_spec(@count, []))
+    start!(Supervisor.child_spec({Bandit, opts}, id: @listener))
+    url()
+  end
 
+  defp start!(%{id: id} = spec) do
     case Supervisor.start_child(Locus.Supervisor, spec) do
       {:ok, _pid} ->
         :ok
@@ -59,21 +66,23 @@ defmodule Cyfr.Test.LocusService do
         :ok
 
       {:error, :already_present} ->
-        {:ok, _pid} = Supervisor.restart_child(Locus.Supervisor, @listener)
+        {:ok, _pid} = Supervisor.restart_child(Locus.Supervisor, id)
+        :ok
     end
-
-    url()
   end
 
   @doc """
-  Stop serving: the listener stopped and removed from `Locus.Supervisor`
-  and the key taken away, as they were before `serve!/0`.
+  Stop serving: the listener and the count stopped and removed from
+  `Locus.Supervisor` and the key taken away, as they were before
+  `serve!/0`.
   """
   @spec stop!() :: :ok
   def stop! do
     if Process.whereis(Locus.Supervisor) do
-      _ = Supervisor.terminate_child(Locus.Supervisor, @listener)
-      _ = Supervisor.delete_child(Locus.Supervisor, @listener)
+      for id <- [@listener, @count] do
+        _ = Supervisor.terminate_child(Locus.Supervisor, id)
+        _ = Supervisor.delete_child(Locus.Supervisor, id)
+      end
     end
 
     Application.delete_env(:locus, :request_key)

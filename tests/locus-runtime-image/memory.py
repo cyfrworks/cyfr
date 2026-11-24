@@ -115,6 +115,10 @@ def group(uid):
     return f"/sys/fs/cgroup/keeper-{uid}/bound"
 
 
+# The keeper's group: cyfr-locus, the service and every spawn without a bound.
+KEEPER_GROUP = "/sys/fs/cgroup/keeper"
+
+
 def read_group(stack, uid):
     """The group of the spawn running under `uid` as the kernel accounts it, or None when there is none.
 
@@ -165,7 +169,7 @@ def brief_stat(stat):
 
 def keeper_group(stack):
     """The keeper's group (cyfr-locus, the service and every spawn without a bound): its peak and current use."""
-    out = imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/keeper/memory.peak /sys/fs/cgroup/keeper/memory.current"),
+    out = imagesuite.read_output(stack.exec(f"cat {KEEPER_GROUP}/memory.peak {KEEPER_GROUP}/memory.current"),
                                  "the keeper group").split()
     if len(out) != 2:
         sys.exit(f"FAIL: the keeper group answered {out!r}")
@@ -207,7 +211,7 @@ def process_alive(container, pid):
 
 
 class GroupSampler(threading.Thread):
-    """Samples one uid's group and the container's memory from inside it, as fast as a shell reads a file.
+    """Samples one group (`group(uid)`, or `KEEPER_GROUP`) and the container's memory from inside it, as fast as a shell reads a file.
 
     The loop forks nothing (`read` and `echo` are the shell's own), so it
     sees a group that fills its bound within a fraction of a second, and
@@ -218,7 +222,7 @@ class GroupSampler(threading.Thread):
 
     SCRIPT = r"""
       echo "pid $$"
-      g=/sys/fs/cgroup/keeper-UID/bound
+      g=GROUP
       while :; do
         p=; c=; k=; o=; ok=
         { read -r p < $g/memory.peak; read -r c < $g/memory.current; } 2>/dev/null
@@ -229,12 +233,12 @@ class GroupSampler(threading.Thread):
         echo "$p|$c|$k|oom $o oom_kill $ok"
       done"""
 
-    def __init__(self, container, uid):
+    def __init__(self, container, path):
         super().__init__(daemon=True)
         self.container = container
         self.pid = None
         self.process = subprocess.Popen(
-            ["docker", "exec", container, "sh", "-c", self.SCRIPT.replace("UID", str(uid))],
+            ["docker", "exec", container, "sh", "-c", self.SCRIPT.replace("GROUP", path)],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         self.samples = []
 
@@ -452,7 +456,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
     state_before = stack.container_state()
     flag_before = oom_killed_flag(stack)
     ready = read_group(stack, runner["uid"])
-    sampler = GroupSampler(stack.container, runner["uid"])
+    sampler = GroupSampler(stack.container, group(runner["uid"]))
     sampler.start()
     time.sleep(0.3)
 
