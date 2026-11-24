@@ -382,7 +382,7 @@ mock.module("electron", {exports: {
   Menu: {setApplicationMenu: (menu) => world.menus.push(menu),
     // A menu main pops up: its items, for the test to press one, and where.
     buildFromTemplate: (items) => {
-      const menu = {items, popped: [], popup(options) { menu.popped.push(options) }}
+      const menu = {items, popped: [], closed: [], popup(options) { menu.popped.push(options) }, closePopup(w) { menu.closed.push(w) }}
       world.popups.push(menu)
       return menu
     }},
@@ -780,7 +780,9 @@ test("a navigation of the rail that is no press, a redirect or a frame's among t
   const r = rail()
   const views = world.windows.length
   for (const url of ["https://evil.example/", HOME + "/", "http://127.0.0.1:7340/rail/", "http://127.0.0.1:7340/bootstrap/",
-    "http://127.0.0.1:7340/rail/select?cyfr=nonsense", "http://127.0.0.1:7340/rail/connect?x=1"]) {
+    "http://127.0.0.1:7340/rail/select?cyfr=nonsense", "http://127.0.0.1:7340/rail/connect?x=1",
+    // This box is the box's screen's alone, and names nothing.
+    "http://127.0.0.1:7340/rail/box", "http://127.0.0.1:7340/rail/box?cyfr=" + encodeURIComponent(PORT_B)]) {
     assert.ok(press(url).prevented, url)
   }
   const to = "http://127.0.0.1:7340/rail/select?cyfr=" + encodeURIComponent(PORT_B)
@@ -2065,6 +2067,9 @@ const SCREEN = "/home/ana/cyfr"
 // Windows the switch is refused, which the last test of these shows there.
 const ON_LINUX = {skip: process.platform !== "linux" && "the box's screen runs on Linux alone"}
 const SHELL_PAGE = "http://127.0.0.1:7340/"
+// The chooser as main loads it on the box's screen: the six-word road, and
+// the box, where it sets nothing up.
+const SCREEN_CHOOSER = CHOOSER_AT + "road=words&box=1"
 
 // The screen's end by the kernel, recorded: the turn it came in, and what
 // main had done by then: quit or exited, and what it had told cyfr and
@@ -2089,7 +2094,7 @@ async function screenStarted(project = SCREEN) {
     startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: sayTraced(said), endSelf})
     await settled()
     if (world.exited === undefined) {
-      child.say({type: "ready", url: SHELL_PAGE})
+      child.say({type: "ready", url: READY, rail: RAIL})
       await settled()
     }
   } finally {
@@ -2098,19 +2103,19 @@ async function screenStarted(project = SCREEN) {
   return said
 }
 
-test("as the box's screen the app runs the screen shell in that project, in one frameless maximized window with no menu", ON_LINUX, async () => {
+test("as the box's screen the app runs the screen shell in that project, in one frameless maximized window with no menu, the rail beside the chooser", ON_LINUX, async () => {
   await screenStarted()
   assert.deepEqual(world.spawned, [["screen", "shell"]])
   assert.deepEqual(world.spawnedIn, [SCREEN])
   assert.deepEqual(world.menus, [null], "no menu")
   const w = content()
-  assert.equal(w.webContents.url, SHELL_PAGE, "the shell's own page, no chooser")
+  assert.equal(w.webContents.url, SCREEN_CHOOSER, "the chooser, on the six-word road, told it is the box")
   assert.equal(world.frames.length, 1)
   assert.equal(frame().options.frame, false)
   assert.ok(frame().maximized)
   assert.deepEqual(stores(), [], "nothing kept on disk")
-  assert.equal(world.windows.find(isRail), undefined, "no rail")
-  assert.deepEqual(w.bounds.at(-1), {x: 0, y: 0, width: 1280, height: 860}, "the content the whole window")
+  assert.equal(rail()?.webContents.url, RAIL, "the rail, always visible")
+  assert.deepEqual(w.bounds.at(-1), {x: RAIL_WIDTH, y: 0, width: 1280 - RAIL_WIDTH, height: 860}, "the content beside it")
 })
 
 test("only an explicit project makes the app a screen; another switch value is refused", ON_LINUX, async () => {
@@ -2147,13 +2152,13 @@ test("the folder cyfr setup opened the app in is the one its cyfr suggests; a sw
   assert.deepEqual(world.spawned, [["desktop-serve"]], "no switch, ~/cyfr")
 })
 
-test("the screen's first page is the shell's own: a chooser there ends the app", ON_LINUX, async () => {
+test("the screen's first page is the chooser with its rail, as a desktop's: the shell's own page instead ends the app", ON_LINUX, async () => {
   reset()
   world.screen = SCREEN
   startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: () => {}, endSelf})
   world.screen = undefined
   await settled()
-  child.say({type: "ready", url: READY})
+  child.say({type: "ready", url: SHELL_PAGE})
   await settled()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(content(), undefined)
@@ -2161,7 +2166,7 @@ test("the screen's first page is the shell's own: a chooser there ends the app",
   assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is shut down")
 })
 
-test("a lock on the screen hides the page at once and shows the shell's page again, in a new session", ON_LINUX, async () => {
+test("a lock on the screen hides the page at once and shows the chooser again, in a new session, which goes on to the device's page", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
@@ -2172,18 +2177,18 @@ test("a lock on the screen hides the page at once and shows the shell's page aga
   await settled()
   await settled()
   const after = content()
-  assert.equal(after.webContents.url, SHELL_PAGE)
+  assert.equal(after.webContents.url, SCREEN_CHOOSER)
   assert.notEqual(after.webContents.session, session)
 })
 
-test("on the screen a lost page locks, a failed load shows the shell's page, and cyfr's end ends the app with no message", ON_LINUX, async () => {
+test("on the screen a lost page locks, a failed load shows the chooser, and cyfr's end ends the app with no message", ON_LINUX, async () => {
   await screenStarted()
   assert.ok(await opens())
   await give(content())
   fails(content(), HOME + "/", -106)
   await settled()
   await settled()
-  assert.equal(content().webContents.url, SHELL_PAGE, "the shell's page, from which Open CYFR tries again")
+  assert.ok(content().webContents.url.startsWith(SCREEN_CHOOSER), "the chooser, from which the device's page tries again")
   content().webContents.emit("render-process-gone", {}, {reason: "crashed"})
   await settled()
   await settled()
@@ -2212,7 +2217,9 @@ test("on the screen a lock closes the app's window, ending nothing, and the lock
   assert.deepEqual(world.endedSelf, [], "its close ends nothing")
   assert.notEqual(frame(), before, "a fresh window")
   assert.ok(!frame().isDestroyed())
-  assert.equal(content().webContents.url, SHELL_PAGE, "showing the locked screen's page")
+  assert.equal(content().webContents.url, SCREEN_CHOOSER, "showing the chooser, on to the locked screen's page")
+  assert.equal(rail()?.webContents.url, RAIL, "the rail in the fresh window too")
+  assert.ok(frame().contentView.children.includes(rail()), "inside it")
   frame().emit("closed")
   await turns()
   assert.equal(world.endedSelf.length, 1, "the fresh window's own close is the app's end")
@@ -2273,7 +2280,7 @@ test("on the screen every end of the app is its one end, and none is the engine'
     assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: [...(sentence ? [`said ${sentence}`] : []), ...ENDS]}], road)
     assert.equal(world.relaunched, null, road)
   }
-  // Its first page not the shell's own, the same.
+  // Its first page not the chooser with its rail, the same.
   reset()
   world.screen = SCREEN
   startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: false, say: sayTraced([]), endSelf})
@@ -2282,7 +2289,8 @@ test("on the screen every end of the app is its one end, and none is the engine'
   world.trace = []
   child.say({type: "ready", url: READY})
   await settled()
-  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: its first page was not the chooser", ...ENDS]}])
+  assert.deepEqual(world.endedSelf, [{quit: false, exited: undefined, trace: ["said cyfr ended: its first page was not the chooser", ...ENDS]}],
+    "a ready without the rail")
 })
 
 test("on the screen a failed load of the shell's own page locks, and so does a confirmation lost or failed", ON_LINUX, async () => {
@@ -2296,7 +2304,7 @@ test("on the screen a failed load of the shell's own page locks, and so does a c
   child.say({type: "locked"})
   await settled()
   await settled()
-  assert.equal(content().webContents.url, SHELL_PAGE)
+  assert.equal(content().webContents.url, SCREEN_CHOOSER)
   assert.ok(await opens())
   await give(content())
   for (const [end, made] of Object.entries(CONFIRMATION_ENDS)) {
@@ -2311,6 +2319,65 @@ test("on the screen a failed load of the shell's own page locks, and so does a c
     await settled()
     assert.ok(await opens(), end)
     await give(content())
+  }
+})
+
+// A departure on the box is confirmed as a lock is (internal/wayland):
+// every window shown as cyfr is told to leave has closed, so the whole
+// window closes before leave is sent, and the chooser connecting to the
+// CYFR chosen comes up with the rail in a fresh one only once cyfr left
+// and the pages parted.
+test("on the screen a departure closes the app's window before cyfr is told to leave, and the chooser comes up in a fresh one with the rail", ON_LINUX, async () => {
+  for (const [name, pressed, then] of [["a CYFR on the rail", () => select(PORT_B), "&connect=" + encodeURIComponent(PORT_B)],
+    ["This box on the rail", () => press("http://127.0.0.1:7340/rail/box"), "&way=box"]]) {
+    await screenStarted()
+    assert.ok(await opens(), name)
+    await give(content())
+    const before = frame()
+    let closedAtLeave = null
+    const heard = child.heard
+    const push = heard.push.bind(heard)
+    heard.push = (m) => {
+      if (m.type === "leave") closedAtLeave = before.isDestroyed()
+      return push(m)
+    }
+    assert.ok(pressed().prevented, name)
+    await turns()
+    assert.equal(closedAtLeave, true, `${name}: the window was closed as leave was sent`)
+    assert.deepEqual(world.endedSelf, [], `${name}: the close ends nothing`)
+    assert.equal(content(), undefined, `${name}: nothing shows until cyfr left`)
+    child.say({type: "left", id: leaves().at(-1).id})
+    await turns()
+    assert.notEqual(frame(), before, name)
+    assert.equal(content().webContents.url, SCREEN_CHOOSER + then, name)
+    assert.equal(rail()?.webContents.url, RAIL, `${name}: the rail in the fresh window`)
+  }
+})
+
+// A row's menu, and the dialog its Forget opens, are the window's: a lock
+// or a departure closes them with it, and an answer given after that
+// forgets nothing. On the box no window outlives a lock.
+test("a lock closes a row's menu and its Forget's dialog, and an answer after it forgets nothing", async () => {
+  for (const screen of [false, true]) {
+    if (screen && process.platform !== "linux") continue
+    if (screen) await screenStarted()
+    else await started(true)
+    let answered
+    let aborted = null
+    world.messageBox = (_parent, options) => new Promise((resolve) => {
+      answered = resolve
+      options.signal.addEventListener("abort", () => { aborted = true })
+    })
+    press(menuOf(PORT_B))
+    const menu = world.popups.at(-1)
+    menu.items[0].click()
+    child.say({type: "locked"})
+    await turns()
+    assert.equal(aborted, true, `the dialog was closed (screen ${screen})`)
+    assert.ok(menu.closed.length > 0, `the menu was closed (screen ${screen})`)
+    answered({response: 0})
+    await turns()
+    assert.deepEqual(forgets(), [], `an answer after the lock forgets nothing (screen ${screen})`)
   }
 })
 

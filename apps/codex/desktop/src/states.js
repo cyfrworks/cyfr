@@ -56,21 +56,17 @@
 // CYFR if it is open, and only then tells cyfr to forget it.
 //
 // The box's screen (`screen`, its project; app.js) is the six-word road
-// with no chooser: cyfr's first page is the device's own, at loopback's
-// root, and the content window shows it again wherever the chooser would
-// show, after every lock and after a failed load of the CYFR's. There
-// every lost or failed page ends on that page or in a lock: a page lost,
-// the content's or a confirmation's, and a failed load of the device's own
-// page are each a lock, and so is cyfr's end, after which the app quits,
-// to be started again locked; on a desktop a lost page is shown again and
-// a lost confirmation is closed alone. cyfr proposes its CYFR again after
-// every lock (cmd/screen_app.go), and its locked there names none: a
-// proposal heard while a lock runs is `wanted`, taken once the lock has
-// settled, so whatever order the messages and the takes and clears come
-// in, main ends keeping to that CYFR on the device's page. Its last lock,
-// at its end, says ending in place of locked: main closes at once and
-// ends as at cyfr's end, settling no lock, so whatever is still to arrive
-// (a forget answered, the exit), no window opens for a cyfr that is going.
+// with the same rail and chooser, and what only the box has: This box on
+// the rail (`box`), the CYFR its folder names, opened by the chooser; no
+// setup on this computer and no folder dialog. There every lost or failed
+// page ends in a lock: a page lost, the content's or a confirmation's, and
+// a failed load of the device's own page are each a lock, and so is cyfr's
+// end, after which the app quits, to be started again locked; on a desktop
+// a lost page is shown again and a lost confirmation is closed alone. Its
+// last lock, at cyfr's end, says ending in place of locked: main closes at
+// once and ends as at cyfr's end, settling no lock, so whatever is still to
+// arrive (a forget answered, the exit), no window opens for a cyfr that is
+// going.
 //
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
@@ -203,9 +199,11 @@ const atRail = (url) => {
   return !!u && u.origin === LOOPBACK && u.pathname === "/rail/"
 }
 // What a press on the rail may do now: nothing while cyfr starts, a lock
-// or a departure runs, or a proposal waits for its commit; and none on
-// the box's screen, which has no rail in this part.
-const railFree = (s) => !s.screen && ["chooser", "open"].includes(s.name)
+// or a departure runs, or a proposal waits for its commit.
+const railFree = (s) => ["chooser", "open"].includes(s.name)
+// The rail's ways at the foot, by place: Set up CYFR on this computer on a
+// desktop, This box on the box's screen.
+const railWays = (s) => s.screen ? ["connect", "box"] : ["connect", "setup"]
 // The chooser's Try again and its Sign in with your passkey: addresses
 // main alone answers, never loaded, each the CYFR open in its own kept
 // storage, at its root or at its sign-in page. A CYFR's page never loads
@@ -248,11 +246,14 @@ export const ACTS = {
       if (s.name === "open" && s.home === home) return {state: s, allow: false, do: [{show: true}]}
       return {...away(s, {connect: home}), allow: false}
     }},
-  // Connect, and Set up CYFR on this computer, on the rail: the chooser
-  // at that way, once the CYFR open is left.
+  // Connect, Set up CYFR on this computer and This box, on the rail: the
+  // chooser at that way, once the CYFR open is left.
   connect: {window: "rail", by: (_, url) => atRail(url),
-    to: (s, e) => railFree(s) && ["connect", "setup"].includes(railPress(e.url)?.act),
-    then: (s, e) => ({...away(s, railPress(e.url).act === "setup" ? {way: "setup"} : {}), allow: false})},
+    to: (s, e) => railFree(s) && railWays(s).includes(railPress(e.url)?.act),
+    then: (s, e) => {
+      const act = railPress(e.url).act
+      return {...away(s, act === "connect" ? {} : {way: act}), allow: false}
+    }},
   // A row's menu on the rail, which main draws: its Forget is confirmed
   // there (forget-confirmed).
   menu: {window: "rail", by: (_, url) => atRail(url),
@@ -266,8 +267,8 @@ export const ACTS = {
     to: (s, e) => s.accountRoad && s.name === "open" && Object.hasOwn(REOPEN, e.url),
     then: (s, e) => ({state: {...s, notices: []}, allow: false, do: [{root: {home: s.home, path: REOPEN[e.url]}}]})},
   // Change…, the folder CYFR is set up in on this computer, on the
-  // chooser: the system's dialog, one at a time. The box's screen has no
-  // chooser, and none of its acts.
+  // chooser: the system's dialog, one at a time. The box's screen sets
+  // nothing up, and has neither this nor Docker's page.
   pick: {window: "content", by: (_, url) => atChooser(url),
     to: (s, e) => !s.screen && pickAsked(e.url) !== null,
     then: (s, e) => s.picking ? {state: s, allow: false, do: []}
@@ -313,10 +314,14 @@ function sentToSignIn(s, e) {
 
 // A lock from state s: the content closes at once. cyfr is told, unless
 // it said locked itself (`heard`, its message): that is then the barrier
-// passed and the device's session ended, which is forgotten.
+// passed and the device's session ended, which is forgotten. A lock while
+// a CYFR is proposed holds on to that proposal: cyfr may have committed it
+// as the lock began, its opened crossing the lock, and its locked then
+// names it, which main keeps to (settle) as cyfr does.
 function lock(s, why, notice, heard = null) {
   const [t, answer] = unpicked(s)
-  const next = {...t, name: "locking", before: kept(s), notices: adding(s.notices, notice), barrier: heard !== null,
+  const before = s.name === "proposed" ? {home: s.home, account: s.account, accountRoad: s.accountRoad} : kept(s)
+  const next = {...t, name: "locking", before, notices: adding(s.notices, notice), barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
   return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, heard ? {forget: true} : {send: {type: "lock"}}]}
 }
@@ -357,9 +362,7 @@ function settle(s) {
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
     railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", returning: null, notices: s.notices,
     picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
-  if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
-  const taken = step(next, {type: "home", message: s.wanted})
-  return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
+  return {state: next, do: [{chooser: s.notices}]}
 }
 
 // The chooser's state after a departure: main keeps to none.
@@ -385,14 +388,12 @@ function advance(s, e) {
   switch (e.type) {
     // ---- cyfr ----
     case "ready": {
-      // The box's screen has no rail in this part: its own pages alone.
       const rail = e.message?.rail ?? ""
-      if (s.name !== "starting" || (s.screen ? e.url !== LOOPBACK + "/" || rail
-        : !e.url.startsWith(LOOPBACK + "/bootstrap/#token=") || !rail.startsWith(LOOPBACK + "/rail/#read="))) {
+      if (s.name !== "starting" || !e.url.startsWith(LOOPBACK + "/bootstrap/#token=") || !rail.startsWith(LOOPBACK + "/rail/#read=")) {
         return stopped(s, "its first page was not the chooser")
       }
       return {state: {...s, name: "chooser", readyURL: e.url, railURL: rail},
-        do: [{say: "ready"}, ...(rail ? [{rail: {url: rail}}] : []), {chooser: s.notices}]}
+        do: [{say: "ready"}, {rail: {url: rail}}, {chooser: s.notices}]}
     }
     case "home": {
       // The box's screen makes its first person by the device's pages: a
@@ -401,11 +402,10 @@ function advance(s, e) {
       const m = s.screen ? rest : e.message
       // An attempt's number only goes up: a home not above the highest
       // proposed, and the one queued, changes nothing, in any state.
-      if (Number.isSafeInteger(m.attempt) && m.attempt <= Math.max(s.seen, s.wanted?.attempt ?? 0)) return same(s)
+      if (Number.isSafeInteger(m.attempt) && m.attempt <= s.seen) return same(s)
       const seen = Number.isSafeInteger(m.attempt) ? m.attempt : s.seen
-      // From before the lock; on the screen, the proposal after it, queued
-      // and taken once the lock settles.
-      if (s.name === "locking") return s.screen ? same({...s, wanted: m}) : same({...s, seen})
+      // From before the lock.
+      if (s.name === "locking") return same({...s, seen})
       if (!["chooser", "proposed"].includes(s.name) || !homeMessage(m)) {
         return stopped(s, "it named a CYFR this app does not open")
       }
