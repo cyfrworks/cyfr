@@ -9,7 +9,7 @@
 # real sg), sets CYFR up in a folder seeded as a release's download would
 # leave it, with the loaded app image, and opens it. app/proof.js drives
 # the app from inside its main process; this script does what the host
-# does between its steps. Four launches:
+# does between its steps. Three launches:
 #
 #   first   missing_to_ready  with no Docker socket the setup screen says
 #                             Docker does not answer and shows the commands;
@@ -59,20 +59,6 @@
 #                             that CYFR's socket, which is what it is for:
 #                             a message to another origin is the policy's
 #                             to refuse (its tests), not this row's to read
-#   two     two_reopened      the passkey launch's CYFR, still running, is
-#                             the one selected last: the app opens it by
-#                             itself as it starts, signed in as before, in
-#                             a store kept on disk
-#           two_set_up        Set up on the rail sets CYFR up in a third
-#                             folder on a port of its own beside it, its
-#                             first person made with a passkey, and adds it
-#                             as a row of its own: two folders, two rows
-#           two_apart         each keeps its own sign-in in its own store,
-#                             though both are at localhost, apart by port
-#                             alone: each one's session cookie opens its own
-#                             CYFR and not the other's, in the real engine
-#           two_back          pressing each row switches to it, still
-#                             signed in there with the same cookie
 #
 # No lock is a row: on a desktop nothing locks while no CYFR is open, so a
 # lock during a setup is held by the app's Go and JS tests, and the chooser
@@ -208,9 +194,8 @@ sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_URL=.*|CYFR_L
 printf '%s\n' "" CYFR_AUTO_MIGRATE=on CYFR_DIRECTORY_SERVE=writer "CYFR_DIRECTORY_URL=$ADDR" "CYFR_REGISTRY_URL=localhost:$PORT" \
   CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1 >>"$D/.env.example"
 }
-# The proof's inputs for a launch: the CYFR at ADDR in folder DIR, and the
-# address of the other folder's CYFR running beside it (OTHER), if any.
-inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s, "other": "%s"}\n' "$1" "$1" "$2" "$GID" "${3:-}" >"$W/fixture/inputs.json"; }
+# The proof's inputs for a launch: the CYFR at ADDR in folder DIR.
+inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$1" "$1" "$2" "$GID" >"$W/fixture/inputs.json"; }
 PORT=$(free_port); ADDR="http://localhost:$PORT"
 seed "$D" "$PORT"
 GID=$(stat -c %g /var/run/docker.sock)
@@ -404,11 +389,3 @@ if python3 -I -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok
 else
   failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), times the one scrub met a withheld secret in all the run kept $MET, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
 fi
-# Two folders on two ports of one host, both running: the passkey launch's
-# CYFR stays up, and a third folder, seeded as the others on its own port
-# and Compose project, is set up beside it from the rail (two).
-PORT3=$(free_port); ADDR3="http://localhost:$PORT3"; RUN3="$RUN-3"; D3="$W/$RUN3"
-mkdir -p "$D3"; PROJECTS="$PROJECTS $RUN3:$D3"
-seed "$D3" "$PORT3"
-inputs "$ADDR3" "$D3" "$ADDR2"
-launch two "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"

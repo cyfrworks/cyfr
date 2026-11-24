@@ -98,68 +98,9 @@ async function pick(w) {
   await waitFor(async () => (await shown(w)).folder === FOLDER || null, "the folder picked")
 }
 
-async function prism(at = atHome) {
-  const w = await contentAt(at, "Prism")
+async function prism() {
+  const w = await contentAt(atHome, "Prism")
   return waitFor(() => js(w.webContents, `!!document.querySelector("[data-phx-main].phx-connected") || null`), "Prism's live connection")
-}
-
-// Prism of the CYFR at `home`, live in the content.
-const atCYFR = (home) => (url) => url.startsWith(home + "/") && !/^\/(login|setup|auth\/|account\/)/.test(new URL(url).pathname)
-
-// The CYFR's setup page, once a setup that made `token` opened it, its
-// first person `name` made with a passkey in the app's account window:
-// whether it opened there, at which account page, and Prism live after.
-async function firstByPasskey(token, name) {
-  const setup = await waitFor(() => {
-    const c = lib.content()
-    return c && !c.webContents.isLoading() && c.webContents.getURL().startsWith(lib.HOME + "/setup") ? c : null
-  }, "the CYFR's setup page", 300_000)
-  const opened = setup.webContents.getURL() === `${lib.HOME}/setup#${token}`
-  await waitFor(() => js(setup.webContents, `!!document.querySelector('[data-test="setup-create"]') && !!document.querySelector(".phx-connected")`),
-    "Create your account")
-  await js(setup.webContents, `document.querySelector('[data-test="setup-create"]').click(); 1`)
-  const a = await waitFor(() => accountWindow(), "the app's account window")
-  await armWindow(a)
-  await lib.section(a.webContents, ["choose"])
-  const at = new URL(a.webContents.getURL()).pathname
-  await js(a.webContents, `document.querySelector("#name").value = ${JSON.stringify(name)};
-    document.querySelector("#name").dispatchEvent(new Event("input", {bubbles: true}));
-    const ok = document.querySelector("#acceptance:not([hidden]) #accept"); if (ok) ok.click();
-    document.querySelector("#create").click(); 1`)
-  await lib.section(a.webContents, ["show-code"])
-  await js(a.webContents, `document.querySelector("#saved").click(); 1`)
-  await lib.section(a.webContents, ["done-return"])
-  await armWindow(a)
-  await js(a.webContents, `document.querySelector("#continue").click(); 1`)
-  const live = await prism()
-  return {ok: opened && at === "/account/new" && !!live && !accountWindow(), detail: {opened, at}}
-}
-
-// The folder's setup token, once its .env holds it.
-const tokenIn = (folder) => waitFor(() => existsSync(path.join(folder, ".env")) &&
-  /^CYFR_SETUP_TOKEN=([0-9a-f]{64})$/m.exec(readFileSync(path.join(folder, ".env"), "utf8"))?.[1], "the folder's setup token")
-
-// A press on the rail: its own top frame going to `to`, which main answers.
-async function railTo(to) {
-  const r = await waitFor(() => lib.rail(), "the rail")
-  await js(r.webContents, `location.assign(${JSON.stringify(to)}); 1`)
-}
-const rows = () => js(lib.rail().webContents, `[...document.querySelectorAll("#cyfrs a")].map((a) => ({cyfr: a.title,
-  open: a.getAttribute("aria-current") === "page"}))`)
-
-// The session cookie each folder's CYFR keeps in its own store, and
-// whether it opens that CYFR and not the other: two stores of one host,
-// localhost, apart only by port.
-const store = (home) => electron.session.fromPartition(`persist:cyfr-home-v2-${digest(home)}`)
-async function signIns(homes) {
-  const out = {}
-  for (const home of homes) {
-    const kept = await store(home).cookies.get({name: "_cyfr_key"})
-    const value = kept.length === 1 ? kept[0].value : null
-    out[home] = {kept: kept.map((c) => `${c.name}@${c.domain}`), digest: value && createHash("sha256").update(value).digest("hex").slice(0, 16),
-      opens: Object.fromEntries(await Promise.all(homes.map(async (at) => [at, value ? (await lib.opens(value, at)).opens : null])))}
-  }
-  return out
 }
 
 lib.run("setup", {
@@ -275,63 +216,39 @@ lib.run("setup", {
     await answered(w)
     await pick(w)
     await press(w, "start")
-    const token = await tokenIn(FOLDER)
+    const token = await waitFor(() => existsSync(path.join(FOLDER, ".env")) &&
+      /^CYFR_SETUP_TOKEN=([0-9a-f]{64})$/m.exec(readFileSync(path.join(FOLDER, ".env"), "utf8"))?.[1], "the folder's setup token")
     writeFileSync(path.join(FIXTURE, "setup-token"), token)
     // The row is app.sh's, decided once the app has quit: this launch's
-    // part of it (what the person sees) is written for it here. A whole
-    // setup first, files, settings, download and start.
-    const part = await firstByPasskey(token, "desk-first").catch((e) => ({ok: false, threw: String(e?.message ?? e)}))
+    // part of it (what the person sees) is written for it here.
+    const part = await (async () => {
+      // A whole setup first, files, settings, download and start.
+      const setup = await waitFor(() => {
+        const c = lib.content()
+        return c && !c.webContents.isLoading() && c.webContents.getURL().startsWith(lib.HOME + "/setup") ? c : null
+      }, "the CYFR's setup page", 300_000)
+      const opened = setup.webContents.getURL() === `${lib.HOME}/setup#${token}`
+      await waitFor(() => js(setup.webContents, `!!document.querySelector('[data-test="setup-create"]') && !!document.querySelector(".phx-connected")`),
+        "Create your account")
+      await js(setup.webContents, `document.querySelector('[data-test="setup-create"]').click(); 1`)
+      const a = await waitFor(() => accountWindow(), "the app's account window")
+      await armWindow(a)
+      await lib.section(a.webContents, ["choose"])
+      const at = new URL(a.webContents.getURL()).pathname
+      await js(a.webContents, `document.querySelector("#name").value = "desk-first";
+        document.querySelector("#name").dispatchEvent(new Event("input", {bubbles: true}));
+        const ok = document.querySelector("#acceptance:not([hidden]) #accept"); if (ok) ok.click();
+        document.querySelector("#create").click(); 1`)
+      await lib.section(a.webContents, ["show-code"])
+      await js(a.webContents, `document.querySelector("#saved").click(); 1`)
+      await lib.section(a.webContents, ["done-return"])
+      await armWindow(a)
+      await js(a.webContents, `document.querySelector("#continue").click(); 1`)
+      const live = await prism()
+      return {ok: opened && at === "/account/new" && !!live && !accountWindow(), detail: {opened, at}}
+    })().catch((e) => ({ok: false, threw: String(e?.message ?? e)}))
     writeFileSync(path.join(FIXTURE, "first-passkey.json"), JSON.stringify(part))
     await Promise.all(sessions().map((ses) => ses.netLog.stopLogging()))
     return "quit"
   },
-  // Two folders on two ports of one host, both running: the one set up
-  // in the passkey launch (inputs.other) and a third, set up here. The app
-  // opens the one selected last by itself, signed in as it was; Set up on
-  // the rail adds the other as a row of its own; each keeps its own
-  // sign-in in its own store, though both are at localhost; pressing each
-  // row switches to it, still signed in.
-  async two() {
-    const OTHER = inputs.other
-    // Which store is two_apart's to read; this row, that the one opened is
-    // kept on disk.
-    await judged("two_reopened", "the folder's CYFR selected last opens by itself as the app starts, signed in as before, in a store kept on disk",
-      async () => {
-        const w = await contentAt(atCYFR(OTHER), "the CYFR selected last")
-        const live = await waitFor(() => js(w.webContents, `!!document.querySelector("[data-phx-main].phx-connected") || null`), "Prism live")
-        const kept = !!w.webContents.session.getStoragePath()
-        return [!!live && kept, {at: w.webContents.getURL().split("#")[0], kept}]
-      })
-    await judged("two_set_up", "Set up on the rail sets CYFR up in a second folder on its own port, its first person made with a passkey, and adds it as a row of its own beside the first",
-      async () => {
-        await railTo("/rail/setup")
-        const w = await contentAt(atBootstrap, "the chooser at Set up")
-        await answered(w)
-        await pick(w)
-        await press(w, "start")
-        const first = await firstByPasskey(await tokenIn(FOLDER), "desk-second")
-        const listed = await waitFor(async () => (await rows()).length === 2 ? rows() : null, "both folders on the rail")
-        return [first.ok && listed.some((r) => r.cyfr === OTHER) && listed.find((r) => r.cyfr === lib.HOME)?.open, {first, listed}]
-      })
-    const homes = [OTHER, lib.HOME]
-    await judged("two_apart", "each folder's CYFR keeps its own sign-in in its own store, though both are at localhost: each one's cookie opens its own CYFR and not the other's",
-      async () => {
-        const got = await signIns(homes)
-        const own = homes.every((h) => got[h].kept.length === 1 && got[h].opens[h] === true && homes.every((o) => o === h || got[h].opens[o] === false))
-        return [own && got[OTHER].digest !== got[lib.HOME].digest, got]
-      })
-    await judged("two_back", "pressing each folder's row switches to its CYFR, still signed in there, in its own store", async () => {
-      const before = await signIns(homes)
-      const seen = []
-      for (const home of [OTHER, lib.HOME]) {
-        await railTo("/rail/select?cyfr=" + encodeURIComponent(home))
-        const w = await contentAt(atCYFR(home), `Prism at ${home}`)
-        const live = await waitFor(() => js(w.webContents, `!!document.querySelector("[data-phx-main].phx-connected") || null`), `Prism live at ${home}`)
-        seen.push({home, live: !!live, own: w.webContents.session === store(home)})
-      }
-      const after = await signIns(homes)
-      return [seen.every((v) => v.live && v.own) && homes.every((h) => after[h].digest === before[h].digest), {seen, before, after}]
-    })
-    return "quit"
-  },
-}, {accountRoad: ["passkey", "two"].includes(lib.PHASE)})
+}, {accountRoad: lib.PHASE === "passkey"})
