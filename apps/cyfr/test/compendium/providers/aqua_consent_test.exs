@@ -8,10 +8,12 @@ defmodule Compendium.Providers.AquaConsentTest do
   # surface, because a turn resolves its soul through them.
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Compendium.Providers.Aqua, as: Tool
   alias Sanctum.Visibility
 
-  @writes ~w(create update delete reset skill_create skill_update skill_delete)
+  @writes ~w(create update delete reset skill_create skill_update skill_file skill_delete)
   @reads ~w(list get status skill_list skill_get)
 
   setup tags do
@@ -39,6 +41,13 @@ defmodule Compendium.Providers.AquaConsentTest do
     calls = [
       {"skill_create", %{"name" => "mine:sneak", "description" => "d", "content" => "c"}},
       {"skill_update", %{"name" => "cyfr:capability-acquisition", "content" => "c"}},
+      {"skill_file",
+       %{
+         "name" => "mine:sneak",
+         "path" => "skills/sneak/a.sh",
+         "content" => "c",
+         "against" => "none"
+       }},
       {"reset", %{"all" => true}},
       {"update", %{"name" => "aqua", "content" => "x"}},
       {"create", %{"name" => "sneak", "content" => "x"}},
@@ -82,7 +91,7 @@ defmodule Compendium.Providers.AquaConsentTest do
     # The turn's root, as the person's session admitted it; the surface a
     # call is refused on is the one its context names.
     ctx = Sanctum.TestContext.local(:prism)
-    lineage = caller!(ctx)
+    lineage = turn!(ctx)
 
     create = fn ctx, name ->
       Sanctum.Gate.call_in_chain(
@@ -120,7 +129,7 @@ defmodule Compendium.Providers.AquaConsentTest do
   test "a chain proposes a scroll and writes nothing; Save writes exactly what it showed" do
     auth = granting(["aqua.skill_create", "aqua.skill_update"])
     ctx = Sanctum.TestContext.local(:prism)
-    lineage = caller!(ctx)
+    lineage = turn!(ctx)
 
     in_chain = fn args ->
       Sanctum.Gate.call_in_chain("aqua", Sanctum.Context.enter_guest(ctx), args, auth,
@@ -220,6 +229,146 @@ defmodule Compendium.Providers.AquaConsentTest do
 
     assert {:error, {:invalid_argument, "Scroll 'mine:kept-way' already exists"}} =
              save.(proposal, "skill_create")
+  end
+
+  # Every proposal is a turn's own call (`Arca.TurnStorage.own_turn/3`): a
+  # component a turn started, a page's call through the turn and a call
+  # naming no open turn of the person's propose nothing, a scroll or a file
+  # alike; the turn's own call proposes each.
+  test "only a turn's own call proposes a scroll or a file" do
+    auth = granting(["aqua.skill_create", "aqua.skill_update", "aqua.skill_file"])
+    ctx = Sanctum.TestContext.local(:prism)
+    lineage = turn!(ctx)
+
+    {:ok, _} =
+      Arca.Files.write(
+        Sanctum.Context.actor(ctx),
+        "aqua/scrolls/mine/skills/fern/SKILL.md",
+        "---\nname: fern\ndescription: d\n---\n\nWater it.\n"
+      )
+
+    component = Cyfr.Test.AttemptFixtures.lineage!(ctx)
+
+    callers = [
+      {"a component the turn started",
+       %{lineage | parent_execution_id: component.parent_execution_id, attempt: component.attempt}},
+      {"a page through the turn", Map.put(lineage, :called_by_page, true)},
+      {"a call naming no turn", caller!(ctx)}
+    ]
+
+    proposals = [
+      %{
+        "action" => "skill_create",
+        "name" => "mine:kept",
+        "description" => "d",
+        "content" => "c"
+      },
+      %{"action" => "skill_update", "name" => "mine:fern", "content" => "Water it daily."},
+      %{
+        "action" => "skill_file",
+        "name" => "mine:fern",
+        "path" => "skills/fern/a.sh",
+        "content" => "#!/bin/sh\n"
+      }
+    ]
+
+    call = fn args, lineage ->
+      Sanctum.Gate.call_in_chain("aqua", Sanctum.Context.enter_guest(ctx), args, auth,
+        lineage: lineage
+      )
+    end
+
+    for {who, other} <- callers, args <- proposals do
+      assert {:error, :propose_not_a_turn} = call.(args, other), "#{who}: #{args["action"]}"
+    end
+
+    assert Prima.Refusal.message(:propose_not_a_turn) ==
+             "Only Aqua or one of its members proposes a scroll or a file for your packs, in a " <>
+               "turn of its own; a component or a page cannot"
+
+    for args <- proposals do
+      assert {:ok, %{proposed: _}} = call.(args, lineage), args["action"]
+    end
+  end
+
+  # A file a turn proposes beside a scroll waits for the person: in the
+  # turn's own call it answers the file as Save would write it and writes
+  # nothing; the person's Save sends exactly that back from their own
+  # session, and is refused once the file is not as the proposal read it.
+  # The action saves a proposal and nothing else.
+  test "a chain proposes a file and writes nothing; Save writes exactly what it showed" do
+    auth = granting(["aqua.skill_file"])
+    ctx = Sanctum.TestContext.local(:prism)
+    actor = Sanctum.Context.actor(ctx)
+    lineage = turn!(ctx)
+
+    {:ok, _} =
+      Arca.Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/fern/SKILL.md",
+        "---\nname: fern\ndescription: d\n---\n\nWater it.\n"
+      )
+
+    in_chain = fn args ->
+      Sanctum.Gate.call_in_chain("aqua", Sanctum.Context.enter_guest(ctx), args, auth,
+        lineage: lineage
+      )
+    end
+
+    save = fn proposal ->
+      Sanctum.Gate.call_external("aqua", ctx, %{
+        "action" => "skill_file",
+        "name" => proposal.proposed,
+        "path" => proposal.path,
+        "content" => proposal.content,
+        "encoding" => proposal.encoding,
+        "against" => proposal.against
+      })
+    end
+
+    script = "#!/bin/sh\necho water\n"
+    path = ~w(aqua scrolls mine skills fern scripts water.sh)
+
+    ask = %{
+      "action" => "skill_file",
+      "name" => "mine:fern",
+      "path" => "skills/fern/scripts/water.sh",
+      "content" => Base.encode64(script),
+      "encoding" => "base64"
+    }
+
+    assert {:ok, proposal} = in_chain.(ask)
+
+    # Sent as base64, a text file is kept as text, for the card to show.
+    assert Map.delete(proposal, :note) == %{
+             proposed: "mine:fern",
+             path: "skills/fern/scripts/water.sh",
+             encoding: "utf8",
+             content: script,
+             size: byte_size(script),
+             sha256: Prima.Digest.sha256(script),
+             against: "none",
+             runs: true,
+             script: true
+           }
+
+    assert {:ok, second} = in_chain.(%{ask | "content" => Base.encode64("#!/bin/sh\necho\n")})
+    assert {:error, :not_found} = Arca.get(actor, path)
+
+    assert {:ok, %{written: "mine:fern"}} = save.(proposal)
+    assert {:ok, ^script} = Arca.get(actor, path)
+
+    assert {:error, {:conflict, refusal}} = save.(second)
+    assert refusal =~ "changed since Aqua proposed this"
+    assert {:ok, ^script} = Arca.get(actor, path)
+
+    # With nothing it was made against, it is no writer of its own.
+    assert {:error, {:invalid_argument, "aqua.skill_file saves a file Aqua proposed" <> _}} =
+             Sanctum.Gate.call_external(
+               "aqua",
+               ctx,
+               Map.delete(%{ask | "content" => "x", "encoding" => "utf8"}, "against")
+             )
   end
 
   # A scroll's bound, stated once where it is written: a manifest of at
@@ -466,4 +615,27 @@ defmodule Compendium.Providers.AquaConsentTest do
   # names in its lineage.
   defp caller!(ctx),
     do: ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
+
+  # The lineage of a call a running turn of the person's makes itself: its
+  # thread, and the turn's root as the call's parent and root, as the loop
+  # stamps it (`Aqua.Loop.Binding`).
+  defp turn!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: "keep it"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: lineage.root_execution_id, status: "running"]
+      )
+
+    Map.put(lineage, :thread_id, thread.id)
+  end
 end

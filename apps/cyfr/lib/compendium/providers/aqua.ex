@@ -227,7 +227,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("content", :string,
               bulk: true,
               description:
-                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)"
             ),
             Arg.new("disabled", :boolean,
               nullable: true,
@@ -305,7 +305,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("path", :string,
               description:
-                "skill_get: one file of the scroll's pack by its path inside the pack, like 'skills/research/scripts/fetch.sh'; read as outside material"
+                "One file of the scroll's pack by its path inside the pack, like 'skills/research/scripts/fetch.sh': skill_get reads it as outside material; skill_file proposes it, under the scroll's folder"
             )
           ],
           kind: :read,
@@ -331,11 +331,11 @@ defmodule Compendium.Providers.Aqua do
               required: true,
               bulk: true,
               description:
-                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)"
             ),
             Arg.new("against", :string,
               description:
-                "skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since"
+                "skill_create/skill_update/skill_file from a person's Save: what the proposal was made against, the stored scroll's or file's digest, or none for a new one; the write is refused when it changed since"
             ),
             Arg.new("new_pack", :boolean,
               description:
@@ -364,11 +364,47 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("content", :string,
               bulk: true,
               description:
-                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)"
             ),
             Arg.new("against", :string,
               description:
-                "skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since"
+                "skill_create/skill_update/skill_file from a person's Save: what the proposal was made against, the stored scroll's or file's digest, or none for a new one; the write is refused when it changed since"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          permission: :component_manage
+        ),
+        Operation.new(
+          "aqua",
+          "skill_file",
+          "Write a file beside a scroll",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
+            ),
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "One file of the scroll's pack by its path inside the pack, like 'skills/research/scripts/fetch.sh': skill_get reads it as outside material; skill_file proposes it, under the scroll's folder"
+            ),
+            Arg.new("content", :string,
+              required: true,
+              bulk: true,
+              description:
+                "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)"
+            ),
+            Arg.new("encoding", :string,
+              enum: ["utf8", "base64"],
+              description:
+                "skill_file: how content holds the file's bytes, utf8 text (the default) or base64"
+            ),
+            Arg.new("against", :string,
+              description:
+                "skill_create/skill_update/skill_file from a person's Save: what the proposal was made against, the stored scroll's or file's digest, or none for a new one; the write is refused when it changed since"
             )
           ],
           kind: :write,
@@ -414,7 +450,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_delete' to remove one there, 'wait' to wait in a turn until a time (a message from the person ends the wait early), or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_file' to write a file beside one there (a script or a reference), 'skill_delete' to remove one there, 'wait' to wait in a turn until a time (a message from the person ends the wait early), or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
       title: "Aqua Agent System"
     )
   end
@@ -818,8 +854,10 @@ defmodule Compendium.Providers.Aqua do
 
   # A chain's create writes nothing: it answers the scroll as it would be
   # stored, made against no scroll of its name, for the person to save.
+  # Only a turn's own call proposes (`proposing_turn/2`).
   def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_create", "name" => name} = args) do
-    with {:ok, pack, scroll} <- scroll_name(ctx, name),
+    with :ok <- proposing_turn(ctx, args),
+         {:ok, pack, scroll} <- scroll_name(ctx, name),
          :ok <- own_pack(ctx, pack),
          {:ok, _manifest} <- skill_manifest_bytes(scroll, args["description"], args["content"]),
          :ok <- untaken(ctx, name) do
@@ -866,7 +904,8 @@ defmodule Compendium.Providers.Aqua do
   # the update would store it, the fields the call leaves out read now,
   # and the digest of the stored manifest it was made against.
   def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_update", "name" => name} = args) do
-    with {:ok, pack, scroll} <- scroll_name(ctx, name),
+    with :ok <- proposing_turn(ctx, args),
+         {:ok, pack, scroll} <- scroll_name(ctx, name),
          {:ok, %{bytes: current, origin: origin}} <- Compendium.Packs.manifest(ctx, name),
          :ok <- own_origin(pack, origin),
          {:ok, meta, body} <- AquaAgent.parse_frontmatter(current),
@@ -933,6 +972,47 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # A chain's file beside a scroll writes nothing either: it answers the
+  # file as Save would write it, its bytes, what it was made against and
+  # whether it runs, for the person to save (`Compendium.Packs`'
+  # `file_proposal/4` holds what may be proposed). A text file is kept as
+  # text, any other as base64, so the card shows a text file as written.
+  def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_file", "name" => name} = args) do
+    with :ok <- proposing_turn(ctx, args),
+         {:ok, path, bytes} <- file_args(args),
+         {:ok, seen} <- Compendium.Packs.file_proposal(ctx, name, path, bytes) do
+      {:ok,
+       %{
+         proposed: name,
+         path: path,
+         encoding: if(seen.text, do: "utf8", else: "base64"),
+         content: if(seen.text, do: bytes, else: Base.encode64(bytes)),
+         size: byte_size(bytes),
+         sha256: Prima.Digest.sha256(bytes),
+         against: seen.against,
+         runs: seen.runs,
+         script: seen.script,
+         note:
+           "Nothing is written: this waits in the thread for the person to save it beside the scroll."
+       }}
+    else
+      {:error, reason} -> passthrough_or_unavailable(reason, "aqua.skill_file #{inspect(name)}")
+    end
+  end
+
+  # The person's Save of a proposed file, from their own session: exactly
+  # the bytes the card showed, read again from its row, written only over
+  # the file as the proposal read it (`against`), one revision of the pack.
+  def handle(%Context{} = ctx, %{"action" => "skill_file", "name" => name} = args) do
+    with {:ok, against} <- save_against(args),
+         {:ok, path, bytes} <- file_args(args) do
+      case Compendium.Packs.put_file(ctx, name, path, bytes, against) do
+        :ok -> {:ok, %{written: name, path: path}}
+        {:error, reason} -> passthrough_or_unavailable(reason, "aqua.skill_file #{inspect(name)}")
+      end
+    end
+  end
+
   # A scroll's folder goes whole, as a delete through Files takes it: a
   # write into its pack, which a brought pack and `cyfr` refuse.
   def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
@@ -990,6 +1070,59 @@ defmodule Compendium.Providers.Aqua do
   end
 
   # --- helpers ---
+
+  # A proposal is a turn's own call, by the store's one rule
+  # (`Arca.TurnStorage.own_turn/3`): an open turn of the person's whose
+  # root made the call, never a component's call or a page's through the
+  # turn, nor a call naming no turn.
+  defp proposing_turn(%Context{user_id: user_id} = ctx, args) when is_binary(user_id) do
+    case Arca.TurnStorage.own_turn(Sanctum.Context.actor(ctx), user_id, args) do
+      {:ok, _turn} ->
+        :ok
+
+      {:error, reason} when reason in [:by_page, :by_component, :not_open] ->
+        {:error, :propose_not_a_turn}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
+
+  defp proposing_turn(_ctx, _args), do: {:error, :propose_not_a_turn}
+
+  # A file's path and its bytes, from `content` as `encoding` holds them.
+  defp file_args(%{"path" => path, "content" => content} = args)
+       when is_binary(path) and is_binary(content) do
+    case Map.get(args, "encoding") || "utf8" do
+      "utf8" ->
+        {:ok, path, content}
+
+      "base64" ->
+        case Base.decode64(content) do
+          {:ok, bytes} -> {:ok, path, bytes}
+          :error -> {:error, {:invalid_argument, "aqua.skill_file: content is not base64"}}
+        end
+
+      _other ->
+        {:error, {:invalid_argument, "aqua.skill_file: encoding is utf8 or base64"}}
+    end
+  end
+
+  defp file_args(_args),
+    do: {:error, {:invalid_argument, "aqua.skill_file needs a path and its content"}}
+
+  # Outside a chain the action is a proposal's Save, which always says
+  # what the proposal was made against; any other file of a pack is
+  # written through Files.
+  defp save_against(%{"against" => against}) when is_binary(against) and against != "",
+    do: {:ok, against}
+
+  defp save_against(_args),
+    do:
+      {:error,
+       {:invalid_argument,
+        "aqua.skill_file saves a file Aqua proposed, with what it was made against; " <>
+          "write other files through Files"}}
 
   defp waiting_turn(%Context{plane: :guest, user_id: user_id} = ctx, args)
        when is_binary(user_id) do

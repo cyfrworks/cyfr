@@ -1263,7 +1263,8 @@ defmodule Aqua.CrewTest do
     "\n\n---\n\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack " <>
       "and its name. Read one with `aqua.skill_get` before doing what it describes; " <>
       "propose one with `aqua.skill_create` (in `mine`, or a pack of the person's own) " <>
-      "when a procedure worth repeating has just worked: it waits in the thread for the " <>
+      "when a procedure worth repeating has just worked, and each file it runs or reads " <>
+      "beside its SKILL.md with `aqua.skill_file`: each waits in the thread for the " <>
       "person to save it.\n" <>
       Enum.map_join(entries, fn %{name: name, description: line} -> "- #{name} — #{line}\n" end)
   end

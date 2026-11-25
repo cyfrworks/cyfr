@@ -3363,7 +3363,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # person's own session, or says why it did not.
   describe "a scroll a turn proposed" do
     # A proposal's result row as the loop writes it (`Aqua.Loop`): a model's
-    # `tool_result`, or a page's `page_result`, `proposed`.
+    # `tool_result`, `proposed`. (`kind` writes a page's `page_result` row
+    # holding one, which no page's call makes: a page proposes nothing.)
     defp proposed!(here, thread, proposal, kind \\ "tool_result") do
       {:ok, row} =
         Threads.append(Sanctum.Context.actor(here), thread.id, %{
@@ -3512,9 +3513,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
 
     # The pane reads the thread's proposals as such: one behind more than
-    # the pane's window of newer results, and one a page's call made, each
-    # has its card while its row can be seen.
-    test "a proposal has its card behind many newer results, and a page's proposal has one",
+    # the pane's window of newer results has its card while its row can be
+    # seen. A page proposes nothing (`Arca.TurnStorage.own_turn/3`), so a
+    # page's result row is drawn as no card, whatever it holds.
+    test "a proposal has its card behind many newer results, and a page's result is no proposal",
          %{conn: conn, athanor: athanor, here: here, thread: thread} do
       actor = Sanctum.Context.actor(here)
 
@@ -3548,7 +3550,159 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       pane = open_pane(conn, athanor, thread)
 
       assert pane |> element(card(older, "name")) |> render() =~ "older-way"
-      assert pane |> element(card(paged, "name")) |> render() =~ "paged-way"
+      refute has_element?(pane, card(paged, "name"))
+    end
+  end
+
+  # A file a turn proposed beside a scroll waits for the person: its card
+  # shows its path, size and digest, the whole file when it is text, a
+  # script marked as one that runs with the pack sheet's sentence, and
+  # Save file writes exactly that from the person's own session, or says
+  # why it did not. A script the card cannot show whole offers no Save.
+  describe "a file a turn proposed" do
+    defp file_proposed!(here, thread, proposal) do
+      {:ok, row} =
+        Threads.append(Sanctum.Context.actor(here), thread.id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_result",
+          status: "proposed",
+          content: "proposed",
+          payload: %{
+            "tool_call_id" => "c1",
+            "name" => "aqua",
+            "is_error" => false,
+            "proposal" => proposal
+          }
+        })
+
+      row
+    end
+
+    defp file_card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
+
+    defp a_file(path, bytes, extra \\ %{}) do
+      text = String.valid?(bytes) and not String.contains?(bytes, <<0>>)
+      runs = match?(<<"#!", _::binary>>, bytes)
+
+      Map.merge(
+        %{
+          "name" => "mine:fern",
+          "path" => path,
+          "encoding" => if(text, do: "utf8", else: "base64"),
+          "content" => if(text, do: bytes, else: Base.encode64(bytes)),
+          "size" => byte_size(bytes),
+          "sha256" => Prima.Digest.sha256(bytes),
+          "against" => "none",
+          "runs" => runs,
+          "script" => runs or String.contains?(path, "/scripts/")
+        },
+        extra
+      )
+    end
+
+    defp fern!(here) do
+      {:ok, _} =
+        Arca.Files.write(
+          Sanctum.Context.actor(here),
+          "aqua/scrolls/mine/skills/fern/SKILL.md",
+          "---\nname: fern\ndescription: d\n---\n\nWater it.\n"
+        )
+    end
+
+    test "a script's card shows all of it, marked as one that runs, and Save file writes exactly it",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      fern!(here)
+      actor = Sanctum.Context.actor(here)
+      lines = for n <- 1..3_000, do: "echo line #{n}\n"
+      script = IO.iodata_to_binary(["#!/bin/sh\n" | lines])
+      path = "skills/fern/scripts/water.sh"
+      row = file_proposed!(here, thread, a_file(path, script))
+      pane = open_pane(conn, athanor, thread)
+
+      assert pane |> element(file_card(row, "path")) |> render() =~ path
+      size = pane |> element(file_card(row, "size")) |> render()
+      assert size =~ "#{byte_size(script)} bytes"
+      assert size =~ Prima.Digest.sha256(script)
+
+      runs = pane |> element(file_card(row, "runs")) |> render()
+      assert runs =~ "This file is a script: it runs in your programs&#39; sessions."
+      assert runs =~ "Bring in only packs you trust."
+
+      # The whole script, its last line among it, never a cut view.
+      shown = pane |> element(file_card(row, "content")) |> render()
+      assert shown =~ "echo line 1\n"
+      assert shown =~ "echo line 3000\n"
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
+
+      pane |> element(file_card(row, "save")) |> render_click()
+      assert pane |> element(file_card(row, "saved")) |> render() =~ "Saved beside the scroll."
+      assert {:ok, ^script} = Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
+
+      # A second proposal that read the same absence is refused once the
+      # first is saved, and the first stays.
+      again = file_proposed!(here, thread, a_file(path, "#!/bin/sh\necho other\n"))
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        thread_id: thread.id,
+        athanor_id: athanor.id,
+        kind: :message,
+        data: again
+      })
+
+      pane |> element(file_card(again, "save")) |> render_click()
+
+      assert pane |> element(file_card(again, "refused")) |> render() =~
+               "changed since Aqua proposed this"
+
+      assert {:ok, ^script} = Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
+    end
+
+    test "a file that is not text shows its size and digest, and a script that is not text offers no Save",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      fern!(here)
+      actor = Sanctum.Context.actor(here)
+      leaf = <<137, 80, 78, 71, 0, 9>>
+      tool = <<127, 69, 76, 70, 0, 1>>
+      image = file_proposed!(here, thread, a_file("skills/fern/leaf.png", leaf))
+      binary = file_proposed!(here, thread, a_file("skills/fern/scripts/tool", tool))
+      pane = open_pane(conn, athanor, thread)
+
+      assert has_element?(pane, file_card(image, "binary"))
+      refute has_element?(pane, file_card(image, "content"))
+      refute has_element?(pane, file_card(image, "runs"))
+      pane |> element(file_card(image, "save")) |> render_click()
+      assert has_element?(pane, file_card(image, "saved"))
+      assert {:ok, ^leaf} = Arca.get(actor, ~w(aqua scrolls mine skills fern leaf.png))
+
+      assert has_element?(pane, file_card(binary, "runs"))
+      assert pane |> element(file_card(binary, "unshown")) |> render() =~ "use Files"
+      refute has_element?(pane, file_card(binary, "save"))
+
+      # Its Save sent anyway writes nothing.
+      render_click(pane, "save_file", %{"id" => binary.id})
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls mine skills fern scripts tool))
+    end
+
+    test "a file whose scroll is not saved yet is refused, saying to save the scroll first",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      row =
+        file_proposed!(
+          here,
+          thread,
+          a_file("skills/tulip/notes.md", "Plant in autumn.\n", %{"name" => "mine:tulip"})
+        )
+
+      pane = open_pane(conn, athanor, thread)
+      assert pane |> element(file_card(row, "content")) |> render() =~ "Plant in autumn."
+      pane |> element(file_card(row, "save")) |> render_click()
+
+      assert pane |> element(file_card(row, "refused")) |> render() =~
+               "Save the scroll `mine:tulip` first: this file belongs to it"
     end
   end
 end

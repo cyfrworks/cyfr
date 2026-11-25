@@ -726,7 +726,7 @@ defmodule Aqua.Providers.NotesTest do
       assert "notes.#{action}" in granted, "notes.#{action} is not in the shipped caps"
     end
 
-    for action <- ~w(skill_list skill_get skill_create skill_update) do
+    for action <- ~w(skill_list skill_get skill_create skill_update skill_file) do
       assert "aqua.#{action}" in granted, "aqua.#{action} is not in the shipped caps"
     end
 

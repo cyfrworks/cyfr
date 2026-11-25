@@ -88,6 +88,7 @@ defmodule Sanctum.Gate.BulkArgumentLogTest do
       # edited with update, never created.
       assert Enum.sort(Enum.uniq(positions)) == [
                "aqua.skill_create content",
+               "aqua.skill_file content",
                "aqua.skill_update content",
                "aqua.update content",
                "browser.page files[].content",

@@ -1181,4 +1181,193 @@ defmodule Compendium.PacksTest do
                Packs.skill(ctx, "builder")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # A file a turn proposes beside a scroll
+  # ---------------------------------------------------------------------------
+
+  # A turn proposes one file beside a scroll of a pack of the person's own,
+  # made against the file as it read it; the person's Save writes it as one
+  # revision of the pack, only while the scroll is stored and the file is
+  # as the proposal read it, and every rule of what may be proposed holds
+  # again at the Save.
+  describe "a file a turn proposes beside a scroll" do
+    setup %{actor: actor} do
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/mine/skills/fern/SKILL.md",
+          "---\nname: fern\n---\n\nb\n"
+        )
+
+      :ok
+    end
+
+    test "a proposal is made against the file as it is, and Save writes one revision over exactly that",
+         %{ctx: ctx, actor: actor} do
+      path = "skills/fern/scripts/water.sh"
+      first = "#!/bin/sh\necho water\n"
+      second = "#!/bin/sh\necho more water\n"
+      before = revision(ctx, "mine")
+
+      assert {:ok, %{against: "none", runs: true, script: true, text: true}} =
+               Packs.file_proposal(ctx, "mine:fern", path, first)
+
+      assert {:ok, %{against: "none"}} = Packs.file_proposal(ctx, "mine:fern", path, second)
+
+      # A proposal writes nothing.
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
+
+      assert revision(ctx, "mine").revision == before.revision
+
+      assert :ok = Packs.put_file(ctx, "mine:fern", path, first, "none")
+      saved = revision(ctx, "mine")
+      refute saved.revision == before.revision
+      assert %{executable: true} = Enum.find(saved.files, &(&1.path == path))
+
+      # The second proposal read the same absence: saved after the first, it
+      # is refused and the first stays.
+      assert {:error, {:conflict, refusal}} =
+               Packs.put_file(ctx, "mine:fern", path, second, "none")
+
+      assert refusal ==
+               "The file `skills/fern/scripts/water.sh` changed since Aqua proposed this, so " <>
+                 "nothing was saved: open it in Files to see it as it is now"
+
+      assert {:ok, ^first} = Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
+
+      # Proposed again over the file as it is now, the Save replaces it.
+      against = Prima.Digest.sha256(first)
+
+      assert {:ok, %{against: ^against}} = Packs.file_proposal(ctx, "mine:fern", path, second)
+      assert :ok = Packs.put_file(ctx, "mine:fern", path, second, against)
+      assert {:ok, ^second} = Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
+
+      # A reference runs not; a file under scripts/ is a script as the sheet
+      # counts one, running only with `#!`; a binary is no text.
+      assert {:ok, %{runs: false, script: false, text: true}} =
+               Packs.file_proposal(ctx, "mine:fern", "skills/fern/notes.md", "Keep it shaded.\n")
+
+      assert {:ok, %{runs: false, script: true}} =
+               Packs.file_proposal(ctx, "mine:fern", "skills/fern/scripts/x.py", "print(1)\n")
+
+      assert {:ok, %{text: false}} =
+               Packs.file_proposal(ctx, "mine:fern", "skills/fern/leaf.png", <<137, 80, 0, 1>>)
+    end
+
+    test "only a path beside a stored scroll of a pack of the person's own is proposed and saved",
+         %{ctx: ctx, actor: actor} do
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/mine/.claude-plugin/plugin.json",
+          ~s({"name": "mine", "skills": "./skills/", "hooks": "./skills/fern/hooks.json"})
+        )
+
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/mine/hooks/hooks.json",
+          ~s({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", ) <>
+            ~s("command": "${CLAUDE_PLUGIN_ROOT}/skills/fern/scripts/guard.sh"}]}]}})
+        )
+
+      {brought, _sheet} =
+        bring_in!(
+          ctx,
+          tgz([{"tools/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false}]),
+          "p.tar.gz"
+        )
+
+      outside = fn path ->
+        "`#{path}` is outside the folder of the scroll `mine:fern`, `skills/fern/`: a file " <>
+          "Aqua proposes stays beside its scroll"
+      end
+
+      named = fn path, manifest ->
+        "`#{path}` is named by the pack's own `#{manifest}`, which decides what its programs " <>
+          "load and run: change it through Files"
+      end
+
+      manifest =
+        "A scroll's SKILL.md is written with `aqua.skill_create` or `aqua.skill_update`, never as a file"
+
+      long = "skills/fern/" <> String.duplicate("a", 245)
+
+      refused = [
+        {"mine:fern", "skills/other/x.sh", "x", outside.("skills/other/x.sh")},
+        {"mine:fern", "hooks/hooks.json", "{}", outside.("hooks/hooks.json")},
+        {"mine:fern", ".claude-plugin/plugin.json", "{}", outside.(".claude-plugin/plugin.json")},
+        {"mine:fern", "skills/fern", "x", outside.("skills/fern")},
+        {"mine:fern", "skills/fern/SKILL.md", "x", manifest},
+        {"mine:fern", "skills/fern/sub/SKILL.md", "x", manifest},
+        {"mine:fern", "skills/fern/hooks.json", "{}",
+         named.("skills/fern/hooks.json", ".claude-plugin/plugin.json")},
+        {"mine:fern", "skills/fern/scripts/guard.sh", "#!/bin/sh\n",
+         named.("skills/fern/scripts/guard.sh", "hooks/hooks.json")},
+        {"mine:fern", "skills/fern/../x", "x",
+         "`skills/fern/../x` is not a path a pack may hold: letters, digits, `_`, `-`, `.` " <>
+           "and `/`, with no `..`"},
+        {"mine:fern", long, "x", "`#{long}` is a path past a pack's 255 bytes"},
+        {"mine:fern", "skills/fern/big.txt", String.duplicate("a", Packs.max_bytes() + 1),
+         "A file Aqua proposes holds at most 131072 bytes and `skills/fern/big.txt` holds " <>
+           "131073: put it in through Files"},
+        {"#{brought}:x", "skills/x/run.sh", "x",
+         "`tools` was brought in and is kept as its author published it: copy the scroll " <>
+           "into a pack of your own"},
+        {"cyfr:research", "skills/research/run.sh", "x",
+         "`cyfr` is CYFR's own pack and changes only with CYFR's update: copy the scroll " <>
+           "into a pack of your own"}
+      ]
+
+      for {name, path, bytes, sentence} <- refused do
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Packs.file_proposal(ctx, name, path, bytes),
+               path
+
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Packs.put_file(ctx, name, path, bytes, "none"),
+               path
+      end
+
+      # The plugin manifest's `skills` names where scrolls are, no path a
+      # program runs: a reference beside the scroll is proposed and saved.
+      assert {:ok, %{against: "none"}} =
+               Packs.file_proposal(ctx, "mine:fern", "skills/fern/notes.md", "n\n")
+
+      assert :ok = Packs.put_file(ctx, "mine:fern", "skills/fern/notes.md", "n\n", "none")
+      assert length(revision(ctx, "mine").files) == 4
+    end
+
+    test "a file for a scroll not stored yet is proposed, and its Save waits for the scroll",
+         %{ctx: ctx, actor: actor} do
+      first = "Save the scroll `mine:tulip` first: this file belongs to it"
+      in_new_pack = "Save the scroll `garden:roses` first: this file belongs to it"
+
+      assert {:ok, %{against: "none"}} =
+               Packs.file_proposal(ctx, "mine:tulip", "skills/tulip/run.sh", "#!/bin/sh\n")
+
+      assert {:error, {:invalid_argument, ^first}} =
+               Packs.put_file(ctx, "mine:tulip", "skills/tulip/run.sh", "#!/bin/sh\n", "none")
+
+      assert {:ok, %{against: "none"}} =
+               Packs.file_proposal(ctx, "garden:roses", "skills/roses/a.txt", "a\n")
+
+      assert {:error, {:invalid_argument, ^in_new_pack}} =
+               Packs.put_file(ctx, "garden:roses", "skills/roses/a.txt", "a\n", "none")
+
+      assert {:error, :not_found} = Packs.pack(ctx, "garden")
+
+      # Once the scroll is stored, its file is saved beside it.
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/mine/skills/tulip/SKILL.md",
+          "---\nname: tulip\n---\n\nb\n"
+        )
+
+      assert :ok = Packs.put_file(ctx, "mine:tulip", "skills/tulip/run.sh", "#!/bin/sh\n", "none")
+    end
+  end
 end

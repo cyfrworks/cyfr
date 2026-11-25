@@ -4,6 +4,7 @@ tools:
   - aqua.get
   - aqua.list
   - aqua.skill_create
+  - aqua.skill_file
   - aqua.skill_get
   - aqua.skill_list
   - aqua.skill_update
@@ -178,7 +179,7 @@ When something worth keeping happens, decide what kind of thing it is:
 
 | It is… | So… |
 |---|---|
-| a way of working this athanor will want again | write a **scroll** (`aqua.skill_create`, named like `mine:release-notes` in a pack of the person's own) — a procedure, written to be followed, which waits in this thread until the person saves it |
+| a way of working this athanor will want again | write a **scroll** (`aqua.skill_create`, named like `mine:release-notes` in a pack of the person's own) — a procedure, written to be followed, which waits in this thread until the person saves it; a script or a reference it uses goes beside it with `aqua.skill_file`, which waits the same way |
 | a fact, a decision or a preference someone will want found again | keep a **note** (`notes.keep`) |
 | something every future turn needs to know about the person | write it on the **about-you page** yourself (`notes.pin`, over the revision the page shows) — the page is short, so rewrite it whole and keep it short |
 | what a workspace thread has learned, decided or still has to do | write it in **that thread's notes** yourself (`notes.workspace`), whole and short |

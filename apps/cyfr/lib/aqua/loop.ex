@@ -1879,7 +1879,7 @@ defmodule Aqua.Loop do
           {"ok", text, false}
 
         other ->
-          %{text: text, is_error: error?} = render(call, other)
+          %{text: text, is_error: error?} = render(call, shown(call, other))
           {if(error?, do: "error", else: "ok"), text, error?}
       end
 
@@ -2005,7 +2005,38 @@ defmodule Aqua.Loop do
     end
   end
 
+  # A file a chain's `aqua.skill_file` proposed beside a scroll, kept on
+  # its result row whole: the bytes Save writes and the card shows, how
+  # they are held, what they were made against and whether they run.
+  defp proposed(
+         %Call{kind: :catalog, tool: "aqua", action: "skill_file"},
+         {:ok, %{} = answer},
+         payload
+       ) do
+    case answer |> Jason.encode!() |> Jason.decode!() do
+      %{"proposed" => name, "path" => path, "content" => c, "against" => against} = kept
+      when is_binary(name) and is_binary(path) and is_binary(c) and is_binary(against) ->
+        Map.put(
+          payload,
+          "proposal",
+          kept
+          |> Map.take(~w(path encoding content size sha256 against runs script))
+          |> Map.put("name", name)
+        )
+
+      _written ->
+        payload
+    end
+  end
+
   defp proposed(_call, _result, payload), do: payload
+
+  # What the model reads of a file it proposed: everything but the bytes
+  # it just wrote, which its row keeps for the person's Save.
+  defp shown(%Call{kind: :catalog, tool: "aqua", action: "skill_file"}, {:ok, %{} = answer}),
+    do: {:ok, Map.drop(answer, [:content, "content"])}
+
+  defp shown(_call, result), do: result
 
   defp page_value(%Call{kind: :hand}, {:ok, %{output: output}}),
     do: {:ok, Aqua.PageCalls.data(output)}
