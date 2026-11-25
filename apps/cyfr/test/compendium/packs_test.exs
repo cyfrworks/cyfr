@@ -848,14 +848,11 @@ defmodule Compendium.PacksTest do
       {:ok, _} =
         Files.write(actor, "aqua/scrolls/sib/skills/a/SKILL.md", "---\nname: a\n---\nb")
 
-      original = Application.get_env(:arca, :storage_adapter)
-      Application.put_env(:arca, :storage_adapter, Compendium.PacksTest.UnmeasurableSibling)
-
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:arca, :storage_adapter, original),
-          else: Application.delete_env(:arca, :storage_adapter)
-      end)
+      Prima.Test.Env.put_app_env(
+        :arca,
+        :storage_adapter,
+        Compendium.PacksTest.UnmeasurableSibling
+      )
 
       assert {:error, {:invalid_argument, refused}} =
                Files.write(actor, "aqua/scrolls/other/skills/b/SKILL.md", "---\nname: b\n---\nc")
