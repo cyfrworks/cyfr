@@ -682,7 +682,7 @@ defmodule Aqua.Models do
   def pinned_program(%Context{} = ctx, row_id) when is_binary(row_id),
     do: suited(Arca.McpServerStorage.get_by_id(Context.actor(ctx), row_id))
 
-  # A row a brain runs in: `{:ok, %{row, epoch, name}}` for an
+  # A row a brain runs in: `{:ok, %{row, epoch, name, driver}}` for an
   # enabled driven program with a kept folder whose command starts with a
   # brain's driver (`Arca.McpServerStorage.driver/1`); else
   # `{:error, {:program_unfit, name}}` for any other row, Aqua's browser
@@ -695,8 +695,8 @@ defmodule Aqua.Models do
       {nil, _enabled} ->
         {:error, {:program_unfit, row.name}}
 
-      {_driver, true} ->
-        {:ok, %{row: row.id, epoch: row.epoch, name: row.name}}
+      {driver, true} ->
+        {:ok, %{row: row.id, epoch: row.epoch, name: row.name, driver: driver}}
 
       {_driver, _disabled} ->
         {:error, {:program_disabled, row.name}}

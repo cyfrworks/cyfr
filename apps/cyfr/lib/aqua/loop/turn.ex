@@ -63,8 +63,9 @@ defmodule Aqua.Loop.Turn do
     # program brain and for a turn that asks no model.
     :brain_authority,
     :catalyst,
-    # The program row a program brain runs on, `%{row, epoch, name}`, or
-    # nil for a catalyst's brain.
+    # The program row a program brain runs on, `%{row, epoch, name,
+    # driver}`, the driver its command names
+    # (`Arca.McpServerStorage.driver/1`), or nil for a catalyst's brain.
     :program,
     :model,
     :capabilities,
