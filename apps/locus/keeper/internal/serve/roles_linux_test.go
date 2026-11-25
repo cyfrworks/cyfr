@@ -203,7 +203,7 @@ func newRolesKeeper(t *testing.T, limits map[string]cgroup.Limits) *rolesKeeper 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { tcp.Close() })
-	abstractName := "cyfr-keeper-test-" + randomHex(4)
+	abstractName := "locus-role-test-" + randomHex(4)
 	abstract, err := net.Listen("unix", "@"+abstractName)
 	if err != nil {
 		t.Fatal(err)

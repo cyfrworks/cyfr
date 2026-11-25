@@ -73,37 +73,37 @@ func TestParseArgsRefusals(t *testing.T) {
 	const pools = " --pool p:200-299:routed --pool q:300-399:relay --home-root /h --guard /g"
 	for _, args := range []string{
 		"--home-root /h --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --home-root /h --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:300-399:relay --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:300-399:relay --home-root h --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:300-399:relay --home-root /h/ --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q" + pools + " --",
-		"--role a:100:4000:p --role b:101:4001:q" + pools + " run",
-		"--role a:100:4000:p --role b:101:4001:q" + pools + " --unknown x -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool p:300-399:relay --home-root /h --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:relay --pool q:250-399:relay --home-root /h --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:0-199:relay --pool q:300-399:relay --home-root /h --guard /g -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299 --pool q:300-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:relay --pool q:300-399:relay --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:relay --pool q:300-399:relay --home-root h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:relay --pool q:300-399:relay --home-root /h/ --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q" + pools + " --",
+		"--role a:100:4000:p --role b:101:4009:q" + pools + " run",
+		"--role a:100:4000:p --role b:101:4009:q" + pools + " --unknown x -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:relay --pool p:300-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:relay --pool q:250-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:0-199:relay --pool q:300-399:relay --home-root /h --guard /g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299 --pool q:300-399:relay --home-root /h --guard /g -- run",
 		// Every role's space is routed: the guard is required.
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:routed --pool q:300-399:relay --home-root /h -- run",
-		"--role a:100:4000:p --role b:101:4001:q --pool p:200-299:routed --pool q:300-399:relay --home-root /h --guard g -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:routed --pool q:300-399:relay --home-root /h -- run",
+		"--role a:100:4000:p --role b:101:4009:q --pool p:200-299:routed --pool q:300-399:relay --home-root /h --guard g -- run",
 		// The roles are each their own.
 		"--pool p:200-299:routed --home-root /h --guard /g -- run",
-		"--role a:100:4000:p --role a:101:4001:q" + pools + " -- run",
-		"--role a:100:4000:p --role b:100:4001:q" + pools + " -- run",
+		"--role a:100:4000:p --role a:101:4009:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:100:4009:q" + pools + " -- run",
 		"--role a:100:4000:p --role b:101:4000:q" + pools + " -- run",
-		"--role a:100:4000:p --role b:101:4001:p" + pools + " -- run",
-		"--role a:100:4000:p --role b:101:4001:r" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4009:p" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4009:r" + pools + " -- run",
 		"--role a:100:4000:p" + pools + " -- run",
-		"--role a:250:4000:p --role b:101:4001:q" + pools + " -- run",
-		"--role a:100:4000:p --role b:301:4001:q" + pools + " -- run",
+		"--role a:250:4000:p --role b:101:4009:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:301:4009:q" + pools + " -- run",
 		// Kept on one role of a routed pool, with --kept-homes, and its
 		// range holds no role's uid.
-		"--role a:100:4000:p:kept --role b:101:4001:q:kept" + pools + " --kept-homes /k:400-499 -- run",
-		"--role a:100:4000:p --role b:101:4001:q:kept" + pools + " --kept-homes /k:400-499 -- run",
-		"--role a:100:4000:p:kept --role b:101:4001:q" + pools + " -- run",
-		"--role a:100:4000:p --role b:101:4001:q" + pools + " --kept-homes /k:400-499 -- run",
-		"--role a:450:4000:p:kept --role b:101:4001:q" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:100:4000:p:kept --role b:101:4009:q:kept" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:100:4000:p --role b:101:4009:q:kept" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:100:4000:p:kept --role b:101:4009:q" + pools + " -- run",
+		"--role a:100:4000:p --role b:101:4009:q" + pools + " --kept-homes /k:400-499 -- run",
+		"--role a:450:4000:p:kept --role b:101:4009:q" + pools + " --kept-homes /k:400-499 -- run",
 	} {
 		if _, err := ParseArgs(strings.Fields(args)); err == nil {
 			t.Errorf("%q accepted", args)
@@ -185,6 +185,7 @@ func TestRoleEnvironHoldsTheRolesOwnAndNothingOfAnothers(t *testing.T) {
 	environ := []string{
 		"PATH=/usr/bin", "HOME=/root", "USER=root", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "LANGUAGE=en", "ELIXIR_ERL_OPTIONS=+fnu",
 		"RELEASE_DISTRIBUTION=none", "RELEASE_TMP=/tmp", "HOSTNAME=locus", "CYFR_LOG_FORMAT=json",
+		"RUSTUP_HOME=/usr/local/rustup", "CARGO_HOME=/usr/local/cargo",
 		"LOCUS_RUNTIME_KEY=rk", "LOCUS_RUNTIME_PORT=4200", "LOCUS_RUNTIME_MEMORY_LIMIT=4G", "LOCUS_RUNTIME_CPU_LIMIT=4",
 		"LOCUS_BUILDS_KEY=bk", "LOCUS_BUILDS_MEMORY_LIMIT=4G", "LOCUS_RUNTIMES_KEY=x", "LOCUS_LOG_LEVEL=info",
 		"KEEPER_CHANNEL=socket:[1]", "KEEPER_RUN_DIR=/elsewhere",
@@ -192,6 +193,7 @@ func TestRoleEnvironHoldsTheRolesOwnAndNothingOfAnothers(t *testing.T) {
 	got := RoleEnviron(environ, RoleSpec{Name: "runtime"}, "/run/locus/runtime", "socket:[4242]")
 	want := map[string]string{
 		"PATH": "/usr/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LANGUAGE": "en", "ELIXIR_ERL_OPTIONS": "+fnu", "RELEASE_DISTRIBUTION": "none",
+		"RUSTUP_HOME": "/usr/local/rustup", "CARGO_HOME": "/usr/local/cargo",
 		"LOCUS_RUNTIME_KEY": "rk", "LOCUS_RUNTIME_PORT": "4200", "LOCUS_LOG_LEVEL": "info",
 		"RELEASE_TMP": "/run/locus/runtime", "HOME": "/run/locus/runtime", "KEEPER_CHANNEL": "socket:[4242]", "KEEPER_RUN_DIR": "/run/locus/runtime",
 	}

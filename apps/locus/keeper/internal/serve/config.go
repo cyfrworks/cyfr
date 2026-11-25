@@ -444,9 +444,11 @@ func CheckEnviron(environ []string) error {
 		strings.Join(slices.Compact(unknown), ", "), strings.Join(DeclaredEnv, ", "))
 }
 
-// releaseEnv are the image's locale and release variables every role
-// process is given as the keeper has them.
-var releaseEnv = []string{"LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS", "RELEASE_DISTRIBUTION", "PATH"}
+// releaseEnv are the image's locale, release and toolchain variables every
+// role process is given as the keeper has them: rustup and cargo find the
+// image's toolchains by RUSTUP_HOME and CARGO_HOME, and a role's HOME is
+// its run folder, which holds none.
+var releaseEnv = []string{"LANG", "LANGUAGE", "LC_ALL", "ELIXIR_ERL_OPTIONS", "RELEASE_DISTRIBUTION", "PATH", "RUSTUP_HOME", "CARGO_HOME"}
 
 // Limit variables are the keeper's alone: a role's bounds, which its group
 // holds and the role never reads.
