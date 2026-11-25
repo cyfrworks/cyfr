@@ -205,6 +205,21 @@ func TestBackupWhoseStartFailsSaysTheBuildsStayStopped(t *testing.T) {
 	}
 }
 
+// A backup whose stop fails starts the stack again; when that start fails
+// too, it says 'cyfr up' starts the stack and which services of its own
+// that leaves stopped.
+func TestBackupWhoseStopAndStartFailSaysTheBuildsStayStopped(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(buildsProfiles)
+	s.answer("stop-cyfr.exit", "1")
+	s.engine.startErr = errors.New("cyfr did not become healthy")
+	out, err := s.backup()
+	said := "; 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them."
+	if err == nil || !strings.Contains(err.Error(), "\nThe stack did not start again (") || !strings.HasSuffix(err.Error(), said) {
+		t.Fatalf("cyfr backup answered %v\n%s", err, out)
+	}
+}
+
 // When the server's container owns a managed file's directory, as it
 // does once the stack has run, the closing line names the restore with
 // sudo, the form that puts the snapshot back.
