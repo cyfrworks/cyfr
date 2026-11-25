@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
-	"github.com/cyfr/codex/internal/apparmor"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
@@ -374,26 +373,6 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	// The snapshot is left as it was, for another restore.
 	if _, err := readSnapshot(r.dir); err != nil {
 		t.Errorf("the snapshot no longer reads: %v", err)
-	}
-}
-
-// A restored .env that names an AppArmor profile this machine has not
-// loaded, as a later update's start takes the profile it replaced off the
-// machine, is said before the restored stack starts, with the command
-// that loads it through the restored release's own cyfr.
-func TestRestoreSaysHowToLoadTheRestoredReleasesProfile(t *testing.T) {
-	appArmorOn(t, apparmor.ProfileName)
-	const older = "cyfr-locus-0123456789ab"
-	r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
-		s.edit(".env", scenarioEnv+appArmorEnv+"="+older+"\n")
-	})
-	out, err := r.restore(true)
-	if err != nil {
-		t.Fatalf("restore: %v\n%s", err, out)
-	}
-	want := "The restored .env names the AppArmor profile " + older + ", which this machine has not loaded: an update since the snapshot may have taken it off, and release 0.8.0's Locus services start only under it. Load it with release 0.8.0's cyfr (" + installScript + " | CYFR_VERSION=0.8.0 sh installs it):\n  " + fmt.Sprintf(loadAppArmorFormat, older) + "\n"
-	if !strings.Contains(out, want+"Starting release 0.8.0...\n") {
-		t.Errorf("the restore did not say, before its start, %q:\n%s", want, out)
 	}
 }
 

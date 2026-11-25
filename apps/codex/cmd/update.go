@@ -678,7 +678,19 @@ var composeImage = regexp.MustCompile(`^(\s*(?:-\s+)?image:).*$`)
 // masked (maskEnvironment).
 func composeDifference(shipped, mine []byte) []string {
 	a, b := strings.Split(string(shipped), "\n"), strings.Split(string(mine), "\n")
-	key := func(line string) string { return composeImage.ReplaceAllString(line, "$1") }
+	// Each line's key is read once: the table below compares every line of
+	// one file with every line of the other.
+	keys := func(lines []string) []string {
+		out := make([]string, len(lines))
+		for i, line := range lines {
+			out[i] = composeImage.ReplaceAllString(line, "$1")
+		}
+		return out
+	}
+	ka, kb := keys(a), keys(b)
+	if slices.Equal(ka, kb) {
+		return nil
+	}
 	ma, mb := maskEnvironment(a), maskEnvironment(b)
 	// The longest common subsequence of the lines, from the ends.
 	lcs := make([][]int32, len(a)+1)
@@ -687,7 +699,7 @@ func composeDifference(shipped, mine []byte) []string {
 	}
 	for i := len(a) - 1; i >= 0; i-- {
 		for j := len(b) - 1; j >= 0; j-- {
-			if key(a[i]) == key(b[j]) {
+			if ka[i] == kb[j] {
 				lcs[i][j] = lcs[i+1][j+1] + 1
 			} else {
 				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
@@ -698,7 +710,7 @@ func composeDifference(shipped, mine []byte) []string {
 	i, j := 0, 0
 	for i < len(a) || j < len(b) {
 		switch {
-		case i < len(a) && j < len(b) && key(a[i]) == key(b[j]):
+		case i < len(a) && j < len(b) && ka[i] == kb[j]:
 			i, j = i+1, j+1
 		case j < len(b) && (i == len(a) || lcs[i][j+1] >= lcs[i+1][j]):
 			out = append(out, "+ "+mb[j])
