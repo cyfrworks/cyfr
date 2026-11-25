@@ -71,6 +71,64 @@ import (
 // the driver must never pass on.
 const fakeEnv = "CYFR_FAKE_CLAUDE"
 
+// fakeSkills are the skills `initialize` answers, as 2.1.323 lists them:
+// the person's (`$HOME/.claude/skills/<dir>`, named by the folder, and
+// `$HOME/.claude/commands/<ns>/<file>.md`, named `<ns>:<file>`), each line
+// closing ` (user)`; then the `--plugin-dir` plugin's, named
+// `<plugin>:<dir>`, each line opening `(<plugin>)`, but for one a skill
+// of the person's already lists under its name, which it hides.
+// FAKE_SKILLS answers no list (`unlisted`) or no `initialize` (`silent`).
+func fakeSkills(pluginDir string) []any {
+	home, _ := os.UserHomeDir()
+	described := func(path string) string {
+		raw, _ := os.ReadFile(path)
+		for _, line := range strings.Split(string(raw), "\n") {
+			if value, ok := strings.CutPrefix(line, "description: "); ok {
+				var text string
+				if json.Unmarshal([]byte(value), &text) == nil {
+					return text
+				}
+				return value
+			}
+		}
+		return ""
+	}
+	rows := []any{}
+	taken := map[string]bool{}
+	skills, _ := os.ReadDir(filepath.Join(home, ".claude", "skills"))
+	for _, e := range skills {
+		rows = append(rows, map[string]any{"name": e.Name(), "description": described(filepath.Join(home, ".claude", "skills", e.Name(), "SKILL.md")) + " (user)", "argumentHint": ""})
+		taken[e.Name()] = true
+	}
+	namespaces, _ := os.ReadDir(filepath.Join(home, ".claude", "commands"))
+	for _, ns := range namespaces {
+		files, _ := os.ReadDir(filepath.Join(home, ".claude", "commands", ns.Name()))
+		for _, f := range files {
+			name := ns.Name() + ":" + strings.TrimSuffix(f.Name(), ".md")
+			rows = append(rows, map[string]any{"name": name, "description": "(user)", "argumentHint": ""})
+			taken[name] = true
+		}
+	}
+	if pluginDir == "" {
+		return rows
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	raw, _ := os.ReadFile(filepath.Join(pluginDir, ".claude-plugin", "plugin.json"))
+	_ = json.Unmarshal(raw, &manifest)
+	placed, _ := os.ReadDir(filepath.Join(pluginDir, "skills"))
+	for _, e := range placed {
+		name := manifest.Name + ":" + e.Name()
+		if taken[name] {
+			continue
+		}
+		line := "(" + manifest.Name + ") " + described(filepath.Join(pluginDir, "skills", e.Name(), "SKILL.md"))
+		rows = append(rows, map[string]any{"name": name, "description": line, "argumentHint": ""})
+	}
+	return rows
+}
+
 const stderrCanary = "FAKE-STDERR-CANARY the harness writes this to its stderr"
 
 func fakeClaude() int {
@@ -402,6 +460,12 @@ func fakeClaude() int {
 						}}
 					if account := os.Getenv("FAKE_ACCOUNT"); account != "" {
 						answer["account"] = json.RawMessage(account)
+					}
+					if os.Getenv("FAKE_SKILLS") == "silent" {
+						break
+					}
+					if os.Getenv("FAKE_SKILLS") != "unlisted" {
+						answer["commands"] = fakeSkills(flag("--plugin-dir"))
 					}
 					write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": answer}})
 				case "mcp_status":

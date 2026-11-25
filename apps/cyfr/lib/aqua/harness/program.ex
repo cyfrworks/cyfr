@@ -572,12 +572,25 @@ defmodule Aqua.Harness.Program do
   # names, or for places its driver could not read, are said in the turn's
   # activity.
   # A start the wire would not take (an option, its instructions or its
-  # tools) is refused before its scrolls, so it writes nothing.
+  # tools) is refused before its scrolls, so it writes nothing: it is
+  # measured as the line it can be at most, with the session it resumes,
+  # its pending posts and the most its instructions can be once its
+  # scrolls are answered (`Aqua.Prompt.program_bound/2`).
   defp write_scrolls(%{work: work} = state) do
-    if Opus.Brain.writable?(start_command(work, nil, [], work.system)),
-      do: scrolls(state),
-      else:
-        fail(shut(state), refused(work, {:start_unfit, work.config |> Map.keys() |> Enum.sort()}))
+    with {:ok, %{session: session}} <- Tape.brain(work.guest, state.thread_id),
+         {:ok, pending} <- pending(work, session) do
+      most = Aqua.Prompt.program_bound(work.system, work.scrolls)
+
+      if Opus.Brain.writable?(start_command(work, session, pending, most)),
+        do: scrolls(state),
+        else:
+          fail(
+            shut(state),
+            refused(work, {:start_unfit, work.config |> Map.keys() |> Enum.sort()})
+          )
+    else
+      {:error, _unanswered} -> fail(shut(state), refused(work, {:start_failed, :session}))
+    end
   end
 
   defp scrolls(%{work: work} = state),
@@ -641,10 +654,12 @@ defmodule Aqua.Harness.Program do
 
   # The name a program lists a placed scroll by, which the start's
   # instructions quote: the program's word, so only the scroll's own name,
-  # or a plain namespace, `:` and it (Claude Code's `cyfr:<name>`), is
-  # taken.
-  defp listed_as?(as, name),
-    do: as == name or Regex.match?(~r/\A[A-Za-z0-9_-]+:#{Regex.escape(name)}\z/, as)
+  # or a plain namespace of at most `Aqua.Prompt.listed_prefix_bytes/0`, `:`
+  # and it (Claude Code's `cyfr:<name>`), is taken.
+  defp listed_as?(as, name) do
+    prefix = Aqua.Prompt.listed_prefix_bytes()
+    as == name or Regex.match?(~r/\A[A-Za-z0-9_-]{1,#{prefix}}:#{Regex.escape(name)}\z/, as)
+  end
 
   # The harness starts, resuming the thread's native session if it keeps
   # one, with the posts whose delivery its transcript says. A read that

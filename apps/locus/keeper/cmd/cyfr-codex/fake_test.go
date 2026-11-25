@@ -60,9 +60,11 @@ import (
 // A steer is refused as Codex refuses one it did not take (-32600) while
 // FAKE_STEER_REFUSE is set, and with an error of another code (-32603)
 // while FAKE_STEER_UNKNOWN is. `skills/list` answers the skills of
-// `$CODEX_HOME/skills` and `~/.agents/skills`, a folder a skill, and the one
-// built in, `imagegen`, or an error while FAKE_SKILLS_FAIL is set;
-// `skills/extraRoots/set` keeps its roots for the process.
+// `$CODEX_HOME/skills`, `~/.agents/skills` and each extra root, a folder a
+// skill, none past 64 characters, and the one built in, `imagegen`;
+// FAKE_SKILLS answers an error (`fail`), no list (`nolist`), a list with
+// errors (`errors`) or nothing (`silent`). `skills/extraRoots/set` keeps
+// its roots for the process.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -378,15 +380,31 @@ func fakeCodex() int {
 					ok(map[string]any{"account": nil, "requiresOpenaiAuth": true})
 				}
 			case m.Method == "skills/list":
-				if os.Getenv("FAKE_SKILLS_FAIL") != "" {
+				switch os.Getenv("FAKE_SKILLS") {
+				case "fail":
 					fail(-32603, "HARNESS-WORDS the skills could not be read")
+					continue
+				case "nolist":
+					ok(map[string]any{})
+					continue
+				case "errors":
+					ok(map[string]any{"data": []any{map[string]any{"cwd": "/", "skills": []any{}, "errors": []any{map[string]any{"path": "/x", "message": "bad"}}}}})
+					continue
+				case "silent":
 					continue
 				}
 				skills := []any{map[string]any{"name": "imagegen", "scope": "system", "path": "/fake/imagegen/SKILL.md", "description": "", "enabled": true}}
-				for _, dir := range []string{filepath.Join(home, "skills"), filepath.Join(os.Getenv("HOME"), ".agents", "skills")} {
+				methodsMu.Lock()
+				dirs := []string{filepath.Join(home, "skills"), filepath.Join(os.Getenv("HOME"), ".agents", "skills")}
+				for _, root := range roots {
+					dirs = append(dirs, root.(string))
+				}
+				methodsMu.Unlock()
+				for _, dir := range dirs {
 					entries, _ := os.ReadDir(dir)
 					for _, e := range entries {
-						if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+						// Codex 0.169.0 lists no skill past 64 characters.
+						if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && len(e.Name()) <= 64 {
 							skills = append(skills, map[string]any{"name": e.Name(), "scope": "user", "path": filepath.Join(dir, e.Name(), "SKILL.md"), "description": "", "enabled": true})
 						}
 					}

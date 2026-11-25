@@ -14,8 +14,10 @@
 //   `--resume` of a session its folder does not hold, it ends as 2.1.318
 //   ended: a `result` of no turn naming the session on its stdout, the
 //   same words on its stderr, and exit 1, before it reads a line.
-// - `initialize` is answered with a model listing, and the system prompt it
-//   carries is kept; `mcp_set_servers` starts each stdio server it names
+// - `initialize` is answered with a model listing and its `--plugin-dir`
+//   plugin's skills, as 2.1.323 lists them, and the system prompt it
+//   carries is kept; a turn's `skills <path>` replies with those skills and
+//   whether it sees `<path>`; `mcp_set_servers` starts each stdio server it names
 //   (the image's `cyfr-stub`), lists its tools over MCP and answers
 //   `added`.
 // - The person's own MCP servers, those `$HOME/.claude.json` names under
@@ -284,6 +286,11 @@ async function turn(message) {
       ran.push(`${tool} ${answered}`);
     }
     reply(`Tools: ${mcpTools().filter((t) => t.endsWith('__echo_env') || t.endsWith('__files')).sort().join(', ')}. ${ran.join('; ')}.`);
+  } else if (words.startsWith('skills ')) {
+    // Its plugin folder's skills, and whether the path the words name, a
+    // folder another session placed, is one it can see.
+    const other = words.slice('skills '.length);
+    reply(JSON.stringify({ placed: placedSkills().map((s) => s.name), sees: fs.existsSync(other), folder: flag('--plugin-dir') ?? null }));
   } else if (words.includes('modes')) {
     const ids = [];
     for (const [tool, input] of [['Write', { file_path: 'made.txt', content: 'x' }], ['Bash', { command: 'touch made.txt' }]]) {
@@ -296,6 +303,24 @@ async function turn(message) {
   }
 }
 
+// The skills of its `--plugin-dir` plugin, as 2.1.323 lists them in its
+// `initialize` answer: `<plugin>:<dir>`, the line opening `(<plugin>)`.
+function placedSkills() {
+  const dir = flag('--plugin-dir');
+  if (!dir) return [];
+  let name = '';
+  try { name = JSON.parse(fs.readFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name; } catch { return []; }
+  let skills = [];
+  try { skills = fs.readdirSync(path.join(dir, 'skills')); } catch { return []; }
+  return skills.map((skill) => {
+    const text = fs.readFileSync(path.join(dir, 'skills', skill, 'SKILL.md'), 'utf8');
+    const line = text.split('\n').find((l) => l.startsWith('description: ')) ?? 'description: ""';
+    let description = line.slice('description: '.length);
+    try { description = JSON.parse(description); } catch {}
+    return { name: `${name}:${skill}`, description: `(${name}) ${description}`, argumentHint: '' };
+  });
+}
+
 // ---- The driver's lines ----
 let turns = Promise.resolve();
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
@@ -304,7 +329,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     const request = message.request;
     if (request.subtype === 'initialize') {
       appended = request.appendSystemPrompt || '';
-      out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { commands: [], agents: [], output_style: 'default', available_output_styles: ['default'], models: MODELS, account: {}, claude_code_version: 'fake', session_state: 'idle' } } });
+      out({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { commands: placedSkills(), agents: [], output_style: 'default', available_output_styles: ['default'], models: MODELS, account: {}, claude_code_version: 'fake', session_state: 'idle' } } });
     } else if (request.subtype === 'mcp_status') {
       const listed = [...ownNames.map((name) => ({ name, status: own.has(name) ? 'connected' : 'pending', scope: 'user', source: 'user' })),
         ...[...servers.keys()].map((name) => ({ name, status: 'connected', scope: 'dynamic', source: 'dynamic' }))];

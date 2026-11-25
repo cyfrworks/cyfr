@@ -188,8 +188,15 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return ok({ data: MODELS, nextCursor: null });
     // The skills it has: the one built in, as Codex 0.169.0 lists its own;
     // an extra root is kept for the process, as Codex keeps one.
-    case 'skills/list':
-      return ok({ data: [{ cwd: process.cwd(), errors: [], skills: [{ name: 'imagegen', scope: 'system', path: '/fake/imagegen/SKILL.md', description: '', enabled: true }] }] });
+    case 'skills/list': {
+      const skills = [{ name: 'imagegen', scope: 'system', path: '/fake/imagegen/SKILL.md', description: '', enabled: true }];
+      for (const root of extraRoots) {
+        let names = [];
+        try { names = fs.readdirSync(root); } catch {}
+        for (const name of names) skills.push({ name, scope: 'user', path: path.join(root, name, 'SKILL.md'), description: '', enabled: true });
+      }
+      return ok({ data: [{ cwd: process.cwd(), errors: [], skills }] });
+    }
     case 'skills/extraRoots/set':
       extraRoots = message.params.extraRoots;
       return ok({});

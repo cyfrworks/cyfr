@@ -1162,8 +1162,14 @@ defmodule Compendium.Providers.Aqua do
 
   defp taken(name), do: "Scroll '#{name}' already exists"
 
+  defp misnamed(name),
+    do: "Scroll '#{name}' is not used: its name holds what CYFR marks its own frames with"
+
   # A chain is never handed a scroll past the bound; the person's own
   # session reads it, to see it and change it.
+  defp carried(%Context{plane: :guest}, %{carried: false, unhanded: :name, name: name}),
+    do: {:error, {:invalid_argument, misnamed(name)}}
+
   defp carried(%Context{plane: :guest}, %{carried: false, name: name}),
     do: {:error, {:invalid_argument, too_large(name)}}
 

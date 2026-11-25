@@ -53,6 +53,19 @@ defmodule Compendium.AquaPath do
   @spec valid_name?(term()) :: boolean()
   def valid_name?(name), do: is_binary(name) and name =~ @name_format
 
+  # The shapes of a thread's mark and of the engine's stand-in for it
+  # (`Aqua.Reader.mark/1`, `Aqua.Reader.token/0`): a name holding either
+  # would be renamed as it is handed, which nothing handed is.
+  @frame_shape ~r/cyfr-[A-Z2-7]{16}|cyfr-frame-[A-Z2-7]{24}/
+
+  @doc """
+  Whether a scroll's name is one a harness is handed as it is stored: of
+  the grammar, and holding neither a thread's mark nor the engine's
+  stand-in for it, which the handing would remove.
+  """
+  @spec handed_name?(term()) :: boolean()
+  def handed_name?(name), do: valid_name?(name) and not Regex.match?(@frame_shape, name)
+
   @doc """
   The scope root, for whole-tree operations.
 

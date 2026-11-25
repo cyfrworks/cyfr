@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 // The scrolls handed before a start, `scroll` by `scroll`.
@@ -76,6 +78,8 @@ func rootsOf(t *testing.T, s *wireSession, turn, id string) ([]any, []any) {
 // person's skills are untouched, nothing is written where Codex keeps its
 // own, and the folder goes at the driver's end.
 func TestAStartsScrollsAreAnExtraRootAndOnesNamedLikeCodexsOwnYield(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	s := startDriver(t)
 	codexSkills := filepath.Join(s.home, ".codex", "skills")
 	agentsSkills := filepath.Join(s.home, ".agents", "skills")
@@ -83,18 +87,18 @@ func TestAStartsScrollsAreAnExtraRootAndOnesNamedLikeCodexsOwnYield(t *testing.T
 	plantFile(t, filepath.Join(agentsSkills, "research", "SKILL.md"), "the person's research")
 	before := map[string]map[string]string{"codex": tree(t, codexSkills), "agents": tree(t, agentsSkills)}
 	s.expect("hello")
-	answers := handScrolls(s, "research", "imagegen", "web")
-	got := []any{answers[0]["t"], answers[0]["why"], answers[1]["t"], answers[1]["why"], answers[2]["t"], answers[2]["as"]}
-	if !reflect.DeepEqual(got, []any{"yielded", "own", "yielded", "own", "placed", "web"}) {
+	long := strings.Repeat("n", 65)
+	answers := handScrolls(s, "research", "imagegen", "web", long)
+	got := []any{answers[0]["t"], answers[0]["why"], answers[1]["t"], answers[1]["why"], answers[2]["t"], answers[2]["as"], answers[3]["t"], answers[3]["why"]}
+	if !reflect.DeepEqual(got, []any{"yielded", "own", "yielded", "own", "placed", "web", "yielded", nil}) {
 		t.Fatalf("a scroll named like one of Codex's skills yields and another is placed by its name: %v", answers)
 	}
 	started(s, map[string]any{})
 	roots, methods := rootsOf(t, s, "trn_1", "stp_post")
-	place := filepath.Join(s.home, ".cyfr", "scrolls")
-	if len(roots) != 1 || filepath.Dir(filepath.Dir(roots[0].(string))) != place || filepath.Base(roots[0].(string)) != "skills" {
-		t.Fatalf("the start names the driver's folder as its one extra root: %v", roots)
+	if len(roots) != 1 || filepath.Dir(filepath.Dir(roots[0].(string))) != tmp || filepath.Base(roots[0].(string)) != "skills" {
+		t.Fatalf("the start names the driver's folder in its /tmp as its one extra root: %v", roots)
 	}
-	want := []any{"initialize", "initialized", "skills/list", "account/read", "skills/extraRoots/set", "thread/start", "turn/start"}
+	want := []any{"initialize", "initialized", "skills/list", "skills/extraRoots/set", "skills/list", "account/read", "skills/extraRoots/set", "thread/start", "turn/start"}
 	if !reflect.DeepEqual(methods, want) {
 		t.Fatalf("one process lists, is given the root, then starts the thread:\n%v\nnot\n%v", want, methods)
 	}
@@ -106,9 +110,12 @@ func TestAStartsScrollsAreAnExtraRootAndOnesNamedLikeCodexsOwnYield(t *testing.T
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("Codex's own skills places are untouched: %v %v", before, after)
 	}
+	if _, err := os.Lstat(filepath.Join(s.home, ".cyfr")); !os.IsNotExist(err) {
+		t.Fatalf("nothing is written in the home: %v", err)
+	}
 	s.end()
-	if entries, err := os.ReadDir(place); err != nil || len(entries) != 0 {
-		t.Fatalf("the folder and its lock go at the driver's end: %v %v", entries, err)
+	if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
+		t.Fatalf("the folder goes at the driver's end: %v %v", entries, err)
 	}
 }
 
@@ -130,38 +137,52 @@ func TestAResumeIsGivenTheRootAndAStartWithNoScrollNamesNone(t *testing.T) {
 	s.send(map[string]any{"t": "start", "gen": 3, "session": session, "config": map[string]any{}, "system": "be brief"})
 	s.expect("started")
 	roots, methods := rootsOf(t, s, "trn_2", "stp_post_2")
-	want := []any{"initialize", "initialized", "skills/list", "account/read", "skills/extraRoots/set", "thread/resume", "turn/start"}
+	want := []any{"initialize", "initialized", "skills/list", "skills/extraRoots/set", "skills/list", "account/read", "skills/extraRoots/set", "thread/resume", "turn/start"}
 	if len(roots) != 1 || !reflect.DeepEqual(methods, want) {
 		t.Fatalf("a resume is given the root before it resumes: %v %v", roots, methods)
 	}
 	s.end()
 }
 
-// A listing that does not answer yields every scroll and names no root.
-func TestAListingThatDoesNotAnswerYieldsEveryScroll(t *testing.T) {
-	t.Setenv("FAKE_SKILLS_FAIL", "1")
-	s := startDriver(t)
-	s.expect("hello")
-	for _, answer := range handScrolls(s, "research", "web") {
-		if answer["t"] != "yielded" || answer["why"] != "unread" {
-			t.Fatalf("every scroll yields, its listing unread: %v", answer)
+// Not knowing is not none: a listing that fails, answers no list, carries
+// errors or does not answer in its bound yields every scroll (unread), and
+// the start goes on in a process of its own, naming no root.
+func TestAListingThatDoesNotSayYieldsEveryScroll(t *testing.T) {
+	for _, mode := range []string{"fail", "nolist", "errors", "silent"} {
+		t.Setenv("FAKE_SKILLS", mode)
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+		was := skillsWait
+		skillsWait = time.Second
+		s := startDriver(t)
+		s.expect("hello")
+		for _, answer := range handScrolls(s, "research", "web") {
+			if answer["t"] != "yielded" || answer["why"] != "unread" {
+				t.Fatalf("%s: every scroll yields, unread: %v", mode, answer)
+			}
 		}
+		skillsWait = was
+		started(s, map[string]any{})
+		roots, methods := rootsOf(t, s, "trn_1", "stp_post")
+		for _, m := range methods {
+			if m == "skills/extraRoots/set" || m == "thread/resume" {
+				t.Fatalf("%s: no root is named: %v", mode, methods)
+			}
+		}
+		if roots != nil {
+			t.Fatalf("%s: no root is named: %v", mode, roots)
+		}
+		if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+			t.Fatalf("%s: nothing is written: %v", mode, entries)
+		}
+		s.end()
 	}
-	started(s, map[string]any{})
-	roots, methods := rootsOf(t, s, "trn_1", "stp_post")
-	if roots != nil || !reflect.DeepEqual(methods, []any{"initialize", "initialized", "skills/list", "account/read", "thread/start", "turn/start"}) {
-		t.Fatalf("no root is named: %v %v", roots, methods)
-	}
-	if _, err := os.Lstat(filepath.Join(s.home, ".cyfr")); !os.IsNotExist(err) {
-		t.Fatalf("nothing is written: %v", err)
-	}
-	s.end()
 }
 
 // A scroll the driver cannot write is refused in the driver's words.
 func TestAScrollTheDriverCannotWriteIsRefused(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "absent"))
 	s := startDriver(t)
-	plantFile(t, filepath.Join(s.home, ".cyfr"), "a file where the folder would be")
 	s.expect("hello")
 	if answer := handScrolls(s, "web")[0]; answer["t"] != "refused" || answer["reason"] != unplacedSentence {
 		t.Fatalf("an unwritable folder refuses the scroll: %v", answer)

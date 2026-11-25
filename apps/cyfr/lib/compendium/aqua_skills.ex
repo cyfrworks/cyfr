@@ -34,13 +34,22 @@ defmodule Compendium.AquaSkills do
           name: String.t(),
           title: String.t(),
           description: String.t(),
-          carried: boolean()
+          carried: boolean(),
+          unhanded: unhanded()
         }
+
+  @typedoc """
+  Why no harness is handed a scroll: its name holds a frame's mark or its
+  stand-in (`Compendium.AquaPath.handed_name?/1`), or it is past the bound;
+  nil for one it is handed.
+  """
+  @type unhanded :: :name | :size | nil
 
   @typedoc """
   One scroll as a read by name answers it: its name, its description, its
   body as written and its other files' names, the bytes its frame
-  delivers (`delivered_bytes/3`), and whether a harness carries it.
+  delivers (`delivered_bytes/3`), whether a harness carries it, and why
+  not.
   """
   @type scroll :: %{
           name: String.t(),
@@ -49,7 +58,8 @@ defmodule Compendium.AquaSkills do
           body: String.t(),
           files: [String.t()],
           delivered: non_neg_integer(),
-          carried: boolean()
+          carried: boolean(),
+          unhanded: unhanded()
         }
 
   @max_bytes 131_072
@@ -112,6 +122,13 @@ defmodule Compendium.AquaSkills do
       files = files(ctx, name)
       delivered = delivered_bytes(name, body, files)
 
+      unhanded =
+        cond do
+          not AquaPath.handed_name?(name) -> :name
+          not (fits?(byte_size(binary), description) and delivered <= @max_bytes) -> :size
+          true -> nil
+        end
+
       {:ok,
        %{
          name: name,
@@ -120,7 +137,8 @@ defmodule Compendium.AquaSkills do
          body: body,
          files: files,
          delivered: delivered,
-         carried: fits?(byte_size(binary), description) and delivered <= @max_bytes
+         carried: unhanded == nil,
+         unhanded: unhanded
        }}
     end
   end
@@ -145,7 +163,7 @@ defmodule Compendium.AquaSkills do
   defp string(_value), do: ""
 
   # What an index entry holds of a scroll.
-  @entry [:name, :title, :description]
+  @entry [:name, :title, :description, :unhanded]
 
   @doc """
   Every scroll as name, title and the one line its manifest describes it
@@ -199,7 +217,7 @@ defmodule Compendium.AquaSkills do
     with {:ok, entries} <- Arca.list_typed(Sanctum.Context.actor(ctx), AquaPath.skills_root()) do
       names = Enum.sort(for {name, :dir} <- entries, AquaPath.valid_name?(name), do: name)
       {kept, more} = carried(ctx, names, limit, [], [:name, :description, :body])
-      {:ok, %{entries: Enum.map(kept, &Map.delete(&1, :carried)), more: more}}
+      {:ok, %{entries: Enum.map(kept, &Map.drop(&1, [:carried])), more: more}}
     end
   end
 

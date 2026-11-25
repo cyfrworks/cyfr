@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The scrolls handed before a start, `scroll` by `scroll`.
@@ -48,12 +49,15 @@ func argvValue(argv []any, flag string) (string, bool) {
 	return "", false
 }
 
-// A start's scrolls are written into the driver's own folder as a plugin
-// named `cyfr`, which that start's process alone is handed with
-// `--plugin-dir`; Claude Code lists each as `cyfr:<name>`. A skill of the
-// person's own, named like a scroll, is untouched, and the folder and its
-// lock are gone at the driver's end.
+// A start's scrolls are written into the driver's own folder in its
+// session's /tmp as a plugin named `cyfr`, which that start's process
+// alone is handed with `--plugin-dir`; each is placed as Claude Code is
+// seen to list it, `cyfr:<name>`. A skill of the person's own, named like
+// a scroll, is untouched; nothing is written in the home, and the folder
+// is gone at the driver's end.
 func TestAStartsScrollsArePlacedAsAPluginForThatProcessAndGoAtTheEnd(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	s := startDriver(t)
 	own := filepath.Join(s.home, ".claude", "skills", "research", "SKILL.md")
 	plantFile(t, own, "---\nname: research\ndescription: the person's\n---\nTheirs.\n")
@@ -68,9 +72,8 @@ func TestAStartsScrollsArePlacedAsAPluginForThatProcessAndGoAtTheEnd(t *testing.
 	work(s, "stp_work", []any{})
 	argv, _ := modesOf(t, s, "stp_post")
 	dir, ok := argvValue(argv, "--plugin-dir")
-	place := filepath.Join(s.home, ".cyfr", "scrolls")
-	if !ok || filepath.Dir(dir) != place {
-		t.Fatalf("the start names the driver's folder with --plugin-dir: %v", argv)
+	if !ok || filepath.Dir(dir) != tmp || !strings.HasPrefix(filepath.Base(dir), "cyfr-scrolls-") {
+		t.Fatalf("the start names the driver's folder in its /tmp with --plugin-dir: %v", argv)
 	}
 	want := append(strs(baseArgv...), strs("--plugin-dir", dir, "--session-id", session, "--permission-mode", "default")...)
 	if !reflect.DeepEqual(argv, want) {
@@ -83,16 +86,69 @@ func TestAStartsScrollsArePlacedAsAPluginForThatProcessAndGoAtTheEnd(t *testing.
 	if plugin, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json")); err != nil || !strings.Contains(string(plugin), `"name":"cyfr"`) {
 		t.Fatalf("the folder is a plugin named cyfr: %q %v", plugin, err)
 	}
+	if _, err := os.Lstat(filepath.Join(s.home, ".cyfr")); !os.IsNotExist(err) {
+		t.Fatalf("nothing is written in the home: %v", err)
+	}
+	s.end()
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the folder goes at the driver's end: %v", err)
+	}
 	if got, _ := os.ReadFile(own); string(got) != "---\nname: research\ndescription: the person's\n---\nTheirs.\n" {
 		t.Fatalf("the person's own skill is untouched: %q", got)
 	}
+}
+
+// A person's own always wins a name: a skill or a command of theirs listed
+// under the very name a scroll would be, `cyfr:<name>`, yields that scroll
+// (own), and the others are placed.
+func TestASkillOfThePersonsUnderAScrollsListedNameYieldsIt(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	s := startDriver(t)
+	plantFile(t, filepath.Join(s.home, ".claude", "skills", "cyfr:research", "SKILL.md"), "---\ndescription: theirs\n---\nTheirs.\n")
+	plantFile(t, filepath.Join(s.home, ".claude", "commands", "cyfr", "web.md"), "Theirs.\n")
+	s.expect("hello")
+	answers := handScrolls(s, "research", "web", "notes")
+	got := []any{answers[0]["t"], answers[0]["why"], answers[1]["t"], answers[1]["why"], answers[2]["t"], answers[2]["as"]}
+	if !reflect.DeepEqual(got, []any{"yielded", "own", "yielded", "own", "placed", "cyfr:notes"}) {
+		t.Fatalf("the person's names yield their scrolls and the rest are placed: %v", answers)
+	}
+	started(s, map[string]any{})
+	work(s, "stp_work", []any{})
+	argv, _ := modesOf(t, s, "stp_post")
+	dir, _ := argvValue(argv, "--plugin-dir")
+	if entries, err := os.ReadDir(filepath.Join(dir, "skills")); err != nil || len(entries) != 1 || entries[0].Name() != "notes" {
+		t.Fatalf("a yielded scroll is taken back from the folder: %v %v", entries, err)
+	}
 	s.end()
-	if entries, err := os.ReadDir(place); err != nil || len(entries) != 0 {
-		t.Fatalf("the folder and its lock go at the driver's end: %v %v", entries, err)
+}
+
+// Not knowing is not none: a listing that answers no list, or none in its
+// bound, yields that scroll and the rest of the start's (unread); a name
+// past what the wire carries yields quietly.
+func TestAListingThatDoesNotSayYieldsEveryScrollAndALongNameYieldsQuietly(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	for name, env := range map[string]string{"no list": "unlisted", "no answer": "silent"} {
+		t.Setenv("FAKE_SKILLS", env)
+		was := skillsWait
+		skillsWait = 2 * time.Second
+		s := startDriver(t)
+		s.expect("hello")
+		for _, answer := range handScrolls(s, "research", "web") {
+			if answer["t"] != "yielded" || answer["why"] != "unread" {
+				t.Fatalf("%s: every scroll yields, unread: %v", name, answer)
+			}
+		}
+		skillsWait = was
+		s.end()
 	}
-	if got, _ := os.ReadFile(own); string(got) != "---\nname: research\ndescription: the person's\n---\nTheirs.\n" {
-		t.Fatalf("the person's own skill is untouched at the end: %q", got)
+	t.Setenv("FAKE_SKILLS", "")
+	s := startDriver(t)
+	s.expect("hello")
+	long := strings.Repeat("n", 252)
+	if answer := handScrolls(s, long)[0]; answer["t"] != "yielded" || answer["why"] != nil {
+		t.Fatalf("a name past the wire's bound as listed yields quietly: %v", answer)
 	}
+	s.end()
 }
 
 // A plugin of the person's own named cyfr, recorded or in its folder,
@@ -101,7 +157,8 @@ func TestAStartsScrollsArePlacedAsAPluginForThatProcessAndGoAtTheEnd(t *testing.
 // driver reads there goes nowhere.
 func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *testing.T) {
 	secret := "PLUGIN-RECORD-CANARY"
-	whys := map[string]string{"recorded": "own", "in its folder": "own", "a record that does not read": "unread", "a record that is a link": "unread"}
+	whys := map[string]string{"recorded": "own", "in its folder": "own", "a record that does not read": "unread", "a record that is a link": "unread",
+		"a record of no plugins": "unread", "a configuration folder outside the home": "unread", "a configuration folder through a link": "unread"}
 	for name, plant := range map[string]func(home string){
 		"recorded": func(home string) {
 			plantFile(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"),
@@ -112,6 +169,19 @@ func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *tes
 		},
 		"a record that does not read": func(home string) {
 			plantFile(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), "{"+secret)
+		},
+		"a record of no plugins": func(home string) {
+			plantFile(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), `{"version":2,"plugins":null,"x":"`+secret+`"}`)
+		},
+		"a configuration folder outside the home": func(home string) {
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+		},
+		"a configuration folder through a link": func(home string) {
+			outside := t.TempDir()
+			if err := os.Symlink(outside, filepath.Join(home, "linked")); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "linked"))
 		},
 		"a record that is a link": func(home string) {
 			target := filepath.Join(t.TempDir(), "record.json")
@@ -124,6 +194,8 @@ func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *tes
 			}
 		},
 	} {
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
 		s := startDriver(t)
 		plant(s.home)
 		s.expect("hello")
@@ -138,8 +210,8 @@ func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *tes
 		if _, ok := argvValue(argv, "--plugin-dir"); ok {
 			t.Fatalf("%s: no folder is named: %v", name, argv)
 		}
-		if _, err := os.Lstat(filepath.Join(s.home, ".cyfr")); !os.IsNotExist(err) {
-			t.Fatalf("%s: nothing is written: %v", name, err)
+		if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+			t.Fatalf("%s: nothing is written: %v", name, entries)
 		}
 		s.end()
 		if strings.Contains(s.output(), secret) || strings.Contains(s.stderr.String(), secret) {
@@ -160,8 +232,8 @@ func TestAPluginOfThePersonsNamedCyfrOrAnUnreadablePlaceYieldsEveryScroll(t *tes
 // A scroll the driver cannot write is refused in the driver's words, and
 // a scroll while the harness runs ends the driver.
 func TestAScrollTheDriverCannotWriteIsRefusedAndOneWhileTheHarnessRunsEndsIt(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "absent"))
 	s := startDriver(t)
-	plantFile(t, filepath.Join(s.home, ".cyfr"), "a file where the folder would be")
 	s.expect("hello")
 	answer := handScrolls(s, "research")[0]
 	if answer["t"] != "refused" || answer["reason"] != unplacedSentence {
@@ -169,6 +241,7 @@ func TestAScrollTheDriverCannotWriteIsRefusedAndOneWhileTheHarnessRunsEndsIt(t *
 	}
 	s.end()
 
+	t.Setenv("TMPDIR", t.TempDir())
 	s = startDriver(t)
 	s.expect("hello")
 	if answer := handScrolls(s, "-lead")[0]; answer["t"] != "refused" {

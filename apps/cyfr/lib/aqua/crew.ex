@@ -522,6 +522,12 @@ defmodule Aqua.Crew do
         {:ok, %{carried: true} = scroll} ->
           {:cont, {:ok, [scroll | kept]}}
 
+        {:ok, %{unhanded: :name}} ->
+          {:halt,
+           {:error,
+            {:invalid_argument,
+             "#{operation}: the scroll '#{name}' is not used: its name holds what CYFR marks its own frames with"}}}
+
         {:ok, _past_bound} ->
           {:halt,
            {:error,

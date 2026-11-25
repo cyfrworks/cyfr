@@ -994,6 +994,32 @@ defmodule PrismWeb.AquaLiveTest do
                "Aqua does not use this scroll"
     end
 
+    # A scroll whose name holds what CYFR marks its frames with is handed to
+    # no harness, since handing would rename it, and the page says why on it.
+    test "a scroll named with a frame's mark says why on the page, and no index lists it",
+         %{conn: conn, ctx: ctx} do
+      name = "s" <> Aqua.Reader.mark("thr_any")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "skill_create",
+          "name" => name,
+          "description" => "d",
+          "content" => "short"
+        })
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert view |> element("#aqua-scroll-misnamed-" <> name) |> render() =~
+               "its name holds what CYFR marks its own frames with"
+
+      refute has_element?(view, "#aqua-scroll-too-large-" <> name)
+      {:ok, %{entries: entries}} = Compendium.skills_index(ctx, Compendium.skills_index_limit())
+      refute Enum.any?(entries, &(&1.name == name))
+      refute Compendium.AquaPath.handed_name?(Aqua.Reader.token())
+      assert Compendium.AquaPath.handed_name?("research")
+    end
+
     test "the scrolls disclosure opens when a scroll exists, and one is written, edited and deleted here",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"skills" => [shipped | _]}} =

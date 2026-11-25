@@ -480,6 +480,24 @@ defmodule Aqua.PromptTest do
     # A program's start names the placed scrolls as its program lists them,
     # in the rule and the index, and indexes the yielded ones alone; with
     # none placed it reads as the model's harness's.
+    # A start is measured before its scrolls are answered by the most its
+    # instructions can be, whatever its driver answers.
+    test "a program's instructions are never more than their bound", %{home: home} do
+      composed = Prompt.compose(home, agent: agent(), authority: nil)
+      entries = composed.scrolls.entries
+      bound = byte_size(Prompt.program_bound(composed.instructions, composed.scrolls))
+      longest = String.duplicate("n", Prompt.listed_prefix_bytes())
+
+      for placed <- [
+            [],
+            Enum.map(entries, &{&1.name, &1.name}),
+            Enum.map(entries, &{&1.name, longest <> ":" <> &1.name}),
+            entries |> Enum.take_every(2) |> Enum.map(&{&1.name, "cyfr:" <> &1.name})
+          ] do
+        assert byte_size(Prompt.program(composed.instructions, composed.scrolls, placed)) <= bound
+      end
+    end
+
     test "a program's instructions name its placed scrolls", %{home: home} do
       composed = Prompt.compose(home, agent: agent(), authority: nil)
       [first | _] = composed.scrolls.entries

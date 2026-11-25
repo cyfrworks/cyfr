@@ -47,9 +47,12 @@ type starting struct {
 	stage   string
 	request string
 	account string
-	// root is the folder of the scrolls placed for this start, named to
-	// Codex before the thread starts or resumes, or none.
-	root string
+	// roots are the start's extra roots, the folder of the scrolls placed
+	// for it or none, named to Codex before the thread starts or resumes
+	// when name is set: the folder has scrolls, or the app-server holds it
+	// from the listing.
+	roots []string
+	name  bool
 }
 
 // waiting is the delivery the holder waits on Codex's answer for: the
@@ -118,12 +121,24 @@ func newDriver(command []string, c *brainwire.Conn, home string) brainwire.Drive
 
 func (d *driver) Process() *brainwire.Process { return d.h }
 
-// Deadline is none: Codex's answers are bounded by the holder's clock
+// Deadline is when the listing of a start's scrolls is overdue
+// (scrolls.go); Codex's other answers are bounded by the holder's clock
 // alone.
-func (d *driver) Deadline() <-chan time.Time { return nil }
+func (d *driver) Deadline() <-chan time.Time {
+	due := d.listingDue()
+	if due.IsZero() {
+		return nil
+	}
+	return time.After(time.Until(due))
+}
 
-// Expired is never called, with no deadline.
-func (d *driver) Expired() error { return nil }
+// Expired yields what waited on a listing that did not answer in time.
+func (d *driver) Expired() error {
+	if due := d.listingDue(); due.IsZero() || time.Now().Before(due) {
+		return nil
+	}
+	return d.listingExpired()
+}
 
 // Inbox is none: Codex's calls of CYFR's tools come on its own output.
 func (d *driver) Inbox() <-chan func() error { return nil }
@@ -175,7 +190,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	// The scrolls handed since the last start are this start's set, whether
 	// it runs or not: the next start is handed its own.
-	root := d.placed()
+	roots, nameRoots := d.placed()
 	var config brainwire.Config
 	var pending []string
 	var tools []brainwire.Tool
@@ -209,7 +224,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	d.config = config
 	d.policy = access.Native
-	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, root: root}
+	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, roots: roots, name: nameRoots}
 	if reuse {
 		// Its `initialize` was answered as it listed its skills.
 		return d.readAccount(d.starting)
@@ -542,10 +557,10 @@ func (d *driver) startStep(s *starting, m rpc) error {
 	case "account":
 		s.account = accountOf(m)
 		d.signedIn = s.account == brainwire.SignedIn
-		if s.root != "" {
+		if s.name {
 			s.stage = "roots"
 			s.request = d.nextID("roots")
-			return d.h.Write(extraRootsLine(s.request, s.root))
+			return d.h.Write(extraRootsLine(s.request, s.roots))
 		}
 		return d.thread(s)
 	case "roots":

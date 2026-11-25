@@ -266,7 +266,14 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
               <%!-- A scroll past the bound no harness carries
                     (`Compendium.AquaSkills`) says why Aqua does not use it. --%>
               <p
-                :if={Map.get(skill, :carried) == false}
+                :if={Map.get(skill, :unhanded) == :name}
+                id={"aqua-scroll-misnamed-" <> skill.name}
+                class="text-[11px] text-amber-400"
+              >
+                Aqua does not use this scroll: its name holds what CYFR marks its own frames with. Give it another name.
+              </p>
+              <p
+                :if={Map.get(skill, :unhanded) == :size}
                 id={"aqua-scroll-too-large-" <> skill.name}
                 class="text-[11px] text-amber-400"
               >

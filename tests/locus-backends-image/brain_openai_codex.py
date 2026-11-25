@@ -182,7 +182,6 @@ def main():
         eventually(lambda: not harnesses(stack), "the listing's app-server to end")
 
         # ————— a start's scrolls, placed beside the program's own, then a start, a work and a post —————
-        folder = f".cyfr/scrolls/{hello['boot']}"
         d.send({"t": "scroll", "id": "stp_start_1:scroll:0", "name": "research", "description": "How it researches",
                 "body": "Search the notes first.\n"})
         expect(d.expect("placed", "a scroll is placed") == {"t": "placed", "id": "stp_start_1:scroll:0", "as": "research"},
@@ -245,13 +244,10 @@ def main():
         said = [e["text"] for e in answered if e["t"] == "said"]
         expect(answered[0] == {"t": "accepted", "id": "stp_answer_1"} and "The file says: three lines" in said,
                "the answer reaches Codex as the call's result", answered)
-        expect(home_has(c, f"{folder}/skills/research/SKILL.md") and not home_has(c, f"{folder}/skills/imagegen"),
-               "the folder holds the placed scroll alone while the driver runs")
+        expect(not home_has(c, ".cyfr"), "nothing of the scrolls is written in the home: the folder is the session's /tmp")
         seen += d.lines
         d.close()
         eventually(lambda: not harnesses(stack), "the closed session's app-server to end")
-        eventually(lambda: not home_has(c, folder) and not home_has(c, f"{folder}.lock"),
-                   "the driver's folder and its lock to go at its end")
 
         # ————— a new process resumes the thread —————
         d = Driver(c, "brain-two")

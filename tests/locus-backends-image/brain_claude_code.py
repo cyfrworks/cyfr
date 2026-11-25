@@ -191,7 +191,6 @@ def main():
         eventually(lambda: not harnesses(stack), "the listing's harness to end")
 
         # ————— a start's scroll, placed as a plugin of its own, then a start, a work and a post —————
-        folder = f".cyfr/scrolls/{hello['boot']}"
         d.send({"t": "scroll", "id": "stp_start_1:scroll:0", "name": "research", "description": "How it researches",
                 "body": "Search the notes first.\n"})
         expect(d.expect("placed", "a scroll is placed") == {"t": "placed", "id": "stp_start_1:scroll:0", "as": "cyfr:research"},
@@ -249,13 +248,34 @@ def main():
         expect(own == [("mcp__cyfr__echo_env", "start"), ("mcp__cyfr__echo_env", "end"),
                        ("mcp__mine__echo_env", "start"), ("mcp__mine__echo_env", "end")],
                "each call of theirs is shown as the program's own tool by name", own)
-        expect(home_has(c, f"{folder}/skills/research/SKILL.md") and home_has(c, f"{folder}/.claude-plugin/plugin.json"),
-               "the folder is a plugin holding the scroll while the driver runs")
+        # ————— a second session of the same home places its own, and neither sees the other's —————
+        def skills_of(driver, post, work, other):
+            driver.send({"t": "post", "id": post, "work": work, "content": [{"type": "text", "text": f"skills {other}"}]})
+            said = [e["text"] for e in driver.until("idle") if e["t"] == "said"]
+            expect(len(said) == 1, "the harness names its skills", said)
+            return json.loads(said[0])
+        mine = skills_of(d, "stp_post_skills_1", WORK, "/nowhere")
+        expect(mine["placed"] == ["cyfr:research"] and mine["folder"].startswith("/tmp/cyfr-scrolls-"),
+               "the harness lists the scroll from a folder in its session's /tmp", mine)
+        side = Driver(c, "brain-side")
+        side.expect("hello", "a second session of the same home says hello")
+        side.send({"t": "scroll", "id": "stp_side:scroll:0", "name": "tidy", "description": "How it tidies", "body": "Tidy.\n"})
+        expect(side.expect("placed", "the second session places its scroll")["as"] == "cyfr:tidy", "under its own name")
+        side.send({"t": "start", "gen": 4, "config": {"model": "fake-haiku"}, "system": SYSTEM})
+        side.expect("started", "the second session starts")
+        side.send({"t": "work", "id": "stp_side_work", "work": "trn_side", "tools": []})
+        side.expect("accepted", "its work is accepted")
+        theirs = skills_of(side, "stp_side_post", "trn_side", mine["folder"])
+        again = skills_of(d, "stp_post_skills_2", WORK, theirs["folder"])
+        expect(theirs["placed"] == ["cyfr:tidy"] and not theirs["sees"] and again["placed"] == ["cyfr:research"] and not again["sees"]
+               and theirs["folder"] != mine["folder"],
+               "each session of one home lists its own scrolls alone and sees no folder of the other's", [mine, theirs, again])
+        expect(not home_has(c, ".cyfr"), "nothing of the scrolls is written in the home")
+        seen += side.lines
+        side.close()
         seen += d.lines
         d.close()
-        eventually(lambda: not harnesses(stack), "the closed session's harness to end")
-        eventually(lambda: not home_has(c, folder) and not home_has(c, f"{folder}.lock"),
-                   "the driver's folder and its lock to go at its end")
+        eventually(lambda: not harnesses(stack), "the closed sessions' harnesses to end")
 
         # ————— a new process resumes the session, with other flags —————
         d = Driver(c, "brain-two")

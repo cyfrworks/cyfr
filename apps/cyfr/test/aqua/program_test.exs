@@ -6465,6 +6465,47 @@ defmodule Aqua.ProgramTest do
       refute_receive {:session, "send", %{"lines" => [_line]}, _fields}, 200
     end
 
+    # The start is measured as the line it can be once its scrolls are
+    # answered: one that fits without the index and not with it hands none.
+    @tag harness: :program
+    test "a start that would not fit once its scrolls are answered hands none",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, soul} = Arca.get(actor, ["aqua", "aqua.md"])
+      mark = Aqua.Reader.mark(thread.id)
+      probe = accept!(ctx, thread, row, "measure")
+      probing = run(ctx, probe)
+      opened!(fake, row, "boot-one")
+      {_scrolls, start} = scrolled!(fake, row, &%{"t" => "yielded", "id" => &1["id"]})
+      spec = spec!(ctx, probe)
+      base = byte_size(Jason.encode!(start))
+
+      most =
+        start
+        |> Map.put(
+          "system",
+          Aqua.Reader.deliver(Aqua.Prompt.program_bound(spec.system, spec.scrolls), mark)
+        )
+        |> Jason.encode!()
+        |> byte_size()
+
+      stop!(ctx, probe, probing)
+      Process.put(:scrolls_fake, fake)
+      assert most - base > 200
+      pad = Opus.Brain.max_line_bytes() - base - div(most - base, 2)
+
+      :ok =
+        Arca.put(actor, ["aqua", "aqua.md"], soul <> "\n" <> String.duplicate("x", pad) <> "\n")
+
+      turn = accept!(ctx, thread, row, "hello")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      Process.delete(:scrolls_fake)
+      assert {:failed, said} = Task.await(loop, 30_000)
+      assert said =~ "could not start with what this work gives it"
+      refute_receive {:session, "send", %{"lines" => [_line]}, _fields}, 200
+    end
+
     @tag harness: :program
     test "one its driver could not write ends the work naming it, and nothing starts",
          %{ctx: ctx, thread: thread, row: row, fake: fake} do
@@ -6632,7 +6673,28 @@ defmodule Aqua.ProgramTest do
         TurnStorage.pin_program(Sanctum.Context.actor(ctx), turn.id, row.id, %{fence: turn.fence})
 
       loop = run(ctx, turn)
-      %{start: start} = started!(fake, row)
+      opened!(fake, row, "boot-one")
+
+      # The driver places every scroll it is handed, as a placing driver
+      # answers; the one named with the mark is handed by no route.
+      {scrolls, start} =
+        scrolled!(fake, row, &%{"t" => "placed", "id" => &1["id"], "as" => "cyfr:" <> &1["name"]})
+
+      assert %{"t" => "start"} = start
+      assert scrolls != [] and not Enum.any?(scrolls, &(&1["name"] == "s" or &1["name"] =~ mark))
+      say(fake, row, started([]))
+      work = sent()
+      say(fake, row, %{"t" => "accepted", "id" => work["id"]})
+      spec = spec!(ctx, turn)
+      refute Enum.any?(spec.scrolls.entries, &(&1.name == scroll))
+      placed = for %{name: name} <- spec.scrolls.entries, do: {name, "cyfr:" <> name}
+
+      [placed_rule] =
+        spec.system
+        |> Aqua.Prompt.program(spec.scrolls, placed)
+        |> Aqua.Reader.deliver(mark)
+        |> marked_lines(mark)
+
       handed = Enum.reverse(handed_until_post!([start]))
       input = Enum.find(inputs(ctx, turn), &(&1.idempotency_key =~ ":post:"))
       say(fake, row, accepted(input))
@@ -6653,7 +6715,7 @@ defmodule Aqua.ProgramTest do
       # A fresh program is handed its instructions, then what waits for it,
       # the member's reply with its scroll among it, then each answer.
       assert marked_lines(handed ++ answers, mark) ==
-               [rule_line(mark) | Enum.take(history_frames(mark), 2)] ++
+               [placed_rule | Enum.take(history_frames(mark), 2)] ++
                  List.flatten(answer_frames(mark))
 
       seeded_answers!(Enum.map(answers, & &1["content"]), mark)
@@ -7258,19 +7320,25 @@ defmodule Aqua.ProgramTest do
     ]
 
   # The frames the engine wrote for the turn's three answers, in order: the
-  # scroll read, the server's answer and its own error.
+  # scroll read, refused, since its name holds the mark and nothing handed
+  # is renamed, the server's answer and its own error.
   defp answer_frames(mark),
     do: [
-      [~s(⟦#{mark} scroll "s"⟧), "⟦#{mark} end⟧"],
+      [],
       ["⟦#{mark} outside gh__search⟧", "⟦#{mark} end⟧"],
       ["⟦#{mark} outside gh__fail⟧", "⟦#{mark} end⟧"]
     ]
 
-  # The three answers as the model reads them: the scroll in its frame,
-  # the server's answer and its own error, each in the outside frame, the
-  # mark in none of their words.
+  # The three answers as the model reads them: the scroll's read refused,
+  # its name holding the mark, the server's answer and its own error, each
+  # in the outside frame, the mark in none of their words.
   defp seeded_answers!(answers, mark) do
-    assert Enum.any?(answers, &(&1 == "⟦#{mark} scroll \"s\"⟧\nwater it weekly \n⟦#{mark} end⟧"))
+    assert Enum.any?(
+             answers,
+             &(&1 =~ "is not used: its name holds what CYFR marks its own frames with")
+           )
+
+    refute Enum.any?(answers, &(&1 =~ "water it weekly"))
 
     assert Enum.any?(
              answers,

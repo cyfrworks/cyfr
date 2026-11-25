@@ -77,6 +77,9 @@ defmodule Aqua.Prompt do
 
   # What separates two sections of a prompt's tail.
   @section "\n\n---\n\n"
+  # The longest namespace a program lists a placed scroll under
+  # (`program_bound/2`, `Aqua.Harness.Program`).
+  @listed_prefix_bytes 16
 
   @type opts :: [
           agent: map(),
@@ -211,6 +214,38 @@ defmodule Aqua.Prompt do
 
     IO.iodata_to_binary([instructions, index(yielded, scrolls.more, as)])
   end
+
+  @doc """
+  The most a program's instructions for one start can be (`program/3`),
+  whatever its driver answers: the rule naming every scroll placed under
+  the longest name a program may list it by (`listed_prefix_bytes/0`) and
+  the index of every one. A start is measured with it before any scroll is
+  handed, so one that would not fit hands none.
+  """
+  @spec program_bound(String.t(), scrolls()) :: String.t()
+  def program_bound(instructions, scrolls) when is_binary(instructions) do
+    prefix = String.duplicate("x", @listed_prefix_bytes) <> ":"
+    as = Enum.map(scrolls.entries, &(prefix <> &1.name))
+
+    instructions =
+      if as == [],
+        do: instructions,
+        else:
+          String.replace(
+            instructions,
+            scroll_frame(Reader.token()),
+            placed_rule(Reader.token(), as)
+          )
+
+    IO.iodata_to_binary([instructions, index(scrolls.entries, scrolls.more, as)])
+  end
+
+  @doc """
+  The most bytes the namespace of a placed scroll's listed name may hold,
+  before its `:` and the scroll's name (Claude Code's `cyfr`).
+  """
+  @spec listed_prefix_bytes() :: pos_integer()
+  def listed_prefix_bytes, do: @listed_prefix_bytes
 
   # CYFR's part of every agent's prompt, Aqua's included: the standing
   # facts of working here, said once for all, and what a program's brain
