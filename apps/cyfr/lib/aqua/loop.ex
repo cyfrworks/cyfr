@@ -2766,7 +2766,7 @@ defmodule Aqua.Loop do
   defp give_back(%State{spec: spec} = state, step) do
     %{id: id} = Binding.charge(step, state.turn)
 
-    Sanctum.Authority.release_charge(Sanctum.Context.actor(ctx(state)), spec.authority, id)
+    Aqua.Ops.give_back(ctx(state), spec.authority, id)
   end
 
   # The early answer, as its step's result: a step its worker dispatched

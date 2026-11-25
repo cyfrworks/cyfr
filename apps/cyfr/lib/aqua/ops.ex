@@ -52,6 +52,15 @@ defmodule Aqua.Ops do
   @spec cancel_call(term()) :: :ok
   def cancel_call(handle), do: Sanctum.RunningTasks.cancel_handle(handle)
 
+  @doc """
+  Give back the charge `charge_id` of a call that waits the loop stopped,
+  under `authority`, in `ctx`'s athanor: its owner writes it
+  (`Sanctum.Authority.release_charge/3`).
+  """
+  @spec give_back(Sanctum.Context.t(), Prima.Authority.t(), String.t()) :: :ok
+  def give_back(ctx, authority, charge_id),
+    do: Sanctum.Authority.release_charge(Sanctum.Context.actor(ctx), authority, charge_id)
+
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok
   def release_call(handle), do: Sanctum.RunningTasks.release_handle(handle)

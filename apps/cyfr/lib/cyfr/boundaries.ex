@@ -360,7 +360,7 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
+        Sanctum.Annotations Sanctum.Authority Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
         Sanctum.VirtualTools
@@ -379,7 +379,10 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Gate` is the gate a turn's tool calls pass. `Sanctum.Catalog` is the " <>
           "table's tool definitions, kinds and actions the assistant reads, and " <>
           "`Sanctum.Annotations` an action's declared kind and recovery. " <>
-          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and " <>
+          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, " <>
+          "`Sanctum.Authority` gives back the charge of a call that waits the turn's " <>
+          "loop stopped, which the stopped worker's own release skipped " <>
+          "(`release_charge/3`), and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
           "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
           "`Sanctum.SharedThreads` is the one place the person's own assistant meets a " <>
