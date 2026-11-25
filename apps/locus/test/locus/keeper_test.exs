@@ -560,6 +560,17 @@ defmodule Locus.KeeperTest do
       assert {:error, {:keeper_unavailable, {:attach_dir_not_private, ^dir}}} =
                Keeper.start_link(channel: channel, attach_dir: dir, name: :keeper_open_dir)
     end
+
+    # The role's run folder is at the same path inside its space and
+    # outside it, where cyfr-locus starts the relays: a client listens there
+    # unless told another directory.
+    test "the attach directory is the run folder cyfr-locus names, or /run/locus" do
+      assert Keeper.default_attach_dir(fn "KEEPER_RUN_DIR" -> "/run/locus/builds" end) ==
+               "/run/locus/builds"
+
+      assert Keeper.default_attach_dir(fn "KEEPER_RUN_DIR" -> nil end) == "/run/locus"
+      assert Keeper.default_attach_dir(fn "KEEPER_RUN_DIR" -> "" end) == "/run/locus"
+    end
   end
 
   describe "no credential on an exit path" do

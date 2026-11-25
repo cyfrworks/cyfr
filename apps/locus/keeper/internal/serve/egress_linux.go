@@ -66,6 +66,7 @@ func resolveHosts(hosts []string) ([]netip.Addr, string, error) {
 // *guard.Client in production.
 type routeGuard interface {
 	Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error)
+	AdmitRole(spawnID string, port uint16, private bool, netns, udp, tcp *os.File) (guard.Route, error)
 	Clear(spawnID string, r guard.Route) error
 	// Live reports whether r's connection is the live one at this instant,
 	// with no end waiting unread on it.
@@ -92,14 +93,26 @@ func (s *server) spawnEgress(req *protocol.Request) (egress, string, error) {
 	return egress{listed: true, addrs: addrs}, "", nil
 }
 
+// admitSpawn has the guard make a routed spawn's route (admitRoute): the
+// island's rule, or exactly its hosts' addresses.
+func (s *server) admitSpawn(sp *spawn, route *os.File, e egress) (string, error) {
+	reach := guard.ReachIsland
+	if e.listed {
+		reach = guard.ReachHosts
+	}
+	return s.admitRoute(route, &sp.route, func(netns, udp, tcp *os.File) (guard.Route, error) {
+		return s.guard.Admit(sp.id, reach, e.addrs, netns, udp, tcp)
+	})
+}
+
 // admitRoute takes the descriptors a routed stage handed up on route (its
 // network namespace and two name sockets) and has the guard make the
-// space's route with them. Only once the guard has said admitted, and its
-// connection has not ended since, is the route the spawn's and the stage
-// told to go on: anything else refuses the spawn, and the stage, which
-// waits for that word before it executes anything, is killed by the
-// launch's failure path.
-func (s *server) admitRoute(sp *spawn, route *os.File, e egress) (string, error) {
+// space's route with them (admit). Only once the guard has said admitted,
+// and its connection has not ended since, is the route the space's, held
+// in held, and the stage told to go on: anything else refuses the space,
+// and the stage, which waits for that word before it executes anything, is
+// killed by its starter's failure path.
+func (s *server) admitRoute(route *os.File, held **guard.Route, admit func(netns, udp, tcp *os.File) (guard.Route, error)) (string, error) {
 	if err := route.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
 		return protocol.CodeInternal, fmt.Errorf("the stage's route socket: %w", err)
 	}
@@ -112,25 +125,21 @@ func (s *server) admitRoute(sp *spawn, route *os.File, e egress) (string, error)
 			_ = f.Close()
 		}
 	}()
-	reach := guard.ReachIsland
-	if e.listed {
-		reach = guard.ReachHosts
-	}
-	r, err := s.guard.Admit(sp.id, reach, e.addrs, files[0], files[1], files[2])
+	r, err := admit(files[0], files[1], files[2])
 	if err != nil {
 		return protocol.CodeGuardUnavailable, fmt.Errorf("its route was not made: %w", err)
 	}
 	// The admitted counts only while its connection is the live one at the
 	// instant the command is released: both are decided under s.mu, which
 	// the connection's end (guardLost) takes too, so either the end comes
-	// first and the spawn is refused, or the route is recorded first and
+	// first and the space is refused, or the route is recorded first and
 	// the end kills the space.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lostRoutes[r.Conn] || !s.guard.Live(r) {
 		return protocol.CodeGuardUnavailable, errors.New("the guard's connection ended as its route was admitted")
 	}
-	sp.route = &r
+	*held = &r
 	if err := route.SetWriteDeadline(time.Now().Add(stageTimeout)); err != nil {
 		return protocol.CodeInternal, fmt.Errorf("the stage's route socket: %w", err)
 	}
@@ -193,33 +202,34 @@ func receiveDescriptors(from *os.File, want int) ([]int, error) {
 	return fds, nil
 }
 
-// withdrawRoute has the guard withdraw a retiring spawn's route once its
-// processes are gone. The route stays the keeper's until the guard says
+// withdrawRoute has the guard withdraw a space's route, held in held under
+// its id, once its processes are gone: a retiring spawn's, or an ended
+// role process's. The route stays the keeper's until the guard says
 // cleared, or its connection has ended (the guard's own rule withdraws
 // every route made over it): one the guard refuses is asked again at each
 // sweep (retryClears), and nothing counts it cleared before.
-func (s *server) withdrawRoute(sp *spawn) {
+func (s *server) withdrawRoute(id string, held **guard.Route) {
 	s.mu.Lock()
-	r := sp.route
+	r := *held
 	gone := r != nil && s.lostRoutes[r.Conn]
 	s.mu.Unlock()
 	if r == nil {
 		return
 	}
 	if !gone {
-		if err := s.guard.Clear(sp.id, *r); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
-			s.log.Warn("spawn %s: its route is not yet withdrawn, and is asked again: %v", sp.id, err)
+		if err := s.guard.Clear(id, *r); err != nil && !errors.Is(err, guard.ErrConnectionGone) {
+			s.log.Warn("space %s: its route is not yet withdrawn, and is asked again: %v", id, err)
 			s.mu.Lock()
 			if s.uncleared == nil {
 				s.uncleared = map[string]guard.Route{}
 			}
-			s.uncleared[sp.id] = *r
+			s.uncleared[id] = *r
 			s.mu.Unlock()
 			return
 		}
 	}
 	s.mu.Lock()
-	sp.route = nil
+	*held = nil
 	s.mu.Unlock()
 }
 
@@ -252,9 +262,11 @@ func (s *server) retryClears() {
 // guard withdraws every route made over it, or has lost them with its
 // namespace, and every space routed over it is killed here, before the
 // client may dial again, so none outlives the guard that held its route. A
-// spawn whose admit was answered over conn and not yet recorded is refused
+// space whose admit was answered over conn and not yet recorded is refused
 // at its recording (admitRoute). The spawns end as every killed spawn does:
-// their leaders' exits retire them.
+// their leaders' exits retire them. A role process routed over conn ends
+// the keeper, every role and spawn with it: the container starts again
+// behind a guard, and no role runs while another guard is dialled.
 func (s *server) guardLost(conn uint64) {
 	s.mu.Lock()
 	if s.lostRoutes == nil {
@@ -267,7 +279,29 @@ func (s *server) guardLost(conn uint64) {
 			routed = append(routed, sp)
 		}
 	}
+	var roles []*role
+	for _, r := range s.roles {
+		if c := r.client; c != nil && c.route != nil && c.route.Conn == conn {
+			roles = append(roles, r)
+		}
+	}
 	s.mu.Unlock()
+	if len(roles) > 0 {
+		// No role starts again from here, nor any spawn.
+		s.closing.Store(true)
+		for _, r := range roles {
+			if !r.leaf.KillBy(time.Now()) {
+				s.log.Error("role %s: processes outlived its group's kill after the guard's connection ended", r.spec.Name)
+				r.leaf.KillBy(time.Now())
+				s.exitKeeper(ExitLost)
+				return
+			}
+		}
+		defer func() {
+			s.log.Error("egress: the guard's connection %d ended under the routes of roles %s; the keeper ends", conn, roleNames(roles))
+			s.end(ExitLost)
+		}()
+	}
 	if len(routed) == 0 {
 		return
 	}

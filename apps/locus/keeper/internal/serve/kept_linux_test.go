@@ -24,6 +24,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/frame"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
+	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 )
@@ -33,9 +34,10 @@ const (
 	testKeptLast  = 39104
 )
 
-// keptKeeper is a routed bounded keeper that keeps homes under a root it
-// makes beside the scratch home root, as the shipped image does: owned by
-// root and the client's group, 1773.
+// keptKeeper is a routed bounded keeper whose role is the kept one, keeping
+// homes under a root it makes beside the scratch home root, as the shipped
+// image does: owned by root and a group no role, pool or kept home holds,
+// 1773.
 func keptKeeper(t *testing.T) *keeper {
 	t.Helper()
 	k := routedKeeper(t)
@@ -43,16 +45,14 @@ func keptKeeper(t *testing.T) *keeper {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chown(root, 0, k.s.client.GID); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Chmod(root, home.KeptRootMode.Perm()|os.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
-	if err := home.CheckKeptRoot(root, k.s.client.GID); err != nil {
+	k.s.cfg.Kept = &home.Kept{Root: root, First: testKeptFirst, Last: testKeptLast}
+	k.c.role.spec.Kept = true
+	if err := home.CheckKeptRoot(root, heldGID(k.s.cfg, []Account{k.c.role.account}, k.s.accounts)); err != nil {
 		t.Fatal(err)
 	}
-	k.s.cfg.Kept = &home.Kept{Root: root, First: testKeptFirst, Last: testKeptLast}
 	return k
 }
 
@@ -61,7 +61,7 @@ func keptKeeper(t *testing.T) *keeper {
 // the uid the draw gives the home.
 func (k *keeper) homeRequest(t *testing.T, typ, id, path string, uid int) map[string]any {
 	t.Helper()
-	k.s.handle(&protocol.Request{V: protocol.Version, Type: typ, ID: id, Home: filepath.Base(path)})
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: typ, ID: id, Home: filepath.Base(path)})
 	reply := k.reply(t)
 	if typ == protocol.TypeHomeMake && reply["type"] == protocol.TypeHomeMade && reply["uid"] != float64(uid) {
 		t.Fatalf("home_make %s of %s answered uid %v, want %d", id, path, reply["uid"], uid)
@@ -323,7 +323,7 @@ func TestAKeptHomeResetEmptiesItUnderItsUID(t *testing.T) {
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
 	// The reset's answer and its spawn's end, killed by it, come in either
 	// order.
-	k.s.handle(&protocol.Request{V: protocol.Version, Type: protocol.TypeHomeReset, ID: "x1", Home: filepath.Base(path)})
+	k.s.handle(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeReset, ID: "x1", Home: filepath.Base(path)})
 	got := map[string]map[string]any{}
 	for len(got) < 3 {
 		m := k.reply(t)
@@ -404,7 +404,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}
-	k.s.handle(resize)
+	k.s.handle(k.c, resize)
 	rc.send(t, frame.StreamStdin, []byte("\n"))
 	rc.readUntil(t, func() bool { return false })
 	if out := string(rc.got[frame.StreamStdout]); !strings.Contains(out, "24 80") || !strings.Contains(out, "50 132") {
@@ -475,7 +475,7 @@ func TestAKeptUIDIsRetiringUntilEveryProcessOfItIsGone(t *testing.T) {
 	// Released, it is retiring at once: its child outlives the grace of a
 	// SIGTERM it ignores, and the uid is no new home's until it is killed.
 	grace := int64(2000)
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawned, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawned, GraceMs: &grace})
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m3", c, uid+2); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make beside a retiring uid: %v", made)
 	}
@@ -600,7 +600,7 @@ func TestANewHomesUIDIsTheLowestNothingHolds(t *testing.T) {
 
 // channelServer is a server on one end of a socketpair, keeping homes under
 // kept, and a reader of what it sends.
-func channelServer(t *testing.T, kept *home.Kept) (*server, *protocol.LineReader) {
+func channelServer(t *testing.T, kept *home.Kept) (*server, *client, *protocol.LineReader) {
 	t.Helper()
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -608,8 +608,10 @@ func channelServer(t *testing.T, kept *home.Kept) (*server, *protocol.LineReader
 	}
 	ours, theirs := os.NewFile(uintptr(fds[0]), "channel"), os.NewFile(uintptr(fds[1]), "client-channel")
 	t.Cleanup(func() { ours.Close(); theirs.Close() })
-	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false), channel: ours}
-	return s, protocol.NewLineReader(theirs)
+	s := &server{cfg: Config{Kept: kept}, log: logx.NewWriter(io.Discard, "cyfr-locus", false)}
+	c := testClient(ours, pool.Spec{Name: "backends", Reach: pool.ReachRouted}, Account{})
+	c.role.spec.Kept = true
+	return s, c, protocol.NewLineReader(theirs)
 }
 
 // home_list answers the homes in byte order, a page of at most
@@ -630,10 +632,10 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(kept.Root, "vlt_file"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s, replies := channelServer(t, kept)
+	s, c, replies := channelServer(t, kept)
 	list := func(after string) protocol.Homes {
 		t.Helper()
-		s.handle(&protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l", After: after})
+		s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l", After: after})
 		line, _, err := replies.Next()
 		if err != nil {
 			t.Fatal(err)
@@ -657,7 +659,7 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	}
 
 	kept.Root = filepath.Join(kept.Root, "absent")
-	s.handle(&protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l"})
+	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l"})
 	line, _, _ := replies.Next()
 	if want := `{"v":5,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
 		t.Fatalf("a list of a root that cannot be read: %s", line)

@@ -20,7 +20,7 @@ import (
 // KeptRootMode is the mode the kept-homes root must have: sticky, and
 // writable and searchable but not listable by the uids that make their homes
 // in it; its owner (uid 0, the keeper, which lists it to draw a new home's
-// uid) and its group (the client's) list it.
+// uid) and its group, which no process the keeper starts holds, list it.
 const KeptRootMode = fs.ModeDir | fs.ModeSticky | 0o773
 
 // KeptHomeMode is the mode every kept home has: its own uid's alone.
@@ -153,9 +153,10 @@ func (k Kept) Taken(procRoot string) (map[int]bool, error) {
 	return taken, nil
 }
 
-// CheckKeptRoot verifies that root is a directory owned by uid 0 and the
-// group gid, with KeptRootMode.
-func CheckKeptRoot(root string, gid int) error {
+// CheckKeptRoot verifies that root is a directory owned by uid 0 with
+// KeptRootMode whose group no process the keeper starts holds (held): the
+// group's bits give it a list of every kept home.
+func CheckKeptRoot(root string, held func(gid int) bool) error {
 	info, err := os.Lstat(root)
 	if err != nil {
 		return err
@@ -164,8 +165,11 @@ func CheckKeptRoot(root string, gid int) error {
 		return fmt.Errorf("kept-homes root %s has mode %s, want %s", root, info.Mode(), KeptRootMode)
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || int(st.Gid) != gid {
-		return fmt.Errorf("kept-homes root %s must be owned by uid 0 and the client's group %d", root, gid)
+	if !ok || st.Uid != 0 {
+		return fmt.Errorf("kept-homes root %s must be owned by uid 0", root)
+	}
+	if held(int(st.Gid)) {
+		return fmt.Errorf("kept-homes root %s is of group %d, which a role, a pooled uid or a kept home holds", root, st.Gid)
 	}
 	return nil
 }
@@ -177,13 +181,21 @@ var ErrNotKeptHome = errors.New("not a kept home")
 // owned by uid with KeptHomeMode, read without following a symbolic link.
 // An absent home is fs.ErrNotExist; anything else there is ErrNotKeptHome.
 func CheckKeptHome(path string, uid int) error {
+	return CheckOwnDir(path, uid, ErrNotKeptHome)
+}
+
+// CheckOwnDir reports whether path is a directory owned by uid with mode
+// 0700 (KeptHomeMode), read without following a symbolic link: a kept home,
+// or a role's run folder. An absent one is fs.ErrNotExist; anything else
+// there is notOwn.
+func CheckOwnDir(path string, uid int, notOwn error) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || info.Mode() != KeptHomeMode || int(st.Uid) != uid {
-		return fmt.Errorf("%s: %w", path, ErrNotKeptHome)
+		return fmt.Errorf("%s: %w", path, notOwn)
 	}
 	return nil
 }

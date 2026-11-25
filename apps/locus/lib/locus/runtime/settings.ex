@@ -25,7 +25,8 @@ defmodule Locus.Runtime.Settings do
   starts its runners (`:keeper`, `:channel`: the `cyfr-locus` channel the
   image inherits; the test build alone also knows `:direct`,
   `Locus.Runtime.Keeper.direct_keeper/0`), where the keeper's relays
-  attach (`:attach_dir`, `/run/locus`), the memory bound of every
+  attach (`:attach_dir`, the role's run folder as
+  `Locus.Keeper.default_attach_dir/1` reads it), the memory bound of every
   runner `cyfr-locus` starts (`:runner_memory_bytes`, 384 MiB) and its
   CPU quota (`:runner_cpu_quota`, 100000 microseconds of every 100000,
   one CPU: `Locus.Config.cpu_quota_range/0`); each
@@ -71,7 +72,6 @@ defmodule Locus.Runtime.Settings do
     idle_ttl_ms: 30_000,
     watchdog_grace_ms: 5_000,
     release_grace_ms: 2_000,
-    attach_dir: "/run/locus",
     runner_memory_bytes: 402_653_184,
     runner_cpu_quota: 100_000
   }
@@ -123,7 +123,6 @@ defmodule Locus.Runtime.Settings do
           | :idle_ttl_ms
           | :watchdog_grace_ms
           | :release_grace_ms
-          | :attach_dir
           | :runner_memory_bytes
           | :runner_cpu_quota
         ) :: pos_integer() | String.t()
@@ -142,16 +141,16 @@ defmodule Locus.Runtime.Settings do
   @spec pool(keyword(), %{optional(String.t()) => String.t()}) ::
           {:ok, pool()} | {:error, pool_refusal()}
   def pool(env, system) when is_list(env) and is_map(system) do
-    with :ok <- no_unknown(system), do: pool_of(env)
+    with :ok <- no_unknown(system), do: pool_of(env, system)
   end
 
-  defp pool_of(env) do
+  defp pool_of(env, system) do
     with {:ok, size} <- positive(env, :pool_size),
          {:ok, idle} <- positive(env, :idle_ttl_ms),
          {:ok, watchdog} <- positive(env, :watchdog_grace_ms),
          {:ok, release} <- positive(env, :release_grace_ms),
          {:ok, keeper} <- keeper(Keyword.get(env, :keeper)),
-         {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir)),
+         {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir), system),
          {:ok, memory_bytes} <- runner_memory_bytes(env),
          {:ok, cpu_quota} <- runner_cpu_quota(env) do
       {:ok,
@@ -266,15 +265,16 @@ defmodule Locus.Runtime.Settings do
     end
   end
 
-  defp attach_dir(nil), do: {:ok, default(:attach_dir)}
+  defp attach_dir(nil, system),
+    do: attach_dir(Locus.Keeper.default_attach_dir(&Map.get(system, &1)), system)
 
-  defp attach_dir(dir) when is_binary(dir) do
+  defp attach_dir(dir, _system) when is_binary(dir) do
     if Path.type(dir) == :absolute and dir == Path.expand(dir),
       do: {:ok, dir},
       else: {:error, {:malformed, :attach_dir}}
   end
 
-  defp attach_dir(_dir), do: {:error, {:malformed, :attach_dir}}
+  defp attach_dir(_dir, _system), do: {:error, {:malformed, :attach_dir}}
 
   @doc "What a well-formed value of the pool setting `key` is, for the message that refuses one."
   @spec expected(atom()) :: String.t()

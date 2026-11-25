@@ -3,12 +3,14 @@
 
 // Package relay carries one spawned process's stdio, its control channel
 // when it has one and its relay when it is a relay space, between its pipes and
-// sockets and the client. `cyfr-locus relay` runs as the client's user,
+// sockets and the client, the role's process that asked for the spawn.
+// `cyfr-locus relay` runs as that role's uid, outside the role's space,
 // holding the parent ends of the backend's pipes; it connects to the
-// client's attach socket, presents the spawn's token and then frames the
-// streams (package frame) over that one connection. The client therefore
-// reaches a backend's stdio without ever sharing its uid, and the keeper
-// never reads backend output.
+// client's attach socket in the role's run folder, which is at the same
+// path inside the space and outside it, presents the spawn's token and then
+// frames the streams (package frame) over that one connection. The client
+// therefore reaches a backend's stdio without ever sharing its uid, and the
+// keeper never reads backend output.
 package relay
 
 import (

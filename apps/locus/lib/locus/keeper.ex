@@ -260,6 +260,7 @@ defmodule Locus.Keeper do
 
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
+  @run_dir_env "KEEPER_RUN_DIR"
   # A home request runs a helper as the home's uid; a retirement ends every
   # process of the uid with a grace and scrubs it, which takes passes.
   @home_timeout_ms 120_000
@@ -307,10 +308,25 @@ defmodule Locus.Keeper do
   @doc """
   Starts the client. Options: `:channel`, a connected `:socket` to use in
   place of fd 3; `:attach_dir`, a directory only this node's user can
-  enter (default `#{@attach_dir}`); `:name`.
+  enter (default `default_attach_dir/1`'s); `:name`.
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+  end
+
+  @doc """
+  The directory a client listens in for its spawns' relays unless told
+  another, over `getenv`, which reads a variable as `System.get_env/1`
+  does: the role's run folder cyfr-locus names in `KEEPER_RUN_DIR`, which
+  is at the same path inside the role's space and outside it, where the
+  relays run; `#{@attach_dir}` where it names none.
+  """
+  @spec default_attach_dir((String.t() -> String.t() | nil)) :: Path.t()
+  def default_attach_dir(getenv \\ &System.get_env/1) when is_function(getenv, 1) do
+    case getenv.(@run_dir_env) do
+      dir when is_binary(dir) and dir != "" -> dir
+      _ -> @attach_dir
+    end
   end
 
   @doc "The environment variable cyfr-locus names the inherited channel in."
@@ -924,7 +940,8 @@ defmodule Locus.Keeper do
     Process.flag(:trap_exit, true)
 
     with {:ok, channel} <- open_channel(opts),
-         {:ok, listener, path} <- listen(Keyword.get(opts, :attach_dir, @attach_dir)) do
+         {:ok, listener, path} <-
+           listen(Keyword.get_lazy(opts, :attach_dir, &default_attach_dir/0)) do
       server = self()
 
       {:ok,

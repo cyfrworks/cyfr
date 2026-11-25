@@ -93,12 +93,24 @@ type routeCall struct {
 	spawnID string
 	reach   string
 	addrs   []netip.Addr
+	port    uint16
+	private bool
 	conn    uint64
 }
 
 func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error) {
+	return g.admit(routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs}, netns, udp, tcp)
+}
+
+func (g *fakeRouteGuard) AdmitRole(spawnID string, port uint16, private bool, netns, udp, tcp *os.File) (guard.Route, error) {
+	return g.admit(routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: guard.ReachRole, port: port, private: private}, netns, udp, tcp)
+}
+
+func (g *fakeRouteGuard) admit(call routeCall, netns, udp, tcp *os.File) (guard.Route, error) {
+	spawnID := call.spawnID
 	g.mu.Lock()
-	g.calls = append(g.calls, routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs, conn: g.conn})
+	call.conn = g.conn
+	g.calls = append(g.calls, call)
 	hold, before, refuse, conn := g.hold, g.before, g.refuse, g.conn
 	g.mu.Unlock()
 	if err := checkSpaceDescriptors(netns, udp, tcp); err != nil {

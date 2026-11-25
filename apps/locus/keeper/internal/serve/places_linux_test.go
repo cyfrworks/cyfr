@@ -50,15 +50,14 @@ func placesKeeper(t *testing.T) (*keeper, *os.File) {
 		log:       logx.NewWriter(os.Stderr, "cyfr-locus", false),
 		pools:     map[string]*pool.Pool{},
 		spawns:    map[string]*spawn{},
-		places:    map[string]*place{},
 		unremoved: map[*spawn]*removal{},
 		waiters:   map[int]*child{},
-		channel:   ours,
 	}
+	c := testClient(ours, pool.Spec{Name: "runner"}, Account{})
 	done := make(chan struct{})
-	go func() { s.serveChannel(); close(done) }()
+	go func() { s.serveChannel(c); close(done) }()
 	t.Cleanup(func() { theirs.Close(); <-done; ours.Close() })
-	return &keeper{s: s, channel: protocol.NewLineReader(theirs)}, theirs
+	return &keeper{s: s, c: c, channel: protocol.NewLineReader(theirs)}, theirs
 }
 
 // write sends the lines in one write, as a client sends requests at once.
@@ -92,9 +91,10 @@ func (k *keeper) expect(t *testing.T, want ...any) {
 // that claimed it is made in it and held once it starts.
 func (k *keeper) spawnedIn(t *testing.T, id string, sp *spawn) {
 	t.Helper()
-	if k.s.claimPlace(id) == nil {
+	if k.s.claimPlace(k.c, id) == nil {
 		t.Fatalf("place %s cannot be claimed", id)
 	}
+	sp.client = k.c
 	k.s.madeIn(id, sp)
 	k.s.mu.Lock()
 	k.s.spawns[sp.id] = sp
@@ -293,7 +293,7 @@ func TestAReadingOfASpawnGoneIsNotStored(t *testing.T) {
 	// place, and the place's id is placed again for another.
 	k.s.mu.Lock()
 	delete(k.s.spawns, gone.id)
-	delete(k.s.places, gone.place)
+	delete(k.c.places, gone.place)
 	k.s.mu.Unlock()
 	write(t, client, `{"v":5,"type":"place","id":"p","kind":"build"}`)
 	k.expect(t, protocol.NewPlaced("p"))
@@ -315,7 +315,7 @@ func TestASpawnNamingAPlaceNotHeldOrNamedIsRefusedAndStartsNothing(t *testing.T)
 	for _, c := range []struct{ id, place string }{{"b", "absent"}, {"c", "a"}} {
 		req := spawnRequest(t, k.attach, c.id, "exec sleep 60", map[string]string{}, false, 64<<20)
 		req.Place = c.place
-		k.s.handleSpawn(req)
+		k.s.handleSpawn(k.c, req)
 		k.expect(t, protocol.NewError(c.id, "", protocol.CodeBadRequest))
 	}
 	k.s.mu.Lock()
@@ -346,9 +346,9 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
 		t.Fatalf("home_make: %v", made)
 	}
-	k.s.handle(parsed(t, `{"v":5,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
+	k.s.handle(k.c, parsed(t, `{"v":5,"type":"place","id":"pl","kind":"program","athanor":"ath-1","subject":"mcp-1"}`))
 	k.expect(t, protocol.NewPlaced("pl"))
-	k.s.handleSpawn(keptRequest(t, k.attach, "pl", "exec "+k.helper+" hold 4 60", path, nil))
+	k.s.handleSpawn(k.c, keptRequest(t, k.attach, "pl", "exec "+k.helper+" hold 4 60", path, nil))
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("spawn: %v", spawned)
@@ -365,9 +365,9 @@ func TestAPlaceIsMeasuredFromItsSpawnUntilItsRelease(t *testing.T) {
 
 	// The assign is answered and the drop is not: the next reply after the
 	// assign's is the measure's.
-	k.s.handle(parsed(t, `{"v":5,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
+	k.s.handle(k.c, parsed(t, `{"v":5,"type":"assign","id":"as","place":"pl","kind":"terminal","athanor":"ath-2"}`))
 	k.expect(t, protocol.NewAssigned("as"))
-	k.s.handle(parsed(t, `{"v":5,"type":"drop","place":"pl"}`))
+	k.s.handle(k.c, parsed(t, `{"v":5,"type":"drop","place":"pl"}`))
 	whose = protocol.Whose{Kind: protocol.KindTerminal, Athanor: "ath-2"}
 	sameReading := func(when string) {
 		t.Helper()
@@ -460,7 +460,7 @@ func TestAHeldReadDelaysNoOtherSpawnsReading(t *testing.T) {
 // reader's pass over a spawn whose group went ends so and stores nothing.
 func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
 	k := boundedKeeper(t)
-	group, err := k.s.memory.Create(cgroup.SpawnName(randomHex(16)), 64<<20, protocol.CPUPeriod)
+	group, err := k.c.role.groups.Create(cgroup.SpawnName(randomHex(16)), 64<<20, protocol.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
 	t.Cleanup(func() {
 		k.s.mu.Lock()
 		delete(k.s.spawns, sp.id)
-		delete(k.s.places, sp.place)
+		delete(k.c.places, sp.place)
 		k.s.mu.Unlock()
 	})
 	if err := group.Remove(); err != nil {
@@ -633,7 +633,7 @@ func TestASpawnWhoseGroupStaysKeepsItsPlaceUntilARetryRemovesIt(t *testing.T) {
 			if m := k.measure(t, "a"); m["type"] != protocol.TypeError || m["code"] != protocol.CodeUnmeasured {
 				t.Fatalf("a released spawn's place was measured %v", m)
 			}
-			if _, err := os.Stat(filepath.Join(cgroup.Root, group)); err == nil {
+			if _, err := os.Stat(filepath.Join(k.c.role.groups.Dir(), group)); err == nil {
 				t.Fatalf("group %s outlived the retry that removed it", group)
 			}
 			if !kept {
@@ -699,7 +699,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			spawnID := k.refusedMade(t, "r", protocol.CodeExecFailed)
 			k.s.mu.Lock()
 			var made *spawn
-			if p := k.s.places["r"]; p != nil {
+			if p := k.c.places["r"]; p != nil {
 				made = p.spawn
 			}
 			k.s.mu.Unlock()

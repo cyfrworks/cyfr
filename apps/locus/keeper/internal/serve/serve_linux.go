@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -38,13 +39,14 @@ import (
 
 // Exit statuses of `cyfr-locus serve`.
 const (
-	// ExitStopped follows a termination signal forwarded to the client.
+	// ExitStopped follows a termination signal forwarded to every role.
 	ExitStopped = 0
 	// ExitUsage reports a malformed command line.
 	ExitUsage = 64
-	// ExitLost reports that the client or its channel went away unasked.
+	// ExitLost reports the guard's loss under a role's route, or a role's
+	// spawns that did not retire.
 	ExitLost = 70
-	// ExitStart reports that the client could not be started.
+	// ExitStart reports that a role could not be started at the boot.
 	ExitStart = 71
 	// ExitConfig reports a privilege or environment the keeper refuses.
 	ExitConfig = 78
@@ -67,7 +69,17 @@ const (
 	// writeTimeout bounds one reply; a client that stops reading for this
 	// long is treated as lost.
 	writeTimeout = 30 * time.Second
+	// retireTimeout bounds the retirement of a role's spawns at its end, and
+	// of every spawn at the keeper's.
+	retireTimeout = 30 * time.Second
 )
+
+// restartAfter is how long a role's process waits after its end before it
+// starts again; a variable so a test can shorten it.
+var restartAfter = time.Second
+
+// RunRoot holds each role's run folder, named for the role.
+const RunRoot = "/run/locus"
 
 // Main runs `cyfr-locus serve` with the arguments after the subcommand.
 func Main(args []string) int {
@@ -79,6 +91,26 @@ func Main(args []string) int {
 	}
 	if err := CheckEnviron(os.Environ()); err != nil {
 		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
+	environ := os.Environ()
+	limits := make([]cgroup.Limits, len(cfg.Roles))
+	var keyed []int
+	for i, r := range cfg.Roles {
+		if limits[i], err = RoleLimits(environ, r); err != nil {
+			log.Error("refusing to start: role %s: %v", r.Name, err)
+			return ExitConfig
+		}
+		if Keyed(environ, r) {
+			keyed = append(keyed, i)
+		}
+	}
+	if len(keyed) == 0 {
+		keys := make([]string, len(cfg.Roles))
+		for i, r := range cfg.Roles {
+			keys[i] = r.KeyEnv()
+		}
+		log.Error("refusing to start: no role's key is set (%s), so no role would run", strings.Join(keys, ", "))
 		return ExitConfig
 	}
 
@@ -106,11 +138,16 @@ func Main(args []string) int {
 		log.Error("refusing to start: PR_SET_CHILD_SUBREAPER: %v", err)
 		return ExitConfig
 	}
-	if err := home.CheckRoot(cfg.HomeRoot); err != nil {
-		log.Error("refusing to start: %v", err)
-		return ExitConfig
+	var homeRoots []string
+	for _, r := range cfg.Roles {
+		root := filepath.Join(cfg.HomeRoot, r.Name)
+		if err := home.CheckRoot(root); err != nil {
+			log.Error("refusing to start: role %s's spawns' homes: %v", r.Name, err)
+			return ExitConfig
+		}
+		homeRoots = append(homeRoots, root)
 	}
-	client, accounts, err := ResolveAccounts(cfg, SystemLookup)
+	roleAccounts, accounts, err := ResolveAccounts(cfg, SystemLookup)
 	if err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -122,13 +159,13 @@ func Main(args []string) int {
 	}
 	keptRoot := ""
 	if cfg.Kept != nil {
-		if err := home.CheckKeptRoot(cfg.Kept.Root, client.GID); err != nil {
+		if err := home.CheckKeptRoot(cfg.Kept.Root, heldGID(cfg, roleAccounts, accounts)); err != nil {
 			log.Error("refusing to start: %v", err)
 			return ExitConfig
 		}
 		keptRoot = cfg.Kept.Root
 	}
-	if err := residue.CheckMounts(mounts, cfg.HomeRoot, keptRoot, PoolAccounts(accounts)); err != nil {
+	if err := residue.CheckMounts(mounts, homeRoots, keptRoot, PoolAccounts(accounts)); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
@@ -160,43 +197,100 @@ func Main(args []string) int {
 		cfg:       cfg,
 		log:       log,
 		self:      self,
-		client:    client,
 		accounts:  accounts,
 		roots:     roots,
+		runRoot:   RunRoot,
 		pools:     map[string]*pool.Pool{},
 		spawns:    map[string]*spawn{},
-		places:    map[string]*place{},
 		unremoved: map[*spawn]*removal{},
 		waiters:   map[int]*child{},
 		keptLive:  map[int]int{},
 		keptOps:   map[int]*sync.Mutex{},
+		ended:     make(chan struct{}),
 	}
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
 	}
-	if cfg.Guard != "" {
-		netns, err := os.Readlink("/proc/self/ns/net")
-		if err != nil {
-			log.Error("refusing to start: reading this network namespace: %v", err)
+	netns, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		log.Error("refusing to start: reading this network namespace: %v", err)
+		return ExitConfig
+	}
+	s.guard = guard.NewClient(cfg.Guard, netns, s.guardLost)
+	for _, spec := range cfg.Pools {
+		if spec.Routed() {
+			if err := s.proveGuard(spec); err != nil {
+				log.Error("refusing to start: %v", err)
+				return ExitConfig
+			}
+			break
+		}
+	}
+	log.Info("egress: every routed space's route is made by the guard on %s before it starts", cfg.Guard)
+	memory, err := delegateMemory()
+	if err != nil {
+		log.Error("refusing to start: every role and spawn is held in a cgroup group of its own, and none can be made here: %v", err)
+		return ExitConfig
+	}
+	log.Info("memory and CPU bounds are enforced: a cgroup under %s for each role and each spawn", cgroup.Root)
+	for _, i := range keyed {
+		spec, _ := poolOf(cfg.Pools, cfg.Roles[i].Pool)
+		r := &role{
+			spec:     cfg.Roles[i],
+			pool:     spec,
+			account:  roleAccounts[i],
+			runDir:   filepath.Join(s.runRoot, cfg.Roles[i].Name),
+			homeRoot: filepath.Join(cfg.HomeRoot, cfg.Roles[i].Name),
+		}
+		if r.groups, r.leaf, err = memory.Role(r.spec.Name, limits[i]); err != nil {
+			log.Error("refusing to start: role %s's group: %v", r.spec.Name, err)
 			return ExitConfig
 		}
-		s.guard = guard.NewClient(cfg.Guard, netns, s.guardLost)
-		for _, spec := range cfg.Pools {
-			if spec.Routed() {
-				if err := s.proveGuard(spec); err != nil {
-					log.Error("refusing to start: %v", err)
-					return ExitConfig
-				}
-				break
-			}
-		}
-		log.Info("egress: every routed space's route is made by the guard on %s before it starts", cfg.Guard)
+		log.Info("role %s: memory %s, processors %s", r.spec.Name, describeBytes(limits[i].MemoryBytes), describeQuota(limits[i].CPUQuota))
+		s.roles = append(s.roles, r)
 	}
-	s.memory = delegateMemory(log)
+	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
 	return s.run()
 }
 
-// spaceAttr is how the keeper starts every spawn's stage: in a session of
+// heldGID says whether a gid is held by a process the keeper starts: a
+// role's, a pooled uid's or a kept home's.
+func heldGID(cfg Config, roles []Account, accounts map[int]Account) func(gid int) bool {
+	return func(gid int) bool {
+		for _, r := range roles {
+			if r.GID == gid {
+				return true
+			}
+		}
+		for _, a := range accounts {
+			if a.GID == gid {
+				return true
+			}
+		}
+		return cfg.Kept != nil && cfg.Kept.Contains(gid)
+	}
+}
+
+// describeBytes and describeQuota say a role's bound for the log.
+func describeBytes(n uint64) string {
+	if n == 0 {
+		return "unbounded"
+	}
+	return strconv.FormatUint(n, 10) + " bytes and as much swap"
+}
+
+func describeQuota(q uint64) string {
+	if q == 0 {
+		return "unbounded"
+	}
+	return strconv.FormatFloat(float64(q)/cgroup.CPUPeriod, 'f', -1, 64)
+}
+
+// spaceAttr is how the keeper starts every space's stage, a spawn's and a
+// role process's alike: in a session of
 // its own, killed if this keeper dies, cloned into a new user, network and
 // IPC namespace, which takes no capability of the keeper's own namespace,
 // and holding as ambient capabilities, inside that namespace only, what the
@@ -446,21 +540,14 @@ func (s *server) proveGuard(spec pool.Spec) error {
 	return nil
 }
 
-// delegateMemory prepares the keeper's cgroup for spawns bounded in memory
-// and CPU, or reports why spawns will be refused here.
-func delegateMemory(log *logx.Logger) *cgroup.Manager {
+// delegateMemory prepares the keeper's cgroup for its roles' and spawns'
+// groups, or says why it cannot.
+func delegateMemory() (*cgroup.Manager, error) {
 	self, err := os.ReadFile(cgroup.SelfPath)
 	if err != nil {
-		log.Info("memory and CPU bounds are unavailable; spawns are refused: %v", err)
-		return nil
+		return nil, err
 	}
-	m, err := cgroup.Delegate(cgroup.Root, self)
-	if err != nil {
-		log.Info("memory and CPU bounds are unavailable; spawns are refused: %v", err)
-		return nil
-	}
-	log.Info("memory and CPU bounds are enforced: a cgroup under %s for each spawn", cgroup.Root)
-	return m
+	return cgroup.Delegate(cgroup.Root, self)
 }
 
 // child is a process this keeper started and will reap.
@@ -483,7 +570,11 @@ func (c *child) reaped() bool {
 // kept spawn runs under its kept home's uid in that home, and has no pool:
 // several kept spawns may share a uid, and the uid is never a pool's.
 type spawn struct {
-	id      string
+	id string
+	// client is the start of the role process that asked for it: its
+	// replies and reports go to that one's channel, its place is among
+	// that one's, and that one's end retires it.
+	client  *client
 	pool    *pool.Pool
 	kept    bool
 	account Account
@@ -523,29 +614,62 @@ type spawn struct {
 	retireOnce sync.Once
 }
 
+// role is one role the keeper runs: its spec and account, its run folder,
+// the folder its spawns' homes are made in, its groups and its process.
+type role struct {
+	spec     RoleSpec
+	pool     pool.Spec
+	account  Account
+	runDir   string
+	homeRoot string
+	// groups makes the role's spawns' groups, inside the role's own group;
+	// nil where none can be made, and every spawn is refused. leaf is the
+	// role's group's leaf, which holds its process and its relays.
+	groups *cgroup.Manager
+	leaf   *cgroup.Group
+	// client is the role's process standing, nil from its end until it is
+	// started again; s.mu guards it.
+	client *client
+}
+
+// client is one start of a role's process: its space's stage, its channel,
+// and what it holds, which goes with it at its end.
+type client struct {
+	role *role
+	// id names its route at the guard.
+	id      string
+	proc    *child
+	channel *os.File
+	writeMu sync.Mutex
+	// places are the places it holds, by its own ids; route is its space's
+	// route once admitted; ended says its end has begun, from which no
+	// spawn is held for it. s.mu guards the three.
+	places map[string]*place
+	route  *guard.Route
+	ended  bool
+}
+
 type server struct {
 	cfg      Config
 	log      *logx.Logger
 	self     string
-	client   Account
 	accounts map[int]Account
 	// roots are the writable mounts and the mqueue mount a pooled uid can
 	// leave something behind in.
 	roots residue.Roots
-	// memory makes the cgroups of memory-bounded spawns; nil where the
-	// keeper cannot, and a spawn asking for a bound is refused.
-	memory *cgroup.Manager
-	// guard makes each routed space's route (--guard); nil for a keeper
-	// whose pools are all relay pools.
+	// guard makes each routed space's route (--guard).
 	guard routeGuard
+	// roles are the roles the keeper runs, one for each key it was given,
+	// and runRoot holds their run folders.
+	roles   []*role
+	runRoot string
 
-	// mu guards pools, spawns, places, unremoved and waiters, and is held
-	// across every fork, reap and signal, so a pid is never signalled after
-	// it was reaped.
+	// mu guards pools, spawns, every client's places, unremoved and
+	// waiters, and is held across every fork, reap and signal, so a pid is
+	// never signalled after it was reaped.
 	mu     sync.Mutex
 	pools  map[string]*pool.Pool
 	spawns map[string]*spawn
-	places map[string]*place
 	// unremoved holds every retired spawn whose group could not be removed,
 	// out of spawns, with what its retirement leaves to the retry that
 	// removes the group: until then its place stays, read as a live
@@ -589,78 +713,67 @@ type server struct {
 	keptMaking      map[int]bool
 	homeOps         map[string]*sync.Mutex
 
-	channel  *os.File
-	writeMu  sync.Mutex
 	stopping atomic.Bool
 	closing  atomic.Bool
+	// ended closes when the keeper must end with endCode: the guard was
+	// lost under a role's route, or a role's spawns did not retire.
+	ended   chan struct{}
+	endOnce sync.Once
+	endCode int
 }
 
 func (s *server) run() int {
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		s.log.Error("socketpair: %v", err)
-		return ExitStart
-	}
-	if err := unix.SetNonblock(fds[0], true); err != nil {
-		s.log.Error("socketpair: %v", err)
-		return ExitStart
-	}
-	s.channel = os.NewFile(uintptr(fds[0]), "channel")
-	theirs := os.NewFile(uintptr(fds[1]), "client-channel")
-
 	sigchld := make(chan os.Signal, 1)
 	signal.Notify(sigchld, unix.SIGCHLD)
 	stop := make(chan os.Signal, 4)
 	signal.Notify(stop, unix.SIGTERM, unix.SIGINT, unix.SIGHUP)
 	go s.reaper(sigchld)
 
-	argv0, err := lookPathIn(s.cfg.ClientArgv[0], os.Getenv("PATH"))
-	if err != nil {
-		s.log.Error("client command: %v", err)
-		return ExitStart
+	// A role that cannot start at the boot refuses the boot by its name.
+	for _, r := range s.roles {
+		c, err := s.startRole(r)
+		if err != nil {
+			s.log.Error("refusing to start: role %s: %v", r.spec.Name, err)
+			s.closing.Store(true)
+			s.endRoles()
+			return ExitStart
+		}
+		s.mu.Lock()
+		r.client = c
+		s.mu.Unlock()
+		s.log.Info("role %s: pid %d started as %s; pool %s", r.spec.Name, c.proc.pid, r.account.Name, r.spec.Pool)
 	}
-	channelID, err := socketID(theirs)
-	if err != nil {
-		s.log.Error("socketpair: %v", err)
-		return ExitStart
-	}
-	clientProc, err := s.start(argv0, s.cfg.ClientArgv, ClientEnviron(os.Environ(), s.client, channelID),
-		[]uintptr{0, 1, 2, theirs.Fd()}, s.client.UID, s.client.GID, "")
-	theirs.Close()
-	if err != nil {
-		s.log.Error("starting the client: %v", err)
-		return ExitStart
-	}
-	s.log.Info("client pid %d started as %s; pools %v", clientProc.pid, s.client.Name, s.cfg.Pools)
 
-	lost := make(chan struct{})
-	go func() {
-		s.serveChannel()
-		close(lost)
-	}()
 	go s.sweeper()
 	reading := make(chan struct{})
 	defer close(reading)
 	go s.reader(reading)
+	done := make(chan struct{}, len(s.roles))
+	for _, r := range s.roles {
+		go func() {
+			s.keepRole(r)
+			done <- struct{}{}
+		}()
+	}
 
+	running := len(s.roles)
 loop:
-	for {
+	for running > 0 {
 		select {
 		case sig := <-stop:
 			if sig != unix.SIGHUP {
 				s.stopping.Store(true)
 			}
-			s.signalChild(clientProc, sig.(syscall.Signal))
-		case <-lost:
-			break loop
-		case <-clientProc.done:
+			s.signalRoles(sig.(syscall.Signal))
+		case <-done:
+			running--
+		case <-s.ended:
 			break loop
 		}
 	}
 
 	s.closing.Store(true)
-	_ = s.channel.Close()
-	s.signalChild(clientProc, unix.SIGKILL)
+	s.endRoles()
 	s.mu.Lock()
 	live := make([]*spawn, 0, len(s.spawns))
 	for _, sp := range s.spawns {
@@ -670,22 +783,41 @@ loop:
 	for _, sp := range live {
 		s.retire(sp, lostGrace, false)
 	}
-	deadline := time.After(30 * time.Second)
-	for _, sp := range live {
+	if !s.awaitRetired(live) {
+		s.log.Error("retirement did not finish within %v", retireTimeout)
+		return ExitLost
+	}
+	select {
+	case <-s.ended:
+		s.log.Error("every role and spawn ended")
+		return s.endCode
+	default:
+	}
+	s.log.Info("stopped")
+	return ExitStopped
+}
+
+// end has the keeper end with code, once: every role and spawn ends first.
+func (s *server) end(code int) {
+	s.endOnce.Do(func() {
+		s.endCode = code
+		s.closing.Store(true)
+		close(s.ended)
+	})
+}
+
+// awaitRetired waits retireTimeout at most for every one of spawns to be
+// retired, and says whether they were.
+func (s *server) awaitRetired(spawns []*spawn) bool {
+	deadline := time.After(retireTimeout)
+	for _, sp := range spawns {
 		select {
 		case <-sp.retired:
 		case <-deadline:
-			s.log.Error("retirement did not finish within 30s")
-			return ExitLost
+			return false
 		}
 	}
-
-	if s.stopping.Load() {
-		s.log.Info("stopped")
-		return ExitStopped
-	}
-	s.log.Error("client channel lost; every spawn retired")
-	return ExitLost
+	return true
 }
 
 // reaper collects every exited child, including orphans reparented to this
@@ -755,25 +887,26 @@ func (s *server) signalChild(c *child, sig syscall.Signal) {
 	}
 }
 
-func (s *server) serveChannel() {
-	lr := protocol.NewLineReader(s.channel)
+// serveChannel answers c's requests until its channel ends.
+func (s *server) serveChannel(c *client) {
+	lr := protocol.NewLineReader(c.channel)
 	for {
 		line, tooLong, err := lr.Next()
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
-				s.log.Error("reading the channel: %v", err)
+				s.log.Error("reading role %s's channel: %v", c.role.spec.Name, err)
 			}
 			return
 		}
 		if tooLong {
 			s.log.Warn("refused a request longer than %d bytes", protocol.MaxLineBytes)
-			s.send(protocol.NewError("", "", protocol.CodeBadRequest))
+			s.send(c, protocol.NewError("", "", protocol.CodeBadRequest))
 			continue
 		}
 		req, rerr := protocol.ParseRequest(line)
 		if rerr != nil {
 			s.log.Warn("refused a request: %s", rerr.Detail)
-			s.send(rerr.Reply())
+			s.send(c, rerr.Reply())
 			continue
 		}
 		// A place, a drop and an assign are applied here, before the next
@@ -782,74 +915,95 @@ func (s *server) serveChannel() {
 		// Every other request runs on a goroutine of its own.
 		switch req.Type {
 		case protocol.TypePlace, protocol.TypeDrop, protocol.TypeAssign:
-			s.handle(req)
+			s.handle(c, req)
 		default:
-			go s.handle(req)
+			go s.handle(c, req)
 		}
 	}
 }
 
-func (s *server) send(reply any) {
+// send writes reply to c's channel: every reply goes to the channel its
+// request came on, every report of a spawn to its client's.
+func (s *server) send(c *client, reply any) {
 	line, err := protocol.Encode(reply)
 	if err != nil {
 		s.log.Error("encoding a reply: %v", err)
 		return
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	_ = s.channel.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if _, err := s.channel.Write(line); err != nil && !errors.Is(err, os.ErrClosed) {
-		s.log.Error("writing the channel: %v", err)
-		_ = s.channel.Close()
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_ = c.channel.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if _, err := c.channel.Write(line); err != nil && !errors.Is(err, os.ErrClosed) {
+		s.log.Error("writing role %s's channel: %v", c.role.spec.Name, err)
+		_ = c.channel.Close()
 	}
 }
 
-func (s *server) handle(req *protocol.Request) {
+func (s *server) handle(c *client, req *protocol.Request) {
 	switch req.Type {
 	case protocol.TypePlace:
-		s.handlePlace(req)
+		s.handlePlace(c, req)
 	case protocol.TypeDrop:
-		s.handleDrop(req)
+		s.handleDrop(c, req)
 	case protocol.TypeAssign:
-		s.handleAssign(req)
+		s.handleAssign(c, req)
 	case protocol.TypeSpawn:
-		s.handleSpawn(req)
+		s.handleSpawn(c, req)
 	case protocol.TypeSignal:
-		s.handleSignal(req)
+		s.handleSignal(c, req)
 	case protocol.TypeResize:
-		s.handleResize(req)
+		s.handleResize(c, req)
 	case protocol.TypeRelease:
-		s.handleRelease(req)
+		s.handleRelease(c, req)
 	case protocol.TypePool:
-		s.handlePool(req)
+		s.handlePool(c, req)
 	case protocol.TypeMeasure:
-		s.handleMeasure(req)
+		s.handleMeasure(c, req)
 	case protocol.TypeHomeMake, protocol.TypeHomeMeasure, protocol.TypeHomeReset, protocol.TypeHomeRetire:
-		s.handleHome(req)
+		s.handleHome(c, req)
 	case protocol.TypeHomeList:
-		s.handleHomeList(req)
+		s.handleHomeList(c, req)
 	}
 }
 
-func (s *server) handlePool(req *protocol.Request) {
+// heldSpawn is the spawn id when c holds it, nil for one another role
+// holds as for one the keeper does not; s.mu is held.
+func (s *server) heldSpawn(c *client, id string) *spawn {
+	if sp := s.spawns[id]; sp != nil && sp.client == c {
+		return sp
+	}
+	return nil
+}
+
+// poolOf is c's role's pool spec when it is named name: another role's
+// pool is unknown to c as one the keeper does not serve.
+func (c *client) poolOf(name string) (pool.Spec, bool) {
+	if name != c.role.pool.Name {
+		return pool.Spec{}, false
+	}
+	return c.role.pool, true
+}
+
+func (s *server) handlePool(c *client, req *protocol.Request) {
+	_, known := c.poolOf(req.Pool)
 	s.mu.Lock()
 	p := s.pools[req.Pool]
 	var st pool.Stats
-	if p != nil {
+	if known && p != nil {
 		st = p.Stats()
 	}
 	s.mu.Unlock()
-	if p == nil {
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnknownPool))
+	if !known || p == nil {
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnknownPool))
 		return
 	}
-	s.send(protocol.NewPoolReply(req.ID, req.Pool, st.Size, st.Free, st.Quarantined))
+	s.send(c, protocol.NewPoolReply(req.ID, req.Pool, st.Size, st.Free, st.Quarantined))
 }
 
-func (s *server) handleSignal(req *protocol.Request) {
+func (s *server) handleSignal(c *client, req *protocol.Request) {
 	sig := signalNumbers[req.Sig]
 	s.mu.Lock()
-	sp := s.spawns[req.SpawnID]
+	sp := s.heldSpawn(c, req.SpawnID)
 	running := sp != nil && sp.leader != nil && !sp.leader.reaped()
 	if running {
 		_ = unix.Kill(-sp.leader.pid, sig)
@@ -857,17 +1011,17 @@ func (s *server) handleSignal(req *protocol.Request) {
 	s.mu.Unlock()
 	switch {
 	case sp == nil:
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
+		s.send(c, protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
 	case !running:
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeNotRunning))
+		s.send(c, protocol.NewError("", req.SpawnID, protocol.CodeNotRunning))
 	}
 }
 
 // handleResize sets the size of a spawn's pseudo-terminal; the kernel
 // signals SIGWINCH to the terminal's foreground process group.
-func (s *server) handleResize(req *protocol.Request) {
+func (s *server) handleResize(c *client, req *protocol.Request) {
 	s.mu.Lock()
-	sp := s.spawns[req.SpawnID]
+	sp := s.heldSpawn(c, req.SpawnID)
 	hasPty := sp != nil && sp.pty != nil
 	var err error
 	if hasPty {
@@ -876,12 +1030,12 @@ func (s *server) handleResize(req *protocol.Request) {
 	s.mu.Unlock()
 	switch {
 	case sp == nil:
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
+		s.send(c, protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
 	case !hasPty:
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeBadRequest))
+		s.send(c, protocol.NewError("", req.SpawnID, protocol.CodeBadRequest))
 	case err != nil:
 		s.log.Error("spawn %s: resizing its terminal: %v", sp.id, err)
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeInternal))
+		s.send(c, protocol.NewError("", req.SpawnID, protocol.CodeInternal))
 	}
 }
 
@@ -894,12 +1048,12 @@ func (sp *spawn) closePty() {
 	}
 }
 
-func (s *server) handleRelease(req *protocol.Request) {
+func (s *server) handleRelease(c *client, req *protocol.Request) {
 	s.mu.Lock()
-	sp := s.spawns[req.SpawnID]
+	sp := s.heldSpawn(c, req.SpawnID)
 	s.mu.Unlock()
 	if sp == nil {
-		s.send(protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
+		s.send(c, protocol.NewError("", req.SpawnID, protocol.CodeUnknownSpawn))
 		return
 	}
 	s.retire(sp, time.Duration(*req.GraceMs)*time.Millisecond, true)
@@ -915,16 +1069,6 @@ var signalNumbers = map[string]syscall.Signal{
 	"SIGUSR2": unix.SIGUSR2,
 }
 
-// poolSpec is the declared spec of the pool name, which never changes.
-func (s *server) poolSpec(name string) (pool.Spec, bool) {
-	for _, spec := range s.cfg.Pools {
-		if spec.Name == name {
-			return spec, true
-		}
-	}
-	return pool.Spec{}, false
-}
-
 // handleSpawn claims the place a spawn names before anything else is done,
 // and starts the spawn in it. One naming a place the keeper does not hold,
 // or one another spawn named, is refused. A spawn refused before the keeper
@@ -934,25 +1078,25 @@ func (s *server) poolSpec(name string) (pool.Spec, bool) {
 // retired after the refusal is sent, its exit settled first as none, since
 // it was never spawned: its retirement frees the place once the spawn's
 // group is removed, and then sends its `released`.
-func (s *server) handleSpawn(req *protocol.Request) {
+func (s *server) handleSpawn(c *client, req *protocol.Request) {
 	if s.closing.Load() {
 		return
 	}
-	if s.claimPlace(req.Place) == nil {
-		s.log.Warn("spawn %s refused: the keeper holds no place %s, or another spawn named it", req.ID, req.Place)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+	if s.claimPlace(c, req.Place) == nil {
+		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	made, code := s.startSpawn(req)
+	made, code := s.startSpawn(c, req)
 	switch {
 	case code == "":
 	case made == nil:
 		s.mu.Lock()
-		delete(s.places, req.Place)
+		delete(c.places, req.Place)
 		s.mu.Unlock()
-		s.send(protocol.NewError(req.ID, "", code))
+		s.send(c, protocol.NewError(req.ID, "", code))
 	default:
-		s.send(protocol.NewError(req.ID, made.id, code))
+		s.send(c, protocol.NewError(req.ID, made.id, code))
 		made.exitOnce.Do(func() {})
 		s.retire(made, 0, true)
 	}
@@ -961,16 +1105,17 @@ func (s *server) handleSpawn(req *protocol.Request) {
 // startSpawn starts the spawn req asks for in the place it claimed. It
 // answers the code it is refused with, or "" once it is spawned, and the
 // spawn it made in the place, nil when it is refused before it made one.
-func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
+func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 	// A relay pool's space reaches nothing: it takes no hosts, and no kept
 	// home or terminal, which are a program's, whose pool is routed. A pool
-	// the keeper does not serve is refused below, as it always was.
-	spec, known := s.poolSpec(req.Pool)
+	// that is not the role's is refused below, as one the keeper does not
+	// serve always was.
+	spec, known := c.poolOf(req.Pool)
 	if known && !spec.Routed() && (req.Hosts != nil || req.HomeMode == protocol.HomeKept || req.Pty != nil) {
 		s.log.Warn("spawn %s refused: pool %s's spaces reach nothing, and it names hosts, a kept home or a pty", req.ID, req.Pool)
 		return nil, protocol.CodeBadRequest
 	}
-	if s.memory == nil {
+	if c.role.groups == nil {
 		s.log.Warn("spawn %s refused: its memory and CPU bounds are unavailable here", req.ID)
 		return nil, protocol.CodeMemoryUnavailable
 	}
@@ -980,10 +1125,13 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 		return nil, code
 	}
 	if req.HomeMode == protocol.HomeKept {
-		return s.startKeptSpawn(req, spec.Reach, reach)
+		return s.startKeptSpawn(c, req, spec.Reach, reach, known)
 	}
 	s.mu.Lock()
-	p := s.pools[req.Pool]
+	var p *pool.Pool
+	if known {
+		p = s.pools[req.Pool]
+	}
 	var uid int
 	var ok bool
 	if p != nil {
@@ -1004,39 +1152,52 @@ func (s *server) startSpawn(req *protocol.Request) (*spawn, string) {
 		return nil, protocol.CodeCapacity
 	}
 
-	sp := &spawn{id: randomHex(16), pool: p, account: s.accounts[uid], reach: spec.Reach, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), client: c, pool: p, account: s.accounts[uid], reach: spec.Reach, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	name, err := home.NewName(uid)
 	if err != nil {
 		s.log.Error("spawn %s: %v", req.ID, err)
 		return sp, protocol.CodeInternal
 	}
-	sp.home = filepath.Join(s.cfg.HomeRoot, name)
+	sp.home = filepath.Join(c.role.homeRoot, name)
 
 	if code, err := s.launch(sp, req, reach); err != nil {
 		s.log.Error("spawn %s on uid %d: %v", req.ID, uid, err)
 		return sp, code
 	}
-
-	s.mu.Lock()
-	s.spawns[sp.id] = sp
-	s.mu.Unlock()
+	if !s.hold(sp) {
+		return sp, protocol.CodeInternal
+	}
 	s.log.Info("spawn %s: uid %d, leader pid %d", sp.id, uid, sp.leader.pid)
-	s.send(protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
+	s.send(c, protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
 	return sp, ""
 }
 
-// launch starts the spawn's stage, cloned into its space (spaceAttr), maps
-// its ids and places it in its cgroup, in that order, before its spec
-// releases it; a routed space's stage then hands up its namespace and name
+// hold makes a started spawn one its client holds, unless that client's
+// end has begun, which retires everything it held: such a spawn is refused
+// and retired as any refused once made is.
+func (s *server) hold(sp *spawn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sp.client.ended {
+		s.log.Warn("spawn %s refused: role %s's process ended as it started", sp.id, sp.client.role.spec.Name)
+		return false
+	}
+	s.spawns[sp.id] = sp
+	return true
+}
+
+// launch starts the spawn's stage (startStage) and then releases it with
+// its spec; a routed space's stage then hands up its namespace and name
 // sockets, and only once the guard has admitted its route (admitRoute) is
 // it told to go on. launch waits until the stage has executed the command,
-// and starts the relay as the client user holding the other ends of the
-// command's pipes and, when the request asks for a control channel, the
-// relay's end of its socketpair; the command's end goes to the stage, which
-// makes it the command's fd 3. A failure kills the stage, which has
-// executed nothing. It returns the error code to reply with.
+// and starts the relay as the spawn's role's uid, in its role's leaf,
+// holding the other ends of the command's pipes and, when the request asks
+// for a control channel, the relay's end of its socketpair; the command's
+// end goes to the stage, which makes it the command's fd 3. A failure kills
+// the stage, which has executed nothing. It returns the error code to
+// reply with.
 func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, error) {
 	var opened []*os.File
 	closeAll := func() {
@@ -1110,13 +1271,14 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 	// The spawn's group exists before its stage does, and the stage
 	// is moved into it while it still waits for its spec, so nothing of the
 	// spawn runs outside the bound; the stage checks where it is for itself.
+	r := sp.client.role
 	groupName := cgroup.Name(sp.account.UID)
-	homeRoot := s.cfg.HomeRoot
+	homeRoot := r.homeRoot
 	if sp.kept {
 		groupName = cgroup.SpawnName(sp.id)
 		homeRoot = s.cfg.Kept.Root
 	}
-	group, err := s.memory.Create(groupName, *req.MemoryBytes, *req.CPUQuota)
+	group, err := r.groups.Create(groupName, *req.MemoryBytes, *req.CPUQuota)
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
@@ -1195,14 +1357,14 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		s.routing[sp.id] = sp
 		s.mu.Unlock()
 	}
-	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, stageFiles, "/", spaceAttr())
-	if err != nil {
-		return protocol.CodeInternal, err
-	}
-	sp.leader = leader
+	leader, err := s.startStage(stageFiles, sp.account, sp.group)
 	for _, f := range stageOwned {
 		_ = f.Close()
 	}
+	if leader == nil {
+		return protocol.CodeInternal, err
+	}
+	sp.leader = leader
 	// The stage waits for its spec still holding the keeper's ids, which
 	// retirement under the pooled uid cannot end, and, routed, for its
 	// route's word: it is killed here on every failure before the command
@@ -1213,13 +1375,8 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 			s.signalChild(leader, unix.SIGKILL)
 		}
 	}()
-	if err := mapIDs(leader.pid, sp.account.UID, sp.account.GID); err != nil {
+	if err != nil {
 		return protocol.CodeInternal, err
-	}
-	if sp.group != nil {
-		if err := sp.group.Add(leader.pid); err != nil {
-			return protocol.CodeInternal, err
-		}
 	}
 
 	_ = specW.SetWriteDeadline(time.Now().Add(stageTimeout))
@@ -1228,7 +1385,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 	}
 	_ = specW.Close()
 	if !relayed {
-		if code, err := s.admitRoute(sp, keeperRoute, e); err != nil {
+		if code, err := s.admitSpawn(sp, keeperRoute, e); err != nil {
 			return code, err
 		}
 	}
@@ -1282,16 +1439,37 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		relayFiles = append(relayFiles, helperRelay.Fd())
 	}
 	relayProc, err := s.start(s.self, []string{"cyfr-locus", "relay"}, helperEnviron(), relayFiles,
-		s.client.UID, s.client.GID, "/")
+		r.account.UID, r.account.GID, "/")
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
 	sp.relay = relayProc
+	// The relay waits for its spec, doing nothing, until it is in its
+	// role's leaf, whose bounds hold it as they hold the role.
+	if err := r.leaf.Add(relayProc.pid); err != nil {
+		return protocol.CodeInternal, err
+	}
 	_ = relaySpecW.SetWriteDeadline(time.Now().Add(stageTimeout))
 	if _, err := relaySpecW.Write(relaySpec); err != nil {
 		return protocol.CodeInternal, err
 	}
 	return "", nil
+}
+
+// startStage starts a space's stage, cloned into its space (spaceAttr) with
+// files, maps its ids to acct's and places it in group, in that order: the
+// stage waits for its spec, executing nothing, until its caller sends it.
+// It answers the stage once started, which its caller kills on an error,
+// this one's too; nil when none was started.
+func (s *server) startStage(files []uintptr, acct Account, group *cgroup.Group) (*child, error) {
+	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, files, "/", spaceAttr())
+	if err != nil {
+		return nil, err
+	}
+	if err := mapIDs(leader.pid, acct.UID, acct.GID); err != nil {
+		return leader, err
+	}
+	return leader, group.Add(leader.pid)
 }
 
 // keeperPair is a socketpair whose first end goes to a stage and whose
@@ -1361,7 +1539,7 @@ func (s *server) reportExit(sp *spawn) {
 			c := sp.leader.status.ExitStatus()
 			code = &c
 		}
-		s.send(protocol.NewExited(sp.id, code, sig, memory))
+		s.send(sp.client, protocol.NewExited(sp.id, code, sig, memory))
 	})
 }
 
@@ -1417,7 +1595,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			clean := s.scrub(sp.account, grace, paths, "")
 			// Its processes are gone, or past every kill: its route carries
 			// nothing more.
-			s.withdrawRoute(sp)
+			s.withdrawRoute(sp.id, &sp.route)
 			// The relay's end is its own and its reader's: it has handed the
 			// reader the end of every stream, which closes once the spawn's
 			// processes are gone, or the reader has closed its connection.
@@ -1455,7 +1633,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				s.log.Info("spawn %s: uid %d retired", sp.id, uid)
 			}
 			if notify {
-				s.send(protocol.NewReleased(sp.id))
+				s.send(sp.client, protocol.NewReleased(sp.id))
 			}
 		}()
 	})
@@ -1488,7 +1666,7 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 		return
 	}
 	delete(s.spawns, sp.id)
-	delete(s.places, sp.place)
+	delete(sp.client.places, sp.place)
 	delete(s.routing, sp.id)
 }
 
@@ -1658,22 +1836,6 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-func lookPathIn(file, path string) (string, error) {
-	if filepath.IsAbs(file) || filepath.Base(file) != file {
-		return file, nil
-	}
-	for _, dir := range filepath.SplitList(path) {
-		if dir == "" {
-			continue
-		}
-		candidate := filepath.Join(dir, file)
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-			return candidate, nil
-		}
-	}
-	return "", errors.New(file + ": not found in PATH")
 }
 
 // limits are a spawn's resource limits: the ceilings lowered by its

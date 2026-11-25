@@ -40,7 +40,8 @@ import (
 
 // TestMain gives the test binary the commands spawns run as `<helper> …`:
 // `hold` and `mapped` are the memory tests', `fill` the relay's end's,
-// `mounts` and `queue` the space tests', `dial`, `ask` and `own` the network tests'.
+// `mounts` and `queue` the space tests', `dial`, `ask` and `own` the network tests',
+// `role` a role's process (roleHelper).
 // The keeper under test starts its own helpers, `stage`, `relay`, `retire`
 // and `home`, from a plain build of cyfr-locus (keeperBinary).
 func TestMain(m *testing.M) {
@@ -62,6 +63,8 @@ func TestMain(m *testing.M) {
 			os.Exit(tryMounts())
 		case "queue":
 			os.Exit(queue(os.Args[2:]))
+		case "role":
+			os.Exit(roleHelper(os.Args[2:]))
 		}
 	}
 	os.Exit(m.Run())
@@ -187,11 +190,13 @@ const (
 	testToken     = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 
-// keeper is a server wired as `serve` wires it, without the client process:
-// the test holds the client's end of the channel and the attach socket. It
-// needs root, to run the stage under a pooled uid and the relay as `nobody`.
+// keeper is a server wired as `serve` wires it, with one role's client and
+// without its process: the test holds the client's end of the channel and
+// the attach socket. It needs root, to run the stage under a pooled uid and
+// the relay as `nobody`, the role's uid here.
 type keeper struct {
 	s       *server
+	c       *client
 	channel *protocol.LineReader
 	ln      net.Listener
 	attach  string
@@ -202,6 +207,16 @@ type keeper struct {
 	// helper is the test binary, executable by every uid: the commands
 	// spawns run (TestMain).
 	helper string
+}
+
+// testClient is a client of a role "test" drawing from spec, of account
+// acct, on channel: a role's client as serve makes one, without its
+// process, groups or run folder.
+func testClient(channel *os.File, spec pool.Spec, acct Account) *client {
+	r := &role{spec: RoleSpec{Name: "test", UID: acct.UID, Pool: spec.Name}, pool: spec, account: acct}
+	c := &client{role: r, id: randomHex(16), channel: channel, places: map[string]*place{}}
+	r.client = c
+	return c
 }
 
 // keeperBuild is the plain build of cyfr-locus the keepers under test
@@ -350,22 +365,22 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 		accounts[uid] = Account{UID: uid, GID: uid, Name: strconv.Itoa(uid)}
 	}
 	s := &server{
-		cfg:       Config{Pools: []pool.Spec{spec}, HomeRoot: homes},
+		cfg:       Config{Pools: []pool.Spec{spec}, HomeRoot: filepath.Dir(homes)},
 		log:       logx.NewWriter(os.Stderr, "cyfr-locus", false),
 		self:      binary,
-		client:    Account{UID: 65534, GID: 65534, Name: "nobody", Home: "/"},
 		accounts:  accounts,
 		roots:     residue.Roots{Dirs: []string{base}},
 		pools:     map[string]*pool.Pool{spec.Name: pool.New(spec)},
 		spawns:    map[string]*spawn{},
-		places:    map[string]*place{},
 		unremoved: map[*spawn]*removal{},
 		waiters:   map[int]*child{},
 		keptLive:  map[int]int{},
 		keptOps:   map[int]*sync.Mutex{},
-		channel:   os.NewFile(uintptr(fds[0]), "channel"),
+		ended:     make(chan struct{}),
 	}
-	k := &keeper{s: s, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), helper: helper}
+	c := testClient(os.NewFile(uintptr(fds[0]), "channel"), spec, Account{UID: 65534, GID: 65534, Name: "nobody"})
+	c.role.homeRoot = homes
+	k := &keeper{s: s, c: c, channel: protocol.NewLineReader(theirs), ln: ln, attach: attach, homes: homes, stop: make(chan struct{}), helper: helper}
 	// The keeper's own end would end the test binary: a test that expects
 	// it sets its own.
 	s.exit = func(code int) { t.Errorf("the keeper ended %d", code) }
@@ -417,7 +432,12 @@ func newKeeperOf(t *testing.T, reach string) *keeper {
 			case <-time.After(20 * time.Second):
 			}
 		}
-		s.channel.Close()
+		if r := c.role; r.leaf != nil {
+			r.leaf.KillBy(time.Now())
+			_ = r.leaf.Remove()
+			_ = os.Remove(r.groups.Dir())
+		}
+		c.channel.Close()
 		signal.Stop(sigchld)
 		close(k.stop)
 	})
@@ -510,7 +530,7 @@ func parsed(t *testing.T, line string) *protocol.Request {
 // place has the keeper hold a place of id for kind, and answers its reply.
 func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
 	t.Helper()
-	k.s.handle(parsed(t, `{"v":5,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":5,"type":"place","id":"`+id+`","kind":"`+kind+`"}`))
 	return k.reply(t)
 }
 
@@ -521,13 +541,13 @@ func (k *keeper) handleSpawn(t *testing.T, req *protocol.Request) {
 	if placed := k.place(t, req.Place, protocol.KindRun); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
 		t.Fatalf("place %s answered %v", req.Place, placed)
 	}
-	k.s.handleSpawn(req)
+	k.s.handleSpawn(k.c, req)
 }
 
 func (k *keeper) release(t *testing.T, spawnID string) {
 	t.Helper()
 	grace := int64(0)
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawnID, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawnID, GraceMs: &grace})
 }
 
 // relayConn is the client's view of one relay: every stream's bytes so far
@@ -580,7 +600,7 @@ func TestServeRefusesAnUndeclaredKeeperVariableNamingIt(t *testing.T) {
 	}
 	stderr := os.Stderr
 	os.Stderr = logFile
-	code := Main(strings.Fields("--pool build:30001-30016:relay --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
+	code := Main(strings.Fields("--role builds:10012:4100:build --pool build:30001-30016:routed --home-root /var/lib/locus/homes --guard /run/g -- /app/bin/locus start"))
 	os.Stderr = stderr
 
 	logged, err := os.ReadFile(logFile.Name())
@@ -719,6 +739,44 @@ func assertRetired(t *testing.T, k *keeper, uid int) {
 	}
 }
 
+// mainLogs runs `serve` with args, its stderr kept, and answers its exit
+// and what it logged.
+func mainLogs(t *testing.T, args string) (int, string) {
+	t.Helper()
+	logFile, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = logFile
+	code := Main(strings.Fields(args))
+	os.Stderr = stderr
+	logged, err := os.ReadFile(logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code, string(logged)
+}
+
+// A keeper given no role's key would run nothing, and one given a role's
+// bound it cannot read would hold it to none: each refuses its boot by the
+// variables' names, never their values, before it looks at its privileges.
+func TestServeRefusesNoKeyAndAnUnreadableBoundByName(t *testing.T) {
+	const args = "--role runtime:10011:4200:runner:private --role builds:10012:4100:build --pool runner:30101-30108:relay --pool build:30001-30016:routed --home-root /var/lib/locus/homes --guard /run/g -- /app/bin/locus start"
+	t.Setenv("LOCUS_RUNTIME_KEY", "")
+	t.Setenv("LOCUS_BUILDS_KEY", "")
+	code, logged := mainLogs(t, args)
+	if code != ExitConfig || !strings.Contains(logged, "no role's key is set (LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY)") {
+		t.Fatalf("no key: exit %d, logged %q", code, logged)
+	}
+	t.Setenv("LOCUS_BUILDS_KEY", "secret-key")
+	t.Setenv("LOCUS_RUNTIME_MEMORY_LIMIT", "4 gigabytes")
+	code, logged = mainLogs(t, args)
+	if code != ExitConfig || !strings.Contains(logged, "role runtime: LOCUS_RUNTIME_MEMORY_LIMIT is not a size") || strings.Contains(logged, "gigabytes") || strings.Contains(logged, "secret-key") {
+		t.Fatalf("an unreadable bound: exit %d, logged %q", code, logged)
+	}
+}
+
 // A keeper given no --kept-homes refuses every home request as unavailable
 // on the channel, before any helper runs, and a request after them is still
 // handled.
@@ -747,10 +805,9 @@ func TestHomeRequestsWithoutKeptHomesAreRefused(t *testing.T) {
 		waiters:  map[int]*child{},
 		keptLive: map[int]int{},
 		keptOps:  map[int]*sync.Mutex{},
-		channel:  ours,
 	}
 	done := make(chan struct{})
-	go func() { s.serveChannel(); close(done) }()
+	go func() { s.serveChannel(testClient(ours, pool.Spec{Name: "runner"}, Account{})); close(done) }()
 
 	var ids []string
 	for _, raw := range v.Home {
@@ -825,10 +882,11 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 	plain := &spawn{id: strings.Repeat("b", 32)}
 	t.Cleanup(withPty.closePty)
 	s := &server{
-		log:     logx.NewWriter(io.Discard, "cyfr-locus", false),
-		spawns:  map[string]*spawn{withPty.id: withPty, plain.id: plain},
-		channel: ours,
+		log:    logx.NewWriter(io.Discard, "cyfr-locus", false),
+		spawns: map[string]*spawn{withPty.id: withPty, plain.id: plain},
 	}
+	c := testClient(ours, pool.Spec{Name: "runner"}, Account{})
+	withPty.client, plain.client = c, c
 	resize := func(spawnID string) *protocol.Request {
 		req, rerr := protocol.ParseRequest([]byte(`{"v":5,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 		if rerr != nil {
@@ -836,13 +894,13 @@ func TestAResizeSetsTheTerminalOrIsRefused(t *testing.T) {
 		}
 		return req
 	}
-	s.handle(resize(withPty.id))
+	s.handle(c, resize(withPty.id))
 	if ws, err := unix.IoctlGetWinsize(int(slave.Fd()), unix.TIOCGWINSZ); err != nil || ws.Row != 50 || ws.Col != 132 {
 		t.Fatalf("the terminal after the resize: %+v, %v", ws, err)
 	}
 	unknown := strings.Repeat("c", 32)
-	s.handle(resize(plain.id))
-	s.handle(resize(unknown))
+	s.handle(c, resize(plain.id))
+	s.handle(c, resize(unknown))
 
 	// The resize that succeeded sent nothing: the first reply is the next
 	// request's refusal.

@@ -125,13 +125,13 @@ func (s *server) sweepKept() {
 	}
 }
 
-// keptHome looks up the kept home id under the home's lock: its path, and
-// its uid when it is made (home.Kept.Owner). It answers the refusal of a
-// keeper that keeps no homes (CodeUnavailable), of a home not made
-// (CodeHomeAbsent, with its path) and of an entry that is no home
-// (CodeBadRequest).
-func (s *server) keptHome(id string) (path string, uid int, code string) {
-	if s.cfg.Kept == nil {
+// keptHome looks up the kept home id for c under the home's lock: its
+// path, and its uid when it is made (home.Kept.Owner). It answers the
+// refusal of a keeper that keeps no homes, or of a role whose sessions keep
+// none (CodeUnavailable), of a home not made (CodeHomeAbsent, with its
+// path) and of an entry that is no home (CodeBadRequest).
+func (s *server) keptHome(c *client, id string) (path string, uid int, code string) {
+	if s.cfg.Kept == nil || !c.role.spec.Kept {
 		return "", 0, protocol.CodeUnavailable
 	}
 	path = filepath.Join(s.cfg.Kept.Root, id)
@@ -179,21 +179,18 @@ func (s *server) unmakeKept(uid int) {
 // of the home shares the uid and its files, and each has its own space and
 // route, which reaches what its own start resolved. It answers as
 // startSpawn does.
-func (s *server) startKeptSpawn(req *protocol.Request, reach string, e egress) (*spawn, string) {
+func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, e egress, known bool) (*spawn, string) {
 	// The home's uid, read under its lock, is the home's for its life: a
 	// home retired after this read is absent once the uid's lock is held,
 	// and a reset keeps the uid.
 	homeLock := s.homeLock(req.Home)
 	homeLock.Lock()
-	path, uid, code := s.keptHome(req.Home)
+	path, uid, code := s.keptHome(c, req.Home)
 	homeLock.Unlock()
 	if code != "" {
 		s.log.Warn("spawn %s refused: kept home %s: %s", req.ID, req.Home, code)
 		return nil, code
 	}
-	s.mu.Lock()
-	_, known := s.pools[req.Pool]
-	s.mu.Unlock()
 	if !known {
 		return nil, protocol.CodeUnknownPool
 	}
@@ -256,17 +253,17 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach string, e egress) (
 	s.mu.Unlock()
 	lock.Unlock()
 
-	sp := &spawn{id: randomHex(16), kept: true, account: acct, home: path, reach: reach, retired: make(chan struct{})}
+	sp := &spawn{id: randomHex(16), client: c, kept: true, account: acct, home: path, reach: reach, retired: make(chan struct{})}
 	s.madeIn(req.Place, sp)
 	if code, err := s.launch(sp, req, e); err != nil {
 		s.log.Error("spawn %s on kept uid %d: %v", req.ID, uid, err)
 		return sp, code
 	}
-	s.mu.Lock()
-	s.spawns[sp.id] = sp
-	s.mu.Unlock()
+	if !s.hold(sp) {
+		return sp, protocol.CodeInternal
+	}
 	s.log.Info("spawn %s: kept uid %d, leader pid %d", sp.id, uid, sp.leader.pid)
-	s.send(protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
+	s.send(c, protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
 	return sp, ""
 }
@@ -473,7 +470,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 			// Its processes are gone, or past their group's kill: its route
 			// carries nothing more.
-			s.withdrawRoute(sp)
+			s.withdrawRoute(sp.id, &sp.route)
 			// The relay ends as a pooled spawn's does (retire): at its
 			// reader's taking the last byte or closing, never cut here.
 			if sp.relay != nil {
@@ -524,7 +521,7 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 			}
 			s.log.Info("spawn %s: kept uid %d retired", sp.id, uid)
 			if notify {
-				s.send(protocol.NewReleased(sp.id))
+				s.send(sp.client, protocol.NewReleased(sp.id))
 			}
 		}()
 	})
@@ -536,29 +533,29 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 // bytes allocated under it, `home_reset` ends every process of the uid and
 // makes the home again empty under it, and `home_retire` ends every process
 // of the uid and removes the home and everything else the uid left.
-func (s *server) handleHome(req *protocol.Request) {
-	if s.keepsNoHomes(req) {
+func (s *server) handleHome(c *client, req *protocol.Request) {
+	if s.keepsNoHomes(c, req) {
 		return
 	}
 	lock := s.homeLock(req.Home)
 	lock.Lock()
 	defer lock.Unlock()
-	path, uid, code := s.keptHome(req.Home)
+	path, uid, code := s.keptHome(c, req.Home)
 	absent := code == protocol.CodeHomeAbsent
 	if code != "" && !absent {
 		s.log.Warn("%s %s refused: kept home %s: %s", req.Type, req.ID, req.Home, code)
-		s.send(protocol.NewError(req.ID, "", code))
+		s.send(c, protocol.NewError(req.ID, "", code))
 		return
 	}
 	switch {
 	case req.Type == protocol.TypeHomeMake && !absent:
-		s.send(protocol.NewHomeMade(req.ID, uid))
+		s.send(c, protocol.NewHomeMade(req.ID, uid))
 	case req.Type == protocol.TypeHomeMake:
-		s.makeHome(req, path)
+		s.makeHome(c, req, path)
 	case absent && req.Type == protocol.TypeHomeMeasure:
-		s.send(protocol.NewError(req.ID, "", protocol.CodeHomeAbsent))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeHomeAbsent))
 	case absent:
-		s.send(protocol.NewHomeRetired(req.ID))
+		s.send(c, protocol.NewHomeRetired(req.ID))
 	case req.Type == protocol.TypeHomeMeasure:
 		uidLock := s.keptLock(uid)
 		uidLock.Lock()
@@ -566,39 +563,43 @@ func (s *server) handleHome(req *protocol.Request) {
 		uidLock.Unlock()
 		if err != nil {
 			s.log.Error("home_measure %s: uid %d: %v", req.ID, uid, err)
-			s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 			return
 		}
-		s.send(protocol.NewHomeMeasured(req.ID, bytes))
+		s.send(c, protocol.NewHomeMeasured(req.ID, bytes))
 	default:
-		s.retireHome(req, path, uid)
+		s.retireHome(c, req, path, uid)
 	}
 }
 
 // keepsNoHomes refuses req as CodeUnavailable when the keeper was given no
-// --kept-homes, and answers whether it did.
-func (s *server) keepsNoHomes(req *protocol.Request) bool {
-	if s.cfg.Kept != nil {
+// --kept-homes or c's role is not the kept one, and answers whether it did.
+func (s *server) keepsNoHomes(c *client, req *protocol.Request) bool {
+	switch {
+	case s.cfg.Kept == nil:
+		s.log.Warn("%s %s refused: this keeper keeps no homes (no --kept-homes)", req.Type, req.ID)
+	case !c.role.spec.Kept:
+		s.log.Warn("%s %s refused: role %s's sessions keep no homes", req.Type, req.ID, c.role.spec.Name)
+	default:
 		return false
 	}
-	s.log.Warn("%s %s refused: this keeper keeps no homes (no --kept-homes)", req.Type, req.ID)
-	s.send(protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+	s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 	return true
 }
 
 // makeHome makes the absent home at path under the lowest free uid of the
 // range (home.Kept.Taken, pickKept), held as making until the home is made.
-func (s *server) makeHome(req *protocol.Request, path string) {
+func (s *server) makeHome(c *client, req *protocol.Request, path string) {
 	taken, err := s.cfg.Kept.Taken("/proc")
 	if err != nil {
 		s.log.Error("home_make %s: reading the kept homes' root and /proc: %v", req.ID, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		return
 	}
 	uid, ok := s.pickKept(taken)
 	if !ok {
 		s.log.Warn("home_make %s refused: every kept uid is taken", req.ID)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeCapacity))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))
 		return
 	}
 	defer s.unmakeKept(uid)
@@ -607,17 +608,17 @@ func (s *server) makeHome(req *protocol.Request, path string) {
 	defer lock.Unlock()
 	if _, err := s.runHomeHelper(KeptAccount(uid), home.HelperSpec{Op: home.OpMake, Path: path, UID: uid}); err != nil {
 		s.log.Error("home_make %s: uid %d: %v", req.ID, uid, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 		return
 	}
-	s.send(protocol.NewHomeMade(req.ID, uid))
+	s.send(c, protocol.NewHomeMade(req.ID, uid))
 }
 
 // retireHome ends every process of the made home's uid and removes the home
 // and everything else the uid left, then, for a `home_reset`, makes the
 // home again empty under the same uid, which stays held as making between
 // the two so no draw takes it while no folder owns it.
-func (s *server) retireHome(req *protocol.Request, path string, uid int) {
+func (s *server) retireHome(c *client, req *protocol.Request, path string, uid int) {
 	reset := req.Type == protocol.TypeHomeReset
 	if reset {
 		s.mu.Lock()
@@ -632,12 +633,12 @@ func (s *server) retireHome(req *protocol.Request, path string, uid int) {
 	defer lock.Unlock()
 	if !s.scrub(acct, homeRetireGrace, []string{path}, "") {
 		s.log.Warn("%s %s: uid %d: a process or something it left outlived retirement", req.Type, req.ID, uid)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 		return
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
 		s.log.Warn("%s %s: uid %d: the home is still there", req.Type, req.ID, uid)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 		return
 	}
 	s.mu.Lock()
@@ -646,29 +647,29 @@ func (s *server) retireHome(req *protocol.Request, path string, uid int) {
 	s.mu.Unlock()
 	if !reset {
 		s.log.Info("kept uid %d retired with its home", uid)
-		s.send(protocol.NewHomeRetired(req.ID))
+		s.send(c, protocol.NewHomeRetired(req.ID))
 		return
 	}
 	if _, err := s.runHomeHelper(acct, home.HelperSpec{Op: home.OpMake, Path: path, UID: uid}); err != nil {
 		s.log.Error("home_reset %s: uid %d: %v", req.ID, uid, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeInternal))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeInternal))
 		return
 	}
 	s.log.Info("kept uid %d reset with its home", uid)
-	s.send(protocol.NewHomeMade(req.ID, uid))
+	s.send(c, protocol.NewHomeMade(req.ID, uid))
 }
 
 // handleHomeList answers a `home_list` with the page of kept home ids after
 // its `after`, at most protocol.MaxHomeListIDs, naming the last as `next`
 // when more follow.
-func (s *server) handleHomeList(req *protocol.Request) {
-	if s.keepsNoHomes(req) {
+func (s *server) handleHomeList(c *client, req *protocol.Request) {
+	if s.keepsNoHomes(c, req) {
 		return
 	}
 	ids, err := s.cfg.Kept.IDs()
 	if err != nil {
 		s.log.Error("home_list %s: listing the kept homes' root: %v", req.ID, err)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeUnavailable))
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		return
 	}
 	ids = ids[sort.SearchStrings(ids, req.After):]
@@ -680,7 +681,7 @@ func (s *server) handleHomeList(req *protocol.Request) {
 		ids = ids[:protocol.MaxHomeListIDs]
 		next = ids[len(ids)-1]
 	}
-	s.send(protocol.NewHomes(req.ID, ids, next))
+	s.send(c, protocol.NewHomes(req.ID, ids, next))
 }
 
 // measureHome answers the bytes allocated under a kept home, measured as its
