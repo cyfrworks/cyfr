@@ -4418,6 +4418,65 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # The page tells why no grant stands now, never an older revocation:
+    # a grant its person revoked, given again and then taken by a removal,
+    # and two grants standing under two labels, an ambiguity, each read as
+    # a grant to give, never as one the person revoked.
+    for {scenario, made} <- [
+          {"given again and then removed", :revoked_then_removed!},
+          {"given again under two labels", :revoked_then_two_standing!}
+        ] do
+      test "a grant its person once revoked, #{scenario}, is never said as revoked",
+           %{conn: conn, ctx: ctx} do
+        soul_on_open!(ctx)
+        :ok = apply(Cyfr.Test.AquaTool, unquote(made), [ctx])
+
+        {view, _html} = mount_athanor(conn, "/aqua")
+        line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_absent"])
+
+        settled(
+          fn ->
+            has_element?(
+              view,
+              line,
+              "You have not granted yet what Aqua and its crew members may use."
+            )
+          end,
+          "the grant said not granted"
+        )
+
+        refute render(view) =~ "You revoked"
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
+    # Why a revoked grant is absent read from a record the store cannot
+    # answer: the page says the grant cannot be read, never that it was
+    # not granted.
+    test "a revoked grant whose record cannot be read is said as unreadable",
+         %{conn: conn, ctx: ctx} do
+      soul_on_open!(ctx)
+      :ok = Cyfr.Test.AquaTool.revoked_then_unreadable!(ctx)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_unavailable"])
+
+      settled(
+        fn ->
+          has_element?(
+            view,
+            line,
+            "A consent this model runs under cannot be read right now — try again."
+          )
+        end,
+        "the grant said unreadable"
+      )
+
+      refute render(view) =~ "You have not granted yet"
+      refute render(view) =~ "You revoked"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # A grant given while a server did not expose a listed tool still
     # loads once the server exposes it, and the next turn's start refuses
     # for it: the block says so, from the start's own comparison.

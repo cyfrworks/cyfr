@@ -2312,6 +2312,57 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # The empty state tells why no grant stands now, never an older
+  # revocation: a grant its person revoked, given again and then taken by
+  # a removal, and two grants standing under two labels, an ambiguity, each
+  # read as a grant to give, never as one the person revoked.
+  for {scenario, made} <- [
+        {"given again and then removed", :revoked_then_removed!},
+        {"given again under two labels", :revoked_then_two_standing!}
+      ] do
+    test "Aqua whose grant its person once revoked, #{scenario}, is never said as revoked",
+         %{athanor: athanor, user: user, conn: conn} do
+      ctx = connected!(athanor, user)
+      :ok = apply(Cyfr.Test.AquaTool, unquote(made), [ctx])
+      pane = empty_pane(conn, athanor)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-consent"]),
+               "You have not granted yet what Aqua and its crew members may use."
+             )
+
+      assert has_element?(
+               pane,
+               ~s(a[href="#{athanor_path("/aqua", athanor)}"]),
+               "Grant it on your Aqua page."
+             )
+
+      refute render(pane) =~ "You revoked"
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # Why a revoked grant is absent read from a record the store cannot
+  # answer: the empty state says the grant cannot be read, never that it
+  # was not granted.
+  test "Aqua whose revoked grant's record cannot be read says it cannot be read",
+       %{athanor: athanor, user: user, conn: conn} do
+    ctx = connected!(athanor, user)
+    :ok = Cyfr.Test.AquaTool.revoked_then_unreadable!(ctx)
+    pane = empty_pane(conn, athanor)
+
+    assert has_element?(
+             pane,
+             ~s([data-test="model-consent"]),
+             "A consent this model runs under cannot be read right now — try again."
+           )
+
+    refute render(pane) =~ "You have not granted yet"
+    refute render(pane) =~ "You revoked"
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   # Before its socket connects the pane has read no model: its first render
   # says the status is pending, never that a ready athanor has no model, and
   # the connected mount reads it.

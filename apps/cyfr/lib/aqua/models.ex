@@ -46,13 +46,15 @@ defmodule Aqua.Models do
       tools and hands Aqua names as they stand, changed since it was
       granted. Aqua runs once the person grants it again;
     * `:consent_absent` — Aqua only: the crew's grant was never given,
-      or a removal took it; Aqua runs once the person grants it;
-    * `:consent_revoked` — Aqua only: the crew's grant was revoked by its
-      person, as the record of who revoked it says (`Opus.ungranted/2`);
-      Aqua runs once the person grants it again;
+      or the last of it a removal took; Aqua runs once the person grants
+      it;
+    * `:consent_revoked` — Aqua only: no grant of the crew's stands and
+      the last of it was revoked by its person, as the record of who
+      revoked it says (`Opus.ungranted/2`); Aqua runs once the person
+      grants it again;
     * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
       or for Aqua the crew's, is damaged, or the store could not answer
-      it;
+      it, or for Aqua why its grant is absent;
     * `:missing` — the athanor's catalysts, read, hold no such model, or
       its setup plan answers that the registry holds no such component;
     * `:model_unavailable` — the athanor's catalysts could not be read,
@@ -636,8 +638,9 @@ defmodule Aqua.Models do
   # member runs on, through `Aqua.ConsentStatus.classify_refusal/1`: stale,
   # absent, damaged, or unread. An absent grant its person revoked reads
   # so, from the record of who revoked it, as a turn refused for it reads
-  # it (`Opus.ungranted/2`, `Aqua.Loop`); one never given, taken by a
-  # removal or whose record could not be read is absent. A context that
+  # it (`Opus.ungranted/2`, `Aqua.Loop`); one never given or taken by a
+  # removal is absent, and one whose record could not be read is one the
+  # store could not answer. A context that
   # names no athanor (`:forbidden`) cannot read the grant at all, so it
   # reads as one the store could not answer, never as one to give.
   defp soul_grant(ctx, reason, brain) do
@@ -652,7 +655,8 @@ defmodule Aqua.Models do
   defp absent(ctx, brain) do
     case Opus.ungranted(ctx, @grant) do
       {:ok, :revoked} -> {:consent_revoked, brain}
-      _never_or_unread -> {:consent_absent, brain}
+      {:ok, :no_grant} -> {:consent_absent, brain}
+      {:error, _unanswered} -> {:consent_unavailable, brain}
     end
   end
 

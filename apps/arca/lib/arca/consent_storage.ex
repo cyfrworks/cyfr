@@ -1329,6 +1329,75 @@ defmodule Arca.ConsentStorage do
   def revoked_by_person?(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
 
   @doc """
+  Why no grant of the name-level `source_ref` in the actor's athanor
+  stands now, as a person is told it: `:standing` when an owner profile
+  of it stands, whatever its status or label and however many (several
+  are an ambiguity, never an absence); else the cause of the owner
+  profile that ended last, `:person` when its person revoked it and
+  `:removal` when a removal of its component took it; `:never` when none
+  was ever granted. "Last" is the latest revocation written, the row's
+  `updated_at`, then its id. This is the present absence's cause alone:
+  whether its person ever refused a default grant of it, which decides
+  whether CYFR may grant it again, is `revoked_by_person?/2`'s. A row
+  whose kind, status or cause is outside its closed vocabulary refuses
+  the read, never reads as a cause.
+  """
+  @spec absence_cause(Prima.Actor.t(), String.t()) ::
+          {:ok, :standing | :person | :removal | :never} | {:error, term()}
+  def absence_cause(%Prima.Actor{athanor_id: athanor_id}, source_ref)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.absence_cause", fn ->
+      from(p in Arca.Schemas.Profile,
+        where: p.source_ref == ^source_ref,
+        order_by: [desc: p.updated_at, desc: p.id],
+        select: {p.kind, p.status, p.revoked_by}
+      )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+      |> Arca.Repo.all()
+      |> Enum.reduce_while({:ok, []}, fn row, {:ok, owners} ->
+        case ending(row) do
+          {:ok, :public} -> {:cont, {:ok, owners}}
+          {:ok, ended} -> {:cont, {:ok, [ended | owners]}}
+          {:error, _} = refused -> {:halt, refused}
+        end
+      end)
+      |> case do
+        {:ok, owners} -> {:ok, absence(Enum.reverse(owners))}
+        {:error, _} = refused -> refused
+      end
+    end)
+  end
+
+  def absence_cause(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
+
+  # An owner profile as the absence reads it: standing, or the cause that
+  # ended it; a public profile is no grant of the person's runs.
+  defp ending({kind, status, cause}) do
+    with {:ok, kind} <- decode_enum(kind, %{"owner" => :owner, "public" => :public}),
+         {:ok, status} <-
+           decode_enum(status, %{
+             "active" => :standing,
+             "needs_consent" => :standing,
+             "revoked" => :revoked
+           }),
+         {:ok, cause} <-
+           decode_enum(cause, %{nil => nil, "person" => :person, "removal" => :removal}) do
+      case {kind, status} do
+        {:public, _status} -> {:ok, :public}
+        {:owner, :standing} -> {:ok, :standing}
+        {:owner, :revoked} when cause != nil -> {:ok, cause}
+        {:owner, :revoked} -> {:error, {:invalid_stored_value, nil}}
+      end
+    end
+  end
+
+  # The owners newest ending first: one standing answers standing, else
+  # the newest ending's cause, else none was ever granted.
+  defp absence(owners) do
+    if :standing in owners, do: :standing, else: List.first(owners, :never)
+  end
+
+  @doc """
   The head consent revision of a profile, fully decoded with its vault refs.
 
   Decoding fails closed — a stored scope or invoke mode outside the closed
