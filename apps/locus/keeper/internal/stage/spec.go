@@ -81,6 +81,13 @@ type Spec struct {
 	// Packs is the pack generation (package packview) the space binds read
 	// only at ScrollsPath, "" for none: <kept root>/.packs/<a>/<d>.
 	Packs string `json:"packs,omitempty"`
+	// Machine names the image's programs' device a person's machine boots
+	// from (package vm), "" for every other space. A machine's space is a
+	// relay space whose relay leads nowhere, holding its VMM alone: its
+	// home is the machine's folder, and beside the container's directories
+	// it is given this device, read only at its path, and /dev/kvm in its
+	// /dev, which no other space is.
+	Machine string `json:"machine,omitempty"`
 }
 
 // ScrollsPath is where a space sees its person's packs, read only.
@@ -114,6 +121,14 @@ func (s Spec) Validate() error {
 	}
 	if s.Packs != "" && !validPacks(s.Packs) {
 		return fmt.Errorf("packs %q is not a pack generation", s.Packs)
+	}
+	if s.Machine != "" {
+		if !filepath.IsAbs(s.Machine) || filepath.Clean(s.Machine) != s.Machine || !strings.HasSuffix(s.Machine, ".sqfs") {
+			return fmt.Errorf("machine device %q is not a clean absolute path to a .sqfs", s.Machine)
+		}
+		if s.Kept || s.Control || s.Terminal || s.Reach != pool.ReachRelay {
+			return errors.New("a machine's space is a relay space with no kept home, control channel or terminal")
+		}
 	}
 	if s.Kept {
 		if err := (home.Kept{Root: s.HomeRoot, First: s.UID, Last: s.UID}).Validate(s.Home, s.UID); err != nil {

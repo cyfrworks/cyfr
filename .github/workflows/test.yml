@@ -1676,6 +1676,21 @@ jobs:
       - name: A person's packs
         run: python3 tests/locus-backends-image/packs.py cyfr-locus:backends
 
+      # A person's machine (plan V1): cyfr-locus guest-check in the one
+      # Locus's own confinement given /dev/kvm alone. Without the device no
+      # machine boots and no device is made; the first start makes the
+      # image's programs' squashfs, cold on this runner, and its time is
+      # printed; the guest's own guard is ready before its keeper, which
+      # proves it; the guest answers with its boot identity, its keeper
+      # makes one space with no route whose root is the image's programs,
+      # ends it, and the machine ends with nothing left in its group; the
+      # device holds no canary of the kept homes and none of Docker's bound
+      # files; a second start makes none; of two first starts at once one
+      # makes and one waits; and a session's churn prints the processor time
+      # with and without free-page reporting from order 0.
+      - name: A person's machine
+        run: python3 tests/locus-backends-image/vm.py cyfr-locus:backends
+
       # Aqua's browser: cyfr-browser on a terminal in a kept home, driving
       # the image's Chromium headless shell over its debugging pipe, framed
       # as tests/fixtures/browser_frames.json says: a megabyte read whole in

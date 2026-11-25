@@ -308,54 +308,6 @@ func describeQuota(q uint64) string {
 	return strconv.FormatFloat(float64(q)/cgroup.CPUPeriod, 'f', -1, 64)
 }
 
-// spaceAttr is how the keeper starts every space's stage, a spawn's and a
-// role process's alike: in a session of
-// its own, killed if this keeper dies, cloned into a new user, network and
-// IPC namespace, which takes no capability of the keeper's own namespace,
-// and holding as ambient capabilities, inside that namespace only, what the
-// stage needs there to become the pooled ids, bring a routed space's
-// loopback up and bind its name sockets, build the space's files in a mount
-// namespace it owns, and drop every set. It keeps the keeper's ids until
-// the keeper has mapped them. A pty spawn's command takes its terminal as
-// its controlling one, in the space's own session (package stage).
-func spaceAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{
-		Setsid:     true,
-		Pdeathsig:  syscall.SIGKILL,
-		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
-		AmbientCaps: []uintptr{unix.CAP_SETUID, unix.CAP_SETGID, unix.CAP_SETPCAP, unix.CAP_SYS_ADMIN,
-			unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE},
-	}
-}
-
-// mapIDs maps a cloned stage's uid and gid to themselves from the parent
-// side, the one side that may map an id the child could not: setgroups is
-// denied first, as a gid map written from outside requires, then gid_map,
-// then uid_map. The keeper holds SETUID and SETGID in its own namespace,
-// which is what these writes take.
-func mapIDs(pid, uid, gid int) error {
-	proc := filepath.Join("/proc", strconv.Itoa(pid))
-	for _, w := range []struct{ file, content string }{
-		{"setgroups", "deny"},
-		{"gid_map", strconv.Itoa(gid) + " " + strconv.Itoa(gid) + " 1\n"},
-		{"uid_map", strconv.Itoa(uid) + " " + strconv.Itoa(uid) + " 1\n"},
-	} {
-		// Each map is written whole by one write at offset 0, as the kernel
-		// takes it.
-		f, err := os.OpenFile(filepath.Join(proc, w.file), os.O_WRONLY, 0)
-		if err == nil {
-			_, err = f.Write([]byte(w.content))
-			if cerr := f.Close(); err == nil {
-				err = cerr
-			}
-		}
-		if err != nil {
-			return fmt.Errorf("writing %s: %w", w.file, err)
-		}
-	}
-	return nil
-}
-
 // probeSpaces proves, before the keeper serves, that this host gives each of
 // its pools' spawns its space: for every reach the keeper serves it clones a
 // stage as it clones every spawn's, maps the first uid of the first pool of
@@ -410,7 +362,7 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 		Dir:   "/",
 		Env:   []string{},
 		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd()},
-		Sys:   spaceAttr(),
+		Sys:   stage.SpaceAttr(),
 	})
 	specR.Close()
 	statusW.Close()
@@ -425,7 +377,7 @@ func probeSpace(self string, spec pool.Spec, acct Account) error {
 			}
 		}
 	}
-	if err := mapIDs(pid, acct.UID, acct.GID); err != nil {
+	if err := stage.MapIDs(pid, acct.UID, acct.GID); err != nil {
 		_ = unix.Kill(pid, unix.SIGKILL)
 		reap()
 		return refuse(err)
@@ -494,7 +446,7 @@ func (s *server) proveGuard(spec pool.Spec) error {
 		Dir:   "/",
 		Env:   []string{},
 		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd(), ^uintptr(0), stageRoute.Fd()},
-		Sys:   spaceAttr(),
+		Sys:   stage.SpaceAttr(),
 	})
 	specR.Close()
 	statusW.Close()
@@ -518,7 +470,7 @@ func (s *server) proveGuard(spec pool.Spec) error {
 			reap()
 		}
 	}()
-	if err := mapIDs(pid, acct.UID, acct.GID); err != nil {
+	if err := stage.MapIDs(pid, acct.UID, acct.GID); err != nil {
 		return refuse(err)
 	}
 	probe, err := json.Marshal(stage.Probe{UID: acct.UID, GID: acct.GID, Routed: true, Route: true})
@@ -1636,11 +1588,11 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 // It answers the stage once started, which its caller kills on an error,
 // this one's too; nil when none was started.
 func (s *server) startStage(files []uintptr, acct Account, group *cgroup.Group) (*child, error) {
-	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, files, "/", spaceAttr())
+	leader, err := s.startWith(s.self, []string{"cyfr-locus", "stage"}, nil, files, "/", stage.SpaceAttr())
 	if err != nil {
 		return nil, err
 	}
-	if err := mapIDs(leader.pid, acct.UID, acct.GID); err != nil {
+	if err := stage.MapIDs(leader.pid, acct.UID, acct.GID); err != nil {
 		return leader, err
 	}
 	return leader, group.Add(leader.pid)

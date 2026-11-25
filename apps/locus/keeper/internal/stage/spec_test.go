@@ -275,3 +275,37 @@ func TestPacksSpecValidation(t *testing.T) {
 		}
 	}
 }
+
+// A person's machine's space holds its VMM: a relay space whose home is its
+// folder, given its device, and nothing a spawn's channels give.
+func TestMachineSpecValidation(t *testing.T) {
+	machine := Spec{
+		UID: 30201, GID: 993, User: "locus-machine",
+		HomeRoot: "/run/locus/machines", Home: "/run/locus/machines/30201-0123456789abcdef0123456789abcdef",
+		Argv:    []string{"/usr/lib/cyfr/guest/firecracker", "--api-sock", "/run/locus/machines/30201-0123456789abcdef0123456789abcdef/api.sock"},
+		Limits:  protocol.Limits{Nofile: 256, Nproc: 64, Fsize: 1 << 20},
+		Reach:   pool.ReachRelay,
+		Cgroup:  "/keeper-30201",
+		Machine: "/var/lib/locus/guest/" + strings.Repeat("a", 64) + ".sqfs",
+	}
+	if err := machine.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Spec){
+		"a relative device":        func(s *Spec) { s.Machine = "guest/a.sqfs" },
+		"an unclean device":        func(s *Spec) { s.Machine = "/var/lib/locus/guest/../kept/a.sqfs" },
+		"a device of another kind": func(s *Spec) { s.Machine = "/var/lib/locus/kept/a" },
+		"a routed space":           func(s *Spec) { s.Reach = pool.ReachRouted },
+		"a control channel":        func(s *Spec) { s.Control = true },
+		"a terminal":               func(s *Spec) { s.Terminal = true },
+		"a kept home":              func(s *Spec) { s.Kept = true },
+		"root's group":             func(s *Spec) { s.GID = 0 },
+		"another uid's folder":     func(s *Spec) { s.UID, s.Cgroup = 30202, "/keeper-30202" },
+	} {
+		s := machine
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
