@@ -399,26 +399,24 @@ defmodule Locus.KeeperTest do
          %{name: name, fake: fake} do
       test = self()
       tag = make_ref()
-      :ok = FakeKeeper.mode(fake, {:stdout, :binary.copy(<<1>>, 1_048_576), test})
+      # The command runs until cyfr-locus retires it, so its end is the
+      # keeper's release alone, which the fake holds.
       :ok = FakeKeeper.hold_releases(fake, test)
 
       reader =
         spawn(fn ->
-          Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+          Keeper.run(
+            name,
+            %{argv: ["/bin/sh", "-c", "echo running >&2; exec sleep 300"], env: %{}, stdin: ""},
             place: place!(name, "build"),
             deadline: within(60_000),
-            max_stdout_bytes: 16 * 1_048_576,
+            max_stdout_bytes: 1_048_576,
             heir: {test, tag},
-            on_stdout:
-              {[],
-               fn _piece, _taken ->
-                 send(test, :taking)
-                 receive do: (:never -> :ok)
-               end}
+            on_output: fn line -> send(test, {:run_said, line}) end
           )
         end)
 
-      assert_receive :taking, 10_000
+      assert_receive {:run_said, "running"}, 10_000
       Process.exit(reader, :kill)
 
       # The keeper asks for the spawn's end, which cyfr-locus has not given.
