@@ -1693,6 +1693,52 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # A person's message refused because what Aqua and its crew members may
+  # use moved past Aqua's grant: the pane asks for Aqua's grant there, and
+  # once it is given offers that message again as a new turn, cutting
+  # nothing.
+  test "Aqua's grant asked for a refused message offers the message again once given",
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    ctx = connected!(athanor, user)
+
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    hello = line_id!(here, thread, "hello")
+    {panel, pane} = panel_pane(conn, thread)
+    dialog = "#system-layer-panel-dialog"
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: %{ref: Prima.AgentRef.soul_ref(), user_id: user.user_id, message_id: hello}
+    })
+
+    render(pane)
+    render(panel)
+    assert has_element?(panel, ~s(#{dialog} [data-kind="grant"]))
+
+    panel |> element(~s(#{dialog} button[phx-click="confirm"])) |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
+    assert render(pane) =~ "Granted — send that message again, as a new turn?"
+    assert has_element?(pane, ~s(button[phx-click="restart_send"]))
+    assert restarts_for_consent() == []
+
+    # Given for the list as it stands: a turn's start holds it covered.
+    {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+    {:ok, %{agent: agent}} = Compendium.agent_snapshot(ctx, "aqua")
+    assert :ok = Aqua.Loop.Turn.consented(ctx, authority, agent.tools, [])
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "with no message of the turn that asked to offer, the pane cuts nothing and says so",
        %{conn: conn, user: user, thread: thread, here: here} do
     # A line of another thread is no message of this thread's turn.
@@ -1705,7 +1751,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         content: "a line of another thread"
       })
 
-    for message_id <- [nil, foreign.id] do
+    # A line of Aqua's or a crew member's, a reply that opened the turn, is
+    # no line of the person's to send again as theirs.
+    {:ok, theirs} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: "aqua",
+        sent_by: "aqua",
+        content: "Aqua's own line"
+      })
+
+    for message_id <- [nil, foreign.id, theirs.id] do
       {_panel, pane} = grant_launch_account!(conn, thread, user, here, message_id)
       assigns = :sys.get_state(pane.pid).socket.assigns
 

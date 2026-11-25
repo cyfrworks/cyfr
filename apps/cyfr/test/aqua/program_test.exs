@@ -68,6 +68,9 @@ defmodule Aqua.ProgramTest do
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
   @title "Aqua"
   @post_gone "Aqua could not be given this message: a thread it came from has since been deleted."
+  @stale "What Aqua and its crew members may use changed since you granted it. Your message " <>
+           "was not answered: grant it again here when it is asked, or on your Aqua page, then " <>
+           "send your message again."
   @model "catalyst:local.claude"
   @model_id "scripted-small"
   @missed "What was said in this thread since you last read it, oldest first, as context " <>
@@ -6510,7 +6513,7 @@ defmodule Aqua.ProgramTest do
       serverless_grant!(ctx)
       turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
       assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
-      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert {:ok, %{status: "failed", error: @stale}} = Tape.turn(ctx, turn.id)
       assert model_rounds(ctx, turn) == 0
     end
 
@@ -6529,7 +6532,7 @@ defmodule Aqua.ProgramTest do
 
         turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
         assert {:failed, _} = Task.await(run(ctx, turn), 60_000), inspect(patterns)
-        assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+        assert {:ok, %{status: "failed", error: @stale}} = Tape.turn(ctx, turn.id)
         assert model_rounds(ctx, turn) == 0
         stop_supervised!(ScriptedWorker)
       end
@@ -6551,7 +6554,7 @@ defmodule Aqua.ProgramTest do
       expose!(ctx, ["other", "search"])
       turn = api_turn!(ctx, thread, "search for it", [answer("Never.")])
       assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
-      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert {:ok, %{status: "failed", error: @stale}} = Tape.turn(ctx, turn.id)
       assert model_rounds(ctx, turn) == 0
       stop_supervised!(ScriptedWorker)
 
@@ -6589,7 +6592,7 @@ defmodule Aqua.ProgramTest do
       :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
       turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
       assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
-      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert {:ok, %{status: "failed", error: @stale}} = Tape.turn(ctx, turn.id)
       assert model_rounds(ctx, turn) == 0
       refute_received {:offered, _path, "resources/" <> _, _params}
     end
@@ -6634,8 +6637,32 @@ defmodule Aqua.ProgramTest do
 
       turn = api_turn!(ctx, thread, "read them", [answer("Never.")])
       assert {:failed, _} = Task.await(run(ctx, turn), 60_000)
-      assert {:ok, %{status: "failed", error: "agent_changed"}} = Tape.turn(ctx, turn.id)
+      assert {:ok, %{status: "failed", error: @stale}} = Tape.turn(ctx, turn.id)
       assert model_rounds(ctx, turn) == 0
+    end
+
+    # Aqua's grant given again while a turn's loop is gone: the turn taken
+    # over is refused under its pinned grant, and its thread says what
+    # happened and what to do, never that the turn moved on.
+    @tag harness: :api
+    test "a turn taken over after Aqua's grant was given again says so, and how to go on",
+         %{ctx: ctx, thread: thread} do
+      turn = api_turn!(ctx, thread, "work on it", [{:hold, self()}, answer("Never.")])
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, _model, _child}, 30_000
+      quiet!(loop.pid)
+      Task.shutdown(loop, :brutal_kill)
+      consent_again!(ctx)
+
+      assert {:ok, [{:adopt, _taken}]} =
+               Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      assert {:error, {:consent_moved, @title, :message}} =
+               Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+
+      assert List.last(system_lines(ctx, thread, turn)) ==
+               "Aqua stopped because a grant it was working under, Aqua's or its model's key, " <>
+                 "changed while it worked. Send a message to go on."
     end
 
     # A server CYFR cannot connect to at a turn's start costs the person no

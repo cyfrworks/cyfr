@@ -178,24 +178,30 @@ defmodule Aqua.Loop do
             never_ran(ctx, claim, turn, reason)
 
           # The source has no consent to run under, or one that no longer
-          # covers what the crew may use: the person is asked for it.
+          # answers for Aqua's file as it stands: said as the crew's grant
+          # by its state (`moved/3`).
           {:error, :no_profile} ->
-            setup_required(ctx, turn)
+            refused(ctx, turn, moved(ctx, turn, :ungranted))
 
           {:error, {:consent_required, _}} ->
-            setup_required(ctx, turn)
+            refused(ctx, turn, moved(ctx, turn, :agent_changed))
 
           {:error, {:profile_unavailable, _}} ->
-            setup_required(ctx, turn)
+            refused(ctx, turn, moved(ctx, turn, :ungranted))
 
           {:error, reason} ->
-            reason = unclaimed(ctx, turn, reason)
-            say_unrun(ctx, turn, reason)
-            finish = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
-            unrun(turn, {:failed, reason}, finish)
+            refused(ctx, turn, unclaimed(ctx, turn, reason))
         end
       end
     end)
+  end
+
+  # A turn refused before its root was claimed says why where the person
+  # can act on it (`say_unrun/3`) and ends failed in the same words.
+  defp refused(ctx, turn, reason) do
+    say_unrun(ctx, turn, reason)
+    finish = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
+    unrun(turn, {:failed, reason}, finish)
   end
 
   # Why a root was not claimed, as the person can act on it. Every turn of
@@ -223,9 +229,27 @@ defmodule Aqua.Loop do
   # is said as the brain's own state (`Aqua.Loop.Turn`), a line that
   # points at the Aqua page.
   defp never_ran(ctx, claim, turn, reason) do
+    reason = moved(ctx, turn, reason)
     say_unrun(ctx, turn, reason)
     end_unrun(ctx, claim, turn, reason)
   end
+
+  # A grant the turn holds to that does not cover it, Aqua's list changed
+  # since it was granted (`Aqua.Loop.Turn.consented/4`), one never given
+  # or taken back, or a pinned grant given again: said as the member whose
+  # turn it is, with what starts it again where it is read
+  # (`Aqua.Loop.Turn.again/1`).
+  defp moved(ctx, turn, reason) when reason in [:agent_changed, :ungranted, :consent_moved] do
+    member =
+      case Compendium.agent_snapshot(ctx, turn.agent) do
+        {:ok, %{agent: %{title: title}}} when is_binary(title) -> title
+        _unread -> turn.agent
+      end
+
+    {reason, member, Turn.again(turn)}
+  end
+
+  defp moved(_ctx, _turn, reason), do: reason
 
   # A turn that never ran says why in the thread where the person can act
   # on it: a brain whose provider refused its key, in the provider's
@@ -254,6 +278,24 @@ defmodule Aqua.Loop do
   defp say_unrun(ctx, turn, {:tools_invalid_entry, _entry} = reason),
     do: unrun_line(ctx, turn, describe(reason))
 
+  # A person's message refused for the crew's grant: its line says so,
+  # and the thread's view, open for that person, asks for Aqua's grant
+  # there and offers the message again once it is given.
+  defp say_unrun(ctx, turn, {grant, _member, :message} = reason)
+       when grant in [:agent_changed, :ungranted] do
+    unrun_line(ctx, turn, describe(reason))
+
+    Tape.announce(ctx, turn.thread_id, :consent_required, %{
+      ref: @grant,
+      user_id: ctx.user_id,
+      message_id: turn.message_id
+    })
+  end
+
+  defp say_unrun(ctx, turn, {moved, _member, _then} = reason)
+       when moved in [:agent_changed, :ungranted, :consent_moved],
+       do: unrun_line(ctx, turn, describe(reason))
+
   defp say_unrun(_ctx, _turn, _reason), do: :ok
 
   defp unrun_line(ctx, turn, line), do: Tape.append_line(ctx, turn, line)
@@ -269,17 +311,6 @@ defmodule Aqua.Loop do
     failed = if match?({:unwritten, _result}, ended), do: nil, else: error
     Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: failed)
     ended
-  end
-
-  defp setup_required(ctx, turn) do
-    finish = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
-
-    Tape.announce(ctx, turn.thread_id, :consent_required, %{
-      ref: @grant,
-      user_id: ctx.user_id
-    })
-
-    unrun(turn, {:failed, :setup_required}, finish)
   end
 
   # A turn that never ran answers why, whoever wrote its end: only an end
@@ -327,16 +358,17 @@ defmodule Aqua.Loop do
 
   # The spec of a continued turn, built from its row alone. A pin that no
   # longer loads, Aqua's or its brain's, bound again or taken back, ends
-  # the turn as one that moved on, said in its thread as it is mid-turn;
-  # the runner ends it with the same sentence as its error.
+  # the turn said in its thread as it is mid-turn (`moved/3`); the runner
+  # ends it with the same sentence as its error.
   defp rebuilt(ctx, turn) do
     with {:ok, authority} <- pinned_authority(ctx, turn),
          {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
       {:ok, spec}
     else
-      {:error, :consent_moved} = moved ->
-        _ = unrun_line(ctx, turn, describe(:consent_moved))
-        moved
+      {:error, :consent_moved} ->
+        said = moved(ctx, turn, :consent_moved)
+        _ = unrun_line(ctx, turn, describe(said))
+        {:error, said}
 
       refused ->
         refused
@@ -2704,17 +2736,16 @@ defmodule Aqua.Loop do
   def describe(reason) when is_binary(reason), do: reason
 
   # A refusal for ownership (this server has not won its slot, or has lost
-  # it), a component index still catching up with its files, or a pinned
-  # grant that moved, reads as its declared sentence, which says to retry:
-  # the turn did not run on, and the message can be sent again.
+  # it), or a component index still catching up with its files, reads as
+  # its declared sentence, which says to retry: the turn did not run on,
+  # and the message can be sent again. A grant that moved past the turn
+  # reads as the member's own (`moved/3`).
   def describe(reason)
-      when reason in [
-             :not_owner,
-             :control_plane_lost,
-             :slot_not_held,
-             :projection_unavailable,
-             :consent_moved
-           ],
+      when reason in [:not_owner, :control_plane_lost, :slot_not_held, :projection_unavailable],
+      do: Prima.Refusal.message(reason)
+
+  def describe({moved, _member, _then} = reason)
+      when moved in [:agent_changed, :ungranted, :consent_moved],
       do: Prima.Refusal.message(reason)
 
   def describe(reason) when is_atom(reason), do: Atom.to_string(reason)

@@ -798,8 +798,8 @@ defmodule Aqua.RunnerTest do
 
   # The crew has one grant, Aqua's: under it Aqua's turn and a member's
   # run; revoked, it refuses every member's turn as it refuses Aqua's,
-  # before a root is claimed or a model is asked, and asks for that one
-  # grant.
+  # before a root is claimed or a model is asked, says so in each thread
+  # and asks there for that one grant.
   test "with the crew's grant revoked, Aqua's turn and every member's claim no root and ask for it",
        %{ctx: ctx, thread: thread} do
     member!(ctx, "planner")
@@ -823,30 +823,101 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "agent:local.aqua")
     user = ctx.user_id
 
-    for {room, agent} <- [{thread, "aqua"}, {child, "planner"}] do
-      {:ok, %{turn: turn}} =
+    for {room, agent, member} <- [{thread, "aqua", "Aqua"}, {child, "planner", "Planner"}] do
+      {:ok, %{turn: turn, message: message}} =
         Tape.accept(ctx, room.id, %{
           message: %{author: ctx.user_id, sent_by: "person", content: "go"},
           turn: %{agent: agent, requested_by: ctx.user_id}
         })
 
-      assert {:failed, :setup_required} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+      assert {:failed, {:ungranted, ^member, :message}} =
+               Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
 
-      assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
+      said =
+        "You have not granted yet what Aqua and its crew members may use. Your message was " <>
+          "not answered: grant it here when it is asked, or on your Aqua page, then send your " <>
+          "message again."
+
+      assert {:ok, %{status: "failed", error: ^said, root_execution_id: nil, profile_id: nil}} =
                Tape.turn(ctx, turn.id)
 
+      assert List.last(system_lines(ctx, room)) == said
       assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
       room_id = room.id
+      message_id = message.id
 
       assert_receive %ThreadEvent{
                        thread_id: ^room_id,
                        kind: :consent_required,
-                       data: %{ref: "agent:local.aqua", user_id: ^user}
+                       data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
                      },
                      5_000
     end
 
     assert ScriptedWorker.calls() == ran
+  end
+
+  @stale "What Aqua and its crew members may use changed since you granted it."
+
+  # Aqua's list changed past the crew's grant, as a switch on the Aqua
+  # page moves it: a person's message is refused before a root is claimed,
+  # saying so in its thread and as the turn's error, and that person's
+  # view of the thread is asked for Aqua's grant with the message to offer
+  # again; a schedule's turn says where to grant it, in the error its
+  # occurrence ends with, and asks nobody. No model is asked.
+  test "with Aqua's list changed past its grant, a message and a schedule's turn are refused " <>
+         "saying where to grant it",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Never.")])
+
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    user = ctx.user_id
+    thread_id = thread.id
+
+    asked =
+      @stale <>
+        " Your message was not answered: grant it again here when it is asked, or on your " <>
+        "Aqua page, then send your message again."
+
+    for {origin, then, said} <- [
+          {:interactive, :message, asked},
+          {:schedule, :none, @stale <> " Grant it again on your Aqua page."}
+        ] do
+      sender = %{ctx | origin: origin}
+
+      {:ok, %{turn: turn, message: message}} =
+        Tape.accept(sender, thread.id, %{
+          message: %{author: user, sent_by: "person", content: "go #{origin}"},
+          turn: %{agent: "aqua", requested_by: user}
+        })
+
+      assert {:failed, {:agent_changed, "Aqua", ^then}} =
+               Aqua.Loop.run(ctx: sender, turn_id: turn.id)
+
+      assert {:ok, %{status: "failed", error: ^said}} = Tape.turn(ctx, turn.id)
+
+      # Refused before a root is claimed: a schedule's occurrence ends
+      # with the turn's own error (`Aqua.ScheduleTurns`).
+      assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
+
+      assert List.last(system_lines(ctx, thread)) == said
+
+      if then == :message do
+        message_id = message.id
+
+        assert_receive %ThreadEvent{
+                         thread_id: ^thread_id,
+                         kind: :consent_required,
+                         data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
+                       },
+                       5_000
+      else
+        refute_received %ThreadEvent{kind: :consent_required}
+      end
+    end
+
+    assert ScriptedWorker.calls() == []
   end
 
   # A brain's own grant that is damaged, or that cannot be read, is the

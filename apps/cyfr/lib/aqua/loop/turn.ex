@@ -261,7 +261,9 @@ defmodule Aqua.Loop.Turn do
   # the tree no longer holds is refused too, never replaced.
   # A crew member's bytes resolve under the soul's tools as they stand, so
   # a soul whose tools moved since the turn started moves the digest and
-  # refuses the turn, as an edit of the member's own file does.
+  # refuses the turn, as an edit of the member's own file does
+  # (`:agent_moved`, the turn moved on; a grant that no longer covers the
+  # list is `consented/4`'s `:agent_changed`).
   defp agent(ctx, %{agent_revision_digest: revision, agent_capability_digest: capability} = turn)
        when is_binary(revision) and is_binary(capability) do
     case Tape.agent_revision(ctx, turn) do
@@ -277,7 +279,7 @@ defmodule Aqua.Loop.Turn do
          {:ok, digest} <- Compendium.agent_capability_digest(parsed) do
       if digest == turn.agent_capability_digest,
         do: {:ok, agent_map(parsed)},
-        else: {:error, :agent_changed}
+        else: {:error, :agent_moved}
     end
   end
 
@@ -722,6 +724,18 @@ defmodule Aqua.Loop.Turn do
 
     {tools, Map.merge(unhanded, refused)}
   end
+
+  @doc """
+  What starts `turn`'s member again where a refusal of it is read
+  (`Prima.Refusal`): a message in its thread (`:message`, a person's
+  turn), asking the crew member for its job again (`:ask`, a turn with a
+  request to answer), or nothing that reader can do (`:none`, a
+  schedule's or another source's turn).
+  """
+  @spec again(map()) :: :message | :ask | :none
+  def again(%{request_id: request}) when is_binary(request), do: :ask
+  def again(%{origin: "interactive"}), do: :message
+  def again(_turn), do: :none
 
   @doc """
   Whether the crew's grant covers `tools`, the soul's list, as a turn's
