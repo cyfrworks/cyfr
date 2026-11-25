@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -309,6 +311,74 @@ func TestAKeptHomeTakesTheLowestFreeUID(t *testing.T) {
 	}
 }
 
+// A home's lock is held in the keeper only while a request holds or
+// waits for it: homes made and retired many times, and ids never made,
+// leave the keeper's map of home locks empty.
+func TestAHomesLockGoesWithItsLastRequest(t *testing.T) {
+	k := keptKeeper(t)
+	root := k.s.cfg.Kept.Root
+	for i := 0; i < 20; i++ {
+		path := filepath.Join(root, "vlt_c"+strconv.Itoa(i))
+		if made := k.homeRequest(t, protocol.TypeHomeMake, "m", path, testKeptFirst); made["type"] != protocol.TypeHomeMade {
+			t.Fatalf("home_make %s: %v", path, made)
+		}
+		if retired := k.homeRequest(t, protocol.TypeHomeRetire, "r", path, 0); retired["type"] != protocol.TypeHomeRetired {
+			t.Fatalf("home_retire %s: %v", path, retired)
+		}
+		k.handleSpawn(t, keptRequest(t, k.attach, "s"+strconv.Itoa(i), "true", path, nil))
+		if absent := k.reply(t); absent["code"] != protocol.CodeHomeAbsent {
+			t.Fatalf("a spawn of the retired home %s: %v", path, absent)
+		}
+	}
+	k.s.mu.Lock()
+	left := len(k.s.homeOps)
+	k.s.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d home locks are left after every home was retired", left)
+	}
+}
+
+// Requests of ids never made leave no home lock behind, nor do two
+// requests of one home at once once both have answered. None needs root.
+func TestAHomeNeverMadeLeavesNoLock(t *testing.T) {
+	kept := &home.Kept{Root: t.TempDir(), First: 15, Last: 16}
+	s, c, replies := channelServer(t, kept)
+	for i := 0; i < 100; i++ {
+		for _, typ := range []string{protocol.TypeHomeRetire, protocol.TypeHomeMeasure, protocol.TypeHomeReset} {
+			s.handle(c, &protocol.Request{V: protocol.Version, Type: typ, ID: "h", Home: "vlt_" + strconv.Itoa(i)})
+			if _, _, err := replies.Next(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	held := s.lockHome("vlt_both")
+	waited := make(chan struct{})
+	go func() {
+		s.lockHome("vlt_both")()
+		close(waited)
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		s.mu.Lock()
+		refs := s.homeOps["vlt_both"].refs
+		s.mu.Unlock()
+		if refs == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second request of the home did not wait for its lock")
+		}
+		time.Sleep(time.Millisecond) // sleep-ok: a bounded poll for the second request to wait
+	}
+	held()
+	<-waited
+	s.mu.Lock()
+	left := len(s.homeOps)
+	s.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d home locks are left", left)
+	}
+}
+
 // A reset ends every process of the home's uid and leaves the home empty
 // under that same uid, which no draw takes meanwhile; a reset of a home not
 // made leaves it absent.
@@ -572,7 +642,7 @@ func TestAKeptUIDWhoseRetirementCannotFinishIsQuarantined(t *testing.T) {
 // A new home's uid is the lowest that nothing takes: no folder or process
 // (home.Kept.Taken), no make or reset in flight, and no state of the
 // keeper's own, retiring, quarantined or live; the uid drawn is held until
-// its make ends. None needs root.
+// its make ends, and a reading after that sees its home. None needs root.
 func TestANewHomesUIDIsTheLowestNothingHolds(t *testing.T) {
 	s := &server{cfg: Config{Kept: &home.Kept{Root: "/k", First: 10, Last: 16}}}
 	s.keptMaps()
@@ -580,10 +650,14 @@ func TestANewHomesUIDIsTheLowestNothingHolds(t *testing.T) {
 	s.keptRetiring[11] = make(chan struct{})
 	s.keptQuarantined[12] = "/k/q"
 	s.keptMaking[13] = true
-	taken := map[int]bool{14: true}
+	folders := map[int]bool{14: true}
+	reading := func() (map[int]bool, error) { return maps.Clone(folders), nil }
 	var drawn []int
 	for {
-		uid, ok := s.pickKept(taken)
+		uid, ok, err := s.drawKept(reading)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !ok {
 			break
 		}
@@ -592,10 +666,71 @@ func TestANewHomesUIDIsTheLowestNothingHolds(t *testing.T) {
 	if !reflect.DeepEqual(drawn, []int{15, 16}) {
 		t.Fatalf("drew %v", drawn)
 	}
+	// 15's make made its home and ended: the next reading holds it.
+	folders[15] = true
 	s.unmakeKept(15)
-	if uid, ok := s.pickKept(taken); !ok || uid != 15 {
-		t.Fatalf("after its make ended, drew %d %t", uid, ok)
+	if uid, ok, _ := s.drawKept(reading); ok {
+		t.Fatalf("after 15's home was made, drew %d", uid)
 	}
+	// 16's make failed and left no folder: 16 is free again.
+	s.unmakeKept(16)
+	if uid, ok, _ := s.drawKept(reading); !ok || uid != 16 {
+		t.Fatalf("after 16's make failed, drew %d %t", uid, ok)
+	}
+	if _, _, err := s.drawKept(func() (map[int]bool, error) { return nil, errors.New("unreadable") }); err == nil {
+		t.Fatal("a reading that fails drew a uid")
+	}
+}
+
+// Two homes never get one uid: a make that ends while another draw's
+// reading is under way, which saw no folder of the first home's uid, does
+// not free that uid to the draw. The second draw's reading is held while
+// the first make ends; the end waits for the draw, which takes the next
+// uid. None needs root.
+func TestAMakeEndingDuringAnotherDrawsReadingKeepsItsUID(t *testing.T) {
+	s := &server{cfg: Config{Kept: &home.Kept{Root: "/k", First: 15, Last: 16}}}
+	var mu sync.Mutex
+	folders := map[int]bool{}
+	reading := func() (map[int]bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(folders), nil
+	}
+	first, ok, err := s.drawKept(reading)
+	if err != nil || !ok || first != 15 {
+		t.Fatalf("the first draw: %d %t %v", first, ok, err)
+	}
+	read, release := make(chan struct{}), make(chan struct{})
+	second := make(chan int, 1)
+	go func() {
+		uid, _, _ := s.drawKept(func() (map[int]bool, error) {
+			stale, err := reading()
+			close(read)
+			<-release
+			return stale, err
+		})
+		second <- uid
+	}()
+	<-read
+	// The first home is made and its make ends while the second reading,
+	// which saw no folder of 15, is still answering.
+	ended := make(chan struct{})
+	go func() {
+		mu.Lock()
+		folders[first] = true
+		mu.Unlock()
+		s.unmakeKept(first)
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(200 * time.Millisecond): // sleep-ok: the make's end waits for the draw, so it is given time to come first
+	}
+	close(release)
+	if uid := <-second; uid == first {
+		t.Fatalf("the second home drew uid %d, the first home's", uid)
+	}
+	<-ended
 }
 
 // channelServer is a server on one end of a socketpair, keeping homes under

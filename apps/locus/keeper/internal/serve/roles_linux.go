@@ -35,8 +35,10 @@ import (
 
 // startRole starts r's process in its space with a fresh channel, and
 // answers it once the command has executed: its route admitted by the
-// guard first, so it is never started without it. A failure ends the
-// space, its route withdrawn, and answers why.
+// guard first, so it is never started without it. From its channel's
+// making the start is r's starting until its caller publishes it
+// (publishRole). A failure ends the space, its route withdrawn, and
+// answers why.
 func (s *server) startRole(r *role) (*client, error) {
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -49,6 +51,18 @@ func (s *server) startRole(r *role) (*client, error) {
 	}
 	c := &client{role: r, id: randomHex(16), channel: os.NewFile(uintptr(fds[0]), "channel-"+r.spec.Name), places: map[string]*place{}}
 	theirs := os.NewFile(uintptr(fds[1]), "role-channel-"+r.spec.Name)
+	s.mu.Lock()
+	r.starting = c
+	s.mu.Unlock()
+	defer func() {
+		if c.proc == nil {
+			s.mu.Lock()
+			if r.starting == c {
+				r.starting = nil
+			}
+			s.mu.Unlock()
+		}
+	}()
 	defer theirs.Close()
 	channelID, err := socketID(theirs)
 	if err != nil {
@@ -152,10 +166,15 @@ func (s *server) keepRole(r *role) {
 	s.mu.Unlock()
 	for {
 		lost := make(chan struct{})
-		go func() {
+		// The reader takes this start's client, whatever c names by the
+		// time it runs: an end that wins the race sets c to nil below.
+		go func(c *client) {
+			if s.readerStarts != nil {
+				s.readerStarts(r)
+			}
 			s.serveChannel(c)
 			close(lost)
-		}()
+		}(c)
 		why := "its channel ended"
 		select {
 		case <-c.proc.done:
@@ -184,13 +203,7 @@ func (s *server) keepRole(r *role) {
 			}
 			// A stop or an end that came during the start finds no process
 			// to ask, so this one is ended here, and nothing asks it twice.
-			s.mu.Lock()
-			ending := s.stopping.Load() || s.closing.Load()
-			if !ending {
-				r.client = next
-			}
-			s.mu.Unlock()
-			if ending {
+			if ending := s.publishRole(r, next); ending {
 				s.endClient(next)
 				return
 			}
@@ -200,13 +213,28 @@ func (s *server) keepRole(r *role) {
 	}
 }
 
+// publishRole makes c, a start of r that startRole answered, r's process
+// standing, and answers whether the keeper is stopping or ending. The
+// guard's loss, which looks under the same lock, finds c either as r's
+// start or as its process standing (guardLost).
+func (s *server) publishRole(r *role, c *client) (ending bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.client = c
+	if r.starting == c {
+		r.starting = nil
+	}
+	return s.stopping.Load() || s.closing.Load()
+}
+
 // endClient ends c and everything it held: its channel, every process of
 // its space and its relays, which its role's leaf holds, its route, and
 // every spawn and place it held, each spawn retired before it returns. A
 // role whose processes outlive their group's kill, or whose spawns do not
-// retire within retireTimeout, ends the keeper: a role does not start
-// again beside what its last start left. It may be called again for c,
-// which then does what is left.
+// retire within retireTimeout, or whose spawn starts in flight do not end
+// within startsTimeout, ends the keeper: a role does not start again beside
+// what its last start left. It may be called again for c, which then does
+// what is left.
 func (s *server) endClient(c *client) {
 	s.mu.Lock()
 	c.ended = true
@@ -239,6 +267,29 @@ func (s *server) endClient(c *client) {
 	if !s.awaitRetired(held) {
 		s.log.Error("role %s: its spawns did not retire within %v; the keeper ends", c.role.spec.Name, retireTimeout)
 		s.end(ExitLost)
+	}
+	// A start in flight as the end began is refused at its ownership check
+	// or, past it, as it is held, and retired (handleSpawn): the role
+	// starts again only once each has.
+	if !s.awaitStarts(c) {
+		s.log.Error("role %s: its spawns' starts did not end within %v; the keeper ends", c.role.spec.Name, startsTimeout)
+		s.end(ExitLost)
+	}
+}
+
+// awaitStarts waits up to startsTimeout for c's spawn starts in flight
+// (c.starts), and answers whether every one ended.
+func (s *server) awaitStarts(c *client) bool {
+	done := make(chan struct{})
+	go func() {
+		c.starts.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(startsTimeout):
+		return false
 	}
 }
 

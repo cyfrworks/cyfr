@@ -295,6 +295,53 @@ func TestARoutedSpaceStartsOnlyAfterItsRouteIsAdmitted(t *testing.T) {
 	k.guard.waitOps(t, spawnID, guard.TypeAdmit, guard.TypeClear)
 }
 
+// A spawn whose hosts are resolving as its role's process ends never
+// starts: it is refused once they resolve, before anything of it is made
+// or the guard is asked, and the role's end waits for that start before it
+// is over.
+func TestASpawnResolvingAsItsRoleEndsNeverStarts(t *testing.T) {
+	k := routedKeeper(t)
+	resolving, resolve := make(chan struct{}), make(chan struct{})
+	before := lookupHost
+	t.Cleanup(func() { lookupHost = before })
+	lookupHost = func(context.Context, string) ([]netip.Addr, error) {
+		close(resolving)
+		<-resolve
+		return []netip.Addr{netip.MustParseAddr("203.0.113.7")}, nil
+	}
+	req := spawnRequest(t, k.attach, "r1", "true", nil, false, 64<<20)
+	req.Hosts = []string{"api.example.com"}
+	done := make(chan struct{})
+	go func() {
+		k.handleSpawn(t, req)
+		close(done)
+	}()
+	<-resolving
+	// The role's process ends: its end begins as endClient's does, and
+	// waits for the start in flight.
+	k.s.mu.Lock()
+	k.c.ended = true
+	k.s.mu.Unlock()
+	waited := make(chan bool, 1)
+	go func() { waited <- k.s.awaitStarts(k.c) }()
+	select {
+	case <-waited:
+		t.Fatal("the role's end did not wait for its spawn's start")
+	case <-time.After(200 * time.Millisecond): // sleep-ok: the end must still be waiting while the hosts resolve
+	}
+	close(resolve)
+	<-done
+	if !<-waited {
+		t.Fatal("the role's end timed out waiting for its spawn's start")
+	}
+	if reply := k.reply(t); reply["type"] != protocol.TypeError || reply["code"] != protocol.CodeInternal || reply["spawn_id"] != nil {
+		t.Fatalf("the spawn of a role that ended answered %v", reply)
+	}
+	if calls := k.guard.taken(); len(calls) != 0 {
+		t.Fatalf("the guard was asked to route a spawn of a role that ended: %+v", calls)
+	}
+}
+
 // Two routed spaces at once: each binds the same port on its own loopback
 // and reaches its own listener there, and each has the route of its own
 // start's hosts, whatever the other's.

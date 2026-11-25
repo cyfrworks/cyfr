@@ -50,19 +50,37 @@ func (s *server) keptLock(uid int) *sync.Mutex {
 	return l
 }
 
-// homeLock is the lock of the kept home id.
-func (s *server) homeLock(id string) *sync.Mutex {
+// homeLock is a kept home's lock and the number of requests holding or
+// waiting for it; s.mu guards refs.
+type homeLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockHome takes the kept home id's lock and answers its release. The
+// entry lives in homeOps only while a request holds or waits for it, so a
+// home retired, or an id never made, leaves nothing behind.
+func (s *server) lockHome(id string) (unlock func()) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.homeOps == nil {
-		s.homeOps = map[string]*sync.Mutex{}
+		s.homeOps = map[string]*homeLock{}
 	}
 	l := s.homeOps[id]
 	if l == nil {
-		l = &sync.Mutex{}
+		l = &homeLock{}
 		s.homeOps[id] = l
 	}
-	return l
+	l.refs++
+	s.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if l.refs--; l.refs == 0 {
+			delete(s.homeOps, id)
+		}
+	}
 }
 
 // keptMaps makes the kept uids' state maps; s.mu is held.
@@ -146,27 +164,40 @@ func (s *server) keptHome(c *client, id string) (path string, uid int, code stri
 	return path, uid, ""
 }
 
-// pickKept takes the lowest uid of the range that taken (home.Kept.Taken)
-// does not hold and the keeper holds for nothing: no make or reset holds
-// it, and it is not retiring, quarantined or live. It is held as making
-// until unmakeKept; with none left it answers false.
-func (s *server) pickKept(taken map[int]bool) (int, bool) {
+// drawKept reads which uids of the range are taken (taken, home.Kept.Taken
+// in production) and holds the lowest that the reading does not hold and
+// the keeper holds for nothing (no make or reset holds it, and it is not
+// retiring, quarantined or live) as making until unmakeKept; with none left
+// it answers false. The reading and the draw are one step under keptDraw,
+// which unmakeKept takes too: a make that ends, its home now a folder of
+// its uid, cannot free that uid between another draw's reading, which saw
+// no folder, and that draw, so two homes never get one uid.
+func (s *server) drawKept(taken func() (map[int]bool, error)) (int, bool, error) {
+	s.keptDraw.Lock()
+	defer s.keptDraw.Unlock()
+	held, err := taken()
+	if err != nil {
+		return 0, false, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keptMaps()
 	for uid := s.cfg.Kept.First; uid <= s.cfg.Kept.Last; uid++ {
 		_, quarantined := s.keptQuarantined[uid]
-		if taken[uid] || s.keptMaking[uid] || quarantined || s.keptRetiring[uid] != nil || s.keptLive[uid] > 0 {
+		if held[uid] || s.keptMaking[uid] || quarantined || s.keptRetiring[uid] != nil || s.keptLive[uid] > 0 {
 			continue
 		}
 		s.keptMaking[uid] = true
-		return uid, true
+		return uid, true, nil
 	}
-	return 0, false
+	return 0, false, nil
 }
 
-// unmakeKept ends the hold pickKept or a reset took on uid.
+// unmakeKept ends the hold drawKept or a reset took on uid, under keptDraw
+// (drawKept).
 func (s *server) unmakeKept(uid int) {
+	s.keptDraw.Lock()
+	defer s.keptDraw.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.keptMaking, uid)
@@ -183,10 +214,9 @@ func (s *server) startKeptSpawn(c *client, req *protocol.Request, reach string, 
 	// The home's uid, read under its lock, is the home's for its life: a
 	// home retired after this read is absent once the uid's lock is held,
 	// and a reset keeps the uid.
-	homeLock := s.homeLock(req.Home)
-	homeLock.Lock()
+	unlockHome := s.lockHome(req.Home)
 	path, uid, code := s.keptHome(c, req.Home)
-	homeLock.Unlock()
+	unlockHome()
 	if code != "" {
 		s.log.Warn("spawn %s refused: kept home %s: %s", req.ID, req.Home, code)
 		return nil, code
@@ -537,9 +567,7 @@ func (s *server) handleHome(c *client, req *protocol.Request) {
 	if s.keepsNoHomes(c, req) {
 		return
 	}
-	lock := s.homeLock(req.Home)
-	lock.Lock()
-	defer lock.Unlock()
+	defer s.lockHome(req.Home)()
 	path, uid, code := s.keptHome(c, req.Home)
 	absent := code == protocol.CodeHomeAbsent
 	if code != "" && !absent {
@@ -588,15 +616,14 @@ func (s *server) keepsNoHomes(c *client, req *protocol.Request) bool {
 }
 
 // makeHome makes the absent home at path under the lowest free uid of the
-// range (home.Kept.Taken, pickKept), held as making until the home is made.
+// range (drawKept), held as making until the home is made.
 func (s *server) makeHome(c *client, req *protocol.Request, path string) {
-	taken, err := s.cfg.Kept.Taken("/proc")
+	uid, ok, err := s.drawKept(func() (map[int]bool, error) { return s.cfg.Kept.Taken("/proc") })
 	if err != nil {
 		s.log.Error("home_make %s: reading the kept homes' root and /proc: %v", req.ID, err)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		return
 	}
-	uid, ok := s.pickKept(taken)
 	if !ok {
 		s.log.Warn("home_make %s refused: every kept uid is taken", req.ID)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeCapacity))

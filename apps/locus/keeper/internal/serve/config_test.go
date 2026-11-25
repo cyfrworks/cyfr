@@ -213,9 +213,10 @@ func TestKeyedNeedsTheRolesOwnKeyNotEmpty(t *testing.T) {
 	}
 }
 
-// A role's bounds are read as Docker reads a container's, and anything
-// else refuses the boot by the variable's name.
-func TestRoleLimitsReadDockersSyntaxStrictly(t *testing.T) {
+// A role's bounds are read as Compose reads a container's, every form of a
+// memory size it takes among them, and anything else refuses the boot by
+// the variable's name.
+func TestRoleLimitsReadComposesSyntaxStrictly(t *testing.T) {
 	r := RoleSpec{Name: "runtime"}
 	for _, c := range []struct {
 		memory, cpu string
@@ -228,6 +229,16 @@ func TestRoleLimitsReadDockersSyntaxStrictly(t *testing.T) {
 		{"8192", "", cgroup.Limits{MemoryBytes: 8192}},
 		{"64k", "", cgroup.Limits{MemoryBytes: 64 << 10}},
 		{"1t", "", cgroup.Limits{MemoryBytes: 1 << 40}},
+		{"1p", "", cgroup.Limits{MemoryBytes: 1 << 50}},
+		{"4GB", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4gb", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4 GB", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4Gi", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4GiB", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4096m", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4294967296", "", cgroup.Limits{MemoryBytes: 4 << 30}},
+		{"4096b", "", cgroup.Limits{MemoryBytes: 4096}},
+		{"4096.9", "", cgroup.Limits{MemoryBytes: 4096}},
 		{"", "", cgroup.Limits{}},
 	} {
 		environ := []string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + c.memory, "LOCUS_RUNTIME_CPU_LIMIT=" + c.cpu, "LOCUS_BUILDS_MEMORY_LIMIT=nonsense"}
@@ -236,7 +247,7 @@ func TestRoleLimitsReadDockersSyntaxStrictly(t *testing.T) {
 			t.Errorf("memory %q, cpu %q: %+v, %v", c.memory, c.cpu, got, err)
 		}
 	}
-	for _, bad := range []string{"0", "4096b0", "4 G", "4GB", "4Gi", "-4G", "4x", ".5g", "1.", "0.3b", "4095", "99999999999t"} {
+	for _, bad := range []string{"0", "4096b0", "4  G", " 4G", "4G ", "4bi", "4GBi", "-4G", "4x", ".5g", "1.", "1.2.3g", "0.3b", "4095", "4095.9", "99999999999t"} {
 		if _, err := RoleLimits([]string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_MEMORY_LIMIT") || strings.Contains(err.Error(), strconv.Quote(bad)) {
 			t.Errorf("memory %q: %v", bad, err)
 		}

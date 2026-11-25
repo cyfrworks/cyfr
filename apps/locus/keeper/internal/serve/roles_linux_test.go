@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -294,9 +295,7 @@ func (rk *rolesKeeper) start(t *testing.T) {
 		if err != nil {
 			t.Fatalf("role %s: %v", r.spec.Name, err)
 		}
-		rk.s.mu.Lock()
-		r.client = c
-		rk.s.mu.Unlock()
+		rk.s.publishRole(r, c)
 	}
 	done := make(chan struct{}, len(rk.s.roles))
 	for _, r := range rk.s.roles {
@@ -743,6 +742,96 @@ func TestTheGuardsLossUnderARoleEndsTheKeeper(t *testing.T) {
 			conn.Close()
 			t.Fatalf("role %s started again after the guard's loss", ru.r.spec.Name)
 		}
+	}
+}
+
+// The guard's loss after a role's route is admitted and its command
+// released, before the role stands (publishRole), ends it as it ends a
+// role standing: its space is killed, the keeper ends, and the start,
+// published as run publishes it, is ended and never made again.
+func TestTheGuardsLossAsARoleStartsEndsIt(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	alpha := rk.roles["alpha"].r
+	c, err := rk.s.startRole(alpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rk.s.guardLost(1)
+	if procs, err := alpha.leaf.Procs(); err != nil || len(procs) != 0 {
+		t.Errorf("alpha's leaf after the guard's loss: %v, %v", procs, err)
+	}
+	select {
+	case <-rk.s.ended:
+	default:
+		t.Fatal("the keeper did not end")
+	}
+	if rk.s.endCode != ExitLost {
+		t.Fatalf("the keeper ends %d", rk.s.endCode)
+	}
+	if ending := rk.s.publishRole(alpha, c); !ending {
+		t.Fatal("the start was published as if the keeper ran on")
+	}
+	go func() {
+		rk.s.keepRole(alpha)
+		close(rk.running)
+	}()
+	select {
+	case <-rk.running:
+	case <-time.After(20 * time.Second):
+		t.Fatal("alpha kept running after the guard's loss")
+	}
+	admits := 0
+	for _, call := range rk.guard.taken() {
+		if call.op == guard.TypeAdmit && call.reach == guard.ReachRole {
+			admits++
+		}
+	}
+	if admits != 1 {
+		t.Fatalf("the guard admitted %d roles' routes, want alpha's one start", admits)
+	}
+}
+
+// A role's process that ends before its channel's reader has run starts
+// again as any end does: the reader serves the start it was made for. The
+// first reader of beta is held until beta's end is over and keepRole waits
+// to start it again.
+func TestAnEndBeforeItsReaderRunsStartsTheRoleAgain(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	restartAfter = 2 * time.Second
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	rk.s.readerStarts = func(r *role) {
+		if r.spec.Name == "beta" {
+			once.Do(func() {
+				close(held)
+				<-release
+			})
+		}
+	}
+	rk.start(t)
+	<-held
+	beta := rk.roles["beta"]
+	rk.s.mu.Lock()
+	first := beta.r.client
+	rk.s.mu.Unlock()
+	rk.s.signalChild(first.proc, unix.SIGKILL)
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		rk.s.mu.Lock()
+		over := first.ended && beta.r.client == nil
+		rk.s.mu.Unlock()
+		if over {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("beta's end did not finish")
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded poll for beta's end
+	}
+	time.Sleep(200 * time.Millisecond) // sleep-ok: well inside the restart's wait, where keepRole holds no client
+	close(release)
+	beta.accept(t)
+	if reply := beta.ask(t, `{"v":5,"type":"pool","id":"p","pool":"pbeta"}`); reply["type"] != protocol.TypePool {
+		t.Fatalf("beta's new channel answered %v", reply)
 	}
 }
 

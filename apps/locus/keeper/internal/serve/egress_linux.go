@@ -279,10 +279,15 @@ func (s *server) guardLost(conn uint64) {
 			routed = append(routed, sp)
 		}
 	}
+	// A role's start whose route is admitted counts as the role, from
+	// before its command is released until it stands (publishRole).
 	var roles []*role
 	for _, r := range s.roles {
-		if c := r.client; c != nil && c.route != nil && c.route.Conn == conn {
-			roles = append(roles, r)
+		for _, c := range []*client{r.client, r.starting} {
+			if c != nil && c.route != nil && c.route.Conn == conn {
+				roles = append(roles, r)
+				break
+			}
 		}
 	}
 	s.mu.Unlock()

@@ -18,7 +18,8 @@ signed as CYFR signs them:
 - From a build and from a program, another role's key, processes, IPC
   objects, port, homes and run folder are each out of reach; a runner has no
   network at all (tests/locus-runtime-image/runners.py).
-- Each role's group holds the bounds of its container of before: runtime
+- Each role's live process runs in its role's group and is held to the
+  bounds of its container of before, read from its own group up: runtime
   4G of memory and as much swap, 4 processors; builds 4G and 2; backends 2G
   and no processor bound.
 - A role killed starts again alone: the other two keep their processes and
@@ -219,14 +220,33 @@ def test_run(stack, plane):
     expect(complete["args"]["outcome"]["output"] == {"roles": "one"}, "the run completes with its answer", complete)
 
 
-def test_bounds(stack):
-    for name, (memory, swap, cpu) in BOUNDS.items():
-        group = f"/sys/fs/cgroup/role-{name}"
-        got = imagesuite.read_output(
-            stack.exec(f"cat {group}/memory.max {group}/memory.swap.max {group}/cpu.max"), f"{name}'s bounds").split("\n")
-        expect(got[:3] == [memory, swap, cpu],
-               f"the {name} role's group holds its container's bounds of before: memory {memory}, swap {swap}, cpu {cpu}",
-               got)
+def effective_bounds(chain):
+    """A process's bounds from its group's chain, its own group first: each memory file's least value and the
+    processors' least share, as the kernel holds the process to them, in cgroup v2's own words."""
+    def least(file):
+        values = [int(entry[file]) for entry in chain if entry.get(file, "max") != "max"]
+        return str(min(values)) if values else "max"
+    cpus = [entry["cpu.max"] for entry in chain if not entry.get("cpu.max", "max").startswith("max")]
+    cpu = min(cpus, key=lambda v: int(v.split()[0]) / int(v.split()[1])) if cpus else "max 100000"
+    return [least("memory.max"), least("memory.swap.max"), cpu]
+
+
+def test_bounds(stack, pids):
+    """Each role's live process is in its role's group, and the bounds the kernel holds that process to, read from
+    its own group up to the container's, are its container's of before."""
+    files = ("memory.max", "memory.swap.max", "cpu.max")
+    for name, want in BOUNDS.items():
+        # Its own group, then each group up to the container's, at most eight.
+        script = (f"g=$(sed -n 's/^0:://p' /proc/{pids[name]}/cgroup); echo \"$g\"; d=/sys/fs/cgroup${{g%/}}\n"
+                  "for _ in 1 2 3 4 5 6 7 8; do for f in " + " ".join(files) + "; do\n"
+                  "  printf '%s=%s;' \"$f\" \"$(cat \"$d/$f\" 2>/dev/null || echo max)\"; done; echo\n"
+                  "  [ \"$d\" = /sys/fs/cgroup ] && break; d=$(dirname \"$d\"); done")
+        lines = imagesuite.read_output(stack.exec(script), f"{name}'s process's groups").strip().split("\n")
+        group, chain = lines[0], [dict(kv.split("=", 1) for kv in line.strip(";").split(";")) for line in lines[1:]]
+        expect(group.startswith(f"/role-{name}/"), f"the {name} role's process runs in the {name} role's group", group)
+        expect(effective_bounds(chain) == list(want),
+               f"the {name} role's process is held to its container's bounds of before: memory {want[0]}, swap {want[1]}, "
+               f"cpu {want[2]}", [group, chain])
 
 
 def test_restart_alone(stack, c, victim):
@@ -281,7 +301,7 @@ def main():
         test_apart(stack, pids)
         test_run(stack, plane)
         test_reach(stack, c)
-        test_bounds(stack)
+        test_bounds(stack, pids)
         for victim in ("builds", "runtime", "backends"):
             test_restart_alone(stack, c, victim)
         run("docker", "restart", stack.container)

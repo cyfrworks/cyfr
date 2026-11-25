@@ -72,6 +72,10 @@ const (
 	// retireTimeout bounds the retirement of a role's spawns at its end, and
 	// of every spawn at the keeper's.
 	retireTimeout = 30 * time.Second
+	// startsTimeout bounds the wait of a role's end for its spawns' starts
+	// in flight, longer than a start takes: its hosts' resolution, a kept
+	// uid's retirement and its stage are each bounded within it.
+	startsTimeout = 2 * time.Minute
 )
 
 // restartAfter is how long a role's process waits after its end before it
@@ -628,8 +632,12 @@ type role struct {
 	groups *cgroup.Manager
 	leaf   *cgroup.Group
 	// client is the role's process standing, nil from its end until it is
-	// started again; s.mu guards it.
-	client *client
+	// started again; starting is its start in progress, from its channel's
+	// making until it is published as client (publishRole) or fails, so the
+	// guard's loss finds a role whose route is admitted before it stands
+	// (guardLost). s.mu guards both.
+	client   *client
+	starting *client
 }
 
 // client is one start of a role's process: its space's stage, its channel,
@@ -647,6 +655,9 @@ type client struct {
 	places map[string]*place
 	route  *guard.Route
 	ended  bool
+	// starts counts its spawn starts in flight, each counted before its end
+	// began or not at all (beginStart); its end waits for them (endClient).
+	starts sync.WaitGroup
 }
 
 type server struct {
@@ -686,10 +697,12 @@ type server struct {
 	uncleared map[string]guard.Route
 	// exit ends the keeper (os.Exit in production) and groupKilled kills a
 	// spawn's group and answers whether it is empty (killGroup); tests set
-	// either.
-	exit        func(code int)
-	groupKilled func(sp *spawn) bool
-	waiters     map[int]*child
+	// either. readerStarts, nil in production, runs as a role's channel
+	// reader starts, before it reads: tests hold the reader there.
+	exit         func(code int)
+	groupKilled  func(sp *spawn) bool
+	readerStarts func(r *role)
+	waiters      map[int]*child
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
 	// retirement and a home request take, so none of them interleaves
@@ -701,9 +714,10 @@ type server struct {
 	// (keptQuarantined, naming its home) until the sweeper's retry does.
 	// keptMaking holds the uid a home_make drew, or a home_reset's, from the
 	// draw until the home is made, so no other draw takes it while no folder
-	// owns it; homeOps holds each kept home's lock, by its id, which every
-	// home request and a kept spawn's lookup of its home take, outside the
-	// uid's.
+	// owns it; keptDraw makes a draw's reading and its draw one step
+	// (drawKept). homeOps holds each kept home's lock, by its id, while a
+	// home request or a kept spawn's lookup of its home holds or waits for
+	// it, outside the uid's (lockHome).
 	keptLive        map[int]int
 	keptEnding      map[int]int // a kept uid's released spawns still ending in order (retireKept)
 	keptOps         map[int]*sync.Mutex
@@ -711,7 +725,8 @@ type server struct {
 	keptRetiring    map[int]chan struct{}
 	keptQuarantined map[int]string
 	keptMaking      map[int]bool
-	homeOps         map[string]*sync.Mutex
+	keptDraw        sync.Mutex
+	homeOps         map[string]*homeLock
 
 	stopping atomic.Bool
 	closing  atomic.Bool
@@ -738,9 +753,7 @@ func (s *server) run() int {
 			s.endRoles()
 			return ExitStart
 		}
-		s.mu.Lock()
-		r.client = c
-		s.mu.Unlock()
+		s.publishRole(r, c)
 		s.log.Info("role %s: pid %d started as %s; pool %s", r.spec.Name, c.proc.pid, r.account.Name, r.spec.Pool)
 	}
 
@@ -1082,6 +1095,12 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 	if s.closing.Load() {
 		return
 	}
+	// A start of a client whose end has begun is not made: its channel is
+	// closed, and nothing answers.
+	if !s.beginStart(c) {
+		return
+	}
+	defer c.starts.Done()
 	if s.claimPlace(c, req.Place) == nil {
 		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
@@ -1123,6 +1142,12 @@ func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 	if err != nil {
 		s.log.Warn("spawn %s refused: %v", req.ID, err)
 		return nil, code
+	}
+	// The resolution may outlast the client's process: a command of a role
+	// whose end has begun never starts.
+	if s.clientEnded(c) {
+		s.log.Warn("spawn %s refused: role %s's process ended as its hosts resolved", req.ID, c.role.spec.Name)
+		return nil, protocol.CodeInternal
 	}
 	if req.HomeMode == protocol.HomeKept {
 		return s.startKeptSpawn(c, req, spec.Reach, reach, known)
@@ -1172,6 +1197,26 @@ func (s *server) startSpawn(c *client, req *protocol.Request) (*spawn, string) {
 	s.send(c, protocol.NewSpawned(req.ID, sp.id, uid, sp.leader.pid))
 	go s.watchLeader(sp)
 	return sp, ""
+}
+
+// beginStart counts a spawn start of c in flight (c.starts) unless c's end
+// has begun, and answers whether it did; the end, which begins under the
+// same lock, waits for every start counted (endClient).
+func (s *server) beginStart(c *client) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c.ended {
+		return false
+	}
+	c.starts.Add(1)
+	return true
+}
+
+// clientEnded reports whether c's end has begun.
+func (s *server) clientEnded(c *client) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return c.ended
 }
 
 // hold makes a started spawn one its client holds, unless that client's
