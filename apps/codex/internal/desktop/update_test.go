@@ -297,6 +297,67 @@ func TestTheShellsOwnLockDropsTheOffer(t *testing.T) {
 	}
 }
 
+// The app the update reopened opens the CYFR selected last by itself, a
+// folder's on this computer too (the chooser presses it once), and Update
+// CYFR, opened on the record at ready, then offers that folder's change
+// with no press of its row: its read, begun before that CYFR opened,
+// answers the offer worked out for its folder.
+func TestTheReopenedAppOffersTheLastFoldersChangeByItself(t *testing.T) {
+	var running atomic.Bool
+	running.Store(true)
+	a := rememberLocal(t, t.TempDir(), account.DefaultDirectory, &running)
+	u := newUpdating(t, a, appPlan)
+	stack := UpdatePlan{UpdateOffer: UpdateOffer{App: "0.0.2", Target: "0.0.2", Step: "stack", Says: []string{"Updating it to release 0.0.2:"}},
+		Dir: localFolder, Args: []string{"update", "--version", "0.0.2", "--confirmed", "c"}}
+	a.Offer = func(_ context.Context, project string) UpdatePlan {
+		u.mu.Lock()
+		u.asked = append(u.asked, project)
+		u.mu.Unlock()
+		if project == localFolder {
+			return stack
+		}
+		return UpdatePlan{UpdateOffer: UpdateOffer{App: "0.0.2", Says: []string{"This CYFR app is release 0.0.2, the newest."}}}
+	}
+	first := a.shown(t, offeredAs(1))
+	if first.Offer.Step != "" {
+		t.Fatalf("before the folder opened the page offers %+v", first.Offer)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	waiting := make(chan updateRead, 1)
+	go func() {
+		var got updateRead
+		_ = json.Unmarshal(a.readUpdate(ctx, a.ReadToken, first.Seq).Body.Bytes(), &got)
+		waiting <- got
+	}()
+	shown := a.post(t, "/bootstrap/state", map[string]string{})
+	if shown.Resume != localAddress {
+		t.Fatalf("the chooser of the reopened app resumes %q", shown.Resume)
+	}
+	done := a.connect(t, "/bootstrap/connect", map[string]string{"address": shown.Resume, "kept": "true"})
+	a.next(t)
+	a.ready(localAddress)
+	if got := answered(t, done); got.Next != "/" {
+		t.Fatalf("the chooser's own press answered %+v", got)
+	}
+	a.opened(t, localAddress)
+	got := <-waiting
+	for got.Offer == nil || got.Offer.Step != "stack" {
+		if ctx.Err() != nil {
+			t.Fatalf("the page waiting since ready shows %+v", got)
+		}
+		got = a.shown(t, func(r updateRead) bool { return r.Offer != nil })
+	}
+	if got.Offer.Target != "0.0.2" || !reflect.DeepEqual(got.Offer.Says, stack.Says) {
+		t.Fatalf("the page offers %+v", got.Offer)
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !slices.Contains(u.asked, localFolder) {
+		t.Fatalf("the offers were worked out for %q", u.asked)
+	}
+}
+
 // The record is the last update's, kept until the next update replaces
 // it: the window's close removes nothing, and the page is given it with
 // when it was last written and its sum, the refusal cyfr ended on or else
