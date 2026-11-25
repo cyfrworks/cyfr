@@ -34,7 +34,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "builder-image"))
 
 from stack import (  # noqa: E402
-    RELEASE_BIN, RELEASE_USER, VERSION, Stack, brief, diagnostics, expect, output_bytes, output_file, tincture,
+    RELEASE_USER, VERSION, Stack, brief, diagnostics, expect, output_bytes, output_file, release_eval, tincture,
 )
 
 LIB_RS = """#[allow(warnings)]
@@ -118,7 +118,7 @@ TINCTURE = {
 def cargo_toml(stack):
     """The release's own reagent manifest, printed between markers: eval can print runtime warnings."""
     result = stack.exec(
-        f"""{RELEASE_BIN} eval 'IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'""",
+        release_eval('IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'),
         user=RELEASE_USER,
     )
     out = result.stdout

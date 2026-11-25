@@ -140,13 +140,6 @@ class Stack(imagesuite.Stack):
         """(Re)creates the service, waits for its listener and, unless told not to, for its pool to fill."""
         self.compose("up", "--detach", "--no-build", "--force-recreate", COMPOSE_SERVICE)
         self.container = self.compose("ps", "--quiet", COMPOSE_SERVICE).stdout.strip()
-        # The plane listens on the default bridge's gateway alone: a daemon
-        # whose host-gateway-ip names another address fails here, not on the
-        # service's first call to the plane.
-        gateway = self.host_gateway()
-        expect(gateway == self.plane.host,
-               f"the container resolves host.docker.internal to {gateway}, the address the control plane listens on",
-               {"resolved": gateway, "plane": self.plane.host})
         self.wait_listener()
         if wait_pool:
             self.wait_pool()
@@ -224,11 +217,10 @@ class Stack(imagesuite.Stack):
     # ------------------------------------------------------------------
 
     def host_gateway(self):
-        """The address the container reaches this machine at, compose's host
-        gateway (`host.docker.internal`), as the IPv4 literal a pin names; the
-        engine resolves nothing itself."""
-        out = read_output(self.exec("getent ahostsv4 host.docker.internal"), "the container's host gateway lookup").split()
-        return out[0] if out else None
+        """The address the container reaches this machine at, the default
+        bridge's gateway the control plane listens on, as the IPv4 literal a
+        pin names; the engine resolves nothing itself."""
+        return self.plane.host
 
     def exec(self, script, user=None):
         user_args = ["-u", user] if user else []

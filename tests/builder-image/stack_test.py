@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stack  # noqa: E402
 import imagesuite  # noqa: E402
 
-CONTAINER = "cyfr-locus-builds-1"
+CONTAINER = "cyfr-locus-1"
 PROCESS_LINE = "4242|1001,1001,1001,1001|00000000000000e0|beam.smp -- builder\n"
 HOME_LINE = "build-a1\n"
 

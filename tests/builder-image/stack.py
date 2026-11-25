@@ -113,6 +113,16 @@ BOUNDS = WIRE["bounds"]
 TERMINAL = ("result", "refusal")
 
 
+def release_eval(expression):
+    """A shell command that evaluates `expression` in the release as the builds role's process would run it: its
+    locale and release variables, PATH, its own LOCUS_BUILDS_ and LOCUS_LOG_ variables but its bounds, which are
+    the keeper's alone and which the release refuses, and its run folder as HOME and RELEASE_TMP. A `docker exec`
+    holds the container's whole environment, every role's bounds among it."""
+    keep = "^(LANG|LANGUAGE|LC_ALL|ELIXIR_ERL_OPTIONS|RELEASE_DISTRIBUTION|PATH|LOCUS_BUILDS_[A-Z_]*|LOCUS_LOG_[A-Z_]*)="
+    return (f'env -i $(env | grep -E "{keep}" | grep -v "_LIMIT=") HOME={RUN_DIR} RELEASE_TMP={RUN_DIR} '
+            f"{RELEASE_BIN} eval '{expression}'")
+
+
 def expect(condition, message, detail=None):
     if not condition:
         text = detail if isinstance(detail, str) else json.dumps(detail, indent=2, default=str)

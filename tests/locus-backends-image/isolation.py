@@ -693,9 +693,10 @@ def main():
 
         defaults = run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}{stack.project}-defaults",
                        "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}", "--entrypoint", "cyfr-locus", image,
-                       "serve", "--pool", f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['reach']}", "--home-root", HOME_ROOT,
-                       "--guard", "/run/cyfr-guard-control/guard.sock",
-                       "--client-user", RELEASE_USER, "--", RELEASE_BIN, "start", check=False)
+                       "serve", "--role", imagesuite.role_spec(ROLE),
+                       "--pool", f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['reach']}",
+                       "--home-root", RELEASE["home_root"], "--kept-homes", f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
+                       "--guard", imagesuite.Guard.CONTROL, "--", RELEASE_BIN, "start", check=False)
         expect(defaults.returncode == 78 and "refusing to start: Cap" in defaults.stderr,
                "cyfr-locus refuses Docker's default capabilities", defaults.stderr[-2000:])
 

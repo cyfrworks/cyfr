@@ -187,10 +187,9 @@ services:
     # build, runner and backend a group of its own inside its role's,
     # bounded at its role's LOCUS_BUILDS_MEMORY_BYTES,
     # LOCUS_RUNTIME_MEMORY_BYTES or LOCUS_BACKENDS_MEMORY_BYTES. Without the
-    # option no spawn runs unbounded: no runner starts; the builds role
-    # answers each build `unavailable`, naming the option; and every
-    # backend's spawn is refused as `memory_unavailable`, which the backend
-    # reports as its error.
+    # option nothing runs unbounded and nothing runs: cyfr-locus refuses to
+    # start, since no role's group can be made, and the container
+    # restart-loops.
     # seccomp=./keeper.seccomp.json: cyfr-locus clones each role process
     # and every build, runner and backend into a space of its own, a user,
     # network, IPC, pid, mount and cgroup namespace with files of its own,

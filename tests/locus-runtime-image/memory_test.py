@@ -104,7 +104,7 @@ class ReleaseIdentity(unittest.TestCase):
 class ProcessProbe(unittest.TestCase):
     def probe(self, returncode, stdout):
         with mock.patch.object(memory, "run", lambda *args, **kwargs: answer(returncode, stdout)):
-            return memory.process_alive("cyfr-locus-runtime-1", 4242)
+            return memory.process_alive("cyfr-locus-1", 4242)
 
     def test_a_process_the_probe_finds_running_is_alive(self):
         self.assertTrue(self.probe(0, "alive\n"))

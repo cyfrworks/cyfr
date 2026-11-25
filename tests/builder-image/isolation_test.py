@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import isolation  # noqa: E402
 import stack  # noqa: E402
 
-CONTAINER = "cyfr-locus-builds-1"
+CONTAINER = "cyfr-locus-1"
 TABLES = "key shmid perms\n0 1 600\n"
 
 

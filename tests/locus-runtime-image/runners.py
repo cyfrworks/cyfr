@@ -548,7 +548,7 @@ def test_runner_has_no_route(stack, plane):
     control plane's own address, where the service posts every host call,
     is unreachable from a runner too."""
     gateway = stack.host_gateway()
-    expect(gateway is not None, f"the container reaches this machine at {gateway}", stack.exec("getent ahostsv4 host.docker.internal").stdout)
+    expect(gateway is not None, f"the container reaches this machine at {gateway}", plane.host)
     expect(run("docker", "exec", stack.container, "sh", "-c", "command -v nsenter", check=False).returncode == 0,
            "prerequisite: the image has nsenter, to enter a runner's namespace")
     own, said = dial(stack, None, f"{gateway}:9")
@@ -563,7 +563,7 @@ def test_pinned_egress(stack, plane):
     """A guest's outbound request goes where the control plane pinned it and
     nowhere else, and a refused pin opens no connection."""
     gateway = stack.host_gateway()
-    expect(gateway is not None, f"the container reaches this machine at {gateway}", stack.exec("getent ahostsv4 host.docker.internal").stdout)
+    expect(gateway is not None, f"the container reaches this machine at {gateway}", plane.host)
     origin = Origin(plane.host)
     plane.egress(EGRESS_HOSTS["fetch"], gateway)
     plane.egress(EGRESS_HOSTS["denied"], "denied")

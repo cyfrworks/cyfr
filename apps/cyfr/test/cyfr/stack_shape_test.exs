@@ -625,6 +625,15 @@ defmodule Cyfr.StackShapeTest do
              "ports" => ["127.0.0.1::#{runtime.port}"]
            }
          }, nil},
+      # The roles proof layers this after the backends overlay: the builds'
+      # and the runtime's ports published on the guard beside the backends'.
+      "tests/locus-backends-image/compose.roles.yml" =>
+        {:backends,
+         %{
+           release.guard => %{
+             "ports" => for(name <- [:builds, :runtime], do: "127.0.0.1::#{role(roles, name).port}")
+           }
+         }, nil},
       # The overlays a role's suites layer last, without writable cgroups:
       # the service's own security options but that one.
       "tests/builder-image/compose.no-writable-cgroups.yml" =>

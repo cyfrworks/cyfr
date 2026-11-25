@@ -124,6 +124,7 @@ from control_plane import ControlPlane  # noqa: E402
 from memory import CHILD_BYTES as HOG_BYTES, HOG, HOG_REF, wasm  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, RELEASE, ROLE, RUN_DIR, SERVICE, SERVICE_UID,  # noqa: E402
                    SERVICE_USER, Stack, expect, run, wait_until)
+import imagesuite  # noqa: E402
 from imagesuite import APPARMOR, PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 from worker_auth import ATTEMPT_FIELDS  # noqa: E402
 
@@ -205,24 +206,36 @@ class IsolatedStack(Stack):
 # ---------------------------------------------------------------------------
 
 
-def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None, pool_args=None,
-               apparmor=APPARMOR):
-    """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client;
-    with `network`, in that container's network namespace. Without `seccomp` it runs under Docker's default seccomp
-    profile, and with `apparmor` None under Docker's default AppArmor profile."""
-    args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
-            *(["--network", f"container:{network}"] if network else []),
-            *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
-            "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
-            "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
-    if seccomp:
-        args += ["--security-opt", f"seccomp={PROFILE}"]
-    if apparmor:
-        args += ["--security-opt", f"apparmor={apparmor}"]
-    args += ["--security-opt", "systempaths=unconfined"]
-    args += ["--entrypoint", "cyfr-locus", image, "serve", *(pool_args or ["--pool", POOL]), "--home-root", HOME_ROOT,
-             "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]
-    return run(*args, check=False, timeout=timeout)
+def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard=None, pool_args=None,
+               apparmor=APPARMOR, guarded=True):
+    """cyfr-locus from the image under the shipped service's options, serving the runtime's role, whose process is
+    a shell running `client_script`, and the relay pool, in the network namespace of `guard` (an
+    `imagesuite.Guard`), or of a guard of its own made for the run. `guarded=False` names a guard's control no
+    guard serves. Without `seccomp` it runs under Docker's default seccomp profile, and with `apparmor` None under
+    Docker's default AppArmor profile."""
+    own = None
+    if guard is None and guarded:
+        own = guard = imagesuite.Guard(image, f"locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}")
+    try:
+        args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
+                *(guard.keeper_args() if guard else []),
+                *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID",
+                "--cap-add", "SETGID", "--cap-add", "KILL", "--security-opt", "no-new-privileges:true",
+                "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
+                *imagesuite.role_mounts(RELEASE, ROLE, home_size="64m"),
+                "-e", f"{ROLE['key']}={secrets.token_hex(32)}"]
+        if seccomp:
+            args += ["--security-opt", f"seccomp={PROFILE}"]
+        if apparmor:
+            args += ["--security-opt", f"apparmor={apparmor}"]
+        args += ["--security-opt", "systempaths=unconfined"]
+        args += ["--entrypoint", "cyfr-locus", image, "serve", "--role", imagesuite.role_spec(ROLE),
+                 *(pool_args or ["--pool", POOL]), "--home-root", RELEASE["home_root"],
+                 "--guard", imagesuite.Guard.CONTROL, "--", "/bin/sh", "-c", client_script]
+        return run(*args, check=False, timeout=timeout)
+    finally:
+        if own:
+            own.down()
 
 
 def place_line(place, kind="warm", athanor=None):
@@ -274,11 +287,10 @@ def test_refusals(image):
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,
            f"under Docker's default seccomp profile cyfr-locus refuses to serve the relay pool, naming both settings (exit {refused.returncode})",
            refused.stderr)
-    # The keeper's own entry point: a routed pool whose guard is not there
-    # refuses the boot, naming the guard's socket.
-    guard = "/run/cyfr-guard-control/guard.sock"
-    unguarded = keeper_run(image, "exec sleep 5", timeout=60,
-                           pool_args=["--pool", f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:routed", "--guard", guard])
+    # The keeper's own entry point: a guard that is not there refuses the
+    # boot, naming the guard's socket.
+    guard = imagesuite.Guard.CONTROL
+    unguarded = keeper_run(image, "exec sleep 5", timeout=60, guarded=False)
     expect(unguarded.returncode == 78 and "does not make a route" in unguarded.stderr and guard in unguarded.stderr,
            f"a routed keeper whose guard is not there refuses to start, naming {guard} (exit {unguarded.returncode})",
            unguarded.stderr[-2000:])
@@ -339,7 +351,11 @@ def test_names(image):
     tag = secrets.token_hex(4)
     listener = f"{PROJECT_PREFIX}locus-names-{os.getpid()}-{tag}"
     run("docker", "rm", "--force", listener, check=False)
-    run("docker", "run", "--detach", "--name", listener, "--dns", "127.0.0.53", "-v", f"{LISTENER_DIR}:/listener:ro",
+    # The guard's resolver asks the listener, which shares its namespace on
+    # 127.0.0.53 (compose.names.yml's shape).
+    guard = imagesuite.Guard(image, f"locus-names-guard-{os.getpid()}-{tag}", extra=["--dns", "127.0.0.53"])
+    run("docker", "run", "--detach", "--name", listener, "--network", f"container:{guard.name}",
+        "-v", f"{LISTENER_DIR}:/listener:ro", "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE",
         "--entrypoint", "node", image, "/listener/name-listener.mjs")
     try:
         control, runner = f"keeper-{tag}.l5.test", f"runner-{tag}.l5.test"
@@ -348,7 +364,7 @@ def test_names(image):
         client = (f'echo "own:$(getent hosts {control} | cut -d" " -f1)"; '
                   + PLACE_FIRST + f"printf '%s\\n' '{request}' >&3; "
                   'read -r line <&3; echo "reply:$line"; read -r line <&3; echo "reply:$line"')
-        ran = keeper_run(image, client, network=listener)
+        ran = keeper_run(image, client, guard=guard)
         got = after_placed(ran, "names")
         heard = [line.split(" ", 1)[1] for line in run("docker", "logs", listener, check=False).stdout.splitlines()
                  if line.startswith("heard ")]
@@ -359,6 +375,7 @@ def test_names(image):
                {"replies": got, "heard": heard, "stderr": ran.stderr[-2000:]})
     finally:
         run("docker", "rm", "--force", listener, check=False)
+        guard.down()
 
 
 class Attach:

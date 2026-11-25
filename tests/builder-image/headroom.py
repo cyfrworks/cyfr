@@ -57,7 +57,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import (  # noqa: E402
-    RELEASE, RELEASE_BIN, RELEASE_USER, ROLE, WIRE, Stack, brief, expect, output_bytes, tincture,
+    RELEASE, RELEASE_USER, ROLE, WIRE, Stack, brief, expect, output_bytes, release_eval, tincture,
 )
 # stack puts tests/, which holds the shared plumbing, on the path.
 import imagesuite  # noqa: E402
@@ -153,7 +153,7 @@ def events(stack, path):
 
 def setting(stack, accessor):
     out = imagesuite.read_output(
-        stack.exec(f"""{RELEASE_BIN} eval 'IO.puts("<<<#{{Locus.Config.{accessor}()}}>>>")'""", user=RELEASE_USER),
+        stack.exec(release_eval(f'IO.puts("<<<#{{Locus.Config.{accessor}()}}>>>")'), user=RELEASE_USER),
         f"the release's Locus.Config.{accessor}()")
     return int(out.split("<<<", 1)[1].split(">>>", 1)[0])
 

@@ -48,10 +48,8 @@
 # The memory bound is a cgroup v2 group cyfr-locus makes for each spawn, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
-# It adds no capability. Without it cyfr-locus cannot bound a spawn and
-# refuses every one: the builds and backends roles answer each
-# `unavailable`, and the runtime starts no runner and logs, both naming the
-# option; none runs unbounded.
+# It adds no capability. Without it cyfr-locus can make no role's group
+# and refuses to start; nothing runs unbounded.
 #
 # Every spawn runs in a space of its own: cyfr-locus clones it into a user,
 # network and IPC namespace mapping only its pooled uid and gid, so it

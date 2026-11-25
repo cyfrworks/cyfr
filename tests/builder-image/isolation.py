@@ -23,9 +23,9 @@
   before the next build runs under the same uid; the home root is
   read-only to it and the release's run directory is not in its space.
 - Started without the `writable-cgroups=true` security option, as a
-  deployment that lacks it would be, the service answers every build
-  `unavailable`, naming the option, and runs nothing: no build is ever run
-  without its memory bound (tests/builder-image/memory.py proves the bound).
+  deployment that lacks it would be, cyfr-locus refuses its boot, since no
+  role's group can be made, and runs nothing: no build is ever run without
+  its memory bound (tests/builder-image/memory.py proves the bound).
 - Every build runs in a space of its own, a user, network and IPC
   namespace, with its own loopback and one route, its guard's. The
   builder listens in the namespace of its egress guard, the image under
@@ -88,7 +88,7 @@ from stack import (  # noqa: E402
     BUILDS_SUBNET, CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, HOST_API_ADDRESS, HOST_API_PORT, NETWORK, POOL_FIRST,
     POOL_LAST, PORT, PROJECT_PREFIX, REFUSED, RELEASE,
     RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, SERVICE, Stack, brief, build_canary, expect, output_file, run,
-    tincture,
+    release_eval, tincture,
 )
 
 # On the path once stack.py is loaded.
@@ -242,10 +242,12 @@ def fields(text):
     return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
 
 
-def listening_addresses(stack):
-    """The local address of each listening TCP socket of the container, in hex, from its own tables."""
-    return imagesuite.read_output(stack.exec("awk '$4 == \"0A\" {print $2}' /proc/net/tcp /proc/net/tcp6"),
-                                  "the container's TCP tables").split()
+def listening_addresses(stack, pid="self"):
+    """The local address of each listening TCP socket of the network namespace `pid` is in (the container's own by
+    default), in hex, from that namespace's tables."""
+    return imagesuite.read_output(
+        stack.exec(f"awk '$4 == \"0A\" {{print $2}}' /proc/{pid}/net/tcp /proc/{pid}/net/tcp6"),
+        f"the TCP tables of {pid}'s namespace").split()
 
 
 def test_process_model(stack, image):
@@ -258,11 +260,16 @@ def test_process_model(stack, image):
            f"the release runs as {RELEASE_USER} with no capability", procs)
     expect(not any("epmd" in p["cmd"] for p in procs) and "-sname" not in release[0]["cmd"] and " -name " not in release[0]["cmd"],
            "the release starts no Erlang distribution", release)
-    # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in every
-    # container on a user-defined network.
+    # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in the
+    # container's namespace, and the guard answers names on that address in
+    # the role's space: the role listens in its space alone.
     listening = listening_addresses(stack)
+    expect(all(address.startswith("0B00007F:") for address in listening),
+           "nothing but Docker's resolver listens in the container's own namespace", listening)
+    listening = listening_addresses(stack, release[0]["pid"])
     ports = sorted({int(address.rsplit(":", 1)[1], 16) for address in listening if not address.startswith("0B00007F:")})
-    expect(ports == [PORT], f"besides Docker's resolver, the builder's only listening TCP port is {PORT}", listening)
+    expect(ports == [PORT], f"besides the guard's resolver, the builds role's only listening TCP port is {PORT}, in its space",
+           listening)
 
     def start_alone(name, *env):
         return run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}locus-builds-isolation-{name}-{os.getpid()}",
@@ -321,7 +328,7 @@ def test_concurrent_trees(stack):
 
 def test_no_survivors(stack):
     manifest_result = stack.exec(
-        f"""{RELEASE_BIN} eval 'IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'""", user=RELEASE_USER)
+        release_eval('IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'), user=RELEASE_USER)
     manifest = manifest_result.stdout.split("<<<", 1)[1].split(">>>", 1)[0]
     status, answer = stack.build({"src/lib.rs": LIB_RS, "build.rs": DAEMON_BUILD_RS, "Cargo.toml": manifest}, "rust", "reagent")
     expect(status == 200, "a Rust build whose build.rs starts a daemon succeeds", brief(answer))
@@ -881,7 +888,9 @@ def test_names(image, canary):
 
 
 def test_no_bound_no_build(stack):
-    stack.up(writable_cgroups=False)
+    stack.writable_cgroups = False
+    stack.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE)
+    stack.container = stack.compose("ps", "--all", "--quiet", SERVICE).stdout.strip()
     host = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]
     options = host["SecurityOpt"]
     # Docker reports `systempaths=unconfined` as empty masked and read-only
@@ -891,16 +900,9 @@ def test_no_bound_no_build(stack):
            and not any("writable-cgroups" in o for o in options),
            "the service is started without the writable-cgroups=true option, under the keeper's seccomp and AppArmor "
            "profiles with its system paths unmasked", [o[:60] for o in options])
-    expect(all(toolchain["available"] for toolchain in stack.health["toolchains"].values()),
-           "it starts and answers health as the shipped service does", stack.health)
-
-    status, answer = stack.build(tincture("mkdir -p dist && id -u > dist/ran.txt"), "javascript", "tincture")
-    expect(status == 503 and answer.get("class") == "unavailable" and "writable-cgroups=true" in answer.get("reason", ""),
-           "a build is refused as unavailable, naming the option the service lacks", brief(answer))
-    expect(stack.pool_processes() == [] and stack.homes() == [], "nothing of the build was run: no process of a pool uid, no home",
-           [stack.pool_processes(), stack.homes()])
-    status, again = stack.build(tincture("mkdir -p dist && id -u > dist/ran.txt"), "javascript", "tincture")
-    expect(status == 503 and again.get("class") == "unavailable", "and so is the next: the service keeps refusing, and keeps running", brief(again))
+    text = imagesuite.refused_unbounded(stack.container, stack.logs)
+    expect(imagesuite.NO_GROUPS in text, "cyfr-locus refuses its boot, since no role's group can be made, starts no "
+           "spawn, and the container restart-loops: no build runs unbounded", text[-2000:])
 
 
 def main(image):

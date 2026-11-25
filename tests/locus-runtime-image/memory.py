@@ -9,8 +9,8 @@ the runner a cgroup v2 group of its own at that bound, with no swap and the
 group killed whole, charged for the runner's VM, every guest's linear
 memory, the pages of its home and the kernel memory it causes, together. It
 can do so only where the service mounts the container's cgroup writable
-(`security_opt: writable-cgroups=true`); anywhere else it refuses a spawn
-that asks for a bound, and the service starts no runner.
+(`security_opt: writable-cgroups=true`); anywhere else it can make no
+role's group and refuses its boot, so no runner starts.
 
 - `bound`: every runner runs in such a group. A formula whose children run
   in its runner (the nested probe spawning six children and awaiting them
@@ -32,12 +32,8 @@ that asks for a bound, and the service starts no runner.
   next given to a runner, that runner has a home and a group of its own,
   which the ended one left nothing in.
 - `unavailable`: under the shipped service without `writable-cgroups=true`,
-  no runner process ever starts: every spawn is refused, the pool keeps none
-  of the runners it was refused and backs off, its status reports the
-  refusal naming the option beside the bound every runner would run under,
-  a start is refused 503 `unavailable` naming it with nothing of the attempt
-  run, and the service logs once what the deployment lacks and stays up on
-  the same boot.
+  cyfr-locus refuses its boot, saying it can make no cgroup group for a
+  role, no runner process ever starts, and the container restart-loops.
 
 `--measure` runs the seed components through the scripted control plane,
 each subtree in a fresh runner of a fresh container, and prints each
@@ -67,7 +63,9 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from control_plane import ControlPlane  # noqa: E402
-from stack import HERE, POOL_FIRST, POOL_LAST, ROOT, SERVICE, Stack, StatusSampler, expect, run, wait_until  # noqa: E402
+from stack import (  # noqa: E402
+    COMPOSE_SERVICE, HERE, POOL_FIRST, POOL_LAST, ROOT, SERVICE, Stack, expect, run, wait_until,
+)
 import imagesuite  # noqa: E402
 
 MIB = 1 << 20
@@ -619,50 +617,17 @@ def reuse_uid(stack, plane, hostile, tries=12):
 # ---------------------------------------------------------------------------
 
 
-def test_bound_unavailable(image, plane, window_s=5.0):
-    """Without writable-cgroups=true, no runner process ever starts, the pool keeps none, and the service says what it lacks."""
+def test_bound_unavailable(image, plane):
+    """Without writable-cgroups=true cyfr-locus refuses its boot, since no role's group can be made: no runner
+    process ever starts, and the container restart-loops."""
     stack = Stack("cyfr-locus-runtime-unbounded", image, plane, writable_cgroups=False)
     try:
-        stack.up(wait_pool=False)
-        probe = stack.exec("mkdir /sys/fs/cgroup/probe-writable")
-        expect(probe.returncode != 0 and "Read-only" in probe.stderr,
-               f"the service's cgroup is mounted read-only without the option ({probe.stderr.strip()})", probe.stderr)
-        boot = stack.boot
-        refused = wait_until(lambda: (lambda s: s if s[0] == 200 and s[1]["ok"]["refusal"] else None)(stack.status()),
-                             10, "the status to report the keeper's refusal")[1]["ok"]
-        expect(refused["refusal"]["reason"] == "memory_unavailable" and "writable-cgroups=true" in refused["refusal"]["message"]
-               and refused["memory_bytes"] == 402653184,
-               "the status reports the refusal, naming writable-cgroups=true, and the bound every runner would run under", refused)
-        sampler = StatusSampler(stack, interval=0.1, threads=1).start()
-        seen = set()
-        deadline = time.monotonic() + window_s
-        attempt = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"unbounded": True}, "ath_mem_unbounded", 30_000)
-        code, answer = stack.start(attempt)
-        while time.monotonic() < deadline:
-            seen.update(p["pid"] for p in stack.processes() if any(POOL_FIRST <= u <= POOL_LAST for u in p["uids"]))
-            time.sleep(0.2)
-        samples = sampler.stop()
-        logs = stack.logs().splitlines()
-        refusals = [line for line in logs if "was not started" in line and "writable-cgroups=true" in line]
-        counts = [s[1] for s in samples]
-        print(f"status without the option, over {window_s:.0f} s: {len(samples)} samples, first {counts[0] if counts else None}, "
-              f"last {counts[-1] if counts else None}; the start answered {code} {answer}", flush=True)
-        expect(seen == set() and stack.homes() == [], "no runner process ever ran under a pooled uid, and no home was made",
-               {"pids": sorted(seen), "homes": stack.homes()})
-        expect(len(refusals) == 1, "the service logged once that cyfr-locus cannot bound a runner, naming writable-cgroups=true",
-               [line for line in logs if "memory" in line or "Keeper" in line][-10:])
-        expect(counts and all(c == {"fresh": 0, "idle": 0, "busy": 0, "tainted": 0} for c in counts),
-               f"the pool kept no runner it was refused, tainted or otherwise, in any of {len(counts)} samples",
-               [c for c in counts if c != {"fresh": 0, "idle": 0, "busy": 0, "tainted": 0}][:5])
-        expect(code == 503 and answer.get("error") == "unavailable" and "writable-cgroups=true" in answer.get("message", ""),
-               "the start was refused 503 unavailable, naming writable-cgroups=true", answer)
-        exits = [r for r in plane.seen("runner_exited") if attempt["attempt"] in r["attempts"]]
-        expect(plane.seen(None, attempt["execution_id"]) == [] and exits == [],
-               "the attempt it was refused made no host call and no runner exit was reported for it: nothing of it ran",
-               {"calls": plane.seen(None, attempt["execution_id"]), "exits": exits})
-        code, status = stack.status()
-        expect(code == 200 and status["ok"]["boot"] == boot and status["ok"]["refusal"] == refused["refusal"],
-               "the service stayed up on the same boot, still reporting the refusal", status)
+        stack.compose("up", "--detach", "--no-build", "--force-recreate", COMPOSE_SERVICE)
+        stack.container = stack.compose("ps", "--all", "--quiet", COMPOSE_SERVICE).stdout.strip()
+        text = imagesuite.refused_unbounded(stack.container, stack.logs)
+        expect(imagesuite.NO_GROUPS in text,
+               "cyfr-locus refuses its boot without a writable cgroup, naming what it could not make, and runs no runner",
+               text[-2000:])
     finally:
         stack.down()
 

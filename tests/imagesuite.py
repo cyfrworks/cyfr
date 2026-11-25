@@ -19,7 +19,9 @@ imports the runtime harness on every change.
 """
 
 import atexit
+import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -66,6 +68,7 @@ _signalled = []
 # removed, oldest first, for the exit hook. A stack stays here until its
 # `docker compose down` succeeds.
 _stacks = []
+_guards = []
 _directories = []
 # Set while the exit hook runs: a teardown that fails there is reported by
 # the exit status, not by a SystemExit an exit hook cannot raise.
@@ -291,6 +294,89 @@ class Stack:
             sys.exit(message)
 
 
+# What cyfr-locus says as it refuses its boot where it can make no cgroup
+# group: a container started without `writable-cgroups=true`.
+NO_GROUPS = "refusing to start: every role and spawn is held in a cgroup group of its own, and none can be made here"
+
+
+def refused_unbounded(container, logs, timeout_s=60):
+    """Waits until the container's keeper has refused its boot for want of a cgroup group, the container exited or
+    restarting: answers its logs. Fails the suite past `timeout_s`, or where a spawn was ever started."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        text = logs()
+        if NO_GROUPS in text:
+            inspected = json.loads(run("docker", "inspect", container).stdout)[0]
+            if inspected["RestartCount"] >= 1 or not inspected["State"]["Running"]:
+                if re.search(r"spawn \S+: uid \d+", text):
+                    sys.exit(f"FAIL: a spawn started where no bound can be made\n{text[-3000:]}")
+                return text
+        time.sleep(0.5)
+    sys.exit(f"FAIL: cyfr-locus did not refuse its boot for want of a cgroup group within {timeout_s} s\n{logs()[-3000:]}")
+
+
+def role_spec(role):
+    """A role of the table (tests/fixtures/locus_roles.json) as cyfr-locus's `--role` takes it:
+    `<name>:<uid>:<port>:<pool>`, then `:private` and `:kept` where the role is either."""
+    return (f"{role['name']}:{role['uid']}:{role['port']}:{role['pool']}"
+            + (":private" if role["private"] else "") + (":kept" if role["kept_root"] else ""))
+
+
+def role_mounts(release, role, home_size=None):
+    """The tmpfs mounts a keeper serving `role` alone needs, as `docker run` arguments: the release's run
+    directory, root's and 0711, the role's own run folder, its uid's and 0700, and its spawns' homes' root, 1733."""
+    return ["--tmpfs", f"{release['run_dir']}:mode=0711,size={release['run_size']}",
+            "--tmpfs", f"{role['run_dir']}:uid={role['uid']},gid={role['uid']},mode=0700,size={role['run_size']}",
+            "--tmpfs", f"{role['home_root']}:mode=1733,exec,size={home_size or role['home_size']}"]
+
+
+class Guard:
+    """An egress guard of the suite's own, for a keeper a suite starts from the image by `docker run`: cyfr-locus
+    requires one (`--guard`) to route each role process's space. The guard runs on a network of its own, healthy
+    before `__init__` returns, and serves its control on a volume of its own; `keeper_args` puts a container in the
+    guard's network namespace with the control mounted read-only, and `down` removes all three."""
+
+    CONTROL_DIR = "/run/cyfr-guard-control"
+    CONTROL = f"{CONTROL_DIR}/guard.sock"
+
+    def __init__(self, image, name, env=(), extra=()):
+        self.name = PROJECT_PREFIX + name
+        self.network = f"{self.name}-net"
+        self.volume = f"{self.name}-control"
+        _guards.append(self)
+        run("docker", "network", "create", self.network)
+        run("docker", "volume", "create", self.volume)
+        gateway = run("docker", "network", "inspect", self.network, "--format",
+                      "{{(index .IPAM.Config 0).Gateway}}").stdout.strip()
+        run("docker", "run", "--detach", "--name", self.name, "--init", "--cap-drop", "ALL", "--cap-add", "NET_ADMIN",
+            "--security-opt", "no-new-privileges:true", "--read-only", "--ipc", "none",
+            "--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv4.icmp_ratelimit=0",
+            "--tmpfs", "/run/cyfr-guard:mode=0755,size=1m",
+            "-e", f"CYFR_GUARD_CONTROL_PLANE={gateway}", "-e", "CYFR_PRIVATE_EGRESS_TARGETS=",
+            "-e", f"CYFR_GUARD_CONTROL={self.CONTROL}", *[arg for pair in env for arg in ("-e", pair)],
+            "-v", f"{self.volume}:{self.CONTROL_DIR}", "--network", self.network,
+            "--health-cmd", "cyfr-guard check", "--health-interval", "1s", "--health-timeout", "3s",
+            "--health-retries", "3", *extra, "--entrypoint", "cyfr-guard", image)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            health = run("docker", "inspect", "--format", "{{.State.Health.Status}}", self.name, check=False).stdout.strip()
+            if health == "healthy":
+                return
+            time.sleep(0.5)
+        logs = run("docker", "logs", "--tail", "40", self.name, check=False)
+        sys.exit(f"FAIL: the guard {self.name} was not healthy within 60 s\n{logs.stdout}{logs.stderr}")
+
+    def keeper_args(self):
+        return ["--network", f"container:{self.name}", "-v", f"{self.volume}:{self.CONTROL_DIR}:ro"]
+
+    def down(self):
+        run("docker", "rm", "--force", self.name, check=False)
+        run("docker", "network", "rm", self.network, check=False)
+        run("docker", "volume", "rm", self.volume, check=False)
+        if self in _guards:
+            _guards.remove(self)
+
+
 @atexit.register
 def _leftovers():
     # A stack made before its `try` began, or one whose `down` a signal
@@ -314,6 +400,8 @@ def _leftovers():
             failed.append(stack.project)
             _stacks.remove(stack)
             shutil.rmtree(stack.project_dir, ignore_errors=True)
+    for guard in reversed(list(_guards)):
+        guard.down()
     for path in list(_directories):
         remove_directory(path)
     if failed:
