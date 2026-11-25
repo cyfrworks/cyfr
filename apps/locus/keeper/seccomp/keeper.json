@@ -367,8 +367,6 @@
 				"signalfd4",
 				"sigprocmask",
 				"sigreturn",
-				"socketcall",
-				"socketpair",
 				"splice",
 				"stat",
 				"stat64",
@@ -434,7 +432,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -445,11 +444,12 @@
 					"op": "SCMP_CMP_MASKED_EQ"
 				}
 			],
-			"comment": "cyfr-locus: Docker's rule allows socket for every domain but AF_VSOCK (40) by comparing the whole 64-bit argument, which a domain with high bits set passes while the kernel reads its low 32 bits as AF_VSOCK. These rules allow, by the low 32 bits alone, the domains 0 to 255 but 40, in aligned blocks: every family the kernel names, and room for those a later one adds; a higher domain is no family."
+			"comment": "cyfr-locus: Docker's rule allows socket for every domain but AF_VSOCK (40) by comparing the whole 64-bit argument, which a domain whose low 32 bits are 40 passes while the kernel, reading those 32 bits, makes an AF_VSOCK socket. These rules allow socket and socketpair, by the domain's low 32 bits alone, for the domains 0 to 255 but 40, in aligned blocks: every family the kernel names, and room for those a later one adds; a higher domain is no family. socketcall, the other way into the kernel's socket code, which 64-bit programs never call, is not allowed at all."
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -463,7 +463,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -477,7 +478,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -491,7 +493,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -505,7 +508,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -519,7 +523,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -533,7 +538,8 @@
 		},
 		{
 			"names": [
-				"socket"
+				"socket",
+				"socketpair"
 			],
 			"action": "SCMP_ACT_ALLOW",
 			"args": [
@@ -558,7 +564,7 @@
 					"op": "SCMP_CMP_MASKED_EQ"
 				}
 			],
-			"comment": "cyfr-locus: Docker's personality rules compare the whole 64-bit argument; the kernel reads a persona's low 32 bits, which each of these rules compares alone, as every argument of 32 bits in this profile is compared."
+			"comment": "cyfr-locus: Docker's personality rules compare the whole 64-bit argument; the kernel reads a persona's low 32 bits, which each of these rules compares alone, as the socket and socketpair rules compare a domain's."
 		},
 		{
 			"names": [
