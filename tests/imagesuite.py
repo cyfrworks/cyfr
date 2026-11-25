@@ -32,6 +32,12 @@ import time
 # objects from another's by name.
 PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")
 
+# The name of this tree's AppArmor profile, which a Locus container runs
+# under (docker-compose.yml's CYFR_LOCUS_APPARMOR): the file cyfr's package
+# apparmor holds it in.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps", "codex", "internal", "apparmor", "name")) as _name:
+    APPARMOR = _name.read().strip()
+
 
 def run_name(name):
     """`--name NAME` for a one-off container a suite starts, under

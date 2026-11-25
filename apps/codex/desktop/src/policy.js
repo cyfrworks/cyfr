@@ -283,17 +283,16 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 }
 
 /**
- * The switches the app takes on its command line: the selected CYFR's
- * route, which main relaunches itself with, the box's screen's project
- * (screenProject), the folder cyfr setup opened the app in
+ * The switches the app takes on its command line: the box's screen's
+ * project (screenProject), the folder cyfr setup opened the app in
  * (setupProject), --quit, which asks the app this account runs to end
  * (app.js), and --updated, with which the update Update CYFR started
- * opens the app again (states.js initial). The route moves where traffic goes and nothing more:
- * the origin checks and certificate validation still decide what loads.
- * The engine takes every other switch, from opening a debugging port to
- * trusting any certificate, so the app refuses them all.
+ * opens the app again (states.js initial). The engine takes every other
+ * switch, from opening a debugging port to trusting any certificate, so
+ * the app refuses them all. A CYFR's route is no switch: main sets it on
+ * that CYFR's own stores.
  */
-export const SWITCHES = ["proxy-server", "host-resolver-rules", "screen-project", "setup-project", "quit", "updated"]
+export const SWITCHES = ["screen-project", "setup-project", "quit", "updated"]
 
 /**
  * Whether `value` names a folder explicitly on `platform`, as the system
@@ -334,8 +333,7 @@ export function setupProject(present, value, platform) {
 }
 
 /**
- * The engine's resolver rule unless main was started on a route:
- * localhost is 127.0.0.1 alone, where Docker publishes a local CYFR, and
+ * The engine's resolver rule, the app's whole run: localhost is 127.0.0.1 alone, where Docker publishes a local CYFR, and
  * never ::1, where any other program may listen on the same port and be
  * given that CYFR's pages, tickets and cookies (cmd/local.go).
  */

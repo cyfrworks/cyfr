@@ -501,12 +501,13 @@ func TestAPidTheLeadersChildNoLongerHoldsIsNeverSignalled(t *testing.T) {
 		 echo leader-ready >> "$L"
 		 while :; do wait; sleep 0.05; done`)
 	logged(t, log, "leader-ready")
-	children := k.s.leaderChildren(testPoolFirst, group, leader, time.Now().Add(endGrace))
-	if len(children.fds) != 1 || children.why != "" {
-		t.Fatalf("the leader's one child is held by %d pidfds (%q)", len(children.fds), children.why)
+	e := keptEnder(testPoolFirst, group)
+	children := k.s.leaderChildren(e, group, leader, time.Now().Add(endGrace))
+	if len(children.held) != 1 || children.why != "" {
+		t.Fatalf("the leader's one child is held by %d pidfds (%q)", len(children.held), children.why)
 	}
-	held := children.fds
-	defer releaseHeld(testPoolFirst, held)
+	defer e.Release(children.held)
+	held := []int{children.held[0].Fd}
 	if err := unix.PidfdSendSignal(held[0], unix.SIGKILL, nil, 0); err != nil {
 		t.Fatal(err)
 	}

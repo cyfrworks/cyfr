@@ -228,11 +228,22 @@ func TestOpenCodeCallsInsideItsExecuteAreAsks(t *testing.T) {
 	s := startOpenCode(t, "")
 	freshOpenCode(s, map[string]any{})
 	postText(s, "stp_1", "trn_1", "execute")
+	// The program's line announcing execute and its stub's call reach the
+	// driver by two ways, the program's output and the tool socket, so
+	// either may come first; nothing CYFR shows or keeps rests on their
+	// order (Aqua.Harness.Program tells a batch's asks before its own
+	// tools, and keeps nothing of these). Both are awaited.
 	var ask map[string]any
-	before := s.until("ask")
-	ask = before[len(before)-1]
+	var before []map[string]any
+	for ask == nil || len(ofType(before, "own")) == 0 {
+		e := s.next()
+		before = append(before, e)
+		if e["t"] == "ask" {
+			ask = e
+		}
+	}
 	if own := ofType(before, "own"); len(own) != 1 || own[0]["name"] != "execute" || own[0]["phase"] != "start" {
-		t.Fatalf("execute is shown running before CYFR's call in it: %v", before)
+		t.Fatalf("execute is shown running while CYFR's call in it is held: %v", before)
 	}
 	if ask["name"] != "files" {
 		t.Fatalf("CYFR's call is an ask: %v", ask)
@@ -305,7 +316,8 @@ func TestTheRelayTakesNoNameOfThePersonsServers(t *testing.T) {
 			s := startDriverWith(t, p, home)
 			s.expect("hello")
 			s.send(startCommand("", map[string]any{}, filesTool))
-			if status := s.exit(); status == 0 || !strings.Contains(s.stderr.String(), "did not list its MCP servers") {
+			if status := s.exit(); status == 0 || !strings.Contains(s.stderr.String(), "did not list its MCP servers") ||
+				s.why() != "servers_unlisted" {
 				t.Fatalf("a start with the person's servers unknown ends, saying why: %d %s", status, s.stderr.String())
 			}
 		})

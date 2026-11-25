@@ -33,7 +33,15 @@ defmodule Cyfr.Bus.Program do
           kept: boolean() | nil,
           attached: boolean() | nil,
           by: :person | :aqua | :browser | nil,
-          reason: :exited | :closed | :unanswered | :idle | :row_changed | :standing | nil
+          reason:
+            :exited
+            | :restarted
+            | :closed
+            | :unanswered
+            | :idle
+            | :row_changed
+            | :standing
+            | nil
         }
 
   @doc "The closed union of what happened to the session."

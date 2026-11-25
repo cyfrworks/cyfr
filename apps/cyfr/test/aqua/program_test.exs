@@ -280,6 +280,60 @@ defmodule Aqua.ProgramTest do
       )
     end
 
+    test "a job whose program did not start answers the room saying so, and to ask again",
+         %{ctx: ctx, thread: room, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      actor = Sanctum.Context.actor(ctx)
+      :ok = claude_code!(ctx)
+      row = brain_row!(ctx, "claude")
+
+      {:ok, %{message: request}} =
+        Tape.accept(ctx, room.id, %{
+          message: %{
+            author: "aqua",
+            sent_by: "aqua",
+            addressee: "claude-code",
+            status: "pending",
+            content: "Review the plan."
+          },
+          request: %{
+            member: "claude-code",
+            task: "Review the plan.",
+            person_id: ctx.user_id,
+            origin: :interactive
+          }
+        })
+
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+      [child] = Arca.ThreadStorage.children(actor, room.id)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
+      assert {:ok, [turn]} = Tape.open_turns(ctx, child.id)
+      say(fake, row, text(turn, "msg_0", "starting", :none))
+      committed!(ctx, child, 2)
+      say(fake, row, %{"t" => "ending", "why" => "unanswered"})
+      Scripted.end_sessions(fake, row.id)
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?({:ok, %{status: "failed"}}, Tape.turn(ctx, turn.id)) end,
+        10_000,
+        "the job's start to fail"
+      )
+
+      {:ok, %{error: error}} = Tape.turn(ctx, turn.id)
+
+      assert error =~
+               ~r/\A(.+) could not start: its program did not answer in time\. Ask \1 for it again\.\z/
+
+      assert {:ok, %{"applied" => 1}} = Aqua.Crew.drain(ctx.athanor_id)
+
+      assert [%{content: ^error, outcome: "failed"}] =
+               Enum.filter(
+                 Arca.ThreadStorage.messages(actor, room.id),
+                 &(&1.reply_to == request.id)
+               )
+    end
+
     # CYFR's words for every member, then what a program's brain is told
     # besides: its own tools work in its own folder
     # (`Aqua.Prompt.crew_briefing/3`). The rule names the thread's mark.
@@ -3504,6 +3558,68 @@ defmodule Aqua.ProgramTest do
       refute_received {:session, "send", _wire, _fields}
     end
 
+    test "a driver that says why it ends while the harness starts ends the turn saying why, " <>
+           "and where to look, and none of the driver's own words",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
+      # A line after the hello commits only once the start's write has
+      # returned, so the driver ends while the harness starts.
+      say(fake, row, text(turn, "msg_0", "starting", :none))
+      committed!(ctx, thread, 2)
+      say(fake, row, %{"t" => "ending", "why" => "servers_unlisted"})
+      Scripted.end_sessions(fake, row.id)
+
+      line =
+        "#{@title} could not start: its program did not list its MCP servers. Open its " <>
+          "terminal on the Programs page to check them."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert {:ok, %{status: "failed", error: ^line}} = Tape.turn(ctx, turn.id)
+      assert %{dispatch_state: "closed", error: ^line} = start_step(ctx, turn)
+      assert system_lines(ctx, thread, turn) == [line]
+    end
+
+    test "a start the program did not answer in time says what starts it again, and a " <>
+           "schedule's turn names nothing the reader cannot do",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      for {origin, again} <- [interactive: " Send a message to try again.", schedule: ""] do
+        ctx = %{ctx | origin: origin}
+        turn = accept!(ctx, thread, row, "work on it")
+        loop = run(ctx, turn)
+        opened!(fake, row, "boot-#{origin}")
+        assert %{"t" => "start"} = sent()
+        say(fake, row, text(turn, "msg_0", "starting", :none))
+        committed!(ctx, thread, 2, "boot-#{origin}")
+        say(fake, row, %{"t" => "ending", "why" => "unanswered"})
+        Scripted.end_sessions(fake, row.id)
+
+        line = "#{@title} could not start: its program did not answer in time." <> again
+        assert {:failed, ^line} = Task.await(loop, 30_000)
+      end
+    end
+
+    test "a start whose service started again says CYFR restarted the part that runs programs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      ctx = %{ctx | origin: :interactive}
+      turn = accept!(ctx, thread, row, "work on it")
+      loop = run(ctx, turn)
+      opened!(fake, row, "boot-one")
+      assert %{"t" => "start"} = sent()
+      say(fake, row, text(turn, "msg_0", "starting", :none))
+      committed!(ctx, thread, 2)
+      Scripted.restart(fake, "bb_again")
+
+      line =
+        "#{@title} could not start because CYFR restarted the part that runs programs. " <>
+          "Send a message to try again."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+    end
+
     # Codex's driver exits 1, naming no `gone`, when Codex refuses a resume
     # for a reason other than a missing rollout (`cyfr-codex`).
     test "a driver that ends while the harness resumes the thread's session ends the turn " <>
@@ -4603,7 +4719,7 @@ defmodule Aqua.ProgramTest do
   end
 
   describe "no turn waits for good" do
-    @unstarted "Aqua could not start."
+    @unstarted "Aqua did not start within a minute. Send a message to try again."
 
     test "a program that never says hello ends its start once the silence runs out, and " <>
            "gives its place back",
@@ -4649,8 +4765,10 @@ defmodule Aqua.ProgramTest do
       committed!(ctx, thread, 3)
       Scripted.end_sessions(fake, row.id)
 
-      assert {:failed, @unstarted} = Task.await(loop, 15_000)
-      assert system_lines(ctx, thread, turn) == [@unstarted]
+      # A driver that names no reason reads as no more than that.
+      line = "#{@title} could not start."
+      assert {:failed, ^line} = Task.await(loop, 15_000)
+      assert system_lines(ctx, thread, turn) == [line]
       refute_receive {:session, "open", _wire, _fields}, 1_000
     end
 
@@ -5141,7 +5259,7 @@ defmodule Aqua.ProgramTest do
 
       send(closing, :go)
 
-      line = "#{@title} could not start."
+      line = "#{@title} did not start within a minute. Send a message to try again."
       assert {:failed, ^line} = Task.await(loop, 30_000)
       assert system_lines(ctx, thread, turn) == [line]
       assert running_sessions(fake, row) == []

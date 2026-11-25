@@ -35,6 +35,10 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every Locus container runs under the AppArmor profile cyfr-locus,
+      # which a host loads at install (cyfr init) and this runner here.
+      - name: Load the Locus containers' AppArmor profile
+        run: scripts/ci/apparmor-profile.sh
       - name: Build the Locus image
         uses: ./.github/actions/image-build
         with:

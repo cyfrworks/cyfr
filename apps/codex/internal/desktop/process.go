@@ -99,9 +99,9 @@ const (
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
 	TypeReady:        {required: []string{"url"}, optional: []string{"rail", "update"}},
-	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "resolver", "setup"}},
+	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "setup"}},
 	TypeOpened:       {required: []string{"home", "attempt"}},
-	TypeLocked:       {optional: []string{"home", "account", "proxy", "resolver"}},
+	TypeLocked:       {optional: []string{"home", "account", "proxy"}},
 	TypeEnding:       {},
 	TypeLeft:         {required: []string{"id"}},
 	TypeErase:        {required: []string{"id", "home"}, optional: []string{"account"}},
@@ -131,12 +131,11 @@ type Message struct {
 	ID      uint64
 	// Rail and Update are ready's addresses of the rail's page and of
 	// Update CYFR's; OK is erased's answer and Offer update's number.
-	Rail     string
-	Update   string
-	OK       bool
-	Offer    uint64
-	Proxy    string
-	Resolver string
+	Rail   string
+	Update string
+	OK     bool
+	Offer  uint64
+	Proxy  string
 	// Setup is the setup token of a CYFR on this computer that no one is
 	// set up at yet: on the passkey road main opens its setup page with
 	// it, in the address's fragment alone, where the first person is made.
@@ -263,7 +262,7 @@ func (m Message) object() (map[string]any, error) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
 	values := map[string]string{"url": m.URL, "rail": m.Rail, "update": m.Update, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
-		"resolver": m.Resolver, "setup": m.Setup}
+		"setup": m.Setup}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {
 		if f == "attempt" || f == "id" {

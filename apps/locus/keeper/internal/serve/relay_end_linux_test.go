@@ -160,7 +160,7 @@ func (r *slowReader) Read(p []byte) (int, error) {
 // last byte.
 func TestASlowReaderTakesEveryByteAfterItsLeaderExits(t *testing.T) {
 	eachSpawn(t, func(t *testing.T, k *keeper, spawn start) {
-		spawnID, rc := spawn("slow", "exec "+k.s.self+" fill")
+		spawnID, rc := spawn("slow", "exec "+k.helper+" fill")
 		if exited := within(t, k.nextReply(), 20*time.Second, "exit"); exited["type"] != protocol.TypeExited || exited["spawn_id"] != spawnID || exited["code"] != float64(0) {
 			t.Fatalf("the writer's exit: %v", exited)
 		}
@@ -265,7 +265,7 @@ func TestAReaderThatClosesItsConnectionCutsTheRelay(t *testing.T) {
 	})
 	t.Run("leader exited", func(t *testing.T) {
 		eachSpawn(t, func(t *testing.T, k *keeper, spawn start) {
-			spawnID, rc := spawn("cut", "exec "+k.s.self+" fill")
+			spawnID, rc := spawn("cut", "exec "+k.helper+" fill")
 			if exited := within(t, k.nextReply(), 20*time.Second, "exit"); exited["type"] != protocol.TypeExited || exited["spawn_id"] != spawnID || exited["code"] != float64(0) {
 				t.Fatalf("the writer's exit: %v", exited)
 			}

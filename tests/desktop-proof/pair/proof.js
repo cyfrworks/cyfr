@@ -197,15 +197,20 @@ const appSeen = async (host) => (await seen(host)).filter(fromApp)
 // What the rail's page holds and what its credential may do: each
 // change cyfr serves, asked with the rail's read credential from the
 // rail's own page.
+// The credential is tried where the run token goes, the chooser's
+// header, and in a body, where a page would hold it.
 const railTries = (home) => js(rail().webContents, `(async () => {
   const read = sessionStorage.getItem("read") || ""
-  const post = (p, body) => fetch(p, {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({token: read, epoch: 0, ...body})}).then((r) => r.status, () => "failed")
-  const tried = {}
+  const post = (p, body, header) => fetch(p, {method: "POST", headers: {"Content-Type": "application/json", ...(header ? {"Cyfr-Run": read} : {})},
+    body: JSON.stringify(header ? {epoch: 0, ...body} : {token: read, epoch: 0, ...body})}).then((r) => r.status, () => "failed")
+  const tried = {}, inBody = {}
   for (const [p, body] of [["/bootstrap/state", {}], ["/bootstrap/connect", {address: ${literal(home)}}],
     ["/bootstrap/approve", {cyfr: ${literal(home)}, directory: ${literal(DIRECTORY)}}], ["/bootstrap/start", {picks: 0, run: 0}],
-    ["/bootstrap/open", {picks: 0, run: 0}], ["/bootstrap/docker", {}]]) tried[p] = await post(p, body)
-  return {tried, kept: Object.keys(sessionStorage), url: location.href, history: history.length}
+    ["/bootstrap/open", {picks: 0, run: 0}], ["/bootstrap/docker", {}]]) {
+    tried[p] = await post(p, body, true)
+    inBody[p] = await post(p, body, false)
+  }
+  return {tried, inBody, kept: Object.keys(sessionStorage), url: location.href, history: history.length}
 })()`)
 
 async function pairPhase() {
@@ -269,7 +274,8 @@ async function pairPhase() {
   // read_only: the rail's page holds its read credential alone, in no
   // address, and cyfr refuses that credential every change.
   const tries = await railTries(SECOND)
-  row("read_only", Object.values(tries.tried).every((s) => s === 403) && tries.kept.join() === "read" && !/#|token|read=/.test(tries.url),
+  row("read_only", Object.values(tries.tried).every((s) => s === 403) && Object.values(tries.inBody).every((s) => s === 400) &&
+    tries.kept.join() === "read" && !/#|token|read=/.test(tries.url),
     "the rail's page keeps its read credential alone and in no address, and cyfr refuses it every change", tries)
 
   // sign_out_alone: Sign out in A's Prism ends A's session; B's is

@@ -16,11 +16,16 @@ export const VERSION = 2
 
 export const MAX_LINE = 64 * 1024
 
+// The header of the chooser's requests that carries the run token, which
+// main adds to those of the chooser's own top document alone (app.js
+// runHeader) and cyfr reads nowhere else (internal/desktop RunHeader).
+export const RUN_HEADER = "Cyfr-Run"
+
 const FIELDS = {
   ready: {required: ["url"], optional: ["rail", "update"]},
-  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "setup"]},
+  home: {required: ["home", "account", "attempt"], optional: ["proxy", "setup"]},
   opened: {required: ["home", "attempt"]},
-  locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
+  locked: {required: [], optional: ["home", "account", "proxy"], together: ["home", "account"]},
   ending: {required: []},
   left: {required: ["id"]},
   erase: {required: ["id", "home"], optional: ["account"]},
@@ -90,7 +95,7 @@ export function readFromCyfr(line) {
   const {together = []} = FIELDS[m.type]
   const named = together.filter((k) => Object.hasOwn(m, k)).length
   if (named !== 0 && named !== together.length) throw new Refused("fields")
-  if (together.length && named === 0 && (Object.hasOwn(m, "proxy") || Object.hasOwn(m, "resolver"))) throw new Refused("fields")
+  if (together.length && named === 0 && Object.hasOwn(m, "proxy")) throw new Refused("fields")
   // A setup token in its one form, which the CYFR's setup page reads.
   if (Object.hasOwn(m, "setup") && !/^[0-9a-f]{64}$/.test(m.setup)) throw new Refused("fields")
   // What an erase names is erased by its origin: nothing else is one.

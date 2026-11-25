@@ -61,6 +61,9 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 		first = append([]string{"up", "-d"}, otherServices(c, h)...)
 	}
 	if why := e.compose(ctx, h, StartDeadline, first...); why != "" {
+		if held := e.heldBy(ctx, c); held != "" {
+			why = held
+		}
 		return started{why: why, content: content}
 	}
 	if services := accessServices(c, h); len(services) > 0 {

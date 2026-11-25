@@ -2,6 +2,10 @@ module github.com/cyfr/codex
 
 go 1.27.4
 
+// The app's npm tree holds no Go, and npm ci replaces it while other checks
+// walk ./...: a walk that meets it mid-replace fails on a missing folder.
+ignore ./desktop/node_modules
+
 require (
 	charm.land/huh/v2 v2.0.3
 	github.com/boombuler/barcode v1.1.0

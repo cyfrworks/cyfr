@@ -88,7 +88,7 @@ func newScreenApp(in io.Reader, out io.Writer, l desktop.Local, hiding func() fu
 	}
 	gone := make(chan struct{})
 	return &screenApp{in: in, to: desktop.NewWriter(out, func() { close(gone) }), gone: gone, hiding: hiding, endApp: endApp,
-		home: desktop.Message{Type: desktop.TypeHome, Home: l.Shell.Address, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver}}, nil
+		home: desktop.Message{Type: desktop.TypeHome, Home: l.Shell.Address, Account: found.Origin, Proxy: l.Proxy}}, nil
 }
 
 // say gives main m after every message given before it, under a.mu: the

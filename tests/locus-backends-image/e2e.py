@@ -69,7 +69,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HERE, MCP_VERSION, POOL_FIRST, POOL_LAST, ROOT, ROUTES, STATUSES, VERSION, Controller, Stack, eventually,
+    HERE, MCP_VERSION, POOL_FIRST, POOL_LAST, PROBE, ROOT, ROUTES, STATUSES, VERSION, Controller, Stack, eventually,
     expect, backend_environ, owner_of, post, probe, require_docker, run, wire_json,
 )
 import imagesuite  # noqa: E402
@@ -141,7 +141,9 @@ def scripted_controller(image):
         client.after = again[1]["lines"][-1]["seq"]
 
         who = c.tool(OWNER, "probe__whoami")
-        environ = backend_environ(stack, who["pid"], who["uid"])
+        # The program's pid is its space's own: the container finds the
+        # process by the space.
+        environ = backend_environ(stack, stack.outside(who)["pid"], who["uid"])
         expect(f"PROBE_SECRET={SECRET}" in environ, "the sealed credential reaches the program's environment")
 
         # Every way out of the service masks it.
@@ -166,7 +168,7 @@ def scripted_controller(image):
                program["stderr_tail"][-400:])
 
         # Idle: no line sent or read for the idle period ends the session.
-        uid, pid = who["uid"], who["pid"]
+        uid = who["uid"]
         idle = eventually(lambda: (lambda p: p if p["status"] == "idle" and p["sessions"] == 0 else None)(
             c.program(OWNER)), "the session to be ended idle", timeout_s=IDLE_MS / 1000 + 20)
         expect(idle["restarts"] == 0, "an idle end is no crash", idle)
@@ -175,8 +177,9 @@ def scripted_controller(image):
         expect(ended[0] == 200 and ended[1]["running"] is False, "the ended session answers running: false", ended)
 
         woken = c.tool(OWNER, "probe__whoami")
-        expect(woken["pid"] != pid and POOL_FIRST <= woken["uid"] <= POOL_LAST and client.initializations == 2
-               and client.resumed is False,
+        # Every process of the uid ended above, so the program that answers
+        # is a new one, whatever number its space gives it.
+        expect(POOL_FIRST <= woken["uid"] <= POOL_LAST and client.initializations == 2 and client.resumed is False,
                "the next call opens the session again and initializes the program afresh under a new process", woken)
         expect(c.program(OWNER)["status"] == "running", "a woken program runs", c.report(OWNER))
 
@@ -402,7 +405,11 @@ def cyfr_controller(image):
                "the person sees the canary masked in the tool's answer", echoed)
 
         # The program runs on the service in the session cyfr opened.
-        processes = eventually(lambda: stack.pool_processes(), "cyfr's session to run its program", timeout_s=60)
+        # A space's processes are its waiter, its init and the program, which
+        # its command line names.
+        def programs():
+            return [p for p in stack.pool_processes() if p["cmd"].strip() == PROBE]
+        processes = eventually(programs, "cyfr's session to run its program", timeout_s=60)
         environ = backend_environ(stack, processes[0]["pid"], processes[0]["uids"][0])
         expect(f"PROBE_SECRET={canary}" in environ,
                "the canary reaches the program's environment from the vault, through cyfr's seal")
@@ -410,15 +417,14 @@ def cyfr_controller(image):
         # Idle: the session cyfr opened ends when no line uses it, and the
         # person's next call wakes it: cyfr opens it again and initializes
         # the program afresh.
-        idle_pid = processes[0]["pid"]
         eventually(lambda: not stack.pool_processes(), "cyfr's session to end idle",
                    timeout_s=CYFR_IDLE_MS / 1000 + 20)
         woken = console("e2e-probe:whoami", {})
         expect("ok" in woken and canary not in text_of(woken), "the next call through cyfr is answered after the idle "
                "end", woken)
-        rewoken = eventually(lambda: stack.pool_processes(), "cyfr's woken session to run its program", timeout_s=60)
-        expect(all(p["pid"] != idle_pid for p in rewoken), "cyfr woke the program under a new process",
-               [idle_pid, rewoken])
+        # No process of the pool ran once the session ended idle, so the
+        # program that runs now is a new process.
+        eventually(programs, "cyfr woke the program under a new process", timeout_s=60)
         failed = console("e2e-probe:fail", {"name": "PROBE_SECRET"})
         expect(canary not in text_of(failed), "a tool's error through cyfr carries no canary", failed)
         ran = console("e2e-probe:run", {"argv": ["/bin/sh", "-c", 'echo "$PROBE_SECRET"; echo "$PROBE_SECRET" >&2']})

@@ -213,7 +213,7 @@ func TestASelectionOfAnAddressThatCameAndWentAddsNothing(t *testing.T) {
 func TestASelectionBegunFromARowAddsNoCYFR(t *testing.T) {
 	const a = "https://a.example.com"
 	f := Homes(filepath.Join(t.TempDir(), "homes.json"))
-	if _, err := f.Row(a); !IsUnkept(err) {
+	if _, _, err := f.Row(a); !IsUnkept(err) {
 		t.Fatalf("a row the list does not hold was taken: %v", err)
 	}
 	keep := func() Row {
@@ -221,7 +221,7 @@ func TestASelectionBegunFromARowAddsNoCYFR(t *testing.T) {
 		if err := sel.Commit(""); err != nil {
 			t.Fatal(err)
 		}
-		row, err := f.Row(a)
+		row, _, err := f.Row(a)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -73,7 +73,7 @@ test("cyfr's ready shows the chooser; a second ready, or another first page, end
 test("a proposal is answered home-ready and replaced by the next until cyfr says it opened", () => {
   const {s, effects} = run(proposed)
   assert.equal(s.name, "proposed")
-  assert.deepEqual(effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
+  assert.deepEqual(effects.at(-1), {prepare: {home: HOME, attempt: 1, proxy: ""}})
   assert.equal(run([...proposed, home("https://bob.example", 2), taken]).s.home, "https://bob.example", "after a failure")
   assert.equal(run(open).s.name, "open")
   assert.equal(run([...open, home("https://bob.example", 2)]).s.name, "ended", "a proposal after a commit")
@@ -82,14 +82,20 @@ test("a proposal is answered home-ready and replaced by the next until cyfr says
   assert.equal(run([ready, openedAt(HOME)]).s.name, "ended", "opened with nothing proposed")
 })
 
-test("a home on another route starts the app again with it, closing first and forgetting nothing", () => {
-  const rerouted = {type: "home", message: {type: "home", home: "https://bob.example", account: ACCOUNT,
-    proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}}
-  const {s, effects} = run([...proposed, given, rerouted])
-  assert.equal(s.name, "ended")
-  assert.deepEqual(effects.slice(-2), [{close: true},
-    {relaunch: {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}}])
-  assert.ok(!effects.some((e) => e.forget))
+// A CYFR reached by its proxy is proposed as any other: main is told to
+// set that route on its stores before it answers (prepare), and nothing
+// closes, ends or starts again for it, on a desktop or on the box's screen.
+test("a home with a route is prepared with it, as any other, on a desktop and on the screen", () => {
+  const routed = {type: "home", message: {type: "home", home: "https://bob.example", account: ACCOUNT, attempt: 2,
+    proxy: "socks5://127.0.0.1:1055"}}
+  const {s, effects} = run([...proposed, routed])
+  assert.equal(s.name, "proposed")
+  assert.deepEqual(effects.at(-1), {prepare: {home: "https://bob.example", attempt: 2, proxy: "socks5://127.0.0.1:1055"}})
+  assert.ok(!effects.some((e) => e.close || e.end || e.forget || e.quit))
+  let screen = step(initial(false, "/home/alice/cyfr"), {type: "ready", url: "http://127.0.0.1:7340/"}).state
+  const told = step(screen, {...routed, message: {...routed.message, attempt: 1}})
+  assert.equal(told.state.name, "proposed")
+  assert.deepEqual(told.do.at(-1), {prepare: {home: "https://bob.example", attempt: 1, proxy: "socks5://127.0.0.1:1055"}})
 })
 
 test("nothing loads and no window opens before ready", () => {
@@ -197,7 +203,7 @@ test("the sign-in page as a way on, its own loads, and the six-word road are nev
 test("main answers a proposal home-ready at once and keeps to a CYFR only once cyfr opened it, whichever road", () => {
   for (const road of [false, true]) {
     const waiting = run([ready, home()], road)
-    assert.deepEqual(waiting.effects.at(-1), {send: {type: "home-ready", fields: {home: HOME, attempt: 1}}})
+    assert.deepEqual(waiting.effects.at(-1), {prepare: {home: HOME, attempt: 1, proxy: ""}})
     assert.ok(!waiting.effects.some((e) => e.root || e.forget), "nothing opened or cleared for a proposal")
     for (const url of [HOME + "/", HOME + "/login", HOME + "/auth/device/complete/x"]) {
       assert.equal(step(waiting.s, navigate({url})).allow, false, url)
@@ -210,7 +216,7 @@ test("main answers a proposal home-ready at once and keeps to a CYFR only once c
 test("each proposal is answered as it comes, and only the last one's opened opens", () => {
   const bob = "https://bob.example"
   const over = run([ready, home(HOME, 1), home(bob, 2), home(HOME, 3)], true)
-  assert.deepEqual(over.effects.filter((e) => e.send).map((e) => e.send.fields.attempt), [1, 2, 3])
+  assert.deepEqual(over.effects.filter((e) => e.prepare).map((e) => e.prepare.attempt), [1, 2, 3])
   assert.equal(step(over.s, openedAt(HOME, 1)).state.name, "ended", "an opened of an earlier proposal")
   assert.equal(step(over.s, openedAt(HOME, 3)).state.name, "open")
 })
@@ -362,7 +368,7 @@ test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by
   assert.equal(r.allow, false)
   assert.equal(r.state.name, "open", "the CYFR open is left as it is")
   assert.equal(r.state.home, HOME)
-  const updated = step(initial(true, {proxy: "", resolver: ""}, "", true), ready)
+  const updated = step(initial(true, "", true), ready)
   assert.deepEqual(updated.do.slice(-2), [{chooser: []}, {update: {url: UPDATE + "&updated=1"}}], "the update's reopen opens it, over the chooser")
   assert.equal(updated.state.updated, false, "once")
   assert.ok(!run([ready], true).effects.some((e) => e.update), "opened plainly, nothing opens")
@@ -370,7 +376,7 @@ test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by
     assert.deepEqual(step(run(before, true).s, railed("/rail/update")).do, [], "not while cyfr starts, a proposal or a departure waits")
   }
   const SCREEN_PAGE = "http://127.0.0.1:7340/"
-  const screen = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr", true)
+  const screen = initial(false, "/home/ana/cyfr", true)
   assert.ok(!step(screen, {type: "ready", url: SCREEN_PAGE, message: {type: "ready", url: SCREEN_PAGE}}).do.some((e) => e.update),
     "the box's screen opens no Update CYFR, --updated or not")
 })
@@ -431,7 +437,7 @@ test("cyfr's loss ends main from any state, closing first, and signs nobody out"
 
 test("the screen shell's ending closes at once and quits, settling no lock, so nothing opens after it", () => {
   const screen = (events) => {
-    let st = initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr")
+    let st = initial(false, "/home/alice/cyfr")
     const effects = []
     for (const e of events) {
       const next = step(st, e)
@@ -634,7 +640,7 @@ test("a second launch with --quit ends the app as a quit does, from every state;
     assert.deepEqual(next.do.at(-1), {quit: true}, name)
   }
   const SCREEN_PAGE = "http://127.0.0.1:7340/"
-  let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+  let s = initial(false, "/home/ana/cyfr")
   for (const e of [{type: "ready", url: SCREEN_PAGE}, home(), taken, openedAt(HOME)]) s = step(s, e).state
   assert.deepEqual(step(s, asked), {state: s, do: [{show: true}]}, "the box's screen")
 })
@@ -726,7 +732,7 @@ test("an act is no redirect, and is begun by the top frame's own document that o
 test("on the box's screen none of the chooser's acts is offered or accepted, from any page of it", () => {
   const SCREEN_PAGE = "http://127.0.0.1:7340/"
   const screen = (events) => {
-    let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+    let s = initial(false, "/home/ana/cyfr")
     for (const e of [{type: "ready", url: SCREEN_PAGE}, ...events]) s = step(s, e).state
     return s
   }
@@ -845,7 +851,7 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
   const LOOP = "http://127.0.0.1:7340/"
   const CYFR = "http://localhost:4000"
   const initialWorld = (endable) => ({
-    main: initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr"),
+    main: initial(false, "/home/alice/cyfr"),
     shell: {ready: false, attempt: 0, answered: false, locks: 2, keyboard: 1, gone: false, ending: false, exited: false, endable},
     toMain: [],
     toShell: [], pending: [], showing: "", lost: 1, trace: [],
@@ -872,6 +878,8 @@ test("the screen ends on its CYFR whatever the order of its messages", () => {
     w.main = next.state
     for (const effect of next.do) {
       if (effect.send) w.toShell.push({type: effect.send.type, ...(effect.send.fields ?? {})})
+      // main answers home-ready once the CYFR's route is set (app.js prepare)
+      if (effect.prepare) w.toShell.push({type: "home-ready", home: effect.prepare.home, attempt: effect.prepare.attempt})
       if (effect.take) w.pending.push({type: "taken", taken: true})
       if (effect.forget) w.pending.push({type: "forgot", cleared: true})
       if (effect.chooser) w.showing = w.main.readyURL
@@ -975,7 +983,7 @@ test("ending is the last word of a run: after it main ends, and a left, which th
   const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
   assert.ok(vectors["endings"].length > 0)
   for (const {name, from_cyfr: said} of vectors["endings"]) {
-    let s = initial(false, {proxy: "", resolver: ""}, "/home/ana/cyfr")
+    let s = initial(false, "/home/ana/cyfr")
     for (const e of [{type: "ready", url: "http://127.0.0.1:7340/"}, home(), taken, openedAt(HOME)]) s = step(s, e).state
     const effects = []
     for (const m of said) {
@@ -1053,7 +1061,7 @@ test("an attempt's number only goes up: a home not above the highest proposed ch
 test("on the box's screen a home's setup token is dropped as it arrives, so nothing queued holds one, and an older home never replaces the queued next", () => {
   const SCREEN = {type: "ready", url: "http://127.0.0.1:7340/"}
   const onScreen = (events) => {
-    let s = initial(false, {proxy: "", resolver: ""}, "/home/alice/cyfr")
+    let s = initial(false, "/home/alice/cyfr")
     for (const e of events) s = step(s, e).state
     return s
   }

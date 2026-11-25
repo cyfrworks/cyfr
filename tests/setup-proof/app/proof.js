@@ -36,9 +36,10 @@ if (lib.PHASE === "passkey") {
 
 // A word with app.sh, which acts on the host: the proof asks, app.sh does
 // it and answers.
-async function ask(what) {
+async function ask(what, ms = 120_000) {
   writeFileSync(path.join(FIXTURE, `asked-${what}`), "")
-  await waitFor(() => existsSync(path.join(FIXTURE, `done-${what}`)), `app.sh to ${what}`, 120_000)
+  await waitFor(() => existsSync(path.join(FIXTURE, `done-${what}`)), `app.sh to ${what}`, ms)
+  return readFileSync(path.join(FIXTURE, `done-${what}`), "utf8").trim()
 }
 
 // What the chooser shows, read within 5 s: a read the page does not
@@ -85,6 +86,26 @@ const read = (w) => js(w.webContents, `(() => {
     start: !$("start").hidden, folder: $("folder").textContent, progress: $("progress").hidden ? [] : $("progress").textContent.split("\\n"),
     notice: $("notice").textContent, go: !$("go").hidden, retry: !$("retry").hidden}
 })()`)
+const said = (w) => js(w.webContents, `document.querySelector("#notice").textContent`)
+// The docker calls made on this computer, as the wrapper logs them, and
+// those of them from the `from`th on that start anything.
+const calls = () => readFileSync("/tmp/docker-times", "utf8").split("\n").filter((l) => /^\S/.test(l))
+const starts = (from) => calls().slice(from).filter((l) => !/^\S+ exit /.test(l) && /(^| )(up|start|run)( |$)/.test(l.replace(/^\S+ /, "")))
+// Prism of the launch's CYFR, the store main keeps it in (src/policy.js
+// homePartition), and the digest of the sign-in that store keeps.
+const atCYFR = (url) => url.startsWith(lib.HOME + "/") && !/^\/(login|setup|auth\/|account\/)/.test(new URL(url).pathname)
+const store = () => electron.session.fromPartition(PARTITIONS[0])
+async function signedIn() {
+  const kept = await store().cookies.get({name: "_cyfr_key"})
+  return kept.length === 1 ? createHash("sha256").update(kept[0].value).digest("hex").slice(0, 16) : ""
+}
+// A press on the rail: its own top frame going to `to`, which main answers.
+async function railTo(to) {
+  const r = await waitFor(() => lib.rail(), "the rail")
+  await js(r.webContents, `location.assign(${JSON.stringify(to)}); 1`)
+}
+const rows = () => js(lib.rail().webContents, `[...document.querySelectorAll("#cyfrs a")].map((a) => ({cyfr: a.title,
+  open: a.getAttribute("aria-current") === "page"}))`)
 const answered = (w) => waitFor(async () => {
   const s = await shown(w)
   return s.docker && !s.docker.startsWith("Checking") ? s : null
@@ -248,7 +269,57 @@ lib.run("setup", {
       return {ok: opened && at === "/account/new" && !!live && !accountWindow(), detail: {opened, at}}
     })().catch((e) => ({ok: false, threw: String(e?.message ?? e)}))
     writeFileSync(path.join(FIXTURE, "first-passkey.json"), JSON.stringify(part))
+    // The sign-in it leaves, by digest, which the later launches' CYFR is
+    // to be opened under.
+    writeFileSync(path.join(FIXTURE, "passkey-session"), await signedIn())
     await Promise.all(sessions().map((ses) => ses.netLog.stopLogging()))
     return "quit"
   },
-}, {accountRoad: lib.PHASE === "passkey"})
+  // The passkey launch's folder, the one a person has on this computer,
+  // its CYFR stopped by cyfr down there (app.sh): the CYFR selected last
+  // does not open as the app starts, and says why; after cyfr up there,
+  // Try again opens it, signed in from its own store on disk.
+  async stopped() {
+    const from = calls().length
+    const w = await contentAt(atBootstrap, "the chooser")
+    await judged("stopped_reopen", "the folder's CYFR selected last, stopped by cyfr down in its folder, does not open as the app starts: the chooser says why, naming the folder, and offers Try again, the rail lists it, and nothing of its stack starts",
+      async () => {
+        const notice = await waitFor(async () => (await said(w)).includes(FOLDER) && said(w), "the reason, naming the folder")
+        const again = await js(w.webContents, `!document.querySelector("#reopen").hidden`)
+        const listed = await waitFor(async () => lib.rail() && (await rows()).length ? rows() : null, "the rail's rows")
+        const started = starts(from)
+        return [again && listed.some((r) => r.cyfr === lib.HOME) && started.length === 0, {notice, again, listed, started}]
+      })
+    await judged("try_again", "after cyfr up in its folder, Try again opens it, signed in as the passkey launch left it, from its own store kept on disk",
+      async () => {
+        const up = await ask("up", 330_000)
+        await press(w, "reopen")
+        const c = await contentAt(atCYFR, "the CYFR's Prism")
+        const live = await waitFor(() => js(c.webContents, `!!document.querySelector("[data-phx-main].phx-connected") || null`), "Prism live")
+        const own = c.webContents.session === store() && !!store().getStoragePath()
+        const session = await signedIn()
+        const before = readFileSync(path.join(FIXTURE, "passkey-session"), "utf8")
+        return [up === "0" && !!live && own && !!session && session === before, {up, at: c.webContents.getURL().split("#")[0], own, same: session === before}]
+      })
+    return "quit"
+  },
+  // Stopped again by cyfr down: its row pressed on the rail says why and
+  // starts nothing.
+  async pressed() {
+    const w = await contentAt(atBootstrap, "the chooser")
+    await waitFor(() => js(w.webContents, `!document.querySelector("#reopen").hidden || null`), "the reopen's answer")
+    await judged("stopped_press", "pressing the folder's row on the rail while its CYFR is stopped by cyfr down says why, naming the folder, and nothing of its stack starts",
+      async () => {
+        await js(w.webContents, `document.querySelector("#notice").textContent = ""; 1`)
+        const from = calls().length
+        await railTo("/rail/select?cyfr=" + encodeURIComponent(lib.HOME))
+        const notice = await waitFor(async () => {
+          const c = lib.content()
+          return c && atBootstrap(c.webContents.getURL()) && (await said(c)).includes(FOLDER) ? said(c) : null
+        }, "the reason, naming the folder")
+        const started = starts(from)
+        return [started.length === 0, {notice, started}]
+      })
+    return "quit"
+  },
+}, {accountRoad: ["passkey", "stopped", "pressed"].includes(lib.PHASE)})

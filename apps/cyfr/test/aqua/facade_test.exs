@@ -26,6 +26,7 @@ defmodule Aqua.FacadeTest do
     models: 1,
     models: 2,
     note_pinned?: 1,
+    offerings: 3,
     pin_max_bytes: 0,
     pinned_note_page: 1,
     program_listing: 2,
@@ -46,6 +47,7 @@ defmodule Aqua.FacadeTest do
     thread_state: 2,
     threads: 2,
     today: 1,
+    tool_title: 1,
     virtual_tool_catalog: 0,
     workspace: 2
   ]
@@ -64,6 +66,12 @@ defmodule Aqua.FacadeTest do
 
     assert Aqua.providers(outside) == Aqua.Models.providers(outside)
     assert {:error, :forbidden} = Aqua.providers(outside)
+  end
+
+  test "a tool family reads as its declared title, a virtual tool as its family's" do
+    assert Aqua.tool_title("notes") == "Notes"
+    assert Aqua.tool_title("files") == Sanctum.VirtualTools.table()["files"].title
+    assert Aqua.tool_title("no-such-tool") == "no-such-tool"
   end
 
   test "attachment bounds and names are Aqua.Attachments'" do

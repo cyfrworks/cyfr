@@ -564,6 +564,8 @@ func fakeACP() int {
 				if ch != nil {
 					ch <- json.RawMessage(line)
 				}
+			case m.Method == "initialize" && os.Getenv("FAKE_INIT_UNREADABLE") != "":
+				answer(m.ID, "ready")
 			case m.Method == "initialize" && oc:
 				version := "2.4.1"
 				if v := os.Getenv("FAKE_VERSION"); v != "" {

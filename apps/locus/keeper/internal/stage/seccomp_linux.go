@@ -17,19 +17,23 @@ import (
 
 // The space's own seccomp filter. Every Locus container runs under the
 // keeper's profile (apps/locus/keeper/seccomp/keeper.json), which lets a
-// clone make a user, a network and an IPC namespace because the keeper makes
-// each spawn's space that way. Without a filter of its own a spawn inherits
-// that allowance and could clone a user namespace of its own inside the one
-// it was given, holding every capability there. Every spawn's stage
-// therefore installs this filter on itself after it has dropped every
-// capability and set no_new_privs, and before it executes the command; the
-// filter stays with the command across exec and with every thread and
-// process the command starts, and nothing in it can be lifted.
+// clone make a namespace and a process mount because the keeper and the
+// stage make each spawn's space that way. Without a filter of its own a
+// spawn inherits that allowance and could clone a user namespace of its own
+// inside the one it was given, holding every capability there. Every
+// space's first process therefore installs this filter on itself after it
+// has dropped every capability and set no_new_privs, and before it executes
+// the space's init; the filter stays with the init and the command across
+// exec and with every thread and process the command starts, and nothing in
+// it can be lifted. The stage, which stays outside the space's processes,
+// installs it on itself too.
 //
 // The filter refuses, with EPERM, the calls that make or enter a namespace
 // or a mount and the kernel interfaces a space never uses: unshare, setns,
-// mount, umount2, pivot_root, keyctl, add_key, request_key, bpf,
-// userfaultfd, perf_event_open, and a clone whose flags hold any CLONE_NEW*
+// mount, umount2, pivot_root, the newer mount calls (open_tree,
+// move_mount, fsopen, fsconfig, fsmount, fspick and mount_setattr), keyctl,
+// add_key, request_key, bpf, userfaultfd, perf_event_open, and a clone
+// whose flags hold any CLONE_NEW*
 // bit. It answers clone3 with ENOSYS, as a kernel without it would, so the
 // C library falls back to clone, whose flags the filter can read; clone3
 // passes its flags in memory a filter cannot read. A clone without a
@@ -96,7 +100,8 @@ func nativeSeccompCalls() seccompCalls {
 		refused: []uint32{
 			unix.SYS_UNSHARE, unix.SYS_SETNS, unix.SYS_MOUNT, unix.SYS_UMOUNT2, unix.SYS_PIVOT_ROOT,
 			unix.SYS_KEYCTL, unix.SYS_ADD_KEY, unix.SYS_REQUEST_KEY, unix.SYS_BPF, unix.SYS_USERFAULTFD,
-			unix.SYS_PERF_EVENT_OPEN,
+			unix.SYS_PERF_EVENT_OPEN, unix.SYS_OPEN_TREE, unix.SYS_MOVE_MOUNT, unix.SYS_FSOPEN, unix.SYS_FSCONFIG,
+			unix.SYS_FSMOUNT, unix.SYS_FSPICK, unix.SYS_MOUNT_SETATTR,
 		},
 		clone:  unix.SYS_CLONE,
 		clone3: unix.SYS_CLONE3,
