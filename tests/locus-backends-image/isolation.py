@@ -444,10 +444,12 @@ def test_guard_death(image):
         took = time.monotonic() - killed
         expect(gone and took < 5.0, f"the keeper ended with the routed session, daemon included, {took:.2f} s after the "
                "guard's control died (the poll's own cost included), and the container starts again", took)
-        # The keeper says so once every group it killed is empty, which
-        # comes just after the processes are seen gone.
-        expect(eventually(lambda: "routed spaces are killed" in stack.logs(), "the keeper to say it killed the routed spaces"),
-               "the keeper says it killed the routed spaces")
+        # The keeper says why it ends: the guard's connection ended under
+        # its routes, every routed space killed with it.
+        said = eventually(lambda: (lambda t: t if "the guard's connection" in t and "the keeper ends" in t else None)(
+            stack.logs()), "the keeper to say the guard's connection ended and it ends")
+        expect("the keeper ends" in said, "the keeper says the guard's connection ended under its routes, and ends",
+               said[-2000:])
     finally:
         stack.down()
 
