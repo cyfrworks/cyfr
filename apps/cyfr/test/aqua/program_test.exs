@@ -71,6 +71,8 @@ defmodule Aqua.ProgramTest do
   @stale "What Aqua and its crew members may use changed since you granted it. Your message " <>
            "was not answered: grant it again here when it is asked, or on your Aqua page, then " <>
            "send your message again."
+  @regranted "Aqua stopped because a grant it was working under, Aqua's or its model's key, " <>
+               "changed while it worked. Send a message to go on."
   @model "catalyst:local.claude"
   @model_id "scripted-small"
   @missed "What was said in this thread since you last read it, oldest first, as context " <>
@@ -6660,9 +6662,94 @@ defmodule Aqua.ProgramTest do
       assert {:error, {:consent_moved, @title, :message}} =
                Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
 
-      assert List.last(system_lines(ctx, thread, turn)) ==
-               "Aqua stopped because a grant it was working under, Aqua's or its model's key, " <>
-                 "changed while it worked. Send a message to go on."
+      assert system_lines(ctx, thread, turn) == [@regranted]
+    end
+
+    # Aqua's grant revoked by its person while a turn's loop is gone: the
+    # turn taken over says so in one line, as the record of who revoked it
+    # says, and how to go on.
+    @tag harness: :api
+    test "a turn taken over after Aqua's grant was revoked says it was revoked, and how to go on",
+         %{ctx: ctx, thread: thread} do
+      {:ok, %{profile_id: id}} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      turn =
+        taken_over!(ctx, thread, fn ->
+          assert {:ok, %{status: "revoked"}} =
+                   Sanctum.Providers.Profile.handle(ctx, %{
+                     "action" => "revoke",
+                     "profile_id" => id
+                   })
+        end)
+
+      assert {:error, {:consent_revoked, @title, :message}} =
+               Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+
+      assert system_lines(ctx, thread, turn) == [
+               "Aqua stopped because you revoked your grant of what Aqua and its crew members " <>
+                 "may use while it worked. Grant it again on your Aqua page, then send a message " <>
+                 "to go on."
+             ]
+    end
+
+    # Aqua's grant taken back by a removal, not by its person, while a
+    # turn's loop is gone: the turn taken over says its grant changed.
+    @tag harness: :api
+    test "a turn taken over after a removal took Aqua's grant says its grant changed",
+         %{ctx: ctx, thread: thread} do
+      turn =
+        taken_over!(ctx, thread, fn ->
+          assert {:ok, %{revoked: [_]}} =
+                   Sanctum.Consent.revoke_source(ctx, Prima.AgentRef.soul_ref())
+        end)
+
+      assert {:error, {:consent_moved, @title, :message}} =
+               Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+
+      assert system_lines(ctx, thread, turn) == [@regranted]
+    end
+
+    # The claim precedes the servers' discovery: a switch of what Aqua may
+    # use committed while a start discovers them is refused after a root
+    # was claimed, with a failed execution and no model asked, said once.
+    @tag harness: :api
+    test "a switch committed while a start discovers its servers is refused after its root " <>
+           "is claimed, said once and asking no model",
+         %{ctx: ctx, thread: thread} do
+      {turn, server, loop} = discovering!(ctx, thread)
+      :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+      send(server, :finish_discovery)
+
+      assert {:failed, {:agent_changed, @title, :message}} = Task.await(loop, 15_000)
+      assert %{status: "failed"} = Arca.Repo.get_by!(Arca.Schemas.Execution, turn_id: turn.id)
+      assert model_rounds(ctx, turn) == 0
+      assert system_lines(ctx, thread, turn) == [@stale]
+    end
+
+    # A member's settings moved while a start discovers its servers: the
+    # turn's start finds its pinned settings gone and says so from the
+    # refusal table, never as the reason's name.
+    @tag harness: :api
+    test "a member's model edited while a start discovers its servers is said from the table, " <>
+           "never as its reason's name",
+         %{ctx: ctx, thread: thread} do
+      {turn, server, loop} = discovering!(ctx, thread)
+      {:ok, %{agent: %{member: member}}} = Compendium.agent_snapshot(ctx, "aqua")
+
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => member,
+          "model" => "another-model"
+        })
+
+      send(server, :finish_discovery)
+      said = Prima.Refusal.message(:agent_moved)
+      refute said == "agent_moved"
+
+      assert {:failed, :agent_moved} = Task.await(loop, 15_000)
+      assert {:ok, %{status: "failed", error: ^said}} = Tape.turn(ctx, turn.id)
+      assert system_lines(ctx, thread, turn) == [said]
     end
 
     # A server CYFR cannot connect to at a turn's start costs the person no
@@ -7967,6 +8054,52 @@ defmodule Aqua.ProgramTest do
     }
 
   defp run(ctx, turn), do: Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+
+  # A turn whose loop is gone after its model was asked, `take` run before
+  # another takes it over: answers the turn, its recovery planned as an
+  # adoption.
+  defp taken_over!(ctx, thread, take) do
+    turn = api_turn!(ctx, thread, "work on it", [{:hold, self()}, answer("Never.")])
+    loop = run(ctx, turn)
+    assert_receive {:scripted_probe, _model, _child}, 30_000
+    quiet!(loop.pid)
+    Task.shutdown(loop, :brutal_kill)
+    take.()
+
+    assert {:ok, [{:adopt, _taken}]} =
+             Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+    turn
+  end
+
+  # A turn whose start is held inside the servers' discovery, after its
+  # root was claimed: answers the turn and the server's process, which
+  # `:finish_discovery` lets go on, and the loop's task.
+  defp discovering!(ctx, thread) do
+    test = self()
+    {:ok, armed} = Agent.start_link(fn -> false end)
+
+    offering!(ctx,
+      offers: fn ->
+        if Agent.get_and_update(armed, fn hold -> {hold, false} end) do
+          send(test, {:discovering, self()})
+          receive do: (:finish_discovery -> :ok)
+        end
+
+        ["resources"]
+      end
+    )
+
+    offer!(ctx, ["docs:@resources"])
+    turn = api_turn!(ctx, thread, "read the list", [answer("Never.")])
+    :ok = Emissary.External.ServerSupervisor.stop("docs", ctx.athanor_id)
+    Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
+    Agent.update(armed, fn _ -> true end)
+    loop = run(ctx, turn)
+    assert_receive {:discovering, server}, 10_000
+    assert %{} = Arca.Repo.get_by!(Arca.Schemas.Execution, turn_id: turn.id)
+    {turn, server, loop}
+  end
 
   # The spec the loop built for the running turn, built again as a resumed
   # loop builds it: its system prompt and tools are what the driver is given.

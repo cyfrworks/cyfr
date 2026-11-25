@@ -500,6 +500,9 @@ defmodule Prima.RefusalTest do
 
   @stale "What Aqua and its crew members may use changed since you granted it."
   @ungranted "You have not granted yet what Aqua and its crew members may use."
+  @revoked "You revoked your grant of what Aqua and its crew members may use."
+  @revoked_while "stopped because you revoked your grant of what Aqua and its crew members " <>
+                   "may use while it worked. Grant it again on your Aqua page"
   @regranted "stopped because a grant it was working under, Aqua's or its model's key, " <>
                "changed while it worked."
 
@@ -531,7 +534,22 @@ defmodule Prima.RefusalTest do
      "Aqua " <> @regranted <> " Send a message to go on."},
     {{:consent_moved, "Scout", :ask}, :conflict,
      "Scout " <> @regranted <> " Ask Scout for it again."},
-    {{:consent_moved, "Aqua", :none}, :conflict, "Aqua " <> @regranted}
+    {{:consent_moved, "Aqua", :none}, :conflict, "Aqua " <> @regranted},
+    {{:grant_revoked, "Aqua", :message}, :consent_required,
+     @revoked <>
+       " Your message was not answered: grant it again here when it is asked, or on your " <>
+       "Aqua page, then send your message again."},
+    {{:grant_revoked, "Scout", :ask}, :consent_required,
+     @revoked <>
+       " Scout did not do this job: grant it again on your Aqua page, then ask Scout for it " <>
+       "again."},
+    {{:grant_revoked, "Aqua", :none}, :consent_required,
+     @revoked <> " Grant it again on your Aqua page."},
+    {{:consent_revoked, "Aqua", :message}, :consent_required,
+     "Aqua " <> @revoked_while <> ", then send a message to go on."},
+    {{:consent_revoked, "Scout", :ask}, :consent_required,
+     "Scout " <> @revoked_while <> ", then ask Scout for it again."},
+    {{:consent_revoked, "Aqua", :none}, :consent_required, "Aqua " <> @revoked_while <> "."}
   ]
 
   # The access, setup, program and grant rows are rostered with their
@@ -635,6 +653,17 @@ defmodule Prima.RefusalTest do
       for {reason, class, sentence} <- @grant_rows do
         assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
                "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
+      end
+
+      # What the Aqua page link says is what a refusal with nothing else
+      # to offer ends with.
+      for {state, ends} <- [
+            agent_changed: "Grant it again on your Aqua page.",
+            ungranted: "Grant it on your Aqua page.",
+            grant_revoked: "Grant it again on your Aqua page."
+          ] do
+        assert Refusal.grant_action(state) == ends
+        assert String.ends_with?(Refusal.message({state, "Aqua", :none}), " " <> ends)
       end
     end
 

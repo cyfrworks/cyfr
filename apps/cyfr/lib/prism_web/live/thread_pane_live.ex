@@ -1558,15 +1558,21 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The text of the ended turn's own message, read by its id from this
   # thread: never a scan of the rows around it, which may hold a line
-  # queued while the turn ran, or not reach back to it at all. Only a
-  # person's own line is sent again as theirs, never a crew member's reply
-  # that opened the turn.
+  # queued while the turn ran, or not reach back to it at all. Only this
+  # person's own line, its sender and its author both theirs, is sent again
+  # as theirs: never a schedule's line or a crew member's reply that opened
+  # the turn. A line with files is not offered, since a send again would
+  # carry its words alone; its thread's line says to send it again.
   defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}, message_id)
        when is_binary(message_id) do
+    person = ctx.user_id
+
     case Threads.get_message(Sanctum.Context.actor(ctx), message_id) do
-      {:ok, %{thread_id: ^thread_id, kind: "text", sent_by: "person", content: text}}
+      {:ok,
+       %{thread_id: ^thread_id, kind: "text", sent_by: "person", author: ^person, content: text} =
+           row}
       when is_binary(text) and text != "" ->
-        text
+        if Aqua.Attachments.refs_of(row) == [], do: text
 
       _none ->
         nil
@@ -2076,7 +2082,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
                   class="text-blue-400 hover:underline"
                 >
-                  Grant it on your Aqua page.
+                  {Prima.Refusal.grant_action(:ungranted)}
                 </.link>
               <% @model_ready in [:consent_absent, :consent_stale] -> %>
                 <%!-- The crew's grant was never given, or no longer covers
@@ -2089,9 +2095,9 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  {if @model_ready == :consent_absent,
-                    do: "Grant it on your Aqua page.",
-                    else: "Grant it again on your Aqua page."}
+                  {Prima.Refusal.grant_action(
+                    if(@model_ready == :consent_absent, do: :ungranted, else: :agent_changed)
+                  )}
                 </.link>
               <% @model_ready in [:consent_damaged, :consent_unavailable] -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,

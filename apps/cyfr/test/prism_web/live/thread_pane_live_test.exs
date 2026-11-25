@@ -1700,31 +1700,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   test "Aqua's grant asked for a refused message offers the message again once given",
        %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
     ctx = connected!(athanor, user)
-
     :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
 
-    hello = line_id!(here, thread, "hello")
-    {panel, pane} = panel_pane(conn, thread)
-    dialog = "#system-layer-panel-dialog"
-
-    send(pane.pid, %Cyfr.Bus.ThreadEvent{
-      athanor_id: thread.athanor_id,
-      thread_id: thread.id,
-      kind: :consent_required,
-      data: %{ref: Prima.AgentRef.soul_ref(), user_id: user.user_id, message_id: hello}
-    })
-
-    render(pane)
-    render(panel)
-    assert has_element?(panel, ~s(#{dialog} [data-kind="grant"]))
-
-    panel |> element(~s(#{dialog} button[phx-click="confirm"])) |> render_click()
-
-    Prima.Test.Wait.wait_until(
-      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
-      5_000,
-      "the pane to hear its grant"
-    )
+    {_panel, pane} = grant_aqua!(conn, user, thread, line_id!(here, thread, "hello"))
 
     assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
     assert render(pane) =~ "Granted — send that message again, as a new turn?"
@@ -1737,6 +1715,100 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert :ok = Aqua.Loop.Turn.consented(ctx, authority, agent.tools, [])
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  # Only the person's own line is sent again as theirs, its sender and its
+  # author both theirs: a schedule's line, sent as the person's and written
+  # by the server, is offered by no grant the pane asks, Aqua's or a
+  # launch's account's.
+  test "a schedule's line is offered again by no grant",
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    ctx = connected!(athanor, user)
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    {:ok, fired} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: Prima.Author.system(),
+        sent_by: "person",
+        content: "read the daily totals",
+        payload: %{"schedule" => %{"id" => "sch_daily", "name" => "Daily"}}
+      })
+
+    {_panel, pane} = grant_aqua!(conn, user, thread, fired.id)
+    offers_nothing!(pane)
+    Cyfr.Test.Sandbox.end_views()
+
+    {_panel, pane} = grant_launch_account!(conn, thread, user, here, fired.id)
+    offers_nothing!(pane)
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # A send again would carry a line's words alone, so a line with files is
+  # not offered, with words or without: its thread's line says to send it
+  # again.
+  test "a refused message with files is not offered again, with words or without",
+       %{conn: conn, user: user, athanor: athanor, thread: thread} do
+    ctx = connected!(athanor, user)
+    actor = Sanctum.Context.actor(ctx)
+
+    for text <- ["Describe my attached note.", ""] do
+      :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+      id = Prima.UUID7.generate_id("msg")
+      file = %{"filename" => "notes.txt", "bytes" => "hello", "media_type" => "text/plain"}
+      {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, id, [file])
+
+      {:ok, row} =
+        Threads.append(actor, thread.id, %{
+          id: id,
+          author: user.user_id,
+          sent_by: "person",
+          content: text,
+          payload: %{"attachments" => refs}
+        })
+
+      assert [_file] = Aqua.Attachments.refs_of(row)
+      {_panel, pane} = grant_aqua!(conn, user, thread, row.id)
+      offers_nothing!(pane)
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # Aqua's grant asked for the refused turn whose message is `message_id`,
+  # in the panel's layer, and given there. Answers the panel and the pane
+  # once the pane has heard its grant.
+  defp grant_aqua!(conn, user, thread, message_id) do
+    {panel, pane} = panel_pane(conn, thread)
+    dialog = "#system-layer-panel-dialog"
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: %{ref: Prima.AgentRef.soul_ref(), user_id: user.user_id, message_id: message_id}
+    })
+
+    render(pane)
+    render(panel)
+    assert has_element?(panel, ~s(#{dialog} [data-kind="grant"]))
+    panel |> element(~s(#{dialog} button[phx-click="confirm"])) |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    {panel, pane}
+  end
+
+  # Granted, the pane offers nothing to send again, says the turn ended and
+  # cuts nothing.
+  defp offers_nothing!(pane) do
+    assigns = :sys.get_state(pane.pid).socket.assigns
+    assert assigns.restart_prompt == nil
+    assert assigns.flash["info"] =~ "The turn that asked has ended"
+    refute has_element?(pane, ~s(button[phx-click="restart_send"]))
+    assert restarts_for_consent() == []
   end
 
   test "with no message of the turn that asked to offer, the pane cuts nothing and says so",

@@ -797,9 +797,10 @@ defmodule Aqua.RunnerTest do
   end
 
   # The crew has one grant, Aqua's: under it Aqua's turn and a member's
-  # run; revoked, it refuses every member's turn as it refuses Aqua's,
-  # before a root is claimed or a model is asked, says so in each thread
-  # and asks there for that one grant.
+  # run; revoked by its person, it refuses every member's turn as it
+  # refuses Aqua's, before a root is claimed or a model is asked, says in
+  # each thread that it was revoked, read from the record of who revoked
+  # it, and asks there for that one grant.
   test "with the crew's grant revoked, Aqua's turn and every member's claim no root and ask for it",
        %{ctx: ctx, thread: thread} do
     member!(ctx, "planner")
@@ -820,7 +821,12 @@ defmodule Aqua.RunnerTest do
     ran = ScriptedWorker.calls()
     assert Enum.count(ran, &(&1.input["operation"] == "chat")) == 2
 
-    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "agent:local.aqua")
+    # Revoked by the person, as the profile's revoke records it.
+    {:ok, %{profile_id: soul}} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{"action" => "revoke", "profile_id" => soul})
+
     user = ctx.user_id
 
     for {room, agent, member} <- [{thread, "aqua", "Aqua"}, {child, "planner", "Planner"}] do
@@ -830,18 +836,18 @@ defmodule Aqua.RunnerTest do
           turn: %{agent: agent, requested_by: ctx.user_id}
         })
 
-      assert {:failed, {:ungranted, ^member, :message}} =
+      assert {:failed, {:grant_revoked, ^member, :message}} =
                Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
 
       said =
-        "You have not granted yet what Aqua and its crew members may use. Your message was " <>
-          "not answered: grant it here when it is asked, or on your Aqua page, then send your " <>
-          "message again."
+        "You revoked your grant of what Aqua and its crew members may use. Your message was " <>
+          "not answered: grant it again here when it is asked, or on your Aqua page, then send " <>
+          "your message again."
 
       assert {:ok, %{status: "failed", error: ^said, root_execution_id: nil, profile_id: nil}} =
                Tape.turn(ctx, turn.id)
 
-      assert List.last(system_lines(ctx, room)) == said
+      assert system_lines(ctx, room) == [said]
       assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
       room_id = room.id
       message_id = message.id
@@ -880,10 +886,12 @@ defmodule Aqua.RunnerTest do
         " Your message was not answered: grant it again here when it is asked, or on your " <>
         "Aqua page, then send your message again."
 
-    for {origin, then, said} <- [
-          {:interactive, :message, asked},
-          {:schedule, :none, @stale <> " Grant it again on your Aqua page."}
-        ] do
+    cases = [
+      {:interactive, :message, asked},
+      {:schedule, :none, @stale <> " Grant it again on your Aqua page."}
+    ]
+
+    for {{origin, then, said}, n} <- Enum.with_index(cases, 1) do
       sender = %{ctx | origin: origin}
 
       {:ok, %{turn: turn, message: message}} =
@@ -901,7 +909,8 @@ defmodule Aqua.RunnerTest do
       # with the turn's own error (`Aqua.ScheduleTurns`).
       assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
 
-      assert List.last(system_lines(ctx, thread)) == said
+      # The thread's lines whole: each refusal's one line, and no other.
+      assert system_lines(ctx, thread) == cases |> Enum.take(n) |> Enum.map(&elem(&1, 2))
 
       if then == :message do
         message_id = message.id

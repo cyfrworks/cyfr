@@ -727,14 +727,16 @@ defmodule Aqua.Loop.Turn do
 
   @doc """
   What starts `turn`'s member again where a refusal of it is read
-  (`Prima.Refusal`): a message in its thread (`:message`, a person's
-  turn), asking the crew member for its job again (`:ask`, a turn with a
-  request to answer), or nothing that reader can do (`:none`, a
-  schedule's or another source's turn).
+  (`Prima.Refusal`), by what opened it: a message in its thread
+  (`:message`, a turn a person's line opened there), asking the crew
+  member for its job again (`:ask`, a turn with a request to answer), or
+  nothing that reader can do (`:none`): a schedule's or another source's
+  turn, a page's call, which the row has no action for, or a crew
+  member's reply to Aqua.
   """
   @spec again(map()) :: :message | :ask | :none
   def again(%{request_id: request}) when is_binary(request), do: :ask
-  def again(%{origin: "interactive"}), do: :message
+  def again(%{origin: "interactive", sent_by: "person"}), do: :message
   def again(_turn), do: :none
 
   @doc """

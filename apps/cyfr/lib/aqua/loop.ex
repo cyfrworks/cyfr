@@ -91,6 +91,9 @@ defmodule Aqua.Loop do
   # each crew member's alike: the crew's one grant (`Compendium.AgentSource`).
   # The member stays the worker the turn's row names (`turns.agent`).
   @grant Prima.AgentRef.soul_ref()
+
+  # What a grant that does not cover the turn is said as (`moved/3`).
+  @moved [:agent_changed, :ungranted, :consent_moved, :consent_revoked]
   @resume_backoff_ms [500, 2_000, 8_000]
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
   # What a harness tells of its work that any of the loop's waits takes
@@ -200,7 +203,7 @@ defmodule Aqua.Loop do
   # can act on it (`say_unrun/3`) and ends failed in the same words.
   defp refused(ctx, turn, reason) do
     say_unrun(ctx, turn, reason)
-    finish = Tape.finish(ctx, turn, "failed", %{error: describe(reason)})
+    finish = Tape.finish(ctx, turn, "failed", %{error: turn_words(reason)})
     unrun(turn, {:failed, reason}, finish)
   end
 
@@ -234,22 +237,53 @@ defmodule Aqua.Loop do
     end_unrun(ctx, claim, turn, reason)
   end
 
-  # A grant the turn holds to that does not cover it, Aqua's list changed
-  # since it was granted (`Aqua.Loop.Turn.consented/4`), one never given
-  # or taken back, or a pinned grant given again: said as the member whose
-  # turn it is, with what starts it again where it is read
-  # (`Aqua.Loop.Turn.again/1`).
-  defp moved(ctx, turn, reason) when reason in [:agent_changed, :ungranted, :consent_moved] do
+  # A grant the turn holds to that does not cover it: Aqua's list changed
+  # since it was granted (`Aqua.Loop.Turn.consented/4`), one never given or
+  # revoked by its person (read from the record of who revoked it,
+  # `Sanctum.Consent.ungranted/2`, never inferred), or a pinned grant given
+  # again, taken back or revoked. Said as the member whose turn it is, with
+  # what starts it again where it is read (`source/2`).
+  defp moved(ctx, turn, reason) when reason in @moved do
     member =
       case Compendium.agent_snapshot(ctx, turn.agent) do
         {:ok, %{agent: %{title: title}}} when is_binary(title) -> title
         _unread -> turn.agent
       end
 
-    {reason, member, Turn.again(turn)}
+    {revoked(ctx, reason), member, source(ctx, turn)}
   end
 
   defp moved(_ctx, _turn, reason), do: reason
+
+  defp revoked(ctx, :ungranted) do
+    case Sanctum.Consent.ungranted(ctx, @grant) do
+      {:ok, :revoked} -> :grant_revoked
+      _never_or_unread -> :ungranted
+    end
+  end
+
+  defp revoked(_ctx, reason), do: reason
+
+  # What starts the member again where its refusal is read
+  # (`Aqua.Loop.Turn.again/1`), a message held to the person's own line,
+  # its sender and its author both theirs: a line in their name they did
+  # not write, a workspace's opening Aqua wrote among them, is no message
+  # of theirs to send again.
+  defp source(ctx, turn) do
+    case Turn.again(turn) do
+      :message -> if own_line?(ctx, turn), do: :message, else: :none
+      then -> then
+    end
+  end
+
+  defp own_line?(ctx, %{message_id: id, requested_by: person}) when is_binary(id) do
+    case Tape.message(ctx, id) do
+      {:ok, %{sent_by: "person", author: ^person}} -> true
+      _other -> false
+    end
+  end
+
+  defp own_line?(_ctx, _turn), do: false
 
   # A turn that never ran says why in the thread where the person can act
   # on it: a brain whose provider refused its key, in the provider's
@@ -270,20 +304,20 @@ defmodule Aqua.Loop do
   # Aqua whose crew member does not stand, and a brain that is a program
   # whose row does not, in the sentence the Aqua page says too.
   defp say_unrun(ctx, turn, {:aqua_runs_on, _state, _member} = reason),
-    do: unrun_line(ctx, turn, describe(reason))
+    do: unrun_line(ctx, turn, turn_words(reason))
 
   defp say_unrun(ctx, turn, {:crew_unready, _member, _state} = reason),
-    do: unrun_line(ctx, turn, describe(reason))
+    do: unrun_line(ctx, turn, turn_words(reason))
 
   defp say_unrun(ctx, turn, {:tools_invalid_entry, _entry} = reason),
-    do: unrun_line(ctx, turn, describe(reason))
+    do: unrun_line(ctx, turn, turn_words(reason))
 
   # A person's message refused for the crew's grant: its line says so,
   # and the thread's view, open for that person, asks for Aqua's grant
   # there and offers the message again once it is given.
   defp say_unrun(ctx, turn, {grant, _member, :message} = reason)
-       when grant in [:agent_changed, :ungranted] do
-    unrun_line(ctx, turn, describe(reason))
+       when grant in [:agent_changed, :ungranted, :grant_revoked] do
+    unrun_line(ctx, turn, turn_words(reason))
 
     Tape.announce(ctx, turn.thread_id, :consent_required, %{
       ref: @grant,
@@ -293,15 +327,18 @@ defmodule Aqua.Loop do
   end
 
   defp say_unrun(ctx, turn, {moved, _member, _then} = reason)
-       when moved in [:agent_changed, :ungranted, :consent_moved],
-       do: unrun_line(ctx, turn, describe(reason))
+       when moved in [:agent_changed, :ungranted, :grant_revoked, :consent_moved],
+       do: unrun_line(ctx, turn, turn_words(reason))
+
+  # The member's pinned settings moved while its start read its servers.
+  defp say_unrun(ctx, turn, :agent_moved), do: unrun_line(ctx, turn, turn_words(:agent_moved))
 
   defp say_unrun(_ctx, _turn, _reason), do: :ok
 
   defp unrun_line(ctx, turn, line), do: Tape.append_line(ctx, turn, line)
 
   defp end_unrun(ctx, claim, turn, reason) do
-    error = describe(reason)
+    error = turn_words(reason)
     Opus.suspend_lease_watch(claim.keeper)
     finish = Tape.finish(ctx, turn, "failed", %{error: error})
     ended = unrun(turn, {:failed, reason}, finish)
@@ -357,17 +394,18 @@ defmodule Aqua.Loop do
   end
 
   # The spec of a continued turn, built from its row alone. A pin that no
-  # longer loads, Aqua's or its brain's, bound again or taken back, ends
-  # the turn said in its thread as it is mid-turn (`moved/3`); the runner
-  # ends it with the same sentence as its error.
+  # longer loads, Aqua's or its brain's, bound again, taken back or revoked
+  # by its person, or the member's pinned settings moved, ends the turn
+  # said in its thread as it is mid-turn (`moved/3`); the runner ends it
+  # with the same sentence as its error.
   defp rebuilt(ctx, turn) do
     with {:ok, authority} <- pinned_authority(ctx, turn),
          {:ok, spec} <- Turn.build(ctx, turn, authority: authority, excerpt?: false) do
       {:ok, spec}
     else
-      {:error, :consent_moved} ->
-        said = moved(ctx, turn, :consent_moved)
-        _ = unrun_line(ctx, turn, describe(said))
+      {:error, reason} when reason in [:consent_moved, :consent_revoked, :agent_moved] ->
+        said = moved(ctx, turn, reason)
+        _ = unrun_line(ctx, turn, turn_words(said))
         {:error, said}
 
       refused ->
@@ -658,12 +696,31 @@ defmodule Aqua.Loop do
       {:ok, _moved} ->
         {:error, :consent_moved}
 
+      {:error, :not_found} ->
+        taken_back(ctx)
+
+      {:error, {:not_found, _profile}} ->
+        taken_back(ctx)
+
       {:error, _} = error ->
         error
     end
   end
 
   defp pinned_authority(_ctx, _turn), do: {:error, :no_pin}
+
+  # A pinned grant that no longer loads was taken back: revoked by its
+  # person when Aqua has no grant to stand on any more and the record of
+  # who revoked says so (`Sanctum.Consent.ungranted/2`), else taken back
+  # some other way, as a removal takes it.
+  defp taken_back(ctx) do
+    with {:ok, []} <- Sanctum.Consent.profiles(ctx, @grant),
+         {:ok, :revoked} <- Sanctum.Consent.ungranted(ctx, @grant) do
+      {:error, :consent_revoked}
+    else
+      _standing_removed_or_unread -> {:error, :consent_moved}
+    end
+  end
 
   # The tools the turn pinned must be those of the release the loaded
   # grant names for its source, Aqua's, as the tree and the brains stand
@@ -805,8 +862,8 @@ defmodule Aqua.Loop do
 
   defp terminal(:completed), do: {"completed", nil}
   defp terminal(:cancelled), do: {"cancelled", "stopped"}
-  defp terminal({:failed, reason}), do: {"failed", describe(reason)}
-  defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
+  defp terminal({:failed, reason}), do: {"failed", turn_words(reason)}
+  defp terminal({:uncertain, reason}), do: {"uncertain", turn_words(reason)}
 
   # The loop waits on its harness no more, whose end is now its own stop.
   defp unwatch(%State{watch: watch}) when is_reference(watch),
@@ -2738,18 +2795,25 @@ defmodule Aqua.Loop do
   # A refusal for ownership (this server has not won its slot, or has lost
   # it), or a component index still catching up with its files, reads as
   # its declared sentence, which says to retry: the turn did not run on,
-  # and the message can be sent again. A grant that moved past the turn
-  # reads as the member's own (`moved/3`).
+  # and the message can be sent again.
   def describe(reason)
       when reason in [:not_owner, :control_plane_lost, :slot_not_held, :projection_unavailable],
       do: Prima.Refusal.message(reason)
 
-  def describe({moved, _member, _then} = reason)
-      when moved in [:agent_changed, :ungranted, :consent_moved],
-      do: Prima.Refusal.message(reason)
-
   def describe(reason) when is_atom(reason), do: Atom.to_string(reason)
   def describe(reason), do: Aqua.Ops.render_refusal(reason)
+
+  @doc false
+  # What a turn's end and its line say: what `describe/1` says, but never
+  # a reason's atom, which reads as its row's sentence (`Prima.Refusal`),
+  # one the table does not know as an outcome that could not be confirmed.
+  @spec turn_words(term()) :: String.t()
+  def turn_words(reason) when is_atom(reason) do
+    said = describe(reason)
+    if said == Atom.to_string(reason), do: Prima.Refusal.message(reason), else: said
+  end
+
+  def turn_words(reason), do: describe(reason)
 
   # This member still holds its slot in the cell. Asked again at each point
   # of the abort that would write, never once for the whole of it: a

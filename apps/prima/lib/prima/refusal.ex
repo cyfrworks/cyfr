@@ -86,10 +86,16 @@ defmodule Prima.Refusal do
   @unconfirmed "The outcome could not be confirmed."
 
   # The crew's grant, by its state, in the one sentence every place says
-  # it in: no longer covering what Aqua's file and servers give it
-  # (`row(:agent_changed)`), or never given or taken back (`row(:ungranted)`).
-  @stale "What Aqua and its crew members may use changed since you granted it."
-  @ungranted "You have not granted yet what Aqua and its crew members may use."
+  # it in, and what granting it is there: no longer covering what Aqua's
+  # file and servers give it (`:agent_changed`), never given
+  # (`:ungranted`), or revoked by its person (`:grant_revoked`).
+  @grant_states %{
+    agent_changed:
+      {"What Aqua and its crew members may use changed since you granted it.", "grant it again"},
+    ungranted: {"You have not granted yet what Aqua and its crew members may use.", "grant it"},
+    grant_revoked:
+      {"You revoked your grant of what Aqua and its crew members may use.", "grant it again"}
+  }
 
   # The consent signals' tags and shape, read from their owner rather
   # than spelled: this table, `is_consent_signal/2` and every surface that
@@ -414,6 +420,15 @@ defmodule Prima.Refusal do
   @doc "The public sentence for `reason` (`classify/1`'s message)."
   @spec message(term()) :: String.t()
   def message(reason), do: classify(reason).message
+
+  @doc """
+  What the person does on the Aqua page about the crew's grant in
+  `state` (`:agent_changed`, `:ungranted` or `:grant_revoked`), in the
+  words its refusals end with where nothing else is offered.
+  """
+  @spec grant_action(:agent_changed | :ungranted | :grant_revoked) :: String.t()
+  def grant_action(state) when is_map_key(@grant_states, state),
+    do: granting(nil, :none, elem(@grant_states[state], 1))
 
   @doc """
   The JSON-RPC code name a row answers with in place of its class's code,
@@ -769,18 +784,36 @@ defmodule Prima.Refusal do
          "work in another thread or wait for it to end, then send your message again."}
 
   # The crew's grant that does not cover what Aqua and its crew members
-  # may use: moved past by Aqua's file or its servers
-  # (`Aqua.Loop.Turn.consented/4`), or never given or taken back. Bare, as
-  # the Aqua page and an empty thread say it; a turn refused for it, with
-  # what to do where it is read (`Aqua.Loop.Turn.again/1`).
-  defp row(:agent_changed), do: {:consent_required, @stale}
-  defp row(:ungranted), do: {:consent_required, @ungranted}
+  # may use (`@grant_states`): moved past by Aqua's file or its servers
+  # (`Aqua.Loop.Turn.consented/4`), never given, or revoked. Bare, as the
+  # Aqua page and an empty thread say it; a turn refused for it, with what
+  # to do where it is read (`Aqua.Loop.Turn.again/1`).
+  defp row(state) when state in [:agent_changed, :ungranted],
+    do: {:consent_required, elem(@grant_states[state], 0)}
 
-  defp row({:agent_changed, member, then}) when is_binary(member),
-    do: ungranted(@stale, granting(member, then, "grant it again"))
+  defp row({state, member, then}) when is_map_key(@grant_states, state) and is_binary(member) do
+    {said, grant} = @grant_states[state]
 
-  defp row({:ungranted, member, then}) when is_binary(member),
-    do: ungranted(@ungranted, granting(member, then, "grant it"))
+    case granting(member, then, grant) do
+      nil -> nil
+      what -> {:consent_required, said <> " " <> what}
+    end
+  end
+
+  # Aqua's grant, pinned by a turn, revoked by its person while the turn
+  # was away from it: a turn taken over is refused it.
+  defp row({:consent_revoked, member, then}) when is_binary(member) do
+    said =
+      "#{member} stopped because you revoked your grant of what Aqua and its crew members " <>
+        "may use while it worked. Grant it again on your Aqua page"
+
+    case then do
+      :message -> {:consent_required, said <> ", then send a message to go on."}
+      :ask -> {:consent_required, said <> ", then ask #{member} for it again."}
+      :none -> {:consent_required, said <> "."}
+      _unknown -> nil
+    end
+  end
 
   # A grant the turn pinned, Aqua's or its brain's, given again or taken
   # back since: a turn continued from its rows, or a model's call, is
@@ -1951,9 +1984,6 @@ defmodule Prima.Refusal do
     do: {"#{member} did not start within #{minutes} minutes.", :again}
 
   defp start_failed(_member, _unknown), do: nil
-
-  defp ungranted(_said, nil), do: nil
-  defp ungranted(said, what), do: {:consent_required, said <> " " <> what}
 
   # What a turn refused for the crew's grant says to do where it is read.
   # A person's message is asked for the grant in its thread when that is
