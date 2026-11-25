@@ -327,6 +327,15 @@ for network in project.get("networks", {}).values():
             print("subnet", config["subnet"])'
 }
 
+# Each network on the daemon and its subnets, one line each; a network
+# removed between the listing and its reading is passed over.
+network_subnets() {
+  local id
+  for id in $(docker network ls -q); do
+    docker network inspect --format '{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}' "$id" 2>/dev/null || true
+  done
+}
+
 # Nothing on the daemon holds a name or subnet either compose file fixes:
 # otherwise the run ends here with 69, naming the holder.
 names_free() {
@@ -338,8 +347,7 @@ names_free() {
         [ -z "$holder" ] || missing "the container name $value, which the stack fixes, is held by the container $holder"
         ;;
       subnet)
-        holder="$(docker network ls -q | xargs -r docker network inspect --format '{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}' |
-          awk -v s="$value" '{ for (i = 2; i <= NF; i++) if ($i == s) print $1 }' | head -n 1)"
+        holder="$(network_subnets | awk -v s="$value" '{ for (i = 2; i <= NF; i++) if ($i == s) print $1 }' | head -n 1)"
         [ -z "$holder" ] || missing "the subnet $value, which the stack fixes, is held by the network $holder"
         ;;
     esac
