@@ -5820,6 +5820,8 @@ defmodule Aqua.ProgramTest do
 
       loop = run(ctx, turn)
       waiting!(ctx, turn)
+      # Its handler admitted and holding, so no write of its worker's is cut.
+      handler_waiting!()
       quiet!(loop.pid)
       Task.shutdown(loop, :brutal_kill)
       assert {:ok, [{:adopt, _}]} = Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
@@ -9232,6 +9234,22 @@ defmodule Aqua.ProgramTest do
     id = "#{step.idempotency_key}:g#{step.generation}"
     {:ok, rows} = Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), live.budget_id)
     match?([%{holder_deadline: nil, admit_by: nil}], Enum.filter(rows, &(&1.id == id)))
+  end
+
+  # An `aqua.wait`'s handler sits in its wait, past the gate's admission.
+  defp handler_waiting! do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        Enum.any?(
+          Process.list(),
+          &match?(
+            {:current_function, {Compendium.Providers.Aqua, :wait_until, 1}},
+            Process.info(&1, :current_function)
+          )
+        )
+      end,
+      10_000
+    )
   end
 
   # The turn's wait has been dispatched, so it runs.
