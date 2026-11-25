@@ -176,11 +176,15 @@ folder_gone() {
 }
 
 cleanup() {
-  local code=$? failed="" made
+  local code=$? failed="" made id
   trap '' INT TERM
   if [ "$code" -ne 0 ] && [ -n "$PROJECT" ]; then
     echo "----- the project's containers -----" >&2
     docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Names}} {{.Status}}' >&2 || true
+    for id in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=cyfr"); do
+      echo "----- the last lines of cyfr's log -----" >&2
+      docker logs --tail 120 "$id" 2>&1 | cut -c1-400 >&2 || true
+    done
   fi
   if [ -n "$PROJECT" ]; then project_gone "$PROJECT" || failed=1; fi
   if [ -n "$HELD_AT" ]; then
@@ -420,8 +424,11 @@ fill_ready() {
         other -> other
       end
     end
-    IO.puts(\"FILL=#{settle.(settle)}\")" | sed -n 's/^FILL=//p')"
-  [ "$fill" = ready ] || fail "the person's athanor reads '${fill:-nothing}', not ready, within 120 s"
+    IO.puts(\"FILL=#{settle.(settle)}\")
+    # arca:unscoped-ok: the proof reads why its own person's fill failed.
+    IO.puts(\"WHY=#{inspect(Arca.Repo.get(Arca.Schemas.Athanor, ctx.athanor_id).provisioning_failure)}\")")"
+  [ "$(sed -n 's/^FILL=//p' <<<"$fill")" = ready ] ||
+    fail "the person's athanor reads '$(sed -n 's/^FILL=//p' <<<"$fill")', not ready, within 120 s: $(sed -n 's/^WHY=//p' <<<"$fill" | cut -c1-600)"
 }
 
 # The fixture's command `$3...` of the tree `$2` asked again, 2 s apart,
@@ -516,7 +523,7 @@ build_runs() {
 # server's container is replaced.
 devices_out() {
   local name
-  rm -rf "$PROOF/devices" && mkdir -p "$PROOF/devices"
+  rm -rf "$PROOF/devices" && mkdir -m 700 "$PROOF/devices"
   for name in $(docker exec "$cyfr_id" sh -c 'cd /tmp && ls device-*.json 2>/dev/null' || true); do
     docker cp "$cyfr_id:/tmp/$name" "$PROOF/devices/$name" >/dev/null || fail "the device record $name could not be kept"
   done
@@ -649,6 +656,10 @@ PY
 # ---------------------------------------------------------------------------
 
 mkdir -m 700 "$WORK"
+# A person's usual umask, where the queue's is 077: what the run lays
+# down for the install (the scaffold's aqua/ and guides among it) is
+# readable by the server's user, as a person's install is.
+umask 022
 mkdir -p "$PROOF/logs" "$PROOF/home" "$PROOF/bin" "$RELEASES"
 : >"$PROOF/candidate-pulls"
 
