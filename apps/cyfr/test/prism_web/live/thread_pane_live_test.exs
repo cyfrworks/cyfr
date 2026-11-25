@@ -3385,6 +3385,64 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     defp card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
 
+    test "a pending update to the unchanged shipped planner can still be saved", %{
+      conn: conn,
+      athanor: athanor,
+      here: here,
+      thread: thread
+    } do
+      assert :ok = Compendium.Packs.settle(here)
+      {:ok, %{bytes: original}} = Compendium.Packs.manifest(here, "cyfr:planner")
+
+      row =
+        proposed!(here, thread, %{
+          "name" => "planner",
+          "description" => "custom",
+          "content" => "my edit",
+          "against" => Prima.Digest.sha256(original)
+        })
+
+      pane = open_pane(conn, athanor, thread)
+      assert pane |> element(card(row, "name")) |> render() =~ "mine:planner"
+      pane |> element(card(row, "save")) |> render_click()
+      assert has_element?(pane, card(row, "saved"))
+    end
+
+    test "a proposal to make a new pack says so, and its Save is refused when the pack is there",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      actor = Sanctum.Context.actor(here)
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\nred"
+        )
+
+      row =
+        proposed!(here, thread, %{
+          "name" => "garden:tulips",
+          "description" => "How tulips are kept",
+          "content" => "Plant them in autumn.",
+          "against" => "none",
+          "new_pack" => true
+        })
+
+      pane = open_pane(conn, athanor, thread)
+
+      assert render(pane) =~
+               "Aqua proposes a new pack with this scroll as its first. Nothing is kept until you save it."
+
+      pane |> element(card(row, "save")) |> render_click()
+      assert has_element?(pane, card(row, "refused"))
+      refute has_element?(pane, card(row, "saved"))
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls garden skills tulips SKILL.md))
+    end
+
+    # A card proposed before scrolls had packs names its scroll bare; it is
+    # the first pack's, `mine`, where the release moved every made scroll.
     test "its card shows what Save as scroll writes, and a save writes exactly that",
          %{conn: conn, athanor: athanor, here: here, thread: thread} do
       proposal = %{
@@ -3397,16 +3455,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       row = proposed!(here, thread, proposal)
       pane = open_pane(conn, athanor, thread)
 
-      assert pane |> element(card(row, "name")) |> render() =~ "fern-care"
+      assert pane |> element(card(row, "name")) |> render() =~ "mine:fern-care"
       assert pane |> element(card(row, "description")) |> render() =~ "How the fern is kept"
 
       assert pane |> element(card(row, "content")) |> render() =~
                "Water it weekly.\nTurn it monthly."
 
-      assert {:error, {:not_found, "Scroll", "fern-care"}} =
+      assert {:error, {:not_found, "Scroll", "mine:fern-care"}} =
                Compendium.Providers.Aqua.handle(here, %{
                  "action" => "skill_get",
-                 "name" => "fern-care"
+                 "name" => "mine:fern-care"
                })
 
       pane |> element(card(row, "save")) |> render_click()
@@ -3421,14 +3479,14 @@ defmodule PrismWeb.ThreadPaneLiveTest do
               }} =
                Compendium.Providers.Aqua.handle(here, %{
                  "action" => "skill_get",
-                 "name" => "fern-care"
+                 "name" => "mine:fern-care"
                })
 
       # A change proposed over a scroll that changed since is refused, in
       # the sentence the card shows, and nothing is written.
       stale =
         proposed!(here, thread, %{
-          "name" => "fern-care",
+          "name" => "mine:fern-care",
           "description" => "How the fern stays green",
           "content" => "Water it weekly.\nTurn it monthly.",
           "against" => Prima.Digest.sha256("an older manifest")
@@ -3449,7 +3507,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert {:ok, %{description: "How the fern is kept"}} =
                Compendium.Providers.Aqua.handle(here, %{
                  "action" => "skill_get",
-                 "name" => "fern-care"
+                 "name" => "mine:fern-care"
                })
     end
 

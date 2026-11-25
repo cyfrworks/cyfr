@@ -17,7 +17,8 @@ defmodule Arca.Test.UnitLocator do
   a directory unit at the version directory the contracts spell
   (`Prima.ComponentPath.version_dir/4`, five segments) with a sentinel
   that marks a completed copy; an aqua crew member is a file unit and an aqua
-  skill a directory unit. A path that names neither sits above any unit.
+  pack of scrolls a directory unit committed whole. A path that names
+  neither sits above any unit.
   A refusal the real grammar would make — a malformed name, an unknown
   type — is the domain's to make and is not this double's business.
   """
@@ -57,7 +58,7 @@ defmodule Arca.Test.UnitLocator do
     # is the same name the real locator reads it from.
     @root "aqua"
     @soul Prima.AgentRef.soul_name() <> ".md"
-    @skill_manifest "SKILL.md"
+    @record ".cyfr-pack.json"
 
     @impl Arca.Storage.UnitLocator
     def locate([@root, @soul | _rest]), do: {:file, [@root, @soul]}
@@ -68,8 +69,8 @@ defmodule Arca.Test.UnitLocator do
         else: :above_unit
     end
 
-    def locate([@root, "skills", name | _rest]),
-      do: {:dir, [@root, "skills", name], @skill_manifest}
+    def locate([@root, "scrolls", pack | _rest]),
+      do: {:dir, [@root, "scrolls", pack], @record}
 
     def locate(_path), do: :above_unit
 
@@ -77,6 +78,18 @@ defmodule Arca.Test.UnitLocator do
     # own file; a component (the Components locator says nothing) is not.
     @impl Arca.Storage.UnitLocator
     def creates_by_write?(_unit), do: true
+
+    # A pack is committed whole, and the write of its first file makes it,
+    # its record minted; its record is the domain's to write.
+    @impl Arca.Storage.UnitLocator
+    def commits_whole?([@root, "scrolls", _pack]), do: true
+    def commits_whole?(_unit), do: false
+
+    @impl Arca.Storage.UnitLocator
+    def admit_edit(_actor, _unit, nil, next),
+      do: {:ok, next ++ [{[@record], ~s({"origin": "own", "on": true})}]}
+
+    def admit_edit(_actor, _unit, _current, next), do: {:ok, next}
   end
 
   @doc "The registry the suites install through `Arca.Storage.UnitLocator.install!/1`."

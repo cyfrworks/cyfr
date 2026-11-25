@@ -24,7 +24,7 @@ func TestWriteKeepsTheTreeReadableUnderAnyUmask(t *testing.T) {
 		{name: "aqua", dir: true},
 		{name: "aqua/crew", dir: true},
 		{name: "aqua/crew/shipped.md", mode: 0o644, data: []byte("a crew member")},
-		{name: "aqua/skills/shipped/SKILL.md", mode: 0o644, data: []byte("a scroll, its parents absent from the tarball")},
+		{name: "aqua/scrolls/cyfr/skills/shipped/SKILL.md", mode: 0o644, data: []byte("a scroll, its parents absent from the tarball")},
 	}}
 	if err := r.Write(false); err != nil {
 		t.Fatal(err)

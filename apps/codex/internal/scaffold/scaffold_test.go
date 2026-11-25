@@ -29,7 +29,7 @@ import (
 
 // TestIsManaged pins down which scaffold entries `cyfr update` is allowed to
 // overwrite. Managed = the guides, the WIT definitions, and the Aqua files
-// the scaffold ships — the soul and every file inside a shipped scroll.
+// the scaffold ships — the soul and every file of CYFR's own pack.
 // Everything a member owns — config, the compose/proxy files, every crew
 // member, their own scrolls, .env — must NOT be managed, or `cyfr update`
 // would clobber them.
@@ -45,10 +45,11 @@ func TestIsManaged(t *testing.T) {
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
-		"aqua/skills/builder/SKILL.md",
-		"aqua/skills/canvas/SKILL.md",
-		"aqua/skills/capability-acquisition/SKILL.md",
-		"aqua/skills/capability-acquisition/references/notes.md",
+		"aqua/scrolls/cyfr/.cyfr-pack.json",
+		"aqua/scrolls/cyfr/skills/builder/SKILL.md",
+		"aqua/scrolls/cyfr/skills/canvas/SKILL.md",
+		"aqua/scrolls/cyfr/skills/capability-acquisition/SKILL.md",
+		"aqua/scrolls/cyfr/skills/capability-acquisition/references/notes.md",
 	}
 	for _, p := range managed {
 		if !IsManaged(p) {
@@ -63,12 +64,13 @@ func TestIsManaged(t *testing.T) {
 		".env.example",
 		".env.locus.example",
 		"aqua",
-		"aqua/README.md",                     // only the soul and scrolls ship
-		"aqua/crew/custom.md",                // a member's own crew file
-		"aqua/crew/claude-code.md",           // no crew member ships
-		"aqua/roles/builder.md",              // the roles are gone
-		"aqua/skills/custom/SKILL.md",        // a member's own scroll
-		"aqua/skills/capability-acquisition", // a scroll is the files inside its directory
+		"aqua/README.md",           // only the soul and scrolls ship
+		"aqua/crew/custom.md",      // a member's own crew file
+		"aqua/crew/claude-code.md", // no crew member ships
+		"aqua/roles/builder.md",    // the roles are gone
+		"aqua/scrolls/mine/skills/custom/SKILL.md",   // a member's own pack
+		"aqua/scrolls/taste-skill/skills/x/SKILL.md", // a pack a member brought in
+		"aqua/scrolls/cyfr",                          // a pack is the files inside its folder
 	}
 	for _, p := range notManaged {
 		if IsManaged(p) {
@@ -201,14 +203,18 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 			}
 		case strings.HasPrefix(rel, "crew/"):
 			t.Errorf("the seed ships the crew member %q: no crew member ships, each is the athanor's own", tarPath)
-		case strings.HasPrefix(rel, "skills/"):
-			name, file, _ := strings.Cut(strings.TrimPrefix(rel, "skills/"), "/")
-			if file != "SKILL.md" {
-				return nil
+		case strings.HasPrefix(rel, "scrolls/"):
+			pack, _, _ := strings.Cut(strings.TrimPrefix(rel, "scrolls/"), "/")
+			if pack != "cyfr" {
+				t.Errorf("the seed ships the pack %q: CYFR ships its own pack, cyfr, alone", pack)
 			}
-			seedScrolls[name] = true
+			if name, ok := strings.CutPrefix(rel, "scrolls/cyfr/skills/"); ok {
+				if scroll, file, _ := strings.Cut(name, "/"); file == "SKILL.md" {
+					seedScrolls[scroll] = true
+				}
+			}
 			if !IsManaged(tarPath) {
-				t.Errorf("shipped scroll %q is not managed — `cyfr update` will never refresh it", tarPath)
+				t.Errorf("CYFR's own pack's file %q is not managed — `cyfr update` will never refresh it", tarPath)
 			}
 		}
 		return nil
@@ -224,10 +230,8 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 		t.Fatalf("no shipped scrolls found under %s", filepath.Join(seedAqua, "skills"))
 	}
 
-	for name := range shippedScrolls {
-		if !seedScrolls[name] {
-			t.Errorf("shippedScrolls names %q which the seed tree does not ship — a stale entry that matches nothing", name)
-		}
+	if len(seedScrolls) == 0 {
+		t.Error("the seed ships no scroll in CYFR's own pack")
 	}
 
 	// A member's own crew file or scroll must survive `cyfr update`. Guard the
@@ -236,7 +240,7 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 	if seedScrolls[custom] {
 		t.Fatalf("the seed tree ships a scroll named %q; pick another name for the member-owned check", custom)
 	}
-	for _, p := range []string{"aqua/crew/custom.md", "aqua/skills/custom/SKILL.md"} {
+	for _, p := range []string{"aqua/crew/custom.md", "aqua/scrolls/mine/skills/custom/SKILL.md"} {
 		if IsManaged(p) {
 			t.Errorf("expected member-owned %q NOT to be managed (must be preserved on update)", p)
 		}
@@ -497,5 +501,45 @@ func TestFetchWritesNothingUntilWrite(t *testing.T) {
 	}
 	if got := extracted(t); !slices.Equal(got, []string{"configuration-guide.md", "docker-compose.yml"}) {
 		t.Errorf("Write left %v; a temporary file stayed behind", got)
+	}
+}
+
+// TestUpdateRefreshesCyfrsPackAndKeepsEveryOther is `cyfr update` over a
+// project holding CYFR's own pack and a member's: the release's files of
+// aqua/scrolls/cyfr/ replace the project's, and aqua/scrolls/mine/ stays
+// byte for byte, even where the release carries a file of that path.
+func TestUpdateRefreshesCyfrsPackAndKeepsEveryOther(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for path, data := range map[string]string{
+		"aqua/scrolls/cyfr/skills/builder/SKILL.md": "the release before's builder",
+		"aqua/scrolls/mine/skills/notes/SKILL.md":   "a member's own scroll",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Release{entries: []entry{
+		{name: "aqua/scrolls/cyfr/.cyfr-pack.json", mode: 0o644, data: []byte("{}\n")},
+		{name: "aqua/scrolls/cyfr/skills/builder/SKILL.md", mode: 0o644, data: []byte("this release's builder")},
+		{name: "aqua/scrolls/mine/skills/notes/SKILL.md", mode: 0o644, data: []byte("a release's file of that path")},
+	}}
+	if err := r.Write(true); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"aqua/scrolls/cyfr/.cyfr-pack.json":         "{}\n",
+		"aqua/scrolls/cyfr/skills/builder/SKILL.md": "this release's builder",
+		"aqua/scrolls/mine/skills/notes/SKILL.md":   "a member's own scroll",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("%s holds %q after the update, want %q", path, got, want)
+		}
 	}
 }

@@ -17,6 +17,10 @@ defmodule PrismWeb.FileController do
   be named and the server's own storage has no address. What comes back
   is a download with a content type from a short allowlist (anything
   else is `application/octet-stream`), `nosniff`, and no caching.
+
+  `GET /a/:athanor/scrolls/download/:pack` is one pack as the archive it
+  would be brought in by, a `.tar.gz` without CYFR's record of it
+  (`Compendium.download_pack/2`), under the same session and focus.
   """
 
   use PrismWeb, :controller
@@ -51,6 +55,48 @@ defmodule PrismWeb.FileController do
   end
 
   def show(conn, _params), do: send_resp(conn, 404, "Not found")
+
+  def pack(conn, %{"athanor" => route, "pack" => pack}) when is_binary(pack) do
+    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
+
+    with {:ok, _person} <- authenticate(token, nil),
+         {:ok, athanor} <- Athanors.by_route_slug(route),
+         {:ok, ctx} <- authenticate(token, athanor.id),
+         {:ok, %{filename: filename, stream: stream}} <- packed(ctx, pack) do
+      conn
+      |> put_resp_header("content-type", "application/gzip")
+      |> put_resp_header("content-disposition", disposition(filename))
+      |> put_resp_header("x-content-type-options", "nosniff")
+      |> put_resp_header("cache-control", "private, no-store")
+      |> send_chunked(200)
+      |> stream_pack(stream)
+    else
+      :sign_in -> redirect(conn, to: PrismWeb.AuthHelpers.sign_in_path())
+      :company_login -> redirect(conn, to: "/company-login")
+      :unavailable -> send_resp(conn, 503, "Try again shortly")
+      _ -> send_resp(conn, 404, "Not found")
+    end
+  end
+
+  def pack(conn, _params), do: send_resp(conn, 404, "Not found")
+
+  # The archive goes out as it is made, one compressed file at a time; a
+  # browser that goes away ends it.
+  defp stream_pack(conn, stream) do
+    Enum.reduce_while(stream, conn, fn data, conn ->
+      case chunk(conn, data) do
+        {:ok, conn} -> {:cont, conn}
+        {:error, _closed} -> {:halt, conn}
+      end
+    end)
+  end
+
+  defp packed(ctx, pack) do
+    case Compendium.download_pack(ctx, pack) do
+      {:ok, archive} -> {:ok, archive}
+      {:error, _} -> :not_found
+    end
+  end
 
   # A session refusal is rendered by its disposition; a path the tree does
   # not show is simply not found, whatever the reason.

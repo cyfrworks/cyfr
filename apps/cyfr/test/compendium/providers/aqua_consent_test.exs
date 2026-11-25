@@ -11,7 +11,7 @@ defmodule Compendium.Providers.AquaConsentTest do
   alias Compendium.Providers.Aqua, as: Tool
   alias Sanctum.Visibility
 
-  @writes ~w(create update delete reset skill_create skill_update skill_delete skill_reset)
+  @writes ~w(create update delete reset skill_create skill_update skill_delete)
   @reads ~w(list get status skill_list skill_get)
 
   setup tags do
@@ -37,15 +37,14 @@ defmodule Compendium.Providers.AquaConsentTest do
     star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
     calls = [
-      {"skill_create", %{"name" => "sneak", "description" => "d", "content" => "c"}},
-      {"skill_update", %{"name" => "capability-acquisition", "content" => "c"}},
+      {"skill_create", %{"name" => "mine:sneak", "description" => "d", "content" => "c"}},
+      {"skill_update", %{"name" => "cyfr:capability-acquisition", "content" => "c"}},
       {"reset", %{"all" => true}},
       {"update", %{"name" => "aqua", "content" => "x"}},
       {"create", %{"name" => "sneak", "content" => "x"}},
       {"delete", %{"name" => "aqua"}},
       {"reset", %{"name" => "aqua"}},
-      {"skill_delete", %{"name" => "capability-acquisition"}},
-      {"skill_reset", %{"name" => "capability-acquisition"}}
+      {"skill_delete", %{"name" => "cyfr:capability-acquisition"}}
     ]
 
     for {action, args} <- calls do
@@ -100,16 +99,16 @@ defmodule Compendium.Providers.AquaConsentTest do
               %Prima.Refusal{
                 stage: :admission,
                 reason: {:consent_class_required, {:surface_not_permitted, ^method}}
-              }} = create.(%{ctx | auth_method: method}, "by-#{method}")
+              }} = create.(%{ctx | auth_method: method}, "mine:by-#{method}")
 
       assert {:error, {:not_found, "Scroll", _}} =
-               Tool.handle(ctx, %{"action" => "skill_get", "name" => "by-#{method}"})
+               Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:by-#{method}"})
     end
 
-    assert {:ok, %{proposed: "by-person", against: "none"}} = create.(ctx, "by-person")
+    assert {:ok, %{proposed: "mine:by-person", against: "none"}} = create.(ctx, "mine:by-person")
 
-    assert {:error, {:not_found, "Scroll", "by-person"}} =
-             Tool.handle(ctx, %{"action" => "skill_get", "name" => "by-person"})
+    assert {:error, {:not_found, "Scroll", "mine:by-person"}} =
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:by-person"})
   end
 
   # A scroll a turn writes waits for the person: in a chain the person's
@@ -141,7 +140,7 @@ defmodule Compendium.Providers.AquaConsentTest do
 
     create = %{
       "action" => "skill_create",
-      "name" => "kept-way",
+      "name" => "mine:kept-way",
       "description" => "  How the fern is kept  ",
       "content" => "\nWater it weekly.\n"
     }
@@ -149,73 +148,77 @@ defmodule Compendium.Providers.AquaConsentTest do
     assert {:ok, proposal} = in_chain.(create)
 
     assert Map.delete(proposal, :note) == %{
-             proposed: "kept-way",
+             proposed: "mine:kept-way",
              description: "How the fern is kept",
              content: "Water it weekly.",
              against: "none"
            }
 
     # Unsaved, it is nothing any read sees.
-    assert {:error, {:not_found, "Scroll", "kept-way"}} =
-             Tool.handle(ctx, %{"action" => "skill_get", "name" => "kept-way"})
+    assert {:error, {:not_found, "Scroll", "mine:kept-way"}} =
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:kept-way"})
 
-    {:ok, index} = Compendium.AquaSkills.index(ctx)
-    refute "kept-way" in Enum.map(index, & &1.name)
+    {:ok, index} = Compendium.Packs.index(ctx)
+    refute "mine:kept-way" in Enum.map(index, & &1.name)
 
     assert {:error,
-            {:invalid_argument, "crew.ask: this athanor has no scroll named \"kept-way\""}} =
-             Aqua.Crew.scrolls(ctx, ["kept-way"], "crew.ask")
+            {:invalid_argument, "crew.ask: this athanor has no scroll named \"mine:kept-way\""}} =
+             Aqua.Crew.scrolls(ctx, ["mine:kept-way"], "crew.ask")
 
-    assert {:ok, %{created: "kept-way"}} = save.(proposal, "skill_create")
+    assert {:ok, %{created: "mine:kept-way"}} = save.(proposal, "skill_create")
 
     assert {:ok, %{description: "How the fern is kept", content: "Water it weekly."}} =
-             Tool.handle(ctx, %{"action" => "skill_get", "name" => "kept-way"})
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:kept-way"})
 
     # A proposal that names only a description stores the body it showed.
     assert {:ok, %{content: "Water it weekly.", against: against} = described} =
              in_chain.(%{
                "action" => "skill_update",
-               "name" => "kept-way",
+               "name" => "mine:kept-way",
                "description" => "How the fern stays green"
              })
 
     {:ok, stored} =
-      Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.skill_manifest("kept-way"))
+      Arca.get(
+        Sanctum.Context.actor(ctx),
+        Compendium.AquaPath.scroll_manifest("mine", "kept-way")
+      )
 
     assert against == Prima.Digest.sha256(stored)
 
     # Its body edited elsewhere after the proposal, the save is refused and
     # nothing is written.
-    assert {:ok, %{updated: "kept-way"}} =
+    assert {:ok, %{updated: "mine:kept-way"}} =
              Sanctum.Gate.call_external("aqua", ctx, %{
                "action" => "skill_update",
-               "name" => "kept-way",
+               "name" => "mine:kept-way",
                "content" => "Water it daily."
              })
 
     assert {:error, {:conflict, refusal}} = save.(described, "skill_update")
-    assert refusal =~ "The scroll 'kept-way' changed since Aqua proposed this"
+    assert refusal =~ "The scroll 'mine:kept-way' changed since Aqua proposed this"
 
     assert {:ok, %{description: "How the fern is kept", content: "Water it daily."}} =
-             Tool.handle(ctx, %{"action" => "skill_get", "name" => "kept-way"})
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:kept-way"})
 
     # Proposed again over the scroll as it is, the save writes exactly it.
     assert {:ok, again} =
              in_chain.(%{
                "action" => "skill_update",
-               "name" => "kept-way",
+               "name" => "mine:kept-way",
                "description" => "How the fern stays green"
              })
 
-    assert {:ok, %{updated: "kept-way"}} = save.(again, "skill_update")
+    assert {:ok, %{updated: "mine:kept-way"}} = save.(again, "skill_update")
 
     assert {:ok, %{description: "How the fern stays green", content: "Water it daily."}} =
-             Tool.handle(ctx, %{"action" => "skill_get", "name" => "kept-way"})
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:kept-way"})
 
     # A name already taken is refused at the proposal and at the save.
-    assert {:error, {:invalid_argument, "Scroll 'kept-way' already exists"}} = in_chain.(create)
+    assert {:error, {:invalid_argument, "Scroll 'mine:kept-way' already exists"}} =
+             in_chain.(create)
 
-    assert {:error, {:invalid_argument, "Scroll 'kept-way' already exists"}} =
+    assert {:error, {:invalid_argument, "Scroll 'mine:kept-way' already exists"}} =
              save.(proposal, "skill_create")
   end
 
@@ -236,22 +239,25 @@ defmodule Compendium.Providers.AquaConsentTest do
     overhead = byte_size(~s(---\nname: "at-bound"\ndescription: "d"\n---\n\n\n))
     whole = String.duplicate("a", 131_072 - overhead)
 
-    assert {:ok, %{created: "at-bound"}} = write.("at-bound", "d", whole)
+    assert {:ok, %{created: "mine:at-bound"}} = write.("mine:at-bound", "d", whole)
 
     {:ok, stored} =
-      Arca.get(Sanctum.Context.actor(ctx), Compendium.AquaPath.skill_manifest("at-bound"))
+      Arca.get(
+        Sanctum.Context.actor(ctx),
+        Compendium.AquaPath.scroll_manifest("mine", "at-bound")
+      )
 
     assert byte_size(stored) == 131_072
 
     over = ~s(---\nname: "past-bound"\ndescription: "d"\n---\n\n\n)
     past = String.duplicate("a", 131_073 - byte_size(over))
-    assert {:error, {:invalid_argument, refusal}} = write.("past-bound", "d", past)
+    assert {:error, {:invalid_argument, refusal}} = write.("mine:past-bound", "d", past)
     assert refusal =~ "The scroll 'past-bound' is too large for Aqua to use"
 
-    assert {:ok, _} = write.("long-line", String.duplicate("é", 1_024), "c")
+    assert {:ok, _} = write.("mine:long-line", String.duplicate("é", 1_024), "c")
 
     assert {:error, {:invalid_argument, _}} =
-             write.("longer-line", String.duplicate("é", 1_025), "c")
+             write.("mine:longer-line", String.duplicate("é", 1_025), "c")
   end
 
   # A scroll stored past the bound, written before or replaced through
@@ -268,7 +274,7 @@ defmodule Compendium.Providers.AquaConsentTest do
     {:ok, _} =
       Tool.handle(ctx, %{
         "action" => "skill_create",
-        "name" => "too-big",
+        "name" => "mine:too-big",
         "description" => "d",
         "content" => "short"
       })
@@ -276,7 +282,7 @@ defmodule Compendium.Providers.AquaConsentTest do
     assert {:ok, _written} =
              Arca.Files.write(
                Sanctum.Context.actor(ctx),
-               Enum.join(Compendium.AquaPath.skill_manifest("too-big"), "/"),
+               Enum.join(Compendium.AquaPath.scroll_manifest("mine", "too-big"), "/"),
                ~s(---\nname: "too-big"\ndescription: "d"\n---\n\n) <> body <> "\n"
              )
 
@@ -287,21 +293,22 @@ defmodule Compendium.Providers.AquaConsentTest do
     end
 
     assert {:error, {:invalid_argument, refusal}} =
-             in_chain.(%{"action" => "skill_get", "name" => "too-big"})
+             in_chain.(%{"action" => "skill_get", "name" => "mine:too-big"})
 
-    assert refusal =~ "The scroll 'too-big' is too large for Aqua to use"
+    assert refusal =~ "The scroll 'mine:too-big' is too large for Aqua to use"
     assert {:ok, %{skills: listed}} = in_chain.(%{"action" => "skill_list"})
-    refute "too-big" in Enum.map(listed, & &1.name)
+    refute "mine:too-big" in Enum.map(listed, & &1.name)
 
     assert {:ok, %{content: ^body}} =
-             Tool.handle(ctx, %{"action" => "skill_get", "name" => "too-big"})
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:too-big"})
 
     assert {:ok, %{skills: all}} = Tool.handle(ctx, %{"action" => "skill_list"})
-    assert %{carried: false} = Enum.find(all, &(&1.name == "too-big"))
+    assert %{carried: false} = Enum.find(all, &(&1.name == "mine:too-big"))
 
     assert {:error,
-            {:invalid_argument, "crew.ask: the scroll 'too-big' is too large for Aqua to use"}} =
-             Aqua.Crew.scrolls(ctx, ["too-big"], "crew.ask")
+            {:invalid_argument,
+             "crew.ask: the scroll 'mine:too-big' is too large for Aqua to use"}} =
+             Aqua.Crew.scrolls(ctx, ["mine:too-big"], "crew.ask")
 
     prompt =
       Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
@@ -316,28 +323,35 @@ defmodule Compendium.Providers.AquaConsentTest do
     {:ok, _} =
       Tool.handle(ctx, %{
         "action" => "skill_create",
-        "name" => "many-files",
+        "name" => "mine:many-files",
         "description" => "d",
         "content" => "short"
       })
 
-    for n <- 1..600 do
-      name = String.pad_leading("#{n}", 230, "f")
+    # The files land in one revision of the pack, as a bring-in lands them.
+    :ok =
+      Arca.Overlay.edit_unit(
+        Sanctum.Context.actor(ctx),
+        Compendium.AquaPath.pack_dir("mine"),
+        fn pairs ->
+          {:ok,
+           pairs ++
+             for(
+               n <- 1..600,
+               do: {["skills", "many-files", String.pad_leading("#{n}", 230, "f")], "x"}
+             )}
+        end
+      )
 
-      :ok =
-        Arca.put(
-          Sanctum.Context.actor(ctx),
-          Compendium.AquaPath.skill_dir("many-files") ++ [name],
-          "x"
-        )
-    end
+    assert {:ok, %{carried: false, delivered: delivered}} =
+             Compendium.skill(ctx, "mine:many-files")
 
-    assert {:ok, %{carried: false, delivered: delivered}} = Compendium.skill(ctx, "many-files")
     assert delivered > 131_072
 
     assert {:error,
-            {:invalid_argument, "crew.ask: the scroll 'many-files' is too large for Aqua to use"}} =
-             Aqua.Crew.scrolls(ctx, ["many-files"], "crew.ask")
+            {:invalid_argument,
+             "crew.ask: the scroll 'mine:many-files' is too large for Aqua to use"}} =
+             Aqua.Crew.scrolls(ctx, ["mine:many-files"], "crew.ask")
   end
 
   # A job's bound is on what the member reads: scrolls whose names and
@@ -347,13 +361,13 @@ defmodule Compendium.Providers.AquaConsentTest do
   # alike (`Aqua.CrewBoundTest`).
   test "scrolls that fit as parts and not as framed are refused for one job", %{ctx: ctx} do
     body = String.duplicate("b", 65_500)
-    names = ["s1", "s2"]
+    names = ["mine:s1", "mine:s2"]
 
-    for name <- names do
+    for name <- ["s1", "s2"] do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          Compendium.AquaPath.skill_manifest(name),
+          Compendium.AquaPath.scroll_manifest("mine", name),
           ~s(---\nname: "#{name}"\ndescription: "d"\n---\n\n#{body}\n)
         )
     end
@@ -386,7 +400,7 @@ defmodule Compendium.Providers.AquaConsentTest do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          Compendium.AquaPath.skill_manifest(name),
+          Compendium.AquaPath.scroll_manifest("mine", name),
           ~s(---\nname: "#{name}"\ndescription: "#{long}"\n---\n\nbody\n)
         )
     end
@@ -394,17 +408,17 @@ defmodule Compendium.Providers.AquaConsentTest do
     {:ok, _} =
       Tool.handle(ctx, %{
         "action" => "skill_create",
-        "name" => "zz-usable",
+        "name" => "mine:zz-usable",
         "description" => "the one that works",
         "content" => "body"
       })
 
     {:ok, %{entries: entries}} = Compendium.skills_index(ctx, Compendium.skills_index_limit())
-    assert "zz-usable" in Enum.map(entries, & &1.name)
-    refute Enum.any?(entries, &String.starts_with?(&1.name, "aa"))
+    assert "mine:zz-usable" in Enum.map(entries, & &1.name)
+    refute Enum.any?(entries, &String.starts_with?(&1.name, "mine:aa"))
 
     prompt = Aqua.Prompt.compose(ctx, agent: %{"prompt" => ""})
-    assert prompt.text =~ "- zz-usable — the one that works"
+    assert prompt.text =~ "- mine:zz-usable — the one that works"
   end
 
   # A chain authority granting exactly `tools`, the shape the consent blob
