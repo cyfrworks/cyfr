@@ -708,8 +708,13 @@ defmodule PrismWeb.AquaLive do
   end
 
   # Why a list did not come, said as that: the program's sentence, signed
-  # out only where its driver read that, no room, or no answer.
+  # out only where its driver read that, no room, packs not made ready
+  # (the refusal's own sentence), or no answer.
   defp unlisted_words({:signed_out, sentence}, _title), do: sentence
+
+  defp unlisted_words(packs, _title) when packs in [:packs_unready, :packs_moved],
+    do: Prima.Refusal.message(packs)
+
   defp unlisted_words({:refused, sentence}, _title) when is_binary(sentence), do: sentence
 
   defp unlisted_words({:refused, :capacity, _boot}, _title),

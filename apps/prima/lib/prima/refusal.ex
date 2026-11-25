@@ -821,6 +821,15 @@ defmodule Prima.Refusal do
        "#{member} could not start: this CYFR has no room for another running program. Stop " <>
          "work in another thread or wait for it to end, then send your message again."}
 
+  # A program that loads the person's packs starts only once its box holds
+  # them (`Opus.Programs.Session`): a copy not made ready, or a selection
+  # that moved on at every try, ends the start with nothing of it spent.
+  defp row(:packs_unready),
+    do: {:unavailable, "Your packs could not be made ready for this program."}
+
+  defp row(:packs_moved),
+    do: {:conflict, "Your packs changed while this program was starting; start it again."}
+
   # The crew's grant that does not cover what Aqua and its crew members
   # may use (`@grant_states`): moved past by Aqua's file or its servers
   # (`Aqua.Loop.Turn.consented/4`), never given, or revoked. Bare, as the

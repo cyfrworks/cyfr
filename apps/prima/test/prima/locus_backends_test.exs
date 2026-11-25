@@ -11,7 +11,8 @@ defmodule Prima.LocusBackendsTest do
   bytes, the sealed
   environment, every accepted and malformed header, every valid and invalid
   field, every invalid message refused with its error and answered with its
-  refusal, every rejected header refused at its instant, every fence
+  refusal, every packs answer read as its vector says, held naming its
+  digest, every rejected header refused at its instant, every fence
   vector's messages signed and its refusal of the roster, the refusal roster
   and the masking rule. Beyond the vectors: header-first verification
   refuses exactly what the one-step verifier refuses, the bounds on a
@@ -35,7 +36,10 @@ defmodule Prima.LocusBackendsTest do
     {"open_terminal", :open},
     {"input", :input},
     {"output", :output},
-    {"resize", :resize}
+    {"resize", :resize},
+    {"open_packs", :open},
+    {"packs_hold", :packs_hold},
+    {"packs_put", :packs_put}
   ]
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
@@ -121,7 +125,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.read_health(LocusBackends.health_body())
       assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
       assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
-      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":4,"x":1}))
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":5,"x":1}))
       assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
@@ -181,6 +185,66 @@ defmodule Prima.LocusBackendsTest do
         assert {:ok, answer} = LocusBackends.read_answer(answer_type, v["answer"]), type
         assert {:ok, v["answer"]} == LocusBackends.encode_answer(answer_type, answer), type
       end
+    end
+
+    test "a packs hold, a put's part and an open naming its generation name one digest and one lifetime" do
+      {:ok, hold} = LocusBackends.read_session(@vectors["packs_hold"]["body"])
+      {:ok, put} = LocusBackends.read_session(@vectors["packs_put"]["body"])
+      {:ok, open} = LocusBackends.read_session(@vectors["open_packs"]["body"])
+
+      assert {put.part, put.seq, put.last} == {"hello", 0, true}
+      assert hold.digest == put.digest and open.packs == hold.digest
+      assert hold.lifetime == put.lifetime and open.lifetime == hold.lifetime
+      assert byte_size(put.part) <= LocusBackends.max_pack_part_bytes()
+
+      # A part past the bound, and one that is not base64, do not read.
+      wire = Jason.decode!(@vectors["packs_put"]["body"])
+      past = Base.encode64(:binary.copy("x", LocusBackends.max_pack_part_bytes() + 1))
+
+      assert {:error, {:too_large, :part, _, _}} =
+               LocusBackends.read_session(Jason.encode!(%{wire | "part" => past}))
+
+      assert {:error, {:invalid_field, "part"}} =
+               LocusBackends.read_session(Jason.encode!(%{wire | "part" => "not base64!"}))
+
+      assert {:error, {:invalid_field, "digest"}} =
+               LocusBackends.read_session(Jason.encode!(%{wire | "digest" => "sha256:AB"}))
+    end
+
+    test "a held answer names the generation held, and no other packs answer names one" do
+      hold = @vectors["packs_hold"]
+      digest = Jason.decode!(hold["body"])["digest"]
+
+      read = %{
+        hold: LocusBackends.read_session_answer(:packs_hold, hold["answer"]),
+        held: LocusBackends.read_session_answer(:packs_hold, hold["answer_held"]),
+        put: LocusBackends.read_session_answer(:packs_put, @vectors["packs_put"]["answer"]),
+        refused:
+          for %{"name" => name, "answer" => answer} <- hold["invalid_answers"] do
+            {:error, error} = LocusBackends.read_session_answer(:packs_hold, answer)
+            {name, Atom.to_string(tag(error))}
+          end
+      }
+
+      assert read == %{
+               hold: {:ok, %{state: :missing}},
+               held: {:ok, %{state: :held, digest: digest}},
+               put: {:ok, %{state: :held, digest: digest}},
+               refused: for(v <- hold["invalid_answers"], do: {v["name"], v["error"]})
+             }
+
+      assert Enum.map(hold["invalid_answers"], & &1["name"]) ==
+               ~w(held_without_digest missing_with_digest)
+
+      {:ok, held} = LocusBackends.read_session_answer(:packs_hold, hold["answer_held"])
+      assert {:ok, hold["answer_held"]} == LocusBackends.encode_session_answer(:packs_hold, held)
+
+      # The encoder refuses what the reader refuses.
+      assert {:error, {:missing_field, "digest"}} =
+               LocusBackends.encode_session_answer(:packs_hold, %{state: :held})
+
+      assert {:error, {:unknown_field, "digest"}} =
+               LocusBackends.encode_session_answer(:packs_put, %{state: :taken, digest: digest})
     end
 
     test "a hello names no lifetime yet, and a sync carries the sealed environment" do
@@ -690,13 +754,13 @@ defmodule Prima.LocusBackendsTest do
       assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
       assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
-      assert {:protocol_mismatch, 4, 2} = LocusBackends.refusal_for({:version, 2})
-      assert {:protocol_mismatch, 4, nil} = LocusBackends.refusal_for({:version, "4"})
+      assert {:protocol_mismatch, 5, 2} = LocusBackends.refusal_for({:version, 2})
+      assert {:protocol_mismatch, 5, nil} = LocusBackends.refusal_for({:version, "5"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 4, 2}) ==
-               ~s({"error":"version","version":4})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 5, 2}) ==
+               ~s({"error":"version","version":5})
 
-      assert LocusBackends.status({:protocol_mismatch, 4, nil}) == 409
+      assert LocusBackends.status({:protocol_mismatch, 5, nil}) == 409
 
       assert {:error, {:version, 1}} =
                LocusBackends.read_answer(

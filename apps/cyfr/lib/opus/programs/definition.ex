@@ -259,6 +259,23 @@ defmodule Opus.Programs.Definition do
     }
   ]
 
+  # The drivers that point their program at the athanor's packs in its
+  # session's space, which the program loads as its own skills (T5).
+  @pack_drivers ~w(cyfr-claude-code cyfr-codex)
+
+  @doc """
+  Whether a program row's driver points its program at the athanor's
+  packs in its session's space (`/run/cyfr/scrolls`), each loaded by the
+  program as its own skills: the one fact that decides it, from the row's
+  driver word (`Arca.McpServerStorage.driver/1`). True for Claude Code's
+  driver and Codex's; false for every other driver, an ACP program's
+  among them, and for a row that names none. Such a program's own loader
+  is the list of its scrolls, so its turn's briefing carries no index of
+  them (`Aqua.Harness.facts/1`, `loader?`).
+  """
+  @spec loads_packs?(String.t() | nil) :: boolean()
+  def loads_packs?(driver), do: driver in @pack_drivers
+
   @typedoc "A program brain CYFR ships a driver for (`brains/0`)."
   @type brain :: %{name: String.t(), title: String.t(), command: String.t()}
 
@@ -284,7 +301,8 @@ defmodule Opus.Programs.Definition do
           home: :scratch | :kept,
           memory_bytes: pos_integer() | nil,
           home_max_bytes: pos_integer() | nil,
-          hosts: [String.t(), ...] | nil
+          hosts: [String.t(), ...] | nil,
+          packs: boolean()
         }
 
   @doc """
@@ -433,8 +451,9 @@ defmodule Opus.Programs.Definition do
 
   @doc """
   The program a stored row defines from its validated definition, with the
-  row's program settings, or the refusal of a row whose stored hosts do
-  not read.
+  row's program settings and whether it loads the athanor's packs
+  (`loads_packs?/1`), or the refusal of a row whose stored hosts do not
+  read.
   """
   @spec program(map(), definition()) ::
           {:ok, program()} | {:error, {:invalid_argument, String.t()}}
@@ -448,7 +467,8 @@ defmodule Opus.Programs.Definition do
          home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
          memory_bytes: Map.get(row, :memory_bytes),
          home_max_bytes: Map.get(row, :home_max_bytes),
-         hosts: hosts
+         hosts: hosts,
+         packs: loads_packs?(Arca.McpServerStorage.driver(row))
        }}
     end
   end
@@ -463,7 +483,8 @@ defmodule Opus.Programs.Definition do
       home: program.home,
       memory_bytes: program.memory_bytes,
       home_max_bytes: program.home_max_bytes,
-      hosts: program.hosts
+      hosts: program.hosts,
+      packs: program.packs
     }
   end
 

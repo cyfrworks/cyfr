@@ -95,7 +95,13 @@ defmodule Locus.Test.FakeKeeper do
   two answering `home_retired` for a home not made, and `home_list` answers
   the homes in pages of two ids. A kept spawn of a home not made is
   refused `home_absent`; without a kept root, every home request and kept
-  spawn is refused `unavailable`. A spawn's kept-home and `pty` members
+  spawn is refused `unavailable`. It holds pack generations as cyfr-locus
+  does, with no file: a `packs_hold` is `held` for a generation a put
+  completed and `missing` otherwise, a `packs_put` is `taken` until its
+  `last`, `held` then, and refused `packs_refused` for a seq out of order,
+  and `packs_busy` for a first part while another put of its athanor is
+  in progress;
+  without a kept root both are refused `unavailable`. A spawn's kept-home and `pty` members
   are recorded among the requests and run as any other spawn; a `resize`
   is recorded and changes nothing, since no spawn here runs on a terminal.
   """
@@ -240,6 +246,9 @@ defmodule Locus.Test.FakeKeeper do
        release_held: nil,
        held_releases: [],
        kept_root: nil,
+       # The pack generations held complete and the puts in progress.
+       packs: MapSet.new(),
+       puts: %{},
        next: 0
      }}
   end
@@ -406,6 +415,50 @@ defmodule Locus.Test.FakeKeeper do
        ) do
     send(self(), {:send, %{type: "error", id: id, code: code}})
     state
+  end
+
+  defp handle_request(%{"type" => "packs_" <> _, "id" => id}, %{kept_root: nil} = state) do
+    send(self(), {:send, %{type: "error", id: id, code: "unavailable"}})
+    state
+  end
+
+  defp handle_request(%{"type" => "packs_hold", "id" => id} = request, state) do
+    held? = MapSet.member?(state.packs, {request["athanor"], request["digest"]})
+    send(self(), {:send, %{type: "packs", id: id, state: if(held?, do: "held", else: "missing")}})
+    state
+  end
+
+  defp handle_request(%{"type" => "packs_put", "id" => id} = request, state) do
+    key = {request["athanor"], request["digest"], request["lifetime"]}
+    next = if request["seq"] == 0, do: 0, else: Map.get(state.puts, key)
+
+    under_way? =
+      Enum.any?(Map.keys(state.puts), fn {athanor, _d, _l} = other ->
+        other != key and athanor == request["athanor"]
+      end)
+
+    cond do
+      request["seq"] == 0 and under_way? ->
+        send(self(), {:send, %{type: "error", id: id, code: "packs_busy"}})
+        state
+
+      next != request["seq"] ->
+        send(self(), {:send, %{type: "error", id: id, code: "packs_refused"}})
+        %{state | puts: Map.delete(state.puts, key)}
+
+      request["last"] ->
+        send(self(), {:send, %{type: "packs", id: id, state: "held"}})
+
+        %{
+          state
+          | puts: Map.delete(state.puts, key),
+            packs: MapSet.put(state.packs, {request["athanor"], request["digest"]})
+        }
+
+      true ->
+        send(self(), {:send, %{type: "packs", id: id, state: "taken"}})
+        %{state | puts: Map.put(state.puts, key, next + 1)}
+    end
   end
 
   defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{kept_root: nil} = state) do

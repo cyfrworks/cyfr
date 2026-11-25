@@ -28,6 +28,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
+	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -176,6 +177,16 @@ func Main(args []string) int {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
+	// The packs' folder is made by its first put: nothing of it decides
+	// whether the keeper starts. What an earlier keeper left half put is
+	// removed now, and a folder that cannot be swept is only said.
+	var packs *packview.Store
+	if cfg.Kept != nil {
+		packs = packview.New(filepath.Join(cfg.Kept.Root, packview.DirName))
+		if err := packs.Sweep(); err != nil {
+			log.Warn("the packs' folder holds what an earlier keeper left, and it was not removed: %v", err)
+		}
+	}
 	self, err := os.Executable()
 	if err != nil {
 		log.Error("refusing to start: %v", err)
@@ -213,6 +224,7 @@ func Main(args []string) int {
 		waiters:   map[int]*child{},
 		keptLive:  map[int]int{},
 		keptOps:   map[int]*sync.Mutex{},
+		packs:     packs,
 		ended:     make(chan struct{}),
 	}
 	for _, spec := range cfg.Pools {
@@ -571,6 +583,16 @@ type spawn struct {
 	// retired closes when retirement has finished.
 	retired    chan struct{}
 	retireOnce sync.Once
+	// packs is the generation its space binds (packview.Store.Acquire),
+	// whose release its final release calls (forget); nil for none.
+	packs func()
+}
+
+// releasePacks lets go of the generation the spawn's space binds.
+func (sp *spawn) releasePacks() {
+	if sp.packs != nil {
+		sp.packs()
+	}
 }
 
 // role is one role the keeper runs: its spec and account, its run folder,
@@ -613,6 +635,8 @@ type client struct {
 	// starts counts its spawn starts in flight, each counted before its end
 	// began or not at all (beginStart); its end waits for them (endClient).
 	starts sync.WaitGroup
+	// packs owns its puts at the packs' store (packview), ended with it.
+	packs packview.Owner
 }
 
 type server struct {
@@ -684,6 +708,9 @@ type server struct {
 	keptMaking      map[int]bool
 	keptDraw        sync.Mutex
 	homeOps         map[string]*homeLock
+	// packs is every person's packs (package packview) under the kept
+	// homes' root; nil for a keeper that keeps no homes.
+	packs *packview.Store
 
 	stopping atomic.Bool
 	closing  atomic.Bool
@@ -984,6 +1011,8 @@ func (s *server) handle(c *client, req *protocol.Request) {
 		s.handleHome(c, req)
 	case protocol.TypeHomeList:
 		s.handleHomeList(c, req)
+	case protocol.TypePacksHold, protocol.TypePacksPut:
+		s.handlePacks(c, req)
 	}
 }
 
@@ -1109,8 +1138,13 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		return
 	}
 	defer c.starts.Done()
-	if s.claimPlace(c, req.Place) == nil {
+	switch s.claimPlace(c, req) {
+	case claimNone:
 		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		return
+	case claimOthersPacks:
+		s.log.Warn("spawn %s refused: its packs are not its place's athanor's, or role %s keeps none", req.ID, c.role.spec.Name)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
@@ -1349,6 +1383,17 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		return protocol.CodeInternal, err
 	}
 	sp.group = group
+	packs := ""
+	if req.Packs != nil {
+		path, empty, release, err := s.packs.Acquire(req.Packs.Athanor, req.Packs.Digest)
+		if err != nil {
+			return protocol.CodeBadRequest, fmt.Errorf("its packs: %w", err)
+		}
+		sp.packs = release
+		if !empty {
+			packs = path
+		}
+	}
 
 	spec, err := json.Marshal(stage.Spec{
 		UID:      sp.account.UID,
@@ -1364,6 +1409,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		Terminal: req.Pty != nil,
 		Reach:    sp.reach,
 		Cgroup:   group.Path(),
+		Packs:    packs,
 	})
 	if err != nil {
 		return protocol.CodeInternal, err
@@ -1745,9 +1791,18 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 		s.unremoved[sp] = &left
 		return
 	}
+	s.forget(sp)
+}
+
+// forget is a spawn's final release, with s.mu held: it leaves spawns, its
+// place and its routing go, and the generation of packs its space binds is
+// let go only now, its group gone, so no start can remove files a process
+// of it may still read.
+func (s *server) forget(sp *spawn) {
 	delete(s.spawns, sp.id)
 	delete(sp.client.places, sp.place)
 	delete(s.routing, sp.id)
+	sp.releasePacks()
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends

@@ -17,7 +17,8 @@ defmodule Compendium.PackArchive do
   the other way about) each refuse the whole archive, saying which. The
   pack's own bounds and its path grammar are the pack's (`Compendium.Packs`).
 
-  `tar_gz_stream/1` writes files as one `.tar.gz`, made as it is read, the same bytes for the same
+  `tar_gz_stream/1` writes files as one `.tar.gz`, made as it is read, and
+  `tar/1` the same entries as one plain tar, the same bytes for the same
   files: every time stamp, owner and group zero, a mode of `0644`, or
   `0755` for an executable file.
   """
@@ -491,6 +492,9 @@ defmodule Compendium.PackArchive do
   # Writing
   # ---------------------------------------------------------------------------
 
+  # A tar ends with two zero blocks.
+  @tar_end <<0::size(8192)>>
+
   @doc """
   The files as one `.tar.gz`, in the order given, each `{path, bytes,
   executable?}`, produced as it is read: a lazy stream of gzip chunks,
@@ -507,11 +511,11 @@ defmodule Compendium.PackArchive do
         {z, files}
       end,
       fn
-        {z, [{path, bytes, executable} | rest]} ->
-          {[IO.iodata_to_binary(:zlib.deflate(z, tar_file(path, bytes, executable)))], {z, rest}}
+        {z, [file | rest]} ->
+          {[IO.iodata_to_binary(:zlib.deflate(z, tar_file(file)))], {z, rest}}
 
         {z, []} ->
-          {[IO.iodata_to_binary(:zlib.deflate(z, <<0::size(8192)>>, :finish))], {z, :done}}
+          {[IO.iodata_to_binary(:zlib.deflate(z, @tar_end, :finish))], {z, :done}}
 
         {z, :done} ->
           {:halt, {z, :done}}
@@ -524,7 +528,12 @@ defmodule Compendium.PackArchive do
   @spec tar_gz([{String.t(), binary(), boolean()}]) :: binary()
   def tar_gz(files) when is_list(files), do: files |> tar_gz_stream() |> Enum.join()
 
-  defp tar_file(path, bytes, executable) do
+  @doc "The tar `tar_gz_stream/1` compresses, uncompressed and held whole."
+  @spec tar([{String.t(), binary(), boolean()}]) :: binary()
+  def tar(files) when is_list(files),
+    do: IO.iodata_to_binary([Enum.map(files, &tar_file/1), @tar_end])
+
+  defp tar_file({path, bytes, executable}) do
     mode = if executable, do: 0o755, else: 0o644
 
     case ustar_name(path) do

@@ -912,6 +912,117 @@ defmodule Compendium.PacksTest do
       assert %{past: nil} = Enum.find(cards, &(&1.name == "a4"))
     end
 
+    test "the view's archive is the manifest of the files handed, then each of them under its pack",
+         %{ctx: ctx, other: other, actor: actor} do
+      skill = "---\nname: a\n---\n\nb\n"
+      script = "#!/bin/sh\necho ok\n"
+      {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", skill)
+      {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/run.sh", script)
+
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\nred"
+        )
+
+      assert :ok = Packs.switch(ctx, "garden", false)
+
+      {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+      {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+
+      # Read by another reader than CYFR's own writer, as the keeper's is.
+      {:ok, table} = :erl_tar.table({:binary, view.archive}, [:verbose])
+
+      {:ok, [{~c".cyfr-packs.json", manifest} | files]} =
+        :erl_tar.extract({:binary, view.archive}, [:memory])
+
+      assert %{
+               entries: for({name, type, _, _, mode, _, _} <- table, do: {"#{name}", type, mode}),
+               manifest: Jason.decode!(manifest, keys: :atoms!),
+               files: for({name, bytes} <- files, do: {"#{name}", bytes})
+             } == %{
+               entries: [
+                 {".cyfr-packs.json", :regular, 0o644},
+                 {"mine/skills/a/SKILL.md", :regular, 0o644},
+                 {"mine/skills/a/run.sh", :regular, 0o755}
+               ],
+               manifest: %{
+                 files:
+                   for(
+                     %{name: "mine", files: lines} <- view.packs,
+                     line <- lines,
+                     do: %{line | path: "mine/" <> line.path}
+                   )
+               },
+               files: [{"mine/skills/a/SKILL.md", skill}, {"mine/skills/a/run.sh", script}]
+             }
+
+      # A set that hands no file is its manifest alone.
+      {:ok, none} = Packs.pack_digest(other, other.athanor_id)
+      {:ok, empty} = Packs.pack_view(other, other.athanor_id, none)
+      assert empty.archive == PackArchive.tar([{".cyfr-packs.json", ~s({"files":[]}), false}])
+    end
+
+    test "the bounds and the stream's first entry are the keeper's, as the shared vectors pin them",
+         %{ctx: ctx} do
+      shared =
+        Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("pack_bounds")
+
+      {manifest, bounds} = Map.pop!(shared, "manifest")
+      assert bounds == Map.new(Packs.bounds(), fn {name, n} -> {Atom.to_string(name), n} end)
+
+      {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+      {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+      {:ok, [{first, _bytes} | _rest]} = :erl_tar.extract({:binary, view.archive}, [:memory])
+      assert "#{first}" == manifest
+    end
+
+    test "the archive of a pack at the longest name and path is the shared vectors' pack_archive, which the keeper extracts",
+         %{ctx: ctx, actor: actor} do
+      %{"pack" => pack, "path" => path, "data" => data, "archive" => archive} =
+        Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("pack_archive")
+
+      bounds = Packs.bounds()
+      assert {byte_size(pack), byte_size(path)} == {bounds.name_bytes, bounds.path_bytes}
+
+      :ok =
+        Arca.Overlay.edit_unit(actor, ["aqua", "scrolls", pack], fn nil ->
+          {:ok,
+           [
+             {[".cyfr-pack.json"], Packs.encode_record(Packs.own_record())},
+             {String.split(path, "/"), data}
+           ]}
+        end)
+
+      {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+      {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+      assert view.archive == Base.decode64!(archive)
+    end
+
+    test "a path's bound is on the path inside its pack, the keeper's too, at the shared vectors' edge" do
+      %{"held" => held, "refused" => refused} =
+        Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("pack_paths")
+
+      for path <- held, do: assert(:ok = Packs.pack_path(path), "#{byte_size(path)} bytes")
+
+      for path <- refused,
+          do:
+            assert(
+              {:error, {:invalid_argument, _}} = Packs.pack_path(path),
+              "#{byte_size(path)} bytes"
+            )
+    end
+
     test "pack_file/4 answers for no file of a pack switched off, by any path", %{
       ctx: ctx,
       actor: actor

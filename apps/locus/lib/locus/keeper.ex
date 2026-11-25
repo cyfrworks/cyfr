@@ -170,6 +170,14 @@ defmodule Locus.Keeper do
   no homes refuses every home call and every spec naming a home
   `unavailable`; a new home with every uid of its range taken, `capacity`.
 
+  cyfr-locus keeps each person's packs beside the kept homes, one
+  read-only generation for each set digest (`Prima.KeeperProtocol`,
+  "Packs"): `packs_hold/4` holds one for a start's lifetime or says it is
+  missing, `packs_put/7` sends one part of its stream at a time, each
+  awaited, and a spec's `packs` names the generation its space binds at
+  `/run/cyfr/scrolls`. A cyfr-locus that keeps no homes refuses both
+  `unavailable`.
+
   ## A spawn with a control channel
 
   A spec with `control: true` asks for a spawn whose fd 3 is a control
@@ -477,6 +485,7 @@ defmodule Locus.Keeper do
       home_max_bytes: Map.get(spec, :home_max_bytes),
       pty: Map.get(spec, :pty),
       hosts: Map.get(spec, :hosts),
+      packs: Map.get(spec, :packs),
       heir: Map.get(spec, :heir)
     }
 
@@ -594,7 +603,9 @@ defmodule Locus.Keeper do
   @doc """
   Give the place `place` `whose`'s kind, and its athanor and subject where
   it names them: `:ok` once cyfr-locus has applied it, `{:error,
-  {:refused, "bad_request"}}` where it holds no such place ("Places"),
+  {:refused, "bad_request"}}` where it holds no such place, or where a
+  spawn naming packs claimed it and `whose` names another athanor
+  ("Places"),
   `{:error, {:launcher_unavailable, :timeout}}` where it has not answered
   by `until` (monotonic milliseconds), and `{:error, :unencodable}`,
   nothing sent, for one the codec refuses.
@@ -646,6 +657,47 @@ defmodule Locus.Keeper do
   @doc "The id of every kept home cyfr-locus keeps, sorted: every page of its list."
   @impl Locus.Launcher
   def home_list(server), do: home_call(server, :home_list)
+
+  @doc """
+  Hold the person `athanor`'s pack generation of `digest` for the start
+  of `lifetime`: `{:ok, :held}` when cyfr-locus holds it complete, now
+  for that lifetime, `{:ok, :missing}` when it does not
+  (`Prima.KeeperProtocol`, "Packs"). `{:refused, "unavailable"}` from a
+  cyfr-locus that keeps no homes.
+  """
+  @impl Locus.Launcher
+  def packs_hold(server, athanor, lifetime, digest),
+    do:
+      home_call(
+        server,
+        {:packs, %{type: :packs_hold, athanor: athanor, lifetime: lifetime, digest: digest}}
+      )
+
+  @doc """
+  One part of the stream of the person `athanor`'s pack generation of
+  `digest`, for the start of `lifetime`: `{:ok, :taken}`, or `{:ok, :held}`
+  for the `last`, the generation then complete and held for that
+  lifetime; `{:refused, "packs_refused"}` for a stream cyfr-locus does
+  not take, which leaves nothing of it; `{:refused, "packs_busy"}` for a
+  first part while another put of `athanor` is under way, and
+  `{:refused, "unavailable"}` for one while the most at once are.
+  """
+  @impl Locus.Launcher
+  def packs_put(server, athanor, lifetime, digest, seq, last, data),
+    do:
+      home_call(
+        server,
+        {:packs,
+         %{
+           type: :packs_put,
+           athanor: athanor,
+           lifetime: lifetime,
+           digest: digest,
+           seq: seq,
+           last: last,
+           data: data
+         }}
+      )
 
   defp home_call(server, request) do
     GenServer.call(server, request, @home_timeout_ms)
@@ -1117,6 +1169,9 @@ defmodule Locus.Keeper do
 
   def handle_call(:home_list, from, state),
     do: home_request(state, %{type: :home_list}, {:list, from, []})
+
+  def handle_call({:packs, request}, from, state),
+    do: home_request(state, request, {:packs, from})
 
   def handle_call({op, id}, from, state) when op in [:home_measure, :home_reset, :home_retire] do
     case unmade(state, op, id) do
@@ -1624,6 +1679,7 @@ defmodule Locus.Keeper do
       |> Map.merge(home)
       |> put_given(:pty, opts.pty)
       |> put_given(:hosts, opts.hosts)
+      |> put_given(:packs, opts.packs)
 
     # A spawn with a control channel is answered once its request is
     # written; a long-lived spawn once cyfr-locus reports it spawned.
@@ -1728,6 +1784,7 @@ defmodule Locus.Keeper do
   defp home_answer({:home_measure, _from}, {:measured, bytes}), do: {:ok, bytes}
   defp home_answer({:home_measure, _from}, {:refused, "home_absent"}), do: :absent
   defp home_answer({:list, _from, ids}, {:homes, page, nil}), do: {:ok, Enum.sort(ids ++ page)}
+  defp home_answer({:packs, _from}, {:packs, packs_state}), do: {:ok, packs_state}
   defp home_answer(_pending, {:refused, code}), do: {:error, {:refused, code}}
   defp home_answer(_pending, _outcome), do: {:error, {:refused, "internal"}}
 
@@ -1929,6 +1986,9 @@ defmodule Locus.Keeper do
 
   defp on_reply({:homes, id, ids, next}, state),
     do: home_reply(state, id, {:homes, ids, next})
+
+  defp on_reply({:packs, id, packs_state}, state),
+    do: home_reply(state, id, {:packs, packs_state})
 
   # An `error` for a spawn this client does not follow is ignored, as is a
   # refused resize: a spawn's size changes nothing of whom it belongs to.

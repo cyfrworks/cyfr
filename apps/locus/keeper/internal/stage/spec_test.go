@@ -251,6 +251,31 @@ func TestRoleSpecValidation(t *testing.T) {
 	}
 }
 
+// A spawn's packs name a pack generation, .packs/<64 hex>/<64 hex>, by a
+// clean absolute path; a role's space binds none.
+func TestPacksSpecValidation(t *testing.T) {
+	gen := "/var/lib/locus/kept/.packs/" + strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64)
+	s := validSpec()
+	s.Packs = gen
+	if err := s.Validate(); err != nil {
+		t.Fatalf("a spawn naming a generation: %v", err)
+	}
+	for _, p := range []string{
+		"relative/.packs/" + strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64),
+		gen + "/",
+		"/var/lib/locus/kept/.packs/" + strings.Repeat("a", 64) + "/../" + strings.Repeat("b", 64),
+		"/var/lib/locus/kept/packs/" + strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64),
+		"/var/lib/locus/kept/.packs/" + strings.Repeat("a", 63) + "/" + strings.Repeat("b", 64),
+		"/etc",
+	} {
+		s := validSpec()
+		s.Packs = p
+		if err := s.Validate(); err == nil {
+			t.Errorf("packs %q passed", p)
+		}
+	}
+}
+
 // A person's machine's space holds its VMM: a relay space whose home is its
 // folder, given its device, and nothing a spawn's channels give.
 func TestMachineSpecValidation(t *testing.T) {

@@ -120,11 +120,12 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 
 ### Locus: where untrusted things run
 
-- One container whose keeper runs a process for each role whose key it holds, each under its own uid, run folder and bounds: the runtime, whose runners have no network of their own, and builds and backends, for toolchains and programs.
+- One container whose keeper runs each role whose key it holds under its own uid, run folder and bounds: the runtime, whose runners have no network, and builds and backends, for toolchains and programs.
 - The keeper, `cyfr-locus`, which starts every child under a pooled uid or its kept folder's, and the egress guard (§5.7).
+- Each person's Arca packs, read only, in their sessions.
 - A program's driver, between the program's own protocol and Opus's wire.
 - Opus, Compendium and Emissary decide what runs; Locus only runs it.
-- *Not built yet:* a VM level of isolation, a computer per athanor, and perception bodies with their display and pointer-input contracts.
+- *Not built yet:* VM isolation, a computer per athanor, and perception bodies with their display and pointer-input contracts.
 
 ### Apps and releases
 

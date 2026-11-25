@@ -415,6 +415,9 @@ defmodule Prima.RefusalTest do
 
   # How a turn's work on a program ends, each sentence as a person reads it.
   @program_rows [
+    {:packs_unready, :unavailable, "Your packs could not be made ready for this program."},
+    {:packs_moved, :conflict,
+     "Your packs changed while this program was starting; start it again."},
     {{:crew_unready, "Aqua", :signed_out}, :setup_required,
      "Aqua's program is signed out. Sign it in, or choose another, on the Aqua page."},
     {{:program_full, "Aqua"}, :rate_limited,

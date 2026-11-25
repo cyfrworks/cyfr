@@ -374,7 +374,7 @@ def open_sealed(sealing_key, owner, boot, sealed):
 
 
 def program_wire(program):
-    """A program as a sync defines it, from {name, command, env} and the optional home, bounds and hosts.
+    """A program as a sync defines it, from {name, command, env} and the optional home, bounds, hosts and packs.
 
     An optional member with no value is absent, never null: the wire refuses a present null.
     """
@@ -387,6 +387,8 @@ def program_wire(program):
     for name in ["memory_bytes", "home_max_bytes", "hosts"]:
         if program.get(name) is not None:
             wire[name] = program[name]
+    if program.get("packs"):
+        wire["packs"] = True
     return wire
 
 
@@ -408,7 +410,7 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 4)
+    compare("version", VERSION, 5)
     compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
@@ -420,14 +422,15 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("control", values, body), vector["canonical"])
         compare(f"{kind}.header", control_header(control_key(key), fields, body), vector["header"])
 
-    for kind in ["open", "send", "recv", "close", "open_terminal", "input", "output", "resize"]:
+    for kind in ["open", "send", "recv", "close", "open_terminal", "input", "output", "resize", "open_packs",
+                 "packs_hold", "packs_put"]:
         vector = WIRE[kind]
         body = vector["body"].encode()
         fields = vector["fields"]
         signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         message = json.loads(vector["body"])
         compare(f"{kind}.body", wire_json(message).decode(), vector["body"])
-        for answer in ["answer", "answer_ended"]:
+        for answer in ["answer", "answer_ended", "answer_held"]:
             if answer in vector:
                 compare(f"{kind}.{answer}", wire_json(json.loads(vector[answer])).decode(), vector[answer])
         compare(f"{kind}.owner", [message["owner"], message["e"]],
@@ -443,6 +446,12 @@ def check_vectors():
     compare("open_terminal.size", [terminal["mode"], 1 <= terminal["rows"] <= BOUNDS["max_pty_size"],
                                    1 <= terminal["cols"] <= BOUNDS["max_pty_size"]], ["terminal", True, True])
     compare("open.size", [name for name in ["rows", "cols"] if name in json.loads(WIRE["open"]["body"])], [])
+    put = json.loads(WIRE["packs_put"]["body"])
+    compare("packs_put.part", [unb64(put["part"]), put["seq"], put["last"]], [b"hello", 0, True])
+    compare("packs_put.members", sorted(put), ["digest", "e", "key", "last", "lifetime", "mode", "owner", "part",
+                                               "program", "seq", "type", "version"])
+    compare("open_packs.packs", json.loads(WIRE["open_packs"]["body"])["packs"],
+            json.loads(WIRE["packs_hold"]["body"])["digest"])
     resized = json.loads(WIRE["resize"]["body"])
     compare("resize.size", [1 <= resized["rows"] <= BOUNDS["max_pty_size"],
                             1 <= resized["cols"] <= BOUNDS["max_pty_size"]], [True, True])
@@ -662,17 +671,43 @@ class Controller:
         return self._opened[session]["lifetime"]
 
     def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, lifetime=None,
-             **options):
+             packs=None, **options):
         """Opens the session of a lifetime of `key` and `mode`, a new one unless given: (status, answer).
 
         A `terminal` open names its terminal's `rows` and `cols`; a run open names neither.
         """
         message = {"type": "open", "program": program, "key": key, "mode": mode, "argv": list(argv or [])}
-        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols), ("lifetime", lifetime)]:
+        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols), ("lifetime", lifetime),
+                            ("packs", packs)]:
             if value is not None:
                 message[name] = value
         status, answer, _boot, _request = self.session(owner, message, **options)
         return status, answer
+
+    def packs_hold(self, owner, program, lifetime, digest, key="k", mode="run", home_id=None, **options):
+        """Asks the keeper to hold the owner's person's pack generation of `digest` for `lifetime`: (status, answer)."""
+        message = {"type": "packs_hold", "program": program, "key": key, "mode": mode, "lifetime": lifetime,
+                   "digest": digest}
+        if home_id is not None:
+            message["home_id"] = home_id
+        status, answer, _boot, _request = self.session(owner, message, **options)
+        return status, answer
+
+    def packs_put(self, owner, program, lifetime, digest, stream, key="k", mode="run", home_id=None, **options):
+        """Puts the generation's `stream` in parts of the wire's bound, each awaited: every (status, answer)."""
+        size = BOUNDS["max_pack_part_bytes"]
+        parts = [stream[i:i + size] for i in range(0, len(stream), size)] or [b""]
+        answers = []
+        for seq, part in enumerate(parts):
+            message = {"type": "packs_put", "program": program, "key": key, "mode": mode, "lifetime": lifetime,
+                       "digest": digest, "seq": seq, "last": seq == len(parts) - 1, "part": b64(part)}
+            if home_id is not None:
+                message["home_id"] = home_id
+            status, answer, _boot, _request = self.session(owner, message, **options)
+            answers.append((status, answer))
+            if status != 200:
+                break
+        return answers
 
     def send(self, owner, session, lines, **options):
         status, answer, _boot, _request = self.session(owner, {"type": "send", "session": session,
@@ -794,9 +829,11 @@ class McpClient:
         self.next_id = 0
         self.initializations = 0
         self.resumed = None
+        # What the next open names beside its key: a lifetime held before it, its pack generation.
+        self.opening = {}
 
     def _open(self):
-        status, answer = self.c.open(self.owner, self.program, key=self.key, home_id=self.home_id)
+        status, answer = self.c.open(self.owner, self.program, key=self.key, home_id=self.home_id, **self.opening)
         if status != 200:
             return status, answer
         self.session, self.after, self.resumed = answer["session"], 0, answer["resumed"]

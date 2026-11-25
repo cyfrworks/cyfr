@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -77,6 +78,9 @@ type Spec struct {
 	// only from inside it: a spec naming none is refused, so no command runs
 	// outside a bound.
 	Cgroup string `json:"cgroup"`
+	// Packs is the pack generation (package packview) the space binds read
+	// only at ScrollsPath, "" for none: <kept root>/.packs/<a>/<d>.
+	Packs string `json:"packs,omitempty"`
 	// Machine names the image's programs' device a person's machine boots
 	// from (package vm), "" for every other space. A machine's space is a
 	// relay space whose relay leads nowhere, holding its VMM alone: its
@@ -84,6 +88,22 @@ type Spec struct {
 	// it is given this device, read only at its path, and /dev/kvm in its
 	// /dev, which no other space is.
 	Machine string `json:"machine,omitempty"`
+}
+
+// ScrollsPath is where a space sees its person's packs, read only.
+const ScrollsPath = "/run/cyfr/scrolls"
+
+var generationName = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// validPacks reports whether p names a pack generation: a clean absolute
+// path ending in .packs/<64 hex>/<64 hex>.
+func validPacks(p string) bool {
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return false
+	}
+	person := filepath.Dir(p)
+	return generationName.MatchString(filepath.Base(p)) && generationName.MatchString(filepath.Base(person)) &&
+		filepath.Base(filepath.Dir(person)) == ".packs"
 }
 
 // Validate checks the spec independently of the keeper: a non-root uid
@@ -98,6 +118,9 @@ func (s Spec) Validate() error {
 	}
 	if s.Role != "" {
 		return s.validateRole()
+	}
+	if s.Packs != "" && !validPacks(s.Packs) {
+		return fmt.Errorf("packs %q is not a pack generation", s.Packs)
 	}
 	if s.Machine != "" {
 		if !filepath.IsAbs(s.Machine) || filepath.Clean(s.Machine) != s.Machine || !strings.HasSuffix(s.Machine, ".sqfs") {
@@ -147,8 +170,8 @@ func (s Spec) validateRole() error {
 	if !filepath.IsAbs(s.HomeRoot) || filepath.Clean(s.HomeRoot) != s.HomeRoot || s.Home != filepath.Join(s.HomeRoot, s.Role) {
 		return fmt.Errorf("the run folder %q is not %s under the run root %q", s.Home, s.Role, s.HomeRoot)
 	}
-	if s.Kept || s.Terminal || !s.Control || s.Reach != pool.ReachRouted || s.Limits != (protocol.Limits{}) {
-		return errors.New("a role's space is routed, holds its channel, and has no kept home, terminal or limits of its own")
+	if s.Kept || s.Terminal || !s.Control || s.Reach != pool.ReachRouted || s.Limits != (protocol.Limits{}) || s.Packs != "" {
+		return errors.New("a role's space is routed, holds its channel, and has no kept home, terminal, limits or packs of its own")
 	}
 	if err := protocol.ValidateCommand(s.Argv, nil); err != nil {
 		return err

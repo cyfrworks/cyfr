@@ -42,6 +42,9 @@ type place struct {
 	// zero readAt is no reading yet.
 	reading protocol.Reading
 	readAt  time.Time
+	// packs is the athanor whose packs its spawn binds, fixed at its claim
+	// (claimPlace): an assign naming another is refused.
+	packs string
 }
 
 // removal is what a retirement whose group could not be removed leaves to
@@ -88,34 +91,61 @@ func (s *server) handleDrop(c *client, req *protocol.Request) {
 
 // handleAssign makes a place whose the request says, an athanor or a subject
 // it does not name cleared, answered `assigned`; an assign of a place the
-// keeper does not hold is refused.
+// keeper does not hold, or naming another athanor than the one whose packs
+// its spawn binds, is refused.
 func (s *server) handleAssign(c *client, req *protocol.Request) {
 	s.mu.Lock()
 	p := c.places[req.Place]
-	if p != nil {
+	bound := p != nil && p.packs != "" && p.packs != req.Athanor
+	if p != nil && !bound {
 		p.whose = whoseOf(req)
 	}
 	s.mu.Unlock()
-	if p == nil {
+	switch {
+	case p == nil:
 		s.log.Warn("assign %s refused: role %s holds no place %s", req.ID, c.role.spec.Name, req.Place)
-		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+	case bound:
+		s.log.Warn("assign %s refused: the spawn of place %s binds its athanor's packs", req.ID, req.Place)
+	default:
+		s.send(c, protocol.NewAssigned(req.ID))
 		return
 	}
-	s.send(c, protocol.NewAssigned(req.ID))
+	s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 }
 
-// claimPlace has a starting spawn of c name its place, and answers the
-// place: a place c does not hold, or one another spawn named, cannot be,
-// and answers nil.
-func (s *server) claimPlace(c *client, id string) *place {
+// What a spawn's claim of its place came to.
+type claim int
+
+const (
+	claimed claim = iota
+	// claimNone: c holds no such place, or another spawn named it.
+	claimNone
+	// claimOthersPacks: the spawn names packs not its place's athanor's,
+	// or of a role that keeps none; the place is freed.
+	claimOthersPacks
+)
+
+// claimPlace has a starting spawn of c name its place. Whose packs it
+// binds is decided in the same step, under s.mu: only its place's
+// athanor's, of the kept role whose keeper keeps them, and from here the
+// place keeps that athanor (handleAssign), so the athanor checked is the
+// athanor bound.
+func (s *server) claimPlace(c *client, req *protocol.Request) claim {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := c.places[id]
+	p := c.places[req.Place]
 	if p == nil || p.named {
-		return nil
+		return claimNone
+	}
+	if req.Packs != nil {
+		if req.Packs.Athanor != p.whose.Athanor || s.packs == nil || !c.role.spec.Kept {
+			delete(c.places, req.Place)
+			return claimOthersPacks
+		}
+		p.packs = req.Packs.Athanor
 	}
 	p.named = true
-	return p
+	return claimed
 }
 
 // madeIn makes sp the spawn made in the place id it claimed: from here its
@@ -252,9 +282,7 @@ func (s *server) retryRemoval(sp *spawn, remove func(*cgroup.Group) error) {
 	if r.clean {
 		_ = sp.pool.Release(sp.account.UID)
 	}
-	delete(s.spawns, sp.id)
-	delete(sp.client.places, sp.place)
-	delete(s.routing, sp.id)
+	s.forget(sp)
 	delete(s.unremoved, sp)
 	s.mu.Unlock()
 	s.log.Info("spawn %s: its memory group of uid %d removed on a retry; retired", sp.id, sp.account.UID)

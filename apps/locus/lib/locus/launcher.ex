@@ -109,7 +109,9 @@ defmodule Locus.Launcher do
   What a process is started with: its place, the memory and the CPU it is bounded
   by, which every process has, `control` where it has a control channel, a
   program's kept `home` with its bound and
-  `pty`, and `hosts`, the only hosts it may reach where its row names them.
+  `pty`, `hosts`, the only hosts it may reach where its row names them, and
+  `packs`, the person's pack generation its space binds read only at
+  `/run/cyfr/scrolls` where its program loads packs.
   """
   @type spec :: %{
           required(:argv) => [String.t(), ...],
@@ -123,6 +125,7 @@ defmodule Locus.Launcher do
           optional(:home_max_bytes) => pos_integer(),
           optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},
           optional(:hosts) => [String.t(), ...],
+          optional(:packs) => %{athanor: String.t(), digest: String.t()},
           optional(:heir) => {pid(), term()}
         }
 
@@ -265,6 +268,29 @@ defmodule Locus.Launcher do
 
   @doc "End every process of the kept home `id`'s uid, remove the home and free its uid."
   @callback home_retire(GenServer.server() | keyword(), String.t()) :: :ok | {:error, error()}
+
+  @doc """
+  Hold the person's pack generation of a set digest for a start's
+  lifetime: `:held` when the launcher holds it complete, `:missing` when
+  it does not (`Prima.KeeperProtocol`, "Packs").
+  """
+  @callback packs_hold(GenServer.server() | keyword(), String.t(), String.t(), String.t()) ::
+              {:ok, :held | :missing} | {:error, error()}
+
+  @doc """
+  One part, by its `seq`, of a pack generation's stream for a start's
+  lifetime: `:taken`, or `:held` for the last once the generation is
+  complete and held.
+  """
+  @callback packs_put(
+              GenServer.server() | keyword(),
+              String.t(),
+              String.t(),
+              String.t(),
+              non_neg_integer(),
+              boolean(),
+              binary()
+            ) :: {:ok, :taken | :held} | {:error, error()}
 
   @doc "Write `data` to the control channel of a process started with `control: true`."
   @callback send_control(handle(), iodata()) :: :ok | {:error, term()}

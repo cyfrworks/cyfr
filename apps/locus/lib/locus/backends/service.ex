@@ -15,7 +15,7 @@ defmodule Locus.Backends.Service do
   ## Health
 
   `POST /locus/v1/backends/health` answers without authentication: a
-  `{"version": 4}` body (`Prima.LocusBackends.read_health/1`), read within
+  `{"version": 5}` body (`Prima.LocusBackends.read_health/1`), read within
   #{@max_health_bytes} bytes, is answered with the protocol version and the
   release; a body at another version is refused `version`.
 
@@ -65,6 +65,12 @@ defmodule Locus.Backends.Service do
   7. **The message**, read strictly (`read_session/1`), naming the owner
      and epoch its header names (`bad_request`).
   8. **The session**: `open` through the owners (`Locus.Backends.Owners.open/3`);
+     a `packs_hold` or a `packs_put` to the keeper of the owner's person,
+     where the owners name it (`Locus.Backends.Owners.packs/3`), and a
+     hold of a lifetime whose session lives answered held at that
+     session's generation, with nothing sent to the keeper; each part
+     of a put bound to the owner, the program and the boot before its body
+     is read and after, as every session message is;
      every other message to the session the owners name
      (`unknown_session` for one they do not hold) when it is of that
      session's mode (`bad_request` otherwise:
@@ -409,6 +415,23 @@ defmodule Locus.Backends.Service do
     end
   end
 
+  # A packs request goes to the keeper of the owner's person, once the
+  # owners have found it a program of that owner that loads packs and a
+  # lifetime still to open: the request sends it itself, so a put's part
+  # never passes through the owners' table. A hold of a lifetime whose
+  # session lives is answered by the owners, held at that session's
+  # generation. `held` names its digest: the session's, or the one the
+  # keeper was asked for.
+  defp served(conn, invoke, %{type: type} = message) when type in [:packs_hold, :packs_put] do
+    with {:ok, {launcher, server}} <- Owners.packs(owners(conn), invoke, message),
+         {:ok, state} <- packs_sent(launcher, server, invoke.athanor, message) do
+      {:ok, packs_state(state, message.digest)}
+    else
+      {:held, digest} -> {:ok, packs_state(:held, digest)}
+      {:error, code} -> {:refused, conn, code}
+    end
+  end
+
   defp served(conn, invoke, message) do
     with {:ok, pid, mode} <- Owners.session(owners(conn), invoke, message.session),
          :ok <- of_mode(message, mode) do
@@ -417,6 +440,33 @@ defmodule Locus.Backends.Service do
       {:error, code} -> {:refused, conn, code}
     end
   end
+
+  defp packs_sent(launcher, server, athanor, %{type: :packs_hold} = message),
+    do: launcher.packs_hold(server, athanor, message.lifetime, message.digest) |> packs_answer()
+
+  defp packs_sent(launcher, server, athanor, %{type: :packs_put} = message) do
+    launcher.packs_put(
+      server,
+      athanor,
+      message.lifetime,
+      message.digest,
+      message.seq,
+      message.last,
+      message.part
+    )
+    |> packs_answer()
+  end
+
+  defp packs_state(:held, digest), do: %{state: :held, digest: digest}
+  defp packs_state(state, _digest), do: %{state: state}
+
+  defp packs_answer({:ok, state}), do: {:ok, state}
+  defp packs_answer({:error, {:refused, "packs_refused"}}), do: {:error, :packs_refused}
+  defp packs_answer({:error, {:refused, "packs_busy"}}), do: {:error, :packs_busy}
+  defp packs_answer({:error, {:refused, "unavailable"}}), do: {:error, :unavailable}
+  defp packs_answer({:error, {:refused, "bad_request"}}), do: {:error, :bad_request}
+  defp packs_answer({:error, {:launcher_unavailable, _kind}}), do: {:error, :unavailable}
+  defp packs_answer({:error, _other}), do: {:error, :internal}
 
   defp of_mode(%{type: type}, mode),
     do: if(type in LocusBackends.mode_types(mode), do: :ok, else: {:error, :bad_request})

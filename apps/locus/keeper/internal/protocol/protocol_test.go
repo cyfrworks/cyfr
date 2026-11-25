@@ -5,6 +5,7 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -51,9 +52,11 @@ type vectors struct {
 		SpawnID string          `json:"spawn_id"`
 		Request json.RawMessage `json:"request"`
 	} `json:"invalid_requests"`
-	Replies      []json.RawMessage `json:"replies"`
-	HomeRequests []json.RawMessage `json:"home_requests"`
-	HomeReplies  []json.RawMessage `json:"home_replies"`
+	Replies       []json.RawMessage `json:"replies"`
+	HomeRequests  []json.RawMessage `json:"home_requests"`
+	HomeReplies   []json.RawMessage `json:"home_replies"`
+	PacksRequests []json.RawMessage `json:"packs_requests"`
+	PacksReplies  []json.RawMessage `json:"packs_replies"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -135,6 +138,8 @@ func TestSharedRequestBounds(t *testing.T) {
 		"max_home_bytes":        MaxHomeBytes,
 		"max_hosts":             MaxHosts,
 		"max_pty_size":          MaxPtySize,
+		"max_pack_part_bytes":   MaxPackPartBytes,
+		"max_pack_seq":          MaxPackSeq,
 	}
 	if !reflect.DeepEqual(v.RequestBounds, want) {
 		t.Fatalf("the request bounds are %v, the vectors pin %v", want, v.RequestBounds)
@@ -261,30 +266,30 @@ func TestHomeRequestBounds(t *testing.T) {
 		line string
 		ok   bool
 	}{
-		{`{"v":5,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
-		{`{"v":5,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
-		{`{"v":5,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
-		{`{"v":5,"type":"home_retire","id":"1","home":"_a"}`, false},
-		{`{"v":5,"type":"home_retire","id":"1","home":"a.b"}`, false},
-		{`{"v":5,"type":"home_retire","id":"1","home":""}`, false},
-		{`{"v":5,"type":"home_retire","id":"1"}`, false},
-		{`{"v":5,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
-		{`{"v":5,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
-		{`{"v":5,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
-		{`{"v":5,"type":"home_make","home":"k"}`, false},
-		{`{"v":5,"type":"home_list","id":"1"}`, true},
-		{`{"v":5,"type":"home_list","id":"1","after":"k"}`, true},
-		{`{"v":5,"type":"home_list","id":"1","after":""}`, false},
-		{`{"v":5,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
-		{`{"v":5,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
-		{`{"v":5,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
+		{`{"v":6,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
+		{`{"v":6,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":"_a"}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":"a.b"}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":""}`, false},
+		{`{"v":6,"type":"home_retire","id":"1"}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
+		{`{"v":6,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
+		{`{"v":6,"type":"home_make","home":"k"}`, false},
+		{`{"v":6,"type":"home_list","id":"1"}`, true},
+		{`{"v":6,"type":"home_list","id":"1","after":"k"}`, true},
+		{`{"v":6,"type":"home_list","id":"1","after":""}`, false},
+		{`{"v":6,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
+		{`{"v":6,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
+		{`{"v":6,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":5,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":6,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -322,7 +327,7 @@ func TestAPageOfHomesFitsAFrame(t *testing.T) {
 	if len(line) > frame.MaxPayload {
 		t.Fatalf("a full page of homes is %d bytes, past a frame's %d", len(line), frame.MaxPayload)
 	}
-	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":5,"type":"homes","id":"1","ids":[]}`+"\n" {
+	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":6,"type":"homes","id":"1","ids":[]}`+"\n" {
 		t.Fatalf("an empty page is %s", empty)
 	}
 }
@@ -385,6 +390,78 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		if !reflect.DeepEqual(got, expected) {
 			t.Errorf("reply %d = %s, want %s", i, line, want[i])
 		}
+	}
+}
+
+// The keeper accepts every packs request: a hold, a put's first and last
+// parts, their parts decoded, and a kept spawn naming its generation.
+func TestSharedPacksRequestsParse(t *testing.T) {
+	var parts [][]byte
+	var spawn *Request
+	for _, raw := range loadVectors(t).PacksRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatalf("%s: refused: %v", raw, err)
+		}
+		switch req.Type {
+		case TypePacksPut:
+			parts = append(parts, req.Part())
+		case TypeSpawn:
+			spawn = req
+		}
+	}
+	if len(parts) != 2 || string(parts[0]) != "hello" || len(parts[1]) != 0 {
+		t.Fatalf("parts %q", parts)
+	}
+	if spawn == nil || spawn.Packs == nil || spawn.Packs.Digest != "sha256:"+strings.Repeat("0123456789abcdef", 4) {
+		t.Fatalf("the spawn's packs: %+v", spawn)
+	}
+}
+
+func TestSharedPacksRepliesMatchTheEncoders(t *testing.T) {
+	built := []any{
+		NewPacksReply("40", PacksHeld),
+		NewPacksReply("40", PacksMissing),
+		NewPacksReply("41", PacksTaken),
+		NewPacksReply("42", PacksHeld),
+		NewError("42", "", CodePacksRefused),
+		NewError("40", "", CodeUnavailable),
+		NewError("41", "", CodePacksBusy),
+	}
+	want := loadVectors(t).PacksReplies
+	if len(want) != len(built) {
+		t.Fatalf("%d vectors for %d encoders", len(want), len(built))
+	}
+	for i, reply := range built {
+		line, err := Encode(reply)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got, expected map[string]any
+		_ = json.Unmarshal(line, &got)
+		_ = json.Unmarshal(want[i], &expected)
+		if !reflect.DeepEqual(got, expected) {
+			t.Errorf("packs reply %d = %s, want %s", i, line, want[i])
+		}
+	}
+}
+
+// A put's largest part, in base64, fits one line with room for the rest
+// of the request.
+func TestAPacksPutsLargestPartFitsALine(t *testing.T) {
+	data := base64.StdEncoding.EncodeToString(make([]byte, MaxPackPartBytes))
+	line := `{"v":6,"type":"packs_put","id":"` + strings.Repeat("i", 64) + `","athanor":"` + strings.Repeat("a", 256) +
+		`","lifetime":"` + strings.Repeat("l", 128) + `","digest":"sha256:` + strings.Repeat("0", 64) + `","seq":65536,"last":true,"data":"` + data + `"}`
+	if len(line) > MaxLineBytes {
+		t.Fatalf("the largest put is %d bytes, past a line's %d", len(line), MaxLineBytes)
+	}
+	req, err := ParseRequest([]byte(line))
+	if err != nil || len(req.Part()) != MaxPackPartBytes {
+		t.Fatalf("%v", err)
+	}
+	over := base64.StdEncoding.EncodeToString(make([]byte, MaxPackPartBytes+1))
+	if _, err := ParseRequest([]byte(strings.Replace(line, data, over, 1))); err == nil {
+		t.Fatal("a part past the bound parsed")
 	}
 }
 
@@ -694,8 +771,8 @@ func TestSpawnRequiresCPUQuota(t *testing.T) {
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":5,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":5,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
+		`{"v":6,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":6,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
 		`[]`,
 		``,
 	} {
@@ -714,7 +791,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":5,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":6,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

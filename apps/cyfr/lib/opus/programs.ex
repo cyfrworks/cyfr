@@ -1066,7 +1066,9 @@ defmodule Opus.Programs do
   (`argv`, and a terminal's `rows` and `cols`), answered by `deadline`
   (Unix milliseconds). Answers the lifetime's session, `{:error,
   :deadline}` past it, `{:error, :control_plane_lost}` for a member
-  without its slot, or the refusal: `lifetime_over` for one closed or
+  without its slot, `:packs_unready` or `:packs_moved` for a program that
+  loads the person's packs whose copy could not be made ready before it
+  (`Opus.Programs.Session`), or the refusal: `lifetime_over` for one closed or
   ended, and `stale_boot` for one of another boot of the service, whose
   caller holds again and mints another. An open that is never given has
   its lifetime closed (`Opus.Programs.Box`, "Sessions").

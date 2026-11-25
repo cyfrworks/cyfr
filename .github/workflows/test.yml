@@ -1669,6 +1669,13 @@ jobs:
       - name: Kept homes
         run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
+      # A person's packs: a first start held missing, put in parts and
+      # opened once in that lifetime, a second held with nothing put, the
+      # folder read only in the session as written, another person's and a
+      # row that loads none seeing nothing, and the copy the keeper's own.
+      - name: A person's packs
+        run: python3 tests/locus-backends-image/packs.py cyfr-locus:backends
+
       # A person's machine (plan V1): cyfr-locus guest-check in the one
       # Locus's own confinement given /dev/kvm alone. Without the device no
       # machine boots and no device is made; the first start makes the

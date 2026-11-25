@@ -80,6 +80,28 @@ defmodule Cyfr.Test.ScriptedBackends do
   A `homes` message answers the kept homes the script holds (`homes`, a
   set: each an open names, until its retire; `set(fake, :homes, …)`).
 
+  The person's packs are held as the keeper holds them, one generation
+  for each set digest of each athanor (`generations/2`). A `packs_hold`
+  of a lifetime whose session runs answers `held` naming the digest that
+  session's open named, whatever it asks; one of a lifetime spent (a
+  session started or a close carried out) or of another boot is refused
+  `lifetime_over`; any other answers `held` naming its digest when the
+  athanor's generation of it is held, and `missing` otherwise. A
+  `packs_put` of a lifetime spent or of another boot is refused
+  `lifetime_over`; any other's parts are collected by athanor,
+  digest and lifetime, each answered `taken`; at its `last` the stream is
+  read with `:erl_tar`, as another reader than CYFR's own writer: its
+  first entry the manifest `.cyfr-packs.json`, then exactly the regular
+  files it names, each by size, SHA-256 and executable bit, which makes
+  the generation held and is answered `held` naming its digest. A part
+  out of order, or a stream that does not read so, is refused
+  `packs_refused` and drops the put; a first part while another put of
+  its athanor is collected is refused `packs_busy`, as the keeper's. With
+  `set(fake, :put_idle_ms, ms)` a put no part reached for `ms` is dropped,
+  as the keeper drops one its idle bound after its last part. A hold, a put or an open naming
+  `packs` for a program its sync did not mark `packs` is refused
+  `bad_request`; an open's `packs` is kept on its session.
+
   A status reports `stderr_bytes` of stderr per program (none unless set),
   as its tail for a scratch program and as its length for a kept one: the script does not bound its answers, so a test can see what the
   box makes of an unbounded one. `answer_version` is the protocol version
@@ -118,7 +140,11 @@ defmodule Cyfr.Test.ScriptedBackends do
              answer_version: LocusBackends.version(),
              refuse: %{},
              reset_send: false,
-             lose_close: false
+             lose_close: false,
+             packs: %{},
+             puts: %{},
+             put_idle_ms: nil,
+             put_touched: %{}
            }
          end},
         id: :scripted_backends
@@ -229,6 +255,13 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
 
+  @doc "Drop every put of `athanor` being collected, as a put that failed: its next part is out of order."
+  def drop_puts(%{agent: agent}, athanor),
+    do:
+      Agent.update(agent, fn st ->
+        %{st | puts: Map.reject(st.puts, fn {{a, _d, _l}, _parts} -> a == athanor end)}
+      end)
+
   @doc """
   End every session of `server`'s owner, as an idle period or a crash
   would; with `exit_code`, as its process exiting with that status, which
@@ -299,6 +332,14 @@ defmodule Cyfr.Test.ScriptedBackends do
       for {id, s} <- st.sessions, elem(s.owner, 1) == server, into: %{}, do: {id, s}
     end)
   end
+
+  @doc """
+  The packs' generations held for `athanor`, by set digest: each its
+  manifest's lines (`path`, `size`, `sha256`, `executable`, as the JSON
+  says them) and its files' bytes by path.
+  """
+  def generations(%{agent: agent}, athanor),
+    do: Agent.get(agent, &Map.get(&1.packs, athanor, %{}))
 
   @doc "Write `line` into every running session of `server`, as its program would."
   def write(%{agent: agent}, server, line) do
@@ -884,9 +925,22 @@ defmodule Cyfr.Test.ScriptedBackends do
     end)
   end
 
-  defp handle_session(conn, agent, fields, %{type: :open} = message) do
-    bound = now() + LocusBackends.close_wait_ms()
-    opening(conn, agent, lifetime(fields, message), message, bound)
+  defp handle_session(conn, agent, fields, %{type: type} = message)
+       when type in [:open, :packs_hold, :packs_put] do
+    st = Agent.get(agent, & &1)
+
+    cond do
+      (type != :open or message.packs != nil) and
+          not loads_packs?(st, {fields.athanor, fields.server}, message.program) ->
+        refuse(conn, st, :bad_request)
+
+      type == :open ->
+        bound = now() + LocusBackends.close_wait_ms()
+        opening(conn, agent, lifetime(fields, message), message, bound)
+
+      true ->
+        packs(conn, agent, lifetime(fields, message), message)
+    end
   end
 
   defp handle_session(conn, agent, fields, %{session: id} = message) do
@@ -952,6 +1006,146 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
+  defp loads_packs?(st, owner, program),
+    do: Enum.any?(Map.get(st.programs, owner, []), &(&1["name"] == program and &1["packs"]))
+
+  # A hold of a lifetime whose session runs is held at the generation its
+  # open named; any other hold or put is of a lifetime still to open.
+  defp packs(conn, agent, named, %{type: :packs_hold, digest: digest}) do
+    st = Agent.get(agent, & &1)
+    {athanor, _server} = named.owner
+    live = Enum.find(Map.values(st.sessions), &(&1.running and &1.named == named and &1.packs))
+
+    cond do
+      live ->
+        session_answer(conn, st, %{"state" => "held", "digest" => live.packs})
+
+      spent?(st, named) ->
+        refuse(conn, st, :lifetime_over)
+
+      Map.has_key?(Map.get(st.packs, athanor, %{}), digest) ->
+        session_answer(conn, st, %{"state" => "held", "digest" => digest})
+
+      true ->
+        session_answer(conn, st, %{"state" => "missing"})
+    end
+  end
+
+  defp packs(conn, agent, named, %{type: :packs_put} = message) do
+    st = Agent.get(agent, & &1)
+
+    if spent?(st, named),
+      do: refuse(conn, st, :lifetime_over),
+      else: put(conn, agent, named, message)
+  end
+
+  # Every put no part reached for the idle bound is dropped.
+  defp idled(%{put_idle_ms: nil} = st), do: st
+
+  defp idled(st) do
+    now = System.monotonic_time(:millisecond)
+    idle = for {key, at} <- st.put_touched, now - at >= st.put_idle_ms, do: key
+    %{st | puts: Map.drop(st.puts, idle), put_touched: Map.drop(st.put_touched, idle)}
+  end
+
+  defp spent?(st, named),
+    do: MapSet.member?(st.spent, named) or not LocusBackends.lifetime_of?(named.lifetime, st.boot)
+
+  defp put(conn, agent, %{owner: {athanor, _server}}, message) do
+    key = {athanor, message.digest, message.lifetime}
+
+    state =
+      Agent.get_and_update(agent, fn st ->
+        st = idled(st)
+
+        st = %{
+          st
+          | put_touched: Map.put(st.put_touched, key, System.monotonic_time(:millisecond))
+        }
+
+        parts = Map.get(st.puts, key, [])
+        puts = Map.delete(st.puts, key)
+
+        under_way? =
+          Enum.any?(Map.keys(st.puts), fn {a, _d, _l} = other -> other != key and a == athanor end)
+
+        cond do
+          message.seq == 0 and under_way? ->
+            {:busy, st}
+
+          message.seq != length(parts) ->
+            {:refused, %{st | puts: puts}}
+
+          not message.last ->
+            {"taken", %{st | puts: Map.put(st.puts, key, [message.part | parts])}}
+
+          true ->
+            case generation(IO.iodata_to_binary(Enum.reverse([message.part | parts]))) do
+              {:ok, held} ->
+                packs =
+                  Map.update(
+                    st.packs,
+                    athanor,
+                    %{message.digest => held},
+                    &Map.put(&1, message.digest, held)
+                  )
+
+                {"held", %{st | puts: puts, packs: packs}}
+
+              :error ->
+                {:refused, %{st | puts: puts}}
+            end
+        end
+      end)
+
+    case state do
+      :refused ->
+        refuse(conn, Agent.get(agent, & &1), :packs_refused)
+
+      :busy ->
+        refuse(conn, Agent.get(agent, & &1), :packs_busy)
+
+      "held" ->
+        session_answer(conn, Agent.get(agent, & &1), %{
+          "state" => "held",
+          "digest" => message.digest
+        })
+
+      state ->
+        session_answer(conn, Agent.get(agent, & &1), %{"state" => state})
+    end
+  end
+
+  # A put's stream, read as the keeper reads it.
+  defp generation(tar) do
+    with {:ok, [{~c".cyfr-packs.json", :regular, _, _, _, _, _} | entries]} <-
+           :erl_tar.table({:binary, tar}, [:verbose]),
+         true <- Enum.all?(entries, &(elem(&1, 1) == :regular)),
+         {:ok, [{_manifest, manifest} | files]} <- :erl_tar.extract({:binary, tar}, [:memory]),
+         {:ok, %{"files" => lines}} when is_list(lines) <- Jason.decode(manifest) do
+      written =
+        for {{name, bytes}, entry} <- Enum.zip(files, entries) do
+          %{
+            "path" => List.to_string(name),
+            "size" => byte_size(bytes),
+            "sha256" => Prima.Digest.sha256(bytes),
+            "executable" => Bitwise.band(elem(entry, 4), 0o100) != 0
+          }
+        end
+
+      if Enum.sort(written) == Enum.sort(lines),
+        do:
+          {:ok,
+           %{
+             manifest: lines,
+             files: Map.new(files, fn {name, bytes} -> {List.to_string(name), bytes} end)
+           }},
+        else: :error
+    else
+      _unread -> :error
+    end
+  end
+
   defp opened(id, resumed?),
     do: %{"status" => "running", "session" => id, "resumed" => resumed?}
 
@@ -967,6 +1161,7 @@ defmodule Cyfr.Test.ScriptedBackends do
       home_id: message.home_id,
       mode: message.mode,
       size: message.rows && {message.rows, message.cols},
+      packs: message.packs,
       lines: [],
       seq: 0,
       running: true,
