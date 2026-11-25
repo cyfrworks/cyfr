@@ -27,7 +27,9 @@ defmodule Aqua.Harness do
   the calls not yet started when `supersedes?` holds, and a harness whose
   brain has tools of its own, acting in a folder of its own, says its
   work needs the briefing for them (`own_tools?`, whose words are
-  `Aqua.Prompt.briefing/2`'s). They belong to the
+  `Aqua.Prompt.briefing/3`'s); a harness whose program loads the
+  athanor's packs as its own skills says so (`loader?`,
+  `Opus.loads_packs?/1`). They belong to the
   harness the turn pins, so they are known before `open/1` (`facts/1`), and
   the engine reads no fact it was not given. A launch waits while any call
   of the turn whose run is a child of its root runs, which the rows decide
@@ -55,7 +57,7 @@ defmodule Aqua.Harness do
   @type handle :: pid()
 
   @typedoc "All the engine reads of a harness."
-  @type facts :: %{supersedes?: boolean(), own_tools?: boolean()}
+  @type facts :: %{supersedes?: boolean(), own_tools?: boolean(), loader?: boolean()}
 
   @typedoc """
   What the engine hands a harness of the turn: its contexts, the turn as
@@ -102,7 +104,7 @@ defmodule Aqua.Harness do
   @callback open(work()) :: {:ok, handle(), facts()} | {:admit, map()} | {:end, finish()}
   @callback moved(handle()) :: :ok
   @callback stop(handle()) :: :ok
-  @callback facts() :: facts()
+  @callback facts(Turn.t()) :: facts()
 
   @doc """
   The harness of a turn, the one place that picks it from the turn's pin:
@@ -159,5 +161,5 @@ defmodule Aqua.Harness do
 
   @doc "The facts of the turn's harness, from its pin, before anything is opened."
   @spec facts(Turn.t()) :: facts()
-  def facts(%Turn{} = spec), do: of(spec).facts()
+  def facts(%Turn{} = spec), do: of(spec).facts(spec)
 end

@@ -163,7 +163,7 @@ defmodule Aqua.Harness.Program do
   # All the engine reads of this harness (`Aqua.Harness`): its process is
   # not the root's child, so a launch need not wait for it, and a post
   # written while it works is delivered, never a reason to skip a call.
-  @facts %{supersedes?: false, own_tools?: true}
+  @facts %{supersedes?: false, own_tools?: true, loader?: false}
   # The most bytes a fresh session's context takes on its post's line, as
   # the line's JSON measures them, escapes included: the newest posts that
   # fit. A post a sender writes is at most 32 KiB, at most six times that
@@ -208,7 +208,7 @@ defmodule Aqua.Harness.Program do
     work = work |> with_generation() |> Map.put(:start, start.id)
 
     case DynamicSupervisor.start_child(@sessions, {__MODULE__, {work, self()}}) do
-      {:ok, pid} -> {:ok, pid, @facts}
+      {:ok, pid} -> {:ok, pid, facts(work.spec)}
       {:error, _reason} -> {:end, refused(work, :start_failed)}
     end
   end
@@ -239,7 +239,8 @@ defmodule Aqua.Harness.Program do
 
   @doc "What the engine reads of this harness (`Aqua.Harness.facts/1`)."
   @impl Aqua.Harness
-  def facts, do: @facts
+  def facts(%Aqua.Loop.Turn{program: %{driver: driver}}),
+    do: %{@facts | loader?: Opus.loads_packs?(driver)}
 
   @doc false
   def start_link(attending), do: GenServer.start_link(__MODULE__, attending)

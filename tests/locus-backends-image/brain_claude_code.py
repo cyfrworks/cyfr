@@ -35,6 +35,10 @@ its message is one of the events, with exactly its members.
   a call of one runs in their server with the model's own input and is
   shown as the program's own tool, never asked of CYFR; one named `cyfr`
   keeps its name, and CYFR's server takes another.
+- A start of a session the person's packs are bound into
+  (/run/cyfr/scrolls, held and named as Opus holds them) runs the harness
+  with a `--plugin-dir` for each pack, and a turn's post lists the skills
+  of each and reaches one by the name the harness gives it.
 - A new process, started resuming the session, holds it: its reply names
   the same session and the new flags; and `held` names the post its
   transcript holds and not one it never had.
@@ -61,6 +65,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import ROOT, Stack, ending, eventually, expect, owner_of, probe, require_docker  # noqa: E402
+from packs import held  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "fixtures", "brain_wire.json"), encoding="utf-8") as _vectors:
     VECTORS = json.load(_vectors)
@@ -69,7 +74,7 @@ EVENTS = VECTORS["events"]
 OWNER = owner_of("brain-claude-code")
 HOME = "mcp_brain-claude-code"
 FAKE = "fake-claude.mjs"
-PROGRAM = {"name": "brain", "command": f"cyfr-claude-code node /probe/{FAKE}", "env": {}, "home": "kept"}
+PROGRAM = {"name": "brain", "command": f"cyfr-claude-code node /probe/{FAKE}", "env": {}, "home": "kept", "packs": True}
 CANARIES = ("FAKE-STDERR-CANARY", "FAKE-FOLDER-CANARY", "FAKE-SIGNIN-CANARY")
 FILES = {
     "name": "files",
@@ -81,14 +86,27 @@ SYSTEM = "You are a crew member of this athanor."
 WORK = "trn_brain_1"
 LISTED = [("default", ["low", "medium", "high"]), ("fake-opus", ["low", "medium", "high", "max"]), ("fake-haiku", [])]
 TIMEOUT_S = 60
+# The person's packs switched on, as the keeper binds them at
+# /run/cyfr/scrolls: one named by its manifest, one by its folder, and one
+# holding no skill.
+PACKS = {
+    "notes/README.md": (b"a pack of no skill\n", False),
+    "pstack/.claude-plugin/plugin.json": (b'{"name": "pstack"}\n', False),
+    "pstack/skills/poteto-mode/SKILL.md": (b"---\nname: poteto-mode\ndescription: be exact\n---\nSay what changed, then stop.\n",
+                                           False),
+    "taste/skills/taste/SKILL.md": (b"Make it plain.\n", False),
+}
 
 
 class Driver:
     """One run session of the driver, spoken to as the holder speaks to it."""
 
-    def __init__(self, c, key):
+    def __init__(self, c, key, packs=None):
+        """Opens a run session of `key`; given `packs`, with those packs held and named, as Opus opens one."""
         self.c = c
-        status, opened = c.open(OWNER, PROGRAM["name"], key=key, argv=[], home_id=HOME)
+        lifetime, digest = held(c, OWNER, PROGRAM["name"], key, HOME, packs) if packs else (None, None)
+        status, opened = c.open(OWNER, PROGRAM["name"], key=key, argv=[], home_id=HOME, lifetime=lifetime,
+                                packs=digest)
         expect(status == 200 and opened["resumed"] is False, "a run session of the brain row opens fresh", opened)
         self.session = opened["session"]
         self.after = 0
@@ -247,6 +265,26 @@ def main():
         seen += d.lines
         d.close()
         eventually(lambda: not harnesses(stack), "the closed session's harness to end")
+
+        # ————— the person's packs, loaded by the program as its own —————
+        d = Driver(c, "brain-packs", packs=PACKS)
+        d.expect("hello", "a process with the person's packs says hello")
+        d.send({"t": "start", "gen": 4, "config": {}, "system": SYSTEM})
+        d.expect("started", "a start with the packs answers started")
+        d.send({"t": "work", "id": "stp_work_packs", "work": "trn_brain_packs", "tools": []})
+        d.expect("accepted", "its work is accepted")
+        d.send({"t": "post", "id": "stp_post_skills", "work": "trn_brain_packs", "content": [{"type": "text", "text": "skills"}]})
+        said = [e["text"] for e in d.until("idle") if e["t"] == "said"]
+        expect(said == ["Skills: pstack:poteto-mode, taste:taste."],
+               "the program lists the skills of each pack it was given, under the names it gives them", said)
+        d.send({"t": "post", "id": "stp_post_use", "work": "trn_brain_packs",
+                "content": [{"type": "text", "text": "use pstack:poteto-mode"}]})
+        said = [e["text"] for e in d.until("idle") if e["t"] == "said"]
+        expect(said == ["Using pstack:poteto-mode: Say what changed, then stop."],
+               "a turn's post reaches a pack's skill by its name", said)
+        seen += d.lines
+        d.close()
+        eventually(lambda: not harnesses(stack), "the packs session's harness to end")
 
         # ————— a new process resumes the session, with other flags —————
         d = Driver(c, "brain-two")

@@ -79,7 +79,7 @@ type Spec struct {
 	// outside a bound.
 	Cgroup string `json:"cgroup"`
 	// Packs is the pack generation (package packview) the space binds read
-	// only at ScrollsPath, "" for none: <kept root>/.packs/<a>/<d>.
+	// only at scrolls.Path, "" for none: <kept root>/.packs/<a>/<d>.
 	Packs string `json:"packs,omitempty"`
 	// Machine names the image's programs' device a person's machine boots
 	// from (package vm), "" for every other space. A machine's space is a
@@ -89,9 +89,6 @@ type Spec struct {
 	// /dev, which no other space is.
 	Machine string `json:"machine,omitempty"`
 }
-
-// ScrollsPath is where a space sees its person's packs, read only.
-const ScrollsPath = "/run/cyfr/scrolls"
 
 var generationName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 

@@ -778,4 +778,12 @@ defmodule Opus do
   @doc "Stop a lease keeper; a keeper that is gone answers `:ok` (`Opus.LeaseWatch.stop/1`)."
   @spec stop_lease_watch(pid()) :: :ok
   defdelegate stop_lease_watch(keeper), to: Opus.LeaseWatch, as: :stop
+
+  @doc """
+  Whether a program row's driver loads the athanor's packs as its
+  program's own skills, from its driver word
+  (`Opus.Programs.Definition.loads_packs?/1`).
+  """
+  @spec loads_packs?(String.t() | nil) :: boolean()
+  defdelegate loads_packs?(driver), to: Opus.Programs.Definition
 end

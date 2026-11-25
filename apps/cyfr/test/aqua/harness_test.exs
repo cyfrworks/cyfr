@@ -55,7 +55,7 @@ defmodule Aqua.HarnessTest do
     end
 
     @impl true
-    def facts, do: %{supersedes?: true, own_tools?: false}
+    def facts(_spec), do: %{supersedes?: true, own_tools?: false, loader?: false}
   end
 
   describe "the boundary's answers, said straight to it" do
@@ -68,7 +68,7 @@ defmodule Aqua.HarnessTest do
     test "a harness that opens at once is held where Stop finds it, with the facts it gives",
          %{state: state, turn_id: turn_id} do
       handle = spawn(fn -> receive(do: (:stop -> :ok)) end)
-      facts = Stand.facts()
+      facts = Stand.facts(nil)
 
       assert {:ok, %State{harness: {Stand, ^handle}, facts: ^facts}} =
                Aqua.Loop.take_open(state, Stand, Stand.open(%{answer: {:ok, handle, facts}}))
@@ -82,6 +82,31 @@ defmodule Aqua.HarnessTest do
 
       assert {:end, ^state, ^finish} =
                Aqua.Loop.take_open(state, Stand, Stand.open(%{answer: {:end, finish}}))
+    end
+  end
+
+  describe "whether a turn's program loads the athanor's packs" do
+    # One fact from the pinned row's driver (`loads_packs?/1`), given by the
+    # harness before anything is opened: the briefing of a loader carries
+    # no index of its scrolls.
+    test "Claude Code's and Codex's drivers load them; an ACP program and a model's turn do not" do
+      loader? = fn program -> Aqua.Harness.facts(%Aqua.Loop.Turn{program: program}).loader? end
+      pin = &%{row: "srv_1", epoch: 1, name: "brain", driver: &1}
+
+      assert loader?.(pin.("cyfr-claude-code"))
+      assert loader?.(pin.("cyfr-codex"))
+      refute loader?.(pin.("cyfr-opencode"))
+      refute loader?.(pin.("cyfr-antigravity"))
+      refute loader?.(pin.("cyfr-cursor"))
+      refute loader?.(nil)
+    end
+
+    # The fact is decided once, from the pin's driver: a program pin that
+    # names none is a defect, never briefed as a program that loads none.
+    test "a program pin without its driver is refused, not briefed as a non-loader" do
+      assert_raise FunctionClauseError, fn ->
+        Aqua.Harness.facts(%Aqua.Loop.Turn{program: %{row: "srv_1", epoch: 1, name: "brain"}})
+      end
     end
   end
 
@@ -129,7 +154,7 @@ defmodule Aqua.HarnessTest do
       turn = accept!(ctx, thread, row)
       loop = run(ctx, turn)
       handle = handle!()
-      answer!(nil, {:ok, handle, Stand.facts()})
+      answer!(nil, {:ok, handle, Stand.facts(nil)})
 
       assert_receive {:handle, :moved}, 10_000
       assert [{_loop, {Stand, ^handle}}] = Registry.lookup(Aqua.RunnerRegistry, {:turn, turn.id})
@@ -150,7 +175,7 @@ defmodule Aqua.HarnessTest do
       loop = run(ctx, turn)
       start = admitted!()
       handle = handle!()
-      answer!(start, {:ok, handle, Stand.facts()})
+      answer!(start, {:ok, handle, Stand.facts(nil)})
 
       assert_receive {:handle, :moved}, 10_000
       send(loop.pid, {Aqua.Harness, turn.id, {:took, [{start.id, :started}]}})

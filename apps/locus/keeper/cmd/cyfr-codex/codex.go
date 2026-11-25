@@ -8,6 +8,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/cyfr/locus/keeper/internal/brainwire"
@@ -437,4 +439,26 @@ func errorSentence(kind string) string {
 		return "OpenAI Codex does not know the model asked for."
 	}
 	return "OpenAI Codex reported an error of its provider."
+}
+
+// packRoots are the `skills/` folders of the athanor's packs in the space
+// (`brainwire.Packs`), each a directory and no link, which Codex lists the
+// skills of for this process alone (`skills/extraRoots/set`, which writes
+// no configuration), naming each pack's as it names a root's: by the
+// pack's manifest where it has one, else bare. A pack with none is not
+// named; with no pack there are none, and nothing is sent.
+func packRoots() []string {
+	var roots []string
+	for _, pack := range brainwire.Packs() {
+		root := filepath.Join(pack, "skills")
+		if info, err := os.Lstat(root); err == nil && info.IsDir() {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// extraRootsLine names the start's skill roots to Codex for this process.
+func extraRootsLine(id string, roots []string) []byte {
+	return request(id, "skills/extraRoots/set", map[string]any{"extraRoots": roots})
 }

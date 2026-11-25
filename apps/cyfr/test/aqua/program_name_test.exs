@@ -91,8 +91,9 @@ defmodule Aqua.ProgramNameTest do
     completed!(fake, second, next, loop, "boot-two")
     second_id = second.id
     assert {:ok, %{program: ^second_id}} = Tape.turn(ctx, next.id)
-    assert {:ok, %{program: %{row: ^second_id, epoch: epoch}}} = build(ctx, next)
+    assert {:ok, %{program: %{row: ^second_id, epoch: epoch, driver: driver}}} = build(ctx, next)
     assert epoch == second.epoch
+    assert driver == Arca.McpServerStorage.driver(second)
     assert Scripted.sessions(fake, theirs.id) == %{}
   end
 

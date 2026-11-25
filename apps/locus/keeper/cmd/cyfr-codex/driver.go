@@ -46,6 +46,9 @@ type starting struct {
 	stage   string
 	request string
 	account string
+	// roots are the `skills/` folders of the athanor's packs in the space
+	// (packRoots), named to Codex before the thread starts or resumes.
+	roots []string
 }
 
 // waiting is the delivery the holder waits on Codex's answer for: the
@@ -200,7 +203,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	d.h = h
 	d.config = config
 	d.policy = access.Native
-	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, stage: "initialize"}
+	d.starting = &starting{resume: resume, session: session, pending: pending, system: str("system"), tools: dynamic, stage: "initialize", roots: packRoots()}
 	d.starting.request = d.nextID("initialize")
 	return d.h.Write(initializeLine(d.starting.request))
 }
@@ -486,8 +489,19 @@ func accountOf(m rpc) string {
 	return brainwire.SignedIn
 }
 
+// thread starts the start's thread, or resumes it.
+func (d *driver) thread(s *starting) error {
+	s.stage = "thread"
+	s.request = d.nextID("thread")
+	if s.resume {
+		return d.h.Write(threadResume(s.request, s.session, s.system, d.config, d.policy))
+	}
+	return d.h.Write(threadStart(s.request, s.system, s.tools, d.config, d.policy))
+}
+
 // startStep is the start's handshake, one answer at a time: `initialize`,
-// then the sign-in read, then the thread started or resumed.
+// then the sign-in read, then the packs' skill roots when the space holds
+// any, then the thread started or resumed.
 func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case "initialize":
@@ -503,12 +517,17 @@ func (d *driver) startStep(s *starting, m rpc) error {
 	case "account":
 		s.account = accountOf(m)
 		d.signedIn = s.account == brainwire.SignedIn
-		s.stage = "thread"
-		s.request = d.nextID("thread")
-		if s.resume {
-			return d.h.Write(threadResume(s.request, s.session, s.system, d.config, d.policy))
+		if len(s.roots) > 0 {
+			s.stage = "roots"
+			s.request = d.nextID("roots")
+			return d.h.Write(extraRootsLine(s.request, s.roots))
 		}
-		return d.h.Write(threadStart(s.request, s.system, s.tools, d.config, d.policy))
+		return d.thread(s)
+	case "roots":
+		if m.Error != nil {
+			return brainwire.Fail(1, brainwire.WhyRefused, "OpenAI Codex refused the packs' skill folders as extra roots")
+		}
+		return d.thread(s)
 	case "thread":
 		if m.Error != nil {
 			// A thread the folder holds no rollout of, or an empty one, is

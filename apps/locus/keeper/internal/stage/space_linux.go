@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/pool"
+	"github.com/cyfr/locus/keeper/internal/scrolls"
 )
 
 // A space's processes and files. The stage, in the space's user, network
@@ -418,7 +419,7 @@ func bindAt(source, target string, writable bool) error {
 // own /dev with the container's few device nodes, its own terminals and
 // /dev/shm; its own /tmp, /var/tmp and /run; its home, writable, at its
 // path, the only home it sees; given packs, its person's pack generation
-// read only at ScrollsPath in its own /run; and a machine's space also its
+// read only at scrolls.Path in its own /run; and a machine's space also its
 // device, read only at its path, and /dev/kvm. The root itself is
 // read-only once pivoted.
 func buildFiles(home, packs, machine string) error {
@@ -471,7 +472,7 @@ func buildFiles(home, packs, machine string) error {
 			if packs == "" {
 				return nil
 			}
-			return bindAt(packs, filepath.Join(Root, ScrollsPath), false)
+			return bindAt(packs, filepath.Join(Root, scrolls.Path), false)
 		},
 		func() error {
 			if machine == "" {
