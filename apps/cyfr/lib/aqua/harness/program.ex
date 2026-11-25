@@ -562,12 +562,6 @@ defmodule Aqua.Harness.Program do
         Reader.deliver(command, Reader.mark(work.turn.thread_id))
       )
 
-  # The harness starts, resuming the thread's native session if it keeps
-  # one, with the posts whose delivery its transcript says. A read that
-  # did not answer says nothing of the session or of those posts: a fresh
-  # start would leave a kept session behind, and a resume naming none
-  # would leave the posts it holds unreconciled, so the work ends with
-  # nothing written.
   # Every start is handed the turn's scrolls first, one `scroll` at a time
   # and each answered before the next: `placed` where its program looks for
   # skills, `yielded` to the model's harness's way, or `refused`, which
@@ -624,8 +618,12 @@ defmodule Aqua.Harness.Program do
   # The scroll handed last is answered: the next is handed, or the start.
   defp on_scrolls(%{phase: :scrolling, scrolling: {id, name}, work: work} = state, effects) do
     cond do
-      as = List.keyfind(effects.placed, id, 0) ->
-        scroll(%{state | scrolling: nil, placed: state.placed ++ [{name, elem(as, 1)}]})
+      placed = List.keyfind(effects.placed, id, 0) ->
+        as = elem(placed, 1)
+
+        if listed_as?(as, name),
+          do: scroll(%{state | scrolling: nil, placed: state.placed ++ [{name, as}]}),
+          else: fail(shut(state), refused(work, {:scroll_unplaced, name}))
 
       yielded = List.keyfind(effects.yielded, id, 0) ->
         kept = if elem(yielded, 1), do: state.kept ++ [name], else: state.kept
@@ -641,6 +639,19 @@ defmodule Aqua.Harness.Program do
 
   defp on_scrolls(state, _effects), do: state
 
+  # The name a program lists a placed scroll by, which the start's
+  # instructions quote: the program's word, so only the scroll's own name,
+  # or a plain namespace, `:` and it (Claude Code's `cyfr:<name>`), is
+  # taken.
+  defp listed_as?(as, name),
+    do: as == name or Regex.match?(~r/\A[A-Za-z0-9_-]+:#{Regex.escape(name)}\z/, as)
+
+  # The harness starts, resuming the thread's native session if it keeps
+  # one, with the posts whose delivery its transcript says. A read that
+  # did not answer says nothing of the session or of those posts: a fresh
+  # start would leave a kept session behind, and a resume naming none
+  # would leave the posts it holds unreconciled, so the work ends with
+  # nothing written.
   defp write_start(%{work: work} = state) do
     with {:ok, %{session: session}} <- Tape.brain(work.guest, state.thread_id),
          {:ok, pending} <- pending(work, session) do
