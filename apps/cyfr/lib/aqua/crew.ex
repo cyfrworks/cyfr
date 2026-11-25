@@ -542,9 +542,15 @@ defmodule Aqua.Crew do
     end)
   end
 
-  # Measured on what is rendered, delimiters and separators with it, the
-  # stand-in no shorter than the mark it becomes (`Aqua.Reader.deliver/2`).
-  defp within_bound(scrolls, operation) do
+  @doc """
+  Whether `scrolls`, as a job's row keeps them, fit the bound one job
+  carries as a member reads them (`Aqua.Reader.scrolls/2`): measured on
+  what is rendered, each frame, delimiter and separator with it, the
+  stand-in no shorter than the mark it becomes (`Aqua.Reader.deliver/2`).
+  Past it, the refusal names `operation`, the bytes and the bound.
+  """
+  @spec within_bound([map()], String.t()) :: :ok | {:error, {:invalid_argument, String.t()}}
+  def within_bound(scrolls, operation) do
     bytes = byte_size(Aqua.Reader.scrolls(scrolls, Aqua.Reader.token()))
 
     %{bytes: most} = Compendium.skill_bound()
