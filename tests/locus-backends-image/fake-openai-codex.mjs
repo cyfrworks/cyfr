@@ -23,10 +23,17 @@
 //   model and effort, the thread's tools, policy and instructions, and the
 //   approval's decision; `read` calls CYFR's `files` tool
 //   (`item/tool/call`), holds until the driver answers, and replies with
-//   the answer. Each reply streams as
+//   the answer; `skills` replies naming every skill the thread loaded;
+//   `use <skill>` replies with that skill's instructions. Each reply
+//   streams as
 //   `item/agentMessage/delta`s, then the completed `agentMessage`, the
 //   thread's token usage sent again unchanged (as a rate-limit update sends
 //   it) and then grown by the reply's, and `turn/completed`.
+// - `skills/extraRoots/set` names the process's extra skill roots, which
+//   a thread started or resumed after it loads: each folder of a root that
+//   holds a SKILL.md is a skill, named by its `name`, else by its folder,
+//   after `<manifest>:` when the root's parent holds a plugin manifest,
+//   as Codex 0.169.0 names a root's skills (P11.1).
 // - It writes a canary to its stderr and to its folder, which the driver
 //   must never pass on.
 // - It keeps each thread as Codex 0.169.0 keeps it in the folder: a rollout,
@@ -83,6 +90,38 @@ const save = () => fs.writeFileSync(threadFile(thread.id), JSON.stringify(thread
 const rollout = (id) => path.join(sessions, `rollout-2026-11-18T10-00-00-${id}.jsonl`);
 let active = null;
 let steered = null;
+let extraRoots = [];
+
+// The skills of the extra roots, by name: each one's instructions, its
+// SKILL.md after its front matter.
+function skillsOf(roots) {
+  const found = {};
+  for (const root of roots) {
+    let plugin = '';
+    for (const manifest of ['.codex-plugin', '.claude-plugin', '.cursor-plugin']) {
+      try {
+        plugin = JSON.parse(fs.readFileSync(path.join(root, '..', manifest, 'plugin.json'), 'utf8')).name || '';
+      } catch {}
+      if (plugin) break;
+    }
+    let folders = [];
+    try {
+      folders = fs.readdirSync(root).sort();
+    } catch {}
+    for (const folder of folders) {
+      let text;
+      try {
+        text = fs.readFileSync(path.join(root, folder, 'SKILL.md'), 'utf8');
+      } catch {
+        continue;
+      }
+      const matter = text.startsWith('---\n') ? text.slice(4, text.indexOf('\n---', 4) + 1) : '';
+      const name = matter.match(/^name:\s*(\S+)\s*$/m)?.[1] || folder;
+      found[plugin ? `${plugin}:${name}` : name] = text.slice(matter ? matter.length + 8 : 0).trim();
+    }
+  }
+  return found;
+}
 
 // A user message Codex records under the client's id: shown as an item of
 // the turn, and kept in the thread's rollout.
@@ -134,7 +173,12 @@ async function turn(turnId, params) {
   notify('turn/started', { threadId: thread.id, turn: { id: turnId, items: [], status: 'inProgress', error: null } });
   userMessage(turnId, params.clientUserMessageId, words);
   const base = { threadId: thread.id, turnId };
-  if (words.includes('hello')) {
+  if (words === 'skills') {
+    reply(turnId, `Skills: ${Object.keys(thread.skills).join(', ') || 'none'}.`);
+  } else if (words.startsWith('use ')) {
+    const name = words.slice(4).trim();
+    reply(turnId, name in thread.skills ? `Using ${name}: ${thread.skills[name]}` : `No skill ${name}.`);
+  } else if (words.includes('hello')) {
     const command = { type: 'commandExecution', id: 'call_own_1', command: "/bin/bash -lc 'cat ~/.codex/auth.json'", cwd: process.env.HOME, status: 'inProgress', commandActions: [] };
     notify('item/started', { ...base, item: command });
     notify('item/completed', { ...base, item: { ...command, status: 'completed', aggregatedOutput: 'FAKE-FOLDER-CANARY', exitCode: 0 } });
@@ -183,12 +227,15 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return ok(fs.existsSync(auth)
         ? { account: { type: 'chatgpt', email: 'FAKE-ACCOUNT-CANARY@example.invalid', planType: 'plus' }, requiresOpenaiAuth: true }
         : { account: null, requiresOpenaiAuth: true });
+    case 'skills/extraRoots/set':
+      extraRoots = message.params.extraRoots;
+      return ok({});
     case 'model/list':
       return ok({ data: MODELS, nextCursor: null });
     case 'thread/start': {
       const p = message.params;
       thread = { id: crypto.randomUUID(), model: p.model, dynamicTools: p.dynamicTools || [], approvalPolicy: p.approvalPolicy, sandbox: p.sandbox,
-        developerInstructions: p.developerInstructions || '',
+        developerInstructions: p.developerInstructions || '', skills: skillsOf(extraRoots),
         total: { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
       save();
       fs.writeFileSync(rollout(thread.id), JSON.stringify({ type: 'session_meta', payload: { id: thread.id } }) + '\n');
@@ -200,6 +247,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const file = threadFile(message.params.threadId);
       if (!fs.existsSync(file)) return fail(`no rollout found for thread id ${message.params.threadId}`);
       thread = JSON.parse(fs.readFileSync(file, 'utf8'));
+      thread.skills = skillsOf(extraRoots);
       thread.approvalPolicy = message.params.approvalPolicy;
       thread.sandbox = message.params.sandbox;
       if (message.params.developerInstructions !== undefined) thread.developerInstructions = message.params.developerInstructions;

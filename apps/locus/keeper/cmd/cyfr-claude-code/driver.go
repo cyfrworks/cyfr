@@ -190,7 +190,7 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	if !resume {
 		session = brainwire.NewUUID()
 	}
-	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, session, resume, config, access.Native))
+	h, err := d.c.Spawn(harnessArgv(d.harnessCommand, brainwire.Packs(), session, resume, config, access.Native))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
 		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")

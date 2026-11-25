@@ -80,7 +80,7 @@ func TestAnAccountsErrorIsTypedAuthenticationInTheDriversWords(t *testing.T) {
 // tools gives it `--tools ""`, none of them, never its default of all.
 func TestAnEmptyListOfTheHarnessesToolsStartsItWithNone(t *testing.T) {
 	none := []string{}
-	argv := harnessArgv([]string{"claude"}, "6f1e2d3c-0000-4968-8776-000000000001", false, brainwire.Config{HarnessTools: &none}, nil)
+	argv := harnessArgv([]string{"claude"}, nil, "6f1e2d3c-0000-4968-8776-000000000001", false, brainwire.Config{HarnessTools: &none}, nil)
 	want := append(append([]string{"claude"}, baseArgv...), "--session-id", "6f1e2d3c-0000-4968-8776-000000000001", "--tools", "")
 	if !reflect.DeepEqual(argv, want) {
 		t.Fatalf("an empty tools list is --tools \"\": %q", argv)

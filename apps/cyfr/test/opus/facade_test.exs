@@ -13,7 +13,11 @@ defmodule Opus.FacadeTest do
   closes without a completion result to carry its read threads.
   `ungranted/2` is why a grant a turn needs is missing, revoked by its
   person or not: Aqua's loop must say which and reaches Sanctum only
-  through this door.
+  through this door. `loads_packs?/1` is whether a program row's driver
+  loads the athanor's packs as its program's own skills
+  (`Opus.Programs.Definition`): Aqua's program harness gives it as the
+  turn's `loader?` and reaches the execution domain only through this
+  door.
   """
 
   use ExUnit.Case, async: true
@@ -34,6 +38,7 @@ defmodule Opus.FacadeTest do
     feeds: 1,
     get: 2,
     list_by_request: 3,
+    loads_packs?: 1,
     pause_turn_root: 3,
     read_threads: 2,
     release_turn_root: 3,

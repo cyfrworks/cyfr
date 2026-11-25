@@ -236,6 +236,11 @@ defmodule Aqua.PromptTest do
 
     @search "\n- You have native search: use it when a job needs the web searched."
 
+    @loader_propose "\n- To keep a procedure as a scroll, propose one with " <>
+                      "`aqua.skill_create` (in `mine`, or a pack of the person's own) when a " <>
+                      "procedure worth repeating has just worked: it waits in the thread for " <>
+                      "the person to save it."
+
     @context "\n\n---\n\n## Runtime Context\n\n"
 
     defp member(name), do: %{"name" => name, "title" => String.capitalize(name), "prompt" => nil}
@@ -272,6 +277,59 @@ defmodule Aqua.PromptTest do
 
       refute Prompt.compose(ctx, agent: member("explorer"), authority: nil).text =~
                "native search"
+    end
+
+    # A program that loads the athanor's packs as its own skills (`loader?`,
+    # Claude Code's and Codex's) is its own list of them: CYFR lists none,
+    # says nothing of reading one with `aqua.skill_get`, and its rule speaks
+    # of the scrolls CYFR delivers. Every other word is main's.
+    test "a program that loads the packs is handed no scroll list and the rule on CYFR's scrolls",
+         %{ctx: ctx} do
+      crew =
+        String.replace(
+          @crew,
+          "; read any other scroll it names with `aqua.skill_get` before doing what it describes.",
+          "."
+        )
+
+      # A loader is told how to propose a scroll, beside how to propose a
+      # change, since no index tells it.
+      part_one =
+        @part_one
+        |> String.replace(
+          "for the person to save it.",
+          "for the person to save it." <> @loader_propose
+        )
+        |> String.replace("A scroll is only", "A scroll CYFR delivers is only")
+
+      refute crew == @crew or part_one == @part_one
+      loader = [own_tools?: true, loader?: true, authority: nil]
+
+      assert opening(ctx, [agent: member("coder")] ++ loader) ==
+               crew <> "\n\n" <> part_one <> @program
+
+      assert opening(ctx, [agent: agent()] ++ loader) ==
+               "You are Aqua.\n\n---\n\n" <> part_one <> @program
+
+      for agent <- [member("coder"), agent()] do
+        text = Prompt.compose(ctx, [agent: agent] ++ loader).text
+        refute text =~ "## Scrolls"
+        refute text =~ "skill_get"
+        refute text =~ "cyfr:research"
+        assert length(String.split(text, "aqua.skill_create")) == 2
+      end
+
+      # The same member on a program that loads none keeps main's words.
+      assert opening(ctx,
+               agent: member("coder"),
+               own_tools?: true,
+               loader?: false,
+               authority: nil
+             ) ==
+               @briefing <> @program
+
+      assert Prompt.compose(ctx, agent: member("coder"), own_tools?: true, authority: nil).text =~
+               "\n\n---\n\n## Scrolls\n\n"
     end
 
     # Aqua's prompt is in two parts: its file's, then CYFR's, for the brain

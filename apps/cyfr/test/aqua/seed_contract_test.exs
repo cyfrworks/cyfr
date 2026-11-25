@@ -479,7 +479,7 @@ defmodule Aqua.SeedContractTest do
         body
       end
 
-    Enum.join([soul_body(), Aqua.Prompt.briefing(true, true) | scrolls], "\n")
+    Enum.join([soul_body(), Aqua.Prompt.briefing(true, true, false) | scrolls], "\n")
   end
 
   # `component(action: "search")` is how a body teaches `component.search`.

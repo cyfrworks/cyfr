@@ -273,7 +273,11 @@ jobs:
     # filesystem, process and trust-store behavior.
     name: vet + test (macOS)
     runs-on: macos-latest
-    timeout-minutes: 10
+    # The suite on this runner is long, not stuck: its go test step takes
+    # about 8 minutes and up to 9.5 on a slow runner, cmd's tests, which run
+    # one after another, about 7 of them. 15 minutes leaves the step half
+    # again its slowest passing run.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/codex

@@ -45,7 +45,7 @@ defmodule Aqua.Harness.Api do
   alias Aqua.Loop.{Planner, Policy, Request, Turn}
   alias Aqua.{Reader, Tape}
 
-  @facts %{supersedes?: true, own_tools?: false}
+  @facts %{supersedes?: true, own_tools?: false, loader?: false}
   @max_steps 30
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
@@ -126,7 +126,7 @@ defmodule Aqua.Harness.Api do
 
   @doc "What the engine reads of this harness (`Aqua.Harness.facts/1`)."
   @impl Aqua.Harness
-  def facts, do: @facts
+  def facts(_spec), do: @facts
 
   # ===========================================================================
   # The rounds

@@ -45,6 +45,7 @@ import (
 //	history   replies with the items injected into the thread so far, by every process, as JSON
 //	noise     writes a line that is no JSON and one cut short, then replies
 //	die       ends the process with status 3
+//	roots     replies with the extra skill roots it was given and every method it was asked, in order, as JSON
 //
 // It refuses to start without `app-server` last, answers nothing before
 // `initialize`, writes a canary to its standard error, which the driver
@@ -58,7 +59,8 @@ import (
 // while FAKE_INJECT_FAIL is set or a turn runs.
 // A steer is refused as Codex refuses one it did not take (-32600) while
 // FAKE_STEER_REFUSE is set, and with an error of another code (-32603)
-// while FAKE_STEER_UNKNOWN is.
+// while FAKE_STEER_UNKNOWN is. `skills/extraRoots/set` keeps its roots
+// for the process, and is refused while FAKE_ROOTS_REFUSE is set.
 const fakeEnv = "CYFR_FAKE_CODEX"
 
 const stderrCanary = "FAKE-STDERR-CANARY Codex writes this to its stderr"
@@ -111,6 +113,12 @@ func fakeCodex() int {
 		return ch
 	}
 	ask := func(method string, params map[string]any) json.RawMessage { return <-call(method, params) }
+
+	// What the process was asked, in order, and the extra skill roots it
+	// keeps for its life.
+	var methods []string
+	var roots []any
+	var methodsMu sync.Mutex
 
 	var thread struct {
 		sync.Mutex
@@ -203,6 +211,11 @@ func fakeCodex() int {
 			first := call("item/tool/call", map[string]any{"threadId": thread.id, "turnId": turn, "callId": "call_a", "tool": "files", "arguments": map[string]any{"path": "a.txt"}})
 			second := call("item/tool/call", map[string]any{"threadId": thread.id, "turnId": turn, "callId": "call_b", "tool": "files", "arguments": map[string]any{"path": "b.txt"}})
 			reply(turn, fmt.Sprintf("call_a answered %s; call_b answered %s", toolResult(<-first), toolResult(<-second)))
+		case strings.Contains(words, "roots"):
+			methodsMu.Lock()
+			given, _ := json.Marshal(map[string]any{"roots": roots, "methods": methods})
+			methodsMu.Unlock()
+			reply(turn, string(given))
 		case strings.Contains(words, "twice"):
 			say(turn, "msg_one", "One.")
 			say(turn, "msg_two", "Two.")
@@ -333,6 +346,11 @@ func fakeCodex() int {
 				write(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": message}})
 			}
 			str := func(name string) string { s, _ := m.Params[name].(string); return s }
+			if m.Method != "" {
+				methodsMu.Lock()
+				methods = append(methods, m.Method)
+				methodsMu.Unlock()
+			}
 			switch {
 			case m.Method == "" && len(m.ID) > 0:
 				answersMu.Lock()
@@ -349,6 +367,15 @@ func fakeCodex() int {
 			case !initialized:
 				fail(-32600, "initialize with experimentalApi first")
 			case m.Method == "initialized":
+			case m.Method == "skills/extraRoots/set":
+				if os.Getenv("FAKE_ROOTS_REFUSE") != "" {
+					fail(-32602, "HARNESS-WORDS the roots could not be set")
+					continue
+				}
+				methodsMu.Lock()
+				roots, _ = m.Params["extraRoots"].([]any)
+				methodsMu.Unlock()
+				ok(map[string]any{})
 			case m.Method == "account/read":
 				if answer := os.Getenv("FAKE_ACCOUNT"); answer == "fail" {
 					fail(-32603, "HARNESS-WORDS the account could not be read")
