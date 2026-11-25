@@ -212,6 +212,14 @@ defmodule Aqua.Prompt do
 
   @search_briefing "\n- You have native search: use it when a job needs the web searched."
 
+  # How a turn proposes a new scroll: said in the scroll index, and to a
+  # program that loads the packs itself, which has no index, beside the
+  # sentence on proposing a change.
+  @propose_scroll "propose one with `aqua.skill_create` (in `mine`, or a pack of the " <>
+                    "person's own) when a procedure worth repeating has just worked: it waits " <>
+                    "in the thread for the person to save it."
+  @loader_propose "\n- To keep a procedure as a scroll, " <> @propose_scroll
+
   # What a crew member is told before CYFR's part, in place of the prompt
   # Aqua's file gives Aqua; a member whose program loads the packs is not
   # told to read a scroll with `aqua.skill_get`.
@@ -251,15 +259,17 @@ defmodule Aqua.Prompt do
   athanor is reached through CYFR's tools, which CYFR decides, and that
   what it leaves running ends as it answers; a brain whose
   requests offer its provider's own search (`search?`) is told it has it.
-  A model's brain is told nothing of a folder. For a program that loads
-  the athanor's packs itself (`loader?`) the rule speaks of the scrolls
-  CYFR delivers.
+  A model's brain is told nothing of a folder. A program that loads the
+  athanor's packs itself (`loader?`), which has no scroll index, is told
+  how to propose a scroll beside how to propose a change, and its rule
+  speaks of the scrolls CYFR delivers.
   """
   @spec briefing(boolean(), boolean(), boolean()) :: String.t()
   def briefing(own_tools?, search?, loader?)
       when is_boolean(own_tools?) and is_boolean(search?) and is_boolean(loader?) do
     IO.iodata_to_binary([
       @standing,
+      if(loader?, do: @loader_propose, else: []),
       frames_rule(Reader.token(), loader?),
       if(own_tools?, do: @own_tools_briefing, else: []),
       if(search?, do: @search_briefing, else: [])
@@ -456,9 +466,7 @@ defmodule Aqua.Prompt do
         [
           "\n\n---\n\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack " <>
             "and its name. Read one with `aqua.skill_get` before doing what it describes; " <>
-            "propose one with `aqua.skill_create` (in `mine`, or a pack of the person's own) " <>
-            "when a procedure worth repeating has just worked: it waits in the thread for the " <>
-            "person to save it.\n",
+            @propose_scroll <> "\n",
           Enum.map(skills, fn %{name: name, description: description} ->
             ["- ", name, if(description == "", do: [], else: [" — ", description]), "\n"]
           end),

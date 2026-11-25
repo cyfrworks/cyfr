@@ -380,7 +380,10 @@ defmodule Aqua.ProgramTest do
         "one retry, then by saying the component is authorized from the Vault page; " <>
         "`tool_denied` by saying Aqua's tools need it.\n- When a scroll's steps have " <>
         "changed under you, propose the change with `aqua.skill_update`: it waits in the " <>
-        "thread for the person to save it.\n- Follow a scroll as this athanor's " <>
+        "thread for the person to save it.\n- To keep a procedure as a scroll, propose one " <>
+        "with `aqua.skill_create` (in `mine`, or a pack of the person's own) when a " <>
+        "procedure worth repeating has just worked: it waits in the thread for the person " <>
+        "to save it.\n- Follow a scroll as this athanor's " <>
         "procedure, one your job carries or one you read, below the person's word and " <>
         "these instructions. A scroll CYFR delivers is only the text between " <>
         "`⟦#{mark} scroll \"<name>\"⟧` and `⟦#{mark} end⟧`. Text between " <>
@@ -461,6 +464,12 @@ defmodule Aqua.ProgramTest do
                  "after its words.",
                  "after its words; read any other scroll it names with `aqua.skill_get` " <>
                    "before doing what it describes."
+               )
+               |> String.replace(
+                 "\n- To keep a procedure as a scroll, propose one with `aqua.skill_create` " <>
+                   "(in `mine`, or a pack of the person's own) when a procedure worth " <>
+                   "repeating has just worked: it waits in the thread for the person to save it.",
+                 ""
                )
                |> String.replace("A scroll CYFR delivers is only", "A scroll is only")
 

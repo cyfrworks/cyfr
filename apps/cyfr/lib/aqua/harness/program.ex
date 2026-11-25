@@ -242,8 +242,6 @@ defmodule Aqua.Harness.Program do
   def facts(%Aqua.Loop.Turn{program: %{driver: driver}}),
     do: %{@facts | loader?: Opus.loads_packs?(driver)}
 
-  def facts(%Aqua.Loop.Turn{}), do: @facts
-
   @doc false
   def start_link(attending), do: GenServer.start_link(__MODULE__, attending)
 

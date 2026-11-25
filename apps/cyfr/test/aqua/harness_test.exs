@@ -100,6 +100,14 @@ defmodule Aqua.HarnessTest do
       refute loader?.(pin.("cyfr-cursor"))
       refute loader?.(nil)
     end
+
+    # The fact is decided once, from the pin's driver: a program pin that
+    # names none is a defect, never briefed as a program that loads none.
+    test "a program pin without its driver is refused, not briefed as a non-loader" do
+      assert_raise FunctionClauseError, fn ->
+        Aqua.Harness.facts(%Aqua.Loop.Turn{program: %{row: "srv_1", epoch: 1, name: "brain"}})
+      end
+    end
   end
 
   describe "a turn whose harness the engine does not know" do

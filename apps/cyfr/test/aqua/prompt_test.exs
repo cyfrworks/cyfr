@@ -236,6 +236,11 @@ defmodule Aqua.PromptTest do
 
     @search "\n- You have native search: use it when a job needs the web searched."
 
+    @loader_propose "\n- To keep a procedure as a scroll, propose one with " <>
+                      "`aqua.skill_create` (in `mine`, or a pack of the person's own) when a " <>
+                      "procedure worth repeating has just worked: it waits in the thread for " <>
+                      "the person to save it."
+
     @context "\n\n---\n\n## Runtime Context\n\n"
 
     defp member(name), do: %{"name" => name, "title" => String.capitalize(name), "prompt" => nil}
@@ -287,7 +292,16 @@ defmodule Aqua.PromptTest do
           "."
         )
 
-      part_one = String.replace(@part_one, "A scroll is only", "A scroll CYFR delivers is only")
+      # A loader is told how to propose a scroll, beside how to propose a
+      # change, since no index tells it.
+      part_one =
+        @part_one
+        |> String.replace(
+          "for the person to save it.",
+          "for the person to save it." <> @loader_propose
+        )
+        |> String.replace("A scroll is only", "A scroll CYFR delivers is only")
+
       refute crew == @crew or part_one == @part_one
       loader = [own_tools?: true, loader?: true, authority: nil]
 
@@ -302,6 +316,7 @@ defmodule Aqua.PromptTest do
         refute text =~ "## Scrolls"
         refute text =~ "skill_get"
         refute text =~ "cyfr:research"
+        assert length(String.split(text, "aqua.skill_create")) == 2
       end
 
       # The same member on a program that loads none keeps main's words.
