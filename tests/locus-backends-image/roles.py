@@ -287,6 +287,9 @@ def test_restart_alone(stack, c, victim):
         if name != victim:
             expect(after[name] == before[name], f"killing the {victim} role leaves the {name} role's process", [before, after])
     stack.healthy()
+    # The container's health is read every ten seconds: the backends' own
+    # answer says the role started again listens.
+    wait_healthy(stack.base)
     if victim != "backends":
         again = c.mcp(OWNER, "scratch", key="steady").call("whoami", {})
         expect(again[0] == 200 and json.loads(again[1]["result"]["content"][0]["text"])["pid"]
