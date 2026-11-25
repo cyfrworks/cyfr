@@ -3,10 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # cyfr-guard: the egress guard of a Locus island. docker-compose.yml runs
-# one for the builds island (locus-builds-guard) and one for the backends
-# island (locus-backends-guard), each from the Locus image, holding
-# NET_ADMIN and no other capability, in a namespace whose net.ipv4.ip_forward
-# is 1 and net.ipv4.icmp_ratelimit 0 (compose's sysctls; the guard refuses
+# one, locus-guard, from the Locus image, holding NET_ADMIN and no other
+# capability, in a namespace whose net.ipv4.ip_forward is 1 and
+# net.ipv4.icmp_ratelimit 0 (compose's sysctls; the guard refuses
 # to start otherwise). The island's service shares this container's network
 # namespace (`network_mode: service:`), and starts only once this container
 # is healthy: healthy means the ready file is present, the static rules it
