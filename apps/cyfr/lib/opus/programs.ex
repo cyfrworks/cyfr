@@ -669,7 +669,9 @@ defmodule Opus.Programs do
   `read/3`, once the session has printed past `offset` and then printed
   nothing for half a second (`Opus.Programs.Terminal`), or its program
   has ended, or `ms` has passed, whichever comes first: with `:infinity`,
-  as long as that takes. A session of the caller's own with no process,
+  as long as that takes, and `ms` at most what a timer holds
+  (`Prima.Operation.longest_wait_ms/0`, which `Opus.Programs.Provider`
+  checks at the arguments). A session of the caller's own with no process,
   its run lost with the holder at a restart of CYFR, answers
   `{:error, :ended}`, read from what its id names (`Opus.Programs.Box`,
   "A terminal's id"); any other `{:error, :not_found}`. A session whose
@@ -681,15 +683,26 @@ defmodule Opus.Programs do
   def wait(caller, session_id, offset, ms)
       when is_integer(offset) and offset >= 0 and
              ((is_integer(ms) and ms >= 0) or ms == :infinity) do
-    timeout = if ms == :infinity, do: :infinity, else: ms + @answer_margin_ms + 5_000
-
     with {:ok, principal} <- who(caller) do
       case terminal_pid(session_id, principal, :owner) do
-        nil -> lost(caller, session_id)
-        pid -> waited(pid, {:wait, principal, offset, ms}, timeout, caller, session_id)
+        nil ->
+          lost(caller, session_id)
+
+        pid ->
+          # Every check has passed: from here a post answers a turn's wait
+          # early (`Sanctum.RunningTasks.wake/1`).
+          :ok = Sanctum.RunningTasks.waiting()
+          waited(pid, {:wait, principal, offset, ms}, answer_timeout(ms), caller, session_id)
       end
     end
   end
+
+  # How long the caller waits on the terminal's answer: past its own time,
+  # within what a timer holds (`Prima.Operation.longest_wait_ms/0`).
+  defp answer_timeout(:infinity), do: :infinity
+
+  defp answer_timeout(ms),
+    do: min(ms + @answer_margin_ms + 5_000, Prima.Operation.longest_wait_ms())
 
   # A wait the process answers; one it did not answer in time still runs,
   # and one whose process went meanwhile is read as gone.

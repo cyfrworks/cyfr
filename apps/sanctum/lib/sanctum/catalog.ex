@@ -795,7 +795,8 @@ defmodule Sanctum.Catalog do
   a replay-safe read may be; false for every other, an action the table
   does not hold and a proxied tool among them. The gate gives such a call
   no handler timeout and no holder window (`Sanctum.Dispatch`), and a
-  turn's loop answers it early on a post (`Aqua.Loop`).
+  turn's loop wakes it on a post, which the gate answers early once its
+  handler waits (`Aqua.Loop`, `Sanctum.RunningTasks.wake/1`).
   """
   @spec waits?(term(), term()) :: boolean()
   def waits?(tool, action) when is_binary(tool) and is_binary(action) do

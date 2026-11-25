@@ -62,6 +62,7 @@ defmodule Opus.Programs.Provider do
   # How long a start waits for what it prints, at most and by default.
   @start_max_ms 30_000
   @start_wait_ms 10_000
+  @longest_wait_ms Prima.Operation.longest_wait_ms()
 
   @impl true
   def service, do: "opus"
@@ -159,7 +160,7 @@ defmodule Opus.Programs.Provider do
             Arg.new("ms", :integer,
               min: 0,
               description:
-                "wait: how long to wait at most, in milliseconds; leave it out to wait as long as it takes"
+                "wait: how long to wait at most, in milliseconds, up to #{@longest_wait_ms}; leave it out to wait as long as it takes"
             )
           ],
           kind: :read,
@@ -212,8 +213,15 @@ defmodule Opus.Programs.Provider do
   defp dispatch("read", caller, %{"session" => session} = args) when is_binary(session),
     do: shown(session, Programs.read(caller, session, Map.get(args, "after") || 0))
 
-  defp dispatch("wait", caller, %{"session" => session} = args) when is_binary(session),
-    do: answer(caller, session, Map.get(args, "after") || 0, Map.get(args, "ms") || :infinity)
+  defp dispatch("wait", caller, %{"session" => session} = args) when is_binary(session) do
+    case Map.get(args, "ms") || :infinity do
+      ms when is_integer(ms) and ms > @longest_wait_ms ->
+        {:error, {:invalid_argument, Prima.Operation.wait_too_long("program.wait: ms")}}
+
+      ms ->
+        answer(caller, session, Map.get(args, "after") || 0, ms)
+    end
+  end
 
   defp dispatch("stop", caller, %{"session" => session}) when is_binary(session) do
     case Programs.close(caller, session) do

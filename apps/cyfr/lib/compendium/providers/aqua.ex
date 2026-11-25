@@ -974,17 +974,18 @@ defmodule Compendium.Providers.Aqua do
   # (`Aqua.Loop`) stop it.
   def handle(%Context{} = ctx, %{"action" => "wait", "until" => until} = args)
       when is_binary(until) do
-    with :ok <- waiting_turn(ctx, args) do
-      case DateTime.from_iso8601(until) do
-        {:ok, due, _offset} ->
-          :ok = wait_until(due)
-          {:ok, %{until: DateTime.to_iso8601(due), now: DateTime.to_iso8601(DateTime.utc_now())}}
+    with :ok <- waiting_turn(ctx, args),
+         {:ok, due, left_ms} <- due(until) do
+      # Every check has passed: from here a post answers the wait early
+      # (`Sanctum.RunningTasks.wake/1`).
+      :ok = Sanctum.RunningTasks.waiting()
 
-        {:error, _unparsed} ->
-          {:error,
-           {:invalid_argument,
-            "aqua.wait: until must be an ISO 8601 time with its offset, like 2026-11-26T09:00:00+01:00"}}
+      receive do
+      after
+        left_ms -> :ok
       end
+
+      {:ok, %{until: DateTime.to_iso8601(due), now: DateTime.to_iso8601(DateTime.utc_now())}}
     end
   end
 
@@ -1009,20 +1010,22 @@ defmodule Compendium.Providers.Aqua do
 
   defp waiting_turn(_ctx, _args), do: {:error, :wait_not_a_turn}
 
-  # The longest one `receive ... after` holds; a longer wait is held in
-  # steps, each measured again from the clock.
-  @wait_step_ms 3_600_000
+  # The time a wait is for and how far off it is, in whole milliseconds
+  # (none for a time past): one a timer holds, or a refusal of the
+  # argument (`Prima.Operation.longest_wait_ms/0`).
+  defp due(until) do
+    case DateTime.from_iso8601(until) do
+      {:ok, due, _offset} ->
+        left_ms = max(div(DateTime.diff(due, DateTime.utc_now(), :microsecond) + 999, 1000), 0)
 
-  defp wait_until(due) do
-    case DateTime.diff(due, DateTime.utc_now(), :microsecond) do
-      left when left > 0 ->
-        receive do
-        after
-          min(div(left + 999, 1000), @wait_step_ms) -> wait_until(due)
-        end
+        if left_ms <= Prima.Operation.longest_wait_ms(),
+          do: {:ok, due, left_ms},
+          else: {:error, {:invalid_argument, Prima.Operation.wait_too_long("aqua.wait: until")}}
 
-      _due ->
-        :ok
+      {:error, _unparsed} ->
+        {:error,
+         {:invalid_argument,
+          "aqua.wait: until must be an ISO 8601 time with its offset, like 2026-11-26T09:00:00+01:00"}}
     end
   end
 

@@ -5864,6 +5864,7 @@ defmodule Aqua.ProgramTest do
 
       Prima.Test.Wait.wait_until(fn -> match?([%{holder_deadline: nil}], charges.()) end, 10_000)
       _steer = steer!(ctx, thread, turn, "stop waiting")
+      assert %{"t" => "post"} = accept_next!(fake, row)
       assert %{"ask" => "ask-1"} = accept_next!(fake, row)
       assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
       assert {:ok, _} = Arca.BudgetReservations.sweep(actor)
@@ -5933,6 +5934,201 @@ defmodule Aqua.ProgramTest do
 
       assert %{dispatch_state: "closed", outcome: "ok"} = step_by_key(ctx, turn, key)
     end
+
+    # The gate decides a wait before anything answers it: a page's wait is
+    # refused before a post and after one alike.
+    @tag harness: :program
+    test "a page's wait is refused, before a post and after one",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "begin")
+      _loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      assert %{outcome: "error"} = page_wait!(ctx, turn, "page-before")
+      _steer = steer!(ctx, thread, turn, "new post")
+      assert %{"t" => "post", "id" => id} = accept_next!(fake, row)
+      [_input, delivered] = inputs(ctx, turn)
+      assert delivered.id == id
+      closed!(ctx, turn, delivered.idempotency_key)
+      assert %{outcome: "error", result_message_id: result} = page_wait!(ctx, turn, "page-after")
+      {:ok, result} = Tape.message(ctx, result)
+      assert result.content =~ Prima.Refusal.message(:wait_not_a_turn)
+    end
+
+    # Only a brain's asks are answered by the harness: a page's call that
+    # finished is no open ask, so a post read since leaves a wait to hold.
+    @tag harness: :program
+    test "a page's finished call leaves a post read since read, and a wait holds",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "begin")
+      _loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      {:ok, live} = Tape.turn(ctx, turn.id)
+
+      payload =
+        Aqua.PageCalls.row(%{
+          request: "page-read",
+          name: "component.list",
+          arguments: %{},
+          user_id: ctx.user_id,
+          put_turn_id: turn.id
+        })
+
+      {:ok, %{idempotency_key: key}} =
+        Tape.propose_call(ctx, live, Aqua.PageCalls.proposal(live, payload))
+
+      send(Aqua.Loop.holder(turn.id), {:moved, turn.id})
+      assert %{outcome: "ok"} = closed!(ctx, turn, key)
+      _steer = steer!(ctx, thread, turn, "keep waiting after reading this")
+      assert %{"t" => "post", "id" => id} = accept_next!(fake, row)
+      [_input, delivered] = inputs(ctx, turn)
+      assert delivered.id == id
+      closed!(ctx, turn, delivered.idempotency_key)
+      say(fake, row, said(turn, "msg_1", "I read it."))
+      say(fake, row, ask(turn, "ask-wait", "aqua", waiting()))
+      wait_key = TurnStorage.brain_ask_key(turn.id, "ask-wait")
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          match?(%{dispatch_state: "closed"}, step_by_key(ctx, turn, wait_key)) or
+            handler_waits?()
+        end,
+        10_000
+      )
+
+      assert %{dispatch_state: "dispatched"} = step_by_key(ctx, turn, wait_key)
+    end
+
+    # What a waiting worker that died by itself took comes back by its
+    # owner, the guard that watched it, while the turn still runs.
+    @tag harness: :program
+    test "a waiting worker that dies gives its charge back while the turn still runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "wait")
+      _loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-wait", "aqua", waiting()))
+      waiting!(ctx, turn)
+      {:dictionary, dictionary} = Process.info(wait_handler(), :dictionary)
+      [worker | _callers] = Keyword.fetch!(dictionary, :"$callers")
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, live} = Tape.turn(ctx, turn.id)
+      charges = fn -> Arca.BudgetReservations.charges(actor, live.budget_id) end
+      assert {:ok, [%{holder_deadline: nil}]} = charges.()
+      Process.exit(worker, :kill)
+      assert %{"ask" => "ask-wait"} = accept_next!(fake, row)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      Prima.Test.Wait.wait_until(fn -> charges.() == {:ok, []} end, 10_000)
+      assert %{charged: 0} = Arca.BudgetReservations.lookup(actor, live.budget_id)
+    end
+
+    # A time no timer holds is refused at the arguments, in one sentence,
+    # on both waits; the largest one a timer holds is taken and raises
+    # nowhere.
+    @tag harness: :program
+    test "a wait longer than a timer holds is refused in a sentence, on both waits",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      cli = terminal_row!(ctx)
+      turn = accept!(ctx, thread, row, "run it")
+      _loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-start", "program", start_args(cli)))
+      started = accept_next!(fake, row)
+
+      %{"session" => session} =
+        started["content"] |> outside_answer(thread, "program") |> Jason.decode!()
+
+      [{terminal, _owner}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
+      longest = Prima.Operation.longest_wait_ms()
+
+      for {ms, n} <- [{9_007_199_254_740_991, 1}, {longest + 1, 2}] do
+        wait = %{"action" => "wait", "session" => session, "after" => 0, "ms" => ms}
+        say(fake, row, ask(turn, "ask-ms-#{n}", "program", wait))
+        assert %{"ask" => "ask-ms-" <> _, "content" => content} = accept_next!(fake, row)
+        assert content =~ Prima.Operation.wait_too_long("program.wait: ms")
+        assert Process.alive?(terminal)
+      end
+
+      until = DateTime.utc_now() |> DateTime.add(longest + 60_000, :millisecond)
+      far = %{"action" => "wait", "until" => DateTime.to_iso8601(until)}
+      say(fake, row, ask(turn, "ask-until", "aqua", far))
+      assert %{"ask" => "ask-until", "content" => content} = accept_next!(fake, row)
+      assert content =~ Prima.Operation.wait_too_long("aqua.wait: until")
+
+      wait = %{"action" => "wait", "session" => session, "after" => 0, "ms" => longest}
+      say(fake, row, ask(turn, "ask-longest", "program", wait))
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?([_], Map.values(:sys.get_state(terminal).waiters)) end,
+        10_000
+      )
+
+      Scripted.end_sessions(fake, cli.id, 0)
+      assert %{"ask" => "ask-longest", "content" => content} = accept_next!(fake, row)
+
+      assert %{"running" => false, "ended" => "exited"} =
+               content |> outside_answer(thread, "program") |> Jason.decode!()
+    end
+
+    # The harness lost while a wait runs and a later ask is queued: the
+    # end is read before anything else starts, so the queued ask never
+    # runs and is settled with the turn.
+    @tag harness: :program
+    test "a session lost while a wait runs starts no queued call before its end is read",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "wait then list")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-wait", "aqua", waiting()))
+      waiting!(ctx, turn)
+      say(fake, row, ask(turn, "ask-list", "program", %{"action" => "list"}))
+      key = TurnStorage.brain_ask_key(turn.id, "ask-list")
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?(%{dispatch_state: "proposed"}, step_by_key(ctx, turn, key)) end,
+        10_000
+      )
+
+      :ok = forgotten!(ctx, thread, row)
+      assert {:failed, _line} = Task.await(loop, 30_000)
+      assert %{dispatch_state: "closed", outcome: outcome} = step_by_key(ctx, turn, key)
+      assert outcome != "ok"
+    end
+  end
+
+  # A page's `aqua.wait` proposed into the running turn and run, as
+  # `Aqua.PageCalls` proposes one: its step once it closed.
+  defp page_wait!(ctx, turn, request) do
+    {:ok, live} = Tape.turn(ctx, turn.id)
+
+    payload =
+      Aqua.PageCalls.row(%{
+        request: request,
+        name: "aqua.wait",
+        arguments: %{"until" => waiting()["until"]},
+        user_id: ctx.user_id,
+        put_turn_id: turn.id
+      })
+
+    {:ok, %{idempotency_key: key}} =
+      Tape.propose_call(ctx, live, Aqua.PageCalls.proposal(live, payload))
+
+    send(Aqua.Loop.holder(turn.id), {:moved, turn.id})
+    closed!(ctx, turn, key)
   end
 
   # One table over both harnesses (`Aqua.Harness`): each row runs once on a
@@ -6067,9 +6263,10 @@ defmodule Aqua.ProgramTest do
       say(fake, row, ask(turn, "ask-1", "aqua", waiting()))
       waiting!(ctx, turn)
       _steer = steer!(ctx, thread, turn, "stop waiting")
-      # The wait's answer first, then the post, each taken in turn.
+      # The post first, handed over at once while the wait is open, then
+      # the wait's early answer, with which the program reads it (P9).
+      assert %{"t" => "post"} = steered = accept_next!(fake, row)
       assert %{"t" => "answer", "ask" => "ask-1"} = accept_next!(fake, row)
-      steered = accept_next!(fake, row)
       say(fake, row, said(turn, "msg_1", "Read it."))
       say(fake, row, usage(turn, "result-1"))
       say(fake, row, usage(turn, "result-2"))
@@ -9160,8 +9357,8 @@ defmodule Aqua.ProgramTest do
   defp delivered(:early),
     do: [
       {"post", "ok", "text", "wait for it"},
-      {"answer", "ok", "tool_result", @early_answer},
-      {"post", "ok", "text", "stop waiting"}
+      {"post", "ok", "text", "stop waiting"},
+      {"answer", "ok", "tool_result", @early_answer}
     ]
 
   defp delivered(:stop), do: [{"post", "ok", "text", "work on it"}]
@@ -9235,18 +9432,18 @@ defmodule Aqua.ProgramTest do
   end
 
   # An `aqua.wait`'s handler sits in its wait, past the gate's admission.
-  defp handler_waiting! do
-    Prima.Test.Wait.wait_until(
-      fn ->
-        Enum.any?(
-          Process.list(),
-          &match?(
-            {:current_function, {Compendium.Providers.Aqua, :wait_until, 1}},
-            Process.info(&1, :current_function)
-          )
-        )
-      end,
-      10_000
+  defp handler_waiting!, do: Prima.Test.Wait.wait_until(&handler_waits?/0, 10_000)
+
+  # An `aqua.wait` handler holds in its wait, past the gate's admission
+  # and its own checks.
+  defp handler_waits?, do: wait_handler() != nil
+
+  defp wait_handler do
+    Enum.find(
+      Process.list(),
+      &(Process.info(&1, :current_function) ==
+          {:current_function, {Compendium.Providers.Aqua, :handle, 2}} and
+          Process.info(&1, :status) == {:status, :waiting})
     )
   end
 

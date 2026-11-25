@@ -66,9 +66,14 @@ defmodule Sanctum.Dispatch do
   read from the operation's one definition) waits as long as it takes: its
   handler has no timeout and its charge no window, so the row has no
   `holder_deadline` and is reclaimed when its attempt ends
-  (`Arca.BudgetReservations.sweep/1`). It is decided, admitted and
-  charged as every call is; it ends at its answer, a cancel, or its
-  caller's end, and a caller that stops it gives its row back.
+  (`Arca.BudgetReservations.sweep/1`), at its holder's death
+  (`Sanctum.Authority.BudgetGuard`), or at its own end. It is decided,
+  admitted and charged as every call is; it ends at its answer, a cancel,
+  its caller's end, or a wake (`Sanctum.RunningTasks.wake/1`), which
+  answers it early (`Sanctum.RunningTasks.woken_answer/0`) once its
+  handler, past every check of its own, says it waits
+  (`Sanctum.RunningTasks.waiting/0`): the gate and the handler decide a
+  wait before anything answers it.
 
   ## A handler that does not answer
 
@@ -332,7 +337,7 @@ defmodule Sanctum.Dispatch do
   defp release_row(%Context{athanor_id: athanor_id} = ctx, authority, opts)
        when is_binary(athanor_id) do
     case Keyword.get(opts, :charge) do
-      %{id: id} -> Sanctum.Authority.release_charge(Context.actor(ctx), authority, id)
+      %{id: id} -> Arca.BudgetReservations.release(Context.actor(ctx), authority.budget.id, id)
       _ -> :ok
     end
   end
@@ -800,7 +805,8 @@ defmodule Sanctum.Dispatch do
          :ok <- authorize_declared_action(name, ctx, args, true),
          {:ok, cast} <- validate_chain_arguments(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, cast),
-         {:ok, resource} <- authority_step(authority, guest_fn, target) do
+         {:ok, resource} <-
+           authority_step(authority, guest_fn, target, hold(ctx, authority, opts)) do
       warn_on_description_drift(ctx, authority, resource)
 
       # The server row the transition was judged on is the one dispatch
@@ -834,10 +840,10 @@ defmodule Sanctum.Dispatch do
     end
   end
 
-  defp authority_step(authority, guest_fn, target) do
+  defp authority_step(authority, guest_fn, target, hold) do
     # Taken guarded: the slot's holder, this process, is watched from the
     # instant it holds it, so a stop inside the charge leaves no slot.
-    case Sanctum.Authority.step(authority, guest_fn, target, :guarded) do
+    case Sanctum.Authority.step(authority, guest_fn, target, hold) do
       {:allow_tool, resource} ->
         {:ok, resource}
 
@@ -851,13 +857,27 @@ defmodule Sanctum.Dispatch do
     end
   end
 
+  # How a slot is guarded: a call that waits names its charge's row, which
+  # its holder's death gives back with the slot, since it has no effect
+  # left to finish and no window to pass (`Sanctum.Authority.BudgetGuard`).
+  # Any other call's row stands until its window passes.
+  defp hold(%Context{athanor_id: athanor_id} = ctx, authority, opts)
+       when is_binary(athanor_id) do
+    case {Keyword.get(opts, :waits, false), Keyword.get(opts, :charge)} do
+      {true, %{id: id}} -> {:guarded, {Context.actor(ctx), authority.budget.id, id}}
+      _ -> :guarded
+    end
+  end
+
+  defp hold(_ctx, _authority, _opts), do: :guarded
+
   # A spawn-shaped transition charged the invoke budget; this process
   # holds the slot, guarded from the instant it took it
-  # (`authority_step/3`), and a kill would skip the `after` — the guard
+  # (`authority_step/4`), and a kill would skip the `after` — the guard
   # releases on :DOWN. With a charge identity the hold is a row too,
   # reclaimable past the dispatcher's own timeout; a waiting call's row
-  # has none, and the caller that stops it gives the row back
-  # (`Aqua.Loop`), or its attempt's end does.
+  # has none, and is given back at its end, at its holder's death
+  # (`hold/3`), or at its attempt's end.
   defp charged(name, ctx, args, authority, guest_fn, opts) do
     # The window starts before the charge is taken, so the cell's deadline,
     # set inside the charge's transaction, is after the handler's.
@@ -1077,21 +1097,23 @@ defmodule Sanctum.Dispatch do
   end
 
   defp run_supervised({name, _action} = op, ctx, opts, timeout_ms, execute_fn) do
+    waits? = Keyword.get(opts, :waits, false)
+
     case Keyword.get(opts, :cancel_handle) do
       nil ->
-        supervise(op, ctx, nil, timeout_ms, execute_fn)
+        supervise(op, ctx, nil, {timeout_ms, waits?}, execute_fn)
 
       handle ->
         # Claimed before the task exists, so a cancel that lands first is
         # seen when the task registers, and the handler never runs.
         case Sanctum.RunningTasks.claim(handle) do
-          :ok -> supervise(op, ctx, handle, timeout_ms, execute_fn)
+          :ok -> supervise(op, ctx, handle, {timeout_ms, waits?}, execute_fn)
           :cancelled -> {:error, {:cancelled, "Tool #{name} was cancelled"}}
         end
     end
   end
 
-  defp supervise({name, _action} = op, ctx, handle, timeout_ms, execute_fn) do
+  defp supervise({name, _action} = op, ctx, handle, {timeout_ms, waits?}, execute_fn) do
     # Registered under the request id `do_call/4` guarantees, which is
     # also the request's progress topic (`Cyfr.Bus.progress/2`) — one
     # identity per request across both subsystems. The transport cancels
@@ -1105,10 +1127,12 @@ defmodule Sanctum.Dispatch do
     claim = Sanctum.RunningTasks.claim_request(request_id)
 
     logger_metadata = Prima.LoggerContext.capture()
+    claimer = self()
 
     task =
       Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
         Prima.LoggerContext.restore(logger_metadata)
+        if waits?, do: Sanctum.RunningTasks.wakeable(claimer)
 
         # A refused registration exits with a reason of its own: the
         # handler never ran, so the call is cancelled whatever its action.
@@ -1118,8 +1142,16 @@ defmodule Sanctum.Dispatch do
         end
       end)
 
+    awaited =
+      if waits?,
+        do: await_waiting(task, false, false),
+        else: Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+
     result =
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      case awaited do
+        :woken ->
+          {:ok, Sanctum.RunningTasks.woken_answer()}
+
         {:ok, outcome} ->
           answer(op, outcome)
 
@@ -1145,6 +1177,35 @@ defmodule Sanctum.Dispatch do
     Sanctum.RunningTasks.unregister(request_id, claim)
     if handle, do: Sanctum.RunningTasks.release_handle(handle)
     result
+  end
+
+  # A call that waits, awaited as long as it takes, and answered early
+  # once both a wake (`Sanctum.RunningTasks.wake/1`) and its handler's word
+  # that it waits (`Sanctum.RunningTasks.waiting/0`) have come, in either
+  # order: a handler refused by a check of its own answers its refusal
+  # whatever woke it. A handler that answered meanwhile keeps its answer.
+  defp await_waiting(task, true = _woken?, true = _waiting?) do
+    case Task.shutdown(task, :brutal_kill) do
+      nil -> :woken
+      answered_or_exited -> answered_or_exited
+    end
+  end
+
+  defp await_waiting(%Task{ref: ref, pid: pid} = task, woken?, waiting?) do
+    receive do
+      {^ref, outcome} ->
+        Process.demonitor(ref, [:flush])
+        {:ok, outcome}
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        {:exit, reason}
+
+      {Sanctum.RunningTasks, :wake} ->
+        await_waiting(task, true, waiting?)
+
+      {Sanctum.RunningTasks, :waiting, ^pid} ->
+        await_waiting(task, woken?, true)
+    end
   end
 
   # A handler that ended without answering once it may have run. An effect

@@ -360,7 +360,7 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.Annotations Sanctum.Authority Sanctum.Catalog Sanctum.Consent Sanctum.Context
+        Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Provisioning Sanctum.Proxy
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.SharedThreads Sanctum.Tenancy
         Sanctum.VirtualTools
@@ -379,10 +379,7 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Gate` is the gate a turn's tool calls pass. `Sanctum.Catalog` is the " <>
           "table's tool definitions, kinds and actions the assistant reads, and " <>
           "`Sanctum.Annotations` an action's declared kind and recovery. " <>
-          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, " <>
-          "`Sanctum.Authority` gives back the charge of a call that waits the turn's " <>
-          "loop stopped, which the stopped worker's own release skipped " <>
-          "(`release_charge/3`), and " <>
+          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
           "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
           "`Sanctum.SharedThreads` is the one place the person's own assistant meets a " <>
@@ -1884,16 +1881,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ApiKey" => [admit_tool: 2, looks_like_key?: 1, permissions: 0, presets: 0],
     "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth.OIDC" => [issuer: 0],
-    # `release_charge/3`: a turn's loop gives back the charge of a call
-    # that waits it stopped, whose worker's own release the stop skipped
-    # (`Aqua.Loop`).
-    "Sanctum.Authority" => [
-      guard_invoke: 1,
-      release_charge: 3,
-      release_invoke: 1,
-      step: 3,
-      take_over_invoke: 2
-    ],
+    "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
     # `stands?/1`: a program's terminal session belongs to a person, not
@@ -1915,8 +1903,8 @@ defmodule Cyfr.Boundaries do
     # could have had. `follows_setting?/2`: the actions that follow the
     # person's browser setting are offered as it says (`Aqua.Offered`), and
     # the Aqua page leaves them out of the capability list. `waits?/2`: a
-    # turn's loop answers a running call that waits early when a post
-    # arrives (`Aqua.Loop`), read from the operation's one definition.
+    # turn's loop wakes a running call that waits when a post arrives
+    # (`Aqua.Loop`), read from the operation's one definition.
     "Sanctum.Catalog" => [
       action_declaration: 1,
       authorize_stream: 2,
@@ -2083,7 +2071,17 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
-    "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
+    # `wake/1`: a turn's loop wakes a call that waits when a post arrives,
+    # which the gate then answers early (`Aqua.Loop`); `waiting/0`: the handler of such a call says
+    # it waits, past its own checks (`Compendium.Providers.Aqua`,
+    # `Opus.Programs`), so the early answer never comes before them.
+    "Sanctum.RunningTasks" => [
+      cancel: 1,
+      cancel_handle: 1,
+      release_handle: 1,
+      wake: 1,
+      waiting: 0
+    ],
     # A catalyst's ask is decided and waited on for the host's side of the
     # call (`Opus.Host.Question`), and a run's end announces the questions
     # it closed (`Opus.Record`); a person's open questions are attention's

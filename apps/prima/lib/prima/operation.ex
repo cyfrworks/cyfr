@@ -60,12 +60,14 @@ defmodule Prima.Operation do
   run's end or a time, as long as that takes. The gate gives it no
   handler timeout and no holder window, so its charge has no
   `holder_deadline` and its attempt's end reclaims it
-  (`Sanctum.Dispatch`), and a turn's loop answers it early when a post
-  arrives (`Aqua.Loop`). Everything else that bounds a call bounds it
+  (`Sanctum.Dispatch`), and a turn's loop wakes it when a post arrives
+  (`Aqua.Loop`), which the gate answers early once its handler waits. Everything else that bounds a call bounds it
   too: authorization, the grant, the charge and the attempt's end. Only a
   replay-safe read may wait, since the early answer cancels it and a
   restart dispatches it again. It is metadata for the gate and the loop,
-  absent from the annotation view and from discovery.
+  absent from the annotation view and from discovery. A wait is asked for
+  at most `longest_wait_ms/0`, the largest time a timer holds; a longer
+  one is refused at its arguments in `wait_too_long/1`'s sentence.
   """
 
   alias Prima.Arg
@@ -120,6 +122,23 @@ defmodule Prima.Operation do
 
   @valid_planes [:external, :in_chain]
   @resource_kinds [:storage_path, :egress_domain, :program_row]
+
+  # The largest time an Erlang timer holds, in milliseconds.
+  @longest_wait_ms 4_294_967_295
+
+  @doc "The longest a call that waits may be asked to wait, in milliseconds."
+  @spec longest_wait_ms() :: pos_integer()
+  def longest_wait_ms, do: @longest_wait_ms
+
+  @doc """
+  The sentence a wait longer than `longest_wait_ms/0` is refused with,
+  naming the argument `field` that asked for it.
+  """
+  @spec wait_too_long(String.t()) :: String.t()
+  def wait_too_long(field) when is_binary(field),
+    do:
+      "#{field} is further off than a wait holds, #{@longest_wait_ms} ms (about 49 days); " <>
+        "make a schedule to be woken later instead"
 
   @doc "The kinds of resource a `resource:` declaration may name."
   @spec resource_kinds() :: [resource_kind()]

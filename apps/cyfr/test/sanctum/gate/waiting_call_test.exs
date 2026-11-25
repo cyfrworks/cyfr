@@ -10,7 +10,9 @@ defmodule Sanctum.Gate.WaitingCallTest do
   call without the flag keeps both: its charge has a deadline, and past
   its window it answers that its outcome is unknown. Both are charged,
   admitted and released alike. A short window (`:holder_window_ms`)
-  stands in for the five minutes.
+  stands in for the five minutes. A wake answers a waiting call early,
+  only once its handler, past its own checks, says it waits; a waiting
+  holder that dies gives its charge back with its slot.
   """
 
   use ExUnit.Case, async: false
@@ -47,6 +49,12 @@ defmodule Sanctum.Gate.WaitingCallTest do
             recovery: :replay_safe,
             waits: true
           ),
+          Operation.new("waiting_probe", "check", "Wait once a check passes", [],
+            kind: :read,
+            planes: [:in_chain],
+            recovery: :replay_safe,
+            waits: true
+          ),
           Operation.new("waiting_probe", "work", "Work until told", [],
             kind: :write,
             planes: [:in_chain]
@@ -55,9 +63,34 @@ defmodule Sanctum.Gate.WaitingCallTest do
       ]
     end
 
+    # `check` holds before a check of its own until told whether it
+    # passes, as a wait's handler checks whose turn it is; `hold` and
+    # `work` hold at once, `hold` saying it waits.
     @impl true
+    def handle("waiting_probe", _ctx, %{"action" => "check"}) do
+      send(:waiting_probe_observer, {:holding, "check", self()})
+
+      receive do
+        :refuse -> {:error, :wait_not_a_turn}
+        :pass -> held("check")
+      end
+    end
+
+    def handle("waiting_probe", _ctx, %{"action" => "hold"}) do
+      send(:waiting_probe_observer, {:holding, "hold", self()})
+      held("hold")
+    end
+
     def handle("waiting_probe", _ctx, %{"action" => action}) do
       send(:waiting_probe_observer, {:holding, action, self()})
+
+      receive do
+        :answer -> {:ok, %{"answered" => action}}
+      end
+    end
+
+    defp held(action) do
+      :ok = Sanctum.RunningTasks.waiting()
 
       receive do
         :answer -> {:ok, %{"answered" => action}}
@@ -85,7 +118,12 @@ defmodule Sanctum.Gate.WaitingCallTest do
           },
           "edges" => %{
             "@ingress" => %{
-              "tools" => ["aqua.wait", "waiting_probe.hold", "waiting_probe.work"]
+              "tools" => [
+                "aqua.wait",
+                "waiting_probe.check",
+                "waiting_probe.hold",
+                "waiting_probe.work"
+              ]
             }
           }
         }
@@ -214,6 +252,63 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
     Prima.Test.Wait.wait_until(
       fn -> Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 0 end,
+      5_000
+    )
+  end
+
+  test "a wake before its handler's own check answers nothing early: its refusal stands",
+       %{auth: auth} = setup do
+    task = call(setup, "check")
+    assert_receive {:holding, "check", handler}, 10_000
+    :ok = Sanctum.RunningTasks.wake(task.pid)
+    send(handler, :refuse)
+
+    assert {:error, reason} = Task.await(task, 10_000)
+    assert %Prima.Refusal{class: :forbidden} = Sanctum.Refusals.classify(reason)
+    assert {:ok, []} = Arca.BudgetReservations.charges(actor(), auth.budget.id)
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
+  end
+
+  test "a wake answers a waiting call early once its handler waits, in either order",
+       %{auth: auth} = setup do
+    early = Sanctum.RunningTasks.woken_answer()
+
+    # Woken first: the answer waits for the handler's word.
+    task = call(setup, "check")
+    assert_receive {:holding, "check", handler}, 10_000
+    :ok = Sanctum.RunningTasks.wake(task.pid)
+    send(handler, :pass)
+    assert {:ok, ^early} = Task.await(task, 10_000)
+    refute Process.alive?(handler)
+
+    # Waiting first: the wake answers at once.
+    task = call(setup, "hold")
+    assert_receive {:holding, "hold", handler}, 10_000
+    :ok = Sanctum.RunningTasks.wake(task.pid)
+    assert {:ok, ^early} = Task.await(task, 10_000)
+    refute Process.alive?(handler)
+
+    assert {:ok, []} = Arca.BudgetReservations.charges(actor(), auth.budget.id)
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
+  end
+
+  test "a waiting holder that dies gives its charge back with its slot, its attempt live",
+       %{auth: auth} = setup do
+    task = call(setup, "hold")
+    assert_receive {:holding, "hold", handler}, 10_000
+
+    assert {:ok, [%{holder_deadline: nil}]} =
+             Arca.BudgetReservations.charges(actor(), auth.budget.id)
+
+    ref = Process.monitor(handler)
+    Task.shutdown(task, :brutal_kill)
+    assert_receive {:DOWN, ^ref, :process, ^handler, _stopped}, 5_000
+
+    Prima.Test.Wait.wait_until(
+      fn ->
+        Arca.BudgetReservations.charges(actor(), auth.budget.id) == {:ok, []} and
+          Sanctum.TestContext.invoke_budget(auth).in_flight == 0
+      end,
       5_000
     )
   end
