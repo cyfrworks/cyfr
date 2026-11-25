@@ -22,6 +22,12 @@ import (
 // the host's for a spawn's relay, or a spawn relay's for the host's.
 var pairWait = 30 * time.Second
 
+// maxUnmatched bounds the attach connections, the host's and the keeper's
+// relays' together, that the relay holds before each is joined to its
+// other half: one more is refused at once, so a peer that keeps connecting
+// holds at most this many descriptors, goroutines and timers.
+const maxUnmatched = 64
+
 // relayMain is the guest keeper's one role, in the role's own space, on
 // its channel at file descriptor 3. It makes no vsock socket, which the
 // keeper's policy refuses every process under the keeper: the guest's first
@@ -237,21 +243,44 @@ type half struct {
 }
 
 // pairs holds each attach connection until its other half arrives, by the
-// token both present.
+// token both present, and counts the connections admitted and not yet
+// joined, closed or timed out.
 type pairs struct {
-	mu      sync.Mutex
-	waiting map[string]*half
+	mu        sync.Mutex
+	waiting   map[string]*half
+	unmatched int
 }
 
-// offer joins conn with the waiting half of token from the other side, or
-// waits pairWait for it. A second half from the same side ends both: a
-// token is one spawn's.
+// admit counts one more connection not yet matched, or refuses it when
+// maxUnmatched are held already.
+func (p *pairs) admit() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.unmatched >= maxUnmatched {
+		return false
+	}
+	p.unmatched++
+	return true
+}
+
+// leave counts out an admitted connection that will never be offered.
+func (p *pairs) leave() {
+	p.mu.Lock()
+	p.unmatched--
+	p.mu.Unlock()
+}
+
+// offer joins conn, an admitted connection, with the waiting half of token
+// from the other side, or waits pairWait for it. A second half from the
+// same side ends both: a token is one spawn's. Either way both leave the
+// count of the unmatched.
 func (p *pairs) offer(token string, conn io.ReadWriteCloser, host bool) {
 	p.mu.Lock()
 	other, ok := p.waiting[token]
 	if ok {
 		delete(p.waiting, token)
 		other.timer.Stop()
+		p.unmatched -= 2
 	}
 	if !ok {
 		h := &half{conn: conn, host: host}
@@ -259,6 +288,7 @@ func (p *pairs) offer(token string, conn io.ReadWriteCloser, host bool) {
 			p.mu.Lock()
 			if p.waiting[token] == h {
 				delete(p.waiting, token)
+				p.unmatched--
 			}
 			p.mu.Unlock()
 			_ = conn.Close()
@@ -293,7 +323,8 @@ func token(conn io.ReadWriteCloser, deadline func(time.Time) error) (string, err
 	return string(payload), nil
 }
 
-// acceptAttach takes the keeper's relays on the attach socket.
+// acceptAttach takes the keeper's relays on the attach socket, each
+// admitted as one of the unmatched or closed at once.
 func acceptAttach(l net.Listener, p *pairs) {
 	for {
 		conn, err := l.Accept()
@@ -301,11 +332,16 @@ func acceptAttach(l net.Listener, p *pairs) {
 			logf("relay: the attach socket: %v", err)
 			return
 		}
+		if !p.admit() {
+			_ = conn.Close()
+			continue
+		}
 		go func() {
 			uc := conn.(*net.UnixConn)
 			t, err := token(uc, uc.SetReadDeadline)
 			if err != nil {
 				_ = conn.Close()
+				p.leave()
 				return
 			}
 			p.offer(t, uc, false)
@@ -313,13 +349,18 @@ func acceptAttach(l net.Listener, p *pairs) {
 	}
 }
 
-// acceptHostAttach takes the host's attach connections on AttachPort.
+// acceptHostAttach takes the host's attach connections on AttachPort, each
+// admitted as one of the unmatched or closed at once.
 func acceptHostAttach(fd int, p *pairs) {
 	for {
 		conn, err := acceptHost(fd)
 		if err != nil {
 			logf("relay: the host's attach port: %v", err)
 			return
+		}
+		if !p.admit() {
+			_ = conn.Close()
+			continue
 		}
 		go func() {
 			tv := unix.NsecToTimeval(pairWait.Nanoseconds())
@@ -328,6 +369,7 @@ func acceptHostAttach(fd int, p *pairs) {
 			_ = unix.SetsockoptTimeval(conn.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{})
 			if err != nil {
 				_ = conn.Close()
+				p.leave()
 				return
 			}
 			p.offer(t, conn, true)

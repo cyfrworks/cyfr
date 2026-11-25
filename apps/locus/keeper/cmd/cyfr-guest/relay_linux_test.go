@@ -143,3 +143,46 @@ func TestTokenRefusesAnotherFirstFrame(t *testing.T) {
 		}
 	}
 }
+
+// The attach socket admits maxUnmatched connections not yet matched and
+// refuses one more at once, while those it holds stay open: a stand-in
+// that keeps connecting, and never presents a token.
+func TestAttachRefusesAConnectionPastTheUnmatchedBound(t *testing.T) {
+	path := t.TempDir() + "/attach.sock"
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	p := &pairs{waiting: map[string]*half{}}
+	go acceptAttach(l, p)
+	dial := func() *net.UnixConn {
+		c, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c.(*net.UnixConn)
+	}
+	held := make([]*net.UnixConn, 0, maxUnmatched)
+	for i := 0; i < maxUnmatched; i++ {
+		held = append(held, dial())
+	}
+	one := dial()
+	_ = one.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := one.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("connection %d past the bound of %d was not refused at once: %v", maxUnmatched+1, maxUnmatched, err)
+	}
+	for _, c := range held[:1] {
+		_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		if _, err := c.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("a connection within the bound did not stay open: %v", err)
+		}
+	}
+	p.mu.Lock()
+	counted := p.unmatched
+	p.mu.Unlock()
+	if counted != maxUnmatched {
+		t.Fatalf("%d connections are counted unmatched, not %d", counted, maxUnmatched)
+	}
+}
