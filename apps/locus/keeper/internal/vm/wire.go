@@ -14,14 +14,17 @@
 // connection to its Unix socket, after "CONNECT <port>\n", into one to that
 // port in the guest, and the guest agent answers only a peer whose CID is
 // the host's. Nothing on the host listens for the guest, so no process in
-// the guest, a session's included, has a way to the host but the two
+// the guest, a session's included, has a way to the host but the
 // connections the host opens:
 //
-//   - ControlPort, once for the guest's life: the agent's Hello line, then
-//     the keeper protocol (package protocol) between the host and the
-//     guest's keeper, line for line. Its end, from either side, ends the
-//     guest: the agent exits, the guest's keeper loses its client and ends
-//     every space, and the guest's init powers the machine off.
+//   - ControlPort, once for each start of the guest keeper's role: the
+//     agent's Hello line, then the keeper protocol (package protocol)
+//     between the host and the guest's keeper, line for line. Its end, from
+//     either side, ends the relay, and the guest's keeper retires every
+//     space the role held and starts the role again, as it does any role.
+//   - EndPort, once: the guest's first process answers it alone, stops the
+//     guest's keeper, which ends its role and every space, and resets the
+//     machine, on which its VMM ends.
 //   - AttachPort, once for each spawn: the host's first frame is the
 //     spawn's attach token (frame.StreamAttach), the agent pairs it with
 //     the spawn's relay that presented the same token on GuestAttachPath,
@@ -42,6 +45,7 @@ import (
 const (
 	ControlPort uint32 = 1024
 	AttachPort  uint32 = 1025
+	EndPort     uint32 = 1026
 	// HostCID is the host's address on every vsock device.
 	HostCID uint32 = 2
 	// GuestCID is the guest's address on its machine's vsock device.

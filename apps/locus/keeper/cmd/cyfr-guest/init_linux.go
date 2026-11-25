@@ -31,6 +31,10 @@ const keeperGroup = "/sys/fs/cgroup/locus"
 // take, so no space's growth ends the agent, whose end is the machine's.
 const guestReserve = 64 << 20
 
+// keeperStop bounds the keeper's own end, every role and space retired,
+// once the host ends the machine; past it the keeper's group is killed.
+const keeperStop = 5 * time.Second
+
 // guardWait bounds the guest's guard's start to its ready file: every rule
 // in, before the keeper proves it.
 const guardWait = 10 * time.Second
@@ -84,6 +88,23 @@ func initMain() int {
 	}
 	_ = group.Close()
 	keeper := cmd.Process.Pid
+	end, err := listenVsock(vm.EndPort)
+	if err != nil {
+		logf("refusing to start: the end's port: %v", err)
+		return 1
+	}
+	go func() {
+		conn, err := acceptHost(end)
+		if err != nil {
+			logf("the end's port: %v", err)
+			return
+		}
+		_ = conn.Close()
+		logf("the host ends the machine: its keeper stops")
+		_ = unix.Kill(keeper, unix.SIGTERM)
+		time.Sleep(keeperStop) // a bound on the keeper's own end, not a wait for an event
+		_ = os.WriteFile(filepath.Join(keeperGroup, "cgroup.kill"), []byte("1"), 0o644)
+	}()
 	for {
 		var ws unix.WaitStatus
 		pid, err := unix.Wait4(-1, &ws, 0, nil)

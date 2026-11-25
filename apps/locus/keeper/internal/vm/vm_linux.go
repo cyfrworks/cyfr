@@ -290,6 +290,16 @@ func (m *Machine) dialOnce(port uint32, deadline time.Time) (net.Conn, error) {
 	return conn, nil
 }
 
+// End asks the guest's first process to end the machine: its keeper stops,
+// ending every role and space, and the guest resets. It reports whether
+// the VMM ended by itself within d, and kills it otherwise.
+func (m *Machine) End(d time.Duration) bool {
+	if conn, err := m.Dial(EndPort, d); err == nil {
+		_ = conn.Close()
+	}
+	return m.Wait(d)
+}
+
 // Control is the host's control connection to the guest: the agent's
 // Hello, then the guest keeper's channel.
 type Control struct {

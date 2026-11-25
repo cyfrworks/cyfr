@@ -47,12 +47,17 @@ const (
 	stepWait = 60 * time.Second
 )
 
+// keeperEnd is the guest keeper's own bound on its end, cyfr-guest's
+// keeperStop, which the machine's end waits past.
+const keeperEnd = 5 * time.Second
+
 // defaultCommand is the check's space's command when none is given: it
 // shows the space's uid, its boot, its IPv4 and IPv6 routes, which must be
 // none, and its root, which must be the image's programs bound from the
 // guest's read-only root.
 var defaultCommand = []string{"/bin/sh", "-c", "id -u; cat /proc/sys/kernel/random/boot_id; " +
-	"echo routes $(($(wc -l < /proc/net/route) - 1)) $(wc -l < /proc/net/ipv6_route); cat /proc/self/mountinfo"}
+	"echo routes $(awk 'NR > 1 && $1 != \"lo\"' /proc/net/route | wc -l) $(awk '$10 != \"lo\"' /proc/net/ipv6_route | wc -l); " +
+	"cat /proc/self/mountinfo"}
 
 // Report is what the check found, one JSON object on standard output.
 type Report struct {
@@ -73,8 +78,8 @@ type Report struct {
 	Stderr string          `json:"stderr"`
 	// Released is that the guest keeper released the space.
 	Released bool `json:"released"`
-	// EndedByItself is that the VMM ended within EndWait of the control
-	// connection's end, without being killed.
+	// EndedByItself is that the VMM ended within its bound of the end's
+	// request, without being killed.
 	EndedByItself bool  `json:"ended_by_itself"`
 	EndMs         int64 `json:"end_ms"`
 	// GroupProcs are the processes left in the VMM's group after its end.
@@ -190,11 +195,11 @@ func check(argv []string, report *Report) error {
 	report.HeldBytes = groupNumber(group, "memory.current")
 	report.PeakBytes = groupNumber(group, "memory.peak")
 
-	// The control connection's end is the guest's: its keeper ends every
-	// space and the guest resets.
-	closed := time.Now()
+	// The machine's end: the guest's first process stops its keeper, which
+	// ends the role and every space, and resets the guest.
 	_ = c.Close()
-	report.EndedByItself = m.Wait(EndWait)
+	closed := time.Now()
+	report.EndedByItself = m.End(EndWait + keeperEnd)
 	ended = true
 	report.EndMs = time.Since(closed).Milliseconds()
 	report.CPUUsec = cpuUsec(group)
