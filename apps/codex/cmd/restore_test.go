@@ -670,43 +670,70 @@ func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 // lacks one, as a restore of a snapshot taken before the release shipped it
 // leaves the project, is restored from a snapshot that holds it, where
 // compose would refuse the live read's container of the cyfr service, which
-// names it. A refusal after that leaves the profile as the project held it.
+// names it. A refusal after that leaves the profile as the project held it:
+// absent where it was absent, and where the project had one the snapshot
+// does not hold, the project's, with its permissions.
 func TestARestorePutsTheSnapshotsProfilesInPlaceWithItsComposeFile(t *testing.T) {
 	const profile = `{"defaultAction":"SCMP_ACT_ERRNO","container":"0.8.0"}` + "\n"
-	for name, refused := range map[string]bool{"restored": false, "refused by a live member": true} {
+	const kept = `{"defaultAction":"SCMP_ACT_ERRNO","container":"the project's"}` + "\n"
+	for name, c := range map[string]struct{ refused, snapshotHolds, projectHas bool }{
+		"restored":                 {false, true, false},
+		"refused by a live member": {true, true, false},
+		"a snapshot without it, refused, the project's kept":                 {true, false, true},
+		"a snapshot with another, refused, the project's kept with its mode": {true, true, true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRestoreScenario(t, shippedCompose(t), nil, nil)
-			if err := os.WriteFile(filepath.Join(r.dir, "scaffold", "container.seccomp.json"), []byte(profile), 0600); err != nil {
+			own := filepath.Join(r.project, "container.seccomp.json")
+			if c.snapshotHolds {
+				if err := os.WriteFile(filepath.Join(r.dir, "scaffold", "container.seccomp.json"), []byte(profile), 0600); err != nil {
+					t.Fatal(err)
+				}
+				manifest := filepath.Join(r.dir, "snapshot.json")
+				var m snapshotManifest
+				if err := json.Unmarshal([]byte(read(t, manifest)), &m); err != nil {
+					t.Fatal(err)
+				}
+				m.Scaffold = append(m.Scaffold, "container.seccomp.json")
+				data, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manifest, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Remove(own); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				t.Fatal(err)
 			}
-			manifest := filepath.Join(r.dir, "snapshot.json")
-			var m snapshotManifest
-			if err := json.Unmarshal([]byte(read(t, manifest)), &m); err != nil {
-				t.Fatal(err)
-			}
-			m.Scaffold = append(m.Scaffold, "container.seccomp.json")
-			data, err := json.Marshal(m)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(manifest, data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Remove(filepath.Join(r.project, "container.seccomp.json")); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				t.Fatal(err)
+			if c.projectHas {
+				if err := os.WriteFile(own, []byte(kept), 0640); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(own, 0640); err != nil {
+					t.Fatal(err)
+				}
 			}
 			r.answer("compose.profiles", "")
-			if refused {
+			if c.refused {
 				r.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@other-host","owner":"o2","release":"0.8.0","lease_until":"2026-10-16T12:00:12Z"}]}`+"\n")
 			}
 			out, err := r.restore(false)
-			got := read(t, filepath.Join(r.project, "container.seccomp.json"))
-			if refused {
-				if err == nil || !strings.Contains(err.Error(), "cyfr@other-host") {
+			got := read(t, own)
+			if c.refused {
+				if err == nil || !strings.Contains(err.Error(), "cyfr@other-host") || !strings.Contains(err.Error(), "the seccomp profiles are as they were") {
 					t.Fatalf("restore answered %v\n%s", err, out)
 				}
-				if got != "<absent>" {
+				if !c.projectHas && got != "<absent>" {
 					t.Errorf("the refused restore left container.seccomp.json holding %q, which the project did not hold", got)
+				}
+				if c.projectHas {
+					if got != kept {
+						t.Errorf("the refused restore left container.seccomp.json holding %q, not the project's %q", got, kept)
+					}
+					if info, err := os.Stat(own); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0640 {
+						t.Errorf("the refused restore left container.seccomp.json as %v (%v), not 0640", info.Mode(), err)
+					}
 				}
 				return
 			}

@@ -379,9 +379,11 @@ type restorer struct {
 	updater
 	snap  *snapshotFiles
 	start bool
-	// held are docker-compose.yml's and .env's bytes before the restore put
-	// the snapshot's back, nil for a file that was absent.
-	held map[string][]byte
+	// held are the bytes of each of restoreFiles before the restore put the
+	// snapshot's back, nil for a file that was absent, and heldMode the
+	// permissions of each that was there.
+	held     map[string][]byte
+	heldMode map[string]os.FileMode
 	// sqliteLive reports whether the restored configuration's SQLite file
 	// exists, so a member may hold a slot in it.
 	sqliteLive bool
@@ -456,7 +458,7 @@ func (r *restorer) run() error {
 	// Putting the parts back and declaring the restore run to their end, so
 	// the cell is never left half-restored by an interrupt.
 	if err := r.putParts(); err != nil {
-		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml and .env are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir)
+		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml, .env and the seccomp profiles are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir)
 	}
 	if err := r.declare(); err != nil {
 		return fmt.Errorf("Every part of the snapshot is back, but the restore could not be declared: %v.\nThe stack is left stopped and barred from starting undeclared (%s in .env). Fix the cause and run 'cyfr restore %s' again, or declare it by hand with:\n  docker compose run --rm --no-deps -T -e %s= cyfr bin/cyfr eval '%s'\nthen take the %s line out of .env", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir, restoreBarrier, markRestoreExpr, restoreBarrier)
@@ -542,8 +544,8 @@ func (r *restorer) sayUnselected() {
 	}
 }
 
-// refuseStopped puts docker-compose.yml and .env back as they were and
-// refuses with reason, the stack left stopped.
+// refuseStopped puts docker-compose.yml, .env and the seccomp profiles back
+// as they were and refuses with reason, the stack left stopped.
 func (r *restorer) refuseStopped(reason error) error {
 	for i := len(r.made) - 1; i >= 0; i-- {
 		// Each is empty, made by this restore since the stop: a directory
@@ -552,25 +554,29 @@ func (r *restorer) refuseStopped(reason error) error {
 	}
 	message := fmt.Sprintf("%v.\nThe stack is left stopped and nothing of the snapshot was put back", r.redactor().Text(reason.Error()))
 	if err := r.putBackHeld(); err != nil {
-		return fmt.Errorf("%s; docker-compose.yml and .env could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
+		return fmt.Errorf("%s; docker-compose.yml, .env and the seccomp profiles could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
 	}
-	return fmt.Errorf("%s; docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'", message)
+	return fmt.Errorf("%s; docker-compose.yml, .env and the seccomp profiles are as they were. Start the stack again with 'cyfr up'", message)
 }
 
 // holdConfigFiles reads the project's docker-compose.yml, .env and seccomp
 // profiles, for a refusal to put back.
 func (r *restorer) holdConfigFiles() error {
 	r.barredBy, _ = restoreBarred(".env")
-	r.held = map[string][]byte{}
+	r.held, r.heldMode = map[string][]byte{}, map[string]os.FileMode{}
 	for _, f := range restoreFiles {
 		data, err := os.ReadFile(f)
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(f)
+		}
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			r.held[f] = nil
 		case err != nil:
 			return fmt.Errorf("%s does not read (%v)", f, err)
 		default:
-			r.held[f] = data
+			r.held[f], r.heldMode[f] = data, info.Mode().Perm()
 		}
 	}
 	return nil
@@ -684,17 +690,14 @@ func (r *restorer) putConfigFiles() error {
 	return writeDurable(stagedCompose, compose, mode)
 }
 
-// publishCompose renames the staged compose file, whose configuration
+// publishCompose puts each seccomp profile the snapshot holds in place,
+// then renames the staged compose file, whose configuration
 // readRestoredConfig read with the bar reaching cyfr, over
-// docker-compose.yml, and puts each seccomp profile the snapshot holds in
-// place with it: the first container run under it (refuseLiveMembers'
+// docker-compose.yml: the first container run under it (refuseLiveMembers'
 // offline read) is of a service that names one. A profile the snapshot
 // does not hold is one its compose file does not name, and putParts
 // removes it with the other scaffold files the snapshot lacks.
 func (r *restorer) publishCompose() error {
-	if err := access.ReplaceFile(stagedCompose, "docker-compose.yml"); err != nil {
-		return err
-	}
 	for _, name := range scaffold.SeccompProfiles {
 		if !slices.Contains(r.snap.manifest.Scaffold, name) {
 			continue
@@ -709,6 +712,11 @@ func (r *restorer) publishCompose() error {
 		if err := putProjectFile(name, data, 0644); err != nil {
 			return fmt.Errorf("put %s in place: %w", name, err)
 		}
+	}
+	// The profiles first: the compose file in place never names one that
+	// is not there yet.
+	if err := access.ReplaceFile(stagedCompose, "docker-compose.yml"); err != nil {
+		return err
 	}
 	return access.SyncDir(".")
 }
@@ -740,7 +748,8 @@ func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
 	return slices.Concat(files, args), nil
 }
 
-// putBackHeld writes the held configuration files back.
+// putBackHeld writes the held configuration files back, each with the
+// permissions it had.
 func (r *restorer) putBackHeld() error {
 	var errs []error
 	for _, f := range restoreFiles {
@@ -754,11 +763,7 @@ func (r *restorer) putBackHeld() error {
 				errs = append(errs, access.SyncDir("."))
 			}
 		default:
-			mode := os.FileMode(0600)
-			if info, err := os.Stat(f); err == nil {
-				mode = info.Mode().Perm()
-			}
-			errs = append(errs, writeDurable(f, data, mode))
+			errs = append(errs, writeDurable(f, data, r.heldMode[f]))
 		}
 	}
 	if err := os.Remove(stagedCompose); err != nil && !errors.Is(err, fs.ErrNotExist) {
