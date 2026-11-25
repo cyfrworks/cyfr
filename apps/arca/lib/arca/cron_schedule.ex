@@ -147,8 +147,9 @@ defmodule Arca.CronSchedule do
   A write that touches a row's target (`reference`, `resolved_reference`
   or `input`) where the row as it stands under its lock holds a line for
   Aqua, or would after the write, is refused `:aqua_line_by_person`
-  unless `by_person: true` says the caller is the schedule's person in a
-  signed-in session of their own (`aqua_target/3`): who may write is
+  unless `by_person: true` says the caller is the schedule's person, in a
+  signed-in session of their own or a turn of theirs (`aqua_target/3`,
+  decided by `Opus.Schedules.Provider`): who may write is
   decided against the row being written, never one read before.
 
   With `definition:` (the row's `definition/1` as the caller read it), the
@@ -187,8 +188,8 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  A digest of what a schedule is defined to do: its name, time,
-  reference, profile, input and missed-run policy. What the scheduler
+  A digest of what a schedule is defined to do: its name, time (and
+  whether it fires once), reference, profile, input and missed-run policy. What the scheduler
   records of its fires (the run times and counts, the last error) and its
   status are not part of it, so a fire or a pause between
   a read and a write does not change it.
@@ -198,6 +199,7 @@ defmodule Arca.CronSchedule do
     [
       row.name,
       row.cron_expression,
+      Map.get(row, :once, false),
       row.reference,
       row.profile_id,
       row.input,
@@ -337,8 +339,9 @@ defmodule Arca.CronSchedule do
 
   @doc """
   Records a successful run with tenant-scoped lookup: its run is the last
-  one, and the last failure's reason is cleared. Every row, whatever its
-  kind, is written only under the member's live slot (`:not_owner`
+  one, and the last failure's reason is cleared. A `once` schedule's one
+  occurrence has ended, so the same write removes it. Every row, whatever
+  its kind, is written only under the member's live slot (`:not_owner`
   otherwise).
   """
   @spec record_run(Prima.Actor.t(), String.t(), String.t()) ::
@@ -354,12 +357,13 @@ defmodule Arca.CronSchedule do
 
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
-          set: [
-            last_run_at: now,
-            last_execution_id: execution_id,
-            last_error: nil,
-            updated_at: now
-          ],
+          set:
+            [
+              last_run_at: now,
+              last_execution_id: execution_id,
+              last_error: nil,
+              updated_at: now
+            ] ++ spent(schedule),
           inc: [run_count: 1]
         )
 
@@ -375,7 +379,9 @@ defmodule Arca.CronSchedule do
   names is the one `occurrence_id`'s row records, read in the same
   transaction, or none when the fire failed before a run started or had
   no occurrence (nil). A failure so never names an earlier run, and never
-  loses its run to a read of its own. Every row, whatever its kind, is
+  loses its run to a read of its own. A failure of a `once` schedule's
+  occurrence ends its one fire, so the same write removes it; one with no
+  occurrence never fired, and it stays. Every row, whatever its kind, is
   written only under the member's live slot (`:not_owner` otherwise).
   """
   @spec record_error(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
@@ -390,11 +396,12 @@ defmodule Arca.CronSchedule do
       guarded(actor, id, fn schedule ->
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
-          set: [
-            last_error: said,
-            last_execution_id: run_of(schedule, occurrence_id),
-            updated_at: DateTime.utc_now()
-          ],
+          set:
+            [
+              last_error: said,
+              last_execution_id: run_of(schedule, occurrence_id),
+              updated_at: DateTime.utc_now()
+            ] ++ if(occurrence_id, do: spent(schedule), else: []),
           inc: [error_count: 1]
         )
 
@@ -403,6 +410,11 @@ defmodule Arca.CronSchedule do
     end)
     |> Arca.Data.project()
   end
+
+  # What an ended occurrence leaves of its schedule: a `once` one, whose
+  # one fire this was, is removed.
+  defp spent(%{once: true}), do: [status: "deleted"]
+  defp spent(_schedule), do: []
 
   # The run an occurrence of this schedule records, in its athanor.
   # arca:db-raise-ok inside the caller's transaction
@@ -454,7 +466,8 @@ defmodule Arca.CronSchedule do
   schedule's status, oldest due first: what that boot's turn consumer
   (`Aqua.ScheduleTurns`) has to start or end. Each is the occurrence's
   `id`, `athanor_id`, `schedule_id`, `scheduled_for` and `claimed_by`,
-  with its schedule's `user_id`, `name`, `input` (the line) and `status`.
+  with its schedule's `user_id`, `name`, `input` (the line), `status`,
+  `maker` and `thread_id`.
 
   The claimed row is the record of the fire, written in the claim's own
   transaction (`Arca.ScheduleOccurrences.claim/3`); nothing else records
@@ -481,7 +494,9 @@ defmodule Arca.CronSchedule do
             user_id: s.user_id,
             name: s.name,
             input: s.input,
-            status: s.status
+            status: s.status,
+            maker: s.maker,
+            thread_id: s.thread_id
           }
         )
         |> Arca.Repo.all()

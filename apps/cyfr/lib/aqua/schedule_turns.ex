@@ -4,17 +4,21 @@
 defmodule Aqua.ScheduleTurns do
   @moduledoc """
   A schedule that holds a line for Aqua: each of its fires becomes a turn
-  of Aqua, as the schedule's person, in their daily thread current when it
-  fires. No thread is made for a schedule.
+  of Aqua, as the schedule's person, in the workspace thread the schedule
+  names, or else in their daily thread current when it fires. No thread
+  is made for a schedule.
 
   ## Who can make, change and fire one
 
-  Only a person's own signed-in session makes a schedule hold a line for
-  Aqua, or changes the line (`Opus.Schedules.Provider`); a key, a
-  tincture's frame and an agent's call are refused. The scheduler fires
-  it as it fires any schedule, and never calls Aqua: the occurrence its
-  claim writes is the record of the fire, and the claim wakes this
-  consumer (`Cyfr.Bus.schedule_turns/0`).
+  The schedule's person makes a schedule hold a line for Aqua, or changes
+  the line, in their own signed-in session or through a turn of theirs,
+  the soul's or a crew member's alike (`Opus.Schedules.Provider`); a key
+  and a tincture's frame are refused. One a turn made records the turn's
+  agent (`maker`) and, when the turn works under a workspace thread, that
+  thread (`thread_id`). The scheduler fires it as it fires any schedule,
+  and never calls Aqua: the occurrence its claim writes is the record of
+  the fire, and the claim wakes this consumer
+  (`Cyfr.Bus.schedule_turns/0`).
 
   ## Starting a fire's turn
 
@@ -35,10 +39,17 @@ defmodule Aqua.ScheduleTurns do
   often it is read. It is an ordinary turn of that thread, queued behind
   whatever runs there, its message the schedule's line in the server's
   voice naming the schedule by id and name, which the person's count
-  counts. The turn carries the schedule and the occurrence, and its root's
-  admission starts the occurrence (`Opus.TurnRoot`).
+  counts. A schedule a turn made opens its line with
+  "`<maker>` set this schedule: `<name>`", so the soul hands that member
+  the job again (`crew.ask`). The turn carries the schedule and the
+  occurrence, and its root's admission starts the occurrence
+  (`Opus.TurnRoot`).
 
-  ## Which daily thread
+  ## Which thread
+
+  A schedule that names a workspace thread fires there, and a claim sent
+  again lands in that same thread. One that names none joins a daily
+  thread, as below.
 
   A claim is sent again at every drain until its turn's root starts the
   occurrence, and an acceptance is found again only in the thread it is
@@ -88,6 +99,8 @@ defmodule Aqua.ScheduleTurns do
   @terminal ~w(completed failed cancelled uncertain)
   # Refusals no later drain changes: the claim ends failed with them.
   @for_good [
+    # The workspace thread a schedule names is gone.
+    :not_found,
     :archived,
     :denied,
     :not_member,
@@ -188,7 +201,7 @@ defmodule Aqua.ScheduleTurns do
          {:ok, line} <- line(claim),
          {:ok, thread_id} <- thread(ctx, claim) do
       ctx
-      |> Runner.send_message(thread_id, line,
+      |> Runner.send_message(thread_id, said(claim, line),
         client_id: client_id(claim),
         schedule: %{schedule_id: claim.schedule_id, occurrence_id: claim.id},
         payload: %{"schedule" => %{"id" => claim.schedule_id, "name" => claim.name}}
@@ -221,8 +234,16 @@ defmodule Aqua.ScheduleTurns do
 
   defp line(_claim), do: {:error, :no_line}
 
-  # The daily thread that already holds this claim's message, else the one
-  # current now.
+  # What the fire says: the line, opened with who set it when a turn did.
+  defp said(%{maker: maker, name: name}, line) when is_binary(maker),
+    do: "#{maker} set this schedule: #{name}\n\n#{line}"
+
+  defp said(_claim, line), do: line
+
+  # The workspace thread the schedule names; else the daily thread that
+  # already holds this claim's message, else the one current now.
+  defp thread(_ctx, %{thread_id: thread_id}) when is_binary(thread_id), do: {:ok, thread_id}
+
   defp thread(ctx, claim) do
     case Arca.ThreadStorage.daily_message(Sanctum.Context.actor(ctx), client_id(claim)) do
       {:ok, %{thread_id: thread_id}} ->

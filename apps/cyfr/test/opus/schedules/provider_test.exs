@@ -541,6 +541,133 @@ defmodule Opus.Schedules.ProviderTest do
     end
   end
 
+  describe "a schedule set for one time" do
+    defp once!(ctx, at, extra \\ %{}) do
+      Provider.handle(
+        "schedule",
+        ctx,
+        Map.merge(
+          %{
+            "action" => "create",
+            "profile_id" => "prof-cron",
+            "name" => "once-#{System.unique_integer([:positive])}",
+            "reference" => "reagent:local.test:1.0.0",
+            "at" => at
+          },
+          extra
+        )
+      )
+    end
+
+    defp ahead(seconds), do: DateTime.utc_now() |> DateTime.add(seconds, :second)
+
+    defp row!(id), do: Arca.Repo.get!(Arca.Schemas.CronSchedule, id)
+
+    test "at names the minute it fires, rounded up, as its expression in UTC", %{ctx: ctx} do
+      # The same instant, written two hours ahead of UTC.
+      utc = ahead(3 * 3600)
+
+      local =
+        utc |> DateTime.add(7200, :second) |> DateTime.to_naive() |> NaiveDateTime.to_iso8601()
+
+      assert {:ok, created} = once!(ctx, local <> "+02:00")
+
+      minute = %{utc | second: 0, microsecond: {0, 6}}
+      minute = if DateTime.compare(minute, utc) == :lt, do: DateTime.add(minute, 60), else: minute
+
+      assert created.once == true
+
+      assert created.cron_expression ==
+               "#{minute.minute} #{minute.hour} #{minute.day} #{minute.month} *"
+
+      assert {:ok, next, _} = DateTime.from_iso8601(created.next_run_at)
+      assert DateTime.compare(next, minute) == :eq
+      assert %{once: true, maker: nil, thread_id: nil} = row!(created.schedule_id)
+    end
+
+    test "one sooner than a minute, later than a year, unreadable, beside a cron or with neither is refused",
+         %{ctx: ctx} do
+      assert {:error, {:invalid_argument, "at must be at least a minute ahead"}} =
+               once!(ctx, DateTime.to_iso8601(ahead(20)))
+
+      assert {:error, {:invalid_argument, "at must be at most a year ahead" <> _}} =
+               once!(ctx, DateTime.to_iso8601(ahead(370 * 86_400)))
+
+      assert {:error, {:invalid_argument, "at is an ISO 8601 time" <> _}} =
+               once!(ctx, "tomorrow at nine")
+
+      assert {:error,
+              {:invalid_argument, "A schedule names a cron_expression or an at, not both"}} =
+               once!(ctx, DateTime.to_iso8601(ahead(3600)), %{"cron_expression" => "0 * * * *"})
+
+      assert {:error, {:invalid_argument, "Missing required arguments: cron_expression or at"}} =
+               once!(ctx, nil)
+
+      assert {:ok, %{schedules: []}} = Provider.handle("schedule", ctx, %{"action" => "list"})
+    end
+
+    test "an update naming no time keeps it once and its cursor; a cron makes it recurring",
+         %{ctx: ctx} do
+      {:ok, created} = once!(ctx, DateTime.to_iso8601(ahead(7200)))
+      cursor = row!(created.schedule_id).next_run_at
+
+      assert {:ok, renamed} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => created.schedule_id,
+                 "name" => "renamed-once"
+               })
+
+      assert %{once: true, next_run_at: ^cursor} = row!(created.schedule_id)
+      assert renamed.once
+
+      assert {:ok, recurring} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => created.schedule_id,
+                 "cron_expression" => "0 * * * *"
+               })
+
+      assert recurring.once == false
+      assert recurring.cron_expression == "0 * * * *"
+    end
+
+    test "a paused one whose time passed keeps that time when resumed, so it fires at once",
+         %{ctx: ctx} do
+      {:ok, created} = once!(ctx, DateTime.to_iso8601(ahead(7200)))
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "pause",
+                 "schedule_id" => created.schedule_id
+               })
+
+      passed = DateTime.add(DateTime.utc_now(), -600, :second)
+
+      {1, _} =
+        Ecto.Query.from(s in Arca.Schemas.CronSchedule, where: s.id == ^created.schedule_id)
+        |> Arca.Repo.update_all(set: [next_run_at: passed])
+
+      assert {:ok, %{status: "active"}} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "resume",
+                 "schedule_id" => created.schedule_id
+               })
+
+      assert DateTime.compare(row!(created.schedule_id).next_run_at, passed) == :eq
+    end
+
+    test "a maker or a thread in the arguments is never read", %{ctx: ctx} do
+      {:ok, created} =
+        once!(ctx, DateTime.to_iso8601(ahead(7200)), %{
+          "maker" => "planner",
+          "thread_id" => "thread_forged"
+        })
+
+      assert %{maker: nil, thread_id: nil} = row!(created.schedule_id)
+    end
+  end
+
   describe "delete action" do
     test "soft-deletes schedule", %{ctx: ctx} do
       {:ok, created} =

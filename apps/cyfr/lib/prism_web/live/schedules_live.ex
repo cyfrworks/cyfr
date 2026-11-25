@@ -23,8 +23,13 @@ defmodule PrismWeb.SchedulesLive do
 
   A schedule may instead hold a line for Aqua: each time it runs, Aqua is
   sent the line in the person's daily thread, under the schedule's name,
-  and uses the tools it is offered (`Aqua.ScheduleTurns`). Only the person,
-  signed in, makes one; this page is where they do.
+  and uses the tools it is offered (`Aqua.ScheduleTurns`). The person
+  makes one here, signed in, and Aqua or a crew member may make one from
+  a turn of theirs, which fires in that turn's workspace thread when it
+  worked under one. Each row names who set it (the person, or that agent)
+  and, for a line for Aqua, where it fires: the daily thread, or the
+  workspace thread by its title. A schedule set for one time reads as
+  Once; editing it keeps it once unless its time is changed.
 
   Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
   binding id, component, operation, interval, the time of its last
@@ -92,6 +97,7 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:page_title, "Schedules")
       |> assign(:active_nav, "schedules")
       |> assign(:schedules, [])
+      |> assign(:rooms, %{})
       |> assign(:feeds, [])
       |> assign(:components, [])
       |> assign(:loading, true)
@@ -424,9 +430,9 @@ defmodule PrismWeb.SchedulesLive do
       "action" => "update",
       "schedule_id" => f(sched, :schedule_id),
       "definition" => f(sched, :definition),
-      "name" => params["name"],
-      "cron_expression" => cron
+      "name" => params["name"]
     }
+    |> changed("cron_expression", cron, f(sched, :cron_expression))
   end
 
   defp changed(args, _key, value, value), do: args
@@ -500,7 +506,41 @@ defmodule PrismWeb.SchedulesLive do
           []
       end
 
-    assign(socket, :schedules, schedules)
+    socket
+    |> assign(:schedules, schedules)
+    |> assign(:rooms, rooms(socket, schedules))
+  end
+
+  # The title of each workspace thread a listed schedule fires in, by id;
+  # one that does not read is shown by its id.
+  defp rooms(socket, schedules) do
+    actor = Sanctum.Context.actor(socket.assigns[:context])
+
+    for id <- schedules |> Enum.map(&f(&1, :thread_id)) |> Enum.uniq(),
+        is_binary(id),
+        into: %{} do
+      case Arca.ThreadStorage.get(actor, id) do
+        {:ok, %{title: title}} when is_binary(title) -> {id, title}
+        _unread -> {id, id}
+      end
+    end
+  end
+
+  # Who set a schedule: the person, or the agent whose turn did.
+  defp maker_label(sched) do
+    case f(sched, :maker) do
+      maker when is_binary(maker) -> "Set by " <> maker
+      _person -> "Set by you"
+    end
+  end
+
+  # Where a line for Aqua fires; a component's schedule fires in no thread.
+  defp room_label(sched, rooms) do
+    cond do
+      f(sched, :reference) != @aqua_line -> nil
+      id = f(sched, :thread_id) -> "Workspace thread: " <> Map.get(rooms, id, id)
+      true -> "Daily thread"
+    end
   end
 
   # `feed.list` answers no arguments and no result's content, so the page
@@ -797,7 +837,23 @@ defmodule PrismWeb.SchedulesLive do
                     else: "hover:bg-gray-800/50"
                   )
                 ]}>
-                  <td class="px-4 py-3 text-sm text-white font-medium truncate">{f(sched, :name)}</td>
+                  <td class="px-4 py-3 text-sm text-white font-medium truncate">
+                    {f(sched, :name)}
+                    <span
+                      class="block text-xs font-normal text-gray-500 truncate"
+                      data-test="schedule-maker"
+                    >
+                      {maker_label(sched)}
+                    </span>
+                    <span
+                      :if={room_label(sched, @rooms)}
+                      class="block text-xs font-normal text-gray-500 truncate"
+                      title={room_label(sched, @rooms)}
+                      data-test="schedule-room"
+                    >
+                      {room_label(sched, @rooms)}
+                    </span>
+                  </td>
                   <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
                     <span
                       :if={f(sched, :reference) == @aqua_line}
@@ -815,7 +871,7 @@ defmodule PrismWeb.SchedulesLive do
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="text-gray-300" title={f(sched, :cron_expression)}>
-                      {cron_label(f(sched, :cron_expression))}
+                      {if f(sched, :once), do: "Once", else: cron_label(f(sched, :cron_expression))}
                     </span>
                     <span class="block text-xs text-gray-500 font-mono">
                       {f(sched, :cron_expression)}

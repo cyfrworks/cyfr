@@ -203,6 +203,7 @@ defmodule Aqua.PromptTest do
                 "this instruction stops you. Read the `cyfr:browser` scroll before you use the " <>
                 "browser.\n" <>
                 "- A program on the Programs page, such as `gh`, is a command CYFR runs for you: `program.list` names them, `program.start` runs one with the words after its command and answers what it printed, `program.wait` waits for more and `program.read` reads it again from the `next` an answer gave, `program.send` types on it, and `program.stop` stops it once you have what you need: a run ends with your turn anyway.\n" <>
+                "- To be woken later, make a schedule with `schedule.create` that says when and for what: a line for Aqua (`reference` `agent:local.aqua`, `input` `{\"line\": text}`) at one time (`at`) or by `cron_expression`. It fires in this room as Aqua's turn, which hands the job back to whoever set it. In a daily thread a wake due another day fires in that day's thread, so its line carries what the job needs.\n" <>
                 "- A call that fails: read why, adjust and try once more, never the " <>
                 "same failing call twice. `setup_required` is answered by `request_setup`; " <>
                 "`authorization_required` by one retry, then by saying the component is " <>

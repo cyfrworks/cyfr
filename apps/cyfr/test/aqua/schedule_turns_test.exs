@@ -17,7 +17,7 @@ defmodule Aqua.ScheduleTurnsTest do
   import Prima.Test.Wait
   import Cyfr.Test.Cron, only: [hourly_away: 0]
 
-  alias Aqua.{Runner, ScheduleTurns, Tape}
+  alias Aqua.{Crew, Runner, ScheduleTurns, Tape}
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ScheduleTurnDue
@@ -272,8 +272,9 @@ defmodule Aqua.ScheduleTurnsTest do
       assert user_id == ctx.user_id
       assert Jason.decode!(row.input) == %{"line" => "summarise what is unread"}
 
-      # The schedule names no thread: its fires join the person's day.
-      refute Map.has_key?(row, :thread_id)
+      # The person made it, and it names no thread: its fires join the
+      # person's day.
+      assert %{maker: nil, thread_id: nil, once: false} = row
       assert threads(ctx) == []
     end
 
@@ -459,12 +460,15 @@ defmodule Aqua.ScheduleTurnsTest do
                CronSchedule.update(actor(ctx), component.id, %{status: "paused"})
     end
 
-    test "no agent's call reaches making or changing one: both take the external plane alone" do
+    test "a turn reaches every write but re-resolving: they take both planes" do
       [tool] = Provider.tools()
 
-      for action <- ~w(create update) do
-        assert %{planes: [:external]} = Enum.find(tool.operations, &(&1.action == action))
+      for action <- ~w(create update pause resume delete) do
+        assert %{planes: [:external, :in_chain]} =
+                 Enum.find(tool.operations, &(&1.action == action))
       end
+
+      assert %{planes: [:external]} = Enum.find(tool.operations, &(&1.action == "re_resolve"))
     end
   end
 
@@ -532,7 +536,7 @@ defmodule Aqua.ScheduleTurnsTest do
                )
 
       assert threads(ctx) == [thread_id]
-      refute Map.has_key?(row!(ctx, id), :thread_id)
+      assert %{maker: nil, thread_id: nil} = row!(ctx, id)
 
       # The line is the server's, sent for the person, naming the schedule;
       # it is a post the person has not seen, and the answer another.
@@ -990,7 +994,7 @@ defmodule Aqua.ScheduleTurnsTest do
       refute again == made
       assert {:ok, %{kind: "daily", day: ^day}} = Threads.get(actor(ctx), again)
       assert threads(ctx) == [again]
-      refute Map.has_key?(row!(ctx, id), :thread_id)
+      assert %{maker: nil, thread_id: nil} = row!(ctx, id)
 
       assert {:ok, %{deleted: true}} =
                Provider.handle("schedule", ctx, %{"action" => "delete", "schedule_id" => id})
@@ -1162,6 +1166,326 @@ defmodule Aqua.ScheduleTurnsTest do
       assert Scheduler.end_turn(actor(ctx), started.id, nil, "x") == {:error, :stale}
       assert %{state: "started"} = occurrence(ctx, started.id)
     end
+  end
+
+  describe "a schedule from a turn" do
+    # A crew member the athanor made, on the scripted model, under Aqua's
+    # grant like every member.
+    defp member!(ctx, name) do
+      :ok =
+        Arca.put(
+          actor(ctx),
+          Compendium.AquaPath.crew_file(name),
+          "---\ntitle: #{name}\ndescription: Watches builds.\navoid: Building.\n" <>
+            "catalyst_ref: #{@model}\nmodel: claude-sonnet-5-5\n---\n"
+        )
+
+      {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    end
+
+    # A job for `member` in `room`, as the soul's `crew.ask` writes it.
+    defp asked!(ctx, room, member, task) do
+      {:ok, %{message: row}} =
+        Arca.TurnStorage.accept_message(actor(ctx), room.id, %{
+          message: %{
+            author: Prima.Author.agent(),
+            sent_by: "aqua",
+            addressee: member,
+            status: "pending",
+            content: task
+          },
+          request: %{
+            member: member,
+            task: task,
+            options: %{},
+            person_id: ctx.user_id,
+            origin: :interactive
+          }
+        })
+
+      row
+    end
+
+    defp children(ctx, room, member),
+      do: Enum.filter(Threads.children(actor(ctx), room.id), &(&1.agent == member))
+
+    # The turn the member's thread under `room` holds for a delivered
+    # request, in order.
+    defp member_turns(ctx, room, member) do
+      [child] = children(ctx, room, member)
+      {child, turns_in(child.id)}
+    end
+
+    defp in_an_hour,
+      do: DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_iso8601()
+
+    # The `schedule.create` a turn calls for a wake in an hour. Its
+    # arguments name a thread too, a lineage name the gate drops before it
+    # stamps its own; a `maker` is no argument the tool declares, which the
+    # gate refuses as an unknown field.
+    defp wake(id, name, line),
+      do:
+        call(id, "schedule", %{
+          "action" => "create",
+          "name" => name,
+          "reference" => @aqua,
+          "input" => %{"line" => line},
+          "at" => in_an_hour(),
+          "thread_id" => "thread_forged"
+        })
+
+    defp named!(ctx, name) do
+      {:ok, [row]} = CronSchedule.list(actor(ctx), kind: "schedule")
+      assert row.name == name
+      row
+    end
+
+    # The turn an occurrence opened in `thread_id`, by its message.
+    defp turn_in(ctx, thread_id, occurrence) do
+      {:ok, %{turn: turn}} = Tape.accepted(ctx, thread_id, client_id(occurrence))
+      turn
+    end
+
+    test "a member's wake fires in its room as the soul's turn, which hands the member the job again in its work there",
+         %{ctx: ctx} do
+      member!(ctx, "planner")
+      room = today!(ctx)
+
+      script!([
+        wake("w1", "Check the build", "see whether the build passed"),
+        reply("I will look again in an hour."),
+        call("a1", "crew", %{
+          "action" => "ask",
+          "member" => "planner",
+          "task" => "see whether the build passed"
+        }),
+        reply("Handed to planner."),
+        reply("It passed.")
+      ])
+
+      asked!(ctx, room, "planner", "watch the build")
+      assert {:ok, _} = Crew.drain(ctx.athanor_id)
+      {child, [first]} = member_turns(ctx, room, "planner")
+      await_status(ctx, first, "completed")
+
+      # Admitted under Aqua's grant, with no rule against a member: the row
+      # names the member and no thread, since its room is a daily thread.
+      row = named!(ctx, "Check the build")
+
+      assert %{maker: "planner", thread_id: nil, once: true, user_id: user_id, status: "active"} =
+               row
+
+      assert user_id == ctx.user_id
+
+      occurrence = fire!(ctx, row.id)
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+      soul = await_status(ctx, turn_in(ctx, room.id, occurrence).id, "completed")
+      assert soul.agent == Prima.AgentRef.soul_name()
+
+      assert [%{content: line}] = under_client_id(ctx, room.id, client_id(occurrence))
+      assert line == "planner set this schedule: Check the build\n\nsee whether the build passed"
+
+      # The soul's crew.ask lands in the member's one thread under the room,
+      # as a turn after its first.
+      assert {:ok, _} = Crew.drain(ctx.athanor_id)
+      child_id = child.id
+      assert [%{id: ^child_id}] = children(ctx, room, "planner")
+      {%{id: ^child_id}, [^first, second]} = member_turns(ctx, room, "planner")
+      await_status(ctx, second, "completed")
+
+      # Its one occurrence ended, and the row went with it.
+      ended!(ctx, occurrence, "completed")
+      assert row!(ctx, row.id).status == "deleted"
+    end
+
+    test "a wake set in yesterday's daily thread fires in today's, and the job lands under today's room",
+         %{ctx: ctx} do
+      member!(ctx, "planner")
+      zone!(ctx, @west)
+      yesterday = today!(ctx)
+
+      script!([
+        wake("w1", "Tomorrow's check", "check the release went out"),
+        reply("Set."),
+        call("a1", "crew", %{
+          "action" => "ask",
+          "member" => "planner",
+          "task" => "check the release went out"
+        }),
+        reply("Handed."),
+        reply("It went out.")
+      ])
+
+      asked!(ctx, yesterday, "planner", "watch the release")
+      assert {:ok, _} = Crew.drain(ctx.athanor_id)
+      {_child, [first]} = member_turns(ctx, yesterday, "planner")
+      await_status(ctx, first, "completed")
+      row = named!(ctx, "Tomorrow's check")
+      assert %{maker: "planner", thread_id: nil} = row
+
+      zone!(ctx, @east)
+      today = today!(ctx)
+      assert today.id != yesterday.id
+
+      occurrence = fire!(ctx, row.id)
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+      await_status(ctx, turn_in(ctx, today.id, occurrence).id, "completed")
+
+      assert [
+               %{
+                 content:
+                   "planner set this schedule: Tomorrow's check\n\ncheck the release went out"
+               }
+             ] =
+               under_client_id(ctx, today.id, client_id(occurrence))
+
+      assert {:ok, _} = Crew.drain(ctx.athanor_id)
+      {_today_child, [job]} = member_turns(ctx, today, "planner")
+      await_status(ctx, job, "completed")
+      {_child, [^first]} = member_turns(ctx, yesterday, "planner")
+    end
+
+    test "the soul's wake in a workspace thread fires in that workspace thread", %{ctx: ctx} do
+      workspace = workspace!(ctx, "Deploy")
+
+      script!([
+        wake("w1", "Deploy check", "see whether the deploy finished"),
+        reply("Set."),
+        reply("It finished.")
+      ])
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, workspace.id, "watch the deploy")
+      await_status(ctx, turn_id, "completed")
+
+      soul = Prima.AgentRef.soul_name()
+      row = named!(ctx, "Deploy check")
+      assert %{maker: ^soul, thread_id: workspace_id} = row
+      assert workspace_id == workspace.id
+
+      occurrence = fire!(ctx, row.id)
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+      fired = await_status(ctx, turn_in(ctx, workspace.id, occurrence).id, "completed")
+      assert fired.thread_id == workspace.id
+
+      assert [%{content: line}] = under_client_id(ctx, workspace.id, client_id(occurrence))
+      assert line == "#{soul} set this schedule: Deploy check\n\nsee whether the deploy finished"
+      assert {:error, :not_found} = Threads.daily_message(actor(ctx), client_id(occurrence))
+    end
+
+    test "the soul's own wake in a daily thread fires in the daily thread current then",
+         %{ctx: ctx} do
+      zone!(ctx, @west)
+      yesterday = today!(ctx)
+      script!([wake("w1", "Soul's check", "look again"), reply("Set."), reply("Looked.")])
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, yesterday.id, "look in an hour")
+      await_status(ctx, turn_id, "completed")
+
+      row = named!(ctx, "Soul's check")
+      assert %{thread_id: nil} = row
+      assert row.maker == Prima.AgentRef.soul_name()
+
+      zone!(ctx, @east)
+      today = today!(ctx)
+      occurrence = fire!(ctx, row.id)
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+      await_status(ctx, turn_in(ctx, today.id, occurrence).id, "completed")
+    end
+
+    test "a turn started by a key, or a call no turn made, writes no line for Aqua",
+         %{ctx: ctx} do
+      room = today!(ctx)
+      chain = %{ctx | plane: :guest, authenticated: true}
+
+      lineage = %{
+        "thread_id" => room.id,
+        "root_execution_id" => "exec_none",
+        "parent_execution_id" => "exec_none"
+      }
+
+      args = %{"reference" => @aqua, "input" => %{"line" => "hi"}}
+
+      # No open turn of that thread has that root.
+      assert create(chain, Map.merge(args, lineage)) == {:error, :not_in_a_turn}
+      # A chain's call whose parent is not its root is a component's.
+      assert create(chain, Map.merge(args, %{lineage | "parent_execution_id" => "exec_child"})) ==
+               {:error, :not_in_a_turn}
+
+      assert {:ok, []} = CronSchedule.list(actor(ctx), kind: "schedule")
+    end
+  end
+
+  describe "a schedule set for one time" do
+    test "fires once however late, under skip, and is removed when its occurrence ends",
+         %{ctx: ctx} do
+      script!([reply("Done.")])
+
+      {:ok, %{schedule_id: id}} =
+        create(ctx, %{
+          "cron_expression" => nil,
+          "at" => DateTime.utc_now() |> DateTime.add(7200, :second) |> DateTime.to_iso8601(),
+          "reference" => @aqua,
+          "input" => %{"line" => "once"}
+        })
+
+      # Due an hour ago, long past the missed bound: a recurring schedule
+      # under skip would move on with nothing fired.
+      late = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in Arca.Schemas.CronSchedule, where: s.id == ^id),
+          set: [next_run_at: late]
+        )
+
+      cadence = %{next_after: &{:ok, DateTime.add(&1, 3600, :second)}, missed_bound_ms: 1_000}
+
+      assert {:ok, occurrence} =
+               ScheduleOccurrences.claim(
+                 %{row!(ctx, id) | next_run_at: late},
+                 Prima.Boot.id(),
+                 cadence
+               )
+
+      assert occurrence.scheduled_for == late
+      assert %{next_run_at: nil, status: "active", once: true} = row!(ctx, id)
+
+      assert ScheduleTurns.drain() == %{occurrence.id => :sent}
+      ended!(ctx, occurrence, "completed")
+      assert %{status: "deleted", run_count: 1} = row!(ctx, id)
+    end
+
+    test "one deleted between its claim and its turn does not fire", %{ctx: ctx} do
+      {:ok, %{schedule_id: id}} =
+        create(ctx, %{
+          "cron_expression" => nil,
+          "at" => DateTime.utc_now() |> DateTime.add(7200, :second) |> DateTime.to_iso8601(),
+          "reference" => @aqua,
+          "input" => %{"line" => "once"}
+        })
+
+      occurrence = fire!(ctx, id)
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{"action" => "delete", "schedule_id" => id})
+
+      assert ScheduleTurns.drain() == %{occurrence.id => {:ended, "the schedule is deleted"}}
+      assert threads(ctx) == []
+    end
+  end
+
+  # A workspace thread of the athanor's, as its opening's delivery leaves it.
+  defp workspace!(ctx, title) do
+    id = Prima.UUID7.generate_id("thread")
+
+    Arca.Repo.insert!(%Arca.Schemas.Thread{
+      id: id,
+      athanor_id: ctx.athanor_id,
+      created_by: ctx.user_id,
+      kind: "workspace",
+      title: title,
+      workspace_state: "open"
+    })
+
+    elem(Threads.get(actor(ctx), id), 1)
   end
 
   # An execution of the schedule admitted and still running.

@@ -108,9 +108,12 @@ defmodule Opus.Schedules.Provider do
                   "Human-readable schedule name, unique within the athanor (create/update)"
               ),
               Arg.new("cron_expression", :string,
-                required: true,
                 description:
-                  "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
+                  "Cron expression, e.g. '*/5 * * * *' (create/update): a cron_expression or an at. Minimum 1-minute interval."
+              ),
+              Arg.new("at", :string,
+                description:
+                  "Instead of cron_expression, the one time it fires, ISO 8601 with its offset, e.g. '2026-11-26T09:00:00+01:00' (create/update): at least a minute and at most a year ahead, rounded up to the minute. It fires once, however late, and is then removed."
               ),
               Arg.new("reference", :string,
                 required: true,
@@ -145,7 +148,7 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :write,
-            planes: [:external],
+            planes: [:external, :in_chain],
             permission: :execute
           ),
           Operation.new(
@@ -191,7 +194,11 @@ defmodule Opus.Schedules.Provider do
               ),
               Arg.new("cron_expression", :string,
                 description:
-                  "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
+                  "Cron expression, e.g. '*/5 * * * *' (create/update): a cron_expression or an at. Minimum 1-minute interval."
+              ),
+              Arg.new("at", :string,
+                description:
+                  "Instead of cron_expression, the one time it fires, ISO 8601 with its offset, e.g. '2026-11-26T09:00:00+01:00' (create/update): at least a minute and at most a year ahead, rounded up to the minute. It fires once, however late, and is then removed."
               ),
               Arg.new("reference", :string,
                 description: "Component reference to run under the schedule profile"
@@ -230,7 +237,7 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :write,
-            planes: [:external],
+            planes: [:external, :in_chain],
             permission: :execute
           ),
           Operation.new(
@@ -244,7 +251,7 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :write,
-            planes: [:external],
+            planes: [:external, :in_chain],
             permission: :execute
           ),
           Operation.new(
@@ -258,7 +265,7 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :write,
-            planes: [:external],
+            planes: [:external, :in_chain],
             permission: :execute
           ),
           Operation.new(
@@ -272,7 +279,7 @@ defmodule Opus.Schedules.Provider do
               )
             ],
             kind: :destructive,
-            planes: [:external],
+            planes: [:external, :in_chain],
             permission: :execute
           ),
           Operation.new(
@@ -290,7 +297,8 @@ defmodule Opus.Schedules.Provider do
             permission: :execute
           )
         ],
-        description: "Manage recurring WASM component execution schedules",
+        description:
+          "Manage the athanor's schedules: a component run, or a line for Aqua, at a cron time or once",
         title: "Cron Schedule"
       )
     ]
@@ -303,34 +311,36 @@ defmodule Opus.Schedules.Provider do
         %Context{} = ctx,
         %{"action" => "create", "reference" => @aqua_line} = args
       ) do
-    with :ok <- aqua_writer(ctx),
-         :ok <- validate_required(args, ["name", "cron_expression"]),
-         :ok <- validate_cron(args["cron_expression"]),
+    with {:ok, writer} <- writer(ctx, args),
+         :ok <- person(writer),
+         :ok <- validate_required(args, ["name"]),
+         {:ok, timing} <- timing(args, nil),
          :ok <- no_profile(args),
          {:ok, missed} <- missed_runs(args, %{missed_runs: "skip", catch_up_limit: nil}),
          {:ok, input_json} <- aqua_input(args) do
       attrs = %{
         user_id: ctx.user_id,
+        maker: writer.maker,
+        thread_id: writer.room,
         name: args["name"],
-        cron_expression: args["cron_expression"],
         reference: @aqua_line,
         resolved_reference: @aqua_line,
         input: input_json,
         metadata: if(args["metadata"], do: safe_encode(args["metadata"])),
-        next_run_at: next_run(args["cron_expression"]),
         profile_id: nil,
         concurrency: args["concurrency"] || "forbid"
       }
 
-      insert(ctx, Map.merge(attrs, missed))
+      insert(ctx, writer, attrs |> Map.merge(timing) |> Map.merge(missed))
     end
   end
 
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
-    with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
+    with {:ok, writer} <- writer(ctx, args),
+         :ok <- validate_required(args, ["name", "reference"]),
          :ok <- no_other_agent(args["reference"]),
          :ok <- profile_given(args),
-         :ok <- validate_cron(args["cron_expression"]),
+         {:ok, timing} <- timing(args, nil),
          {:ok, missed} <- missed_runs(args, %{missed_runs: "skip", catch_up_limit: nil}),
          {:ok, reference, resolved_reference} <-
            resolve_for_schedule(ctx, args["reference"], "create schedule"),
@@ -339,26 +349,20 @@ defmodule Opus.Schedules.Provider do
       input_json = if args["input"], do: safe_encode(args["input"]), else: nil
       metadata_json = if args["metadata"], do: safe_encode(args["metadata"]), else: nil
 
-      next_run =
-        case compute_next_run(args["cron_expression"]) do
-          {:ok, dt} -> dt
-          _ -> nil
-        end
-
       attrs = %{
         user_id: ctx.user_id,
+        maker: writer.maker,
+        thread_id: writer.room,
         name: args["name"],
-        cron_expression: args["cron_expression"],
         reference: reference,
         resolved_reference: resolved_reference,
         input: input_json,
         metadata: metadata_json,
-        next_run_at: next_run,
         profile_id: args["profile_id"],
         concurrency: args["concurrency"] || "forbid"
       }
 
-      insert(ctx, Map.merge(attrs, missed))
+      insert(ctx, writer, attrs |> Map.merge(timing) |> Map.merge(missed))
     end
   end
 
@@ -392,13 +396,13 @@ defmodule Opus.Schedules.Provider do
     # A definition given is compared first, so a caller who read an
     # older schedule hears that, never a refusal about what the schedule
     # has become; the store's comparison under the row's lock decides.
-    with {:schedule, {:ok, schedule}} <-
-           {:schedule, schedule(ctx, id)},
+    with {:ok, writer} <- writer(ctx, args),
+         {:schedule, {:ok, schedule}} <- {:schedule, schedule(ctx, id)},
          :ok <- Arca.CronSchedule.as_read(schedule, args["definition"]),
-         :ok <- validate_cron_if_present(args["cron_expression"]),
+         {:ok, timing} <- timing(args, schedule),
          {:ok, missed} <- missed_runs(args, schedule),
-         {:ok, line} <- aqua_update(ctx, schedule, args) do
-      update_attrs = missed
+         {:ok, line} <- aqua_update(writer, schedule, args) do
+      update_attrs = Map.merge(missed, timing)
 
       update_attrs =
         if args["concurrency"],
@@ -407,11 +411,6 @@ defmodule Opus.Schedules.Provider do
 
       update_attrs =
         if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
-
-      update_attrs =
-        if args["cron_expression"],
-          do: Map.put(update_attrs, :cron_expression, args["cron_expression"]),
-          else: update_attrs
 
       with {:ok, update_attrs} <- target_update(ctx, schedule, args, update_attrs, line) do
         update_attrs =
@@ -424,17 +423,8 @@ defmodule Opus.Schedules.Provider do
               ),
             else: update_attrs
 
-        # Recompute next_run if cron changed
-        cron = args["cron_expression"] || schedule.cron_expression
-
-        update_attrs =
-          case compute_next_run(cron) do
-            {:ok, dt} -> Map.put(update_attrs, :next_run_at, dt)
-            _ -> update_attrs
-          end
-
         case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs,
-               by_person: by_person?(ctx),
+               by_person: writer.person?,
                definition: args["definition"]
              ) do
           {:ok, updated} ->
@@ -453,70 +443,73 @@ defmodule Opus.Schedules.Provider do
   end
 
   # Pause
-  def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
-    case schedule(ctx, id) do
-      {:error, reason} ->
-        {:error, format_store_error(reason, id)}
+  def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id} = args) do
+    with {:ok, _writer} <- writer(ctx, args) do
+      case schedule(ctx, id) do
+        {:error, reason} ->
+          {:error, format_store_error(reason, id)}
 
-      {:ok, schedule} ->
-        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{status: "paused"}) do
-          {:ok, updated} ->
-            Opus.Schedules.Scheduler.pause(updated.id)
-            Changes.changed(Sanctum.Context.actor(ctx), updated.id)
-            {:ok, format_schedule(updated)}
+        {:ok, schedule} ->
+          case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+                 status: "paused"
+               }) do
+            {:ok, updated} ->
+              Opus.Schedules.Scheduler.pause(updated.id)
+              Changes.changed(Sanctum.Context.actor(ctx), updated.id)
+              {:ok, format_schedule(updated)}
 
-          {:error, reason} ->
-            store_refusal(reason, id)
-        end
+            {:error, reason} ->
+              store_refusal(reason, id)
+          end
+      end
     end
   end
 
   # Resume
-  def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
-    case schedule(ctx, id) do
-      {:error, reason} ->
-        {:error, format_store_error(reason, id)}
+  def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id} = args) do
+    with {:ok, _writer} <- writer(ctx, args) do
+      case schedule(ctx, id) do
+        {:error, reason} ->
+          {:error, format_store_error(reason, id)}
 
-      {:ok, schedule} ->
-        # No cap check here: the cap counts every non-deleted schedule, so a
-        # paused schedule still occupies its slot and resume never mints one.
-        next_run =
-          case compute_next_run(schedule.cron_expression) do
-            {:ok, dt} -> dt
-            _ -> nil
+        {:ok, schedule} ->
+          # No cap check here: the cap counts every non-deleted schedule, so a
+          # paused schedule still occupies its slot and resume never mints one.
+          case Arca.CronSchedule.update(
+                 Sanctum.Context.actor(ctx),
+                 schedule.id,
+                 Map.put(resumed_cursor(schedule), :status, "active")
+               ) do
+            {:ok, updated} ->
+              Opus.Schedules.Scheduler.resume(updated.id)
+              Changes.changed(Sanctum.Context.actor(ctx), updated.id)
+              {:ok, format_schedule(updated)}
+
+            {:error, reason} ->
+              store_refusal(reason, id)
           end
-
-        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
-               status: "active",
-               next_run_at: next_run
-             }) do
-          {:ok, updated} ->
-            Opus.Schedules.Scheduler.resume(updated.id)
-            Changes.changed(Sanctum.Context.actor(ctx), updated.id)
-            {:ok, format_schedule(updated)}
-
-          {:error, reason} ->
-            store_refusal(reason, id)
-        end
+      end
     end
   end
 
   # Delete
-  def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    case schedule(ctx, id) do
-      {:error, reason} ->
-        {:error, format_store_error(reason, id)}
+  def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id} = args) do
+    with {:ok, _writer} <- writer(ctx, args) do
+      case schedule(ctx, id) do
+        {:error, reason} ->
+          {:error, format_store_error(reason, id)}
 
-      {:ok, schedule} ->
-        case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
-          {:ok, deleted} ->
-            Opus.Schedules.Scheduler.remove(schedule.id)
-            Changes.removed(Sanctum.Context.actor(ctx), deleted)
-            {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
+        {:ok, schedule} ->
+          case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
+            {:ok, deleted} ->
+              Opus.Schedules.Scheduler.remove(schedule.id)
+              Changes.removed(Sanctum.Context.actor(ctx), deleted)
+              {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
-          {:error, reason} ->
-            store_refusal(reason, id)
-        end
+            {:error, reason} ->
+              store_refusal(reason, id)
+          end
+      end
     end
   end
 
@@ -794,11 +787,11 @@ defmodule Opus.Schedules.Provider do
   # The cap is read at the write and counted in the insert's own
   # transaction. A cap the store cannot answer refuses: the setting refuses
   # a stale value, and no fallback number stands in for it.
-  defp insert(ctx, attrs) do
+  defp insert(ctx, writer, attrs) do
     with {:ok, cap} <- schedule_cap() do
       case Arca.CronSchedule.create(
              Sanctum.Context.actor(ctx),
-             Map.merge(attrs, %{cap: cap, by_person: by_person?(ctx)})
+             Map.merge(attrs, %{cap: cap, by_person: writer.person?})
            ) do
         {:ok, schedule} ->
           Opus.Schedules.Scheduler.add(schedule.id)
@@ -836,6 +829,9 @@ defmodule Opus.Schedules.Provider do
       schedule_id: schedule.id,
       name: schedule.name,
       cron_expression: schedule.cron_expression,
+      once: schedule.once,
+      maker: schedule.maker,
+      thread_id: schedule.thread_id,
       reference: schedule.reference,
       resolved_reference: schedule.resolved_reference,
       profile_id: schedule.profile_id,
@@ -950,23 +946,160 @@ defmodule Opus.Schedules.Provider do
 
   # ---- a line for Aqua ---------------------------------------------------------
 
-  # Who may make an Aqua line or change its line: the schedule's person in
-  # a signed-in session of their own (a browser's, or a paired device's),
-  # never through an API key or a tincture's frame credential, and never
-  # under an origin that is no person's own act. The declaration keeps
-  # these writes off the in-chain plane, so no agent's call reaches here.
+  # Who calls a write, and what the row records of it: `person?`, whether
+  # the caller is the schedule's person (their own signed-in session, or a
+  # turn of theirs, `own_turn/2`), which only that person's writes to a
+  # line for Aqua need; `maker`, the agent whose turn calls; and `room`,
+  # the workspace thread that turn works under, none for a daily thread.
+  # A call outside any chain is the session's, a person's or a key's, and
+  # names no maker. A call in a chain is a turn's own or nothing: no
+  # component a turn started writes a schedule.
+  defp writer(%Context{plane: :guest} = ctx, args) do
+    with {:ok, turn, room} <- own_turn(ctx, args) do
+      {:ok, %{person?: turn_writer?(ctx, turn), maker: turn.agent, room: room}}
+    end
+  end
+
+  defp writer(%Context{} = ctx, _args),
+    do: {:ok, %{person?: aqua_writer(ctx) == :ok, maker: nil, room: nil}}
+
+  defp person(%{person?: true}), do: :ok
+  defp person(_writer), do: {:error, :aqua_line_by_person}
+
+  # The person's own signed-in session: a browser's or a paired device's,
+  # never an API key or a tincture's frame credential, and never under an
+  # origin that is no person's own act.
   defp aqua_writer(%Context{auth_method: method, api_key_id: nil, frame: nil, origin: origin})
        when method in [:oidc, :device] and origin in [nil, :interactive],
        do: :ok
 
   defp aqua_writer(_ctx), do: {:error, :aqua_line_by_person}
 
-  # What the storage write is told of its caller: whether it is the
-  # person's own signed-in session, decided from the context alone. The
-  # store decides against the row it locks whether that is needed
-  # (`Arca.CronSchedule.update/4`); the check above is only the fast
-  # refusal on the row as read.
+  # A turn of the person's: a sign-in's chain with no key and no frame,
+  # started by the person or by a schedule's fire (whose turn, and the
+  # member it hands the job to, set the next wake), as its row stores it.
+  defp turn_writer?(
+         %Context{authenticated: true, auth_method: :oidc, api_key_id: nil, frame: nil},
+         turn
+       ),
+       do: turn.origin in ["interactive", "schedule"]
+
+  defp turn_writer?(_ctx, _turn), do: false
+
+  # The open turn a chain's call is the own call of, from the lineage the
+  # gate stamps (`Sanctum.Dispatch` drops what a guest sends under those
+  # names): a turn of that thread, in the context's athanor, asked for by
+  # its person, whose root made the call itself. Opus reads the rows, as
+  # `Opus.Programs` does, since it does not call Aqua. Anything else is
+  # no turn's call.
+  defp own_turn(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, %{
+         "thread_id" => thread_id,
+         "root_execution_id" => root,
+         "parent_execution_id" => root
+       })
+       when is_binary(thread_id) and is_binary(root) and is_binary(athanor_id) and
+              athanor_id != "" and is_binary(user_id) and user_id != "" do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, turns} <- Arca.TurnStorage.open_turns(actor, thread_id),
+         %{} = turn <-
+           Enum.find(turns, &(&1.root_execution_id == root and &1.requested_by == user_id)),
+         {:ok, thread} <- Arca.ThreadStorage.get(actor, thread_id),
+         {:ok, room} <- room(actor, thread) do
+      {:ok, turn, room}
+    else
+      nil -> {:error, :not_in_a_turn}
+      {:error, :not_found} -> {:error, :not_in_a_turn}
+      {:error, _unread} -> {:error, format_store_error(:database_error)}
+    end
+  end
+
+  defp own_turn(_ctx, _args), do: {:error, :not_in_a_turn}
+
+  # The room a turn works in: a workspace thread is its own, a member's
+  # thread works under its parent, and a daily thread is none, which a
+  # fire reads as the daily thread current when it fires.
+  defp room(_actor, %{kind: "workspace", id: id}), do: {:ok, id}
+
+  defp room(actor, %{kind: "crew", parent_id: parent_id}) when is_binary(parent_id) do
+    with {:ok, parent} <- Arca.ThreadStorage.get(actor, parent_id), do: room(actor, parent)
+  end
+
+  defp room(_actor, _daily), do: {:ok, nil}
+
+  # What the store is told of a write that names no turn's call: whether
+  # it is the person's own signed-in session, decided from the context
+  # alone. The store decides against the row it locks whether that is
+  # needed (`Arca.CronSchedule.update/4`).
   defp by_person?(ctx), do: aqua_writer(ctx) == :ok
+
+  # When a write leaves the schedule firing: a cron expression, or `at`,
+  # one time, as the cron expression naming that minute in UTC with
+  # `once`. An update naming neither keeps a once schedule's cursor, and
+  # moves a recurring one's to its expression's next time, as before.
+  defp timing(%{"cron_expression" => cron, "at" => at}, _current)
+       when is_binary(cron) and is_binary(at),
+       do: {:error, {:invalid_argument, "A schedule names a cron_expression or an at, not both"}}
+
+  defp timing(%{"at" => at}, _current) when is_binary(at), do: once_at(at)
+
+  defp timing(%{"cron_expression" => cron}, _current) when is_binary(cron) do
+    with :ok <- validate_cron(cron),
+         do: {:ok, %{cron_expression: cron, once: false, next_run_at: next_run(cron)}}
+  end
+
+  defp timing(_args, nil),
+    do: {:error, {:invalid_argument, "Missing required arguments: cron_expression or at"}}
+
+  defp timing(_args, %{once: true}), do: {:ok, %{}}
+
+  defp timing(_args, current), do: {:ok, %{next_run_at: next_run(current.cron_expression)}}
+
+  # One time: at least a minute ahead as any fire is, rounded up to the
+  # minute, and named by a cron expression whose next time is that
+  # minute, which a time more than a year ahead is not, since an
+  # expression names no year.
+  defp once_at(at) do
+    with {:ok, asked} <- parse_at(at) do
+      time = round_up_to_minute(asked)
+      cron = "#{time.minute} #{time.hour} #{time.day} #{time.month} *"
+
+      cond do
+        DateTime.diff(asked, DateTime.utc_now(), :second) < 60 ->
+          {:error, {:invalid_argument, "at must be at least a minute ahead"}}
+
+        not match?(%DateTime{}, next_run(cron)) or DateTime.compare(next_run(cron), time) != :eq ->
+          {:error,
+           {:invalid_argument,
+            "at must be at most a year ahead: a schedule names no year, so a later wake is a recurring schedule"}}
+
+        true ->
+          {:ok, %{cron_expression: cron, once: true, next_run_at: time}}
+      end
+    end
+  end
+
+  defp parse_at(at) do
+    case DateTime.from_iso8601(at) do
+      {:ok, time, _offset} ->
+        {:ok, DateTime.shift_zone!(time, "Etc/UTC")}
+
+      {:error, _} ->
+        {:error,
+         {:invalid_argument, "at is an ISO 8601 time with its offset, e.g. 2026-11-26T09:00:00Z"}}
+    end
+  end
+
+  defp round_up_to_minute(time) do
+    floor = %{time | second: 0, microsecond: {0, 6}}
+    if DateTime.compare(floor, time) == :lt, do: DateTime.add(floor, 60, :second), else: floor
+  end
+
+  # Where a resumed schedule's cursor goes: a recurring one's to its next
+  # time; a once one's stays where it was, so one whose time passed while
+  # it was paused fires at once.
+  defp resumed_cursor(%{once: true}), do: %{}
+  defp resumed_cursor(schedule), do: %{next_run_at: next_run(schedule.cron_expression)}
 
   # The line is the input's one field: a non-empty text a person could send.
   defp aqua_input(%{"input" => %{"line" => line} = input})
@@ -1009,7 +1142,7 @@ defmodule Opus.Schedules.Provider do
   # update that touches an Aqua line's reference or input, or makes a
   # schedule one, is the person's; one that leaves it names the profile
   # the component binds.
-  defp aqua_update(ctx, schedule, args) do
+  defp aqua_update(writer, schedule, args) do
     aqua? = schedule.reference == @aqua_line
     to_aqua? = args["reference"] == @aqua_line
     leaving? = aqua? and Map.has_key?(args, "reference") and not to_aqua?
@@ -1019,8 +1152,8 @@ defmodule Opus.Schedules.Provider do
       not aqua? and not to_aqua? ->
         with :ok <- no_other_agent(args["reference"]), do: {:ok, :component}
 
-      touches? and aqua_writer(ctx) != :ok ->
-        aqua_writer(ctx)
+      touches? and not writer.person? ->
+        {:error, :aqua_line_by_person}
 
       leaving? ->
         if is_binary(args["profile_id"]),
@@ -1077,9 +1210,6 @@ defmodule Opus.Schedules.Provider do
       _ -> nil
     end
   end
-
-  defp validate_cron_if_present(nil), do: :ok
-  defp validate_cron_if_present(expr), do: validate_cron(expr)
 
   defp maybe_resolve_reference(ctx, %{"reference" => reference}, update_attrs)
        when is_binary(reference) do

@@ -176,6 +176,91 @@ defmodule PrismWeb.SchedulesLiveTest do
 
   # `ui.schedule.focus` names a schedule by its id: that one row is marked,
   # and a page opened without one marks none.
+  describe "who set a schedule and where it fires" do
+    # A line for Aqua as its row stands, written by hand: one the person
+    # made, one a crew member's turn made in the daily thread, and one the
+    # soul's turn made in a workspace thread, set for one time.
+    defp line!(ctx, name, fields) do
+      {:ok, row} =
+        Arca.CronSchedule.create(
+          Sanctum.Context.actor(ctx),
+          Map.merge(
+            %{
+              user_id: ctx.user_id,
+              name: name,
+              cron_expression: "0 9 * * *",
+              reference: "agent:local.aqua",
+              resolved_reference: "agent:local.aqua",
+              input: Jason.encode!(%{"line" => "look at #{name}"}),
+              next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+              by_person: true,
+              cap: 0
+            },
+            fields
+          )
+        )
+
+      row
+    end
+
+    defp workspace!(ctx, title) do
+      id = Prima.UUID7.generate_id("thread")
+
+      Arca.Repo.insert!(%Arca.Schemas.Thread{
+        id: id,
+        athanor_id: ctx.athanor_id,
+        created_by: ctx.user_id,
+        kind: "workspace",
+        title: title,
+        workspace_state: "open"
+      })
+
+      id
+    end
+
+    # The row of the schedule named `name`, the only row that names it.
+    defp row_text(view, row),
+      do: view |> element("tbody tr", ~r/\A\s*#{Regex.escape(row.name)}\s/) |> render()
+
+    test "each row names its maker and, for a line for Aqua, its room; one set for one time reads Once and stays once when edited",
+         %{conn: conn, ctx: ctx} do
+      mine = line!(ctx, "Mine", %{})
+      planner = line!(ctx, "Planner's", %{maker: "planner"})
+      workspace = workspace!(ctx, "Deploy")
+
+      soul =
+        line!(ctx, "Deploy check", %{
+          maker: "aqua",
+          thread_id: workspace,
+          once: true,
+          cron_expression: "30 9 26 11 *"
+        })
+
+      {view, _html} = mount_athanor(conn, "/schedules")
+
+      assert row_text(view, mine) =~ "Set by you"
+      assert row_text(view, mine) =~ "Daily thread"
+      assert row_text(view, planner) =~ "Set by planner"
+      assert row_text(view, planner) =~ "Daily thread"
+      assert row_text(view, soul) =~ "Set by aqua"
+      assert row_text(view, soul) =~ "Workspace thread: Deploy"
+      assert row_text(view, soul) =~ "Once"
+
+      render_click(view, "edit", %{"id" => soul.id})
+
+      render_submit(view, "save", %{
+        "name" => "Deploy check again",
+        "target" => "aqua",
+        "line" => "look at the deploy",
+        "cron_custom" => "30 9 26 11 *",
+        "missed_runs" => "skip"
+      })
+
+      assert {:ok, %{name: "Deploy check again", once: true, cron_expression: "30 9 26 11 *"}} =
+               Arca.CronSchedule.get(Sanctum.Context.actor(ctx), soul.id)
+    end
+  end
+
   test "the schedule a focus link names is the one row marked", %{
     conn: conn,
     view: view,

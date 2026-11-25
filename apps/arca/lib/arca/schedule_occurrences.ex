@@ -87,6 +87,11 @@ defmodule Arca.ScheduleOccurrences do
   slot lease, so neither a timer that fires a few seconds late nor a
   successor taking over a slot is downtime.
 
+  A `once` schedule's due time fires however late it is, under either
+  policy, and the cursor clears: nothing of it is due again, and the
+  write that records the occurrence's end removes the row
+  (`Arca.CronSchedule.record_run/3`).
+
   A due time older than the bound at claim was missed. Under `skip` it
   does not fire: the cursor moves to the first time the bound does not
   call missed, and the claim answers `:skipped`. Under `catch_up` it
@@ -202,6 +207,7 @@ defmodule Arca.ScheduleOccurrences do
         where: s.status == "active" and s.next_run_at == ^due_for and s.next_run_at <= ^now,
         select:
           map(s, [
+            :once,
             :concurrency,
             :missed_runs,
             :catch_up_limit,
@@ -215,6 +221,9 @@ defmodule Arca.ScheduleOccurrences do
   # What the claim does with the due time and where the cursor goes, as
   # `{:fire | :skip, cursor}` with the episode columns the cursor carries,
   # or `:none` when the expression names no later time.
+  defp advance(%{once: true}, _due_for, _horizon, _next_after),
+    do: {:fire, episode(nil, nil, 0)}
+
   defp advance(%{catch_up_left: left, catch_up_until: until}, due_for, horizon, next_after)
        when left > 0 do
     # An open episode: the cursor's time is one of its missed times.

@@ -3882,8 +3882,10 @@ func (args *RetentionSetArgsSettings) UnmarshalJSON(data []byte) error {
 type ScheduleCreateArgs struct {
 	// Human-readable schedule name, unique within the athanor (create/update)
 	Name string `json:"name"`
-	// Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval.
-	CronExpression string `json:"cron_expression"`
+	// Cron expression, e.g. '*/5 * * * *' (create/update): a cron_expression or an at. Minimum 1-minute interval.
+	CronExpression Field[string] `json:"cron_expression,omitzero"`
+	// Instead of cron_expression, the one time it fires, ISO 8601 with its offset, e.g. '2026-11-26T09:00:00+01:00' (create/update): at least a minute and at most a year ahead, rounded up to the minute. It fires once, however late, and is then removed.
+	At Field[string] `json:"at,omitzero"`
 	// Component reference string, or agent:local.aqua for a line for Aqua (create/update)
 	Reference string `json:"reference"`
 	// Profile the schedule fires under; its consent authorizes the binding (create, required for a component, refused for a line for Aqua; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
@@ -4005,8 +4007,10 @@ type ScheduleUpdateArgs struct {
 	ScheduleId string `json:"schedule_id"`
 	// Human-readable schedule name, unique within the athanor (create/update)
 	Name Field[string] `json:"name,omitzero"`
-	// Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval.
+	// Cron expression, e.g. '*/5 * * * *' (create/update): a cron_expression or an at. Minimum 1-minute interval.
 	CronExpression Field[string] `json:"cron_expression,omitzero"`
+	// Instead of cron_expression, the one time it fires, ISO 8601 with its offset, e.g. '2026-11-26T09:00:00+01:00' (create/update): at least a minute and at most a year ahead, rounded up to the minute. It fires once, however late, and is then removed.
+	At Field[string] `json:"at,omitzero"`
 	// Component reference to run under the schedule profile
 	Reference Field[string] `json:"reference,omitzero"`
 	// Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument.
