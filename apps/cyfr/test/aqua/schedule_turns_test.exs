@@ -433,11 +433,14 @@ defmodule Aqua.ScheduleTurnsTest do
                "input" => %{"line" => "read every shared thread"}
              }) == {:error, :aqua_line_by_person}
 
-      # The store holds the rule itself, whoever calls it.
+      # The store holds the rule itself, whoever calls it: the line and the
+      # time a fire reads alike.
       for attrs <- [
             %{input: Jason.encode!(%{"line" => "x"})},
             %{reference: "reagent:local.test:1.0.0"},
-            %{resolved_reference: "reagent:local.test:1.0.0"}
+            %{resolved_reference: "reagent:local.test:1.0.0"},
+            %{cron_expression: "*/5 * * * *"},
+            %{once: true}
           ] do
         assert CronSchedule.update(actor(ctx), component.id, attrs) ==
                  {:error, :aqua_line_by_person}
@@ -1696,6 +1699,10 @@ defmodule Aqua.ScheduleTurnsTest do
       assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor(ctx), room.id)
       assert under_client_id(ctx, room.id, client_id(fired)) == []
       assert %{state: "failed", execution_id: nil} = occurrence(ctx, fired.id)
+
+      # A fire that never started removes nothing: the wake stays, saying why.
+      assert %{status: "active", once: true, last_error: "Last run did not start: " <> _} =
+               row!(ctx, fired.schedule_id)
     end
 
     test "a time more than a year off by its date is refused, a leap day among them", %{ctx: ctx} do
