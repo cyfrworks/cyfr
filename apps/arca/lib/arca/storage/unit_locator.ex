@@ -64,7 +64,31 @@ defmodule Arca.Storage.UnitLocator do
   """
   @callback creates_by_write?(unit :: Arca.Storage.path()) :: boolean()
 
-  @optional_callbacks creates_by_write?: 1
+  @doc """
+  Whether a directory unit is committed whole by every ordinary write:
+  a write, an append, an edit or a delete inside it, Files' own
+  included, stages the unit's every object again with the change and
+  lands as a new revision through `Arca.Overlay.commit_unit/4`, never as
+  an edit of the committed revision in place. Its sentinel is its
+  record, written by the unit's own verbs alone: an ordinary write or
+  delete of it is refused as `{:reserved_path, path}`
+  (`Arca.Overlay.reserved/1`). False when the locator does not say.
+  """
+  @callback commits_whole?(unit :: Arca.Storage.path()) :: boolean()
+
+  @doc """
+  Whether an ordinary write may land in a unit that commits whole: asked
+  under the unit's draft with the objects the next revision would hold,
+  each `{relative, bytes}`, the sentinel among them as it is now.
+  `:ok`, or the refusal the writer answers, with nothing written. The
+  domain decides, so the storage layer never reads what a sentinel
+  means. `:ok` when the locator does not say.
+  """
+  @callback admit_edit(Prima.Actor.t(), unit :: Arca.Storage.path(), [
+              {Arca.Storage.path(), binary()}
+            ]) :: :ok | {:error, term()}
+
+  @optional_callbacks creates_by_write?: 1, commits_whole?: 1, admit_edit: 3
 
   defmodule NotInstalledError do
     @moduledoc """
@@ -293,5 +317,33 @@ defmodule Arca.Storage.UnitLocator do
     if Code.ensure_loaded?(locator) and function_exported?(locator, :creates_by_write?, 1),
       do: locator.creates_by_write?(unit),
       else: false
+  end
+
+  @doc """
+  Whether a directory unit commits whole, as the root's locator answers
+  (`c:commits_whole?/1`); false for a locator that does not say.
+  """
+  @spec commits_whole?(Arca.Storage.path()) :: boolean()
+  def commits_whole?([root | _] = unit) when is_binary(root) do
+    locator = Map.fetch!(impl!(), root)
+
+    if Code.ensure_loaded?(locator) and function_exported?(locator, :commits_whole?, 1),
+      do: locator.commits_whole?(unit),
+      else: false
+  end
+
+  @doc """
+  Whether an ordinary write may land in a unit that commits whole, as the
+  root's locator answers (`c:admit_edit/3`); `:ok` for a locator that does
+  not say.
+  """
+  @spec admit_edit(Prima.Actor.t(), Arca.Storage.path(), [{Arca.Storage.path(), binary()}]) ::
+          :ok | {:error, term()}
+  def admit_edit(actor, [root | _] = unit, pairs) when is_binary(root) do
+    locator = Map.fetch!(impl!(), root)
+
+    if Code.ensure_loaded?(locator) and function_exported?(locator, :admit_edit, 3),
+      do: locator.admit_edit(actor, unit, pairs),
+      else: :ok
   end
 end
