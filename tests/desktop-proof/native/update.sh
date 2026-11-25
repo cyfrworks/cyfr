@@ -340,16 +340,19 @@ key() {
       # first and the key sent only once it is, within 10 s, or nothing is
       # sent and the press fails naming the window that holds the keys. A
       # background process may not hand the foreground on by itself: it
-      # joins the input of the foreground window's thread to do it. Windows'
-      # Search keeps the keys from that: where it holds them, its process
-      # is ended, on this disposable machine, and said, as the first-run
-      # page's is.
+      # joins the input of the foreground window's thread to do it. A
+      # shell flyout (Search, Start) gives the keys to no one that way:
+      # Escape, which goes to it, closes it; any other window that keeps
+      # them gives them up to a click on Update CYFR's own title bar, as a
+      # person gives a window the keys, its page's focus kept.
       local vk=13
       [ "$1" = Escape ] && vk=27
       VK=$vk pwsh -NoProfile -NonInteractive -Command '
         Add-Type @"
 using System; using System.Text; using System.Runtime.InteropServices;
 public static class K {
+  [StructLayout(LayoutKind.Sequential)] public struct P { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
   public delegate bool F(IntPtr h, IntPtr p);
   [DllImport("user32.dll")] public static extern bool EnumWindows(F f, IntPtr p);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
@@ -361,6 +364,14 @@ public static class K {
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint f, UIntPtr e);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref P p);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+  static string Owner(IntPtr h) {
+    uint p; GetWindowThreadProcessId(h, out p);
+    try { return System.Diagnostics.Process.GetProcessById((int)p).ProcessName; } catch { return ""; }
+  }
   public static IntPtr Find(string prefix) {
     IntPtr found = IntPtr.Zero;
     EnumWindows((h, p) => {
@@ -370,7 +381,6 @@ public static class K {
     }, IntPtr.Zero);
     return found;
   }
-  public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
   public static string Said(IntPtr h) {
     var s = new StringBuilder(512); GetWindowText(h, s, 512);
     uint p; GetWindowThreadProcessId(h, out p); string n = "none";
@@ -384,7 +394,17 @@ public static class K {
     bool joined = them != 0 && them != me && AttachThreadInput(me, them, true);
     BringWindowToTop(t); SetForegroundWindow(t);
     if (joined) AttachThreadInput(me, them, false);
-    return GetForegroundWindow() == t;
+    fg = GetForegroundWindow();
+    if (fg == t) return true;
+    string owner = Owner(fg);
+    if (owner == "SearchHost" || owner == "StartMenuExperienceHost") {
+      keybd_event(0x1B, 0, 0, UIntPtr.Zero); keybd_event(0x1B, 0, 2, UIntPtr.Zero);
+      return false;
+    }
+    R r; GetWindowRect(t, out r); P c = new P(); ClientToScreen(t, ref c);
+    SetCursorPos((r.L + r.Rt) / 2, (r.T + c.Y) / 2);
+    mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+    return false;
   }
 }
 "@
@@ -392,11 +412,6 @@ public static class K {
         if ($t -eq [IntPtr]::Zero) { [Console]::Error.WriteLine("update: no Update CYFR window to press a key in"); exit 1 }
         $until = (Get-Date).AddSeconds(10)
         while (-not [K]::Front($t)) {
-          $holder = Get-Process -Id ([K]::Pid([K]::GetForegroundWindow())) -ErrorAction SilentlyContinue
-          if ($holder.ProcessName -eq "SearchHost") {
-            Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
-            [Console]::Error.WriteLine("update: the Search of Windows (SearchHost, $($holder.Id)) held the keys and was ended: " + $?)
-          }
           if ((Get-Date) -gt $until) {
             [Console]::Error.WriteLine("update: Update CYFR did not take the keys in 10 s; the window that holds them is " + [K]::Said([K]::GetForegroundWindow()))
             exit 1
