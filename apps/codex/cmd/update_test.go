@@ -2386,6 +2386,10 @@ func TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState(t *testing.T) {
 	s = newUpdateScenario(t, shippedCompose(t), nil)
 	writeState(filepath.Join(s.project, ".cyfr"))
 	s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, ".cyfr"), "target": "/app/data/reach"})
+	// Its mount point in data/, as the stack's start made it.
+	if err := os.Mkdir(filepath.Join(s.project, "data", "reach"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := s.run(context.Background()); err != nil {
 		t.Fatalf("update with .cyfr/ bound under the storage root: %v\n%s", err, out)
 	}

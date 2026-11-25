@@ -332,6 +332,21 @@ func TestTheSnapshotLeavesTheAccessStateOutWhereverItLies(t *testing.T) {
 		t.Fatalf("cyfr backup answered %v\n%s", err, out)
 	}
 	snapshotIs(t, s, mainStorage(map[string]string{"database": sqliteDatabase, "database-wal": "sqlite-wal"}))
+
+	// A part of .cyfr bound on its own under the storage root is the
+	// engine's state too.
+	s = newUpdateScenario(t, shippedCompose(t), nil)
+	s.backupScaffold()
+	s.edit(".cyfr/sub/state", "fixture")
+	// Its mount point in data/, as the stack's start made it.
+	if err := os.Mkdir(filepath.Join(s.project, "data", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, ".cyfr", "sub"), "target": "/app/data/sub"})
+	if out, err := s.backup(); err != nil {
+		t.Fatalf("cyfr backup answered %v\n%s", err, out)
+	}
+	snapshotIs(t, s, mainStorage(map[string]string{"database": sqliteDatabase, "database-wal": "sqlite-wal"}))
 }
 
 // A write-ahead log is never lost quietly: on a file bind of its own, and

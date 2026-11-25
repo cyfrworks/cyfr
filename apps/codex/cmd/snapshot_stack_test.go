@@ -18,10 +18,10 @@ import (
 	"time"
 )
 
-// namedLog is the fake docker's log, each read through the stack's
+// namedLog is the fake docker's log, each run through the stack's
 // container name as NAME.
 func (s *updateScenario) namedLog() []string {
-	name := regexp.MustCompile(`cyfr-snapshot-read-[0-9a-f]{12}`)
+	name := regexp.MustCompile(`cyfr-(snapshot-read|restore-write)-[0-9a-f]{12}`)
 	log := s.log()
 	for i := range log {
 		log[i] = name.ReplaceAllString(log[i], "NAME")

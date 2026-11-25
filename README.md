@@ -1045,10 +1045,8 @@ files the directory holds, the keyring, `.env` and `docker-compose.yml`, with
 CYFR is stopped for it as an update stops it and started again afterwards,
 also when the snapshot fails; a stopped one stays stopped. It refuses while
 a server outside this stack still holds a slot of the cluster. A snapshot
-holds the keyring and the database: keep it as you keep the data. Once the
-stack has run, the server's container owns some of the files a snapshot
-puts back, so a backup taken as yourself is restored with sudo; `cyfr
-backup`'s last line names the restore command in the form that works.
+holds the keyring and the database: keep it as you keep the data. `cyfr
+backup`'s last line names the restore command.
 
 **Restore is declared.** `cyfr restore backups/<timestamp>` puts a snapshot
 `cyfr backup` or `cyfr update` took back: it refuses an incomplete snapshot or one whose
@@ -1068,14 +1066,25 @@ docker compose run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr e
 ```
 
 and only then takes the bar out of `.env` and starts the stack
-(`--no-start` leaves it stopped). On native Linux the server's container
-owns the storage root once the stack has run, so `cyfr restore` says at its
-start, before anything stops, that it needs root: run it as
-`sudo cyfr restore backups/<timestamp>`. Run through sudo, it gives `.env`,
-`docker-compose.yml`, the scaffold files and `.cyfr/` back to the account
-that ran sudo. A restore cut short anywhere leaves the
+(`--no-start` leaves it stopped). It runs as you, with no sudo, also on
+native Linux, where the server's container owns the storage root once the
+stack has run: the storage root and the SQLite file are written through
+the stack, as `cyfr update` and `cyfr backup` read them, by one-off
+containers of the snapshot's image (pulled first when this machine has
+none), the binds they replace writable and every other mount of the
+`cyfr` service read only, with no network, from what `cyfr` streams them
+of the snapshot; the declaration's run hands what they wrote to the
+image's user, as every start does. A bind that is a parent of the storage
+root (say `./:/app` with the storage root at `/app/data`) is writable to
+those containers whole, and only their arguments keep the write inside
+the storage root; on kernels before 5.12 Docker's read-only does not
+reach a read-only mount's submounts. `.env`, `docker-compose.yml`, the
+scaffold files and `.cyfr/` are written as you, and a project folder you
+cannot write is refused before anything stops. A restore cut short anywhere leaves the
 bar up; `cyfr restore <backup>` run again puts every part back and
-declares it. A backup put back by hand, with no bar in `.env`, is declared
+declares it. While that bar is up, the restore of another backup refuses a
+database that does not answer, which the one cut short may have left half
+written, and names that restore to run again first. A backup put back by hand, with no bar in `.env`, is declared
 by the same command, with the whole cluster stopped, before its first start.
 The next boot retires what the backup's authority
 could still do before it admits anything: every session ends; API keys
