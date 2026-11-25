@@ -27,7 +27,11 @@ defmodule Opus.Programs.Session do
   on since the digest was read is begun again from the new one, three
   times at most; a fourth move ends the start `:packs_moved`, and a hold
   or a put that fails `:packs_unready`, before the open is sent. The open
-  then names the digest as its `packs`.
+  then names as its `packs` the digest the `held` answer named: the one
+  read, but for an open of a lifetime whose session lives, which the
+  service holds at the generation that session's open named, packs changed
+  since or not, and the open is resumed; the packs as they stand reach the
+  next lifetime.
 
   Answers are the wire's (`Prima.LocusBackends.read_session_answer/2`).
   A refusal is `{:error, {:refused, code, boot}}` with the code a box
@@ -92,7 +96,7 @@ defmodule Opus.Programs.Session do
     end
   end
 
-  # The digest the open names, once the service holds its copy for the
+  # The digest the open names, the one the service holds for the
   # lifetime; nil for a program that loads no packs.
   defp packs(_grant, _lifetime, false, _timeout_ms), do: {:ok, nil}
 
@@ -110,8 +114,8 @@ defmodule Opus.Programs.Session do
       base(:packs_hold, grant) |> Map.merge(of_lifetime(lifetime)) |> Map.put(:digest, digest)
 
     case post(grant, hold, timeout_ms) do
-      {:ok, %{state: :held}} ->
-        {:ok, digest}
+      {:ok, %{state: :held, digest: held}} ->
+        {:ok, held}
 
       {:ok, %{state: :missing}} ->
         case Compendium.pack_view(ctx, lifetime.athanor, digest) do
@@ -142,7 +146,7 @@ defmodule Opus.Programs.Session do
 
     case {post(grant, Map.merge(message, %{seq: seq, last: last, part: part}), timeout_ms), last} do
       {{:ok, %{state: :taken}}, false} -> put(grant, message, rest, seq + 1, timeout_ms)
-      {{:ok, %{state: :held}}, true} -> {:ok, message.digest}
+      {{:ok, %{state: :held, digest: held}}, true} -> {:ok, held}
       {failed, _last} -> unready(failed)
     end
   end

@@ -9,7 +9,9 @@ defmodule Opus.Programs.SessionTest do
   as the keeper does: the copy is held before the one open, put only when
   it is missing, made from the selection as it stands and from the
   athanor's own packs alone, and a start whose copy cannot be made ready
-  sends no open.
+  sends no open. An open of a lifetime whose session runs is resumed at
+  the generation that session opened with, and the next lifetime gets
+  the packs as they stand.
   """
   use ExUnit.Case, async: false
 
@@ -70,17 +72,20 @@ defmodule Opus.Programs.SessionTest do
   # One start: a new lifetime of the program, opened by the box for the
   # holder, the test process.
   defp start(grant, holder \\ self()) do
-    lifetime =
+    lifetime = new_lifetime(grant)
+    {lifetime.id, open(lifetime, holder)}
+  end
+
+  defp new_lifetime(grant),
+    do:
       Programs.lifetime(grant, %{
         program: Opus.Programs.Definition.program_name(),
         key: "k#{System.unique_integer([:positive])}"
       })
 
-    answer =
-      Programs.box_open(lifetime, holder, %{}, System.system_time(:millisecond) + 15_000)
-
-    {lifetime.id, answer}
-  end
+  # The box's one open of `lifetime`, `Opus.Programs.Session.open/2`.
+  defp open(lifetime, holder \\ self()),
+    do: Programs.box_open(lifetime, holder, %{}, System.system_time(:millisecond) + 15_000)
 
   # The session messages of packs and the open the service was told of,
   # in the order they arrived, until the open or a close.
@@ -187,6 +192,60 @@ defmodule Opus.Programs.SessionTest do
                  "mine/skills/a/run.sh" => @script
                }
              }
+           }
+  end
+
+  test "an open of a lifetime whose session runs is resumed at the generation that session " <>
+         "opened with, the packs changed since or not, and the next lifetime puts the new one",
+       %{ctx: ctx, actor: actor, fake: fake} do
+    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", @skill)
+    {grant, _program} = held(ctx)
+    d0 = digest(ctx)
+    lifetime = new_lifetime(grant)
+    {:ok, %{session: session, resumed: false}} = open(lifetime)
+    told()
+
+    unchanged = open(lifetime)
+    unchanged_told = told()
+
+    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/notes.md", "written since")
+    d1 = digest(ctx)
+    changed = open(lifetime)
+    changed_told = told()
+
+    {_next, next} = start(grant)
+    next_told = told()
+
+    assert %{
+             moved: d1 != d0,
+             unchanged: unchanged,
+             unchanged_holds: holds(unchanged_told),
+             unchanged_puts: puts(unchanged_told),
+             unchanged_opened: opened(unchanged_told),
+             changed: changed,
+             changed_holds: holds(changed_told),
+             changed_puts: puts(changed_told),
+             changed_opened: opened(changed_told),
+             next: match?({:ok, %{resumed: false, session: other}} when other != session, next),
+             next_holds: holds(next_told),
+             next_puts: puts(next_told),
+             next_opened: opened(next_told),
+             copies: fake |> Scripted.generations(ctx.athanor_id) |> Map.keys() |> Enum.sort()
+           } == %{
+             moved: true,
+             unchanged: {:ok, %{session: session, resumed: true}},
+             unchanged_holds: [d0],
+             unchanged_puts: [],
+             unchanged_opened: [d0],
+             changed: {:ok, %{session: session, resumed: true}},
+             changed_holds: [d1],
+             changed_puts: [],
+             changed_opened: [d0],
+             next: true,
+             next_holds: [d1],
+             next_puts: [{d1, 0, true}],
+             next_opened: [d1],
+             copies: Enum.sort([d0, d1])
            }
   end
 

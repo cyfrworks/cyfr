@@ -82,17 +82,22 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   The person's packs are held as the keeper holds them, one generation
   for each set digest of each athanor (`generations/2`). A `packs_hold`
-  answers `held` when the athanor's generation of its digest is held, and
-  `missing` otherwise. A `packs_put`'s parts are collected by athanor,
+  of a lifetime whose session runs answers `held` naming the digest that
+  session's open named, whatever it asks; one of a lifetime spent (a
+  session started or a close carried out) or of another boot is refused
+  `lifetime_over`; any other answers `held` naming its digest when the
+  athanor's generation of it is held, and `missing` otherwise. A
+  `packs_put` of a lifetime spent or of another boot is refused
+  `lifetime_over`; any other's parts are collected by athanor,
   digest and lifetime, each answered `taken`; at its `last` the stream is
   read with `:erl_tar`, as another reader than CYFR's own writer: its
   first entry the manifest `.cyfr-packs.json`, then exactly the regular
   files it names, each by size, SHA-256 and executable bit, which makes
-  the generation held and is answered `held`. A part out of order, or a
-  stream that does not read so, is refused `packs_refused` and drops the
-  put. A hold, a put or an open naming `packs` for a program its sync did
-  not mark `packs` is refused `bad_request`; an open's `packs` is kept on
-  its session.
+  the generation held and is answered `held` naming its digest. A part
+  out of order, or a stream that does not read so, is refused
+  `packs_refused` and drops the put. A hold, a put or an open naming
+  `packs` for a program its sync did not mark `packs` is refused
+  `bad_request`; an open's `packs` is kept on its session.
 
   A status reports `stderr_bytes` of stderr per program (none unless set),
   as its tail for a scratch program and as its length for a kept one: the script does not bound its answers, so a test can see what the
@@ -922,7 +927,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         opening(conn, agent, lifetime(fields, message), message, bound)
 
       true ->
-        packs(conn, agent, fields.athanor, message)
+        packs(conn, agent, lifetime(fields, message), message)
     end
   end
 
@@ -992,13 +997,40 @@ defmodule Cyfr.Test.ScriptedBackends do
   defp loads_packs?(st, owner, program),
     do: Enum.any?(Map.get(st.programs, owner, []), &(&1["name"] == program and &1["packs"]))
 
-  defp packs(conn, agent, athanor, %{type: :packs_hold, digest: digest}) do
+  # A hold of a lifetime whose session runs is held at the generation its
+  # open named; any other hold or put is of a lifetime still to open.
+  defp packs(conn, agent, named, %{type: :packs_hold, digest: digest}) do
     st = Agent.get(agent, & &1)
-    held = Map.has_key?(Map.get(st.packs, athanor, %{}), digest)
-    session_answer(conn, st, %{"state" => if(held, do: "held", else: "missing")})
+    {athanor, _server} = named.owner
+    live = Enum.find(Map.values(st.sessions), &(&1.running and &1.named == named and &1.packs))
+
+    cond do
+      live ->
+        session_answer(conn, st, %{"state" => "held", "digest" => live.packs})
+
+      spent?(st, named) ->
+        refuse(conn, st, :lifetime_over)
+
+      Map.has_key?(Map.get(st.packs, athanor, %{}), digest) ->
+        session_answer(conn, st, %{"state" => "held", "digest" => digest})
+
+      true ->
+        session_answer(conn, st, %{"state" => "missing"})
+    end
   end
 
-  defp packs(conn, agent, athanor, %{type: :packs_put} = message) do
+  defp packs(conn, agent, named, %{type: :packs_put} = message) do
+    st = Agent.get(agent, & &1)
+
+    if spent?(st, named),
+      do: refuse(conn, st, :lifetime_over),
+      else: put(conn, agent, named, message)
+  end
+
+  defp spent?(st, named),
+    do: MapSet.member?(st.spent, named) or not LocusBackends.lifetime_of?(named.lifetime, st.boot)
+
+  defp put(conn, agent, %{owner: {athanor, _server}}, message) do
     key = {athanor, message.digest, message.lifetime}
 
     state =
@@ -1033,8 +1065,17 @@ defmodule Cyfr.Test.ScriptedBackends do
       end)
 
     case state do
-      :refused -> refuse(conn, Agent.get(agent, & &1), :packs_refused)
-      state -> session_answer(conn, Agent.get(agent, & &1), %{"state" => state})
+      :refused ->
+        refuse(conn, Agent.get(agent, & &1), :packs_refused)
+
+      "held" ->
+        session_answer(conn, Agent.get(agent, & &1), %{
+          "state" => "held",
+          "digest" => message.digest
+        })
+
+      state ->
+        session_answer(conn, Agent.get(agent, & &1), %{"state" => state})
     end
   end
 

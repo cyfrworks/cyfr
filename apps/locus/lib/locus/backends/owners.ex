@@ -328,16 +328,20 @@ defmodule Locus.Backends.Owners do
   end
 
   @doc """
-  Where a `packs_hold` or a `packs_put` of the owner `invoke` names goes:
-  the launcher that keeps its person's packs, for a program of that owner
-  that loads packs (its sync's `packs`, else `bad_request`) and a lifetime
-  of this boot that no fence names (else `lifetime_over`), the owner
-  admitted at exactly its version as a session message's is. Nothing of
-  the lifetime is spent: no admission, slot, uid or home. The caller sends
+  Where a `packs_hold` or a `packs_put` of the owner `invoke` names goes,
+  for a program of that owner that loads packs (its sync's `packs`, else
+  `bad_request`), the owner admitted at exactly its version as a session
+  message's is. A hold of a lifetime whose session lives, starting or
+  running, is that session's: `{:held, digest}`, the generation its open
+  named, which it keeps while it runs, and nothing goes to the keeper.
+  Any other goes to the launcher that keeps the person's packs, for a
+  lifetime of this boot that no fence names (else `lifetime_over`), so a
+  put for a lifetime whose session lives is refused. Nothing of the
+  lifetime is spent: no admission, slot, uid or home. The caller sends
   the request itself, so no part of a put passes through this table.
   """
   @spec packs(GenServer.server(), map(), map()) ::
-          {:ok, {module(), term()}} | {:error, LocusBackends.code()}
+          {:ok, {module(), term()}} | {:held, String.t()} | {:error, LocusBackends.code()}
   def packs(server \\ __MODULE__, invoke, message) do
     GenServer.call(server, {:packs, invoke, message}, @call_timeout_ms)
   catch
@@ -484,11 +488,14 @@ defmodule Locus.Backends.Owners do
   def handle_call({:packs, invoke, message}, _from, state) do
     case admit_owner(state, invoke) do
       {:ok, owner, state} ->
+        named = lifetime(invoke, message)
+
         with {:ok, _program} <- loading_packs(owner, message),
-             :ok <- admissible(state, lifetime(invoke, message)) do
+             :error <- live_hold(owner, named, message),
+             :ok <- admissible(state, named) do
           {:reply, {:ok, session_launcher(state)}, state}
         else
-          {:error, code} -> {:reply, {:error, code}, state}
+          answered -> {:reply, answered, state}
         end
 
       {:error, code, state} ->
@@ -1153,6 +1160,18 @@ defmodule Locus.Backends.Owners do
     end
   end
 
+  # A hold of a lifetime whose session lives names the generation that
+  # session's open named. A session whose open named none holds none, and
+  # its lifetime is spent.
+  defp live_hold(owner, named, %{type: :packs_hold}) do
+    with {_running_or_starting, id} <- running(owner, named),
+         %{packs: digest} when is_binary(digest) <- owner.sessions[id],
+         do: {:held, digest},
+         else: (_none -> :error)
+  end
+
+  defp live_hold(_owner, _named, %{type: :packs_put}), do: :error
+
   defp open_program(state, owner, program, invoke, message, from) do
     named = lifetime(invoke, message)
 
@@ -1503,6 +1522,7 @@ defmodule Locus.Backends.Owners do
           closed: false,
           home_id: ask.home_id,
           mode: ask.mode,
+          packs: ask.packs,
           running: true,
           started: false,
           memory_bytes: ask.memory_bytes,

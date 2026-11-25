@@ -1726,6 +1726,7 @@
   "owner_key_hex": "f852539d36794b12e52011f7023836f32a6c3ee1c3a373ad48545ef6f03bd4f9",
   "packs_hold": {
     "answer": "{\"state\":\"missing\",\"version\":5}",
+    "answer_held": "{\"digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"state\":\"held\",\"version\":5}",
     "body": "{\"digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"e\":7,\"key\":\"mcp\",\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1d863e7e5413ef4542c743d14c14c367\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"program\":\"fetch\",\"type\":\"packs_hold\",\"version\":5}",
     "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_packs_hold_0001\n3edc4cb731825615028df97104e8fd6e020a1a464e1e245b99aa81860afb1286",
     "fields": {
@@ -1738,10 +1739,22 @@
       "ts": 1789305249602
     },
     "header": "v1 kind=invoke athanor=ath_01a09fee-045b-770b-b745-a62792bb8798 server=mcp_01a09fee-07cc-791f-a598-e7f90608c9e2 gen=3 epoch=7 boot=bb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e ts=1789305249602 nonce=n_packs_hold_0001 body=3edc4cb731825615028df97104e8fd6e020a1a464e1e245b99aa81860afb1286 mac=pAv2WltYsDkjVxCNv3HepnqzJ2et_tMeJD2a-xHa0dA",
+    "invalid_answers": [
+      {
+        "answer": "{\"state\":\"held\",\"version\":5}",
+        "error": "missing_field",
+        "name": "held_without_digest"
+      },
+      {
+        "answer": "{\"digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"state\":\"missing\",\"version\":5}",
+        "error": "unknown_field",
+        "name": "missing_with_digest"
+      }
+    ],
     "mac": "pAv2WltYsDkjVxCNv3HepnqzJ2et_tMeJD2a-xHa0dA"
   },
   "packs_put": {
-    "answer": "{\"state\":\"held\",\"version\":5}",
+    "answer": "{\"digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"state\":\"held\",\"version\":5}",
     "body": "{\"digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"e\":7,\"key\":\"mcp\",\"last\":true,\"lifetime\":\"lt_3b4da9d6aa28e513d474b18ac4d4d29e_1d863e7e5413ef4542c743d14c14c367\",\"mode\":\"run\",\"owner\":{\"athanor\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"server\":\"mcp_01a09fee-07cc-791f-a598-e7f90608c9e2\"},\"part\":\"aGVsbG8=\",\"program\":\"fetch\",\"seq\":0,\"type\":\"packs_put\",\"version\":5}",
     "canonical": "cyfr-locus/v1/backends/invoke\nath_01a09fee-045b-770b-b745-a62792bb8798\nmcp_01a09fee-07cc-791f-a598-e7f90608c9e2\n3\n7\nbb_4f3c2a1e9d8b7c6a5f4e3d2c1b0a9f8e\n1789305249602\nn_packs_put_00001\n54f257e36f88230316337b8417406fd34270b8ba3b53fdd6ad3f1cd5ce3afe1b",
     "fields": {

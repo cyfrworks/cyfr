@@ -835,15 +835,20 @@ defmodule Locus.Backends.ServiceTest do
       assert answer.status == 200, answer.body
       assert {:ok, %{state: :missing}} = LB.read_session_answer(:packs_hold, answer.body)
 
-      for {seq, last, part, state} <- [{0, false, "one", :taken}, {1, true, "two", :held}] do
+      for {seq, last, part, state} <- [
+            {0, false, "one", %{state: :taken}},
+            {1, true, "two", %{state: :held, digest: @digest}}
+          ] do
         answer = invoke(ctx, packs_message(:packs_put, lifetime, put_part(seq, last, part)))
         assert answer.status == 200, answer.body
-        assert {:ok, %{state: ^state}} = LB.read_session_answer(:packs_put, answer.body)
+        assert {:ok, state} == LB.read_session_answer(:packs_put, answer.body)
       end
 
       again = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
       answer = invoke(ctx, packs_message(:packs_hold, again))
-      assert {:ok, %{state: :held}} = LB.read_session_answer(:packs_hold, answer.body)
+
+      assert {:ok, %{state: :held, digest: @digest}} ==
+               LB.read_session_answer(:packs_hold, answer.body)
 
       assert packs_calls(ctx) == [
                {:hold, @athanor, lifetime, @digest},
@@ -930,6 +935,84 @@ defmodule Locus.Backends.ServiceTest do
 
       assert_refused(invoke(ctx, packs_message(:packs_hold, closed.lifetime)), "lifetime_over")
       assert packs_calls(ctx) == []
+    end
+
+    test "a hold of a lifetime whose session runs is held at the generation its open named, " <>
+           "whatever it names, and reaches no keeper; the next lifetime's hold goes there",
+         ctx do
+      packs_sync(ctx)
+      lifetime = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      open = Map.put(open_message(lifetime: lifetime), :packs, @digest)
+      opened = invoke(ctx, open)
+
+      assert {:ok, %{session: session, resumed: false}} =
+               LB.read_session_answer(:open, opened.body)
+
+      # The packs moved on since the open: the store names another digest.
+      moved = "sha256:" <> String.duplicate("cd", 32)
+      again = invoke(ctx, open)
+      same = invoke(ctx, packs_message(:packs_hold, lifetime))
+      other = invoke(ctx, packs_message(:packs_hold, lifetime, %{digest: moved}))
+
+      put =
+        invoke(
+          ctx,
+          packs_message(:packs_put, lifetime, %{digest: moved, seq: 0, last: true, part: "x"})
+        )
+
+      next = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      next_hold = invoke(ctx, packs_message(:packs_hold, next, %{digest: moved}))
+
+      assert %{
+               again: {again.status, LB.read_session_answer(:open, again.body)},
+               same: {same.status, LB.read_session_answer(:packs_hold, same.body)},
+               other: {other.status, LB.read_session_answer(:packs_hold, other.body)},
+               put: {put.status, LB.read_refusal(put.body)},
+               next: {next_hold.status, LB.read_session_answer(:packs_hold, next_hold.body)},
+               calls: packs_calls(ctx)
+             } == %{
+               again: {200, {:ok, %{status: :running, session: session, resumed: true}}},
+               same: {200, {:ok, %{state: :held, digest: @digest}}},
+               other: {200, {:ok, %{state: :held, digest: @digest}}},
+               put: {LB.status(:lifetime_over), {:ok, :lifetime_over}},
+               next: {200, {:ok, %{state: :missing}}},
+               calls: [{:hold, @athanor, next, moved}]
+             }
+    end
+
+    # The session's spawn waits past the test, so it stays starting.
+    @tag session_opts: [delay_ms: 60_000]
+    test "a hold of a lifetime whose session is starting is held at the generation its open named",
+         ctx do
+      packs_sync(ctx)
+      lifetime = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      open = Map.put(open_message(lifetime: lifetime), :packs, @digest)
+      opening = Task.async(fn -> invoke(ctx, open) end)
+
+      wait_until(
+        fn ->
+          ctx.owners
+          |> :sys.get_state()
+          |> Map.fetch!(:owners)
+          |> Map.values()
+          |> Enum.any?(&(&1.sessions != %{}))
+        end,
+        5_000
+      )
+
+      held =
+        invoke(
+          ctx,
+          packs_message(:packs_hold, lifetime, %{digest: "sha256:" <> String.duplicate("cd", 32)})
+        )
+
+      assert %{
+               held: {held.status, LB.read_session_answer(:packs_hold, held.body)},
+               spawned: Agent.get(ctx.launcher, & &1.spawned),
+               calls: packs_calls(ctx)
+             } == %{held: {200, {:ok, %{state: :held, digest: @digest}}}, spawned: [], calls: []}
+
+      Task.shutdown(opening, :brutal_kill)
     end
   end
 

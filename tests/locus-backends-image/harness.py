@@ -430,7 +430,7 @@ def check_vectors():
         signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         message = json.loads(vector["body"])
         compare(f"{kind}.body", wire_json(message).decode(), vector["body"])
-        for answer in ["answer", "answer_ended"]:
+        for answer in ["answer", "answer_ended", "answer_held"]:
             if answer in vector:
                 compare(f"{kind}.{answer}", wire_json(json.loads(vector[answer])).decode(), vector[answer])
         compare(f"{kind}.owner", [message["owner"], message["e"]],

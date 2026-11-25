@@ -146,8 +146,8 @@ defmodule Prima.LocusBackends do
   | `input` | `owner`, `e`, `session`, `bytes` | `status` |
   | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?` |
   | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status` |
-  | `packs_hold` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `digest` | `state` |
-  | `packs_put` | the hold's members, `seq`, `last`, `part` | `state` |
+  | `packs_hold` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `digest` | `state`, `digest?` |
+  | `packs_put` | the hold's members, `seq`, `last`, `part` | `state`, `digest?` |
 
   An `open` answers the session running for its lifetime (`resumed:
   true`) or starts the program's `command` with `argv` appended as its
@@ -170,16 +170,23 @@ defmodule Prima.LocusBackends do
   (`Prima.KeeperProtocol`, "Packs"). Before its open, its holder sends
   `packs_hold`, naming the lifetime it will open and the set's `digest`
   (`sha256:` and 64 lowercase hex digits): `state` `held` says the keeper
-  holds that copy complete, now for that lifetime, and `missing` that it
-  does not. On `missing` it sends the copy's stream in `packs_put`s,
-  `seq` from 0 by one up to the keeper's `max_pack_seq`, `last` on the
-  final one, each `part` standard base64 of at most `max_pack_part_bytes`
-  bytes, one keeper line's part, so a `seq` means one thing on both
-  wires: each answered `taken`, the last `held`. Its `open` then names the
-  digest as `packs`. Neither spends anything of the lifetime: no
-  admission, slot or home. A hold, a put or an open naming `packs` for a
-  program that loads none is refused `bad_request`, one for a lifetime
-  over `lifetime_over`, a put whose stream the keeper does not take
+  holds the copy its `digest` names complete, now for that lifetime, and
+  `missing` that it holds none of the one asked for. On `missing` it
+  sends the copy's stream in `packs_put`s, `seq` from 0 by one up to the
+  keeper's `max_pack_seq`, `last` on the final one, each `part` standard
+  base64 of at most `max_pack_part_bytes` bytes, one keeper line's part,
+  so a `seq` means one thing on both wires: each answered `taken`, the
+  last `held`. Its `open` then names as `packs` the `digest` that `held`
+  named. A `held` answer always names its `digest`, and `missing` and
+  `taken` name none. It is the one asked for, but for a hold of a
+  lifetime whose session lives, starting or running: that is held at the
+  generation the session's open named, which it keeps while it runs,
+  whatever the hold asked, and the open is resumed; the packs as they
+  stand reach the next lifetime. Neither spends anything of the
+  lifetime: no admission, slot or home. A hold, a put or an open naming
+  `packs` for a program that loads none is refused `bad_request`, a hold
+  of a lifetime over, and a put of one whose process started or that is
+  over, `lifetime_over`, a put whose stream the keeper does not take
   `packs_refused`, and a service whose keeper keeps no homes refuses them
   `unavailable`.
 
@@ -481,7 +488,12 @@ defmodule Prima.LocusBackends do
     packs_hold: ~w(home_id),
     packs_put: ~w(home_id)
   }
-  @session_answer_optional %{recv: ~w(exit_code), output: ~w(exit_code)}
+  @session_answer_optional %{
+    recv: ~w(exit_code),
+    output: ~w(exit_code),
+    packs_hold: ~w(digest),
+    packs_put: ~w(digest)
+  }
   @program_fields ~w(name command env_names home)
   @program_optional ~w(memory_bytes home_max_bytes hosts packs)
   @program_report_fields ~w(name status restarts home over_cap sessions)
@@ -765,7 +777,8 @@ defmodule Prima.LocusBackends do
               running: boolean(),
               exit_code: 0..255 | nil
             }
-          | %{state: :held | :missing | :taken}
+          | %{state: :held, digest: String.t()}
+          | %{state: :missing | :taken}
 
   @type code ::
           :unauthorized
@@ -2071,11 +2084,12 @@ defmodule Prima.LocusBackends do
   end
 
   defp read_session_answer_typed(:packs_hold, wire) do
-    with {:ok, state} <- roster(wire, "state", [:held, :missing], ""), do: {:ok, %{state: state}}
+    with {:ok, state} <- roster(wire, "state", [:held, :missing], ""),
+         do: packs_state(state, wire)
   end
 
   defp read_session_answer_typed(:packs_put, wire) do
-    with {:ok, state} <- roster(wire, "state", [:taken, :held], ""), do: {:ok, %{state: state}}
+    with {:ok, state} <- roster(wire, "state", [:taken, :held], ""), do: packs_state(state, wire)
   end
 
   defp read_session_answer_typed(type, wire) when type in [:send, :input, :resize] do
@@ -2099,6 +2113,19 @@ defmodule Prima.LocusBackends do
          {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
       {:ok, %{chunks: chunks, dropped: dropped, running: running, exit_code: exit_code}}
     end
+  end
+
+  # `held` names the generation held, and no other state names one.
+  defp packs_state(:held, wire) do
+    with :ok <- exact(Map.take(wire, ~w(digest)), ~w(digest), ""),
+         {:ok, digest} <- digest(wire["digest"]),
+         do: {:ok, %{state: :held, digest: digest}}
+  end
+
+  defp packs_state(state, wire) do
+    if is_map_key(wire, "digest"),
+      do: {:error, {:unknown_field, "digest"}},
+      else: {:ok, %{state: state}}
   end
 
   # An exit status, only of a session that is no longer running.

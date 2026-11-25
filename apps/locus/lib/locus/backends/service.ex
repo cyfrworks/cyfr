@@ -66,7 +66,9 @@ defmodule Locus.Backends.Service do
      and epoch its header names (`bad_request`).
   8. **The session**: `open` through the owners (`Locus.Backends.Owners.open/3`);
      a `packs_hold` or a `packs_put` to the keeper of the owner's person,
-     where the owners name it (`Locus.Backends.Owners.packs/3`), each part
+     where the owners name it (`Locus.Backends.Owners.packs/3`), and a
+     hold of a lifetime whose session lives answered held at that
+     session's generation, with nothing sent to the keeper; each part
      of a put bound to the owner, the program and the boot before its body
      is read and after, as every session message is;
      every other message to the session the owners name
@@ -416,12 +418,16 @@ defmodule Locus.Backends.Service do
   # A packs request goes to the keeper of the owner's person, once the
   # owners have found it a program of that owner that loads packs and a
   # lifetime still to open: the request sends it itself, so a put's part
-  # never passes through the owners' table.
+  # never passes through the owners' table. A hold of a lifetime whose
+  # session lives is answered by the owners, held at that session's
+  # generation. `held` names its digest: the session's, or the one the
+  # keeper was asked for.
   defp served(conn, invoke, %{type: type} = message) when type in [:packs_hold, :packs_put] do
     with {:ok, {launcher, server}} <- Owners.packs(owners(conn), invoke, message),
          {:ok, state} <- packs_sent(launcher, server, invoke.athanor, message) do
-      {:ok, %{state: state}}
+      {:ok, packs_state(state, message.digest)}
     else
+      {:held, digest} -> {:ok, packs_state(:held, digest)}
       {:error, code} -> {:refused, conn, code}
     end
   end
@@ -450,6 +456,9 @@ defmodule Locus.Backends.Service do
     )
     |> packs_answer()
   end
+
+  defp packs_state(:held, digest), do: %{state: :held, digest: digest}
+  defp packs_state(state, _digest), do: %{state: state}
 
   defp packs_answer({:ok, state}), do: {:ok, state}
   defp packs_answer({:error, {:refused, "packs_refused"}}), do: {:error, :packs_refused}
