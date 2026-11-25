@@ -552,7 +552,7 @@ func (r fakeRunner) Run(ctx context.Context, c access.Call) (access.Result, erro
 	// A snapshot's read through the stack is answered as its container
 	// would answer it, from the scenario's binds.
 	if stackReadCall(c.Args) {
-		return standInStackRead(c)
+		return standInStackRead(ctx, c)
 	}
 	if c.Deadline > 0 {
 		var cancel context.CancelFunc

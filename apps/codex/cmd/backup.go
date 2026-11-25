@@ -81,7 +81,7 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 		defer cancel()
 		return u.listRunning(ctx)
 	}
-	for _, step := range []func() error{u.readConfig, u.probePostgres, listRunning} {
+	for _, step := range []func() error{u.readConfig, u.placeDatabase, u.probePostgres, listRunning} {
 		if err := step(); err != nil {
 			if ctx.Err() != nil {
 				return errBackupInterrupted

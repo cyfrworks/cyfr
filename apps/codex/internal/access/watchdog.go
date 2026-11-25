@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -37,7 +38,8 @@ func watchdogArgs(deadline time.Duration, lock bool) []string {
 // docker never run, so the lock is free again. The deadline runs from
 // before that wait. Once docker runs, its parent's death does not end it:
 // the lock stays held until docker ends, at the latest at the deadline.
-// Docker's own
+// A `docker run --name` call's container is ended and removed once docker
+// ends, however it ended, before the lock is free (removeNamed). Docker's own
 // streams pass through to the engine, which says them only by
 // diagnosis; the watchdog's own lines are redacted with the .env of the
 // project directory it runs in (redactor).
@@ -137,8 +139,10 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case <-stop:
 		killGroup(cmd)
 		err = <-done
+		removeNamed(command)
 		return 143
 	}
+	removeNamed(command)
 	if killed {
 		say("cyfr internal docker-run: killed docker at its %s deadline\n", deadline)
 		return watchdogDeadline
@@ -155,3 +159,35 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 	return 0
 }
+
+// removeNamed ends and removes the container a `docker run --name` call
+// named, once the call has ended however it ended: a docker client that is
+// killed, or loses the cyfr reading its output, leaves its container
+// running, and the call's container never outlives the call, nor the lock
+// this watchdog holds for it. A container that is gone already is no
+// failure.
+func removeNamed(command []string) {
+	if len(command) < 2 || command[1] != "run" {
+		return
+	}
+	i := slices.Index(command, "--name")
+	if i < 0 || i+1 >= len(command) {
+		return
+	}
+	rm := exec.Command(command[0], "rm", "--force", command[i+1])
+	ownGroup(rm)
+	if rm.Start() != nil {
+		return
+	}
+	ended := make(chan struct{})
+	go func() { rm.Wait(); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(removeNamedWithin):
+		killGroup(rm)
+		<-ended
+	}
+}
+
+// removeNamedWithin bounds the removal of a call's named container.
+const removeNamedWithin = 30 * time.Second

@@ -465,7 +465,7 @@ func (u *updater) run() error {
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
 	// the compose file and the scaffold files as they were.
-	steps := []func() error{u.readConfig, u.probePostgres, u.fetchScaffold, u.pull, u.readRoster}
+	steps := []func() error{u.readConfig, u.placeDatabase, u.probePostgres, u.fetchScaffold, u.pull, u.readRoster}
 	for _, step := range steps {
 		if err := step(); err != nil {
 			if u.ctx.Err() != nil {
@@ -1432,16 +1432,17 @@ type stackConfig struct {
 	// sqliteFile is the SQLite database's host path, which a restore puts
 	// back.
 	sqliteFile string
-	// image is the image the cyfr service runs, and reads the binds of the
-	// service that hold what a snapshot reads, through which it reads
-	// them (readThroughStack): dbPath, the SQLite database's container
-	// path, and dataPath, the storage root's; state are the container
-	// paths at which they show the access engine's state, which no
-	// snapshot holds.
-	image            string
-	reads            []composeMount
-	dbPath, dataPath string
-	state            []string
+	// image is the image the cyfr service runs and mounts every mount of
+	// the service as resolved, through which a snapshot reads the storage
+	// as the server sees it (readThroughStack): dbPath is the SQLite
+	// database's container path, dbReal that path with its links
+	// resolved (placeDatabase), dataPath the storage root's; state are
+	// the container paths at which the mounts show the access engine's
+	// state, which no snapshot holds.
+	image                    string
+	mounts                   []composeMount
+	dbPath, dbReal, dataPath string
+	state                    []string
 	// pgURL is CYFR_DATABASE_URL; pgMajor the server's major version.
 	pgURL   string
 	pgMajor int
@@ -1467,6 +1468,55 @@ type storageMount struct {
 // update reads.
 type composeConfig struct {
 	Services map[string]composeService `json:"services"`
+	// Volumes, Secrets and Configs are the top-level declarations a
+	// service's mounts name: a volume's name in the engine, and a secret's
+	// or a config's file.
+	Volumes map[string]struct {
+		Name string `json:"name"`
+	} `json:"volumes"`
+	Secrets map[string]composeSource `json:"secrets"`
+	Configs map[string]composeSource `json:"configs"`
+}
+
+// composeSource is a top-level secret or config: the file it is.
+type composeSource struct {
+	File string `json:"file"`
+}
+
+// resolve answers mounts as docker mounts them: a named volume by its
+// name in the engine, an anonymous one as an empty tmpfs over its place,
+// a secret or a config from a file as a bind of that file. A secret or a config compose makes from no file is left out: no
+// snapshot reads it, since no SQLite database or storage root lies on
+// anything but a bind (readConfig).
+func (config composeConfig) resolve(mounts []composeMount) []composeMount {
+	var out []composeMount
+	for _, m := range mounts {
+		switch m.Type {
+		case "volume":
+			if m.Source == "" {
+				// An anonymous volume is the service's own, which docker
+				// mounts read only for no one else: an empty read-only
+				// tmpfs covers its place as it does.
+				m = composeMount{Type: "tmpfs", Target: m.Target}
+				break
+			}
+			if v, ok := config.Volumes[m.Source]; ok && v.Name != "" {
+				m.Source = v.Name
+			}
+		case "secret", "config":
+			declared := config.Secrets
+			if m.Type == "config" {
+				declared = config.Configs
+			}
+			file := declared[m.Source].File
+			if file == "" {
+				continue
+			}
+			m = composeMount{Type: "bind", Source: file, Target: m.Target}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // composeService is a service as `docker compose config --format json`
@@ -1562,19 +1612,7 @@ func (u *updater) readConfig() error {
 		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore %s' again before cyfr %s; nothing was changed", snapshot, restoreBarrier, snapshot, u.command)
 	}
 	containerToHost := func(p string) (string, bool) { return mountedHost(mounts, p) }
-	c := &stackConfig{image: cyfr.Image}
-	// read adds the bind v to those the snapshot reads through, once.
-	read := func(v composeMount) {
-		if !slices.Contains(c.reads, v) {
-			c.reads = append(c.reads, v)
-		}
-	}
-	// readAt adds the bind that holds the container path p.
-	readAt := func(p string) {
-		if b, ok := bindAt(mounts, p); ok {
-			read(b)
-		}
-	}
+	c := &stackConfig{image: cyfr.Image, mounts: config.resolve(mounts)}
 	// nestedMounts answers every mount whose target lies strictly under the
 	// container path root, shallower first, refusing one that is not a bind:
 	// its bytes are no host directory the snapshot can copy.
@@ -1586,7 +1624,6 @@ func (u *updater) readConfig() error {
 				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr %s cannot snapshot; nothing was changed", root, v.Type, target, u.command)
 			}
 			nested = append(nested, storageMount{rel: n.rel, host: resolvedOr(v.Source)})
-			read(v)
 		}
 		sortByDepth(nested)
 		return nested, nil
@@ -1614,7 +1651,6 @@ func (u *updater) readConfig() error {
 			return fmt.Errorf("The SQLite database %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dbPath, u.command)
 		}
 		c.dbPath = dbPath
-		readAt(dbPath)
 	case "postgres":
 		c.adapter = "postgres"
 		if c.pgURL = env("CYFR_DATABASE_URL"); c.pgURL == "" {
@@ -1640,7 +1676,6 @@ func (u *updater) readConfig() error {
 			return fmt.Errorf("The storage root %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dataPath, u.command)
 		}
 		c.dataPath = dataPath
-		readAt(dataPath)
 		nested, err := nestedMounts(dataPath)
 		if err != nil {
 			return err
@@ -1679,11 +1714,11 @@ func (u *updater) readConfig() error {
 	} else {
 		f.Close()
 	}
-	if c.image == "" && len(c.reads) > 0 {
+	if c.image == "" && (c.adapter == "sqlite" || c.storage == "local") {
 		return fmt.Errorf("the cyfr service names no image, through which cyfr %s reads its storage; nothing was changed", u.command)
 	}
 	if project, err := os.Getwd(); err == nil {
-		c.state = stateIn(c.reads, filepath.Join(resolvedOr(project), ".cyfr"))
+		c.state = stateIn(c.mounts, resolvedOr(filepath.Join(project, ".cyfr")))
 	}
 	u.config = c
 	return nil
@@ -1720,23 +1755,6 @@ func settingPathIn(environment map[string]*string, name, fallback string) (strin
 		value = path.Join(appWorkdir, value)
 	}
 	return path.Clean(value), true
-}
-
-// bindAt answers the mount whose target is the container path p's longest
-// prefix, the one cyfr sees the path through; ok is false unless that
-// mount is a bind.
-func bindAt(mounts []composeMount, p string) (composeMount, bool) {
-	best, found := -1, composeMount{}
-	for _, v := range mounts {
-		target := path.Clean(v.Target)
-		if !underPath(p, target) && target != "/" {
-			continue
-		}
-		if len(target) > best {
-			best, found = len(target), v
-		}
-	}
-	return found, best >= 0 && found.Type == "bind" && found.Source != ""
 }
 
 // mountedHost maps a container path through the mount whose target is its

@@ -435,8 +435,8 @@ func (e *Engine) leaving(before *redactor, rc Receipt, err error) (Receipt, erro
 
 // WatchdogMain is `cyfr internal docker-run`: it runs the docker command
 // its arguments name, holding the lock descriptor it inherited, and kills
-// it at the deadline its arguments name. It answers the process's exit
-// status.
+// it at the deadline its arguments name; a container the command named
+// is ended and removed with it. It answers the process's exit status.
 func WatchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return watchdogMain(args, stdin, stdout, stderr)
 }
