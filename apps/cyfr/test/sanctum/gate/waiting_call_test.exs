@@ -270,18 +270,22 @@ defmodule Sanctum.Gate.WaitingCallTest do
         nil
       )
 
-    task = call(setup, "hold")
-    pid = task.pid
-    assert_receive {:at_charge, ^pid}, 10_000
-    assert Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 1
-    Task.shutdown(task, :brutal_kill)
+    # The task is killed inside its own `with_providers/2`, whose restore
+    # it then never runs: the test holds the probe in the table instead.
+    Catalog.with_providers([Probe], fn ->
+      task = call(setup, "hold")
+      pid = task.pid
+      assert_receive {:at_charge, ^pid}, 10_000
+      assert Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 1
+      Task.shutdown(task, :brutal_kill)
 
-    Prima.Test.Wait.wait_until(
-      fn -> Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 0 end,
-      5_000
-    )
+      Prima.Test.Wait.wait_until(
+        fn -> Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 0 end,
+        5_000
+      )
 
-    given_back!()
+      given_back!()
+    end)
   end
 
   test "a wake before its handler's own check answers nothing early: its refusal stands",
@@ -324,25 +328,29 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
   test "a waiting holder that dies gives its charge back with its slot, its attempt live",
        %{auth: auth} = setup do
-    task = call(setup, "hold")
-    assert_receive {:holding, "hold", handler}, 10_000
+    # The task is killed inside its own `with_providers/2`, whose restore
+    # it then never runs: the test holds the probe in the table instead.
+    Catalog.with_providers([Probe], fn ->
+      task = call(setup, "hold")
+      assert_receive {:holding, "hold", handler}, 10_000
 
-    assert {:ok, [%{holder_deadline: nil}]} =
-             Arca.BudgetReservations.charges(actor(), auth.budget.id)
+      assert {:ok, [%{holder_deadline: nil}]} =
+               Arca.BudgetReservations.charges(actor(), auth.budget.id)
 
-    ref = Process.monitor(handler)
-    Task.shutdown(task, :brutal_kill)
-    assert_receive {:DOWN, ^ref, :process, ^handler, _stopped}, 5_000
+      ref = Process.monitor(handler)
+      Task.shutdown(task, :brutal_kill)
+      assert_receive {:DOWN, ^ref, :process, ^handler, _stopped}, 5_000
 
-    Prima.Test.Wait.wait_until(
-      fn ->
-        Arca.BudgetReservations.charges(actor(), auth.budget.id) == {:ok, []} and
-          Sanctum.TestContext.invoke_budget(auth).in_flight == 0
-      end,
-      5_000
-    )
+      Prima.Test.Wait.wait_until(
+        fn ->
+          Arca.BudgetReservations.charges(actor(), auth.budget.id) == {:ok, []} and
+            Sanctum.TestContext.invoke_budget(auth).in_flight == 0
+        end,
+        5_000
+      )
 
-    given_back!()
+      given_back!()
+    end)
   end
 
   test "the flag is read from the operation's one definition, and nowhere else" do
