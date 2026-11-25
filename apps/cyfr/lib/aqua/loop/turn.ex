@@ -15,7 +15,7 @@ defmodule Aqua.Loop.Turn do
   options — the agent file's own, over which a crew request's
   (`options["brain_options"]`) set theirs — the system prompt (the
   soul's prompt or a crew member's opening, then CYFR's part, the
-  briefing its pinned harness says its work needs, `Aqua.Prompt.briefing/2`;
+  briefing its pinned harness says its work needs, `Aqua.Prompt.briefing/3`;
   the soul's brain is its member's), the tool
   surface (with the accounts its launches may name,
   read once here for every request the spec makes,
@@ -168,10 +168,13 @@ defmodule Aqua.Loop.Turn do
 
       # The briefing is the one the pinned harness says its work needs
       # (`Aqua.Harness.facts/1`); its words are the prompt's.
+      harness = Aqua.Harness.facts(spec)
+
       prompt =
         Aqua.Prompt.compose(ctx,
           agent: agent,
-          own_tools?: Aqua.Harness.facts(spec).own_tools?,
+          own_tools?: harness.own_tools?,
+          loader?: harness.loader?,
           search?: Request.offers_search?(offered, authority, capabilities),
           authority: authority,
           crew: crew(ctx, roster, offered, soul?),

@@ -274,6 +274,49 @@ defmodule Aqua.PromptTest do
                "native search"
     end
 
+    # A program that loads the athanor's packs as its own skills (`loader?`,
+    # Claude Code's and Codex's) is its own list of them: CYFR lists none,
+    # says nothing of reading one with `aqua.skill_get`, and its rule speaks
+    # of the scrolls CYFR delivers. Every other word is main's.
+    test "a program that loads the packs is handed no scroll list and the rule on CYFR's scrolls",
+         %{ctx: ctx} do
+      crew =
+        String.replace(
+          @crew,
+          "; read any other scroll it names with `aqua.skill_get` before doing what it describes.",
+          "."
+        )
+
+      part_one = String.replace(@part_one, "A scroll is only", "A scroll CYFR delivers is only")
+      refute crew == @crew or part_one == @part_one
+      loader = [own_tools?: true, loader?: true, authority: nil]
+
+      assert opening(ctx, [agent: member("coder")] ++ loader) ==
+               crew <> "\n\n" <> part_one <> @program
+
+      assert opening(ctx, [agent: agent()] ++ loader) ==
+               "You are Aqua.\n\n---\n\n" <> part_one <> @program
+
+      for agent <- [member("coder"), agent()] do
+        text = Prompt.compose(ctx, [agent: agent] ++ loader).text
+        refute text =~ "## Scrolls"
+        refute text =~ "skill_get"
+        refute text =~ "cyfr:research"
+      end
+
+      # The same member on a program that loads none keeps main's words.
+      assert opening(ctx,
+               agent: member("coder"),
+               own_tools?: true,
+               loader?: false,
+               authority: nil
+             ) ==
+               @briefing <> @program
+
+      assert Prompt.compose(ctx, agent: member("coder"), own_tools?: true, authority: nil).text =~
+               "\n\n---\n\n## Scrolls\n\n"
+    end
+
     # Aqua's prompt is in two parts: its file's, then CYFR's, for the brain
     # of the member it runs on.
     test "the soul opens with its own prompt, then CYFR's part for its brain", %{ctx: ctx} do
