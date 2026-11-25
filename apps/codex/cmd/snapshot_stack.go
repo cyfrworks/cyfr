@@ -64,29 +64,41 @@ type stackEntry struct {
 	id   string
 }
 
-// stackRunArgs are the docker arguments of a read through the stack named
-// name that runs program with args, the service's mounts all read only,
-// stdin open when the program reads its standard input.
-func stackRunArgs(name string, c *stackConfig, stdin bool, program string, args ...string) []string {
+// stackRunArgs are the docker arguments of a run through the stack named
+// name that runs program with args, stdin open when the program reads its
+// standard input. A read (writable nil) mounts every mount of the service
+// read only and holds no capability but reading past permissions; a
+// write mounts the mounts at the container paths writable writable, every
+// other read only, and holds no capability but writing past permissions.
+func stackRunArgs(name string, c *stackConfig, stdin bool, writable []string, program string, args ...string) []string {
+	capability := "DAC_READ_SEARCH"
+	if writable != nil {
+		capability = "DAC_OVERRIDE"
+	}
 	run := []string{"run", "--rm", "--name", name, "--pull", "never", "--network", "none", "--log-driver", "none",
-		"--user", "0:0", "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges", "--read-only"}
+		"--user", "0:0", "--cap-drop", "ALL", "--cap-add", capability, "--security-opt", "no-new-privileges", "--read-only"}
 	if stdin {
 		run = append(run, "-i")
 	}
 	run = append(run, "--entrypoint", program)
 	for _, m := range c.mounts {
-		run = append(run, "--mount", mountSpec(m))
+		run = append(run, "--mount", mountSpec(m, !slices.Contains(writable, path.Clean(m.Target))))
 	}
 	return append(append(run, c.image), args...)
 }
 
-// mountSpec is the service's mount m as docker's --mount, read only.
-func mountSpec(m composeMount) string {
+// mountSpec is the service's mount m as docker's --mount, read only when
+// readonly.
+func mountSpec(m composeMount, readonly bool) string {
 	fields := []string{"type=" + m.Type}
 	if m.Source != "" {
 		fields = append(fields, mountField("source", m.Source))
 	}
-	return strings.Join(append(fields, mountField("target", m.Target), "readonly"), ",")
+	fields = append(fields, mountField("target", m.Target))
+	if readonly {
+		fields = append(fields, "readonly")
+	}
+	return strings.Join(fields, ",")
 }
 
 // mountField is key=value as one field of docker's --mount, which reads
@@ -100,34 +112,67 @@ func mountField(key, value string) string {
 	return field
 }
 
-// stackRunName names one read through the stack, so its container can be
-// ended and removed whatever ends the read early.
-func stackRunName() string {
+// stackRunName names one run through the stack, a read or a write, so its
+// container can be ended and removed whatever ends the run early.
+func stackRunName(write bool) string {
 	var b [6]byte
 	rand.Read(b[:])
+	if write {
+		return "cyfr-restore-write-" + hex.EncodeToString(b[:])
+	}
 	return "cyfr-snapshot-read-" + hex.EncodeToString(b[:])
 }
 
-// runThroughStack runs program through the stack, stdin its standard
-// input, streaming its standard output into consume as it arrives. The run
-// ends when consume is done, when the stream makes no progress for
-// stackReadStall, or at stackReadBackstop; whatever ends it early, its
-// container is ended and removed (access.Call.RemoveOnEnd), by the
-// engine's watchdog also when cyfr itself is gone. base is the
-// command's context before the stop, which an interrupt ends, and one
-// free of the interrupt from the stop on, as every step's there is.
+// stackCall is one run through the stack: its standard input (nil for
+// none), the container paths of the mounts it writes (nil for a read,
+// which writes none), and what consumes its standard output as it
+// arrives (nil discards it).
+type stackCall struct {
+	stdin    io.Reader
+	writable []string
+	consume  func(io.Reader) error
+}
+
+// runThroughStack is a read through the stack (runStack) whose standard
+// input, when not nil, is stdin.
 func (u *updater) runThroughStack(base context.Context, stdin []byte, consume func(io.Reader) error, program string, args ...string) error {
-	ctx, cancel := context.WithTimeout(base, stackReadBackstop)
-	defer cancel()
-	name := stackRunName()
 	var in io.Reader
 	if stdin != nil {
 		in = bytes.NewReader(stdin)
 	}
+	return u.runStack(base, stackCall{stdin: in, consume: consume}, program, args...)
+}
+
+// runStack runs program through the stack as call says, streaming its
+// standard input to it and its standard output into call.consume as each
+// arrives. The run ends when it has taken and given nothing for
+// stackReadStall, or at stackReadBackstop; when consume fails; and when
+// its standard input fails, which then is what it answers, so a write is
+// never taken for whole from a stream cut short. Whatever ends it early,
+// its container is ended and removed (access.Call.RemoveOnEnd), by the
+// engine's watchdog also when cyfr itself is gone. base is the command's
+// context before the stop, which an interrupt ends, and one free of the
+// interrupt from the stop on, as every step's there is.
+func (u *updater) runStack(base context.Context, call stackCall, program string, args ...string) error {
+	ctx, cancel := context.WithTimeout(base, stackReadBackstop)
+	defer cancel()
+	write := call.writable != nil
+	what := "read of its storage"
+	if write {
+		what = "write of its storage"
+	}
+	name := stackRunName(write)
+	clock := &progress{at: time.Now()}
+	var in *stdinReader
+	var stdin io.Reader
+	if call.stdin != nil {
+		in = &stdinReader{progressReader: progressReader{r: call.stdin, p: clock}, cancel: cancel}
+		stdin = in
+	}
 	pr, pw := io.Pipe()
 	ran := make(chan error, 1)
 	go func() {
-		err := u.dockerRemoving(ctx, name, in, pw, stackRunArgs(name, u.config, stdin != nil, program, args...)...)
+		err := u.dockerRemoving(ctx, name, stdin, pw, stackRunArgs(name, u.config, call.stdin != nil, call.writable, program, args...)...)
 		if err != nil {
 			pw.CloseWithError(runFailed{err})
 		} else {
@@ -135,7 +180,7 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 		}
 		ran <- err
 	}()
-	watched := &progressReader{r: pr, at: time.Now()}
+	watched := &progressReader{r: pr, p: clock}
 	stalled := make(chan struct{})
 	go func() {
 		tick := time.NewTicker(stackReadStall / 10)
@@ -145,7 +190,7 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				if watched.idle() >= stackReadStall {
+				if clock.idle() >= stackReadStall {
 					close(stalled)
 					cancel()
 					return
@@ -153,6 +198,10 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 			}
 		}
 	}()
+	consume := call.consume
+	if consume == nil {
+		consume = func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err }
+	}
 	err := consume(watched)
 	if err != nil {
 		cancel()
@@ -164,39 +213,81 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 	cancel()
 	select {
 	case <-stalled:
-		return fmt.Errorf("the stack's read of its storage made no progress for %s, so it was ended", stackReadStall)
+		return fmt.Errorf("the stack's %s made no progress for %s, so it was ended", what, stackReadStall)
 	default:
+	}
+	if in != nil && in.failed() != nil {
+		return in.failed()
 	}
 	switch {
 	case err != nil && !errors.As(err, new(runFailed)):
 		return err
+	case runErr != nil && write:
+		return fmt.Errorf("the stack's %s through its image %s failed (%v)", what, u.config.image, runErr)
 	case runErr != nil:
-		return fmt.Errorf("the stack's read of its storage through its image %s failed (%v); a stack that never ran may lack the image: run 'cyfr up' or 'docker compose pull cyfr' first", u.config.image, runErr)
+		return fmt.Errorf("the stack's %s through its image %s failed (%v); a stack that never ran may lack the image: run 'cyfr up' or 'docker compose pull cyfr' first", what, u.config.image, runErr)
 	}
 	return nil
 }
 
-// progressReader is r, noting when it last gave bytes.
-type progressReader struct {
-	r  io.Reader
+// progress is when a run through the stack last took or gave bytes.
+type progress struct {
 	mu sync.Mutex
 	at time.Time
+}
+
+func (p *progress) note() {
+	p.mu.Lock()
+	p.at = time.Now()
+	p.mu.Unlock()
+}
+
+func (p *progress) idle() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return time.Since(p.at)
+}
+
+// stdinReader is a run's standard input: a failure to read it, a stream
+// cut short, ends the run at once and is kept, so the run answers it.
+type stdinReader struct {
+	progressReader
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	err    error
+}
+
+func (s *stdinReader) Read(b []byte) (int, error) {
+	n, err := s.progressReader.Read(b)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.mu.Lock()
+		if s.err == nil {
+			s.err = err
+		}
+		s.mu.Unlock()
+		s.cancel()
+	}
+	return n, err
+}
+
+func (s *stdinReader) failed() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// progressReader is r, noting on p when it gives bytes.
+type progressReader struct {
+	r io.Reader
+	p *progress
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)
 	if n > 0 {
-		p.mu.Lock()
-		p.at = time.Now()
-		p.mu.Unlock()
+		p.p.note()
 	}
 	return n, err
-}
-
-func (p *progressReader) idle() time.Duration {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return time.Since(p.at)
 }
 
 // runFailed ends a stream when its run failed, so the reader stops at the
@@ -276,6 +367,46 @@ func (u *updater) placeDatabase() error {
 	return nil
 }
 
+// storageEntries lists, with the stack stopped, what a snapshot reads
+// and a restore replaces: the storage root, every entry under it, for
+// local storage (listing); the SQLite database's own files that are there,
+// by their path (trio: the database, its -wal and its -shm); and left, the
+// identities of the database's files and of the access engine's state,
+// which no snapshot's storage holds and no restore's clear removes, by
+// which file they are (device and inode), however a mount spells their
+// paths.
+func (u *updater) storageEntries(base context.Context) (listing []stackEntry, trio map[string]stackEntry, left map[string]bool, err error) {
+	c := u.config
+	if c.storage == "local" {
+		if listing, err = u.listThroughStack(base, c.dataPath, false); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	left, trio = map[string]bool{}, map[string]stackEntry{}
+	if c.adapter == "sqlite" {
+		near := listing
+		if c.storage != "local" || !underPath(c.dbReal, c.dataPath) {
+			if near, err = u.listThroughStack(base, path.Dir(c.dbReal), true); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		for _, e := range near {
+			if e.path == c.dbReal || e.path == c.dbReal+"-wal" || e.path == c.dbReal+"-shm" {
+				trio[e.path] = e
+				left[e.id] = true
+			}
+		}
+	}
+	for _, e := range listing {
+		if slices.Contains(c.state, e.path) {
+			// The access engine's state is no part of any snapshot,
+			// whatever mount reaches it.
+			left[e.id] = true
+		}
+	}
+	return listing, trio, left, nil
+}
+
 // readThroughStack writes what the snapshot holds of CYFR's storage into
 // the new snapshot directory dir, read through the stack, and answers the
 // parts it wrote: database and, when it holds anything, database-wal for
@@ -283,46 +414,20 @@ func (u *updater) placeDatabase() error {
 func (u *updater) readThroughStack(dir string) ([]string, error) {
 	c := u.config
 	free := context.WithoutCancel(u.ctx)
-	// Listed with the stack stopped: the database's files, by which file
-	// they are, and the storage root.
-	var listing []stackEntry
-	if c.storage == "local" {
-		entries, err := u.listThroughStack(free, c.dataPath, false)
-		if err != nil {
-			return nil, err
-		}
-		listing = entries
+	listing, trio, left, err := u.storageEntries(free)
+	if err != nil {
+		return nil, err
 	}
-	left := map[string]bool{}
 	var parts []string
 	if c.adapter == "sqlite" {
-		trio := listing
-		if c.storage != "local" || !underPath(c.dbReal, c.dataPath) {
-			entries, err := u.listThroughStack(free, path.Dir(c.dbReal), true)
-			if err != nil {
-				return nil, err
-			}
-			trio = entries
-		}
-		var db, wal *stackEntry
-		for i, e := range trio {
-			switch e.path {
-			case c.dbReal:
-				db = &trio[i]
-			case c.dbReal + "-wal":
-				wal = &trio[i]
-			case c.dbReal + "-shm":
-			default:
-				continue
-			}
-			left[e.id] = true
-		}
-		if db == nil || db.kind != 'f' {
+		db, haveDB := trio[c.dbReal]
+		wal, haveWAL := trio[c.dbReal+"-wal"]
+		if !haveDB || db.kind != 'f' {
 			return nil, fmt.Errorf("the SQLite database %s is no longer a regular file", c.dbReal)
 		}
 		members := []string{rootRel(c.dbReal)}
 		switch {
-		case wal == nil:
+		case !haveWAL:
 			// No write-ahead log is there: none is the database's.
 		case wal.kind == 'f' && wal.size == 0:
 		case wal.kind == 'f' || wal.kind == 'l':
@@ -348,13 +453,6 @@ func (u *updater) readThroughStack(dir string) ([]string, error) {
 		}
 	}
 	if c.storage == "local" {
-		for _, e := range listing {
-			if slices.Contains(c.state, e.path) {
-				// The access engine's state is no part of any snapshot,
-				// whatever mount reaches it.
-				left[e.id] = true
-			}
-		}
 		var list bytes.Buffer
 		var skipped []string
 		for _, e := range listing {

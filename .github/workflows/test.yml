@@ -1908,9 +1908,9 @@ jobs:
       # and the declaration `cyfr restore` runs, the bar set empty in its
       # one-off container, boots and declares. restore-person: `cyfr
       # restore` as the person, after the entrypoint has handed the storage
-      # root to the image's user, is refused naming the restore as root,
-      # with both config files as they were, and `cyfr up` starts the home
-      # again. runtime: the shipped
+      # root to the image's user, puts the snapshot back through the stack
+      # and starts the home, data/ the image's user's again and the config
+      # files the person's. runtime: the shipped
       # locus service's runtime role, on the Locus image above, runs a seed
       # catalyst for a signed-in person, cyfr dispatching to the worker URL
       # and the runtime calling the host API the shipped file names under

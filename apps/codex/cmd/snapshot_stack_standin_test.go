@@ -21,10 +21,17 @@ import (
 	"github.com/cyfr/codex/internal/access"
 )
 
-// stackReadCall reports whether args are a read through the stack
-// (stackRunArgs).
+// stackReadCall reports whether args are a run through the stack, a read
+// or a write (stackRunArgs).
 func stackReadCall(args []string) bool {
-	return len(args) > 0 && args[0] == "run" && slices.Contains(args, "--entrypoint") && slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "cyfr-snapshot-read-") })
+	return len(args) > 0 && args[0] == "run" && slices.Contains(args, "--entrypoint") && slices.ContainsFunc(args, func(a string) bool {
+		return strings.HasPrefix(a, "cyfr-snapshot-read-") || strings.HasPrefix(a, "cyfr-restore-write-")
+	})
+}
+
+// stackWriteCall reports whether args are a write through the stack.
+func stackWriteCall(args []string) bool {
+	return stackReadCall(args) && slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "cyfr-restore-write-") })
 }
 
 // standInAsRoot, when a test sets it, gives the stand-in a root's reading
@@ -46,7 +53,13 @@ func standInStackRead(ctx context.Context, c access.Call) (access.Result, error)
 	}
 	fmt.Fprintln(f, strings.Join(c.Args, " "))
 	f.Close()
-	binds, program, args := parseStackRun(c.Args)
+	binds, readonly, program, args := parseStackRun(c.Args)
+	if err := (containerView{binds: binds, readonly: readonly}).mountPoints(); err != nil {
+		return access.Result{ExitCode: 125, Stderr: []byte(err.Error())}, nil
+	}
+	if stackWriteCall(c.Args) {
+		return standInStackWrite(ctx, c, containerView{binds: binds, readonly: readonly}, program, args)
+	}
 	storage := program == "tar" && slices.Contains(args, "-T")
 	if storage {
 		if raw, err := os.ReadFile(filepath.Join(d, "tar.exit")); err == nil {
@@ -67,7 +80,7 @@ func standInStackRead(ctx context.Context, c access.Call) (access.Result, error)
 	if standInAsRoot != nil {
 		defer standInAsRoot()()
 	}
-	v := containerView{binds: binds}
+	v := containerView{binds: binds, readonly: readonly}
 	var stdin []byte
 	if c.Stdin != nil {
 		stdin, _ = io.ReadAll(c.Stdin)
@@ -92,18 +105,22 @@ func standInStackRead(ctx context.Context, c access.Call) (access.Result, error)
 	return access.Result{}, nil
 }
 
-// parseStackRun reads stackRunArgs back: the binds mounted, the program
-// and its arguments.
-func parseStackRun(args []string) (binds []composeMount, program string, rest []string) {
+// parseStackRun reads stackRunArgs back: the binds mounted, the targets
+// of those mounted read only, the program and its arguments.
+func parseStackRun(args []string) (binds []composeMount, readonly map[string]bool, program string, rest []string) {
+	readonly = map[string]bool{}
 	i := slices.Index(args, "--entrypoint")
 	program = args[i+1]
 	i += 2
 	for ; i < len(args) && args[i] == "--mount"; i += 2 {
 		fields, _ := csv.NewReader(strings.NewReader(args[i+1])).Read()
 		var b composeMount
+		ro := false
 		for _, field := range fields {
 			key, value, _ := strings.Cut(field, "=")
 			switch key {
+			case "readonly":
+				ro = true
 			case "type":
 				b.Type = value
 			case "source":
@@ -114,16 +131,41 @@ func parseStackRun(args []string) (binds []composeMount, program string, rest []
 		}
 		if b.Type == "bind" {
 			binds = append(binds, b)
+			if ro {
+				readonly[path.Clean(b.Target)] = true
+			}
 		}
 	}
-	return binds, program, args[i+1:]
+	return binds, readonly, program, args[i+1:]
 }
 
 // containerView is the filesystem a container sees through binds: each
 // container path read through the bind with the longest target holding
 // it, a directory's entries those of its host directory and the binds
 // mounted directly in it.
-type containerView struct{ binds []composeMount }
+type containerView struct {
+	binds    []composeMount
+	readonly map[string]bool
+}
+
+// mountPoints refuses, as docker does, a bind whose mount point is not
+// there in a bind it lies in that is mounted read only, where docker
+// cannot make it.
+func (v containerView) mountPoints() error {
+	for _, b := range v.binds {
+		target := path.Clean(b.Target)
+		others := slices.DeleteFunc(slices.Clone(v.binds), func(o composeMount) bool { return path.Clean(o.Target) == target })
+		parent, _, ok := holdingMount(others, target)
+		if !ok || !v.readonly[path.Clean(parent.Target)] {
+			continue
+		}
+		point, _ := mountedHost(others, target)
+		if _, err := os.Lstat(point); errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("error mounting %q to rootfs at %q: make mountpoint: read-only file system", b.Source, target)
+		}
+	}
+	return nil
+}
 
 func (v containerView) host(p string) (string, error) {
 	h, ok := mountedHost(v.binds, p)
