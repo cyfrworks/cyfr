@@ -453,9 +453,9 @@ type AquaSkillCreateArgs struct {
 	Name string `json:"name"`
 	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description string `json:"description"`
-	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's text (skill_file)
 	Content string `json:"content"`
-	// skill_create/skill_update/skill_file from a person's Save: what the proposal was made against, the stored scroll's or file's digest, or none for a new one; the write is refused when it changed since
+	// skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since
 	Against Field[string] `json:"against,omitzero"`
 	// skill_create from a person's New pack: the scroll is its pack's first, and the write is refused when a pack of that name is already here (default false writes into the pack, making it when there is none)
 	NewPack Field[bool] `json:"new_pack,omitzero"`
@@ -488,15 +488,15 @@ func (args AquaSkillDeleteArgs) MarshalJSON() ([]byte, error) {
 // AquaSkillFileArgs carries arguments for aqua.skill_file.
 type AquaSkillFileArgs struct {
 	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
-	Name string `json:"name"`
+	Name Field[string] `json:"name,omitzero"`
 	// One file of the scroll's pack by its path inside the pack, like 'skills/research/scripts/fetch.sh': skill_get reads it as outside material; skill_file proposes it, under the scroll's folder
-	Path string `json:"path"`
-	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)
-	Content string `json:"content"`
-	// skill_file: how content holds the file's bytes, utf8 text (the default) or base64
-	Encoding Field[string] `json:"encoding,omitzero"`
-	// skill_create/skill_update/skill_file from a person's Save: what the proposal was made against, the stored scroll's or file's digest, or none for a new one; the write is refused when it changed since
-	Against Field[string] `json:"against,omitzero"`
+	Path Field[string] `json:"path,omitzero"`
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's text (skill_file)
+	Content Field[string] `json:"content,omitzero"`
+	// skill_file from a person's Save: the thread's row that holds the proposal of the file
+	Proposal Field[string] `json:"proposal,omitzero"`
+	// skill_file from a person's Save: the SHA-256 of the file its card showed; the save is refused when the proposal's file is not that
+	Sha256 Field[string] `json:"sha256,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -544,9 +544,9 @@ type AquaSkillUpdateArgs struct {
 	Name string `json:"name"`
 	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description Field[string] `json:"description,omitzero"`
-	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's text (skill_file)
 	Content Field[string] `json:"content,omitzero"`
-	// skill_create/skill_update/skill_file from a person's Save: what the proposal was made against, the stored scroll's or file's digest, or none for a new one; the write is refused when it changed since
+	// skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since
 	Against Field[string] `json:"against,omitzero"`
 }
 
@@ -598,7 +598,7 @@ type AquaUpdateArgs struct {
 	ToolsAdd Field[[]string] `json:"tools_add,omitzero"`
 	// update only: tools to take off the soul's list as it is when the write lands. Not with tools.
 	ToolsRemove Field[[]string] `json:"tools_remove,omitzero"`
-	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's bytes (skill_file, as its encoding says)
+	// The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), the scroll's body (skill_create/skill_update), or the file's text (skill_file)
 	Content Field[string] `json:"content,omitzero"`
 	// Take a crew member out of the crew without deleting its file (for update; shipped members cannot be deleted — disable them instead)
 	Disabled Field[*bool] `json:"disabled,omitzero"`
