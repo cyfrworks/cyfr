@@ -4380,6 +4380,44 @@ defmodule PrismWeb.AquaLiveTest do
       Cyfr.Test.Sandbox.end_views()
     end
 
+    # Aqua on a ready brain, its grant revoked by its person, as the
+    # profile's revoke records it: the page says it was revoked, in the
+    # sentence a turn refused for it says (`Prima.Refusal`), and offers to
+    # grant it again, never that it was never granted.
+    test "a grant its person revoked is said as revoked, and offered again",
+         %{conn: conn, ctx: ctx} do
+      soul_on_open!(ctx)
+      {:ok, %{profile_id: id}} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      assert {:ok, %{status: "revoked"}} =
+               Sanctum.Providers.Profile.handle(ctx, %{"action" => "revoke", "profile_id" => id})
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_revoked"])
+
+      settled(
+        fn ->
+          has_element?(
+            view,
+            line,
+            "You revoked your grant of what Aqua and its crew members may use."
+          )
+        end,
+        "the grant said revoked"
+      )
+
+      assert has_element?(view, "#aqua-may-use button[phx-click=open_consent]", "Grant again")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-may-use [data-test="aqua-grant-held"] [data-test="aqua-grant-meanwhile"]),
+               "Aqua and its crew members take no turn"
+             )
+
+      refute render(view) =~ "You have not granted yet"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     # A grant given while a server did not expose a listed tool still
     # loads once the server exposes it, and the next turn's start refuses
     # for it: the block says so, from the start's own comparison.

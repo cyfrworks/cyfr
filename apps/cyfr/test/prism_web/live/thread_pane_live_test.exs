@@ -2280,6 +2280,38 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # Aqua's grant revoked by its person, as the profile's revoke records it:
+  # the empty state says it was revoked, in the sentence a turn refused for
+  # it says (`Prima.Refusal`), and points at the Aqua page to grant it
+  # again, never that it was never granted.
+  test "Aqua whose grant its person revoked says so, granted again on the Aqua page",
+       %{athanor: athanor, user: user, conn: conn} do
+    ctx = connected!(athanor, user)
+    {:ok, %{profile_id: id}} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{"action" => "revoke", "profile_id" => id})
+
+    pane = empty_pane(conn, athanor)
+
+    assert has_element?(
+             pane,
+             ~s([data-test="model-consent"]),
+             "You revoked your grant of what Aqua and its crew members may use."
+           )
+
+    assert has_element?(
+             pane,
+             ~s(a[href="#{athanor_path("/aqua", athanor)}"]),
+             "Grant it again on your Aqua page."
+           )
+
+    refute render(pane) =~ "You have not granted yet"
+    refute render(pane) =~ @connect
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   # Before its socket connects the pane has read no model: its first render
   # says the status is pending, never that a ready athanor has no model, and
   # the connected mount reads it.
