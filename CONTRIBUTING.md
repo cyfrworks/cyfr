@@ -38,15 +38,15 @@ missing or wrong header fails CI.
 
 `scripts/dev-stack.sh`, from the checkout, runs CYFR from source the way an
 install runs it: Prism, the server and live reload from `mix phx.server`,
-the runtime, the backends service (stdio MCP servers) and the builds
-service in their containers under `cyfr-locus`, each with the shipped
-security options and its egress guard, run from this tree's Locus image,
+and Locus with its runtime, builds and backends (stdio MCP servers) roles
+under `cyfr-locus`, with the shipped security options and its egress
+guard, run from this tree's Locus image,
 and a cyfr.run of its own on this machine as its registry and account
 service. Besides the setup the next section names (the pinned
 `wasm-tools`, the prebuilt binaries and the tailwind CLI), it needs Docker
 with its compose plugin, `python3`, `openssl`, a host that allows
-unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime`
-service says why), on a host with AppArmor this checkout's profile
+unprivileged user namespaces (`docker-compose.yml`'s `locus` service
+says why), on a host with AppArmor this checkout's profile
 `apps/codex/internal/apparmor/cyfr-locus` loaded under the name the file
 `name` beside it holds (the loop refuses before anything starts
 otherwise, naming the one command, and again after a change to that
@@ -121,7 +121,7 @@ is done:
 into it what a `mix` boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the
 runtime root and the backends key, minted as `cyfr init` mints them. Later
 runs keep every value. The builds key, which a `mix` boot refuses without
-the builds URL only the stack sets, is minted for each run unless `.env`
+the backends' URL only the stack sets, is minted for each run unless `.env`
 sets one. It then builds the tree's Locus image with `scripts/image.sh`
 when the host does not hold it already (every worktree at the same inputs
 shares one), starts the containers, and runs `mix phx.server` in the
@@ -256,8 +256,10 @@ same worktree refuses, naming the run that holds it.
     the pull request's run, with that run's id,
     `scripts/stage.sh handoff --reproduce RUN tests-postgres,dialyzer
     [-- <test paths>]`, and the receipt records both;
-  - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
-    proof, which no workflow runs, each on one quarter. The host's
+  - `nightly`: `scripts/janitor.sh`, then the install proof, the handle
+    proof and the update proof (an install of the newest published release
+    on main's schema, or of that schema's base, updated to main's head by
+    `cyfr update`, its header says how), which no workflow runs, each on one quarter. The host's
     timer runs it once a day on main's head through `scripts/nightly.sh`, which
     reports the night to GitHub (the nightly, below).
 

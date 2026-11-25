@@ -32,7 +32,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
   # The variables the evaluations set or clear, so a case starts from none of them.
   @controlled @access_keys ++
-                ~w(CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY CYFR_CLUSTER CYFR_CRYPTO_KEYRING
+                ~w(CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_BACKENDS_URL CYFR_CLUSTER CYFR_CRYPTO_KEYRING
                    CYFR_OPUS_MAX_CONCURRENT)
 
   @builds_key :binary.copy(<<7>>, 32)
@@ -198,23 +198,23 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert named == [], "runtime.exs names releases: #{inspect(named)}"
   end
 
-  # The builds service is two variables read by one resolver, both or neither,
-  # written as the two keys `Compendium.Builds.Client` reads.
-  test "the builds service is written as its URL and key, both or neither" do
+  # The builds role is its key, read by one resolver beside the backends
+  # URL, written as the two keys `Compendium.Builds.Client` reads.
+  test "the builds role is written as its URL beside the backends and its key, or neither" do
     with_env(
       %{
-        "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100/",
+        "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101/",
         "CYFR_LOCUS_BUILDS_KEY" => Base.encode16(@builds_key)
       },
       fn ->
         cyfr = read_prod_config!()[:cyfr]
 
-        assert cyfr[:locus_builds_url] == "http://locus-builds:4100"
+        assert cyfr[:locus_builds_url] == "http://locus:#{Prima.LocusRoles.role!(:builds).port}"
         assert cyfr[:locus_builds_key] == @builds_key
       end
     )
 
-    with_env(%{"CYFR_LOCUS_BUILDS_URL" => nil, "CYFR_LOCUS_BUILDS_KEY" => nil}, fn ->
+    with_env(%{"CYFR_LOCUS_BUILDS_KEY" => nil}, fn ->
       cyfr = read_prod_config!()[:cyfr]
 
       assert cyfr[:locus_builds_url] == nil

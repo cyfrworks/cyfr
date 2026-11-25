@@ -7,13 +7,13 @@
 # (tests/dev-stack/compose_shape.py), and scripts/dev-stack.sh at its
 # command boundary.
 #
-# The override: the runtime, backends and builds services and their
-# guards are the shipped ones field by field, but for the project and
-# container names (cyfr-dev-<seed>), the shared image it never builds or
-# pulls, the runtime's listener on the host's loopback alone and its calls
-# to its network's gateway, each guard's fixed address and the control
-# plane it refuses at its network's gateway, and the keeper's profile at
-# its tracked path. Slot 0 keeps Prism on 127.0.0.1:4000, and every slot's
+# The override: Locus and its guard are the shipped ones field by field,
+# but for the project and container names (cyfr-dev-<seed>), the shared
+# image it never builds or pulls, the runtime's listener on the host's
+# loopback alone, which the guard publishes, and its calls to its
+# network's gateway, the host API the guard lets it reach there, the
+# guard's fixed address and the control plane it refuses at the network's
+# gateway, and the keeper's profile at its tracked path. Slot 0 keeps Prism on 127.0.0.1:4000, and every slot's
 # host ports and subnets are apart from what the checks on a host reserve,
 # read from their sources, and from every other slot's; a source that
 # moves a reservation onto a slot fails as a dev declaration that moves
@@ -127,7 +127,7 @@ resolve() {
   # shellcheck disable=SC2046
   (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" $(slot_env "$slot") DEV_STACK_PROJECT="$project" \
     DEV_STACK_IMAGE="$stub_image" "$REAL_DOCKER" compose --env-file /dev/null \
-    --profile locus-builds "${files[@]}" config --format json locus-runtime locus-backends locus-builds)
+    "${files[@]}" config --format json locus locus-guard)
 }
 
 # sources DIR: the files the checks reserve ports and names in, copied, so
@@ -145,8 +145,8 @@ check_project="cyfr-dev-$(run_names_seed "$ROOT")"
 # other.
 checks() {
   local dir="$1" sources="${2:-$ROOT}" slots="${3:-0 19}" k jsons=()
-  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "$REAL_DOCKER" compose --env-file /dev/null --profile locus-builds \
-    -f docker-compose.yml config --format json locus-runtime locus-backends locus-builds) >"$dir/base.json" 2>"$dir/err" ||
+  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "$REAL_DOCKER" compose --env-file /dev/null \
+    -f docker-compose.yml config --format json locus locus-guard) >"$dir/base.json" 2>"$dir/err" ||
     { cat "$dir/err"; return 1; }
   for k in $slots; do
     resolve "$dir" "$k" "$check_project" docker-compose.yml docker-compose.dev.yml >"$dir/slot-$k.json" 2>"$dir/err" ||
@@ -187,19 +187,15 @@ DEV_STACK_PRISM_PORT=4000
 DEV_STACK_PROXY_PORT=4001
 DEV_STACK_RUNTIME_PORT=4700
 DEV_STACK_HOST_API_PORT=4701
-DEV_STACK_RUNTIME_NET=172.16.100
-DEV_STACK_BACKENDS_NET=172.16.101
-DEV_STACK_BUILDS_NET=172.16.102"
+DEV_STACK_LOCUS_NET=172.16.100"
 want19="DEV_STACK_SLOT=19
 DEV_STACK_PRISM_PORT=4190
 DEV_STACK_PROXY_PORT=4191
 DEV_STACK_RUNTIME_PORT=4890
 DEV_STACK_HOST_API_PORT=4891
-DEV_STACK_RUNTIME_NET=172.16.157
-DEV_STACK_BACKENDS_NET=172.16.158
-DEV_STACK_BUILDS_NET=172.16.159"
+DEV_STACK_LOCUS_NET=172.16.119"
 if [ "$(slot_env 0)" = "$want0" ] && [ "$(slot_env 19)" = "$want19" ] && ! slot_env 20 >/dev/null 2>&1; then
-  pass "slot 0 is Prism on 4000 and 172.16.100-102, slot 19 the last, and there is no slot 20"
+  pass "slot 0 is Prism on 4000 and 172.16.100, slot 19 the last, and there is no slot 20"
 else
   failed "the slot rule" "$(slot_env 0; slot_env 19; slot_env 20 2>&1)"
 fi
@@ -224,31 +220,32 @@ mutate prismwild "Prism on every interface" 's/^x-prism: 127\.0\.0\.1:/x-prism: 
 mutate proxyfixed "Prism's proxy on one port in every slot" 's/^x-prism-proxy: .*$/x-prism-proxy: 4501/'
 mutate sameport "the host API on the runtime's port" 's|(LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:)\$\{DEV_STACK_HOST_API_PORT[^}]*\}|\1${DEV_STACK_RUNTIME_PORT}|'
 mutate published "a published image tag" '0,/image: \$\{DEV_STACK_IMAGE[^}]*\}/s||image: ghcr.io/cyfrworks/cyfr-locus:latest|'
-mutate guardimage "a guard on the published image" '/^  locus-builds-guard:$/,/container_name:/s|image: \$\{DEV_STACK_IMAGE\}|image: ghcr.io/cyfrworks/cyfr-locus:latest|'
+mutate guardimage "a guard on the published image" '/^  locus-guard:$/,/container_name:/s|image: \$\{DEV_STACK_IMAGE\}|image: ghcr.io/cyfrworks/cyfr-locus:latest|'
 mutate pulled "an image compose may pull" '0,/pull_policy: never/{/pull_policy: never/d}'
 mutate built "an image compose builds" '0,/pull_policy: never/s//pull_policy: build/'
 mutate callback "the runtime's callbacks to the shipped cyfr service" 's|LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:|LOCUS_RUNTIME_HOST_API_URL=http://cyfr:|'
 mutate loopback "the runtime's callbacks to its own loopback" 's|LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:|LOCUS_RUNTIME_HOST_API_URL=http://127.0.0.1:|'
-mutate gateway "another gateway than the callbacks name" 's/gateway: \$\{DEV_STACK_RUNTIME_NET\}\.1$/gateway: ${DEV_STACK_RUNTIME_NET}.126/'
+mutate gateway "another gateway than the callbacks name" 's/gateway: \$\{DEV_STACK_LOCUS_NET\}\.1$/gateway: ${DEV_STACK_LOCUS_NET}.126/'
 mutate serviceid "the shipped service id, which CYFR does not dispatch to" 's/LOCUS_RUNTIME_SERVICE_ID=wrk_local/LOCUS_RUNTIME_SERVICE_ID=wrk_locus/'
 mutate joined "the security options joined to the shipped ones" 's/security_opt: !override/security_opt:/'
 mutate seccomp "the keeper's profile dropped" '/seccomp=\.\/apps/d'
 mutate noprofile "a profile the checkout does not hold" 's|seccomp=\./apps/locus/keeper/seccomp/keeper\.json|seccomp=./keeper.seccomp.json|'
 mutate nnp "no-new-privileges dropped" '/- no-new-privileges:true/d'
-mutate capability "a capability added to the backends service" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-backends)$/\1\n    cap_add: [NET_ADMIN]/'
-mutate writable "a writable root for the builder" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-builds)$/\1\n    read_only: false/'
-mutate hostnet "the backends service on the host's network" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-backends)$/\1\n    network_mode: host/'
-mutate guardless "the builder outside its guard's namespace" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-builds)$/\1\n    network_mode: bridge/'
-mutate shippedplane "a guard refusing the shipped control plane, not the host" 's/CYFR_GUARD_CONTROL_PLANE=\$\{DEV_STACK_BACKENDS_NET[^}]*\}\.1/CYFR_GUARD_CONTROL_PLANE=172.16.230.2/'
-mutate noplane "a guard's control plane left as shipped" '/CYFR_GUARD_CONTROL_PLANE=\$\{DEV_STACK_BUILDS_NET/d'
-mutate inrange "a guard's address inside its network's ip_range" 's/ipv4_address: \$\{DEV_STACK_BACKENDS_NET\}\.2/ipv4_address: ${DEV_STACK_BACKENDS_NET}.200/'
-mutate shippedsubnet "a dev network on the shipped runtime subnet" 's/\$\{DEV_STACK_BACKENDS_NET[^}]*\}/172.16.231/g'
-mutate pool "a dev network in Docker's address pools" 's/\$\{DEV_STACK_BUILDS_NET[^}]*\}/172.18.242/g'
-mutate twice "two dev networks on one subnet" 's/\$\{DEV_STACK_BUILDS_NET[^}]*\}/${DEV_STACK_BACKENDS_NET}/g'
-mutate onesubnet "one subnet in every slot" 's/\$\{DEV_STACK_RUNTIME_NET[^}]*\}/172.16.99/g'
+mutate capability "a capability added to Locus" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus)$/\1\n    cap_add: [NET_ADMIN]/'
+mutate writable "a writable root for Locus" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus)$/\1\n    read_only: false/'
+mutate hostnet "the guard on the host's network" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-guard)$/\1\n    network_mode: host/'
+mutate guardless "Locus outside its guard's namespace" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus)$/\1\n    network_mode: bridge/'
+mutate shippedplane "a guard refusing the shipped control plane, not the host" 's/CYFR_GUARD_CONTROL_PLANE=\$\{DEV_STACK_LOCUS_NET[^}]*\}\.1/CYFR_GUARD_CONTROL_PLANE=172.16.230.2/'
+mutate noplane "the guard's control plane left as shipped" '/CYFR_GUARD_CONTROL_PLANE=/d'
+mutate nohostapi "the guard's host API left as shipped" '/CYFR_GUARD_HOST_API=/d'
+mutate hostapiport "the guard's host API on another port than the callbacks'" 's/(CYFR_GUARD_HOST_API=.*\}\.1:)\$\{DEV_STACK_HOST_API_PORT[^}]*\}/\14300/'
+mutate inrange "the guard's address inside its network's ip_range" 's/ipv4_address: \$\{DEV_STACK_LOCUS_NET\}\.2/ipv4_address: ${DEV_STACK_LOCUS_NET}.200/'
+mutate shippedsubnet "the dev network on the shipped locus subnet" 's/\$\{DEV_STACK_LOCUS_NET[^}]*\}/172.16.231/g'
+mutate pool "the dev network in Docker's address pools" 's/\$\{DEV_STACK_LOCUS_NET[^}]*\}/172.18.242/g'
+mutate onesubnet "one subnet in every slot" 's/\$\{DEV_STACK_LOCUS_NET[^}]*\}/172.16.99/g'
 mutate unnamed "the checkout directory's project name" '/^name: /d'
 mutate seedless "one project for every worktree" 's/^name: .*$/name: cyfr-dev/'
-mutate container "the shipped container name" 's/container_name: \$\{DEV_STACK_PROJECT\}-locus-runtime/container_name: cyfr-locus-runtime/'
+mutate container "the shipped container name" 's/container_name: \$\{DEV_STACK_PROJECT\}-locus$/container_name: cyfr-locus/'
 
 # move NAME WHAT FILE SED_EXPRESSION: a check's own reservation moved onto
 # a slot, which must fail.
@@ -265,12 +262,12 @@ move() {
 }
 move suite "the test suite's endpoint moved onto slot 0's runtime port" config/test.exs 's/port: 4002\]/port: 4700]/'
 move hsts "the HSTS proof moved onto slot 13's Prism address" tests/proxy-hsts/run.sh 's/TLS_PORT=4123/TLS_PORT=4130/'
-move named "a proof naming a loop's container" tests/compose-proof/run.sh '1a # docker logs cyfr-dev-0123456789-locus-builds'
+move named "a proof naming a loop's container" tests/compose-proof/run.sh '1a # docker logs cyfr-dev-0123456789-locus'
 move unread "a reservation the check can no longer read" tests/proxy-hsts/run.sh 's/TLS_PORT=4123/TLS_LISTENER=4123/'
 dir="$scratch/s-shipped"
 project "$dir" "$override"
-sed -i 's|- subnet: 172\.16\.234\.0/24|- subnet: 172.16.101.0/24|' "$dir/docker-compose.yml"
-expect_checks fail "the shipped edge network moved onto slot 0's backends subnet" "$dir"
+sed -i 's|- subnet: 172\.16\.234\.0/24|- subnet: 172.16.100.0/24|' "$dir/docker-compose.yml"
+expect_checks fail "the shipped edge network moved onto slot 0's subnet" "$dir"
 
 # scripts/dev-stack.sh at its command boundary: docker, mix, curl and
 # scripts/image.sh stubbed, each recording what it is handed, in case
@@ -557,7 +554,7 @@ CYFR_LOCUS_RUNTIME_ROOT=$root_a
 CYFR_LOCUS_BACKENDS_KEY=$key_b
 CYFR_LOCUS_BUILDS_KEY=$key_c
 "
-services="locus-runtime locus-backends locus-builds"
+services="locus locus-guard"
 unset_keys="LOCUS_RUNTIME_KEY=unset|CYFR_LOCUS_BACKENDS_KEY=unset|CYFR_LOCUS_BUILDS_KEY=unset"
 
 # Every slot's settings, as the task derives them from the slot's
@@ -697,7 +694,7 @@ status_is() { [ "$(cat "$case_dir/status")" = "$1" ] || echo "the run exited $(c
 # ARGS`, which the script makes with the case's project and its own files
 # alone.
 calls() {
-  local acting="compose --env-file /dev/null -p $case_project --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml "
+  local acting="compose --env-file /dev/null -p $case_project -f docker-compose.yml -f docker-compose.dev.yml "
   record docker.calls | while IFS= read -r line; do
     case "$line" in *" -p cyfr-run-dev "* | "volume inspect "* | "image inspect "*) continue ;; esac
     printf '%s\n' "${line/#"$acting"/compose }"
@@ -760,7 +757,7 @@ image_calls() { printf '%s\n' "--undated --tag-only locus" "--undated --for $(re
 # want_settings K: the server's settings at slot K, from the override as
 # the case's project resolves it, and the local cyfr.run's: the registry,
 # OCI registry and account service, whatever .env says, and the two names
-# the private egress names beside the backends guard's address.
+# the private egress names beside the guard's address.
 want_settings() {
   resolve "$case_dir" "$1" "$case_project" docker-compose.yml docker-compose.dev.yml >"$case_dir/want.json" &&
     { python3 -I "$SHAPE" settings "$case_dir/want.json" | sed "s/^CYFR_PRIVATE_EGRESS_TARGETS=.*$/&,cyfr.test,registry.cyfr.test/"
@@ -792,8 +789,8 @@ case_provision() {
   setup="$(sed -n 's/^CYFR_SETUP_TOKEN=//p' "$case_dir/.env")"
   root="$(sed -n 's/^CYFR_LOCUS_RUNTIME_ROOT=//p' "$case_dir/.env")"
   backends="$(sed -n 's/^CYFR_LOCUS_BACKENDS_KEY=//p' "$case_dir/.env")"
-  # The builds key, which a boot refuses without its URL, is the run's
-  # alone: the builder's and the server's, never .env's.
+  # The builds key, which a boot refuses without the backends URL, is the
+  # run's alone: the builds role's and the server's, never .env's.
   builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=\([0-9a-f]*\)|.*$/\1/p')"
   [ "$(cat "$case_dir/.env")" = "CYFR_SETUP_TOKEN=$setup
 CYFR_LOCUS_RUNTIME_ROOT=$root
@@ -861,7 +858,7 @@ case_retained() {
 case_refused() {
   local line name
   for line in "CYFR_LOCUS_RUNTIME_WORKERS = wrk_elsewhere=http://127.0.0.1:4999" "CYFR_HOST_API_BIND=0.0.0.0 # all of them" \
-    "CYFR_HOST_API_URL=http://cyfr:4300" "CYFR_PORT=4999" "CYFR_PROXY_PORT=4999" "CYFR_LOCUS_BACKENDS_URL=http://locus-backends:4101"; do
+    "CYFR_HOST_API_URL=http://cyfr:4300" "CYFR_PORT=4999" "CYFR_PROXY_PORT=4999" "CYFR_LOCUS_BACKENDS_URL=http://locus:4101"; do
     name="${line%%[ =]*}"
     stack "$1" refused "$complete$line"$'\n' 0644 "" STUB_SERVER_STATUS=0
     [ "$(cat "$case_dir/status")" != 0 ] || echo "the run accepted $line"
@@ -916,10 +913,10 @@ case_port_held() {
   [ "$(calls)" = "$(full_run "$slot_b" "$root_a" "$key_b" "$key_c" "$slot_a")" ] || echo "docker was handed: $(calls)"
   remembers "$slot_b"
 }
-# A slot one of whose subnets a Docker network overlaps is passed.
+# A slot whose subnet a Docker network overlaps is passed.
 case_network_overlap() {
   local net
-  net="$(value "$slot_a" DEV_STACK_BUILDS_NET)"
+  net="$(value "$slot_a" DEV_STACK_LOCUS_NET)"
   STACK_SLOT="$slot_a" stack "$1" network-overlap "$complete" 0600 "" STUB_SERVER_STATUS=0 STUB_NETWORKS="someones_net $net.64/26"
   status_is 0
   grep -qxF "dev-stack: slot $slot_a is taken (the network someones_net ($net.64/26)), so this worktree's loop takes slot $slot_b." "$case_dir/out" ||

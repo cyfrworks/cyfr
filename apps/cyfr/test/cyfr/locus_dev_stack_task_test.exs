@@ -34,7 +34,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   @vectors @fixture |> File.read!() |> Jason.decode!()
 
   @server ~w(CYFR_PORT CYFR_PROXY_PORT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT
-             CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_BUILDS_URL)
+             CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS)
   @provisioned ~w(CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY
                   CYFR_LOCUS_BUILDS_KEY)
   @registry_names ~w(CYFR_REGISTRY_URL CYFR_DIRECTORY_URL CYFR_OCI_REGISTRY_URL)
@@ -102,26 +102,24 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   # resolves it, its values the test's own, and the fields the task reads
   # among the rest.
   defp declarations do
-    guard = fn network, address, port ->
-      %{
-        "image" => "cyfr-locus:in-0123456789abcdef0123",
-        "expose" => [port],
-        "networks" => %{network => %{"aliases" => [network], "ipv4_address" => address}}
-      }
-    end
-
     %{
       "name" => "cyfr-dev-0123456789",
       "x-prism" => "127.0.0.1:4555",
       "x-prism-proxy" => "4556",
       "services" => %{
-        "locus-runtime" => %{
+        "locus" => %{
           "image" => "cyfr-locus:in-0123456789abcdef0123",
+          "network_mode" => "service:locus-guard",
           "environment" => %{
             "LOCUS_RUNTIME_SERVICE_ID" => service(),
             "LOCUS_RUNTIME_HOST_API_URL" => "http://172.16.250.1:4566",
             "LOCUS_RUNTIME_KEY" => ""
-          },
+          }
+        },
+        "locus-guard" => %{
+          "image" => "cyfr-locus:in-0123456789abcdef0123",
+          "expose" => ["4100", "4101", "4200"],
+          "networks" => %{"locus" => %{"aliases" => ["locus"], "ipv4_address" => "172.16.250.2"}},
           "ports" => [
             %{
               "mode" => "ingress",
@@ -131,9 +129,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
               "protocol" => "tcp"
             }
           ]
-        },
-        "locus-backends-guard" => guard.("locus-backends", "172.16.251.2", "4101"),
-        "locus-builds-guard" => guard.("locus-builds", "172.16.252.2", "4100")
+        }
       }
     }
   end
@@ -145,9 +141,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       "server CYFR_LOCUS_RUNTIME_WORKERS=#{service()}=http://127.0.0.1:4565",
       "server CYFR_HOST_API_BIND=172.16.250.1",
       "server CYFR_HOST_API_PORT=4566",
-      "server CYFR_LOCUS_BACKENDS_URL=http://172.16.251.2:4101",
-      "server CYFR_PRIVATE_EGRESS_TARGETS=172.16.251.2,cyfr.test,registry.cyfr.test",
-      "server CYFR_LOCUS_BUILDS_URL=http://172.16.252.2:4100",
+      "server CYFR_LOCUS_BACKENDS_URL=http://172.16.250.2:4101",
+      "server CYFR_PRIVATE_EGRESS_TARGETS=172.16.250.2,cyfr.test,registry.cyfr.test",
       "server CYFR_REGISTRY_URL=cyfr.test",
       "server CYFR_OCI_REGISTRY_URL=registry.cyfr.test",
       "server CYFR_DIRECTORY_URL=https://cyfr.test"
@@ -234,12 +229,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
              ] = String.split(File.read!(".env"), "\n")
 
       # Every other mix boot of the checkout reads this .env alone, and
-      # accepts it: no builds key without its URL.
+      # accepts it: no builds key without the backends URL.
       file = Cyfr.EnvFiles.source!([".env"], side_effect: false)
       assert {:ok, nil} = Cyfr.RuntimeConfig.resolve_locus_builds(&Map.get(file, &1))
 
-      # The builds key, which a boot refuses without its URL, is the run's
-      # alone, the server's as the builder's.
+      # The builds key, which a boot refuses without the backends URL, is
+      # the run's alone, the server's as the builds role's.
       "server CYFR_LOCUS_BUILDS_KEY=" <> builds = Enum.at(rest, length(server_lines()))
 
       # The setup token as `cyfr init` mints it, which the boot accepts, in
@@ -364,7 +359,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       end
     end
 
-    test "reads an island key as the boot does: trimmed, then decoded" do
+    test "reads a role's key as the boot does: trimmed, then decoded" do
       File.write!(".env", complete())
       System.put_env("CYFR_LOCUS_BACKENDS_KEY", "  " <> @backends_key <> " ")
       System.put_env("CYFR_LOCUS_BUILDS_KEY", " " <> @builds_key <> "\t")
@@ -383,13 +378,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       CYFR_LOCUS_RUNTIME_WORKERS=#{service()}=http://127.0.0.1:4565
       CYFR_HOST_API_BIND=172.16.250.1
       CYFR_HOST_API_URL=http://172.16.250.1:4566/
-      CYFR_LOCUS_BACKENDS_URL=http://172.16.251.2:4101/
-      CYFR_PRIVATE_EGRESS_TARGETS= 172.16.251.2 , cyfr.test,registry.cyfr.test
+      CYFR_LOCUS_BACKENDS_URL=http://172.16.250.2:4101/
+      CYFR_PRIVATE_EGRESS_TARGETS= 172.16.250.2 , cyfr.test,registry.cyfr.test
       CYFR_BIND_ADDRESS=127.0.0.1
       """)
 
       System.put_env("CYFR_HOST_API_PORT", "4566")
-      System.put_env("CYFR_LOCUS_BUILDS_URL", "http://172.16.252.2:4100")
       settings!()
       assert answers() == answered()
     end
@@ -405,10 +399,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
             {"CYFR_HOST_API_BIND", "0.0.0.0"},
             {"CYFR_HOST_API_PORT", "4300"},
             {"CYFR_HOST_API_URL", "http://cyfr:4566"},
-            {"CYFR_LOCUS_BACKENDS_URL", "http://locus-backends:4101"},
-            {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.251.2,127.0.0.1"},
-            {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.251.2"},
-            {"CYFR_LOCUS_BUILDS_URL", "http://locus-builds:4100"},
+            {"CYFR_LOCUS_BACKENDS_URL", "http://locus:4101"},
+            {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.250.2,127.0.0.1"},
+            {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.250.2"},
             {"CYFR_BIND_ADDRESS", "::1"}
           ] do
         File.write!(".env", complete() <> "#{name} = #{value} # a note\n")
@@ -598,12 +591,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
             {&Map.delete(&1, "x-prism-proxy"), "does not declare x-prism-proxy as a port"},
             {&Map.put(&1, "x-prism-proxy", "127.0.0.1:4556"),
              "does not declare x-prism-proxy as a port"},
-            {&put_in(&1, ["services", "locus-runtime", "ports"], []),
-             "does not declare the runtime's id, callback address and one port on 127.0.0.1"},
-            {&put_in(&1, ["services", "locus-backends-guard", "networks"], %{}),
-             "does not declare locus-backends-guard with one exposed port and a fixed address"},
-            {&update_in(&1, ["services"], fn s -> Map.delete(s, "locus-builds-guard") end),
-             "does not declare locus-builds-guard"}
+            {&put_in(&1, ["services", "locus-guard", "ports"], []),
+             "does not declare the runtime's id and callback address, and the guard's one port"},
+            {&put_in(&1, ["services", "locus", "environment"], %{}),
+             "does not declare the runtime's id and callback address"},
+            {&put_in(&1, ["services", "locus-guard", "networks"], %{}),
+             "builds' ports, fixed on locus"},
+            {&put_in(&1, ["services", "locus-guard", "expose"], ["4101", "4200"]),
+             "does not declare locus-guard exposing the backends' and builds' ports"}
           ] do
         File.write!("stack.json", Jason.encode!(edit.(declarations())))
         refused(message)

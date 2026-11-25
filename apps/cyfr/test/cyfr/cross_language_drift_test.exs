@@ -49,21 +49,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "matches before a trailing newline — use \\A..\\z"
   end
 
-  test "the access engine's builds URL grammar is Cyfr.RuntimeConfig's" do
-    # Spelled the same on both sides, each anchored its own way; the
-    # vectors' builds_urls hold the two to the same verdicts.
-    [_, elixir] =
-      Regex.run(~r/@builds_url ~r\/\\A(.+)\\z\//, read!("apps/cyfr/lib/cyfr/runtime_config.ex"))
-
-    [_, go] =
-      Regex.run(
-        ~r/buildsURLGrammar = regexp\.MustCompile\(`\^(.+)\$`\)/,
-        read!("apps/codex/internal/access/head.go")
-      )
-
-    assert String.replace(elixir, "\\/", "/") == go
-  end
-
   test "the access engine's refusal sentences are Prima.Refusal's, as rendered" do
     # The section and refusals_gen.go are rendered from Prima.Refusal
     # (`mix cyfr.gen.access_refusals`), so a row that changes without the
@@ -552,10 +537,14 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/registry-stand-in/standin_test.py", ~w(chains directory entries)}
     ],
     "keeper_protocol.json" => [
+      {"apps/cyfr/test/compendium/packs_test.exs", ~w(pack_bounds pack_archive pack_paths)},
       {"apps/cyfr/test/opus/programs/definition_test.exs",
        ~w(reserved_env_prefixes request_bounds)},
+      {"apps/cyfr/test/opus/programs/session_test.exs", ~w(pack_waits)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies)},
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)},
+      {"apps/locus/keeper/internal/packview/packview_test.go",
+       ~w(pack_bounds pack_waits pack_archive pack_paths)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
       {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(home_requests)},
       {"apps/locus/test/locus/config_test.exs", ~w(valid_requests invalid_requests)},
@@ -566,7 +555,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(control_frames valid_requests replies)},
       {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
       {"apps/prima/test/prima/keeper_protocol_test.exs",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies)}
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)}
     ],
     "layout.json" => [
       {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid unsupported)}
@@ -581,9 +570,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version routes key_hex owner hello sync release status open invalid_messages fence_rejected refusals)},
       {"apps/locus/test/locus/listener_test.exs", ~w(version service key_hex owner hello sync)},
       {"apps/prima/test/prima/locus_backends_test.exs",
-       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv open_terminal input output resize seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking masking_stream terminal_type)},
+       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv open_terminal input output resize open_packs packs_hold packs_put seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking masking_stream terminal_type)},
       {"tests/locus-backends-image/harness.py",
-       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals open_terminal input output resize)}
+       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals open_terminal input output resize open_packs packs_hold packs_put)}
     ],
     "locus_builds.json" => [
       {"apps/cyfr/test/support/scripted_builder.ex", ~w(key_hex request_key_hex lines)},
@@ -602,6 +591,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/builder-image/stack.py", ~w(release roles)},
       {"tests/compose-proof/run.sh", ~w(release)},
       {"tests/locus-backends-image/harness.py", ~w(release roles)},
+      {"tests/locus-backends-image/roles.py", ~w(roles)},
+      {"tests/locus-backends-image/roles_update.py", ~w(roles)},
       {"tests/locus-runtime-image/stack.py", ~w(release roles)}
     ],
     "login_directory.json" => [

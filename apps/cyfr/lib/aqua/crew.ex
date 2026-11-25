@@ -484,7 +484,7 @@ defmodule Aqua.Crew do
   of `names` read by name under the caller's actor (`Compendium.skill/2`),
   its body as written and its other files' names, in the order named. A
   name is given once, every scroll is one each harness carries
-  (`Compendium.AquaSkills`), and the scrolls as a member reads them, each
+  (`Compendium.Packs`), and the scrolls as a member reads them, each
   in its frame (`Aqua.Reader.scrolls/2`), hold no more bytes than one
   scroll's bound, so a job's post fits one line of the brain wire. A name
   this athanor has no scroll of, another athanor's included, refuses the
@@ -531,6 +531,10 @@ defmodule Aqua.Crew do
           {:halt,
            {:error,
             {:invalid_argument, "#{operation}: this athanor has no scroll named #{inspect(name)}"}}}
+
+        # A bare name: the sentence names the full names it matches.
+        {:error, {:invalid_argument, sentence}} ->
+          {:halt, {:error, {:invalid_argument, "#{operation}: #{sentence}"}}}
 
         {:error, _unread} ->
           {:halt, {:error, {:unavailable, "Scrolls"}}}

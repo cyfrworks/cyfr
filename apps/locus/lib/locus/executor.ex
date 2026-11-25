@@ -60,13 +60,17 @@ defmodule Locus.Executor do
     next read only once it returned; its state is the outcome's `taken`
     (none drops stdout)
   - `:on_output` — called with each log line as it arrives, likewise
+  - `:heir` — `{pid, tag}`, told `{executor, {:heir, tag}, :released}` once
+    nothing of the run is left, whoever waits on it then, or once it is
+    known that nothing of it was started (`Locus.Launcher`'s heir)
   """
   @type opts :: [
           place: String.t(),
           deadline: integer(),
           max_stdout_bytes: pos_integer(),
           on_stdout: on_stdout(),
-          on_output: (String.t() -> taken())
+          on_output: (String.t() -> taken()),
+          heir: {pid(), term()}
         ]
 
   @typedoc """
@@ -101,6 +105,13 @@ defmodule Locus.Executor do
 
   @doc "Free the place, unless a run named it."
   @callback drop(String.t()) :: :ok
+
+  @doc """
+  Whether a run naming the heir tag is held (`:pending`, its heir told of
+  its end) or not (`:none`, and every later run naming the tag is refused):
+  `Locus.Launcher`'s fence, for a process that named an heir and died.
+  """
+  @callback fence(term()) :: :none | :pending | {:error, term()}
 
   @doc """
   The launcher the test build runs builds and long-lived processes through
@@ -147,6 +158,15 @@ defmodule Locus.Executor do
   def cancel(pid) when is_pid(pid) do
     send(pid, {__MODULE__, :cancel})
     :ok
+  end
+
+  @doc "The executor's fence of the heir tag `tag` (`c:fence/1`)."
+  @spec fence(term()) :: :none | :pending | {:error, term()}
+  def fence(tag) do
+    case executor() do
+      {:ok, executor} -> executor.fence(tag)
+      {:error, :no_keeper} = error -> error
+    end
   end
 
   defmodule Log do

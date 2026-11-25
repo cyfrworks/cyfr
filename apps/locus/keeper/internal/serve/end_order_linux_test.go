@@ -64,7 +64,7 @@ func heldLeader(then string) string {
 // answers the leader, the group and a log file the script writes to as $L.
 func endingGroup(t *testing.T, k *keeper, uid int, script string) (*child, *cgroup.Group, string) {
 	t.Helper()
-	group, err := k.s.memory.Create(cgroup.Name(uid), 256<<20, protocol.CPUPeriod)
+	group, err := k.c.role.groups.Create(cgroup.Name(uid), 256<<20, protocol.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 
 	grace := endGrace.Milliseconds()
 	for _, spawnID := range []string{slow, fast} {
-		k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawnID, GraceMs: &grace})
+		k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: spawnID, GraceMs: &grace})
 	}
 	released := map[string]bool{}
 	for len(released) < 2 {
@@ -291,9 +291,9 @@ func TestTwoSessionsOfOneHomeEachEndInTheirOwnTime(t *testing.T) {
 }
 
 // The release of a home's only session marks its uid retiring at once: while
-// that session is still ending, a home_make of the home is refused and a
-// spawn of it waits for the uid's retirement, as for any retiring uid, and
-// another home is unaffected. A newcomer is never admitted beside a uid
+// that session is still ending, a home_make of the home answers its uid and
+// a spawn of it waits for the uid's retirement, as for any retiring uid,
+// and another home is made under another uid. A newcomer is never admitted beside a uid
 // whose last session is ending.
 func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	k := keptKeeper(t)
@@ -307,11 +307,12 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	only, _ := k.spawnKept(t, "only", `L="$HOME/log"; sleep 600`+heldLeader(`:`), home, uid)
 	logged(t, log, "leader-ready")
 	grace := endGrace.Milliseconds()
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: only, GraceMs: &grace})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: only, GraceMs: &grace})
 	logged(t, log, "leader-got-term")
 
-	if busy := k.homeRequest(t, protocol.TypeHomeMake, "m2", home, uid); busy["code"] != protocol.CodeUIDBusy {
-		t.Fatalf("home_make of the home while its last session ends: %v", busy)
+	// A made home's make answers its uid, retiring or not.
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m2", home, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make of the home while its last session ends: %v", made)
 	}
 	k.s.mu.Lock()
 	retiring, busy := k.s.keptState(uid, home)
@@ -326,7 +327,7 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 	if placed := k.place(t, "newcomer", protocol.KindProgram); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("the newcomer's place answered %v", placed)
 	}
-	go k.s.handleSpawn(keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, uid, nil))
+	go k.s.handleSpawn(k.c, keptRequest(t, k.attach, "newcomer", `echo newcomer-started >> "$HOME/log"; sleep 600`, home, nil))
 	if err := os.WriteFile(log+".go", nil, 0o666); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +346,7 @@ func TestANewcomerWaitsForTheLastSessionsEnd(t *testing.T) {
 		t.Fatalf("the newcomer started before the last session ended: %q", got)
 	}
 	zero := int64(0)
-	k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: newcomer, GraceMs: &zero})
+	k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: newcomer, GraceMs: &zero})
 }
 
 // waitingFor makes the end's wait for the leader's children say when it
@@ -584,7 +585,7 @@ func TestAScanNeverHoldsTheLockNorSignalsPastTheDeadline(t *testing.T) {
 		}
 	}()
 	zero := int64(0)
-	go k.s.handleRelease(&protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: other, GraceMs: &zero})
+	go k.s.handleRelease(k.c, &protocol.Request{V: protocol.Version, Type: protocol.TypeRelease, SpawnID: other, GraceMs: &zero})
 	select {
 	case m := <-released:
 		if m["type"] != protocol.TypeReleased {

@@ -93,13 +93,8 @@
 #          project's .cyfr/, and removes join.json. That a snapshot holds
 #          neither the tailnet state nor the access state is
 #          apps/codex/cmd/update_test.go's
-#          TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState. The
-#          restore alone runs as root, in a container of a pinned docker
-#          CLI image with the host's docker and the project directory at
-#          its own path, as `cyfr restore` tells a person to once the
-#          container's entrypoint has handed the storage root to the
-#          image's user (the restore-person case holds that refusal);
-#          every other CYFR command runs as the person.
+#          TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState. Every
+#          CYFR command runs as the person, the restore among them.
 #
 #   shutdown
 #          `docker compose stop cyfr` ends within the stop_grace_period
@@ -134,17 +129,18 @@
 #   restore-person
 #          `cyfr restore` run as the person, who is not root, once the
 #          stack has run and the entrypoint has handed the storage root to
-#          the image's user: refused before any part is put back, with the
-#          sentence that names the same restore as root and says
-#          docker-compose.yml and .env are as they were. Both files are
-#          byte for byte what they were, no restore bar is left in .env,
-#          and `cyfr up` starts the home again.
+#          the image's user, and the storage has changed since the
+#          snapshot: it puts the snapshot back through the stack, says no
+#          sudo, and starts the home; what the snapshot held is back,
+#          what was written since is gone, the
+#          storage root is the image's user's again, and .env and
+#          docker-compose.yml are the person's.
 #
 #   runtime
 #          a component run on the shipped cyfr by the real runtime: the
-#          project's locus-runtime service started from the Locus image
-#          built from the tree, with every setting the shipped file gives
-#          it and the keys `cyfr init` wrote (the root in cyfr's .env, the
+#          project's locus service and its guard started from the Locus
+#          image built from the tree, with every setting the shipped file
+#          gives them and the keys `cyfr init` wrote (the root in cyfr's .env, the
 #          key it derives for wrk_locus beside it), so cyfr dispatches to
 #          the worker URL the shipped file names and the runtime calls back
 #          at the host API address it names, each side checking the other's
@@ -203,8 +199,8 @@
 #          keyring setting that is not its JSON, Cyfr.Application); the update
 #          ends non-zero with the stack left stopped, the boot's
 #          `[Cyfr] FATAL:` line and the one `cyfr restore SNAPSHOT` it
-#          prints, its snapshot complete, and that command, run as root
-#          (cli_run_root), brings the old release back serving the
+#          prints, its snapshot complete, and that command, run as the
+#          person, brings the old release back serving the
 #          person's message.
 #          update-interrupt: SIGINT while the update reads the roster
 #          offline, the last step of its stop, restarts the old release,
@@ -219,8 +215,7 @@
 #          row signalling a PostgreSQL home's snapshot.
 #          What these cases cannot show: the program step that downloads
 #          and replaces the command line, the signature check of a real
-#          release's manifest and scaffold (a candidate has none), and a
-#          person's own sudo (the restore runs as root in a container).
+#          release's manifest and scaffold (a candidate has none).
 #          test.yml runs them on main's push run, the tag's and the
 #          nightly, not on a pull request.
 #
@@ -330,7 +325,7 @@ PERSON="" THREAD="" MARK=""
 # it whole for a program that runs it (scripts/cosign.sh check run).
 COMPOSE_CMD=(docker compose --project-name "$RUN" --project-directory "$WORK"
   -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml"
-  --profile public --profile tailnet --profile locus-builds)
+  --profile public --profile tailnet)
 compose() {
   "${COMPOSE_CMD[@]}" "$@"
 }
@@ -339,6 +334,8 @@ compose() {
 . "$HERE/cleanup.sh"
 # shellcheck source=tests/compose-proof/predicates.sh
 . "$HERE/predicates.sh"
+# shellcheck source=tests/lib/candidate-release.sh
+. "$ROOT/tests/lib/candidate-release.sh"
 trap cleanup EXIT
 
 step() { echo; echo "==> $*"; }
@@ -436,35 +433,6 @@ cyfr_cli() {
       ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
       ${words[@]+"${words[@]}"} "$CYFR" "$@"
   )
-}
-
-# The docker CLI image the restore-identity case runs `cyfr restore` in, as
-# root, as a person's refused restore says to (docker:29.8.1-cli).
-ROOT_CLI_IMAGE="docker:29.8.1-cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca"
-
-# The command line's run `$2...` as root, in a container of ROOT_CLI_IMAGE
-# with the host's docker at the image's default socket and the project
-# directory at its own path, its output in `$WORK/$1.log`; its status is
-# the run's. Everything it leaves in the project but data/, which is the
-# image's user's, goes back to the person, so the steps after it run as the
-# person again.
-cli_run_root() {
-  local log="$WORK/$1.log" endpoint status=0
-  shift
-  endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
-  case "$endpoint" in
-    unix://*) ;;
-    *) fail "the host's docker is at $endpoint, not a socket a container can mount" ;;
-  esac
-  printf '$ cyfr %s (as root)\n' "$*" >"$log"
-  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-cli-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
-    -v "${endpoint#unix://}:/var/run/docker.sock" -v "$WORK:$WORK" -w "$WORK" \
-    -e HOME="$WORK/home" -e LANG=C.UTF-8 -e TERM=dumb --entrypoint "$CYFR" "$ROOT_CLI_IMAGE" "$@" \
-    </dev/null >>"$log" 2>&1 || status=$?
-  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-chown-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --user 0 -v "$WORK:$WORK" --entrypoint sh "$IMAGE" -c \
-    'find "$1" -mindepth 1 -maxdepth 1 ! -name data -exec chown -R "$2" {} +' sh "$WORK" "$(id -u):$(id -g)" ||
-    fail "what the restore left in the project could not be given back to the person"
-  return "$status"
 }
 
 # The command line's run `$2...` with its output in `$WORK/$1.log` and its
@@ -989,8 +957,11 @@ project_new() {
     cp "$HERE/compose.yml" "$WORK/docker-compose.override.yml"
     update_overlay
   else
-    step "the project's directory: the shipped file, the overlay, and the .env cyfr init writes"
+    step "the project's directory: the shipped file, the overlay, the shipped aqua/ as an install lays it down, and the .env cyfr init writes"
     cp "$ROOT/docker-compose.yml" "$WORK/docker-compose.yml"
+    # The person's, as the scaffold's: a folder the compose file binds that
+    # is not there is made by Docker as root at the first start.
+    cp -R "$ROOT/seed/aqua" "$WORK/aqua"
     cp "$HERE/compose.yml" "$WORK/docker-compose.override.yml"
     cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$WORK/keeper.seccomp.json"
     cp "$ROOT/.env.example" "$WORK/.env.example"
@@ -999,7 +970,7 @@ project_new() {
   [ -f "$WORK/.env" ] || fail "cyfr init wrote no .env"
   # The run's own settings: its images, migration, the private host the
   # shutdown case's upstream is, and builds off as an operator turns them
-  # off, both empty. A registry, its OCI host and a directory at an
+  # off, its key empty. A registry, its OCI host and a directory at an
   # address this deployment's egress refuses (loopback, which no private
   # egress target lists), so nothing of the run reaches cyfr.run: the
   # fixture's people are cached here alone and have no name
@@ -1008,10 +979,9 @@ project_new() {
   env_set CYFR_OCI_REGISTRY_URL 127.0.0.1:9
   env_set CYFR_DIRECTORY_URL http://127.0.0.1:9
   env_set CYFR_AUTO_MIGRATE on
-  env_set CYFR_LOCUS_BUILDS_URL ""
   env_set CYFR_LOCUS_BUILDS_KEY ""
   if [ "$CASE" = shutdown ]; then
-    env_set CYFR_PRIVATE_EGRESS_TARGETS "locus-backends,$UPSTREAM_HOST"
+    env_set CYFR_PRIVATE_EGRESS_TARGETS "locus,$UPSTREAM_HOST"
   fi
   env_set PROOF_APP_IMAGE "$IMAGE"
   env_set PROOF_TAILSCALE_IMAGE "$STANDIN_IMAGE"
@@ -1026,43 +996,46 @@ project_new() {
   proof_caddyfile
 }
 
-# The runtime case's overlay: the runtime's profile, which keeps it from
-# every other case, replaced by the Locus image the run names, so `cyfr
-# up` starts it with every other setting the shipped file gives it.
+# The runtime case's overlay: the profile of Locus and its guard, which
+# keeps them from every other case, replaced by the Locus image the run
+# names, so `cyfr up` starts them with every other setting the shipped
+# file gives them.
 runtime_overlay() {
-  python3 -I - "$WORK/docker-compose.override.yml" <<'PY' || fail "the overlay holds no runtime block to lift"
+  python3 -I - "$WORK/docker-compose.override.yml" "$(table service)" "$(table guard)" <<'PY' || fail "the overlay holds no Locus block to lift"
 import sys
 path = sys.argv[1]
 text = open(path).read()
-block = '  locus-runtime:\n    profiles: ["proof-never"]\n'
-assert text.count(block) == 1
-open(path, "w").write(text.replace(block, '  locus-runtime:\n    image: ${PROOF_LOCUS_IMAGE:?set PROOF_LOCUS_IMAGE}\n    pull_policy: never\n'))
+for service in sys.argv[2:]:
+    block = f'  {service}:\n    profiles: ["proof-never"]\n'
+    assert text.count(block) == 1
+    text = text.replace(block, f'  {service}:\n    image: ${{PROOF_LOCUS_IMAGE:?set PROOF_LOCUS_IMAGE}}\n    pull_policy: never\n')
+open(path, "w").write(text)
 PY
 }
 
-# The island networks exist before cyfr joins them, with IPv6: the plain
-# ones, the builds and backends islands' (the runtime's carries its own
-# subnet), as they do in a deployment whose island started first, or whose
-# cyfr was recreated beside running islands, and with IPv6 on, as the image
-# suites' overlays and a dual-stack deployment have them: Docker's port
-# mapping must still land on the default network's address. Docker maps a
-# published port to the container's address on an IPv6-enabled network
-# ahead of an IPv4-only one, whatever the gateway priority, so the shipped
-# default network is dual-stack and cyfr's gw_priority on it decides;
-# without both, the port answers nothing here.
+# Locus's network exists before cyfr joins it, with IPv6 and the subnet
+# the shipped file fixes, as it does in a deployment whose Locus started
+# first, or whose cyfr was recreated beside a running Locus, and with IPv6
+# on, as the image suites' overlays and a dual-stack deployment have it:
+# Docker's port mapping must still land on the default network's address.
+# Docker maps a published port to the container's address on an
+# IPv6-enabled network ahead of an IPv4-only one, whatever the gateway
+# priority, so the shipped default network is dual-stack and cyfr's
+# gw_priority on it decides; without both, the port answers nothing here.
 islands_first() {
-  local network
-  for network in $(compose config --format json | python3 -I -c '
-import json, sys
-project = json.load(sys.stdin)
-cyfr = project["services"]["cyfr"]
-print(" ".join(name for name in cyfr["networks"]
-               if name != sys.argv[1] and not (project["networks"].get(name) or {}).get("ipam")))' "$(table endpoint_network)"); do
+  local network subnet range
+  while read -r network subnet range; do
+    [ -n "$network" ] || continue
     docker network inspect "${RUN}_${network}" >/dev/null 2>&1 && continue
-    docker network create --ipv6 --label "com.docker.compose.project=$RUN" --label "com.docker.compose.network=$network" \
+    docker network create --ipv6 --subnet "$subnet" --ip-range "$range" \
+      --label "com.docker.compose.project=$RUN" --label "com.docker.compose.network=$network" \
       --label "com.docker.compose.version=$(docker compose version --short)" "${RUN}_${network}" >/dev/null
     ok "created ${RUN}_${network} first, with IPv6"
-  done
+  done <<<"$(compose config --format json | python3 -I -c '
+import json, sys
+project = json.load(sys.stdin)
+config = project["networks"][sys.argv[1]]["ipam"]["config"][0]
+print(sys.argv[1], config["subnet"], config["ip_range"])' "$(table network)")"
 }
 
 # ---------------------------------------------------------------------------
@@ -1916,7 +1889,7 @@ interrupt_case() {
 backup_take() {
   cli_ok "$1" backup
   grep -qxF "The stack runs again." "$WORK/$1.log" || fail "cyfr backup did not start the home again: $(tail -n 20 "$WORK/$1.log")"
-  SNAPSHOT="$(sed -n "s/^The snapshot of release .* is in \(.*\); '\(sudo \)\{0,1\}cyfr restore .*' puts it back\.\$/\1/p" "$WORK/$1.log")"
+  SNAPSHOT="$(sed -n "s/^The snapshot of release .* is in \(.*\); 'cyfr restore .*' puts it back\.\$/\1/p" "$WORK/$1.log")"
   RESTORE="$(sed -n "s/^The snapshot of release .* is in .*; '\(.*\)' puts it back\.\$/\1/p" "$WORK/$1.log")"
   [ -f "$SNAPSHOT/snapshot.json" ] || fail "cyfr backup named no snapshot with its snapshot.json: $(tail -n 20 "$WORK/$1.log")"
   await_healthy
@@ -1952,7 +1925,7 @@ restore_identity_case() {
 
   step "restore-identity: cyfr restore of A"
   status=0
-  cli_run_root restore restore "$snapshot" || status=$?
+  cli_run restore restore "$snapshot" || status=$?
   # Exit 3: the home started, on this machine only.
   [ "$status" -eq 3 ] || fail "cyfr restore exited $status, not 3, the start that leaves the home on this machine only: $(tail -n 20 "$WORK/restore.log")"
   mismatch="$(expected "tailnet_node_mismatch sentence" render tailnet_node_mismatch node=cyfr-1.proof.ts.net env=cyfr.proof.ts.net)" || exit 1
@@ -2245,42 +2218,44 @@ restore_case() {
 # ---------------------------------------------------------------------------
 
 restore_person_case() {
-  local snapshot status compose_before env_before
+  local snapshot status owners
   [ "$(id -u)" != 0 ] || fail "the restore-person case is a person's who is not root; this run is root's"
 
   step "restore-person: cyfr backup of the running home, which runs again after it"
   cli_ok up-first up
+  # In the storage before the snapshot, as the server writes, the image's
+  # user's.
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-write-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network none --user 0 \
+    -v "$WORK/data:/d" --entrypoint sh "$IMAGE" -c 'mkdir -p /d/proof && printf kept > /d/proof/in-snapshot && chown -R 999:999 /d/proof && chmod -R go-rwx /d/proof' ||
+    fail "the storage could not be written before the snapshot"
   backup_take backup-person
   snapshot="$SNAPSHOT"
-  # The container owns some of the files the restore puts back, so the
-  # backup names the restore that works: with sudo.
-  [ "$RESTORE" = "sudo cyfr restore $snapshot" ] || fail "cyfr backup names the restore as '$RESTORE', not with sudo"
+  [ "$RESTORE" = "cyfr restore $snapshot" ] || fail "cyfr backup names the restore as '$RESTORE'"
   expect_head local localhost
-  ok "snapshot $snapshot; the running home's entrypoint has handed data/ to the image's user"
-  compose_before="$(sha256sum <"$WORK/docker-compose.yml")"
-  env_before="$(sha256sum <"$WORK/.env")"
+  # Written after the snapshot as the server writes, the image's user's.
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-write-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network none --user 0 \
+    -v "$WORK/data:/d" --entrypoint sh "$IMAGE" -c 'printf since > /d/written-since && chown 999:999 /d/written-since && chmod 600 /d/written-since' ||
+    fail "the storage could not be written after the snapshot"
+  owners="$(docker run --rm --network none --user 0 -v "$WORK/data:/d:ro" --entrypoint sh "$IMAGE" -c 'stat -c %u /d')"
+  [ "$owners" = 999 ] && [ ! -r "$WORK/data/written-since" ] ||
+    fail "data/ is not the image's user's alone after the stack ran (owner $owners)"
+  ok "snapshot $snapshot; data/ is the image's user's, and a file was written since"
 
-  step "restore-person: cyfr restore as the person is refused before any part is put back"
+  step "restore-person: cyfr restore as the person puts the snapshot back and starts the home"
   status=0
   cli_run restore-person restore "$snapshot" || status=$?
-  [ "$status" -ne 0 ] || fail "cyfr restore as the person exited 0: $(tail -n 20 "$WORK/restore-person.log")"
-  # The backup lists the managed Aqua files, which the server's container
-  # owns once the stack has run, so the restore refuses at its start,
-  # before it stops anything.
-  for said in "cyfr restore cannot put the snapshot back as you" \
-    "run the same cyfr restore as root, with sudo; nothing was changed"; do
-    grep -qF -- "$said" "$WORK/restore-person.log" ||
-      fail "the refusal does not say \"$said\": $(tail -n 20 "$WORK/restore-person.log")"
-  done
-  [ "$(sha256sum <"$WORK/docker-compose.yml")" = "$compose_before" ] || fail "the refused restore changed docker-compose.yml"
-  [ "$(sha256sum <"$WORK/.env")" = "$env_before" ] || fail "the refused restore changed .env"
-  [ -z "$(env_value "$(barrier name)")" ] || fail "the refused restore left $(barrier name) in .env"
-  ok "exit $status: $(grep -m1 -F 'as root, with sudo' "$WORK/restore-person.log")"
-
-  step "restore-person: the home starts again"
-  cli_ok up-after up
+  [ "$status" -eq 0 ] || fail "cyfr restore as the person exited $status: $(tail -n 20 "$WORK/restore-person.log")"
+  ! grep -q sudo "$WORK/restore-person.log" || fail "the restore spoke of sudo: $(grep sudo "$WORK/restore-person.log")"
+  grep -q "^Declared restore " "$WORK/restore-person.log" || fail "the restore was not declared: $(tail -n 20 "$WORK/restore-person.log")"
   expect_head local localhost
-  ok "cyfr up started the home the refused restore stopped"
+  owners="$(docker run --rm --network none --user 0 -v "$WORK/data:/d:ro" --entrypoint sh "$IMAGE" -c '[ ! -e /d/written-since ] && [ "$(cat /d/proof/in-snapshot)" = kept ] && find /d -printf "%U\n" | sort -u')" ||
+    fail "the file written since the snapshot is still there, or the snapshot's proof/in-snapshot did not come back"
+  [ "$owners" = 999 ] || fail "after the restore data/ is owned by $(echo "$owners" | tr '\n' ' '), not the image's user alone"
+  for f in .env docker-compose.yml; do
+    [ "$(stat -c %u "$WORK/$f")" = "$(id -u)" ] || fail "$f is not the person's after the restore"
+  done
+  [ -z "$(env_value "$(barrier name)")" ] || fail "the restore left $(barrier name) in .env"
+  ok "exit 0: the snapshot is back, data/ is the image's user's, .env and docker-compose.yml are the person's"
 }
 
 # ---------------------------------------------------------------------------
@@ -2291,44 +2266,6 @@ restore_person_case() {
 update_case() {
   case "$CASE" in update | update-refused | update-fail | update-interrupt) return 0 ;; esac
   return 1
-}
-
-# The digest the image store names `$1` (repository:tag) by: its
-# repository's entry among the image's repository digests, which the
-# containerd image store gives every image it holds.
-store_digest() {
-  local repository="${1%:*}" digest
-  digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" |
-    sed -n "s|^$repository@\(sha256:[0-9a-f]\{64\}\)\$|\1|p" | head -n 1)"
-  [ -n "$digest" ] || fail "the image store names $1 by no digest; the update cases need the containerd image store (scripts/ci/containerd-image-store.sh --check)"
-  printf '%s\n' "$digest"
-}
-
-# A release tag the run is to make, refused when the daemon holds it
-# already: the run takes no name it did not make.
-release_name_free() {
-  ! docker image inspect "$1" >/dev/null 2>&1 || fail "the image store holds $1 already, which this run did not make"
-}
-
-# `$2` tagged as `$1`, the tag removed when the run ends.
-release_tag() {
-  release_name_free "$1"
-  docker tag "$2" "$1" || fail "docker tag $2 $1 failed"
-  RELEASE_IMAGES+=("$1")
-}
-
-# The image `$1` built from the Dockerfile lines on stdin, removed when the
-# run ends.
-release_build() {
-  release_name_free "$1"
-  docker build --quiet --tag "$1" - >"$WORK/build.log" 2>&1 || fail "the image $1 did not build: $(tail -n 20 "$WORK/build.log")"
-  RELEASE_IMAGES+=("$1")
-}
-
-# A managed line's digest in the compose `$2`: `$1` (cyfr or caddy or
-# tailscale/tailscale) pinned there.
-pinned_digest() {
-  sed -nE "s|^[[:space:]]*image:[[:space:]]*$1:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*\$|\1|p" "$2" | head -n 1
 }
 
 # The two releases the update cases move between, both the candidate: the
@@ -2346,12 +2283,7 @@ pinned_digest() {
 update_releases() {
   local versions schema caddy tailscale v
   TREE_VERSION="$(sed -n 's/^ *version: "\([^"]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs" | head -n 1)"
-  versions="$(python3 -I -c '
-import re, sys
-m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?", sys.argv[1])
-assert m, sys.argv[1]
-base = "%s.%s.%d-%s" % (m.group(1), m.group(2), int(m.group(3)) + 1, sys.argv[2])
-print(base + ".1", base + ".2")' "$TREE_VERSION" "$RUN")" || fail "apps/prima/mix.exs declares no release version: '$TREE_VERSION'"
+  versions="$(candidate_versions "$TREE_VERSION" "$RUN")" || exit 1
   read -r OLD_VERSION NEW_VERSION <<<"$versions"
   step "the releases the update moves between, made from the candidate $TREE_VERSION: $OLD_VERSION and $NEW_VERSION"
   release_tag "ghcr.io/cyfrworks/cyfr:$OLD_VERSION" "$IMAGE"
@@ -2383,10 +2315,7 @@ DOCKERFILE
   "$ROOT/scripts/scaffold-tarball.sh" "$RELEASES/$NEW_VERSION/cyfr-scaffold.tar.gz" "$NEW_VERSION" "$NEW_DIGEST" "$LOCUS_DIGEST" >"$WORK/scaffold.log" 2>&1 ||
     fail "the new release's scaffold did not build: $(tail -n 20 "$WORK/scaffold.log")"
 
-  # As release.yml reads it from the image it publishes.
-  schema="$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-schema"} -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(od -An -N48 -tx1 /dev/urandom | tr -d ' \n')" \
-    "ghcr.io/cyfrworks/cyfr:$NEW_VERSION" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' | sed -n 's/^CYFR_SCHEMA=//p')"
-  [[ "$schema" =~ ^[0-9a-f]{64}$ ]] || fail "the new release's image answered no schema fingerprint: '$schema'"
+  schema="$(release_schema "ghcr.io/cyfrworks/cyfr:$NEW_VERSION")" || exit 1
   if [ "$CASE" = update-refused ]; then
     # The one difference INS-3 needs, made without a published release: the
     # new release's schema is not the one the old home's database was built
@@ -2395,20 +2324,10 @@ DOCKERFILE
   fi
   caddy="$(pinned_digest caddy "$ROOT/docker-compose.yml")"
   tailscale="$(pinned_digest tailscale/tailscale "$ROOT/docker-compose.yml")"
-  python3 -I - "$RELEASES/$NEW_VERSION" "$NEW_VERSION" "$NEW_DIGEST" "$LOCUS_DIGEST" "$caddy" "$tailscale" "$schema" <<'PY' ||
-import hashlib, json, os, sys
-folder, version, cyfr, locus, caddy, tailscale, schema = sys.argv[1:]
-scaffold = hashlib.sha256(open(os.path.join(folder, "cyfr-scaffold.tar.gz"), "rb").read()).hexdigest()
-manifest = {"version": version, "images": {"cyfr": cyfr, "cyfr_locus": locus, "caddy": caddy, "tailscale": tailscale},
-            "scaffold": "sha256:" + scaffold, "schema_fingerprint": schema}
-json.dump(manifest, open(os.path.join(folder, "release.json"), "w"), indent=2)
-PY
-    fail "release.json of $NEW_VERSION was not written"
+  release_manifest "$RELEASES/$NEW_VERSION" "$NEW_VERSION" "$NEW_DIGEST" "$LOCUS_DIGEST" "$caddy" "$tailscale" "$schema"
   ok "old $OLD_VERSION (${OLD_DIGEST:7:12}), new $NEW_VERSION (${NEW_DIGEST:7:12}), Locus ${LOCUS_DIGEST:7:12}, schema ${schema:0:12}"
 
-  (cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -mod=readonly -tags releaseproof \
-    -ldflags "-X github.com/cyfr/codex/internal/version.Version=$NEW_VERSION -X github.com/cyfr/codex/cmd.proofReleases=$RELEASES" \
-    -o "$NEW_CYFR" .) || fail "the new release's command line did not build"
+  release_cli "$ROOT/apps/codex" "$NEW_VERSION" "$RELEASES" "$NEW_CYFR"
   ok "built $NEW_CYFR, release $NEW_VERSION, reading its releases from $RELEASES"
 }
 
@@ -2586,8 +2505,8 @@ update_fail_case() {
   printed_restore fail
   [ -z "$(running)" ] || fail "the failed update left running: $(running)"
   ok "exit $status: left stopped, the FATAL line shown, cyfr ${RESTORE_ARGS[*]} printed, its snapshot complete"
-  step "update-fail: cyfr ${RESTORE_ARGS[*]}, as the failure prints it, as root"
-  cli_run_root restore-fail "${RESTORE_ARGS[@]}" || fail "cyfr ${RESTORE_ARGS[*]} exited non-zero: $(tail -n 20 "$WORK/restore-fail.log")"
+  step "update-fail: cyfr ${RESTORE_ARGS[*]}, as the failure prints it, as the person"
+  cli_run restore-fail "${RESTORE_ARGS[@]}" || fail "cyfr ${RESTORE_ARGS[*]} exited non-zero: $(tail -n 20 "$WORK/restore-fail.log")"
   data_served "$OLD_VERSION" "$OLD_DIGEST"
 }
 
@@ -2697,10 +2616,10 @@ runtime_case() {
   shipped="$(cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" config --format json)"
   project="$(compose config --format json)"
   workers="$(service_env "$project" CYFR_LOCUS_RUNTIME_WORKERS cyfr)"
-  host_api="$(service_env "$project" LOCUS_RUNTIME_HOST_API_URL locus-runtime)"
+  host_api="$(service_env "$project" LOCUS_RUNTIME_HOST_API_URL "$(table service)")"
   [ -n "$workers" ] && [ "$workers" = "$(service_env "$shipped" CYFR_LOCUS_RUNTIME_WORKERS cyfr)" ] ||
     fail "cyfr's worker URL '$workers' is not the shipped file's"
-  [ -n "$host_api" ] && [ "$host_api" = "$(service_env "$shipped" LOCUS_RUNTIME_HOST_API_URL locus-runtime)" ] ||
+  [ -n "$host_api" ] && [ "$host_api" = "$(service_env "$shipped" LOCUS_RUNTIME_HOST_API_URL "$(table service)")" ] ||
     fail "the runtime's host API URL '$host_api' is not the shipped file's"
   [ -n "$(env_value CYFR_LOCUS_RUNTIME_ROOT)" ] && [ -n "$(env_value LOCUS_RUNTIME_KEY)" ] ||
     fail "cyfr init wrote no runtime root or derived key"
@@ -2709,14 +2628,14 @@ runtime_case() {
   step "the runtime is up and healthy"
   health="" runtime_id=""
   for _ in $(seq 1 120); do
-    runtime_id="$(compose ps -q locus-runtime 2>/dev/null || true)"
+    runtime_id="$(compose ps -q "$(table service)" 2>/dev/null || true)"
     [ -z "$runtime_id" ] || health="$(docker inspect --format '{{.State.Health.Status}}' "$runtime_id" 2>/dev/null || true)"
     [ "$health" = healthy ] && break
     sleep 1
   done
   [ "$health" = healthy ] ||
-    fail "locus-runtime is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
-  ok "locus-runtime runs $LOCUS_IMAGE and is healthy"
+    fail "Locus is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
+  ok "Locus runs $LOCUS_IMAGE and is healthy, its runtime among its roles"
 
   step "a person signed in on cyfr, as the release proofs sign one in"
   signed_in="$(cyfr_fixture person compose-proof-runtime)"

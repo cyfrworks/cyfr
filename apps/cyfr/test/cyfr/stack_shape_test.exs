@@ -5,30 +5,25 @@ defmodule Cyfr.StackShapeTest do
   @moduledoc """
   The shipped stack is one origin: every request Caddy or Tailscale Serve
   takes reaches cyfr's one endpoint, on its proxy listener, and compose
-  runs cyfr, the Locus runtime, the Locus backends service behind its
-  egress guard, and (optionally) caddy, tailscale and the Locus builds
-  service behind its guard — nothing else. cyfr's loopback listener sits
-  on the `default` network, which carries cyfr alone and which Docker
-  publishes on the host's loopback alone; its proxy listener sits on
-  `edge` with the two proxies, at the role table's addresses. Read the
-  files, assert the shape; the same style as the ingress inventory.
+  runs cyfr, the one Locus behind its egress guard, and (optionally) caddy
+  and tailscale — nothing else. cyfr's loopback listener sits on the
+  `default` network, which carries cyfr alone and which Docker publishes
+  on the host's loopback alone; its proxy listener sits on `edge` with the
+  two proxies, at the role table's addresses. Read the files, assert the
+  shape; the same style as the ingress inventory.
 
-  Two readings of docker-compose.yml serve the tests. The tests of the
-  Locus services' hardening and `role_drift/3` parse the file whole: the
-  `x-locus-role` block the services share, and each service as compose
-  runs it, that block merged under the service's own keys
-  (`merged_services/1`). Every other test reads a service's own lines
-  (`service_block/2`, `list_entries/2`), which resolve no merge.
-  `role_drift/3` parses the image suites' overlays whole (`overlay/1`) and
-  holds each to the one mapping written here (`expected_overlays/2`).
+  docker-compose.yml is parsed whole (`services/1`), and so is each image
+  suite's overlay (`overlay/1`), which `role_drift/3` holds to the one
+  mapping written here (`expected_overlays/2`).
 
   Every fact of a Locus role is the role table's (`Prima.LocusRoles`): a
   test here reads the table where it would spell one, and `role_drift/3`
   holds every other spelling to it, wherever it is — Dockerfile.locus's
-  users, entrypoint and ports, compose's Locus services, the image suites'
-  overlays, Locus's own pool names, attach directory and
-  listener ports, and the image suites, whose harnesses read the table's
-  vector file.
+  users, directories and entrypoint, the image's health probe
+  (apps/locus/health.sh), compose's Locus service and guard, the image
+  suites' overlays, Locus's own pool names, attach directory and listener
+  ports, and the image suites, whose harnesses read the table's vector
+  file.
   """
   use ExUnit.Case, async: true
 
@@ -36,14 +31,9 @@ defmodule Cyfr.StackShapeTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  @locus_services Enum.map(LocusRoles.roles(), & &1.service)
-
-  # The keys every Locus service takes from `x-locus-role`.
-  @role_keys ~w(init cap_drop cap_add security_opt read_only ipc restart logging)
-
-  # The hardening every Locus service runs under, and each role's own
-  # security options; its tmpfs mounts are the table's (`tmpfs/2`).
-  @shared_hardening %{
+  # The hardening the Locus service runs under, beside its tmpfs mounts
+  # and volumes, which are the table's (`tmpfs/1`, `locus_volumes/1`).
+  @hardening %{
     "init" => true,
     "cap_drop" => ["ALL"],
     "cap_add" => ["SETUID", "SETGID", "KILL"],
@@ -56,29 +46,38 @@ defmodule Cyfr.StackShapeTest do
     }
   }
 
-  # Every Locus service runs under the keeper's seccomp profile and, on a
-  # host with AppArmor, the profile .env names (CYFR_LOCUS_APPARMOR), with its system paths
-  # unmasked: every spawn is cloned into a space of its own, which mounts
-  # its own /proc.
+  # Locus runs under the keeper's seccomp profile and, on a host with
+  # AppArmor, the profile .env names (CYFR_LOCUS_APPARMOR), with its system
+  # paths unmasked: every role process and every spawn is cloned into a
+  # space of its own, which mounts its own /proc.
   @confinement [
     "seccomp=./keeper.seccomp.json",
     "apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}",
     "systempaths=unconfined"
   ]
-  @security_opt %{
-    builds: ["no-new-privileges:true", "writable-cgroups=true" | @confinement],
-    backends: ["no-new-privileges:true", "writable-cgroups=true" | @confinement],
-    runtime: ["no-new-privileges:true", "writable-cgroups=true" | @confinement]
-  }
+  @security_opt ["no-new-privileges:true", "writable-cgroups=true" | @confinement]
 
-  # Keys that would hand a Locus service the host's privileges, namespaces,
-  # devices or storage.
-  @forbidden_keys ~w(privileged pid userns_mode cgroup devices volumes)
+  # Keys that would hand Locus the host's privileges, namespaces, devices,
+  # a network of its own or a compose limit: each role's bounds are the
+  # keeper's to write into the role's group, from `@bounds`.
+  @forbidden_keys ~w(privileged pid userns_mode cgroup devices networks ports expose deploy
+                     entrypoint healthcheck mem_limit cpus)
+
+  # Each role's bounds and their defaults, compose's one definition of
+  # them: the backends role has no processor bound.
+  @bounds [
+    {"LOCUS_RUNTIME_MEMORY_LIMIT", "4G"},
+    {"LOCUS_RUNTIME_CPU_LIMIT", "4"},
+    {"LOCUS_BUILDS_MEMORY_LIMIT", "4G"},
+    {"LOCUS_BUILDS_CPU_LIMIT", "2"},
+    {"LOCUS_BACKENDS_MEMORY_LIMIT", "2G"}
+  ]
 
   # The files that spell a role's facts, beside docker-compose.yml and the
   # Locus image.
   @dockerfile "Dockerfile.locus"
   @compose "docker-compose.yml"
+  @health "apps/locus/health.sh"
   @config "apps/locus/lib/locus/config.ex"
   @locus_lib "apps/locus/lib/"
 
@@ -92,6 +91,12 @@ defmodule Cyfr.StackShapeTest do
 
   # A role's suite kept outside its directory.
   @suite_files %{"scripts/builder-smoke.py" => :builds}
+
+  # The guard's control, on the volume both mount: the guard writes it and
+  # Locus only reads it.
+  @guard_control_dir "/run/cyfr-guard-control"
+  @guard_control "#{@guard_control_dir}/guard.sock"
+  @control_volume "guard-control"
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
 
@@ -109,125 +114,99 @@ defmodule Cyfr.StackShapeTest do
     root
   end
 
-  # A merge key, as YamlElixir names it: `<<` and a counter.
-  defp merge_key?({key, _}), do: String.starts_with?(key, "<<")
+  defp services(compose), do: YamlElixir.read_from_string!(compose)["services"]
 
-  # Each service of a compose text as compose runs it: the one mapping it
-  # merges, under the service's own keys, which win. A merge copies keys
-  # and never joins lists, so a list the service sets replaces the merged
-  # one whole.
-  defp merged_services(compose) do
-    for {service, definition} <- YamlElixir.read_from_string!(compose)["services"],
-        into: %{} do
-      {merges, own} = Enum.split_with(definition, &merge_key?/1)
+  # The Locus service's tmpfs mounts as the table spells them: each role's
+  # spawns' homes, the release's run directory, root's, and each role's run
+  # folder, its own uid's.
+  defp tmpfs(release) do
+    roles = LocusRoles.roles()
 
-      merged =
-        case merges do
-          [] -> Map.new(own)
-          [{_, role}] -> Map.merge(role, Map.new(own))
-        end
-
-      {service, merged}
-    end
+    for(role <- roles, do: "#{role.home_root}:mode=1733,exec,size=#{role.home_size}") ++
+      ["#{release.run_dir}:mode=0711,size=#{release.run_size}"] ++
+      for(
+        role <- roles,
+        do: "#{role.run_dir}:uid=#{role.uid},gid=#{role.uid},mode=0700,size=#{role.run_size}"
+      )
   end
 
-  # A role's tmpfs mounts as the table spells them: its homes, then the
-  # release's run directory, owned by the release's user.
-  defp tmpfs(release, role) do
+  # The kept homes at their root, the guard's control, read-only, and the
+  # machines' folder.
+  defp locus_volumes(roles) do
+    for(%{kept_root: root, kept_volume: volume} <- roles, root != nil, do: "#{volume}:#{root}") ++
+      ["#{@control_volume}:#{@guard_control_dir}:ro"] ++
+      for(
+        %{guest_root: root, guest_volume: volume} <- roles,
+        root != nil,
+        do: "#{volume}:#{root}"
+      )
+  end
+
+  # The keys compose hands Locus and each role's bounds: every role's key,
+  # the builds' and the backends' from the names cyfr reads them under.
+  defp locus_environment do
     [
-      "#{release.home_root}:mode=1733,exec,size=#{role.home_size}",
-      "#{release.run_dir}:uid=#{release.uid},gid=#{release.uid},mode=0700,size=#{release.run_size}"
-    ]
+      "LOCUS_RUNTIME_KEY=${LOCUS_RUNTIME_KEY:-}",
+      "LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}",
+      "LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}",
+      "LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}",
+      "LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}",
+      "LOCUS_RUNTIME_BIND=0.0.0.0",
+      "LOCUS_RUNTIME_PORT=#{LocusRoles.role!(:runtime).port}"
+    ] ++ for({variable, default} <- @bounds, do: "#{variable}=${#{variable}:-#{default}}")
   end
 
-  defp service_hardening(release, role) do
-    Map.merge(@shared_hardening, %{
-      "security_opt" => Map.fetch!(@security_opt, role.name),
-      "tmpfs" => tmpfs(release, role)
+  # The Locus service as compose runs it, by the keys it must hold: the
+  # hardening, its mounts, its environment, the guard's namespace and its
+  # health. A key here differing is a violation of that key.
+  defp locus_service(release, roles) do
+    Map.merge(@hardening, %{
+      "container_name" => release.container,
+      "image" => "ghcr.io/cyfrworks/cyfr-locus:latest",
+      "build" => %{"context" => ".", "dockerfile" => "Dockerfile.locus"},
+      "security_opt" => @security_opt,
+      "env_file" => [%{"path" => ".env.locus", "required" => false}],
+      "environment" => locus_environment(),
+      "network_mode" => "service:" <> release.guard,
+      "depends_on" => %{release.guard => %{"condition" => "service_healthy"}},
+      "tmpfs" => tmpfs(release),
+      "volumes" => locus_volumes(roles),
+      "stop_grace_period" => "40s"
     })
   end
 
-  # The `{service, key}` pairs, sorted, where a Locus service of a compose
-  # text runs without its hardening: a value other than the shipped one, a
-  # key it must not have, or no memory limit.
-  defp hardening_violations(compose) do
-    services = merged_services(compose)
+  # The keys, sorted, where the Locus service of a compose text runs
+  # without its shape: a value other than the shipped one, or a key it must
+  # not have.
+  defp locus_violations(compose) do
     release = LocusRoles.release()
+    locus = Map.get(services(compose), release.service, %{})
+    expected = locus_service(release, LocusRoles.roles())
 
     Enum.sort(
-      for role <- LocusRoles.roles(),
-          merged = Map.get(services, role.service, %{}),
-          violation <- service_violations(merged, service_hardening(release, role), role),
-          do: {role.service, violation}
+      for(
+        key <- Enum.uniq(Map.keys(locus) ++ Map.keys(expected)),
+        key not in @forbidden_keys,
+        Map.get(locus, key) != Map.get(expected, key),
+        do: key
+      ) ++ for(key <- @forbidden_keys, Map.has_key?(locus, key), do: key)
     )
   end
 
-  defp service_violations(merged, expected, role) do
-    wrong = for {key, value} <- expected, Map.get(merged, key) != value, do: key
-
-    # The volumes a Locus service holds: the backends role's kept folders,
-    # at their root and nowhere else, and its guard's control, read-only.
-    forbidden =
-      for key <- @forbidden_keys,
-          Map.has_key?(merged, key),
-          not (key == "volumes" and Map.get(merged, key) == island_volumes(role)),
-          do: key
-
-    unbounded =
-      case merged do
-        %{"deploy" => %{"resources" => %{"limits" => %{"memory" => memory}}}}
-        when memory not in [nil, ""] ->
-          []
-
-        _ ->
-          ["deploy.resources.limits.memory"]
-      end
-
-    wrong ++ forbidden ++ unbounded
-  end
-
-  defp island_volumes(%{kept_root: nil} = role) do
-    case control_volume(role, ":ro") do
-      [] -> nil
-      volumes -> volumes
-    end
-  end
-
-  defp island_volumes(%{kept_root: root, kept_volume: volume} = role),
-    do: ["#{volume}:#{root}" | control_volume(role, ":ro")]
-
-  # A routed island's keeper has its guard make each space's route over
-  # the control on a volume both mount, which the guard writes and the
-  # service only reads: each island's volume of its own.
-  @guard_control_dir "/run/cyfr-guard-control"
-  @guard_control "#{@guard_control_dir}/guard.sock"
-  @control_volumes %{backends: "guard-control", builds: "builds-guard-control"}
-
-  defp control_volume(%{reach: "routed", name: name}, mode),
-    do: ["#{Map.fetch!(@control_volumes, name)}:#{@guard_control_dir}#{mode}"]
-
-  defp control_volume(_role, _mode), do: []
-
-  defp guard_argv(%{reach: "routed"}), do: ["--guard", @guard_control]
-  defp guard_argv(_role), do: []
-
-  defp control_env(%{reach: "routed"}), do: ["CYFR_GUARD_CONTROL=#{@guard_control}"]
-  defp control_env(_role), do: []
-
-  # An island's egress guard as compose runs it, whole: the Locus image
-  # running cyfr-guard, NET_ADMIN alone, forwarding with no ICMP rate limit
-  # (its sysctls), the ready file's tmpfs and its control's volume, whose
-  # socket its environment names, its only writable surfaces, and cyfr's
-  # fixed endpoint address in its environment with the private hosts the
-  # deployment names,
-  # the island's service name as its alias on the island's network, and the
-  # guard's own health probe. Its profile is the island's.
-  defp guard_service(release, role, backends) do
-    guard = %{
-      "container_name" => role.container <> "-guard",
+  # The guard as compose runs it, whole: the Locus image running
+  # cyfr-guard, NET_ADMIN alone, forwarding with no ICMP rate limit (its
+  # sysctls), the ready file's tmpfs and its control's volume, whose socket
+  # its environment names, its only writable surfaces, cyfr's fixed
+  # endpoint address in its environment with the private hosts the
+  # deployment names and core's host API, Locus's service name as its alias
+  # on the one network, every role's port exposed, and the guard's own
+  # health probe.
+  defp guard_service(release, roles) do
+    %{
+      "container_name" => release.guard_container,
       "image" => "ghcr.io/cyfrworks/cyfr-locus:latest",
       "build" => %{"context" => ".", "dockerfile" => "Dockerfile.locus"},
-      "expose" => ["#{role.port}"],
+      "expose" => roles |> Enum.map(&"#{&1.port}") |> Enum.sort(),
       "entrypoint" => ["cyfr-guard"],
       "init" => true,
       "cap_drop" => ["ALL"],
@@ -239,10 +218,12 @@ defmodule Cyfr.StackShapeTest do
       "tmpfs" => ["/run/cyfr-guard:mode=0755,size=1m"],
       "environment" => [
         "CYFR_GUARD_CONTROL_PLANE=#{release.endpoint_address}",
-        "CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-#{backends.service}}"
-        | control_env(role)
+        "CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-#{release.service}}",
+        "CYFR_GUARD_CONTROL=#{@guard_control}",
+        "CYFR_GUARD_HOST_API=#{release.host_api_address}:${CYFR_HOST_API_PORT:-4300}"
       ],
-      "networks" => %{role.network => %{"aliases" => [role.service]}},
+      "volumes" => ["#{@control_volume}:#{@guard_control_dir}"],
+      "networks" => %{release.network => %{"aliases" => [release.service]}},
       "healthcheck" => %{
         "test" => ["CMD", "cyfr-guard", "check"],
         "interval" => "10s",
@@ -251,70 +232,23 @@ defmodule Cyfr.StackShapeTest do
         "retries" => 3
       },
       "restart" => "unless-stopped",
-      "logging" => @shared_hardening["logging"],
+      "logging" => @hardening["logging"],
       "deploy" => %{"resources" => %{"limits" => %{"memory" => "32M"}}}
     }
-
-    guard =
-      case control_volume(role, "") do
-        [] -> guard
-        volumes -> Map.put(guard, "volumes", volumes)
-      end
-
-    if role.profile, do: Map.put(guard, "profiles", [role.profile]), else: guard
   end
 
-  # The `{service, key}` pairs, sorted, where a guard of a compose text
-  # differs from `guard_service/3` in any key, or where its island does not
-  # share the guard's namespace, wait for its health, or stays off every
-  # network and port of its own.
+  # The keys, sorted, where the guard of a compose text differs from
+  # `guard_service/2`.
   defp guard_violations(compose) do
-    services = merged_services(compose)
     release = LocusRoles.release()
-    backends = LocusRoles.role!(:backends)
+    guard = Map.get(services(compose), release.guard, %{})
+    expected = guard_service(release, LocusRoles.roles())
 
     Enum.sort(
-      for role <- LocusRoles.roles(),
-          role.guard != nil,
-          violation <- guard_violations(services, release, role, backends),
-          do: violation
-    )
-  end
-
-  defp guard_violations(services, release, role, backends) do
-    guard = Map.get(services, role.guard, %{})
-    expected = guard_service(release, role, backends)
-
-    wrong =
       for key <- Enum.uniq(Map.keys(guard) ++ Map.keys(expected)),
           Map.get(guard, key) != Map.get(expected, key),
-          do: {role.guard, key}
-
-    island = Map.get(services, role.service, %{})
-
-    island_wrong =
-      for {key, right?} <- [
-            {"network_mode", island["network_mode"] == "service:" <> role.guard},
-            {"depends_on",
-             island["depends_on"] == %{role.guard => %{"condition" => "service_healthy"}}},
-            {"networks", not Map.has_key?(island, "networks")},
-            {"ports", not Map.has_key?(island, "ports")},
-            {"expose", not Map.has_key?(island, "expose")}
-          ],
-          not right?,
-          do: {role.service, key}
-
-    wrong ++ island_wrong
-  end
-
-  # One service's block of docker-compose.yml, and the entries of one of
-  # its list keys.
-  defp service_block(compose, name) do
-    [_, services | _] = Regex.split(~r/^services:\s*$/m, compose)
-    [services | _] = Regex.split(~r/^[a-z]/m, services)
-    [_, block | _] = Regex.split(~r/^  #{Regex.escape(name)}:\s*$/m, services)
-    [block | _] = Regex.split(~r/^  [a-z]/m, block)
-    block
+          do: key
+    )
   end
 
   # The networks a service of a parsed compose file joins, whether it lists
@@ -338,34 +272,29 @@ defmodule Cyfr.StackShapeTest do
     Bitwise.bsr(a, shift) == Bitwise.bsr(b, shift)
   end
 
-  defp list_entries(block, key) do
-    [_, list | _] = Regex.split(~r/^    #{key}:\s*$/m, block)
-    [list | _] = Regex.split(~r/^    [a-z]/m, list)
-    Regex.scan(~r/^      - (\S+)/m, list, capture: :all_but_first) |> List.flatten()
-  end
-
   # A role's uid pool as cyfr-locus takes it: `<pool>:<first>-<last>:<reach>`.
   defp pool_spec(role), do: "#{role.pool}:#{role.uids.first}-#{role.uids.last}:#{role.reach}"
 
-  # The command that serves a role: cyfr-locus over the role's pool,
-  # starting the release as its user.
-  defp keeper_argv(release, role) do
-    ["cyfr-locus", "serve", "--pool", pool_spec(role), "--home-root", release.home_root] ++
-      kept_argv(role) ++
-      guard_argv(role) ++ ["--client-user", release.user, "--", release.bin, "start"]
+  # A role as cyfr-locus takes it: `<name>:<uid>:<port>:<pool>`, then
+  # `:private` for the role whose space reaches private addresses and
+  # `:kept` for the role whose sessions keep homes.
+  defp role_spec(role) do
+    "#{role.name}:#{role.uid}:#{role.port}:#{role.pool}" <>
+      if(role.private, do: ":private", else: "") <> if(role.kept_root, do: ":kept", else: "")
   end
 
-  # A role whose programs keep their folders names their root and uid range
-  # to the keeper, which takes its uid bounds from no client.
-  defp kept_argv(%{kept_root: nil}), do: []
-
-  defp kept_argv(%{kept_root: root, kept_uids: uids}),
-    do: ["--kept-homes", "#{root}:#{uids.first}-#{uids.last}"]
-
-  # The one entrypoint line of a service's block, decoded.
-  defp entrypoint(block) do
-    [json] = Regex.run(~r/^    entrypoint: (\[.*\])$/m, block, capture: :all_but_first)
-    Jason.decode!(json)
+  # The command that serves Locus: cyfr-locus over every role and its pool,
+  # the homes' root, the kept homes' root and range, and the guard's
+  # control, starting the release for each role.
+  defp keeper_argv(release, roles) do
+    ["cyfr-locus", "serve"] ++
+      Enum.flat_map(roles, &["--role", role_spec(&1)]) ++
+      Enum.flat_map(roles, &["--pool", pool_spec(&1)]) ++
+      ["--home-root", release.home_root] ++
+      Enum.flat_map(
+        for(%{kept_root: root} = role <- roles, root != nil, do: role),
+        &["--kept-homes", "#{&1.kept_root}:#{&1.kept_uids.first}-#{&1.kept_uids.last}"]
+      ) ++ ["--guard", @guard_control, "--", release.bin, "start"]
   end
 
   # ————— the role table, and every spelling of it —————
@@ -376,7 +305,7 @@ defmodule Cyfr.StackShapeTest do
     suites = for {_name, {dir, _harness}} <- @suites, path <- wildcard("#{dir}/*.py"), do: path
 
     paths =
-      [@dockerfile, @compose | overlays] ++
+      [@dockerfile, @compose, @health | overlays] ++
         suites ++ Map.keys(@suite_files) ++ wildcard("#{@locus_lib}**/*.ex")
 
     Map.new(paths, &{&1, read!(&1)})
@@ -395,37 +324,37 @@ defmodule Cyfr.StackShapeTest do
   # that must be spelled and is missing, or is not in the form read, is
   # drift as a differing one is. Its kinds:
   #
-  # - `:users`: Dockerfile.locus's pooled users, the release's user, group
-  #   and directories, and the directory a space's files are built under.
-  # - `:entrypoint`: the image's entrypoint (the image's role), each
-  #   other role's compose entrypoint, and each overlay's entrypoint.
-  # - `:network`: a service's networks are its own alone, cyfr joins it,
-  #   and it is declared.
-  # - `:tmpfs`: a service's mounts.
-  # - `:port`: what a service exposes, its health probe (each role's but
-  #   the image's, which takes the image's probe), cyfr's address for it,
-  #   the port it is told to listen on, the image's port arguments and
-  #   probe, the overlays' published ports, and `Locus.Config`'s listener
-  #   defaults, answered and documented.
-  # - `:service`: a service's container name and profile, and everything
-  #   else an overlay layers: its one service and every other key it gives
-  #   it (`overlay_drift/3`).
+  # - `:users`: Dockerfile.locus's role users and pooled users, the kept
+  #   homes' group, the run and home roots and each role's folder of them,
+  #   and the directory a space's files are built under.
+  # - `:entrypoint`: the image's entrypoint, which compose's service takes,
+  #   and each overlay's entrypoint.
+  # - `:network`: Locus shares the guard's namespace alone, the guard sits
+  #   on the one network under Locus's name, cyfr joins it, and it is
+  #   declared.
+  # - `:tmpfs`: the service's mounts.
+  # - `:port`: what the guard exposes, each role's probe in the image's
+  #   health script, cyfr's address for each role, the port the runtime is
+  #   told to listen on, the overlays' published ports, and
+  #   `Locus.Config`'s listener defaults, answered and documented.
+  # - `:service`: the service's and the guard's container names, and
+  #   everything else an overlay layers: its services and every other key
+  #   it gives them (`overlay_drift/3`).
   # - `:suite`: an image suite that spells a fact of its role or the
   #   release, or a harness that reads no vector file.
-  # - `:pool`: Locus's own pool names and attach directory,
-  #   its `--pool` arguments, and the documented attach directory.
+  # - `:pool`: Locus's own pool names and attach directory, its `--pool`
+  #   arguments, and the documented attach directory.
   defp role_drift(texts, release, roles) do
-    compose = Map.fetch!(texts, @compose)
-    services = merged_services(compose)
+    services = services(Map.fetch!(texts, @compose))
 
     Enum.sort(
       Enum.uniq(
         users_drift(Map.fetch!(texts, @dockerfile), release, roles) ++
           entrypoint_drift(texts, services, release, roles) ++
-          network_drift(compose, services, roles) ++
-          tmpfs_drift(services, release, roles) ++
+          network_drift(Map.fetch!(texts, @compose), services, release) ++
+          tmpfs_drift(services, release) ++
           port_drift(texts, services, release, roles) ++
-          service_drift(services, roles) ++
+          service_drift(services, release) ++
           overlay_drift(texts, release, roles) ++
           suite_drift(texts, release, roles) ++
           pool_drift(texts, release, roles)
@@ -444,36 +373,57 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
+  # Dockerfile.locus makes the role users over `<name>:<uid>` pairs, each
+  # `locus-<name>` with its run folder and its homes' folder.
+  @role_loop ~r/for role in ((?:[a-z]+:\d+ ?)+); do/
+
+  defp role_users(dockerfile) do
+    case Regex.run(@role_loop, dockerfile, capture: :all_but_first) do
+      [pairs] ->
+        for pair <- String.split(pairs),
+            [name, uid] = String.split(pair, ":"),
+            do: {name, String.to_integer(uid)}
+
+      nil ->
+        nil
+    end
+  end
+
   defp users_drift(dockerfile, release, roles) do
     loops = user_loops(dockerfile)
-    %{user: user, uid: uid, home_root: home_root, run_dir: run_dir} = release
-    uid = Integer.to_string(uid)
+    %{home_root: home_root, run_dir: run_dir} = release
+    [kept] = for %{kept_root: root} = role <- roles, root != nil, do: role
 
     pools =
       for role <- roles,
-          {role.user_prefix, role.uids} not in loops,
+          {role.user_prefix, role.uids} not in loops or
+            {Atom.to_string(role.name), role.uid} not in (role_users(dockerfile) || []),
           do: {@dockerfile, :users, role.name}
 
     release_spelled? =
-      Regex.scan(~r/\bgroupadd -r -g (\d+) (\S+)/, dockerfile, capture: :all_but_first) ==
-        [[uid, user]] and
-        Regex.scan(~r/\buseradd -r -u (\d+) -g (\S+) .* (\S+) \\$/m, dockerfile,
-          capture: :all_but_first
-        ) == [[uid, user, user]] and
-        Regex.scan(~r/\binstall -d -m (\d+) -o (\S+) -g (\S+) (\S+)/, dockerfile,
+      length(role_users(dockerfile) || []) == length(roles) and
+        dockerfile =~ ~s(name="locus-${role%%:*}"; uid="${role##*:}") and
+        dockerfile =~ ~s(install -d -m 0700 -o "$name" -g "$name" "#{run_dir}/${role%%:*}") and
+        dockerfile =~ ~s(install -d -m 1733 -o root -g root "#{home_root}/${role%%:*}") and
+        Regex.scan(~r/\bgroupadd -r -g (\d+) (\S+)/, dockerfile, capture: :all_but_first) ==
+          [["#{kept.kept_gid}", kept.kept_group]] and
+        Regex.scan(~r/\buseradd -r -u (\d+)/, dockerfile, capture: :all_but_first) == [] and
+        not (dockerfile =~ ~r/\buseradd [^\n]* -G /) and
+        Regex.scan(~r/\binstall -d -m (\d+) -o (\S+) -g (\S+) (\/\S+)/, dockerfile,
           capture: :all_but_first
         ) ==
-          [["1733", "root", "root", home_root]] ++
-            for(%{kept_root: root} <- roles, root != nil, do: ["1773", "root", user, root]) ++
-            [["0700", user, user, run_dir], ["0755", "root", "root", space_root()]] and
-        Regex.scan(~r/\bRELEASE_TMP=(\S+)/, dockerfile, capture: :all_but_first) == [[run_dir]]
+          [
+            ["1773", "root", kept.kept_group, kept.kept_root],
+            ["0755", "root", "root", space_root()]
+          ] and
+        Regex.scan(~r/\bchmod (\d+) (\S+)/, dockerfile, capture: :all_but_first) ==
+          [["0711", run_dir], ["0755", home_root]] and
+        not (dockerfile =~ "RELEASE_TMP=")
 
     if release_spelled?, do: pools, else: [{@dockerfile, :users, :release} | pools]
   end
 
   defp entrypoint_drift(texts, services, release, roles) do
-    image_role = role(roles, release.image_role)
-
     image =
       case Regex.run(~r/^ENTRYPOINT (\[.*\])$/m, Map.fetch!(texts, @dockerfile),
              capture: :all_but_first
@@ -482,29 +432,11 @@ defmodule Cyfr.StackShapeTest do
         nil -> nil
       end
 
-    composed =
-      for role <- roles,
-          not compose_entrypoint?(
-            Map.get(services, role.service, %{}),
-            release,
-            role,
-            image_role
-          ),
-          do: {@compose, :entrypoint, role.name}
-
-    if(image == keeper_argv(release, image_role),
-      do: [],
-      else: [{@dockerfile, :entrypoint, image_role.name}]
-    ) ++ composed
-  end
-
-  # The image's role may take the image's entrypoint; every other role's
-  # service names its own.
-  defp compose_entrypoint?(service, release, role, image_role) do
-    case service["entrypoint"] do
-      nil -> role.name == image_role.name
-      argv -> argv == keeper_argv(release, role)
-    end
+    if(image == keeper_argv(release, roles), do: [], else: [{@dockerfile, :entrypoint, :release}]) ++
+      if(Map.has_key?(Map.get(services, release.service, %{}), "entrypoint"),
+        do: [{@compose, :entrypoint, :release}],
+        else: []
+      )
   end
 
   defp decode(json) do
@@ -514,36 +446,26 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  defp network_drift(compose, services, roles) do
+  # Locus sits on the one network through its guard alone, whose namespace
+  # it shares and which carries Locus's name there; cyfr joins it.
+  defp network_drift(compose, services, release) do
     declared = Map.keys(YamlElixir.read_from_string!(compose)["networks"] || %{})
     cyfr = network_names(get_in(services, ["cyfr", "networks"]))
+    locus = Map.get(services, release.service, %{})
+    guard = Map.get(services, release.guard, %{})
 
-    for role <- roles,
-        not island_network?(services, role) or role.network not in cyfr or
-          role.network not in declared,
-        do: {@compose, :network, role.name}
+    if locus["network_mode"] == "service:" <> release.guard and
+         not Map.has_key?(locus, "networks") and
+         guard["networks"] == %{release.network => %{"aliases" => [release.service]}} and
+         release.network in cyfr and release.network in declared,
+       do: [],
+       else: [{@compose, :network, :release}]
   end
 
-  # A role's service sits on its network alone: directly where its spawns
-  # have no network of the island's (the runtime), else through its guard,
-  # whose namespace it shares and which carries the service's name on the
-  # island's network.
-  defp island_network?(services, %{guard: nil} = role),
-    do: get_in(services, [role.service, "networks"]) == [role.network]
-
-  defp island_network?(services, role) do
-    service = Map.get(services, role.service, %{})
-    guard = Map.get(services, role.guard, %{})
-
-    service["network_mode"] == "service:" <> role.guard and
-      not Map.has_key?(service, "networks") and
-      guard["networks"] == %{role.network => %{"aliases" => [role.service]}}
-  end
-
-  defp tmpfs_drift(services, release, roles) do
-    for role <- roles,
-        get_in(services, [role.service, "tmpfs"]) != tmpfs(release, role),
-        do: {@compose, :tmpfs, role.name}
+  defp tmpfs_drift(services, release) do
+    if get_in(services, [release.service, "tmpfs"]) == tmpfs(release),
+      do: [],
+      else: [{@compose, :tmpfs, :release}]
   end
 
   # The one variable of a role's roster that names its listener's port.
@@ -564,33 +486,54 @@ defmodule Cyfr.StackShapeTest do
   end
 
   defp port_drift(texts, services, release, roles) do
-    dockerfile = Map.fetch!(texts, @dockerfile)
-    image_role = role(roles, release.image_role)
-    cyfr = List.wrap(get_in(services, ["cyfr", "environment"]))
-    defaults = listener_defaults()
-
-    image_probe =
-      if Regex.scan(~r/localhost:\$\{([A-Z_]+):-(\d+)\}/, dockerfile, capture: :all_but_first) ==
-           [[port_variable(image_role), "#{image_role.port}"]],
-         do: [],
-         else: [{@dockerfile, :port, image_role.name}]
-
     config = Map.fetch!(texts, @config)
+    health = Map.fetch!(texts, @health)
+    defaults = listener_defaults()
+    cyfr = List.wrap(get_in(services, ["cyfr", "environment"]))
+    exposed = get_in(services, [release.guard, "expose"]) || []
+    told = List.wrap(get_in(services, [release.service, "environment"]))
 
-    image_probe ++
+    # Each address cyfr names for Locus is a role's port at Locus's name.
+    reached =
+      for entry <- cyfr,
+          [port] <-
+            Regex.scan(~r{http://#{Regex.escape(release.service)}:(\d+)}, entry,
+              capture: :all_but_first
+            ),
+          do: String.to_integer(port)
+
+    strays =
+      if Enum.all?(reached, &(&1 in Enum.map(roles, fn role -> role.port end))),
+        do: [],
+        else: [{@compose, :port, :release}]
+
+    strays ++
       for role <- roles,
+          variable = port_variable(role),
           {path, spelled?} <- [
-            {@dockerfile,
-             Regex.scan(~r/^ARG #{port_variable(role)}=(\S+)$/m, dockerfile,
-               capture: :all_but_first
-             ) == [["#{role.port}"]]},
-            {@compose, compose_ports?(services, cyfr, role, image_role)},
+            {@compose,
+             "#{role.port}" in exposed and
+               Enum.all?(
+                 told,
+                 &(not String.starts_with?(&1, variable <> "=") or
+                     &1 == "#{variable}=#{role.port}")
+               )},
+            {@health, health_probe?(health, role)},
             {@config,
              defaults[role.name] == role.port and
-               documented_default(config, port_variable(role)) == "#{role.port}"}
+               documented_default(config, variable) == "#{role.port}"}
           ],
           not spelled?,
           do: {path, :port, role.name}
+  end
+
+  # The health script probes a role exactly when its key is set, at the
+  # island address and the role's port, once.
+  defp health_probe?(health, role) do
+    Regex.scan(~r/\$\{(LOCUS_[A-Z]+_KEY):-\}/, health, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.count(&(&1 == role.key)) == 1 and
+      length(Regex.scan(~r{"http://\$address:#{role.port}/}, health)) == 1
   end
 
   # The default `Locus.Config`'s documentation table gives `variable`: the
@@ -608,136 +551,111 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  # A service exposes its port alone (through its guard, the namespace's
-  # owner, where it has one), probes its health there, is told to listen
-  # there where compose tells it, and cyfr reaches it there. Its probe
-  # names exactly one `localhost:<port>`; only the image's role may have no
-  # healthcheck, taking the image's own, and none disables it.
-  defp compose_ports?(services, cyfr, role, image_role) do
-    port = "#{role.port}"
-    variable = port_variable(role)
-    service = Map.get(services, role.service, %{})
-    exposing = if role.guard, do: Map.get(services, role.guard, %{}), else: service
-
-    probed? =
-      case service["healthcheck"] do
-        nil ->
-          role.name == image_role.name
-
-        %{"test" => test} = check ->
-          check["disable"] != true and
-            test |> List.wrap() |> Enum.join(" ") |> then(&Regex.scan(~r/localhost(?::\d+)?/, &1)) ==
-              [["localhost:#{port}"]]
-
-        _check ->
-          false
-      end
-
-    told =
-      for entry <- List.wrap(service["environment"]),
-          String.starts_with?(entry, variable <> "="),
-          do: String.replace_prefix(entry, variable <> "=", "")
-
-    address = ~r{http://#{Regex.escape(role.service)}:(\d+)}
-
-    reached =
-      for entry <- cyfr, [value] <- Regex.scan(address, entry, capture: :all_but_first), do: value
-
-    exposing["expose"] == [port] and probed? and Enum.all?(told ++ reached, &(&1 == port))
-  end
-
-  # Each overlay as the image suites write it, whole: the role it layers,
-  # the services it gives keys to with every key and value, and the
+  # Each overlay as the image suites write it, whole: the role it layers
+  # for, the services it gives keys to with every key and value, and the
   # networks it changes (`nil` where it changes none). A value that is a
   # fact of the table comes from the table; the rest is written here, so a
   # change to an overlay is a change to this test.
   #
-  # A guarded island's overlay publishes the worker's port on the guard,
-  # since a service under `network_mode: service:` publishes nothing, and
-  # the suite reads it with `compose port <guard>`; it gives the guard a
-  # tools directory first on its PATH, empty in every case but the one that
-  # starts the guard with an ip6tables that fails; it adds a stand-in for
-  # cyfr, a listener on the control plane's two addresses (cyfr's name on
-  # the island's network and its fixed endpoint address), which the suite
-  # proves refused; and it enables IPv6 on the island's network, so the
-  # guard's IPv6 rules are met by routed packets.
+  # An overlay publishes its role's port on the guard, since a service
+  # under `network_mode: service:` publishes nothing, and the suite reads it
+  # with `compose port <guard>`. A builds or backends overlay gives the
+  # guard a tools directory first on its PATH, empty in every case but the
+  # one that starts the guard with an ip6tables that fails; adds a stand-in
+  # for cyfr, a listener on the control plane's two addresses (cyfr's fixed
+  # endpoint address and cyfr's fixed address on the Locus network, under
+  # cyfr's name), which the suite proves refused and where the builds'
+  # stands in for core's host API, which the guard is given; enables IPv6
+  # on the Locus network, so the guard's IPv6 rules are met by routed
+  # packets; and starts the keeper with a pool and, for the backends, kept
+  # homes the suite chooses.
   defp expected_overlays(release, roles) do
     [runtime, builds, backends] = Enum.map([:runtime, :builds, :backends], &role(roles, &1))
 
+    island = fn image_variable, role, locus ->
+      {role.name,
+       %{
+         release.service =>
+           Map.merge(
+             %{
+               "image" => "${#{image_variable}:?set #{image_variable}}",
+               "container_name" => nil,
+               "pull_policy" => "never"
+             },
+             locus
+           ),
+         release.guard => guard_overlay(image_variable, role),
+         "cyfr-stand-in" => stand_in_overlay(image_variable, release)
+       }, %{release.network => %{"enable_ipv6" => true}}}
+    end
+
     %{
-      "tests/builder-image/compose.locus-builds.yml" =>
-        {:builds,
-         %{
-           builds.service => %{
-             "image" => "${BUILDER_IMAGE:?set BUILDER_IMAGE}",
-             "container_name" => nil,
-             "pull_policy" => "never",
-             "volumes" => ["${CANARY_DIR:?set CANARY_DIR}:/canary:ro"],
-             "entrypoint" => chosen_pool_argv(release, builds, "BUILD_POOL"),
-             "environment" => ["LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}"]
-           },
-           builds.guard => guard_overlay("BUILDER_IMAGE", builds),
-           "cyfr-stand-in" => stand_in_overlay("BUILDER_IMAGE", release, builds)
-         }, %{builds.network => %{"enable_ipv6" => true}}},
-      "tests/locus-backends-image/compose.locus-backends.yml" =>
-        {:backends,
-         %{
-           backends.service => %{
-             "image" => "${BACKENDS_IMAGE:?set BACKENDS_IMAGE}",
-             "container_name" => nil,
-             "pull_policy" => "never",
-             "volumes" => [
-               "${PROBE_DIR:?set PROBE_DIR}:/probe:ro",
-               "${CANARY_DIR:?set CANARY_DIR}:/canary:ro"
-             ],
-             "entrypoint" => chosen_pool_argv(release, backends, "BACKENDS_POOL"),
-             "environment" => [
-               "LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}",
-               "LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}"
-             ]
-           },
-           backends.guard => guard_overlay("BACKENDS_IMAGE", backends),
-           "cyfr-stand-in" => stand_in_overlay("BACKENDS_IMAGE", release, backends)
-         }, %{backends.network => %{"enable_ipv6" => true}}},
-      # The runtime's suites take compose's entrypoint: the overlay names none.
-      "tests/locus-runtime-image/compose.locus-runtime.yml" =>
+      "tests/builder-image/compose.builds.yml" =>
+        island.("BUILDER_IMAGE", builds, %{
+          "volumes" => ["${CANARY_DIR:?set CANARY_DIR}:/canary:ro"],
+          "entrypoint" => chosen_pool_argv(release, roles, builds, "BUILD_POOL"),
+          "environment" => ["LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}"]
+        }),
+      "tests/locus-backends-image/compose.backends.yml" =>
+        island.("BACKENDS_IMAGE", backends, %{
+          "volumes" => [
+            "${PROBE_DIR:?set PROBE_DIR}:/probe:ro",
+            "${CANARY_DIR:?set CANARY_DIR}:/canary:ro"
+          ],
+          "entrypoint" => chosen_pool_argv(release, roles, backends, "BACKENDS_POOL"),
+          "environment" => [
+            "LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}",
+            "LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}"
+          ]
+        }),
+      # The runtime's suites take the image's entrypoint: the overlay names
+      # none.
+      "tests/locus-runtime-image/compose.runtime.yml" =>
         {:runtime,
          %{
-           runtime.service => %{
+           release.service => %{
              "image" => "${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}",
-             "pull_policy" => "never",
              "container_name" => nil,
-             "ports" => ["127.0.0.1::#{runtime.port}"],
-             "extra_hosts" => ["host.docker.internal:host-gateway"],
+             "pull_policy" => "never",
              "environment" => [
                "LOCUS_RUNTIME_POOL_SIZE=${LOCUS_RUNTIME_POOL_SIZE:?set LOCUS_RUNTIME_POOL_SIZE}",
                "LOCUS_RUNTIME_IDLE_TTL_MS=${LOCUS_RUNTIME_IDLE_TTL_MS:?set LOCUS_RUNTIME_IDLE_TTL_MS}",
                "LOCUS_RUNTIME_WATCHDOG_GRACE_MS=${LOCUS_RUNTIME_WATCHDOG_GRACE_MS:?set LOCUS_RUNTIME_WATCHDOG_GRACE_MS}",
                "LOCUS_RUNTIME_RELEASE_GRACE_MS=${LOCUS_RUNTIME_RELEASE_GRACE_MS:?set LOCUS_RUNTIME_RELEASE_GRACE_MS}"
              ]
+           },
+           release.guard => %{
+             "image" => "${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}",
+             "container_name" => nil,
+             "pull_policy" => "never",
+             "ports" => ["127.0.0.1::#{runtime.port}"]
+           }
+         }, nil},
+      # The roles proof layers this after the backends overlay: the builds'
+      # and the runtime's ports published on the guard beside the backends'.
+      "tests/locus-backends-image/compose.roles.yml" =>
+        {:backends,
+         %{
+           release.guard => %{
+             "ports" =>
+               for(name <- [:builds, :runtime], do: "127.0.0.1::#{role(roles, name).port}")
            }
          }, nil},
       # The overlays a role's suites layer last, without writable cgroups:
-      # the role's own security options but that one.
+      # the service's own security options but that one.
       "tests/builder-image/compose.no-writable-cgroups.yml" =>
         {:builds,
-         %{
-           builds.service => %{
-             "security_opt" => @security_opt.builds -- ["writable-cgroups=true"]
-           }
-         }, nil},
+         %{release.service => %{"security_opt" => @security_opt -- ["writable-cgroups=true"]}},
+         nil},
       "tests/locus-runtime-image/compose.no-writable-cgroups.yml" =>
         {:runtime,
-         %{
-           runtime.service => %{
-             "security_opt" => @security_opt.runtime -- ["writable-cgroups=true"]
-           }
-         }, nil}
+         %{release.service => %{"security_opt" => @security_opt -- ["writable-cgroups=true"]}},
+         nil}
     }
   end
 
-  # The island's guard as an overlay layers it: the image under test, the
-  # worker's port published on the loopback, and the tools directory the
+  # The guard as an island's overlay layers it: the image under test, the
+  # role's port published on the loopback, and the tools directory the
   # suite chooses first on its PATH.
   defp guard_overlay(image_variable, role) do
     %{
@@ -753,9 +671,9 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # The stand-in for cyfr an island's suite starts: the image under test
-  # answering on port 4000, on cyfr's fixed endpoint address and under
-  # cyfr's name on the island's network.
-  defp stand_in_overlay(image_variable, release, role) do
+  # answering on port 4000, on cyfr's fixed endpoint address and at cyfr's
+  # fixed address and under cyfr's name on the Locus network.
+  defp stand_in_overlay(image_variable, release) do
     %{
       "image" => "${#{image_variable}:?set #{image_variable}}",
       "pull_policy" => "never",
@@ -770,23 +688,26 @@ defmodule Cyfr.StackShapeTest do
         release.endpoint_network => %{
           "ipv4_address" => "${ENDPOINT_ADDRESS:?set ENDPOINT_ADDRESS}"
         },
-        role.network => %{"aliases" => ["cyfr"]}
+        release.network => %{
+          "ipv4_address" => "${HOST_API_ADDRESS:?set HOST_API_ADDRESS}",
+          "aliases" => ["cyfr"]
+        }
       }
     }
   end
 
-  # The keeper's command for a role whose suite chooses its pool's uids
-  # through `variable`: `<pool>:${VARIABLE:?set VARIABLE}:<reach>`.
-  defp chosen_pool_argv(release, role, variable) do
-    spec = "#{role.pool}:${#{variable}:?set #{variable}}:#{role.reach}"
+  # The keeper's command where the suite chooses `role`'s pool's uids
+  # through `variable` (`<pool>:${VARIABLE:?set VARIABLE}:<reach>`) and, for
+  # the role that keeps homes, the kept homes' root and range, since the
+  # image suites run several stacks side by side.
+  defp chosen_pool_argv(release, roles, role, variable) do
+    argv = keeper_argv(release, roles)
+    at = Enum.find_index(argv, &(&1 == pool_spec(role)))
+    argv = List.replace_at(argv, at, "#{role.pool}:${#{variable}:?set #{variable}}:#{role.reach}")
 
-    argv = List.replace_at(keeper_argv(release, role), 3, spec)
-
-    # An overlay chooses the kept folders' root and range as it chooses the
-    # pool's (the image suites run several stacks side by side).
-    case Enum.find_index(argv, &(&1 == "--kept-homes")) do
-      nil -> argv
-      at -> List.replace_at(argv, at + 1, "${KEPT_HOMES:?set KEPT_HOMES}")
+    case {role.kept_root, Enum.find_index(argv, &(&1 == "--kept-homes"))} do
+      {nil, _} -> argv
+      {_root, at} -> List.replace_at(argv, at + 1, "${KEPT_HOMES:?set KEPT_HOMES}")
     end
   end
 
@@ -894,12 +815,11 @@ defmodule Cyfr.StackShapeTest do
 
   defp merge_name?(key), do: is_binary(key) and String.starts_with?(key, "<<")
 
-  defp service_drift(services, roles) do
-    for role <- roles,
-        service = Map.get(services, role.service, %{}),
-        service["container_name"] != role.container or
-          service["profiles"] != if(role.profile, do: [role.profile]),
-        do: {@compose, :service, role.name}
+  defp service_drift(services, release) do
+    if get_in(services, [release.service, "container_name"]) == release.container and
+         get_in(services, [release.guard, "container_name"]) == release.guard_container,
+       do: [],
+       else: [{@compose, :service, :release}]
   end
 
   # Every image suite of the texts: `{path, role, harness?}`.
@@ -918,19 +838,17 @@ defmodule Cyfr.StackShapeTest do
     for {path, name, harness?} <- suite_files(texts),
         text = Map.fetch!(texts, path),
         (harness? and not (text =~ ~s("fixtures", "locus_roles.json"))) or
-          (harness? and guard_spelled?(text, role(roles, name))) or
+          (harness? and guard_spelled?(text)) or
           Enum.any?(spellings(release, role(roles, name)), &Regex.match?(&1, text)),
         do: {path, :suite, name}
   end
 
-  # A harness of a guarded role names the guard from the table alone,
-  # `GUARD = ROLE["guard"]`: a literal in that position is drift whatever
-  # it says, since a wrong name is not one of the table's values and a
-  # value scan would miss it.
-  defp guard_spelled?(_text, %{guard: nil}), do: false
-
-  defp guard_spelled?(text, _role),
-    do: not (text =~ ~r/^GUARD\s*=\s*ROLE\["guard"\]\s*$/m) or text =~ ~r/^GUARD\s*=\s*["']/m
+  # A harness names the guard from the table alone, `GUARD =
+  # RELEASE["guard"]`: a literal in that position is drift whatever it
+  # says, since a wrong name is not one of the table's values and a value
+  # scan would miss it.
+  defp guard_spelled?(text),
+    do: not (text =~ ~r/^GUARD\s*=\s*RELEASE\["guard"\]\s*$/m) or text =~ ~r/^GUARD\s*=\s*["']/m
 
   # Where a suite spells a fact of its role or of the release: a number
   # (`_` allowed between its digits) or a path anywhere; a name as a whole
@@ -939,12 +857,16 @@ defmodule Cyfr.StackShapeTest do
   # users' prefix as a pooled user's name and the reach as a pool
   # argument's.
   defp spellings(release, role) do
-    numbers = [release.uid, role.port, role.uids.first - 1 | Enum.to_list(role.uids)]
-    paths = [release.bin, release.home_root, release.run_dir]
+    numbers = [role.uid, role.port, role.uids.first - 1 | Enum.to_list(role.uids)]
+    paths = [release.bin, release.home_root, release.run_dir, role.home_root, role.run_dir]
 
+    # The release's container is named as the keeper's binary is,
+    # `cyfr-locus`, which a suite spells to run it, and its run root's size,
+    # `1m`, as a rate limit's window is: neither is a spelling of the
+    # table's.
     names =
-      [role.user_prefix, role.service, role.container, role.network, role.profile] ++
-        [role.guard, role.home_size, release.run_size, release.user]
+      [role.user_prefix, role.user, role.home_size, role.run_size] ++
+        [release.service, release.guard, release.guard_container]
 
     pool = Regex.escape(role.pool)
 
@@ -953,7 +875,7 @@ defmodule Cyfr.StackShapeTest do
       ~r/(?<![\w.])#{digits}(?!\w)/
     end) ++
       Enum.map(paths, fn path -> ~r/(?<![\w.\/-])#{Regex.escape(path)}(?![\w-])/ end) ++
-      for(name <- names, name != nil, do: ~r/(?<!["']apps["'], )["']#{Regex.escape(name)}["']/) ++
+      for(name <- Enum.uniq(names), do: ~r/(?<!["']apps["'], )["']#{Regex.escape(name)}["']/) ++
       [
         ~r/(?<![\w-])#{pool}:(?=[\d{$])/,
         ~r/["']pool["']\s*:\s*["']#{pool}["']/,
@@ -962,10 +884,11 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # A module of Locus's is a role's when it lies in the directory named for
-  # the role, and the image's role's otherwise.
-  defp lib_role(path, release, roles) do
+  # the role, and the builds role's otherwise (`Locus.Keeper`, its client,
+  # serves the builds).
+  defp lib_role(path, roles) do
     [dir | _] = path |> String.replace_prefix("#{@locus_lib}locus/", "") |> Path.split()
-    Enum.find(roles, &(Atom.to_string(&1.name) == dir)) || role(roles, release.image_role)
+    Enum.find(roles, &(Atom.to_string(&1.name) == dir)) || role(roles, :builds)
   end
 
   @lib_spellings [
@@ -974,14 +897,17 @@ defmodule Cyfr.StackShapeTest do
     attach_dir: ~r/(?:@attach_dir |\battach_dir: )"([^"]*)"/
   ]
 
-  # The variable whose documented default is the release's run directory.
+  # The variable whose documented default is the role's run folder, which
+  # the keeper names to each role in `@run_dir_variable`; a client named
+  # none attaches at the release's run directory.
   @attach_variable "LOCUS_RUNTIME_ATTACH_DIR"
+  @run_dir_variable "KEEPER_RUN_DIR"
 
   defp pool_drift(texts, release, roles) do
     spelled =
       for {path, text} <- texts,
           String.starts_with?(path, @locus_lib),
-          role = lib_role(path, release, roles),
+          role = lib_role(path, roles),
           {kind, pattern} <- @lib_spellings,
           [value] <- Regex.scan(pattern, text, capture: :all_but_first),
           do: {path, role, kind, value}
@@ -993,12 +919,12 @@ defmodule Cyfr.StackShapeTest do
     end
 
     # `Locus.Config` documents the attach directory's default for the role
-    # whose variable it is.
+    # whose variable it is: the run folder the keeper names.
     documented =
       for role <- roles,
           @attach_variable in Locus.Config.variables(role.name),
           documented_default(Map.fetch!(texts, @config), @attach_variable) !=
-            "`#{release.run_dir}`",
+            "the role's run folder (`#{@run_dir_variable}`)",
           do: {@config, :pool, role.name}
 
     wrong =
@@ -1032,142 +958,78 @@ defmodule Cyfr.StackShapeTest do
     refute caddy =~ ~r/CYFR_PORT\b|4000/
   end
 
-  test "compose runs cyfr, locus-runtime, locus-backends, locus-builds, caddy and tailscale — one web origin" do
+  test "compose runs cyfr, locus, its guard, caddy and tailscale — one web origin" do
     compose = read!("docker-compose.yml")
-    runtime = LocusRoles.role!(:runtime)
-    backends = LocusRoles.role!(:backends)
+    release = LocusRoles.release()
+    parsed = services(compose)
 
-    # Only the keys under `services:` — the file also has `volumes:` and
-    # `networks:` blocks with the same indentation.
-    [_, services_block | _] = Regex.split(~r/^services:\s*$/m, compose)
-    [services_block | _] = Regex.split(~r/^[a-z]/m, services_block)
+    assert Enum.sort(Map.keys(parsed)) ==
+             Enum.sort(["caddy", "cyfr", "tailscale", release.service, release.guard])
 
-    services =
-      Regex.scan(~r/^  ([a-z][a-z0-9_-]*):\s*$/m, services_block, capture: :all_but_first)
-      |> List.flatten()
-      |> Enum.sort()
+    cyfr = parsed["cyfr"]
+    [runtime, backends] = Enum.map([:runtime, :backends], &LocusRoles.role!/1)
 
-    guards = for %{guard: guard} <- LocusRoles.roles(), guard != nil, do: guard
-    assert services == Enum.sort(["caddy", "cyfr", "tailscale" | @locus_services] ++ guards)
+    # cyfr reaches every role at Locus's name, which the guard carries on
+    # the one network: the runtime and the backends at the URLs compose
+    # gives it, the builds beside the backends (`Cyfr.RuntimeConfig`).
+    workers = "wrk_locus=http://#{release.service}:#{runtime.port}"
+    backends_url = "http://#{release.service}:#{backends.port}"
 
-    # The runtime is attached to its network and no other, which cyfr
-    # joins: cyfr reaches it there, it reaches cyfr's host API there, and
-    # the other Locus services and caddy never see either port. The network
-    # is the service's alone: its runners have none, and reach the host API
-    # and a pinned address only through the service.
-    [_, runtime_block | _] =
-      Regex.split(~r/^  #{Regex.escape(runtime.service)}:\s*$/m, services_block)
+    assert "CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-#{workers}}" in cyfr[
+             "environment"
+           ]
 
-    [runtime_block | _] = Regex.split(~r/^  [a-z]/m, runtime_block)
-    [_, runtime_networks | _] = Regex.split(~r/^    networks:\s*$/m, runtime_block)
-    [runtime_networks | _] = Regex.split(~r/^    [a-z]/m, runtime_networks)
+    assert "CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-#{backends_url}}" in cyfr[
+             "environment"
+           ]
 
-    assert Regex.scan(~r/^      - (\S+)/m, runtime_networks, capture: :all_but_first) ==
-             [[runtime.network]]
+    assert "CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-#{release.service}}" in cyfr[
+             "environment"
+           ]
 
-    assert runtime_block =~ ~r/^\s*- LOCUS_RUNTIME_KEY=\$\{LOCUS_RUNTIME_KEY:-\}$/m
-
-    assert runtime_block =~
-             ~r/^\s*- LOCUS_RUNTIME_HOST_API_URL=\$\{LOCUS_RUNTIME_HOST_API_URL:-http:\/\/cyfr:/m
-
-    [_, cyfr_block | _] = Regex.split(~r/^  cyfr:\s*$/m, services_block)
-    [cyfr_block | _] = Regex.split(~r/^  [a-z]/m, cyfr_block)
-
-    workers = "wrk_locus=http://#{runtime.service}:#{runtime.port}"
-
-    assert cyfr_block =~
-             ~r/^\s*- CYFR_LOCUS_RUNTIME_WORKERS=\$\{CYFR_LOCUS_RUNTIME_WORKERS:-#{Regex.escape(workers)}\}$/m
-
-    cyfr_networks =
-      network_names(YamlElixir.read_from_string!(compose)["services"]["cyfr"]["networks"])
-
-    for role <- LocusRoles.roles() do
-      assert role.network in cyfr_networks
-    end
-
-    backends_url = "http://#{backends.service}:#{backends.port}"
-
-    assert cyfr_block =~
-             ~r/^\s*- CYFR_LOCUS_BACKENDS_URL=\$\{CYFR_LOCUS_BACKENDS_URL:-#{Regex.escape(backends_url)}\}$/m
-
-    assert cyfr_block =~
-             ~r/^\s*- CYFR_PRIVATE_EGRESS_TARGETS=\$\{CYFR_PRIVATE_EGRESS_TARGETS:-#{Regex.escape(backends.service)}\}$/m
-
-    # Each Locus service is attached to its own network and no other: what
-    # it listens on is that network, which is its isolation. A role whose
-    # spawns share the island's network listens in its guard's namespace,
-    # and the guard sits on the island's network under the service's name.
-    for role <- LocusRoles.roles() do
-      block = service_block(compose, role.service)
-
-      case role.guard do
-        nil ->
-          assert list_entries(block, "networks") == [role.network]
-
-        guard ->
-          refute block =~ ~r/^    networks:/m
-          assert block =~ ~r/^    network_mode: service:#{Regex.escape(guard)}$/m
-
-          assert block =~
-                   ~r/^    depends_on:\n      #{Regex.escape(guard)}:\n        condition: service_healthy$/m
-
-          guard_block = service_block(compose, guard)
-
-          assert guard_block =~
-                   ~r/^    networks:\n      #{Regex.escape(role.network)}:\n        aliases:\n          - #{Regex.escape(role.service)}$/m
-      end
-    end
+    refute compose =~ "CYFR_LOCUS_BUILDS_URL"
+    assert release.network in network_names(cyfr["networks"])
   end
 
-  # cyfr reaches the builder over the builds network, which only the two of
-  # them join, and a build reaches crates.io and the npm registry over the
-  # same network: it is not `internal`, so the isolation is who is attached.
-  # The backends network is the same shape for a backend's registry and
-  # upstream API, and the runtime's network for a guest's consented egress.
-  test "the builds, backends and runtime networks carry cyfr to each service and the service out" do
-    compose = read!("docker-compose.yml")
-    parsed = YamlElixir.read_from_string!(compose)
-    [_, networks] = Regex.split(~r/^networks:\s*$/m, compose)
-    [networks | _] = Regex.split(~r/^[a-z]/m, networks)
-    runtime = LocusRoles.role!(:runtime)
+  # cyfr reaches Locus over the one network, which only cyfr and the guard
+  # join, and a build or a program reaches its registry and upstream API
+  # over the same network: it is not `internal`, so the isolation is who is
+  # attached.
+  test "the locus network carries cyfr and the guard alone, and Locus out" do
+    parsed = compose!()
+    release = LocusRoles.release()
 
-    for role <- LocusRoles.roles() do
-      # Declared plain: no driver, option or `internal` flag. The runtime's
-      # network fixes its addresses as well (the next test reads them).
-      own = if role.network == runtime.network, do: ["ipam"], else: []
+    assert parsed["networks"][release.network] == %{
+             "ipam" => %{
+               "config" => [%{"subnet" => release.subnet, "ip_range" => release.ip_range}]
+             }
+           }
 
-      assert Map.keys(Map.fetch!(parsed["networks"], role.network)) == own,
-             "#{role.network} must be declared plain"
+    attached =
+      for {service, definition} <- parsed["services"],
+          release.network in network_names(definition["networks"]),
+          do: service
 
-      attached =
-        for {service, definition} <- parsed["services"],
-            role.network in network_names(definition["networks"]),
-            do: service
+    assert Enum.sort(attached) == Enum.sort(["cyfr", release.guard])
 
-      # The service of a guarded island is on the network through its
-      # guard's namespace, so the network's members are cyfr and the guard.
-      assert Enum.sort(attached) == Enum.sort(["cyfr", role.guard || role.service]),
-             "#{role.network} joins #{inspect(attached)}"
-    end
-
-    refute networks =~ ~r/internal:\s*true/
+    assert Enum.sort(Map.keys(parsed["networks"])) ==
+             Enum.sort(["default", "edge", release.network])
   end
 
   # cyfr holds three fixed addresses, each bound by one listener and never
   # an interface wildcard, so no other network cyfr joins reaches any: the
-  # host API binds cyfr's address on the runtime's network, reachable from
-  # that network alone; the endpoint's loopback listener binds cyfr's
-  # address on the default network (the table's), where Docker publishes
-  # the host's loopback port; and its proxy listener binds cyfr's address on
-  # the edge network (the table's), where Caddy and Tailscale reach it.
-  # Each address lies in its network's subnet, outside the range Docker
-  # hands the network's other containers, and is neither the subnet's
-  # network, gateway nor broadcast address; each subnet is private, outside
-  # the pools Docker draws the other networks' subnets from by default, and
-  # apart from the others.
+  # host API binds cyfr's address on the Locus network (the table's),
+  # reachable from that network alone; the endpoint's loopback listener
+  # binds cyfr's address on the default network (the table's), where Docker
+  # publishes the host's loopback port; and its proxy listener binds cyfr's
+  # address on the edge network (the table's), where Caddy and Tailscale
+  # reach it. Each address lies in its network's subnet, outside the range
+  # Docker hands the network's other containers, and is neither the
+  # subnet's network, gateway nor broadcast address; each subnet is
+  # private, outside the pools Docker draws the other networks' subnets
+  # from by default, and apart from the others.
   test "the host API and the endpoint's two listeners each bind cyfr's own fixed address on their network" do
-    parsed = YamlElixir.read_from_string!(read!("docker-compose.yml"))
-    runtime = LocusRoles.role!(:runtime)
+    parsed = compose!()
     release = LocusRoles.release()
     cyfr = parsed["services"]["cyfr"]
 
@@ -1176,8 +1038,8 @@ defmodule Cyfr.StackShapeTest do
     # networks cyfr joins, IPv6-enabled or not, and in whatever order they
     # came up (tests/compose-proof/run.sh --case bind holds it).
     fixed = [
-      {runtime.network, "172.16.231.0/24", "172.16.231.128/25", "172.16.231.2",
-       "CYFR_HOST_API_BIND=", %{"ipv4_address" => "172.16.231.2"}, %{}},
+      {release.network, release.subnet, release.ip_range, release.host_api_address,
+       "CYFR_HOST_API_BIND=", %{"ipv4_address" => release.host_api_address}, %{}},
       {release.endpoint_network, release.endpoint_subnet, release.endpoint_ip_range,
        release.endpoint_address, "CYFR_BIND_ADDRESS=",
        %{"ipv4_address" => release.endpoint_address, "gw_priority" => 1},
@@ -1205,12 +1067,8 @@ defmodule Cyfr.StackShapeTest do
       assert_fixed_address(subnet, range, address)
     end
 
-    # Only those two networks fix cyfr's address.
-    fixed_networks = Enum.map(fixed, &elem(&1, 0))
-
-    for {network, attachment} <- cyfr["networks"], network not in fixed_networks do
-      assert attachment == %{}, "cyfr's attachment to #{network} is #{inspect(attachment)}"
-    end
+    # cyfr joins those three networks alone.
+    assert Enum.sort(Map.keys(cyfr["networks"])) == Enum.sort(Enum.map(fixed, &elem(&1, 0)))
 
     subnets = Enum.map(fixed, &cidr(elem(&1, 1)))
 
@@ -1245,76 +1103,30 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  test "the builds service is the locus image under the shipped names, holding only its own settings" do
-    compose = read!("docker-compose.yml")
-    role = LocusRoles.role!(:builds)
-    builds = service_block(compose, role.service)
-
-    assert builds =~ ~r/^    container_name: #{Regex.escape(role.container)}$/m
-    assert builds =~ ~r/^    image: ghcr\.io\/cyfrworks\/cyfr-locus:latest$/m
-    assert builds =~ ~r/^      dockerfile: Dockerfile\.locus$/m
-    assert builds =~ ~r/^    profiles: \["#{Regex.escape(role.profile)}"\]$/m
-    assert builds =~ ~r/^      - path: \.env\.locus$/m
-    assert File.regular?(Path.join(@root, "Dockerfile.locus"))
-
-    # `Locus.Config` refuses the control plane's variables, so the service
-    # is handed `LOCUS_BUILDS_*` names and nothing else; its key is the one
-    # cyfr reads as CYFR_LOCUS_BUILDS_KEY.
-    assert list_entries(builds, "environment") == ["LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}"]
-
-    # The container's limit is a setting, since it holds the concurrent
-    # builds' bounds, which are settings too.
-    assert builds =~ ~r/^          memory: \$\{LOCUS_BUILDS_MEMORY_LIMIT:-[0-9]+[MG]\}$/m
-    assert builds =~ ~r/^          cpus: "\$\{LOCUS_BUILDS_CPU_LIMIT:-[0-9]+\}"$/m
-  end
-
-  # The backends service runs the Locus image as compose runs the builds
-  # service, with the backend pool in place of the build pool; its key is
-  # the one cyfr reads as CYFR_LOCUS_BACKENDS_KEY, and it always starts.
-  test "the backends service is the locus image under the shipped names, holding only its own settings" do
-    compose = read!("docker-compose.yml")
-    role = LocusRoles.role!(:backends)
-    backends = service_block(compose, role.service)
-
-    assert backends =~ ~r/^    container_name: #{Regex.escape(role.container)}$/m
-    assert backends =~ ~r/^    image: ghcr\.io\/cyfrworks\/cyfr-locus:latest$/m
-    assert backends =~ ~r/^      dockerfile: Dockerfile\.locus$/m
-    assert role.profile == nil
-    refute backends =~ ~r/^    profiles:/m
-    assert backends =~ ~r/^      - path: \.env\.locus$/m
-    # The service listens in its guard's namespace, whose owner alone
-    # exposes the port.
-    refute backends =~ ~r/^    expose:/m
-    assert list_entries(service_block(compose, role.guard), "expose") == [~s("#{role.port}")]
-
-    assert list_entries(backends, "environment") == [
-             "LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}"
-           ]
-
-    assert entrypoint(backends) == keeper_argv(LocusRoles.release(), role)
-
-    # The release's own health probe is the builds wire's; this service
-    # probes the backends wire's instead.
-    assert backends =~ Prima.LocusBackends.route(:health)
-
-    # The container's limit is a setting, since it holds the service's
-    # memory budget, which is a setting too; its default is the budget's
-    # default plus the service's 256 MiB of headroom.
-    assert [_, limit] =
-             Regex.run(
-               ~r/^          memory: \$\{LOCUS_BACKENDS_MEMORY_LIMIT:-([0-9]+[MG])\}$/m,
-               backends
-             )
+  # The bounds' defaults are each role's old container's limits, and the
+  # backends' is its budget's default plus the role's 256 MiB of headroom;
+  # .env.example documents each, and .env.locus.example says where they are
+  # without setting one, since compose's environment wins over that file.
+  test "the locus service holds the three keys and each role's bounds, their one default" do
+    environment = compose!()["services"][LocusRoles.release().service]["environment"]
+    assert environment == locus_environment()
 
     env = %{"LOCUS_BACKENDS_KEY" => String.duplicate("ab", 32)}
     {:ok, settings} = Locus.Config.from_env(&Map.get(env, &1), Map.keys(env))
+    {_, backends_limit} = List.keyfind(@bounds, "LOCUS_BACKENDS_MEMORY_LIMIT", 0)
+    assert limit_bytes(backends_limit) == settings[:backends_memory_budget] + 256 * 1024 * 1024
 
-    assert limit_bytes(limit) == settings[:backends_memory_budget] + 256 * 1024 * 1024
+    example = read!(".env.example")
+    locus_example = read!(".env.locus.example")
 
-    example = read!(".env.locus.example")
-    assert example =~ "LOCUS_BACKENDS_MEMORY_LIMIT"
-    refute example =~ ~r/^#? ?LOCUS_BACKENDS_MEMORY_LIMIT=/m
-    assert read!(".env.example") =~ ~r/^# LOCUS_BACKENDS_MEMORY_LIMIT=#{limit}$/m
+    for {variable, default} <- @bounds do
+      assert example =~ ~r/^# #{variable}=#{default}$/m, "#{variable} in .env.example"
+      assert locus_example =~ variable, "#{variable} in .env.locus.example"
+      refute locus_example =~ ~r/^#? ?#{variable}=/m
+    end
+
+    # No role's processor bound but those the table of bounds names.
+    refute Enum.any?(environment, &String.starts_with?(&1, "LOCUS_BACKENDS_CPU_LIMIT="))
   end
 
   defp limit_bytes(limit) do
@@ -1322,125 +1134,99 @@ defmodule Cyfr.StackShapeTest do
     count * Map.fetch!(%{"M" => 1024 * 1024, "G" => 1024 * 1024 * 1024}, unit)
   end
 
-  # The hardening is written once, so a role cannot miss one and a new role
-  # inherits it; the block carries the hardening alone, so no role gains a
-  # network, an environment or a mount from it.
-  test "the Locus services take their hardening from one block" do
-    compose = YamlElixir.read_from_string!(read!("docker-compose.yml"))
-    role = compose["x-locus-role"]
-
-    assert for({key, _} <- compose, String.starts_with?(key, "x-"), do: key) == ["x-locus-role"]
-    assert role |> Map.keys() |> Enum.sort() == Enum.sort(@role_keys)
-
-    for service <- @locus_services,
-        do: assert(Map.has_key?(compose["services"], service), service)
-
-    for {service, definition} <- compose["services"] do
-      {merges, own} = Enum.split_with(definition, &merge_key?/1)
-
-      if service in @locus_services do
-        assert Enum.map(merges, &elem(&1, 1)) == [role], "#{service} merges x-locus-role once"
-
-        # No service sets a key of the block: a service's own list would
-        # replace the merged one whole.
-        overlap = for {key, _} <- own, key in @role_keys, do: key
-        assert overlap == [], "#{service} sets #{inspect(overlap)} over x-locus-role"
-      else
-        assert merges == [], "#{service} merges #{inspect(merges)}"
-      end
-    end
+  # cyfr-locus bounds each role and each spawn only where the container's
+  # cgroup is mounted writable, and clones each into a space of its own,
+  # which takes the keeper's seccomp profile too. The container carries no
+  # compose limit: the keeper writes each role's bounds into its group.
+  test "the locus service keeps its hardening, its mounts and its guard's namespace" do
+    assert locus_violations(read!("docker-compose.yml")) == []
   end
 
-  # cyfr-locus bounds a spawn's memory only where the container's cgroup is
-  # mounted writable; without the option every bounded spawn is refused, so
-  # the shipped services carry it. Every spawn is a space of its own,
-  # which takes the keeper's seccomp profile too.
-  test "the Locus services keep their hardening, and can bound a spawn's memory" do
-    assert hardening_violations(read!("docker-compose.yml")) == []
-  end
-
-  test "a Locus service that loses a hardening option fails" do
+  test "a locus service that loses its shape fails" do
     compose = read!("docker-compose.yml")
-    every = fn key -> for service <- @locus_services, do: {service, key} end
-    [_runtime, builds, backends] = Enum.map([:runtime, :builds, :backends], &LocusRoles.role!/1)
+    release = LocusRoles.release()
 
     plants = [
-      {"the block's list without no-new-privileges:true",
+      {"without no-new-privileges:true",
        "\n      - no-new-privileges:true\n      - writable-cgroups=true\n",
-       "\n      - writable-cgroups=true\n", every.("security_opt")},
-      {"the block's list without its AppArmor profile",
+       "\n      - writable-cgroups=true\n", ["security_opt"]},
+      {"without its AppArmor profile",
        "\n      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}\n      - systempaths=unconfined\n",
-       "\n      - systempaths=unconfined\n", every.("security_opt")},
-      {"locus-backends without its merge", "\n  #{backends.service}:\n    <<: *locus-role\n",
-       "\n  #{backends.service}:\n", for(key <- @role_keys, do: {backends.service, key})},
-      {"locus-builds setting read_only: false", "\n  #{builds.service}:\n    <<: *locus-role\n",
-       "\n  #{builds.service}:\n    <<: *locus-role\n    read_only: false\n",
-       [{builds.service, "read_only"}]},
-      {"the block without ipc: none", "\n  ipc: none\n", "\n", every.("ipc")},
-      {"the block granting privileged: true", "\nx-locus-role: &locus-role\n",
-       "\nx-locus-role: &locus-role\n  privileged: true\n", every.("privileged")}
+       "\n      - systempaths=unconfined\n", ["security_opt"]},
+      {"setting read_only: false", "\n    read_only: true\n    ipc: none\n    restart",
+       "\n    read_only: false\n    ipc: none\n    restart", ["read_only"]},
+      {"without ipc: none", "\n    read_only: true\n    ipc: none\n    restart",
+       "\n    read_only: true\n    restart", ["ipc"]},
+      {"granting privileged: true", "\n  locus:\n    container_name:",
+       "\n  locus:\n    privileged: true\n    container_name:", ["privileged"]},
+      {"with a compose memory limit", "\n    stop_grace_period: 40s\n    # Healthcheck",
+       "\n    stop_grace_period: 40s\n    deploy:\n      resources:\n        limits:\n          memory: 8G\n    # Healthcheck",
+       ["deploy"]},
+      {"with the runtime's bound at another default", "LOCUS_RUNTIME_MEMORY_LIMIT:-4G}",
+       "LOCUS_RUNTIME_MEMORY_LIMIT:-8G}", ["environment"]},
+      {"on its own network", "    network_mode: service:#{release.guard}\n",
+       "    networks:\n      - #{release.network}\n", ["network_mode", "networks"]},
+      {"waiting for its guard's start, not its health",
+       "      #{release.guard}:\n        condition: service_healthy\n",
+       "      #{release.guard}:\n        condition: service_started\n", ["depends_on"]},
+      {"with the run root writable by all", "/run/locus:mode=0711,", "/run/locus:mode=1777,",
+       ["tmpfs"]},
+      {"with the runtime's run folder another's", "/run/locus/runtime:uid=10011,gid=10011,",
+       "/run/locus/runtime:uid=10012,gid=10012,", ["tmpfs"]}
     ]
 
-    # Each plant replaces one exact line; one that changes nothing answers
-    # `:unchanged`, which no plant expects.
+    # Each plant replaces one exact text, found once; one that is not
+    # answers `:unchanged`, which no plant expects.
     outcomes =
-      for {plant, line, replacement, _} <- plants do
-        planted = String.replace(compose, line, replacement)
-        {plant, if(planted == compose, do: :unchanged, else: hardening_violations(planted))}
+      for {plant, from, to, _} <- plants do
+        outcome =
+          if length(String.split(compose, from)) == 2,
+            do: locus_violations(String.replace(compose, from, to)),
+            else: :unchanged
+
+        {plant, outcome}
       end
 
     assert outcomes == for({plant, _, _, expected} <- plants, do: {plant, Enum.sort(expected)})
   end
 
-  # Each island whose spawns share its network, the builds and the backends
-  # islands, starts behind an egress guard: the Locus image running
-  # cyfr-guard with NET_ADMIN and no other capability, in the network
-  # namespace the island's service shares, carrying the island's service
-  # name as its alias there, healthy only with every rule installed, and
-  # holding no key, mount or release. The island waits for the guard's
-  # health, not its start, so a guard whose rules failed starts no island.
-  test "each island's guard holds NET_ADMIN alone, and the island starts behind its health" do
+  # Locus starts behind an egress guard: the Locus image running cyfr-guard
+  # with NET_ADMIN and no other capability, in the network namespace Locus
+  # shares, carrying Locus's name as its alias there, healthy only with
+  # every rule installed, and holding no key or release. Locus waits for
+  # the guard's health, not its start, so a guard whose rules failed starts
+  # no role.
+  test "the guard holds NET_ADMIN alone, exposes every role's port, and gives the runtime core's host API" do
     assert guard_violations(read!("docker-compose.yml")) == []
   end
 
-  test "a guard or an island that loses its shape fails" do
+  test "a guard that loses its shape fails" do
     compose = read!("docker-compose.yml")
-    [builds, backends] = Enum.map([:builds, :backends], &LocusRoles.role!/1)
+    release = LocusRoles.release()
 
     plants = [
-      {"the builds guard gaining SETUID",
-       "      - \"#{builds.port}\"\n    entrypoint: [\"cyfr-guard\"]\n    init: true\n    cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n",
-       "      - \"#{builds.port}\"\n    entrypoint: [\"cyfr-guard\"]\n    init: true\n    cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n      - SETUID\n",
-       [{builds.guard, "cap_add"}]},
-      {"the backends island on its own network",
-       "    network_mode: service:#{backends.guard}\n    depends_on:\n      #{backends.guard}:\n        condition: service_healthy\n",
-       "    networks:\n      - #{backends.network}\n",
-       [
-         {backends.service, "depends_on"},
-         {backends.service, "network_mode"},
-         {backends.service, "networks"}
-       ]},
-      {"the builds island waiting for its guard's start, not its health",
-       "      #{builds.guard}:\n        condition: service_healthy\n",
-       "      #{builds.guard}:\n        condition: service_started\n",
-       [{builds.service, "depends_on"}]},
-      {"the backends guard publishing the island's port",
-       "    networks:\n      #{backends.network}:\n        aliases:\n          - #{backends.service}\n",
-       "    ports:\n      - \"#{backends.port}:#{backends.port}\"\n    networks:\n      #{backends.network}:\n        aliases:\n          - #{backends.service}\n",
-       [{backends.guard, "ports"}]},
-      {"the builds guard without the island's alias",
-       "    networks:\n      #{builds.network}:\n        aliases:\n          - #{builds.service}\n",
-       "    networks:\n      - #{builds.network}\n", [{builds.guard, "networks"}]},
-      {"the backends guard serving no control",
-       "      - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock\n    volumes:\n      - guard-control:",
-       "    volumes:\n      - guard-control:", [{backends.guard, "environment"}]},
-      {"the builds guard forwarding with the ICMP rate limit on",
+      {"gaining SETUID", "    cap_add:\n      - NET_ADMIN\n",
+       "    cap_add:\n      - NET_ADMIN\n      - SETUID\n", ["cap_add"]},
+      {"publishing a role's port",
+       "    networks:\n      #{release.network}:\n        aliases:\n          - #{release.service}\n",
+       "    ports:\n      - \"4101:4101\"\n    networks:\n      #{release.network}:\n        aliases:\n          - #{release.service}\n",
+       ["ports"]},
+      {"without Locus's alias",
+       "    networks:\n      #{release.network}:\n        aliases:\n          - #{release.service}\n",
+       "    networks:\n      - #{release.network}\n", ["networks"]},
+      {"serving no control",
+       "      - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock\n      - CYFR_GUARD_HOST_API",
+       "      - CYFR_GUARD_HOST_API", ["environment"]},
+      {"naming no host API",
+       "      - CYFR_GUARD_HOST_API=172.16.231.2:${CYFR_HOST_API_PORT:-4300}\n", "",
+       ["environment"]},
+      {"exposing the builds' port no more", "      - \"4100\"\n      - \"4101\"\n",
+       "      - \"4101\"\n", ["expose"]},
+      {"forwarding with the ICMP rate limit on",
        "      net.ipv4.icmp_ratelimit: \"0\"\n    # The ready file's tmpfs",
-       "    # The ready file's tmpfs", [{builds.guard, "sysctls"}]}
+       "    # The ready file's tmpfs", ["sysctls"]}
     ]
 
-    # Each plant replaces one exact text, found once; one that is not
-    # answers `:unchanged`, which no plant expects.
     outcomes =
       for {plant, from, to, _} <- plants do
         outcome =
@@ -1451,36 +1237,26 @@ defmodule Cyfr.StackShapeTest do
         {plant, outcome}
       end
 
-    for {{plant, outcome}, {_, _, _, expected}} <- Enum.zip(outcomes, plants) do
-      assert outcome == Enum.sort(expected), "#{plant}: #{inspect(outcome)}"
-    end
+    assert outcomes == for({plant, _, _, expected} <- plants, do: {plant, Enum.sort(expected)})
   end
 
-  # cyfr-locus clones every spawn into a space of its own, a user,
-  # network, IPC, pid, mount and cgroup namespace with files of its own,
-  # which Docker's default seccomp and AppArmor profiles deny. Every Locus
-  # service runs under the keeper's seccomp profile, which the image
+  # cyfr-locus clones each role process and every spawn into a space of
+  # its own, a user, network, IPC, pid, mount and cgroup namespace with
+  # files of its own, which Docker's default seccomp and AppArmor profiles
+  # deny. Locus runs under the keeper's seccomp profile, which the image
   # carries and a scaffolded project holds beside its compose file, where
   # compose reads it, and under the AppArmor profile .env names, which cyfr
-  # carries, loads and names there, and whose name the image carries for the
-  # keeper to prove; a project without the one, or a host without the
+  # carries, loads and names there, and whose name the image carries for
+  # the keeper to prove; a project without the one, or a host without the
   # other, does not start the service. The image makes the directory a
   # space's files are built under, which the profile lets a space mount.
-  test "every Locus service runs under the keeper's seccomp and AppArmor profiles, shipped beside the compose file" do
-    role = LocusRoles.role!(:runtime)
+  test "Locus runs under the keeper's seccomp and AppArmor profiles, shipped beside the compose file" do
     compose = read!("docker-compose.yml")
-    parsed = YamlElixir.read_from_string!(compose)
-    for option <- @confinement, do: assert(option in parsed["x-locus-role"]["security_opt"])
+    locus = services(compose)[LocusRoles.release().service]
+    for option <- @confinement, do: assert(option in locus["security_opt"])
     assert compose =~ "user.max_user_namespaces"
-    runtime = service_block(compose, role.service)
 
-    # The image's entrypoint is the builds role's; the runtime's service
-    # names its own, the relay runner pool, and its own health probe.
-    assert role.reach in LocusRoles.reaches()
-    assert entrypoint(runtime) == keeper_argv(LocusRoles.release(), role)
-    assert entrypoint(runtime) |> Enum.at(3) |> String.ends_with?(":" <> role.reach)
-
-    assert runtime =~ Prima.WorkerWire.worker_route(:status)
+    for role <- LocusRoles.roles(), do: assert(role.reach in LocusRoles.reaches())
 
     dockerfile = read!("Dockerfile.locus")
     assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
@@ -1517,14 +1293,16 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # The image names its pooled uids for the role that runs under them,
-  # `printf '<name>%02d'` over `<base> + i`; cyfr-locus refuses pools that
-  # overlap within one container, and this keeps every role's pool and the
-  # release's own user apart across the role's containers too.
-  test "every pooled uid is named for its service, and no two pools or services share a uid" do
-    pools = user_loops(read!("Dockerfile.locus"))
+  # `printf '<name>%02d'` over `<base> + i`, and each role's user for the
+  # role; cyfr-locus refuses pools that overlap, and this keeps every pool,
+  # every role's user and the kept homes' group apart.
+  test "every pooled uid is named for its role, and no two pools or role users share a uid" do
+    dockerfile = read!("Dockerfile.locus")
+    pools = user_loops(dockerfile)
     roles = LocusRoles.roles()
 
     assert Enum.sort(pools) == Enum.sort(for role <- roles, do: {role.user_prefix, role.uids})
+    assert role_users(dockerfile) == for(role <- roles, do: {Atom.to_string(role.name), role.uid})
 
     ranges = Enum.map(pools, &elem(&1, 1))
 
@@ -1532,16 +1310,44 @@ defmodule Cyfr.StackShapeTest do
         b <- Enum.drop(ranges, i + 1),
         do: assert(Range.disjoint?(a, b), "#{inspect(a)} and #{inspect(b)} overlap")
 
-    for range <- ranges, do: refute(LocusRoles.release().uid in range)
+    for range <- ranges, role <- roles, do: refute(role.uid in range)
 
-    # The shipped entrypoints serve exactly those ranges: the image's the
-    # builds role's, each other role's its compose service's.
-    image_role = LocusRoles.release().image_role
-
+    # The shipped entrypoint serves exactly those ranges, and every role.
     for role <- roles do
-      file = if role.name == image_role, do: "Dockerfile.locus", else: "docker-compose.yml"
-      assert read!(file) =~ ~s("--pool", "#{pool_spec(role)}")
+      assert dockerfile =~ ~s("--pool", "#{pool_spec(role)}")
+      assert dockerfile =~ ~s("--role", "#{role_spec(role)}")
     end
+  end
+
+  # Each wire refuses a health body at another version, so the probe the
+  # image runs posts each wire's own body at its own route, and the worker
+  # listener's unsigned status is refused with 401 once it serves. Compose
+  # carries no probe of its own, so no version is spelled there.
+  test "the image's health script probes each role whose key is set at its wire's version" do
+    health = read!(@health)
+    dockerfile = read!("Dockerfile.locus")
+
+    assert health =~
+             "-d '#{Prima.BuilderProtocol.encode_health_request()}' \\\n    \"http://$address:#{LocusRoles.role!(:builds).port}#{Prima.BuilderProtocol.route(:health)}\""
+
+    assert health =~
+             "-d '#{Prima.LocusBackends.health_body()}' \\\n    \"http://$address:#{LocusRoles.role!(:backends).port}#{Prima.LocusBackends.route(:health)}\""
+
+    assert health =~
+             "\"http://$address:#{LocusRoles.role!(:runtime).port}#{Prima.WorkerWire.worker_route(:status)}\""
+
+    assert health =~ ~s([ "$status" = "401" ])
+
+    for role <- LocusRoles.roles(),
+        do: assert(health_probe?(health, role), "#{role.name}'s probe")
+
+    assert dockerfile =~
+             ~r{^COPY --chmod=0755 apps/locus/health\.sh /usr/local/bin/locus-health$}m
+
+    assert dockerfile =~ ~r{^    CMD \["locus-health"\]$}m
+
+    refute Map.has_key?(compose!()["services"][LocusRoles.release().service], "healthcheck")
+    refute read!("docker-compose.yml") =~ ~r/"version"/
   end
 
   test "every spelling of a role's facts is the role table's" do
@@ -1564,9 +1370,9 @@ defmodule Cyfr.StackShapeTest do
 
     runtime_suite = "tests/locus-runtime-image/stack.py"
     builds_harness = "tests/builder-image/stack.py"
-    builds_overlay = "tests/builder-image/compose.locus-builds.yml"
-    runtime_overlay = "tests/locus-runtime-image/compose.locus-runtime.yml"
-    backends_overlay = "tests/locus-backends-image/compose.locus-backends.yml"
+    builds_overlay = "tests/builder-image/compose.builds.yml"
+    runtime_overlay = "tests/locus-runtime-image/compose.runtime.yml"
+    backends_overlay = "tests/locus-backends-image/compose.backends.yml"
     builds_last_overlay = "tests/builder-image/compose.no-writable-cgroups.yml"
     channel = "apps/locus/lib/locus/runtime/keeper/channel.ex"
     runtime_keeper = "apps/locus/lib/locus/runtime/keeper.ex"
@@ -1582,104 +1388,124 @@ defmodule Cyfr.StackShapeTest do
       {"the runtime's users counted from another base",
        {@dockerfile, "uid=$((#{first - 1} + i))", "uid=$((#{first + 99} + i))"},
        [{@dockerfile, :users, :runtime}]},
+      {"the builds role's user at another uid",
+       {@dockerfile, "builds:#{builds.uid} ", "builds:#{builds.uid + 100} "},
+       [{@dockerfile, :users, :builds}]},
+      {"the run root writable by every role",
+       {@dockerfile, "chmod 0711 #{release.run_dir}", "chmod 1777 #{release.run_dir}"},
+       [{@dockerfile, :users, :release}]},
+      {"a role user of the kept homes' group",
+       {@dockerfile, ~s(-s /usr/sbin/nologin "$name" \\\n         && install -d -m 0700),
+        ~s(-s /usr/sbin/nologin -G locus "$name" \\\n         && install -d -m 0700)},
+       [{@dockerfile, :users, :release}]},
       {"the backends' pool a uid short",
-       {@compose, ~s("#{pool_spec(backends)}"),
-        ~s("#{backends.pool}:#{backends.uids.first}-#{backends.uids.last - 1}")},
-       [{@compose, :entrypoint, :backends}]},
+       {@dockerfile, ~s("#{pool_spec(backends)}"),
+        ~s("#{backends.pool}:#{backends.uids.first}-#{backends.uids.last - 1}:routed")},
+       [{@dockerfile, :entrypoint, :release}]},
       {"the runtime's pool not isolated",
-       {@compose, ~s("#{pool_spec(runtime)}"), ~s("#{runtime.pool}:#{first}-#{last}")},
-       [{@compose, :entrypoint, :runtime}]},
-      {"the image's entrypoint starting the release as root",
-       {@dockerfile, ~s("--client-user", "#{release.user}"), ~s("--client-user", "root")},
-       [{@dockerfile, :entrypoint, :builds}]},
-      {"the builds guard on the backends' network",
+       {@dockerfile, ~s("#{pool_spec(runtime)}"), ~s("#{runtime.pool}:#{first}-#{last}")},
+       [{@dockerfile, :entrypoint, :release}]},
+      {"the runtime role no longer private",
+       {@dockerfile, ~s("#{role_spec(runtime)}"),
+        ~s("#{role_spec(%{runtime | private: false})}")}, [{@dockerfile, :entrypoint, :release}]},
+      {"compose naming an entrypoint of its own",
+       {@compose, "    container_name: #{release.container}\n",
+        "    container_name: #{release.container}\n    entrypoint: [\"cyfr-locus\"]\n"},
+       [{@compose, :entrypoint, :release}]},
+      {"the guard on another network",
        {@compose,
-        "    networks:\n      #{builds.network}:\n        aliases:\n          - #{builds.service}\n",
-        "    networks:\n      #{backends.network}:\n        aliases:\n          - #{builds.service}\n"},
-       [{@compose, :network, :builds}]},
+        "    networks:\n      #{release.network}:\n        aliases:\n          - #{release.service}\n",
+        "    networks:\n      edge:\n        aliases:\n          - #{release.service}\n"},
+       [{@compose, :network, :release}]},
       {"the runtime's homes twice as large", {@compose, "size=#{runtime.home_size}", "size=512m"},
-       [{@compose, :tmpfs, :runtime}]},
+       [{@compose, :tmpfs, :release}]},
       {"the runtime's harness spelling its pool",
        {runtime_suite, ~s(POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]),
         "POOL_FIRST, POOL_LAST = #{first}, #{last}"}, [{runtime_suite, :suite, :runtime}]},
-      {"the builder overlay starting the release as nobody",
-       {builds_overlay, ~s("--client-user", "#{release.user}"), ~s("--client-user", "nobody")},
+      {"the builder overlay starting the builds role as another uid",
+       {builds_overlay, ~s("#{role_spec(builds)}"), ~s("builds:0:#{builds.port}:#{builds.pool}")},
        [{builds_overlay, :entrypoint, :builds}]},
       {"the runtime's channel asking another pool",
        {channel, ~s(@pool "#{runtime.pool}"), ~s(@pool "#{runtime.pool}s")},
        [{channel, :pool, :runtime}]},
       {"a table with a ninth runner",
        {release, with_role.(:runtime, &%{&1 | uids: first..(last + 1)//1})},
-       [{@compose, :entrypoint, :runtime}, {@dockerfile, :users, :runtime}]},
+       [
+         {@dockerfile, :entrypoint, :release},
+         {@dockerfile, :users, :runtime},
+         {backends_overlay, :entrypoint, :backends},
+         {builds_overlay, :entrypoint, :builds}
+       ]},
       {"a table moving the builds' port",
        {release, with_role.(:builds, &%{&1 | port: &1.port + 2})},
        [
          {@config, :port, :builds},
          {@compose, :port, :builds},
-         {@dockerfile, :port, :builds},
-         {builds_overlay, :port, :builds}
+         {@dockerfile, :entrypoint, :release},
+         {@health, :port, :builds},
+         {backends_overlay, :entrypoint, :backends},
+         {builds_overlay, :entrypoint, :builds},
+         {builds_overlay, :port, :builds},
+         {"tests/locus-backends-image/compose.roles.yml", :port, :backends}
        ]},
       {"the builds' harness reading no vector file",
        {builds_harness, ~s("fixtures", "locus_roles.json"), ~s("fixtures", "locus_builds.json")},
        [{builds_harness, :suite, :builds}]},
       # A site that is missing, or not in the form read, is drift too.
       {"the runtime's probe without its port",
-       {@compose, "http://localhost:#{runtime.port}#{status_route}",
-        "http://localhost#{status_route}"}, [{@compose, :port, :runtime}]},
-      {"the backends' probe on another address and port",
-       {@compose, "http://localhost:#{backends.port}/locus",
-        "http://127.0.0.1:#{backends.port + 2}/locus"}, [{@compose, :port, :backends}]},
+       {@health, "http://$address:#{runtime.port}#{status_route}",
+        "http://$address#{status_route}"}, [{@health, :port, :runtime}]},
+      {"the backends' probe whatever its key",
+       {@health, ~s([ -n "${#{backends.key}:-}" ]), ~s([ -n "${LOCUS_ANY_KEY:-}" ])},
+       [{@health, :port, :backends}]},
+      {"cyfr reaching the backends at another port",
+       {@compose, "http://#{release.service}:#{backends.port}}",
+        "http://#{release.service}:#{backends.port + 2}}"}, [{@compose, :port, :release}]},
+      {"the runtime told another port",
+       {@compose, "LOCUS_RUNTIME_PORT=#{runtime.port}", "LOCUS_RUNTIME_PORT=#{runtime.port + 2}"},
+       [{@compose, :port, :runtime}]},
       {"the runtime overlay publishing another port, as tcp",
        {runtime_overlay, ~s("127.0.0.1::#{runtime.port}"),
         ~s("127.0.0.1::#{runtime.port + 2}/tcp")}, [{runtime_overlay, :port, :runtime}]},
       {"the backends overlay publishing another port, as tcp",
        {backends_overlay, ~s("127.0.0.1::#{backends.port}"),
         ~s("127.0.0.1::#{backends.port + 2}/tcp")}, [{backends_overlay, :port, :backends}]},
-      {"the backends overlay starting the release as nobody, behind a comment",
-       {backends_overlay,
-        ~s("--client-user", "#{release.user}", "--", "#{release.bin}", "start"]),
-        ~s("--client-user", "nobody", "--", "#{release.bin}", "start"]  # the suite's user)},
+      {"the backends overlay starting the release elsewhere, behind a comment",
+       {backends_overlay, ~s("--", "#{release.bin}", "start"]),
+        ~s("--", "/tmp/locus", "start"]  # the suite's release)},
        [{backends_overlay, :entrypoint, :backends}]},
       {"the builds overlay without its entrypoint line",
        {builds_overlay, "\n    entrypoint: [\"cyfr-locus\"",
         "\n    # entrypoint: [\"cyfr-locus\""}, [{builds_overlay, :entrypoint, :builds}]},
-      {"the builds service on its own network, its guard idle",
-       {@compose,
-        "    network_mode: service:#{builds.guard}\n    depends_on:\n      #{builds.guard}:\n        condition: service_healthy\n",
-        "    networks:\n      - #{builds.network}\n"}, [{@compose, :network, :builds}]},
-      {"the backends guard without the service's alias",
-       {@compose,
-        "    networks:\n      #{backends.network}:\n        aliases:\n          - #{backends.service}\n",
-        "    networks:\n      - #{backends.network}\n"}, [{@compose, :network, :backends}]},
-      {"the backends overlay publishing the port on the island, not its guard",
+      {"the backends overlay publishing the port on Locus, not its guard",
        {backends_overlay,
-        "  #{backends.guard}:\n    image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}\n    container_name: !reset null\n    pull_policy: never\n    ports:\n      - \"127.0.0.1::#{backends.port}\"\n",
-        "  #{backends.guard}:\n    image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}\n    container_name: !reset null\n    pull_policy: never\n"},
+        "  #{release.guard}:\n    image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}\n    container_name: !reset null\n    pull_policy: never\n    ports:\n      - \"127.0.0.1::#{backends.port}\"\n",
+        "  #{release.guard}:\n    image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}\n    container_name: !reset null\n    pull_policy: never\n"},
        [{backends_overlay, :port, :backends}]},
-      {"the builds overlay leaving the island's network IPv4 alone",
-       {builds_overlay, "networks:\n  #{builds.network}:\n    enable_ipv6: true\n", ""},
+      {"the builds overlay leaving the locus network IPv4 alone",
+       {builds_overlay, "networks:\n  #{release.network}:\n    enable_ipv6: true\n", ""},
        [{builds_overlay, :service, :builds}]},
       {"the builds harness spelling its guard",
-       {builds_harness, ~s(GUARD = ROLE["guard"]), ~s(GUARD = "#{builds.guard}")},
+       {builds_harness, ~s(GUARD = RELEASE["guard"]), ~s(GUARD = "#{release.guard}")},
        [{builds_harness, :suite, :builds}]},
       {"the builds harness spelling a guard other than the table's",
-       {builds_harness, ~s(GUARD = ROLE["guard"]), ~s(GUARD = "wrong-guard")},
+       {builds_harness, ~s(GUARD = RELEASE["guard"]), ~s(GUARD = "wrong-guard")},
        [{builds_harness, :suite, :builds}]},
       {"a later literal overrides the suite guard lookup",
-       {builds_harness, ~s(GUARD = ROLE["guard"]),
-        ~s(GUARD = ROLE["guard"]) <> "\n" <> ~s(GUARD="wrong-guard")},
+       {builds_harness, ~s(GUARD = RELEASE["guard"]),
+        ~s(GUARD = RELEASE["guard"]) <> "\n" <> ~s(GUARD="wrong-guard")},
        [{builds_harness, :suite, :builds}]},
       {"the runtime keeper's remedy naming another pool",
        {runtime_keeper, "--pool #{runtime.pool}:", "--pool #{runtime.pool}s:"},
        [{runtime_keeper, :pool, :runtime}]},
       {"the builder's last overlay layering another service",
-       {builds_last_overlay, "\n  #{builds.service}:\n", "\n  #{backends.service}:\n"},
+       {builds_last_overlay, "\n  #{release.service}:\n", "\n  #{release.guard}:\n"},
        [{builds_last_overlay, :service, :builds}]},
       {"the documented backends port",
        {@config, "| 1..65535 | #{backends.port} |", "| 1..65535 | #{backends.port + 2} |"},
        [{@config, :port, :backends}]},
       {"the documented attach directory",
-       {@config, "| `#{release.run_dir}` |", "| `#{release.run_dir}/attach` |"},
+       {@config, "| the role's run folder (`KEEPER_RUN_DIR`) |", "| `#{release.run_dir}` |"},
        [{@config, :pool, :runtime}]},
       # An overlay is read whole, so no blank line, comment or spelling of
       # a key ends the reading early.
@@ -1691,17 +1517,17 @@ defmodule Cyfr.StackShapeTest do
        {backends_overlay, ~s(      - "127.0.0.1::#{backends.port}"\n),
         ~s(      - "127.0.0.1::#{backends.port}"\n    # and on every interface\n      - "#{backends.port}"\n)},
        [{backends_overlay, :port, :backends}]},
-      {"the runtime overlay naming a routed entrypoint, its key quoted",
-       {runtime_overlay, "    pull_policy: never\n",
-        ~s(    pull_policy: never\n    "entrypoint": ["cyfr-locus", "serve", "--pool", "#{runtime.pool}:#{first}-#{last}"]\n)},
+      {"the runtime overlay naming an entrypoint, its key quoted",
+       {runtime_overlay, "    pull_policy: never\n    environment:\n",
+        ~s(    pull_policy: never\n    "entrypoint": ["cyfr-locus", "serve", "--pool", "#{runtime.pool}:#{first}-#{last}"]\n    environment:\n)},
        [{runtime_overlay, :entrypoint, :runtime}]},
-      {"the runtime overlay naming a routed entrypoint, its key spaced",
-       {runtime_overlay, "    pull_policy: never\n",
-        ~s(    pull_policy: never\n    entrypoint : ["cyfr-locus", "serve", "--pool", "#{runtime.pool}:#{first}-#{last}"]\n)},
+      {"the runtime overlay naming an entrypoint, its key spaced",
+       {runtime_overlay, "    pull_policy: never\n    environment:\n",
+        ~s(    pull_policy: never\n    entrypoint : ["cyfr-locus", "serve", "--pool", "#{runtime.pool}:#{first}-#{last}"]\n    environment:\n)},
        [{runtime_overlay, :entrypoint, :runtime}]},
       {"the builder's last overlay layering a second service after a comment",
        {builds_last_overlay, "      - no-new-privileges:true\n",
-        "      - no-new-privileges:true\n# and the backends service too\n  #{backends.service}:\n    security_opt: !override\n      - no-new-privileges:true\n"},
+        "      - no-new-privileges:true\n# and the guard too\n  #{release.guard}:\n    security_opt: !override\n      - no-new-privileges:true\n"},
        [{builds_last_overlay, :service, :builds}]},
       # An overlay compose reads otherwise than its parse is no overlay:
       # every reading of it is drift.
@@ -1709,31 +1535,31 @@ defmodule Cyfr.StackShapeTest do
        {runtime_overlay, "    ports:\n", "    ports: !reset\n"},
        unread.(runtime_overlay, :runtime)},
       {"the runtime overlay resetting an entrypoint it names",
-       {runtime_overlay, "    pull_policy: never\n",
-        ~s(    pull_policy: never\n    entrypoint: !reset #{Jason.encode!(keeper_argv(release, runtime))}\n)},
+       {runtime_overlay, "    pull_policy: never\n    environment:\n",
+        ~s(    pull_policy: never\n    entrypoint: !reset #{Jason.encode!(keeper_argv(release, roles))}\n    environment:\n)},
        unread.(runtime_overlay, :runtime)},
       {"the runtime overlay replacing compose's service whole",
-       {runtime_overlay, "  #{runtime.service}:\n", "  #{runtime.service}: !override\n"},
+       {runtime_overlay, "  #{release.service}:\n", "  #{release.service}: !override\n"},
        unread.(runtime_overlay, :runtime)},
-      {"the runtime overlay merging a routed entrypoint",
-       {runtime_overlay, "services:\n  #{runtime.service}:\n",
-        "x-unisolated: &unisolated\n  entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\nservices:\n  #{runtime.service}:\n    <<: *unisolated\n"},
+      {"the runtime overlay merging an entrypoint",
+       {runtime_overlay, "services:\n  #{release.service}:\n",
+        "x-unisolated: &unisolated\n  entrypoint: [\"cyfr-locus\"]\nservices:\n  #{release.service}:\n    <<: *unisolated\n"},
        unread.(runtime_overlay, :runtime)},
-      {"the runtime overlay behind a document naming a routed entrypoint",
-       {runtime_overlay, "services:\n  #{runtime.service}:\n",
-        "services:\n  #{runtime.service}:\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\n---\nservices:\n  #{runtime.service}:\n"},
+      {"the runtime overlay behind a document naming an entrypoint",
+       {runtime_overlay, "services:\n  #{release.service}:\n",
+        "services:\n  #{release.service}:\n    entrypoint: [\"cyfr-locus\"]\n---\nservices:\n  #{release.service}:\n"},
        unread.(runtime_overlay, :runtime)},
       {"the runtime overlay extending a service from another file",
-       {runtime_overlay, "    pull_policy: never\n",
-        "    pull_policy: never\n    extends:\n      file: unisolated.yml\n      service: #{runtime.service}\n"},
+       {runtime_overlay, "    pull_policy: never\n    environment:\n",
+        "    pull_policy: never\n    extends:\n      file: unisolated.yml\n      service: #{release.service}\n    environment:\n"},
        [{runtime_overlay, :service, :runtime}]},
       {"the runtime overlay including another file",
-       {runtime_overlay, "services:\n  #{runtime.service}:\n",
-        "include:\n  - sidecar.yml\nservices:\n  #{runtime.service}:\n"},
+       {runtime_overlay, "services:\n  #{release.service}:\n",
+        "include:\n  - sidecar.yml\nservices:\n  #{release.service}:\n"},
        unread.(runtime_overlay, :runtime)},
-      {"the runtime's last overlay naming a routed entrypoint",
+      {"the runtime's last overlay naming an entrypoint",
        {runtime_last_overlay, "      - systempaths=unconfined\n",
-        "      - systempaths=unconfined\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | reach: "routed"}))}\n"},
+        "      - systempaths=unconfined\n    entrypoint: [\"cyfr-locus\"]\n"},
        [{runtime_last_overlay, :entrypoint, :runtime}]},
       # Every value an overlay gives is read: one the test does not expect
       # is drift, whatever key carries it.
@@ -1745,32 +1571,35 @@ defmodule Cyfr.StackShapeTest do
        {runtime_overlay, release_grace,
         release_grace <> "      - LOCUS_RUNTIME_ATTACH_DIR=/tmp/attach\n"},
        [{runtime_overlay, :service, :runtime}]},
-      {"the runtime overlay putting another cyfr-locus first on the path",
-       {runtime_overlay, release_grace,
-        release_grace <>
-          "      - PATH=/canary:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n    volumes:\n      - ./bin:/canary:ro\n"},
+      {"the runtime overlay giving the runtime the builds key",
+       {runtime_overlay, release_grace, release_grace <> "      - LOCUS_BUILDS_KEY=${KEY:-}\n"},
        [{runtime_overlay, :service, :runtime}]},
       {"the runtime overlay mounting another program over the release",
-       {runtime_overlay, "    pull_policy: never\n",
-        "    pull_policy: never\n    volumes:\n      - ./bin/locus:#{release.bin}:ro\n"},
+       {runtime_overlay, "    pull_policy: never\n    environment:\n",
+        "    pull_policy: never\n    volumes:\n      - ./bin/locus:#{release.bin}:ro\n    environment:\n"},
        [{runtime_overlay, :service, :runtime}]},
       {"the runtime's last overlay unconfining seccomp",
        {runtime_last_overlay, "      - seccomp=./keeper.seccomp.json\n",
         "      - seccomp=./keeper.seccomp.json\n      - seccomp=unconfined\n      - systempaths=unconfined\n"},
        [{runtime_last_overlay, :service, :runtime}]},
-      {"the runtime overlay naming its container after the builds'",
-       {runtime_overlay, "    container_name: !reset null\n",
-        "    container_name: #{builds.container}\n"}, [{runtime_overlay, :service, :runtime}]},
+      {"the runtime overlay naming its container after the shipped one",
+       {runtime_overlay,
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: #{release.container}\n"},
+       [{runtime_overlay, :service, :runtime}]},
       {"the runtime overlay keeping the deployed container name through an untagged null",
-       {runtime_overlay, "    container_name: !reset null\n", "    container_name: null\n"},
+       {runtime_overlay,
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: null\n"},
        [{runtime_overlay, :service, :runtime}]},
       {"the runtime overlay naming its container what stands in for the reset",
-       {runtime_overlay, "    container_name: !reset null\n",
-        ~s(    container_name: "!reset null"\n)}, unread.(runtime_overlay, :runtime)},
-      {"the builds service disabling the image's probe",
-       {@compose, "\n  #{builds.service}:\n",
-        "\n  #{builds.service}:\n    healthcheck:\n      disable: true\n"},
-       [{@compose, :port, :builds}]}
+       {runtime_overlay,
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
+        ~s(  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: "!reset null"\n)},
+       unread.(runtime_overlay, :runtime)},
+      {"the guard under another container name",
+       {@compose, "    container_name: #{release.guard_container}\n",
+        "    container_name: #{release.container}-guard2\n"}, [{@compose, :service, :release}]}
     ]
 
     # A text plant replaces one exact text, found once; one that is not
@@ -1800,7 +1629,7 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  test "the builds service's example names every setting of the locus release, and none of the control plane's" do
+  test "the release's example names every builds setting, and none of the control plane's" do
     example = read!(".env.locus.example")
 
     # The release's settings are the rows of `Locus.Config`'s table.
@@ -1816,9 +1645,9 @@ defmodule Cyfr.StackShapeTest do
       assert example =~ ~r/^# #{knob}=/m, "#{knob} is missing from .env.locus.example"
     end
 
-    # The key reaches the service from the project .env through compose,
-    # and the container's limits are compose's to read there: neither is
-    # set in this file, and the example says where each is.
+    # The key reaches the role from the project .env through compose, and
+    # the role's bounds are compose's to read there: neither is set in this
+    # file, and the example says where each is.
     assert example =~ "CYFR_LOCUS_BUILDS_KEY"
     assert example =~ "LOCUS_BUILDS_MEMORY_LIMIT"
 
@@ -1934,7 +1763,7 @@ defmodule Cyfr.StackShapeTest do
   # alone: an `environment:` entry here would be a second, unchecked
   # source of the home's access settings.
   @head_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_PORT CYFR_PUBLIC_URL CYFR_TAILNET_NODE_ID
-                CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL)
+                CADDY_ACME_EMAIL)
 
   test "cyfr asserts its loopback listener's address, and takes its access settings from .env alone" do
     cyfr = compose!()["services"]["cyfr"]
@@ -2012,28 +1841,13 @@ defmodule Cyfr.StackShapeTest do
 
     for {profiles, expected} <- [
           {[], loopback},
-          {["locus-builds"], loopback},
           {["tailnet"], loopback ++ kiosk},
-          {["tailnet", "locus-builds"], loopback ++ kiosk},
-          {["public"], loopback ++ caddy},
-          {["public", "locus-builds"], loopback ++ caddy}
+          {["public"], loopback ++ caddy}
         ] do
       assert Enum.sort(published(parsed, profiles)) == Enum.sort(expected), inspect(profiles)
     end
 
     assert parsed["services"]["caddy"]["profiles"] == ["public"]
-  end
-
-  # The backends service refuses a health probe at any other version of
-  # its wire, so a probe left at an older one keeps the service unhealthy
-  # and the stack from starting.
-  test "the backends service's healthcheck posts the wire's own health body" do
-    backends = LocusRoles.role!(:backends)
-    [_shell, probe] = compose!()["services"][backends.service]["healthcheck"]["test"]
-
-    assert probe =~
-             "-d '#{Prima.LocusBackends.health_body()}' " <>
-               "http://localhost:#{backends.port}/locus/v1/backends/health"
   end
 
   # A probe that runs the binary (`caddy version`) passes in a container
@@ -2197,23 +2011,23 @@ defmodule Cyfr.StackShapeTest do
       assert env =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.example"
     end
 
-    # Compose sets five variables in the runtime service's environment,
-    # over anything .env.locus sets: the three it interpolates from the
-    # project .env are documented in .env.example above, and the two it
-    # fixes in integration-guide.md's section on running a worker outside
-    # Compose. .env.locus.example documents none of them, and says where
-    # they are.
-    runtime = LocusRoles.role!(:runtime)
-
+    # Compose sets the runtime's variables in Locus's environment, over
+    # anything .env.locus sets: the three it interpolates from the project
+    # .env are documented in .env.example above, and the two it fixes in
+    # integration-guide.md's section on running a worker outside Compose.
+    # .env.locus.example documents none of them, and says where they are.
     environment =
-      list_entries(service_block(read!("docker-compose.yml"), runtime.service), "environment")
+      for entry <- compose!()["services"][LocusRoles.release().service]["environment"],
+          String.starts_with?(entry, "LOCUS_RUNTIME_"),
+          not String.contains?(entry, "_LIMIT="),
+          do: entry
 
     assert environment == [
-             "LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}",
              "LOCUS_RUNTIME_KEY=${LOCUS_RUNTIME_KEY:-}",
+             "LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}",
              "LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}",
              "LOCUS_RUNTIME_BIND=0.0.0.0",
-             "LOCUS_RUNTIME_PORT=#{runtime.port}"
+             "LOCUS_RUNTIME_PORT=#{LocusRoles.role!(:runtime).port}"
            ]
 
     set = for entry <- environment, do: entry |> String.split("=", parts: 2) |> hd()
@@ -2231,7 +2045,7 @@ defmodule Cyfr.StackShapeTest do
     refute example =~ ~r/CYFR_LOCUS_RUNTIME_ROOT|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end
 
-  test "the compose file's profiles are public, tailnet and locus-builds" do
+  test "the compose file's profiles are public and tailnet" do
     services = YamlElixir.read_from_string!(read!("docker-compose.yml"))
 
     profiles =
@@ -2240,6 +2054,6 @@ defmodule Cyfr.StackShapeTest do
           uniq: true,
           do: profile
 
-    assert Enum.sort(profiles) == ["locus-builds", "public", "tailnet"]
+    assert Enum.sort(profiles) == ["public", "tailnet"]
   end
 end

@@ -29,14 +29,22 @@
 // leaves the counters of a kill at the bound. So no group above a mark may
 // set memory.oom.group.
 //
+// A role's group, `role-<name>` under the namespace root, holds the role's
+// process and its relays in its leaf `service`, and its spawns' marks
+// beside it. It carries the role's memory bound, the same bound of swap, as
+// Docker sets beside a container's memory limit, and its CPU bound, and no
+// memory.oom.group, so a kill for the role's bound is counted in the mark
+// as a limit above the spawn's own.
+//
 // Groups can be made only where the keeper's own cgroup is the root of a
 // cgroup namespace mounted writable, as a container started with Docker's
 // `writable-cgroups=true` security option has it; Delegate reports anything
 // else as the reason bounds are unavailable, and the keeper then refuses
-// spawns. cgroup v2 lets a group hold processes or enable controllers for
+// its boot. cgroup v2 lets a group hold processes or enable controllers for
 // its children, not both, so Delegate first moves every
 // process of the namespace root, the keeper among them, into the leaf
-// group `keeper`; the client and the keeper's other helpers stay there.
+// group `keeper`, which has no bound; the keeper's retirement and home
+// helpers stay there.
 //
 // Where the host mounts cgroup2 with `nsdelegate`, as systemd does, the
 // kernel refuses a write from inside the namespace to the root's own limits,
@@ -52,8 +60,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -75,6 +85,9 @@ const (
 	drainInterval = 50 * time.Millisecond
 	// boundLeaf is the bound inside a spawn's mark.
 	boundLeaf = "bound"
+	// serviceLeaf is the leaf of a role's group that holds its process and
+	// its relays.
+	serviceLeaf = "service"
 	// settleAttempts and settleInterval bound the wait for the group kill's
 	// count, which the kernel writes just after it signals the first victim.
 	settleAttempts = 20
@@ -90,6 +103,8 @@ const PollInterval = removeInterval
 
 var namePattern = regexp.MustCompile(`^keeper-([1-9][0-9]{0,9}|s-[0-9a-f]{32})$`)
 
+var roleNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
+
 // pause waits between two passes over the namespace root and between two
 // readings of a kill whose count has not settled.
 var pause = time.Sleep
@@ -104,13 +119,46 @@ func SpawnName(id string) string { return "keeper-s-" + id }
 // ValidName reports whether name is a spawn's group, by uid or by spawn id.
 func ValidName(name string) bool { return namePattern.MatchString(name) }
 
-// Manager makes groups under the root of the keeper's cgroup namespace.
-type Manager struct {
-	root string
+// ValidRoleName reports whether name is a role's: a lowercase letter, then
+// at most 15 lowercase letters and digits.
+func ValidRoleName(name string) bool { return roleNamePattern.MatchString(name) }
+
+// RoleName is the group of the role name.
+func RoleName(name string) string { return "role-" + name }
+
+// RoleLeaf is the role name's leaf as Own reads it of a process in it.
+func RoleLeaf(name string) string { return "/" + RoleName(name) + "/" + serviceLeaf }
+
+// SplitPath splits a spawn's group as Own reads it, `/<name>` or
+// `/role-<role>/<name>`, into its role, "" for none, and its name, which is
+// a spawn's (ValidName). ok is false for any other path.
+func SplitPath(p string) (role, name string, ok bool) {
+	rest, abs := strings.CutPrefix(p, "/")
+	if !abs {
+		return "", "", false
+	}
+	dir, name, nested := strings.Cut(rest, "/")
+	if !nested {
+		return "", dir, ValidName(dir)
+	}
+	role, isRole := strings.CutPrefix(dir, "role-")
+	if !isRole || !ValidRoleName(role) || !ValidName(name) {
+		return "", "", false
+	}
+	return role, name, true
 }
 
-// Group is one spawn's group: its mark and, inside it, its bound.
+// Manager makes groups under the root of the keeper's cgroup namespace, or
+// under a role's group, whose path from that root is prefix.
+type Manager struct {
+	root   string
+	prefix string
+}
+
+// Group is one spawn's group: its mark and, inside it, its bound; or a
+// role's leaf, which has no mark.
 type Group struct {
+	// name is the group's path from the namespace root.
 	name string
 	mark string
 	// path is the bound's: the spawn's processes, limits and use.
@@ -263,14 +311,16 @@ func Own(self []byte) (string, error) {
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "0::/") {
 		return "", errors.New("the process is not in a cgroup v2 hierarchy alone")
 	}
-	in := strings.TrimPrefix(lines[0], "0::/")
-	if name, ok := strings.CutSuffix(in, "/"+boundLeaf); ok && ValidName(name) {
-		return "/" + name, nil
+	in := strings.TrimPrefix(lines[0], "0::")
+	if mark, ok := strings.CutSuffix(in, "/"+boundLeaf); ok {
+		if _, _, spawn := SplitPath(mark); spawn {
+			return mark, nil
+		}
 	}
-	if ValidName(in) {
+	if _, _, spawn := SplitPath(in); spawn {
 		return "", fmt.Errorf("the process is in the mark of %s, outside its bound", in)
 	}
-	return "/" + in, nil
+	return in, nil
 }
 
 // Create makes the group name: its mark, and inside it the bound with the
@@ -282,7 +332,7 @@ func (m *Manager) Create(name string, memoryBytes, cpuQuota uint64) (*Group, err
 		return nil, fmt.Errorf("group name %q", name)
 	}
 	mark := filepath.Join(m.root, name)
-	g := &Group{name: name, mark: mark, path: filepath.Join(mark, boundLeaf)}
+	g := &Group{name: path.Join(m.prefix, name), mark: mark, path: filepath.Join(mark, boundLeaf)}
 	for _, dir := range []string{g.path, g.mark} {
 		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("removing the group an earlier spawn left: %w", err)
@@ -294,6 +344,75 @@ func (m *Manager) Create(name string, memoryBytes, cpuQuota uint64) (*Group, err
 		return nil, err
 	}
 	return g, nil
+}
+
+// Limits are a role's bounds, each zero for none: its memory, in bytes,
+// which bounds its swap alike, and its CPU quota, in microseconds of every
+// CPUPeriod.
+type Limits struct {
+	MemoryBytes uint64
+	CPUQuota    uint64
+}
+
+// Role makes the group of the role name with its limits, and in it the
+// role's leaf, and answers a Manager of the role's spawns' groups, which it
+// makes inside the role's group, and the leaf. A group of that name left
+// by an earlier keeper is removed first, empty as it must be.
+func (m *Manager) Role(name string, l Limits) (*Manager, *Group, error) {
+	if !ValidRoleName(name) || m.prefix != "" {
+		return nil, nil, fmt.Errorf("role group %q", name)
+	}
+	dir := filepath.Join(m.root, RoleName(name))
+	leaf := &Group{name: RoleName(name) + "/" + serviceLeaf, path: filepath.Join(dir, serviceLeaf)}
+	for _, d := range []string{leaf.path, dir} {
+		if err := os.Remove(d); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, fmt.Errorf("removing the group an earlier keeper left: %w", err)
+		}
+	}
+	type setting struct{ file, value string }
+	settings := []setting{{"cgroup.subtree_control", "+memory +cpu"}}
+	if l.MemoryBytes > 0 {
+		bytes := strconv.FormatUint(l.MemoryBytes, 10)
+		settings = append(settings, setting{"memory.max", bytes}, setting{"memory.swap.max", bytes})
+	}
+	if l.CPUQuota > 0 {
+		settings = append(settings, setting{"cpu.max", strconv.FormatUint(l.CPUQuota, 10) + " " + strconv.Itoa(CPUPeriod)})
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		return nil, nil, err
+	}
+	for _, s := range settings {
+		if err := os.WriteFile(filepath.Join(dir, s.file), []byte(s.value), 0o644); err != nil {
+			_ = os.Remove(dir)
+			return nil, nil, fmt.Errorf("%s of role %s: %w", s.file, name, err)
+		}
+	}
+	if err := os.Mkdir(leaf.path, 0o755); err != nil {
+		_ = os.Remove(dir)
+		return nil, nil, err
+	}
+	return &Manager{root: dir, prefix: RoleName(name)}, leaf, nil
+}
+
+// Dir is the directory the manager makes its groups in.
+func (m *Manager) Dir() string { return m.root }
+
+// Kill ends every process of the manager's group and of every group in it
+// at once, by the kernel's group kill (cgroup.kill), and reports whether
+// the group holds no process within the bound (cgroup.events).
+func (m *Manager) Kill() bool {
+	empty := func() bool {
+		events, err := os.ReadFile(filepath.Join(m.root, "cgroup.events"))
+		return err == nil && slices.Contains(strings.Split(string(events), "\n"), "populated 0")
+	}
+	for attempt := 0; attempt < removeAttempts; attempt++ {
+		if empty() {
+			return true
+		}
+		_ = os.WriteFile(filepath.Join(m.root, "cgroup.kill"), []byte("1"), 0o644)
+		time.Sleep(removeInterval)
+	}
+	return empty()
 }
 
 func (g *Group) make(memoryBytes, cpuQuota uint64) error {
@@ -538,6 +657,9 @@ func (g *Group) KillBy(deadline time.Time) bool {
 // are gone, waiting briefly for the last of them to be reaped.
 func (g *Group) Remove() error {
 	for _, dir := range []string{g.path, g.mark} {
+		if dir == "" {
+			continue
+		}
 		if err := removeEmpty(dir); err != nil {
 			return err
 		}

@@ -3,13 +3,14 @@
 # Copyright 2026 CYFR Works Inc.
 """The backends service under docker compose, and a control plane that signs as CYFR does.
 
-A Stack runs docker-compose.yml's `locus-backends` service behind its
-egress guard, layered with compose.locus-backends.yml, which adds only the
+A Stack runs docker-compose.yml's `locus` service behind its egress guard
+with the backends key alone, layered with compose.backends.yml, which adds
+only the
 image under test, the probe program (probe-backend.mjs, an MCP server), the
 residue canary, the pool's uid range, the kept homes' root and uid range
 (the keeper's `--kept-homes`) and the per-program memory bound, on the guard
 a loopback port and a tools directory first on its PATH, a stand-in for
-cyfr and IPv6 on the backends network, and lets compose name the containers
+cyfr and IPv6 on the locus network, and lets compose name the containers
 after the project. Everything else (the backends key from
 CYFR_LOCUS_BACKENDS_KEY, capabilities, security options, read-only root,
 `ipc: none`, tmpfs mounts, the `homes` volume, limits, the network, the
@@ -85,20 +86,23 @@ ROLE = next((role for role in _TABLE["roles"] if role["name"] == "backends"), No
 if ROLE is None:
     sys.exit("FAIL: tests/fixtures/locus_roles.json names no backends role")
 
-SERVICE = ROLE["service"]
-GUARD = ROLE["guard"]
-NETWORK = ROLE["network"]
+SERVICE = RELEASE["service"]
+GUARD = RELEASE["guard"]
+NETWORK = RELEASE["network"]
 PORT = ROLE["port"]
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
 ENDPOINT_ADDRESS = RELEASE["endpoint_address"]
-# The stand-in for cyfr the overlay starts, under cyfr's name on the
-# backends network and at cyfr's fixed endpoint address.
+HOST_API_ADDRESS = RELEASE["host_api_address"]
+# The stand-in for cyfr the overlay starts, under cyfr's name and at cyfr's
+# fixed address on the locus network, and at cyfr's fixed endpoint address.
 STAND_IN = "cyfr-stand-in"
-RELEASE_UID = RELEASE["uid"]
-RELEASE_USER = RELEASE["user"]
+# The backends role's process: its user and uid, the release it runs, its
+# run folder and its spawns' homes' root.
+RELEASE_UID = ROLE["uid"]
+RELEASE_USER = ROLE["user"]
 RELEASE_BIN = RELEASE["bin"]
-HOME_ROOT = RELEASE["home_root"]
-RUN_DIR = RELEASE["run_dir"]
+HOME_ROOT = ROLE["home_root"]
+RUN_DIR = ROLE["run_dir"]
 PROBE = "node /probe/probe-backend.mjs"
 # cyfr-locus's effective, permitted and bounding sets: SETUID, SETGID and
 # KILL alone.
@@ -113,8 +117,8 @@ MCP_LEGACY_VERSION = "2025-03-26"
 # the shipped compose entrypoint names and the overlay repeats. A kept
 # home's uid is drawn from this range, outside the pools and the image's
 # users.
-KEPT_ROOT = "/var/lib/locus/kept"
-KEPT_FIRST, KEPT_LAST = 40001, 49999
+KEPT_ROOT = ROLE["kept_root"]
+KEPT_FIRST, KEPT_LAST = ROLE["kept_first_uid"], ROLE["kept_last_uid"]
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_backends.json"), encoding="utf-8") as _vectors:
     WIRE = json.load(_vectors)
@@ -370,7 +374,7 @@ def open_sealed(sealing_key, owner, boot, sealed):
 
 
 def program_wire(program):
-    """A program as a sync defines it, from {name, command, env} and the optional home, bounds and hosts.
+    """A program as a sync defines it, from {name, command, env} and the optional home, bounds, hosts and packs.
 
     An optional member with no value is absent, never null: the wire refuses a present null.
     """
@@ -383,6 +387,8 @@ def program_wire(program):
     for name in ["memory_bytes", "home_max_bytes", "hosts"]:
         if program.get(name) is not None:
             wire[name] = program[name]
+    if program.get("packs"):
+        wire["packs"] = True
     return wire
 
 
@@ -404,7 +410,7 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 4)
+    compare("version", VERSION, 5)
     compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
@@ -416,14 +422,15 @@ def check_vectors():
         compare(f"{kind}.canonical", canonical("control", values, body), vector["canonical"])
         compare(f"{kind}.header", control_header(control_key(key), fields, body), vector["header"])
 
-    for kind in ["open", "send", "recv", "close", "open_terminal", "input", "output", "resize"]:
+    for kind in ["open", "send", "recv", "close", "open_terminal", "input", "output", "resize", "open_packs",
+                 "packs_hold", "packs_put"]:
         vector = WIRE[kind]
         body = vector["body"].encode()
         fields = vector["fields"]
         signing = owner_key(key, fields["athanor"], fields["server"], fields["generation"], fields["epoch"])
         message = json.loads(vector["body"])
         compare(f"{kind}.body", wire_json(message).decode(), vector["body"])
-        for answer in ["answer", "answer_ended"]:
+        for answer in ["answer", "answer_ended", "answer_held"]:
             if answer in vector:
                 compare(f"{kind}.{answer}", wire_json(json.loads(vector[answer])).decode(), vector[answer])
         compare(f"{kind}.owner", [message["owner"], message["e"]],
@@ -439,6 +446,12 @@ def check_vectors():
     compare("open_terminal.size", [terminal["mode"], 1 <= terminal["rows"] <= BOUNDS["max_pty_size"],
                                    1 <= terminal["cols"] <= BOUNDS["max_pty_size"]], ["terminal", True, True])
     compare("open.size", [name for name in ["rows", "cols"] if name in json.loads(WIRE["open"]["body"])], [])
+    put = json.loads(WIRE["packs_put"]["body"])
+    compare("packs_put.part", [unb64(put["part"]), put["seq"], put["last"]], [b"hello", 0, True])
+    compare("packs_put.members", sorted(put), ["digest", "e", "key", "last", "lifetime", "mode", "owner", "part",
+                                               "program", "seq", "type", "version"])
+    compare("open_packs.packs", json.loads(WIRE["open_packs"]["body"])["packs"],
+            json.loads(WIRE["packs_hold"]["body"])["digest"])
     resized = json.loads(WIRE["resize"]["body"])
     compare("resize.size", [1 <= resized["rows"] <= BOUNDS["max_pty_size"],
                             1 <= resized["cols"] <= BOUNDS["max_pty_size"]], [True, True])
@@ -658,17 +671,43 @@ class Controller:
         return self._opened[session]["lifetime"]
 
     def open(self, owner, program, key="k", mode="run", argv=None, home_id=None, rows=None, cols=None, lifetime=None,
-             **options):
+             packs=None, **options):
         """Opens the session of a lifetime of `key` and `mode`, a new one unless given: (status, answer).
 
         A `terminal` open names its terminal's `rows` and `cols`; a run open names neither.
         """
         message = {"type": "open", "program": program, "key": key, "mode": mode, "argv": list(argv or [])}
-        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols), ("lifetime", lifetime)]:
+        for name, value in [("home_id", home_id), ("rows", rows), ("cols", cols), ("lifetime", lifetime),
+                            ("packs", packs)]:
             if value is not None:
                 message[name] = value
         status, answer, _boot, _request = self.session(owner, message, **options)
         return status, answer
+
+    def packs_hold(self, owner, program, lifetime, digest, key="k", mode="run", home_id=None, **options):
+        """Asks the keeper to hold the owner's person's pack generation of `digest` for `lifetime`: (status, answer)."""
+        message = {"type": "packs_hold", "program": program, "key": key, "mode": mode, "lifetime": lifetime,
+                   "digest": digest}
+        if home_id is not None:
+            message["home_id"] = home_id
+        status, answer, _boot, _request = self.session(owner, message, **options)
+        return status, answer
+
+    def packs_put(self, owner, program, lifetime, digest, stream, key="k", mode="run", home_id=None, **options):
+        """Puts the generation's `stream` in parts of the wire's bound, each awaited: every (status, answer)."""
+        size = BOUNDS["max_pack_part_bytes"]
+        parts = [stream[i:i + size] for i in range(0, len(stream), size)] or [b""]
+        answers = []
+        for seq, part in enumerate(parts):
+            message = {"type": "packs_put", "program": program, "key": key, "mode": mode, "lifetime": lifetime,
+                       "digest": digest, "seq": seq, "last": seq == len(parts) - 1, "part": b64(part)}
+            if home_id is not None:
+                message["home_id"] = home_id
+            status, answer, _boot, _request = self.session(owner, message, **options)
+            answers.append((status, answer))
+            if status != 200:
+                break
+        return answers
 
     def send(self, owner, session, lines, **options):
         status, answer, _boot, _request = self.session(owner, {"type": "send", "session": session,
@@ -790,9 +829,11 @@ class McpClient:
         self.next_id = 0
         self.initializations = 0
         self.resumed = None
+        # What the next open names beside its key: a lifetime held before it, its pack generation.
+        self.opening = {}
 
     def _open(self):
-        status, answer = self.c.open(self.owner, self.program, key=self.key, home_id=self.home_id)
+        status, answer = self.c.open(self.owner, self.program, key=self.key, home_id=self.home_id, **self.opening)
         if status != 200:
             return status, answer
         self.session, self.after, self.resumed = answer["session"], 0, answer["resumed"]
@@ -984,6 +1025,7 @@ class Stack(imagesuite.Stack):
             "CANARY_DIR": self.canary_dir,
             "GUARD_TOOLS_DIR": self.guard_tools_dir,
             "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
+            "HOST_API_ADDRESS": HOST_API_ADDRESS,
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
             "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
@@ -996,7 +1038,7 @@ class Stack(imagesuite.Stack):
         }
 
     def compose(self, *args, check=True, env=None):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-backends.yml")]
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.backends.yml")]
         if self.names:
             files.append(os.path.join(HERE, "compose.names.yml"))
         return run(
@@ -1061,7 +1103,7 @@ class Stack(imagesuite.Stack):
         return run("docker", "run", "--rm", "--name", f"{self.project}-beside-{os.getpid()}", "--network", f"{self.project}_{network}",
                    "--entrypoint", command[0], self.image, *command[1:], check=False, timeout=60)
 
-    def alone(self, suffix, publish=False):
+    def alone(self, suffix, publish=False, env=None):
         """A second instance of the shipped service, started as the project's `suffix` (PROJECT-SUFFIX) behind a guard of its own on the island's network.
 
         `compose run` would put it in the guard's namespace, beside the
@@ -1073,7 +1115,8 @@ class Stack(imagesuite.Stack):
         spells none of it. Its guard serves its keeper the control on a
         volume of their own: every program's session runs in a routed
         space, which no keeper starts without its guard. With `publish`,
-        its port is published on the loopback, read with `docker port`.
+        its port is published on the loopback, read with `docker port`;
+        `env` sets variables over the running service's.
         `alone_down(suffix)` removes both and their volumes.
         """
         guard_name = f"{self.project}-{suffix}-guard"
@@ -1088,10 +1131,10 @@ class Stack(imagesuite.Stack):
                    f"{guard_name} to turn healthy", timeout_s=60)
         info = self.inspect(self.container)
         args = ["docker", "run", "--detach", "--name", f"{self.project}-{suffix}", "--network", f"container:{guard_name}"]
-        args += self.copied(info, control=True, guard_name=guard_name)
+        args += self.copied(info, control=True, guard_name=guard_name, env=env)
         run(*args)
 
-    def copied(self, info, control, guard_name=None):
+    def copied(self, info, control, guard_name=None, env=None):
         """The `docker run` arguments that give a container `info`'s configuration, its control volume shared with
         `guard_name`'s where `control` is set, and a fresh volume of its own for every other volume mount."""
         host, config = info["HostConfig"], info["Config"]
@@ -1144,6 +1187,8 @@ class Stack(imagesuite.Stack):
             args += ["--health-cmd", " ".join(test[1:]), "--health-interval", "1s"]
         for entry in config.get("Env") or []:
             args += ["--env", entry]
+        for name, value in (env or {}).items():
+            args += ["--env", f"{name}={value}"]
         entrypoint = list(config.get("Entrypoint") or [])
         args += ["--entrypoint", entrypoint[0], self.image, *entrypoint[1:], *(config.get("Cmd") or [])]
         return args

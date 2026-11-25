@@ -115,8 +115,10 @@ defmodule Locus.BuilderService do
   - **The connection's process killed** (the listener stopping, a crash):
     the link ends the build process, whose executor's own watch ends the
     build (the keeper's client releases a dead caller's spawn, the direct
-    launcher's janitor kills the group), and the slots' monitor gives the
-    slot back.
+    launcher's janitor kills the group). The slot names the build slots as
+    the run's heir (`Prima.Slots`, "A holding that names an heir"), so it
+    goes back when the executor says nothing of the run is left, or when
+    its fence says no run of it was taken, and never on the death alone.
   - **cyfr-locus lost**: the keeper's client answers every run in flight
     and stops; each build's terminal line is `unavailable`, its slot is
     released, and the listener, which depends on the keeper's client, stops
@@ -201,10 +203,12 @@ defmodule Locus.BuilderService do
   end
 
   defp placed_build(conn, request, place, time) do
+    heir = {Process.whereis(@slots), {@slots, make_ref()}}
+
     with {:ok, plan} <- prepared(conn, request),
-         {:ok, slot} <- slot(conn, request) do
+         {:ok, slot} <- slot(conn, request, heir) do
       try do
-        stream(conn, plan, place, time)
+        stream(conn, plan, place, time, heir)
       after
         Prima.Slots.release(@slots, slot)
       end
@@ -313,8 +317,8 @@ defmodule Locus.BuilderService do
 
   # A build never waits for a slot, so a slot server that does not answer
   # refuses within the call's grace instead of holding the request open.
-  defp slot(conn, %{athanor_id: athanor_id}) do
-    case Prima.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0) do
+  defp slot(conn, %{athanor_id: athanor_id}, {_slots, tag}) do
+    case Prima.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0, heir: tag) do
       {:ok, slot} -> {:ok, slot}
       {:error, refusal} -> {:refused, conn, slot_refusal(refusal, Prima.Slots.status(@slots))}
     end
@@ -329,7 +333,7 @@ defmodule Locus.BuilderService do
 
   # ————— the stream —————
 
-  defp stream(conn, plan, place, time) do
+  defp stream(conn, plan, place, time, heir) do
     conn =
       conn
       |> put_resp_content_type(@content_type)
@@ -349,6 +353,7 @@ defmodule Locus.BuilderService do
           ref: ref,
           plan: plan,
           place: place,
+          heir: heir,
           budget_ms: time.budget_ms,
           deadline: time.deadline
         })
@@ -420,7 +425,8 @@ defmodule Locus.BuilderService do
       deadline: b.deadline,
       budget_ms: b.budget_ms,
       on_progress: on_progress,
-      on_line: &hand(b, &1, :running)
+      on_line: &hand(b, &1, :running),
+      heir: b.heir
     )
   end
 

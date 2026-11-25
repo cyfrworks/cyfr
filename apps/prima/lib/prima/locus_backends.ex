@@ -24,7 +24,7 @@ defmodule Prima.LocusBackends do
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | `{"version": 4}` | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 5}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
   | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
   | `:close` | `/locus/v1/backends/close` | a close | `status` `closed`, or a refusal |
@@ -53,7 +53,7 @@ defmodule Prima.LocusBackends do
   | `homes` | none | `homes[]` |
 
   A sync's program is `{name, command, env_names, home, memory_bytes?,
-  home_max_bytes?, hosts?}`: a `name` of lowercase letters, digits and
+  home_max_bytes?, hosts?, packs?}`: a `name` of lowercase letters, digits and
   hyphens, a `command` meeting `check_command/1`, the `env_names` its sealed
   environment carries (each an uppercase variable name, none reserved:
   `reserved_env_names/0`, `reserved_env_prefixes/0`), its `home`
@@ -65,7 +65,8 @@ defmodule Prima.LocusBackends do
   may reach beside the resolver and the deployment's private hosts
   (`Prima.KeeperProtocol.valid_hosts?/1`), resolved when each process
   starts and held there by the island's egress guard on the addresses they
-  resolved to (absent: public hosts). An `open` whose hosts resolve to no
+  resolved to (absent: public hosts), and `packs`, `true` for a program
+  whose sessions load the person's packs (absent: none). An `open` whose hosts resolve to no
   address is refused `hosts_unresolved`, and one the guard does not hold to
   them `guard_unavailable`; neither starts. `sealed` is the environment
   `seal/5` sealed to the owner and the service's lifetime.
@@ -139,12 +140,14 @@ defmodule Prima.LocusBackends do
 
   | Type | Members | Answer (`encode_session_answer/2`, `read_session_answer/2`) |
   |---|---|---|
-  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `argv[]`, `rows?`, `cols?` | `status`, `session`, `resumed` |
+  | `open` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `argv[]`, `rows?`, `cols?`, `packs?` | `status`, `session`, `resumed` |
   | `send` | `owner`, `e`, `session`, `lines[]` | `status` |
   | `recv` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `lines[{seq, text}]`, `dropped`, `running`, `exit_code?` |
   | `input` | `owner`, `e`, `session`, `bytes` | `status` |
   | `output` | `owner`, `e`, `session`, `after`, `max_wait_ms` | `chunks[{seq, bytes}]`, `dropped`, `running`, `exit_code?` |
   | `resize` | `owner`, `e`, `session`, `rows`, `cols` | `status` |
+  | `packs_hold` | `owner`, `e`, `program`, `home_id?`, `key`, `mode`, `lifetime`, `digest` | `state`, `digest?` |
+  | `packs_put` | the hold's members, `seq`, `last`, `part` | `state`, `digest?` |
 
   An `open` answers the session running for its lifetime (`resumed:
   true`) or starts the program's `command` with `argv` appended as its
@@ -160,6 +163,33 @@ defmodule Prima.LocusBackends do
   size, its `TERM` `terminal_type/0` unless the program's environment names
   its own; one in mode `run` names neither and is given no default `TERM`.
   A resumed open leaves the size as it is.
+
+  A program that loads packs (its sync's `packs`) has its person's packs
+  as a folder of its sessions' space, read only, at `/run/cyfr/scrolls`,
+  which the keeper holds one copy of for each set digest
+  (`Prima.KeeperProtocol`, "Packs"). Before its open, its holder sends
+  `packs_hold`, naming the lifetime it will open and the set's `digest`
+  (`sha256:` and 64 lowercase hex digits): `state` `held` says the keeper
+  holds the copy its `digest` names complete, now for that lifetime, and
+  `missing` that it holds none of the one asked for. On `missing` it
+  sends the copy's stream in `packs_put`s, `seq` from 0 by one up to the
+  keeper's `max_pack_seq`, `last` on the final one, each `part` standard
+  base64 of at most `max_pack_part_bytes` bytes, one keeper line's part,
+  so a `seq` means one thing on both wires: each answered `taken`, the
+  last `held`. Its `open` then names as `packs` the `digest` that `held`
+  named. A `held` answer always names its `digest`, and `missing` and
+  `taken` name none. It is the one asked for, but for a hold of a
+  lifetime whose session lives, starting or running: that is held at the
+  generation the session's open named, which it keeps while it runs,
+  whatever the hold asked, and the open is resumed; the packs as they
+  stand reach the next lifetime. Neither spends anything of the
+  lifetime: no admission, slot or home. A hold, a put or an open naming
+  `packs` for a program that loads none is refused `bad_request`, a hold
+  of a lifetime over, and a put of one whose process started or that is
+  over, `lifetime_over`, a put whose stream the keeper does not take
+  `packs_refused`, a put's first part while another put of the person's
+  is under way `packs_busy`, which its holder meets by holding again, and
+  a service whose keeper keeps no homes refuses them `unavailable`.
 
   `send` and `recv` speak to a `run` session; `input`, `output` and
   `resize` to a `terminal` one; a message naming a session of the other
@@ -242,7 +272,7 @@ defmodule Prima.LocusBackends do
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 4, "error": <code>}` (`encode_refusal/1`).
+  `{"version": 5, "error": <code>}` (`encode_refusal/1`).
 
   ## Authentication
 
@@ -287,7 +317,7 @@ defmodule Prima.LocusBackends do
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
 
-  @version 4
+  @version 5
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -316,6 +346,11 @@ defmodule Prima.LocusBackends do
   @max_recv_wait_ms 30_000
   @close_wait_ms 17_000
   @max_status_owners 64
+  # A put's part is one keeper line's (`Prima.KeeperProtocol`), so a part's
+  # seq means one thing on both wires.
+  @max_pack_part_bytes KeeperProtocol.request_bounds().max_pack_part_bytes
+  @max_pack_seq KeeperProtocol.request_bounds().max_pack_seq
+  @digest ~r/\Asha256:[0-9a-f]{64}\z/
   @max_status_answer_bytes @max_control_bytes
   @max_programs 16
   @max_sessions 16
@@ -346,6 +381,7 @@ defmodule Prima.LocusBackends do
     close_wait_ms: @close_wait_ms,
     max_status_owners: @max_status_owners,
     max_status_answer_bytes: @max_status_answer_bytes,
+    max_pack_part_bytes: @max_pack_part_bytes,
     max_programs: @max_programs,
     max_sessions: @max_sessions,
     max_argv: @max_argv,
@@ -378,6 +414,8 @@ defmodule Prima.LocusBackends do
     program_failed: 409,
     home_over_cap: 409,
     hosts_unresolved: 409,
+    packs_refused: 409,
+    packs_busy: 409,
     replay: 409,
     capacity: 409,
     status_too_large: 409,
@@ -393,7 +431,7 @@ defmodule Prima.LocusBackends do
   @classes Map.keys(@statuses) |> Enum.sort()
 
   @control_types [:hello, :reconcile, :sync, :renew, :release, :status, :home, :homes]
-  @session_types [:open, :send, :recv, :input, :output, :resize]
+  @session_types [:open, :send, :recv, :input, :output, :resize, :packs_hold, :packs_put]
   @run_types [:send, :recv]
   @terminal_types [:input, :output, :resize]
   @owner_states [:running, :draining]
@@ -430,7 +468,9 @@ defmodule Prima.LocusBackends do
     recv: ~w(version type owner e session after max_wait_ms),
     input: ~w(version type owner e session bytes),
     output: ~w(version type owner e session after max_wait_ms),
-    resize: ~w(version type owner e session rows cols)
+    resize: ~w(version type owner e session rows cols),
+    packs_hold: ~w(version type owner e program key mode lifetime digest),
+    packs_put: ~w(version type owner e program key mode lifetime digest seq last part)
   }
   @close_fields ~w(version owner e program key mode lifetime)
   @close_optional ~w(home_id)
@@ -440,13 +480,24 @@ defmodule Prima.LocusBackends do
     recv: ~w(version lines dropped running),
     input: ~w(version status),
     output: ~w(version chunks dropped running),
-    resize: ~w(version status)
+    resize: ~w(version status),
+    packs_hold: ~w(version state),
+    packs_put: ~w(version state)
   }
   @close_answer_fields ~w(version status)
-  @session_optional %{open: ~w(home_id rows cols)}
-  @session_answer_optional %{recv: ~w(exit_code), output: ~w(exit_code)}
+  @session_optional %{
+    open: ~w(home_id rows cols packs),
+    packs_hold: ~w(home_id),
+    packs_put: ~w(home_id)
+  }
+  @session_answer_optional %{
+    recv: ~w(exit_code),
+    output: ~w(exit_code),
+    packs_hold: ~w(digest),
+    packs_put: ~w(digest)
+  }
   @program_fields ~w(name command env_names home)
-  @program_optional ~w(memory_bytes home_max_bytes hosts)
+  @program_optional ~w(memory_bytes home_max_bytes hosts packs)
   @program_report_fields ~w(name status restarts home over_cap sessions)
   @program_report_optional ~w(error stderr_tail stderr_bytes home_bytes)
   @program_name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
@@ -488,7 +539,8 @@ defmodule Prima.LocusBackends do
   @type kind :: :invoke | :control
   @type control_type ::
           :hello | :reconcile | :sync | :renew | :release | :status | :home | :homes
-  @type session_type :: :open | :send | :recv | :input | :output | :resize
+  @type session_type ::
+          :open | :send | :recv | :input | :output | :resize | :packs_hold | :packs_put
   @type owner_state :: :running | :draining
   @type program_status :: :idle | :running | :failed
   @type home :: :scratch | :kept
@@ -547,7 +599,8 @@ defmodule Prima.LocusBackends do
           home: home(),
           memory_bytes: pos_integer() | nil,
           home_max_bytes: pos_integer() | nil,
-          hosts: [String.t(), ...] | nil
+          hosts: [String.t(), ...] | nil,
+          packs: boolean()
         }
 
   @typedoc "A control message by its `type`."
@@ -634,7 +687,8 @@ defmodule Prima.LocusBackends do
             lifetime: lifetime(),
             argv: [String.t()],
             rows: pos_integer() | nil,
-            cols: pos_integer() | nil
+            cols: pos_integer() | nil,
+            packs: String.t() | nil
           }
           | %{
               type: :send,
@@ -674,6 +728,20 @@ defmodule Prima.LocusBackends do
               rows: pos_integer(),
               cols: pos_integer()
             }
+          | %{
+              required(:type) => :packs_hold | :packs_put,
+              required(:owner) => owner_ref(),
+              required(:e) => pos_integer(),
+              required(:program) => String.t(),
+              required(:home_id) => String.t() | nil,
+              required(:key) => String.t(),
+              required(:mode) => mode(),
+              required(:lifetime) => lifetime(),
+              required(:digest) => String.t(),
+              optional(:seq) => non_neg_integer(),
+              optional(:last) => boolean(),
+              optional(:part) => binary()
+            }
 
   @typedoc "A lifetime's text (`new_lifetime/2`), the tag of the service's boot in it."
   @type lifetime :: String.t()
@@ -711,6 +779,8 @@ defmodule Prima.LocusBackends do
               running: boolean(),
               exit_code: 0..255 | nil
             }
+          | %{state: :held, digest: String.t()}
+          | %{state: :missing | :taken}
 
   @type code ::
           :unauthorized
@@ -727,6 +797,8 @@ defmodule Prima.LocusBackends do
           | :program_failed
           | :home_over_cap
           | :hosts_unresolved
+          | :packs_refused
+          | :packs_busy
           | :replay
           | :capacity
           | :status_too_large
@@ -762,8 +834,14 @@ defmodule Prima.LocusBackends do
           | {:missing_field, String.t()}
           | {:invalid_field, String.t()}
           | {:too_large,
-             :control | :answer | :status_answer | :session | :command | :line | :chunk,
-             non_neg_integer(), pos_integer()}
+             :control
+             | :answer
+             | :status_answer
+             | :session
+             | :command
+             | :line
+             | :chunk
+             | :part, non_neg_integer(), pos_integer()}
           | {:too_many, :owners | :programs | :argv, non_neg_integer(), pos_integer()}
           | {:out_of_range, String.t(), integer(), pos_integer()}
           | {:duplicate, String.t()}
@@ -878,6 +956,10 @@ defmodule Prima.LocusBackends do
   @doc "The most bytes one `input` writes or one buffered chunk of a terminal holds."
   @spec max_chunk_bytes() :: pos_integer()
   def max_chunk_bytes, do: @max_chunk_bytes
+
+  @doc "The most one `packs_put` part carries, a keeper line's part (`Prima.KeeperProtocol`)."
+  @spec max_pack_part_bytes() :: pos_integer()
+  def max_pack_part_bytes, do: @max_pack_part_bytes
 
   @doc "The most rows or columns a terminal has (`Prima.KeeperProtocol`'s bound)."
   @spec max_pty_size() :: pos_integer()
@@ -1225,7 +1307,7 @@ defmodule Prima.LocusBackends do
   @doc "The body of a control message, checked as `read_control/1` will check it."
   @spec encode_control(control_message()) :: {:ok, binary()} | {:error, read_error()}
   def encode_control(%{type: type} = message) when type in @control_types do
-    wire = message |> wire() |> Map.put("version", @version)
+    wire = message |> packs_flag() |> wire() |> Map.put("version", @version)
 
     with {:ok, _message} <- read_control_wire(wire),
          body = Jason.encode!(wire),
@@ -1384,7 +1466,8 @@ defmodule Prima.LocusBackends do
            optional(wire, "memory_bytes", &memory_bytes(&1, at <> ".memory_bytes")),
          {:ok, home_max_bytes} <-
            optional(wire, "home_max_bytes", &home_max_bytes(&1, home, at <> ".home_max_bytes")),
-         {:ok, hosts} <- optional(wire, "hosts", &hosts(&1, at <> ".hosts")) do
+         {:ok, hosts} <- optional(wire, "hosts", &hosts(&1, at <> ".hosts")),
+         {:ok, packs} <- optional(wire, "packs", &loads_packs(&1, at <> ".packs")) do
       {:ok,
        %{
          name: name,
@@ -1393,7 +1476,8 @@ defmodule Prima.LocusBackends do
          home: home,
          memory_bytes: memory_bytes,
          home_max_bytes: home_max_bytes,
-         hosts: hosts
+         hosts: hosts,
+         packs: packs == true
        }}
     end
   end
@@ -1422,6 +1506,11 @@ defmodule Prima.LocusBackends do
   defp hosts(hosts, at) do
     if KeeperProtocol.valid_hosts?(hosts), do: {:ok, hosts}, else: {:error, {:invalid_field, at}}
   end
+
+  # A program that loads packs says so, and one that loads none carries no
+  # member: present, it is true.
+  defp loads_packs(true, _at), do: {:ok, true}
+  defp loads_packs(_value, at), do: {:error, {:invalid_field, at}}
 
   defp program_name(name, at) do
     if is_binary(name) and Regex.match?(@program_name, name),
@@ -1711,7 +1800,7 @@ defmodule Prima.LocusBackends do
   @doc "The body of a session message, checked as `read_session/1` will check it."
   @spec encode_session(session_message()) :: {:ok, binary()} | {:error, read_error()}
   def encode_session(%{type: type} = message) when type in @session_types do
-    wire = message |> base64(:bytes) |> wire() |> Map.put("version", @version)
+    wire = message |> base64(:bytes) |> base64(:part) |> wire() |> Map.put("version", @version)
 
     with {:ok, _message} <- read_session_wire(wire),
          body = Jason.encode!(wire),
@@ -1748,8 +1837,32 @@ defmodule Prima.LocusBackends do
   defp read_session_typed(:open, wire, message) do
     with {:ok, named} <- named_lifetime(wire),
          {:ok, argv} <- argv(wire["argv"]),
-         {:ok, rows, cols} <- open_size(wire, named.mode) do
-      {:ok, message |> Map.merge(named) |> Map.merge(%{argv: argv, rows: rows, cols: cols})}
+         {:ok, rows, cols} <- open_size(wire, named.mode),
+         {:ok, packs} <- optional(wire, "packs", &digest/1) do
+      {:ok,
+       message
+       |> Map.merge(named)
+       |> Map.merge(%{argv: argv, rows: rows, cols: cols, packs: packs})}
+    end
+  end
+
+  defp read_session_typed(:packs_hold, wire, message) do
+    with {:ok, named} <- named_lifetime(wire),
+         {:ok, digest} <- digest(wire["digest"]),
+         do: {:ok, message |> Map.merge(named) |> Map.put(:digest, digest)}
+  end
+
+  defp read_session_typed(:packs_put, wire, message) do
+    with {:ok, named} <- named_lifetime(wire),
+         {:ok, digest} <- digest(wire["digest"]),
+         {:ok, seq} <- count(wire, "seq", ""),
+         true <- seq <= @max_pack_seq || {:error, {:out_of_range, "seq", seq, @max_pack_seq}},
+         {:ok, last} <- boolean(wire, "last", ""),
+         {:ok, part} <- part(wire["part"]) do
+      {:ok,
+       message
+       |> Map.merge(named)
+       |> Map.merge(%{digest: digest, seq: seq, last: last, part: part})}
     end
   end
 
@@ -1840,6 +1953,30 @@ defmodule Prima.LocusBackends do
       do: {:ok, value},
       else: {:error, {:invalid_field, name}}
   end
+
+  # A set digest: `sha256:` and 64 lowercase hex digits.
+  defp digest(text) do
+    if is_binary(text) and Regex.match?(@digest, text),
+      do: {:ok, text},
+      else: {:error, {:invalid_field, "digest"}}
+  end
+
+  # A put's part: standard base64 of at most `max_pack_part_bytes` bytes,
+  # none for a last part that carries nothing more.
+  defp part(text) when is_binary(text) do
+    case Base.decode64(text) do
+      {:ok, bytes} when byte_size(bytes) > @max_pack_part_bytes ->
+        {:error, {:too_large, :part, byte_size(bytes), @max_pack_part_bytes}}
+
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      :error ->
+        {:error, {:invalid_field, "part"}}
+    end
+  end
+
+  defp part(_text), do: {:error, {:invalid_field, "part"}}
 
   # A terminal's input: standard base64 of 1 to `max_chunk_bytes` bytes.
   defp input_bytes(text) when is_binary(text) do
@@ -1955,6 +2092,15 @@ defmodule Prima.LocusBackends do
     end
   end
 
+  defp read_session_answer_typed(:packs_hold, wire) do
+    with {:ok, state} <- roster(wire, "state", [:held, :missing], ""),
+         do: packs_state(state, wire)
+  end
+
+  defp read_session_answer_typed(:packs_put, wire) do
+    with {:ok, state} <- roster(wire, "state", [:taken, :held], ""), do: packs_state(state, wire)
+  end
+
   defp read_session_answer_typed(type, wire) when type in [:send, :input, :resize] do
     with {:ok, status} <- roster(wire, "status", [:running, :ended], ""),
          do: {:ok, %{status: status}}
@@ -1976,6 +2122,19 @@ defmodule Prima.LocusBackends do
          {:ok, exit_code} <- optional(wire, "exit_code", &exit_code(&1, running)) do
       {:ok, %{chunks: chunks, dropped: dropped, running: running, exit_code: exit_code}}
     end
+  end
+
+  # `held` names the generation held, and no other state names one.
+  defp packs_state(:held, wire) do
+    with :ok <- exact(Map.take(wire, ~w(digest)), ~w(digest), ""),
+         {:ok, digest} <- digest(wire["digest"]),
+         do: {:ok, %{state: :held, digest: digest}}
+  end
+
+  defp packs_state(state, wire) do
+    if is_map_key(wire, "digest"),
+      do: {:error, {:unknown_field, "digest"}},
+      else: {:ok, %{state: state}}
   end
 
   # An exit status, only of a session that is no longer running.
@@ -2421,6 +2580,13 @@ defmodule Prima.LocusBackends do
       {:error, _} = error -> error
     end
   end
+
+  # A program that loads no packs carries no `packs` member.
+  defp packs_flag(%{programs: programs} = message) when is_list(programs),
+    do: %{message | programs: Enum.map(programs, &packs_flag/1)}
+
+  defp packs_flag(%{packs: false} = program), do: Map.delete(program, :packs)
+  defp packs_flag(message), do: message
 
   # A terminal's bytes travel as standard base64.
   defp base64(map, key) do

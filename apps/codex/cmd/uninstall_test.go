@@ -207,7 +207,7 @@ func (s *uninstallScenario) fill(dir string) {
 		"a-link-to-a-file":   filepath.Join(s.outside, "target.txt"),
 		"a-link-to-a-folder": s.outside,
 		"a-dangling-link":    filepath.Join(s.outside, "gone"),
-		"aqua/skills":        s.outside,
+		"aqua/scrolls":       s.outside,
 	} {
 		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
 			s.t.Fatal(err)
@@ -313,7 +313,7 @@ func exists(path string) bool {
 func (s *uninstallScenario) images() []string {
 	path := filepath.Join(s.t.TempDir(), "docker-compose.yml")
 	s.write(path, string(s.compose))
-	return imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
+	return imagesFromCompose(path, []string{access.ModePublic, access.ModeTailnet})
 }
 
 // ownCalls are the docker calls the uninstall makes after the stop: its

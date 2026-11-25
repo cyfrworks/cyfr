@@ -2,40 +2,40 @@
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
 #                 tinctures; its host API (:4300) takes the runtime's host
 #                 calls, signed with a runtime worker's key, on cyfr's own
-#                 address of the locus-runtime network alone
-#   locus-backends — runs the programs CYFR registers (`mcp_servers` rows
-#                 with transport `stdio` or `pipe`), one owner per row,
-#                 each process under a uid and a memory bound of its own.
-#                 Every request between cyfr and the service is signed
-#                 under CYFR_LOCUS_BACKENDS_KEY; its one state is the
-#                 kept homes on its `homes` volume, which no backup holds.
-#   locus-runtime — the runtime: runs WASM components as CYFR assigns
-#                 them, on the `locus-runtime` network. Every request
-#                 between cyfr and the runtime is signed under the worker
-#                 key CYFR derives for LOCUS_RUNTIME_SERVICE_ID; the runtime
-#                 holds no tenant state.
-#   locus-builds — the builder: compiles components and tinctures, each
-#                 build under a uid and a memory bound of its own. Every
-#                 build request is signed under CYFR_LOCUS_BUILDS_KEY; the
-#                 builder holds no tenant state. On after `cyfr init`, which
-#                 writes CYFR_LOCUS_BUILDS_URL and mints its key; selected
-#                 by its profile.                  [profile: locus-builds]
-#   locus-builds-guard, locus-backends-guard — each island's egress guard:
-#                 the same image running cyfr-guard with NET_ADMIN alone,
-#                 whose network namespace the island's service shares. It
-#                 makes each build's and each program session's one route
-#                 out of its space, so a build or a backend reaches public
-#                 hosts and the private hosts CYFR_PRIVATE_EGRESS_TARGETS
-#                 names, and never a link-local or metadata address, the
-#                 control plane, another private address or another space.
-#                 The island starts only once its guard is healthy, which
-#                 it is only with every rule installed.
-# Every Locus service runs under keeper.seccomp.json, shipped beside this
-# file, and on a host with AppArmor under the profile .env names
-# (CYFR_LOCUS_APPARMOR), which cyfr carries and `cyfr init` and `cyfr update`
-# load, on a host that allows unprivileged
-# user namespaces (x-locus-role).
-#                                  [locus-builds-guard: profile locus-builds]
+#                 address of the locus network alone
+#   locus       — the one Locus: cyfr-locus, its keeper, starts a role
+#                 process for each role whose key it holds, each under a
+#                 uid of its own, in a space of its own, with its own run
+#                 folder, its own bounds and a channel to the keeper that
+#                 reaches its own spawns alone:
+#                   runtime  (:4200, LOCUS_RUNTIME_KEY) runs WASM components
+#                            as CYFR assigns them; every request is signed
+#                            under the worker key CYFR derives for
+#                            LOCUS_RUNTIME_SERVICE_ID;
+#                   builds   (:4100, CYFR_LOCUS_BUILDS_KEY) compiles
+#                            components and tinctures; on once `cyfr init`
+#                            mints its key, off with the key empty;
+#                   backends (:4101, CYFR_LOCUS_BACKENDS_KEY) runs the
+#                            programs CYFR registers (`mcp_servers` rows
+#                            with transport `stdio` or `pipe`), one owner
+#                            a row; its one state is the kept homes on its
+#                            `homes` volume, which no backup holds.
+#                 No role holds tenant state, and none sees another's key,
+#                 processes, files, port or spawns.
+#   locus-guard — Locus's egress guard: the same image running cyfr-guard
+#                 with NET_ADMIN alone, whose network namespace `locus`
+#                 shares. It makes each role process's, each build's and
+#                 each program session's one route out of its space, so a
+#                 build or a backend reaches public hosts and the private
+#                 hosts CYFR_PRIVATE_EGRESS_TARGETS names, the runtime
+#                 reaches cyfr's host API, and none reaches a link-local or
+#                 metadata address, the control plane, another private
+#                 address or another space. Locus starts only once its guard
+#                 is healthy, which it is only with every rule installed.
+# Locus runs under keeper.seccomp.json, shipped beside this file, and on a
+# host with AppArmor under the profile .env names (CYFR_LOCUS_APPARMOR),
+# which cyfr carries and `cyfr init` and `cyfr update` load, on a host that
+# allows unprivileged user namespaces (the locus service says each).
 #   caddy      — TLS and the reverse proxy in front of a public home, on
 #                 :80 and :443, forwarding to cyfr's proxy listener on the
 #                 edge network.                           [profile: public]
@@ -46,91 +46,12 @@
 # How the home is reached is CYFR_ACCESS in .env (local, tailnet or public),
 # which `cyfr init` and `cyfr access` write with every setting it implies.
 # `cyfr up`, `cyfr access`, `cyfr update` and `cyfr restore` start the stack
-# with the profiles that follow from it: the access mode's proxy (`public` or
-# `tailnet`; none for `local`), and `locus-builds` when
-# CYFR_LOCUS_BUILDS_URL names that service. They run Docker Compose with
-# every COMPOSE_* variable cleared, refuse a .env that sets one, and check
-# the home's settings and its tailnet machine before anything is served.
-# Running `docker compose` directly skips those checks. To build nothing,
-# set CYFR_LOCUS_BUILDS_URL and CYFR_LOCUS_BUILDS_KEY empty. See the
-# "Deploy to a Server" section of README.md.
-
-# The hardening every Locus service runs under, written once. Each Locus
-# service merges this block (`<<: *locus-role`) beside the keys that are its
-# own: its network, environment, tmpfs mounts and limits, and, for a role
-# other than the image's builds role, its entrypoint. A key the service sets
-# itself replaces this block's whole: a merge copies keys and never joins
-# lists.
-x-locus-role: &locus-role
-  # docker-init is PID 1 and forwards stop signals to cyfr-locus, the child
-  # subreaper of every build, runner and backend process: an orphaned
-  # process is reparented to it, not to docker-init, and retired with its
-  # uid.
-  init: true
-  # cyfr-locus refuses to start with any capability other than these: it
-  # starts the locus release and each build, runner or backend under their
-  # own uids and signals their processes. The release and every process it
-  # starts run with none.
-  cap_drop:
-    - ALL
-  cap_add:
-    - SETUID
-    - SETGID
-    - KILL
-  # no-new-privileges:true: no process in the container gains a privilege
-  # by executing a setuid or file-capability binary.
-  # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
-  # mounts the container's own cgroup writable, which adds no capability:
-  # cyfr-locus gives every build, runner and backend a group of its own
-  # there, bounded at its role's LOCUS_BUILDS_MEMORY_BYTES,
-  # LOCUS_RUNTIME_MEMORY_BYTES or LOCUS_BACKENDS_MEMORY_BYTES, and refuses
-  # a spawn that asks for a bound where it cannot make one. Without the
-  # option none runs unbounded: no runner starts; the builds service
-  # answers each build `unavailable`, naming the option; and every
-  # backend's spawn is refused as `memory_unavailable`, which the backend
-  # reports as its error.
-  # seccomp=./keeper.seccomp.json: cyfr-locus clones every build, runner
-  # and backend into a space of its own, a user, network, IPC, pid, mount
-  # and cgroup namespace with files of its own, which the space's first
-  # process mounts in its own mount namespace. Docker's default seccomp
-  # profile denies a clone that makes a namespace and every mount, so every
-  # Locus service runs under keeper.seccomp.json, shipped beside this file
-  # (the image's /etc/cyfr/keeper.json): Docker's default with those
-  # clones and the space's mounts allowed and unshare and setns denied.
-  # apparmor: on a host with AppArmor, the container runs under the
-  # profile .env's CYFR_LOCUS_APPARMOR names, cyfr-locus- and 12 hex digits
-  # of its content's hash, which cyfr carries and `cyfr init` and `update`
-  # write there and load (`cyfr apparmor-profile` prints it); unset, it
-  # names no profile, which Docker refuses: Docker's default with
-  # the user namespace allowed, the space's mounts under its new root
-  # allowed and no other mount. A host without AppArmor, Docker Desktop
-  # among them, ignores the option. systempaths=unconfined: a /proc that
-  # Docker has masked lets no space mount its own, so the container's system
-  # paths are unmasked; on a host with AppArmor the profile denies them
-  # again, and on one without, the keeper alone, never a space, may write
-  # /proc/sys. The keeper proves at its boot that it runs under its image's
-  # profile name, enforced, or that the host has no AppArmor. The
-  # host must allow unprivileged user namespaces: user.max_user_namespaces
-  # above 0. Without any of these cyfr-locus refuses to start, naming what
-  # to check, and the container restart-loops.
-  security_opt:
-      - no-new-privileges:true
-      - writable-cgroups=true
-      - seccomp=./keeper.seccomp.json
-      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
-      - systempaths=unconfined
-  # No Locus service holds tenant state: the root is read-only, each
-  # service's tmpfs mounts are its only writable surfaces, and cyfr-locus
-  # refuses to start if any other location is writable by a pool uid.
-  # `ipc: none` leaves /dev/shm unmounted.
-  read_only: true
-  ipc: none
-  restart: unless-stopped
-  logging:
-    driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
+# with the access mode's proxy profile (`public` or `tailnet`; none for
+# `local`). They run Docker Compose with every COMPOSE_* variable cleared,
+# refuse a .env that sets one, and check the home's settings and its
+# tailnet machine before anything is served. Running `docker compose`
+# directly skips those checks. To build nothing, set CYFR_LOCUS_BUILDS_KEY
+# empty. See the "Deploy to a Server" section of README.md.
 
 services:
   cyfr:
@@ -141,8 +62,8 @@ services:
       # The proxy listener, reached by caddy and tailscale over the edge
       # network; never published.
       - "${CYFR_PROXY_PORT:-4001}"
-      # The host API, reached by locus-runtime over the locus-runtime
-      # network; never published.
+      # The host API, reached by Locus's runtime over the locus network;
+      # never published.
       - "${CYFR_HOST_API_PORT:-4300}"
     ports:
       # The loopback listener, published on the host's loopback alone: the
@@ -159,24 +80,24 @@ services:
     env_file:
       - .env
     # Every access setting (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL,
-    # CYFR_TAILNET_NODE_ID, CYFR_PORT, CYFR_LOCUS_BUILDS_URL) reaches cyfr
-    # from .env through env_file alone: `cyfr` refuses to start a stack
-    # whose configuration assigns one here.
+    # CYFR_TAILNET_NODE_ID, CYFR_PORT) reaches cyfr from .env through
+    # env_file alone: `cyfr` refuses to start a stack whose configuration
+    # assigns one here.
     environment:
-      # The private hosts outbound calls may reach; the backends service is
-      # one.
-      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
-      # Where cyfr reaches the locus-backends service. Stdio MCP servers need
+      # The private hosts outbound calls may reach; Locus is one.
+      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus}
+      # Where cyfr reaches Locus's backends role. Stdio MCP servers need
       # this and CYFR_LOCUS_BACKENDS_KEY, which cyfr reads from .env
-      # (env_file above).
-      - CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}
+      # (env_file above). The builds role answers beside it, at the same
+      # host on its own port, whenever .env sets CYFR_LOCUS_BUILDS_KEY.
+      - CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus:4101}
       # The runtime cyfr dispatches runs to, and where it listens for the
-      # runtime's host calls: cyfr's own address on the locus-runtime
-      # network (below), so the host API is reachable from that network
-      # alone, and serves there only calls signed with a runtime worker's
-      # key. CYFR_LOCUS_RUNTIME_ROOT, the root the runtime's key derives
-      # from, comes from .env.
-      - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus-runtime:4200}
+      # runtime's host calls: cyfr's own address on the locus network
+      # (below), so the host API is reachable from that network alone, and
+      # serves there only calls signed with a runtime worker's key.
+      # CYFR_LOCUS_RUNTIME_ROOT, the root the runtime's key derives from,
+      # comes from .env.
+      - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus:4200}
       - CYFR_HOST_API_BIND=172.16.231.2
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
       # The loopback listener binds cyfr's own fixed address on the default
@@ -209,11 +130,9 @@ services:
       # published port.
       edge:
         ipv4_address: 172.16.234.2
-      locus-backends: {}
-      locus-builds: {}
       # A fixed address, the one CYFR_HOST_API_BIND names: outside the
       # network's ip_range, so no container started first can take it.
-      locus-runtime:
+      locus:
         ipv4_address: 172.16.231.2
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
@@ -229,113 +148,230 @@ services:
         limits:
           memory: 2G
           # The control plane's own share of the host: components run in
-          # locus-runtime, under its limits.
+          # Locus, under the runtime's bounds.
           cpus: "${CYFR_CPU_LIMIT:-4}"
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
-  # Optional builds service: `docker compose --profile locus-builds up -d`,
-  # or `cyfr up` once .env sets CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100
-  # and CYFR_LOCUS_BUILDS_KEY. cyfr reads both from .env (env_file above);
-  # compose hands this service the same key as LOCUS_BUILDS_KEY. Its other
-  # settings go in .env.locus.
-  locus-builds:
-    <<: *locus-role
-    container_name: cyfr-locus-builds
-    # Pulled as published; a source checkout builds it with
-    # `docker compose --profile locus-builds build locus-builds`.
+  # The one Locus: the image's entrypoint, cyfr-locus serving every role
+  # whose key this environment holds (Dockerfile.locus). Pulled as
+  # published; a source checkout builds it with `docker compose build
+  # locus`.
+  locus:
+    container_name: cyfr-locus
     image: ghcr.io/cyfrworks/cyfr-locus:latest
     build:
       context: .
       dockerfile: Dockerfile.locus
-    profiles: ["locus-builds"]
-    # The release's settings from .env.locus, one file for every role. The
-    # builder never sees the rest of .env: not the keyring, not the
-    # database, not the runtime's root, not the backends key, and refuses
-    # to start with any of them in its environment.
+    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
+    # child subreaper of every role process and every build, runner and
+    # backend: an orphaned process is reparented to it, not to docker-init,
+    # and retired with its uid.
+    init: true
+    # cyfr-locus refuses to start with any capability other than these: it
+    # starts each role process and each build, runner or backend under
+    # their own uids and signals their processes. Every process it starts
+    # runs with none.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
+    # no-new-privileges:true: no process in the container gains a privilege
+    # by executing a setuid or file-capability binary.
+    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
+    # mounts the container's own cgroup writable, which adds no capability:
+    # cyfr-locus gives each role a group of its own there, bounded at the
+    # role's LOCUS_<ROLE>_MEMORY_LIMIT and _CPU_LIMIT (below), and every
+    # build, runner and backend a group of its own inside its role's,
+    # bounded at its role's LOCUS_BUILDS_MEMORY_BYTES,
+    # LOCUS_RUNTIME_MEMORY_BYTES or LOCUS_BACKENDS_MEMORY_BYTES. Without the
+    # option nothing runs unbounded and nothing runs: cyfr-locus refuses to
+    # start, since no role's group can be made, and the container
+    # restart-loops.
+    # seccomp=./keeper.seccomp.json: cyfr-locus clones each role process
+    # and every build, runner and backend into a space of its own, a user,
+    # network, IPC, pid, mount and cgroup namespace with files of its own,
+    # which the space's first process mounts in its own mount namespace.
+    # Docker's default seccomp profile denies a clone that makes a
+    # namespace and every mount, so Locus runs under keeper.seccomp.json,
+    # shipped beside this file (the image's /etc/cyfr/keeper.json):
+    # Docker's default with those clones and the space's mounts allowed,
+    # unshare, setns and socketcall denied, socket's and socketpair's domain
+    # and personality's persona compared by their low 32 bits, so a domain
+    # whose low 32 bits are AF_VSOCK's is AF_VSOCK to the profile, as it is
+    # to the kernel, and every 32-bit and x32 call killed: no 32-bit program
+    # runs in Locus.
+    # apparmor: on a host with AppArmor, the container runs under the
+    # profile .env's CYFR_LOCUS_APPARMOR names, cyfr-locus- and 12 hex
+    # digits of its content's hash, which cyfr carries and `cyfr init` and
+    # `update` write there and load (`cyfr apparmor-profile` prints it);
+    # unset, it names no profile, which Docker refuses: Docker's default
+    # with the user namespace allowed, the space's mounts under its new root
+    # allowed and no other mount. A host without AppArmor, Docker Desktop
+    # among them, ignores the option. systempaths=unconfined: a /proc that
+    # Docker has masked lets no space mount its own, so the container's
+    # system paths are unmasked; on a host with AppArmor the profile denies
+    # them again, and on one without, the keeper alone, never a space, may
+    # write /proc/sys. The keeper proves at its boot that it runs under its
+    # image's profile name, enforced, or that the host has no AppArmor. The
+    # host must allow unprivileged user namespaces:
+    # user.max_user_namespaces above 0. Without any of these cyfr-locus
+    # refuses to start, naming what to check, and the container
+    # restart-loops.
+    security_opt:
+      - no-new-privileges:true
+      - writable-cgroups=true
+      - seccomp=./keeper.seccomp.json
+      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
+      - systempaths=unconfined
+    # Locus holds no tenant state: the root is read-only, the tmpfs mounts
+    # and the kept homes below are its only writable surfaces, and
+    # cyfr-locus refuses to start if any other location is writable by a
+    # role's or a pool's uid. `ipc: none` leaves /dev/shm unmounted.
+    read_only: true
+    ipc: none
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # The release's settings from .env.locus, one file for every role. Locus
+    # never sees the rest of .env: not the keyring, not the database, not
+    # the runtime's root, and each role process sees its own variables
+    # alone (LOCUS_<ROLE>_*), which the keeper hands it; a role refuses to
+    # start with any control-plane variable in its environment.
     env_file:
       - path: .env.locus
         required: false
     environment:
-      # The builds key every build request is signed and verified with: 32
-      # random bytes as 64 hexadecimal digits, the value cyfr reads as
-      # CYFR_LOCUS_BUILDS_KEY. Without a valid key the builder refuses to
-      # start (and restart-loops here).
+      # The three keys, each a role's: a role starts when its key is set
+      # and is off when it is empty. Each is 32 random bytes as 64
+      # hexadecimal digits. The runtime's is the worker key CYFR derives
+      # for LOCUS_RUNTIME_SERVICE_ID from CYFR_LOCUS_RUNTIME_ROOT; the
+      # builds and backends keys are the values cyfr reads as
+      # CYFR_LOCUS_BUILDS_KEY and CYFR_LOCUS_BACKENDS_KEY, which `cyfr init`
+      # mints. A key of another form refuses that role's start, and its
+      # process restart-loops alone.
+      - LOCUS_RUNTIME_KEY=${LOCUS_RUNTIME_KEY:-}
       - LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}
-    # Only cyfr can reach the builder: it shares the network namespace of
-    # its guard, which sits on the builds network, which cyfr also joins;
-    # locus-backends, locus-runtime and caddy never see port 4100. The
-    # network is not `internal` — cargo and npm need crates.io and the
-    # registry. Each build runs in a space of its own whose one way out is
-    # the route the guard makes for it before it starts (the image's
-    # entrypoint names the guard's control, the `builds-guard-control`
-    # volume below), held to the guard's rules (cyfr-guard): public hosts
-    # and the private hosts CYFR_PRIVATE_EGRESS_TARGETS names, nothing
-    # link-local, no metadata address, not the control plane, no other
-    # private address, and no other space. The guard's
-    # namespace is the container's only network, so listening on every
-    # interface is listening on it (LOCUS_BUILDS_BIND is for a builder
-    # outside compose). The builder starts only once the guard is healthy,
-    # which it is only with every rule installed; a guard that restarts
-    # takes a fresh namespace, and the builder is recreated to join it
-    # (`docker compose up -d`).
-    network_mode: service:locus-builds-guard
+      - LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}
+      # The runtime's id, cyfr's host API it reaches over its route, and
+      # its listener, which the guard forwards its port to.
+      - LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}
+      - LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}
+      - LOCUS_RUNTIME_BIND=0.0.0.0
+      - LOCUS_RUNTIME_PORT=4200
+      # Each role's bounds, which the keeper writes into the role's group:
+      # its memory (with swap the same, as Docker gives a memory limit) and
+      # its processors, the one definition of their defaults. A role and
+      # every spawn of its own share them; the keeper's own processes have
+      # none. The runtime's holds every runner uid (8) at its bound
+      # (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB) and the role beside them,
+      # 8 x 384 MiB + 1 GiB, whose peak serving the seed components
+      # tests/locus-runtime-image/memory.py --measure measures; its
+      # processors cap the damage of components that never yield (a killed
+      # tight loop leaks a spinning native thread). The builds' holds
+      # LOCUS_BUILDS_MAX_CONCURRENT (2) builds at their bound
+      # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB) and up to 1 GiB the role takes
+      # for each result it answers at the wire's largest: 2 x (1 GiB +
+      # 1 GiB) (tests/builder-image/headroom.py repeats it). The backends'
+      # is LOCUS_BACKENDS_MEMORY_BUDGET (1792 MiB) times
+      # LOCUS_BACKENDS_MEMORY_OVERCOMMIT (1), which the sessions' bounds
+      # stay within, plus 256 MiB for the role beside them; it has no
+      # processor bound. Raise each with what it holds (.env.example has
+      # the arithmetic).
+      - LOCUS_RUNTIME_MEMORY_LIMIT=${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}
+      - LOCUS_RUNTIME_CPU_LIMIT=${LOCUS_RUNTIME_CPU_LIMIT:-4}
+      - LOCUS_BUILDS_MEMORY_LIMIT=${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
+      - LOCUS_BUILDS_CPU_LIMIT=${LOCUS_BUILDS_CPU_LIMIT:-2}
+      - LOCUS_BACKENDS_MEMORY_LIMIT=${LOCUS_BACKENDS_MEMORY_LIMIT:-2G}
+    # Only cyfr reaches Locus: it shares the network namespace of its
+    # guard, which sits on the locus network, which cyfr also joins; caddy
+    # and tailscale never see a role's port. Each role process listens in
+    # a space of its own, which the guard forwards the role's port to from
+    # the network alone. The network is not `internal`: cargo and npm need
+    # crates.io and the registry, and a program its upstream API. What a
+    # role process, a build or a session reaches out to is its route's
+    # rules (cyfr-guard): public hosts, or the hosts a program's row named
+    # at its start, and the private hosts CYFR_PRIVATE_EGRESS_TARGETS
+    # names; the runtime's role process cyfr's host API and every private
+    # address besides, and its runners nothing but their relays; nothing
+    # link-local, no metadata address, not the control plane and no other
+    # space. Locus starts only once the guard is healthy, which it is only
+    # with every rule installed; a guard that restarts takes a fresh
+    # namespace, and the keeper, which loses its control, ends every role
+    # and is recreated to join it (`docker compose up -d`).
+    network_mode: service:locus-guard
     depends_on:
-      locus-builds-guard:
+      locus-guard:
         condition: service_healthy
-    # No /data mount: the builder holds no tenant state — sources arrive in
-    # the request, artifacts leave in the response. These tmpfs mounts are
-    # the only writable surfaces under the read-only root. Build homes: each
-    # build's uid creates its own 0700 home holding its sources, Cargo home,
-    # npm cache, temporary files and target directory; mode 1733 lets it
-    # create one without listing the others, and build scripts and bundler
-    # binaries run from there, so it allows exec. What a build writes to its
-    # home counts against that build's memory bound, and the mount's size
-    # bounds what all concurrent builds write. /run/locus holds the
-    # release's temporary files and the socket builds' relays attach to.
+    # These tmpfs mounts are the only writable surfaces under the
+    # read-only root but the kept homes, so no role or spawn has a shared
+    # /tmp, /var/tmp or /dev/shm. Each role's spawns' homes, a mount of the
+    # role's own: each spawn's uid creates its own 0700 home there holding
+    # its temporary files (a build's sources, Cargo home, npm cache and
+    # target, a runner's VM's files, a program's npx cache); mode 1733 lets
+    # it create one without listing the others, and spawns run from there,
+    # so it allows exec. What a spawn writes to its home counts against its
+    # memory bound, and the mount's size bounds what all of a role's spawns
+    # write. /run/locus is root's, 0711, holding each role's run folder, a
+    # tmpfs of the role's own uid, 0700, which the keeper takes as the
+    # role's: its release's temporary files and the socket its spawns'
+    # relays attach to, bounded apart so no role fills another's, and no
+    # role reaches another's.
     tmpfs:
-      - /var/lib/locus/homes:mode=1733,exec,size=2g
-      - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
-    # The guard's control, read-only here: its folder is root's own, 0700,
-    # so in this container the keeper alone reaches it.
+      - /var/lib/locus/homes/runtime:mode=1733,exec,size=256m
+      - /var/lib/locus/homes/builds:mode=1733,exec,size=2g
+      - /var/lib/locus/homes/backends:mode=1733,exec,size=2g
+      - /run/locus:mode=0711,size=1m
+      - /run/locus/runtime:uid=10011,gid=10011,mode=0700,size=16m
+      - /run/locus/builds:uid=10012,gid=10012,mode=0700,size=16m
+      - /run/locus/backends:uid=10013,gid=10013,mode=0700,size=16m
+    # Kept homes: a program's home that outlives its process, one 0700
+    # folder per login entry under a uid of its own, which the keeper alone
+    # finds, lists and draws. The volume is the homes' whole disk and their
+    # only bound beside a row's own home_max_bytes; it is never under data/
+    # and no backup carries it. The image makes its root root's and the
+    # locus group's, 1773, which a new volume takes; no role mounts it or
+    # is of that group. The guard's control, read-only here: its folder is
+    # root's own, 0700, so in this container the keeper alone reaches it.
+    # The machines' device and each machine's sockets, the `guest` volume
+    # below, the keeper's alone: no role mounts it.
     volumes:
-      - builds-guard-control:/run/cyfr-guard-control:ro
-    deploy:
-      resources:
-        limits:
-          # The one container that runs multi-minute cargo/npm compiles.
-          # Every build has a memory bound of its own
-          # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB): its processes, its home's
-          # tmpfs pages and the kernel memory charged to it, together, and
-          # a build that reaches it is ended there alone. This limit holds
-          # LOCUS_BUILDS_MAX_CONCURRENT (2) such bounds and the service,
-          # which takes up to 1 GiB for each result it answers at the
-          # wire's largest: 2 x (1 GiB + 1 GiB). Raise it with either
-          # setting (.env.locus.example has the arithmetic and the
-          # measurement, tests/builder-image/headroom.py repeats it).
-          memory: ${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
-          cpus: "${LOCUS_BUILDS_CPU_LIMIT:-2}"
+      - homes:/var/lib/locus/kept
+      - guard-control:/run/cyfr-guard-control:ro
+      - guest:/var/lib/locus/guest
+    # Shutdown ends every role: running attempts close or are reported and
+    # every backend is retired; compose's default 10s grace would SIGKILL
+    # mid-report.
+    stop_grace_period: 40s
+    # Healthcheck: the image's (Dockerfile.locus HEALTHCHECK,
+    # apps/locus/health.sh), which probes each role whose key is set at its
+    # port, each at its wire's version.
 
-  # The builds island's egress guard: the Locus image running cyfr-guard
-  # (apps/locus/keeper/guard/cyfr-guard.sh) in the network namespace
-  # locus-builds shares, holding NET_ADMIN and no other capability. It
-  # carries the island's service name as an alias, so cyfr's
-  # CYFR_LOCUS_BUILDS_URL resolves to the namespace the builder listens
-  # in. Its health is the ready file cyfr-guard writes only once every rule
-  # is installed, re-checked against the rules in place; a guard whose
-  # rules failed never turns healthy, so its island never starts. It
-  # starts with the island's profile and no release, key or mount.
-  locus-builds-guard:
-    container_name: cyfr-locus-builds-guard
+  # Locus's egress guard: the Locus image running cyfr-guard
+  # (apps/locus/keeper/guard/cyfr-guard.sh) in the network namespace locus
+  # shares, holding NET_ADMIN and no other capability. It carries Locus's
+  # service name as an alias, so cyfr's URLs for each role resolve to the
+  # namespace the roles listen in. Its health is the ready file cyfr-guard
+  # writes only once every rule is installed, re-checked against the rules
+  # in place; a guard whose rules failed never turns healthy, so Locus
+  # never starts. It runs no release and holds no key.
+  locus-guard:
+    container_name: cyfr-locus-guard
     image: ghcr.io/cyfrworks/cyfr-locus:latest
     build:
       context: .
       dockerfile: Dockerfile.locus
-    profiles: ["locus-builds"]
-    # The builder's port, which it listens on in this namespace: Docker
+    # The roles' ports, which they are reached at in this namespace: Docker
     # takes a port's exposure from the namespace's owner alone.
     expose:
       - "4100"
+      - "4101"
+      - "4200"
     entrypoint: ["cyfr-guard"]
     init: true
     cap_drop:
@@ -357,265 +393,21 @@ services:
       - /run/cyfr-guard:mode=0755,size=1m
     environment:
       # cyfr's fixed address on the default network; the private hosts the
-      # deployment names, the one exception to the private ranges; and the
-      # control's socket, on the `builds-guard-control` volume, the one
-      # other place the guard writes: each build's route, made before the
-      # build starts.
+      # deployment names, the one exception to the private ranges; the
+      # control's socket, on the `guard-control` volume, the one other place
+      # the guard writes: each route, made before its space starts; and
+      # cyfr's host API, its fixed address on the locus network and its
+      # port, which the runtime's role process alone reaches.
       - CYFR_GUARD_CONTROL_PLANE=172.16.230.2
-      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
+      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus}
       - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock
-    volumes:
-      - builds-guard-control:/run/cyfr-guard-control
-    networks:
-      locus-builds:
-        aliases:
-          - locus-builds
-    healthcheck:
-      test: ["CMD", "cyfr-guard", "check"]
-      interval: 10s
-      timeout: 3s
-      start_period: 5s
-      retries: 3
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    deploy:
-      resources:
-        limits:
-          memory: 32M
-
-  # The runtime: the same image as locus-builds, holding the runtime's key
-  # and the runner pool, and no other key. cyfr reaches it at
-  # http://locus-runtime:4200 (CYFR_LOCUS_RUNTIME_WORKERS) and it reaches
-  # cyfr's host API at LOCUS_RUNTIME_HOST_API_URL; both sit on the
-  # locus-runtime network, which nothing else joins. The network is the
-  # service's alone: a runner has no interface on it or on any other, and
-  # its host calls and pinned fetches leave through its relay to the
-  # service, which posts and connects for it.
-  locus-runtime:
-    <<: *locus-role
-    container_name: cyfr-locus-runtime
-    # Pulled as published; a source checkout builds it with
-    # `docker compose build locus-runtime`.
-    image: ghcr.io/cyfrworks/cyfr-locus:latest
-    build:
-      context: .
-      dockerfile: Dockerfile.locus
-    expose:
-      - "4200"
-    # The image's entrypoint serves builds; this service runs the runner
-    # pool instead: 8 uids, each runner under one of its own, in a relay
-    # space whose only way out is its relay to the service.
-    entrypoint: ["cyfr-locus", "serve", "--pool", "runner:30101-30108:relay", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
-    # The release's settings from .env.locus, one file for every role;
-    # LOCUS_RUNTIME_KEY comes from .env below. The runtime never sees the
-    # rest of .env: not the runtime's root, not the keyring, not the
-    # database, and refuses to start with any of them in its environment,
-    # or with the builds or backends key beside its own.
-    env_file:
-      - path: .env.locus
-        required: false
-    environment:
-      - LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}
-      - LOCUS_RUNTIME_KEY=${LOCUS_RUNTIME_KEY:-}
-      - LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}
-      - LOCUS_RUNTIME_BIND=0.0.0.0
-      - LOCUS_RUNTIME_PORT=4200
-    networks:
-      - locus-runtime
-    # The engine holds no tenant state: these tmpfs mounts are the only
-    # writable surfaces under the read-only root. Runner homes: each
-    # runner's uid creates its own 0700 home, where its VM keeps the
-    # release's temporary files; mode 1733 lets it create one without
-    # listing the others, and the runner runs the release from there, so it
-    # allows exec. Its size counts against the memory limit below.
-    # /run/locus holds the service's temporary files and the socket
-    # runners' relays attach to.
-    tmpfs:
-      - /var/lib/locus/homes:mode=1733,exec,size=256m
-      - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
-    # Running attempts close or are reported on shutdown; compose's default
-    # 10s grace would SIGKILL mid-report.
-    stop_grace_period: 40s
-    # Liveness: the worker listener refuses an unsigned status request with
-    # 401, which it answers only once the worker service holds its
-    # credentials; in place of the image's builds probe.
-    healthcheck:
-      test: ["CMD-SHELL", "[ \"$$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:4200/worker/v1/status)\" = \"401\" ] || exit 1"]
-      interval: 10s
-      timeout: 3s
-      start_period: 20s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          # Every runner has a memory bound of its own
-          # (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB): its VM, every guest's
-          # linear memory, its home's tmpfs pages and the kernel memory
-          # charged to it, together, and a runner that reaches it is ended
-          # there alone. This limit holds every runner uid the image has (8)
-          # at that bound and the service beside them: 8 x 384 MiB + 1 GiB
-          # for the service (cyfr-locus and the locus release), whose current
-          # peak serving the seed components comes from
-          # tests/locus-runtime-image/memory.py --measure. Raise it with the
-          # bound (.env.example has the arithmetic).
-          memory: ${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}
-          # Caps aggregate damage from WASM components that never yield
-          # (a killed tight-loop leaks a spinning native thread).
-          cpus: "${LOCUS_RUNTIME_CPU_LIMIT:-4}"
-
-  # The backends service: the same image as locus-builds, holding the
-  # backends key and the backend pool in place of the builds key and the
-  # build pool. cyfr reaches it at http://locus-backends:4101
-  # (CYFR_LOCUS_BACKENDS_URL) with CYFR_LOCUS_BACKENDS_KEY, which it reads
-  # from .env; compose hands this service the same key as
-  # LOCUS_BACKENDS_KEY. Its other settings go in .env.locus.
-  locus-backends:
-    <<: *locus-role
-    container_name: cyfr-locus-backends
-    # Pulled as published; a source checkout builds it with
-    # `docker compose build locus-backends`.
-    image: ghcr.io/cyfrworks/cyfr-locus:latest
-    build:
-      context: .
-      dockerfile: Dockerfile.locus
-    # The image's entrypoint serves builds; this service runs the backend
-    # pool instead: 32 uids, each program's process under one of its own.
-    # --kept-homes names the kept homes' root, the `homes` volume below,
-    # and the uids they own: a kept home, one per login entry, holds one
-    # uid of 40001-49999 for its life, which no pool and no other home is
-    # given. The range lies outside the image's users and every pool; the
-    # keeper refuses one that does not. Every session runs in a space of
-    # its own, two sessions of one folder included. --guard names the
-    # control of this island's guard (the `guard-control` volume below):
-    # before each session starts, the keeper resolves the hosts its row
-    # names and has the guard make the session's own route to their
-    # addresses, or to the public hosts for a row that names none, and a
-    # session without its route is never started.
-    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]
-    # The release's settings from .env.locus, one file for every role. The
-    # service never sees the rest of .env: not the keyring, not the
-    # database, not the runtime's root, not the builds key, and refuses to
-    # start with any control-plane variable in its environment. Backends
-    # receive only the environment their server row defines.
-    env_file:
-      - path: .env.locus
-        required: false
-    environment:
-      # The backends key every control message and MCP request is signed
-      # and verified with, and every sync's environment sealed with: 32
-      # random bytes as 64 hexadecimal digits, the value cyfr reads as
-      # CYFR_LOCUS_BACKENDS_KEY. `cyfr init` generates it. Without a valid
-      # key the service refuses to start (and restart-loops here).
-      - LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}
-    # Only cyfr can reach the service: it shares the network namespace of
-    # its guard, which sits on the backends network, which cyfr also joins;
-    # locus-builds, locus-runtime and caddy never see port 4101. The
-    # network is not `internal` — `npx` needs the registry and a backend
-    # its upstream API — and what a session reaches out to is its route's
-    # rules (cyfr-guard): the hosts its row named at its start or, with
-    # none, public hosts, and the private hosts CYFR_PRIVATE_EGRESS_TARGETS
-    # names; nothing link-local, no metadata address, not the control
-    # plane, no other private address, and no other space. The guard's
-    # namespace is the container's only network, so listening on every
-    # interface is listening on it. The service starts only once the guard
-    # is healthy, which it is only with every rule installed; a guard that
-    # restarts takes a fresh namespace, and the service is recreated to
-    # join it (`docker compose up -d`).
-    network_mode: service:locus-backends-guard
-    depends_on:
-      locus-backends-guard:
-        condition: service_healthy
-    # These tmpfs mounts are the only writable surfaces under the read-only
-    # root, so a backend has no shared /tmp, /var/tmp, /run or /dev/shm and
-    # writes temporary files under its home. Backend homes: each backend's
-    # uid creates its own 0700 home; mode 1733 lets it create one without
-    # listing the others. Homes hold npx caches, so they allow exec, and
-    # what a backend writes there counts against its memory bound.
-    # /run/locus holds the release's temporary files and the socket
-    # backends' relays attach to.
-    tmpfs:
-      - /var/lib/locus/homes:mode=1733,exec,size=2g
-      - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
-    # Kept homes: a program's home that outlives its process, one 0700
-    # folder per login entry under a uid of its own. The volume is the
-    # homes' whole disk and their only bound beside a row's own
-    # home_max_bytes; it is never under data/ and no backup carries it.
-    # The image makes its root root's and the locus group's, 1773, which a
-    # new volume takes: the release lists it to draw a free uid, and a
-    # home's uid makes its own folder without listing the others. The
-    # guard's control, read-only here: its folder is root's own, 0700, so
-    # in this container the keeper alone reaches it.
-    volumes:
-      - homes:/var/lib/locus/kept
-      - guard-control:/run/cyfr-guard-control:ro
-    # Shutdown retires every backend and drains in-flight requests;
-    # compose's default 10s is tight when several backends are up.
-    stop_grace_period: 15s
-    # The backends wire's health operation, answered without a key
-    # (Prima.LocusBackends), in place of the image's builds probe.
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -X POST -H 'content-type: application/json' -d '{\"version\":4}' http://localhost:4101/locus/v1/backends/health || exit 1"]
-      interval: 10s
-      timeout: 3s
-      start_period: 20s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          # Every backend session has a memory bound of its own
-          # (LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, or its row's): its
-          # processes, its home's tmpfs pages and the kernel memory charged
-          # to them, together, and a session that reaches it is ended there
-          # alone. The service admits a session only while the bounds of
-          # the sessions it holds stay within LOCUS_BACKENDS_MEMORY_BUDGET
-          # (1792 MiB) times LOCUS_BACKENDS_MEMORY_OVERCOMMIT (1), so this
-          # limit is that budget plus 256 MiB for the service beside them.
-          # Raise it with the budget (.env.example has the arithmetic).
-          memory: ${LOCUS_BACKENDS_MEMORY_LIMIT:-2G}
-
-  # The backends island's egress guard, as the builds island's: cyfr-guard
-  # in the namespace locus-backends shares, NET_ADMIN alone, the island's
-  # service name as its alias, healthy only with every rule installed,
-  # serving the island's keeper its control (CYFR_GUARD_CONTROL, on the
-  # `guard-control` volume, the one other place it writes): each session's
-  # route, made before the session starts.
-  locus-backends-guard:
-    container_name: cyfr-locus-backends-guard
-    image: ghcr.io/cyfrworks/cyfr-locus:latest
-    build:
-      context: .
-      dockerfile: Dockerfile.locus
-    expose:
-      - "4101"
-    entrypoint: ["cyfr-guard"]
-    init: true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_ADMIN
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    ipc: none
-    sysctls:
-      net.ipv4.ip_forward: "1"
-      net.ipv4.icmp_ratelimit: "0"
-    tmpfs:
-      - /run/cyfr-guard:mode=0755,size=1m
-    environment:
-      - CYFR_GUARD_CONTROL_PLANE=172.16.230.2
-      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
-      - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock
+      - CYFR_GUARD_HOST_API=172.16.231.2:${CYFR_HOST_API_PORT:-4300}
     volumes:
       - guard-control:/run/cyfr-guard-control
     networks:
-      locus-backends:
+      locus:
         aliases:
-          - locus-backends
+          - locus
     healthcheck:
       test: ["CMD", "cyfr-guard", "check"]
       interval: 10s
@@ -760,7 +552,7 @@ networks:
   # network. Its subnet is fixed so cyfr can hold the fixed address its
   # loopback listener binds (CYFR_BIND_ADDRESS), outside the pools Docker
   # draws the other networks' subnets from by default, as the
-  # locus-runtime network's is (below); a container on it would take an
+  # locus network's is (below); a container on it would take an
   # address from its ip_range alone. Docker publishes 127.0.0.1:${CYFR_PORT:-4000} to that address
   # (tests/compose-proof/run.sh --case bind holds it to that). The network
   # is dual-stack, with the unique-local IPv6 subnet Docker assigns: Docker
@@ -784,22 +576,15 @@ networks:
       config:
         - subnet: 172.16.234.0/24
           ip_range: 172.16.234.128/25
-  # cyfr <-> locus-backends-guard, whose namespace locus-backends shares
-  # (see the locus-backends service).
-  locus-backends: {}
-  # cyfr <-> locus-builds-guard, whose namespace locus-builds shares (see
-  # the locus-builds service).
-  locus-builds: {}
-  # cyfr <-> locus-runtime only: the other Locus services and caddy never
-  # see port 4200, and no runner is on it (see the locus-runtime service).
-  # The network is not `internal` — a guest's consented HTTP egress leaves
-  # from the worker service, which connects to the pinned address for it —
-  # so the isolation is who is attached. Its subnet is fixed so cyfr can
-  # hold the fixed address its host API binds. It lies outside the pools
-  # Docker draws the other networks' subnets from by default (172.17.0.0/16
-  # to 172.31.0.0/16, and 192.168.0.0/16), and the other containers on it
-  # take addresses from its ip_range alone.
-  locus-runtime:
+  # cyfr <-> locus-guard only, whose namespace locus shares (see the locus
+  # service): caddy and tailscale never see a role's port. The network is
+  # not `internal` (see the locus service), so the isolation is who is
+  # attached. Its subnet is fixed so cyfr can hold the fixed address its
+  # host API binds, the address the guard lets the runtime reach. It lies
+  # outside the pools Docker draws the other networks' subnets from by
+  # default (172.17.0.0/16 to 172.31.0.0/16, and 192.168.0.0/16), and the
+  # other containers on it take addresses from its ip_range alone.
+  locus:
     ipam:
       config:
         - subnet: 172.16.231.0/24
@@ -807,11 +592,16 @@ networks:
 
 volumes:
   homes:
-  # Each island guard's control socket, which the guard alone writes; the
-  # island's service mounts it read-only. Nothing in it outlives the guard:
-  # a guard that starts removes a socket an earlier one left.
+  # The machines' device: the image's programs as one read-only squashfs,
+  # which the keeper makes from its own root the first time it starts a
+  # person's machine under an image, named by the image's digest. A new
+  # release makes its own and removes the old; it holds nothing of a
+  # person's.
+  guest:
+  # The guard's control socket, which the guard alone writes; locus mounts
+  # it read-only. Nothing in it outlives the guard: a guard that starts
+  # removes a socket an earlier one left.
   guard-control:
-  builds-guard-control:
   caddy_data:
   caddy_config:
   tailscale_state:

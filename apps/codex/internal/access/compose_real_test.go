@@ -224,6 +224,57 @@ func boxProject(t *testing.T, compose, env string) (string, string) {
 	return dir, name
 }
 
+// A profile of the stack's own, one no access mode selects, is read from
+// compose itself, every service's whichever selection runs it; a head
+// that names it beside its access mode's materializes a configuration
+// holding that profile's service, checked against .env's head, while a
+// head naming another mode's profile is still refused.
+func TestRealComposeSelectsTheStacksOwnProfiles(t *testing.T) {
+	requireCompose(t)
+	dir := filepath.Join(t.TempDir(), "home")
+	os.Mkdir(dir, 0o755)
+	writeFile(t, filepath.Join(dir, "compose.yml"), []byte("services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n"+
+		"  builds:\n    image: busybox:latest\n    profiles: [\"builds\"]\n  proxy:\n    image: busybox:latest\n    profiles: [\"public\"]\n"))
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"))
+	e, err := Open(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys := e.docker.(*systemDocker)
+	sys.watchdog, sys.environ = []string{exeOrSkip(t), "-access.watchdog"}, func() []string { return childEnv() }
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	declared, err := e.DeclaredProfiles(bg)
+	if slices.Sort(declared); err != nil || !slices.Equal(declared, []string{"builds", "public"}) {
+		t.Fatalf("DeclaredProfiles answered %v, %v", declared, err)
+	}
+	h, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := h
+	own.Profiles = append(slices.Clone(h.Profiles), "builds")
+	args, err := e.ComposeArgs(bg, own, "config", "--services")
+	if err != nil {
+		t.Fatalf("a head naming the stack's own profile is refused: %v", err)
+	}
+	cmd := exec.Command("docker", args...)
+	cmd.Dir, cmd.Env = dir, childEnv()
+	out, err := cmd.Output()
+	services := strings.Fields(string(out))
+	if slices.Sort(services); err != nil || !slices.Equal(services, []string{"builds", "cyfr"}) {
+		t.Fatalf("the configuration under the stack's own profile runs %v (%v)", services, err)
+	}
+	other := h
+	other.Profiles = []string{"public"}
+	if _, err := e.ComposeArgs(bg, other, "ps"); err == nil || !strings.Contains(err.Error(), "starts cyfr reached as") {
+		t.Fatalf("a local head naming the public profile answered %v", err)
+	}
+}
+
 // The lock stays held while a real `docker compose` call runs, and
 // after the command that started it is killed, as flock -n from outside
 // shows, until the call ends.

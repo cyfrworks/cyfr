@@ -107,19 +107,20 @@ defmodule Aqua.Runner.AdmissionRoomsTest do
   defp check(ctx, thread, text, opts),
     do: Admission.check(ctx, ctx.athanor_id, thread, text, opts)
 
-  test "a schedule's fire is a turn of the soul in a daily thread, and admitted in no other kind",
+  test "a schedule's fire is a turn of the soul in a daily or a workspace thread, and admitted in no crew thread",
        %{ctx: ctx} do
     fired = Sanctum.TestContext.via(ctx, :schedule)
 
-    assert {:ok, {:turn, "aqua"}, "summarise"} = check(fired, @daily, "summarise", @fire)
+    # A daily thread, or the workspace thread a turn there set it from.
+    for room <- [@daily, @workspace] do
+      assert {:ok, {:turn, "aqua"}, "summarise"} = check(fired, room, "summarise", @fire)
 
-    # Whatever names its line holds: nobody present asks no crew member.
-    assert {:ok, {:turn, "aqua"}, _} =
-             check(fired, @daily, "@planner summarise", [{:agents, @roster} | @fire])
-
-    for thread <- [@workspace, @crew] do
-      assert {:error, :not_addressable} = check(fired, thread, "summarise", @fire), thread.kind
+      # Whatever names its line holds: nobody present asks no crew member.
+      assert {:ok, {:turn, "aqua"}, _} =
+               check(fired, room, "@planner summarise", [{:agents, @roster} | @fire])
     end
+
+    assert {:error, :not_addressable} = check(fired, @crew, "summarise", @fire)
 
     # A fire is the schedule's own origin's, and a person's send is none.
     assert {:error, :not_addressable} = check(ctx, @daily, "summarise", @fire)

@@ -38,7 +38,6 @@ defmodule Locus.Runtime.SettingsTest do
             idle_ttl_ms: 30_000,
             watchdog_grace_ms: 5_000,
             release_grace_ms: 2_000,
-            attach_dir: "/run/locus",
             runner_memory_bytes: 402_653_184
           ] do
         assert Settings.default(key) == value
@@ -180,6 +179,21 @@ defmodule Locus.Runtime.SettingsTest do
       after
         Locus.Runtime.Test.Env.restore(previous, [:runner_memory_bytes])
       end
+    end
+
+    test "unset, the attach directory is the run folder cyfr-locus names, and a clean absolute path" do
+      assert {:ok, %{attach_dir: "/run/locus/runtime"}} =
+               Settings.pool([], %{"KEEPER_RUN_DIR" => "/run/locus/runtime"})
+
+      assert {:ok, %{attach_dir: "/run/locus"}} = Settings.pool([], %{"KEEPER_RUN_DIR" => ""})
+
+      assert {:error, {:malformed, :attach_dir}} =
+               Settings.pool([], %{"KEEPER_RUN_DIR" => "run/locus/runtime"})
+
+      assert {:ok, %{attach_dir: "/tmp/locus"}} =
+               Settings.pool([attach_dir: "/tmp/locus"], %{
+                 "KEEPER_RUN_DIR" => "/run/locus/runtime"
+               })
     end
 
     test "the attach directory is a clean absolute path" do

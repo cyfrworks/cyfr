@@ -106,8 +106,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
   # The place `id` the client asks for, a runner's at rest, answered as
   # cyfr-locus answers it.
   defp placed!(keeper, id) do
-    assert %{"v" => 4, "type" => "place", "id" => ^id, "kind" => "warm"} = request(keeper)
-    reply(keeper, %{v: 4, type: "placed", id: id})
+    assert %{"v" => 6, "type" => "place", "id" => ^id, "kind" => "warm"} = request(keeper)
+    reply(keeper, %{v: 6, type: "placed", id: id})
   end
 
   # The next line the client sent the keeper.
@@ -130,14 +130,14 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert %{"type" => "assign", "id" => id} = asked = request(keeper)
 
     assert Map.delete(asked, "id") == %{
-             "v" => 4,
+             "v" => 6,
              "type" => "assign",
              "place" => place,
              "kind" => kind,
              "athanor" => athanor
            }
 
-    reply(keeper, %{v: 4, type: "assigned", id: id})
+    reply(keeper, %{v: 6, type: "assigned", id: id})
   end
 
   defp attach!(dir, token) do
@@ -178,7 +178,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
              spawned = request(keeper)
 
     assert Map.drop(spawned, ["id", "attach"]) == %{
-             "v" => 4,
+             "v" => 6,
              "type" => "spawn",
              "place" => "runner_1",
              "pool" => "runner",
@@ -194,7 +194,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert String.match?(token, ~r/\A[0-9a-f]{64}\z/)
 
     spawn_id = String.duplicate("ab", 16)
-    reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
     # The assign is held until the relay attaches, then flushed as frames,
     # its attempt bound on the runner's relay first, once the keeper has
@@ -269,7 +269,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
 
     reply(keeper, %{
-      v: 4,
+      v: 6,
       type: "exited",
       spawn_id: spawn_id,
       code: 0,
@@ -280,7 +280,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     # Its end is heard once its connection has carried its last frame.
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
-    reply(keeper, %{v: 4, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
   end
 
@@ -298,7 +298,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     %{"id" => id} = request(keeper)
 
     reply(keeper, %{
-      v: 4,
+      v: 6,
       type: "spawned",
       id: id,
       spawn_id: String.duplicate("aa", 16),
@@ -355,17 +355,17 @@ defmodule Locus.Runtime.KeeperChannelTest do
     handle = start_handle!(keeper, name)
     %{"id" => id, "attach" => %{"token" => token}} = request(keeper)
     spawn_id = String.duplicate("cd", 16)
-    reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
+    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
     RunnerProcess.release(handle, 750)
 
-    assert %{"v" => 4, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
+    assert %{"v" => 6, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
              request(keeper)
 
     reply(keeper, %{
-      v: 4,
+      v: 6,
       type: "exited",
       spawn_id: spawn_id,
       code: nil,
@@ -402,7 +402,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {:channel, channel}, 5_000
     %{"id" => id} = request(keeper)
     spawn_id = String.duplicate("12", 16)
-    reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
+    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
     :ok = Channel.release(channel, 500)
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 500} = request(keeper)
 
@@ -414,7 +414,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert map_size(:sys.get_state(client).requests) == 1
 
     # Its retirement reported, the runner is forgotten.
-    reply(keeper, %{v: 4, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
 
     Prima.Test.Wait.wait_until(
       fn -> :sys.get_state(client).requests == %{} end,
@@ -431,7 +431,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     %{"id" => id} = request(keeper)
     RunnerProcess.release(handle, 0)
     spawn_id = String.duplicate("ef", 16)
-    reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(keeper)
   end
 
@@ -441,7 +441,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
   } do
     handle = start_handle!(keeper, name)
     %{"id" => id} = request(keeper)
-    reply(keeper, %{v: 4, type: "error", id: id, code: "capacity"})
+    reply(keeper, %{v: 6, type: "error", id: id, code: "capacity"})
     assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
@@ -498,7 +498,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     handle = start_handle!(keeper, name)
     %{"id" => id, "attach" => %{"token" => token}} = sent = request(keeper)
     assert {:ok, sent["memory_bytes"]} == Locus.Runtime.Settings.runner_memory_bytes([])
-    reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 

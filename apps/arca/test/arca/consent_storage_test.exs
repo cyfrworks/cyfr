@@ -941,6 +941,139 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "absence_cause/2" do
+    defp owner!(athanor, source, id, label \\ "default") do
+      {:ok, profile} =
+        Writers.put_profile(%{
+          id: id,
+          athanor_id: athanor,
+          source_ref: source,
+          kind: "owner",
+          label: label,
+          status: "active"
+        })
+
+      profile
+    end
+
+    test "answers why no grant of the source stands now, from the grant that ended last, " <>
+           "in the actor's athanor alone",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      source = "reagent:local.absence"
+
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :never}
+
+      _ = owner!(athanor, source, "prof_abs_first")
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :standing}
+
+      assert :ok = ProfileStorage.revoke_by_person(actor, "prof_abs_first")
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :person}
+
+      # Granted again, then a removal took that grant: the absence is the
+      # removal's, though its person revoked an older grant, which stays
+      # authority's answer.
+      _ = owner!(athanor, source, "prof_abs_second")
+      assert {:ok, ["prof_abs_second"]} = ProfileStorage.revoke_for_source(actor, source)
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :removal}
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, true}
+
+      # Two owner profiles under different labels stand: an ambiguity,
+      # never an absence.
+      _ = owner!(athanor, source, "prof_abs_default")
+      _ = owner!(athanor, source, "prof_abs_work", "work")
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :standing}
+
+      # One revoked, one standing: still standing.
+      assert :ok = ProfileStorage.revoke_by_person(actor, "prof_abs_default")
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :standing}
+
+      # The last to end, its person's.
+      assert :ok = ProfileStorage.revoke_by_person(actor, "prof_abs_work")
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :person}
+
+      other = "ath_absence_elsewhere"
+      Arca.Test.Actor.ensure_athanor_row(other)
+      assert ConsentStorage.absence_cause(Prima.Actor.in_athanor(other), source) == {:ok, :never}
+      assert ConsentStorage.absence_cause(actor, "reagent:local.other") == {:ok, :never}
+    end
+
+    # A removal queued behind a person's revocation ends its grant later,
+    # and is stamped so: it takes its time once it holds its connection,
+    # inside its transaction, never before.
+    test "a removal queued behind a person's revocation is the grant that ended last",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      source = "reagent:local.absence-order"
+      person = owner!(athanor, source, "prof_abs_people")
+      last = owner!(athanor, source, "prof_abs_ending_last", "work")
+
+      removal =
+        Arca.Repo.checkout(fn ->
+          task = Task.async(fn -> ProfileStorage.revoke_for_source(actor, source) end)
+
+          Prima.Test.Wait.wait_until(
+            fn ->
+              {:current_stacktrace, frames} = Process.info(task.pid, :current_stacktrace)
+              Enum.any?(frames, fn {module, _, _, _} -> module == DBConnection.Holder end)
+            end,
+            2_000,
+            "the removal to wait for its connection"
+          )
+
+          assert :ok = ProfileStorage.revoke_by_person(actor, person.id)
+          assert ConsentStorage.absence_cause(actor, source) == {:ok, :standing}
+          task
+        end)
+
+      last_id = last.id
+      assert {:ok, [^last_id]} = Task.await(removal)
+      assert {:ok, []} = ProfileStorage.list_for_source(actor, source)
+      assert ConsentStorage.revoked_by_person?(actor, source) == {:ok, true}
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :removal}
+    end
+
+    # A repeat of an old revocation ends no grant: the grant that ended
+    # last is still the removal's.
+    test "a repeat of its person's old revocation leaves the grant that ended last",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      source = "reagent:local.absence-repeat"
+      first = owner!(athanor, source, "prof_abs_repeat_first")
+      assert :ok = ProfileStorage.revoke_by_person(actor, first.id)
+      _ = owner!(athanor, source, "prof_abs_repeat_next")
+      assert {:ok, ["prof_abs_repeat_next"]} = ProfileStorage.revoke_for_source(actor, source)
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :removal}
+
+      assert :ok = ProfileStorage.revoke_by_person(actor, first.id)
+      assert ConsentStorage.absence_cause(actor, source) == {:ok, :removal}
+    end
+
+    test "a profile row outside its vocabulary refuses the read, never reads as a cause",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      source = "reagent:local.absence-damaged"
+      _ = owner!(athanor, source, "prof_abs_damaged")
+      assert :ok = ProfileStorage.revoke_by_person(actor, "prof_abs_damaged")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^athanor and p.id == "prof_abs_damaged"
+          ),
+          set: [kind: "sideways"]
+        )
+
+      assert ConsentStorage.absence_cause(actor, source) ==
+               {:error, {:invalid_stored_value, "sideways"}}
+    end
+
+    test "a context with no athanor is refused" do
+      assert ConsentStorage.absence_cause(%Prima.Actor{}, "reagent:local.absence") ==
+               {:error, :no_athanor}
+    end
+  end
+
   describe "active_heads/2" do
     defp granted!(athanor, id, status, refs \\ []) do
       {:ok, _profile} =

@@ -47,7 +47,12 @@ runner's own uid, outside that namespace, may not):
   namespace so the keeper can isolate each spawn, a runner makes none of
   its own: its clone with CLONE_NEWUSER, alone or with CLONE_NEWNET, is
   refused EPERM, where the same clone without a namespace flag makes a
-  child; `unshare -U` is refused; and it still starts a thread.
+  child; `unshare -U` is refused; and it still starts a thread. It makes
+  an AF_UNIX socket and socket pair, and is refused EPERM an AF_VSOCK one
+  of each, and so with the domain's high bits set, which the kernel reads
+  as AF_VSOCK; on x86_64 its 32-bit socketcall of AF_VSOCK makes no socket,
+  and under the profile alone, outside any space, a 32-bit socketcall of
+  AF_INET or AF_VSOCK is killed, as every 32-bit call is.
 - `measure`: one real runner, the release's own runner command with its
   control channel and relay as the shipped service spawns it, its attach
   connection served by this machine as its worker service: its place is
@@ -111,9 +116,11 @@ import secrets
 import shutil
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -124,6 +131,7 @@ from control_plane import ControlPlane  # noqa: E402
 from memory import CHILD_BYTES as HOG_BYTES, HOG, HOG_REF, wasm  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, RELEASE, ROLE, RUN_DIR, SERVICE, SERVICE_UID,  # noqa: E402
                    SERVICE_USER, Stack, expect, run, wait_until)
+import imagesuite  # noqa: E402
 from imagesuite import APPARMOR, PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 from worker_auth import ATTEMPT_FIELDS  # noqa: E402
 
@@ -205,28 +213,68 @@ class IsolatedStack(Stack):
 # ---------------------------------------------------------------------------
 
 
-def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), network=None, pool_args=None,
-               apparmor=APPARMOR):
-    """cyfr-locus from the image under the shipped service's options, serving the relay pool to a shell client;
-    with `network`, in that container's network namespace. Without `seccomp` it runs under Docker's default seccomp
-    profile, and with `apparmor` None under Docker's default AppArmor profile."""
-    args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
-            *(["--network", f"container:{network}"] if network else []),
-            *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
-            "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
-            "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
-    if seccomp:
-        args += ["--security-opt", f"seccomp={PROFILE}"]
-    if apparmor:
-        args += ["--security-opt", f"apparmor={apparmor}"]
-    args += ["--security-opt", "systempaths=unconfined"]
-    args += ["--entrypoint", "cyfr-locus", image, "serve", *(pool_args or ["--pool", POOL]), "--home-root", HOME_ROOT,
-             "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]
-    return run(*args, check=False, timeout=timeout)
+# What the client's shell prints once its script is done, with the script's status: a role's process that ends is
+# started again by its keeper, so the client stays until the run stops it.
+CLIENT_DONE = "<<<client done "
+
+
+def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard=None, pool_args=None,
+               apparmor=APPARMOR, guarded=True, on_start=None):
+    """cyfr-locus from the image under the shipped service's options, serving the runtime's role, whose process is
+    a shell running `client_script`, and the relay pool, in the network namespace of `guard` (an
+    `imagesuite.Guard`), or of a guard of its own made for the run. `guarded=False` names a guard's control no
+    guard serves. Without `seccomp` it runs under Docker's default seccomp profile, and with `apparmor` None under
+    Docker's default AppArmor profile. `on_start` is told the container's id once it runs. Answers the run as a
+    finished process: the keeper's status where it ended, else the client script's once it is done, and what the
+    container printed."""
+    own = None
+    if guard is None and guarded:
+        own = guard = imagesuite.Guard(image, f"locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}", runner=run)
+    name = None
+    client = f"{client_script}\necho \"{CLIENT_DONE}$?>>>\"; exec sleep 1000000"
+    try:
+        args = ["docker", "run", "--detach",
+                *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
+                *(guard.keeper_args() if guard else []),
+                *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID",
+                "--cap-add", "SETGID", "--cap-add", "KILL", "--security-opt", "no-new-privileges:true",
+                "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
+                *imagesuite.role_mounts(RELEASE, ROLE, home_size="64m"),
+                "-e", f"{ROLE['key']}={secrets.token_hex(32)}"]
+        if seccomp:
+            args += ["--security-opt", f"seccomp={PROFILE}"]
+        if apparmor:
+            args += ["--security-opt", f"apparmor={apparmor}"]
+        args += ["--security-opt", "systempaths=unconfined"]
+        args += ["--entrypoint", "cyfr-locus", image, "serve", "--role", imagesuite.role_spec(ROLE),
+                 *(pool_args or ["--pool", POOL]), "--home-root", RELEASE["home_root"],
+                 "--guard", imagesuite.Guard.CONTROL, "--", "/bin/sh", "-c", client]
+        name = run(*args).stdout.strip()
+        if on_start:
+            on_start(name)
+        deadline = time.monotonic() + timeout
+        while True:
+            logs = run("docker", "logs", name, check=False)
+            if CLIENT_DONE in logs.stdout:
+                head, tail = logs.stdout.split(CLIENT_DONE, 1)
+                return subprocess.CompletedProcess(args, int(tail.split(">>>", 1)[0]), head, logs.stderr)
+            state = json.loads(run("docker", "inspect", name).stdout)[0]["State"]
+            if not state["Running"]:
+                logs = run("docker", "logs", name, check=False)
+                return subprocess.CompletedProcess(args, state["ExitCode"], logs.stdout, logs.stderr)
+            if time.monotonic() > deadline:
+                sys.exit(f"FAIL: the keeper's client was not done within {timeout} s\n{logs.stdout[-3000:]}\n"
+                         f"{logs.stderr[-3000:]}")
+            time.sleep(0.2)  # sleep-ok: polling the client's log for its end
+    finally:
+        if name:
+            run("docker", "rm", "--force", name, check=False)
+        if own:
+            own.down()
 
 
 def place_line(place, kind="warm", athanor=None):
-    request = {"v": 4, "type": "place", "id": place, "kind": kind}
+    request = {"v": 6, "type": "place", "id": place, "kind": kind}
     if athanor:
         request["athanor"] = athanor
     return json.dumps(request)
@@ -234,7 +282,7 @@ def place_line(place, kind="warm", athanor=None):
 
 def spawn_line(spawn_id, argv, env=None, control=False, attach=f"{RUN_DIR}/attach.sock", place=PLACE,
                memory_bytes=MEMORY_BYTES, **extra):
-    request = {"v": 4, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
+    request = {"v": 6, "type": "spawn", "id": spawn_id, "place": place, "pool": ROLE["pool"], "argv": argv, "env": env or {},
                "memory_bytes": memory_bytes, "cpu_quota": CPU_QUOTA, "attach": {"path": attach, "token": TOKEN}, **extra}
     if control:
         request["control"] = True
@@ -252,7 +300,7 @@ def replies(stdout):
 def after_placed(ran, step):
     """The replies the client read after its first, which must be the keeper's `placed` for the place its spawn names."""
     got = replies(ran.stdout)
-    expect(got[:1] == [{"v": 4, "type": "placed", "id": PLACE}],
+    expect(got[:1] == [{"v": 6, "type": "placed", "id": PLACE}],
            f"{step}: the keeper placed {PLACE} before the client sent the spawn naming it", {"replies": got, "stderr": ran.stderr[-2000:]})
     return got[1:]
 
@@ -274,13 +322,12 @@ def test_refusals(image):
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,
            f"under Docker's default seccomp profile cyfr-locus refuses to serve the relay pool, naming both settings (exit {refused.returncode})",
            refused.stderr)
-    # The keeper's own entry point: a routed pool whose guard is not there
-    # refuses the boot, naming the guard's socket.
-    guard = "/run/cyfr-guard-control/guard.sock"
-    unguarded = keeper_run(image, "exec sleep 5", timeout=60,
-                           pool_args=["--pool", f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:routed", "--guard", guard])
-    expect(unguarded.returncode == 78 and "does not make a route" in unguarded.stderr and guard in unguarded.stderr,
-           f"a routed keeper whose guard is not there refuses to start, naming {guard} (exit {unguarded.returncode})",
+    # The keeper's own entry point: a guard that is not there refuses the
+    # boot, naming the guard's socket.
+    guard = imagesuite.Guard.CONTROL
+    unguarded = keeper_run(image, "exec sleep 5", timeout=60, guarded=False)
+    expect(unguarded.returncode != 0 and "its route was not made" in unguarded.stderr and guard in unguarded.stderr,
+           f"a keeper whose guard is not there refuses to start the role, naming {guard} (exit {unguarded.returncode})",
            unguarded.stderr[-2000:])
     for name, extra in [("naming hosts", {"hosts": ["api.example.com"]}), ("carrying isolation", {"isolation": "netns"})]:
         client = PLACE_FIRST + (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], **extra)}' >&3; "
@@ -296,8 +343,8 @@ def test_connect(image):
     # The command dials the container's loopback and the container's own
     # address and exits 42 when both are unreachable. Its output has no
     # reader, since no client listens on the attach socket, so its exit
-    # status is the answer. The client's shell, in the container's own
-    # namespace, dials the same two first.
+    # status is the answer. The client's shell, the role's process in its
+    # own space, dials its own loopback and address first.
     # Then it asks for a name, which no resolver of its own answers (the
     # loopback is down), within a second, and it reads its IPC namespace,
     # which is not the container's: exit 42 for all of it.
@@ -309,7 +356,7 @@ def test_connect(image):
                '[ $n -eq 2 ] && exit 42; exit $n')
     request = spawn_line("1", ["/bin/sh", "-c", command], env={"TARGET": "@ADDR@", "IPC": "@IPC@"})
     assert "'" not in request
-    client = ('addr=$(getent hosts "$(cat /etc/hostname)" | awk "{print \\$1; exit}"); '
+    client = ('addr=$(awk \'/\\|-- / {a = $2} /\\/32 host LOCAL/ && a !~ /^127\\./ {print a; exit}\' /proc/net/fib_trie); '
               'for t in 127.0.0.1:9 "$addr:9"; do '
               'echo "own $t:$(curl -sv --max-time 3 "http://$t/" 2>&1 | grep -o "Connection refused\\|Network is unreachable" | head -n1)"; done; '
               'ipc=$(readlink /proc/self/ns/ipc); '
@@ -321,9 +368,9 @@ def test_connect(image):
            "connect: under the profile the keeper serves and spawns a command of the relay pool", ran.stdout + ran.stderr)
     own = re.findall(r"^own (\S+):(.*)$", ran.stdout, re.M)
     expect(len(own) == 2 and all(answer == "Connection refused" for _, answer in own),
-           "connect: from the container's own namespace its loopback and its address answer (the dial is refused, not unreachable)", own)
+           "connect: from the role's own space its loopback and its address answer (the dial is refused, not unreachable)", own)
     expect(got[1]["type"] == "exited" and got[1]["code"] == 42,
-           "connect: from the command's namespace neither the loopback nor the container's address is reachable (no route "
+           "connect: from the command's namespace neither the loopback nor the role's address is reachable (no route "
            "exists), no name resolves at once, and its IPC namespace is its own",
            {"replies": got, "stdout": ran.stdout, "stderr": ran.stderr[-2000:]})
 
@@ -339,7 +386,11 @@ def test_names(image):
     tag = secrets.token_hex(4)
     listener = f"{PROJECT_PREFIX}locus-names-{os.getpid()}-{tag}"
     run("docker", "rm", "--force", listener, check=False)
-    run("docker", "run", "--detach", "--name", listener, "--dns", "127.0.0.53", "-v", f"{LISTENER_DIR}:/listener:ro",
+    # The guard's resolver asks the listener, which shares its namespace on
+    # 127.0.0.53 (compose.names.yml's shape).
+    guard = imagesuite.Guard(image, f"locus-names-guard-{os.getpid()}-{tag}", extra=["--dns", "127.0.0.53"])
+    run("docker", "run", "--detach", "--name", listener, "--network", f"container:{guard.id}",
+        "-v", f"{LISTENER_DIR}:/listener:ro", "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE",
         "--entrypoint", "node", image, "/listener/name-listener.mjs")
     try:
         control, runner = f"keeper-{tag}.l5.test", f"runner-{tag}.l5.test"
@@ -348,7 +399,7 @@ def test_names(image):
         client = (f'echo "own:$(getent hosts {control} | cut -d" " -f1)"; '
                   + PLACE_FIRST + f"printf '%s\\n' '{request}' >&3; "
                   'read -r line <&3; echo "reply:$line"; read -r line <&3; echo "reply:$line"')
-        ran = keeper_run(image, client, network=listener)
+        ran = keeper_run(image, client, guard=guard)
         got = after_placed(ran, "names")
         heard = [line.split(" ", 1)[1] for line in run("docker", "logs", listener, check=False).stdout.splitlines()
                  if line.startswith("heard ")]
@@ -359,19 +410,23 @@ def test_names(image):
                {"replies": got, "heard": heard, "stderr": ran.stderr[-2000:]})
     finally:
         run("docker", "rm", "--force", listener, check=False)
+        guard.down()
 
 
 class Attach:
-    """The client's attach socket, on this machine in a directory mounted into the container, speaking the keeper's frames."""
+    """The client's attach socket, on this machine in a directory mounted into the container, speaking the keeper's frames.
 
-    MOUNT = "/run/cyfr-attach"
+    The mount is outside /run, whose run folder alone a role's space holds, so the client, in its space, reads this
+    machine's marks there; it leaves its own in its run folder (`ClientMarks`), the one place its space writes."""
+
+    MOUNT = "/cyfr-attach"
 
     def __init__(self, client_marks=None):
         self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-attach-")
-        # This machine leaves its marks for the client here (`mark`); the client leaves its own in `client_marks`
-        # (`ClientMarks`): cyfr-locus refuses to start with a mount a pooled uid could write.
+        # This machine leaves its marks for the client here (`mark`): cyfr-locus refuses to start with a mount a
+        # pooled uid could write.
         os.chmod(self.dir, 0o755)
-        self.client_marks = client_marks or self.dir
+        self.client_marks = client_marks
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(os.path.join(self.dir, "a.sock"))
         os.chmod(os.path.join(self.dir, "a.sock"), 0o777)
@@ -440,7 +495,9 @@ class Attach:
         open(os.path.join(self.dir, name), "w").close()
 
     def marked(self, name):
-        return os.path.exists(os.path.join(self.client_marks, name))
+        if self.client_marks is None:
+            return False
+        return self.client_marks.marked(name)
 
     def close(self):
         self.server.close()
@@ -498,14 +555,56 @@ NESTED_CLONES = (
 )
 NESTED_THREAD = "$| = 1; print qq{thread=}, threads->create(sub { 7 })->join, qq{\n};"
 CLONE_NR = {"x86_64": 56, "aarch64": 220}
+# The runner's sockets, made with syscall() by socket's and socketpair's
+# numbers on this machine: AF_UNIX, the probe's control; AF_VSOCK (40),
+# which the keeper's profile refuses; and 40 with a high bit set, which the
+# kernel reads as AF_VSOCK too, since it reads a domain's low 32 bits. Each
+# answers `ok` or its errno's name.
+VSOCK_SOCKETS = (
+    "$| = 1; my ($nr, $pnr) = @ARGV; "
+    "sub answer { my $r = shift; return $r >= 0 ? q{ok} : $!{EPERM} ? q{EPERM} : q{errno} . ($! + 0); } "
+    "sub one { answer(syscall($nr, shift, 1, 0)) } "
+    "sub pair { my $sv = qq{\\0} x 8; answer(syscall($pnr, shift, 1, 0, $sv)) } "
+    "print qq{socket_unix=}, one(1), qq{\n}; "
+    "print qq{socket_vsock=}, one(40), qq{\n}; "
+    "print qq{socket_vsock_widened=}, one(0x100000028), qq{\n}; "
+    "print qq{socketpair_unix=}, pair(1), qq{\n}; "
+    "print qq{socketpair_vsock=}, pair(40), qq{\n}; "
+    "print qq{socketpair_vsock_widened=}, pair(0x100000028), qq{\n};"
+)
+SOCKET_NR = {"x86_64": (41, 53), "aarch64": (198, 199)}
+
+
+def socketcall_program(domain):
+    """A 32-bit x86 program that calls socketcall(SYS_SOCKET, {domain, SOCK_STREAM, 0}), the other way into the
+    kernel's socket code, which no 64-bit call names, and exits with the call's negated return: 1 for EPERM, 253
+    for the descriptor 3, which it made. A 32-bit program is the only kind that can make the call."""
+    base = 0x08048000
+    code = (b"\x6a\x00" b"\x6a\x01" b"\x68" + struct.pack("<I", domain) +  # push 0, push 1, push domain
+            b"\x89\xe1" b"\xbb\x01\x00\x00\x00" b"\xb8\x66\x00\x00\x00" b"\xcd\x80" +  # ecx=args, ebx=1, eax=102, int 0x80
+            b"\x89\xc3" b"\xf7\xdb" b"\xb8\x01\x00\x00\x00" b"\xcd\x80")  # exit(-eax)
+    size = 52 + 32 + len(code)
+    header = b"\x7fELF\x01\x01\x01\x00" + b"\x00" * 8 + struct.pack("<HHIIIIIHHHHHH", 2, 3, 1, base + 84, 52, 0, 0, 52, 32, 1, 40, 0, 0)
+    program = struct.pack("<IIIIIIII", 1, 0, base, base, size, size, 5, 0x1000)
+    return base64.b64encode(header + program + code).decode()
+
+
+SOCKETCALL_MADE = 253
 
 
 def test_nested(image):
     command = ('arch=$(uname -m); echo "arch=$arch"; '
-               'case "$arch" in ' + " ".join(f"{arch}) nr={nr};;" for arch, nr in CLONE_NR.items()) + ' *) nr=;; esac; '
+               'case "$arch" in ' + " ".join(f"{arch}) nr={nr} snr={SOCKET_NR[arch][0]} pnr={SOCKET_NR[arch][1]};;"
+                                             for arch, nr in CLONE_NR.items()) +
+               ' *) nr= snr= pnr=;; esac; '
                'u=$(unshare -U true 2>&1); echo "unshare=$u status $?"; '
-               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; perl -Mthreads -e "$THREAD"')
-    got, carried, ran = relay_session(image, command, opens=False, env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD})
+               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; [ -n "$snr" ] && perl -e "$SOCKETS" "$snr" "$pnr"; '
+               'if [ "$arch" = x86_64 ]; then echo "$SOCKETCALL" | base64 -d > "$HOME/socketcall" && chmod 0700 "$HOME/socketcall"; '
+               '"$HOME/socketcall"; echo "socketcall_vsock=$?"; fi; '
+               'perl -Mthreads -e "$THREAD"')
+    got, carried, ran = relay_session(image, command, opens=False,
+                                      env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD, "SOCKETS": VSOCK_SOCKETS,
+                                           "SOCKETCALL": socketcall_program(40)})
     out = (carried or {}).get("got", {}).get(1, b"").decode(errors="replace")
     facts = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     detail = {"stdout": out, "stderr": (carried or {}).get("got", {}).get(2, b"").decode(errors="replace"), "replies": got,
@@ -520,6 +619,39 @@ def test_nested(image):
     expect("Operation not permitted" in facts.get("unshare", "") and not facts.get("unshare", "").endswith(" status 0"),
            "nested: a runner's `unshare -U` is refused", detail)
     expect(facts.get("thread") == "7", "nested: a runner still starts a thread and joins it", detail)
+    expect(facts.get("socket_unix") == "ok", "nested: a runner makes an AF_UNIX socket (the vsock probe's control)", detail)
+    expect(facts.get("socket_vsock") == "EPERM" and facts.get("socket_vsock_widened") == "EPERM",
+           "nested: a runner is refused socket(AF_VSOCK) EPERM, and so with the domain's high bits set, "
+           "which the kernel reads as AF_VSOCK too", detail)
+    expect(facts.get("socketpair_unix") == "ok", "nested: a runner makes an AF_UNIX socket pair (the pair probe's control)", detail)
+    expect(facts.get("socketpair_vsock") == "EPERM" and facts.get("socketpair_vsock_widened") == "EPERM",
+           "nested: a runner is refused socketpair(AF_VSOCK) EPERM by the profile, and so with the domain's high bits set", detail)
+    if facts.get("arch") == "x86_64":
+        expect(facts.get("socketcall_vsock") not in (None, str(SOCKETCALL_MADE)),
+               "nested: a runner's 32-bit socketcall(SYS_SOCKET, AF_VSOCK) makes no socket", detail)
+        test_compat_killed(image)
+    else:
+        print(f"nested: no 32-bit program of {facts.get('arch')} is probed: the 32-bit socketcall is x86's", flush=True)
+
+
+# A 32-bit call is the profile's own to refuse outside a space, where no
+# space's filter stands before it: the keeper's profile names no 32-bit
+# architecture, so every 32-bit and x32 call in the Locus container is
+# killed (SIGSYS, exit 159), and the socketcall whose domain no filter can
+# read, behind its pointer, never reaches the kernel's socket code.
+SIGSYS_EXIT = 128 + 31
+
+
+def test_compat_killed(image):
+    for domain, name in ((2, "AF_INET"), (40, "AF_VSOCK")):
+        ran = run("docker", "run", "--rm", "--network", "none", "--security-opt", f"seccomp={PROFILE}",
+                  *run_name(f"{PROJECT_PREFIX}compat-{domain}"), "--entrypoint", "sh", image, "-c",
+                  f'echo {socketcall_program(domain)} | base64 -d > /tmp/socketcall && chmod 0700 /tmp/socketcall; '
+                  '/tmp/socketcall; echo "exit=$?"', check=False)
+        got = dict(line.split("=", 1) for line in ran.stdout.splitlines() if "=" in line)
+        expect(got.get("exit") == str(SIGSYS_EXIT),
+               f"compat: under the keeper's profile alone, a 32-bit socketcall(SYS_SOCKET, {name}) is killed, "
+               "as every 32-bit call is", {"stdout": ran.stdout, "stderr": ran.stderr[-1000:]})
 
 
 # The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
@@ -560,7 +692,7 @@ WORK_TIMEOUT_MS = 120_000
 PLACES_CLIENT = r"""
 ask() {
   n=$((n + 1))
-  printf '{"v":4,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
+  printf '{"v":6,"type":"measure","id":"m%s","place":"%s"}\n' "$n" "$place" >&3
   while read -r line <&3; do
     echo "read:$1:$line"
     case "$line" in *"\"id\":\"m$n\","*) return 0 ;; esac
@@ -585,7 +717,7 @@ assign() {
   done
   return 1
 }
-mark() { : > "$own_marks/$1"; }
+mark() { mkdir -p "$own_marks" && : > "$own_marks/$1"; }
 marked() {
   tries=0
   until [ -e "$marks/$1" ]; do
@@ -601,7 +733,7 @@ sid=$(printf '%s' "$line" | sed -n 's/.*"spawn_id":"\([0-9a-f]*\)".*/\1/p')
 [ -n "$sid" ] || exit 1
 @OWNERS@
 n=$((n + 1))
-printf '{"v":4,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":4,"type":"measure","id":"m%s","place":"%s"}\n' \
+printf '{"v":6,"type":"release","spawn_id":"%s","grace_ms":%s}\n{"v":6,"type":"measure","id":"m%s","place":"%s"}\n' \
   "$sid" "$grace" "$n" "$place" >&3
 while read -r line <&3; do
   echo "read:release:$line"
@@ -624,33 +756,25 @@ def assigns():
     sent, before = {}, OWNERS[0][1:3]
     for step, kind, athanor, _ in OWNERS[1:]:
         if (kind, athanor) != before:
-            sent[step] = {"v": 4, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
+            sent[step] = {"v": 6, "type": "assign", "id": f"as{len(sent) + 1}", "place": RUNNER, "kind": kind, "athanor": athanor}
         before = (kind, athanor)
     return sent
 
 
 class ClientMarks:
-    """Where the client leaves its marks for this machine: a directory mounted at MOUNT, the service user's and
-    writable by it alone, as cyfr-locus requires of every mount, which a root container of the image makes so."""
+    """Where the client leaves its marks for this machine: a folder of the runtime role's run folder, the one place its
+    space writes, which this machine reads in the keeper's container as the role's user (`name`, the container that
+    `keeper_run` started, told as it starts)."""
 
-    MOUNT = "/run/cyfr-marks"
+    MOUNT = f"{RUN_DIR}/marks"
 
-    def __init__(self, image):
-        self.image = image
-        self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-marks-")
-        self._as_root(f"chown {SERVICE_UID}:{SERVICE_UID} /m && chmod 0755 /m")
+    def __init__(self):
+        self.container = None
 
-    def _as_root(self, script):
-        run("docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-marks-{os.getpid()}-{secrets.token_hex(4)}"),
-            "--user", "0", "-v", f"{self.dir}:/m", "--entrypoint", "/bin/sh", self.image, "-c", script)
-
-    @property
-    def mount(self):
-        return f"{self.dir}:{self.MOUNT}"
-
-    def close(self):
-        self._as_root("rm -rf /m/*")
-        shutil.rmtree(self.dir, ignore_errors=True)
+    def marked(self, mark):
+        return self.container is not None and run(
+            "docker", "exec", "-u", SERVICE_USER, self.container, "test", "-e", f"{self.MOUNT}/{mark}",
+            check=False).returncode == 0
 
 
 def places_client(env, marks=Attach.MOUNT, client_marks=ClientMarks.MOUNT):
@@ -699,14 +823,14 @@ def reading(reply, kind, athanor=None):
     """Whether `reply` answers its measure with a reading above zero of a place whose owner is `kind` and `athanor`, and nothing else."""
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 4, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
+    owner = {"v": 6, "type": "measured", "id": reply.get("id"), "kind": kind, **({"athanor": athanor} if athanor else {})}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(reply):
-    return isinstance(reply, dict) and reply == {"v": 4, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
+    return isinstance(reply, dict) and reply == {"v": 6, "type": "error", "id": reply.get("id"), "code": "unmeasured"}
 
 
 def judge_places(read, detail):
@@ -714,11 +838,11 @@ def judge_places(read, detail):
     steps = {}
     for step, reply in read:
         steps.setdefault(step, []).append(reply)
-    expect(steps.get("placed") == [{"v": 4, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
+    expect(steps.get("placed") == [{"v": 6, "type": "placed", "id": RUNNER}], f"measure: the keeper placed the runner's place {RUNNER}, warm",
            detail)
     spawned = (steps.get("spawned") or [None])[0]
     expect(isinstance(spawned, dict)
-           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 4, "type": "spawned", "id": "1"}
+           and {key: value for key, value in spawned.items() if key not in ("spawn_id", "uid", "pid")} == {"v": 6, "type": "spawned", "id": "1"}
            and re.fullmatch(r"[0-9a-f]{32}", str(spawned.get("spawn_id"))) is not None
            and type(spawned.get("uid")) is int and POOL_FIRST <= spawned["uid"] <= POOL_LAST
            and type(spawned.get("pid")) is int and spawned["pid"] > 0,
@@ -730,7 +854,7 @@ def judge_places(read, detail):
     sent = assigns()
     for step, kind, athanor, what in OWNERS:
         if step in sent:
-            expect(steps.get(f"{step}.assign") == [{"v": 4, "type": "assigned", "id": sent[step]["id"]}],
+            expect(steps.get(f"{step}.assign") == [{"v": 6, "type": "assigned", "id": sent[step]["id"]}],
                    f"measure: before {step}, the keeper applied the assign of {kind} for {athanor} and answered it under its id, "
                    "and nothing else came before that answer", detail)
         got = steps.get(step, [])
@@ -747,7 +871,7 @@ def judge_places(read, detail):
     released = steps.get("release", [])
     end = next((n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") == "released"), None)
     measures = [n for n, reply in enumerate(released) if isinstance(reply, dict) and reply.get("type") in ("measured", "error")]
-    expect(end is not None and released[end] == {"v": 4, "type": "released", "spawn_id": spawned["spawn_id"]}
+    expect(end is not None and released[end] == {"v": 6, "type": "released", "spawn_id": spawned["spawn_id"]}
            and len(measures) == 1 and measures[0] < end and reading(released[measures[0]], kind, athanor),
            "measure: after its release, the runner's place is still read above zero, answered before its released", detail)
     after = steps.get("after", [])
@@ -886,18 +1010,18 @@ def held_until_measured(plane, attach):
 def test_measure(image):
     env = runner_env(image)
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
-    client_marks = ClientMarks(image)
-    attach = Attach(client_marks.dir)
+    marks = ClientMarks()
+    attach = Attach(marks)
     attempt = plane.mint(RUNNER_ENV["RUNTIME_BOOT_ID"], "catalyst", HOG_REF, wasm(HOG), {}, ATHANOR, WORK_TIMEOUT_MS)
     plane.script("push_deltas", held_until_measured(plane, attach), attempt["execution_id"])
     serving = threading.Thread(target=serve_work, args=(attach, plane, attempt), daemon=True)
     serving.start()
     try:
-        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount, client_marks.mount])
+        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount],
+                         on_start=lambda container: setattr(marks, "container", container))
         serving.join(60)
     finally:
         attach.close()
-        client_marks.close()
         plane.stop()
     read = transcript(ran.stdout)
     served = attach.result or {}
@@ -942,8 +1066,11 @@ def runner_facts(stack, runner):
 
 def service_namespaces(stack):
     beam = stack.service_beam_pid()
-    out = stack.as_uid(SERVICE_UID, f"readlink /proc/{beam}/ns/net; readlink /proc/{beam}/ns/user; readlink /proc/{beam}/ns/ipc; "
-                                    f"readlink /proc/{beam}/fd/3").stdout.split()
+    # Read by the observer (`Stack.observe`): the role's uid outside its own
+    # user namespace reads none of its links, and the container's root
+    # holds no capability to.
+    out = stack.observe(f"readlink /proc/{beam}/ns/net; readlink /proc/{beam}/ns/user; readlink /proc/{beam}/ns/ipc; "
+                     f"readlink /proc/{beam}/fd/3").stdout.split()
     return {"net": out[0], "user": out[1], "ipc": out[2], "channel": out[3]} if len(out) == 4 else None
 
 
@@ -969,7 +1096,7 @@ def test_spawn(stack):
 def test_cgroup(stack):
     for runner in stack.runner_processes():
         facts = runner_facts(stack, runner)
-        expect(facts.get("cgroup") == f"0::/keeper-{runner['uid']}/bound",
+        expect(facts.get("cgroup") == f"0::/role-{ROLE['name']}/keeper-{runner['uid']}/bound",
                f"cgroup: runner uid {runner['uid']} runs in its own group, placed from the parent side before it ran", facts)
 
 
@@ -1010,7 +1137,7 @@ def group_removed(stack, uid):
     A failed exec is no answer whatever its status, and a stopped or
     restarting container is not taken for a removed group either.
     """
-    probe = f"test -e /sys/fs/cgroup/keeper-{uid} && echo present || echo absent"
+    probe = f"test -e /sys/fs/cgroup/role-{ROLE['name']}/keeper-{uid} && echo present || echo absent"
     return read_word(stack.exec(probe), ("present", "absent"), f"the keeper group of uid {uid}") == "absent"
 
 
@@ -1051,10 +1178,19 @@ def test_reuse(stack):
 
 
 def test_restart(stack):
+    # The runtime role killed starts again alone; the container then
+    # restarts, its keeper draining the cgroup the last one left.
     state = stack.container_state()
     beam = stack.service_beam_pid()
     stack.exec(f"kill -9 {beam}")
-    stack.wait_restarted(state, 60)
+    wait_until(lambda: stack.service_beam_pid() not in (None, beam), 60, "the runtime role to start again")
+    expect(stack.container_state()["restarts"] == state["restarts"],
+           "restart: the runtime role killed starts again alone, in the same container", stack.container_state())
+    stack.wait_listener()
+    stack.wait_pool(timeout=BOOT_S)
+    for runner in stack.runner_processes():
+        assert_isolated(stack, runner, "role restart")
+    run("docker", "restart", stack.container)
     stack.wait_listener()
     logs = stack.logs()
     unavailable = [line for line in logs.splitlines() if "CPU bounds are unavailable" in line]

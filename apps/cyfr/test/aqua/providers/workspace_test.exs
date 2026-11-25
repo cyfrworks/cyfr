@@ -501,25 +501,26 @@ defmodule Aqua.Providers.WorkspaceTest do
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "skill_create",
-          "name" => "fern-care",
+          "name" => "mine:fern-care",
           "description" => "How the fern is kept",
           "content" => "Water it weekly."
         })
 
       assert {:error,
-              {:invalid_argument, "workspace.open: this athanor has no scroll named \"nowhere\""}} =
-               open(ctx, daily, %{"scrolls" => ["nowhere"]})
+              {:invalid_argument,
+               "workspace.open: this athanor has no scroll named \"mine:nowhere\""}} =
+               open(ctx, daily, %{"scrolls" => ["mine:nowhere"]})
 
       assert Threads.list(actor(ctx), kind: "workspace") == []
       assert records(ctx, "workspace_open") == []
 
       script!([reply("Working on it.")])
-      workspace = open!(ctx, daily, %{"scrolls" => ["fern-care"]})
+      workspace = open!(ctx, daily, %{"scrolls" => ["mine:fern-care"]})
       [opening] = Enum.filter(rows(ctx, workspace.id), &(&1.kind == "opening"))
 
       assert %{
                "scrolls" => [
-                 %{"name" => "fern-care", "body" => "Water it weekly.", "files" => []}
+                 %{"name" => "mine:fern-care", "body" => "Water it weekly.", "files" => []}
                ]
              } =
                Tape.payload(opening)
@@ -536,7 +537,7 @@ defmodule Aqua.Providers.WorkspaceTest do
 
       assert String.ends_with?(
                text,
-               "write the moon report\n\n⟦#{mark} scroll \"fern-care\"⟧\nWater it weekly.\n" <>
+               "write the moon report\n\n⟦#{mark} scroll \"mine:fern-care\"⟧\nWater it weekly.\n" <>
                  "⟦#{mark} end⟧"
              )
     end

@@ -257,8 +257,8 @@ defmodule Locus.Runtime.Keeper do
   defp remedy(Locus.Runtime.Keeper.Channel) do
     ". The worker service starts its runners only through cyfr-locus, which " <>
       "starts it with the keeper channel on fd 3 (#{Locus.Keeper.channel_env()}): start " <>
-      "the release through `cyfr-locus serve --pool runner:… -- /app/bin/locus start` " <>
-      "(the locus-runtime service's entrypoint)."
+      "the release through `cyfr-locus serve --role runtime:… --pool runner:… -- " <>
+      "/app/bin/locus start` (the locus image's entrypoint)."
   end
 
   defp remedy(_keeper), do: ""

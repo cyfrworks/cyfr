@@ -155,6 +155,10 @@ type route struct {
 	udp       *os.File
 	tcp       *os.File
 	names     *names
+	// port and private are a role's: the port forwarded into its space,
+	// which no other route holds while this one stands.
+	port    int
+	private bool
 	// sockets are the inodes of its two name sockets, which no other
 	// route may hold.
 	sockets [2]uint64
@@ -213,6 +217,12 @@ func (k kernelRoutes) pair(r *route) error {
 
 func (k kernelRoutes) rules(r *route) error {
 	args := []string{"route", outerName(r.slot), r.inner.String(), strconv.FormatUint(uint64(r.mark), 10), r.reach}
+	if r.reach == ReachRole {
+		args = append(args, strconv.Itoa(r.port))
+		if r.private {
+			args = append(args, "private")
+		}
+	}
 	return k.apply(append(args, r.addresses...)...)
 }
 
@@ -246,6 +256,9 @@ type server struct {
 	// sockets holds the name sockets of every route standing, by inode:
 	// a socket is one route's, and is refused to another.
 	sockets map[uint64]bool
+	// ports holds the port of every role route standing: a port is one
+	// route's, and is refused to another.
+	ports map[int]bool
 	// pending holds every route whose withdrawal failed: it keeps its slot
 	// and is tried again until it is gone, or the guard ends.
 	pending map[*route]bool
@@ -269,7 +282,7 @@ type server struct {
 
 func newServer(log *logx.Logger, netns string, rng netip.Prefix, maker routeMaker) *server {
 	return &server{log: log, netns: netns, rng: rng, maker: maker, upstream: islandResolver,
-		pending: map[*route]bool{}, routes: map[uint64]map[string]*route{}, exit: os.Exit, now: time.Now,
+		sockets: map[uint64]bool{}, ports: map[int]bool{}, pending: map[*route]bool{}, routes: map[uint64]map[string]*route{}, exit: os.Exit, now: time.Now,
 		bound: withdrawBound, interval: retryInterval}
 }
 
@@ -403,6 +416,13 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	if slot < 0 {
 		return nil, fmt.Errorf("every one of the %d routes of %s is taken", slots, s.rng)
 	}
+	port, private := 0, false
+	if req.Reach == ReachRole {
+		port, private = *req.Port, *req.Private
+		if s.ports[port] {
+			return nil, fmt.Errorf("port %d is another route's", port)
+		}
+	}
 	var sockets [2]uint64
 	for i, f := range files[1:] {
 		ino, err := nsInode(int(f.Fd()))
@@ -417,12 +437,12 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	s.marks++
 	gateway, inner := slotAddresses(s.rng, slot)
 	r := &route{spawnID: req.SpawnID, slot: slot, gateway: gateway, inner: inner, mark: s.marks, conn: id,
-		reach: req.Reach, addresses: req.Addresses, netns: files[0], udp: files[1], tcp: files[2], sockets: sockets}
+		reach: req.Reach, addresses: req.Addresses, port: port, private: private, netns: files[0], udp: files[1], tcp: files[2], sockets: sockets}
 	s.taken[slot] = true
-	if s.sockets == nil {
-		s.sockets = map[uint64]bool{}
-	}
 	s.sockets[sockets[0]], s.sockets[sockets[1]] = true, true
+	if port != 0 {
+		s.ports[port] = true
+	}
 	fail := func(err error) (*route, error) {
 		if uerr := s.withdrawLocked(r); uerr != nil {
 			s.log.Error("control: the parts of spawn %s's refused route could not all be removed, and slot %d stays taken while the guard tries again: %v", r.spawnID, slot, uerr)
@@ -441,7 +461,11 @@ func (s *server) admit(id uint64, req Message, files []*os.File) (*route, error)
 	}
 	r.names = n
 	s.routes[id][req.SpawnID] = r
-	s.log.Info("control: route %s of spawn %s made, %s to %s, reach %s", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.reach)
+	if r.reach == ReachRole {
+		s.log.Info("control: route %s of spawn %s made, %s to %s, reach role, port %d, private %t", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.port, r.private)
+	} else {
+		s.log.Info("control: route %s of spawn %s made, %s to %s, reach %s", outerName(r.slot), r.spawnID, r.gateway, r.inner, r.reach)
+	}
 	// The namespace is the pair's to hold now; the sockets are the names'.
 	_ = r.netns.Close()
 	r.netns = nil
@@ -481,6 +505,9 @@ func (s *server) withdrawLocked(r *route) error {
 	delete(s.pending, r)
 	delete(s.sockets, r.sockets[0])
 	delete(s.sockets, r.sockets[1])
+	if r.port != 0 {
+		delete(s.ports, r.port)
+	}
 	s.taken[r.slot] = false
 	s.log.Info("control: route %s of spawn %s withdrawn; it answered %d names", outerName(r.slot), r.spawnID, r.answered)
 	return nil

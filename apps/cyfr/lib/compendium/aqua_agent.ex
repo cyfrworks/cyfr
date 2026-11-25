@@ -77,8 +77,8 @@ defmodule Compendium.AquaAgent do
   byte-stably. The list's grammar is the one rule the file parser and the
   `aqua` tool door both apply (`check_tools/1`), so an entry the runtime
   would otherwise have to reinterpret never lands.
-  `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files under
-  `aqua/skills/` follow the open Agent Skills convention: `name` +
+  `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files of the
+  packs under `aqua/scrolls/` follow the open Agent Skills convention: `name` +
   `description` frontmatter, instructions as the body).
   """
 

@@ -252,8 +252,8 @@ defmodule Cyfr.RuntimeConfig do
   def release?, do: System.get_env("RELEASE_ROOT") != nil
 
   @doc """
-  Whether this server builds components: it does exactly when a builds
-  service is configured, its URL and its key both (`locus_builds_url/0`,
+  Whether this server builds components: it does exactly when Locus's
+  builds role is configured, its URL and its key both (`locus_builds_url/0`,
   `locus_builds_key/0`). A server without one refuses every build and
   runs no toolchain of its own.
   """
@@ -261,7 +261,7 @@ defmodule Cyfr.RuntimeConfig do
   def builds_enabled?, do: is_binary(locus_builds_url()) and is_binary(locus_builds_key())
 
   @doc """
-  The base URL of the Locus builds service (`CYFR_LOCUS_BUILDS_URL`), as
+  The base URL of Locus's builds role, beside its backends role, as
   `resolve_locus_builds/1` answers it, or nil when none is configured.
   """
   @spec locus_builds_url() :: String.t() | nil
@@ -744,39 +744,36 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve the Locus builds service this server sends its builds to
-  (`Compendium.Builds.Client`): `CYFR_LOCUS_BUILDS_URL`, the base URL of
-  its listener (http or https with a host and no path), and
-  `CYFR_LOCUS_BUILDS_KEY`, the service's key as 64 hexadecimal digits, the
-  same key as `LOCUS_BUILDS_KEY` on the service. Answers `{:ok, nil}`
-  when neither is set — this server builds nothing — and
-  `{:ok, %{url: url, key: key}}`, the values `config :cyfr,
-  :locus_builds_url` and `:locus_builds_key` take, when both are. One
-  without the other, or a value of another form, is an error naming the
-  variable and never the key's text.
+  Resolve Locus's builds role, which this server sends its builds to
+  (`Compendium.Builds.Client`), from `CYFR_LOCUS_BUILDS_KEY`, the builds
+  key as 64 hexadecimal digits, the same key as `LOCUS_BUILDS_KEY` in
+  Locus. Builds run in the Locus that serves the backends role: the role
+  listens at the host of `CYFR_LOCUS_BACKENDS_URL`, on the builds role's
+  port (`Prima.LocusRoles`). Answers `{:ok, nil}` when the key is unset —
+  this server builds nothing — and `{:ok, %{url: url, key: key}}`, the
+  values `config :cyfr, :locus_builds_url` and `:locus_builds_key` take,
+  when it is set beside the backends URL. The key without that URL, or a
+  value of another form, is an error naming the variable and never the
+  key's text.
   """
   @spec resolve_locus_builds(getenv) ::
           {:ok, %{url: String.t(), key: <<_::256>>} | nil} | {:error, String.t()}
   def resolve_locus_builds(getenv) when is_function(getenv, 1) do
-    with {:ok, url} <- Prima.EnvValue.url(getenv, "CYFR_LOCUS_BUILDS_URL"),
-         {:ok, key} <- Prima.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY") do
-      case {url, key} do
-        {nil, nil} ->
+    with {:ok, key} <- Prima.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY"),
+         {:ok, backends} <- Prima.EnvValue.url(getenv, "CYFR_LOCUS_BACKENDS_URL") do
+      case {key, backends} do
+        {nil, _backends} ->
           {:ok, nil}
 
-        {url, key} when is_binary(url) and is_binary(key) ->
-          {:ok, %{url: url, key: key}}
-
-        {nil, _key} ->
+        {_key, nil} ->
           {:error,
-           "CYFR_LOCUS_BUILDS_KEY is set but CYFR_LOCUS_BUILDS_URL is not; set both to " <>
-             "build on a Locus builds service, or neither to build nothing."}
+           "CYFR_LOCUS_BUILDS_KEY is set but CYFR_LOCUS_BACKENDS_URL is not; builds run in " <>
+             "the Locus that serves the backends, at its host. Set it, or leave the key " <>
+             "empty to build nothing."}
 
-        {_url, nil} ->
-          {:error,
-           "CYFR_LOCUS_BUILDS_URL is set but CYFR_LOCUS_BUILDS_KEY is not; every build " <>
-             "request is signed with it (64 hexadecimal digits, the same key as " <>
-             "LOCUS_BUILDS_KEY on the builds service)."}
+        {key, backends} ->
+          builds = %{URI.parse(backends) | port: Prima.LocusRoles.role!(:builds).port}
+          {:ok, %{url: URI.to_string(builds), key: key}}
       end
     end
   end
@@ -839,8 +836,8 @@ defmodule Cyfr.RuntimeConfig do
   # Every name the resolver reads. A name `.env` and the merged environment
   # assign differently is a source conflict; the compose file's assertion
   # has its own rule.
-  @access_keys ~w(CADDY_ACME_EMAIL CYFR_BIND_ADDRESS CYFR_HOST CYFR_LOCUS_BUILDS_URL
-                 CYFR_PORT CYFR_PROXY_BIND_ADDRESS CYFR_PROXY_PORT CYFR_PUBLIC_URL CYFR_ACCESS
+  @access_keys ~w(CADDY_ACME_EMAIL CYFR_BIND_ADDRESS CYFR_HOST CYFR_PORT
+                 CYFR_PROXY_BIND_ADDRESS CYFR_PROXY_PORT CYFR_PUBLIC_URL CYFR_ACCESS
                  CYFR_TAILNET_NODE_ID CYFR_TRUSTED_PROXY_CIDRS CYFR_TRUSTED_PROXY_HOPS)
   @assertion "CYFR_LOCAL_INGRESS_ASSERTED"
 
@@ -848,17 +845,10 @@ defmodule Cyfr.RuntimeConfig do
   @default_bind "127.0.0.1"
   @default_proxy_port 4001
   @default_proxy_hops 1
-  @builds_service "locus-builds"
 
   @dns_label ~r/\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z/
   @node_id ~r/\A[A-Za-z0-9._-]{1,128}\z/
   @digits ~r/\A[0-9]{1,5}\z/
-
-  # A builds service's URL: http or https, a host (a DNS name, an IPv4
-  # address or a bracketed IPv6 address), an optional port and nothing
-  # after but one slash. `tests/fixtures/access_modes.json` holds the
-  # grammar's answers, which the access engine's twin of it gives too.
-  @builds_url ~r/\A(?:http|https):\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)(?::([0-9]{1,5}))?\/?\z/
 
   @doc """
   Resolve how this home is reached from what the boot read
@@ -874,7 +864,7 @@ defmodule Cyfr.RuntimeConfig do
   first such name in byte order), the assertion assigned in `.env`, the
   mode (unset in a release, then unknown), the host, the node id, the
   public URL, a key outside its mode (the email before the node id), a
-  malformed port, builds URL, address, assertion or proxy trust, a proxy
+  malformed port, address, assertion or proxy trust, a proxy
   listener on the loopback listener's port at an address it overlaps, and
   the loopback listener's bind. `tests/fixtures/access_modes.json`
   holds the answers; the access engine reads the same file.
@@ -923,52 +913,10 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  @doc """
-  A head's complete compose selection, sorted: the mode's proxy profile,
-  and `locus-builds` exactly when `builds_url`'s host is that compose
-  service.
-  """
-  @spec access_profiles(String.t(), String.t() | nil) :: [String.t()]
-  def access_profiles(mode, builds_url) when mode in ["local", "tailnet", "public"] do
-    proxy = if mode == "local", do: [], else: [mode]
-
-    builds =
-      case builds_url && builds_host(builds_url) do
-        @builds_service -> [@builds_service]
-        _ -> []
-      end
-
-    Enum.sort(proxy ++ builds)
-  end
-
-  @doc """
-  Whether `url` is a builds service's URL: `http` or `https`, a host (a
-  DNS name, an IPv4 address or a bracketed IPv6 address), an optional
-  port from 1 to 65535, and nothing after but one slash: no path, query,
-  fragment or credentials.
-  """
-  @spec builds_url?(String.t()) :: boolean()
-  def builds_url?(url) when is_binary(url), do: builds_host(url) != nil
-
-  # The URL's host, lowercased, or nil when it is no builds URL.
-  defp builds_host(url) do
-    with true <- String.valid?(url),
-         [_, host | port] <- Regex.run(@builds_url, url),
-         true <- builds_port?(port),
-         true <- not String.starts_with?(host, "[") or bracketed_ipv6?(host) do
-      String.downcase(host)
-    else
-      _ -> nil
-    end
-  end
-
-  defp builds_port?([]), do: true
-  defp builds_port?([port]), do: String.to_integer(port) in 1..65_535
-
-  defp bracketed_ipv6?(host) do
-    address = host |> String.trim_leading("[") |> String.trim_trailing("]")
-    String.contains?(address, ":") and ip_literal(address) != nil
-  end
+  @doc "A head's complete compose selection: the mode's proxy profile, none for `local`."
+  @spec access_profiles(String.t()) :: [String.t()]
+  def access_profiles(mode) when mode in ["local", "tailnet", "public"],
+    do: if(mode == "local", do: [], else: [mode])
 
   @doc """
   An access head's canonical JSON (`Prima.JCS`) and its digest,
@@ -1066,15 +1014,13 @@ defmodule Cyfr.RuntimeConfig do
     node_id = get.("CYFR_TAILNET_NODE_ID")
     url = get.("CYFR_PUBLIC_URL")
     email = get.("CADDY_ACME_EMAIL")
-    builds_url = get.("CYFR_LOCUS_BUILDS_URL")
 
     with :ok <- access_host(mode, host),
          :ok <- access_node_id(mode, node_id),
          :ok <- access_url(mode, host, url),
          :ok <- access_outside(mode, "CADDY_ACME_EMAIL", email, "public"),
          :ok <- access_outside(mode, "CYFR_TAILNET_NODE_ID", node_id, "tailnet"),
-         {:ok, port} <- access_port(get, "CYFR_PORT", @default_port),
-         :ok <- access_builds_url(builds_url) do
+         {:ok, port} <- access_port(get, "CYFR_PORT", @default_port) do
       head =
         %{
           "mode" => mode,
@@ -1083,21 +1029,12 @@ defmodule Cyfr.RuntimeConfig do
           "node_id" => node_id,
           "public_url" => url,
           "acme_email" => email,
-          "builds_url" => builds_url,
-          "profiles" => access_profiles(mode, builds_url)
+          "profiles" => access_profiles(mode)
         }
         |> reject_nil()
 
       {:ok, head}
     end
-  end
-
-  defp access_builds_url(nil), do: :ok
-
-  defp access_builds_url(url) do
-    if builds_url?(url),
-      do: :ok,
-      else: {:error, {:access_setting_invalid, %{key: "CYFR_LOCUS_BUILDS_URL", value: url}}}
   end
 
   defp access_host("local", host) when host in [nil, "localhost"], do: :ok

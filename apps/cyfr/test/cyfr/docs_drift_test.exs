@@ -733,11 +733,12 @@ defmodule Cyfr.DocsDriftTest do
   # Where each setting of the worker and the builder is documented
   #
   # Compose hands a service the values its `environment:` names, over
-  # anything its own env file sets: the locus-runtime service gets its id,
-  # its key and the host URL interpolated from the project .env and a fixed
-  # bind address and port; the builds service gets its key from .env's
-  # CYFR_LOCUS_BUILDS_KEY. So a variable the locus release reads has one
-  # place an operator sets it, and the documentation is there alone:
+  # anything its own env file sets: the locus service gets the runtime's
+  # id, key and host URL interpolated from the project .env and its fixed
+  # bind address and port, the builds and backends keys from .env's
+  # CYFR_LOCUS_BUILDS_KEY and CYFR_LOCUS_BACKENDS_KEY, and each role's
+  # bounds. So a variable the locus release reads has one place an operator
+  # sets it, and the documentation is there alone:
   #
   #   * `.env.example`, for what compose interpolates from the project .env;
   #   * the services' own example (`.env.locus.example`, one file for every
@@ -916,11 +917,12 @@ defmodule Cyfr.DocsDriftTest do
     # their MCP handshake read.
     assert length(variables) >= 24, "the scan found only #{inspect(variables)}"
     assert "LOCUS_LOG_LEVEL" in variables
-    assert services["locus-runtime"].env_files == [".env.locus"]
-    assert "LOCUS_RUNTIME_BIND" in services["locus-runtime"].environment
-    assert services["locus-builds"].environment == ["LOCUS_BUILDS_KEY"]
-    assert services["locus-backends"].environment == ["LOCUS_BACKENDS_KEY"]
-    assert services["locus-backends"].env_files == [".env.locus"]
+    locus = services[Prima.LocusRoles.release().service]
+    assert locus.env_files == [".env.locus"]
+    assert "LOCUS_RUNTIME_BIND" in locus.environment
+
+    for key <- ~w(LOCUS_RUNTIME_KEY LOCUS_BUILDS_KEY LOCUS_BACKENDS_KEY),
+        do: assert(key in locus.environment, key)
 
     for {_service, %{env_files: files}} <- services, file <- files do
       assert Map.has_key?(homes, file <> ".example"),
@@ -979,7 +981,7 @@ defmodule Cyfr.DocsDriftTest do
     planted = plant.(".env.locus.example", "# LOCUS_BUILDS_KEY=")
     assert {".env.locus.example", "LOCUS_BUILDS_KEY"} in overridden(services, planted)
 
-    # The backends key likewise, which compose hands the backends service.
+    # The backends key likewise, which compose hands Locus too.
     planted = plant.(".env.locus.example", "# LOCUS_BACKENDS_KEY=")
     assert {".env.locus.example", "LOCUS_BACKENDS_KEY"} in overridden(services, planted)
 
@@ -1074,11 +1076,11 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # The builds service is two variables, read by one resolver
+  # The builds role is one variable of the control plane's, its key, read by
+  # one resolver beside the backends URL
   # (`Cyfr.RuntimeConfig.resolve_locus_builds/1`), which `.env.example`
-  # assigns for `cyfr init` to complete: the compose service's URL, and the
-  # key init mints. The configuration guide documents each.
-  test "the builds service's variables are assigned in .env.example and documented in the guide" do
+  # assigns for `cyfr init` to mint. The configuration guide documents it.
+  test "the builds role's key is assigned in .env.example and documented in the guide" do
     read =
       @repo_root
       |> Path.join("apps/cyfr/lib/cyfr/runtime_config.ex")
@@ -1088,7 +1090,7 @@ defmodule Cyfr.DocsDriftTest do
       |> Enum.uniq()
       |> Enum.sort()
 
-    assert read == ["CYFR_LOCUS_BUILDS_KEY", "CYFR_LOCUS_BUILDS_URL"]
+    assert read == ["CYFR_LOCUS_BUILDS_KEY"]
 
     project = SourceTree.read(Path.join(@repo_root, ".env.example"))
     configuration = documented_in_guide(SourceTree.read(@configuration_guide))
@@ -1098,7 +1100,6 @@ defmodule Cyfr.DocsDriftTest do
       assert name in configuration, "#{name} is not in configuration-guide.md"
     end
 
-    assert project =~ ~r/^CYFR_LOCUS_BUILDS_URL=http:\/\/locus-builds:4100$/m
     assert project =~ ~r/^CYFR_LOCUS_BUILDS_KEY=$/m
   end
 
@@ -1132,7 +1133,7 @@ defmodule Cyfr.DocsDriftTest do
     assert project =~ ~r/^CYFR_LOCUS_BACKENDS_KEY=$/m
 
     assert SourceTree.read(Path.join(@repo_root, "docker-compose.yml")) =~
-             "CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}"
+             "CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus:4101}"
   end
 
   # Every build and every runner is bounded by a cgroup of its own, which
@@ -1154,8 +1155,13 @@ defmodule Cyfr.DocsDriftTest do
       end
     end
 
+    # The stack's table names Locus and its guard, each by its compose
+    # service, and no profile beside them.
     readme = SourceTree.read(@readme)
-    assert readme =~ ~r/^\| `locus-builds` \*\(profile: `locus-builds`\)\* \|/m
+    release = Prima.LocusRoles.release()
+
+    for service <- [release.service, release.guard],
+        do: assert(readme =~ ~r/^\| `#{service}` \|/m, service)
   end
 
   # What `describe` may answer, as `Aqua.Models` reads it, is what the
@@ -1309,10 +1315,9 @@ defmodule Cyfr.DocsDriftTest do
     # The keeper sets it for the client it starts; an inherited value is
     # replaced, never read.
     "KEEPER_CHANNEL" => :keeper,
-    # The keeper hands its client the kept homes' root and uid range from
-    # its own `--kept-homes` flag, which compose's entrypoint sets; an
-    # inherited value is replaced, never read.
-    "KEEPER_KEPT_HOMES" => :keeper,
+    # The role's run folder, where its client attaches its spawns' relays,
+    # which the keeper names to each role process it starts.
+    "KEEPER_RUN_DIR" => :keeper,
     # The worker service hands each runner its role and identities
     # (`Locus.Runtime.Settings.runner_environment/1`). cyfr-locus places
     # the control channel and the relay on file descriptors 3 and 4, which
@@ -1407,7 +1412,7 @@ defmodule Cyfr.DocsDriftTest do
     CYFR_SECRET_KEY_BASE CYFR_ACCESS CYFR_HOST CYFR_PORT
     CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_RUNTIME_ROOT
     LOCUS_RUNTIME_KEY CYFR_LOCUS_BACKENDS_KEY
-    CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_APPARMOR CYFR_SETUP_TOKEN
+    CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_APPARMOR CYFR_SETUP_TOKEN
   )
 
   test "the deployment file assigns init's lines, keeps its anchor and holds no platform setting" do
@@ -1709,7 +1714,7 @@ defmodule Cyfr.DocsDriftTest do
     ]
 
     for file <- [
-          "seed/aqua/skills/canvas/SKILL.md",
+          "seed/aqua/scrolls/cyfr/skills/canvas/SKILL.md",
           "tincture-guide.md",
           "integration-guide.md",
           "apps/cyfr/assets/js/sdk/client.js"
@@ -1956,7 +1961,7 @@ defmodule Cyfr.DocsDriftTest do
   # reaches the guide and the scroll before any reader meets a stale one.
   # ==========================================================================
 
-  @tincture_list_files ["tincture-guide.md", "seed/aqua/skills/artisan/SKILL.md"]
+  @tincture_list_files ["tincture-guide.md", "seed/aqua/scrolls/cyfr/skills/artisan/SKILL.md"]
   @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk canvas)
 
   # The SDK's call for each request kind and for the stream connection,

@@ -186,8 +186,8 @@ pg_drop_created() {
 # absent when the vector reads no .env) and `process` (NUL-terminated
 # NAME=value words that make the environment merged over that file the
 # vector's process: each it assigns that the file does not, or assigns
-# otherwise), and, where the vector names no builds URL, an empty builds
-# key, which the release would refuse without one. `$2/strip` lists every
+# otherwise), and an empty builds key, which the release would refuse
+# without the backends' URL no vector names. `$2/strip` lists every
 # name a vector assigns and the compose file's assertion: the settings a
 # vector's boot starts from hold none of them (`access_settings`).
 access_vectors() {
@@ -210,8 +210,9 @@ for v in vectors:
         if key not in process and val.strip() != "":
             sys.exit(f"the vector {v['name']!r} assigns {key} in .env alone, which no merged environment does")
     words = [f"{k}={val}" for k, val in sorted(process.items()) if file is None or file.get(k) != val]
-    if (process.get("CYFR_LOCUS_BUILDS_URL") or "") == "":
-        words.append("CYFR_LOCUS_BUILDS_KEY=")
+    # The cell's builds key, which a boot refuses without the backends'
+    # URL the access vectors never name: builds are off for every vector.
+    words.append("CYFR_LOCUS_BUILDS_KEY=")
     n += 1
     d = os.path.join(out, f"{n:03d}")
     os.mkdir(d)

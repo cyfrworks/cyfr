@@ -987,156 +987,6 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#aqua-notes button[phx-value-name=plan]")
     end
 
-    # A scroll replaced through Files past the bound stays the athanor's,
-    # and the page says on it why Aqua does not use it.
-    test "a scroll replaced through Files past the bound says why on the page",
-         %{conn: conn, ctx: ctx} do
-      {:ok, _} =
-        Cyfr.Test.AquaTool.call(ctx, %{
-          "action" => "skill_create",
-          "name" => "too-big",
-          "description" => "d",
-          "content" => "short"
-        })
-
-      {:ok, _written} =
-        Arca.Files.write(
-          Sanctum.Context.actor(ctx),
-          Enum.join(Compendium.AquaPath.skill_manifest("too-big"), "/"),
-          ~s(---\nname: "too-big"\ndescription: "d"\n---\n\n) <> String.duplicate("a", 131_072)
-        )
-
-      {view, _html} = mount_athanor(conn, "/aqua")
-
-      assert view |> element("#aqua-scroll-too-large-too-big") |> render() =~
-               "Aqua does not use this scroll"
-    end
-
-    test "the Scrolls group opens while a scroll is written, and one is written, edited and " <>
-           "deleted here",
-         %{conn: conn, ctx: ctx} do
-      {:ok, %{"skills" => [shipped | _]}} =
-        Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_list"})
-
-      # The server ships a scroll, listed in the Scrolls group, which opens
-      # on the person's press like every group of what Aqua may use.
-      {view, html} = mount_athanor(conn, "/aqua")
-      refute has_element?(view, "#aqua-scrolls[open]")
-      assert html =~ shipped["name"]
-
-      # A shipped, unedited scroll offers no removal verb; edited, it
-      # offers the way back — and takes it.
-      view
-      |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_open", %{
-        "name" => shipped["name"]
-      })
-
-      assert has_element?(view, "#aqua-scroll-open", "shipped")
-      refute has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]")
-      refute has_element?(view, "#aqua-scroll-open button[phx-click=skill_revert]")
-
-      view
-      |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_edit", %{
-        "name" => shipped["name"]
-      })
-
-      view
-      |> form("#aqua-scroll-editor", %{"description" => "Edited here", "content" => "# Mine"})
-      |> render_submit()
-
-      view
-      |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_open", %{
-        "name" => shipped["name"]
-      })
-
-      assert has_element?(view, "#aqua-scroll-open", "edited")
-
-      assert has_element?(
-               view,
-               "#aqua-scroll-open button[phx-click=skill_revert]",
-               "Revert to shipped"
-             )
-
-      view
-      |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_revert", %{
-        "name" => shipped["name"]
-      })
-
-      shipped_description = shipped["description"]
-
-      assert {:ok, %{"description" => ^shipped_description}} =
-               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => shipped["name"]})
-
-      view |> with_target("#aqua-scrolls-section") |> render_click("skill_new", %{})
-      assert has_element?(view, "#aqua-scrolls[open]")
-
-      view
-      |> form("#aqua-scroll-editor", %{
-        "name" => "pdf-forms",
-        "description" => "Fill PDF forms",
-        "content" => "# PDF forms\nUse pdftk."
-      })
-      |> render_submit()
-
-      # The list is read again on the page's own message after the write.
-      settled(
-        fn -> has_element?(view, "#aqua-scrolls-section button[phx-value-name=pdf-forms]") end,
-        "the new scroll listed"
-      )
-
-      html = render(view)
-      assert html =~ "pdf-forms"
-      assert html =~ "Fill PDF forms"
-      refute html =~ "Use pdftk."
-
-      assert {:ok, %{"content" => "# PDF forms\nUse pdftk."}} =
-               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
-
-      # Open it, edit it: the open scroll shows the new body.
-      assert view
-             |> with_target("#aqua-scrolls-section")
-             |> render_click("skill_open", %{
-               "name" => "pdf-forms"
-             }) =~ "Use pdftk."
-
-      assert has_element?(view, "#aqua-scroll-open", "yours")
-
-      view
-      |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_edit", %{"name" => "pdf-forms"})
-
-      view
-      |> form("#aqua-scroll-editor", %{
-        "description" => "Fill PDF forms",
-        "content" => "# PDF forms\nUse qpdf."
-      })
-      |> render_submit()
-
-      html = render(view)
-      assert html =~ "Use qpdf."
-      refute html =~ "Use pdftk."
-
-      assert {:ok, %{"content" => "# PDF forms\nUse qpdf."}} =
-               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
-
-      # The athanor's own scroll is deleted, with the verb spelled as such.
-      assert has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]", "Delete")
-
-      view
-      |> with_target("#aqua-scrolls-section")
-      |> render_click("skill_delete", %{"name" => "pdf-forms"})
-
-      assert {:error, _} =
-               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
-
-      refute has_element?(view, "#aqua-scroll-open")
-      refute has_element?(view, "#aqua-scrolls button[phx-value-name=pdf-forms]")
-    end
-
     test "the first paint is the frame and its spinner — no empty state the load has not earned",
          %{conn: conn} do
       html = conn |> get(athanor_path("/aqua")) |> html_response(200)
@@ -4377,6 +4227,103 @@ defmodule PrismWeb.AquaLiveTest do
       other |> element(search) |> render_click()
       assert {:ok, %{"tools" => after_both}} = get_agent(ctx, "aqua")
       assert "native_search" in after_both == not on?
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Aqua on a ready brain, its grant revoked by its person, as the
+    # profile's revoke records it: the page says it was revoked, in the
+    # sentence a turn refused for it says (`Prima.Refusal`), and offers to
+    # grant it again, never that it was never granted.
+    test "a grant its person revoked is said as revoked, and offered again",
+         %{conn: conn, ctx: ctx} do
+      soul_on_open!(ctx)
+      {:ok, %{profile_id: id}} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      assert {:ok, %{status: "revoked"}} =
+               Sanctum.Providers.Profile.handle(ctx, %{"action" => "revoke", "profile_id" => id})
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_revoked"])
+
+      settled(
+        fn ->
+          has_element?(
+            view,
+            line,
+            "You revoked your grant of what Aqua and its crew members may use."
+          )
+        end,
+        "the grant said revoked"
+      )
+
+      assert has_element?(view, "#aqua-may-use button[phx-click=open_consent]", "Grant again")
+
+      assert has_element?(
+               view,
+               ~s(#aqua-may-use [data-test="aqua-grant-held"] [data-test="aqua-grant-meanwhile"]),
+               "Aqua and its crew members take no turn"
+             )
+
+      refute render(view) =~ "You have not granted yet"
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The page tells why no grant stands now, never an older revocation:
+    # a grant its person revoked, given again and then taken by a removal,
+    # and two grants standing under two labels, an ambiguity, each read as
+    # a grant to give, never as one the person revoked.
+    for {scenario, made} <- [
+          {"given again and then removed", :revoked_then_removed!},
+          {"given again under two labels", :revoked_then_two_standing!}
+        ] do
+      test "a grant its person once revoked, #{scenario}, is never said as revoked",
+           %{conn: conn, ctx: ctx} do
+        soul_on_open!(ctx)
+        :ok = apply(Cyfr.Test.AquaTool, unquote(made), [ctx])
+
+        {view, _html} = mount_athanor(conn, "/aqua")
+        line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_absent"])
+
+        settled(
+          fn ->
+            has_element?(
+              view,
+              line,
+              "You have not granted yet what Aqua and its crew members may use."
+            )
+          end,
+          "the grant said not granted"
+        )
+
+        refute render(view) =~ "You revoked"
+        Cyfr.Test.Sandbox.end_views()
+      end
+    end
+
+    # Why a revoked grant is absent read from a record the store cannot
+    # answer: the page says the grant cannot be read, never that it was
+    # not granted.
+    test "a revoked grant whose record cannot be read is said as unreadable",
+         %{conn: conn, ctx: ctx} do
+      soul_on_open!(ctx)
+      :ok = Cyfr.Test.AquaTool.revoked_then_unreadable!(ctx)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      line = ~s(#aqua-may-use [data-test="aqua-grant"][data-state="consent_unavailable"])
+
+      settled(
+        fn ->
+          has_element?(
+            view,
+            line,
+            "A consent this model runs under cannot be read right now — try again."
+          )
+        end,
+        "the grant said unreadable"
+      )
+
+      refute render(view) =~ "You have not granted yet"
+      refute render(view) =~ "You revoked"
       Cyfr.Test.Sandbox.end_views()
     end
 

@@ -81,6 +81,10 @@ var keptOut = map[string]bool{"proc": true, "sys": true, "dev": true, "tmp": tru
 // devices are the nodes bound from the container's /dev into a space's.
 var devices = []string{"null", "zero", "full", "random", "urandom", "tty"}
 
+// machineDevice is the node a machine's space is given beside devices,
+// for its VMM alone (Spec.Machine).
+const machineDevice = "kvm"
+
 // enter is the stage's last part: it clones the space's first process,
 // which runs the command, drops every capability of its own, installs the
 // space's filter and executes itself as the space's waiter (Wait). It
@@ -312,7 +316,7 @@ func First(probe bool) int {
 	if err != nil {
 		return fail("the stage's binary: %v", err)
 	}
-	if err := buildFiles(spec.Home); err != nil {
+	if err := buildFiles(spec.Home, spec.Packs, spec.Machine); err != nil {
 		return fail("the space's files: %v", err)
 	}
 	if spec.Terminal {
@@ -386,7 +390,14 @@ func setAttr(path string, set uint64, recursive bool) error {
 // bind binds source and every mount below it at the same path under Root,
 // read-only unless writable, and never with setuid.
 func bind(source string, writable bool) error {
-	target := filepath.Join(Root, source)
+	return bindAt(source, filepath.Join(Root, source), writable)
+}
+
+// bindAt binds source and every mount below it at target, read-only unless
+// writable, and never with setuid: a recursive bind, as the profile allows
+// one onto the space (apps/codex/internal/apparmor/cyfr-locus), made read
+// only by mount_setattr.
+func bindAt(source, target string, writable bool) error {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}
@@ -405,9 +416,12 @@ func bind(source string, writable bool) error {
 // gives a space; a fresh /proc of the space's processes; a read-only sysfs
 // and, read-only, the cgroup tree whose root is the space's own group; its
 // own /dev with the container's few device nodes, its own terminals and
-// /dev/shm; its own /tmp, /var/tmp and /run; and its home, writable, at its
-// path, the only home it sees. The root itself is read-only once pivoted.
-func buildFiles(home string) error {
+// /dev/shm; its own /tmp, /var/tmp and /run; its home, writable, at its
+// path, the only home it sees; given packs, its person's pack generation
+// read only at ScrollsPath in its own /run; and a machine's space also its
+// device, read only at its path, and /dev/kvm. The root itself is
+// read-only once pivoted.
+func buildFiles(home, packs, machine string) error {
 	steps := []func() error{
 		func() error { return mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "") },
 		func() error { return mount("space", Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m") },
@@ -446,12 +460,24 @@ func buildFiles(home string) error {
 			}
 			return nil
 		},
-		buildDev,
+		func() error { return buildDev(machine != "") },
 		func() error {
 			if home == "" {
 				return nil
 			}
 			return bind(home, true)
+		},
+		func() error {
+			if packs == "" {
+				return nil
+			}
+			return bindAt(packs, filepath.Join(Root, ScrollsPath), false)
+		},
+		func() error {
+			if machine == "" {
+				return nil
+			}
+			return bindFile(machine)
 		},
 		func() error {
 			if err := unix.PivotRoot(Root, Root+"/.old"); err != nil {
@@ -510,11 +536,34 @@ func bindContainerRoot() error {
 	return nil
 }
 
+// bindFile binds the file source at the same path under Root, read only,
+// without setuid or devices.
+func bindFile(source string) error {
+	target := filepath.Join(Root, source)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_ = f.Close()
+	if err := mount(source, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return err
+	}
+	return setAttr(target, unix.MOUNT_ATTR_RDONLY|unix.MOUNT_ATTR_NOSUID|unix.MOUNT_ATTR_NODEV, false)
+}
+
 // buildDev fills the space's /dev: the container's null, zero, full,
-// random, urandom and tty nodes, a terminal instance of its own with its
-// ptmx, its own /dev/shm, and the usual links into /proc.
-func buildDev() error {
-	for _, node := range devices {
+// random, urandom and tty nodes, and a machine's kvm, a terminal instance
+// of its own with its ptmx, its own /dev/shm, and the usual links into
+// /proc.
+func buildDev(machine bool) error {
+	nodes := devices
+	if machine {
+		nodes = append(append([]string{}, devices...), machineDevice)
+	}
+	for _, node := range nodes {
 		target := Root + "/dev/" + node
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o666)
 		if err != nil {
@@ -580,7 +629,7 @@ func openTerminal() error {
 }
 
 // Init runs `cyfr-locus stage init`: the space's pid 1 once it holds
-// nothing. It sets the spec's limits and umask, starts the command in a
+// nothing. It sets the umask and a spawn's limits, starts the command in a
 // session of its own, which takes its terminal as its controlling one when
 // it has one, with its control channel on fd 3 and a relay space's relay on
 // fd 4, and closes the status pipe once the command has executed. It then
@@ -611,8 +660,12 @@ func Init() int {
 	signal.Notify(signals, passedSignals...)
 
 	syscall.Umask(0o077)
-	if err := setLimits(spec.Limits); err != nil {
-		return fail("rlimits: %v", err)
+	// A role keeps the keeper's own limits, as its process had them before
+	// it had a space.
+	if spec.Role == "" {
+		if err := setLimits(spec.Limits); err != nil {
+			return fail("rlimits: %v", err)
+		}
 	}
 	path, err := spec.LookPath(spec.Argv[0])
 	if err != nil {

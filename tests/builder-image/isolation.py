@@ -23,9 +23,9 @@
   before the next build runs under the same uid; the home root is
   read-only to it and the release's run directory is not in its space.
 - Started without the `writable-cgroups=true` security option, as a
-  deployment that lacks it would be, the service answers every build
-  `unavailable`, naming the option, and runs nothing: no build is ever run
-  without its memory bound (tests/builder-image/memory.py proves the bound).
+  deployment that lacks it would be, cyfr-locus refuses its boot, since no
+  role's group can be made, and runs nothing: no build is ever run without
+  its memory bound (tests/builder-image/memory.py proves the bound).
 - Every build runs in a space of its own, a user, network and IPC
   namespace, with its own loopback and one route, its guard's. The
   builder listens in the namespace of its egress guard, the image under
@@ -44,6 +44,19 @@
 - A build's listener on its own loopback is its own: the container's root
   and a concurrent build of another uid find nothing there, and the other
   build listens on the same port at the same time, reaching its own.
+- A role's service process, in a space of its own the guard routes with
+  reach `role` (tests/builder-image/guard-role-space.go stands in for the
+  keeper that starts one), is reached at its port on the island's own
+  address from the island's network and from the island's own processes,
+  and at no other port; a role that is not private is refused another
+  private address and core's host API (the stand-in at its fixed address),
+  each counted on the guard's own rule; a private role passes the guard to
+  a private address outside the island and reaches the host API at its
+  port, but not another port of it, another island address, the metadata,
+  the control plane or the other role's space; a second role of a port a
+  route holds is refused; a clear removes the role's forwarding and every
+  connection of its address, and a lost control connection withdraws its
+  role's route; the guard stays healthy throughout.
 - A guard started with an ip6tables that fails writes no ready file, never
   turns healthy, names the rule that failed, and the builder behind it is
   never started.
@@ -59,9 +72,11 @@ Usage: tests/builder-image/isolation.py IMAGE
 import ipaddress
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -70,9 +85,10 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import (  # noqa: E402
-    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, NETWORK, POOL_FIRST, POOL_LAST, PORT, PROJECT_PREFIX, REFUSED, RELEASE,
+    BUILDS_SUBNET, CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, HOST_API_ADDRESS, HOST_API_PORT, NETWORK, POOL_FIRST,
+    POOL_LAST, PORT, PROJECT_PREFIX, REFUSED, RELEASE,
     RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, SERVICE, Stack, brief, build_canary, expect, output_file, run,
-    tincture,
+    release_eval, tincture,
 )
 
 # On the path once stack.py is loaded.
@@ -226,10 +242,12 @@ def fields(text):
     return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
 
 
-def listening_addresses(stack):
-    """The local address of each listening TCP socket of the container, in hex, from its own tables."""
-    return imagesuite.read_output(stack.exec("awk '$4 == \"0A\" {print $2}' /proc/net/tcp /proc/net/tcp6"),
-                                  "the container's TCP tables").split()
+def listening_addresses(stack, pid="self"):
+    """The local address of each listening TCP socket of the network namespace `pid` is in (the container's own by
+    default), in hex, from that namespace's tables."""
+    return imagesuite.read_output(
+        stack.exec(f"awk '$4 == \"0A\" {{print $2}}' /proc/{pid}/net/tcp /proc/{pid}/net/tcp6"),
+        f"the TCP tables of {pid}'s namespace").split()
 
 
 def test_process_model(stack, image):
@@ -242,11 +260,16 @@ def test_process_model(stack, image):
            f"the release runs as {RELEASE_USER} with no capability", procs)
     expect(not any("epmd" in p["cmd"] for p in procs) and "-sname" not in release[0]["cmd"] and " -name " not in release[0]["cmd"],
            "the release starts no Erlang distribution", release)
-    # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in every
-    # container on a user-defined network.
+    # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in the
+    # container's namespace, and the guard answers names on that address in
+    # the role's space: the role listens in its space alone.
     listening = listening_addresses(stack)
+    expect(all(address.startswith("0B00007F:") for address in listening),
+           "nothing but Docker's resolver listens in the container's own namespace", listening)
+    listening = listening_addresses(stack, release[0]["pid"])
     ports = sorted({int(address.rsplit(":", 1)[1], 16) for address in listening if not address.startswith("0B00007F:")})
-    expect(ports == [PORT], f"besides Docker's resolver, the builder's only listening TCP port is {PORT}", listening)
+    expect(ports == [PORT], f"besides the guard's resolver, the builds role's only listening TCP port is {PORT}, in its space",
+           listening)
 
     def start_alone(name, *env):
         return run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}locus-builds-isolation-{name}-{os.getpid()}",
@@ -305,7 +328,7 @@ def test_concurrent_trees(stack):
 
 def test_no_survivors(stack):
     manifest_result = stack.exec(
-        f"""{RELEASE_BIN} eval 'IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'""", user=RELEASE_USER)
+        release_eval('IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'), user=RELEASE_USER)
     manifest = manifest_result.stdout.split("<<<", 1)[1].split(">>>", 1)[0]
     status, answer = stack.build({"src/lib.rs": LIB_RS, "build.rs": DAEMON_BUILD_RS, "Cargo.toml": manifest}, "rust", "reagent")
     expect(status == 200, "a Rust build whose build.rs starts a daemon succeeds", brief(answer))
@@ -487,6 +510,261 @@ def test_own_loopback(stack):
     expect(own == f"own {intruding_uid}", "the other build listens on the same port at once and reaches its own listener", detail)
 
 
+# The stand-in for a keeper starting a role (guard-role-space.go), in the
+# builds service's mount of the canary folder, and the guard's control as
+# the service mounts it. The ports the roles listen on in their spaces, and
+# one each listens on that is not forwarded.
+ROLE_SPACE = "/canary/guard-role-space"
+CONTROL = "/run/cyfr-guard-control/guard.sock"
+ROLE_PORT, PRIVATE_PORT, OTHER_PORT = 4501, 4502, 4509
+# One connection to the last argument's `host:port`, printing what the far
+# end wrote before it closed, or the connect's code.
+READ_PROBE = r"""
+const net = require("net");
+const target = process.argv[process.argv.length - 1];
+const at = target.lastIndexOf(":");
+const socket = net.connect({ host: target.slice(0, at), port: Number(target.slice(at + 1)), timeout: 4000 });
+let got = "";
+socket.on("data", (d) => { got += d; });
+socket.on("end", () => console.log(got.trim() || "empty"));
+socket.on("error", (e) => console.log(e.code || String(e)));
+socket.on("timeout", () => { console.log("ETIMEDOUT"); socket.destroy(); });
+"""
+
+
+class RoleSpace:
+    """guard-role-space run as root in the builds service: a role's space whose route of reach `role` the guard admits
+    or refuses, and the commands it takes (its docstring)."""
+
+    def __init__(self, stack, port, private):
+        self.port = port
+        self.process = subprocess.Popen(
+            ["docker", "exec", "-i", "-u", "0", stack.container, ROLE_SPACE, CONTROL, secrets.token_hex(16), str(port),
+             "true" if private else "false", str(OTHER_PORT)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        self.lines = queue.Queue()
+        self.seen = []
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.process.stdout:
+            self.lines.put(line.rstrip("\n"))
+        self.lines.put(None)
+
+    def until(self, done, what, timeout=60):
+        """Its lines up to the first that `done` takes, that one included."""
+        got, deadline = [], time.monotonic() + timeout
+        while True:
+            try:
+                line = self.lines.get(timeout=max(0.1, deadline - time.monotonic()))
+            except queue.Empty:
+                sys.exit(f"FAIL: {what}: nothing within {timeout} s\n" + "\n".join(self.seen + got))
+            if line is None:
+                sys.exit(f"FAIL: {what}: the role's space ended\n" + "\n".join(self.seen + got))
+            got.append(line)
+            if done(line):
+                self.seen += got
+                return got
+
+    def answer(self):
+        """The guard's answer, as `answer=<type> <reason>`."""
+        return self.until(lambda line: line.startswith(("answer=", "error=")), "the guard's answer")[-1]
+
+    def admitted(self):
+        answer = self.answer()
+        expect(answer == "answer=admitted ", f"the guard admits the route of a role listening on {self.port}", self.seen)
+        self.until(lambda line: line == "ready" or line.startswith("error="), "the role's listeners")
+        expect(self.seen[-1] == "ready", f"the role listens on {self.port} and {OTHER_PORT} in its space", self.seen)
+
+    def send(self, command):
+        self.process.stdin.write(command + "\n")
+        self.process.stdin.flush()
+
+    def probe(self, targets):
+        """What the space's connection to each target answered."""
+        self.send("probe " + " ".join(targets))
+        return fields("\n".join(self.until(lambda line: line == "probed", "the space's probes")))
+
+    def clear(self):
+        self.send("clear")
+        return self.answer()
+
+    def close(self):
+        if self.process.stdin and not self.process.stdin.closed:
+            self.process.stdin.close()
+        try:
+            self.process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+
+
+def guard_routes(stack):
+    """The guard's record of every route it holds: its guard's end, sp<slot>, to the rules recorded for it."""
+    listed = stack.guard_exec('for f in /run/cyfr-guard/routes/sp*; do [ -f "$f" ] && printf "== %s\\n" "${f##*/}" && cat "$f"; done; true')
+    out, iface = {}, None
+    for line in listed.stdout.splitlines():
+        if line.startswith("== "):
+            iface = line[3:]
+            out[iface] = []
+        elif iface:
+            out[iface].append(line)
+    return out
+
+
+def role_route(stack, port):
+    """The route forwarding `port`: (its guard's end, its slot, the space's address, its recorded rules)."""
+    found = [(iface, rules, re.search(rf"--to-destination ([0-9.]+):{port}$", rule).group(1))
+             for iface, rules in guard_routes(stack).items() for rule in rules
+             if rule.startswith("-A CYFR_GUARD_ROLES ") and rule.endswith(f":{port}")]
+    expect(len(found) == 1, f"one route at the guard forwards port {port}", guard_routes(stack))
+    iface, rules, inner = found[0]
+    return iface, int(iface[2:]), inner, rules
+
+
+def rejected(before, after, chains):
+    """The packets the REJECT rules of `chains` counted between two readings."""
+    return sum(after[rule] - before.get(rule, 0) for rule in after
+               if "-j REJECT" in rule and any(rule.startswith(f"-A {chain} ") for chain in chains))
+
+
+def connections_of(stack, address):
+    """The guard's connection-table entries `address` is a party to, or None where the kernel keeps no such file."""
+    listed = stack.guard_exec("cat /proc/net/nf_conntrack")
+    if listed.returncode != 0:
+        return None
+    return [line for line in listed.stdout.splitlines() if re.search(rf"\b(src|dst)={re.escape(address)} ", line)]
+
+
+def read_from(stack, target, own=False):
+    """What one connection to `target` read: from a container on the builds network outside the guard, or, `own`, from a
+    process of the island's own namespace (the builds service)."""
+    if own:
+        done = run("docker", "exec", stack.container, "node", "-e", READ_PROBE, target, check=False, timeout=60)
+    else:
+        done = stack.beside(NETWORK, "node", "-e", READ_PROBE, target)
+    return done.stdout.strip()
+
+
+def test_role_reach(stack):
+    offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
+    own = island_address(stack)
+    logs = stack.guard_logs()
+    expect(f"island address {own}" in logs and f"host API {HOST_API_ADDRESS}:{HOST_API_PORT} passes private roles" in logs,
+           "the guard forwards the roles' ports on the island's own address and knows the host API", logs[-3000:])
+    island_gateway = str(ipaddress.ip_network(BUILDS_SUBNET)[1])
+    # A private address outside the island: the host's on the stack's
+    # default network.
+    configs = json.loads(run("docker", "network", "inspect", f"{stack.project}_default").stdout)[0]["IPAM"]["Config"]
+    subnet = next(ipaddress.ip_network(c["Subnet"]) for c in configs if ":" not in c["Subnet"])
+    outside = next((c["Gateway"] for c in configs if ":" not in c["Subnet"] and c.get("Gateway")), str(subnet[1]))
+    host_api = f"{HOST_API_ADDRESS}:{HOST_API_PORT}"
+    role, private, third = RoleSpace(stack, ROLE_PORT, False), None, None
+    try:
+        role.admitted()
+        iface, slot, inner, rules = role_route(stack, ROLE_PORT)
+        chain = f"CYFR_GUARD_R{slot}"
+        expect(f"-A CYFR_GUARD_ROLES -p tcp -m tcp --dport {ROLE_PORT} -m comment --comment {iface} -j DNAT --to-destination {inner}:{ROLE_PORT}" in rules
+               and any(r.startswith(f"-A CYFR_GUARD_ROLES -p tcp -m tcp --dport {ROLE_PORT} -m comment --comment {iface} -j CONNMARK ") for r in rules)
+               and any(r.startswith(f"-A CYFR_GUARD_REPLIES -o {iface} -p tcp -m tcp --dport {ROLE_PORT} ") and r.endswith("-j ACCEPT") for r in rules)
+               and f"-A {chain} -j CYFR_GUARD_PRIVATE" in rules,
+               "the role's route forwards its port to its space alone and holds it to the island's rule out", rules)
+        expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard is healthy with a role's route in")
+
+        # ————— in: its port, from the island and from the island's own processes —————
+        got = read_from(stack, f"{own}:{ROLE_PORT}")
+        expect(got == f"role {ROLE_PORT}", f"a container on the builds network reaches the role at {own}:{ROLE_PORT}", got)
+        got = read_from(stack, f"{own}:{ROLE_PORT}", own=True)
+        expect(got == f"role {ROLE_PORT}",
+               f"a process of the island's own namespace reaches the role at {own}:{ROLE_PORT}, as a health probe would", got)
+        # Not forwarded, the port is the namespace's own, where nothing
+        # listens; its own processes are refused its island address there,
+        # as every new connection of theirs to the island's subnets is.
+        got = read_from(stack, f"{own}:{OTHER_PORT}")
+        expect(got in OWN_NOTHING, f"the role's space, listening on {OTHER_PORT} too, is not reached there from the island", got)
+        got = read_from(stack, f"{own}:{OTHER_PORT}", own=True)
+        expect(got in REFUSED, f"nor from the island's own processes, which the guard refuses {own}:{OTHER_PORT}", got)
+
+        # ————— out: the island's rule —————
+        before = stack.guard_counters()
+        codes = role.probe([host_api, f"{outside}:9", "169.254.169.254:80", f"{ENDPOINT_ADDRESS}:4000"]
+                           + ([] if offline else ["1.1.1.1:443"]))
+        after = stack.guard_counters()
+        subnets = re.findall(r"island subnet (\S+)", logs)
+        rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after}
+        expect(codes.get(host_api) in REFUSED and island_rule_counted(rose, subnets, HOST_API_ADDRESS),
+               "a role that is not private is refused core's host API, on the island's own subnet rule", codes)
+        expect(codes.get(f"{outside}:9") in REFUSED and rejected(before, after, ["CYFR_GUARD_PRIVATE"]) >= 1,
+               "a role that is not private is refused a private address outside the island, on the private rule", codes)
+        expect(codes.get("169.254.169.254:80") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED,
+               "a role that is not private is refused the metadata and the control plane", codes)
+        if offline:
+            print("skip: 1.1.1.1:443 is not reached from a role: CYFR_TEST_OFFLINE=1 says this host has no public network", flush=True)
+        else:
+            expect(codes.get("1.1.1.1:443") == "connected", "a role reaches the public Internet", codes)
+
+        # ————— a private role —————
+        private = RoleSpace(stack, PRIVATE_PORT, True)
+        private.admitted()
+        _piface, pslot, _pinner, prules = role_route(stack, PRIVATE_PORT)
+        pchain, ppasses = f"CYFR_GUARD_R{pslot}", f"CYFR_GUARD_P{pslot}"
+        expect(f"-A {pchain} -d {HOST_API_ADDRESS}/32 -p tcp -m tcp --dport {HOST_API_PORT} -j {ppasses}" in prules
+               and f"-A {pchain} -j CYFR_GUARD_PRIVATE" not in prules and f"-A {pchain} -j {ppasses}" in prules,
+               "the private role's route passes the host API and every private address", prules)
+        expect(read_from(stack, f"{own}:{PRIVATE_PORT}") == f"role {PRIVATE_PORT}",
+               f"a container on the builds network reaches the private role at {own}:{PRIVATE_PORT}")
+        before = stack.guard_counters()
+        codes = private.probe([f"{outside}:9"])
+        after = stack.guard_counters()
+        expect(after.get(f"-A {pchain} -j {ppasses}", 0) > before.get(f"-A {pchain} -j {ppasses}", 0)
+               and rejected(before, after, [pchain, "CYFR_GUARD_REFUSE", "CYFR_GUARD_PRIVATE"]) == 0,
+               f"the private role's connection to {outside}, a private address outside the island, passes the guard",
+               {"codes": codes, "rose": {r: after[r] - before.get(r, 0) for r in after if after[r] != before.get(r, 0)}})
+        codes = private.probe([host_api, f"{HOST_API_ADDRESS}:{HOST_API_PORT + 1}", f"{island_gateway}:{HOST_API_PORT}",
+                               "169.254.169.254:80", f"{ENDPOINT_ADDRESS}:4000", f"{inner}:{ROLE_PORT}"])
+        expect(codes.get(host_api) == "connected", "a private role reaches core's host API", codes)
+        expect(codes.get(f"{HOST_API_ADDRESS}:{HOST_API_PORT + 1}") in REFUSED
+               and codes.get(f"{island_gateway}:{HOST_API_PORT}") in REFUSED,
+               "a private role is refused another port of the host API's address and another island address", codes)
+        expect(codes.get("169.254.169.254:80") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED
+               and codes.get(f"{inner}:{ROLE_PORT}") in REFUSED,
+               "a private role is refused the metadata, the control plane and the other role's space", codes)
+
+        # ————— one role per port —————
+        third = RoleSpace(stack, ROLE_PORT, True)
+        refused = third.answer()
+        expect(refused == f"answer=refused the guard could not make the route: port {ROLE_PORT} is another route's",
+               f"a second role of port {ROLE_PORT}, which a route holds, is refused", third.seen)
+        third.close()
+        expect(role_route(stack, ROLE_PORT)[0] == iface, "and the first role's route stands as it was")
+
+        # ————— the clear and the connection's end —————
+        expect(role.clear() == "answer=cleared ", "the role's route is cleared", role.seen)
+        role.close()
+        roles = imagesuite.read_output(stack.guard_exec("iptables -t nat -S CYFR_GUARD_ROLES"), "the roles' forwarding")
+        expect(iface not in guard_routes(stack) and f"--comment {iface} " not in roles,
+               "the cleared route's record and forwarding are gone", roles)
+        expect(read_from(stack, f"{own}:{ROLE_PORT}") in OWN_NOTHING, f"{own}:{ROLE_PORT} reaches nothing once cleared")
+        left = connections_of(stack, inner)
+        if left is None:
+            print("skip: the kernel keeps no /proc/net/nf_conntrack, so the connection table is not read here", flush=True)
+        else:
+            expect(left == [], f"no connection of {inner}, made by it or forwarded to it, is left in the kernel's table", left)
+        private.close()
+        eventually_gone = None
+        for _ in range(100):
+            eventually_gone = all(f":{PRIVATE_PORT}" not in r for rules in guard_routes(stack).values() for r in rules)
+            if eventually_gone:
+                break
+            time.sleep(0.1)  # sleep-ok: the guard withdraws a lost connection's routes as it sees the end
+        expect(eventually_gone, "the private role's route is withdrawn with its control connection", guard_routes(stack))
+        expect(stack.guard_exec("cyfr-guard check").returncode == 0, "the guard is healthy once the roles are gone")
+    finally:
+        for space in (role, private, third):
+            if space:
+                space.close()
+
+
 def test_guard_failure(image, canary):
     tools = imagesuite.temporary_directory("cyfr-guard-fails-", 0o755)
     with open(os.path.join(tools, "ip6tables"), "w") as f:
@@ -610,7 +888,9 @@ def test_names(image, canary):
 
 
 def test_no_bound_no_build(stack):
-    stack.up(writable_cgroups=False)
+    stack.writable_cgroups = False
+    stack.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE)
+    stack.container = stack.compose("ps", "--all", "--quiet", SERVICE).stdout.strip()
     host = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]
     options = host["SecurityOpt"]
     # Docker reports `systempaths=unconfined` as empty masked and read-only
@@ -620,16 +900,9 @@ def test_no_bound_no_build(stack):
            and not any("writable-cgroups" in o for o in options),
            "the service is started without the writable-cgroups=true option, under the keeper's seccomp and AppArmor "
            "profiles with its system paths unmasked", [o[:60] for o in options])
-    expect(all(toolchain["available"] for toolchain in stack.health["toolchains"].values()),
-           "it starts and answers health as the shipped service does", stack.health)
-
-    status, answer = stack.build(tincture("mkdir -p dist && id -u > dist/ran.txt"), "javascript", "tincture")
-    expect(status == 503 and answer.get("class") == "unavailable" and "writable-cgroups=true" in answer.get("reason", ""),
-           "a build is refused as unavailable, naming the option the service lacks", brief(answer))
-    expect(stack.pool_processes() == [] and stack.homes() == [], "nothing of the build was run: no process of a pool uid, no home",
-           [stack.pool_processes(), stack.homes()])
-    status, again = stack.build(tincture("mkdir -p dist && id -u > dist/ran.txt"), "javascript", "tincture")
-    expect(status == 503 and again.get("class") == "unavailable", "and so is the next: the service keeps refusing, and keeps running", brief(again))
+    text = imagesuite.refused_unbounded(stack.container, stack.logs)
+    expect(imagesuite.NO_GROUPS in text, "cyfr-locus refuses its boot, since no role's group can be made, starts no "
+           "spawn, and the container restart-loops: no build runs unbounded", text[-2000:])
 
 
 def main(image):
@@ -642,6 +915,7 @@ def main(image):
         test_concurrent_trees(stack)
         test_egress(stack)
         test_own_loopback(stack)
+        test_role_reach(stack)
         test_no_survivors(stack)
         test_residue(stack)
         test_no_bound_no_build(stack)

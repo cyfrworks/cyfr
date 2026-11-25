@@ -102,7 +102,7 @@ defmodule Compendium.Builds.StagedBuildTest do
 
     assert message ==
              "builds are disabled on this server: no builds service is configured " <>
-               "(CYFR_LOCUS_BUILDS_URL and CYFR_LOCUS_BUILDS_KEY)"
+               "(CYFR_LOCUS_BUILDS_KEY)"
 
     assert Prima.Refusal.classify(refusal) == refusal
     assert ScriptedBuilder.requests() == []

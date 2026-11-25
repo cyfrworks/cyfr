@@ -3,25 +3,33 @@
 
 //go:build linux
 
-// Command cyfr-locus starts processes under uids and in spaces of their own
-// (a user, network and IPC namespace each) on behalf of an unprivileged
-// client.
+// Command cyfr-locus starts a process for each role whose key it is given,
+// and processes under uids on each one's behalf, every one in a space of
+// its own (a user, pid, IPC, mount, cgroup and network namespace each).
 //
-//	cyfr-locus serve --pool <name>:<first>-<last>:<relay|routed> --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]
+//	cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> -- <command> [args…]
 //	cyfr-locus guard-control <socket> <range>
+//	cyfr-locus guest-check [--kernel-reporting] [--beside] [-- <command> [args…]]
+//	cyfr-locus image-digest
 //
 // `serve` is the only subcommand an operator runs; `guard-control` is the
 // one an island's egress guard runs once its rules are in (package guard). It needs exactly the
-// capabilities SETUID, SETGID and KILL and refuses to start with any other.
-// Every spawn requires a memory bound. The keeper enforces it only where
-// its cgroup is the root of a cgroup namespace mounted writable (Docker's
-// `writable-cgroups=true` security option, which adds no capability), and
-// refuses spawns anywhere else (package cgroup).
+// capabilities SETUID, SETGID and KILL and refuses to start with any other,
+// as does `guest-check`, which boots one person's machine as the keeper
+// does, has the machine's keeper make and end one space, and reports
+// (package vm). `image-digest` prints the image's identity, which its build
+// writes last (package vm).
+// Every role and spawn is held in a cgroup group of its own, each role's
+// to its LOCUS_<NAME>_MEMORY_LIMIT and _CPU_LIMIT, each spawn's to its
+// memory bound. The keeper makes them only where its cgroup is the root of
+// a cgroup namespace mounted writable (Docker's `writable-cgroups=true`
+// security option, which adds no capability), and refuses its boot
+// anywhere else (package cgroup).
 // `stage`, `relay`, `retire` and `home` are helpers that read their
 // instructions from a pipe on fd 3. A stage starts in its space with the
 // keeper's ids until its namespace is mapped; retirement helpers start as
 // their pooled uid, home helpers as their kept home's uid, and relays start
-// as the client user.
+// as their spawn's role's uid, in that role's group.
 package main
 
 import (
@@ -34,6 +42,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/retire"
 	"github.com/cyfr/locus/keeper/internal/serve"
 	"github.com/cyfr/locus/keeper/internal/stage"
+	"github.com/cyfr/locus/keeper/internal/vm"
 )
 
 func main() {
@@ -54,6 +63,10 @@ func main() {
 		os.Exit(home.HelperMain())
 	case "guard-control":
 		os.Exit(guard.Main(os.Args[2:]))
+	case "guest-check":
+		os.Exit(vm.CheckMain(os.Args[2:]))
+	case "image-digest":
+		os.Exit(vm.DigestMain(os.Args[2:]))
 	default:
 		fmt.Fprintln(os.Stderr, "usage: "+serve.Usage)
 		os.Exit(serve.ExitUsage)

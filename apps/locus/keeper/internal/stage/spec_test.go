@@ -193,3 +193,119 @@ func TestKeptSpecValidation(t *testing.T) {
 		t.Fatal("a pooled spawn in a spawn's group was accepted")
 	}
 }
+
+// A role's spec is its run folder under the run root, a routed space with
+// its channel, its whole environment as the keeper built it, the keeper's
+// own limits, and its role's leaf; a spawn's group may be in a role's.
+func TestRoleSpecValidation(t *testing.T) {
+	role := Spec{
+		UID: 10011, GID: 10011, User: "locus-runtime", Role: "runtime",
+		HomeRoot: "/run/locus", Home: "/run/locus/runtime",
+		Argv:    []string{"/app/bin/locus", "start"},
+		Env:     map[string]string{"HOME": "/run/locus/runtime", "PATH": "/usr/bin:/bin", "LOCUS_RUNTIME_KEY": "k", "KEEPER_CHANNEL": "socket:[1]"},
+		Control: true, Reach: pool.ReachRouted, Cgroup: "/role-runtime/service",
+	}
+	if err := role.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := role.Environ(), []string{"HOME=/run/locus/runtime", "KEEPER_CHANNEL=socket:[1]", "LOCUS_RUNTIME_KEY=k", "PATH=/usr/bin:/bin"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("a role's environ %q, want %q", got, want)
+	}
+	if role.SearchPath() != "/usr/bin:/bin" {
+		t.Fatalf("a role's PATH %q", role.SearchPath())
+	}
+	for name, mutate := range map[string]func(*Spec){
+		"another role's folder": func(s *Spec) { s.Home = "/run/locus/builds" },
+		"a relative run root":   func(s *Spec) { s.HomeRoot, s.Home = "run", "run/runtime" },
+		"a malformed role":      func(s *Spec) { s.Role, s.Home, s.Cgroup = "Run", "/run/locus/Run", "/role-Run/service" },
+		"a relay space":         func(s *Spec) { s.Reach = pool.ReachRelay },
+		"no channel":            func(s *Spec) { s.Control = false },
+		"a terminal":            func(s *Spec) { s.Terminal = true },
+		"a kept home":           func(s *Spec) { s.Kept = true },
+		"limits of its own":     func(s *Spec) { s.Limits = protocol.Ceilings },
+		"another role's leaf":   func(s *Spec) { s.Cgroup = "/role-builds/service" },
+		"a spawn's group":       func(s *Spec) { s.Cgroup = "/role-runtime/keeper-10011" },
+		"a malformed variable":  func(s *Spec) { s.Env = map[string]string{"A=B": "c"} },
+		"a NUL in a value":      func(s *Spec) { s.Env = map[string]string{"A": "b\x00"} },
+		"no command":            func(s *Spec) { s.Argv = nil },
+		"root":                  func(s *Spec) { s.UID = 0 },
+	} {
+		s := role
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	inRole := validSpec()
+	inRole.Cgroup = "/role-builds/keeper-20007"
+	if err := inRole.Validate(); err != nil {
+		t.Fatalf("a spawn in its role's group: %v", err)
+	}
+	inRole.Cgroup = "/role-builds/keeper-20008"
+	if err := inRole.Validate(); err == nil {
+		t.Fatal("a spawn in another uid's group of its role was accepted")
+	}
+	inRole.Cgroup = "/other/keeper-20007"
+	if err := inRole.Validate(); err == nil {
+		t.Fatal("a spawn in a group that is no role's was accepted")
+	}
+}
+
+// A spawn's packs name a pack generation, .packs/<64 hex>/<64 hex>, by a
+// clean absolute path; a role's space binds none.
+func TestPacksSpecValidation(t *testing.T) {
+	gen := "/var/lib/locus/kept/.packs/" + strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64)
+	s := validSpec()
+	s.Packs = gen
+	if err := s.Validate(); err != nil {
+		t.Fatalf("a spawn naming a generation: %v", err)
+	}
+	for _, p := range []string{
+		"relative/.packs/" + strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64),
+		gen + "/",
+		"/var/lib/locus/kept/.packs/" + strings.Repeat("a", 64) + "/../" + strings.Repeat("b", 64),
+		"/var/lib/locus/kept/packs/" + strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64),
+		"/var/lib/locus/kept/.packs/" + strings.Repeat("a", 63) + "/" + strings.Repeat("b", 64),
+		"/etc",
+	} {
+		s := validSpec()
+		s.Packs = p
+		if err := s.Validate(); err == nil {
+			t.Errorf("packs %q passed", p)
+		}
+	}
+}
+
+// A person's machine's space holds its VMM: a relay space whose home is its
+// folder, given its device, and nothing a spawn's channels give.
+func TestMachineSpecValidation(t *testing.T) {
+	machine := Spec{
+		UID: 30201, GID: 993, User: "locus-machine",
+		HomeRoot: "/run/locus/machines", Home: "/run/locus/machines/30201-0123456789abcdef0123456789abcdef",
+		Argv:    []string{"/usr/lib/cyfr/guest/firecracker", "--api-sock", "/run/locus/machines/30201-0123456789abcdef0123456789abcdef/api.sock"},
+		Limits:  protocol.Limits{Nofile: 256, Nproc: 64, Fsize: 1 << 20},
+		Reach:   pool.ReachRelay,
+		Cgroup:  "/keeper-30201",
+		Machine: "/var/lib/locus/guest/" + strings.Repeat("a", 64) + ".sqfs",
+	}
+	if err := machine.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Spec){
+		"a relative device":        func(s *Spec) { s.Machine = "guest/a.sqfs" },
+		"an unclean device":        func(s *Spec) { s.Machine = "/var/lib/locus/guest/../kept/a.sqfs" },
+		"a device of another kind": func(s *Spec) { s.Machine = "/var/lib/locus/kept/a" },
+		"a routed space":           func(s *Spec) { s.Reach = pool.ReachRouted },
+		"a control channel":        func(s *Spec) { s.Control = true },
+		"a terminal":               func(s *Spec) { s.Terminal = true },
+		"a kept home":              func(s *Spec) { s.Kept = true },
+		"root's group":             func(s *Spec) { s.GID = 0 },
+		"another uid's folder":     func(s *Spec) { s.UID, s.Cgroup = 30202, "/keeper-30202" },
+	} {
+		s := machine
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

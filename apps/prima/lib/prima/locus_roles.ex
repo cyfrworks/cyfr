@@ -7,11 +7,20 @@ defmodule Prima.LocusRoles do
   reader reads or a check holds, and the facts every role shares as the
   release's. Data only: no process, no file and no environment.
 
-  The release (`release/0`) runs every role's service as one user, `user`
-  with uid `uid`, starting `bin`; each spawn's home is under `home_root`,
-  and `run_dir`, a tmpfs of `run_size`, holds the release's temporary files
-  and the socket spawns' relays attach to. The image's own entrypoint and
-  health probe serve `image_role`.
+  The release (`release/0`) is one compose service, `service`, in the
+  container `container`, holding no network of its own: it shares the
+  network namespace of its egress guard, the service `guard` in the
+  container `guard_container` (cyfr-guard), and starts behind the guard's
+  health. The guard sits on the one network `network`, which only it and
+  CYFR join, under the alias `service`, so CYFR reaches every role at
+  `http://<service>:<port>`. That network's subnet is `subnet` and its
+  other containers take addresses from `ip_range` alone; CYFR holds the
+  fixed address `host_api_address` on it, where its host API binds and
+  where the guard lets the runtime's role process reach it. cyfr-locus
+  runs as the container's root and starts one role process for each role
+  whose key is set, running `bin`; the role's spawns' homes lie under
+  `home_root`, the role's folder of it, and `run_dir`, a tmpfs of
+  `run_size` owned by root, holds each role's run folder.
 
   The release's endpoint, which cyfr serves, binds its loopback listener
   to one fixed address under compose: `endpoint_address`, on the network
@@ -19,37 +28,47 @@ defmodule Prima.LocusRoles do
   `endpoint_subnet` and whose other containers take addresses from
   `endpoint_ip_range` alone, so nothing started first can hold cyfr's.
   Docker publishes the host's loopback port to that address, and the
-  networks the Locus roles join never reach the endpoint. Its proxy
-  listener, in a tailnet or public home, binds `edge_address` on the
-  network `edge_network`, whose subnet is `edge_subnet` and whose dynamic
-  range is `edge_ip_range`; the two proxies that forward to it sit there
-  at fixed addresses of their own, Caddy at `edge_caddy_address` and
-  Tailscale at `edge_tailscale_address`, the addresses whose forwarded
-  headers the proxy listener trusts.
+  network Locus joins never reaches the endpoint. Its proxy listener, in a
+  tailnet or public home, binds `edge_address` on the network
+  `edge_network`, whose subnet is `edge_subnet` and whose dynamic range is
+  `edge_ip_range`; the two proxies that forward to it sit there at fixed
+  addresses of their own, Caddy at `edge_caddy_address` and Tailscale at
+  `edge_tailscale_address`, the addresses whose forwarded headers the
+  proxy listener trusts.
 
-  A role (`roles/0`, in the order runtime, builds, backends) is served
-  under cyfr-locus from the uid pool `pool`, whose uids `uids` are named
-  `user_prefix` and a two-digit ordinal, each spawn in a space of its own
-  whose reach is `reach` (`reaches/0`, the keeper's `--pool` suffix). Its service
-  listens on `port`; compose runs it as the service `service` in the
-  container `container`, on the network `network` that only it and CYFR
-  join, selected by the profile `profile` where it has one (`nil`: it
-  always starts), with its spawns' homes on a tmpfs of `home_size`. A
-  routed role, builds and backends, runs behind the egress guard `guard`:
-  the compose service that holds the island's network namespace, makes
-  each build's or backend's route and installs the rules it leaves
-  through (cyfr-guard), which the role's service shares
-  (`network_mode: service:<guard>`) and starts behind; the runtime, whose
-  runners reach nothing but their relays, has none (`nil`).
+  A role (`roles/0`, in the order runtime, builds, backends) is a process
+  the keeper starts when the role's key variable `key` is set, as the user
+  `user` with uid `uid` (its gid the same, alone in its group), listening
+  on `port`, in a space of its own routed by the guard. The space's reach
+  is the guard's `role` reach, with every private address and core's host
+  API besides where `private` is true (the runtime's). The role's run
+  folder is `run_dir` (its own, 0700, under the release's), and its
+  spawns' homes lie on a tmpfs of `home_size` at `home_root`, the
+  release's root and the role's name. Its run folder is a tmpfs of
+  `run_size` of its own, so no role fills another's. Its spawns are drawn
+  from the uid
+  pool `pool`, whose uids `uids` are named `user_prefix` and a two-digit
+  ordinal, each spawn in a space of its own whose reach is `reach`
+  (`reaches/0`, the keeper's `--pool` suffix): the runtime's runners
+  reach nothing but their relays, builds and programs leave through the
+  route the guard makes for each.
 
   A role whose programs keep their folders, the backends role, names the
   kept folders' root `kept_root`, the compose volume `kept_volume` mounted
-  there (never under `data/`, never in a backup) and the uid range
+  there (never under `data/`, never in a backup), the uid range
   `kept_uids` the keeper's `--kept-homes` flag draws each folder's uid
-  from, outside every pool and every user of the image; every other role
-  has none (`nil`). The root is the release user's group's, mode 1773.
+  from, outside every pool and every user of the image, and the group the
+  root is shared with, `kept_group` with gid `kept_gid`, of which no user
+  is a member; every other role has none (`nil`). The root is root's and
+  that group's, mode 1773.
 
-  A role's `memory` is what its service holds of its own: the bounds of
+  The role whose sessions run in a person's machine where the host has KVM,
+  the backends role, names the machines' folder `guest_root` and the compose
+  volume `guest_volume` mounted there: the image's programs as one squashfs
+  the keeper makes, and each machine's sockets (the keeper's package vm);
+  every other role has none (`nil`).
+
+  A role's `memory` is what its process holds of its own: the bounds of
   what it counts (`Locus.Output`), `unread` (the backends role's alone,
   `nil` for the others) and `answering`, and the figures of what it holds
   uncounted that an image suite's allowance reads. The runtime names one
@@ -58,11 +77,11 @@ defmodule Prima.LocusRoles do
   it (`fetch_read_ahead_bytes`), the most of a fetch's head the HTTP
   client reads (`fetch_head_bytes`) and the freed segments its VM keeps
   for reuse (`freed_segments_bytes`); every other role names none of them
-  (`nil`). The release's `memory` holds what every
-  role's service shares: the bytes of resident memory one byte it holds
-  costs at most (`byte_cost`), one read of a held keeper connection
+  (`nil`). The release's `memory` holds what every role's process shares:
+  the bytes of resident memory one byte it holds costs at most
+  (`byte_cost`), one read of a held keeper connection
   (`keeper_read_bytes`) and the copies of it held at once
-  (`keeper_read_copies`), and the kernel's queues beside the service, a
+  (`keeper_read_copies`), and the kernel's queues beside the process, a
   relay connection's (`relay_queue_bytes`) and a TCP connection's send
   queue (`socket_queue_bytes`). What each is, its cap and how many there
   can be at once, is `Locus.Output`'s table ("What each role holds").
@@ -70,20 +89,22 @@ defmodule Prima.LocusRoles do
   Every spawn's space is a user, network, IPC, pid, mount and cgroup
   namespace of its own, so no spawn shares a loopback, an abstract unix
   socket, a System V object, a process list or a file outside its home
-  with another or with its service: a `"relay"` space has its loopback
-  down and no route, a `"routed"` space its own loopback and the one route
-  its guard makes for it. It sees the image read-only, its own /proc,
-  /tmp, /dev/shm, terminals and group, and its home alone.
+  with another or with its role's process: a `"relay"` space has its
+  loopback down and no route, a `"routed"` space its own loopback and the
+  one route the guard makes for it. It sees the image read-only, its own
+  /proc, /tmp, /dev/shm, terminals and group, and its home alone.
 
   `tests/fixtures/locus_roles.json` holds the same table for the image
   suites, which cannot read this module: `Prima.LocusRolesTest` holds the
   file to it value by value. `Locus.Application` selects a node's roles
-  from it, and the stack's shape test holds every other spelling of a
-  role's facts to it: the Locus image's users and entrypoint, compose's
-  services and the image suites' overlays, Locus's own pool names,
-  reaches, attach directory and listener ports, and the image suites'
-  harnesses. A role's key variables are `Locus.Config`'s; the memory bound
-  of each spawn and each container's limits are not facts of this table,
+  from it, CYFR reaches the builds role beside the backends role at the
+  builds role's port (`Cyfr.RuntimeConfig`), and the stack's shape test
+  holds every other spelling of a role's facts to it: the Locus image's
+  users, directories, entrypoint and health probe, compose's services,
+  the image suites' overlays, Locus's own pool names, reaches and listener
+  ports, and the image suites' harnesses. Each role's memory and processor
+  bounds are compose's (the `locus` service's environment), which the
+  keeper writes into the role's group; they are not facts of this table,
   and neither is the rule that a node serving the runtime serves no other
   role (`Locus.Application`).
   """
@@ -91,15 +112,20 @@ defmodule Prima.LocusRoles do
   @typedoc "A role the `locus` release serves."
   @type name :: :runtime | :builds | :backends
 
-  @typedoc "The facts every role's service shares."
+  @typedoc "The facts every role shares."
   @type release :: %{
-          user: String.t(),
-          uid: pos_integer(),
+          service: String.t(),
+          container: String.t(),
+          guard: String.t(),
+          guard_container: String.t(),
+          network: String.t(),
+          subnet: String.t(),
+          ip_range: String.t(),
+          host_api_address: String.t(),
           bin: String.t(),
           home_root: String.t(),
           run_dir: String.t(),
           run_size: String.t(),
-          image_role: name(),
           endpoint_network: String.t(),
           endpoint_subnet: String.t(),
           endpoint_ip_range: String.t(),
@@ -122,20 +148,26 @@ defmodule Prima.LocusRoles do
   @typedoc "One role's facts."
   @type role :: %{
           name: name(),
+          key: String.t(),
+          user: String.t(),
+          uid: pos_integer(),
+          port: :inet.port_number(),
+          private: boolean(),
+          run_dir: String.t(),
+          run_size: String.t(),
+          home_root: String.t(),
+          home_size: String.t(),
           pool: String.t(),
           user_prefix: String.t(),
           uids: Range.t(),
           reach: String.t(),
-          port: :inet.port_number(),
-          home_size: String.t(),
-          service: String.t(),
-          container: String.t(),
-          network: String.t(),
-          profile: String.t() | nil,
-          guard: String.t() | nil,
           kept_root: String.t() | nil,
           kept_volume: String.t() | nil,
           kept_uids: Range.t() | nil,
+          kept_group: String.t() | nil,
+          kept_gid: pos_integer() | nil,
+          guest_root: String.t() | nil,
+          guest_volume: String.t() | nil,
           memory: %{
             unread: pos_integer() | nil,
             answering: pos_integer(),
@@ -147,13 +179,18 @@ defmodule Prima.LocusRoles do
         }
 
   @release %{
-    user: "locus",
-    uid: 10_001,
+    service: "locus",
+    container: "cyfr-locus",
+    guard: "locus-guard",
+    guard_container: "cyfr-locus-guard",
+    network: "locus",
+    subnet: "172.16.231.0/24",
+    ip_range: "172.16.231.128/25",
+    host_api_address: "172.16.231.2",
     bin: "/app/bin/locus",
     home_root: "/var/lib/locus/homes",
     run_dir: "/run/locus",
-    run_size: "16m",
-    image_role: :builds,
+    run_size: "1m",
     endpoint_network: "default",
     endpoint_subnet: "172.16.230.0/24",
     endpoint_ip_range: "172.16.230.128/25",
@@ -176,20 +213,26 @@ defmodule Prima.LocusRoles do
   @roles [
     %{
       name: :runtime,
+      key: "LOCUS_RUNTIME_KEY",
+      user: "locus-runtime",
+      uid: 10_011,
+      port: 4200,
+      private: true,
+      run_dir: "/run/locus/runtime",
+      run_size: "16m",
+      home_root: "/var/lib/locus/homes/runtime",
+      home_size: "256m",
       pool: "runner",
       user_prefix: "locus-runner",
       uids: 30_101..30_108,
       reach: "relay",
-      port: 4200,
-      home_size: "256m",
-      service: "locus-runtime",
-      container: "cyfr-locus-runtime",
-      network: "locus-runtime",
-      profile: nil,
-      guard: nil,
       kept_root: nil,
       kept_volume: nil,
       kept_uids: nil,
+      kept_group: nil,
+      kept_gid: nil,
+      guest_root: nil,
+      guest_volume: nil,
       memory: %{
         unread: nil,
         answering: 16_777_216,
@@ -201,20 +244,26 @@ defmodule Prima.LocusRoles do
     },
     %{
       name: :builds,
+      key: "LOCUS_BUILDS_KEY",
+      user: "locus-builds",
+      uid: 10_012,
+      port: 4100,
+      private: false,
+      run_dir: "/run/locus/builds",
+      run_size: "16m",
+      home_root: "/var/lib/locus/homes/builds",
+      home_size: "2g",
       pool: "build",
       user_prefix: "locus-build",
       uids: 30_001..30_016,
       reach: "routed",
-      port: 4100,
-      home_size: "2g",
-      service: "locus-builds",
-      container: "cyfr-locus-builds",
-      network: "locus-builds",
-      profile: "locus-builds",
-      guard: "locus-builds-guard",
       kept_root: nil,
       kept_volume: nil,
       kept_uids: nil,
+      kept_group: nil,
+      kept_gid: nil,
+      guest_root: nil,
+      guest_volume: nil,
       memory: %{
         unread: nil,
         answering: 8_388_608,
@@ -226,20 +275,26 @@ defmodule Prima.LocusRoles do
     },
     %{
       name: :backends,
+      key: "LOCUS_BACKENDS_KEY",
+      user: "locus-backends",
+      uid: 10_013,
+      port: 4101,
+      private: false,
+      run_dir: "/run/locus/backends",
+      run_size: "16m",
+      home_root: "/var/lib/locus/homes/backends",
+      home_size: "2g",
       pool: "backends",
       user_prefix: "locus-backend",
       uids: 20_001..20_032,
       reach: "routed",
-      port: 4101,
-      home_size: "2g",
-      service: "locus-backends",
-      container: "cyfr-locus-backends",
-      network: "locus-backends",
-      profile: nil,
-      guard: "locus-backends-guard",
       kept_root: "/var/lib/locus/kept",
       kept_volume: "homes",
       kept_uids: 40_001..49_999,
+      kept_group: "locus",
+      kept_gid: 10_001,
+      guest_root: "/var/lib/locus/guest",
+      guest_volume: "guest",
       memory: %{
         unread: 67_108_864,
         answering: 27_262_976,
@@ -253,7 +308,7 @@ defmodule Prima.LocusRoles do
 
   @names Enum.map(@roles, & &1.name)
 
-  @doc "The facts every role's service shares."
+  @doc "The facts every role shares."
   @spec release() :: release()
   def release, do: @release
 

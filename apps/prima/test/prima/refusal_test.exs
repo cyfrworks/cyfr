@@ -47,15 +47,12 @@ defmodule Prima.RefusalTest do
      "`CYFR_PROXY_PORT` is `4001` on `0.0.0.0`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."},
     {{:access_setting_invalid, %{key: "CADDY_ACME_EMAIL"}}, :invalid_argument,
      "`CADDY_ACME_EMAIL` is not valid UTF-8 text. Nothing started. Correct it, or remove it."},
-    {{:access_setting_invalid, %{key: "CYFR_LOCUS_BUILDS_URL", value: "http://locus-builds:bad"}},
-     :invalid_argument,
-     "`CYFR_LOCUS_BUILDS_URL` is `http://locus-builds:bad`, which is not an http or https URL with a host, an optional port and no path, query or credentials. Nothing started. Correct it, or remove it to take the default."},
     {{:access_option_outside_mode, %{option: "--domain", mode: "local"}}, :invalid_argument,
      "`--domain` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."},
     {{:access_option_outside_mode, %{option: "--acme-email", mode: "tailnet"}}, :invalid_argument,
      "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."},
     {{:compose_env_refused, %{key: "COMPOSE_PROFILES"}}, :invalid_argument,
-     "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."},
+     "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."},
     {{:compose_env_refused, %{line: "7"}}, :invalid_argument,
      "Line 7 of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."},
     {{:compose_override_refused,
@@ -241,6 +238,10 @@ defmodule Prima.RefusalTest do
     {:not_addressable, :forbidden},
     {:not_in_a_turn, :forbidden},
     {:aqua_line_by_person, :forbidden},
+    {:schedule_by_component, :forbidden},
+    {:schedule_turn_not_yours, :forbidden},
+    {:schedule_by_page, :forbidden},
+    {:schedule_turn_ended, :conflict},
     {:schedule_changed, :conflict},
     {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},
@@ -414,6 +415,9 @@ defmodule Prima.RefusalTest do
 
   # How a turn's work on a program ends, each sentence as a person reads it.
   @program_rows [
+    {:packs_unready, :unavailable, "Your packs could not be made ready for this program."},
+    {:packs_moved, :conflict,
+     "Your packs changed while this program was starting; start it again."},
     {{:crew_unready, "Aqua", :signed_out}, :setup_required,
      "Aqua's program is signed out. Sign it in, or choose another, on the Aqua page."},
     {{:program_full, "Aqua"}, :rate_limited,
@@ -535,6 +539,7 @@ defmodule Prima.RefusalTest do
     {{:consent_moved, "Scout", :ask}, :conflict,
      "Scout " <> @regranted <> " Ask Scout for it again."},
     {{:consent_moved, "Aqua", :none}, :conflict, "Aqua " <> @regranted},
+    {:grant_revoked, :consent_required, @revoked},
     {{:grant_revoked, "Aqua", :message}, :consent_required,
      @revoked <>
        " Your message was not answered: grant it again here when it is asked, or on your " <>

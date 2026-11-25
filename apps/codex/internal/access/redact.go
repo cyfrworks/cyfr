@@ -76,7 +76,7 @@ func publishedNames(dir string) []string {
 
 // engineWords are the names and words the engine itself says: its
 // services, the modes, the settings the boot reads by name.
-var engineWords = slices.Concat([]string{cyfrService, serveService, buildsService, ModeLocal, ModeTailnet, ModePublic, "localhost", redactedText}, readKeys)
+var engineWords = slices.Concat([]string{cyfrService, serveService, ModeLocal, ModeTailnet, ModePublic, "localhost", redactedText}, readKeys)
 
 // redactorFor is the redactor of the .env text data, keeping names.
 func redactorFor(data []byte, names []string) *redactor {

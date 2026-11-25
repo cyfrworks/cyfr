@@ -46,10 +46,15 @@ defmodule Aqua.Models do
       tools and hands Aqua names as they stand, changed since it was
       granted. Aqua runs once the person grants it again;
     * `:consent_absent` — Aqua only: the crew's grant was never given,
-      or was revoked; Aqua runs once the person grants it;
+      or the last of it a removal took; Aqua runs once the person grants
+      it;
+    * `:consent_revoked` — Aqua only: no grant of the crew's stands and
+      the last of it was revoked by its person, as the record of who
+      revoked it says (`Opus.ungranted/2`); Aqua runs once the person
+      grants it again;
     * `:consent_damaged`, `:consent_unavailable` — the brain's own grant,
       or for Aqua the crew's, is damaged, or the store could not answer
-      it;
+      it, or for Aqua why its grant is absent;
     * `:missing` — the athanor's catalysts, read, hold no such model, or
       its setup plan answers that the registry holds no such component;
     * `:model_unavailable` — the athanor's catalysts could not be read,
@@ -74,6 +79,7 @@ defmodule Aqua.Models do
            | :needs_grant
            | :consent_stale
            | :consent_absent
+           | :consent_revoked
            | :consent_damaged
            | :consent_unavailable
            | :missing
@@ -558,7 +564,9 @@ defmodule Aqua.Models do
   read once, for Aqua alone, as a turn loads it, and where it does not
   load Aqua reads why (`Aqua.ConsentStatus.classify_refusal/1`: a stale
   grant is `:consent_stale`, a grant to give again, one never given or
-  revoked `:consent_absent`, a grant to give, and damage or an outage as
+  taken by a removal `:consent_absent`, a grant to give, one its person
+  revoked `:consent_revoked`, a grant to give again, as the loop reads
+  it (`Opus.ungranted/2`), and damage or an outage as
   above), on a program brain as on a catalyst, which is said once, on
   Aqua, and never on a member. A catalyst
   listing that cannot be read is not an empty one, and a setup plan
@@ -601,7 +609,7 @@ defmodule Aqua.Models do
         do: Opus.authority_for(ctx, :default, @grant)
 
     Map.new(statuses, fn
-      {name, {:soul_ready, brain}} -> {name, granted(grant, brain)}
+      {name, {:soul_ready, brain}} -> {name, granted(ctx, grant, brain)}
       settled -> settled
     end)
   end
@@ -623,20 +631,32 @@ defmodule Aqua.Models do
 
   # No brain is an edge of the grant: Aqua is ready when the grant loads,
   # and otherwise reads the grant's own state (`soul_grant/2`).
-  defp granted({:ok, _authority}, brain), do: {:ready, brain}
-  defp granted({:error, reason}, brain), do: soul_grant(reason, brain)
+  defp granted(_ctx, {:ok, _authority}, brain), do: {:ready, brain}
+  defp granted(ctx, {:error, reason}, brain), do: soul_grant(ctx, reason, brain)
 
   # Why the crew's grant did not load, as Aqua reads it whatever brain its
   # member runs on, through `Aqua.ConsentStatus.classify_refusal/1`: stale,
-  # never given or revoked (`:absent`), damaged, or unread. A context that
+  # absent, damaged, or unread. An absent grant its person revoked reads
+  # so, from the record of who revoked it, as a turn refused for it reads
+  # it (`Opus.ungranted/2`, `Aqua.Loop`); one never given or taken by a
+  # removal is absent, and one whose record could not be read is one the
+  # store could not answer. A context that
   # names no athanor (`:forbidden`) cannot read the grant at all, so it
   # reads as one the store could not answer, never as one to give.
-  defp soul_grant(reason, brain) do
+  defp soul_grant(ctx, reason, brain) do
     case Aqua.ConsentStatus.classify_refusal(reason) do
       {:ok, :stale} -> {:consent_stale, brain}
-      {:ok, :absent} -> {:consent_absent, brain}
+      {:ok, :absent} -> absent(ctx, brain)
       {:error, :corrupt} -> {:consent_damaged, brain}
       {:error, _unread_or_forbidden} -> {:consent_unavailable, brain}
+    end
+  end
+
+  defp absent(ctx, brain) do
+    case Opus.ungranted(ctx, @grant) do
+      {:ok, :revoked} -> {:consent_revoked, brain}
+      {:ok, :no_grant} -> {:consent_absent, brain}
+      {:error, _unanswered} -> {:consent_unavailable, brain}
     end
   end
 

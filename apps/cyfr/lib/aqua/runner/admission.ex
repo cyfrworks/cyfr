@@ -28,12 +28,13 @@ defmodule Aqua.Runner.Admission do
       that asked it: its reply lands on the request's thread, addressed
       to the request's sender, and opens the soul's turn when that sender
       is the soul, or is room content when it is the person.
-    * A line of the server's is a turn of the soul in a daily thread under
-      the `schedule` origin, whatever names its text holds: a line with
-      nobody present asks no crew member. A schedule's line
-      (`:schedule`) is sent as the person, and a post of the server's own
-      (`:server`) by the server (`Prima.Author.system/0`). No other kind
-      of thread admits one.
+    * A line of the server's is a turn of the soul under the `schedule`
+      origin, whatever names its text holds: a line with nobody present
+      asks no crew member. A schedule's line (`:schedule`) is sent as the
+      person, into a daily thread or the workspace thread the schedule
+      names (`Aqua.ScheduleTurns`), and a post of the server's own
+      (`:server`) by the server (`Prima.Author.system/0`), into a daily
+      thread. No other kind of thread admits one.
     * A workspace thread's opening (`:opening`, the row its opening's
       transaction wrote there) is a turn of the soul in that workspace
       thread, which works it, sent by the person who asked.
@@ -155,7 +156,7 @@ defmodule Aqua.Runner.Admission do
 
     decided =
       cond do
-        Keyword.has_key?(opts, :schedule) -> servers(thread, sent_by, @person, ctx.origin)
+        Keyword.has_key?(opts, :schedule) -> scheduled(thread, sent_by, ctx.origin)
         Keyword.get(opts, :server) == true -> servers(thread, sent_by, @server, ctx.origin)
         true -> address(thread, sent_by, text, opts)
       end
@@ -177,8 +178,16 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  # A line of the server's on a daily thread, sent by whom its kind is sent
-  # by: the soul's turn, whatever names its text holds.
+  # A schedule's line, sent as its person, on a daily thread or on the
+  # workspace thread a turn there set it from: the soul's turn, whatever
+  # names its text holds.
+  defp scheduled(%{kind: kind}, @person, :schedule) when kind in ["daily", "workspace"],
+    do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
+
+  defp scheduled(_thread, _sent_by, _origin), do: {:error, :not_addressable}
+
+  # A line of the server's own on a daily thread, sent by the server: the
+  # soul's turn, whatever names its text holds.
   defp servers(%{kind: "daily"}, sent_by, sent_by, :schedule),
     do: {:ok, {:turn, Prima.AgentRef.soul_name()}}
 

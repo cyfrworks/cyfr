@@ -3390,7 +3390,7 @@ defmodule Opus.ProgramsTest do
 
     test "a message carrying a grant, and a reason carrying a state, are redacted" do
       grant = %{
-        url: "http://locus-backends:4101/locus/v1/backends/session",
+        url: "http://locus:4101/locus/v1/backends/session",
         owner_key: :crypto.strong_rand_bytes(32),
         epoch: 1
       }
@@ -3408,7 +3408,7 @@ defmodule Opus.ProgramsTest do
                  {Opus.Programs, :owner,
                   %{
                     owner_key: "[REDACTED]",
-                    url: "http://locus-backends:4101/locus/v1/backends/session"
+                    url: "http://locus:4101/locus/v1/backends/session"
                   }},
                reason:
                  {:function_clause,

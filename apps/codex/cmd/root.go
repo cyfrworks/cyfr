@@ -124,6 +124,11 @@ var errQuestionInterrupted = errors.New("Interrupted; nothing was written.")
 // lock released, rather than die with them; it answers the status the
 // process exits with (Run).
 func Main() int {
+	// The app's update service is read before the command line: root runs
+	// none of cyfr's commands.
+	if status, ok := appUpdateService(os.Args); ok {
+		return status
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	return Run(ctx)

@@ -212,8 +212,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       {"aqua", "update"},
       {"aqua", "delete"},
       {"aqua", "reset"},
-      {"aqua", "skill_delete"},
-      {"aqua", "skill_reset"}
+      {"aqua", "skill_delete"}
     ]
 
     auth = granting_authority(in_chain_pairs() ++ verbs)

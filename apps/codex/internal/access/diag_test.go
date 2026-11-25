@@ -52,7 +52,7 @@ func TestDiagnosesSayOnlyWhatTheEngineKnows(t *testing.T) {
 		{" cyfr Error pull access denied for " + secret + ", repository does not exist or may require 'docker login'\nError response from daemon: pull access denied for " + secret + ", repository does not exist or may require 'docker login'\n", "an image could not be found or pulled"},
 		{"Error response from daemon: failed to resolve reference \"docker.io/library/busybox:" + secret + "\": docker.io/library/busybox:" + secret + ": not found\n", "an image could not be found or pulled"},
 		{"Error response from daemon: No such image: " + secret + ":latest\n", "an image could not be found or pulled"},
-		{"no such service: locus-backends\n", "it has no service locus-backends"},
+		{"no such service: locus-guard\n", "it has no service locus-guard"},
 		{"no such service: " + secret + "\n", "it has no such service"},
 		{"failed to read /x/.env: line 2: unterminated quoted value \"a\nno such service: cyfr", "it could not read an env file"},
 		{"error: the value " + secret + " no such service: cyfr\n", ""},

@@ -139,7 +139,7 @@ func readUninstallPlan() (*uninstallPlan, error) {
 	}
 	for _, name := range access.ComposeMainFiles {
 		if fileExists(name) {
-			p.images = imagesFromCompose(name, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
+			p.images = imagesFromCompose(name, []string{access.ModePublic, access.ModeTailnet})
 			break
 		}
 	}

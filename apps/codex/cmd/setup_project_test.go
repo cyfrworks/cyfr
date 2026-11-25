@@ -125,7 +125,7 @@ func workInThisProcess(args []string) *workProcess {
 // made and offers no token, whatever else it says.
 func TestALookNamingNoContainerSendsNothing(t *testing.T) {
 	dir := t.TempDir()
-	env := "CYFR_ACCESS=local\nCYFR_PORT=4100\nCYFR_LOCUS_BUILDS_URL=\n" + setupTokenVar + "=" + testToken + "\n"
+	env := "CYFR_ACCESS=local\nCYFR_PORT=4100\n" + setupTokenVar + "=" + testToken + "\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func begins(w *workProcess) workBegin { return func() (*workProcess, error) { re
 func setUpFolder(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_PORT=4100\nCYFR_LOCUS_BUILDS_URL=\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_ACCESS=local\nCYFR_PORT=4100\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir

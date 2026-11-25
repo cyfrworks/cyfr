@@ -176,7 +176,7 @@ defmodule Locus.KeeperVectorsTest do
     assert line ==
              Jason.encode!(%{vector | "id" => sent["id"], "attach" => sent["attach"]}) <> "\n"
 
-    send_reply(peer, %{v: 4, type: "error", id: sent["id"], code: "capacity"})
+    send_reply(peer, %{v: 6, type: "error", id: sent["id"], code: "capacity"})
     assert {{:error, :capacity}, []} = Task.await(task, 10_000)
   end
 

@@ -1130,7 +1130,7 @@ defmodule Arca.OverlayTest do
   end
 
   describe "commit_unit/4 with if_absent: true — create, never replace" do
-    @skill_manifest "SKILL.md"
+    @skill_manifest ".cyfr-pack.json"
 
     defp create(actor, unit, bytes, opts \\ []) do
       source =
@@ -1145,10 +1145,10 @@ defmodule Arca.OverlayTest do
     test "a held shipped copy refuses; a shipped unit not yet pulled is not the athanor's",
          %{actor: actor, seed_dir: seed} do
       member = ship_member!(seed, "a.md", "shipped crew member")
-      scroll_dir = Path.join(seed, "aqua/skills/s")
+      scroll_dir = Path.join(seed, "aqua/scrolls/s")
       File.mkdir_p!(scroll_dir)
       File.write!(Path.join(scroll_dir, @skill_manifest), "shipped scroll")
-      scroll = ["aqua", "skills", "s"]
+      scroll = ["aqua", "scrolls", "s"]
 
       :ok = Arca.Overlay.pull_shipped(actor, member)
       :ok = Arca.Overlay.pull_shipped(actor, scroll)
@@ -1169,7 +1169,7 @@ defmodule Arca.OverlayTest do
       actor: actor
     } do
       member = ["aqua", "crew", "b.md"]
-      scroll = ["aqua", "skills", "t"]
+      scroll = ["aqua", "scrolls", "t"]
 
       assert {:ok, [[]]} = create(actor, member, "first", if_absent: true)
       assert {:ok, [[@skill_manifest]]} = create(actor, scroll, "first scroll", if_absent: true)
@@ -1203,7 +1203,7 @@ defmodule Arca.OverlayTest do
       # there — a probe outside the draft would let several pass it and
       # each replace the last.
       member = ["aqua", "crew", "c.md"]
-      scroll = ["aqua", "skills", "u"]
+      scroll = ["aqua", "scrolls", "u"]
 
       for unit <- [member, scroll] do
         results =
@@ -1246,15 +1246,17 @@ defmodule Arca.OverlayTest do
   end
 
   describe "update/3 — one serialized read-modify-write" do
-    @scroll ["aqua", "skills", "u"]
-    @manifest @scroll ++ ["SKILL.md"]
+    # A unit edited in place: a component version directory, its manifest
+    # its sentinel. A pack of scrolls is committed whole instead.
+    @scroll ["components", "catalysts", "local", "u", "1.0.0"]
+    @manifest @scroll ++ ["cyfr-manifest.json"]
 
     test "a writer that lands between the read and the write is not overwritten", %{actor: actor} do
       {:ok, _} =
         Arca.Overlay.commit_unit(
           actor,
           @scroll,
-          {:files, [{["SKILL.md"], "v0"}]},
+          {:files, [{["cyfr-manifest.json"], "v0"}]},
           cap: :exempt
         )
 
@@ -1282,7 +1284,7 @@ defmodule Arca.OverlayTest do
         Arca.Overlay.commit_unit(
           actor,
           @scroll,
-          {:files, [{["SKILL.md"], "v1"}]},
+          {:files, [{["cyfr-manifest.json"], "v1"}]},
           cap: :exempt
         )
 
@@ -1301,7 +1303,7 @@ defmodule Arca.OverlayTest do
         Arca.Overlay.commit_unit(
           actor,
           @scroll,
-          {:files, [{["SKILL.md"], "v0"}]},
+          {:files, [{["cyfr-manifest.json"], "v0"}]},
           cap: :exempt
         )
 
@@ -1328,7 +1330,7 @@ defmodule Arca.OverlayTest do
         Arca.Overlay.commit_unit(
           actor,
           @scroll,
-          {:files, [{["SKILL.md"], "v0"}]},
+          {:files, [{["cyfr-manifest.json"], "v0"}]},
           cap: :exempt
         )
 
@@ -1373,9 +1375,9 @@ defmodule Arca.OverlayTest do
       actor: actor,
       seed_dir: seed
     } do
-      shipped = Path.join(seed, "aqua/skills/u")
+      shipped = Path.join(seed, "components/catalysts/local/u/1.0.0")
       File.mkdir_p!(shipped)
-      File.write!(Path.join(shipped, "SKILL.md"), "shipped scroll")
+      File.write!(Path.join(shipped, "cyfr-manifest.json"), "shipped scroll")
       File.write!(Path.join(shipped, "reference.md"), "field tables")
 
       assert {:error, :not_found} =
@@ -1395,7 +1397,7 @@ defmodule Arca.OverlayTest do
       assert {:ok, "field tables"} =
                Arca.get(actor, @scroll ++ ["reference.md"])
 
-      assert {:ok, %{changed: [["SKILL.md"]]}} =
+      assert {:ok, %{changed: [["cyfr-manifest.json"]]}} =
                Arca.Overlay.diff_unit(actor, @scroll)
     end
 
@@ -1416,7 +1418,7 @@ defmodule Arca.OverlayTest do
         Arca.Overlay.commit_unit(
           actor,
           @scroll,
-          {:files, [{["SKILL.md"], "v0"}]},
+          {:files, [{["cyfr-manifest.json"], "v0"}]},
           cap: :exempt
         )
 
@@ -1998,18 +2000,18 @@ defmodule Arca.OverlayTest do
     end
   end
 
-  describe "a partial aqua skill is not a skill" do
-    # `compendium/providers/aqua.ex` reads the tree directly — `list_typed`,
-    # `list_recursive`, `get` — so a half-written skill that read as whole
-    # would put its instructions in front of the agent.
+  describe "a partial directory unit is not a unit" do
+    # Readers read the tree directly — `list_typed`, `list_recursive`,
+    # `get` — so a half-written unit that read as whole would put what it
+    # holds in front of its reader.
     #
-    # A skill is a DIRECTORY unit whose sentinel is `SKILL.md` itself
-    # (`Compendium.AquaPath.locate/1`), which is the load-bearing detail:
-    # a crashed write leaves the manifest absent, so there is nothing to
-    # read even if the directory lists.
-    test "a skill dir whose SKILL.md never landed cannot be read", %{actor: actor} do
+    # A component version is a DIRECTORY unit whose sentinel is its
+    # manifest (`Compendium.ComponentPath.locate/1`), which is the
+    # load-bearing detail: a crashed write leaves the manifest absent, so
+    # there is nothing to read even if the directory lists.
+    test "a unit whose manifest never landed cannot be read", %{actor: actor} do
       name = "half-written"
-      dir = Compendium.AquaPath.skill_dir(name)
+      dir = ["components", "catalysts", "local", name, "1.0.0"]
 
       # A crashed `commit_unit`: the body file is staged under the draft's
       # prefix, the sentinel never was, and no row is committed. A plain
@@ -2036,25 +2038,25 @@ defmodule Arca.OverlayTest do
       assert status == :absent
       assert {:ok, []} = Arca.list_recursive(actor, dir)
 
-      # And the instructions are unreachable: SKILL.md IS the sentinel.
+      # And what it holds is unreachable: the manifest IS the sentinel.
       assert {:error, :not_found} =
-               Arca.get(actor, Compendium.AquaPath.skill_manifest(name))
+               Arca.get(actor, dir ++ ["cyfr-manifest.json"])
     end
 
-    test "a completed skill reads and lists normally", %{actor: actor} do
+    test "a completed unit reads and lists normally", %{actor: actor} do
       name = "whole-skill"
-      dir = Compendium.AquaPath.skill_dir(name)
+      dir = ["components", "catalysts", "local", name, "1.0.0"]
 
       {:ok, _} =
         Arca.Overlay.commit_unit(
           actor,
           dir,
-          {:files, [{["SKILL.md"], "# Whole"}, {["reference.md"], "detail"}]},
+          {:files, [{["cyfr-manifest.json"], "# Whole"}, {["reference.md"], "detail"}]},
           cap: :exempt
         )
 
       assert {:ok, "# Whole"} =
-               Arca.get(actor, Compendium.AquaPath.skill_manifest(name))
+               Arca.get(actor, dir ++ ["cyfr-manifest.json"])
 
       assert {:ok, :own} = Arca.Overlay.unit_status(actor, dir)
     end

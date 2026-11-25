@@ -2,37 +2,51 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
-// client over the inherited socket (fd 3): one JSON object per line, each
-// carrying `"v": 4` and a `type`.
+// clients, one role process each, over each one's inherited socket (fd 3):
+// one JSON object per line, each carrying `"v": 6` and a `type`.
+//
+// Each role's channel is its own. A request names only what is its role's:
+// a pool another role draws from is unknown (CodeUnknownPool), a spawn
+// another role holds unknown (CodeUnknownSpawn), a place another role holds
+// absent, as it is to a spawn, an assign and a measure, and a kept home on
+// a role whose sessions keep none unavailable (CodeUnavailable). Every
+// reply and every report of a spawn goes to the channel of the role that
+// asked for it.
 //
 // Client to keeper:
 //
-//	{"v":4,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":4,"type":"drop","place":…}
-//	{"v":4,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":4,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home_path":…,"home_uid":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
-//	{"v":4,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":4,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":4,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":4,"type":"measure","id":…,"place":…}
-//	{"v":4,"type":"pool","id":…,"pool":…}
-//	{"v":4,"type":"home_make","id":…,"path":…,"uid":…}
-//	{"v":4,"type":"home_measure","id":…,"path":…,"uid":…}
-//	{"v":4,"type":"home_retire","id":…,"path":…,"uid":…}
+//	{"v":6,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":6,"type":"drop","place":…}
+//	{"v":6,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":6,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
+//	{"v":6,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":6,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":6,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":6,"type":"measure","id":…,"place":…}
+//	{"v":6,"type":"pool","id":…,"pool":…}
+//	{"v":6,"type":"home_make","id":…,"home":…}
+//	{"v":6,"type":"home_measure","id":…,"home":…}
+//	{"v":6,"type":"home_reset","id":…,"home":…}
+//	{"v":6,"type":"home_retire","id":…,"home":…}
+//	{"v":6,"type":"home_list","id":…,"after":…}
+//	{"v":6,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
+//	{"v":6,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
 //
 // Keeper to client:
 //
-//	{"v":4,"type":"placed","id":…}
-//	{"v":4,"type":"assigned","id":…}
-//	{"v":4,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":4,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
-//	{"v":4,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":4,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
-//	{"v":4,"type":"released","spawn_id":…}
-//	{"v":4,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":4,"type":"home_made","id":…}
-//	{"v":4,"type":"home_measured","id":…,"bytes":…}
-//	{"v":4,"type":"home_retired","id":…}
+//	{"v":6,"type":"placed","id":…}
+//	{"v":6,"type":"assigned","id":…}
+//	{"v":6,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":6,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":6,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":6,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":6,"type":"released","spawn_id":…}
+//	{"v":6,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":6,"type":"home_made","id":…,"uid":…}
+//	{"v":6,"type":"home_measured","id":…,"bytes":…}
+//	{"v":6,"type":"home_retired","id":…}
+//	{"v":6,"type":"homes","id":…,"ids":[…],"next":…}
+//	{"v":6,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
 //
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
@@ -47,7 +61,8 @@
 // own beside the `place` it names and gives that place another kind,
 // athanor and subject, as a runner given work or back at rest; it is
 // answered under that id alone, `assigned` once applied, or refused as
-// CodeBadRequest where the keeper holds no such place. A `spawn` names its
+// CodeBadRequest where the keeper holds no such place, or where a spawn
+// naming packs claimed it and the assign names another athanor. A `spawn` names its
 // place, which no other spawn may name: one naming a place the keeper does
 // not hold, or one another spawn named, is refused as CodeBadRequest. Only
 // the keeper frees a place a spawn named: a spawn refused before the keeper
@@ -71,7 +86,7 @@
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
-// TMPDIR): nothing of the keeper's or the client's environment is
+// TMPDIR): nothing of the keeper's or any client's environment is
 // inherited, so the request names exactly the variables that reach the
 // command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
 // refused.
@@ -124,7 +139,8 @@
 // closes the command's reading side, so the command reads end of file. A
 // `release` ends the channel with the command's processes. Any pool may
 // serve such a spawn; a long-lived command is ended only by a `release`, by
-// its own exit or by the loss of the client, whichever pool it came from.
+// its own exit or by the end of the client that asked for it, whichever
+// pool it came from.
 //
 // Every spawn's command runs in a space of its own: a user, network and
 // IPC namespace cloned for it, whose only mapping is its uid and gid to
@@ -141,17 +157,22 @@
 //
 // A spawn's `home_mode` is HomeScratch, today's home scrubbed at
 // retirement, or HomeKept, a home that outlives the spawn: absent reads as
-// HomeScratch. A kept spawn names its home's clean absolute `home_path`
-// and the home's own `home_uid`, and may bound it by `home_max_bytes`;
-// those three are refused without HomeKept. A spawn's `pty` asks for a
-// pseudo-terminal of its `rows` and `cols`, exactly those two members, each
-// 1..MaxPtySize; absent, the spawn has none. The `home_make`, `home_measure`
-// and `home_retire` requests name a kept home by `path` and `uid`.
+// HomeScratch. A kept spawn names its kept home by its id, `home`, and may
+// bound it by `home_max_bytes`; both are refused without HomeKept. A
+// spawn's `pty` asks for a pseudo-terminal of its `rows` and `cols`,
+// exactly those two members, each 1..MaxPtySize; absent, the spawn has
+// none. The `home_make`, `home_measure`, `home_reset` and `home_retire`
+// requests name a kept home by its id, `home`, as a kept spawn does.
 //
-// The keeper runs a kept spawn under its home_uid in its home_path, both
-// within its `--kept-homes <root>:<first>-<last>` (a home directly under the
-// root, a uid of the range), and takes no uid of the pool for it; a kept
-// spawn whose home already holds home_max_bytes is refused as
+// The keeper alone knows its kept homes. A home is `<root>/<home>` under
+// its `--kept-homes <root>:<first>-<last>`, 0700, owned by a uid of the
+// range that is its own for its life: the folder's owner, read without
+// following a link, and no index of it is kept. A keeper given no
+// --kept-homes refuses every home request and every kept spawn as
+// CodeUnavailable. The keeper runs a kept spawn under its home's uid in its
+// home, and takes no uid of the pool for it; one naming a home not made is
+// refused as CodeHomeAbsent, one naming an entry that is not a home as
+// CodeBadRequest, and one whose home already holds home_max_bytes as
 // CodeHomeOverCap. A `pty` spawn's stdin, stdout and stderr are a
 // pseudo-terminal of the size it names, which its stdout frames carry; its
 // stderr ends at once. A `resize` sets that terminal's size to its `rows`
@@ -159,9 +180,26 @@
 // the terminal's foreground process group; like `signal` it has no reply
 // but a refusal: CodeUnknownSpawn for a spawn the keeper does not hold and
 // CodeBadRequest for one without a pseudo-terminal.
-// The home requests act as helpers running as the home's uid: `home_make`
-// makes the home 0700, `home_measure` answers the bytes allocated under it,
-// and `home_retire` ends every process of the uid and removes the home.
+//
+// The home requests act as helpers running as the home's uid, one request
+// of a home at a time, each on a goroutine of its own, so two requests of
+// one home sent together are applied in either order. `home_make` answers
+// `home_made` with a made home's uid, or makes the home 0700 under the
+// lowest uid of the range that no entry under the root owns, no process
+// holds (the keeper's own read of /proc), no make or reset holds and the
+// keeper does not hold as retiring, quarantined or live, and answers that
+// uid; with every uid taken it is refused as CodeCapacity, and with a root
+// or a /proc that cannot be read as CodeUnavailable. `home_measure` answers
+// `home_measured` with the bytes allocated under the home, an empty home's
+// zero among them, or is refused as CodeHomeAbsent for a home not made.
+// `home_reset` ends every process of the home's uid and makes the home
+// again empty under that same uid, answered `home_made`; `home_retire` ends
+// every process of the uid and removes the home, answered `home_retired`.
+// Each of the two answers `home_retired` for a home not made, which it
+// leaves absent. `home_list` answers `homes`: the ids of the kept homes
+// after its `after` (every home without one), in byte order, at most
+// MaxHomeListIDs of them, with `next`, the last of them, when more follow,
+// which the next `home_list` names as its `after`.
 //
 // A spawn's `hosts` names the only hosts its command may reach beyond
 // the resolver and the deployment's private hosts: 1..MaxHosts distinct
@@ -184,6 +222,29 @@
 // died or its answer failed, the keeper kills every routed spawn before it
 // dials again, and those spawns end as any killed spawn does.
 //
+// The keeper holds a read-only copy of each person's packs, one generation
+// for each set digest, under its kept-homes root (package packview, which
+// defines the stream, its manifest, the bounds and the cleanup rule). A
+// `packs_hold` names an `athanor`, the `lifetime` of the start it is for
+// and a set `digest` (`sha256:` and 64 lowercase hex digits), and is
+// answered `packs` with `state` "held" when the keeper holds that
+// generation complete and now holds it for the lifetime, or "missing".
+// A `packs_put` sends the generation's stream, one part of at most
+// MaxPackPartBytes bytes in base64 as its `data`, `seq` from 0 by one,
+// `last` on the final part; each part is answered "taken", the last
+// "held". A put refused (its stream, a bound, a manifest the files do not
+// match, a seq out of order, a put idle or running past its bound) is
+// refused as CodePacksRefused and leaves nothing behind; a put's first part
+// while another put of its athanor is under way is refused as
+// CodePacksBusy, and one while the most puts at once are under way as
+// CodeUnavailable. A spawn's `packs` names a generation by
+// its athanor and digest: the athanor must be its place's when the spawn
+// claims it, which no assign changes from then, and the generation
+// complete; the stage binds it read only at
+// /run/cyfr/scrolls in the space, and binds nothing for a generation that
+// holds no pack. A keeper given no --kept-homes, and a role whose spawns
+// keep no home, refuse every packs request as CodeUnavailable.
+//
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
 // runtime opens descriptors of its own before it can inspect fd 3 tells the
@@ -193,6 +254,7 @@ package protocol
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,10 +262,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/cyfr/locus/keeper/internal/home"
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 4
+const Version = 6
 
 // A place's kinds: a runner at rest and one given a run, a build, and a
 // program's and a terminal's session.
@@ -239,10 +303,10 @@ const (
 // ChannelEnv is the client environment variable naming the channel socket.
 const ChannelEnv = "KEEPER_CHANNEL"
 
-// KeptHomesEnv is the client environment variable naming the kept-homes root
-// and uid range, `<root>:<first>-<last>`, as the keeper's --kept-homes names
-// them; absent for a keeper that keeps no homes.
-const KeptHomesEnv = "KEEPER_KEPT_HOMES"
+// RunDirEnv is the client environment variable naming its role's run
+// folder, which is at the same path inside its space and outside it: the
+// client listens there for its spawns' relays.
+const RunDirEnv = "KEEPER_RUN_DIR"
 
 // Message types.
 const (
@@ -259,7 +323,9 @@ const (
 	TypeMeasure      = "measure"
 	TypeHomeMake     = "home_make"
 	TypeHomeMeasure  = "home_measure"
+	TypeHomeReset    = "home_reset"
 	TypeHomeRetire   = "home_retire"
+	TypeHomeList     = "home_list"
 	TypeSpawned      = "spawned"
 	TypeError        = "error"
 	TypeExited       = "exited"
@@ -268,12 +334,25 @@ const (
 	TypeHomeMade     = "home_made"
 	TypeHomeMeasured = "home_measured"
 	TypeHomeRetired  = "home_retired"
+	TypeHomes        = "homes"
+	TypePacksHold    = "packs_hold"
+	TypePacksPut     = "packs_put"
+	TypePacks        = "packs"
+)
+
+// A `packs` reply's states.
+const (
+	PacksHeld    = "held"
+	PacksMissing = "missing"
+	PacksTaken   = "taken"
 )
 
 // Error codes carried by an `error` reply.
 const (
-	CodeBadRequest   = "bad_request"
-	CodeUnknownPool  = "unknown_pool"
+	CodeBadRequest  = "bad_request"
+	CodeUnknownPool = "unknown_pool"
+	// CodeCapacity refuses a spawn its pool has no free uid for, and a
+	// home_make of a new home with every kept uid taken.
 	CodeCapacity     = "capacity"
 	CodeExecFailed   = "exec_failed"
 	CodeUnknownSpawn = "unknown_spawn"
@@ -288,12 +367,18 @@ const (
 	// CodeHomeOverCap refuses a kept spawn whose home already holds its
 	// home_max_bytes.
 	CodeHomeOverCap = "home_over_cap"
-	// CodeUIDBusy refuses a home_make or a kept spawn on a kept home's uid
-	// that is not free for it: retiring (its last spawn released, its
-	// processes not yet all ended), quarantined (a retirement that could not
-	// finish), or live under another home. A client drawing a uid for a new
-	// home takes another.
+	// CodeUIDBusy refuses a kept spawn on a kept home's uid that is not free
+	// for it: retiring (its last spawn released, its processes not yet all
+	// ended) for longer than the spawn waits, quarantined (a retirement that
+	// could not finish), or live under another home.
 	CodeUIDBusy = "uid_busy"
+	// CodeHomeAbsent refuses a kept spawn or a home_measure naming a kept
+	// home that is not made.
+	CodeHomeAbsent = "home_absent"
+	// CodeUnavailable refuses every home request and kept spawn of a keeper
+	// that keeps no homes (no --kept-homes), and a home_make or home_list
+	// whose root or /proc cannot be read.
+	CodeUnavailable = "unavailable"
 	// CodeHostsUnresolved refuses a spawn one of whose hosts resolves to no
 	// address.
 	CodeHostsUnresolved = "hosts_unresolved"
@@ -301,6 +386,12 @@ const (
 	// did not confirm: no guard (--guard), a guard that cannot be reached
 	// or judges another network namespace, or one that refused the change.
 	CodeGuardUnavailable = "guard_unavailable"
+	// CodePacksRefused refuses a packs_put whose stream the keeper does not
+	// take (package packview): the put leaves nothing behind.
+	CodePacksRefused = "packs_refused"
+	// CodePacksBusy refuses a packs_put's first part while another put of
+	// its athanor is under way: the start it is for holds again.
+	CodePacksBusy = "packs_busy"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
@@ -328,11 +419,8 @@ const (
 	MinCPUQuota = 1_000
 	// MaxCPUQuota is the most a spawn's CPU quota may be: 1024 CPUs.
 	MaxCPUQuota = 1024 * CPUPeriod
-	// MaxHomePathBytes is the longest a kept home's path may be, PATH_MAX
-	// less its NUL.
-	MaxHomePathBytes = 4095
-	// MaxUID is the highest uid or gid an account or a kept home may hold:
-	// (uid_t)-1 is no id.
+	// MaxUID is the highest uid or gid an account may hold: (uid_t)-1 is
+	// no id.
 	MaxUID = 4294967294
 	// MaxHomeBytes is the most a kept home's bound may be, a number every
 	// client's JSON carries exactly.
@@ -342,6 +430,15 @@ const (
 	// MaxPtySize is the most rows, and the most columns, a pseudo-terminal
 	// may have.
 	MaxPtySize = 1000
+	// MaxHomeListIDs is the most ids one `homes` reply carries: a page of
+	// the longest ids fits one frame's payload (frame.MaxPayload).
+	MaxHomeListIDs = 512
+	// MaxPackPartBytes is the most one packs_put part carries, before its
+	// base64: a part's line stays within MaxLineBytes.
+	MaxPackPartBytes = 512 << 10
+	// MaxPackSeq is the highest seq a packs_put may carry: a set's stream
+	// at its bounds is far fewer parts.
+	MaxPackSeq = 1 << 16
 )
 
 // Signals a `signal` request may name.
@@ -367,6 +464,11 @@ var (
 	// 256 printable ASCII characters, no space. Prima.RunnerControl's @id
 	// holds the grammar.
 	athanorPattern = regexp.MustCompile(`^[\x21-\x7E]{1,256}$`)
+	// lifetimePattern is a start's lifetime as the backends wire gives it
+	// (Prima.LocusBackends' lt_ ids), which the keeper keeps opaque.
+	lifetimePattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+	// digestPattern is a set digest: `sha256:` and 64 lowercase hex digits.
+	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	// hostPattern is an exact hostname of the egress domain grammar
 	// (Prima.Destination's): lowercase labels of letters, digits, hyphens
 	// and underscores, neither starting nor ending with a hyphen, of at
@@ -488,6 +590,18 @@ func ValidateAttach(a Attach) error {
 	return nil
 }
 
+// SpawnPacks names a pack generation by its athanor and set digest.
+type SpawnPacks struct {
+	Athanor string `json:"athanor"`
+	Digest  string `json:"digest"`
+}
+
+// Part is a parsed packs_put's part, decoded from its base64.
+func (r *Request) Part() []byte { return r.part }
+
+// ValidDigest reports whether d is a set digest.
+func ValidDigest(d string) bool { return digestPattern.MatchString(d) }
+
 // PtySize is a pseudo-terminal's size; a spawn's `pty` carries both members.
 type PtySize struct {
 	Rows *uint64 `json:"rows"`
@@ -533,12 +647,15 @@ type Request struct {
 	SpawnID string `json:"spawn_id,omitempty"`
 	Sig     string `json:"sig,omitempty"`
 	GraceMs *int64 `json:"grace_ms,omitempty"`
-	// HomeMode is HomeScratch, HomeKept or empty (HomeScratch); HomePath,
-	// HomeUID and HomeMaxBytes are set only on a HomeKept spawn.
+	// HomeMode is HomeScratch, HomeKept or empty (HomeScratch);
+	// HomeMaxBytes is set only on a HomeKept spawn.
 	HomeMode     string  `json:"home_mode,omitempty"`
-	HomePath     string  `json:"home_path,omitempty"`
-	HomeUID      *uint64 `json:"home_uid,omitempty"`
 	HomeMaxBytes *uint64 `json:"home_max_bytes,omitempty"`
+	// Home is the id of the kept home a HomeKept spawn or a home request
+	// names (home.ValidID).
+	Home string `json:"home,omitempty"`
+	// After is the id a home_list's page follows.
+	After string `json:"after,omitempty"`
 	// Pty is the size of a spawn's pseudo-terminal; nil, it has none.
 	Pty *PtySize `json:"pty,omitempty"`
 	// Hosts are the only hosts a spawn may reach (beside the resolver and
@@ -547,9 +664,17 @@ type Request struct {
 	// Rows and Cols are a resize's new size.
 	Rows *uint64 `json:"rows,omitempty"`
 	Cols *uint64 `json:"cols,omitempty"`
-	// Path and UID name the kept home of a home request.
-	Path string  `json:"path,omitempty"`
-	UID  *uint64 `json:"uid,omitempty"`
+	// Lifetime, Digest, Seq, Last and Data are a packs request's.
+	Lifetime string  `json:"lifetime,omitempty"`
+	Digest   string  `json:"digest,omitempty"`
+	Seq      *uint64 `json:"seq,omitempty"`
+	Last     *bool   `json:"last,omitempty"`
+	Data     *string `json:"data,omitempty"`
+	// Packs names the generation a spawn's space binds.
+	Packs *SpawnPacks `json:"packs,omitempty"`
+
+	// part is a packs_put's data, decoded.
+	part []byte
 
 	// present names the members the line carried, whatever their values:
 	// a member is judged by its presence, never by a zero value standing
@@ -700,23 +825,78 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if !poolPattern.MatchString(req.Pool) {
 			return nil, refuse("pool must match " + poolPattern.String())
 		}
-	case TypeHomeMake, TypeHomeMeasure, TypeHomeRetire:
-		if !req.only("id", "path", "uid") {
-			return nil, refuse(req.Type + " carries only id, path and uid")
+	case TypeHomeMake, TypeHomeMeasure, TypeHomeReset, TypeHomeRetire:
+		if !req.only("id", "home") {
+			return nil, refuse(req.Type + " carries only id and home")
 		}
 		if !idPattern.MatchString(req.ID) {
 			return nil, refuse("id must match " + idPattern.String())
 		}
-		if err := validateHomePath("path", req.Path); err != nil {
+		if !home.ValidID(req.Home) {
+			return nil, refuse("home must be a kept home's id")
+		}
+	case TypeHomeList:
+		if !req.only("id", "after") {
+			return nil, refuse("home_list carries only id and after")
+		}
+		if !idPattern.MatchString(req.ID) {
+			return nil, refuse("id must match " + idPattern.String())
+		}
+		if req.present["after"] && !home.ValidID(req.After) {
+			return nil, refuse("after must be a kept home's id")
+		}
+	case TypePacksHold:
+		if !req.only("id", "athanor", "lifetime", "digest") {
+			return nil, refuse("packs_hold carries only id, athanor, lifetime and digest")
+		}
+		if err := validatePacks(&req); err != nil {
 			return nil, refuse(err.Error())
 		}
-		if err := validateUID("uid", req.UID); err != nil {
+	case TypePacksPut:
+		if !req.only("id", "athanor", "lifetime", "digest", "seq", "last", "data") {
+			return nil, refuse("packs_put carries only id, athanor, lifetime, digest, seq, last and data")
+		}
+		if err := validatePacks(&req); err != nil {
 			return nil, refuse(err.Error())
 		}
+		if req.Seq == nil || *req.Seq > MaxPackSeq {
+			return nil, refuse(fmt.Sprintf("seq must be within 0..%d", MaxPackSeq))
+		}
+		if req.Last == nil {
+			return nil, refuse("last is required")
+		}
+		if req.Data == nil {
+			return nil, refuse("data is required")
+		}
+		if base64.StdEncoding.DecodedLen(len(*req.Data)) > MaxPackPartBytes+2 {
+			return nil, refuse(fmt.Sprintf("data must be at most %d bytes", MaxPackPartBytes))
+		}
+		part, err := base64.StdEncoding.Strict().DecodeString(*req.Data)
+		if err != nil || len(part) > MaxPackPartBytes {
+			return nil, refuse(fmt.Sprintf("data must be the base64 of at most %d bytes", MaxPackPartBytes))
+		}
+		req.part = part
 	default:
 		return nil, refuse("unknown type")
 	}
 	return &req, nil
+}
+
+// validatePacks checks a packs request's id, athanor, lifetime and digest.
+func validatePacks(req *Request) error {
+	if !idPattern.MatchString(req.ID) {
+		return errors.New("id must match " + idPattern.String())
+	}
+	if !athanorPattern.MatchString(req.Athanor) {
+		return errors.New("athanor must match " + athanorPattern.String())
+	}
+	if !lifetimePattern.MatchString(req.Lifetime) {
+		return errors.New("lifetime must match " + lifetimePattern.String())
+	}
+	if !digestPattern.MatchString(req.Digest) {
+		return errors.New("digest must match " + digestPattern.String())
+	}
+	return nil
 }
 
 // validateWhose checks whose a place or an assign says it is: one of Kinds,
@@ -736,8 +916,11 @@ func validateWhose(req *Request) error {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "attach", "home_mode", "home_path", "home_uid", "home_max_bytes", "pty", "hosts") {
-		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, attach, home_mode, home_path, home_uid, home_max_bytes, pty and hosts")
+	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "attach", "home_mode", "home", "home_max_bytes", "pty", "hosts", "packs") {
+		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, attach, home_mode, home, home_max_bytes, pty, hosts and packs")
+	}
+	if p := req.Packs; p != nil && (!athanorPattern.MatchString(p.Athanor) || !digestPattern.MatchString(p.Digest)) {
+		return errors.New("packs must name an athanor and a set digest")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -812,41 +995,19 @@ func validateHome(req *Request) error {
 	}
 	switch mode {
 	case HomeScratch:
-		if req.present["home_path"] || req.present["home_uid"] || req.present["home_max_bytes"] {
-			return errors.New("home_path, home_uid and home_max_bytes need home_mode " + HomeKept)
+		if req.present["home"] || req.present["home_max_bytes"] {
+			return errors.New("home and home_max_bytes need home_mode " + HomeKept)
 		}
 		return nil
 	case HomeKept:
 	default:
 		return errors.New("home_mode must be " + HomeScratch + " or " + HomeKept)
 	}
-	if !req.present["home_path"] {
-		return errors.New("home_path is required with home_mode " + HomeKept)
-	}
-	if err := validateHomePath("home_path", req.HomePath); err != nil {
-		return err
-	}
-	if err := validateUID("home_uid", req.HomeUID); err != nil {
-		return err
+	if !home.ValidID(req.Home) {
+		return errors.New("home must be a kept home's id with home_mode " + HomeKept)
 	}
 	if b := req.HomeMaxBytes; b != nil && (*b < 1 || *b > MaxHomeBytes) {
 		return fmt.Errorf("home_max_bytes must be within 1..%d", uint64(MaxHomeBytes))
-	}
-	return nil
-}
-
-// validateHomePath checks a kept home's path: absolute and clean, as
-// filepath.Clean leaves it, with no NUL and at most MaxHomePathBytes.
-func validateHomePath(field, p string) error {
-	if !filepath.IsAbs(p) || filepath.Clean(p) != p || len(p) > MaxHomePathBytes || strings.ContainsRune(p, 0) {
-		return fmt.Errorf("%s must be a clean absolute path of at most %d bytes", field, MaxHomePathBytes)
-	}
-	return nil
-}
-
-func validateUID(field string, uid *uint64) error {
-	if uid == nil || *uid < 1 || *uid > MaxUID {
-		return fmt.Errorf("%s must be within 1..%d", field, uint64(MaxUID))
 	}
 	return nil
 }
@@ -1078,16 +1239,17 @@ func NewPoolReply(id, pool string, size, free, quarantined int) PoolReply {
 	return PoolReply{V: Version, Type: TypePool, ID: id, Pool: pool, Size: size, Free: free, Quarantined: quarantined}
 }
 
-// HomeMade acknowledges a `home_make`.
+// HomeMade answers a `home_make` or a `home_reset` with the made home's uid.
 type HomeMade struct {
 	V    int    `json:"v"`
 	Type string `json:"type"`
 	ID   string `json:"id"`
+	UID  int    `json:"uid"`
 }
 
 // NewHomeMade builds a `home_made` reply.
-func NewHomeMade(id string) HomeMade {
-	return HomeMade{V: Version, Type: TypeHomeMade, ID: id}
+func NewHomeMade(id string, uid int) HomeMade {
+	return HomeMade{V: Version, Type: TypeHomeMade, ID: id, UID: uid}
 }
 
 // HomeMeasured answers a `home_measure` with the bytes the home holds.
@@ -1103,7 +1265,8 @@ func NewHomeMeasured(id string, bytes uint64) HomeMeasured {
 	return HomeMeasured{V: Version, Type: TypeHomeMeasured, ID: id, Bytes: bytes}
 }
 
-// HomeRetired acknowledges a `home_retire`.
+// HomeRetired acknowledges a `home_retire`, or a `home_reset` of a home not
+// made.
 type HomeRetired struct {
 	V    int    `json:"v"`
 	Type string `json:"type"`
@@ -1113,6 +1276,37 @@ type HomeRetired struct {
 // NewHomeRetired builds a `home_retired` reply.
 func NewHomeRetired(id string) HomeRetired {
 	return HomeRetired{V: Version, Type: TypeHomeRetired, ID: id}
+}
+
+// Homes answers a `home_list` with one page of kept home ids, and Next, the
+// last of them, when more follow.
+type Homes struct {
+	V    int      `json:"v"`
+	Type string   `json:"type"`
+	ID   string   `json:"id"`
+	IDs  []string `json:"ids"`
+	Next string   `json:"next,omitempty"`
+}
+
+// NewHomes builds a `homes` reply; no ids are an empty list.
+func NewHomes(id string, ids []string, next string) Homes {
+	if ids == nil {
+		ids = []string{}
+	}
+	return Homes{V: Version, Type: TypeHomes, ID: id, IDs: ids, Next: next}
+}
+
+// PacksReply answers a packs_hold or a packs_put.
+type PacksReply struct {
+	V     int    `json:"v"`
+	Type  string `json:"type"`
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+// NewPacksReply builds a `packs` reply.
+func NewPacksReply(id, state string) PacksReply {
+	return PacksReply{V: Version, Type: TypePacks, ID: id, State: state}
 }
 
 // Encode renders a reply as one line.

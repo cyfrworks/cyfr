@@ -425,7 +425,7 @@ chmod -R a+rX "$FIX"
 BOX_PORT="$(free_port)"
 SEED_MOUNTS="$FIX/authority.pem:/run/cyfr-proof/authority.pem:ro $FIX/inetrc:/run/cyfr-proof/inetrc:ro" \
   seed "$BOXDIR" "$BOX_PORT" CYFR_DIRECTORY_URL=https://dir.test CYFR_REGISTRY_URL=dir.test \
-  ERL_INETRC=/run/cyfr-proof/inetrc "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,$GATEWAY"
+  ERL_INETRC=/run/cyfr-proof/inetrc "CYFR_PRIVATE_EGRESS_TARGETS=locus,$GATEWAY"
 docker rm -f "$CLIENT" >/dev/null 2>&1 || true
 # The engine's sandbox and glycin's bwrap make namespaces of their own, so
 # the client runs unconfined and the app under its package's profile, as

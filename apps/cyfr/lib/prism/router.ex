@@ -183,6 +183,9 @@ defmodule Prism.Router do
 
         get "/files/download/*path", FileController, :show,
           metadata: %{auth: :browser_focus_handler}
+
+        get "/scrolls/download/:pack", FileController, :pack,
+          metadata: %{auth: :browser_focus_handler}
       end
 
       # A shared thread is no athanor's: its files are reached by the

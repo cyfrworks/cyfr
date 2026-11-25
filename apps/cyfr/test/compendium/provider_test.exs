@@ -2127,11 +2127,11 @@ defmodule Compendium.ProviderTest do
       assert %{state: "bundled_modified"} =
                Enum.find(files, &(&1.path == "aqua/aqua.md"))
 
-      assert %{state: "bundled"} =
-               Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
+      # A pack is no file of the template: it has no provenance here.
+      refute Enum.any?(files, &String.starts_with?(&1.path, "aqua/scrolls/"))
     end
 
-    test "reset keeps athanor-made agents and scrolls unless all=true", %{ctx: ctx} do
+    test "reset keeps athanor-made agents unless all=true, and touches no pack", %{ctx: ctx} do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
@@ -2139,10 +2139,10 @@ defmodule Compendium.ProviderTest do
           "---\ntitle: Keeper\n---\n"
         )
 
-      {:ok, %{created: "pdf"}} =
+      {:ok, %{created: "mine:pdf"}} =
         Provider.handle("aqua", ctx, %{
           "action" => "skill_create",
-          "name" => "pdf",
+          "name" => "mine:pdf",
           "description" => "fills PDF forms",
           "content" => "Use the reference."
         })
@@ -2151,7 +2151,7 @@ defmodule Compendium.ProviderTest do
         Provider.handle("aqua", ctx, %{"action" => "reset"})
 
       assert "aqua/crew/keeper.md" in kept
-      assert "aqua/skills/pdf" in kept
+      refute Enum.any?(kept ++ reverted, &String.starts_with?(&1, "aqua/scrolls/"))
       assert "aqua/aqua.md" in reverted
       assert Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "crew", "keeper.md"])
 
@@ -2159,63 +2159,67 @@ defmodule Compendium.ProviderTest do
         Provider.handle("aqua", ctx, %{"action" => "reset", "all" => true})
 
       refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "crew", "keeper.md"])
-      refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "skills", "pdf", "SKILL.md"])
+      assert {:ok, %{name: "mine:pdf"}} = Compendium.skill(ctx, "mine:pdf")
     end
 
-    test "skill_list and skill_get serve the scrolls, shipped and the athanor's own", %{ctx: ctx} do
-      # The shipped scrolls are read in place from the seed.
+    test "skill_list and skill_get serve the scrolls by their full names, CYFR's and the person's own",
+         %{ctx: ctx} do
+      # CYFR's own pack, as the fill copied it in.
       {:ok, shipped} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
-      assert ~w(artisan browser builder canvas capability-acquisition planner research web) ==
-               Enum.map(shipped.skills, & &1.name)
+      assert ~w(artisan browser builder canvas capability-acquisition planner research web)
+             |> Enum.map(&("cyfr:" <> &1)) == Enum.map(shipped.skills, & &1.name)
 
       by_name = Map.new(shipped.skills, &{&1.name, &1.description})
-      assert by_name["canvas"] =~ "canvas"
-      assert by_name["capability-acquisition"] =~ "registry"
-      assert by_name["builder"] =~ "WASM component"
-      assert by_name["browser"] =~ "your own Chrome"
+      assert by_name["cyfr:canvas"] =~ "canvas"
+      assert by_name["cyfr:capability-acquisition"] =~ "registry"
+      assert by_name["cyfr:builder"] =~ "WASM component"
+      assert by_name["cyfr:browser"] =~ "your own Chrome"
       refute Map.has_key?(shipped, :hint)
 
       # The research method a member is handed by name, as instructions for
       # whoever does the job.
       assert {:ok,
               %{
-                name: "research",
+                name: "cyfr:research",
                 title: "research",
                 description: description,
                 format: "markdown",
                 content: method,
                 resources: []
-              }} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "research"})
+              }} =
+               Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "cyfr:research"})
 
-      assert description == by_name["research"]
+      assert description == by_name["cyfr:research"]
       assert description =~ "Find, verify and synthesize information on the web"
       assert method =~ "## Research Method\n\n1. **Multiple queries**"
       assert method =~ "- **Confidence** — high/medium/low from source quality and agreement"
       refute method =~ "You are"
 
-      {:ok, %{created: "pdf"}} =
+      {:ok, %{created: "mine:pdf"}} =
         Provider.handle("aqua", ctx, %{
           "action" => "skill_create",
-          "name" => "pdf",
+          "name" => "mine:pdf",
           "description" => "fills PDF forms",
           "content" => "Use the reference."
         })
 
-      # A resource beside the manifest, as a member adds one by hand.
+      # A resource beside the manifest, as a member adds one through Files.
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          ["aqua", "skills", "pdf", "reference.md"],
+          ["aqua", "scrolls", "mine", "skills", "pdf", "reference.md"],
           "field tables"
         )
 
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
 
       assert Enum.map(listing.skills, & &1.name) ==
-               ~w(artisan browser builder canvas capability-acquisition pdf planner research web)
+               Enum.sort(["mine:pdf" | Enum.map(shipped.skills, & &1.name)])
 
-      {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+      {:ok, skill} =
+        Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
+
       assert skill.description == "fills PDF forms"
       assert skill.content =~ "Use the reference."
       assert skill.resources == ["reference.md"]
@@ -2225,7 +2229,7 @@ defmodule Compendium.ProviderTest do
       {:ok, _} =
         Provider.handle("aqua", ctx, %{
           "action" => "skill_create",
-          "name" => "pdf",
+          "name" => "mine:pdf",
           "description" => "fills PDF forms",
           "content" => "Use the reference."
         })
@@ -2233,32 +2237,34 @@ defmodule Compendium.ProviderTest do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          ["aqua", "skills", "pdf", "reference.md"],
+          ["aqua", "scrolls", "mine", "skills", "pdf", "reference.md"],
           "field tables"
         )
 
-      {:ok, %{updated: "pdf"}} =
+      {:ok, %{updated: "mine:pdf"}} =
         Provider.handle("aqua", ctx, %{
           "action" => "skill_update",
-          "name" => "pdf",
+          "name" => "mine:pdf",
           "content" => "Read it twice."
         })
 
-      {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+      {:ok, skill} =
+        Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
+
       assert skill.content == "Read it twice."
       assert skill.description == "fills PDF forms"
       assert skill.resources == ["reference.md"]
 
-      assert {:error, {:not_found, "Scroll", "nope"}} =
+      assert {:error, {:not_found, "Scroll", "mine:nope"}} =
                Provider.handle("aqua", ctx, %{
                  "action" => "skill_update",
-                 "name" => "nope",
+                 "name" => "mine:nope",
                  "content" => "x"
                })
     end
 
     test "a scroll needs a line and a body, and a name nobody holds", %{ctx: ctx} do
-      base = %{"action" => "skill_create", "name" => "pdf", "content" => "Use it."}
+      base = %{"action" => "skill_create", "name" => "mine:pdf", "content" => "Use it."}
 
       assert {:error, {:invalid_argument, msg}} = Provider.handle("aqua", ctx, base)
       assert msg =~ "description"
@@ -2271,104 +2277,68 @@ defmodule Compendium.ProviderTest do
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{
                  "action" => "skill_create",
-                 "name" => "pdf",
+                 "name" => "mine:pdf",
                  "description" => "d"
                })
 
       assert msg =~ "content"
 
+      {:ok, _} = Provider.handle("aqua", ctx, Map.put(base, "description", "d"))
+
       assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "skill_create",
-                 "name" => "capability-acquisition",
-                 "description" => "d",
-                 "content" => "c"
-               })
+               Provider.handle("aqua", ctx, Map.put(base, "description", "d"))
 
       assert msg =~ "already exists"
 
       assert {:error, {:invalid_argument, _}} =
                Provider.handle("aqua", ctx, %{
                  "action" => "skill_create",
-                 "name" => "../x",
+                 "name" => "mine:../x",
                  "description" => "d",
                  "content" => "c"
                })
     end
 
-    test "the shipped scroll is never deleted, edited or not; a reset restores it; the athanor's own goes",
-         %{ctx: ctx} do
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "skill_delete",
-                 "name" => "capability-acquisition"
-               })
-
-      assert msg =~ "ships with the server"
-
-      {:ok, %{updated: _}} =
-        Provider.handle("aqua", ctx, %{
-          "action" => "skill_update",
-          "name" => "capability-acquisition",
-          "content" => "Shortened."
-        })
-
-      {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})
-
-      assert %{state: "bundled_modified"} =
-               Enum.find(files, &(&1.path == "aqua/skills/capability-acquisition"))
-
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "skill_delete",
-                 "name" => "capability-acquisition"
-               })
-
-      assert msg =~ "ships with the server"
-
-      {:ok, %{restored: "capability-acquisition"}} =
-        Provider.handle("aqua", ctx, %{
-          "action" => "skill_reset",
-          "name" => "capability-acquisition"
-        })
+    test "CYFR's own scroll is never edited or deleted; the person's own goes", %{ctx: ctx} do
+      for args <- [
+            %{"action" => "skill_delete", "name" => "cyfr:capability-acquisition"},
+            %{
+              "action" => "skill_update",
+              "name" => "cyfr:capability-acquisition",
+              "content" => "Shortened."
+            },
+            %{
+              "action" => "skill_create",
+              "name" => "cyfr:mine",
+              "description" => "d",
+              "content" => "c"
+            }
+          ] do
+        assert {:error, {:invalid_argument, msg}} = Provider.handle("aqua", ctx, args)
+        assert msg =~ "CYFR's own pack"
+      end
 
       {:ok, back} =
         Provider.handle("aqua", ctx, %{
           "action" => "skill_get",
-          "name" => "capability-acquisition"
+          "name" => "cyfr:capability-acquisition"
         })
 
       assert back.content =~ "component(action: \"search\""
 
-      # Restoring again changes nothing and answers the same; the athanor's
-      # own has nothing to restore to.
-      {:ok, %{restored: "capability-acquisition"}} =
-        Provider.handle("aqua", ctx, %{
-          "action" => "skill_reset",
-          "name" => "capability-acquisition"
-        })
-
       {:ok, _} =
         Provider.handle("aqua", ctx, %{
           "action" => "skill_create",
-          "name" => "pdf",
+          "name" => "mine:pdf",
           "description" => "d",
           "content" => "c"
         })
 
-      assert {:error, {:invalid_argument, msg}} =
-               Provider.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
+      {:ok, %{deleted: "mine:pdf"}} =
+        Provider.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "mine:pdf"})
 
-      assert msg =~ "athanor's own"
-
-      {:ok, %{deleted: "pdf"}} =
-        Provider.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "pdf"})
-
-      assert {:error, {:not_found, "Scroll", "pdf"}} =
-               Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
-
-      assert {:error, {:not_found, "Scroll", "pdf"}} =
-               Provider.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
+      assert {:error, {:not_found, "Scroll", "mine:pdf"}} =
+               Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
     end
 
     test "a crew member the seed ships refuses delete, edited or not, and points at disable",
@@ -2426,12 +2396,6 @@ defmodule Compendium.ProviderTest do
 
       assert {:error, :not_owner} =
                Provider.handle("aqua", ctx, %{"action" => "reset", "name" => "aqua"})
-
-      assert {:error, :not_owner} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "skill_reset",
-                 "name" => "capability-acquisition"
-               })
 
       Arca.ControlPlane.record(:unclaimed)
       {:ok, %{files: files}} = Provider.handle("aqua", ctx, %{"action" => "status"})

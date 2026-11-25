@@ -543,7 +543,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	}
 	ran := make(chan error, 1)
 	if ctx.Err() == nil {
-		app.show(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL()})
+		app.show(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL(), Update: svc.UpdateURL()})
 		go func() { ran <- svc.Run(in) }()
 	}
 
@@ -614,7 +614,7 @@ func folderRelease(dir string) string {
 			continue
 		}
 		return sharedRelease(func(yield func(string, string) bool) {
-			for _, image := range imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet}) {
+			for _, image := range imagesFromCompose(path, []string{access.ModePublic, access.ModeTailnet}) {
 				repository, tag, _ := splitImageReference(image)
 				if !yield(repository, tag) {
 					return

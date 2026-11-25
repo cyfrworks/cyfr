@@ -276,9 +276,7 @@ defmodule Prima.Refusal do
     "CYFR_PROXY_BIND_ADDRESS" => "an IPv4 or IPv6 address",
     "CYFR_LOCAL_INGRESS_ASSERTED" => "true, the one value the compose file asserts",
     "CYFR_TRUSTED_PROXY_HOPS" => "a whole number of proxy hops from 0 to 16",
-    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs",
-    "CYFR_LOCUS_BUILDS_URL" =>
-      "an http or https URL with a host, an optional port and no path, query or credentials"
+    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs"
   }
 
   # What a `cyfr access` input was meant to be.
@@ -693,10 +691,41 @@ defmodule Prima.Refusal do
     do: {:forbidden, "This crew member's thread is retired — ask the member again from its room"}
 
   # A schedule's line for Aqua runs as its person with nobody present, so
-  # only the person, signed in, makes or changes one
-  # (`Opus.Schedules.Provider`).
+  # only the person makes or changes one, signed in or through a turn of
+  # theirs (`Opus.Schedules.Provider`).
   defp row(:aqua_line_by_person),
-    do: {:forbidden, "Only you, signed in, can give a schedule a line for Aqua or change it"}
+    do:
+      {:forbidden,
+       "Only you, signed in or through Aqua's turn, can give a schedule a line for Aqua or change its line or its time"}
+
+  # A turn's own schedule write that is not its person's: under a key or a
+  # tincture's frame, or in work neither the person nor a schedule's fire
+  # began (`Opus.Schedules.Provider`).
+  defp row(:schedule_turn_not_yours),
+    do:
+      {:forbidden,
+       "A turn makes or changes a schedule only when you started it signed in, or a schedule of yours did; a key's or an app's turn cannot"}
+
+  # A schedule write a page in Aqua's browser made through the turn: the
+  # page's call, not the turn's own (`Opus.Schedules.Provider`).
+  defp row(:schedule_by_page),
+    do:
+      {:forbidden,
+       "A page in Aqua's browser cannot make or change a schedule; Aqua or one of its members does, in its own turn"}
+
+  # A turn's schedule write that names a turn no longer open.
+  defp row(:schedule_turn_ended),
+    do:
+      {:conflict,
+       "The turn that made this call has ended, so it can no longer make or change a schedule"}
+
+  # A schedule is made or changed from a chain only by a turn's own call
+  # (`Opus.Schedules.Provider`): a component a turn or a key started is
+  # not Aqua or a crew member.
+  defp row(:schedule_by_component),
+    do:
+      {:forbidden,
+       "A component cannot make or change a schedule; Aqua or one of its members does, in its own turn"}
 
   # A schedule's update made against a definition the schedule no longer
   # has (`Arca.CronSchedule.update/4`'s `definition:`).
@@ -792,12 +821,21 @@ defmodule Prima.Refusal do
        "#{member} could not start: this CYFR has no room for another running program. Stop " <>
          "work in another thread or wait for it to end, then send your message again."}
 
+  # A program that loads the person's packs starts only once its box holds
+  # them (`Opus.Programs.Session`): a copy not made ready, or a selection
+  # that moved on at every try, ends the start with nothing of it spent.
+  defp row(:packs_unready),
+    do: {:unavailable, "Your packs could not be made ready for this program."}
+
+  defp row(:packs_moved),
+    do: {:conflict, "Your packs changed while this program was starting; start it again."}
+
   # The crew's grant that does not cover what Aqua and its crew members
   # may use (`@grant_states`): moved past by Aqua's file or its servers
   # (`Aqua.Loop.Turn.consented/4`), never given, or revoked. Bare, as the
   # Aqua page and an empty thread say it; a turn refused for it, with what
   # to do where it is read (`Aqua.Loop.Turn.again/1`).
-  defp row(state) when state in [:agent_changed, :ungranted],
+  defp row(state) when state in [:agent_changed, :ungranted, :grant_revoked],
     do: {:consent_required, elem(@grant_states[state], 0)}
 
   defp row({state, member, then}) when is_map_key(@grant_states, state) and is_binary(member) do
@@ -1586,7 +1624,7 @@ defmodule Prima.Refusal do
       {:invalid_argument,
        "`.env` sets `#{key}`, which Docker Compose would read to choose this stack's files, " <>
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
-         "them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."}
+         "them from CYFR_ACCESS."}
 
   # A .env line Docker Compose does not read: cyfr neither reads nor
   # writes a file it cannot read as compose does, and names the line,

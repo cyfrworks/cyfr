@@ -2406,8 +2406,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :kind, :string, null: false, default: "schedule", check: if(sqlite?, do: kind_spec)
       # Attribution: who created the schedule. The athanor owns it.
       add :user_id, :string, null: false
+      # The agent whose turn made it (`Opus.Schedules.Provider`), none for
+      # one the person made themselves.
+      add :maker, :string
+      # The workspace thread its fires join; none is the person's daily
+      # thread current when it fires.
+      add :thread_id, :string
       add :name, :string, null: false
       add :cron_expression, :string, null: false
+      # A one-time schedule: its expression names one minute, it fires once
+      # however late, and its row is removed when that occurrence ends.
+      add :once, :boolean, null: false, default: false
       add :reference, :string, null: false
       add :input, :text
       add :metadata, :text
@@ -2484,6 +2493,9 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :scheduled_for, :utc_datetime_usec, null: false
+      # Claimed as a one-time schedule's one fire: its end removes the
+      # schedule, while the schedule still awaits nothing else.
+      add :once, :boolean, null: false, default: false
       add :state, :string, null: false, check: if(sqlite?, do: occurrence_state)
       add :execution_id, :string
       add :attempts, :integer, null: false, default: 0

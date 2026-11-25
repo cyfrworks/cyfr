@@ -132,7 +132,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   # cyfr-locus answers it: its id.
   defp placed!(keeper) do
     assert %{"type" => "place", "id" => id, "kind" => "warm"} = next_request(keeper)
-    reply(keeper, %{v: 4, type: "placed", id: id})
+    reply(keeper, %{v: 6, type: "placed", id: id})
     id
   end
 
@@ -219,7 +219,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       handle = start_handle!(keeper, name)
       %{"id" => id, "attach" => %{"token" => token}} = next_request(keeper)
       spawn_id = at_bound["spawn_id"]
-      reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+      reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
       relay = attach!(ctx.dir, token)
       assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
@@ -236,7 +236,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       assert log =~ "runner runner_1 was ended at its memory bound of 536870912 bytes"
       assert log =~ "spawn #{spawn_id}, signal SIGKILL"
 
-      reply(keeper, %{v: 4, type: "released", spawn_id: spawn_id})
+      reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
       assert_receive {RunnerProcess, ^handle, :released}, 5_000
     end
 
@@ -248,12 +248,12 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         %{"id" => id} = next_request(keeper)
         spawn_id = spawn_id(7)
 
-        reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+        reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
         log =
           capture_log(fn ->
             reply(keeper, %{
-              v: 4,
+              v: 6,
               type: "exited",
               spawn_id: spawn_id,
               code: nil,
@@ -297,7 +297,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       assert %{"memory_bytes" => 268_435_456, "id" => id, "attach" => %{"token" => token}} = first
       assert rest == ""
       spawn_id = spawn_id(1)
-      reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+      reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
       relay = attach!(ctx.dir, token)
       wait_until(fn -> RunnerPool.status(pool).runners.fresh == 1 end)
 
@@ -312,7 +312,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       capture_log(fn ->
         reply(keeper, %{
-          v: 4,
+          v: 6,
           type: "exited",
           spawn_id: spawn_id,
           code: nil,
@@ -331,13 +331,13 @@ defmodule Locus.Runtime.KeeperMemoryTest do
                next_request(keeper)
 
       assert RunnerPool.status(pool).runners.tainted == 1
-      reply(keeper, %{v: 4, type: "released", spawn_id: spawn_id})
+      reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
       wait_until(fn -> RunnerPool.status(pool).runners.tainted == 0 end)
       refute Enum.any?(Runners.runners(pool), &(&1.id == runner))
 
       # The athanor's next subtree gets another runner, never this one.
       reply(keeper, %{
-        v: 4,
+        v: 6,
         type: "spawned",
         id: refill_id,
         spawn_id: spawn_id(2),
@@ -411,7 +411,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           assert env["RUNTIME_PLANT"] == secret
 
           reply(keeper, %{
-            v: 4,
+            v: 6,
             type: "spawned",
             id: id,
             spawn_id: spawn_id(9),
@@ -439,7 +439,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           {one, rest} = request(keeper)
           {two, ""} = request(keeper, rest)
           [%{"id" => assign_id}] = Enum.filter([one, two], &(&1["type"] == "assign"))
-          reply(keeper, %{v: 4, type: "assigned", id: assign_id})
+          reply(keeper, %{v: 6, type: "assigned", id: assign_id})
           :ok = Task.await(assigning)
 
           # The runner attaches while its handle is suspended, and the
@@ -477,12 +477,12 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         capture_log(fn ->
           first = start_handle!(keeper, name, "runner_1")
           %{"id" => id} = next_request(keeper)
-          reply(keeper, %{v: 4, type: "error", id: id, code: "memory_unavailable"})
+          reply(keeper, %{v: 6, type: "error", id: id, code: "memory_unavailable"})
           assert_receive {RunnerProcess, ^first, {:refused, :memory_unavailable}}, 5_000
 
           second = start_handle!(keeper, name, "runner_2")
           %{"id" => id, "memory_bytes" => @default} = next_request(keeper)
-          reply(keeper, %{v: 4, type: "error", id: id, code: "memory_unavailable"})
+          reply(keeper, %{v: 6, type: "error", id: id, code: "memory_unavailable"})
           assert_receive {RunnerProcess, ^second, {:refused, :memory_unavailable}}, 5_000
         end)
 
@@ -495,14 +495,14 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       # Another refusal is logged again once a runner was spawned since.
       third = start_handle!(keeper, name, "runner_3")
       %{"id" => id} = next_request(keeper)
-      reply(keeper, %{v: 4, type: "spawned", id: id, spawn_id: spawn_id(3), uid: 30_101, pid: 1})
+      reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id(3), uid: 30_101, pid: 1})
       wait_until(fn -> RunnerProcess.info(third).os_pid == 1 end)
 
       log =
         capture_log(fn ->
           fourth = start_handle!(keeper, name, "runner_4")
           %{"id" => id} = next_request(keeper)
-          reply(keeper, %{v: 4, type: "error", id: id, code: "memory_unavailable"})
+          reply(keeper, %{v: 6, type: "error", id: id, code: "memory_unavailable"})
           assert_receive {RunnerProcess, ^fourth, {:refused, :memory_unavailable}}, 5_000
         end)
 
@@ -516,7 +516,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       log =
         capture_log(fn ->
-          reply(keeper, %{v: 4, type: "error", id: id, code: "capacity"})
+          reply(keeper, %{v: 6, type: "error", id: id, code: "capacity"})
           assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
         end)
 

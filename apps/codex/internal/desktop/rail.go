@@ -45,7 +45,8 @@ var railPage = `<!doctype html>
 
 // boxRailPage is the rail on a box's screen (Service.Box), whose first
 // paint, before its list answers, offers no Set up and no Update: a box
-// sets nothing up, and updates by cyfr update alone.
+// sets nothing up, and offers Update only once its list says the box is
+// unlocked (rail.js).
 var boxRailPage = strings.NewReplacer(`<li><a class="way" id="setup"`, `<li hidden><a class="way" id="setup"`,
 	`<li><a class="way" id="update"`, `<li hidden><a class="way" id="update"`).Replace(railPage)
 

@@ -1905,7 +1905,7 @@ defmodule Emissary.External.Server do
     # Pin to the validated IP on EVERY request (not just at init), with the
     # original hostname preserved for SNI/Host. This both blocks SSRF and
     # closes the DNS-rebinding gap that connecting by hostname would reopen.
-    # A private server (locus-backends on the compose network) is reachable
+    # A private server (Locus's backends on the compose network) is reachable
     # only when the operator named it in the private-egress allowlist.
     opts = [
       receive_timeout: state.timeout_ms,

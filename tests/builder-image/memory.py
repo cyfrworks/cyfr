@@ -63,6 +63,7 @@ container and refuses to run without.
 Usage: tests/builder-image/memory.py IMAGE [--measure] [keeper|javascript|rust|tree|home]...
 """
 
+import copy
 import json
 import os
 import subprocess
@@ -73,7 +74,9 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from stack import HOME_ROOT, POOL_FIRST, POOL_LAST, RELEASE_UID, Stack, expect, run, tincture  # noqa: E402
+from stack import (  # noqa: E402
+    POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, Stack, expect, run, tincture,
+)
 # stack puts tests/, which holds the shared plumbing, on the path.
 import imagesuite  # noqa: E402
 
@@ -82,8 +85,12 @@ MIB = 1 << 20
 DEADLINE_MS = 60_000
 # The second cyfr-locus's uids, one for each spawn of its scenario that
 # runs: the last of the image's pool, which the service's own keeper is
-# started without.
+# started without, as a pool of their own the builds role names.
 PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
+PROBE_POOL = "probe"
+# The builds role's group, which holds its process and every build: its
+# memory.max bounds the hostile work.
+ROLE_GROUP = f"/sys/fs/cgroup/role-{ROLE['name']}"
 # The bound the keeper cases ask for.
 BOUND = 256 * MIB
 # The measured build: a tincture's `npm run build`, the image's npm running
@@ -128,13 +135,13 @@ while :; do
     /^VmRSS:/ { if (uid >= first && uid <= last) rss[uid] += $2 }
     END { for (u in n) printf "%%s:%%d:%%d,", u, rss[u], n[u] }'
   groups=""
-  for d in /sys/fs/cgroup/keeper-*; do
+  for d in %s/keeper-*; do
     peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
   done
-  printf '|%%s|%%s|%%s\n' "$(cat /sys/fs/cgroup/memory.current)" "$(awk '$1 == "shmem" {print $2}' /sys/fs/cgroup/memory.stat)" "$groups"
+  printf '|%%s|%%s|%%s\n' "$(cat %s/memory.current)" "$(awk '$1 == "shmem" {print $2}' %s/memory.stat)" "$groups"
   sleep 0.1
 done
-""" % (POOL_FIRST, POOL_LAST)
+""" % (POOL_FIRST, POOL_LAST, ROLE_GROUP, ROLE_GROUP, ROLE_GROUP)
 
 # Touches every page it allocates, outside V8's heap, until something stops it.
 NODE_ALLOCATOR = "const held = []; for (;;) held.push(Buffer.alloc(16 << 20, 1));"
@@ -221,7 +228,10 @@ function finish(timedOut) {
     { name, place, uid, replies, measures, holding_ms, stdout: stdout.slice(-400), done }));
   process.stdout.write("<<<" + JSON.stringify({ timed_out: timedOut, spawns: report }) + ">>>\n", () => {
     fs.rmSync(dir, { recursive: true, force: true });
-    process.exit(timedOut ? 1 : 0);
+    // A role's process that ends is started again by its keeper, which
+    // would run the scenario twice: one that `stays` waits to be stopped.
+    if (scenario.stay) setInterval(() => {}, 1 << 30);
+    else process.exit(timedOut ? 1 : 0);
   });
 }
 
@@ -230,7 +240,7 @@ function measure(spawn, phase, before = "") {
   const entry = { phase, id, sent_ms: Date.now() - started };
   measures.set(id, { spawn, entry });
   spawn.measures.push(entry);
-  channel.write(before + JSON.stringify({ v: 4, type: "measure", id, place: spawn.place }) + "\n");
+  channel.write(before + JSON.stringify({ v: 6, type: "measure", id, place: spawn.place }) + "\n");
 }
 
 function measured(spawn, entry, reply) {
@@ -242,7 +252,7 @@ function measured(spawn, entry, reply) {
   if (entry.phase !== "running" || spawn.replies.some((r) => r.type === "released")) return;
   const readAt = reply.type === "measured" ? entry.at_ms - reply.age_ms : -Infinity;
   if (spawn.holding_ms !== undefined && readAt > spawn.holding_ms + scenario.measure.margin_ms) {
-    const release = { v: 4, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
+    const release = { v: 6, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
     measure(spawn, "release", JSON.stringify(release) + "\n");
   } else {
     setTimeout(() => measure(spawn, "running"), scenario.measure.poll_ms);
@@ -253,7 +263,7 @@ function settle(spawn, reply) {
   spawn.replies.push({ ...reply, at_ms: Date.now() - started, seq });
   if (reply.type === "placed") {
     const request = {
-      v: 4, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
+      v: 6, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
       attach: { path: attach, token: spawn.token },
     };
     if ("memory_bytes" in spawn) request.memory_bytes = spawn.memory_bytes;
@@ -317,7 +327,7 @@ server.listen(attach, () => {
     }
   });
   for (const s of spawns) {
-    const place = { v: 4, type: "place", id: s.place, kind: "build" };
+    const place = { v: 6, type: "place", id: s.place, kind: "build" };
     if (s.athanor) place.athanor = s.athanor;
     channel.write(JSON.stringify(place) + "\n");
   }
@@ -353,14 +363,14 @@ def reading(entry, athanor):
     reply = entry.get("reply")
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 4, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
+    owner = {"v": 6, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(entry):
-    return entry.get("reply") == {"v": 4, "type": "error", "id": entry["id"], "code": "unmeasured"}
+    return entry.get("reply") == {"v": 6, "type": "error", "id": entry["id"], "code": "unmeasured"}
 
 
 def judge_build(spawn):
@@ -368,7 +378,7 @@ def judge_build(spawn):
     replies = spawn["replies"]
     types = [reply["type"] for reply in replies]
     expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
-           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 4, "type": "placed", "id": spawn["place"]},
+           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 6, "type": "placed", "id": spawn["place"]},
            "the build's place is placed before its spawn names it, and the build is released", spawn)
     released = replies[-1]["seq"]
     phases = {phase: [entry for entry in spawn["measures"] if entry["phase"] == phase] for phase in ("running", "release", "after")}
@@ -459,8 +469,8 @@ def container_state(stack):
     """
     inspect = json.loads(run("docker", "inspect", stack.container).stdout)[0]
     events = {}
-    for line in imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.events"),
-                                       "the container's memory events").splitlines():
+    for line in imagesuite.read_output(stack.exec(f"cat {ROLE_GROUP}/memory.events"),
+                                       "the builds role's memory events").splitlines():
         name, count = line.split()
         events[name] = int(count)
     pids = [1] + [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
@@ -474,8 +484,8 @@ def container_state(stack):
         "init": started[:1],
         "events": events,
         "release": started[1:],
-        "current": int(imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.current"),
-                                              "the container's memory use").strip()),
+        "current": int(imagesuite.read_output(stack.exec(f"cat {ROLE_GROUP}/memory.current"),
+                                              "the builds role's memory use").strip()),
     }
 
 
@@ -520,41 +530,79 @@ def keeper_groups(stack):
     `find` exits 0 with no output when no group matches, and non-zero on a
     read error, so the word is printed only after the enumeration succeeded.
     """
-    script = ('groups="$(find /sys/fs/cgroup -maxdepth 1 -name \'keeper-*\')" || exit 3; '
+    script = (f'groups="$(find {ROLE_GROUP} -maxdepth 1 -name \'keeper-*\')" || exit 3; '
               'if [ -n "$groups" ]; then echo present; echo "$groups"; else echo absent; fi')
     return imagesuite.read_listing(stack.exec(script), "the keeper cgroups the container holds")
 
 
-def release_user(stack):
-    """The name the release's uid has in the image, which cyfr-locus starts a client under."""
-    return imagesuite.read_output(stack.exec(f'user="$(getent passwd {RELEASE_UID})" && echo "${{user%%:*}}"'),
-                                  "the release user's name").strip()
+def keeper_report(name, timeout_s=300):
+    """The scenario client's report, once the one-off container's log holds it whole, and the log."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        logs = run("docker", "logs", name, check=False)
+        if ">>>" in logs.stdout.split("<<<", 1)[-1] and "<<<" in logs.stdout:
+            return logs
+        if run("docker", "inspect", "--format", "{{.State.Running}}", name, check=False).stdout.strip() != "true":
+            return logs
+        time.sleep(0.5)
+    return run("docker", "logs", name, check=False)
 
 
 def test_keeper(stack, limit, canary):
-    user = release_user(stack)
-    expect(user, "the release's user has a name cyfr-locus can start a client under", user)
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)
     with open(os.path.join(canary, "memory-scenario.json"), "w") as out:
-        json.dump({"pool": "probe", "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario()}, out)
+        json.dump({"pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario(), "stay": True}, out)
     # The container's user reads them, whatever the caller's umask.
     os.chmod(os.path.join(canary, "memory-client.mjs"), 0o644)
     os.chmod(os.path.join(canary, "memory-scenario.json"), 0o644)
     os.chmod(canary, 0o755)
 
-    before = container_state(stack)
-    sampler = Sampler(stack.container)
-    sampler.start()
-    result = stack.exec(
-        f"exec cyfr-locus serve --pool probe:{PROBE_FIRST}-{PROBE_LAST}:relay --home-root {HOME_ROOT} --client-user {user} "
-        "-- node /canary/memory-client.mjs /canary/memory-scenario.json")
-    time.sleep(1)
-    sampler.stop()
-    expect("<<<" in result.stdout, "the second cyfr-locus ran the scenario's client", result.stdout + result.stderr)
+    # A second cyfr-locus, in a container of its own under the service's
+    # options behind a guard of its own, whose builds role is the scenario's
+    # client over the probe pool, relay spaces that need no route.
+    guard = imagesuite.Guard(stack.image, f"{stack.project}-keeper-guard")
+    probe = copy.copy(stack)
+    name = None
+    try:
+        name = run("docker", "run", "--detach", *imagesuite.run_name(f"{stack.project}-keeper"), *guard.keeper_args(),
+                   "-v", f"{canary}:/canary:ro",
+            "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
+            "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true",
+            "--security-opt", f"seccomp={os.path.join(ROOT, 'apps', 'locus', 'keeper', 'seccomp', 'keeper.json')}",
+            "--security-opt", f"apparmor={imagesuite.APPARMOR}", "--security-opt", "systempaths=unconfined",
+            "--read-only", "--ipc", "none", "--init", *imagesuite.role_mounts(RELEASE, ROLE),
+            # The role's own bound, the service's, which the hostile work meets beside its own.
+            "-e", f"{ROLE['key']}={stack.key}", "-e", f"LOCUS_{ROLE['name'].upper()}_MEMORY_LIMIT={limit}",
+            "--entrypoint", "cyfr-locus", stack.image, "serve",
+            "--role", imagesuite.role_spec(dict(ROLE, pool=PROBE_POOL)),
+            "--pool", f"{PROBE_POOL}:{PROBE_FIRST}-{PROBE_LAST}:relay", "--home-root", RELEASE["home_root"],
+            "--guard", imagesuite.Guard.CONTROL, "--", "node", "/canary/memory-client.mjs",
+                   "/canary/memory-scenario.json").stdout.strip()
+        probe.container = name
+        # The role's group is made as the keeper boots, before the role starts.
+        deadline = time.monotonic() + 60
+        while probe.exec(f"test -f {ROLE_GROUP}/memory.events").returncode != 0:
+            expect(time.monotonic() < deadline, "the second cyfr-locus makes the builds role's group",
+                   run("docker", "logs", name, check=False).stderr[-2000:])
+            time.sleep(0.2)  # sleep-ok: polling for the group the keeper makes as it boots
+        before = container_state(probe)
+        sampler = Sampler(name)
+        sampler.start()
+        result = keeper_report(name)
+        time.sleep(1)  # sleep-ok: the sampler's last tenth-second readings of the scenario's end
+        sampler.stop()
+        expect("<<<" in result.stdout, "the second cyfr-locus ran the scenario's client", result.stdout + result.stderr)
+        after = container_state(probe)
+        left = probe.pool_processes()
+        homes = probe.homes()
+        groups = keeper_groups(probe)
+    finally:
+        if name:
+            run("docker", "rm", "--force", name, check=False)
+        guard.down()
     report = json.loads(result.stdout.split("<<<", 1)[1].rsplit(">>>", 1)[0])
     spawns = {spawn["name"]: spawn for spawn in report["spawns"]}
-    after = container_state(stack)
 
     def reply(name, kind):
         return next((r for r in spawns[name]["replies"] if r["type"] == kind), None)
@@ -591,13 +639,6 @@ def test_keeper(stack, limit, canary):
                f"{name} is refused as a bad request", spawns[name])
 
     bounded = ("the least bound", "sibling", "process", "tree", "home", "build")
-    refused = [name for name in bounded if reply(name, "error")]
-    if refused:
-        expect(all(reply(name, "error")["code"] == "memory_unavailable" and not reply(name, "spawned") for name in bounded),
-               "where it cannot enforce a bound, cyfr-locus refuses every spawn that asks for one", spawns)
-        sys.exit("FAIL: the service gives cyfr-locus no writable cgroup, so no build can be bounded: "
-                 "the service needs `security_opt: writable-cgroups=true` (Docker Engine 28 or later)\n" + result.stderr[-1500:])
-
     least = reply("the least bound", "exited")
     expect(least and least["code"] == 0 and least["memory"] is None and "ran" in spawns["the least bound"]["stdout"],
            f"a command runs under the least bound the protocol allows, {mib(MIN_BOUND)}", spawns["the least bound"])
@@ -618,13 +659,10 @@ def test_keeper(stack, limit, canary):
     expect(seen["sibling"] and all(peak is None or peak <= asked[name] for name, peak in seen.items()),
            "no group's peak, as the kernel accounts it, passed the bound its spawn asked for", {"asked": asked, "seen": seen})
 
-    left = stack.pool_processes()
     expect(left == [], "no process of any spawn's uid is left, the daemon included", left)
-    expect(stack.homes() == [], "no home is left", stack.homes())
-    groups = keeper_groups(stack)
+    expect(homes == [], "no home is left", homes)
     expect(groups == [], "no spawn's cgroup is left", groups)
-    expect(not again and after["release"] == before["release"] and after["release"],
-           "the release and the container were not touched", {"before": before, "after": after})
+    expect(not again, "the container was not started again", {"before": before, "after": after})
 
 
 def test_build(stack, case, limit, measure):
@@ -689,8 +727,8 @@ def test_build(stack, case, limit, measure):
 
 
 def container_limit(stack):
-    """The container's own memory.max, which bounds the hostile work."""
-    return imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.max"), "the container's memory.max").strip()
+    """The builds role's memory.max, which bounds the hostile work: the container carries no limit of its own."""
+    return imagesuite.read_output(stack.exec(f"cat {ROLE_GROUP}/memory.max"), "the builds role's memory.max").strip()
 
 
 def main(image, measure, cases):
@@ -703,7 +741,7 @@ def main(image, measure, cases):
             # A fresh container per case, so one case's damage is not the next one's start.
             stack.up(pool=f"{POOL_FIRST}-{PROBE_FIRST - 1}", timeout_ms=DEADLINE_MS)
             limit = container_limit(stack)
-            expect(limit.isdigit(), "the container has a memory limit of its own, which bounds the hostile work", limit)
+            expect(limit.isdigit(), "the builds role has a memory bound of its own, which bounds the hostile work", limit)
             if case == "keeper":
                 test_keeper(stack, int(limit), canary)
             else:

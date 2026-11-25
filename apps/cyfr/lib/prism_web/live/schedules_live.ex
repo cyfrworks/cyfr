@@ -23,8 +23,15 @@ defmodule PrismWeb.SchedulesLive do
 
   A schedule may instead hold a line for Aqua: each time it runs, Aqua is
   sent the line in the person's daily thread, under the schedule's name,
-  and uses the tools it is offered (`Aqua.ScheduleTurns`). Only the person,
-  signed in, makes one; this page is where they do.
+  and uses the tools it is offered (`Aqua.ScheduleTurns`). The person
+  makes one here, signed in, and Aqua or a crew member may make one from
+  a turn of theirs, which fires in that turn's workspace thread when it
+  worked under one. Each row names who set it (the person, or that agent)
+  and, for a line for Aqua, where it fires: the daily thread, or the
+  workspace thread by its title. A schedule set for one time reads as
+  Once; editing it keeps it once unless its time is changed. The newest
+  25 show first, and Show more adds 25 older ones at a time, so every
+  live schedule can be reached and stopped.
 
   Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
   binding id, component, operation, interval, the time of its last
@@ -56,6 +63,11 @@ defmodule PrismWeb.SchedulesLive do
     "missed_runs" => "skip",
     "catch_up_limit" => ""
   }
+
+  # How many schedules the page shows at first, and how many more each
+  # Show more adds; and the most the `schedule` tool lists in one call.
+  @page 25
+  @tool_page 1000
 
   @cron_presets [
     {"Every minute", "* * * * *"},
@@ -92,6 +104,9 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:page_title, "Schedules")
       |> assign(:active_nav, "schedules")
       |> assign(:schedules, [])
+      |> assign(:shown, @page)
+      |> assign(:more?, false)
+      |> assign(:rooms, %{})
       |> assign(:feeds, [])
       |> assign(:components, [])
       |> assign(:loading, true)
@@ -112,6 +127,10 @@ defmodule PrismWeb.SchedulesLive do
       do: {:noreply, close_form(socket)},
       else: {:noreply, socket |> fetch_components() |> assign(:show_create, true)}
   end
+
+  # The next older schedules, after the ones shown.
+  def handle_event("show_more", _params, socket),
+    do: {:noreply, socket |> assign(:shown, socket.assigns.shown + @page) |> fetch_schedules()}
 
   # A row's Edit: the one form, prefilled with the schedule as listed.
   def handle_event("edit", %{"id" => id}, socket) do
@@ -424,9 +443,9 @@ defmodule PrismWeb.SchedulesLive do
       "action" => "update",
       "schedule_id" => f(sched, :schedule_id),
       "definition" => f(sched, :definition),
-      "name" => params["name"],
-      "cron_expression" => cron
+      "name" => params["name"]
     }
+    |> changed("cron_expression", cron, f(sched, :cron_expression))
   end
 
   defp changed(args, _key, value, value), do: args
@@ -489,18 +508,71 @@ defmodule PrismWeb.SchedulesLive do
 
   defp decode_input(_input), do: {:error, "Input must be a valid JSON object"}
 
+  # The newest `shown` live schedules, and whether any older one waits
+  # behind them: read one past them, in the tool's pages of at most
+  # @tool_page.
   defp fetch_schedules(socket) do
-    schedules =
-      case call_tool(socket, "schedule", %{"action" => "list"}) do
-        {:ok, %{schedules: list}} ->
-          list
+    shown = socket.assigns.shown
+    rows = list_schedules(socket, 0, shown + 1, [])
 
-        other ->
-          Logger.warning("[SchedulesLive] schedule list failed: #{inspect(other)}")
-          []
+    socket
+    |> assign(:schedules, Enum.take(rows, shown))
+    |> assign(:more?, length(rows) > shown)
+    |> assign(:rooms, rooms(socket, Enum.take(rows, shown)))
+  end
+
+  defp list_schedules(_socket, _offset, 0, acc), do: acc
+
+  defp list_schedules(socket, offset, wanted, acc) do
+    limit = min(wanted, @tool_page)
+
+    case call_tool(socket, "schedule", %{"action" => "list", "limit" => limit, "offset" => offset}) do
+      {:ok, %{schedules: page}} when length(page) == limit ->
+        list_schedules(socket, offset + limit, wanted - limit, acc ++ page)
+
+      {:ok, %{schedules: page}} ->
+        acc ++ page
+
+      other ->
+        Logger.warning("[SchedulesLive] schedule list failed: #{inspect(other)}")
+        acc
+    end
+  end
+
+  # The title of each workspace thread a shown line for Aqua fires in, by
+  # id; one that does not read is shown by its id. A component's schedule
+  # fires in no thread, so none is read for it.
+  defp rooms(socket, schedules) do
+    actor = Sanctum.Context.actor(socket.assigns[:context])
+
+    for sched <- schedules,
+        f(sched, :reference) == @aqua_line,
+        id = f(sched, :thread_id),
+        is_binary(id),
+        uniq: true,
+        into: %{} do
+      case Arca.ThreadStorage.get(actor, id) do
+        {:ok, %{title: title}} when is_binary(title) -> {id, title}
+        _unread -> {id, id}
       end
+    end
+  end
 
-    assign(socket, :schedules, schedules)
+  # Who set a schedule: the person, or the agent whose turn did.
+  defp maker_label(sched) do
+    case f(sched, :maker) do
+      maker when is_binary(maker) -> "Set by " <> maker
+      _person -> "Set by you"
+    end
+  end
+
+  # Where a line for Aqua fires; a component's schedule fires in no thread.
+  defp room_label(sched, rooms) do
+    cond do
+      f(sched, :reference) != @aqua_line -> nil
+      id = f(sched, :thread_id) -> "Workspace thread: " <> Map.get(rooms, id, id)
+      true -> "Daily thread"
+    end
   end
 
   # `feed.list` answers no arguments and no result's content, so the page
@@ -797,7 +869,23 @@ defmodule PrismWeb.SchedulesLive do
                     else: "hover:bg-gray-800/50"
                   )
                 ]}>
-                  <td class="px-4 py-3 text-sm text-white font-medium truncate">{f(sched, :name)}</td>
+                  <td class="px-4 py-3 text-sm text-white font-medium truncate">
+                    {f(sched, :name)}
+                    <span
+                      class="block text-xs font-normal text-gray-500 truncate"
+                      data-test="schedule-maker"
+                    >
+                      {maker_label(sched)}
+                    </span>
+                    <span
+                      :if={room_label(sched, @rooms)}
+                      class="block text-xs font-normal text-gray-500 truncate"
+                      title={room_label(sched, @rooms)}
+                      data-test="schedule-room"
+                    >
+                      {room_label(sched, @rooms)}
+                    </span>
+                  </td>
                   <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
                     <span
                       :if={f(sched, :reference) == @aqua_line}
@@ -815,7 +903,7 @@ defmodule PrismWeb.SchedulesLive do
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="text-gray-300" title={f(sched, :cron_expression)}>
-                      {cron_label(f(sched, :cron_expression))}
+                      {if f(sched, :once), do: "Once", else: cron_label(f(sched, :cron_expression))}
                     </span>
                     <span class="block text-xs text-gray-500 font-mono">
                       {f(sched, :cron_expression)}
@@ -929,6 +1017,11 @@ defmodule PrismWeb.SchedulesLive do
               <% end %>
             </tbody>
           </table>
+        </div>
+        <div :if={!@loading && @more?} class="pt-4 text-center">
+          <.button variant="ghost" phx-click="show_more" data-test="schedules-more">
+            Show more schedules
+          </.button>
         </div>
       </.card>
 

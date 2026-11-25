@@ -6,15 +6,16 @@ defmodule Prima.LocusRolesTest do
   The role table and its vector file (`tests/fixtures/locus_roles.json`)
   are one table: the file holds the module's values, value by value and
   in its order, under exactly its keys. And the table is one a node can
-  run: no two roles share a name, a pool, a service, a container, a
-  network, a user prefix, a port or a guard, and no guard is named as a
-  service; their uid ranges are disjoint and none holds the release's uid;
-  every reach is one the keeper knows; a routed role has a guard and the
-  runtime, whose runners reach nothing but their relays, has none; the image serves one of the roles; and each fixed address,
-  the endpoint's loopback listener's on its network and its proxy
-  listener's, Caddy's and Tailscale's on edge, lies in its subnet, outside
-  the range the subnet's other containers draw from, and apart from the
-  others.
+  run: no two roles share a name, a key, a user, a uid, a pool, a user
+  prefix, a port or a run folder; each role's user, key, run folder and
+  home root follow from its name; their uid ranges, the role users' uids
+  and the kept group's gid are apart; every reach is one the keeper
+  knows; the runtime alone is private, its spawns relay spaces and every
+  other role's routed; the backends role alone keeps homes; and each
+  fixed address, the endpoint's loopback listener's on its network, its
+  proxy listener's, Caddy's and Tailscale's on edge, and the host API's on
+  the Locus network, lies in its subnet, outside the range the subnet's
+  other containers draw from, and apart from the others.
   """
   use ExUnit.Case, async: true
 
@@ -24,12 +25,13 @@ defmodule Prima.LocusRolesTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @release_keys ~w(bin edge_address edge_caddy_address edge_ip_range edge_network edge_subnet
-                   edge_tailscale_address endpoint_address endpoint_ip_range endpoint_network
-                   endpoint_subnet home_root image_role memory run_dir run_size uid user)
-  @role_keys ~w(container first_uid guard home_size kept_first_uid kept_last_uid
-                kept_root kept_volume last_uid memory name network pool port profile reach service
-                user_prefix)
+  @release_keys ~w(bin container edge_address edge_caddy_address edge_ip_range edge_network
+                   edge_subnet edge_tailscale_address endpoint_address endpoint_ip_range
+                   endpoint_network endpoint_subnet guard guard_container home_root
+                   host_api_address ip_range memory network run_dir run_size service subnet)
+  @role_keys ~w(first_uid guest_root guest_volume home_root home_size kept_first_uid kept_gid
+                kept_group kept_last_uid kept_root kept_volume key last_uid memory name pool port
+                private reach run_dir run_size uid user user_prefix)
   @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
                           socket_queue_bytes)
   @role_memory_keys ~w(answering fetch_head_bytes fetch_read_ahead_bytes fetch_read_bytes freed_segments_bytes unread)
@@ -37,6 +39,7 @@ defmodule Prima.LocusRolesTest do
   # The file's spelling of a value of the module: atoms as their names, a
   # map under its keys' names, a uid range as its first and last uid.
   defp spelled(nil), do: nil
+  defp spelled(boolean) when is_boolean(boolean), do: boolean
   defp spelled(atom) when is_atom(atom), do: Atom.to_string(atom)
 
   defp spelled(%{} = map) when not is_struct(map),
@@ -87,33 +90,51 @@ defmodule Prima.LocusRolesTest do
     end
   end
 
-  test "no two roles share a name, a pool, a service, a container, a network, a user prefix, a port or a guard" do
+  test "no two roles share a name, a key, a user, a uid, a pool, a prefix, a port or a run folder" do
     roles = LocusRoles.roles()
 
-    for fact <- [:name, :pool, :service, :container, :network, :user_prefix, :port] do
+    for fact <- [:name, :key, :user, :uid, :pool, :user_prefix, :port, :run_dir, :home_root] do
       values = Enum.map(roles, &Map.fetch!(&1, fact))
       assert Enum.uniq(values) == values, "#{fact} repeats: #{inspect(values)}"
     end
 
-    guards = for %{guard: guard} <- roles, guard != nil, do: guard
-    assert Enum.uniq(guards) == guards, "guard repeats: #{inspect(guards)}"
-    assert guards -- Enum.map(roles, & &1.service) == guards, "a guard is named as a service"
+    release = LocusRoles.release()
+    assert release.guard != release.service and release.guard_container != release.container
   end
 
-  # The runtime's runners reach nothing but their relays, so nothing of
-  # theirs leaves to be guarded; a build or a backend leaves through the
-  # route its island's guard makes for its space.
-  test "a routed role has a guard, and the runtime, a relay role, has none" do
-    for role <- LocusRoles.roles() do
-      if role.reach == "routed" do
-        assert is_binary(role.guard) and role.guard != "", "#{role.name} has no guard"
-      else
-        assert role.guard == nil, "#{role.name}'s relay spaces need no guard"
-      end
-    end
+  # The keeper starts a role from its key, runs it as `locus-<name>`, and
+  # gives it `<run root>/<name>` and `<home root>/<name>`: each follows
+  # from the role's name.
+  test "a role's key, user, run folder and home root follow from its name" do
+    release = LocusRoles.release()
 
-    assert Enum.map(LocusRoles.roles(), &{&1.name, &1.reach}) ==
+    for %{name: name} = role <- LocusRoles.roles() do
+      assert role.key == "LOCUS_#{name |> Atom.to_string() |> String.upcase()}_KEY"
+      assert role.user == "locus-#{name}"
+      assert role.run_dir == Path.join(release.run_dir, Atom.to_string(name))
+      assert role.home_root == Path.join(release.home_root, Atom.to_string(name))
+    end
+  end
+
+  # The runtime's runners reach nothing but their relays, and its process
+  # alone reaches core's host API; a build or a program leaves through the
+  # route the guard makes for its space.
+  test "the runtime alone is private and relays, the others route, and the backends alone keep homes" do
+    assert Enum.map(LocusRoles.roles(), &{&1.name, &1.reach, &1.private}) ==
              [runtime: "relay", builds: "routed", backends: "routed"]
+             |> Enum.map(fn {name, reach} -> {name, reach, name == :runtime} end)
+
+    for role <- LocusRoles.roles() do
+      kept = [role.kept_root, role.kept_volume, role.kept_uids, role.kept_group, role.kept_gid]
+      assert Enum.all?(kept, &(&1 == nil)) == (role.name != :backends), "#{role.name}'s kept"
+      guest = [role.guest_root, role.guest_volume]
+      assert Enum.all?(guest, &(&1 == nil)) == (role.name != :backends), "#{role.name}'s guest"
+    end
+  end
+
+  test "the host API's fixed address lies in the Locus network's subnet, outside its range" do
+    %{subnet: subnet, ip_range: range, host_api_address: address} = LocusRoles.release()
+    assert_fixed(subnet, range, address)
   end
 
   test "the endpoint's fixed address lies in its subnet, outside the range the other containers draw from" do
@@ -173,13 +194,16 @@ defmodule Prima.LocusRolesTest do
     {value, String.to_integer(bits)}
   end
 
-  test "the uid ranges are disjoint, ascending, and none holds the release's uid" do
-    ranges = Enum.map(LocusRoles.roles(), & &1.uids)
-    release_uid = LocusRoles.release().uid
+  test "the uid ranges are disjoint, ascending, and hold no role user's uid or the kept group's gid" do
+    roles = LocusRoles.roles()
+    ranges = Enum.flat_map(roles, &Enum.reject([&1.uids, &1.kept_uids], fn r -> r == nil end))
+    ids = Enum.map(roles, & &1.uid) ++ for(%{kept_gid: gid} <- roles, gid != nil, do: gid)
+
+    assert Enum.uniq(ids) == ids
 
     for range <- ranges do
       assert range.step == 1 and range.first <= range.last, inspect(range)
-      refute release_uid in range, "#{inspect(range)} holds the release's uid #{release_uid}"
+      for id <- ids, do: refute(id in range, "#{inspect(range)} holds #{id}")
     end
 
     for {a, i} <- Enum.with_index(ranges), b <- Enum.drop(ranges, i + 1) do
@@ -210,11 +234,9 @@ defmodule Prima.LocusRolesTest do
     assert LocusRoles.release().memory.byte_cost >= 1.0
   end
 
-  test "every reach is one the keeper knows, and the image serves one of the roles" do
+  test "every reach is one the keeper knows" do
     for role <- LocusRoles.roles() do
       assert role.reach in LocusRoles.reaches(), "#{role.name}'s reach #{inspect(role.reach)}"
     end
-
-    assert LocusRoles.release().image_role in LocusRoles.names()
   end
 end

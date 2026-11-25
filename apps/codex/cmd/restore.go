@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -26,7 +25,6 @@ import (
 	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 var restoreNoStart bool
@@ -41,18 +39,18 @@ var restoreCmd = &cobra.Command{
 	Short: "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential the backup carried until its owner re-enables it.
 
-1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory, scaffold directory or directory of ./data this account cannot write: on native Linux the server's container owns the storage root once the stack has run, so the restore runs as root, with sudo. So does a scaffold file whose path crosses a link: nothing is written, removed or given back through one, so a restore run as root changes nothing outside the project.
+1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory or scaffold directory this account cannot write, and a scaffold file whose path leads outside the project.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar CYFR from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
 5. Read the cluster's live slots offline, in the snapshot's image: a live server on any host refuses, whatever its release, since every server of the cluster shares the database.
-6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
+6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major). The storage root and the SQLite file are written through the stack, as the snapshot read them: one-off containers of the snapshot's image (pulled first when this machine has none), the binds they replace writable and every other mount of the cyfr service read only, with no network, from what cyfr streams them of the snapshot; the declaration's run hands them to the image's user, as every start does. cyfr itself runs as you, so the restore needs no sudo where the server's container owns ./data.
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
 8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own tailnet machine, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
 A restored .env names the AppArmor profile of the snapshot's release, which an update since may have taken off the machine; where this machine enforces AppArmor and has not loaded it, the restore says so before it starts the stack, with the command that loads it through that release's own cyfr ('cyfr apparmor-profile | sudo sh -c ...' run by the cyfr of the restored release, which the install script installs with CYFR_VERSION=<release>).
 
-Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. Run through sudo, the restore gives .env, docker-compose.yml, the scaffold files and .cyfr/ back to the account that ran sudo (SUDO_UID and SUDO_GID); the storage root and the database are left to the image's user, which the next start hands them to. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
+Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
 	Example: "  cyfr restore backups/20261016T120000Z",
 	Args:    cobra.ExactArgs(1),
@@ -276,10 +274,8 @@ func checkScaffoldPart(s *snapshotFiles) error {
 // putScaffoldBack puts each of the scaffold files names back as the
 // snapshot at dir holds it, as it stood before the update: the snapshot's
 // bytes where scaffold/ holds the file, and no file where the update
-// created it. Nothing is written or removed through a link at any level of
-// a name's path (putProjectFile, removeProjectFile), so a restore run as
-// root writes nothing outside the project; a name whose path crosses one
-// is refused, naming it.
+// created it, each through the scaffold's own writer, an os.Root of the
+// project, as cyfr update writes them.
 func putScaffoldBack(dir string, names []string) error {
 	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(dir, "scaffold", name))
@@ -295,6 +291,31 @@ func putScaffoldBack(dir string, names []string) error {
 		if err := putProjectFile(name, data, 0644); err != nil {
 			return fmt.Errorf("put %s back: %w", name, err)
 		}
+	}
+	return nil
+}
+
+// putProjectFile writes data over the project's file name, mode, its
+// directory made first, through the scaffold's writer (an os.Root of the
+// project).
+func putProjectFile(name string, data []byte, mode os.FileMode) error {
+	if err := scaffold.MakeDir(filepath.Dir(name)); err != nil {
+		return err
+	}
+	return scaffold.ReplaceFile(name, data, mode)
+}
+
+// removeProjectFile removes the project's file name through an os.Root of
+// the project, as scaffold.ReplaceFile writes one, so no link carries the
+// removal outside; one that is not there is no failure.
+func removeProjectFile(name string) error {
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }
@@ -330,10 +351,6 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err := refuseUnwritableProject(snap); err != nil {
 		return err
 	}
-	// Run as root through sudo, what the restore writes of the project goes
-	// back to the person who ran sudo, after the lock is released, on every
-	// way out.
-	defer returnToSudoAccount(snap, errOut)
 	// The lock an up, an update and an access change hold too, held from
 	// before the first docker call to the restore's end; a change recovery
 	// could not finish leaves the stack in no known state, and the restore
@@ -353,7 +370,7 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err != nil {
 		return engineFailure(err)
 	}
-	r := &restorer{updater: updater{ctx: ctx, out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
+	r := &restorer{updater: updater{ctx: ctx, command: "restore", out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
 	return r.run()
 }
 
@@ -369,6 +386,18 @@ type restorer struct {
 	// exists, so a member may hold a slot in it.
 	sqliteLive bool
 	restoreID  string
+	// declared are the cyfr service's mounts as the restored compose file
+	// declares them, before they are resolved (readRestoredConfig).
+	declared []composeMount
+	// write is what the put-back writes through the stack (planWrite).
+	write *restoreWrite
+	// barredBy is the snapshot the bar in .env named when this restore
+	// began, empty for none: a restore of it cut short left the bar, and
+	// may have left the SQLite file it wrote in place half written.
+	barredBy string
+	// made are the sources of binds, and their mount points, this restore
+	// made as the person (makeSources), removed again on a refusal.
+	made []string
 }
 
 // restoreFiles are the configuration files the restore replaces with the
@@ -390,6 +419,9 @@ func (r *restorer) run() error {
 	if err != nil {
 		return err
 	}
+	if err := r.removeLeftWrites(); err != nil {
+		return err
+	}
 	// A join waiting for approval would enrol the machine under the
 	// configuration the restore replaces, so it is cancelled first.
 	if err := r.engine.CancelWaitingJoin(r.ctx); err != nil {
@@ -404,11 +436,10 @@ func (r *restorer) run() error {
 	if r.ctx.Err() != nil {
 		return errors.New("cyfr restore was interrupted during the stop; the stack is left stopped and nothing was restored. Start it again with 'cyfr up'")
 	}
-	// The permission check is the last step: the live read before it runs
-	// the image's entrypoint, which hands the storage root to the image's
-	// user, and nothing after it until the put-back's writes runs a
-	// container or changes an owner.
-	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers, r.refuseUnwritableParts}
+	// What the put-back writes through the stack is read last, after the
+	// live read, whose offline run may touch the database's files, and
+	// nothing after it until the put-back runs a container.
+	steps := []func() error{r.holdConfigFiles, r.freeNetworks, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.placeRestoredDatabase, r.checkLayout, r.refuseLiveMembers, r.planWrite}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {
@@ -439,6 +470,7 @@ func (r *restorer) run() error {
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
+		r.sayUnselected()
 		return nil
 	}
 	if r.ctx.Err() != nil {
@@ -452,6 +484,7 @@ func (r *restorer) run() error {
 	err = r.updater.start("restore")
 	if local := (startedLocally{}); errors.As(err, &local) {
 		fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s. It runs on this machine alone.\n", m.Version, m.TakenAt, r.restoreID)
+		r.sayUnselected()
 		return err
 	}
 	if err != nil {
@@ -464,12 +497,56 @@ func (r *restorer) run() error {
 		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read its log with 'docker compose logs cyfr', fix the cause and run 'cyfr up'", message, r.restoreID)
 	}
 	fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s.\n", m.Version, m.TakenAt, r.restoreID)
+	r.sayUnselected()
 	return nil
+}
+
+// removeLeftWrites removes, before anything stops, every container of a
+// write through the stack this project's earlier restore left: one whose
+// client died with cyfr, where no watchdog removed it (Windows), runs on
+// until its program ends, and a clear still deleting must never delete
+// what this restore puts back. Only this project's (restoreWriteLabel)
+// are asked for, and only by the names a write takes (stackRunName).
+func (r *restorer) removeLeftWrites() error {
+	ctx, cancel := r.detached(composeRunTimeout)
+	defer cancel()
+	names, err := r.dockerOutput(ctx, nil, "ps", "-a", "--filter", "label="+restoreWriteLabel+"="+access.ProjectName("."), "--format", "{{.Names}}")
+	if err != nil {
+		return fmt.Errorf("cyfr restore could not look for a container an earlier restore's write left (%v); nothing was changed", err)
+	}
+	for _, name := range strings.Fields(names) {
+		if !leftWrite.MatchString(name) {
+			continue
+		}
+		if err := r.docker(ctx, nil, nil, "rm", "--force", name); err != nil {
+			return fmt.Errorf("cyfr restore could not remove %s, the container an earlier restore's write left (%v); nothing was changed", name, err)
+		}
+		fmt.Fprintf(r.out, "Removed %s, the container an earlier restore's write left.\n", name)
+	}
+	return nil
+}
+
+// leftWrite is the name a write through the stack takes (stackRunName).
+var leftWrite = regexp.MustCompile(`^cyfr-restore-write-[0-9a-f]{12}$`)
+
+// sayUnselected says, after the restored stack's start under the
+// snapshot's head alone, which services of the restored compose file's own
+// that start left stopped and how to start them (unselectedLine), as the
+// snapshot holds no record of which of them ran.
+func (r *restorer) sayUnselected() {
+	if line := r.unselectedLine(); line != "" {
+		fmt.Fprintln(r.out, line)
+	}
 }
 
 // refuseStopped puts docker-compose.yml and .env back as they were and
 // refuses with reason, the stack left stopped.
 func (r *restorer) refuseStopped(reason error) error {
+	for i := len(r.made) - 1; i >= 0; i-- {
+		// Each is empty, made by this restore since the stop: a directory
+		// something was put in since stays.
+		os.Remove(r.made[i])
+	}
 	message := fmt.Sprintf("%v.\nThe stack is left stopped and nothing of the snapshot was put back", r.redactor().Text(reason.Error()))
 	if err := r.putBackHeld(); err != nil {
 		return fmt.Errorf("%s; docker-compose.yml and .env could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
@@ -480,6 +557,7 @@ func (r *restorer) refuseStopped(reason error) error {
 // holdConfigFiles reads the project's docker-compose.yml and .env, for a
 // refusal to put back.
 func (r *restorer) holdConfigFiles() error {
+	r.barredBy, _ = restoreBarred(".env")
 	r.held = map[string][]byte{}
 	for _, f := range restoreFiles {
 		data, err := os.ReadFile(f.file)
@@ -493,6 +571,23 @@ func (r *restorer) holdConfigFiles() error {
 		}
 	}
 	return nil
+}
+
+// freeNetworks removes this project's containers of services the
+// snapshot's compose file does not declare (removeContainers) and its
+// networks that file does not use (removeNetworks) before anything runs
+// under it, so a network of its may take the address range one of them
+// holds, as an update that failed after its switch leaves the new
+// release's.
+func (r *restorer) freeNetworks() error {
+	snapshot, err := os.ReadFile(r.snap.path("compose"))
+	if err != nil {
+		return err
+	}
+	if err := r.removeContainers(snapshot, "the snapshot's docker-compose.yml"); err != nil {
+		return err
+	}
+	return r.removeNetworks(snapshot, "the snapshot's docker-compose.yml")
 }
 
 // withBarrier answers the dotenv text env with restoreBarrier set to the
@@ -569,7 +664,9 @@ func (r *restorer) putConfigFiles() error {
 	if err := writeDurable(".env", barred, 0600); err != nil {
 		return err
 	}
-	// From here every compose call runs under the snapshot's head.
+	// From here every compose call runs under the snapshot's head alone:
+	// the stopped stack's own profiles are its compose file's.
+	r.own, r.beside = nil, nil
 	if r.head, err = r.engine.Head(); err != nil {
 		return engineFailure(err)
 	}
@@ -714,15 +811,10 @@ func (r *restorer) readRestoredConfig() error {
 		if err != nil {
 			return err
 		}
-		host, ok := mountedHost(mounts, dbPath)
-		if !ok {
+		if _, ok := mountedHost(mounts, dbPath); !ok {
 			return refuse("the SQLite database %s is on no bind mount of the cyfr service", dbPath)
 		}
-		if c.sqliteFile, err = hostPath(host, false); err != nil {
-			return refuse("the SQLite database %s (on the host %s): %v", dbPath, host, err)
-		}
-		_, err = os.Lstat(c.sqliteFile)
-		r.sqliteLive = err == nil
+		c.dbPath = dbPath
 	case "postgres":
 		c.adapter = "postgres"
 		if c.pgURL = env("CYFR_DATABASE_URL"); c.pgURL == "" {
@@ -755,29 +847,14 @@ func (r *restorer) readRestoredConfig() error {
 	if c.storage != r.snap.manifest.StorageAdapter {
 		return refuse("its storage is %s, but the snapshot was taken of %s storage", c.storage, r.snap.manifest.StorageAdapter)
 	}
-	if c.storage == "local" {
-		if c.storageMounts, err = storageMountsAt(mounts, dataPath, r.snap); err != nil {
-			return refuse("%v", err)
-		}
-		// A mount's bytes are replaced whole, so none may hold the project
-		// or the snapshot, nor lie inside the snapshot.
-		project, err := os.Getwd()
-		if err == nil {
-			project, err = filepath.EvalSymlinks(project)
-		}
-		if err != nil {
-			return fmt.Errorf("the project directory does not read (%v)", err)
-		}
-		snapshot, err := filepath.EvalSymlinks(r.snap.dir)
-		if err != nil {
-			return fmt.Errorf("the snapshot directory does not read (%v)", err)
-		}
-		for _, m := range c.storageMounts {
-			if within(project, m.host) || within(snapshot, m.host) || within(m.host, snapshot) {
-				return refuse("the storage root or a mount under it is on the host %s, which holds the project or the snapshot, so its bytes cannot be replaced", m.host)
-			}
-		}
+	c.image, c.mounts = cyfr.Image, config.resolve(mounts)
+	if project, err := os.Getwd(); err == nil {
+		c.state = stateIn(c.mounts, resolvedOr(filepath.Join(project, ".cyfr")))
 	}
+	if c.storage == "local" {
+		c.dataPath = dataPath
+	}
+	r.declared = mounts
 
 	for _, name := range keyringSettings {
 		want, inSnapshot := r.snap.keyring[name]
@@ -793,16 +870,70 @@ func (r *restorer) readRestoredConfig() error {
 			return refuse("its %s is not the one the snapshot's keyring file (%s) holds; set it as that file holds it, so the restored data can be read", name, r.snap.path("keyring"))
 		}
 	}
+	if c.image == "" && (c.adapter == "sqlite" || c.storage == "local") {
+		return refuse("the cyfr service names no image, through which cyfr restore writes its storage")
+	}
 	r.config = c
+	return nil
+}
+
+// checkLayout refuses, once the database's place is read
+// (placeRestoredDatabase), as the backup's read reads it before it reads
+// the storage, a snapshot whose storage does not fit the restored
+// configuration's mounts under the storage root (storageMountsAt), and a
+// bind the put-back writes whose bytes it cannot replace whole: the
+// storage's, holding the project or the snapshot or lying inside the
+// snapshot, and the database's, holding the snapshot or lying inside it.
+func (r *restorer) checkLayout() error {
+	c := r.config
+	if c.storage != "local" && c.adapter != "sqlite" {
+		return nil
+	}
+	refuse := func(format string, args ...any) error {
+		return fmt.Errorf("The snapshot does not fit the configuration its docker-compose.yml and .env give cyfr: %s", fmt.Sprintf(format, args...))
+	}
+	project, err := os.Getwd()
+	if err == nil {
+		project, err = filepath.EvalSymlinks(project)
+	}
+	if err != nil {
+		return fmt.Errorf("the project directory does not read (%v)", err)
+	}
+	snapshot, err := filepath.EvalSymlinks(r.snap.dir)
+	if err != nil {
+		return fmt.Errorf("the snapshot directory does not read (%v)", err)
+	}
+	if c.storage == "local" {
+		mounts, err := storageMountsAt(r.declared, c.dataPath, r.snap, c.notStorage)
+		if err != nil {
+			return refuse("%v", err)
+		}
+		for _, m := range mounts {
+			if within(project, m.host) || within(snapshot, m.host) || within(m.host, snapshot) {
+				return refuse("the storage root or a mount under it is on the host %s, which holds the project or the snapshot, so its bytes cannot be replaced", m.host)
+			}
+		}
+	}
+	_, database := c.writableMounts()
+	for _, m := range database {
+		if host := resolvedOr(m.Source); m.Type == "bind" && (within(snapshot, host) || within(host, snapshot)) {
+			return refuse("the SQLite database's files are on the host %s, which holds the snapshot or lies inside it, so their bytes cannot be replaced", host)
+		}
+	}
 	return nil
 }
 
 // hostPath resolves a host path the restore writes to: through its links
 // when it exists, refusing one that is not of the kind the snapshot holds
 // for it; else through the links of its parent, since the restore creates
-// it.
+// it. A path this account may not look into (a mount under a storage root
+// the server's container owns) is answered as it is: the restore writes
+// it through the stack, which reads its kind there (planWrite).
 func hostPath(p string, dir bool) (string, error) {
 	resolved, err := filepath.EvalSymlinks(p)
+	if errors.Is(err, fs.ErrPermission) {
+		return filepath.Clean(p), nil
+	}
 	if err == nil {
 		info, err := os.Stat(resolved)
 		switch {
@@ -825,6 +956,19 @@ func hostPath(p string, dir bool) (string, error) {
 		return filepath.Join(parent, filepath.Base(p)), nil
 	}
 	return filepath.Clean(p), nil
+}
+
+// sameFolder reports whether a and b name one folder, each made absolute
+// (from the project) and its links resolved where it resolves: 'snap',
+// './snap', its absolute path and a link to it are one snapshot.
+func sameFolder(a, b string) bool {
+	resolved := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		return resolvedOr(p)
+	}
+	return resolved(a) == resolved(b)
 }
 
 // within reports whether p is root or lies under it.
@@ -852,42 +996,36 @@ func (r *restorer) probeRestoredPostgres() error {
 }
 
 // refuseUnwritableProject refuses, before anything stops, a restore this
-// process could not write the places of: putBackPlaces for the layout this
-// project's own files give the snapshot as far as they can be read for
-// certain (projectLayout), whose storage root the image's entrypoint hands
-// to the image's user at every start. On native Linux a person who is not root learns there that the
-// restore needs sudo. refuseUnwritableParts asks again, of the same list
-// for the layout the restored configuration gives.
+// person could not write the project's places of (putBackPlaces), and a
+// scaffold file whose directory leads outside the project, which the
+// scaffold's writer refuses (an os.Root of the project). The storage and
+// the database are written through the stack, which asks nothing of this
+// person.
 func refuseUnwritableProject(snap *snapshotFiles) error {
+	root, err := os.OpenRoot(".")
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, name := range snap.manifest.Scaffold {
-		if err := noLinkIn(filepath.Dir(name)); err != nil {
-			return fmt.Errorf("%s cannot be restored: the path of its scaffold file %s %v; nothing was changed", snap.dir, name, err)
+		if _, err := root.Stat(filepath.Dir(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s cannot be restored: the directory of its scaffold file %s does not lie in this project (%v); nothing was changed", snap.dir, name, err)
 		}
 	}
-	dirs, err := putBackPlaces(snap, projectLayout(snap))
-	if err == nil {
-		err = firstUnwritable(dirs)
-	}
-	if err != nil {
-		return fmt.Errorf("%v; nothing was changed", unwritable(err))
+	if err := firstUnwritable(putBackPlaces(snap)); err != nil {
+		return fmt.Errorf("cyfr restore cannot put the snapshot back: this account may not write %v; nothing was changed", strings.TrimPrefix(err.Error(), "write "))
 	}
 	return nil
 }
 
-// putBackLayout is where the put-back writes besides the project's own
-// places: the storage root's mounts, shallower first, for a snapshot with
-// local storage, and the SQLite file for a SQLite snapshot ("" for none).
-type putBackLayout struct {
-	mounts     []storageMount
-	sqliteFile string
-}
-
-// storageMountsAt are the storage root's mounts, shallower first, for the
+// storageMountsAt are the storage root's mounts for the
 // cyfr service's mounts and its storage root dataPath, a container path:
 // the bind the root is on, then each mount under it at the place the
-// snapshot holds for it. A layout the snapshot cannot be put back into is
-// refused.
-func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles) ([]storageMount, error) {
+// snapshot holds for it, but those that are no part of the storage
+// (notStorage: the database's files or the engine's state, which no
+// snapshot's storage holds). A layout the snapshot cannot be put back
+// into is refused.
+func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles, notStorage func(target string) bool) ([]storageMount, error) {
 	host, ok := mountedHost(mounts, dataPath)
 	if !ok {
 		return nil, fmt.Errorf("the storage root %s is on no bind mount of the cyfr service", dataPath)
@@ -899,6 +1037,9 @@ func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles
 	var nested []storageMount
 	for _, n := range mountsUnder(mounts, dataPath) {
 		v, target := n.mount, path.Clean(n.mount.Target)
+		if notStorage(target) {
+			continue
+		}
 		if v.Type != "bind" || v.Source == "" {
 			return nil, fmt.Errorf("the storage root %s has a %s mount at %s, whose bytes no host path holds", dataPath, v.Type, target)
 		}
@@ -910,152 +1051,16 @@ func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles
 		if err != nil {
 			return nil, fmt.Errorf("the mount at %s (on the host %s): %v", target, v.Source, err)
 		}
-		nested = append(nested, storageMount{rel: n.rel, host: host, dir: placed.IsDir()})
+		nested = append(nested, storageMount{rel: n.rel, host: host})
 	}
-	sortByDepth(nested)
-	return append([]storageMount{{host: root, dir: true}}, nested...), nil
+	return append([]storageMount{{host: root}}, nested...), nil
 }
 
-// projectLayout is the layout this project's own docker-compose.yml and
-// .env give the snapshot as they stand, read from disk without docker,
-// for the check at the start: the storage root's mounts for a snapshot
-// with local storage, and the SQLite file for a SQLite one. A part it
-// cannot read for certain is left out, and the check after the live read
-// asks it: another compose file or an override beside docker-compose.yml,
-// a cyfr service whose mounts are interpolated, extended, merged or of a
-// kind it does not read, and storage or database paths the service sets
-// for itself.
-func projectLayout(snap *snapshotFiles) putBackLayout {
-	var l putBackLayout
-	mounts, env, ok := projectMounts()
-	if !ok {
-		return l
-	}
-	setting := func(name, fallback string) (string, bool) { return settingPathIn(env, name, fallback) }
-	dataPath, ok := setting("CYFR_DATA_PATH", "data")
-	if !ok {
-		return l
-	}
-	if snap.manifest.StorageAdapter == "local" {
-		if m, err := storageMountsAt(mounts, dataPath, snap); err == nil {
-			l.mounts = m
-		}
-	}
-	if snap.database == "sqlite" {
-		if dbPath, ok := setting("CYFR_DATABASE_PATH", path.Join(dataPath, "cyfr.db")); ok {
-			if host, ok := mountedHost(mounts, dbPath); ok {
-				l.sqliteFile = host
-			}
-		}
-	}
-	return l
-}
-
-// projectMounts are the cyfr service's mounts as this project's
-// docker-compose.yml writes them, with the storage and database paths .env
-// gives it; ok is false where they cannot be read for certain
-// (projectLayout).
-func projectMounts() (mounts []composeMount, env map[string]*string, ok bool) {
-	for _, name := range append(slices.Clone(access.ComposeMainFiles), "compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml") {
-		if _, err := os.Lstat(name); err == nil && name != "docker-compose.yml" {
-			return nil, nil, false
-		}
-	}
-	project, err := os.Getwd()
-	if err != nil {
-		return nil, nil, false
-	}
-	data, err := os.ReadFile("docker-compose.yml")
-	if err != nil {
-		return nil, nil, false
-	}
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
-		return nil, nil, false
-	}
-	services := mapValue(root.Content[0], "services")
-	if services == nil || services.Kind != yaml.MappingNode {
-		return nil, nil, false
-	}
-	cyfr := mapValue(services, "cyfr")
-	if cyfr == nil || cyfr.Kind != yaml.MappingNode {
-		return nil, nil, false
-	}
-	for _, key := range []string{"<<", "extends", "volumes_from", "tmpfs", "secrets", "configs"} {
-		if mapValue(cyfr, key) != nil {
-			return nil, nil, false
-		}
-	}
-	paths := []string{"CYFR_DATA_PATH", "CYFR_DATABASE_PATH"}
-	if environment := mapValue(cyfr, "environment"); environment != nil {
-		for _, n := range environment.Content {
-			for _, name := range paths {
-				if n.Value == name || strings.HasPrefix(n.Value, name+"=") {
-					return nil, nil, false
-				}
-			}
-		}
-	}
-	volumes := mapValue(cyfr, "volumes")
-	if volumes != nil && volumes.Kind != yaml.SequenceNode {
-		return nil, nil, false
-	}
-	var entries []*yaml.Node
-	if volumes != nil {
-		entries = volumes.Content
-	}
-	for _, v := range entries {
-		var m composeMount
-		switch v.Kind {
-		case yaml.ScalarNode:
-			parts := strings.Split(v.Value, ":")
-			if len(parts) < 2 || len(parts) > 3 {
-				return nil, nil, false
-			}
-			m = composeMount{Type: "volume", Source: parts[0], Target: parts[1]}
-			if strings.HasPrefix(parts[0], "/") || strings.HasPrefix(parts[0], ".") {
-				m.Type = "bind"
-			}
-		case yaml.MappingNode:
-			for key, field := range map[string]*string{"type": &m.Type, "source": &m.Source, "target": &m.Target} {
-				if n := mapValue(v, key); n != nil {
-					if n.Kind != yaml.ScalarNode {
-						return nil, nil, false
-					}
-					*field = n.Value
-				}
-			}
-		default:
-			return nil, nil, false
-		}
-		if strings.Contains(m.Source+m.Target, "$") || strings.HasPrefix(m.Source, "~") || m.Target == "" {
-			return nil, nil, false
-		}
-		if m.Type == "bind" && !filepath.IsAbs(m.Source) {
-			m.Source = filepath.Join(project, m.Source)
-		}
-		mounts = append(mounts, m)
-	}
-	values, err := access.ReadEnvValues(".env")
-	if err != nil {
-		return nil, nil, false
-	}
-	env = map[string]*string{}
-	for _, name := range paths {
-		if value, set := values[name]; set {
-			env[name] = &value
-		}
-	}
-	return mounts, env, true
-}
-
-// putBackPlaces are the directories putParts writes or removes in for the
-// layout l, in its order: the project directory (publishCompose and the
-// barrier's lowering), each scaffold file's directory where the snapshot
-// or the project holds the file, each storage mount's directory and every
-// directory clearDir removes or empties under it, and the SQLite file's
-// directory.
-func putBackPlaces(snap *snapshotFiles, l putBackLayout) ([]string, error) {
+// putBackPlaces are the directories the put-back writes or removes in as
+// this person: the project directory (publishCompose and the barrier's
+// lowering) and each scaffold file's directory where the snapshot or the
+// project holds the file.
+func putBackPlaces(snap *snapshotFiles) []string {
 	dirs := []string{"."}
 	for _, name := range snap.manifest.Scaffold {
 		_, err := os.Lstat(filepath.Join(snap.dir, "scaffold", name))
@@ -1064,35 +1069,7 @@ func putBackPlaces(snap *snapshotFiles, l putBackLayout) ([]string, error) {
 		}
 		dirs = append(dirs, filepath.Dir(name))
 	}
-	keep := sqliteKeep(l.sqliteFile)
-	for i, m := range l.mounts {
-		if !m.dir {
-			dirs = append(dirs, filepath.Dir(m.host))
-			continue
-		}
-		covered, _ := mountCover(l.mounts, i, snap.path("storage"), keep)
-		err := filepath.WalkDir(m.host, func(p string, d fs.DirEntry, err error) error {
-			switch {
-			case errors.Is(err, fs.ErrNotExist) && p == m.host:
-				dirs = append(dirs, m.host)
-				return nil
-			case err != nil:
-				return err
-			case covered[p] && d.IsDir():
-				return fs.SkipDir
-			case d.IsDir():
-				dirs = append(dirs, p)
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	if l.sqliteFile != "" {
-		dirs = append(dirs, filepath.Dir(l.sqliteFile))
-	}
-	return dirs, nil
+	return dirs
 }
 
 // firstUnwritable answers the first of dirs this process cannot create,
@@ -1113,49 +1090,31 @@ func firstUnwritable(dirs []string) error {
 	return nil
 }
 
-// refuseUnwritableParts refuses, before any part is put back, a place
-// the put-back writes or removes in that this process cannot (putBackPlaces
-// for the restored configuration's layout): the image's entrypoint hands
-// the storage root to the image's user at every start, so on native Linux
-// a person who is not root cannot clear or rename what it holds. Once this
-// passes no later step fails for a permission.
-func (r *restorer) refuseUnwritableParts() error {
-	c := r.config
-	var l putBackLayout
-	if c.storage == "local" {
-		l.mounts = c.storageMounts
-	}
-	if c.adapter == "sqlite" {
-		l.sqliteFile = c.sqliteFile
-	}
-	dirs, err := putBackPlaces(r.snap, l)
-	if err == nil {
-		err = firstUnwritable(dirs)
-	}
-	if err != nil {
-		return unwritable(err)
-	}
-	return nil
-}
-
-// unwritable is the refusal of a part the put-back could not write as
-// this person. It names no snapshot directory: the refusal is redacted,
-// and .env holds that directory as the barrier's value.
-func unwritable(err error) error {
-	return fmt.Errorf("cyfr restore cannot put the snapshot back as you (%v): the server's container owns its storage once the stack has run, so run the same cyfr restore as root, with sudo", err)
-}
-
 // refuseLiveMembers reads the live slots of the database the restore writes,
 // offline in the snapshot's image, until none is live or the window closes.
 // Any live slot refuses, whatever its release: the restore replaces bytes
-// every member of the cell shares. A SQLite database that does not exist
-// holds no slot.
+// every member of the cell shares. A SQLite database that does not exist,
+// or is an empty file, holds no slot; one that does not answer when this
+// restore found its own bar up, this snapshot's, is one the same restore
+// cut short may have left half written, which the bar has kept every
+// server off, and is put back. Under another snapshot's bar it refuses: a
+// restore of that snapshot was cut short, and only it puts back what it
+// left.
 func (r *restorer) refuseLiveMembers() error {
 	if r.config.adapter == "sqlite" && !r.sqliteLive {
-		fmt.Fprintf(r.out, "No database is at %s yet, so no server of the cluster holds a slot in it.\n", r.config.sqliteFile)
+		fmt.Fprintf(r.out, "No database is at %s yet, so no server of the cluster holds a slot in it.\n", r.config.dbPath)
 		return nil
 	}
 	_, live, err := r.waitLiveSlots(func(rosterSlot) bool { return false })
+	if err != nil && r.barredBy != "" && r.config.adapter == "sqlite" {
+		if !sameFolder(r.barredBy, r.snap.dir) {
+			return fmt.Errorf("The SQLite database at %s does not answer for its live slots (%v), and the bar in .env is that of a restore of %s cut short, which may have left it half written; run 'cyfr restore %s' again first, which puts every part of that snapshot back", r.config.dbPath, err, r.barredBy, r.barredBy)
+		}
+		// This restore cut short may have left the file it wrote in place
+		// half written, and its bar has kept every server off it since.
+		fmt.Fprintf(r.out, "The SQLite database at %s does not answer for its live slots (%v), and the bar this restore left in .env when it was cut short has kept every server off it since; it is put back whole.\n", r.config.dbPath, err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -1177,195 +1136,15 @@ func (r *restorer) putParts() error {
 	}
 	if c.storage == "local" {
 		fmt.Fprintln(r.out, "Putting the storage root back...")
-		if err := restoreStorage(c.storageMounts, r.snap.path("storage"), sqliteKeep(c.sqliteFile), r.out); err != nil {
+		if err := r.writeStorage(); err != nil {
 			return err
 		}
 	}
 	fmt.Fprintln(r.out, "Putting the database back...")
 	if c.adapter == "sqlite" {
-		return r.restoreSQLite()
+		return r.writeDatabase()
 	}
 	return r.restorePostgres()
-}
-
-// sqliteKeep are the host paths of the SQLite file at file and its WAL and
-// shared-memory index, which the storage put-back leaves to the
-// database's own (restoreSQLite); none for no file.
-func sqliteKeep(file string) map[string]bool {
-	keep := map[string]bool{}
-	if file != "" {
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			keep[filepath.Clean(file+suffix)] = true
-		}
-	}
-	return keep
-}
-
-// mountCover is what the put-back of mounts[i] leaves alone: covered, the
-// host paths under it it neither removes nor enters (keep and the places
-// a deeper mount covers), and skip, the snapshot paths under src it does
-// not copy in (the deeper mounts' own).
-func mountCover(mounts []storageMount, i int, src string, keep map[string]bool) (covered, skip map[string]bool) {
-	m := mounts[i]
-	covered, skip = maps.Clone(keep), map[string]bool{}
-	for _, deeper := range mounts[i+1:] {
-		rest, ok := deeper.rel, m.rel == ""
-		if !ok {
-			rest, ok = strings.CutPrefix(deeper.rel, m.rel+"/")
-		}
-		if ok {
-			covered[filepath.Join(m.host, filepath.FromSlash(rest))] = true
-			skip[filepath.Join(src, filepath.FromSlash(deeper.rel))] = true
-		}
-	}
-	return covered, skip
-}
-
-// restoreStorage puts the snapshot's storage/ back at the mounts making up
-// the storage root, shallower first. Each mount's own bytes are replaced:
-// what it holds is removed and the snapshot's copied in, but for the host
-// paths in keep and the places a deeper mount covers, which hold bytes cyfr
-// does not see through this mount.
-func restoreStorage(mounts []storageMount, src string, keep map[string]bool, out io.Writer) error {
-	for i, m := range mounts {
-		covered, skip := mountCover(mounts, i, src, keep)
-		from := filepath.Join(src, filepath.FromSlash(m.rel))
-		if !m.dir {
-			if err := os.MkdirAll(filepath.Dir(m.host), 0700); err != nil {
-				return err
-			}
-			if err := replaceFile(from, m.host); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(m.host, 0700); err != nil {
-			return err
-		}
-		if err := clearDir(m.host, covered); err != nil {
-			return err
-		}
-		if err := copyInto(from, m.host, skip, out); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// clearDir removes everything under dir but the paths in keep and the
-// directories leading to them.
-func clearDir(dir string, keep map[string]bool) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		p := filepath.Join(dir, entry.Name())
-		if keep[p] {
-			continue
-		}
-		holds := false
-		for kept := range keep {
-			if strings.HasPrefix(kept, p+string(filepath.Separator)) {
-				holds = true
-				break
-			}
-		}
-		if holds && entry.IsDir() {
-			if err := clearDir(p, keep); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.RemoveAll(p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// copyInto copies the snapshot directory src into the existing directory
-// dst as copyTree copied it out: directories 0700, regular files 0600, a
-// link as the link it is; the snapshot paths in skip, a deeper mount's
-// bytes, are left out.
-func copyInto(src, dst string, skip map[string]bool, out io.Writer) error {
-	return filepath.WalkDir(src, func(p string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if skip[filepath.Clean(p)] {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		switch mode := entry.Type(); {
-		case entry.IsDir():
-			return os.MkdirAll(target, 0700)
-		case mode&fs.ModeSymlink != 0:
-			link, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		case mode.IsRegular():
-			return copyFile(p, target)
-		default:
-			fmt.Fprintf(out, "Skipped %s, neither a file, a directory nor a link.\n", p)
-			return nil
-		}
-	})
-}
-
-// replaceFile writes a copy of src over dst, 0600, through a temporary file
-// beside dst renamed into place, so dst is the old file or the new one.
-func replaceFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".restore-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	_, err = io.Copy(tmp, in)
-	if err = errors.Join(err, tmp.Chmod(0600), tmp.Sync(), tmp.Close()); err != nil {
-		return err
-	}
-	return access.ReplaceFile(tmp.Name(), dst)
-}
-
-// restoreSQLite puts the SQLite file back, and its WAL as the snapshot
-// holds it. The old WAL and shared-memory index go first, so the restored
-// file is never read with another file's WAL; a WAL the snapshot holds is
-// put in place after the file it belongs to.
-func (r *restorer) restoreSQLite() error {
-	file := r.config.sqliteFile
-	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
-		return err
-	}
-	for _, suffix := range []string{"-shm", "-wal"} {
-		if err := os.Remove(file + suffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
-	if err := replaceFile(r.snap.path("database"), file); err != nil {
-		return err
-	}
-	if r.snap.parts["database-wal"] {
-		if err := replaceFile(r.snap.path("database-wal"), file+"-wal"); err != nil {
-			return err
-		}
-	}
-	access.SyncDir(filepath.Dir(file))
-	return nil
 }
 
 // restorePostgres loads the snapshot's dump into the configured database in

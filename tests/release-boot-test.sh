@@ -367,11 +367,12 @@ pass "a listener that never answers fails server_start in ${took}s, naming the c
 
 # --- a cell's deployment file, from the command line --------------------------
 
-# A checkout holding what cell_new reads of one: .env.example, a seed tree
+# A checkout holding what cell_new reads of one: .env.example, docker-compose.yml, a seed tree
 # and a wasm-tools installer that installs nothing; and the directory a
 # cell's server starts beside it.
 mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin" "$scratch/checkout/tests/registry-stand-in"
 cp "$root/.env.example" "$scratch/checkout/.env.example"
+cp "$root/docker-compose.yml" "$scratch/checkout/docker-compose.yml"
 cp "$root/tests/registry-stand-in/standin.py" "$scratch/checkout/tests/registry-stand-in/standin.py"
 printf '#!/bin/sh\nexit 0\n' >"$scratch/checkout/scripts/wasm-tools.sh"
 chmod +x "$scratch/checkout/scripts/wasm-tools.sh"
@@ -435,6 +436,11 @@ for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=s
   [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
     fail "the local cell's deployment file does not assign $pair once: $(grep "^${pair%%=*}=" "$scratch/cells/local/.env" | tr '\n' ' ')"
 done
+# The backends' URL as compose's cyfr service sets it, beside the builds
+# key init mints: a boot refuses the key without it.
+[ "$(assigned local CYFR_LOCUS_BACKENDS_URL)" = 1 ] &&
+  [ "$(value local CYFR_LOCUS_BACKENDS_URL)" = "$(sed -n 's|^ *- CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-\([^}]*\)}$|\1|p' "$root/docker-compose.yml")" ] ||
+  fail "the local cell's backends URL is '$(value local CYFR_LOCUS_BACKENDS_URL)', not compose's"
 # The cell's own directory, on loopback, a private egress target beside
 # the ones init wrote.
 [[ "$(value local CYFR_DIRECTORY_URL)" =~ ^http://127\.78\.0\.2:[0-9]+$ ]] &&

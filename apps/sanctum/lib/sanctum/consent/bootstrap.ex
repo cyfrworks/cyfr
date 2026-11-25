@@ -362,9 +362,12 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # A source with no live profile is claimed still when its person revoked
-  # its grant: the one place the walk decides that, for every path that
-  # mints.
+  # A source with no live profile is claimed still when its person ever
+  # revoked a default grant of it, whatever was granted, removed or
+  # installed since: only that person's own consent grants it again
+  # (`Arca.ConsentStorage.revoked_by_person?/2`). The one place the walk
+  # decides that, for every path that mints; what a person is told of the
+  # absence is `Sanctum.Consent.ungranted/2`'s, a question of its own.
   defp claimed(ctx, source_ref) do
     case Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), source_ref) do
       {:ok, []} -> ungranted(ctx, source_ref)
@@ -374,10 +377,11 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp ungranted(ctx, source_ref) do
-    case Sanctum.Consent.ungranted(ctx, source_ref) do
-      {:ok, :no_grant} -> :unclaimed
-      {:ok, :revoked} -> :revoked
-      {:error, reason} -> {:error, reason}
+    case Arca.ConsentStorage.revoked_by_person?(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, false} -> :unclaimed
+      {:ok, true} -> :revoked
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 

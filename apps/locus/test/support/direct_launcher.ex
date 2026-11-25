@@ -80,6 +80,10 @@ defmodule Locus.DirectLauncher do
   `resize/3` sets the size of that terminal (`stty -F`), which signals its
   foreground processes as the keeper's does.
 
+  It holds pack generations with no file (`packs_hold/4`, `packs_put/7`):
+  a generation is held once a put's last part has arrived, and a spawn
+  naming one runs as any other, since it makes no space to bind it in.
+
   A spec with `control: true` is a runner's: its standard input and
   output are its control channel (`RUNTIME_CONTROL_FD=0`), since a port
   hands a child no other descriptor, and its relay (`Prima.RunnerRelay`)
@@ -111,7 +115,47 @@ defmodule Locus.DirectLauncher do
   def drop(place), do: drop([], place)
 
   @impl Locus.Executor
-  def run(%{argv: argv, env: env, stdin: stdin}, opts) do
+  def fence(tag), do: fence([], tag)
+
+  # A run for an heir claims its tag first, as a long-lived process does,
+  # and its heir is told once nothing of it is left: at its end, or by its
+  # janitor once its caller died.
+  @impl Locus.Executor
+  def run(command, opts) do
+    heir = Keyword.get(opts, :heir)
+
+    case claim_run(heir) do
+      :ok ->
+        try do
+          run_command(command, opts, heir)
+        after
+          tell_run_heir(heir, self())
+        end
+
+      :fenced ->
+        {:error, {:spawn_failed, :fenced}}
+    end
+  end
+
+  defp claim_run(nil), do: :ok
+
+  defp claim_run({pid, tag}),
+    do: if(:ets.insert_new(heirs(), {tag, self(), pid}), do: :ok, else: :fenced)
+
+  defp tell_run_heir(nil, _caller), do: :ok
+
+  defp tell_run_heir({_pid, tag}, caller) do
+    case :ets.lookup(heirs(), tag) do
+      [{^tag, ^caller, heir}] ->
+        :ets.delete(heirs(), tag)
+        Kernel.send(heir, {__MODULE__, {:heir, tag}, :released})
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp run_command(%{argv: argv, env: env, stdin: stdin}, opts, heir) do
     root = Path.join(System.tmp_dir!(), "locus_build_#{Prima.Hex.short()}")
     home = Path.join(root, "home")
     input = Path.join(root, "stdin")
@@ -124,7 +168,8 @@ defmodule Locus.DirectLauncher do
         argv,
         command_env(env, home),
         %{root: root, home: home, input: input, output: output},
-        opts
+        opts,
+        heir
       )
     else
       {:error, reason} ->
@@ -137,7 +182,7 @@ defmodule Locus.DirectLauncher do
   defp command_env(env, home),
     do: Map.merge(env, Map.put(base_env(home), "COPYFILE_DISABLE", "1"))
 
-  defp launch(argv, env, paths, opts) do
+  defp launch(argv, env, paths, opts, heir) do
     on_output = Keyword.get(opts, :on_output, fn _line -> :ok end)
     deadline = Keyword.fetch!(opts, :deadline)
 
@@ -164,7 +209,7 @@ defmodule Locus.DirectLauncher do
         _ -> nil
       end
 
-    janitor = watch(self(), os_pid, paths.root)
+    janitor = watch(self(), os_pid, paths.root, heir)
 
     result =
       case collect(port, Log.new(), on_output, deadline) do
@@ -422,6 +467,37 @@ defmodule Locus.DirectLauncher do
       end
 
     {:ok, tags}
+  end
+
+  # ————— packs —————
+
+  # A generation is held once a put's last part has arrived; nothing is
+  # written, and a spawn naming one runs as any other, with no folder.
+  @impl Locus.Launcher
+  def packs_hold(opts, athanor, _lifetime, digest) do
+    with :ok <- keeps_homes(opts) do
+      if :ets.member(heirs(), {:packs, athanor, digest}),
+        do: {:ok, :held},
+        else: {:ok, :missing}
+    end
+  end
+
+  @impl Locus.Launcher
+  def packs_put(opts, athanor, _lifetime, digest, _seq, last, _data) do
+    with :ok <- keeps_homes(opts) do
+      if last do
+        :ets.insert(heirs(), {{:packs, athanor, digest}, :held, nil})
+        {:ok, :held}
+      else
+        {:ok, :taken}
+      end
+    end
+  end
+
+  defp keeps_homes(opts) do
+    if Keyword.keyword?(opts) and Keyword.get(opts, :kept_root),
+      do: :ok,
+      else: {:error, {:refused, "unavailable"}}
   end
 
   # ————— kept homes —————
@@ -684,7 +760,7 @@ defmodule Locus.DirectLauncher do
 
   # Kills the run's process group and removes its directory if the caller
   # dies before the run ends.
-  defp watch(caller, os_pid, root) do
+  defp watch(caller, os_pid, root, heir) do
     spawn(fn ->
       ref = Process.monitor(caller)
 
@@ -695,6 +771,7 @@ defmodule Locus.DirectLauncher do
         {:DOWN, ^ref, :process, _pid, _reason} ->
           kill(os_pid)
           File.rm_rf(root)
+          tell_run_heir(heir, caller)
       end
     end)
   end

@@ -1743,6 +1743,8 @@ defmodule Aqua.Loop do
       call_id: spec.call_id,
       attempt: state.turn.attempt,
       thread_id: state.turn.thread_id,
+      # A page's call is the page's, not the turn's own: the gate stamps it.
+      called_by_page: step.purpose == "page",
       charge: Binding.charge(step, state.turn),
       execution_id: step.child_execution_id,
       step_id: step.id,
@@ -1881,7 +1883,8 @@ defmodule Aqua.Loop do
 
   # The frame a model's result reads in, by what the answer is
   # (`Aqua.Loop.Policy.answer_of/1`) and who wrote it: a scroll read, as
-  # its body and its files' names, in a scroll's frame; an outside answer,
+  # its body and its files' names, in a scroll's frame; another file of
+  # its pack read by its path, and an outside answer,
   # and an outside source's own words for why it failed
   # (`Prima.Refusal.outside?/1`), in the outside frame. CYFR's own answers,
   # and every refusal, skip and unknown outcome CYFR wrote, are unframed.
@@ -1889,6 +1892,14 @@ defmodule Aqua.Loop do
 
   defp frame(%Call{} = call, outcome, result) do
     case {Policy.answer_of(call), outcome, result} do
+      # One file of a scroll's pack, read by its path: only a scroll's
+      # `SKILL.md` is instructions, so any other file is outside material.
+      {:scroll, "ok", {:ok, %{path: path}}} when is_binary(path) ->
+        {nil, %{"kind" => "outside", "name" => call.model_name}}
+
+      {:scroll, "ok", {:ok, %{"path" => path}}} when is_binary(path) ->
+        {nil, %{"kind" => "outside", "name" => call.model_name}}
+
       {:scroll, "ok", {:ok, %{} = answer}} ->
         %{name: name, body: body, files: files} = scroll_of(answer)
         {body, %{"kind" => "scroll", "name" => name, "files" => files}}
@@ -1922,14 +1933,15 @@ defmodule Aqua.Loop do
   defp proposed(%Call{kind: :catalog, tool: "aqua", action: action}, {:ok, %{} = answer}, payload)
        when action in ["skill_create", "skill_update"] do
     case answer |> Jason.encode!() |> Jason.decode!() do
-      %{"proposed" => name, "description" => d, "content" => c, "against" => against}
+      %{"proposed" => name, "description" => d, "content" => c, "against" => against} = kept
       when is_binary(name) and is_binary(d) and is_binary(c) and is_binary(against) ->
-        Map.put(payload, "proposal", %{
-          "name" => name,
-          "description" => d,
-          "content" => c,
-          "against" => against
-        })
+        proposal = %{"name" => name, "description" => d, "content" => c, "against" => against}
+
+        Map.put(
+          payload,
+          "proposal",
+          if(kept["new_pack"] == true, do: Map.put(proposal, "new_pack", true), else: proposal)
+        )
 
       _written ->
         payload
@@ -2787,8 +2799,11 @@ defmodule Aqua.Loop do
 
   # A schedule's turn whose fire another turn already took up: on another
   # server after a takeover, or by the turn that started it first.
+  # The occurrence is no longer claimed: its schedule's pause or delete
+  # ended it before the turn came to start, or another turn took it up.
   def describe(:occurrence_not_claimed),
-    do: "This scheduled run was already taken up by another turn, so this one did not start."
+    do:
+      "This scheduled run was stopped, or taken up by another turn, before it started, so this one did not run."
 
   def describe(:read_threads_unrecorded),
     do: "What the model read could not be recorded on the turn, so its answer was not used"

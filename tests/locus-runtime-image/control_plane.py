@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 """CYFR's host API as the runtime image tests script it: the host routes
-`Prima.WorkerWire` names, served on the host machine where the container
-reaches them as `host.docker.internal`, bound to that name's address alone
-(the default bridge's gateway), each request verified as CYFR
+`Prima.WorkerWire` names, served on the host machine at the default bridge's gateway alone, which
+the runtime's role process reaches by that address (it is a private one,
+and the guard lets the private role reach every private address), each
+request verified as CYFR
 verifies it (`Prima.WorkerAuth`: a runner's call under the attempt's call
 key, its sealed body opened and its answer sealed back; a worker service's
 plain report under the service's dispatch key) under the tests' own root,
@@ -217,7 +218,7 @@ class ControlPlane:
 
     @property
     def container_url(self):
-        return f"http://host.docker.internal:{self.port}"
+        return f"http://{self.host}:{self.port}"
 
     def elapsed(self):
         return time.monotonic() - self.epoch

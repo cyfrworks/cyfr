@@ -42,6 +42,9 @@ type place struct {
 	// zero readAt is no reading yet.
 	reading protocol.Reading
 	readAt  time.Time
+	// packs is the athanor whose packs its spawn binds, fixed at its claim
+	// (claimPlace): an assign naming another is refused.
+	packs string
 }
 
 // removal is what a retirement whose group could not be removed leaves to
@@ -61,61 +64,88 @@ func whoseOf(req *protocol.Request) protocol.Whose {
 
 // handlePlace holds a place of a new id, answered `placed`; one of an id the
 // keeper already holds is refused.
-func (s *server) handlePlace(req *protocol.Request) {
+func (s *server) handlePlace(c *client, req *protocol.Request) {
 	s.mu.Lock()
-	_, held := s.places[req.ID]
+	_, held := c.places[req.ID]
 	if !held {
-		s.places[req.ID] = &place{whose: whoseOf(req)}
+		c.places[req.ID] = &place{whose: whoseOf(req)}
 	}
 	s.mu.Unlock()
 	if held {
-		s.log.Warn("place %s refused: the keeper already holds it", req.ID)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		s.log.Warn("place %s refused: role %s already holds it", req.ID, c.role.spec.Name)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	s.send(protocol.NewPlaced(req.ID))
+	s.send(c, protocol.NewPlaced(req.ID))
 }
 
 // handleDrop frees a place no spawn has named; a named one is freed with its
 // spawn. It answers nothing.
-func (s *server) handleDrop(req *protocol.Request) {
+func (s *server) handleDrop(c *client, req *protocol.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p := s.places[req.Place]; p != nil && !p.named {
-		delete(s.places, req.Place)
+	if p := c.places[req.Place]; p != nil && !p.named {
+		delete(c.places, req.Place)
 	}
 }
 
 // handleAssign makes a place whose the request says, an athanor or a subject
 // it does not name cleared, answered `assigned`; an assign of a place the
-// keeper does not hold is refused.
-func (s *server) handleAssign(req *protocol.Request) {
+// keeper does not hold, or naming another athanor than the one whose packs
+// its spawn binds, is refused.
+func (s *server) handleAssign(c *client, req *protocol.Request) {
 	s.mu.Lock()
-	p := s.places[req.Place]
-	if p != nil {
+	p := c.places[req.Place]
+	bound := p != nil && p.packs != "" && p.packs != req.Athanor
+	if p != nil && !bound {
 		p.whose = whoseOf(req)
 	}
 	s.mu.Unlock()
-	if p == nil {
-		s.log.Warn("assign %s refused: the keeper holds no place %s", req.ID, req.Place)
-		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+	switch {
+	case p == nil:
+		s.log.Warn("assign %s refused: role %s holds no place %s", req.ID, c.role.spec.Name, req.Place)
+	case bound:
+		s.log.Warn("assign %s refused: the spawn of place %s binds its athanor's packs", req.ID, req.Place)
+	default:
+		s.send(c, protocol.NewAssigned(req.ID))
 		return
 	}
-	s.send(protocol.NewAssigned(req.ID))
+	s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 }
 
-// claimPlace has a starting spawn name its place, and answers the place: a
-// place the keeper does not hold, or one another spawn named, cannot be,
-// and answers nil.
-func (s *server) claimPlace(id string) *place {
+// What a spawn's claim of its place came to.
+type claim int
+
+const (
+	claimed claim = iota
+	// claimNone: c holds no such place, or another spawn named it.
+	claimNone
+	// claimOthersPacks: the spawn names packs not its place's athanor's,
+	// or of a role that keeps none; the place is freed.
+	claimOthersPacks
+)
+
+// claimPlace has a starting spawn of c name its place. Whose packs it
+// binds is decided in the same step, under s.mu: only its place's
+// athanor's, of the kept role whose keeper keeps them, and from here the
+// place keeps that athanor (handleAssign), so the athanor checked is the
+// athanor bound.
+func (s *server) claimPlace(c *client, req *protocol.Request) claim {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := s.places[id]
+	p := c.places[req.Place]
 	if p == nil || p.named {
-		return nil
+		return claimNone
+	}
+	if req.Packs != nil {
+		if req.Packs.Athanor != p.whose.Athanor || s.packs == nil || !c.role.spec.Kept {
+			delete(c.places, req.Place)
+			return claimOthersPacks
+		}
+		p.packs = req.Packs.Athanor
 	}
 	p.named = true
-	return p
+	return claimed
 }
 
 // madeIn makes sp the spawn made in the place id it claimed: from here its
@@ -124,19 +154,19 @@ func (s *server) madeIn(id string, sp *spawn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sp.place = id
-	s.places[id].spawn = sp
+	sp.client.places[id].spawn = sp
 }
 
 // handleMeasure answers whose a place is, its last reading and that
 // reading's age, from what the reader stored: it never reads a group itself.
-func (s *server) handleMeasure(req *protocol.Request) {
+func (s *server) handleMeasure(c *client, req *protocol.Request) {
 	var reply any = protocol.NewError(req.ID, "", protocol.CodeUnmeasured)
 	s.mu.Lock()
-	if p := s.places[req.Place]; p != nil && !p.readAt.IsZero() {
+	if p := c.places[req.Place]; p != nil && !p.readAt.IsZero() {
 		reply = protocol.NewMeasured(req.ID, p.whose, p.reading, uint64(now().Sub(p.readAt).Milliseconds()))
 	}
 	s.mu.Unlock()
-	s.send(reply)
+	s.send(c, reply)
 }
 
 // reader reads every live spawn's group, and retries the removal of every
@@ -199,7 +229,7 @@ func (s *server) read() (wait func()) {
 			at := clock()
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			if p := s.places[sp.place]; p != nil && p.spawn == sp {
+			if p := sp.client.places[sp.place]; p != nil && p.spawn == sp {
 				p.reading, p.readAt = protocol.Reading{Bytes: got.Bytes, Lesser: got.Lesser}, at
 			}
 		}()
@@ -252,13 +282,11 @@ func (s *server) retryRemoval(sp *spawn, remove func(*cgroup.Group) error) {
 	if r.clean {
 		_ = sp.pool.Release(sp.account.UID)
 	}
-	delete(s.spawns, sp.id)
-	delete(s.places, sp.place)
-	delete(s.routing, sp.id)
+	s.forget(sp)
 	delete(s.unremoved, sp)
 	s.mu.Unlock()
 	s.log.Info("spawn %s: its memory group of uid %d removed on a retry; retired", sp.id, sp.account.UID)
 	if r.notify {
-		s.send(protocol.NewReleased(sp.id))
+		s.send(sp.client, protocol.NewReleased(sp.id))
 	}
 }

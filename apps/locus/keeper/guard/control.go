@@ -3,11 +3,12 @@
 
 // Package guard is the control between an island's keeper and its egress
 // guard (cyfr-guard.sh beside this file, whose header is the rule list).
-// Every build and every program's session runs in a space of its own (a
-// user, network and IPC namespace the keeper made for it), and the guard
-// gives each such routed space its one route out: a veth pair whose inner
-// end it places in the space's network namespace, the rules that hold what
-// passes through it, and the answers to the space's names.
+// Every build, every program's session and every role's service process
+// runs in a space of its own (a user, network and IPC namespace the keeper
+// made for it), and the guard gives each such routed space its one route:
+// a veth pair whose inner end it places in the space's network namespace,
+// the rules that hold what passes through it, and the answers to the
+// space's names.
 //
 // The guard serves it as `cyfr-locus guard-control <socket> <range>` once
 // its rules are in, on a Unix socket of the seqpacket kind in a directory
@@ -15,15 +16,16 @@
 // read-only: only root reaches it, and in the service that is the keeper
 // alone. <range> is the IPv4 /16 the guard's static rules chose for routes
 // (cyfr-guard.sh). Each message is one packet holding one JSON object,
-// carrying `"v": 2` and a `type`:
+// carrying `"v": 3` and a `type`:
 //
-//	{"v":2,"type":"hello","netns":"net:[…]"}                             guard, on connect
-//	{"v":2,"type":"admit","spawn_id":…,"reach":"island"}                 keeper, with three descriptors
-//	{"v":2,"type":"admit","spawn_id":…,"reach":"hosts","addresses":[…]}  keeper, with three descriptors
-//	{"v":2,"type":"clear","spawn_id":…}                                  keeper
-//	{"v":2,"type":"admitted","spawn_id":…}                               guard
-//	{"v":2,"type":"cleared","spawn_id":…}                                guard
-//	{"v":2,"type":"refused","spawn_id":…,"reason":…}                     guard
+//	{"v":3,"type":"hello","netns":"net:[…]"}                                    guard, on connect
+//	{"v":3,"type":"admit","spawn_id":…,"reach":"island"}                        keeper, with three descriptors
+//	{"v":3,"type":"admit","spawn_id":…,"reach":"hosts","addresses":[…]}         keeper, with three descriptors
+//	{"v":3,"type":"admit","spawn_id":…,"reach":"role","port":…,"private":…}     keeper, with three descriptors
+//	{"v":3,"type":"clear","spawn_id":…}                                         keeper
+//	{"v":3,"type":"admitted","spawn_id":…}                                      guard
+//	{"v":3,"type":"cleared","spawn_id":…}                                       guard
+//	{"v":3,"type":"refused","spawn_id":…,"reason":…}                            guard
 //
 // The hello names the network namespace the guard's rules judge, as
 // /proc/self/ns/net links to it; a keeper whose own differs is not behind
@@ -33,22 +35,37 @@
 // An `admit` names the spawn by the keeper's `spawn_id` and carries, as
 // SCM_RIGHTS in this order, the space's network namespace and its two name
 // sockets: a UDP socket and a listening TCP socket, both of that
-// namespace and bound to 127.0.0.11:53. Its `reach` is `island`, the
-// island's rule (every public address), or `hosts`, exactly the 1..
-// MaxAddresses canonical addresses `addresses` names and no other public
-// one. Under either, what the island refuses every space stays refused:
-// the metadata addresses, the control plane, the island's own subnets,
-// every other space and every private address the deployment does not
-// name. The guard makes the pair, sets both ends' addresses, the space's
-// default route and the route's rules, and serves the space's names on
-// its sockets by asking the island's resolver; it answers `admitted` only
-// once all of that is in, and `refused` with a reason, having made
-// nothing that stays, otherwise. A `clear` withdraws the route the
-// connection made for that spawn: the pair first, which ends every
-// connection through it, then its sockets and rules, and answers
-// `cleared` once all of it is gone, or `refused` where this connection
-// made no route for the spawn or a part of it could not be removed.
-// Requests are answered one at a time, in the order they arrive.
+// namespace and bound to 127.0.0.11:53. Its `reach` is one of:
+//
+//   - `island`, the island's rule: every public address;
+//   - `hosts`, exactly the 1..MaxAddresses canonical addresses `addresses`
+//     names and no other public one;
+//   - `role`, a role's service process listening on `port` (1..65535): the
+//     island's rule out, and in, each new TCP connection to the guard's
+//     own island addresses at that port, from the island's network or from
+//     the guard's namespace itself, forwarded to the space at the same
+//     port. One route holds a port at a time: a role admit naming a port
+//     a route still holds is refused. A role whose `private` is true
+//     reaches every private address as well, and core's host API, the one
+//     address and port on the island's subnets the guard was started with
+//     (CYFR_GUARD_HOST_API); a role whose `private` is false reaches
+//     neither.
+//
+// Under every reach, what the island refuses every space stays refused:
+// the metadata addresses, the control plane, the island's own subnets
+// (the host API apart, for a private role), every other space, and every
+// private address the deployment does not name (for a role that is not
+// private). The guard makes the pair, sets both ends' addresses, the
+// space's default route and the route's rules, and serves the space's
+// names on its sockets by asking the island's resolver; it answers
+// `admitted` only once all of that is in, and `refused` with a reason,
+// having made nothing that stays, otherwise. A `clear` withdraws the route
+// the connection made for that spawn: the pair first, which ends every
+// connection through it, then its sockets and rules, a role's forwarding
+// with them, and answers `cleared` once all of it is gone, or `refused`
+// where this connection made no route for the spawn or a part of it could
+// not be removed. Requests are answered one at a time, in the order they
+// arrive.
 //
 // A connection that ends withdraws every route made over it and not
 // cleared since, established connections with them: the keeper that spoke
@@ -66,7 +83,7 @@ import (
 )
 
 // Version is the version every message carries as `v`.
-const Version = 2
+const Version = 3
 
 // Message types.
 const (
@@ -84,6 +101,10 @@ const (
 	ReachIsland = "island"
 	// ReachHosts is exactly the addresses the admit names.
 	ReachHosts = "hosts"
+	// ReachRole is a role's service process: the island's rule, or with
+	// private every private address and the host API as well, and its
+	// port forwarded in from the island.
+	ReachRole = "role"
 )
 
 const (
@@ -108,7 +129,10 @@ type Message struct {
 	SpawnID   string   `json:"spawn_id,omitempty"`
 	Reach     string   `json:"reach,omitempty"`
 	Addresses []string `json:"addresses,omitempty"`
-	Reason    string   `json:"reason,omitempty"`
+	// Port and Private are a role admit's, present exactly there.
+	Port    *int   `json:"port,omitempty"`
+	Private *bool  `json:"private,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // Encode renders a message as one packet.
@@ -137,8 +161,9 @@ func Decode(packet []byte) (Message, error) {
 
 // ParseRequest reads a keeper's request and the number of descriptors it
 // came with: an admit with a spawn id, its reach, the addresses exactly
-// when the reach is hosts, and AdmitDescriptors descriptors, or a clear
-// with a spawn id alone and none.
+// when the reach is hosts, the port and private exactly when it is role,
+// and AdmitDescriptors descriptors, or a clear with a spawn id alone and
+// none.
 func ParseRequest(packet []byte, descriptors int) (Message, error) {
 	m, err := Decode(packet)
 	if err != nil {
@@ -148,17 +173,30 @@ func ParseRequest(packet []byte, descriptors int) (Message, error) {
 		return Message{}, errors.New("spawn_id must be 32 lowercase hexadecimal digits")
 	}
 	if m.Netns != "" || m.Reason != "" {
-		return Message{}, errors.New("a request carries only spawn_id and, for an admit, reach and addresses")
+		return Message{}, errors.New("a request carries only spawn_id and, for an admit, its reach and what the reach names")
 	}
 	switch m.Type {
 	case TypeAdmit:
 		if descriptors != AdmitDescriptors {
 			return Message{}, fmt.Errorf("an admit carries %d descriptors, not %d", AdmitDescriptors, descriptors)
 		}
+		if m.Reach != ReachRole && (m.Port != nil || m.Private != nil) {
+			return Message{}, errors.New("only a role admit names a port and private")
+		}
 		switch m.Reach {
 		case ReachIsland:
 			if m.Addresses != nil {
 				return Message{}, errors.New("an admit of the island's reach names no addresses")
+			}
+		case ReachRole:
+			if m.Addresses != nil {
+				return Message{}, errors.New("a role admit names no addresses")
+			}
+			if m.Port == nil || *m.Port < 1 || *m.Port > 65535 {
+				return Message{}, errors.New("a role admit's port must be 1..65535")
+			}
+			if m.Private == nil {
+				return Message{}, errors.New("a role admit says whether it is private")
 			}
 		case ReachHosts:
 			if len(m.Addresses) == 0 || len(m.Addresses) > MaxAddresses {
@@ -175,13 +213,13 @@ func ParseRequest(packet []byte, descriptors int) (Message, error) {
 				seen[a] = true
 			}
 		default:
-			return Message{}, errors.New("reach must be island or hosts")
+			return Message{}, errors.New("reach must be island, hosts or role")
 		}
 	case TypeClear:
 		if descriptors != 0 {
 			return Message{}, errors.New("a clear carries no descriptors")
 		}
-		if m.Reach != "" || m.Addresses != nil {
+		if m.Reach != "" || m.Addresses != nil || m.Port != nil || m.Private != nil {
 			return Message{}, errors.New("a clear names a spawn_id alone")
 		}
 	default:
@@ -198,7 +236,7 @@ func ParseAnswer(packet []byte, asked, spawnID string) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	if m.SpawnID != spawnID || m.Netns != "" || m.Reach != "" || m.Addresses != nil {
+	if m.SpawnID != spawnID || m.Netns != "" || m.Reach != "" || m.Addresses != nil || m.Port != nil || m.Private != nil {
 		return Message{}, fmt.Errorf("an answer naming spawn %q, not %q, or carrying more than it may", m.SpawnID, spawnID)
 	}
 	switch {
