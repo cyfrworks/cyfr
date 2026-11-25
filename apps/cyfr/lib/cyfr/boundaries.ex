@@ -1902,7 +1902,9 @@ defmodule Cyfr.Boundaries do
     # person is asked, so an approval never meets a refusal the request
     # could have had. `follows_setting?/2`: the actions that follow the
     # person's browser setting are offered as it says (`Aqua.Offered`), and
-    # the Aqua page leaves them out of the capability list.
+    # the Aqua page leaves them out of the capability list. `waits?/2`: a
+    # turn's loop answers a running call that waits early when a post
+    # arrives (`Aqua.Loop`), read from the operation's one definition.
     "Sanctum.Catalog" => [
       action_declaration: 1,
       authorize_stream: 2,
@@ -1920,7 +1922,8 @@ defmodule Cyfr.Boundaries do
       streams: 0,
       tool_actions: 1,
       tool_kind: 2,
-      validate_arguments: 2
+      validate_arguments: 2,
+      waits?: 2
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],

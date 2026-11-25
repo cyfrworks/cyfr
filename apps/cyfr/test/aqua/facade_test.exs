@@ -112,7 +112,8 @@ defmodule Aqua.FacadeTest do
              "skill_get" => "Read a scroll",
              "skill_create" => "Write a new scroll",
              "skill_update" => "Change a scroll",
-             "skill_delete" => "Remove a scroll"
+             "skill_delete" => "Remove a scroll",
+             "wait" => "Wait until a time"
            }
   end
 
