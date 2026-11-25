@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cyfr/codex/internal/access"
 )
 
 // A snapshot reads CYFR's storage (the SQLite database with its
@@ -64,29 +66,47 @@ type stackEntry struct {
 	id   string
 }
 
-// stackRunArgs are the docker arguments of a read through the stack named
-// name that runs program with args, the service's mounts all read only,
-// stdin open when the program reads its standard input.
-func stackRunArgs(name string, c *stackConfig, stdin bool, program string, args ...string) []string {
-	run := []string{"run", "--rm", "--name", name, "--pull", "never", "--network", "none", "--log-driver", "none",
-		"--user", "0:0", "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges", "--read-only"}
+// stackRunArgs are the docker arguments of a run through the stack named
+// name that runs program with args, stdin open when the program reads its
+// standard input. A read (writable nil) mounts every mount of the service
+// read only and holds no capability but reading past permissions; a
+// write mounts the mounts at the container paths writable writable, every
+// other read only, and holds no capability but writing past permissions,
+// and is labelled the project's (restoreWriteLabel), so a later restore of
+// the project removes one an earlier one left (removeLeftWrites).
+func stackRunArgs(name string, c *stackConfig, stdin bool, writable []string, program string, args ...string) []string {
+	capability := "DAC_READ_SEARCH"
+	if writable != nil {
+		capability = "DAC_OVERRIDE"
+	}
+	run := []string{"run", "--rm", "--name", name}
+	if writable != nil {
+		run = append(run, "--label", restoreWriteLabel+"="+access.ProjectName("."))
+	}
+	run = append(run, "--pull", "never", "--network", "none", "--log-driver", "none",
+		"--user", "0:0", "--cap-drop", "ALL", "--cap-add", capability, "--security-opt", "no-new-privileges", "--read-only")
 	if stdin {
 		run = append(run, "-i")
 	}
 	run = append(run, "--entrypoint", program)
 	for _, m := range c.mounts {
-		run = append(run, "--mount", mountSpec(m))
+		run = append(run, "--mount", mountSpec(m, !slices.Contains(writable, path.Clean(m.Target))))
 	}
 	return append(append(run, c.image), args...)
 }
 
-// mountSpec is the service's mount m as docker's --mount, read only.
-func mountSpec(m composeMount) string {
+// mountSpec is the service's mount m as docker's --mount, read only when
+// readonly.
+func mountSpec(m composeMount, readonly bool) string {
 	fields := []string{"type=" + m.Type}
 	if m.Source != "" {
 		fields = append(fields, mountField("source", m.Source))
 	}
-	return strings.Join(append(fields, mountField("target", m.Target), "readonly"), ",")
+	fields = append(fields, mountField("target", m.Target))
+	if readonly {
+		fields = append(fields, "readonly")
+	}
+	return strings.Join(fields, ",")
 }
 
 // mountField is key=value as one field of docker's --mount, which reads
@@ -100,34 +120,80 @@ func mountField(key, value string) string {
 	return field
 }
 
-// stackRunName names one read through the stack, so its container can be
-// ended and removed whatever ends the read early.
-func stackRunName() string {
+// restoreWriteLabel labels a write through the stack with its project.
+const restoreWriteLabel = "cyfr.restore-write"
+
+// stackRunName names one run through the stack, a read or a write, so its
+// container can be ended and removed whatever ends the run early.
+func stackRunName(write bool) string {
 	var b [6]byte
 	rand.Read(b[:])
+	if write {
+		return "cyfr-restore-write-" + hex.EncodeToString(b[:])
+	}
 	return "cyfr-snapshot-read-" + hex.EncodeToString(b[:])
 }
 
-// runThroughStack runs program through the stack, stdin its standard
-// input, streaming its standard output into consume as it arrives. The run
-// ends when consume is done, when the stream makes no progress for
-// stackReadStall, or at stackReadBackstop; whatever ends it early, its
-// container is ended and removed (access.Call.RemoveOnEnd), by the
-// engine's watchdog also when cyfr itself is gone. base is the
-// command's context before the stop, which an interrupt ends, and one
-// free of the interrupt from the stop on, as every step's there is.
+// stackCall is one run through the stack: its standard input (nil for
+// none), the container paths of the mounts it writes (nil for a read,
+// which writes none), and what consumes its standard output as it
+// arrives (nil discards it).
+type stackCall struct {
+	stdin    io.Reader
+	writable []string
+	consume  func(io.Reader) error
+}
+
+// runThroughStack is a read through the stack (runStack) whose standard
+// input, when not nil, is stdin.
 func (u *updater) runThroughStack(base context.Context, stdin []byte, consume func(io.Reader) error, program string, args ...string) error {
-	ctx, cancel := context.WithTimeout(base, stackReadBackstop)
-	defer cancel()
-	name := stackRunName()
 	var in io.Reader
 	if stdin != nil {
 		in = bytes.NewReader(stdin)
 	}
+	return u.runStack(base, stackCall{stdin: in, consume: consume}, program, args...)
+}
+
+// runStack runs program through the stack as call says, streaming its
+// standard input to it and its standard output into call.consume as each
+// arrives. The run ends when it has taken and given nothing for
+// stackReadStall, or at stackReadBackstop; when consume fails; and when
+// its standard input fails, which then is what it answers, so a write is
+// never taken for whole from a stream cut short; a standard input that is
+// an io.Closer is closed as the run ends. Whatever ends it early,
+// its container is ended and removed (access.Call.RemoveOnEnd), by the
+// engine's watchdog also when cyfr itself is gone. base is the command's
+// context before the stop, which an interrupt ends, and one free of the
+// interrupt from the stop on, as every step's there is.
+func (u *updater) runStack(base context.Context, call stackCall, program string, args ...string) error {
+	// The bounds are read once, here: the watcher below outlives the run
+	// by up to a tick.
+	stall := stackReadStall
+	ctx, cancel := context.WithTimeout(base, stackReadBackstop)
+	defer cancel()
+	write := call.writable != nil
+	what := "read of its storage"
+	if write {
+		what = "write of its storage"
+	}
+	name := stackRunName(write)
+	clock := &progress{at: time.Now()}
+	var in *stdinReader
+	var stdin io.Reader
+	if call.stdin != nil {
+		in = &stdinReader{progressReader: progressReader{r: call.stdin, p: clock}, cancel: cancel}
+		stdin = in
+		if closer, ok := call.stdin.(io.Closer); ok {
+			// A producer that stalls leaves docker's copy of the standard
+			// input blocked in a read no ending of the process releases
+			// (exec's WaitDelay included): ending the run closes it.
+			defer context.AfterFunc(ctx, func() { closer.Close() })()
+		}
+	}
 	pr, pw := io.Pipe()
 	ran := make(chan error, 1)
 	go func() {
-		err := u.dockerRemoving(ctx, name, in, pw, stackRunArgs(name, u.config, stdin != nil, program, args...)...)
+		err := u.dockerRemoving(ctx, name, stdin, pw, stackRunArgs(name, u.config, call.stdin != nil, call.writable, program, args...)...)
 		if err != nil {
 			pw.CloseWithError(runFailed{err})
 		} else {
@@ -135,17 +201,17 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 		}
 		ran <- err
 	}()
-	watched := &progressReader{r: pr, at: time.Now()}
+	watched := &progressReader{r: pr, p: clock}
 	stalled := make(chan struct{})
 	go func() {
-		tick := time.NewTicker(stackReadStall / 10)
+		tick := time.NewTicker(stall / 10)
 		defer tick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				if watched.idle() >= stackReadStall {
+				if clock.idle() >= stall {
 					close(stalled)
 					cancel()
 					return
@@ -153,6 +219,10 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 			}
 		}
 	}()
+	consume := call.consume
+	if consume == nil {
+		consume = func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err }
+	}
 	err := consume(watched)
 	if err != nil {
 		cancel()
@@ -164,39 +234,83 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 	cancel()
 	select {
 	case <-stalled:
-		return fmt.Errorf("the stack's read of its storage made no progress for %s, so it was ended", stackReadStall)
+		return fmt.Errorf("the stack's %s made no progress for %s, so it was ended", what, stall)
 	default:
+	}
+	if in != nil && in.failed() != nil {
+		return in.failed()
 	}
 	switch {
 	case err != nil && !errors.As(err, new(runFailed)):
 		return err
+	case runErr != nil && write:
+		return fmt.Errorf("the stack's %s through its image %s failed (%v)", what, u.config.image, runErr)
 	case runErr != nil:
-		return fmt.Errorf("the stack's read of its storage through its image %s failed (%v); a stack that never ran may lack the image: run 'cyfr up' or 'docker compose pull cyfr' first", u.config.image, runErr)
+		return fmt.Errorf("the stack's %s through its image %s failed (%v); a stack that never ran may lack the image: run 'cyfr up' or 'docker compose pull cyfr' first", what, u.config.image, runErr)
 	}
 	return nil
 }
 
-// progressReader is r, noting when it last gave bytes.
-type progressReader struct {
-	r  io.Reader
+// progress is when a run through the stack last took or gave bytes.
+type progress struct {
 	mu sync.Mutex
 	at time.Time
+}
+
+func (p *progress) note() {
+	p.mu.Lock()
+	p.at = time.Now()
+	p.mu.Unlock()
+}
+
+func (p *progress) idle() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return time.Since(p.at)
+}
+
+// stdinReader is a run's standard input: a failure to read it, a stream
+// cut short, ends the run at once and is kept, so the run answers it.
+type stdinReader struct {
+	progressReader
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	err    error
+}
+
+func (s *stdinReader) Read(b []byte) (int, error) {
+	n, err := s.progressReader.Read(b)
+	// A pipe closed on this side is the run's own end (runStack), no
+	// failure of what feeds it.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+		s.mu.Lock()
+		if s.err == nil {
+			s.err = err
+		}
+		s.mu.Unlock()
+		s.cancel()
+	}
+	return n, err
+}
+
+func (s *stdinReader) failed() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// progressReader is r, noting on p when it gives bytes.
+type progressReader struct {
+	r io.Reader
+	p *progress
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)
 	if n > 0 {
-		p.mu.Lock()
-		p.at = time.Now()
-		p.mu.Unlock()
+		p.p.note()
 	}
 	return n, err
-}
-
-func (p *progressReader) idle() time.Duration {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return time.Since(p.at)
 }
 
 // runFailed ends a stream when its run failed, so the reader stops at the
@@ -250,30 +364,101 @@ func parseStackEntry(record string) (stackEntry, bool) {
 
 // placeDatabase reads, before anything stops, where the SQLite database
 // the service opens is, its links resolved as the server resolves them
-// (realpath), and refuses one that is not there or not a regular file.
+// (placeThroughStack), and refuses one that is not there or not a regular
+// file.
 func (u *updater) placeDatabase() error {
 	c := u.config
 	if c.adapter != "sqlite" {
 		return nil
 	}
-	var out strings.Builder
-	err := u.runThroughStack(u.ctx, nil, func(r io.Reader) error {
-		_, err := io.Copy(&out, io.LimitReader(r, 64<<10))
-		return err
-	}, "realpath", "-e", "--", c.dbPath)
-	real := strings.TrimSuffix(out.String(), "\n")
-	if err != nil || !path.IsAbs(real) || strings.Contains(real, "\n") {
+	real, there, entry, err := u.placeThroughStack(u.ctx, c.dbPath)
+	switch {
+	case err != nil || !there:
 		return fmt.Errorf("The SQLite database %s is not there as the cyfr service sees it, so cyfr %s cannot snapshot it; nothing was changed", c.dbPath, u.command)
-	}
-	entries, err := u.listThroughStack(u.ctx, path.Dir(real), true)
-	if err != nil {
-		return fmt.Errorf("cyfr %s could not read the SQLite database %s through the stack (%v); nothing was changed", u.command, c.dbPath, err)
-	}
-	if i := slices.IndexFunc(entries, func(e stackEntry) bool { return e.path == real }); i < 0 || entries[i].kind != 'f' {
+	case entry == nil || entry.kind != 'f':
 		return fmt.Errorf("The SQLite database %s (%s as the cyfr service sees it) is not a regular file, so cyfr %s cannot snapshot it; nothing was changed", c.dbPath, real, u.command)
 	}
 	c.dbReal = real
 	return nil
+}
+
+// placeThroughStack reads where the container path p is as the cyfr
+// service sees it: real, its links resolved as the server resolves them
+// (realpath -e), and there, whether it resolves; where it does not,
+// real is its directory resolved with p's name in it. entry is what the
+// stack lists at real (nil for nothing): the file, or the link to nothing
+// that did not resolve.
+func (u *updater) placeThroughStack(base context.Context, p string) (real string, there bool, entry *stackEntry, err error) {
+	resolve := func(p string) (string, error) {
+		var out strings.Builder
+		err := u.runThroughStack(base, nil, func(r io.Reader) error {
+			_, err := io.Copy(&out, io.LimitReader(r, 64<<10))
+			return err
+		}, "realpath", "-e", "--", p)
+		real := strings.TrimSuffix(out.String(), "\n")
+		if err == nil && (!path.IsAbs(real) || strings.Contains(real, "\n")) {
+			err = fmt.Errorf("realpath answered %q", real)
+		}
+		return real, err
+	}
+	real, err = resolve(p)
+	there = err == nil
+	if !there {
+		dir, err := resolve(path.Dir(p))
+		if err != nil {
+			return "", false, nil, fmt.Errorf("its directory %s is not there as the cyfr service sees it (%v)", path.Dir(p), err)
+		}
+		real = path.Join(dir, path.Base(p))
+	}
+	entries, err := u.listThroughStack(base, path.Dir(real), true)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if i := slices.IndexFunc(entries, func(e stackEntry) bool { return e.path == real }); i >= 0 {
+		entry = &entries[i]
+	}
+	return real, there, entry, nil
+}
+
+// storageEntries lists, with the stack stopped, what a snapshot reads
+// and a restore replaces: the storage root, every entry under it, for
+// local storage (listing); the SQLite database's own files that are there,
+// by their path (trio: the database, its -wal and its -shm, and the names a
+// restore stages the database and its log at, stagedNames); and left, the
+// identities of the database's files and of the access engine's state,
+// which no snapshot's storage holds and no restore's clear removes, by
+// which file they are (device and inode), however a mount spells their
+// paths.
+func (u *updater) storageEntries(base context.Context) (listing []stackEntry, trio map[string]stackEntry, left map[string]bool, err error) {
+	c := u.config
+	if c.storage == "local" {
+		if listing, err = u.listThroughStack(base, c.dataPath, false); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	left, trio = map[string]bool{}, map[string]stackEntry{}
+	if c.adapter == "sqlite" {
+		near := listing
+		if c.storage != "local" || !underPath(c.dbReal, c.dataPath) {
+			if near, err = u.listThroughStack(base, path.Dir(c.dbReal), true); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		for _, e := range near {
+			if e.path == c.dbReal || e.path == c.dbReal+"-wal" || e.path == c.dbReal+"-shm" || slices.Contains(stagedNames(c.dbReal), e.path) {
+				trio[e.path] = e
+				left[e.id] = true
+			}
+		}
+	}
+	for _, e := range listing {
+		if slices.Contains(c.state, e.path) {
+			// The access engine's state is no part of any snapshot,
+			// whatever mount reaches it.
+			left[e.id] = true
+		}
+	}
+	return listing, trio, left, nil
 }
 
 // readThroughStack writes what the snapshot holds of CYFR's storage into
@@ -283,46 +468,20 @@ func (u *updater) placeDatabase() error {
 func (u *updater) readThroughStack(dir string) ([]string, error) {
 	c := u.config
 	free := context.WithoutCancel(u.ctx)
-	// Listed with the stack stopped: the database's files, by which file
-	// they are, and the storage root.
-	var listing []stackEntry
-	if c.storage == "local" {
-		entries, err := u.listThroughStack(free, c.dataPath, false)
-		if err != nil {
-			return nil, err
-		}
-		listing = entries
+	listing, trio, left, err := u.storageEntries(free)
+	if err != nil {
+		return nil, err
 	}
-	left := map[string]bool{}
 	var parts []string
 	if c.adapter == "sqlite" {
-		trio := listing
-		if c.storage != "local" || !underPath(c.dbReal, c.dataPath) {
-			entries, err := u.listThroughStack(free, path.Dir(c.dbReal), true)
-			if err != nil {
-				return nil, err
-			}
-			trio = entries
-		}
-		var db, wal *stackEntry
-		for i, e := range trio {
-			switch e.path {
-			case c.dbReal:
-				db = &trio[i]
-			case c.dbReal + "-wal":
-				wal = &trio[i]
-			case c.dbReal + "-shm":
-			default:
-				continue
-			}
-			left[e.id] = true
-		}
-		if db == nil || db.kind != 'f' {
+		db, haveDB := trio[c.dbReal]
+		wal, haveWAL := trio[c.dbReal+"-wal"]
+		if !haveDB || db.kind != 'f' {
 			return nil, fmt.Errorf("the SQLite database %s is no longer a regular file", c.dbReal)
 		}
 		members := []string{rootRel(c.dbReal)}
 		switch {
-		case wal == nil:
+		case !haveWAL:
 			// No write-ahead log is there: none is the database's.
 		case wal.kind == 'f' && wal.size == 0:
 		case wal.kind == 'f' || wal.kind == 'l':
@@ -348,13 +507,6 @@ func (u *updater) readThroughStack(dir string) ([]string, error) {
 		}
 	}
 	if c.storage == "local" {
-		for _, e := range listing {
-			if slices.Contains(c.state, e.path) {
-				// The access engine's state is no part of any snapshot,
-				// whatever mount reaches it.
-				left[e.id] = true
-			}
-		}
 		var list bytes.Buffer
 		var skipped []string
 		for _, e := range listing {
@@ -528,19 +680,26 @@ func cmpString(s, fallback string) string {
 
 // stateIn answers the container paths at which the service's binds show
 // the project's access state, .cyfr/ (state, a host path with its links
-// resolved), each bind's source taken as written and resolved.
+// resolved): where a bind holds it, its place under the bind's target,
+// and where a bind is part of it (a folder or a file of .cyfr/ bound on
+// its own), the bind's target whole; each bind's source taken as written
+// and resolved.
 func stateIn(mounts []composeMount, state string) []string {
 	var paths []string
+	add := func(p string) {
+		if !slices.Contains(paths, p) {
+			paths = append(paths, p)
+		}
+	}
 	for _, b := range mounts {
 		if b.Type != "bind" || b.Source == "" {
 			continue
 		}
 		for _, source := range []string{b.Source, resolvedOr(b.Source)} {
 			if rel, err := filepath.Rel(source, state); err == nil && filepath.IsLocal(rel) {
-				p := path.Join(b.Target, filepath.ToSlash(rel))
-				if !slices.Contains(paths, p) {
-					paths = append(paths, p)
-				}
+				add(path.Join(b.Target, filepath.ToSlash(rel)))
+			} else if rel, err := filepath.Rel(state, source); err == nil && filepath.IsLocal(rel) {
+				add(path.Clean(b.Target))
 			}
 		}
 	}

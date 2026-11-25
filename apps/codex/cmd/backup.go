@@ -127,11 +127,7 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	if err != nil {
 		return u.startAgain(err)
 	}
-	restore := "cyfr restore " + u.snapshot
-	if needsRoot(managed) {
-		restore = "sudo " + restore
-	}
-	fmt.Fprintf(out, "The snapshot of release %s is in %s; '%s' puts it back.\n", release, u.snapshot, restore)
+	fmt.Fprintf(out, "The snapshot of release %s is in %s; 'cyfr restore %s' puts it back.\n", release, u.snapshot, u.snapshot)
 	if len(u.running) == 0 {
 		fmt.Fprintln(out, "The stack was not running, so it stays stopped.")
 		return nil
@@ -170,19 +166,6 @@ func (u *updater) startAgain(reason error) error {
 		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it.%s", text, err, u.besideLine())
 	}
 	return fmt.Errorf("%s.\nThe stack was started again", text)
-}
-
-// needsRoot reports whether this process may not replace a file in the
-// directory of one of the managed files named, as cyfr restore must
-// (canReplaceIn): once the stack has run, the server's container owns some
-// of them, and the snapshot is put back with sudo.
-func needsRoot(managed []string) bool {
-	for _, name := range managed {
-		if canReplaceIn(filepath.Dir(name)) != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // managedPresent answers the managed scaffold files (scaffold.IsManaged)
