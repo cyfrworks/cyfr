@@ -262,7 +262,8 @@ same worktree refuses, naming the run that holds it.
     reports the night to GitHub (the nightly, below).
 
   Codex CI's `desktop-native` job builds the CYFR app's package from the
-  tree's `cyfr` on Linux, macOS and Windows, each on amd64 and arm64,
+  tree's `cyfr` on Linux and Windows, each on amd64 and arm64, and on
+  macOS on Apple silicon (arm64; CYFR builds nothing for Intel Macs),
   installs it as a person does (DEB, DMG, MSI) and runs
   `tests/desktop-proof/native/smoke.sh` against the installed app with no
   CYFR server and no signing credentials: the refused switches,
@@ -274,16 +275,16 @@ same worktree refuses, naming the run that holds it.
   the machine.
 
   That install and smoke are `tests/desktop-proof/native/linux.sh`,
-  `mac.sh` and `windows.ps1`, which Release runs too on the six
+  `mac.sh` and `windows.ps1`, which Release runs too on the five
   installers the tag publishes (`linux-package`, `mac-package` through
   `desktop-mac.yml`, which alone receives the Apple inputs, and
-  `windows-package`). The macOS legs also install, upgrade and remove the
-  Homebrew cask the release writes from the DMGs
+  `windows-package`). The macOS leg also installs, upgrades and removes
+  the Homebrew cask the release writes from the DMG
   (`tests/desktop-proof/native/brew-tap.sh`), and Codex CI's
   `release-rehearsal` runs the release's GoReleaser on stand-ins for the
-  six (`tests/ci-release-rehearsal.sh`). Release's `installers` job is
-  the one check before anything is published: it takes the six, writes
-  the cask from the DMGs, checks them together and hands that set on to
+  five (`tests/ci-release-rehearsal.sh`). Release's `installers` job is
+  the one check before anything is published: it takes the five, writes
+  the cask from the DMG, checks them together and hands that set on to
   the merge of the images and the CLI release, which both need it, and
   the job that installs each package reads its app and `cyfr` as built
   for its architecture (`tests/desktop-proof/native/installed-machine.sh`).
