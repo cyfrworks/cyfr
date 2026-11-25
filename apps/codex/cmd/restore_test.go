@@ -30,8 +30,9 @@ import (
 // the declaration answers from mark.*, the live read as fakeDocker's eval;
 // pg_restore keeps its stdin in pgrestore.stdin and answers from
 // pgrestore.*; <key>.kill kills the calling process with SIGKILL, as a
-// crash would. A call naming the staged compose file sees that file, every
-// other docker-compose.yml.
+// crash would. A network's read and removal answer as fakeDocker's do. A
+// call naming the staged compose file sees that file, every other
+// docker-compose.yml.
 const restoreFakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
 file=docker-compose.yml
@@ -98,6 +99,21 @@ if [ "$1" = compose ]; then
   esac
 fi
 case "$1" in
+  network)
+    last="${@: -1}"
+    case "$2" in
+      ls) answer "network-ls-${last##*=}" ;;
+      rm) answer "network-rm-$3" ;;
+    esac ;;
+  ps)
+    case "$*" in
+      *network=*)
+        n="$*"
+        n="${n##*network=}"
+        n="${n%% *}"
+        case "$*" in *compose.project=*) answer "network-ours-$n" ;; *) answer "network-all-$n" ;; esac ;;
+    esac ;;
+  rm) answer rm ;;
   pull) answer pull ;;
   run)
     case "$*" in
@@ -370,6 +386,63 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	// The snapshot is left as it was, for another restore.
 	if _, err := readSnapshot(r.dir); err != nil {
 		t.Errorf("the snapshot no longer reads: %v", err)
+	}
+}
+
+// An update from the three-container release that fails after its switch
+// leaves the new release's network locus holding the address range the
+// old release's locus-runtime takes; the restore of its snapshot removes
+// the project's networks the switched docker-compose.yml declares and the
+// snapshot's does not, after the stop and before anything runs under the
+// snapshot's file, and the old stack starts.
+func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.edit("data/cyfr.db", sqliteBytes)
+	s.answer("up.exit", "1")
+	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "cyfr restore "+s.snapshotDir()) {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(s.fake, "docker"), []byte(restoreFakeDocker), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"log", "state", "up.exit"} {
+		if err := os.Remove(filepath.Join(s.fake, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.answer("mark.out", "CYFR_RESTORE_ID="+testRestored+"\n")
+	s.answer("network-ls-locus.out", "net9\n")
+	s.answer("network-ours-net9.out", "ctrlocus\n")
+	s.answer("network-all-net9.out", "ctrlocus\n")
+	r := &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	project := access.ProjectName(r.project)
+	removal := []string{
+		"network ls -q --filter label=com.docker.compose.project=" + project + " --filter label=com.docker.compose.network=locus",
+		"ps -a -q --no-trunc --filter network=net9 --filter label=com.docker.compose.project=" + project,
+		"ps -a -q --no-trunc --filter network=net9",
+		"rm ctrlocus",
+		"network rm net9",
+	}
+	log := r.log()
+	first := slices.Index(log, removal[0])
+	if first < 0 || !slices.Equal(log[first:first+len(removal)], removal) {
+		t.Fatalf("the restore did not remove the network locus:\n%s", strings.Join(log, "\n"))
+	}
+	if stopped, staged := slices.Index(log, profiles+"stop"), slices.Index(log, r.stagedConfig()); first < stopped || staged < first {
+		t.Errorf("the network locus was not removed between the stop and the first read of the snapshot's file:\n%s", strings.Join(log, "\n"))
+	}
+	if !slices.Equal(log[len(log)-2:], started("restore")) {
+		t.Errorf("the old stack was not started:\n%s", strings.Join(log, "\n"))
+	}
+	if got := read(t, filepath.Join(r.project, "docker-compose.yml")); got != lastReleaseCompose(t) {
+		t.Error("docker-compose.yml is not the snapshot's")
+	}
+	if said := "Removed the networks docker-compose.yml declares and the snapshot's does not: locus.\n"; strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not say once %q:\n%s", said, out)
 	}
 }
 

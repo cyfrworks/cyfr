@@ -1321,7 +1321,20 @@ func cyfrBackendsURL(t *testing.T, composePath, envPath string) string {
 	return held["CYFR_LOCUS_BACKENDS_URL"]
 }
 
-func TestUpdateFromThreeContainers(t *testing.T) {
+// threeContainerBuildsKey is the builds key the three-container scenario's
+// .env holds.
+const threeContainerBuildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+
+// retiredNetworks are the networks the three-container release declares
+// and this one does not, in order; the scenario's network i is net<i>,
+// its one container of the project ctrnet<i>.
+var retiredNetworks = []string{"locus-backends", "locus-builds", "locus-runtime"}
+
+// newThreeContainerScenario is an update from the three-container release
+// with builds on: every service of its stack running, the builder and its
+// guard among them, each retired network holding one container of the
+// project, and .env as that release left it.
+func newThreeContainerScenario(t *testing.T) *updateScenario {
 	old := lastReleaseCompose(t)
 	s := newUpdateScenario(t, []byte(old), nil)
 	s.composes = map[string]string{"0.8.0": old}
@@ -1330,19 +1343,93 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		testVersion: readShippedTemplate(t),
 	}
 	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-builds-guard\nlocus-backends\n")
-	retiredNetworks := []string{"locus-backends", "locus-builds", "locus-runtime"}
 	for i, name := range retiredNetworks {
 		id := fmt.Sprintf("net%d", i)
 		s.answer("network-ls-"+name+".out", id+"\n")
 		s.answer("network-ours-"+id+".out", "ctr"+id+"\n")
 		s.answer("network-all-"+id+".out", "ctr"+id+"\n")
 	}
-	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
 	s.edit(".env", scenarioEnv+
 		"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"+
-		"CYFR_LOCUS_BUILDS_KEY="+buildsKey+"\n"+
+		"CYFR_LOCUS_BUILDS_KEY="+threeContainerBuildsKey+"\n"+
 		"CYFR_PRIVATE_EGRESS_TARGETS=locus-backends\n"+
 		"CYFR_LOCUS_RUNTIME_WORKERS=wrk_locus=http://locus-runtime:4200\n")
+	return s
+}
+
+// withProfiles adds to the scenario's `compose config` answer each named
+// service with its profiles, as compose writes the services its selection
+// runs.
+func (s *updateScenario) withProfiles(profiles map[string][]string) {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.fake, "config.out"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		s.t.Fatal(err)
+	}
+	for name, p := range profiles {
+		config["services"].(map[string]any)[name] = map[string]any{"profiles": p}
+	}
+	if raw, err = json.Marshal(config); err != nil {
+		s.t.Fatal(err)
+	}
+	s.answer("config.out", string(raw))
+}
+
+// buildsSelection is the compose selection the three-container stack with
+// builds on runs under: the scenario's head and the builds' own profile.
+func (s *updateScenario) buildsSelection() string {
+	h := scenarioHead
+	h.Profiles = []string{"public", "locus-builds"}
+	return strings.Join(composePrefixArgs(access.ProjectName(s.project), h), " ") + " "
+}
+
+// The three-container release ran its builder and the builder's guard
+// under a profile of their own, which .env's head does not name: the
+// update lists and stops its stack under that profile beside the head's,
+// so the network the builder's guard sits on is removed once both are
+// stopped.
+func TestUpdateStopsTheThreeContainerBuildsUnderTheirProfile(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}})
+	if out, err := s.run(context.Background()); err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	log, builds := s.log(), s.buildsSelection()
+	for _, call := range []string{builds + "ps --services --status running", builds + "stop caddy", builds + "stop cyfr", builds + "stop"} {
+		if !slices.Contains(log, call) {
+			t.Errorf("the update did not run %q:\n%s", call, strings.Join(log, "\n"))
+		}
+	}
+	if stopped, removed := slices.Index(log, builds+"stop"), slices.Index(log, "network rm net1"); removed < 0 || removed < stopped || slices.Index(log, "rm ctrnet1") < stopped {
+		t.Errorf("the network locus-builds was not removed after the builds stopped:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// A failure before the switch, after the stop, starts the old stack again
+// as it ran: the head's services through the engine's start, then the
+// builder and its guard under the builds' own profile.
+func TestUpdateRecoveryStartsTheThreeContainerBuildsAgain(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}})
+	s.answer("network-rm-net0.exit", "1")
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "could not remove the network locus-backends") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	s.composeUnchanged()
+	want := append(started("update"), s.buildsSelection()+"up -d locus-builds locus-builds-guard")
+	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
+		t.Errorf("the old stack was not started again as it ran:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+func TestUpdateFromThreeContainers(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	const buildsKey = threeContainerBuildsKey
 	out, err := s.run(context.Background())
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)

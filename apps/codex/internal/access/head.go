@@ -101,6 +101,16 @@ func Profiles(mode string) []string {
 	return []string{mode}
 }
 
+// ModeProfiles are the profiles every mode's head selects to reach the
+// home, as Profiles derives them.
+func ModeProfiles() []string {
+	var out []string
+	for _, mode := range []string{ModeLocal, ModeTailnet, ModePublic} {
+		out = union(out, Profiles(mode))
+	}
+	return out
+}
+
 // Canonical is the head's RFC 8785 canonical JSON, as Prima.JCS writes it:
 // keys in order, absent keys omitted, strings escaped only where JSON
 // requires it.

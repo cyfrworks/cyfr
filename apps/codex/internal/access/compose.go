@@ -42,6 +42,19 @@ func (e *Engine) selection(files []string, h Head) []string {
 // configuration compose would run for h's selection, .env's values
 // inlined.
 func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
+	return e.readConfig(ctx, h, "config")
+}
+
+// declaredProfiles is DeclaredProfiles: `docker compose config --profiles`
+// over the default file set, under no selection.
+func (e *Engine) declaredProfiles(ctx context.Context) ([]string, error) {
+	out, err := e.readConfig(ctx, Head{}, "config", "--profiles")
+	return strings.Fields(string(out)), err
+}
+
+// readConfig is compose's read args over the default file set under h's
+// selection, its stdout.
+func (e *Engine) readConfig(ctx context.Context, h Head, args ...string) ([]byte, error) {
 	// compose reads COMPOSE_* from .env: no compose call runs over one
 	// that sets any.
 	if _, err := e.readEnv(); err != nil {
@@ -51,9 +64,9 @@ func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), "config"), Deadline: StopDeadline})
+	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), args...), Deadline: StopDeadline})
 	if err != nil {
-		return nil, fmt.Errorf("access: %s", e.callFailed("docker compose config", err, res.Stderr))
+		return nil, fmt.Errorf("access: %s", e.callFailed("docker compose "+strings.Join(args, " "), err, res.Stderr))
 	}
 	return res.Stdout, nil
 }
@@ -243,22 +256,12 @@ func (e *Engine) servicesOf(ctx context.Context, h Head, content []byte) ([]stri
 	return accessServices(c, h), nil
 }
 
-// accessModeProfiles are the profiles every mode's head selects to reach
-// the home, as Profiles derives them.
-func accessModeProfiles() []string {
-	var out []string
-	for _, mode := range []string{ModeLocal, ModeTailnet, ModePublic} {
-		out = union(out, Profiles(mode))
-	}
-	return out
-}
-
 // everyAccessService is every service the stack's configuration puts in a
 // access mode's profile, whichever head selects it: what a stop of the
 // access services must cover when a head cannot say, and what a start removes when
 // its head does not select it.
 func (e *Engine) everyAccessService(ctx context.Context) ([]string, error) {
-	return e.servicesOf(ctx, Head{Profiles: accessModeProfiles()}, nil)
+	return e.servicesOf(ctx, Head{Profiles: ModeProfiles()}, nil)
 }
 
 // otherServices are c's services that are not access services of h.
@@ -287,7 +290,10 @@ func cyfrEnv(c config) map[string]string {
 
 // checkEffective validates the values cyfr would start with: ResolveBoot
 // with .env's own read as the file and the flattened environment as the
-// process, a release's rules, and the head that answers must be h.
+// process, a release's rules, and the head that answers must be h without
+// its profiles no access mode selects: those choose more of the stack's own
+// services (an update's selection of the stack an older release left) and
+// reach no setting of cyfr's.
 func (e *Engine) checkEffective(h Head, content []byte) error {
 	c, err := parseConfig(content)
 	if err != nil {
@@ -308,7 +314,9 @@ func (e *Engine) checkEffective(h Head, content []byte) error {
 	if err != nil {
 		return err
 	}
-	if b.Head.Digest() != h.Digest() {
+	reach := h
+	reach.Profiles = slices.DeleteFunc(slices.Clone(h.Profiles), func(p string) bool { return !slices.Contains(ModeProfiles(), p) })
+	if b.Head.Digest() != reach.Digest() {
 		return fmt.Errorf("access: the stack's configuration starts cyfr reached as %s, not as %s", wordsText(Describe(b.Head)), wordsText(Describe(h)))
 	}
 	return nil
