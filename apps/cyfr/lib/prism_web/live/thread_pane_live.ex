@@ -1572,7 +1572,7 @@ defmodule PrismWeb.ThreadPaneLive do
        %{thread_id: ^thread_id, kind: "text", sent_by: "person", author: ^person, content: text} =
            row}
       when is_binary(text) and text != "" ->
-        if Aqua.Attachments.refs_of(row) == [], do: text
+        if Aqua.attachment_refs(row) == [], do: text
 
       _none ->
         nil

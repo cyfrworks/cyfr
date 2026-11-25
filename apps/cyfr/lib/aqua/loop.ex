@@ -240,7 +240,7 @@ defmodule Aqua.Loop do
   # A grant the turn holds to that does not cover it: Aqua's list changed
   # since it was granted (`Aqua.Loop.Turn.consented/4`), one never given or
   # revoked by its person (read from the record of who revoked it,
-  # `Sanctum.Consent.ungranted/2`, never inferred), or a pinned grant given
+  # `Opus.ungranted/2`, never inferred), or a pinned grant given
   # again, taken back or revoked. Said as the member whose turn it is, with
   # what starts it again where it is read (`source/2`).
   defp moved(ctx, turn, reason) when reason in @moved do
@@ -256,7 +256,7 @@ defmodule Aqua.Loop do
   defp moved(_ctx, _turn, reason), do: reason
 
   defp revoked(ctx, :ungranted) do
-    case Sanctum.Consent.ungranted(ctx, @grant) do
+    case Opus.ungranted(ctx, @grant) do
       {:ok, :revoked} -> :grant_revoked
       _never_or_unread -> :ungranted
     end
@@ -711,11 +711,11 @@ defmodule Aqua.Loop do
 
   # A pinned grant that no longer loads was taken back: revoked by its
   # person when Aqua has no grant to stand on any more and the record of
-  # who revoked says so (`Sanctum.Consent.ungranted/2`), else taken back
-  # some other way, as a removal takes it.
+  # who revoked says so (`Opus.ungranted/2`), else taken back some other
+  # way, as a removal takes it.
   defp taken_back(ctx) do
-    with {:ok, []} <- Sanctum.Consent.profiles(ctx, @grant),
-         {:ok, :revoked} <- Sanctum.Consent.ungranted(ctx, @grant) do
+    with {:error, :no_profile} <- Opus.authority_for(ctx, :default, @grant),
+         {:ok, :revoked} <- Opus.ungranted(ctx, @grant) do
       {:error, :consent_revoked}
     else
       _standing_removed_or_unread -> {:error, :consent_moved}

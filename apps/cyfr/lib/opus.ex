@@ -250,6 +250,17 @@ defmodule Opus do
   defdelegate authority_for(ctx, profile_selector, reference, opts \\ []), to: Admission
 
   @doc """
+  Why the name-level `source_ref` has no grant a run could stand on, once
+  `authority_for/4` finds none: `:revoked` when its person revoked it,
+  `:no_grant` when nobody granted it or a removal took it, as the record
+  of who revoked it says (`Sanctum.Consent.ungranted/2`).
+  """
+  @spec ungranted(Context.t(), String.t()) ::
+          {:ok, :no_grant | :revoked} | {:error, :unavailable | :no_athanor}
+  def ungranted(%Context{} = ctx, source_ref) when is_binary(source_ref),
+    do: Sanctum.Consent.ungranted(ctx, source_ref)
+
+  @doc """
   Subscribe the calling process to an execution's event stream. Pass the
   scope of the athanor that owns the execution, and the same scope to
   `unsubscribe_events/2`.
