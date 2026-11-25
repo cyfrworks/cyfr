@@ -651,6 +651,18 @@ defmodule Opus do
     as: :end_turn
 
   @doc """
+  What a fire of a schedule's line for Aqua says, from the schedule's
+  `maker` (none for the person's own) and `line`: the line, opened with
+  who set it when a turn did. The one wording, which the schedule tool
+  bounds at every write so a saved line always fits its fire, and which
+  `Aqua.ScheduleTurns` sends. See `Opus.Schedules.Provider.fire_text/2`.
+  """
+  @spec schedule_fire_text(String.t() | nil, String.t()) :: String.t()
+  defdelegate schedule_fire_text(maker, line),
+    to: Opus.Schedules.Provider,
+    as: :fire_text
+
+  @doc """
   Cancel a running execution of the context's athanor; only a running
   execution can be cancelled. See `Opus.Dispatch.cancel/2`.
   """
