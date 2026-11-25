@@ -1255,25 +1255,32 @@ defmodule Locus.KeeperTest do
 
     # Takes each stdout piece `handle`'s owner is told until the relay's
     # task has sent every frame and its socket has handed the kernel every
-    # byte, as a relay's writes have once it ends: the bytes it took.
-    defp take_while_sending(%{ref: ref} = handle, sending, relay, bytes) do
+    # byte, as a relay's writes have once it ends: the bytes it took. The
+    # task's last send can return, and the keeper read and tell its bytes,
+    # before the task's answer arrives, so the next event awaited is
+    # whichever comes first, a piece or that answer, never a piece alone.
+    defp take_while_sending(handle, sending, relay, bytes) do
       :ok = Keeper.taken(handle)
+      next_piece(handle, sending, relay, bytes)
+    end
 
-      sending =
-        case sending && Task.yield(sending, 0) do
-          {:ok, sent} ->
-            assert Enum.all?(sent, &(&1 == :ok))
-            nil
-
-          _sending_or_sent ->
-            sending
-        end
-
+    defp next_piece(%{ref: ref} = handle, sending, relay, bytes) do
       if sending == nil and :erlang.port_info(relay, :queue_size) == {:queue_size, 0} do
         bytes
       else
-        assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
-        take_while_sending(handle, sending, relay, bytes + byte_size(piece))
+        task = sending && sending.ref
+
+        receive do
+          {Keeper, ^ref, {:stdout, piece}} ->
+            take_while_sending(handle, sending, relay, bytes + byte_size(piece))
+
+          {^task, sent} when task != nil ->
+            Process.demonitor(task, [:flush])
+            assert Enum.all?(sent, &(&1 == :ok))
+            next_piece(handle, nil, relay, bytes)
+        after
+          5_000 -> flunk("neither a piece nor the relay's end came within 5 s")
+        end
       end
     end
 

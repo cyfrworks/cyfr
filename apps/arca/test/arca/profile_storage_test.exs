@@ -200,6 +200,28 @@ defmodule Arca.ProfileStorageTest do
       end
     end
 
+    # Ending a grant that has ended ends nothing: a repeat of the person's
+    # own revocation writes no stamp and no cause, and a removal's
+    # revocation keeps its stamp, the person named as its cause.
+    test "a row already revoked keeps its stamp: the person's own is left as it is, a " <>
+           "removal's names the person",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+
+      own = profile!(athanor, "active")
+      assert :ok = ProfileStorage.revoke_by_person(actor, own.id)
+      {:ok, revoked} = ProfileStorage.get(actor, own.id)
+      assert :ok = ProfileStorage.revoke_by_person(actor, own.id)
+      assert {:ok, ^revoked} = ProfileStorage.get(actor, own.id)
+
+      removed = profile!(athanor, "revoked")
+      {:ok, %{revoked_by: "removal", updated_at: stamp}} = ProfileStorage.get(actor, removed.id)
+      assert :ok = ProfileStorage.revoke_by_person(actor, removed.id)
+
+      assert {:ok, %{status: "revoked", revoked_by: "person", updated_at: ^stamp}} =
+               ProfileStorage.get(actor, removed.id)
+    end
+
     test "another athanor's row, a missing row and no athanor change nothing", %{
       athanor: athanor
     } do

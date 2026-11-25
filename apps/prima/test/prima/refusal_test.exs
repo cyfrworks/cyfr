@@ -532,6 +532,7 @@ defmodule Prima.RefusalTest do
     {{:consent_moved, "Scout", :ask}, :conflict,
      "Scout " <> @regranted <> " Ask Scout for it again."},
     {{:consent_moved, "Aqua", :none}, :conflict, "Aqua " <> @regranted},
+    {:grant_revoked, :consent_required, @revoked},
     {{:grant_revoked, "Aqua", :message}, :consent_required,
      @revoked <>
        " Your message was not answered: grant it again here when it is asked, or on your " <>
