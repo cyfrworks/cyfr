@@ -789,6 +789,27 @@ defmodule Sanctum.Catalog do
 
   def recorded?(_tool, _action), do: true
 
+  @doc """
+  Whether a call of `tool.action` waits as long as it takes: true for an
+  action the table declares `waits: true` (`Prima.Operation`), which only
+  a replay-safe read may be; false for every other, an action the table
+  does not hold and a proxied tool among them. The gate gives such a call
+  no handler timeout and no holder window (`Sanctum.Dispatch`), and a
+  turn's loop wakes it on a post, which the gate answers early once its
+  handler waits (`Aqua.Loop`, `Sanctum.RunningTasks.wake/1`).
+  """
+  @spec waits?(term(), term()) :: boolean()
+  def waits?(tool, action) when is_binary(tool) and is_binary(action) do
+    with {:ok, {_module, meta}} <- lookup(tool),
+         %Operation{waits: true} <- declared_operation(meta, action) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def waits?(_tool, _action), do: false
+
   # An action name holds no dot, so a pair splits at the last one.
   defp split_action(name) do
     case String.split(name, ".") do

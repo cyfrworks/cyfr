@@ -97,6 +97,17 @@ defmodule Aqua.Loop.Policy do
   def replay_safe?(%Call{}), do: false
 
   @doc """
+  Whether `call` waits as long as it takes (`waits: true` on its action,
+  read from the operation's one definition): a catalog call so declared;
+  nothing else. A post answers such a call early (`Aqua.Loop`).
+  """
+  @spec waits?(Call.t()) :: boolean()
+  def waits?(%Call{kind: :catalog, tool: tool, action: action}),
+    do: Aqua.Ops.waits?(tool, action)
+
+  def waits?(%Call{}), do: false
+
+  @doc """
   The one call a note flush before a summary may make, `notes.keep`, by
   its tool and action: the flush's request offers it alone, and an ask of
   a flush's step runs only if it is this one (`Aqua.Loop`).

@@ -41,7 +41,8 @@ defmodule Sanctum.Supervisor do
         # pulls), and the keepers that renew their claims' leases.
         {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
         # This domain's own fire-and-forget writes off a caller's hot path:
-        # the session slide an establish triggers (`Sanctum.Caller`). On
+        # the session slide an establish triggers (`Sanctum.Caller`), and a
+        # dead waiting holder's charge (`Sanctum.Authority.BudgetGuard`). On
         # demand only — nothing is started here.
         {Task.Supervisor, name: Sanctum.TaskSupervisor}
       ]

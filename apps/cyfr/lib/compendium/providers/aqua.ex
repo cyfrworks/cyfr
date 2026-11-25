@@ -391,10 +391,30 @@ defmodule Compendium.Providers.Aqua do
           planes: [:external],
           consent: :interactive,
           permission: :component_manage
+        ),
+        # A turn's wait for a time, held as long as it takes
+        # (`Prima.Operation`'s `waits`): no effect, so a post answers it
+        # early and a restart waits out what is left.
+        Operation.new(
+          "aqua",
+          "wait",
+          "Wait until a time",
+          [
+            Arg.new("until", :string,
+              required: true,
+              description:
+                "wait: the time to wait until, ISO 8601 with its offset, e.g. '2026-11-26T09:00:00+01:00'; a time already past answers at once"
+            )
+          ],
+          kind: :read,
+          planes: [:in_chain],
+          consent: :interactive,
+          recovery: :replay_safe,
+          waits: true
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_delete' to remove one there, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_delete' to remove one there, 'wait' to wait in a turn until a time (a message from the person ends the wait early), or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
       title: "Aqua Agent System"
     )
   end
@@ -944,7 +964,70 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # --- wait ---
+
+  # A turn's own call, as `program.wait` is: the person's running turn,
+  # by the store's one rule (`Arca.TurnStorage.own_turn/3`), never a
+  # component's or a page's. Held in the gate's handler process until the
+  # time, which the gate bounds by nothing but the call's end
+  # (`waits: true`): the turn's end, a Stop, a lost lease or a post
+  # (`Aqua.Loop`) stop it.
+  def handle(%Context{} = ctx, %{"action" => "wait", "until" => until} = args)
+      when is_binary(until) do
+    with :ok <- waiting_turn(ctx, args),
+         {:ok, due, left_ms} <- due(until) do
+      # Every check has passed: from here a post answers the wait early
+      # (`Sanctum.RunningTasks.wake/1`).
+      :ok = Sanctum.RunningTasks.waiting()
+
+      receive do
+      after
+        left_ms -> :ok
+      end
+
+      {:ok, %{until: DateTime.to_iso8601(due), now: DateTime.to_iso8601(DateTime.utc_now())}}
+    end
+  end
+
   # --- helpers ---
+
+  defp waiting_turn(%Context{plane: :guest, user_id: user_id} = ctx, args)
+       when is_binary(user_id) do
+    case Arca.TurnStorage.own_turn(Sanctum.Context.actor(ctx), user_id, args) do
+      {:ok, %{status: "running"}} ->
+        :ok
+
+      {:ok, _not_running} ->
+        {:error, :wait_not_a_turn}
+
+      {:error, reason} when reason in [:by_page, :by_component, :not_open] ->
+        {:error, :wait_not_a_turn}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
+
+  defp waiting_turn(_ctx, _args), do: {:error, :wait_not_a_turn}
+
+  # The time a wait is for and how far off it is, in whole milliseconds
+  # (none for a time past): one a timer holds, or a refusal of the
+  # argument (`Prima.Operation.longest_wait_ms/0`).
+  defp due(until) do
+    case DateTime.from_iso8601(until) do
+      {:ok, due, _offset} ->
+        left_ms = max(div(DateTime.diff(due, DateTime.utc_now(), :microsecond) + 999, 1000), 0)
+
+        if left_ms <= Prima.Operation.longest_wait_ms(),
+          do: {:ok, due, left_ms},
+          else: {:error, {:invalid_argument, Prima.Operation.wait_too_long("aqua.wait: until")}}
+
+      {:error, _unparsed} ->
+        {:error,
+         {:invalid_argument,
+          "aqua.wait: until must be an ISO 8601 time with its offset, like 2026-11-26T09:00:00+01:00"}}
+    end
+  end
 
   # A refusal the `with` head already typed is the caller's answer; anything
   # else reaching an else arm is a storage term — logged, never reflected.

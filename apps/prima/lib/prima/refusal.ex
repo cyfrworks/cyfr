@@ -713,6 +713,14 @@ defmodule Prima.Refusal do
       {:forbidden,
        "A page in Aqua's browser cannot make or change a schedule; Aqua or one of its members does, in its own turn"}
 
+  # A wait (`aqua.wait`) is a turn's own call, as a program's wait is: a
+  # component's, a page's or a call of no running turn of the person's
+  # waits for nothing (`Compendium.Providers.Aqua`).
+  defp row(:wait_not_a_turn),
+    do:
+      {:forbidden,
+       "Only Aqua or one of its members waits, in a turn of its own; a component or a page cannot"}
+
   # A turn's schedule write that names a turn no longer open.
   defp row(:schedule_turn_ended),
     do:

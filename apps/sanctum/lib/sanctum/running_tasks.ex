@@ -34,6 +34,19 @@ defmodule Sanctum.RunningTasks do
   own. A handle's row lives from its claim to its release: `:pending`,
   then the task's pid, or `:cancelled` once cancelled.
 
+  ## A call that waits
+
+  A call of an action declared `waits: true` (`Prima.Operation`) is
+  answered early by a wake (`wake/1`), sent to the process that called
+  the gate for it, which awaits its task (`Sanctum.Dispatch`). The early
+  answer (`Prima.Operation.woken_answer/0`) comes only once the handler,
+  past every check of its own, says it waits (`waiting/0`): a wake before
+  then is kept in that process's mailbox and answers the call the moment
+  the handler says so, and a handler refused before then answers its
+  refusal. Neither passes through this process, so no order of admission
+  and wake loses one or answers early what the gate or the handler would
+  refuse.
+
   ## Lifetimes
 
   Every change to a claim or a handle's row is made by this process, one
@@ -158,6 +171,42 @@ defmodule Sanctum.RunningTasks do
   """
   @spec cancel_handle(handle()) :: :ok
   def cancel_handle(handle), do: GenServer.call(__MODULE__, {:cancel_handle, handle})
+
+  @doc """
+  Wake the call that waits `claimer` runs through the gate, the process
+  that called the gate for it: it is answered early once its handler says
+  it waits (`waiting/0`), at once if it already has. A claimer running no
+  such call ignores it, and so does one that already answered.
+  """
+  @spec wake(pid()) :: :ok
+  def wake(claimer) when is_pid(claimer) do
+    send(claimer, {__MODULE__, :wake})
+    :ok
+  end
+
+  @doc """
+  Said by the handler of a call that waits, from its own process, once
+  every check of its own has passed and it is about to wait: from then a
+  wake (`wake/1`) answers the call early. Anywhere else it does nothing.
+  """
+  @spec waiting() :: :ok
+  def waiting do
+    case Process.get({__MODULE__, :claimer}) do
+      claimer when is_pid(claimer) -> send(claimer, {__MODULE__, :waiting, self()})
+      nil -> :ok
+    end
+
+    :ok
+  end
+
+  @doc false
+  # The gate, inside a waiting call's task before its handler runs: the
+  # process `waiting/0` tells.
+  @spec wakeable(pid()) :: :ok
+  def wakeable(claimer) when is_pid(claimer) do
+    Process.put({__MODULE__, :claimer}, claimer)
+    :ok
+  end
 
   @doc "Forget `handle` once its caller is done with it: its row is deleted."
   @spec release_handle(handle()) :: :ok
