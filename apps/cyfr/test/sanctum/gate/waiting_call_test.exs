@@ -286,6 +286,8 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
       given_back!()
     end)
+
+    refute Catalog.waits?(@tool, "hold")
   end
 
   test "a wake before its handler's own check answers nothing early: its refusal stands",
@@ -351,6 +353,8 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
       given_back!()
     end)
+
+    refute Catalog.waits?(@tool, "hold")
   end
 
   test "the flag is read from the operation's one definition, and nowhere else" do
