@@ -54,6 +54,10 @@
     {
       "name": "main is asked to erase an account service's ceremony storage at a CYFR",
       "message": {"version": 2, "type": "erase", "id": 2, "home": "https://cyfr.example.com", "account": "https://cyfr.run"}
+    },
+    {
+      "name": "the chooser, the rail and Update CYFR are served (the CYFR app)",
+      "message": {"version": 2, "type": "ready", "url": "http://127.0.0.1:7340/bootstrap/#token=Zm9vYmFyYmF6", "rail": "http://127.0.0.1:7340/rail/#read=cmFpbHRva2Vu", "update": "http://127.0.0.1:7340/update/#read=cmFpbHRva2Vu"}
     }
   ],
   "main_to_go": [
@@ -100,6 +104,14 @@
     {
       "name": "main could not erase a store",
       "message": {"version": 2, "type": "erased", "id": 2, "ok": false}
+    },
+    {
+      "name": "the person said yes to the offer Update CYFR showed, numbered 4",
+      "message": {"version": 2, "type": "update", "offer": 4}
+    },
+    {
+      "name": "the Update CYFR window closed",
+      "message": {"version": 2, "type": "update-closed"}
     }
   ],
   "endings": [
@@ -219,6 +231,12 @@
     {"name": "erase as erase none", "to": "main", "line": "{\"version\":2,\"type\":\"erase\",\"id\":0,\"home\":\"https://cyfr.example.com\"}", "reason": "fields"},
     {"name": "forget, which main sends, sent to it", "to": "main", "line": "{\"version\":2,\"type\":\"forget\",\"home\":\"https://cyfr.example.com\"}", "reason": "type"},
     {"name": "ready with a rail naming nothing", "to": "main", "line": "{\"version\":2,\"type\":\"ready\",\"url\":\"http://127.0.0.1:7340/\",\"rail\":\"\"}", "reason": "fields"},
+    {"name": "a ready whose Update CYFR names nothing", "to": "main", "line": "{\"version\":2,\"type\":\"ready\",\"url\":\"http://127.0.0.1:7340/bootstrap/#token=Zm9v\",\"update\":\"\"}", "reason": "fields"},
+    {"name": "a yes, which main sends, sent to it", "to": "main", "line": "{\"version\":2,\"type\":\"update\",\"offer\":4}", "reason": "type"},
+    {"name": "a yes naming no offer", "to": "go", "line": "{\"version\":2,\"type\":\"update\",\"offer\":0}", "reason": "fields"},
+    {"name": "a yes naming its offer in text", "to": "go", "line": "{\"version\":2,\"type\":\"update\",\"offer\":\"4\"}", "reason": "fields"},
+    {"name": "a yes naming the release it goes to", "to": "go", "line": "{\"version\":2,\"type\":\"update\",\"offer\":4,\"target\":\"9.9.9\"}", "reason": "fields"},
+    {"name": "a closed Update CYFR naming an offer", "to": "go", "line": "{\"version\":2,\"type\":\"update-closed\",\"offer\":4}", "reason": "fields"},
     {"name": "not an object", "to": "main", "line": "\"ready\"", "reason": "shape"}
   ]
 }

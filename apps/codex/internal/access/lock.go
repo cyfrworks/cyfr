@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -79,6 +80,22 @@ func (e *Engine) lockProject(command string) (func(), error) {
 		return nil, err
 	}
 	return sync.OnceFunc(e.unlock), nil
+}
+
+// Locked is whether a command holds the lock of the stack in dir now: an
+// update, an up, a restore. It asks without waiting and creates nothing;
+// a stack that never ran has no lock and none holds it.
+func Locked(dir string) bool {
+	f, err := os.OpenFile(filepath.Join(dir, stateDir, lockFile), os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	busy, err := lockExclusive(f)
+	if err == nil && !busy {
+		unlockExclusive(f)
+	}
+	return busy
 }
 
 // LockFile takes an exclusive lock of the file at path without waiting,

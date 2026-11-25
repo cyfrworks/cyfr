@@ -150,7 +150,7 @@ func TestTheMacRoadPutsTheAppBackOrReplacesNothing(t *testing.T) {
 // the installed app, is refused before anything closes.
 func TestTheMacRoadRefusesAnAppItMayNotReplace(t *testing.T) {
 	r, app := macRoadOn(t, "1.0.0")
-	if _, err := r.elevate(&bytes.Buffer{}, "cyfr update"); err != nil {
+	if _, err := r.elevate(&bytes.Buffer{}, "cyfr update", true); err != nil {
 		t.Fatalf("a writable app was refused: %v", err)
 	}
 	resources := filepath.Join(app, "Contents", "Resources")
@@ -158,7 +158,7 @@ func TestTheMacRoadRefusesAnAppItMayNotReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(resources, 0o755) })
-	if _, err := r.elevate(&bytes.Buffer{}, "cyfr update"); err == nil || err.Error() != "This account may not write "+resources+", so the CYFR app cannot be replaced; nothing was changed and CYFR runs as it did. Run 'sudo cyfr update'" {
+	if _, err := r.elevate(&bytes.Buffer{}, "cyfr update", true); err == nil || err.Error() != "This account may not write "+resources+", so the CYFR app cannot be replaced; nothing was changed and CYFR runs as it did. Run 'sudo cyfr update'" {
 		t.Errorf("an app folder it may not write answered %v", err)
 	}
 }
