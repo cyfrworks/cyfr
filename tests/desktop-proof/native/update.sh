@@ -49,16 +49,19 @@
 #                      opens again at B, a new process, with Update CYFR
 #                      open by itself saying the app is release B, as its
 #                      page read from the record of the update to B; no
-#                      docker was called
+#                      docker was called, and on Linux, through the update
+#                      service, no sudo either
 #   window_record      Close on that window (Escape) leaves the record,
 #                      the last update's, as it was
 #
 # What Update CYFR says is read from its window's title, which its page
 # sets from what it was served (internal/desktop/assets/update.js): what
 # the page was given, not what a person saw drawn.
-#   window_terminal    (Linux) where sudo would ask for a password, Update
-#                      CYFR offers no yes but the line to run in a terminal,
-#                      the app running on and no update begun
+#   window_terminal    (Linux) where the update service's socket does not
+#                      answer (stopped for the row) and sudo would ask for a
+#                      password, Update CYFR offers no yes but the line to
+#                      run in a terminal, the app running on and no update
+#                      begun
 #
 # and on Linux, of the app's update service
 # (apps/codex/cmd/app_service_linux.go):
@@ -634,7 +637,11 @@ window() {
     chmod 755 "$LOGS/bin/docker"
   fi
   echo "$U" >"$dir/latest"
-  (cd "$LOGS/empty" && PATH="$LOGS/bin:$PATH" "$APP" >"$LOGS/app-window.log" 2>&1 &)
+  # On Linux the sudo that records each run and runs nothing is on the
+  # app's PATH too: the window's update goes through the update service.
+  local path="$LOGS/bin:$PATH"
+  [ "$OS" != linux ] || path="$LOGS/bin:$LOGS/nosudo:$PATH"
+  (cd "$LOGS/empty" && PATH="$path" "$APP" >"$LOGS/app-window.log" 2>&1 &)
   if within 60 answers && within 10 running; then
     before=$(first_pid)
   fi
@@ -646,10 +653,11 @@ window() {
   fi
 
   key Return
-  if within 120 titled "did not verify" && within 60 titled "release $U" && alive "$before" && answers && [ "$(release_of)" = "$A" ]; then
+  if within 120 titled "did not verify" && within 60 titled "release $U" && alive "$before" && answers && [ "$(release_of)" = "$A" ] &&
+    { [ "$OS" != linux ] || [ ! -s "$LOGS/sudo-runs" ]; }; then
     pass window_unverified "the yes refused U before anything closed: the app at $A ($before) runs on, answering, and offers U again"
   else
-    fail window_unverified "the app $(alive "$before" && echo still || echo 'no longer') runs, its cyfr answers '$(release_of)'; the record: $(tail -5 "$RECORD" 2>/dev/null)"
+    fail window_unverified "the app $(alive "$before" && echo still || echo 'no longer') runs, its cyfr answers '$(release_of)', sudo ran '$(cat "$LOGS/sudo-runs" 2>/dev/null)'; the record: $(tail -5 "$RECORD" 2>/dev/null)"
   fi
 
   # Close (Escape), then B the newest, Update CYFR again.
@@ -660,7 +668,8 @@ window() {
     step=closed-by-update && within 60 not_alive "$before" &&
     step=reopened && within 120 running && within 60 answers && [ "$(release_of)" = "$B" ] &&
     step=record && within 60 titled "The CYFR app is release $B" &&
-    step=docker && [ ! -s "$docker" ]; then
+    step=docker && [ ! -s "$docker" ] &&
+    step=sudo && { [ "$OS" != linux ] || [ ! -s "$LOGS/sudo-runs" ]; }; then
     after=$(first_pid)
     pass window_update "the app at $A ($before) closed and opened again at $B ($after), Update CYFR open on the record; no docker call"
   else
@@ -677,8 +686,11 @@ window() {
   fi
 
   [ "$OS" = linux ] || return
-  # sudo asks while any rule that matches the account wants a password
-  # (sudo -v); the drop-in's command is no other, so sudo -n removes it.
+  # Where the update service's socket does not answer (stopped for this
+  # row) and sudo asks while any rule that matches the account wants a
+  # password (sudo -v); the drop-in's command is no other, so sudo -n
+  # removes it.
+  sudo -n systemctl stop cyfr-update.socket
   local asks=/etc/sudoers.d/zz-cyfr-update-proof
   echo "$(id -un) ALL=(ALL) /usr/bin/false" | sudo -n tee "$asks" >/dev/null && sudo -n chmod 0440 "$asks"
   echo "$U" >"$dir/latest"
@@ -690,6 +702,7 @@ window() {
     fail window_terminal "the app $(alive "$after" && echo 'runs' || echo 'is gone'), the record $([ "$(sum "$RECORD" 2>/dev/null)" = "$kept" ] && echo 'as it was' || echo 'changed'): $(tail -5 "$LOGS/app-window.log")"
   fi
   sudo -n rm -f "$asks"
+  sudo -n systemctl start cyfr-update.socket
 }
 
 case "${1:-}" in
