@@ -706,3 +706,44 @@ func TestTheWaitOnTheServiceEnds(t *testing.T) {
 		t.Errorf("an unanswered service answered %v after %v, took the sudo road %v: %q", err, time.Since(start), r.sudo, out.String())
 	}
 }
+
+// The service answers what the release's own fetch says, through
+// fetchInstaller: a release it cannot reach (the trust root, the host, a
+// timeout: no ErrUnverified) as unreachable, which its caller takes the
+// sudo road for, and a release whose signature or digest does not match
+// (ErrUnverified) as refused, for good.
+func TestTheServiceTellsAReleaseItCannotReachFromOneThatDoesNotVerify(t *testing.T) {
+	saved, savedFetch := appPackageSum, fetchAppPackage
+	t.Cleanup(func() { appPackageSum, fetchAppPackage = saved, savedFetch })
+	fetchAppPackage = func(context.Context, string, string, string, string) ([]byte, error) {
+		return nil, errors.New("the installer is not read in this test")
+	}
+	for _, c := range []struct {
+		name, want string
+		err        error
+	}{
+		{"the trust root cannot be fetched", serviceMark + answerUnreachable + " could not download release 1.1.0 itself (cyfr update could not download the CYFR app of release 1.1.0 (fetch the Sigstore trusted root: dial tcp: i/o timeout)",
+			errors.New("fetch the Sigstore trusted root: dial tcp: i/o timeout")},
+		{"its signature does not match", serviceMark + answerRefused + " The CYFR app of release 1.1.0 did not verify (release not verified: not signed by the release workflow for 1.1.0",
+			fmt.Errorf("%w: not signed by the release workflow for 1.1.0: no matching certificate", release.ErrUnverified)},
+	} {
+		appPackageSum = func(context.Context, string, string, string) (string, error) { return "", c.err }
+		host := rootHost
+		host.run = func(io.Writer, string, ...string) error {
+			t.Errorf("%s: root ran a command", c.name)
+			return nil
+		}
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			serveUpdate(context.Background(), server, "1.0.0", host)
+		}()
+		client.SetDeadline(time.Now().Add(5 * time.Second))
+		go io.WriteString(client, "1.1.0\n")
+		said, _ := io.ReadAll(client)
+		client.Close()
+		if !strings.Contains(string(said), c.want) {
+			t.Errorf("%s: the service answered %q, want %q", c.name, said, c.want)
+		}
+	}
+}
