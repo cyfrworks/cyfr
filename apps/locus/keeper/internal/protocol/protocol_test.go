@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -131,8 +132,6 @@ func TestSharedRequestBounds(t *testing.T) {
 		"cpu_period":            CPUPeriod,
 		"min_cpu_quota":         MinCPUQuota,
 		"max_cpu_quota":         MaxCPUQuota,
-		"max_home_path_bytes":   MaxHomePathBytes,
-		"max_uid":               MaxUID,
 		"max_home_bytes":        MaxHomeBytes,
 		"max_hosts":             MaxHosts,
 		"max_pty_size":          MaxPtySize,
@@ -188,7 +187,7 @@ func TestSharedValidRequestsParse(t *testing.T) {
 }
 
 // The keeper accepts every home request as valid: a kept spawn, a pty
-// spawn and the three home requests.
+// spawn, the four home requests and a home list with and without after.
 func TestSharedHomeRequestsParse(t *testing.T) {
 	requests := loadVectors(t).HomeRequests
 	types := map[string]int{}
@@ -200,7 +199,7 @@ func TestSharedHomeRequestsParse(t *testing.T) {
 		}
 		types[req.Type]++
 	}
-	want := map[string]int{TypeSpawn: 2, TypeHomeMake: 1, TypeHomeMeasure: 1, TypeHomeRetire: 1}
+	want := map[string]int{TypeSpawn: 2, TypeHomeMake: 1, TypeHomeMeasure: 1, TypeHomeRetire: 1, TypeHomeReset: 1, TypeHomeList: 2}
 	if !reflect.DeepEqual(types, want) {
 		t.Fatalf("vectors: request types %v, want %v", types, want)
 	}
@@ -214,8 +213,8 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kept.HomeMode != HomeKept || kept.HomePath != "/var/lib/locus/kept/0f1e2d3c4b5a69788796a5b4c3d2e1f0" ||
-		kept.HomeUID == nil || *kept.HomeUID != 40001 || kept.HomeMaxBytes == nil || *kept.HomeMaxBytes != 1<<30 || kept.Pty != nil {
+	if kept.HomeMode != HomeKept || kept.Home != "0f1e2d3c4b5a69788796a5b4c3d2e1f0" ||
+		kept.HomeMaxBytes == nil || *kept.HomeMaxBytes != 1<<30 || kept.Pty != nil {
 		t.Fatalf("kept spawn decoded to %+v", kept)
 	}
 	pty, err := ParseRequest(v.HomeRequests[1])
@@ -229,8 +228,15 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if home.Type != TypeHomeMake || home.ID != "22" || home.Path != kept.HomePath || home.UID == nil || *home.UID != 40001 {
+	if home.Type != TypeHomeMake || home.ID != "22" || home.Home != kept.Home {
 		t.Fatalf("home_make decoded to %+v", home)
+	}
+	list, err := ParseRequest(v.HomeRequests[7])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.Type != TypeHomeList || list.ID != "27" || list.After != kept.Home {
+		t.Fatalf("home_list decoded to %+v", list)
 	}
 	var scratch int
 	for _, raw := range v.ValidRequests {
@@ -247,34 +253,38 @@ func TestHomeFieldsAreDecoded(t *testing.T) {
 	}
 }
 
-// The home requests carry only their own members, and their bounds hold
-// at both ends.
+// The home requests carry only their own members, and a kept home's id
+// holds its grammar at both ends.
 func TestHomeRequestBounds(t *testing.T) {
-	home := `"path":"/var/lib/locus/kept/k"`
-	longPath := `"path":"/` + strings.Repeat("a", MaxHomePathBytes) + `"`
+	longest := strings.Repeat("a", 64)
 	for _, c := range []struct {
 		line string
 		ok   bool
 	}{
-		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":1}`, true},
-		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":4294967294}`, true},
-		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":4294967295}`, false},
-		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":1,"pool":"backends"}`, false},
-		{`{"v":4,"type":"home_retire","id":"1",` + home + `,"uid":1,"home_mode":"kept"}`, false},
-		{`{"v":4,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/../k","uid":1}`, false},
-		{`{"v":4,"type":"home_retire","id":"1","path":"/var/lib/locus/kept/k/","uid":1}`, false},
-		{`{"v":4,"type":"home_retire","id":"1",` + longPath + `,"uid":1}`, false},
-		{`{"v":4,"type":"home_retire","id":"1","path":"/` + strings.Repeat("a", MaxHomePathBytes-1) + `","uid":1}`, true},
-		{`{"v":4,"type":"home_make",` + home + `,"uid":1}`, false},
-		{`{"v":4,"type":"pool","id":"1","pool":"backends",` + home + `}`, false},
-		{`{"v":4,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":"vlt_a-1"}`, true},
+		{`{"v":5,"type":"home_reset","id":"1","home":"` + longest + `"}`, true},
+		{`{"v":5,"type":"home_reset","id":"1","home":"` + longest + `a"}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":"_a"}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":"a.b"}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":""}`, false},
+		{`{"v":5,"type":"home_retire","id":"1"}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":"k","pool":"backends"}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":"k","home_mode":"kept"}`, false},
+		{`{"v":5,"type":"home_retire","id":"1","home":"k","uid":1}`, false},
+		{`{"v":5,"type":"home_make","home":"k"}`, false},
+		{`{"v":5,"type":"home_list","id":"1"}`, true},
+		{`{"v":5,"type":"home_list","id":"1","after":"k"}`, true},
+		{`{"v":5,"type":"home_list","id":"1","after":""}`, false},
+		{`{"v":5,"type":"home_list","id":"1","after":"k","home":"k"}`, false},
+		{`{"v":5,"type":"pool","id":"1","pool":"backends","home":"k"}`, false},
+		{`{"v":5,"type":"pool","id":"1","pool":"backends","pty":{"rows":24,"cols":80}}`, false},
 	} {
 		req, err := ParseRequest([]byte(c.line))
 		if c.ok != (err == nil) {
 			t.Errorf("%s: request %+v, refusal %+v", c.line, req, err)
 		}
 	}
-	spawn := `{"v":4,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
+	spawn := `{"v":5,"type":"spawn","id":"1","place":"pl-1","pool":"backends","argv":["x"],"memory_bytes":16777216,"cpu_quota":100000,"attach":{"path":"/run/a.sock","token":"` + strings.Repeat("a", 64) + `"}`
 	for _, c := range []struct {
 		fields string
 		ok     bool
@@ -285,16 +295,35 @@ func TestHomeRequestBounds(t *testing.T) {
 		{`,"pty":{"rows":1000,"cols":1}`, true},
 		{`,"pty":{}`, false},
 		{`,"pty":{"rows":-1,"cols":80}`, false},
-		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":1,"home_max_bytes":1125899906842624`, true},
-		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":1,"home_max_bytes":1125899906842625`, false},
-		{`,"home_mode":"kept",` + strings.Replace(home, "path", "home_path", 1) + `,"home_uid":4294967295`, false},
-		{`,"home_mode":"scratch","home_uid":1`, false},
+		{`,"home_mode":"kept","home":"k","home_max_bytes":1125899906842624`, true},
+		{`,"home_mode":"kept","home":"k","home_max_bytes":1125899906842625`, false},
+		{`,"home_mode":"kept","home":"/var/lib/locus/kept/k"`, false},
+		{`,"home_mode":"kept"`, false},
+		{`,"home_mode":"scratch","home":"k"`, false},
 		{`,"home_mode":"scratch","home_max_bytes":1`, false},
 	} {
 		req, err := ParseRequest([]byte(spawn + c.fields + "}"))
 		if c.ok != (err == nil) {
 			t.Errorf("spawn with %s: request %+v, refusal %+v", c.fields, req, err)
 		}
+	}
+}
+
+// A full page of the longest kept home ids fits one frame's payload.
+func TestAPageOfHomesFitsAFrame(t *testing.T) {
+	ids := make([]string, MaxHomeListIDs)
+	for i := range ids {
+		ids[i] = strings.Repeat("a", 60) + fmt.Sprintf("%04d", i)
+	}
+	line, err := Encode(NewHomes(strings.Repeat("i", 64), ids, ids[len(ids)-1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) > frame.MaxPayload {
+		t.Fatalf("a full page of homes is %d bytes, past a frame's %d", len(line), frame.MaxPayload)
+	}
+	if empty, _ := Encode(NewHomes("1", nil, "")); string(empty) != `{"v":5,"type":"homes","id":"1","ids":[]}`+"\n" {
+		t.Fatalf("an empty page is %s", empty)
 	}
 }
 
@@ -361,11 +390,17 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 
 func TestSharedHomeRepliesMatchTheEncoders(t *testing.T) {
 	built := []any{
-		NewHomeMade("22"),
+		NewHomeMade("22", 40001),
 		NewHomeMeasured("23", 1<<20),
 		NewHomeRetired("24"),
 		NewError("20", "", CodeHomeOverCap),
 		NewError("21", "", CodeUIDBusy),
+		NewHomeMeasured("23", 0),
+		NewError("23", "", CodeHomeAbsent),
+		NewError("22", "", CodeUnavailable),
+		NewHomeMade("25", 40001),
+		NewHomes("26", []string{"0f1e2d3c4b5a69788796a5b4c3d2e1f0", "vlt_a"}, "vlt_a"),
+		NewHomes("27", nil, ""),
 	}
 	want := loadVectors(t).HomeReplies
 	if len(want) != len(built) {
@@ -659,8 +694,8 @@ func TestSpawnRequiresCPUQuota(t *testing.T) {
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
-		`{"v":4,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
-		`{"v":4,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
+		`{"v":5,"type":"pool","id":"1","pool":"backends"} {"v":2}`,
+		`{"v":5,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
 		`[]`,
 		``,
 	} {
@@ -679,7 +714,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":4,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":5,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

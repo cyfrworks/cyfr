@@ -142,9 +142,9 @@
 #
 #   runtime
 #          a component run on the shipped cyfr by the real runtime: the
-#          project's locus-runtime service started from the Locus image
-#          built from the tree, with every setting the shipped file gives
-#          it and the keys `cyfr init` wrote (the root in cyfr's .env, the
+#          project's locus service and its guard started from the Locus
+#          image built from the tree, with every setting the shipped file
+#          gives them and the keys `cyfr init` wrote (the root in cyfr's .env, the
 #          key it derives for wrk_locus beside it), so cyfr dispatches to
 #          the worker URL the shipped file names and the runtime calls back
 #          at the host API address it names, each side checking the other's
@@ -330,7 +330,7 @@ PERSON="" THREAD="" MARK=""
 # it whole for a program that runs it (scripts/cosign.sh check run).
 COMPOSE_CMD=(docker compose --project-name "$RUN" --project-directory "$WORK"
   -f "$WORK/docker-compose.yml" -f "$WORK/docker-compose.override.yml"
-  --profile public --profile tailnet --profile locus-builds)
+  --profile public --profile tailnet)
 compose() {
   "${COMPOSE_CMD[@]}" "$@"
 }
@@ -999,7 +999,7 @@ project_new() {
   [ -f "$WORK/.env" ] || fail "cyfr init wrote no .env"
   # The run's own settings: its images, migration, the private host the
   # shutdown case's upstream is, and builds off as an operator turns them
-  # off, both empty. A registry, its OCI host and a directory at an
+  # off, its key empty. A registry, its OCI host and a directory at an
   # address this deployment's egress refuses (loopback, which no private
   # egress target lists), so nothing of the run reaches cyfr.run: the
   # fixture's people are cached here alone and have no name
@@ -1008,10 +1008,9 @@ project_new() {
   env_set CYFR_OCI_REGISTRY_URL 127.0.0.1:9
   env_set CYFR_DIRECTORY_URL http://127.0.0.1:9
   env_set CYFR_AUTO_MIGRATE on
-  env_set CYFR_LOCUS_BUILDS_URL ""
   env_set CYFR_LOCUS_BUILDS_KEY ""
   if [ "$CASE" = shutdown ]; then
-    env_set CYFR_PRIVATE_EGRESS_TARGETS "locus-backends,$UPSTREAM_HOST"
+    env_set CYFR_PRIVATE_EGRESS_TARGETS "locus,$UPSTREAM_HOST"
   fi
   env_set PROOF_APP_IMAGE "$IMAGE"
   env_set PROOF_TAILSCALE_IMAGE "$STANDIN_IMAGE"
@@ -1026,43 +1025,46 @@ project_new() {
   proof_caddyfile
 }
 
-# The runtime case's overlay: the runtime's profile, which keeps it from
-# every other case, replaced by the Locus image the run names, so `cyfr
-# up` starts it with every other setting the shipped file gives it.
+# The runtime case's overlay: the profile of Locus and its guard, which
+# keeps them from every other case, replaced by the Locus image the run
+# names, so `cyfr up` starts them with every other setting the shipped
+# file gives them.
 runtime_overlay() {
-  python3 -I - "$WORK/docker-compose.override.yml" <<'PY' || fail "the overlay holds no runtime block to lift"
+  python3 -I - "$WORK/docker-compose.override.yml" "$(table service)" "$(table guard)" <<'PY' || fail "the overlay holds no Locus block to lift"
 import sys
 path = sys.argv[1]
 text = open(path).read()
-block = '  locus-runtime:\n    profiles: ["proof-never"]\n'
-assert text.count(block) == 1
-open(path, "w").write(text.replace(block, '  locus-runtime:\n    image: ${PROOF_LOCUS_IMAGE:?set PROOF_LOCUS_IMAGE}\n    pull_policy: never\n'))
+for service in sys.argv[2:]:
+    block = f'  {service}:\n    profiles: ["proof-never"]\n'
+    assert text.count(block) == 1
+    text = text.replace(block, f'  {service}:\n    image: ${{PROOF_LOCUS_IMAGE:?set PROOF_LOCUS_IMAGE}}\n    pull_policy: never\n')
+open(path, "w").write(text)
 PY
 }
 
-# The island networks exist before cyfr joins them, with IPv6: the plain
-# ones, the builds and backends islands' (the runtime's carries its own
-# subnet), as they do in a deployment whose island started first, or whose
-# cyfr was recreated beside running islands, and with IPv6 on, as the image
-# suites' overlays and a dual-stack deployment have them: Docker's port
-# mapping must still land on the default network's address. Docker maps a
-# published port to the container's address on an IPv6-enabled network
-# ahead of an IPv4-only one, whatever the gateway priority, so the shipped
-# default network is dual-stack and cyfr's gw_priority on it decides;
-# without both, the port answers nothing here.
+# Locus's network exists before cyfr joins it, with IPv6 and the subnet
+# the shipped file fixes, as it does in a deployment whose Locus started
+# first, or whose cyfr was recreated beside a running Locus, and with IPv6
+# on, as the image suites' overlays and a dual-stack deployment have it:
+# Docker's port mapping must still land on the default network's address.
+# Docker maps a published port to the container's address on an
+# IPv6-enabled network ahead of an IPv4-only one, whatever the gateway
+# priority, so the shipped default network is dual-stack and cyfr's
+# gw_priority on it decides; without both, the port answers nothing here.
 islands_first() {
-  local network
-  for network in $(compose config --format json | python3 -I -c '
-import json, sys
-project = json.load(sys.stdin)
-cyfr = project["services"]["cyfr"]
-print(" ".join(name for name in cyfr["networks"]
-               if name != sys.argv[1] and not (project["networks"].get(name) or {}).get("ipam")))' "$(table endpoint_network)"); do
+  local network subnet range
+  while read -r network subnet range; do
+    [ -n "$network" ] || continue
     docker network inspect "${RUN}_${network}" >/dev/null 2>&1 && continue
-    docker network create --ipv6 --label "com.docker.compose.project=$RUN" --label "com.docker.compose.network=$network" \
+    docker network create --ipv6 --subnet "$subnet" --ip-range "$range" \
+      --label "com.docker.compose.project=$RUN" --label "com.docker.compose.network=$network" \
       --label "com.docker.compose.version=$(docker compose version --short)" "${RUN}_${network}" >/dev/null
     ok "created ${RUN}_${network} first, with IPv6"
-  done
+  done <<<"$(compose config --format json | python3 -I -c '
+import json, sys
+project = json.load(sys.stdin)
+config = project["networks"][sys.argv[1]]["ipam"]["config"][0]
+print(sys.argv[1], config["subnet"], config["ip_range"])' "$(table network)")"
 }
 
 # ---------------------------------------------------------------------------
@@ -2697,10 +2699,10 @@ runtime_case() {
   shipped="$(cd "$WORK" && docker compose --project-name "$RUN-shipped" -f "$WORK/docker-compose.yml" config --format json)"
   project="$(compose config --format json)"
   workers="$(service_env "$project" CYFR_LOCUS_RUNTIME_WORKERS cyfr)"
-  host_api="$(service_env "$project" LOCUS_RUNTIME_HOST_API_URL locus-runtime)"
+  host_api="$(service_env "$project" LOCUS_RUNTIME_HOST_API_URL "$(table service)")"
   [ -n "$workers" ] && [ "$workers" = "$(service_env "$shipped" CYFR_LOCUS_RUNTIME_WORKERS cyfr)" ] ||
     fail "cyfr's worker URL '$workers' is not the shipped file's"
-  [ -n "$host_api" ] && [ "$host_api" = "$(service_env "$shipped" LOCUS_RUNTIME_HOST_API_URL locus-runtime)" ] ||
+  [ -n "$host_api" ] && [ "$host_api" = "$(service_env "$shipped" LOCUS_RUNTIME_HOST_API_URL "$(table service)")" ] ||
     fail "the runtime's host API URL '$host_api' is not the shipped file's"
   [ -n "$(env_value CYFR_LOCUS_RUNTIME_ROOT)" ] && [ -n "$(env_value LOCUS_RUNTIME_KEY)" ] ||
     fail "cyfr init wrote no runtime root or derived key"
@@ -2709,14 +2711,14 @@ runtime_case() {
   step "the runtime is up and healthy"
   health="" runtime_id=""
   for _ in $(seq 1 120); do
-    runtime_id="$(compose ps -q locus-runtime 2>/dev/null || true)"
+    runtime_id="$(compose ps -q "$(table service)" 2>/dev/null || true)"
     [ -z "$runtime_id" ] || health="$(docker inspect --format '{{.State.Health.Status}}' "$runtime_id" 2>/dev/null || true)"
     [ "$health" = healthy ] && break
     sleep 1
   done
   [ "$health" = healthy ] ||
-    fail "locus-runtime is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
-  ok "locus-runtime runs $LOCUS_IMAGE and is healthy"
+    fail "Locus is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
+  ok "Locus runs $LOCUS_IMAGE and is healthy, its runtime among its roles"
 
   step "a person signed in on cyfr, as the release proofs sign one in"
   signed_in="$(cyfr_fixture person compose-proof-runtime)"

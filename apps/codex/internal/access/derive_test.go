@@ -62,7 +62,7 @@ func TestSwitchRemovesTheOldModesKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"CADDY_ACME_EMAIL", "CYFR_PUBLIC_URL", "CYFR_TAILNET_NODE_ID", "CYFR_LOCUS_BUILDS_URL"} {
+	for _, key := range []string{"CADDY_ACME_EMAIL", "CYFR_PUBLIC_URL", "CYFR_TAILNET_NODE_ID"} {
 		if _, ok := d.Assignments[key]; ok {
 			t.Errorf("local assigns %s", key)
 		}
@@ -129,7 +129,7 @@ func bootJSON(b Boot) map[string]any {
 		trust = map[string]any{"hops": float64(b.Trust.Hops)}
 	}
 	head := map[string]any{"mode": b.Head.Mode, "host": b.Head.Host, "port": float64(b.Head.Port)}
-	for k, v := range map[string]string{"node_id": b.Head.NodeID, "public_url": b.Head.PublicURL, "acme_email": b.Head.ACMEEmail, "builds_url": b.Head.BuildsURL} {
+	for k, v := range map[string]string{"node_id": b.Head.NodeID, "public_url": b.Head.PublicURL, "acme_email": b.Head.ACMEEmail} {
 		if v != "" {
 			head[k] = v
 		}
@@ -157,28 +157,11 @@ func bootJSON(b Boot) map[string]any {
 	}
 }
 
-// A malformed builds URL is refused before a head is made from it, at boot
-// and when a head is derived.
-func TestMalformedBuildsURLRefuses(t *testing.T) {
-	for _, raw := range []string{"http://locus-builds:bad", "http://locus-builds:4100/path", "http://locus-builds:4100?token=x", "http://user@locus-builds:4100", "ftp://locus-builds:4100", "not-a-url"} {
-		want := map[string]string{"key": "CYFR_LOCUS_BUILDS_URL", "value": raw}
-		_, err := ResolveBoot(BootInput{Process: map[string]string{"CYFR_ACCESS": "local", "CYFR_LOCUS_BUILDS_URL": raw}, Release: true})
-		var r *Refusal
-		if !errors.As(err, &r) || r.Code != "access_setting_invalid" || !reflect.DeepEqual(r.Payload, want) {
-			t.Errorf("ResolveBoot with builds URL %q: %v", raw, err)
-		}
-		_, err = Derive(Target{Mode: ModeLocal}, Current{Port: 4000, BuildsURL: raw}, nil)
-		if !errors.As(err, &r) || r.Code != "access_setting_invalid" || !reflect.DeepEqual(r.Payload, want) {
-			t.Errorf("Derive with builds URL %q: %v", raw, err)
-		}
-	}
-}
-
 // A value that is not UTF-8 is refused by its name, never carried into a
 // head's canonical bytes or a sentence.
 func TestInvalidUTF8Refuses(t *testing.T) {
 	public := map[string]string{"CYFR_ACCESS": "public", "CYFR_HOST": "cyfr.example.com", "CYFR_PUBLIC_URL": "https://cyfr.example.com"}
-	for _, key := range []string{"CADDY_ACME_EMAIL", "CYFR_LOCUS_BUILDS_URL", "CYFR_HOST", "CYFR_ACCESS", "CYFR_PORT"} {
+	for _, key := range []string{"CADDY_ACME_EMAIL", "CYFR_HOST", "CYFR_ACCESS", "CYFR_PORT"} {
 		env := map[string]string{}
 		for k, v := range public {
 			env[k] = v
@@ -204,15 +187,14 @@ func TestDeriveRefusesInputThatIsNotUTF8(t *testing.T) {
 		current Current
 		join    *Join
 	}{
-		{"CYFR_LOCUS_BUILDS_URL", Target{Mode: ModeLocal}, Current{Port: 4000, BuildsURL: "http://locus-builds:4100/" + bad}, nil},
 		{"CYFR_TAILNET_NODE_ID", Target{Mode: ModeTailnet}, Current{Port: 4000}, &Join{Name: tn, NodeID: "n" + bad}},
 		{"CYFR_HOST", Target{Mode: ModeTailnet}, Current{Port: 4000}, &Join{Name: "cyfr" + bad + ".tail1a2b3c.ts.net", NodeID: "n1"}},
 		{"CYFR_HOST", Target{Mode: ModePublic, Domain: "cyfr.example.com" + bad}, Current{Port: 4000}, nil},
 		{"CADDY_ACME_EMAIL", Target{Mode: ModePublic, Domain: "cyfr.example.com", ACMEEmail: "ops" + bad + "@example.com"}, Current{Port: 4000}, nil},
 		{"CYFR_ACCESS", Target{Mode: "local" + bad}, Current{Port: 4000}, nil},
 		// Encoding comes first: the domain is outside its mode too, and
-		// the builds URL is malformed too, and neither is answered.
-		{"CADDY_ACME_EMAIL", Target{Mode: ModeLocal, Domain: "cyfr.example.com", ACMEEmail: bad}, Current{Port: 4000, BuildsURL: "bad"}, nil},
+		// that is not answered.
+		{"CADDY_ACME_EMAIL", Target{Mode: ModeLocal, Domain: "cyfr.example.com", ACMEEmail: bad}, Current{Port: 4000}, nil},
 	} {
 		_, err := Derive(c.target, c.current, c.join)
 		var r *Refusal

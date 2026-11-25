@@ -23,7 +23,6 @@ type vectors struct {
 		TailnetNames []nameVector `json:"tailnet_names"`
 		NodeIDs      []nameVector `json:"node_ids"`
 		Domains      []nameVector `json:"domains"`
-		BuildsURLs   []nameVector `json:"builds_urls"`
 	} `json:"names"`
 	Words []wordsVector `json:"words"`
 }
@@ -60,9 +59,8 @@ type bootVector struct {
 }
 
 type profileVector struct {
-	Mode      string   `json:"mode"`
-	BuildsURL string   `json:"builds_url"`
-	Profiles  []string `json:"profiles"`
+	Mode     string   `json:"mode"`
+	Profiles []string `json:"profiles"`
 }
 
 type nameVector struct {
@@ -78,11 +76,10 @@ type wordsVector struct {
 
 func (c *Current) UnmarshalJSON(b []byte) error {
 	var raw struct {
-		Port      int    `json:"port"`
-		BuildsURL string `json:"builds_url"`
+		Port int `json:"port"`
 	}
 	err := json.Unmarshal(b, &raw)
-	c.Port, c.BuildsURL = raw.Port, raw.BuildsURL
+	c.Port = raw.Port
 	return err
 }
 
@@ -108,8 +105,7 @@ func readVectors(t *testing.T) vectors {
 		t.Fatalf("decode access_modes.json: %v", err)
 	}
 	if len(v.Derive) == 0 || len(v.Boot) == 0 || len(v.Profiles) == 0 || len(v.Words) == 0 ||
-		len(v.Names.TailnetNames) == 0 || len(v.Names.NodeIDs) == 0 || len(v.Names.Domains) == 0 ||
-		len(v.Names.BuildsURLs) == 0 {
+		len(v.Names.TailnetNames) == 0 || len(v.Names.NodeIDs) == 0 || len(v.Names.Domains) == 0 {
 		t.Fatal("access_modes.json has an empty or missing section")
 	}
 	return v
@@ -117,8 +113,8 @@ func readVectors(t *testing.T) vectors {
 
 func TestProfilesVectors(t *testing.T) {
 	for _, v := range readVectors(t).Profiles {
-		if got := Profiles(v.Mode, v.BuildsURL); !reflect.DeepEqual(got, v.Profiles) {
-			t.Errorf("Profiles(%q, %q) = %v, want %v", v.Mode, v.BuildsURL, got, v.Profiles)
+		if got := Profiles(v.Mode); !reflect.DeepEqual(got, v.Profiles) {
+			t.Errorf("Profiles(%q) = %v, want %v", v.Mode, got, v.Profiles)
 		}
 	}
 }
@@ -133,7 +129,6 @@ func TestNamesVectors(t *testing.T) {
 		{"TailnetName", TailnetName, v.Names.TailnetNames},
 		{"NodeID", NodeID, v.Names.NodeIDs},
 		{"PublicDomain", PublicDomain, v.Names.Domains},
-		{"BuildsURL", BuildsURL, v.Names.BuildsURLs},
 	} {
 		var valid, invalid int
 		for _, c := range set.cases {
@@ -177,7 +172,7 @@ func TestHeadCanonicalAgreesWithElixir(t *testing.T) {
 // is over the bytes, not the struct.
 func TestDigestBindsEveryField(t *testing.T) {
 	base := Head{Mode: ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000,
-		ACMEEmail: "ops@example.com", BuildsURL: "http://locus-builds:4100", Profiles: []string{"locus-builds", "public"}}
+		ACMEEmail: "ops@example.com", Profiles: []string{"public"}}
 	changes := map[string]func(*Head){
 		"mode":       func(h *Head) { h.Mode = ModeTailnet },
 		"host":       func(h *Head) { h.Host = "other.example.com" },
@@ -185,8 +180,7 @@ func TestDigestBindsEveryField(t *testing.T) {
 		"public_url": func(h *Head) { h.PublicURL = "https://other.example.com" },
 		"port":       func(h *Head) { h.Port = 4001 },
 		"acme_email": func(h *Head) { h.ACMEEmail = "admin@example.com" },
-		"builds_url": func(h *Head) { h.BuildsURL = "http://locus-builds:4200" },
-		"profiles":   func(h *Head) { h.Profiles = []string{"public"} },
+		"profiles":   func(h *Head) { h.Profiles = []string{} },
 	}
 	for field, change := range changes {
 		h := base
@@ -204,8 +198,8 @@ func TestDigestBindsEveryField(t *testing.T) {
 // RFC 8785 escapes only what JSON requires: HTML characters and U+2028
 // stay as they are, unlike encoding/json's default.
 func TestCanonicalEscapesOnlyWhatJSONRequires(t *testing.T) {
-	h := Head{Mode: ModeLocal, Host: "localhost", Port: 4000, BuildsURL: "http://b/?a=1&b=< \"\\\x01>", Profiles: []string{}}
-	want := `{"builds_url":"http://b/?a=1&b=<` + " " + `\"\\\u0001>","host":"localhost","mode":"local","port":4000,"profiles":[]}`
+	h := Head{Mode: ModeLocal, Host: "localhost", Port: 4000, PublicURL: "http://b/?a=1&b=< \"\\\x01>", Profiles: []string{}}
+	want := `{"host":"localhost","mode":"local","port":4000,"profiles":[],"public_url":"http://b/?a=1&b=<` + " " + `\"\\\u0001>"}`
 	if got := string(h.Canonical()); got != want {
 		t.Errorf("canonical\n got %s\nwant %s", got, want)
 	}

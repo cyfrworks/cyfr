@@ -263,10 +263,12 @@ cell_value() {
 
 # A new cell at `$1`: an empty storage root, a copy of the repository's
 # seed tree, and the deployment file `cyfr init --no-interactive --no-pull`
-# writes: the stack's keys minted for this cell alone, the empty CORS
-# allowlist, the client ids .env.example ships, builds on with their URL
-# and key, and the access mode `local` with every setting it implies.
-# Beside it the cell's own settings, each init writes none of: the
+# writes: the stack's keys minted for this cell alone, the builds key among
+# them, the empty CORS allowlist, the client ids .env.example ships, and
+# the access mode `local` with every setting it implies. Beside it the
+# backends' URL as docker-compose.yml's cyfr service sets it, read from
+# that file, whose host builds are run at, as every compose boot has it,
+# and the cell's own settings, each init writes none of: the
 # database adapter the release was COMPILED for (runtime.exs refuses a
 # disagreement), auto-migration on, the listener ports, the host API on
 # loopback, the runtime's service id, the operators, and the pinned
@@ -275,7 +277,7 @@ cell_value() {
 # names one, and no OCI registry. `$2` is the
 # PostgreSQL URL of the cell's database, ignored for SQLite.
 cell_new() {
-  local cell="$1" url="${2:-}" directory_port targets
+  local cell="$1" url="${2:-}" directory_port targets backends_url
   "$ROOT/scripts/wasm-tools.sh" install "$ROOT/_tools" >/dev/null ||
     fail "the pinned wasm-tools could not be installed"
   mkdir -p "$cell/data" "$cell/home"
@@ -283,6 +285,9 @@ cell_new() {
   rm -f "$cell/.env"
 
   cell_cli "$cell" init --no-interactive --no-pull
+  backends_url="$(sed -n 's|^ *- CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-\([^}]*\)}$|\1|p' "$ROOT/docker-compose.yml")"
+  [ -n "$backends_url" ] || fail "docker-compose.yml's cyfr service sets no default CYFR_LOCUS_BACKENDS_URL"
+  cell_set "$cell" CYFR_LOCUS_BACKENDS_URL "$backends_url"
   cell_set "$cell" CYFR_PORT "$PORT"
   cell_set "$cell" CYFR_DATABASE "$ADAPTER"
   cell_set "$cell" CYFR_AUTO_MIGRATE on

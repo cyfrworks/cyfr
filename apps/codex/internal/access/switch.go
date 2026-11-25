@@ -46,7 +46,6 @@ func (e *Engine) readState() (envState, error) {
 		values = env.values()
 	}
 	st.head, st.headErr = headOf(values)
-	st.cur.BuildsURL = strings.TrimSpace(values["CYFR_LOCUS_BUILDS_URL"])
 	switch port := strings.TrimSpace(values["CYFR_PORT"]); {
 	case st.headErr == nil:
 		st.cur.Port = st.head.Port

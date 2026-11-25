@@ -36,7 +36,7 @@ import harness  # noqa: E402
 import isolation  # noqa: E402
 import imagesuite  # noqa: E402
 
-CONTAINER = "cyfr-locus-backends-1"
+CONTAINER = "cyfr-locus-1"
 PROCESS_LINE = ("4242|4000|1001,1001,1001,1001|00000000000000e0|00000000000000e0|00000000000000e0|0|"
                 "beam.smp -- backend\n")
 HOME = os.path.join(harness.HOME_ROOT, "backend-a1")

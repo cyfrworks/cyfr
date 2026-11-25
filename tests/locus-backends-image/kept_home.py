@@ -15,8 +15,9 @@ requests signed as CYFR signs them (harness.py):
   its own, and closing one leaves the other running.
 - A kept home survives retirement: what one session wrote is there for the
   next, once every process of its uid is gone.
-- No pooled uid and not the release's user (`locus`, which lists the root)
-  can read a home.
+- No pooled uid and not the backends role's user can read a home, and the
+  role's user cannot list the kept homes' root: the keeper alone does, and
+  no role is of the root's group.
 - Two rows of one program, as Aqua's two browsers are, run in two homes
   under two uids: the cookies and storage one keeps in its profile the
   other neither reads, lists nor writes.
@@ -160,10 +161,11 @@ def main():
             expect('"ok":false' in text and "ENOENT" in text, f"a pooled uid finds no {path} in its space", text)
         read = stack.exec(f"cat {a['home']}/kept.txt", user=RELEASE_USER)
         expect(read.returncode != 0 and "Permission denied" in read.stderr,
-               f"the release's user, {RELEASE_USER}, cannot read a home", [read.returncode, read.stdout, read.stderr])
+               f"the role's user, {RELEASE_USER}, cannot read a home", [read.returncode, read.stdout, read.stderr])
         listed = stack.exec(f"ls {KEPT_ROOT}", user=RELEASE_USER)
-        expect(listed.returncode == 0 and SHARED in listed.stdout.split(),
-               f"{RELEASE_USER} lists the kept homes' root, which it owns", listed.stdout + listed.stderr)
+        expect(listed.returncode != 0 and "Permission denied" in listed.stderr,
+               f"{RELEASE_USER} cannot list the kept homes' root, whose group it is not of",
+               listed.stdout + listed.stderr)
 
         # ————— two rows of one program: nothing crosses their homes —————
         own = whoami(c, OWNER, key="own", home_id=BROWSER)

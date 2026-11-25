@@ -68,11 +68,11 @@ The program: when the newest release is newer than this one, cyfr update install
 The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is not switched again, with no stop and no snapshot: its stack is started as 'cyfr up' starts it and waited for whole, as step 6 waits, so an update run again after one whose services did not come up waits again; and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before the question and before the stack's lock, so the refusal changes nothing (step 2): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, one without a schema fingerprint (any release's before the fingerprint was carried), or no network access to it, refuses.
-2. Read docker-compose.yml, which the release's own replaces at the switch (step 6). It must hold the bundled stack: a service named cyfr and a service, under any name, whose image is ghcr.io/cyfrworks/cyfr-locus; one without either refuses, naming 'cyfr init --force'. The offer names each image line that changes, and each image line that names no managed image (ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale), which the release's file does not keep. Then read the schema fingerprint and the release of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse a fingerprint other than the manifest's, a release newer than this one or an answer that does not read. Then compare docker-compose.yml with the one that release shipped, read from its verified scaffold, the image lines aside: a file you changed is said before anything stops, its differing lines (at most 12, no value of an environment line), that going on writes the release's file and the snapshot keeps yours, and, in a sentence of its own, each managed service whose volumes differ, since the stack would start without the data the folders you mount there hold. The update then asks 'Replace docker-compose.yml with release <version>'s and update this CYFR?', the answer defaulting to no; --yes does not answer it, and with no terminal to ask on the update refuses with the same words. Nothing of your file is merged into the release's.
+2. Read docker-compose.yml, which the release's own replaces at the switch (step 6). It must hold the bundled stack: a service named cyfr and a service, under any name, whose image is ghcr.io/cyfrworks/cyfr-locus; one without either refuses, naming 'cyfr init --force'. The offer names each managed image that changes, by its repository, and each image line that names no managed image (ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale), which the release's file does not keep. Then read the schema fingerprint and the release of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse a fingerprint other than the manifest's, a release newer than this one or an answer that does not read. Then compare docker-compose.yml with the one that release shipped, read from its verified scaffold, the image lines aside: a file you changed is said before anything stops, its differing lines (at most 12, no value of an environment line), that going on writes the release's file and the snapshot keeps yours, and, in a sentence of its own, each managed service whose volumes differ, since the stack would start without the data the folders you mount there hold. The update then asks 'Replace docker-compose.yml with release <version>'s and update this CYFR?', the answer defaulting to no; --yes does not answer it, and with no terminal to ask on the update refuses with the same words. Nothing of your file is merged into the release's.
 3. While the stack still runs: read its configuration, naming the storage root it snapshots, fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts, its .env.example and its docker-compose.yml) without writing them, pull every image the release's docker-compose.yml manages by the manifest's digest, then read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays). A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses. Then, on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the AppArmor profile built into this cyfr, by its name, which carries its content, offer it as 'cyfr init' does, before anything is changed: declined, the stack runs on as it was.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files and change .env by the .env.example the release this CYFR ran shipped and this release's, both read from the releases' verified scaffolds (the install's own .env.example is the one 'cyfr init' laid down, which no update replaces): remove each setting the old one shipped that the new one no longer declares, the names said (a setting the old .env.example never shipped is yours and stays); set each line that holds the old one's shipped value, where the new one ships another, to the new value, the names and values said; and name, leaving them as you set them, the lines that name as a host a service of the old release's docker-compose.yml that this release's does not run, in any form (a URL, a host and port, a list of them or of id=URL items), by key, line and the service named, never the value, with this release's shipped value for the name or the advice to name a service it runs. A setting assigned more than once is yours: none of its lines changes, and it is named with its lines. No other value you set changes, and a CYFR on no release version changes none. Then write the release's docker-compose.yml in place of the project's, its managed image lines pinned to <image>:<version>@<digest> (Caddy and Tailscale keep their tags), and say once that the file it replaced, with any edits of yours, is the snapshot's compose part; a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again under its own file. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health, then, under the head that start read, for every service of the stack it started, within one deadline 150 s on: healthy where it has a health check, running where it has none. A failure from here leaves the stack stopped and prints the services that did not come up with 'docker compose logs <service>', the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
+6. Write the release's scaffold files and change .env by the .env.example the release this CYFR ran shipped and this release's, both read from the releases' verified scaffolds (the install's own .env.example is the one 'cyfr init' laid down, which no update replaces): remove each setting the old one shipped that the new one no longer declares, the names said (a setting the old .env.example never shipped is yours and stays); set each line that holds the old one's shipped value, where the new one ships another, to the new value, the names and values said; and name, leaving them as you set them, the lines that name as a host a service of the old release's docker-compose.yml that this release's does not run, in any form (a URL, a host and port, a list of them or of id=URL items), by key, line in .env as the update leaves it and the service named, never the value, with the edit that puts in that service's place the host this release's shipped value for the name names (set or commented in its .env.example), in the line or in its URL, keeping the rest of the line, or the advice to name a service it runs, and that CYFR cannot reach that host until each such line is changed and 'cyfr up' is run. A setting assigned more than once is yours: none of its lines changes, and it is named with its lines. No other value you set changes, and a CYFR on no release version changes none. Then write the release's docker-compose.yml in place of the project's, its managed image lines pinned to <image>:<version>@<digest> (Caddy and Tailscale keep their tags), and say once that the file it replaced, with any edits of yours, is the snapshot's compose part; a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again under its own file. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health, then, under the head that start read, for every service of the stack it started, within one deadline 150 s on: healthy where it has a health check, running where it has none. A failure from here leaves the stack stopped and prints the services that did not come up with 'docker compose logs <service>', the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would; an update killed in that time leaves the start of the old stack to the next cyfr command that takes the lock, which says so. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -163,10 +163,10 @@ func fetchVerifiedScaffold(version string) (scaffoldRelease, error) {
 }
 
 // stopOrder is the order the stop step stops services in: the proxies
-// first, then cyfr, then each Locus service before the guard whose network
-// namespace it shares. A running service it does not name is stopped with
-// the rest after them, so a stack of other names stops whole.
-var stopOrder = []string{"caddy", "tailscale", "cyfr", "locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
+// first, then cyfr, then locus before the guard whose network namespace it
+// shares. A running service it does not name is stopped with the rest
+// after them, so a stack of other names stops whole.
+var stopOrder = []string{"caddy", "tailscale", "cyfr", "locus", "locus-guard"}
 
 // managedRepositories are the repositories the release's manifest carries a
 // digest for, normalized as Docker normalizes a reference.
@@ -404,9 +404,16 @@ type updater struct {
 	out, errOut io.Writer
 	// engine holds the stack's lock and runs every docker call of the
 	// update; head is .env's access head, whose selection every compose
-	// call of the update runs with.
+	// call of the update runs with, own beside it.
 	engine stackEngine
 	head   access.Head
+	// own are the profiles of the stack's running services that no access
+	// mode selects, as an older release ran its builds under a profile
+	// .env's head no longer names, learnt from the stack itself
+	// (listRunning); beside are those services. Until the compose file in
+	// place changes, every compose call runs under the head and own, and a
+	// start starts beside again after the head's services.
+	own, beside []string
 	// redaction is the engine's redaction pass for what the update says of
 	// its docker calls (access.Redactor): .env's values, and the values held
 	// from the effective environment, written only into the snapshot.
@@ -533,6 +540,13 @@ func (u *updater) run() error {
 	if u.ctx.Err() != nil {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
 	}
+	newCompose, _ := u.scaffold.File("docker-compose.yml")
+	if err := u.removeContainers(newCompose, "release "+u.version); err != nil {
+		return u.restartOld(err)
+	}
+	if err := u.removeNetworks(newCompose, "release "+u.version); err != nil {
+		return u.restartOld(err)
+	}
 	// From the switch on the old stack never starts over a database the
 	// new release may have migrated, so no recovery may start it: the hold
 	// is released first.
@@ -548,6 +562,9 @@ func (u *updater) run() error {
 	if err := u.switchCompose(); err != nil {
 		return u.revertScaffold(err)
 	}
+	// From the switch every compose call is the new release's, under the
+	// head alone: the old stack's own profiles leave with it.
+	u.own, u.beside = nil, nil
 	if err := u.up(); err != nil {
 		return u.stopAfterSwitch(err)
 	}
@@ -626,10 +643,8 @@ func (u *updater) change() (text, edits, none string, err error) {
 		fmt.Fprintf(&b, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
 	}
 	fmt.Fprintf(&b, "Updating it stops the stack, snapshots it into backups/, replaces docker-compose.yml with release %s's own, the snapshot keeping this one with any edits you made to it, and starts it. Its images change:\n", u.version)
-	for _, line := range plan.managed {
-		if line.value != line.replacement {
-			fmt.Fprintf(&b, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
-		}
+	for _, change := range imageChanges(plan.managed) {
+		fmt.Fprintf(&b, "  %s\n", change)
 	}
 	if len(plan.overrides) > 0 {
 		fmt.Fprintf(&b, "Image lines cyfr update does not manage, which release %s's docker-compose.yml does not keep:\n", u.version)
@@ -933,6 +948,28 @@ func shortDigest(ref string) string {
 		return ref[:i+8+12] + "…"
 	}
 	return ref
+}
+
+// imageChanges answers each change of a managed image the switch makes, by
+// image: its repository as the file writes it, then its reference before
+// and after, each change once, in the order the file first names it. No
+// service is named: the release's file may run the images under other
+// names.
+func imageChanges(managed []imageLine) []string {
+	var changes []string
+	for _, line := range managed {
+		if line.value == line.replacement {
+			continue
+		}
+		beside := func(ref string) string {
+			return shortDigest(strings.TrimPrefix(strings.TrimPrefix(ref, line.repository), ":"))
+		}
+		change := line.repository + ": " + beside(line.value) + " → " + beside(line.replacement)
+		if !slices.Contains(changes, change) {
+			changes = append(changes, change)
+		}
+	}
+	return changes
 }
 
 // ---- the compose file ------------------------------------------------------
@@ -1308,10 +1345,15 @@ func (u *updater) offlineEval(ctx context.Context, expr string) ([]string, error
 }
 
 // composeArgs answers the arguments of the compose command args under the
-// update's head: the engine's complete selection of project, files,
-// directory and profiles (access.Engine.ComposeArgs).
+// update's head and the stack's own profiles (own): the engine's complete
+// selection of project, files, directory and profiles
+// (access.Engine.ComposeArgs).
 func (u *updater) composeArgs(ctx context.Context, args ...string) ([]string, error) {
-	return u.engine.ComposeArgs(ctx, u.head, args...)
+	h := u.head
+	if len(u.own) > 0 {
+		h.Profiles = slices.Concat(h.Profiles, u.own)
+	}
+	return u.engine.ComposeArgs(ctx, h, args...)
 }
 
 // docker runs one docker call through the engine's runner under ctx, held
@@ -1526,9 +1568,10 @@ func (config composeConfig) resolve(mounts []composeMount) []composeMount {
 }
 
 // composeService is a service as `docker compose config --format json`
-// writes it: its environment, and every key that mounts something into its
-// filesystem.
+// writes it: its profiles, its environment, and every key that mounts
+// something into its filesystem.
 type composeService struct {
+	Profiles    []string           `json:"profiles"`
 	Image       string             `json:"image"`
 	Environment map[string]*string `json:"environment"`
 	Volumes     []composeMount     `json:"volumes"`
@@ -1953,21 +1996,47 @@ func (u *updater) writeScaffold() error {
 		fmt.Fprintf(u.out, "Set in .env to release %s's shipped values the settings that held release %s's: %s.\n",
 			u.version, u.oldRelease, strings.Join(set, ", "))
 	}
+	if len(u.stale) == 0 && len(u.twice) == 0 {
+		return nil
+	}
+	// The lines are said as .env holds them now: a line the edit removed
+	// moves every line after it.
+	text, err := os.ReadFile(".env")
+	if err != nil {
+		return fmt.Errorf("Reading .env failed (%v)", err)
+	}
+	lines, err := access.EnvLines(text)
+	if err != nil {
+		return fmt.Errorf("Reading .env failed (%v)", err)
+	}
 	if len(u.stale) > 0 {
 		fmt.Fprintf(u.out, "These .env settings name a service release %s's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n", u.version)
+		var reached []string
 		for _, line := range u.stale {
-			if line.write != "" {
-				fmt.Fprintf(u.out, "  %s, line %d, names %s: write %s there, release %s's shipped value\n", line.name, line.line, line.host, line.write, u.version)
-			} else {
-				fmt.Fprintf(u.out, "  %s, line %d, names %s: name a service release %s's docker-compose.yml runs there\n", line.name, line.line, line.host, u.version)
+			at := lines[line.name][len(lines[line.name])-1]
+			switch {
+			case line.put != "" && line.url:
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: put %s in place of %s in its URL, keeping the rest of the line as it is\n", line.name, at, line.host, line.put, line.host)
+			case line.put != "":
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: put %s in place of %s in that line, keeping the rest of it as it is\n", line.name, at, line.host, line.put, line.host)
+			default:
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: name a service release %s's docker-compose.yml runs there\n", line.name, at, line.host, u.version)
 			}
+			if line.put != "" && !slices.Contains(reached, line.put) {
+				reached = append(reached, line.put)
+			}
+		}
+		if len(reached) > 0 {
+			fmt.Fprintf(u.out, "Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach %s.\n", strings.Join(reached, ", "))
+		} else {
+			fmt.Fprintln(u.out, "Until each of these lines names a service that runs and 'cyfr up' is run, CYFR reaches nothing through it.")
 		}
 	}
 	if len(u.twice) > 0 {
 		fmt.Fprintln(u.out, "These .env settings are assigned more than once, so they are yours and cyfr update changed none of their lines:")
 		for _, line := range u.twice {
-			numbers := make([]string, len(line.lines))
-			for i, n := range line.lines {
+			numbers := make([]string, len(lines[line.name]))
+			for i, n := range lines[line.name] {
 				numbers[i] = strconv.Itoa(n)
 			}
 			at := strings.Join(numbers[:len(numbers)-1], ", ") + " and " + numbers[len(numbers)-1]
@@ -1985,6 +2054,27 @@ func (u *updater) writeScaffold() error {
 // commented out: a person may set a commented one.
 var envName = regexp.MustCompile(`(?m)^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=`)
 
+// commentedExample is a .env.example's commented assignment, the
+// assignment itself after the comment's mark.
+var commentedExample = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*((?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=.*)$`)
+
+// commentedValues answers the values a .env.example's commented
+// assignments would set, each read as the line alone would be once
+// uncommented; a line that does not read so is prose and gives none.
+func commentedValues(example []byte) map[string]string {
+	values := map[string]string{}
+	for _, m := range commentedExample.FindAllSubmatch(example, -1) {
+		line, err := access.EnvValues([]byte(string(m[1]) + "\n"))
+		if err != nil {
+			continue
+		}
+		for name, value := range line {
+			values[name] = value
+		}
+	}
+	return values
+}
+
 func envNames(example []byte) map[string]bool {
 	names := map[string]bool{}
 	for _, m := range envName.FindAllSubmatch(example, -1) {
@@ -1999,7 +2089,8 @@ func envNames(example []byte) map[string]bool {
 // own .env.example is no witness: `cyfr init` laid it down and no update
 // replaces it (scaffold.IsManaged), so after one update it is not the
 // release being left's. A CYFR on no release version, or on this one,
-// gets no change.
+// gets no change. The two releases' compose files name the services a
+// line may still name.
 //
 //   - A setting the old .env.example declared, set or commented, that the
 //     new one no longer declares is removed, since the new server refuses
@@ -2010,7 +2101,8 @@ func envNames(example []byte) map[string]bool {
 //     a commented line ships no value.
 //   - Any other line that names, as a host, a service of the old
 //     release's docker-compose.yml that the new one does not run is the
-//     person's: it is left, and reported with what to write there.
+//     person's: it is left, and reported with what to write there, the
+//     new .env.example's value for it, set or commented.
 //   - A name assigned more than once is the person's: none of its lines
 //     changes, and one the rules above would change is reported.
 func (u *updater) planEnv() error {
@@ -2024,6 +2116,8 @@ func (u *updater) planEnv() error {
 			return fmt.Errorf("cyfr update could not fetch the scaffold files of release %s, which name the settings it shipped in .env.example (%v)", u.oldRelease, err)
 		}
 	}
+	oldCompose, _ := shipped.File("docker-compose.yml")
+	newCompose, _ := u.scaffold.File("docker-compose.yml")
 	old, oldOK := shipped.File(".env.example")
 	now, nowOK := u.scaffold.File(".env.example")
 	if !oldOK || !nowOK {
@@ -2050,9 +2144,8 @@ func (u *updater) planEnv() error {
 		return fmt.Errorf("release %s's .env.example did not read (%v)", u.version, err)
 	}
 	declared := envNames(now)
-	oldCompose, _ := shipped.File("docker-compose.yml")
-	newCompose, _ := u.scaffold.File("docker-compose.yml")
-	gone := retiredServices(oldCompose, newCompose)
+	commented := commentedValues(now)
+	gone := retiredNames(oldCompose, newCompose, "services")
 	shippedOld := envNames(old)
 	for _, name := range slices.Sorted(maps.Keys(held)) {
 		value, at := held[name], lines[name]
@@ -2064,7 +2157,7 @@ func (u *updater) planEnv() error {
 			// A name assigned more than once is the person's: the edit
 			// would remove every line but its last.
 			if retired || defaulted {
-				u.twice = append(u.twice, twiceLine{name: name, lines: at, retired: retired, write: next})
+				u.twice = append(u.twice, twiceLine{name: name, retired: retired, write: next})
 			}
 			continue
 		}
@@ -2083,7 +2176,20 @@ func (u *updater) planEnv() error {
 		}
 		for _, host := range hostsIn(value) {
 			if gone[host] {
-				u.stale = append(u.stale, staleLine{name: name, line: at[len(at)-1], host: host, write: newValues[name]})
+				write, ships := newValues[name]
+				if !ships {
+					write = commented[name]
+				}
+				line := staleLine{name: name, host: host}
+				if hosts := hostsIn(write); len(hosts) > 0 {
+					line.put = hosts[0]
+				}
+				for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+					if slices.Contains(hostsIn(item), host) && strings.Contains(item, "://") {
+						line.url = true
+					}
+				}
+				u.stale = append(u.stale, line)
 				break
 			}
 		}
@@ -2092,15 +2198,16 @@ func (u *updater) planEnv() error {
 }
 
 // staleLine is a .env line the person set that names a service the
-// release no longer runs: its name, its line, the service it names, and
-// the new release's shipped value for the name, "" when it ships none.
-// Its value is never said: a line that names a host may carry a
-// credential.
+// release no longer runs: its name, the service it names, the host the new
+// release's shipped value for the name names in its place ("" when it
+// ships none), and whether the line names the service in a URL, so the
+// edit is said in a URL's terms. Its value is never said: a line that
+// names a host may carry a credential.
 type staleLine struct {
-	name  string
-	line  int
-	host  string
-	write string
+	name string
+	host string
+	put  string
+	url  bool
 }
 
 // twiceLine is a name .env assigns more than once, which the update would
@@ -2108,26 +2215,26 @@ type staleLine struct {
 // value (write), and leaves as the person wrote it.
 type twiceLine struct {
 	name    string
-	lines   []int
 	retired bool
 	write   string
 }
 
-// retiredServices answers the services of the old release's compose file
-// the new release's does not have, by name; none when either does not read.
-func retiredServices(old, now []byte) map[string]bool {
+// retiredNames answers the entries of a top-level section of the compose
+// file old (its services) that the compose file now does not have, by
+// name; none when either does not read.
+func retiredNames(old, now []byte, section string) map[string]bool {
 	names := func(data []byte) map[string]bool {
 		var root yaml.Node
 		if yaml.Unmarshal(data, &root) != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
 			return nil
 		}
-		services := mapValue(root.Content[0], "services")
-		if services == nil || services.Kind != yaml.MappingNode {
+		entries := mapValue(root.Content[0], section)
+		if entries == nil || entries.Kind != yaml.MappingNode {
 			return nil
 		}
 		out := map[string]bool{}
-		for i := 0; i < len(services.Content); i += 2 {
-			out[services.Content[i].Value] = true
+		for i := 0; i < len(entries.Content); i += 2 {
+			out[entries.Content[i].Value] = true
 		}
 		return out
 	}
@@ -2142,6 +2249,147 @@ func retiredServices(old, now []byte) map[string]bool {
 		}
 	}
 	return gone
+}
+
+// usedNetworks answers the networks the compose file data uses, by name:
+// its top-level networks and default, which compose makes for every
+// service that names no network, each service of a file without a networks
+// key among them; nil when data does not read as a compose file.
+func usedNetworks(data []byte) map[string]bool {
+	var root yaml.Node
+	if yaml.Unmarshal(data, &root) != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	used := map[string]bool{"default": true}
+	if entries := mapValue(root.Content[0], "networks"); entries != nil && entries.Kind == yaml.MappingNode {
+		for i := 0; i < len(entries.Content); i += 2 {
+			used[entries.Content[i].Value] = true
+		}
+	}
+	return used
+}
+
+// declaredServices are the services the compose file data declares, by
+// name; nil when data does not read as a compose file.
+func declaredServices(data []byte) map[string]bool {
+	var root yaml.Node
+	if yaml.Unmarshal(data, &root) != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	declared := map[string]bool{}
+	if entries := mapValue(root.Content[0], "services"); entries != nil && entries.Kind == yaml.MappingNode {
+		for i := 0; i < len(entries.Content); i += 2 {
+			declared[entries.Content[i].Value] = true
+		}
+	}
+	return declared
+}
+
+// removeContainers removes, with the stack stopped and before anything
+// starts under the compose file to, each container of this compose
+// project, listed by its compose labels and so never another project's,
+// whose service to does not declare (declaredServices): a container that
+// shares another's network namespace is on no network of its own, so the
+// networks' removal (removeNetworks) never finds it. which names to in what
+// is said. A to that does not read removes nothing.
+func (u *updater) removeContainers(to []byte, which string) error {
+	declared := declaredServices(to)
+	if declared == nil {
+		return nil
+	}
+	ctx, cancel := u.detached(stopTimeout)
+	defer cancel()
+	project := access.ProjectName(".")
+	listed, err := u.dockerOutput(ctx, nil, "ps", "-a", "--no-trunc", "--format", `{{.ID}} {{.Label "com.docker.compose.service"}}`, "--filter", "label=com.docker.compose.project="+project)
+	if err != nil {
+		return fmt.Errorf("cyfr %s could not list this project's containers (%v)", u.command, err)
+	}
+	var ids, services []string
+	for _, line := range strings.Split(listed, "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && !declared[fields[1]] {
+			ids = append(ids, fields[0])
+			if !slices.Contains(services, fields[1]) {
+				services = append(services, fields[1])
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(services)
+	if _, err := u.dockerOutput(ctx, nil, append([]string{"rm"}, ids...)...); err != nil {
+		return fmt.Errorf("cyfr %s could not remove this project's containers of %s, which %s does not run (%v)", u.command, strings.Join(services, ", "), which, err)
+	}
+	fmt.Fprintf(u.out, "Removed this project's containers of services %s does not run: %s.\n", which, strings.Join(services, ", "))
+	return nil
+}
+
+// removeNetworks removes, with the stack stopped and before anything
+// starts under the compose file to, each network of this compose project,
+// listed by its compose labels and so never another project's, that to
+// does not use (usedNetworks), since one may hold an address range a
+// network of to takes; which names to in what is said. Each goes as its
+// project's containers on it, stopped, which the next start makes again,
+// then the network itself. A container of another project on it refuses,
+// naming both, and nothing of that network is removed. A to that does not
+// read removes nothing.
+func (u *updater) removeNetworks(to []byte, which string) error {
+	used := usedNetworks(to)
+	if used == nil {
+		return nil
+	}
+	ctx, cancel := u.detached(stopTimeout)
+	defer cancel()
+	project := access.ProjectName(".")
+	listed, err := u.dockerOutput(ctx, nil, "network", "ls", "--format", `{{.ID}} {{.Label "com.docker.compose.network"}}`, "--filter", "label=com.docker.compose.project="+project)
+	if err != nil {
+		return fmt.Errorf("cyfr %s could not list this project's networks (%v)", u.command, err)
+	}
+	unused := map[string][]string{}
+	for _, line := range strings.Split(listed, "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && !used[fields[1]] {
+			unused[fields[1]] = append(unused[fields[1]], fields[0])
+		}
+	}
+	if len(unused) == 0 {
+		return nil
+	}
+	names := slices.Sorted(maps.Keys(unused))
+	failed := func(name string, why any) error {
+		return fmt.Errorf("cyfr %s could not remove the network %s, which %s does not use (%v)", u.command, name, which, why)
+	}
+	for _, name := range names {
+		for _, id := range unused[name] {
+			attached, err := u.dockerOutput(ctx, nil, "ps", "-a", "-q", "--no-trunc", "--filter", "network="+id, "--filter", "label=com.docker.compose.project="+project)
+			if err != nil {
+				return failed(name, err)
+			}
+			all, err := u.dockerOutput(ctx, nil, "ps", "-a", "-q", "--no-trunc", "--filter", "network="+id)
+			if err != nil {
+				return failed(name, err)
+			}
+			for _, c := range strings.Fields(all) {
+				if !slices.Contains(strings.Fields(attached), c) {
+					return failed(name, "container "+shortID(c)+" of another Compose project is attached to it")
+				}
+			}
+			if ours := strings.Fields(attached); len(ours) > 0 {
+				if _, err := u.dockerOutput(ctx, nil, append([]string{"rm"}, ours...)...); err != nil {
+					return failed(name, err)
+				}
+			}
+			if _, err := u.dockerOutput(ctx, nil, "network", "rm", id); err != nil {
+				return failed(name, err)
+			}
+		}
+	}
+	fmt.Fprintf(u.out, "Removed this project's networks %s does not use: %s.\n", which, strings.Join(names, ", "))
+	return nil
+}
+
+// shortID is a container id as docker ps shows it, its first 12 digits.
+func shortID(id string) string {
+	return id[:min(len(id), 12)]
 }
 
 // hostsIn answers the hosts a setting's value names in any form it takes:
@@ -2413,8 +2661,17 @@ func (u *updater) readRoster() error {
 	return nil
 }
 
-// listRunning reads the stack's running services into u.running.
+// listRunning reads the stack's running services into u.running under the
+// stack's own selection: the head and every profile of its own the compose
+// file set declares (ownServices), since a compose file an older release
+// left may run services under a profile .env's head does not name. The
+// running services of its own are beside, and their profiles are own.
 func (u *updater) listRunning(ctx context.Context) error {
+	apart, wide, err := u.ownServices(ctx)
+	if err != nil {
+		return fmt.Errorf("%v; nothing was changed", err)
+	}
+	u.own, u.beside = wide, nil
 	ps, err := u.composeOutput(ctx, "ps", "--services", "--status", "running")
 	if err != nil {
 		return fmt.Errorf("docker compose could not list the running services (%v); nothing was changed", err)
@@ -2425,7 +2682,105 @@ func (u *updater) listRunning(ctx context.Context) error {
 			u.running = append(u.running, name)
 		}
 	}
+	u.own = nil
+	for _, svc := range u.running {
+		if profiles, ok := apart[svc]; ok {
+			u.beside = append(u.beside, svc)
+			u.own = append(u.own, profiles...)
+		}
+	}
+	slices.Sort(u.own)
+	u.own = slices.Compact(u.own)
 	return nil
+}
+
+// ownServices answers, by name, the services of the stack's compose file
+// set that run only under profiles of its own, which no access mode
+// selects (DeclaredProfiles), as an older release ran its builds under
+// one: none of them starts under .env's head. Each maps to those of its
+// profiles; wide are every such profile the file set declares.
+func (u *updater) ownServices(ctx context.Context) (apart map[string][]string, wide []string, err error) {
+	declared, err := u.engine.DeclaredProfiles(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker compose could not list the stack's profiles (%v)", engineFailure(err))
+	}
+	wide = slices.DeleteFunc(declared, func(p string) bool { return slices.Contains(access.ModeProfiles(), p) })
+	if len(wide) == 0 {
+		return nil, nil, nil
+	}
+	h := u.head
+	h.Profiles = slices.Concat(h.Profiles, wide)
+	args, err := u.engine.ComposeArgs(ctx, h, "config", "--format", "json")
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker compose could not read the stack's configuration (%v)", engineFailure(err))
+	}
+	raw, err := u.dockerOutput(ctx, nil, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("docker compose could not read the stack's configuration (%v)", err)
+	}
+	var config composeConfig
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		return nil, nil, errors.New("docker compose's configuration did not read as JSON")
+	}
+	apart = map[string][]string{}
+	for name, svc := range config.Services {
+		if slices.ContainsFunc(svc.Profiles, func(p string) bool { return slices.Contains(u.head.Profiles, p) }) {
+			continue
+		}
+		if own := slices.DeleteFunc(slices.Clone(svc.Profiles), func(p string) bool { return !slices.Contains(wide, p) }); len(own) > 0 {
+			apart[name] = own
+		}
+	}
+	return apart, wide, nil
+}
+
+// startCommand is the compose command, quoted as the person runs it, that
+// starts services, which run only under profiles of the stack's own
+// (ownServices).
+func startCommand(services, profiles []string) string {
+	command := "docker compose"
+	for _, p := range profiles {
+		command += " --profile " + p
+	}
+	return "'" + command + " up -d " + strings.Join(services, " ") + "'"
+}
+
+// unselectedLine is the sentence that says which services of the stack's
+// own (ownServices) .env's head leaves stopped, and the command that starts
+// them: what a start that ran under the head alone says of them. It is ""
+// when there are none, or when they do not read, since the start it
+// follows has already said how it went.
+func (u *updater) unselectedLine() string {
+	ctx, cancel := u.detached(composeRunTimeout)
+	defer cancel()
+	apart, _, err := u.ownServices(ctx)
+	if err != nil || len(apart) == 0 {
+		return ""
+	}
+	services := slices.Sorted(maps.Keys(apart))
+	var profiles []string
+	for _, svc := range services {
+		profiles = append(profiles, apart[svc]...)
+	}
+	return notStartedLine(services, profiles)
+}
+
+// notStartedLine is the sentence that names services of the stack's own,
+// under profiles .env's head does not select, as not started, and the
+// command that starts them.
+func notStartedLine(services, profiles []string) string {
+	profiles = slices.Compact(slices.Sorted(slices.Values(profiles)))
+	return fmt.Sprintf("These services are not started, since .env selects none of their profiles: %s; %s starts them.", strings.Join(services, ", "), startCommand(services, profiles))
+}
+
+// besideLine is notStartedLine of the services that ran beside the head's
+// (updater.beside), after " " for a sentence that says 'cyfr up' starts the
+// stack, which starts none of them; "" when none ran.
+func (u *updater) besideLine() string {
+	if len(u.beside) == 0 {
+		return ""
+	}
+	return " " + notStartedLine(u.beside, u.own)
 }
 
 // onTarget reports whether slot's member runs the release this update
@@ -2774,16 +3129,43 @@ func readContainers(raw string) ([]stackContainer, error) {
 
 // start starts the stack as .env and the compose file hold it, through the
 // one start path (access.Engine.StartWithin), cause naming the command,
-// waiting startHealth for cyfr's health. The head the start read is the
-// update's from then on, so what is waited for and what a failure stops is
-// what it started. A start that leaves the home on this machine alone
-// answers startedLocally.
+// waiting startHealth for cyfr's health, then the services beside the
+// head's under the stack's own selection, those alone: none they depend on
+// starts, so nothing that did not run before the stop runs after it. The
+// head the start read is the update's from then on, so what is waited for
+// and what a failure stops is what it started. A start that leaves the
+// home on this machine alone answers startedLocally; one whose services
+// beside did not start, besideFailed.
 func (u *updater) start(cause string) error {
 	rc, err := u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth)
 	if rc.FinalHead != nil {
 		u.head = *rc.FinalHead
 	}
-	return answerFailure(rc, err)
+	err = answerFailure(rc, err)
+	if local := (startedLocally{}); len(u.beside) > 0 && (err == nil || errors.As(err, &local)) {
+		ctx, cancel := u.detached(stopTimeout)
+		defer cancel()
+		if upErr := u.composeDocker(ctx, append([]string{"up", "-d", "--no-deps"}, u.beside...)...); upErr != nil {
+			return besideFailed{services: u.beside, profiles: u.own, err: upErr, local: err}
+		}
+	}
+	return err
+}
+
+// besideFailed is a start whose head's services started and whose services
+// beside them (updater.beside, under profiles) did not, err saying why;
+// local is the head's start's answer, nil or startedLocally.
+type besideFailed struct {
+	services, profiles []string
+	err, local         error
+}
+
+func (b besideFailed) Error() string {
+	text := fmt.Sprintf("%s did not start (%v); %s starts them", strings.Join(b.services, ", "), b.err, startCommand(b.services, b.profiles))
+	if b.local != nil {
+		text += ". " + b.local.Error()
+	}
+	return text
 }
 
 // restartOld starts the old stack again after a failure before the switch,
@@ -2803,11 +3185,14 @@ func (u *updater) restartOld(reason error) error {
 	}
 	fmt.Fprintln(u.out, "Starting the old stack again...")
 	err := u.start("update")
+	if beside := (besideFailed{}); errors.As(err, &beside) {
+		return fmt.Errorf("%v.\nThe old stack was started again and docker-compose.yml is unchanged, but %v", u.redactor().Text(reason.Error()), err)
+	}
 	if local := (startedLocally{}); errors.As(err, &local) {
 		return fmt.Errorf("%v.\nThe old stack was started again, on this machine alone; docker-compose.yml is unchanged. %v", u.redactor().Text(reason.Error()), err)
 	}
 	if err != nil {
-		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redactor().Text(reason.Error()), err)
+		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it.%s", u.redactor().Text(reason.Error()), err, u.besideLine())
 	}
 	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redactor().Text(reason.Error()))
 }

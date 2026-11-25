@@ -84,8 +84,9 @@ type fakeRouteGuard struct {
 	refuseClears int
 	dead         bool
 	// afterLive runs as Live returns, as a peer's close just after the
-	// check would.
-	afterLive func()
+	// check would; beforeClear runs as a clear arrives, before it answers.
+	afterLive   func()
+	beforeClear func(spawnID string)
 }
 
 type routeCall struct {
@@ -93,12 +94,24 @@ type routeCall struct {
 	spawnID string
 	reach   string
 	addrs   []netip.Addr
+	port    uint16
+	private bool
 	conn    uint64
 }
 
 func (g *fakeRouteGuard) Admit(spawnID, reach string, addrs []netip.Addr, netns, udp, tcp *os.File) (guard.Route, error) {
+	return g.admit(routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs}, netns, udp, tcp)
+}
+
+func (g *fakeRouteGuard) AdmitRole(spawnID string, port uint16, private bool, netns, udp, tcp *os.File) (guard.Route, error) {
+	return g.admit(routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: guard.ReachRole, port: port, private: private}, netns, udp, tcp)
+}
+
+func (g *fakeRouteGuard) admit(call routeCall, netns, udp, tcp *os.File) (guard.Route, error) {
+	spawnID := call.spawnID
 	g.mu.Lock()
-	g.calls = append(g.calls, routeCall{op: guard.TypeAdmit, spawnID: spawnID, reach: reach, addrs: addrs, conn: g.conn})
+	call.conn = g.conn
+	g.calls = append(g.calls, call)
 	hold, before, refuse, conn := g.hold, g.before, g.refuse, g.conn
 	g.mu.Unlock()
 	if err := checkSpaceDescriptors(netns, udp, tcp); err != nil {
@@ -137,6 +150,12 @@ func (g *fakeRouteGuard) Live(r guard.Route) bool {
 }
 
 func (g *fakeRouteGuard) Clear(spawnID string, r guard.Route) error {
+	g.mu.Lock()
+	before := g.beforeClear
+	g.mu.Unlock()
+	if before != nil {
+		before(spawnID)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, routeCall{op: guard.TypeClear, spawnID: spawnID, conn: r.Conn})
@@ -281,6 +300,53 @@ func TestARoutedSpaceStartsOnlyAfterItsRouteIsAdmitted(t *testing.T) {
 	}
 	k.releasedPair(t, spawnID)
 	k.guard.waitOps(t, spawnID, guard.TypeAdmit, guard.TypeClear)
+}
+
+// A spawn whose hosts are resolving as its role's process ends never
+// starts: it is refused once they resolve, before anything of it is made
+// or the guard is asked, and the role's end waits for that start before it
+// is over.
+func TestASpawnResolvingAsItsRoleEndsNeverStarts(t *testing.T) {
+	k := routedKeeper(t)
+	resolving, resolve := make(chan struct{}), make(chan struct{})
+	before := lookupHost
+	t.Cleanup(func() { lookupHost = before })
+	lookupHost = func(context.Context, string) ([]netip.Addr, error) {
+		close(resolving)
+		<-resolve
+		return []netip.Addr{netip.MustParseAddr("203.0.113.7")}, nil
+	}
+	req := spawnRequest(t, k.attach, "r1", "true", map[string]string{}, false, 64<<20)
+	req.Hosts = []string{"api.example.com"}
+	done := make(chan struct{})
+	go func() {
+		k.handleSpawn(t, req)
+		close(done)
+	}()
+	<-resolving
+	// The role's process ends: its end begins as endClient's does, and
+	// waits for the start in flight.
+	k.s.mu.Lock()
+	k.c.ended = true
+	k.s.mu.Unlock()
+	waited := make(chan bool, 1)
+	go func() { waited <- k.s.awaitStarts(k.c) }()
+	select {
+	case <-waited:
+		t.Fatal("the role's end did not wait for its spawn's start")
+	case <-time.After(200 * time.Millisecond): // sleep-ok: the end must still be waiting while the hosts resolve
+	}
+	close(resolve)
+	<-done
+	if !<-waited {
+		t.Fatal("the role's end timed out waiting for its spawn's start")
+	}
+	if reply := k.reply(t); reply["type"] != protocol.TypeError || reply["code"] != protocol.CodeInternal || reply["spawn_id"] != nil {
+		t.Fatalf("the spawn of a role that ended answered %v", reply)
+	}
+	if calls := k.guard.taken(); len(calls) != 0 {
+		t.Fatalf("the guard was asked to route a spawn of a role that ended: %+v", calls)
+	}
 }
 
 // Two routed spaces at once: each binds the same port on its own loopback

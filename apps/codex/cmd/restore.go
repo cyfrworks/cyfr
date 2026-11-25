@@ -353,7 +353,7 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err != nil {
 		return engineFailure(err)
 	}
-	r := &restorer{updater: updater{ctx: ctx, out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
+	r := &restorer{updater: updater{ctx: ctx, command: "restore", out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
 	return r.run()
 }
 
@@ -408,7 +408,7 @@ func (r *restorer) run() error {
 	// the image's entrypoint, which hands the storage root to the image's
 	// user, and nothing after it until the put-back's writes runs a
 	// container or changes an owner.
-	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers, r.refuseUnwritableParts}
+	steps := []func() error{r.holdConfigFiles, r.freeNetworks, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers, r.refuseUnwritableParts}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {
@@ -439,6 +439,7 @@ func (r *restorer) run() error {
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
+		r.sayUnselected()
 		return nil
 	}
 	if r.ctx.Err() != nil {
@@ -452,6 +453,7 @@ func (r *restorer) run() error {
 	err = r.updater.start("restore")
 	if local := (startedLocally{}); errors.As(err, &local) {
 		fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s. It runs on this machine alone.\n", m.Version, m.TakenAt, r.restoreID)
+		r.sayUnselected()
 		return err
 	}
 	if err != nil {
@@ -464,7 +466,18 @@ func (r *restorer) run() error {
 		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read its log with 'docker compose logs cyfr', fix the cause and run 'cyfr up'", message, r.restoreID)
 	}
 	fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s.\n", m.Version, m.TakenAt, r.restoreID)
+	r.sayUnselected()
 	return nil
+}
+
+// sayUnselected says, after the restored stack's start under the
+// snapshot's head alone, which services of the restored compose file's own
+// that start left stopped and how to start them (unselectedLine), as the
+// snapshot holds no record of which of them ran.
+func (r *restorer) sayUnselected() {
+	if line := r.unselectedLine(); line != "" {
+		fmt.Fprintln(r.out, line)
+	}
 }
 
 // refuseStopped puts docker-compose.yml and .env back as they were and
@@ -493,6 +506,23 @@ func (r *restorer) holdConfigFiles() error {
 		}
 	}
 	return nil
+}
+
+// freeNetworks removes this project's containers of services the
+// snapshot's compose file does not declare (removeContainers) and its
+// networks that file does not use (removeNetworks) before anything runs
+// under it, so a network of its may take the address range one of them
+// holds, as an update that failed after its switch leaves the new
+// release's.
+func (r *restorer) freeNetworks() error {
+	snapshot, err := os.ReadFile(r.snap.path("compose"))
+	if err != nil {
+		return err
+	}
+	if err := r.removeContainers(snapshot, "the snapshot's docker-compose.yml"); err != nil {
+		return err
+	}
+	return r.removeNetworks(snapshot, "the snapshot's docker-compose.yml")
 }
 
 // withBarrier answers the dotenv text env with restoreBarrier set to the
@@ -569,7 +599,9 @@ func (r *restorer) putConfigFiles() error {
 	if err := writeDurable(".env", barred, 0600); err != nil {
 		return err
 	}
-	// From here every compose call runs under the snapshot's head.
+	// From here every compose call runs under the snapshot's head alone:
+	// the stopped stack's own profiles are its compose file's.
+	r.own, r.beside = nil, nil
 	if r.head, err = r.engine.Head(); err != nil {
 		return engineFailure(err)
 	}

@@ -51,7 +51,7 @@ func TestSwitchStopsCommitsThenStarts(t *testing.T) {
 		if c.Serve != serveClosed {
 			t.Errorf("compose up while Serve held %q: %s", c.Serve, c)
 		}
-		want := []string{"compose", "-p", "home", "-f", resolvedName(r.NewDigest), "--project-directory", ".", "--profile", "locus-builds", "--profile", "public"}
+		want := []string{"compose", "-p", "home", "-f", resolvedName(r.NewDigest), "--project-directory", ".", "--profile", "public"}
 		if !slices.Equal(c.Args[:len(want)], want) {
 			t.Errorf("compose up is not on the new head's materialized file and selection: %s", c)
 		}
@@ -96,8 +96,6 @@ func TestSwitchFenceRefusesAStalePreview(t *testing.T) {
 	}
 	for n, edit := range []struct{ name, from, to string }{
 		{"port", "CYFR_PORT=4000", "CYFR_PORT=4100"},
-		{"builds URL", "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100", "CYFR_LOCUS_BUILDS_URL=http://builder.example.com:4100"},
-		{"builds off", "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100", "CYFR_LOCUS_BUILDS_URL="},
 	} {
 		r := h.request(id(10+n), pub, "")
 		before := strings.Replace(h.env(), edit.from, edit.to, 1)

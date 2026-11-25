@@ -323,7 +323,7 @@ func HoldsManaged(dir string) bool {
 	return false
 }
 
-// SeccompProfile is the keeper's seccomp profile, which the locus-runtime service of
+// SeccompProfile is the keeper's seccomp profile, which the locus service of
 // docker-compose.yml names beside it. It follows the image it lets start,
 // so `cyfr update`, which pulls the image, refreshes it too.
 const SeccompProfile = "keeper.seccomp.json"

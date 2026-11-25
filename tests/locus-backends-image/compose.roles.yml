@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered after compose.backends.yml by the roles proof
+# (tests/locus-backends-image/roles.py), which starts the locus service
+# with all three keys: this adds a loopback port on the guard for the
+# builds role's listener and one for the runtime's, which the guard
+# forwards into each role's space, beside the backends' port the backends
+# overlay publishes.
+services:
+  locus-guard:
+    ports:
+      - "127.0.0.1::4100"
+      - "127.0.0.1::4200"

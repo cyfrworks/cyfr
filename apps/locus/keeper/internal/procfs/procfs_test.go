@@ -6,6 +6,7 @@ package procfs
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -211,5 +212,36 @@ func TestScanUIDCountsLiveAndZombieProcesses(t *testing.T) {
 	none, err := ScanUID(root, 20003, 0)
 	if err != nil || none.Total() != 0 {
 		t.Fatalf("count for an unused uid %+v %v", none, err)
+	}
+}
+
+// Every uid of every process is held, a zombie's included, whatever the
+// process's other uids are; a process gone with its entry holds none, and
+// one whose status cannot be read fails the scan, since it may hold any.
+func TestHeldUIDsAreEveryProcesssFourUIDs(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, "10", "S (sleeping)", "20001\t20001\t20001\t20001")
+	writeProc(t, root, "11", "Z (zombie)", "20002\t20002\t20002\t20002")
+	writeProc(t, root, "12", "R (running)", "10001\t20003\t10001\t20004")
+	if err := os.MkdirAll(filepath.Join(root, "self"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "99"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	held, err := HeldUIDs(root)
+	want := map[int]bool{20001: true, 20002: true, 10001: true, 20003: true, 20004: true}
+	if err != nil || !reflect.DeepEqual(held, want) {
+		t.Fatalf("held %v %v, want %v", held, err, want)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "13", "status"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := HeldUIDs(root); err == nil {
+		t.Fatalf("a status that cannot be read held %v", held)
+	}
+	if _, err := HeldUIDs(filepath.Join(root, "absent")); err == nil {
+		t.Fatal("a /proc that cannot be read was scanned")
 	}
 }

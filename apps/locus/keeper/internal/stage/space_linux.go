@@ -580,7 +580,7 @@ func openTerminal() error {
 }
 
 // Init runs `cyfr-locus stage init`: the space's pid 1 once it holds
-// nothing. It sets the spec's limits and umask, starts the command in a
+// nothing. It sets the umask and a spawn's limits, starts the command in a
 // session of its own, which takes its terminal as its controlling one when
 // it has one, with its control channel on fd 3 and a relay space's relay on
 // fd 4, and closes the status pipe once the command has executed. It then
@@ -611,8 +611,12 @@ func Init() int {
 	signal.Notify(signals, passedSignals...)
 
 	syscall.Umask(0o077)
-	if err := setLimits(spec.Limits); err != nil {
-		return fail("rlimits: %v", err)
+	// A role keeps the keeper's own limits, as its process had them before
+	// it had a space.
+	if spec.Role == "" {
+		if err := setLimits(spec.Limits); err != nil {
+			return fail("rlimits: %v", err)
+		}
 	}
 	path, err := spec.LookPath(spec.Argv[0])
 	if err != nil {

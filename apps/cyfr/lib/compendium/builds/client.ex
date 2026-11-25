@@ -8,8 +8,8 @@ defmodule Compendium.Builds.Client do
   does.
 
   The service is the one `Cyfr.RuntimeConfig.locus_builds_url/0` and
-  `locus_builds_key/0` name (`CYFR_LOCUS_BUILDS_URL`,
-  `CYFR_LOCUS_BUILDS_KEY`); with either missing every function answers
+  `locus_builds_key/0` name (`CYFR_LOCUS_BUILDS_KEY`, beside
+  `CYFR_LOCUS_BACKENDS_URL`); with either missing every function answers
   `{:error, :not_configured}` and no request is made. A request is a
   `POST` to its route whose body the protocol encodes and whose
   `x-cyfr-auth` header is `Prima.BuilderProtocol.request_header/3` over

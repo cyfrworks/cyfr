@@ -3,10 +3,10 @@
 
 # runtime image tests
 
-These suites run the Locus image (`Dockerfile.locus`) in its runtime role, as
-`docker-compose.yml`'s `locus-runtime` service, layered with
-`compose.locus-runtime.yml` for the image under test, a
-loopback port and the pool settings a case chooses, against a scripted
+These suites run the Locus image (`Dockerfile.locus`) as
+`docker-compose.yml`'s `locus` service behind its guard, holding the
+runtime's key alone, layered with `compose.runtime.yml` for the image
+under test, a loopback port and the pool settings a case chooses, against a scripted
 control plane on this machine. They read what only the image shows: the
 runners' processes, uids, homes, memory groups and memory, and the
 container's CPU and log. The `locus-runtime-image` job of
@@ -56,8 +56,8 @@ else the host runs.
 temporary directory a run makes (`tests/browser/README.md`, Run names). A TERM or INT ends a suite with its compose project and its
 temporary directories removed.
 They need Docker Engine 28 or later with Compose on a cgroup v2 host that
-allows unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime` service
-says why), and Python 3. Each case prints an `ok:` line per assertion and
+allows unprivileged user namespaces (`docker-compose.yml`'s `locus` service says
+why), and Python 3. Each case prints an `ok:` line per assertion and
 stops at the first `FAIL:`.
 
 ## The credential canary

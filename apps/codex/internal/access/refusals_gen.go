@@ -158,7 +158,7 @@ var refusalRows = map[string]refusalRow{
 	"compose_env_refused": {
 		Class: "invalid_argument",
 		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{"key"}, Template: "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."},
+			{Fixed: map[string]string{}, Slots: []string{"key"}, Template: "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."},
 			{Fixed: map[string]string{}, Slots: []string{"line"}, Template: "Line {line} of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."},
 		},
 	},

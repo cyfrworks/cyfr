@@ -57,7 +57,6 @@ defmodule Compendium.BuildsDisabledTest do
           ] do
         assert {:error, message} = Provider.handle("build", ctx, args)
         assert message =~ "builds are disabled on this server", what
-        assert message =~ "CYFR_LOCUS_BUILDS_URL"
         assert message =~ "CYFR_LOCUS_BUILDS_KEY"
       end
 

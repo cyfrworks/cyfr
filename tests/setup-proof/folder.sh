@@ -19,7 +19,7 @@ seed() {
   local D=$1 PORT=$2 mount
   shift 2
   [ "$#" -gt 0 ] || set -- CYFR_DIRECTORY_SERVE=writer "CYFR_DIRECTORY_URL=http://localhost:$PORT" "CYFR_REGISTRY_URL=localhost:$PORT" \
-    CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1
+    CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1
   cp "$ROOT/docker-compose.yml" "$ROOT/Caddyfile" "$D/"
   cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$D/keeper.seccomp.json"
   {
@@ -28,10 +28,9 @@ seed() {
       echo "    volumes:"
       for mount in $SEED_MOUNTS; do echo "      - $mount"; done
     fi
-    printf '%s\n' "  locus-runtime:" '    profiles: ["proof-never"]' "  locus-backends:" '    profiles: ["proof-never"]' \
-      "  locus-backends-guard:" '    profiles: ["proof-never"]'
+    printf '%s\n' "  locus:" '    profiles: ["proof-never"]' "  locus-guard:" '    profiles: ["proof-never"]'
   } >"$D/docker-compose.override.yml"
-  sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_URL=.*|CYFR_LOCUS_BUILDS_URL=|' \
+  sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_KEY=.*|CYFR_LOCUS_BUILDS_KEY=|' \
     -e '/^CYFR_DIRECTORY_SERVE=/d;/^CYFR_DIRECTORY_URL=/d;/^CYFR_REGISTRY_URL=/d;/^CYFR_PRIVATE_EGRESS_TARGETS=/d' "$ROOT/.env.example" >"$D/.env.example"
   printf '%s\n' "" CYFR_AUTO_MIGRATE=on "$@" >>"$D/.env.example"
 }

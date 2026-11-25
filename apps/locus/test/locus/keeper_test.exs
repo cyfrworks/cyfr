@@ -394,6 +394,50 @@ defmodule Locus.KeeperTest do
       wait_until(fn -> releases(fake, 0) != [] end, 5_000, "the dead reader's spawn released")
     end
 
+    test "a run's heir hears its end once, at cyfr-locus's word, after its reader died, " <>
+           "and a run naming a fenced tag starts nothing",
+         %{name: name, fake: fake} do
+      test = self()
+      tag = make_ref()
+      # The command runs until cyfr-locus retires it, so its end is the
+      # keeper's release alone, which the fake holds.
+      :ok = FakeKeeper.hold_releases(fake, test)
+
+      reader =
+        spawn(fn ->
+          Keeper.run(
+            name,
+            %{argv: ["/bin/sh", "-c", "echo running >&2; exec sleep 300"], env: %{}, stdin: ""},
+            place: place!(name, "build"),
+            deadline: within(60_000),
+            max_stdout_bytes: 1_048_576,
+            heir: {test, tag},
+            on_output: fn line -> send(test, {:run_said, line}) end
+          )
+        end)
+
+      assert_receive {:run_said, "running"}, 10_000
+      Process.exit(reader, :kill)
+
+      # The keeper asks for the spawn's end, which cyfr-locus has not given.
+      assert_receive {:release_held, _spawn_id}, 10_000
+      assert Keeper.fence(name, tag) == :pending
+      refute_received {Keeper, {:heir, ^tag}, :released}
+
+      :ok = FakeKeeper.carry_releases(fake)
+      assert_receive {Keeper, {:heir, ^tag}, :released}, 10_000
+      assert Keeper.fence(name, tag) == :none
+      refute_receive {Keeper, {:heir, ^tag}, :released}, 200
+
+      assert {:error, {:spawn_failed, :fenced}} =
+               Keeper.run(name, %{argv: ["/bin/true"], env: %{}, stdin: ""},
+                 place: place!(name, "build"),
+                 deadline: within(10_000),
+                 max_stdout_bytes: 1_048_576,
+                 heir: {test, tag}
+               )
+    end
+
     test "a relay that dials once the client has read the exit and release reports still delivers its output",
          %{name: name, fake: fake, client: client} do
       test = self()
@@ -514,6 +558,17 @@ defmodule Locus.KeeperTest do
       assert {:error, {:keeper_unavailable, {:attach_dir_not_private, ^dir}}} =
                Keeper.start_link(channel: channel, attach_dir: dir, name: :keeper_open_dir)
     end
+
+    # The role's run folder is at the same path inside its space and
+    # outside it, where cyfr-locus starts the relays: a client listens there
+    # unless told another directory.
+    test "the attach directory is the run folder cyfr-locus names, or /run/locus" do
+      assert Keeper.default_attach_dir(fn "KEEPER_RUN_DIR" -> "/run/locus/builds" end) ==
+               "/run/locus/builds"
+
+      assert Keeper.default_attach_dir(fn "KEEPER_RUN_DIR" -> nil end) == "/run/locus"
+      assert Keeper.default_attach_dir(fn "KEEPER_RUN_DIR" -> "" end) == "/run/locus"
+    end
   end
 
   describe "no credential on an exit path" do
@@ -596,7 +651,7 @@ defmodule Locus.KeeperTest do
       owner = self()
       task = Task.async(fn -> Keeper.place(c.name, id, %{kind: "warm"}, owner) end)
       assert %{"type" => "place", "id" => ^id} = request(c.peer)
-      :ok = :socket.send(c.peer, [Jason.encode!(%{v: 4, type: "placed", id: id}), ?\n])
+      :ok = :socket.send(c.peer, [Jason.encode!(%{v: 5, type: "placed", id: id}), ?\n])
       assert :ok = Task.await(task)
     end
 
@@ -626,7 +681,7 @@ defmodule Locus.KeeperTest do
 
       :ok =
         :socket.send(c.peer, [
-          Jason.encode!(%{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
+          Jason.encode!(%{v: 5, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
           ?\n
         ])
 
@@ -818,7 +873,7 @@ defmodule Locus.KeeperTest do
       %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
       spawn_id = String.duplicate("cd", 16)
 
-      spawned = %{v: 4, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
+      spawned = %{v: 5, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
       :ok = :socket.send(c.peer, [Jason.encode!(spawned), ?\n])
       assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
 
@@ -949,8 +1004,8 @@ defmodule Locus.KeeperTest do
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, "last"))
       :ok = :gen_tcp.close(relay)
       id = String.duplicate("cd", 16)
-      exit = %{v: 4, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil}
-      released = %{v: 4, type: "released", spawn_id: id}
+      exit = %{v: 5, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil}
+      released = %{v: 5, type: "released", spawn_id: id}
       :ok = :socket.send(c.peer, [Jason.encode!(exit), ?\n, Jason.encode!(released), ?\n])
 
       assert until_released(ref) ==
@@ -978,7 +1033,7 @@ defmodule Locus.KeeperTest do
         Task.async(fn ->
           %{"id" => request_id, "attach" => %{"token" => token}} = request(peer)
           spawn_id = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-          spawned = %{v: 4, type: "spawned", id: request_id, spawn_id: spawn_id, uid: 1, pid: 1}
+          spawned = %{v: 5, type: "spawned", id: request_id, spawn_id: spawn_id, uid: 1, pid: 1}
           :ok = :socket.send(peer, [Jason.encode!(spawned), ?\n])
           token
         end)
@@ -1175,7 +1230,7 @@ defmodule Locus.KeeperTest do
       # The leader exits while the owner holds its first frame untaken and
       # the relay still carries the last: that waits for the owner's word as
       # any read does, and the exit waits behind it.
-      channel_reply(c, %{v: 4, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
+      channel_reply(c, %{v: 5, type: "exited", spawn_id: id, code: 0, signal: nil, memory: nil})
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:stdout, "two"))
       :ok = :gen_tcp.close(relay)
       refute_receive {Keeper, ^ref, _event}, 500
@@ -1185,7 +1240,7 @@ defmodule Locus.KeeperTest do
       :ok = Keeper.taken(handle)
       assert until_released(ref, &match?({:exited, _, _, _}, &1)) == [{:exited, 0, nil, nil}]
 
-      channel_reply(c, %{v: 4, type: "released", spawn_id: id})
+      channel_reply(c, %{v: 5, type: "released", spawn_id: id})
       assert until_released(ref) == [:released]
     end
 
@@ -1250,7 +1305,7 @@ defmodule Locus.KeeperTest do
       :ok = :gen_tcp.close(relay)
 
       channel_reply(c, %{
-        v: 4,
+        v: 5,
         type: "exited",
         spawn_id: id,
         code: nil,
@@ -1258,7 +1313,7 @@ defmodule Locus.KeeperTest do
         memory: nil
       })
 
-      channel_reply(c, %{v: 4, type: "released", spawn_id: id})
+      channel_reply(c, %{v: 5, type: "released", spawn_id: id})
 
       # What the relay left is handed over at once, without the owner's
       # word: at most the table's figure for it, the relay's socket queue
@@ -1299,7 +1354,7 @@ defmodule Locus.KeeperTest do
       assert told(ref) == {0, 0}
 
       channel_reply(c, %{
-        v: 4,
+        v: 5,
         type: "exited",
         spawn_id: id,
         code: nil,
@@ -1307,7 +1362,7 @@ defmodule Locus.KeeperTest do
         memory: nil
       })
 
-      channel_reply(c, %{v: 4, type: "released", spawn_id: id})
+      channel_reply(c, %{v: 5, type: "released", spawn_id: id})
       assert until_released(ref) == [{:exited, nil, "SIGKILL", nil}, :released]
     end
 
@@ -1431,7 +1486,7 @@ defmodule Locus.KeeperTest do
             :ok =
               :socket.send(peer, [
                 Jason.encode!(%{
-                  v: 4,
+                  v: 5,
                   type: "spawned",
                   id: request_id,
                   spawn_id: spawn_id,
@@ -1472,7 +1527,7 @@ defmodule Locus.KeeperTest do
           assert Task.await(writing) == :ok
           :gen_tcp.close(relay)
         else
-          channel_reply(c, %{v: 4, type: "released", spawn_id: spawn_id})
+          channel_reply(c, %{v: 5, type: "released", spawn_id: spawn_id})
           assert {:error, :stdin_closed} = Task.await(writing)
         end
       end
@@ -2048,8 +2103,8 @@ defmodule Locus.KeeperTest do
                again: Keeper.place(name, "pl-1", %{kind: "program"}, self())
              } == %{
                requests: [
-                 %{"v" => 4, "type" => "place", "id" => "pl-1", "kind" => "program"},
-                 %{"v" => 4, "type" => "drop", "place" => "pl-1"}
+                 %{"v" => 5, "type" => "place", "id" => "pl-1", "kind" => "program"},
+                 %{"v" => 5, "type" => "drop", "place" => "pl-1"}
                ],
                places: %{},
                again: :ok
@@ -2075,8 +2130,8 @@ defmodule Locus.KeeperTest do
                again: Keeper.place(name, "pl-1", %{kind: "build"}, self())
              } == %{
                requests: [
-                 %{"v" => 4, "type" => "place", "id" => "pl-1", "kind" => "build"},
-                 %{"v" => 4, "type" => "drop", "place" => "pl-1"}
+                 %{"v" => 5, "type" => "place", "id" => "pl-1", "kind" => "build"},
+                 %{"v" => 5, "type" => "drop", "place" => "pl-1"}
                ],
                places: %{},
                again: :ok
@@ -2184,127 +2239,57 @@ defmodule Locus.KeeperTest do
       [root: root, uid: uid]
     end
 
-    # The fake makes every home as the test's own uid, which its own
-    # processes hold too: the client reads an empty /proc of its own.
-    defp kept_client(root, first, last) do
-      proc = FakeKeeper.short_tmp_dir()
-      ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(proc) end)
-      FakeKeeper.start_client!(kept_homes: "#{root}:#{first}-#{last}", proc_root: proc)
-    end
+    # The fake keeps every home as the test's own user, whose uid is every
+    # home's.
+    defp kept_client(root), do: FakeKeeper.start_client!(kept_root: root)
 
     defp home_requests(fake),
       do: for(%{"type" => "home_" <> _} = request <- FakeKeeper.requests(fake), do: request)
 
-    test "home_ensure draws the lowest free uid and makes the home; a made home answers its owner",
+    test "home_ensure names the home by its id alone and answers the uid cyfr-locus names",
          %{root: root, uid: uid} do
-      %{name: name, fake: fake} = kept_client(root, uid, uid + 1)
+      %{name: name, fake: fake} = kept_client(root)
 
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
-
-      assert [%{"type" => "home_make", "path" => path, "uid" => ^uid, "v" => 4}] =
-               home_requests(fake)
-
-      assert path == Path.join(root, "vlt_a")
+      assert File.dir?(Path.join(root, "vlt_a"))
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
-      assert length(home_requests(fake)) == 1
-
-      # The fake makes every home as the test's own uid, which the next
-      # draw finds taken.
-      assert {:ok, next} = Keeper.home_ensure(name, "vlt_b")
-      assert next == uid + 1
-
       assert {:error, {:refused, "bad_request"}} = Keeper.home_ensure(name, "../x")
 
-      # A range every uid of which a home owns draws none.
-      %{name: full} = kept_client(root, uid, uid)
-      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(full, "vlt_c")
+      assert [
+               %{"v" => 5, "type" => "home_make", "id" => first, "home" => "vlt_a"},
+               %{"v" => 5, "type" => "home_make", "id" => second, "home" => "vlt_a"}
+             ] = home_requests(fake)
+
+      assert first != second
+      assert Enum.all?(home_requests(fake), &(map_size(&1) == 4))
     end
 
-    test "a uid cyfr-locus refuses as busy is set aside and the next free uid drawn",
-         %{root: root, uid: uid} do
-      %{fake: fake, name: name} = kept_client(root, uid, uid + 1)
-      FakeKeeper.mode(fake, {:uid_busy, %{uid => true}})
+    test "a refused home request is cyfr-locus's code", %{root: root} do
+      %{name: name, fake: fake} = kept_client(root)
 
-      assert {:ok, drawn} = Keeper.home_ensure(name, "vlt_busy")
-      assert drawn == uid + 1
+      for code <- ~w(capacity unavailable internal) do
+        :ok = FakeKeeper.mode(fake, {:home_refused, code})
 
-      assert [%{"type" => "home_make", "uid" => ^uid}, %{"type" => "home_make", "uid" => ^drawn}] =
-               home_requests(fake)
+        for call <- [
+              &Keeper.home_ensure/2,
+              &Keeper.home_measure/2,
+              &Keeper.home_reset/2,
+              &Keeper.home_retire/2
+            ],
+            do: assert({:error, {:refused, ^code}} = call.(name, "vlt_a"))
 
-      # With every uid of the range busy, none is drawn.
-      FakeKeeper.mode(fake, {:uid_busy, %{uid => true, (uid + 1) => true}})
-      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(name, "vlt_none")
+        assert {:error, {:refused, ^code}} = Keeper.home_list(name)
+      end
     end
 
-    test "a uid a live process holds is no free uid, even with no home folder; home_list names the homes",
+    test "home_measure, home_reset and home_retire ask cyfr-locus by the home's id",
          %{root: root, uid: uid} do
-      proc = FakeKeeper.short_tmp_dir()
-      on_exit(fn -> File.rm_rf!(proc) end)
-      # A process of the first uid outlives its home's folder, as one that
-      # removed its own home would.
-      File.mkdir_p!(Path.join(proc, "4242"))
-
-      File.write!(
-        Path.join([proc, "4242", "status"]),
-        "Name:\tsleep\nUid:\t#{uid}\t#{uid}\t#{uid}\t#{uid}\nGid:\t1\t1\t1\t1\n"
-      )
-
-      File.mkdir_p!(Path.join(proc, "self"))
-
-      %{name: name} =
-        FakeKeeper.start_client!(kept_homes: "#{root}:#{uid}-#{uid + 1}", proc_root: proc)
-
-      assert {:ok, next} = Keeper.home_ensure(name, "vlt_b")
-      assert next == uid + 1
-
-      # With every uid held by a process, none is drawn.
-      File.mkdir_p!(Path.join(proc, "4243"))
-
-      File.write!(
-        Path.join([proc, "4243", "status"]),
-        "Uid:\t1\t#{uid + 1}\t1\t1\n"
-      )
-
-      assert {:error, {:refused, "capacity"}} = Keeper.home_ensure(name, "vlt_c")
-
-      # A /proc that cannot be read draws no uid at all.
-      %{name: blind} =
-        FakeKeeper.start_client!(
-          kept_homes: "#{root}:#{uid}-#{uid + 1}",
-          proc_root: Path.join(proc, "absent")
-        )
-
-      assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(blind, "vlt_d")
-
-      # A process whose status cannot be read holds a uid it does not name,
-      # so none is drawn; one gone with its whole entry holds none.
-      unread = FakeKeeper.short_tmp_dir()
-      on_exit(fn -> File.rm_rf!(unread) end)
-      File.mkdir_p!(Path.join([unread, "4244", "status"]))
-
-      %{name: unreadable} =
-        FakeKeeper.start_client!(kept_homes: "#{root}:#{uid}-#{uid + 1}", proc_root: unread)
-
-      assert {:error, {:refused, "unavailable"}} = Keeper.home_ensure(unreadable, "vlt_e")
-      File.rm_rf!(Path.join(unread, "4244"))
-      assert {:ok, _uid} = Keeper.home_ensure(unreadable, "vlt_e")
-      File.rm_rf!(Path.join(root, "vlt_e"))
-
-      File.write!(Path.join(root, "not-a-home.txt"), "x")
-      assert {:ok, ["vlt_b"]} = Keeper.home_list(name)
-
-      assert {:error, {:refused, "unavailable"}} =
-               Keeper.home_list(FakeKeeper.start_client!().name)
-    end
-
-    test "home_measure, home_reset and home_retire act on a made home as its uid",
-         %{root: root, uid: uid} do
-      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      %{name: name, fake: fake} = kept_client(root)
 
       assert :absent = Keeper.home_measure(name, "vlt_a")
       assert :ok = Keeper.home_reset(name, "vlt_a")
       assert :ok = Keeper.home_retire(name, "vlt_a")
-      assert home_requests(fake) == []
+      refute File.exists?(Path.join(root, "vlt_a"))
 
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
       File.write!(Path.join([root, "vlt_a", "notes"]), "0123456789")
@@ -2312,18 +2297,39 @@ defmodule Locus.KeeperTest do
 
       assert :ok = Keeper.home_reset(name, "vlt_a")
       assert File.ls!(Path.join(root, "vlt_a")) == []
-
-      assert [_make, %{"type" => "home_measure"}, retire, make] = home_requests(fake)
-      assert %{"type" => "home_retire", "uid" => ^uid} = retire
-      assert %{"type" => "home_make", "uid" => ^uid} = make
+      assert {:ok, 0} = Keeper.home_measure(name, "vlt_a")
 
       assert :ok = Keeper.home_retire(name, "vlt_a")
       refute File.exists?(Path.join(root, "vlt_a"))
+
+      assert home_requests(fake) |> Enum.map(&{&1["type"], &1["home"]}) == [
+               {"home_measure", "vlt_a"},
+               {"home_reset", "vlt_a"},
+               {"home_retire", "vlt_a"},
+               {"home_make", "vlt_a"},
+               {"home_measure", "vlt_a"},
+               {"home_reset", "vlt_a"},
+               {"home_measure", "vlt_a"},
+               {"home_retire", "vlt_a"}
+             ]
     end
 
-    test "a spawn in a kept home names the home, its uid, its bound and its terminal",
+    test "home_list gathers every page of cyfr-locus's list, sorted", %{root: root} do
+      %{name: name, fake: fake} = kept_client(root)
+      assert {:ok, []} = Keeper.home_list(name)
+
+      for id <- ~w(vlt_e vlt_b vlt_a vlt_d vlt_c), do: {:ok, _uid} = Keeper.home_ensure(name, id)
+      File.write!(Path.join(root, "not-a-home.txt"), "x")
+
+      assert {:ok, ~w(vlt_a vlt_b vlt_c vlt_d vlt_e)} = Keeper.home_list(name)
+
+      assert for(%{"type" => "home_list"} = list <- FakeKeeper.requests(fake), do: list["after"]) ==
+               [nil, nil, "vlt_b", "vlt_d"]
+    end
+
+    test "a spawn in a kept home names the home by its id, its bound and its terminal",
          %{root: root, uid: uid} do
-      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      %{name: name, fake: fake} = kept_client(root)
 
       spec = %{
         argv: ["true"],
@@ -2335,6 +2341,9 @@ defmodule Locus.KeeperTest do
 
       assert {:error, {:refused, "home_absent"}} =
                Keeper.spawn(name, Map.merge(spec, %{home: "vlt_a", place: place!(name)}))
+
+      assert {:error, {:refused, "bad_request"}} =
+               Keeper.spawn(name, Map.merge(spec, %{home: "../a", place: place!(name)}))
 
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
 
@@ -2349,12 +2358,12 @@ defmodule Locus.KeeperTest do
                  })
                )
 
-      assert [spawn] = for(%{"type" => "spawn"} = r <- FakeKeeper.requests(fake), do: r)
+      assert [absent, spawn] = for(%{"type" => "spawn"} = r <- FakeKeeper.requests(fake), do: r)
+      assert Map.take(absent, ~w(home_mode home)) == %{"home_mode" => "kept", "home" => "vlt_a"}
 
-      assert Map.take(spawn, ~w(home_mode home_path home_uid home_max_bytes pty)) == %{
+      assert Map.take(spawn, ~w(home_mode home home_path home_uid home_max_bytes pty)) == %{
                "home_mode" => "kept",
-               "home_path" => Path.join(root, "vlt_a"),
-               "home_uid" => uid,
+               "home" => "vlt_a",
                "home_max_bytes" => 1_048_576,
                "pty" => %{"rows" => 40, "cols" => 120}
              }
@@ -2405,8 +2414,8 @@ defmodule Locus.KeeperTest do
     for op <- [:home_retire, :home_reset] do
       @tag op: op
       test "#{op} is never ok beside a make held past its caller's timeout, and is once it landed",
-           %{root: root, uid: uid, op: op} do
-        %{name: name, fake: fake} = kept_client(root, uid, uid)
+           %{root: root, op: op} do
+        %{name: name, fake: fake} = kept_client(root)
         FakeKeeper.mode(fake, {:home_make_held, self()})
         assert {:timeout, _call} = catch_exit(GenServer.call(name, {:home_ensure, "vlt_a"}, 200))
         assert_receive {:home_make_held, make}, 2_000
@@ -2434,43 +2443,27 @@ defmodule Locus.KeeperTest do
       end
     end
 
-    test "home_retire is never ok beside a reset, which makes the home again, at either of its steps",
+    test "home_retire is never ok beside a reset, which makes the home again",
          %{root: root, uid: uid} do
-      %{name: name, fake: fake} = kept_client(root, uid, uid)
+      %{name: name, fake: fake} = kept_client(root)
       assert {:ok, ^uid} = Keeper.home_ensure(name, "vlt_a")
-      FakeKeeper.mode(fake, {:home_make_held, self()})
 
-      # Its retirement out, unanswered; then its make.
+      # The reset out, unanswered.
       :sys.suspend(fake)
       resetting = Task.async(fn -> Keeper.home_reset(name, "vlt_a") end)
       Prima.Test.Wait.wait_until(fn -> :sys.get_state(name).homes != %{} end, 5_000)
-      retiring = Task.async(fn -> Keeper.home_retire(name, "vlt_a") end)
-      beside_retirement = Task.yield(retiring, 1_000) || :waits
+      beside_reset = Keeper.home_retire(name, "vlt_a")
       :sys.resume(fake)
-      assert_receive {:home_make_held, make}, 2_000
-      beside_make = Keeper.home_retire(name, "vlt_a")
-      :ok = FakeKeeper.release_make(fake, make)
       assert :ok = Task.await(resetting, 5_000)
       made_again = File.exists?(Path.join(root, "vlt_a"))
 
-      assert %{
-               beside_retirement: beside_retirement,
-               beside_make: beside_make,
-               made_again: made_again
-             } == %{
-               beside_retirement: {:ok, {:error, {:refused, "conflict"}}},
-               beside_make: {:error, {:refused, "conflict"}},
+      assert %{beside_reset: beside_reset, made_again: made_again} == %{
+               beside_reset: {:error, {:refused, "conflict"}},
                made_again: true
              }
 
       assert :ok = Keeper.home_retire(name, "vlt_a")
       refute File.exists?(Path.join(root, "vlt_a"))
-    end
-
-    test "a refused home request is the keeper's code", %{root: root, uid: uid} do
-      %{name: name, fake: fake} = kept_client(root, uid, uid)
-      :ok = FakeKeeper.mode(fake, :home_refused)
-      assert {:error, {:refused, "internal"}} = Keeper.home_ensure(name, "vlt_a")
     end
 
     test "a keeper that keeps no homes refuses every home and kept spawn as unavailable" do
@@ -2484,28 +2477,22 @@ defmodule Locus.KeeperTest do
           ],
           do: assert({:error, {:refused, "unavailable"}} = call.(name, "vlt_a"))
 
+      assert {:error, {:refused, "unavailable"}} = Keeper.home_list(name)
+
       assert {:error, {:refused, "unavailable"}} =
                Keeper.spawn(name, %{
                  argv: ["true"],
                  env: %{},
-                 place: "pl-1",
+                 place: place!(name),
                  pool: "backends",
                  memory_bytes: 268_435_456,
                  cpu_quota: 100_000,
                  home: "vlt_a"
                })
 
-      assert FakeKeeper.requests(fake) == []
-    end
-
-    test "the kept-homes variable reads as cyfr-locus writes it" do
-      assert Keeper.kept_homes_env() == "KEEPER_KEPT_HOMES"
-
-      assert {:ok, %{root: "/var/lib/locus/kept", first: 40_001, last: 49_999}} =
-               Keeper.parse_kept_homes("/var/lib/locus/kept:40001-49999")
-
-      for text <- ["", "/k", "k:1-2", "/:1-2", "/k/:1-2", "/k:2-1", "/k:0-2", "/k:1-x", nil],
-          do: assert(:error = Keeper.parse_kept_homes(text), inspect(text))
+      # The client asks cyfr-locus, which alone knows it keeps no homes.
+      assert home_requests(fake) |> Enum.map(& &1["type"]) ==
+               ~w(home_make home_measure home_reset home_retire home_list)
     end
   end
 

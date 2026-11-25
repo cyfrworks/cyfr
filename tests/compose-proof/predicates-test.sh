@@ -6,7 +6,7 @@
 # predicates.sh) on canned objects: each passes the object a case expects,
 # and fails when any field it holds is changed, dropped or added to.
 #
-#   head_holds          every head field (port, email, builds URL, profiles
+#   head_holds          every head field (port, email, profiles
 #                       and the services they start, the node id and name
 #                       read from the tailnet state) in .env and in the
 #                       running cyfr
@@ -86,7 +86,6 @@ CYFR_PORT=4000
 CYFR_PUBLIC_URL=https://cyfr-1.proof.ts.net
 CYFR_TAILNET_NODE_ID=$node
 CADDY_ACME_EMAIL=
-CYFR_LOCUS_BUILDS_URL=
 ENV
 container_env() {
   python3 -I -c '
@@ -119,8 +118,6 @@ expect fail "another port in .env" holds "$tailnet_head" "$scratch/port" "$scrat
 expect fail "another port in the running cyfr" holds "$tailnet_head" "$scratch/env" "$scratch/port"
 edit 's/^CADDY_ACME_EMAIL=$/CADDY_ACME_EMAIL=ops@example.com/' email
 expect fail "an email the head has none of" holds "$tailnet_head" "$scratch/email"
-edit 's|^CYFR_LOCUS_BUILDS_URL=$|CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100|' builds
-expect fail "a builds URL the head has none of" holds "$tailnet_head" "$scratch/builds"
 edit '/^CYFR_PUBLIC_URL=/d' nourl
 expect fail "the head's public URL missing" holds "$tailnet_head" "$scratch/nourl"
 edit 's/^CYFR_HOST=.*/CYFR_HOST=cyfr.proof.ts.net/' host
@@ -133,7 +130,7 @@ expect fail "a state holding another node" holds "$tailnet_head" "$scratch/env" 
 expect fail "a proxy running that no profile starts" holds "$tailnet_head" "$scratch/env" "$scratch/env" "caddy cyfr tailscale"
 expect fail "the profile's proxy not running" holds "$tailnet_head" "$scratch/env" "$scratch/env" "cyfr"
 expect fail "an expected head with a profile the proof knows no proxy of" \
-  holds '{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["locus-builds","tailnet"]}' "$scratch/env"
+  holds '{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["proof-never","tailnet"]}' "$scratch/env"
 expect fail "an expected head with a field no access setting holds" holds "${tailnet_head%\}},\"extra\":1}" "$scratch/env"
 expect fail "a running cyfr whose environment cannot be read" \
   head_holds "$tailnet_head" "$scratch/env" "not json" "cyfr tailscale" "$node"
