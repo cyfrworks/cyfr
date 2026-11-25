@@ -65,6 +65,11 @@ time.sleep(1)  # sleep-ok: the seat tells its clients of a pointer, which answer
 motion(x + 2)
 motion(x)
 time.sleep(0.3)  # sleep-ok: the pointer enters the window before it presses
+# The press's time on this machine's clock, where TAP_AT names a file for
+# it: what a row times from.
+if os.environ.get("TAP_AT"):
+    with open(os.environ["TAP_AT"], "w") as f:
+        f.write(f"{time.time():.6f}\n")
 for pressed in (1, 0):
     send(POINTER, 2, struct.pack("=III", 0, LEFT_BUTTON, pressed))
     send(POINTER, 4)

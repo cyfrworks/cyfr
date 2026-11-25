@@ -180,30 +180,10 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 failed() { echo "FAIL $1"; exit 1; }
 
-# seed DIR PORT: the folder as a release's download leaves it, but for the
-# loaded image and no Locus (the candidate is a dev build, which downloads
-# nothing), for a CYFR at PORT serving its own accounts.
-free_port() { python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
-seed() {
-local D=$1 PORT=$2 ADDR="http://localhost:$2"
-cp "$ROOT/docker-compose.yml" "$ROOT/Caddyfile" "$D/"
-cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$D/keeper.seccomp.json"
-cat >"$D/docker-compose.override.yml" <<Y
-services:
-  cyfr:
-    image: $IMAGE
-    pull_policy: never
-    container_name: !reset null
-  locus:
-    profiles: ["proof-never"]
-  locus-guard:
-    profiles: ["proof-never"]
-Y
-sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_KEY=.*|CYFR_LOCUS_BUILDS_KEY=|' \
-  -e '/^CYFR_DIRECTORY_SERVE=/d;/^CYFR_DIRECTORY_URL=/d;/^CYFR_REGISTRY_URL=/d;/^CYFR_PRIVATE_EGRESS_TARGETS=/d' "$ROOT/.env.example" >"$D/.env.example"
-printf '%s\n' "" CYFR_AUTO_MIGRATE=on CYFR_DIRECTORY_SERVE=writer "CYFR_DIRECTORY_URL=$ADDR" "CYFR_REGISTRY_URL=localhost:$PORT" \
-  CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1 >>"$D/.env.example"
-}
+# The folder as a release's download leaves it, for a CYFR serving its
+# own accounts (folder.sh, seed).
+# shellcheck source=folder.sh
+source "$ROOT/tests/setup-proof/folder.sh"
 # The proof's inputs for a launch: the CYFR at ADDR in folder DIR.
 inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$1" "$1" "$2" "$GID" >"$W/fixture/inputs.json"; }
 PORT=$(free_port); ADDR="http://localhost:$PORT"

@@ -43,7 +43,9 @@ defmodule PrismWeb.ThreadPaneLive do
   already ended, so once it is granted nothing is cut, and the pane
   offers to send that turn's own message (`message_id` on the event,
   read by its id from this thread) again, as a new turn, or says that
-  the turn ended when it has no such message to offer.
+  the turn ended when it has no such message to offer. A person's turn
+  refused for Aqua's grant asks for it the same way, its message beside
+  it: granted, that message is offered again as a new turn.
 
   Every line is named by who sent it (`sent_by`): a person as the console
   names them, the soul as Aqua, a crew member by its name. A schedule's
@@ -1536,12 +1538,18 @@ defmodule PrismWeb.ThreadPaneLive do
 
         socket
         |> assign(:grant_prompt, id)
-        |> assign(:grant_retry, if(account, do: {:account, message_id}))
+        |> assign(:grant_retry, retry_of(account, message_id))
 
       {:error, reason} ->
         put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
     end
   end
+
+  # What the pane offers once the grant is given: a launch's account, or
+  # Aqua's grant for a refused message, offers that message again.
+  defp retry_of(nil, nil), do: nil
+  defp retry_of(nil, message_id), do: {:grant, message_id}
+  defp retry_of(_account, message_id), do: {:account, message_id}
 
   defp account_opts(%{name: name} = account) when is_binary(name),
     do: [account: %{name: name, dep: nil, need: Map.get(account, :need)}]
@@ -1550,36 +1558,32 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The text of the ended turn's own message, read by its id from this
   # thread: never a scan of the rows around it, which may hold a line
-  # queued while the turn ran, or not reach back to it at all.
+  # queued while the turn ran, or not reach back to it at all. It is
+  # offered as every stored line is (`Aqua.again_text/2`): this person's
+  # own words with no files; its thread's line says to send it again.
   defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}, message_id)
        when is_binary(message_id) do
     case Threads.get_message(Sanctum.Context.actor(ctx), message_id) do
-      {:ok, %{thread_id: ^thread_id, kind: "text", content: text}}
-      when is_binary(text) and text != "" ->
-        text
-
-      _none ->
-        nil
+      {:ok, %{thread_id: ^thread_id} = row} -> Aqua.again_text(row, ctx.user_id)
+      _none -> nil
     end
   end
 
   defp retry_text(_socket, _message_id), do: nil
 
-  # A grant opened for a launch's account offers its turn's message again,
-  # as a new turn: that turn ended, so nothing is cut, and with no message
-  # of that turn to offer the pane only says so. Any other grant cuts the
-  # running turn for the new consent.
-  defp after_grant(%{assigns: %{grant_retry: {:account, message_id}}} = socket) do
+  # A grant opened for a launch's account, or for a message refused for
+  # Aqua's grant, offers its turn's message again, as a new
+  # turn: that turn ended, so nothing is cut, and with no message of that
+  # turn to offer the pane only says so. Any other grant cuts the running
+  # turn for the new consent.
+  defp after_grant(%{assigns: %{grant_retry: {kind, message_id}}} = socket) do
     socket = assign(socket, :grant_retry, nil)
 
     case retry_text(socket, message_id) do
       text when is_binary(text) ->
         socket
         |> assign(:restart_prompt, text)
-        |> assign(
-          :restart_note,
-          "The account is granted — send that message again, as a new turn?"
-        )
+        |> assign(:restart_note, retry_note(kind))
         |> put_flash(:info, "Granted — re-send to continue.")
 
       nil ->
@@ -1592,6 +1596,11 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp after_grant(socket), do: socket |> assign(:grant_retry, nil) |> restart_for_consent()
+
+  defp retry_note(:account),
+    do: "The account is granted — send that message again, as a new turn?"
+
+  defp retry_note(:grant), do: "Granted — send that message again, as a new turn?"
 
   defp restart_for_consent(socket) do
     case socket.assigns.thread do
@@ -2063,7 +2072,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
                   class="text-blue-400 hover:underline"
                 >
-                  Grant it on your Aqua page.
+                  {Prima.Refusal.grant_action(:ungranted)}
                 </.link>
               <% @model_ready in [:consent_absent, :consent_stale] -> %>
                 <%!-- The crew's grant was never given, or no longer covers
@@ -2076,9 +2085,9 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  {if @model_ready == :consent_absent,
-                    do: "Grant it on your Aqua page.",
-                    else: "Grant it again on your Aqua page."}
+                  {Prima.Refusal.grant_action(
+                    if(@model_ready == :consent_absent, do: :ungranted, else: :agent_changed)
+                  )}
                 </.link>
               <% @model_ready in [:consent_damaged, :consent_unavailable] -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,

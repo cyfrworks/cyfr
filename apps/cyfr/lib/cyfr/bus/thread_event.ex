@@ -24,7 +24,8 @@ defmodule Cyfr.Bus.ThreadEvent do
       need:}` beside them: the account's name and the app's credential
       need it is for, nil for the one need or one no binding tells; and
       `message_id:`, the message of the turn that asked, which ended on
-      it, so a retry sends that message again;
+      it, so a retry sends that message again; a person's turn refused for
+      Aqua's grant names its message so too;
     * `:intents` — `%{intents:, user_id:}`;
     * `:usage` — what the thread's latest turn used, as its steps count
       it (`Aqua.Tape.usage/2`): `%{input:, output:, models:, accounting:}`,

@@ -4,16 +4,17 @@
 #
 # GoReleaser's release, run on .goreleaser.yml as the tag's run runs it
 # and publishing nothing: a snapshot at a version of its own, with
-# stand-ins for the six installers in RELEASE_PACKAGES_DIR, for the
+# stand-ins for the five installers in RELEASE_PACKAGES_DIR, for the
 # scaffold and for the signed manifest, and no signature made. Each check
 # prints one PASS or FAIL line, and one FAIL fails the run:
 #
-#   summed   checksums.txt names exactly the CLI's six archives, the
-#            scaffold and the six installers, each by its file's digest
+#   summed   checksums.txt names exactly the CLI's five archives (none for
+#            an Intel Mac), the scaffold and the five installers, each by
+#            its file's digest
 #   missing  with one installer missing, GoReleaser fails naming it, and
 #            writes no checksums.txt: the release stops before any upload
 #   nocask   GoReleaser writes no Homebrew cask (the release workflow
-#            writes it from the DMGs, scripts/ci/homebrew-cask.sh)
+#            writes it from the DMG, scripts/ci/homebrew-cask.sh)
 #
 # The attachments are the same globs as the checksums, which
 # tests/ci-release-graph.py holds; GoReleaser reads them only when it
@@ -41,12 +42,13 @@ cp "$CODEX/.goreleaser.yml" "$RUN/goreleaser.yml"
 printf '\nsnapshot:\n  version_template: "%s"\n' "$VERSION" >> "$RUN/goreleaser.yml"
 mkdir -p "$RUN/packages" "$RUN/manifest"
 installers=()
-for kind in linux:deb darwin:dmg windows:msi; do
-  for arch in amd64 arm64; do
-    name="cyfr-desktop_${VERSION}_${kind%%:*}_${arch}.${kind##*:}"
-    printf 'the %s stand-in\n' "$name" > "$RUN/packages/$name"
-    installers+=("$name")
-  done
+# Linux's and Windows' for amd64 and arm64, the Mac's for Apple silicon
+# alone.
+for target in linux:deb:amd64 linux:deb:arm64 darwin:dmg:arm64 windows:msi:amd64 windows:msi:arm64; do
+  IFS=: read -r os kind arch <<< "$target"
+  name="cyfr-desktop_${VERSION}_${os}_${arch}.${kind}"
+  printf 'the %s stand-in\n' "$name" > "$RUN/packages/$name"
+  installers+=("$name")
 done
 printf 'the scaffold stand-in\n' > "$CODEX/cyfr-scaffold.tar.gz"
 printf '{}\n' > "$RUN/manifest/release.json"
@@ -61,7 +63,8 @@ if ! out=$(release "$RUN/packages"); then
   fail "summed: GoReleaser failed: ${out: -2000}"
 else
   want=$( {
-    for os in linux darwin; do for arch in amd64 arm64; do echo "cyfr_${VERSION}_${os}_${arch}.tar.gz"; done; done
+    for arch in amd64 arm64; do echo "cyfr_${VERSION}_linux_${arch}.tar.gz"; done
+    echo "cyfr_${VERSION}_darwin_arm64.tar.gz"
     for arch in amd64 arm64; do echo "cyfr_${VERSION}_windows_${arch}.zip"; done
     echo cyfr-scaffold.tar.gz
     printf '%s\n' "${installers[@]}"
@@ -76,13 +79,13 @@ else
       grep -qx "$sum  $name" "$CODEX/dist/checksums.txt" || wrong="$wrong $name"
     done
     if [ -n "$wrong" ]; then fail "summed: checksums.txt's digests are not the files' for:$wrong"
-    else pass "summed: checksums.txt names the six archives, the scaffold and the six installers by their digests"; fi
+    else pass "summed: checksums.txt names the five archives, the scaffold and the five installers by their digests"; fi
   fi
   if find "$CODEX/dist" -name '*.rb' | grep -q .; then fail "nocask: GoReleaser wrote $(find "$CODEX/dist" -name '*.rb')"
   else pass "nocask: GoReleaser writes no Homebrew cask"; fi
 fi
 
-missing=${installers[5]}
+missing=${installers[4]}
 cp -R "$RUN/packages" "$RUN/short"
 rm "$RUN/short/$missing"
 if out=$(release "$RUN/short"); then
