@@ -50,22 +50,39 @@ export const accountPartition = (home, account) => `persist:cyfr-account-v2-${di
 /**
  * What a press on the rail asks of main, from the address the rail's page
  * navigates to, which main answers and never loads: select or menu (the
- * row's menu) of a CYFR, named by its origin, or connect, setup or box
- * (This box, the box's own CYFR, whatever its folder names now). Any other
- * address is none (null).
+ * row's menu) of a CYFR, named by its origin, or connect, setup, box
+ * (This box, the box's own CYFR, whatever its folder names now) or update
+ * (Update CYFR). Any other address is none (null).
  */
 export function railPress(address) {
   const u = parse(address)
   if (!u || u.origin !== LOOPBACK || u.hash || u.username || u.password) return null
   const act = {"/rail/select": "select", "/rail/menu": "menu", "/rail/connect": "connect", "/rail/setup": "setup",
-    "/rail/box": "box"}[u.pathname]
+    "/rail/box": "box", "/rail/update": "update"}[u.pathname]
   if (!act) return null
   const keys = [...u.searchParams.keys()]
-  if (act === "connect" || act === "setup" || act === "box") return u.search === "" ? {act} : null
+  if (["connect", "setup", "box", "update"].includes(act)) return u.search === "" ? {act} : null
   const home = u.searchParams.get("cyfr")
   return keys.length === 1 && keys[0] === "cyfr" && isHome(home) ? {act, home} : null
 }
 
+
+/**
+ * What a press on Update CYFR asks of main, from the address its page
+ * navigates to, which main answers and never loads: start, the person's
+ * yes to the offer the page shows, by its number, or close. Any other
+ * address is none (null).
+ */
+export function updatePress(address) {
+  const u = parse(address)
+  if (!u || u.origin !== LOOPBACK || u.hash || u.username || u.password) return null
+  if (u.pathname === "/update/close") return u.search === "" ? {act: "close"} : null
+  if (u.pathname !== "/update/start") return null
+  const keys = [...u.searchParams.keys()]
+  const offer = u.searchParams.get("offer") ?? ""
+  if (keys.length !== 1 || keys[0] !== "offer" || !/^[1-9][0-9]{0,15}$/.test(offer) || !Number.isSafeInteger(Number(offer))) return null
+  return {act: "start", offer: Number(offer)}
+}
 
 /** The address parsed, or null. */
 export function parse(address) {
@@ -101,7 +118,7 @@ export function contentNavigation({url, target, asker, showing}, state) {
   if (!u) return "block"
   if (target !== "top") return asker === "frame-outside" ? "block" : frameLoad(u, state)
   if (asker === "frame-inside" || asker === "frame-outside") return "block"
-  if (chooserPath(u) || railPath(u)) return "block"
+  if (chooserPath(u) || railPath(u) || updatePath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   // The chooser goes on to the device's pages alone: its view's storage is
   // memory's, so a CYFR's page there, its sign-in above all, would be lost
@@ -122,18 +139,20 @@ export function contentNavigation({url, target, asker, showing}, state) {
 // origin.
 function frameLoad(u, state) {
   if (["about:", "blob:", "data:"].includes(u.protocol)) return "allow"
-  if (chooserPath(u) || railPath(u)) return "block"
+  if (chooserPath(u) || railPath(u) || updatePath(u)) return "block"
   if (u.origin === LOOPBACK) return "allow"
   if (!state.home || ceremony(u, state)) return "block"
   return u.origin === state.home && u.pathname !== "/company-login" ? "allow" : "block"
 }
 
-// Whether u is one of the chooser's addresses, or the rail's, as cyfr
-// reads them, which is unescaped: main alone loads those pages (its loads
-// ask no policy), the rail in a view of its own, so what one says on
-// main's behalf comes with main's load and no other.
+// Whether u is one of the chooser's addresses, the rail's or Update
+// CYFR's, as cyfr reads them, which is unescaped: main alone loads those
+// pages (its loads ask no policy), the rail in a view of its own and
+// Update CYFR in a window of its own, so what one says on main's behalf
+// comes with main's load and no other.
 const chooserPath = (u) => cyfrsOwn(u, "/bootstrap")
 const railPath = (u) => cyfrsOwn(u, "/rail")
+const updatePath = (u) => cyfrsOwn(u, "/update")
 function cyfrsOwn(u, prefix) {
   if (u.origin !== LOOPBACK) return false
   try {
@@ -267,13 +286,14 @@ export function documentHeaders(kind, resourceType, headers, {pageGone = false} 
 /**
  * The switches the app takes on its command line: the box's screen's
  * project (screenProject), the folder cyfr setup opened the app in
- * (setupProject) and --quit, which asks the app this account runs to end
- * (app.js). The engine takes every other switch, from opening a
- * debugging port to trusting any certificate, so the app refuses them
- * all. A CYFR's route is no switch: main sets it on that CYFR's own
- * stores.
+ * (setupProject), --quit, which asks the app this account runs to end
+ * (app.js), and --updated, with which the update Update CYFR started
+ * opens the app again (states.js initial). The engine takes every other
+ * switch, from opening a debugging port to trusting any certificate, so
+ * the app refuses them all. A CYFR's route is no switch: main sets it on
+ * that CYFR's own stores.
  */
-export const SWITCHES = ["screen-project", "setup-project", "quit"]
+export const SWITCHES = ["screen-project", "setup-project", "quit", "updated"]
 
 /**
  * Whether `value` names a folder explicitly on `platform`, as the system

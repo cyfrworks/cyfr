@@ -44,8 +44,10 @@ var railPage = `<!doctype html>
 ` + strings.TrimSuffix(railMarkup, "\n") + `<script>` + railScriptText + `</script></html>`
 
 // boxRailPage is the rail on a box's screen (Service.Box), whose first
-// paint, before its list answers, offers no Set up: a box sets nothing up.
-var boxRailPage = strings.Replace(railPage, `<li><a class="way" id="setup"`, `<li hidden><a class="way" id="setup"`, 1)
+// paint, before its list answers, offers no Set up and no Update: a box
+// sets nothing up, and updates by cyfr update alone.
+var boxRailPage = strings.NewReplacer(`<li><a class="way" id="setup"`, `<li hidden><a class="way" id="setup"`,
+	`<li><a class="way" id="update"`, `<li hidden><a class="way" id="update"`).Replace(railPage)
 
 // RailURL is the rail's address main loads, the read token in its
 // fragment, which no request carries but the rail's own reads.

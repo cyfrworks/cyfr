@@ -126,6 +126,11 @@ func (d *driver) socketRequest(s *toolSocket, conn net.Conn, r toolsock.Request)
 	}
 	s.held[ask] = conn
 	if d.turn != nil {
+		// A call of CYFR's is something the turn did.
+		d.output++
+		if err := d.release(); err != nil {
+			return err
+		}
 		d.claim(arguments)
 	}
 	return d.c.Emit(e)

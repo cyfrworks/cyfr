@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,6 +151,20 @@ type Service struct {
 	// tell: the lock's locked, or, at the service's end, ending, the run's
 	// last message. nil (a desktop) tells at once, and nothing at the end.
 	Hide func(tell func())
+	// Offer works out what Update CYFR offers (update.go), with project
+	// this computer's own CYFR's folder where it is the one open, "" for a
+	// CYFR elsewhere or none; BeginUpdate starts an offer's run, the app's
+	// own cyfr, detached from this one, with record as its output, and
+	// answers what waits for its end. nil offers nothing.
+	Offer       func(ctx context.Context, project string) UpdatePlan
+	BeginUpdate func(plan UpdatePlan, record *os.File) (wait func() error, err error)
+	// UpdateRecord is where an update Update CYFR starts writes what it
+	// says, one record, made anew by each and kept until the next;
+	// UpdateRuns says whether an update runs on this computer, by the
+	// locks it holds, and with project, whether the CYFR in that folder is
+	// held by its own lock.
+	UpdateRecord string
+	UpdateRuns   func(project string) bool
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -209,6 +224,8 @@ type Service struct {
 	// closed once that retirement has ended: End waits for it.
 	leaving  *shell.Shell
 	departed chan struct{}
+	// update is Update CYFR's offer and run (update.go).
+	update updating
 }
 
 type selection struct {
@@ -255,6 +272,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/rail/") {
 		s.rail(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/update/") {
+		s.updatePage(w, r)
 		return
 	}
 	s.mu.Lock()
@@ -896,6 +917,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	s.Tell(Message{Type: TypeOpened, Home: home, Attempt: proposal.Attempt})
 	s.committed = proposal
 	s.changed()
+	s.voidOffer()
 	return s.opened(home)
 }
 
@@ -1318,6 +1340,8 @@ func (s *Service) lockStep(from *shell.Shell) {
 		s.stop()
 	}
 	s.pending = nil
+	// An offer is the CYFR's selected at a time, which a lock ends.
+	s.voidOffer()
 	if s.pages == nil {
 		s.ready, s.selecting, s.current = nil, "", 0
 	}
@@ -1368,6 +1392,10 @@ func (s *Service) Run(in io.Reader) error {
 			s.Forget(m.Home)
 		case TypeErased:
 			s.Erased(m.ID, m.OK)
+		case TypeUpdate:
+			s.StartUpdate(m.Offer)
+		case TypeUpdateClosed:
+			s.UpdateClosed()
 		}
 	}
 	s.End()

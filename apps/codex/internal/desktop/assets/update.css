@@ -1,0 +1,17 @@
+:root{--ground:#071013;--ink:#e8f1f2;--grey:#9fb3b8;--step:#13232a;--focus:#7fd4e0;--warn:#f0a35e;--go:#2f7f8c}
+html,body{margin:0;min-height:100%;background:var(--ground);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+main{max-width:34rem;margin:0 auto;padding:24px 24px 32px}
+h1{margin:0 0 12px;font-size:22px;font-weight:650}
+p{margin:0 0 12px}
+#status{font-weight:600}
+#releases,#says p{color:var(--grey)}
+#says p{margin:0 0 10px}
+code{display:block;margin-top:6px;padding:8px 10px;border-radius:8px;background:var(--step);color:var(--ink);font:13px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;user-select:all}
+#refused{color:var(--warn)}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.actions a{display:inline-block;padding:9px 16px;border-radius:9px;background:var(--step);color:var(--ink);text-decoration:none;font-weight:600;outline:none}
+.actions a.primary{background:var(--go)}
+.actions a:focus-visible{box-shadow:0 0 0 2px var(--focus)}
+details{margin-top:18px;color:var(--grey)}
+summary{cursor:pointer}
+pre{margin:8px 0 0;padding:10px;border-radius:8px;background:var(--step);color:var(--ink);font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:40vh;overflow:auto}

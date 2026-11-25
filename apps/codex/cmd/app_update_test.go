@@ -67,9 +67,13 @@ func (a standInRoad) fetch(_ context.Context, _ io.Writer, _, target string) (*s
 	return &staged{file: "installer " + target, sum: "sum"}, nil
 }
 
-func (a standInRoad) elevate(_ io.Writer, again string) (func(), error) {
+func (a standInRoad) elevate(_ io.Writer, again string, ask bool) (func(), error) {
 	r := a.r
-	r.s.log = append(r.s.log, "elevate "+again)
+	entry := "elevate " + again
+	if !ask {
+		entry += ", asking nothing"
+	}
+	r.s.log = append(r.s.log, entry)
 	if r.elevateErr != nil {
 		return nil, r.elevateErr
 	}
@@ -124,8 +128,12 @@ func newAppScenario(t *testing.T, current, latest, app string) *appScenario {
 		a.log = append(a.log, "quit")
 		return a.road.ran, a.road.quitErr
 	}
-	reopenApp = func() error {
-		a.log = append(a.log, "reopen")
+	reopenApp = func(updated bool) error {
+		entry := "reopen"
+		if updated {
+			entry += " --updated"
+		}
+		a.log = append(a.log, entry)
 		return nil
 	}
 	// The app's own cyfr is elsewhere, unless a test makes it this one.
@@ -467,7 +475,7 @@ func TestUpdateStopsBeforeTheStackWhenTheAppDoesNotComeBack(t *testing.T) {
 					}
 				})
 			default:
-				reopenApp = func() error {
+				reopenApp = func(bool) error {
 					a.log = append(a.log, "reopen")
 					return refused
 				}
