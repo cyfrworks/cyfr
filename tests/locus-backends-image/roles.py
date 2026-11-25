@@ -38,7 +38,17 @@ TestRoleEnvironHoldsTheRolesOwnAndNothingOfAnothers): no client of this
 suite holds a role's channel, and a role's environment is not readable
 from outside its space.
 
-Prerequisites: harness.py's. Usage: tests/locus-backends-image/roles.py IMAGE OLD_IMAGE
+A proof of the update from the three-container image, run by hand and not
+by CI, its result recorded in the pull request. It serves nothing on the
+host's port 4000 (every role's port is published on a loopback port of
+Docker's choosing) and reaches no cyfr.run: the runtime's host API is a
+control plane on this machine, and no program fetches anything.
+
+Prerequisites: harness.py's, a checkout of the three-container stack (a
+worktree at the commit before the one Locus, named by OLD_TREE) and its
+Locus image, built there (`scripts/image.sh locus`). Usage:
+
+    OLD_TREE=/path/to/old/checkout tests/locus-backends-image/roles.py IMAGE OLD_IMAGE
 """
 
 import importlib.util
