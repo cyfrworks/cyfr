@@ -105,9 +105,11 @@ func checkDecisions(t *testing.T, decide func(uint32, ...uint64) uint32, decisio
 }
 
 // Under keeper.json, a container holding the Locus container's
-// capabilities is allowed and refused each call as Docker would decide it,
-// and a call whose int argument hides a refused value behind a high word is
-// refused as the kernel will read it. keeper.json's clone rule masks only
+// capabilities is allowed and refused each call as Docker would decide it.
+// keeper.json compares socket's and socketpair's domain and personality's
+// persona by their low 32 bits, as the kernel reads them, so a refused
+// domain behind a high word is refused and an allowed persona behind one
+// is allowed. keeper.json's clone rule masks only
 // CLONE_NEWUTS: clone is allowed unless its flags hold that bit, so a clone
 // into a mount namespace is allowed and one into a UTS namespace is not.
 func TestKeeperProfileDecidesTheLocusContainersCalls(t *testing.T) {
@@ -121,6 +123,11 @@ func TestKeeperProfileDecidesTheLocusContainersCalls(t *testing.T) {
 		{"socket(AF_VSOCK)", unix.SYS_SOCKET, []uint64{unix.AF_VSOCK, unix.SOCK_STREAM}, eperm},
 		{"socket(AF_VSOCK behind a high word)", unix.SYS_SOCKET, []uint64{1<<32 | unix.AF_VSOCK, unix.SOCK_STREAM}, eperm},
 		{"socket(AF_INET behind a high word)", unix.SYS_SOCKET, []uint64{1<<32 | unix.AF_INET, unix.SOCK_STREAM}, allow},
+		{"socket(255), the last domain the profile allows", unix.SYS_SOCKET, []uint64{255, unix.SOCK_STREAM}, allow},
+		{"socket(256), no family", unix.SYS_SOCKET, []uint64{256, unix.SOCK_STREAM}, eperm},
+		{"socketpair(AF_UNIX)", unix.SYS_SOCKETPAIR, []uint64{unix.AF_UNIX, unix.SOCK_STREAM}, allow},
+		{"socketpair(AF_VSOCK)", unix.SYS_SOCKETPAIR, []uint64{unix.AF_VSOCK, unix.SOCK_STREAM}, eperm},
+		{"socketpair(AF_VSOCK behind a high word)", unix.SYS_SOCKETPAIR, []uint64{1<<32 | unix.AF_VSOCK, unix.SOCK_STREAM}, eperm},
 		{"io_uring_setup, which no rule names", unix.SYS_IO_URING_SETUP, nil, eperm},
 		{"clone3, refused ENOSYS by its own rule", unix.SYS_CLONE3, nil, enosys},
 		{"unshare", unix.SYS_UNSHARE, []uint64{unix.CLONE_NEWUSER}, eperm},
@@ -136,7 +143,8 @@ func TestKeeperProfileDecidesTheLocusContainersCalls(t *testing.T) {
 		{"personality(UNAME26)", unix.SYS_PERSONALITY, []uint64{0x20000}, allow},
 		{"personality(query)", unix.SYS_PERSONALITY, []uint64{0xffffffff}, allow},
 		{"personality(1)", unix.SYS_PERSONALITY, []uint64{1}, eperm},
-		{"personality(PER_LINUX with a high word)", unix.SYS_PERSONALITY, []uint64{1 << 32}, eperm},
+		{"personality(PER_LINUX with a high word)", unix.SYS_PERSONALITY, []uint64{1 << 32}, allow},
+		{"personality(1 with a high word)", unix.SYS_PERSONALITY, []uint64{1<<32 | 1}, eperm},
 		{"ptrace, on a kernel past its minKernel", unix.SYS_PTRACE, nil, allow},
 		{"arch_prctl, which the profile allows on amd64", unix.SYS_ARCH_PRCTL, nil, allow},
 		{"chroot, which needs CAP_SYS_CHROOT", unix.SYS_CHROOT, nil, eperm},
@@ -182,7 +190,8 @@ func TestKeeperProfileFollowsTheKernel(t *testing.T) {
 // each name of its first rule, the outright allow list, is allowed; the
 // other names its rules allow outright for this container are allowed; the
 // calls decided on their arguments are allowed with every argument zero
-// (socket(0), clone(0) and personality(PER_LINUX)); clone3 is ENOSYS; and
+// (socket(0), socketpair(0), clone(0) and personality(PER_LINUX)); clone3
+// is ENOSYS; and
 // every call no applicable rule names is refused. A run test that ended a
 // number early or late would fail here.
 func TestKeeperProfileDecidesEveryCallOfTheTable(t *testing.T) {
@@ -199,7 +208,7 @@ func TestKeeperProfileDecidesEveryCallOfTheTable(t *testing.T) {
 		want[name] = allow
 	}
 	for _, name := range []string{"ptrace", "process_vm_readv", "process_vm_writev", "arch_prctl", "modify_ldt",
-		"mount", "umount2", "pivot_root", "mount_setattr", "socket", "clone", "personality"} {
+		"mount", "umount2", "pivot_root", "mount_setattr", "socket", "socketpair", "clone", "personality"} {
 		want[name] = allow
 	}
 	want["clone3"] = enosys
@@ -218,7 +227,7 @@ func TestKeeperProfileDecidesEveryCallOfTheTable(t *testing.T) {
 // A name an applicable rule lists that the kernel's table lacks is skipped,
 // as libseccomp skips a name the architecture does not know: keeper.json's
 // 32-bit calls are absent from x86-64's table. A rule that does not apply
-// is not counted.
+// is not counted. socketcall, which no 64-bit call is, no rule names.
 func TestKeeperProfileSkipsNamesTheTableLacks(t *testing.T) {
 	decided, err := resolve(keeperProfile(t), amd64Table(t), locusCaps, testRelease)
 	if err != nil {
@@ -230,16 +239,46 @@ func TestKeeperProfileSkipsNamesTheTableLacks(t *testing.T) {
 			t.Errorf("%s is skipped though the table numbers it", name)
 		}
 	}
-	for _, name := range []string{"chown32", "_llseek", "socketcall", "mmap2"} {
+	for _, name := range []string{"chown32", "_llseek", "waitpid", "mmap2"} {
 		if !slices.Contains(decided.skipped, name) {
 			t.Errorf("%s is not skipped", name)
 		}
+	}
+	if slices.Contains(decided.skipped, "socketcall") {
+		t.Error("socketcall is named by a rule that applies")
 	}
 	for _, name := range []string{"arm_fadvise64_64", "s390_runtime_instr", "open_by_handle_at", "acct"} {
 		if slices.Contains(decided.skipped, name) {
 			t.Errorf("%s, whose rule does not apply, is counted as skipped", name)
 		}
 	}
+}
+
+// A comparison reads an argument as the kernel may: an EQ allowance needs
+// both words to match, so a value behind a high word is refused, and an NE
+// allowance needs the low words to differ, so a refused int behind a high
+// word, which the kernel reads as itself, is refused too. keeper.json no
+// longer compares by either; a profile of the shape Docker's own default
+// has holds them.
+func TestComparisonsReadTheStricterWord(t *testing.T) {
+	profile := `{"defaultAction": "SCMP_ACT_ERRNO", "defaultErrnoRet": 1, "syscalls": [
+		{"names": ["read", "exit", "exit_group"], "action": "SCMP_ACT_ALLOW"},
+		{"names": ["socket"], "action": "SCMP_ACT_ALLOW", "args": [{"index": 0, "value": 40, "op": "SCMP_CMP_NE"}]},
+		{"names": ["personality"], "action": "SCMP_ACT_ALLOW", "args": [{"index": 0, "value": 8, "op": "SCMP_CMP_EQ"}]}]}`
+	raw, err := Compile([]byte(profile), amd64Table(t), locusCaps, testRelease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decide := decider(t, raw)
+	on := func(nr uint32, args ...uint64) uint32 { return decide(nr, unix.AUDIT_ARCH_X86_64, args...) }
+	checkDecisions(t, on, []decision{
+		{"socket(AF_INET)", unix.SYS_SOCKET, []uint64{unix.AF_INET}, allow},
+		{"socket(AF_VSOCK)", unix.SYS_SOCKET, []uint64{unix.AF_VSOCK}, eperm},
+		{"socket(AF_VSOCK behind a high word)", unix.SYS_SOCKET, []uint64{1<<32 | unix.AF_VSOCK}, eperm},
+		{"socket(AF_INET behind a high word)", unix.SYS_SOCKET, []uint64{1<<32 | unix.AF_INET}, allow},
+		{"personality(8)", unix.SYS_PERSONALITY, []uint64{8}, allow},
+		{"personality(8 behind a high word)", unix.SYS_PERSONALITY, []uint64{1<<32 | 8}, eperm},
+	})
 }
 
 // Whatever the filter cannot apply as Docker would is refused, never
