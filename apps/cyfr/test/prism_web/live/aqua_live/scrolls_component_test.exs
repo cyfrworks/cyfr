@@ -35,8 +35,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
   defp servers_pack do
     PackArchive.tar_gz([
       {"srv/.claude-plugin/plugin.json",
-       ~s({"name": "srv", "mcpServers": {"inline-one": {"command": "a"}}}), false},
-      {"srv/.codex-plugin/plugin.json", ~s({"name": "srv", "mcpServers": "./servers.json"}),
+       ~s({"name": "srv", "mcpServers": [{"inline-one": {"command": "a"}}, "./servers.json"]}),
        false},
       {"srv/servers.json", ~s({"mcpServers": {"from-file": {"command": "b"}}}), false},
       {"srv/.mcp.json", ~s({"mcpServers": {"dot-mcp": {"command": "c"}}}), false},
@@ -54,12 +53,15 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
 
     sheet = view |> element("#aqua-pack-sheet") |> render()
 
+    # The act of trust's sentence, word for word as the plan writes it.
     trust =
-      PrismWeb.AquaLive.ScrollsComponent.trust_sentence()
-      |> Phoenix.HTML.html_escape()
-      |> Phoenix.HTML.safe_to_string()
+      "Its scripts and hooks run in your programs' sessions with each program's own access: " <>
+        "its sign-in, any value from your Vault you gave that program, its folder's files, " <>
+        "and its network, this CYFR's approved private hosts among it. Switching the pack " <>
+        "off takes it out of your programs at their next start, and undoes nothing it " <>
+        "already did. Bring in only packs you trust."
 
-    assert sheet =~ trust
+    assert sheet =~ trust |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
 
     servers = view |> element("#aqua-sheet-servers") |> render()
     for name <- ["inline-one", "from-file", "dot-mcp"], do: assert(servers =~ name)
@@ -86,6 +88,52 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
 
     view |> element("#aqua-scroll-open button[phx-click=scroll_copy]") |> render_click()
     assert {:ok, %{name: "mine:look"}} = Compendium.skill(ctx, "mine:look")
+  end
+
+  test "a name taken while the New pack form was open is refused at Save", %{
+    conn: conn,
+    ctx: ctx,
+    actor: actor
+  } do
+    {view, _} = mount_athanor(conn, "/aqua")
+    view |> section() |> render_click("pack_new", %{})
+
+    assert {:ok, _} =
+             Arca.Files.write(
+               actor,
+               "aqua/scrolls/garden/skills/tulips/SKILL.md",
+               "---\nname: tulips\ndescription: d\n---\n\nmade in Files\n"
+             )
+
+    view
+    |> form("#aqua-scroll-editor", %{
+      "pack" => "garden",
+      "scroll" => "roses",
+      "description" => "d",
+      "content" => "r"
+    })
+    |> render_submit()
+
+    assert {:error, :not_found} = Compendium.skill(ctx, "garden:roses")
+  end
+
+  test "a declaration the sheet cannot read is named by its key, never left out", %{conn: conn} do
+    {view, _html} = mount_athanor(conn, "/aqua")
+
+    upload!(
+      view,
+      "odd.tar.gz",
+      PackArchive.tar_gz([
+        {"odd/.claude-plugin/plugin.json",
+         ~s({"name": "odd", "hooks": 5, "mcpServers": "./server.mcpb"}), false},
+        {"odd/server.mcpb", "bundle", false},
+        {"odd/skills/one/SKILL.md", "---\nname: one\ndescription: d\n---\n\nOne.\n", false}
+      ])
+    )
+
+    sheet = view |> element("#aqua-pack-sheet") |> render()
+    assert sheet =~ "This pack declares hooks CYFR could not read."
+    assert sheet =~ "This pack declares mcpServers CYFR could not read."
   end
 
   test "New pack is one act, refused under cyfr or a name already here; New scroll, Edit, Delete and Remove are the Files writes",

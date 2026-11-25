@@ -322,7 +322,7 @@ defmodule PrismWeb.FilesLiveTest do
     {view, html} = mount_athanor(conn, "/files?p=aqua")
     assert html =~ ~r/>\s*shaped\s*</
     assert html =~ "Aqua page"
-    assert html =~ "skills/"
+    assert html =~ "scrolls/"
     assert html =~ "aqua.md"
 
     html =
@@ -332,6 +332,18 @@ defmodule PrismWeb.FilesLiveTest do
 
     assert html =~ "ships with the server"
     assert has_element?(view, "#files-entries button", "aqua.md")
+
+    # The packs are folders of aqua/scrolls/; CYFR's own ships and refuses to go.
+    {view, html} = mount_athanor(conn, "/files?p=aqua/scrolls")
+    assert html =~ "cyfr/"
+
+    html =
+      view
+      |> element("#files-entries button[phx-value-path='aqua/scrolls/cyfr']", "Delete")
+      |> render_click()
+
+    assert html =~ "ships with the server"
+    assert has_element?(view, "#files-entries button", "cyfr/")
 
     {_view, html} = mount_athanor(conn, "/files?p=notes")
     assert html =~ ~r/>\s*read-only\s*</

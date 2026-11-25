@@ -276,7 +276,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("all", :boolean,
               description:
-                "For reset: also DELETE the crew members and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)"
+                "For reset: also DELETE the crew members the athanor made, so the soul and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls"
             )
           ],
           kind: :destructive,
@@ -336,6 +336,10 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("against", :string,
               description:
                 "skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since"
+            ),
+            Arg.new("new_pack", :boolean,
+              description:
+                "skill_create from a person's New pack: the scroll is its pack's first, and the write is refused when a pack of that name is already here (default false writes into the pack, making it when there is none)"
             )
           ],
           kind: :write,
@@ -815,7 +819,9 @@ defmodule Compendium.Providers.Aqua do
     with {:ok, _pack, scroll} <- scroll_name(ctx, name),
          :ok <- against_none(args),
          {:ok, manifest} <- skill_manifest_bytes(scroll, args["description"], args["content"]) do
-      case Compendium.Packs.put_scroll(ctx, name, manifest, :create) do
+      mode = if args["new_pack"] == true, do: :new_pack, else: :create
+
+      case Compendium.Packs.put_scroll(ctx, name, manifest, mode) do
         :ok ->
           {:ok, %{created: name}}
 

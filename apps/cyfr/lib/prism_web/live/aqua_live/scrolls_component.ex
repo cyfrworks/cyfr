@@ -30,10 +30,6 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
            "Switching the pack off takes it out of your programs at their next start, and " <>
            "undoes nothing it already did. Bring in only packs you trust."
 
-  @doc "The sentence the sheet says before a pack is brought in or updated."
-  @spec trust_sentence() :: String.t()
-  def trust_sentence, do: @trust
-
   @impl true
   def mount(socket) do
     {:ok,
@@ -251,7 +247,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
         %{assigns: %{bring: %{sheet: sheet} = bring}} = socket
       ) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
-      params = %{"folder" => sheet.folder, "name" => sheet.name, "agreed" => sheet.agreed}
+      params = %{
+        "folder" => sheet.folder,
+        "name" => sheet.name,
+        "agreed" => sheet.agreed,
+        "against" => sheet.against
+      }
 
       case Compendium.bring_in_pack(socket.assigns.context, bring.bytes, bring.filename, params) do
         {:ok, name} ->
@@ -336,12 +337,16 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
     name = editor.pack <> ":" <> scroll
     action = if editor.scroll, do: "skill_update", else: "skill_create"
 
-    case call_aqua(socket.assigns.context, %{
-           "action" => action,
-           "name" => name,
-           "description" => params["description"],
-           "content" => params["content"]
-         }) do
+    args = %{
+      "action" => action,
+      "name" => name,
+      "description" => params["description"],
+      "content" => params["content"]
+    }
+
+    args = if kind == :new_pack, do: Map.put(args, "new_pack", true), else: args
+
+    case call_aqua(socket.assigns.context, args) do
       {:ok, _} ->
         send(self(), {:refresh, :skills})
 
@@ -378,7 +383,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
 
   # What each program carries of a pack (the plan's table), said per card.
   defp carried_by(pack) do
-    parts = pack.parts || %{agents: [], commands: [], hooks: [], servers: []}
+    parts =
+      pack.parts || %{agents: [], commands: [], hooks: [], servers: [], skills: [], unread: []}
 
     claude =
       ["scrolls"] ++
@@ -583,6 +589,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                   do: "none",
                   else: Enum.join(sheet.parts.servers, ", ")}
               </li>
+              <li :if={sheet.parts.skills != []}>
+                Skills beside its scrolls: {Enum.join(sheet.parts.skills, ", ")}
+              </li>
+              <li :for={key <- sheet.parts.unread} class="text-amber-300">
+                This pack declares {key} CYFR could not read.
+              </li>
             </ul>
             <div :if={sheet.update} id="aqua-sheet-update" class="text-[11px] text-gray-400">
               <p class="text-gray-300">What this update changes, scripts and hooks first:</p>
@@ -760,6 +772,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                 class="text-[11px] text-gray-500"
               >
                 MCP servers it starts: {Enum.join(pack.parts.servers, ", ")}
+              </p>
+              <p
+                :for={key <- (@pack_open == pack.name && pack.parts && pack.parts.unread) || []}
+                class="text-[11px] text-amber-300"
+              >
+                This pack declares {key} CYFR could not read.
               </p>
               <ul :if={@pack_open == pack.name} class="divide-y divide-gray-800/60">
                 <li :for={scroll <- pack.scrolls} class="py-1">

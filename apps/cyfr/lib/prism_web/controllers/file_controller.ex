@@ -62,13 +62,14 @@ defmodule PrismWeb.FileController do
     with {:ok, _person} <- authenticate(token, nil),
          {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- authenticate(token, athanor.id),
-         {:ok, %{filename: filename, bytes: bytes}} <- packed(ctx, pack) do
+         {:ok, %{filename: filename, stream: stream}} <- packed(ctx, pack) do
       conn
       |> put_resp_header("content-type", "application/gzip")
       |> put_resp_header("content-disposition", disposition(filename))
       |> put_resp_header("x-content-type-options", "nosniff")
       |> put_resp_header("cache-control", "private, no-store")
-      |> send_resp(200, bytes)
+      |> send_chunked(200)
+      |> stream_pack(stream)
     else
       :sign_in -> redirect(conn, to: PrismWeb.AuthHelpers.sign_in_path())
       :company_login -> redirect(conn, to: "/company-login")
@@ -78,6 +79,17 @@ defmodule PrismWeb.FileController do
   end
 
   def pack(conn, _params), do: send_resp(conn, 404, "Not found")
+
+  # The archive goes out as it is made, one compressed file at a time; a
+  # browser that goes away ends it.
+  defp stream_pack(conn, stream) do
+    Enum.reduce_while(stream, conn, fn data, conn ->
+      case chunk(conn, data) do
+        {:ok, conn} -> {:cont, conn}
+        {:error, _closed} -> {:halt, conn}
+      end
+    end)
+  end
 
   defp packed(ctx, pack) do
     case Compendium.download_pack(ctx, pack) do

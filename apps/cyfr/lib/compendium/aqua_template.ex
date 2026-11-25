@@ -144,9 +144,11 @@ defmodule Compendium.AquaTemplate do
   defp unit_provenance(_ctx, _unit, _available_or_absent), do: {:ok, nil}
 
   @doc """
-  Reset the aqua tree to what ships: every edited copy of a shipped unit
-  is restored to the shipped bytes, and every shipped unit the athanor
-  does not hold is copied in. By default athanor-made agents are KEPT
+  Reset the soul and the crew to what ships: every edited copy of a
+  shipped one is restored to the shipped bytes, and every shipped one the
+  athanor does not hold is copied in. The packs of `aqua/scrolls/` are
+  no part of it: `cyfr` follows CYFR's release (`Compendium.Packs`), and
+  every other pack is the person's. By default athanor-made agents are KEPT
   and reported; `all: true` deletes them too, so the tree is
   exactly the shipped set. Either way the template's presence is checked
   before anything changes: a broken install refuses rather than destroys.

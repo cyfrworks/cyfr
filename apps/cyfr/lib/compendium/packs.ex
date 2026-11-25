@@ -87,77 +87,95 @@ defmodule Compendium.Packs do
 
   @path_format ~r/\A[A-Za-z0-9_.\-\/]+\z/
 
-  # Every `SKILL.md` the seed shipped under `aqua/skills/` up to this
-  # release, as SHA-256 hex: the migration drops an athanor's copy of a
-  # shipped scroll that still holds one of these bytes alone, since `cyfr`
-  # carries it, and moves any other into `mine`. Generated with
+  # Every `SKILL.md` the seed shipped under `aqua/skills/<name>/` up to this
+  # release, by the name it shipped under, as SHA-256 hex: the migration
+  # drops an athanor's scroll only when its name is a shipped name and its
+  # bytes are one of the manifests the seed shipped under that name, since
+  # `cyfr` carries it; any other, a person's copy under a name of their
+  # own among them, moves into `mine`. Generated with
   # `git log --format=%H -- seed/aqua/skills/<name>/SKILL.md` and
   # `git show <commit>:<path> | sha256sum` for every name.
-  @shipped_scrolls MapSet.new(~w(
-    06a36e0e1e5a7b07bcb90c6af9338b6594a70f3a58f56ca3d62e0e529394cd67
-    07a1f3de6b73d936fbc01421edb579177f00c4824127370ff235348e1a18ce3e
-    0bd13c1e5b5f1fd0a22168ea3e8fb885f5fef642ac720c95ca6ebbe9e16a2d95
-    0cdc120a41d6afc4abcd23587f988bd4d395f057a5b71a6849c46c2bbcc20ea4
-    11bd967493cb10eecd0d2b00b85d4289fa3d35d0babb4046d3aa8d0b3694879b
-    13bec2d71f36e43367b53d4c43faf98132850d946767ba7a8b1c0d7bc195e865
-    1441005f19b7e1d99156eb1c57df078b7f6521da2fa131acd7b8191d9393bffc
-    182644dda3bdac220cd09629448b57828f4bbc40688994c006f56600016a88f6
-    1e02b029aad74a67985817fe46e72914c141b6602968bb9671d7ff7e92df8780
-    26d97a54eea4d1503b16e043a9836529eb8e577eee4f66e13d08e9882d18f2e4
-    27923f51cffe3eed6403a6846c1c0bb2bfcc01ac6d9b66a8a764f1893da067c3
-    286664b1846ac31a733f2eae84eea96faa7743c3f89000233cfce7fa7b839fce
-    2e97c82ddcb29c2fd5281a970f602e2958b718427557ae3066e0807941dc8d3f
-    30d5f282e7c56a3f8958a7995781b8ef6ff76eedc9f6babda9c87341d6ca91d2
-    358ef5b0f64ccb584940fecf2d162c18175ecec76e30ab640b3c53800b001468
-    3899ab0ab9af3eefe7c380899d19649eb271cfa39d66186f9f8260d1246514cd
-    3c78fbbe9de3537308b20c7241d35529f70de34c2a08fb9e9dd6e8a4aa556027
-    3e965988630c06df65d8922424acaca8055db728e1b8ba1e4751f2d164725164
-    435b1d3d6e437c75038b3c22e19ae51c7daa84d4fd9cb9c95297b6c61153c415
-    440d225e68dd9bc2fd744b332c402330d0007bbf330f838197dbfbad41248c0a
-    4af16e92541408497d60bebe7f599faf1ddaf23fb0be8754c00c2ce6bdf976ac
-    4bc03dc8a157acd36026b4f3ef161641125f1cbcc2c6f302e0ae95d010855eaf
-    4ee383e09a08e1bf4fe8987a12349715041fc572f1dfac59dd771df58b294838
-    5125f0a1a501b7b6813287bc7200ca99ded1db64f9953d083bb7c70bb6af457d
-    57febc03844dde59626b7a544cc9945698f0b9518a360015301cb9d6c1729b4c
-    5961410d742a02faca6307ef2bd7eb7605ddc217b51a11e44159635dae0657c3
-    59a2e5467dd6c5664f1c90f0bb8e2fe50eff2839311a49ef646129bb337fb4ec
-    615f1469f10ba71b899142328f51ae28fb9a5ad99e5724316b21d466e070291f
-    65fbeb2d9a3e1bdc8746fab33cf87d131c438f00d6f10a533bb621324de79801
-    6666ca3b6e44cafdcb955a17e59421f398e32881048808ec43b7340aae53652c
-    6a4b4285c46f020239db0f01e52ee2a3f2e6f4961e8f460ef38b5fe5b7de0da4
-    6b0a6f9e3567add2405eab364f4eb3d906df81bb1b1484fbc505c28ed84416d3
-    6ee2f596768c40422b8614d1762b1acf5041d44eeea90c20ced34c6590367d33
-    6f98d77d68a6524b26933a4755cd15d9cad7dfae81218bfa3dc86f9d22c3e093
-    72be2748473c3e8a53f451ca5f5a55165cd8923b95bfcb17dcf267b7d56cc605
-    748a3c120a7f9134122986058da12aaf90ac82ec2ccd46490bb3a2c8238ad7ec
-    76035857187eb05e499ba470e26f98debc0ef8e83fe8068320c684a6e03031a8
-    7d3e7b9789f9639918624dbbf88ab63012a85ba65af2f5ab8f7f002592687d64
-    7e0c572e88399ff72c62b9e11dd6af448d6d92912c4cf3d0612674c7581c4635
-    7eed37ee4ade44549569e06b132aae5ea0dfc7891d396fcc851cd223242ad661
-    82f3d5ecb8d8dd821850406989d55232b1f50e0637962d18c96286256f55262e
-    852424434cf7dcbf757901a39aaae8b627994af44531bf9fd6c67378c6d8cbff
-    922bb1be5df5f317b5219a9fc2deadc9cc944c8bcda3106a8803b8051015e2e8
-    92c6d01151b9832edcc31e106e3682bef9dc9ca5cbc138ea58c056029fb91ad1
-    991398251e348d98e682a8115d9eb4503219a94f1b4d3d387227ffb7f21adc01
-    9bde2bce25acbd0968fdedb440a9f89416ae1c2f2e1368e076e179dc90425d66
-    9d675400573f96a483376d47197cddcc61bd8e5c90951db9c684c3b5766b2321
-    9f5f4e06f665230c1f61d0ed367463073f44a0be9dfe8bacb5943e8b55e52c08
-    a8a5d0aa70003e9114584e61b24128931762cccaa16caa5a6a22d7aa643472fa
-    ac0f7bdd5ccf0f2d97cc8c8ad986a81e2e09717c7248f95c478d2cb858662da7
-    ad776325c6d5807f506ba4eb8c4fc79fdaa5972a1b99a1c32b3edd8162d9091c
-    bffd96fb99179010b3c7f06c0a78afe32285382a59d76a80fe849e01b9f2cdea
-    c105be873bccbfb28721e1c598e190e711dd25ac296fe26efe7f45ae025e49d0
-    caf4c01ed1bca51f53a36aa8b512daa7095cd0dbb3d15628508d33fe2fb93170
-    d11c0453300e117604fc504dd5ca8be0776dbaaff0388b9ac845ae0c2491e15d
-    d2cdcb8796f35abc4fa211e1ec60ce692ae8aa9d523f06065f268f584590e9b6
-    d4f7f2972811b85cc11a5e8c1ed3f9663aad5a175d659a1b1137834f6df64f0d
-    d95789603a21677612397e5e455c915cd1ab50f489497d139d88b4849f100e94
-    ed01fbe81f93ba7e6b241e9174b21e6bb5cace263e4637dae1b21c346da7f930
-    edb3b6253df6422c5b35ad4380232608feb0bc9f078276a24e3aad2f47e433c4
-    f1a7bf433d429f773d6a054a8de609afff38a78210e840649f5b9b5fe448c06d
-    f3c15e223b4b50aacf57404e09f49ee895bbbbcad49abab1832bab7fced38f6c
-    fd1e03c0765c78f8039854f0e19fb6385b79484efa73a63c0a37c7342623daeb
-  ))
+  @shipped_scrolls %{
+    "artisan" => MapSet.new(~w(
+      13bec2d71f36e43367b53d4c43faf98132850d946767ba7a8b1c0d7bc195e865
+      3899ab0ab9af3eefe7c380899d19649eb271cfa39d66186f9f8260d1246514cd
+      435b1d3d6e437c75038b3c22e19ae51c7daa84d4fd9cb9c95297b6c61153c415
+      57febc03844dde59626b7a544cc9945698f0b9518a360015301cb9d6c1729b4c
+      615f1469f10ba71b899142328f51ae28fb9a5ad99e5724316b21d466e070291f
+      6b0a6f9e3567add2405eab364f4eb3d906df81bb1b1484fbc505c28ed84416d3
+      7eed37ee4ade44549569e06b132aae5ea0dfc7891d396fcc851cd223242ad661
+      922bb1be5df5f317b5219a9fc2deadc9cc944c8bcda3106a8803b8051015e2e8
+      ad776325c6d5807f506ba4eb8c4fc79fdaa5972a1b99a1c32b3edd8162d9091c
+    )),
+    "browser" => MapSet.new(~w(
+      07a1f3de6b73d936fbc01421edb579177f00c4824127370ff235348e1a18ce3e
+      440d225e68dd9bc2fd744b332c402330d0007bbf330f838197dbfbad41248c0a
+      4ee383e09a08e1bf4fe8987a12349715041fc572f1dfac59dd771df58b294838
+      6f98d77d68a6524b26933a4755cd15d9cad7dfae81218bfa3dc86f9d22c3e093
+      82f3d5ecb8d8dd821850406989d55232b1f50e0637962d18c96286256f55262e
+      c105be873bccbfb28721e1c598e190e711dd25ac296fe26efe7f45ae025e49d0
+      d4f7f2972811b85cc11a5e8c1ed3f9663aad5a175d659a1b1137834f6df64f0d
+      d95789603a21677612397e5e455c915cd1ab50f489497d139d88b4849f100e94
+    )),
+    "builder" => MapSet.new(~w(
+      286664b1846ac31a733f2eae84eea96faa7743c3f89000233cfce7fa7b839fce
+    )),
+    "canvas" => MapSet.new(~w(
+      11bd967493cb10eecd0d2b00b85d4289fa3d35d0babb4046d3aa8d0b3694879b
+      1441005f19b7e1d99156eb1c57df078b7f6521da2fa131acd7b8191d9393bffc
+      182644dda3bdac220cd09629448b57828f4bbc40688994c006f56600016a88f6
+      1e02b029aad74a67985817fe46e72914c141b6602968bb9671d7ff7e92df8780
+      26d97a54eea4d1503b16e043a9836529eb8e577eee4f66e13d08e9882d18f2e4
+      27923f51cffe3eed6403a6846c1c0bb2bfcc01ac6d9b66a8a764f1893da067c3
+      358ef5b0f64ccb584940fecf2d162c18175ecec76e30ab640b3c53800b001468
+      3e965988630c06df65d8922424acaca8055db728e1b8ba1e4751f2d164725164
+      4af16e92541408497d60bebe7f599faf1ddaf23fb0be8754c00c2ce6bdf976ac
+      4bc03dc8a157acd36026b4f3ef161641125f1cbcc2c6f302e0ae95d010855eaf
+      5125f0a1a501b7b6813287bc7200ca99ded1db64f9953d083bb7c70bb6af457d
+      5961410d742a02faca6307ef2bd7eb7605ddc217b51a11e44159635dae0657c3
+      6666ca3b6e44cafdcb955a17e59421f398e32881048808ec43b7340aae53652c
+      6a4b4285c46f020239db0f01e52ee2a3f2e6f4961e8f460ef38b5fe5b7de0da4
+      6ee2f596768c40422b8614d1762b1acf5041d44eeea90c20ced34c6590367d33
+      748a3c120a7f9134122986058da12aaf90ac82ec2ccd46490bb3a2c8238ad7ec
+      76035857187eb05e499ba470e26f98debc0ef8e83fe8068320c684a6e03031a8
+      7d3e7b9789f9639918624dbbf88ab63012a85ba65af2f5ab8f7f002592687d64
+      7e0c572e88399ff72c62b9e11dd6af448d6d92912c4cf3d0612674c7581c4635
+      852424434cf7dcbf757901a39aaae8b627994af44531bf9fd6c67378c6d8cbff
+      92c6d01151b9832edcc31e106e3682bef9dc9ca5cbc138ea58c056029fb91ad1
+      991398251e348d98e682a8115d9eb4503219a94f1b4d3d387227ffb7f21adc01
+      9bde2bce25acbd0968fdedb440a9f89416ae1c2f2e1368e076e179dc90425d66
+      9d675400573f96a483376d47197cddcc61bd8e5c90951db9c684c3b5766b2321
+      9f5f4e06f665230c1f61d0ed367463073f44a0be9dfe8bacb5943e8b55e52c08
+      a8a5d0aa70003e9114584e61b24128931762cccaa16caa5a6a22d7aa643472fa
+      ac0f7bdd5ccf0f2d97cc8c8ad986a81e2e09717c7248f95c478d2cb858662da7
+      bffd96fb99179010b3c7f06c0a78afe32285382a59d76a80fe849e01b9f2cdea
+      ed01fbe81f93ba7e6b241e9174b21e6bb5cace263e4637dae1b21c346da7f930
+      edb3b6253df6422c5b35ad4380232608feb0bc9f078276a24e3aad2f47e433c4
+      f1a7bf433d429f773d6a054a8de609afff38a78210e840649f5b9b5fe448c06d
+      f3c15e223b4b50aacf57404e09f49ee895bbbbcad49abab1832bab7fced38f6c
+      fd1e03c0765c78f8039854f0e19fb6385b79484efa73a63c0a37c7342623daeb
+    )),
+    "capability-acquisition" => MapSet.new(~w(
+      0bd13c1e5b5f1fd0a22168ea3e8fb885f5fef642ac720c95ca6ebbe9e16a2d95
+      2e97c82ddcb29c2fd5281a970f602e2958b718427557ae3066e0807941dc8d3f
+      59a2e5467dd6c5664f1c90f0bb8e2fe50eff2839311a49ef646129bb337fb4ec
+      d11c0453300e117604fc504dd5ca8be0776dbaaff0388b9ac845ae0c2491e15d
+      d2cdcb8796f35abc4fa211e1ec60ce692ae8aa9d523f06065f268f584590e9b6
+    )),
+    "planner" => MapSet.new(~w(
+      30d5f282e7c56a3f8958a7995781b8ef6ff76eedc9f6babda9c87341d6ca91d2
+      3c78fbbe9de3537308b20c7241d35529f70de34c2a08fb9e9dd6e8a4aa556027
+    )),
+    "research" => MapSet.new(~w(
+      72be2748473c3e8a53f451ca5f5a55165cd8923b95bfcb17dcf267b7d56cc605
+    )),
+    "web" => MapSet.new(~w(
+      06a36e0e1e5a7b07bcb90c6af9338b6594a70f3a58f56ca3d62e0e529394cd67
+      0cdc120a41d6afc4abcd23587f988bd4d395f057a5b71a6849c46c2bbcc20ea4
+      65fbeb2d9a3e1bdc8746fab33cf87d131c438f00d6f10a533bb621324de79801
+      caf4c01ed1bca51f53a36aa8b512daa7095cd0dbb3d15628508d33fe2fb93170
+    ))
+  }
 
   @typedoc "A pack's record, as `.cyfr-pack.json` holds it."
   @type pack_record :: %{
@@ -554,76 +572,319 @@ defmodule Compendium.Packs do
     parts_of(files, read)
   end
 
+  # Everything Claude Code would load of a pack beyond the scrolls of its
+  # `skills/`, read as its plugin manifest reference allows each component
+  # key (`.claude-plugin/plugin.json`, the one manifest it reads): its
+  # default places (`agents/`, `commands/`, `hooks/hooks.json`, `.mcp.json`)
+  # and every form the manifest may declare instead or beside them, a path,
+  # a list of paths, an inline object, a file the manifest names. A
+  # declaration of a form this reader does not read (an MCP bundle, a key
+  # it does not list, a path outside the pack or not there, a file that is
+  # not JSON) is named by its key in `unread`, so the sheet says so and is
+  # never silent.
+  @unlisted_keys ~w(lspServers outputStyles workflows experimental monitors themes channels)
+
   defp parts_of(files, read) do
+    {manifest, unread} =
+      if ".claude-plugin/plugin.json" in files do
+        case Jason.decode(read.(".claude-plugin/plugin.json") || "") do
+          {:ok, %{} = manifest} -> {manifest, []}
+          _unreadable -> {%{}, [".claude-plugin/plugin.json"]}
+        end
+      else
+        {%{}, []}
+      end
+
+    ctx = %{files: files, read: read}
+    {agents, u1} = agents_of(manifest, ctx)
+    {commands, u2} = commands_of(manifest, ctx)
+    {hooks, u3} = hooks_of(manifest, ctx)
+    {servers, u4} = servers_of(manifest, ctx)
+    {skills, u5} = extra_skills_of(manifest, ctx)
+
+    unlisted =
+      for(key <- @unlisted_keys, Map.has_key?(manifest, key), do: key) ++
+        if(".lsp.json" in files and not Map.has_key?(manifest, "lspServers"),
+          do: ["lspServers"],
+          else: []
+        )
+
     %{
-      agents: named_under(files, "agents/"),
-      commands: named_under(files, "commands/"),
-      hooks: hooks_of(files, read),
-      servers: servers_of(files, read)
+      agents: agents,
+      commands: commands,
+      hooks: hooks,
+      servers: servers,
+      skills: skills,
+      unread: Enum.uniq(unread ++ u1 ++ u2 ++ u3 ++ u4 ++ u5 ++ unlisted)
     }
   end
 
-  defp named_under(files, prefix) do
-    for path <- files,
-        String.starts_with?(path, prefix),
-        rest = String.replace_prefix(path, prefix, ""),
-        not String.contains?(rest, "/"),
-        String.ends_with?(rest, ".md"),
-        do: String.replace_suffix(rest, ".md", "")
+  # A manifest's path, `./`-relative to the pack's root (`.` for the root
+  # itself where the key allows it): the path inside the pack, or `:error`
+  # for one Claude Code does not load (no `./`, a `..`, absolute).
+  defp manifest_path(".", true), do: {:ok, ""}
+  defp manifest_path("./", true), do: {:ok, ""}
+
+  defp manifest_path("./" <> rel, _root?) do
+    rel = String.trim_trailing(rel, "/")
+    segments = String.split(rel, "/")
+
+    if rel != "" and not Enum.any?(segments, &(&1 in ["", ".", ".."])),
+      do: {:ok, rel},
+      else: :error
   end
 
-  defp hooks_of(files, read) do
-    if "hooks/hooks.json" in files do
-      with bytes when is_binary(bytes) <- read.("hooks/hooks.json"),
-           {:ok, %{"hooks" => hooks}} when is_map(hooks) <- Jason.decode(bytes) do
-        Enum.sort(Map.keys(hooks))
+  defp manifest_path(_path, _root?), do: :error
+
+  defp under(files, ""), do: files
+
+  defp under(files, dir),
+    do:
+      for(
+        f <- files,
+        String.starts_with?(f, dir <> "/"),
+        do: String.replace_prefix(f, dir <> "/", "")
+      )
+
+  defp dir?(files, dir), do: under(files, dir) != []
+
+  # A key's value as a list of its entries: a path, or a list of them.
+  defp entries(value) when is_list(value), do: value
+  defp entries(value), do: [value]
+
+  defp md_name(path), do: String.replace_suffix(path, ".md", "")
+
+  # Agents: the manifest's `.md` files, which replace `agents/`; else every
+  # `.md` under `agents/`, its subfolders part of the name.
+  defp agents_of(%{"agents" => declared}, %{files: files}) do
+    Enum.reduce(entries(declared), {[], []}, fn entry, {names, unread} ->
+      with true <- is_binary(entry),
+           {:ok, rel} <- manifest_path(entry, false),
+           true <- String.ends_with?(rel, ".md") and rel in files do
+        {names ++ [md_name(Path.basename(rel))], unread}
       else
-        _other -> ["hooks/hooks.json"]
+        _form -> {names, unread ++ ["agents"]}
       end
-    else
-      []
-    end
+    end)
+    |> sorted()
   end
 
-  # Every MCP server a pack would start, from the three ways a plugin
-  # declares them: a `.mcp.json`, a manifest's inline `mcpServers`, and a
-  # file a manifest names there.
-  defp servers_of(files, read) do
-    from_mcp_json = if ".mcp.json" in files, do: server_names(read.(".mcp.json")), else: []
+  defp agents_of(_manifest, %{files: files}) do
+    {for(f <- under(files, "agents"), String.ends_with?(f, ".md"), do: md_name(f)), []}
+    |> sorted()
+  end
 
-    from_manifests =
-      for manifest <- ["plugin.json" | @manifests], manifest in files, reduce: [] do
-        acc ->
-          with bytes when is_binary(bytes) <- read.(manifest),
-               {:ok, %{"mcpServers" => declared}} <- Jason.decode(bytes) do
-            acc ++ declared_servers(declared, files, read)
-          else
-            _none -> acc
+  # Commands: the manifest's paths (a flat `.md` file, or a folder of them)
+  # or its map of name to `source` or `content`, which replace `commands/`;
+  # else the `.md` files directly in `commands/`.
+  defp commands_of(%{"commands" => declared}, ctx) when is_map(declared) do
+    Enum.reduce(declared, {[], []}, fn
+      {name, %{"content" => content}}, {names, unread} when is_binary(content) ->
+        {names ++ [name], unread}
+
+      {name, %{"source" => source}}, {names, unread} when is_binary(source) ->
+        case manifest_path(source, false) do
+          {:ok, rel} ->
+            if rel in ctx.files,
+              do: {names ++ [name], unread},
+              else: {names, unread ++ ["commands"]}
+
+          :error ->
+            {names, unread ++ ["commands"]}
+        end
+
+      _entry, {names, unread} ->
+        {names, unread ++ ["commands"]}
+    end)
+    |> sorted()
+  end
+
+  defp commands_of(%{"commands" => declared}, %{files: files}) do
+    Enum.reduce(entries(declared), {[], []}, fn entry, {names, unread} ->
+      with true <- is_binary(entry),
+           {:ok, rel} <- manifest_path(entry, false) do
+        cond do
+          String.ends_with?(rel, ".md") and rel in files ->
+            {names ++ [md_name(Path.basename(rel))], unread}
+
+          dir?(files, rel) ->
+            {names ++ flat_md(under(files, rel)), unread}
+
+          true ->
+            {names, unread ++ ["commands"]}
+        end
+      else
+        _form -> {names, unread ++ ["commands"]}
+      end
+    end)
+    |> sorted()
+  end
+
+  defp commands_of(_manifest, %{files: files}),
+    do: sorted({flat_md(under(files, "commands")), []})
+
+  defp flat_md(rels),
+    do:
+      for(
+        rel <- rels,
+        not String.contains?(rel, "/"),
+        String.ends_with?(rel, ".md"),
+        do: md_name(rel)
+      )
+
+  # Hooks, by their events: `hooks/hooks.json` (the event map under a
+  # top-level `"hooks"`) merged with the manifest's file paths (the same
+  # shape), inline event maps (no wrapper), or a list mixing both.
+  defp hooks_of(manifest, %{files: files, read: read}) do
+    default =
+      if "hooks/hooks.json" in files,
+        do: [hooks_file(read.("hooks/hooks.json"))],
+        else: []
+
+    declared =
+      case manifest do
+        %{"hooks" => value} ->
+          for entry <- entries(value) do
+            cond do
+              is_map(entry) ->
+                events(entry)
+
+              is_binary(entry) ->
+                case manifest_path(entry, false) do
+                  {:ok, rel} -> if rel in files, do: hooks_file(read.(rel)), else: :unread
+                  :error -> :unread
+                end
+
+              true ->
+                :unread
+            end
           end
+
+        _none ->
+          []
       end
 
-    Enum.uniq(from_mcp_json ++ from_manifests)
+    gathered(default ++ declared, "hooks")
   end
 
-  defp declared_servers(declared, _files, _read) when is_map(declared),
-    do: Enum.sort(Map.keys(declared))
-
-  defp declared_servers(declared, files, read) when is_binary(declared) do
-    rel = declared |> String.trim_leading("./")
-    if rel in files, do: server_names(read.(rel)), else: []
-  end
-
-  defp declared_servers(_declared, _files, _read), do: []
-
-  defp server_names(bytes) when is_binary(bytes) do
-    case Jason.decode(bytes) do
-      {:ok, %{"mcpServers" => servers}} when is_map(servers) -> Enum.sort(Map.keys(servers))
-      {:ok, servers} when is_map(servers) -> Enum.sort(Map.keys(servers))
-      _unread -> []
+  defp hooks_file(bytes) do
+    case Jason.decode(bytes || "") do
+      {:ok, %{"hooks" => hooks}} when is_map(hooks) -> events(hooks)
+      _unread -> :unread
     end
   end
 
-  defp server_names(_bytes), do: []
+  defp events(map) when is_map(map) do
+    if Enum.all?(map, fn {_event, handlers} -> is_list(handlers) end),
+      do: {:ok, Map.keys(map)},
+      else: :unread
+  end
+
+  # MCP servers, by name: `.mcp.json` (a map under `"mcpServers"`) merged
+  # with the manifest's `.json` file paths, inline maps of name to config,
+  # or a list mixing them. An MCP bundle (`.mcpb`, `.dxt`, a path or an
+  # address) is a form this reader does not open.
+  defp servers_of(manifest, %{files: files, read: read}) do
+    default = if ".mcp.json" in files, do: [servers_file(read.(".mcp.json"))], else: []
+
+    declared =
+      case manifest do
+        %{"mcpServers" => value} ->
+          for entry <- entries(value) do
+            cond do
+              is_map(entry) ->
+                server_map(entry)
+
+              is_binary(entry) ->
+                case manifest_path(entry, false) do
+                  {:ok, rel} ->
+                    if String.ends_with?(rel, ".json") and rel in files,
+                      do: servers_file(read.(rel)),
+                      else: :unread
+
+                  :error ->
+                    :unread
+                end
+
+              true ->
+                :unread
+            end
+          end
+
+        _none ->
+          []
+      end
+
+    gathered(default ++ declared, "mcpServers")
+  end
+
+  defp servers_file(bytes) do
+    case Jason.decode(bytes || "") do
+      {:ok, %{"mcpServers" => servers}} when is_map(servers) -> server_map(servers)
+      {:ok, %{} = servers} -> server_map(servers)
+      _unread -> :unread
+    end
+  end
+
+  defp server_map(map) do
+    if Enum.all?(map, fn {_name, config} -> is_map(config) end),
+      do: {:ok, Map.keys(map)},
+      else: :unread
+  end
+
+  # Skills beyond `skills/`: each folder the manifest's `skills` names (a
+  # folder of `<name>/SKILL.md` folders, or one holding `SKILL.md`), which
+  # add to the default scan; a pack with `SKILL.md` at its root and no
+  # `skills/` loads as one skill.
+  defp extra_skills_of(manifest, %{files: files}) do
+    declared =
+      case manifest do
+        %{"skills" => value} ->
+          for entry <- entries(value) do
+            with true <- is_binary(entry),
+                 {:ok, rel} <- manifest_path(entry, true),
+                 true <- rel == "" or dir?(files, rel) do
+              {:ok, skills_in(files, rel)}
+            else
+              _form -> :unread
+            end
+          end
+
+        _none ->
+          []
+      end
+
+    lone =
+      if "SKILL.md" in files and not dir?(files, "skills") and
+           not Map.has_key?(manifest, "skills"),
+         do: [{:ok, ["SKILL.md"]}],
+         else: []
+
+    gathered(lone ++ declared, "skills")
+  end
+
+  defp skills_in(files, rel) do
+    prefix = if rel == "", do: "", else: rel <> "/"
+
+    for f <- files,
+        String.starts_with?(f, prefix),
+        rest = String.replace_prefix(f, prefix, ""),
+        rest == "SKILL.md" or match?([_name, "SKILL.md"], String.split(rest, "/")),
+        not String.starts_with?(f, "skills/"),
+        do: f
+  end
+
+  defp gathered(found, key) do
+    {names, unread} =
+      Enum.reduce(found, {[], []}, fn
+        {:ok, names}, {acc, unread} -> {acc ++ names, unread}
+        :unread, {acc, _unread} -> {acc, [key]}
+      end)
+
+    {Enum.sort(Enum.uniq(names)), unread}
+  end
+
+  defp sorted({names, unread}), do: {Enum.sort(Enum.uniq(names)), Enum.uniq(unread)}
 
   # ---------------------------------------------------------------------------
   # Scrolls by name: the index, a read, a file
@@ -852,11 +1113,14 @@ defmodule Compendium.Packs do
         packs: [%{name: name, revision: revision_digest, on: boolean,
                   record: %{path: ".cyfr-pack.json", size: n, sha256: "sha256:…"},
                   files: [%{path: "skills/x/SKILL.md", size: n, sha256: "sha256:…",
-                            executable: boolean}]}]}
+                            executable: boolean}],
+                  withheld: nil | "the sentence a pack past its bounds is left out with"}]}
 
   in name order: every pack's name, revision digest and its record's
   line, and for each pack switched on every other file of it by its path
-  inside `aqua/scrolls/<pack>/` (`[]` for a pack switched off). The
+  inside `aqua/scrolls/<pack>/` (`[]` for a pack switched off). A pack
+  switched on but past a pack's bounds (`bounds/0`) is handed with no
+  file, and `withheld` says why, the sentence its card says. The
   record's line is what a keeper needs to recompute each revision digest
   (`content_identity` over every path of the unit, the record's among
   them) and the set's; it writes the files alone.
@@ -915,8 +1179,19 @@ defmodule Compendium.Packs do
 
     on = match?(%{on: true}, record)
 
-    files =
+    # A pack past its bounds (a migrated `mine` that holds more than a pack
+    # may, say) stays in the store and is handed to no program: its files
+    # are left out, with the sentence its card says.
+    withheld =
       if on do
+        case bounded(name, body) do
+          :ok -> nil
+          {:error, {:invalid_argument, sentence}} -> sentence
+        end
+      end
+
+    files =
+      if on and is_nil(withheld) do
         for {rel, bytes} <- Enum.sort_by(body, &elem(&1, 0)) do
           path = Enum.join(rel, "/")
 
@@ -940,7 +1215,8 @@ defmodule Compendium.Packs do
         size: byte_size(raw),
         sha256: Prima.Digest.sha256(raw)
       },
-      files: files
+      files: files,
+      withheld: withheld
     }
   end
 
@@ -1032,9 +1308,25 @@ defmodule Compendium.Packs do
           "under another name"
       )
 
-  defp admitted(_pack, nil, next) do
-    record = own_record()
-    {:ok, record, next ++ [{[AquaPath.record_name()], encode_record(record)}]}
+  # The one rule that makes a pack: the write of its first scroll's
+  # manifest, `skills/<scroll>/SKILL.md`, under a folder that holds no pack.
+  # Any other first write there names a pack that is not here, so a write
+  # meant for a pack that was removed meanwhile, or a stray file, makes
+  # nothing.
+  defp admitted(pack, nil, next) do
+    case next do
+      [{[skills, scroll, manifest], _bytes}] ->
+        if skills == AquaPath.skills_dirname() and manifest == AquaPath.skill_manifest_name() and
+             AquaPath.valid_name?(scroll) do
+          record = own_record()
+          {:ok, record, next ++ [{[AquaPath.record_name()], encode_record(record)}]}
+        else
+          no_pack(pack)
+        end
+
+      _other ->
+        no_pack(pack)
+    end
   end
 
   defp admitted(pack, current, next) do
@@ -1049,6 +1341,13 @@ defmodule Compendium.Packs do
         refuse("The pack `#{pack}` has a record that cannot be read: nothing was written")
     end
   end
+
+  defp no_pack(pack),
+    do:
+      refuse(
+        "No pack named `#{pack}` is here: a pack is made by writing its first scroll, " <>
+          "`#{Enum.join(AquaPath.pack_dir(pack), "/")}/skills/<scroll>/SKILL.md`"
+      )
 
   @doc "The refusal a write into a brought pack or `cyfr` answers."
   @spec sealed(String.t(), String.t()) :: {:invalid_argument, String.t()}
@@ -1177,6 +1476,8 @@ defmodule Compendium.Packs do
   Write a scroll's manifest in a pack of the person's own, as an ordinary
   write meets `admit_edit/4`: `:create` makes `skills/<scroll>/SKILL.md`
   (the pack too, when it has none) and refuses a scroll of that name;
+  `:new_pack` makes the pack with that scroll as its first, and refuses,
+  under the pack's draft, when a pack of that name is already here;
   `{:update, fun}` rewrites the scroll's manifest, `fun` given its bytes
   and answering the next ones.
   """
@@ -1184,7 +1485,7 @@ defmodule Compendium.Packs do
           Context.t(),
           String.t(),
           binary() | nil,
-          :create | {:update, (binary() -> {:ok, binary()} | {:error, term()})}
+          :create | :new_pack | {:update, (binary() -> {:ok, binary()} | {:error, term()})}
         ) :: :ok | {:error, term()}
   def put_scroll(%Context{} = ctx, name, manifest, mode) do
     actor = Context.actor(ctx)
@@ -1193,9 +1494,13 @@ defmodule Compendium.Packs do
       {:ok, pack, scroll} ->
         unit = AquaPath.pack_dir(pack)
 
-        Arca.Overlay.edit_unit(actor, unit, fn current ->
-          with {:ok, next} <- scroll_written(actor, pack, scroll, current || [], manifest, mode),
-               do: admit_edit(actor, unit, current, next)
+        Arca.Overlay.edit_unit(actor, unit, fn
+          current when mode == :new_pack and current != nil ->
+            refuse("A pack named `#{pack}` is already here: choose another name")
+
+          current ->
+            with {:ok, next} <- scroll_written(actor, pack, scroll, current || [], manifest, mode),
+                 do: admit_edit(actor, unit, current, next)
         end)
 
       {:bare, bare} ->
@@ -1205,6 +1510,9 @@ defmodule Compendium.Packs do
         refuse("A scroll is named by its pack and its name, like `#{@mine}:research`")
     end
   end
+
+  defp scroll_written(actor, pack, scroll, pairs, manifest, :new_pack),
+    do: scroll_written(actor, pack, scroll, pairs, manifest, :create)
 
   defp scroll_written(actor, pack, scroll, pairs, manifest, :create) do
     folder = [AquaPath.skills_dirname(), scroll]
@@ -1347,13 +1655,22 @@ defmodule Compendium.Packs do
          {:ok, copied} <- folder_pairs(actor, pack, folder) do
       unit = AquaPath.pack_dir(to)
 
+      # A copy is meant for a pack of the person's own: one that is not
+      # here yet is made by it, its record minted, as `mine` is at a fill.
       Arca.Overlay.edit_unit(actor, unit, fn current ->
-        pairs = current || []
+        base = current || [{[AquaPath.record_name()], encode_record(own_record())}]
         dest = [AquaPath.skills_dirname(), folder]
 
-        if Enum.any?(pairs, fn {rel, _} -> List.starts_with?(rel, dest) end),
-          do: refuse("`#{to}` already has a scroll folder `#{folder}`: delete it first"),
-          else: admit_edit(actor, unit, current, pairs ++ copied)
+        cond do
+          is_nil(current) and to == @cyfr ->
+            admit_edit(actor, unit, nil, copied)
+
+          Enum.any?(base, fn {rel, _} -> List.starts_with?(rel, dest) end) ->
+            refuse("`#{to}` already has a scroll folder `#{folder}`: delete it first")
+
+          true ->
+            admit_edit(actor, unit, base, base ++ copied)
+        end
       end)
     else
       :error -> {:error, :not_found}
@@ -1451,6 +1768,7 @@ defmodule Compendium.Packs do
       files: length(files),
       bytes: Enum.reduce(files, 0, &(&2 + byte_size(&1.bytes))),
       agreed: files_digest(files),
+      against: held_digest(ctx, name),
       update: update_of(ctx, existing, name, files),
       refusal: sheet_refusal(ctx, name, existing, files)
     }
@@ -1620,14 +1938,48 @@ defmodule Compendium.Packs do
     |> Prima.Digest.sha256()
   end
 
+  # The files digest of what the destination holds now, the place the
+  # sheet's pack would go: `nil` when no pack of that name is here.
+  defp held_digest(ctx, name) do
+    if AquaPath.valid_name?(name) do
+      case Arca.read_subtree(Context.actor(ctx), AquaPath.pack_dir(name)) do
+        {:ok, [_ | _] = pairs} -> pairs_digest(pairs)
+        _absent -> nil
+      end
+    end
+  end
+
+  defp pairs_digest(nil), do: nil
+
+  defp pairs_digest(pairs) do
+    record =
+      case record_of(pairs) do
+        {:ok, record} -> record
+        {:error, _} -> %{origin: "brought", executable: []}
+      end
+
+    pairs
+    |> Enum.reject(&(elem(&1, 0) == [AquaPath.record_name()]))
+    |> Enum.map(fn {rel, bytes} ->
+      path = Enum.join(rel, "/")
+      %{path: path, bytes: bytes, executable: executable?(record, path, bytes)}
+    end)
+    |> files_digest()
+  end
+
   @doc """
   Bring a pack in from an archive, or take an update of a brought pack
   of that name, as the sheet the person read showed it: `params` carries
-  the `folder` and `name` the sheet was made with and the digest the
-  person agreed to (`agreed`). An archive whose files are no longer the
-  ones agreed to is refused with the sheet made again,
-  `{:error, {:changed, sheet}}`, so the person is shown it again.
-  Answers `{:ok, name}`.
+  the `folder` and `name` the sheet was made with, the digest of the
+  files the person agreed to (`agreed`), and the files digest of what the
+  destination held when the sheet was made (`against`, absent when it
+  held no pack). Both sides are the agreement: under the pack's write
+  lock the incoming files must be the ones agreed to and the destination
+  must still hold what the sheet showed, nothing or the same files, so a
+  pack that appeared or changed since is refused with the sheet made
+  again, `{:error, {:changed, sheet}}`, for the person to read again. A
+  switch alone changes no files and leaves the agreement good. Answers
+  `{:ok, name}`.
   """
   @spec bring_in(Context.t(), binary(), String.t(), map()) ::
           {:ok, String.t()} | {:error, term()}
@@ -1641,18 +1993,24 @@ defmodule Compendium.Packs do
           {:error, {:changed, sheet}}
 
         true ->
-          land(ctx, archive, sheet)
+          case land(ctx, archive, sheet, params["against"]) do
+            :changed ->
+              with {:ok, again} <- sheet(ctx, archive, filename, params),
+                   do: {:error, {:changed, again}}
+
+            answer ->
+              answer
+          end
       end
     end
   end
 
-  defp land(ctx, archive, sheet) do
+  defp land(ctx, archive, sheet, against) do
     actor = Context.actor(ctx)
     {:ok, entries} = PackArchive.read(archive)
     candidate = Enum.find(sheet.candidates, &(&1.folder == sheet.folder))
     files = pack_files(entries, candidate)
     unit = AquaPath.pack_dir(sheet.name)
-    updating? = sheet.update != nil
 
     Arca.Overlay.edit_unit(actor, unit, fn current ->
       held =
@@ -1684,14 +2042,14 @@ defmodule Compendium.Packs do
           [{[AquaPath.record_name()], encode_record(record)}]
 
       cond do
-        held == nil and updating? -> {:error, {:changed, sheet}}
+        pairs_digest(current) != against -> {:error, :changed}
         held != nil and not match?(%{origin: "brought"}, held) -> refuse(sheet_clash(sheet.name))
-        held != nil and not updating? -> {:error, {:changed, sheet}}
         true -> with :ok <- set_bounded(actor, sheet.name, record, pairs), do: {:ok, pairs}
       end
     end)
     |> case do
       :ok -> {:ok, sheet.name}
+      {:error, :changed} -> :changed
       error -> error
     end
   end
@@ -1796,7 +2154,7 @@ defmodule Compendium.Packs do
           {pack <> "/" <> path, bytes, executable?(record, path, bytes)}
         end
 
-      {:ok, %{filename: pack <> ".tar.gz", bytes: PackArchive.tar_gz(files)}}
+      {:ok, %{filename: pack <> ".tar.gz", stream: PackArchive.tar_gz_stream(files)}}
     end
   end
 
@@ -1840,7 +2198,7 @@ defmodule Compendium.Packs do
       else
         moved =
           for {name, pairs} <- scrolls,
-              not unedited_shipped?(pairs),
+              not unedited_shipped?(name, pairs),
               {rel, bytes} <- pairs,
               do: {[AquaPath.skills_dirname(), name | rel], bytes}
 
@@ -1858,11 +2216,14 @@ defmodule Compendium.Packs do
     end
   end
 
-  defp unedited_shipped?([{["SKILL.md"], bytes}]),
+  defp unedited_shipped?(name, [{["SKILL.md"], bytes}]),
     do:
-      MapSet.member?(@shipped_scrolls, Prima.Digest.sha256_hex(bytes))
+      MapSet.member?(
+        Map.get(@shipped_scrolls, name, MapSet.new()),
+        Prima.Digest.sha256_hex(bytes)
+      )
 
-  defp unedited_shipped?(_pairs), do: false
+  defp unedited_shipped?(_name, _pairs), do: false
 
   # What moves lands in `mine` beside what it holds; a folder `mine`
   # already holds (a migration that ran before) is kept as it is. The

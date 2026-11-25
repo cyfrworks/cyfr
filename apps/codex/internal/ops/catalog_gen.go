@@ -433,7 +433,7 @@ func (args AquaListArgs) MarshalJSON() ([]byte, error) {
 type AquaResetArgs struct {
 	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name Field[string] `json:"name,omitzero"`
-	// For reset: also DELETE the crew members and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)
+	// For reset: also DELETE the crew members the athanor made, so the soul and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls
 	All Field[bool] `json:"all,omitzero"`
 }
 
@@ -456,6 +456,8 @@ type AquaSkillCreateArgs struct {
 	Content string `json:"content"`
 	// skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since
 	Against Field[string] `json:"against,omitzero"`
+	// skill_create from a person's New pack: the scroll is its pack's first, and the write is refused when a pack of that name is already here (default false writes into the pack, making it when there is none)
+	NewPack Field[bool] `json:"new_pack,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

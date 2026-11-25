@@ -17,7 +17,7 @@ defmodule Compendium.PackArchive do
   the other way about) each refuse the whole archive, saying which. The
   pack's own bounds and its path grammar are the pack's (`Compendium.Packs`).
 
-  `tar_gz/1` writes files as one `.tar.gz`, the same bytes for the same
+  `tar_gz_stream/1` writes files as one `.tar.gz`, made as it is read, the same bytes for the same
   files: every time stamp, owner and group zero, a mode of `0644`, or
   `0755` for an executable file.
   """
@@ -219,7 +219,8 @@ defmodule Compendium.PackArchive do
     with {:ok, offset, count} <- end_of_directory(bytes),
          {:ok, headers} <- central(bytes, offset, count, []) do
       Enum.reduce_while(headers, {:ok, new_seen()}, fn h, {:ok, seen} ->
-        with {:ok, data} <- zip_data(bytes, h),
+        with :ok <- allowed(seen, h),
+             {:ok, data} <- zip_data(bytes, h),
              {:ok, seen} <- entry(seen, h.name, h.kind, data, h.executable) do
           {:cont, {:ok, seen}}
         else
@@ -299,6 +300,28 @@ defmodule Compendium.PackArchive do
     end
   end
 
+  # What a file says it expands to is held to what is left before a byte
+  # of it is inflated: the archive's allowance after the files already
+  # read, and a file's own (`Arca.Files.max_write/0`). The inflation is
+  # then bounded by that same declared size (`raw_inflate/6`), so a file
+  # that lies about its size is refused as it grows past it.
+  defp allowed(_seen, %{kind: kind}) when kind != :file, do: :ok
+
+  defp allowed(%{bytes: bytes}, %{usize: usize, name: name}) do
+    cond do
+      usize > Arca.Files.max_write() ->
+        refuse(
+          "The archive's file #{inspect(name)} is past a file's #{Arca.Files.max_write()} bytes"
+        )
+
+      bytes + usize > @max_expanded ->
+        refuse("The archive expands past #{@max_expanded} bytes")
+
+      true ->
+        :ok
+    end
+  end
+
   defp zip_data(_bytes, %{kind: kind}) when kind != :file, do: {:ok, ""}
 
   defp zip_data(_bytes, %{flags: flags}) when (flags &&& 1) == 1,
@@ -324,8 +347,8 @@ defmodule Compendium.PackArchive do
   # field may differ in length from the central directory's.
   defp local_start(bytes, local) do
     case bytes do
-      <<_::binary-size(^local), "PK", 3, 4, _::binary-size(22), nlen::little-16,
-        elen::little-16, _::binary>> ->
+      <<_::binary-size(^local), "PK", 3, 4, _::binary-size(22), nlen::little-16, elen::little-16,
+        _::binary>> ->
         {:ok, local + 30 + nlen + elen}
 
       _short ->
@@ -470,16 +493,36 @@ defmodule Compendium.PackArchive do
 
   @doc """
   The files as one `.tar.gz`, in the order given, each `{path, bytes,
-  executable?}`. A path too long for a ustar header carries a PAX one.
+  executable?}`, produced as it is read: a lazy stream of gzip chunks,
+  one file's tar entry compressed at a time, so the archive is never held
+  whole. A path too long for a ustar header carries a PAX one.
   """
-  @spec tar_gz([{String.t(), binary(), boolean()}]) :: binary()
-  def tar_gz(files) when is_list(files) do
-    files
-    |> Enum.map(fn {path, bytes, executable} -> tar_file(path, bytes, executable) end)
-    |> then(&[&1, <<0::size(8192)>>])
-    |> IO.iodata_to_binary()
-    |> :zlib.gzip()
+  @spec tar_gz_stream([{String.t(), binary(), boolean()}]) :: Enumerable.t()
+  def tar_gz_stream(files) when is_list(files) do
+    Stream.resource(
+      fn ->
+        z = :zlib.open()
+        # 31: deflate with a gzip header and trailer.
+        :ok = :zlib.deflateInit(z, :default, :deflated, 31, 8, :default)
+        {z, files}
+      end,
+      fn
+        {z, [{path, bytes, executable} | rest]} ->
+          {[IO.iodata_to_binary(:zlib.deflate(z, tar_file(path, bytes, executable)))], {z, rest}}
+
+        {z, []} ->
+          {[IO.iodata_to_binary(:zlib.deflate(z, <<0::size(8192)>>, :finish))], {z, :done}}
+
+        {z, :done} ->
+          {:halt, {z, :done}}
+      end,
+      fn {z, _left} -> :zlib.close(z) end
+    )
   end
+
+  @doc "The same archive as `tar_gz_stream/1`, held whole."
+  @spec tar_gz([{String.t(), binary(), boolean()}]) :: binary()
+  def tar_gz(files) when is_list(files), do: files |> tar_gz_stream() |> Enum.join()
 
   defp tar_file(path, bytes, executable) do
     mode = if executable, do: 0o755, else: 0o644

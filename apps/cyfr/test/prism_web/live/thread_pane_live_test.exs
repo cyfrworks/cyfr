@@ -3302,6 +3302,29 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     defp card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
 
+    test "a pending update to the unchanged shipped planner can still be saved", %{
+      conn: conn,
+      athanor: athanor,
+      here: here,
+      thread: thread
+    } do
+      assert :ok = Compendium.Packs.settle(here)
+      {:ok, %{bytes: original}} = Compendium.Packs.manifest(here, "cyfr:planner")
+
+      row =
+        proposed!(here, thread, %{
+          "name" => "planner",
+          "description" => "custom",
+          "content" => "my edit",
+          "against" => Prima.Digest.sha256(original)
+        })
+
+      pane = open_pane(conn, athanor, thread)
+      assert pane |> element(card(row, "name")) |> render() =~ "mine:planner"
+      pane |> element(card(row, "save")) |> render_click()
+      assert has_element?(pane, card(row, "saved"))
+    end
+
     # A card proposed before scrolls had packs names its scroll bare; it is
     # the first pack's, `mine`, where the release moved every made scroll.
     test "its card shows what Save as scroll writes, and a save writes exactly that",

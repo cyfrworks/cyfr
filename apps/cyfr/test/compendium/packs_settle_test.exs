@@ -80,6 +80,35 @@ defmodule Compendium.PacksSettleTest do
         Path.expand("../../../../seed/aqua/scrolls/cyfr/skills/planner/SKILL.md", __DIR__)
       )
 
+  test "the program view withholds a pack retained past the pack size bound", %{
+    actor: actor,
+    ctx: ctx
+  } do
+    chunk = :binary.copy("q", 16 * 1024 * 1024)
+
+    before_packs!(actor, "large", [
+      {["SKILL.md"], "---\nname: large\n---\nbody"},
+      {["a"], chunk},
+      {["b"], chunk}
+    ])
+
+    assert :ok = Packs.settle(ctx)
+    {:ok, index} = Packs.index(ctx)
+    assert %{carried: false} = Enum.find(index, &(&1.name == "mine:large"))
+    {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+    {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+    mine = Enum.find(view.packs, &(&1.name == "mine"))
+    assert Enum.map(mine.files, & &1.path) == []
+  end
+
+  test "a personal copy of the shipped planner keeps its own folder", %{actor: actor, ctx: ctx} do
+    before_packs!(actor, "my-planner", [{["SKILL.md"], shipped_planner()}])
+    assert :ok = Packs.settle(ctx)
+
+    assert {:ok, _} =
+             Arca.get(actor, ["aqua", "scrolls", "mine", "skills", "my-planner", "SKILL.md"])
+  end
+
   test "a made scroll and an edited shipped one move into mine with their files; an unedited shipped one is dropped; aqua/skills/ is gone",
        %{ctx: ctx, actor: actor} do
     before_packs!(actor, "made", [

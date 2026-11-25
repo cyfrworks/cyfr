@@ -91,9 +91,36 @@ defmodule Compendium.PacksTest do
     bytes
   end
 
+  # A .zip whose central directory claims another expanded size for the
+  # named entries than they hold.
+  defp declare(zip, claimed) do
+    Enum.reduce(claimed, zip, fn {name, size}, bytes ->
+      [at] =
+        for {at, _} <- :binary.matches(bytes, <<"PK", 1, 2>>),
+            central_named?(bytes, at, name),
+            do: at
+
+      cut = at + 24
+      <<head::binary-size(cut), _usize::little-32, rest::binary>> = bytes
+      head <> <<size::little-32>> <> rest
+    end)
+  end
+
+  defp central_named?(bytes, at, name) do
+    skip = at + 28
+    <<_::binary-size(skip), nlen::little-16, _::binary>> = bytes
+    binary_part(bytes, at + 46, nlen) == name
+  end
+
   defp bring_in!(ctx, archive, filename, opts \\ %{}) do
     {:ok, sheet} = Packs.sheet(ctx, archive, filename, opts)
-    params = Map.merge(%{"folder" => sheet.folder, "name" => sheet.name}, opts)
+
+    params =
+      Map.merge(
+        %{"folder" => sheet.folder, "name" => sheet.name, "against" => sheet.against},
+        opts
+      )
+
     {:ok, name} = Packs.bring_in(ctx, archive, filename, Map.put(params, "agreed", sheet.agreed))
     {name, sheet}
   end
@@ -115,6 +142,49 @@ defmodule Compendium.PacksTest do
   # ---------------------------------------------------------------------------
 
   describe "bringing a pack in" do
+    test "the sheet names the manifest's hook file and server list", %{ctx: ctx} do
+      archive =
+        tgz([
+          {"sample/.claude-plugin/plugin.json",
+           Jason.encode!(%{
+             "name" => "sample",
+             "hooks" => "./config/hooks.json",
+             "mcpServers" => ["./config/servers.json"]
+           }), false},
+          {"sample/config/hooks.json",
+           Jason.encode!(%{
+             "hooks" => %{"Stop" => [%{"hooks" => [%{"type" => "command", "command" => "true"}]}]}
+           }), false},
+          {"sample/config/servers.json",
+           Jason.encode!(%{"mcpServers" => %{"library" => %{"command" => "true"}}}), false}
+        ])
+
+      {:ok, sheet} = Packs.sheet(ctx, archive, "sample.tgz")
+      assert sheet.refusal == nil
+      assert {sheet.parts.hooks, sheet.parts.servers} == {["Stop"], ["library"]}
+    end
+
+    test "a new import keeps the name conflict visible if another tab used the name", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      shown = tgz([{"same/skills/one/SKILL.md", "---\nname: one\n---\nfirst", false}])
+      other = tgz([{"same/skills/two/SKILL.md", "---\nname: two\n---\nsecond", false}])
+      {:ok, sheet} = Packs.sheet(ctx, shown, "same.tar.gz")
+      assert sheet.update == nil
+      {"same", _} = bring_in!(ctx, other, "same.tar.gz")
+
+      result =
+        Packs.bring_in(ctx, shown, "same.tar.gz", %{
+          "name" => sheet.name,
+          "folder" => sheet.folder,
+          "agreed" => sheet.agreed
+        })
+
+      assert {result, Arca.get(actor, ~w(aqua scrolls same skills two SKILL.md))}
+             |> then(fn {r, old} -> {elem(r, 0), elem(old, 0)} end) == {:error, :ok}
+    end
+
     test "the taste skill comes in byte for byte, named by its folder, its scroll by its front matter",
          %{ctx: ctx, actor: actor} do
       archive = tgz(taste_skill())
@@ -201,6 +271,40 @@ defmodule Compendium.PacksTest do
       File.rm_rf!(link_dir)
     end
 
+    # A .zip entry says what it expands to; that is held to what is left
+    # before a byte of it is inflated, so an entry that lies is refused by
+    # its claim, not read as damage after the work.
+    test "a .zip entry's declared size is held to the file's and the archive's allowance before it inflates",
+         %{ctx: ctx} do
+      claims = fn entries, claimed ->
+        {:ok, {_name, bytes}} =
+          :zip.create(
+            ~c"p.zip",
+            for({name, data} <- entries, do: {String.to_charlist(name), data}),
+            [:memory]
+          )
+
+        declare(bytes, claimed)
+      end
+
+      past_file =
+        claims.([{"p/skills/x/SKILL.md", "b"}], %{
+          "p/skills/x/SKILL.md" => Arca.Files.max_write() + 1
+        })
+
+      assert {:error, {:invalid_argument, file}} = Packs.sheet(ctx, past_file, "p.zip")
+      assert file =~ "past a file's #{Arca.Files.max_write()} bytes"
+
+      nineteen = :binary.copy(<<0>>, 19_000_000)
+      real = for i <- 1..7, do: {"p/f#{i}", nineteen}
+
+      past_archive =
+        claims.(real ++ [{"p/skills/x/SKILL.md", "b"}], %{"p/skills/x/SKILL.md" => 19_000_000})
+
+      assert {:error, {:invalid_argument, archive}} = Packs.sheet(ctx, past_archive, "p.zip")
+      assert archive =~ "expands past #{PackArchive.max_expanded()} bytes"
+    end
+
     test "a pack past a pack's bounds, or carrying CYFR's record at its root, is refused, naming which",
          %{ctx: ctx} do
       scroll = {"p/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false}
@@ -284,20 +388,176 @@ defmodule Compendium.PacksTest do
                )
     end
 
-    test "the sheet names every MCP server of the three ways a plugin declares them", %{ctx: ctx} do
-      archive =
+    # Every form Claude Code's plugin manifest reference allows for the
+    # parts a program would load: a path, a list of paths, an inline
+    # object, a file the manifest names; and the defaults beside them.
+    test "the sheet reads every form the manifest allows for hooks, servers, agents, commands and skills",
+         %{ctx: ctx} do
+      hook = fn event ->
+        %{event => [%{"hooks" => [%{"type" => "command", "command" => "true"}]}]}
+      end
+
+      lists =
         tgz([
           {"p/.claude-plugin/plugin.json",
-           ~s({"name": "srv", "mcpServers": {"inline-one": {"command": "a"}}}), false},
-          {"p/.codex-plugin/plugin.json", ~s({"name": "srv", "mcpServers": "./servers.json"}),
-           false},
-          {"p/servers.json", ~s({"mcpServers": {"from-file": {"command": "b"}}}), false},
+           Jason.encode!(%{
+             "name" => "lists",
+             "hooks" => ["./config/hooks.json", hook.("PostToolUse")],
+             "mcpServers" => [%{"inline-one" => %{"command" => "a"}}, "./servers.json"],
+             "agents" => ["./custom/reviewer.md", "./custom/tester.md"],
+             "commands" => %{
+               "status" => %{"source" => "./cmds/status.md"},
+               "about" => %{"content" => "Explain."}
+             },
+             "skills" => ["./extra/", "."]
+           }), false},
+          {"p/hooks/hooks.json", Jason.encode!(%{"hooks" => hook.("SessionStart")}), false},
+          {"p/config/hooks.json", Jason.encode!(%{"hooks" => hook.("Stop")}), false},
           {"p/.mcp.json", ~s({"mcpServers": {"dot-mcp": {"command": "c"}}}), false},
+          {"p/servers.json", ~s({"mcpServers": {"from-file": {"command": "b"}}}), false},
+          {"p/custom/reviewer.md", "r", false},
+          {"p/custom/tester.md", "t", false},
+          {"p/agents/replaced.md", "a", false},
+          {"p/cmds/status.md", "s", false},
+          {"p/commands/replaced.md", "c", false},
+          {"p/extra/one/SKILL.md", "---\nname: one\n---\n\no\n", false},
+          {"p/SKILL.md", "---\nname: root\n---\n\nr\n", false},
           {"p/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false}
         ])
 
-      assert {:ok, %{parts: %{servers: servers}}} = Packs.sheet(ctx, archive, "srv.tar.gz")
-      assert Enum.sort(servers) == ["dot-mcp", "from-file", "inline-one"]
+      assert {:ok, %{parts: parts}} = Packs.sheet(ctx, lists, "lists.tar.gz")
+
+      assert parts == %{
+               hooks: ["PostToolUse", "SessionStart", "Stop"],
+               servers: ["dot-mcp", "from-file", "inline-one"],
+               agents: ["reviewer", "tester"],
+               commands: ["about", "status"],
+               skills: ["SKILL.md", "extra/one/SKILL.md"],
+               unread: []
+             }
+
+      singles =
+        tgz([
+          {"p/.claude-plugin/plugin.json",
+           Jason.encode!(%{
+             "name" => "singles",
+             "hooks" => "./config/hooks.json",
+             "mcpServers" => %{"inline-one" => %{"command" => "a"}},
+             "agents" => "./custom/reviewer.md",
+             "commands" => ["./cmds/", "./more/extra.md"],
+             "skills" => "./extra/"
+           }), false},
+          {"p/config/hooks.json", Jason.encode!(%{"hooks" => hook.("Stop")}), false},
+          {"p/custom/reviewer.md", "r", false},
+          {"p/cmds/status.md", "s", false},
+          {"p/cmds/deep/not-flat.md", "n", false},
+          {"p/more/extra.md", "e", false},
+          {"p/extra/one/SKILL.md", "---\nname: one\n---\n\no\n", false},
+          {"p/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false}
+        ])
+
+      assert {:ok, %{parts: parts}} = Packs.sheet(ctx, singles, "singles.tar.gz")
+
+      assert parts == %{
+               hooks: ["Stop"],
+               servers: ["inline-one"],
+               agents: ["reviewer"],
+               commands: ["extra", "status"],
+               skills: ["extra/one/SKILL.md"],
+               unread: []
+             }
+
+      # What the reader does not read is named by its key, never left out.
+      odd =
+        tgz([
+          {"p/.claude-plugin/plugin.json",
+           Jason.encode!(%{
+             "name" => "odd",
+             "hooks" => 5,
+             "mcpServers" => ["./bundle.mcpb", "https://example.com/s.mcpb"],
+             "agents" => "./custom/",
+             "commands" => "commands/no-dot.md",
+             "skills" => "./missing/",
+             "lspServers" => %{"go" => %{"command" => "gopls"}}
+           }), false},
+          {"p/bundle.mcpb", "zip", false},
+          {"p/custom/a.md", "a", false},
+          {"p/commands/no-dot.md", "c", false},
+          {"p/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false}
+        ])
+
+      assert {:ok, %{parts: %{unread: unread}}} = Packs.sheet(ctx, odd, "odd.tar.gz")
+      assert Enum.sort(unread) == ~w(agents commands hooks lspServers mcpServers skills)
+    end
+
+    test "the agreement is bound to each file's executable bit", %{ctx: ctx} do
+      plain =
+        tgz([
+          {"p/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false},
+          {"p/run.sh", "echo\n", false}
+        ])
+
+      runs =
+        tgz([
+          {"p/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false},
+          {"p/run.sh", "echo\n", true}
+        ])
+
+      {:ok, shown} = Packs.sheet(ctx, plain, "p.tar.gz")
+      {:ok, pressed} = Packs.sheet(ctx, runs, "p.tar.gz")
+      assert shown.agreed != pressed.agreed
+
+      assert {:error, {:changed, _}} =
+               Packs.bring_in(ctx, runs, "p.tar.gz", %{
+                 "folder" => shown.folder,
+                 "name" => shown.name,
+                 "agreed" => shown.agreed
+               })
+    end
+
+    test "a press agrees to the place too: a pack changed since the sheet is refused, a switch alone is not",
+         %{ctx: ctx, actor: actor} do
+      {name, _} = bring_in!(ctx, tgz(taste_skill()), "taste.tar.gz")
+      updated = tgz(taste_skill() ++ [{"taste-skill/NEW.md", "one", false}])
+      {:ok, sheet} = Packs.sheet(ctx, updated, "taste.tar.gz")
+      assert sheet.against != nil
+
+      press = %{
+        "folder" => sheet.folder,
+        "name" => name,
+        "agreed" => sheet.agreed,
+        "against" => sheet.against
+      }
+
+      # A switch alone between the sheet and the press: the files are the
+      # ones the sheet showed, and the update lands.
+      assert :ok = Packs.switch(ctx, name, false)
+      assert :ok = Packs.switch(ctx, name, true)
+      assert {:ok, ^name} = Packs.bring_in(ctx, updated, "taste.tar.gz", press)
+      assert {:ok, "one"} = Arca.get(actor, ["aqua", "scrolls", name, "NEW.md"])
+
+      # Another update lands between this sheet and its press: refused,
+      # shown again, and the pack keeps what the other press brought.
+      again = tgz(taste_skill() ++ [{"taste-skill/NEW.md", "three", false}])
+      {:ok, stale} = Packs.sheet(ctx, again, "taste.tar.gz")
+
+      {_name, _} =
+        bring_in!(
+          ctx,
+          tgz(taste_skill() ++ [{"taste-skill/NEW.md", "two", false}]),
+          "taste.tar.gz"
+        )
+
+      assert {:error, {:changed, shown}} =
+               Packs.bring_in(ctx, again, "taste.tar.gz", %{
+                 "folder" => stale.folder,
+                 "name" => name,
+                 "agreed" => stale.agreed,
+                 "against" => stale.against
+               })
+
+      assert shown.against != stale.against
+      assert {:ok, "two"} = Arca.get(actor, ["aqua", "scrolls", name, "NEW.md"])
     end
   end
 
@@ -320,6 +580,32 @@ defmodule Compendium.PacksTest do
 
       assert {:ok, _} = Files.delete(actor, "aqua/scrolls/notes")
       assert {:error, :not_found} = Packs.pack(ctx, "notes")
+    end
+
+    test "only a scroll's SKILL.md makes a pack; any other first write there makes nothing",
+         %{ctx: ctx, actor: actor} do
+      assert {:error, {:invalid_argument, sentence}} =
+               Files.write(actor, "aqua/scrolls/stray/notes.md", "n")
+
+      assert sentence =~ "No pack named `stray` is here"
+
+      assert {:error, {:invalid_argument, _}} =
+               Files.write(actor, "aqua/scrolls/stray/skills/x/run.sh", "n")
+
+      assert {:error, :not_found} = Packs.pack(ctx, "stray")
+
+      # New pack is a write that makes a pack or fails: refused when the pack
+      # is here, whatever the asker believed.
+      {:ok, _} =
+        Files.write(actor, "aqua/scrolls/garden/skills/a/SKILL.md", "---\nname: a\n---\n\nb\n")
+
+      assert {:error, {:invalid_argument, taken}} =
+               Packs.put_scroll(ctx, "garden:roses", "---\nname: roses\n---\n\nr\n", :new_pack)
+
+      assert taken =~ "already here"
+      assert {:error, :not_found} = Packs.skill(ctx, "garden:roses")
+      assert :ok = Packs.put_scroll(ctx, "fresh:roses", "---\nname: roses\n---\n\nr\n", :new_pack)
+      assert {:ok, %{name: "fresh:roses"}} = Packs.skill(ctx, "fresh:roses")
     end
 
     test "a write making a pack named cyfr, or one outside the grammar, is refused saying why",
@@ -471,12 +757,53 @@ defmodule Compendium.PacksTest do
                Packs.bring_in(ctx, update, "big1.tar.gz", %{
                  "folder" => sheet.folder,
                  "name" => "big1",
-                 "agreed" => sheet.agreed
+                 "agreed" => sheet.agreed,
+                 "against" => sheet.against
                })
 
       assert updated =~ "#{bound + 1} bytes together"
       assert %{on: false} = record!(actor, "extra")
       assert {:error, :not_found} = Packs.pack(ctx, "small")
+
+      # Two packs growing at once, each within the room left alone and past
+      # it together: the sum is checked under one lock the packs share, so
+      # the second waits for the first and is refused. `big2`'s edit holds
+      # in its own rewrite, past its pack's lock, while `big3` is written.
+      room = bound - 5 * pack_bytes
+      grow = :binary.copy("g", div(room, 2) + 1)
+      test = self()
+
+      first =
+        Task.async(fn ->
+          Packs.put_scroll(
+            ctx,
+            "big2:s",
+            nil,
+            {:update,
+             fn bytes ->
+               send(test, :first_holds)
+
+               receive do
+                 :go -> {:ok, bytes <> grow}
+               end
+             end}
+          )
+        end)
+
+      assert_receive :first_holds, 60_000
+
+      second =
+        Task.async(fn -> Files.write(actor, "aqua/scrolls/big3/skills/s/grow", grow) end)
+
+      # The second write may not land while the first holds the lock: a
+      # bounded check that it has not answered.
+      refute Task.yield(second, 2_000)
+      send(first.pid, :go)
+
+      assert :ok = Task.await(first, 60_000)
+      assert {:error, {:invalid_argument, together}} = Task.await(second, 60_000)
+      assert together =~ "bytes together"
+      assert {:error, :not_found} = Arca.get(actor, ~w(aqua scrolls big3 skills s grow))
     end
   end
 
@@ -501,7 +828,12 @@ defmodule Compendium.PacksTest do
                %{path: "skills/a/run.sh", executable: true}
              ] = view.files
 
-      assert {:ok, %{filename: "mine.tar.gz", bytes: archive}} = Packs.download(ctx, "mine")
+      assert {:ok, %{filename: "mine.tar.gz", stream: stream}} = Packs.download(ctx, "mine")
+      # Made as it is read: one compressed chunk a file, then the end.
+      assert is_function(stream, 2)
+      chunks = Enum.to_list(stream)
+      assert length(chunks) == length(view.files) + 1
+      archive = Enum.join(chunks)
       {:ok, entries} = PackArchive.read(archive)
 
       assert Enum.map(entries, &{&1.path, &1.executable}) == [

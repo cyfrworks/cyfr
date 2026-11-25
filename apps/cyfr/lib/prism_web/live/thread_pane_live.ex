@@ -843,14 +843,15 @@ defmodule PrismWeb.ThreadPaneLive do
          {:ok, %{thread_id: ^thread_id} = row} <-
            Threads.get_message(Sanctum.Context.actor(ctx), id),
          %{} = proposal <- proposal(row) do
+      {action, against} = save_action(ctx, proposal)
+
       status =
         case call_tool(ctx, "aqua", %{
-               "action" =>
-                 if(proposal["against"] == "none", do: "skill_create", else: "skill_update"),
+               "action" => action,
                "name" => proposal["name"],
                "description" => proposal["description"],
                "content" => proposal["content"],
-               "against" => proposal["against"]
+               "against" => against
              }) do
           {:ok, _saved} -> :saved
           {:error, reason} -> {:refused, error_message(reason)}
@@ -2882,7 +2883,9 @@ defmodule PrismWeb.ThreadPaneLive do
   defp proposal(%{kind: kind} = row) when kind in ["tool_result", "page_result"] do
     case Threads.payload(row)["proposal"] do
       %{"name" => name, "description" => _, "content" => _, "against" => _} = proposal ->
-        %{proposal | "name" => full_scroll_name(name)}
+        proposal
+        |> Map.put("name", full_scroll_name(name))
+        |> Map.put("bare", is_binary(name) and not String.contains?(name, ":"))
 
       _none ->
         nil
@@ -2890,6 +2893,22 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp proposal(_row), do: nil
+
+  # What Save writes. A card made against none creates its scroll. A card
+  # made before scrolls had packs, an update of a scroll the release did
+  # not move into `mine` (an unedited shipped one, which `cyfr` holds),
+  # carries the whole scroll as it would be stored, so Save makes it in
+  # `mine`, new. Any other updates the scroll it was made against.
+  defp save_action(_ctx, %{"against" => "none"}), do: {"skill_create", "none"}
+
+  defp save_action(ctx, %{"bare" => true, "name" => name, "against" => against}) do
+    case Compendium.skill(ctx, name) do
+      {:error, :not_found} -> {"skill_create", "none"}
+      _held -> {"skill_update", against}
+    end
+  end
+
+  defp save_action(_ctx, %{"against" => against}), do: {"skill_update", against}
 
   # A card proposed before scrolls had packs names its scroll bare: such a
   # scroll is the person's first pack's, `mine`, where the release moved
