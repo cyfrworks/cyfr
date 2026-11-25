@@ -63,11 +63,13 @@ jobs:
         run: go vet ./...
 
       # The image's maker of the machines' device and its lister, which the
-      # vm package's bound mounts test runs for real.
-      - name: squashfs-tools, which the machines' device's tests run
+      # vm package's bound mounts test runs for real, and bubblewrap, which
+      # makes its binds where the runner's AppArmor gives a plain process's
+      # user namespace no capability.
+      - name: squashfs-tools and bubblewrap, which the machines' device's tests run
         run: |
           ../../../scripts/ci/retry.sh sudo apt-get update
-          ../../../scripts/ci/retry.sh sudo apt-get install -y --no-install-recommends squashfs-tools
+          ../../../scripts/ci/retry.sh sudo apt-get install -y --no-install-recommends squashfs-tools bubblewrap
 
       # The total coverage goes to the job summary: it is reported, never a
       # floor, so only a failing test fails the step.
@@ -86,6 +88,18 @@ jobs:
           set -euo pipefail
           go test ./internal/stage/ -race -count=1 -v -run '^TestRunnerFilterInstalls$' 2>&1 | tee "$RUNNER_TEMP/runner-filter.log"
           grep -q -- '--- PASS: TestRunnerFilterInstalls ' "$RUNNER_TEMP/runner-filter.log" || { echo "::error::TestRunnerFilterInstalls did not run and pass against an unfiltered control"; exit 1; }
+
+      # The device leaves out a bind of the root's own filesystem: the test
+      # binds a folder and a file in a user and mount namespace of its own,
+      # or through bubblewrap where the runner refuses one, and it must run
+      # and pass here, never skip.
+      - name: go test (the machines' device leaves out a bind of its own filesystem)
+        run: |
+          set -euo pipefail
+          go test ./internal/vm/ -count=1 -v -run '^TestABindOfTheRootsOwnFilesystemStaysOutOfTheDevice$' 2>&1 | tee "$RUNNER_TEMP/device-binds.log"
+          grep -q -- '--- PASS: TestABindOfTheRootsOwnFilesystemStaysOutOfTheDevice ' "$RUNNER_TEMP/device-binds.log" || { echo "::error::TestABindOfTheRootsOwnFilesystemStaysOutOfTheDevice did not run and pass"; exit 1; }
+          if grep -q 'bubblewrap made the binds' "$RUNNER_TEMP/device-binds.log"; then how="through bubblewrap: the runner refused the test's own user namespace"; else how="in the test's own user and mount namespace"; fi
+          echo "The device's bind test ran $how." >> "$GITHUB_STEP_SUMMARY"
 
       # Every space builds its files under the AppArmor profile cyfr-locus,
       # which the real-kernel tests' container runs under, as every Locus
