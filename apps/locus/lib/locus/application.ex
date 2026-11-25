@@ -137,7 +137,7 @@ defmodule Locus.Application do
   The roles a service node serves, from which keys it holds, raising when
   it holds the runtime key and either other key: the refusal names
   `LOCUS_RUNTIME_KEY` and each other key variable held, and every role's
-  compose service (`Prima.LocusRoles`).
+  `--role` of cyfr-locus (`Prima.LocusRoles`).
   """
   @spec roles!(roles()) :: roles()
   def roles!(%{runtime: runtime?, builds: builds?, backends: backends?} = roles)
@@ -151,16 +151,18 @@ defmodule Locus.Application do
             "[Locus] FATAL: a server holding LOCUS_RUNTIME_KEY serves the runtime alone, and " <>
               "this one also holds #{Enum.join(held, " and ")}: the runtime's runners have " <>
               "no network, so it shares no server, key or network with a role that has open " <>
-              "egress. Give each role a container of its own (docker-compose.yml's " <>
-              "#{services()})."
+              "egress. Give each role a process of its own (cyfr-locus serve's " <>
+              "#{roles()})."
     end
 
     roles
   end
 
-  # Every role's compose service, in the table's order: `a, b and c`.
-  defp services do
-    {last, others} = Prima.LocusRoles.roles() |> Enum.map(& &1.service) |> List.pop_at(-1)
+  # Every role's `--role` of cyfr-locus, in the table's order: `a, b and c`.
+  defp roles do
+    {last, others} =
+      Prima.LocusRoles.roles() |> Enum.map(&"--role #{&1.name}:…") |> List.pop_at(-1)
+
     Enum.join(others, ", ") <> " and " <> last
   end
 

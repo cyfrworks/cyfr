@@ -3,13 +3,14 @@
 # Copyright 2026 CYFR Works Inc.
 """The backends service under docker compose, and a control plane that signs as CYFR does.
 
-A Stack runs docker-compose.yml's `locus-backends` service behind its
-egress guard, layered with compose.locus-backends.yml, which adds only the
+A Stack runs docker-compose.yml's `locus` service behind its egress guard
+with the backends key alone, layered with compose.backends.yml, which adds
+only the
 image under test, the probe program (probe-backend.mjs, an MCP server), the
 residue canary, the pool's uid range, the kept homes' root and uid range
 (the keeper's `--kept-homes`) and the per-program memory bound, on the guard
 a loopback port and a tools directory first on its PATH, a stand-in for
-cyfr and IPv6 on the backends network, and lets compose name the containers
+cyfr and IPv6 on the locus network, and lets compose name the containers
 after the project. Everything else (the backends key from
 CYFR_LOCUS_BACKENDS_KEY, capabilities, security options, read-only root,
 `ipc: none`, tmpfs mounts, the `homes` volume, limits, the network, the
@@ -85,20 +86,23 @@ ROLE = next((role for role in _TABLE["roles"] if role["name"] == "backends"), No
 if ROLE is None:
     sys.exit("FAIL: tests/fixtures/locus_roles.json names no backends role")
 
-SERVICE = ROLE["service"]
-GUARD = ROLE["guard"]
-NETWORK = ROLE["network"]
+SERVICE = RELEASE["service"]
+GUARD = RELEASE["guard"]
+NETWORK = RELEASE["network"]
 PORT = ROLE["port"]
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
 ENDPOINT_ADDRESS = RELEASE["endpoint_address"]
-# The stand-in for cyfr the overlay starts, under cyfr's name on the
-# backends network and at cyfr's fixed endpoint address.
+HOST_API_ADDRESS = RELEASE["host_api_address"]
+# The stand-in for cyfr the overlay starts, under cyfr's name and at cyfr's
+# fixed address on the locus network, and at cyfr's fixed endpoint address.
 STAND_IN = "cyfr-stand-in"
-RELEASE_UID = RELEASE["uid"]
-RELEASE_USER = RELEASE["user"]
+# The backends role's process: its user and uid, the release it runs, its
+# run folder and its spawns' homes' root.
+RELEASE_UID = ROLE["uid"]
+RELEASE_USER = ROLE["user"]
 RELEASE_BIN = RELEASE["bin"]
-HOME_ROOT = RELEASE["home_root"]
-RUN_DIR = RELEASE["run_dir"]
+HOME_ROOT = ROLE["home_root"]
+RUN_DIR = ROLE["run_dir"]
 PROBE = "node /probe/probe-backend.mjs"
 # cyfr-locus's effective, permitted and bounding sets: SETUID, SETGID and
 # KILL alone.
@@ -113,8 +117,8 @@ MCP_LEGACY_VERSION = "2025-03-26"
 # the shipped compose entrypoint names and the overlay repeats. A kept
 # home's uid is drawn from this range, outside the pools and the image's
 # users.
-KEPT_ROOT = "/var/lib/locus/kept"
-KEPT_FIRST, KEPT_LAST = 40001, 49999
+KEPT_ROOT = ROLE["kept_root"]
+KEPT_FIRST, KEPT_LAST = ROLE["kept_first_uid"], ROLE["kept_last_uid"]
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_backends.json"), encoding="utf-8") as _vectors:
     WIRE = json.load(_vectors)
@@ -984,6 +988,7 @@ class Stack(imagesuite.Stack):
             "CANARY_DIR": self.canary_dir,
             "GUARD_TOOLS_DIR": self.guard_tools_dir,
             "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
+            "HOST_API_ADDRESS": HOST_API_ADDRESS,
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
             "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
@@ -996,7 +1001,7 @@ class Stack(imagesuite.Stack):
         }
 
     def compose(self, *args, check=True, env=None):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-backends.yml")]
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.backends.yml")]
         if self.names:
             files.append(os.path.join(HERE, "compose.names.yml"))
         return run(

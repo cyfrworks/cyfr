@@ -11,7 +11,7 @@
 
 # The head, as the access vectors spell one, that the project runs: `$1` the
 # expected head (JSON: mode, host, port, public_url, acme_email,
-# builds_url, node_id, profiles), `$2` .env, `$3` the cyfr container's
+# node_id, profiles), `$2` .env, `$3` the cyfr container's
 # environment (`docker inspect` .Config.Env as JSON), `$4` the project's
 # running services, one line, sorted, `$5` the node id the tailnet state
 # holds and `$6` the machine's name it holds (Self.DNSName, with the
@@ -32,7 +32,7 @@ import json, sys
 vectors, want, env_path, container_env, running, state_id = sys.argv[1:7]
 state_name = sys.argv[7] if len(sys.argv) > 7 else ""
 FIELDS = {"mode": "CYFR_ACCESS", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
-          "acme_email": "CADDY_ACME_EMAIL", "builds_url": "CYFR_LOCUS_BUILDS_URL", "node_id": "CYFR_TAILNET_NODE_ID"}
+          "acme_email": "CADDY_ACME_EMAIL", "node_id": "CYFR_TAILNET_NODE_ID"}
 PROXIES = {"public": "caddy", "tailnet": "tailscale"}
 problems = []
 derived = set()
@@ -118,7 +118,7 @@ PY
 # words for its mode; apps/codex/cmd/access.go reachedBy), a line for each
 # other field that changes (a tailnet machine replaced, without its node
 # id, the certificate email, the ports unless the new head is public, the
-# port on this computer, the builds service; access.go changedRows), and,
+# port on this computer; access.go changedRows), and,
 # as the address changes, the engine's address-change steps
 # (apps/codex/internal/access/switch.go addressChanges) and the line on
 # accounts after them (AccountsUnchanged there); then one line, the
@@ -155,12 +155,8 @@ if was["email"] != now["email"]:
     block.append(f"  Certificate email: {was['email']} → {now['email']}")
 if was["ports"] != now["ports"] and new["mode"] != "public":
     block.append(f"  Ports opened on this machine: {was['ports']} → {now['ports']}")
-def builds(head):
-    return head.get("builds_url") or "off"
 if old["port"] != new["port"]:
     block.append(f"  Port on this computer: {old['port']} → {new['port']}")
-if old.get("builds_url") != new.get("builds_url"):
-    block.append(f"  Builds service: {builds(old)} → {builds(new)}")
 source = open(switch_go).read()
 listed = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", source, re.S)
 if not listed:

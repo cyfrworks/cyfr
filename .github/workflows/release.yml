@@ -108,7 +108,7 @@ jobs:
         run: scripts/ci/release-note.sh "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUNNER_TEMP/release-note.md"
 
   # The app image and the Locus image, which serves the runtime, the builds
-  # and the backends service: every deploy pulls both, and a project
+  # and the backends roles: every deploy pulls both, and a project
   # `cyfr init` writes carries no sources to build them from.
   #
   # One build per image and platform. It loads the image for the scan and

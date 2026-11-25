@@ -200,7 +200,7 @@ def scripted_controller(image):
 
 # ————— cyfr as the controller —————
 
-# Layered over docker-compose.yml and compose.locus-backends.yml: the cyfr
+# Layered over docker-compose.yml and compose.backends.yml: the cyfr
 # service keeps every setting compose gives it but its image, a loopback
 # port of the system's choosing, a volume of this run's own for its data
 # (so nothing lands in the checkout) and the backends lease this suite
@@ -262,7 +262,7 @@ class CyfrStack(Stack):
         return super().env(CYFR_IMAGE=self.cyfr_image, **extra)
 
     def compose(self, *args, check=True, env=None):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-backends.yml"),
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.backends.yml"),
                  self.override]
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""Smoke-test a builder image as docker-compose.yml's locus-builds service.
+"""Smoke-test a Locus image's builds role as docker-compose.yml's locus service serves it.
 
-Starts the image with the locus-builds service's own settings (the
-`locus-builds` profile of docker-compose.yml, layered with
-tests/builder-image/compose.locus-builds.yml for the image and a loopback
-port), then drives the build wire (`Prima.BuilderProtocol`, signed by
+Starts the image with the locus service's own settings and the builds key
+alone (docker-compose.yml, layered with tests/builder-image/compose.builds.yml
+for the image and a loopback port), then drives the build wire (`Prima.BuilderProtocol`, signed by
 tests/builder-image/stack.py) through a component's life: a Rust build
 that streams its progress and resolves its Cargo.lock, a dependency added
 without re-resolving (refused by `--locked`), a re-resolve, a locked
@@ -128,8 +127,8 @@ def cargo_toml(stack):
 
 
 def main(image):
-    empty = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "locus-builds-smoke-")
-    stack = Stack("locus-builds-smoke", image, empty)
+    empty = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "builds-smoke-")
+    stack = Stack("builds-smoke", image, empty)
     try:
         stack.up()
         expect(stack.health.get("version") == VERSION and all(t["available"] for t in stack.health["toolchains"].values()),

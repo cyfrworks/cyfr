@@ -1510,7 +1510,7 @@ defmodule Prima.Refusal do
       {:invalid_argument,
        "`.env` sets `#{key}`, which Docker Compose would read to choose this stack's files, " <>
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
-         "them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."}
+         "them from CYFR_ACCESS."}
 
   # A .env line Docker Compose does not read: cyfr neither reads nor
   # writes a file it cannot read as compose does, and names the line,

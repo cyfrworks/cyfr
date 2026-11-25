@@ -2454,7 +2454,7 @@ defmodule Opus.Programs.Box do
       :backends_refused_signature ->
         Logger.error(
           "[Opus.Programs] the backends service refused the #{what} signature — " <>
-            "CYFR_LOCUS_BACKENDS_KEY must be the same value for cyfr and locus-backends"
+            "CYFR_LOCUS_BACKENDS_KEY must be the same value for cyfr and locus"
         )
 
       reason ->

@@ -3,15 +3,16 @@
 """What the image suites' three harnesses share.
 
 tests/builder-image/stack.py, tests/locus-runtime-image/stack.py and
-tests/locus-backends-image/harness.py each run one service of the Locus
-image under docker compose. They share the command runner (`run`), the
-teardown on a signal (`stop_on_signals`), the temporary directories
-removed at exit (`temporary_directory`), the default bridge's gateway
-(`bridge_gateway`), the reading of a guard's failure from its inspect
-record (`guard_failed`), and the part of a compose stack that does not
-depend on the service (`Stack`: its project name, its project directory
-and `down`). What differs between them (compose files, services, the
-seccomp copy, their logs) stays in each harness's own subclass.
+tests/locus-backends-image/harness.py each run the Locus image behind its
+guard under docker compose, holding the key of its role alone. They share
+the command runner (`run`), the teardown on a signal (`stop_on_signals`),
+the temporary directories removed at exit (`temporary_directory`), the
+default bridge's gateway (`bridge_gateway`), the reading of a guard's
+failure from its inspect record (`guard_failed`), and the part of a
+compose stack that does not depend on the service (`Stack`: its project
+name, its project directory and `down`). What differs between them
+(compose files, services, the seccomp copy, their logs) stays in each
+harness's own subclass.
 
 Importing this module calls no Docker and binds nothing: CI's static job
 imports the runtime harness on every change.
@@ -48,9 +49,9 @@ def run_name(name):
 
 # How long `docker compose down` gives each container to stop once the
 # suite was signalled. heavy-check sends TERM at its hold deadline and KILL
-# its grace later (30 s by default); a down that waited out a service's own
-# stop_grace_period (40 s for locus-runtime and locus-backends) would be
-# killed midway and leave the project behind.
+# its grace later (30 s by default); a down that waited out Locus's own
+# stop_grace_period (40 s) would be killed midway and leave the project
+# behind.
 SIGNALLED_STOP_S = 10
 
 # How many times `down` runs `docker compose down` on a project before it

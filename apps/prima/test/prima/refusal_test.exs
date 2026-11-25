@@ -55,7 +55,7 @@ defmodule Prima.RefusalTest do
     {{:access_option_outside_mode, %{option: "--acme-email", mode: "tailnet"}}, :invalid_argument,
      "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."},
     {{:compose_env_refused, %{key: "COMPOSE_PROFILES"}}, :invalid_argument,
-     "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."},
+     "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."},
     {{:compose_env_refused, %{line: "7"}}, :invalid_argument,
      "Line 7 of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."},
     {{:compose_override_refused,

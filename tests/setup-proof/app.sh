@@ -182,17 +182,15 @@ services:
     image: $IMAGE
     pull_policy: never
     container_name: !reset null
-  locus-runtime:
+  locus:
     profiles: ["proof-never"]
-  locus-backends:
-    profiles: ["proof-never"]
-  locus-backends-guard:
+  locus-guard:
     profiles: ["proof-never"]
 Y
-sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_URL=.*|CYFR_LOCUS_BUILDS_URL=|' \
+sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_KEY=.*|CYFR_LOCUS_BUILDS_KEY=|' \
   -e '/^CYFR_DIRECTORY_SERVE=/d;/^CYFR_DIRECTORY_URL=/d;/^CYFR_REGISTRY_URL=/d;/^CYFR_PRIVATE_EGRESS_TARGETS=/d' "$ROOT/.env.example" >"$D/.env.example"
 printf '%s\n' "" CYFR_AUTO_MIGRATE=on CYFR_DIRECTORY_SERVE=writer "CYFR_DIRECTORY_URL=$ADDR" "CYFR_REGISTRY_URL=localhost:$PORT" \
-  CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1 >>"$D/.env.example"
+  CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1 >>"$D/.env.example"
 }
 # The proof's inputs for a launch: the CYFR at ADDR in folder DIR.
 inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$1" "$1" "$2" "$GID" >"$W/fixture/inputs.json"; }

@@ -2,16 +2,17 @@
 # Copyright 2026 CYFR Works Inc.
 """The builds service under docker compose, for the builder image tests.
 
-A Stack runs docker-compose.yml's `locus-builds` service (profile
-`locus-builds`) behind its egress guard, layered with
-compose.locus-builds.yml, which adds only the image under test, the residue
-canary, the pool's uid range and the build deadline, on the guard a
-loopback port and a tools directory first on its PATH, a stand-in for cyfr
-and IPv6 on the builds network, and lets compose name the containers after
-the project. Everything else (capabilities, security options, read-only
-root, `ipc: none`, tmpfs mounts, limits, the guard's rules and the
-builder's wait for the guard's health) is the shipped stack. The builder
-listens in the guard's namespace, so its port is read on the guard. `up`
+A Stack runs docker-compose.yml's `locus` service behind its egress guard
+with the builds key alone, so the keeper starts the builds role and no
+other, layered with compose.builds.yml, which adds only the image under
+test, the residue canary, the pool's uid range and the build deadline, on
+the guard a loopback port and a tools directory first on its PATH, a
+stand-in for cyfr and IPv6 on the locus network, and lets compose name the
+containers after the project. Everything else (capabilities, security
+options, read-only root, `ipc: none`, tmpfs mounts, bounds, the guard's
+rules and Locus's wait for the guard's health) is the shipped stack. The
+builds role listens in a space the guard forwards its port to, so its port
+is read on the guard. `up`
 can also start it without the `writable-cgroups=true` option
 (compose.no-writable-cgroups.yml), as a deployment that lacks it would,
 and a Stack made with a tools directory holding an `ip6tables` that fails
@@ -78,27 +79,27 @@ ROLE = next((role for role in _TABLE["roles"] if role["name"] == "builds"), None
 if ROLE is None:
     sys.exit("FAIL: tests/fixtures/locus_roles.json names no builds role")
 
-SERVICE = ROLE["service"]
-GUARD = ROLE["guard"]
-NETWORK = ROLE["network"]
-PROFILE = ROLE["profile"]
+SERVICE = RELEASE["service"]
+GUARD = RELEASE["guard"]
+NETWORK = RELEASE["network"]
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
 PORT = ROLE["port"]
 ENDPOINT_ADDRESS = RELEASE["endpoint_address"]
-# The stand-in for cyfr the overlay starts, under cyfr's name on the builds
-# network and at cyfr's fixed endpoint address.
+# The stand-in for cyfr the overlay starts, under cyfr's name and at cyfr's
+# fixed address on the locus network, where it answers as core's host API
+# (the guard is given CYFR_GUARD_HOST_API at that address and the suite's
+# CYFR_HOST_API_PORT), and at cyfr's fixed endpoint address.
 STAND_IN = "cyfr-stand-in"
-# The overlay's fixed IPv4 subnet of the builds network and the stand-in's
-# address on it, where it answers as core's host API
-# (compose.locus-builds.yml gives the guard CYFR_GUARD_HOST_API).
-BUILDS_SUBNET = "172.16.237.0/24"
-HOST_API_ADDRESS = "172.16.237.7"
+BUILDS_SUBNET = RELEASE["subnet"]
+HOST_API_ADDRESS = RELEASE["host_api_address"]
 HOST_API_PORT = 4000
-RELEASE_UID = RELEASE["uid"]
-RELEASE_USER = RELEASE["user"]
+# The builds role's process: its user and uid, the release it runs, its
+# run folder and its spawns' homes' root.
+RELEASE_UID = ROLE["uid"]
+RELEASE_USER = ROLE["user"]
 RELEASE_BIN = RELEASE["bin"]
-HOME_ROOT = RELEASE["home_root"]
-RUN_DIR = RELEASE["run_dir"]
+HOME_ROOT = ROLE["home_root"]
+RUN_DIR = ROLE["run_dir"]
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_builds.json"), encoding="utf-8") as _vectors:
     WIRE = json.load(_vectors)
@@ -207,6 +208,8 @@ class Stack(imagesuite.Stack):
             "GUARD_TOOLS_DIR": self.guard_tools_dir,
             "NAME_LISTENER_DIR": os.path.join(ROOT, "tests", "locus-backends-image"),
             "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
+            "HOST_API_ADDRESS": HOST_API_ADDRESS,
+            "CYFR_HOST_API_PORT": str(HOST_API_PORT),
             "CYFR_LOCUS_BUILDS_KEY": self.key,
             "BUILD_POOL": self.pool,
             "LOCUS_BUILDS_TIMEOUT_MS": str(self.timeout_ms or ""),
@@ -217,7 +220,7 @@ class Stack(imagesuite.Stack):
     writable_cgroups = True
 
     def compose(self, *args, check=True):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-builds.yml")]
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.builds.yml")]
         if not self.writable_cgroups:
             files.append(os.path.join(HERE, "compose.no-writable-cgroups.yml"))
         if self.names:
@@ -225,7 +228,7 @@ class Stack(imagesuite.Stack):
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
             *[arg for file in files for arg in ("-f", file)],
-            "--profile", PROFILE, *args,
+            *args,
             env=self.env(), check=check,
         )
 

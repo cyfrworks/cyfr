@@ -1362,14 +1362,15 @@ What a cluster changes for a client and an operator:
 
 ### Execution workers
 
-Components run on worker services CYFR reaches over HTTP (the
-`locus-runtime` compose service, Locus's runtime role). `cyfr init` mints
-the root into `.env` and derives the `locus-runtime` service's key from
-it. Compose hands the worker its id, its key and the host API's URL from
-`.env`; `.env.locus.example` documents the worker's own settings, and
-[Running a worker outside Compose](#running-a-worker-outside-compose) what
-compose sets for it. A Locus service holding the runtime's key refuses to start
-with the builds or the backends key beside it.
+Components run on worker services CYFR reaches over HTTP (Locus's runtime
+role, in the `locus` compose service). `cyfr init` mints the root into
+`.env` and derives the runtime's key from it. Compose hands Locus the
+worker's id, its key and the host API's URL from `.env`, and the keeper
+hands them to the runtime's role process alone; `.env.locus.example`
+documents the worker's own settings, and [Running a worker outside
+Compose](#running-a-worker-outside-compose) what compose sets for it. A
+Locus process holding the runtime's key refuses to start with the builds
+or the backends key beside it.
 
 CYFR and its workers speak one versioned wire. Every body and answer
 carries `"v": 1` as its first field and every `x-cyfr-auth` header begins
@@ -1383,19 +1384,19 @@ grant enforces](#what-a-grant-enforces)).
 
 ### Builds
 
-Components and tinctures are built on the Locus builds service (the
-`locus-builds` compose service), which CYFR reaches over a signed wire.
-Builds are on after `cyfr init`, which writes the compose service's URL and
-mints the key into `.env`. Set both variables or neither: with neither,
-CYFR builds nothing and refuses every build; with one, or a malformed
-value, it refuses to boot. `.env.locus.example` documents the builder's own
-`LOCUS_BUILDS_*` side.
+Components and tinctures are built in Locus's builds role, which CYFR
+reaches over a signed wire. Builds are on after `cyfr init`, which mints
+`CYFR_LOCUS_BUILDS_KEY` into `.env`: with the key set, the keeper starts the
+role, and CYFR reaches it at the host of `CYFR_LOCUS_BACKENDS_URL` on port
+4100 (compose: `http://locus:4100`). With the key empty, CYFR builds
+nothing and refuses every build; with the key and no backends URL, or a
+malformed value, it refuses to boot. `.env.locus.example` documents the
+role's own `LOCUS_BUILDS_*` side.
 
 ### Programs
 
-Programs run on the Locus backends service (the `locus-backends` compose
-service), which CYFR reaches over a signed wire; every compose deploy
-starts it. A program row (`"transport": "program"`) is one command and one
+Programs run in Locus's backends role, which CYFR reaches over a signed
+wire; every compose deploy starts it. A program row (`"transport": "program"`) is one command and one
 environment, marked by how it is spoken to: `mcp`, CYFR's MCP client
 speaking to it over the lines of a session the service runs for it, its
 tools named `<row>:<tool>`, or `driven`, a program a person or a brain
@@ -1414,30 +1415,32 @@ side.
 
 A program's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the program starts, and a key shared with you is never available to a definition. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
 
-Every program's session runs in a space of its own, a user, network, IPC, pid, mount and cgroup namespace with files of its own: its own loopback, which no other session shares (two sessions of one kept folder each bind a port of their own there), and one route out, which the island's guard makes for it before it starts, to the hosts its row named at that start or, with none, the public hosts. It lists and signals its own processes alone, under the space's first process, which ends them all when the session ends; it sees the image read-only, its own `/proc`, `/tmp` (its `TMPDIR`, charged to the session), `/dev/shm`, `/run` and terminals, the memory cap of its own group at the root of its cgroup tree, and its own home directory, the only one it sees; and it mounts nothing. So a program's command line is read by the processes of its own session alone, never by another session's or another athanor's. The service gets this from its seccomp profile and, on a host with AppArmor, the profile `.env`'s `CYFR_LOCUS_APPARMOR` names, `cyfr-locus-` and 12 hex digits of its content's hash, which `cyfr init` and `cyfr update` load from `cyfr` itself and the service proves at its start it runs under. On a Linux host whose kernel enforces no AppArmor, as on Docker Desktop, the option is ignored and nothing stands in the place of Docker's masks: the keeper starts, says so once in its log, and alone, never a space, may write `/proc/sys`. A program's command runs as `/bin/sh -c command`, so the safe route for a credential is still the program's environment, where it reads the value itself. A definition whose command names `vault:` is refused: a vault reference in a command is never resolved, so the program would receive the reference's text. A command that holds one of its own vault-bound env names as an expansion (`$NAME`, `${NAME}`, `${NAME:-…}` and every other `${NAME…}` form, quoted or escaped alike), or holds, beside a vault-bound name, a form that computes a value when the shell runs it — a command substitution (`$(…)`, a backtick, `${ …; }`, `${|…;}`), an arithmetic expansion (`$((…))`, `$[…]`) or an indirection (`${!…}`) — places the value on the command line, where every process on the service, every other athanor's programs included, can read it. The administrator decides: such a definition is saved and its program starts, and CYFR warns, naming the variable, in the answer to `mcp_servers.create` and `mcp_servers.update` (their `warnings` list), in the console's flash, in `mcp_servers.get` and in the log each time its program starts. The check reads the command's text with its line continuations joined; a command with no vault-bound name carries no warning. What the program does with a value is its own: a command such as `printenv NAME | xargs …`, or a program that passes the value on the command line of a process it starts, puts it where the service's other programs can read it, and no warning says so.
+Every program's session runs in a space of its own, a user, network, IPC, pid, mount and cgroup namespace with files of its own: its own loopback, which no other session shares (two sessions of one kept folder each bind a port of their own there), and one route out, which Locus's guard makes for it before it starts, to the hosts its row named at that start or, with none, the public hosts. It lists and signals its own processes alone, under the space's first process, which ends them all when the session ends; it sees the image read-only, its own `/proc`, `/tmp` (its `TMPDIR`, charged to the session), `/dev/shm`, `/run` and terminals, the memory cap of its own group at the root of its cgroup tree, and its own home directory, the only one it sees; and it mounts nothing. So a program's command line is read by the processes of its own session alone, never by another session's or another athanor's. The service gets this from its seccomp profile and, on a host with AppArmor, the profile `.env`'s `CYFR_LOCUS_APPARMOR` names, `cyfr-locus-` and 12 hex digits of its content's hash, which `cyfr init` and `cyfr update` load from `cyfr` itself and the service proves at its start it runs under. On a Linux host whose kernel enforces no AppArmor, as on Docker Desktop, the option is ignored and nothing stands in the place of Docker's masks: the keeper starts, says so once in its log, and alone, never a space, may write `/proc/sys`. A program's command runs as `/bin/sh -c command`, so the safe route for a credential is still the program's environment, where it reads the value itself. A definition whose command names `vault:` is refused: a vault reference in a command is never resolved, so the program would receive the reference's text. A command that holds one of its own vault-bound env names as an expansion (`$NAME`, `${NAME}`, `${NAME:-…}` and every other `${NAME…}` form, quoted or escaped alike), or holds, beside a vault-bound name, a form that computes a value when the shell runs it — a command substitution (`$(…)`, a backtick, `${ …; }`, `${|…;}`), an arithmetic expansion (`$((…))`, `$[…]`) or an indirection (`${!…}`) — places the value on the command line, where every process on the service, every other athanor's programs included, can read it. The administrator decides: such a definition is saved and its program starts, and CYFR warns, naming the variable, in the answer to `mcp_servers.create` and `mcp_servers.update` (their `warnings` list), in the console's flash, in `mcp_servers.get` and in the log each time its program starts. The check reads the command's text with its line continuations joined; a command with no vault-bound name carries no warning. What the program does with a value is its own: a command such as `printenv NAME | xargs …`, or a program that passes the value on the command line of a process it starts, puts it where the service's other programs can read it, and no warning says so.
 
 ### Running a worker outside Compose
 
 The `cyfr-locus` image also runs without the shipped `docker-compose.yml`:
-on another container platform, or on a host of its own. Every role reads
-its settings from its own environment alone, so each is given what
-compose's `environment:` gives its service besides the settings of its env
-example (`.env.locus.example`), the entrypoint compose gives it where the
-role is not the image's builds role, and the hardening the compose file
-gives the service: `cap_drop`, `cap_add`, `security_opt`, `init`, `ipc: none`, the
-read-only root and its tmpfs mounts.
+on another container platform, or on a host of its own. Its entrypoint,
+`cyfr-locus serve`, starts a role process for each `--role` whose key
+(`LOCUS_<ROLE>_KEY`) its environment holds, and hands each only its own
+`LOCUS_<ROLE>_*` variables, so the container is given what compose's
+`environment:` gives the `locus` service besides the settings of its env
+example (`.env.locus.example`), each role's bounds
+(`LOCUS_<ROLE>_MEMORY_LIMIT` and `_CPU_LIMIT`, which the keeper writes into
+the role's cgroup), and the hardening the compose file gives the service:
+`cap_drop`, `cap_add`, `security_opt`, `init`, `ipc: none`, the read-only
+root and its tmpfs mounts. It runs in the network namespace of its egress
+guard, whose control socket the keeper names (`--guard`): the guard's
+container holds `NET_ADMIN` alone, with `net.ipv4.ip_forward=1` and
+`net.ipv4.icmp_ratelimit=0` in its namespace, is reached from CYFR's
+network alone, and is given core's host API (`CYFR_GUARD_HOST_API`), an
+address on that network, which the runtime's role process alone reaches.
 
 The runtime takes `LOCUS_RUNTIME_SERVICE_ID`, `LOCUS_RUNTIME_KEY` and
-`LOCUS_RUNTIME_HOST_API_URL` as `.env.example` documents them, and the two below, which
-compose fixes for its container. It runs under the keeper's relay
-`runner` pool, which compose's `entrypoint:` names (`cyfr-locus serve
---pool runner:30101-30108:relay …`) in place of the image's build pool,
-and under the keeper's seccomp profile, as every role does. The builds
-and backends roles run routed pools behind their island's guard, whose
-control socket their keeper names (`--guard`): the guard's container
-holds `NET_ADMIN` alone, with `net.ipv4.ip_forward=1` and
-`net.ipv4.icmp_ratelimit=0` in its namespace, and the role's service
-runs in that namespace. CYFR lists the worker in
+`LOCUS_RUNTIME_HOST_API_URL` as `.env.example` documents them, and the two
+below, which compose fixes for it. Its runners run under the keeper's
+relay `runner` pool and, as every role and spawn does, under the keeper's
+seccomp profile. CYFR lists the worker in
 `CYFR_LOCUS_RUNTIME_WORKERS` under its service id at the URL of this
 listener, and binds `CYFR_HOST_API_BIND` to an address the worker reaches
 at `LOCUS_RUNTIME_HOST_API_URL` — or, where several servers share the
@@ -1445,44 +1448,43 @@ worker, at each server's own `CYFR_HOST_API_URL`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOCUS_RUNTIME_BIND` | `127.0.0.1` | The address the worker's listener binds, one CYFR reaches. Compose binds every interface, since the container is attached to the `locus-runtime` network alone |
+| `LOCUS_RUNTIME_BIND` | `127.0.0.1` | The address the worker's listener binds, one CYFR reaches. Compose binds every interface, since the role's space has its one route and its port is entered from the `locus` network alone |
 | `LOCUS_RUNTIME_PORT` | `4200` | The port the worker's listener binds (compose: `4200`) |
 
-The builds service takes the key compose passes it from `.env`'s
-`CYFR_LOCUS_BUILDS_KEY`; CYFR's `CYFR_LOCUS_BUILDS_URL` names the service's
-listener.
+The builds role takes the key compose passes it from `.env`'s
+`CYFR_LOCUS_BUILDS_KEY`; CYFR reaches its listener at the host of
+`CYFR_LOCUS_BACKENDS_URL`, on port 4100.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOCUS_BUILDS_KEY` | — | The builds key, 64 hex digits: the same value as `CYFR_LOCUS_BUILDS_KEY`. Required: the builder refuses to start without it |
+| `LOCUS_BUILDS_KEY` | — | The builds key, 64 hex digits: the same value as `CYFR_LOCUS_BUILDS_KEY`. Without it the keeper starts no builds role |
 
-The backends service takes the key compose passes it from `.env`'s
-`CYFR_LOCUS_BACKENDS_KEY`, and runs under the keeper's `backends` pool,
-which compose's `entrypoint:` names (`cyfr-locus serve --pool
-backends:20001-20032 …`) in place of the image's build pool; CYFR's
-`CYFR_LOCUS_BACKENDS_URL` names the service's listener.
+The backends role takes the key compose passes it from `.env`'s
+`CYFR_LOCUS_BACKENDS_KEY`, and its programs run under the keeper's
+`backends` pool and keep their folders under `--kept-homes`; CYFR's
+`CYFR_LOCUS_BACKENDS_URL` names the role's listener.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A Locus service with none of this, `LOCUS_BUILDS_KEY` and `LOCUS_RUNTIME_KEY` refuses to start |
+| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. Without it the keeper starts no backends role, and with none of the three keys the container is never healthy |
 
 ### Docker requirement
 
-The `locus-runtime`, `locus-builds` and `locus-backends` containers hold every
-runner, build and backend to a memory bound of its own, a cgroup
+The `locus` container holds each role to its bounds and every runner,
+build and backend to a memory bound of its own, each a cgroup
 `cyfr-locus` makes for it. That needs **Docker Engine 28 or later on a
-cgroup v2 host** and the containers' `security_opt: writable-cgroups=true`,
+cgroup v2 host** and the container's `security_opt: writable-cgroups=true`,
 which the shipped `docker-compose.yml` sets and which adds no capability.
-Without it nothing runs unbounded and nothing runs: `locus-runtime` starts no runner
-and logs, naming `writable-cgroups=true`, that it cannot bound one, so no
-component runs; every build is refused as `unavailable`, naming the option;
-and every backend reports the keeper's refusal as its error.
+Without it nothing runs unbounded and nothing runs: `cyfr-locus` refuses
+to start, naming `writable-cgroups=true`, and the container restart-loops,
+so no component runs, every build is refused as `unavailable`, and no
+program starts.
 
-Docker marks a container `OOMKilled` whenever a runner, a build or a
-backend is ended at its own bound, though neither the container nor its
-release was touched. Read it as a runner, a build or a backend that passed
-its bound (the service's log says which), not as the container running out
-of memory.
+Docker marks the `locus` container `OOMKilled` whenever a runner, a build
+or a backend is ended at its own bound, though neither the container nor
+its roles were touched. Read it as a runner, a build or a backend that
+passed its bound (the role's log says which), not as the container running
+out of memory.
 
 ---
 

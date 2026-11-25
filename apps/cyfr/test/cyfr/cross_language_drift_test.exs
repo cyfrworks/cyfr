@@ -49,21 +49,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "matches before a trailing newline — use \\A..\\z"
   end
 
-  test "the access engine's builds URL grammar is Cyfr.RuntimeConfig's" do
-    # Spelled the same on both sides, each anchored its own way; the
-    # vectors' builds_urls hold the two to the same verdicts.
-    [_, elixir] =
-      Regex.run(~r/@builds_url ~r\/\\A(.+)\\z\//, read!("apps/cyfr/lib/cyfr/runtime_config.ex"))
-
-    [_, go] =
-      Regex.run(
-        ~r/buildsURLGrammar = regexp\.MustCompile\(`\^(.+)\$`\)/,
-        read!("apps/codex/internal/access/head.go")
-      )
-
-    assert String.replace(elixir, "\\/", "/") == go
-  end
-
   test "the access engine's refusal sentences are Prima.Refusal's, as rendered" do
     # The section and refusals_gen.go are rendered from Prima.Refusal
     # (`mix cyfr.gen.access_refusals`), so a row that changes without the

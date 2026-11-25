@@ -254,7 +254,7 @@ class ClientOutput(unittest.TestCase):
                             parent.sendall(json.dumps({"v": 5, "type": "placed", "id": place["id"]}).encode() + b"\n")
                             request = json.loads(lines.readline())
                         self.assertEqual(place, {"v": 5, "type": "place", "id": "p1", "kind": "build"})
-                        self.assertEqual((request["v"], request["type"], request["place"]), (4, "spawn", "p1"))
+                        self.assertEqual((request["v"], request["type"], request["place"]), (5, "spawn", "p1"))
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)
                         self.assertTrue(os.WIFSTOPPED(status))

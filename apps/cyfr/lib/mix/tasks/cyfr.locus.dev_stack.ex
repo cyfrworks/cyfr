@@ -25,15 +25,16 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   settings for the stack: `CYFR_PORT` from Prism's address (`x-prism`),
   `CYFR_PROXY_PORT` from its proxy's (`x-prism-proxy`),
   `CYFR_LOCUS_RUNTIME_WORKERS` from the runtime's id
-  and published listener, `CYFR_HOST_API_BIND` and `CYFR_HOST_API_PORT`
-  from the runtime's callback address, `CYFR_LOCUS_BACKENDS_URL` and
-  `CYFR_LOCUS_BUILDS_URL` from each island guard's fixed address and
-  port, and `CYFR_PRIVATE_EGRESS_TARGETS`, the backends guard's address
-  and the local cyfr.run's two names. A value `.env` or the environment
-  sets for one of them, a `CYFR_HOST_API_URL` other than the callback
-  address, or a `CYFR_BIND_ADDRESS` other than Prism's, is refused by
-  name: each would serve Prism, or send runs, calls or builds, somewhere
-  the stack is not.
+  and the listener the guard publishes for it, `CYFR_HOST_API_BIND` and
+  `CYFR_HOST_API_PORT` from the runtime's callback address,
+  `CYFR_LOCUS_BACKENDS_URL` from the guard's fixed address on the locus
+  network and the backends role's port (builds run beside it, at that
+  address on the builds role's port: `Cyfr.RuntimeConfig`), and
+  `CYFR_PRIVATE_EGRESS_TARGETS`, the guard's address and the local
+  cyfr.run's two names. A value `.env` or the environment sets for one of
+  them, a `CYFR_HOST_API_URL` other than the callback address, or a
+  `CYFR_BIND_ADDRESS` other than Prism's, is refused by name: each would
+  serve Prism, or send runs, calls or builds, somewhere the stack is not.
 
   DOMAIN is the local cyfr.run every worktree's loop shares
   (`scripts/dev-stack.sh`), `cyfr.test`: a name of this machine, never
@@ -56,8 +57,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   mode 0600 before it is written, each setting a mix boot needs that
   neither `.env` nor the environment sets: `CYFR_SETUP_TOKEN`, `CYFR_LOCUS_RUNTIME_ROOT` and `CYFR_LOCUS_BACKENDS_KEY` minted as
   `cyfr init` mints them, 32 random bytes as 64 lowercase hexadecimal
-  digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot refuses without its URL, is
-  never written: unset, it is minted for the run. A value already set is
+  digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot refuses without
+  `CYFR_LOCUS_BACKENDS_URL`, is never written: unset, it is minted for the
+  run. A value already set is
   kept; one the environment sets empty over the file, or one its reader
   at boot refuses, is refused. Nothing is written when anything is
   refused. It then prints `wrote NAME...` when it wrote, and `setup <link>`,
@@ -93,12 +95,21 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   import Bitwise
 
+  alias Prima.LocusRoles
+
   @root "CYFR_LOCUS_RUNTIME_ROOT"
   @backends_key "CYFR_LOCUS_BACKENDS_KEY"
   @builds_key "CYFR_LOCUS_BUILDS_KEY"
   @setup "CYFR_SETUP_TOKEN"
   @host_api_url "CYFR_HOST_API_URL"
   @bind "CYFR_BIND_ADDRESS"
+
+  # Locus's service, its guard, their network and the runtime's port, the
+  # role table's.
+  @locus LocusRoles.release().service
+  @guard LocusRoles.release().guard
+  @network LocusRoles.release().network
+  @runtime_port LocusRoles.role!(:runtime).port
 
   # What a mix boot needs that the stack provisions when nothing sets it,
   # in the order the lines are written.
@@ -176,9 +187,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
          {:ok, json} <- resolution(path),
          {:ok, prism_port} <- prism(json["x-prism"]),
          {:ok, proxy_port} <- proxy(json["x-prism-proxy"]),
-         {:ok, runtime} <- runtime(get_in(json, ["services", "locus-runtime"])),
-         {:ok, backends} <- island(json, "locus-backends"),
-         {:ok, builds} <- island(json, "locus-builds") do
+         {:ok, runtime} <- runtime(json),
+         {:ok, guard} <- guard(json) do
       {:ok,
        %{
          service_id: runtime.service_id,
@@ -191,9 +201,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
            {"CYFR_LOCUS_RUNTIME_WORKERS", "#{runtime.service_id}=#{runtime.url}"},
            {"CYFR_HOST_API_BIND", runtime.host_api_bind},
            {"CYFR_HOST_API_PORT", runtime.host_api_port},
-           {"CYFR_LOCUS_BACKENDS_URL", "http://#{backends.address}:#{backends.port}"},
-           {"CYFR_PRIVATE_EGRESS_TARGETS", "#{backends.address},#{domain},registry.#{domain}"},
-           {"CYFR_LOCUS_BUILDS_URL", "http://#{builds.address}:#{builds.port}"}
+           {"CYFR_LOCUS_BACKENDS_URL", "http://#{guard.address}:#{guard.backends_port}"},
+           {"CYFR_PRIVATE_EGRESS_TARGETS", "#{guard.address},#{domain},registry.#{domain}"}
          ],
          names: [domain, "registry." <> domain],
          registry: [
@@ -326,12 +335,22 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   defp proxy(_), do: undeclared("x-prism-proxy as a port")
 
+  # The runtime's id and callback, Locus's, and the one listener the guard
+  # publishes, on the host's loopback, the runtime role's port.
   defp runtime(%{
-         "environment" => %{
-           "LOCUS_RUNTIME_SERVICE_ID" => service_id,
-           "LOCUS_RUNTIME_HOST_API_URL" => callback
-         },
-         "ports" => [%{"host_ip" => "127.0.0.1", "published" => published, "target" => 4200}]
+         "services" => %{
+           @locus => %{
+             "environment" => %{
+               "LOCUS_RUNTIME_SERVICE_ID" => service_id,
+               "LOCUS_RUNTIME_HOST_API_URL" => callback
+             }
+           },
+           @guard => %{
+             "ports" => [
+               %{"host_ip" => "127.0.0.1", "published" => published, "target" => @runtime_port}
+             ]
+           }
+         }
        }) do
     case URI.parse(callback) do
       %URI{scheme: "http", host: bind, port: port, path: nil} when is_binary(bind) ->
@@ -349,17 +368,21 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   end
 
   defp runtime(_),
-    do: undeclared("the runtime's id, callback address and one port on 127.0.0.1")
+    do: undeclared("the runtime's id and callback address, and the guard's one port on 127.0.0.1")
 
-  # An island's service is reached at its guard's fixed address on the
-  # island's network, on the port the guard exposes for it.
-  defp island(json, name) do
-    case get_in(json, ["services", name <> "-guard"]) do
-      %{"expose" => [port], "networks" => %{^name => %{"ipv4_address" => address}}} ->
-        {:ok, %{address: address, port: port}}
+  # The backends and builds roles are reached at the guard's fixed address
+  # on the locus network, on the ports the guard exposes for them.
+  defp guard(json) do
+    backends = Integer.to_string(LocusRoles.role!(:backends).port)
+    builds = Integer.to_string(LocusRoles.role!(:builds).port)
 
+    with %{"expose" => exposed, "networks" => %{@network => %{"ipv4_address" => address}}} <-
+           get_in(json, ["services", @guard]),
+         true <- backends in exposed and builds in exposed do
+      {:ok, %{address: address, backends_port: backends}}
+    else
       _ ->
-        undeclared("#{name}-guard with one exposed port and a fixed address on #{name}")
+        undeclared("#{@guard} exposing the backends' and builds' ports, fixed on #{@network}")
     end
   end
 
@@ -517,7 +540,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   # A value held, checked by the reader the boot checks it with: the root
   # decoded as it stands (`config/runtime.exs`), the setup token trimmed and
-  # held to `Prima.Device.setup_token?/1`, an island key through
+  # held to `Prima.Device.setup_token?/1`, a role's key through
   # `Prima.EnvValue.hex_key/2`, which trims it. Whitespace alone is
   # refused: it is a value of none of them.
   defp held(name, text) do
@@ -553,10 +576,10 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
        "so the value .env holds is the one the stack uses."}
   end
 
-  # The builds key pairs with CYFR_LOCUS_BUILDS_URL, which the stack hands
+  # The builds key pairs with CYFR_LOCUS_BACKENDS_URL, which the stack hands
   # the server and never writes: in .env without it, every other mix boot
-  # of the checkout would refuse to start. The builder holds no state, so
-  # a key .env or the environment does not set is minted for each run.
+  # of the checkout would refuse to start. The builds role holds no state,
+  # so a key .env or the environment does not set is minted for each run.
   defp builds_key(env) do
     cond do
       System.get_env(@builds_key) == "" ->

@@ -1380,9 +1380,9 @@ jobs:
           set -euo pipefail
           zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
           docker tag cyfr-locus:ci cyfr-locus:smoke
-      # docker-compose.yml's locus-builds service with its own settings
-      # (layered with tests/builder-image/compose.locus-builds.yml for the
-      # image and a loopback port), every request signed on the build wire
+      # docker-compose.yml's locus service serving its builds role, with
+      # its own settings (layered with tests/builder-image/compose.builds.yml
+      # for the image and a loopback port), every request signed on the build wire
       # under a key of the run's own. Builds fetch from crates.io and the
       # npm registry.
       - name: Build a component through its lock lifecycle, and a tincture
@@ -1403,8 +1403,7 @@ jobs:
 
       # The release's boot check on this run's image (scripts/ci/image-boots.sh,
       # which release.yml's images job runs on a tag): the Locus image behind
-      # its builds island's guard, as compose starts it, healthy by its own
-      # probe.
+      # its guard, as compose starts it, healthy by its own probe.
       - name: The Locus image boots as the release checks it
         run: scripts/ci/image-boots.sh cyfr-locus cyfr-locus:smoke
 
@@ -1484,7 +1483,7 @@ jobs:
       # The host's AppArmor restriction on unprivileged user namespaces stays
       # as the runner image sets it: the keeper clones each runner's
       # namespaces under Docker's default AppArmor profile, which allows
-      # the clone (docker-compose.yml's locus-runtime service says why).
+      # the clone (docker-compose.yml's locus service says why).
       # The Locus image this run built once (the locus-image job).
       - name: Fetch the Locus image
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1496,8 +1495,8 @@ jobs:
           set -euo pipefail
           zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
           docker tag cyfr-locus:ci cyfr-locus:runtime
-      # docker-compose.yml's locus-runtime service with its own settings
-      # (layered with tests/locus-runtime-image/compose.locus-runtime.yml
+      # docker-compose.yml's locus service serving its runtime role, with
+      # its own settings (layered with tests/locus-runtime-image/compose.runtime.yml
       # for the image, a loopback port and a pool of two), reaching a
       # scripted control plane on this
       # runner: a spinning guest killed at its deadline with its process
@@ -1558,8 +1557,8 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  # Stdio backends isolated from each other and from the backends
-  # service, under the locus-backends service's own settings. The suites
+  # Stdio backends isolated from each other and from the backends role,
+  # under the locus service's own settings. The suites
   # run here, in the workflow release.yml calls before it publishes, so the
   # release gates on them.
   locus-backends-image:
@@ -1606,9 +1605,9 @@ jobs:
           zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
           docker tag cyfr-locus:ci cyfr-locus:backends
 
-      # Every suite drives docker-compose.yml's locus-backends service with
-      # its own settings (layered with
-      # tests/locus-backends-image/compose.locus-backends.yml for the image
+      # Every suite drives docker-compose.yml's locus service serving its
+      # backends role, with its own settings (layered with
+      # tests/locus-backends-image/compose.backends.yml for the image
       # under test, a loopback port and the probe backend) through a
       # scripted control plane that signs as CYFR does
       # (tests/locus-backends-image/harness.py, checked against
@@ -1819,9 +1818,9 @@ jobs:
           set -euo pipefail
           zstd -dc "$RUNNER_TEMP/app-image/cyfr.tar.zst" | docker load
 
-      # Every suite drives docker-compose.yml's locus-backends service with
-      # its own settings (layered with
-      # tests/locus-backends-image/compose.locus-backends.yml for the image
+      # Every suite drives docker-compose.yml's locus service serving its
+      # backends role, with its own settings (layered with
+      # tests/locus-backends-image/compose.backends.yml for the image
       # under test, a loopback port and the probe backend) through a
       # scripted control plane that signs as CYFR does
       # (tests/locus-backends-image/harness.py, checked against
@@ -1874,7 +1873,7 @@ jobs:
       # root to the image's user, is refused naming the restore as root,
       # with both config files as they were, and `cyfr up` starts the home
       # again. runtime: the shipped
-      # locus-runtime service, on the Locus image above, runs a seed
+      # locus service's runtime role, on the Locus image above, runs a seed
       # catalyst for a signed-in person, cyfr dispatching to the worker URL
       # and the runtime calling the host API the shipped file names under
       # the keys `cyfr init` wrote, and the app image carries the pinned

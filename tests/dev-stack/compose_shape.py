@@ -5,8 +5,8 @@ over docker-compose.yml, held to the shipped file and kept apart from what
 the checks on a host use.
 
   python3 -I compose_shape.py shape BASE_JSON DEV_JSON CHECKOUT PROJECT IMAGE
-      The stack's services (the runtime, the backends and builds services
-      and their guards) and networks against the same services resolved
+      The stack's services (Locus and its guard) and network against the
+      same services resolved
       from docker-compose.yml alone: every field the shipped one's but the
       ones the dev stack names, and those as it names them, under the
       project PROJECT and on the image IMAGE.
@@ -36,10 +36,15 @@ import sys
 # The prefix of every name the loop gives, whatever the worktree's seed.
 NAME_PREFIX = "cyfr-dev-"
 PROFILE = "apps/locus/keeper/seccomp/keeper.json"
-RUNTIME = "locus-runtime"
-ISLANDS = {"locus-backends": "4101", "locus-builds": "4100"}
-SERVICES = [RUNTIME, "locus-backends", "locus-backends-guard", "locus-builds", "locus-builds-guard"]
-NETWORKS = [RUNTIME, *ISLANDS]
+LOCUS = "locus"
+GUARD = "locus-guard"
+NETWORK = "locus"
+SERVICES = [LOCUS, GUARD]
+NETWORKS = [NETWORK]
+# The runtime's port, which the guard publishes, and the backends', where
+# the mix boot reaches the backends and builds beside them.
+RUNTIME_TARGET = 4200
+BACKENDS_PORT = "4101"
 
 # Where each check reserves a port: a default, an assignment or a listener.
 PORT_SOURCES = [
@@ -80,29 +85,32 @@ def expected_service(name, base, dev, project, image):
     want["image"] = image
     want["pull_policy"] = "never"
     want["container_name"] = f"{project}-{name}"
-    if name == RUNTIME:
-        have = dev["services"][name]
-        published = have.get("ports", [{}])[0].get("published")
-        url = have.get("environment", {}).get("LOCUS_RUNTIME_HOST_API_URL", "")
-        port = url.rsplit(":", 1)[-1]
+    url = dev["services"][LOCUS].get("environment", {}).get("LOCUS_RUNTIME_HOST_API_URL", "")
+    port = url.rsplit(":", 1)[-1]
+    port = port if port.isdigit() else "<port>"
+    if name == LOCUS:
         want["environment"] = dict(
             base["environment"],
             LOCUS_RUNTIME_SERVICE_ID="wrk_local",
-            LOCUS_RUNTIME_HOST_API_URL=f"http://{gateway(dev, RUNTIME)}:{port if port.isdigit() else '<port>'}",
+            LOCUS_RUNTIME_HOST_API_URL=f"http://{gateway(dev, NETWORK)}:{port}",
         )
-        want["ports"] = [
-            {"mode": "ingress", "host_ip": "127.0.0.1", "target": 4200, "published": published, "protocol": "tcp"}
-        ]
-    if not name.endswith("-guard"):
-        # Every Locus service names the keeper's profile at its tracked path.
+        # Locus names the keeper's profile at its tracked path.
         want["security_opt"] = [
             f"seccomp=./{PROFILE}" if opt.startswith("seccomp=") else opt for opt in base["security_opt"]
         ]
-    if name.endswith("-guard"):
-        island = name.removesuffix("-guard")
-        address = dev["services"][name].get("networks", {}).get(island, {}).get("ipv4_address")
-        want["environment"] = dict(base["environment"], CYFR_GUARD_CONTROL_PLANE=gateway(dev, island))
-        want["networks"][island] = dict(base["networks"][island], ipv4_address=address)
+    if name == GUARD:
+        have = dev["services"][name]
+        published = have.get("ports", [{}])[0].get("published")
+        address = have.get("networks", {}).get(NETWORK, {}).get("ipv4_address")
+        want["environment"] = dict(
+            base["environment"],
+            CYFR_GUARD_CONTROL_PLANE=gateway(dev, NETWORK),
+            CYFR_GUARD_HOST_API=f"{gateway(dev, NETWORK)}:{port}",
+        )
+        want["networks"][NETWORK] = dict(base["networks"][NETWORK], ipv4_address=address)
+        want["ports"] = [
+            {"mode": "ingress", "host_ip": "127.0.0.1", "target": RUNTIME_TARGET, "published": published, "protocol": "tcp"}
+        ]
     return want
 
 
@@ -130,8 +138,8 @@ def shape(base_path, dev_path, checkout, project, image):
         diff(f"services.{name}", dev["services"][name], want, errors)
     for name in NETWORKS:
         diff(f"networks.{name}", dev["networks"][name], expected_network(name, base["networks"][name], dev, project), errors)
-    # The profile every Locus service names is the checkout's, the one the
-    # scaffold ships as keeper.seccomp.json.
+    # The profile Locus names is the checkout's, the one the scaffold ships
+    # as keeper.seccomp.json.
     for name in SERVICES:
         for opt in dev["services"][name].get("security_opt", []):
             if opt.startswith("seccomp=") and not os.path.isfile(os.path.join(checkout, opt.removeprefix("seccomp="))):
@@ -141,19 +149,17 @@ def shape(base_path, dev_path, checkout, project, image):
 
 def declared(dev):
     """The stack's host ports, subnets and fixed addresses, by what they are for."""
-    runtime = dev["services"][RUNTIME]
-    url = runtime["environment"]["LOCUS_RUNTIME_HOST_API_URL"]
+    url = dev["services"][LOCUS]["environment"]["LOCUS_RUNTIME_HOST_API_URL"]
+    guard = dev["services"][GUARD]
     prism = dev.get("x-prism", "")
     ports = {
         PRISM: prism.rsplit(":", 1)[-1],
         PROXY: str(dev.get("x-prism-proxy", "")),
-        RUNTIME_PORT: runtime["ports"][0]["published"],
+        RUNTIME_PORT: guard["ports"][0]["published"],
         HOST_API_PORT: url.rsplit(":", 1)[-1],
     }
     networks = {name: dev["networks"][name]["ipam"]["config"][0] for name in NETWORKS}
-    addresses = {
-        island: dev["services"][f"{island}-guard"]["networks"][island]["ipv4_address"] for island in ISLANDS
-    }
+    addresses = {NETWORK: guard["networks"][NETWORK]["ipv4_address"]}
     return prism, ports, networks, addresses
 
 
@@ -240,7 +246,7 @@ def apart(shipped_path, sources, *dev_paths):
             if name in addresses:
                 address = ipaddress.ip_address(addresses[name])
                 if address not in subnet or address in ip_range or address == gw:
-                    errors.append(f"slot {slot}: {name}-guard's address {address} is not a free fixed address of {subnet}")
+                    errors.append(f"slot {slot}: {GUARD}'s address {address} is not a free fixed address of {subnet}")
         names += [dev["name"]] + [s["container_name"] for s in dev["services"].values()]
         names += [n["name"] for n in dev["networks"].values()]
 
@@ -257,18 +263,17 @@ def apart(shipped_path, sources, *dev_paths):
 def settings(dev_path):
     dev = json.load(open(dev_path))
     _prism, ports, _networks, addresses = declared(dev)
-    runtime = dev["services"][RUNTIME]
-    bind = runtime["environment"]["LOCUS_RUNTIME_HOST_API_URL"].split("//", 1)[1].rsplit(":", 1)[0]
+    environment = dev["services"][LOCUS]["environment"]
+    bind = environment["LOCUS_RUNTIME_HOST_API_URL"].split("//", 1)[1].rsplit(":", 1)[0]
     lines = [
         f"CYFR_PORT={ports[PRISM]}",
         f"CYFR_PROXY_PORT={ports[PROXY]}",
-        f"CYFR_LOCUS_RUNTIME_WORKERS={runtime['environment']['LOCUS_RUNTIME_SERVICE_ID']}"
-        f"=http://127.0.0.1:{runtime['ports'][0]['published']}",
+        f"CYFR_LOCUS_RUNTIME_WORKERS={environment['LOCUS_RUNTIME_SERVICE_ID']}"
+        f"=http://127.0.0.1:{ports[RUNTIME_PORT]}",
         f"CYFR_HOST_API_BIND={bind}",
         f"CYFR_HOST_API_PORT={ports[HOST_API_PORT]}",
-        f"CYFR_LOCUS_BACKENDS_URL=http://{addresses['locus-backends']}:{ISLANDS['locus-backends']}",
-        f"CYFR_PRIVATE_EGRESS_TARGETS={addresses['locus-backends']}",
-        f"CYFR_LOCUS_BUILDS_URL=http://{addresses['locus-builds']}:{ISLANDS['locus-builds']}",
+        f"CYFR_LOCUS_BACKENDS_URL=http://{addresses[NETWORK]}:{BACKENDS_PORT}",
+        f"CYFR_PRIVATE_EGRESS_TARGETS={addresses[NETWORK]}",
     ]
     print("\n".join(lines))
     return []

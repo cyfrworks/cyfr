@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The locus-runtime service under docker compose, for the runtime image tests.
+"""Locus's runtime role under docker compose, for the runtime image tests.
 
-A Stack runs docker-compose.yml's `locus-runtime` service layered with
-compose.locus-runtime.yml, which adds only the image under test, a loopback port,
+A Stack runs docker-compose.yml's `locus` service behind its guard with the
+runtime's key alone, layered with compose.runtime.yml, which adds only the
+image under test, a loopback port on the guard,
 the host gateway the scripted control plane (control_plane.py, on this
 machine) is reached through and the pool settings a test chooses; its project directory holds the keeper's seccomp
 profile the service names, as a scaffolded project does.
@@ -57,14 +58,18 @@ if ROLE is None:
 
 # The worker service id the scripted control plane knows the service by.
 SERVICE = "wrk_image"
-# The compose service that runs the runtime, and the port it listens on.
-COMPOSE_SERVICE = ROLE["service"]
+# The compose service that runs Locus, its guard, which holds the runtime's
+# port, and the port the runtime role listens on.
+COMPOSE_SERVICE = RELEASE["service"]
+GUARD = RELEASE["guard"]
 PORT = ROLE["port"]
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
-SERVICE_UID = RELEASE["uid"]
-SERVICE_USER = RELEASE["user"]
-HOME_ROOT = RELEASE["home_root"]
-RUN_DIR = RELEASE["run_dir"]
+# The runtime role's process: its user and uid, its spawns' homes' root and
+# its run folder.
+SERVICE_UID = ROLE["uid"]
+SERVICE_USER = ROLE["user"]
+HOME_ROOT = ROLE["home_root"]
+RUN_DIR = ROLE["run_dir"]
 KEEPER_CAPS = "00000000000000e0"
 
 
@@ -121,7 +126,7 @@ class Stack(imagesuite.Stack):
         }
 
     def compose(self, *args, check=True):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-runtime.yml")]
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.runtime.yml")]
         if not self.writable_cgroups:
             files.append(os.path.join(HERE, "compose.no-writable-cgroups.yml"))
         return run(
@@ -157,7 +162,7 @@ class Stack(imagesuite.Stack):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.base is None:
-                published = self.compose("port", COMPOSE_SERVICE, str(PORT), check=False)
+                published = self.compose("port", GUARD, str(PORT), check=False)
                 address = published.stdout.strip().splitlines()[0] if published.returncode == 0 and published.stdout.strip() else None
                 if address is None:
                     time.sleep(0.5)
