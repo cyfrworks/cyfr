@@ -807,7 +807,8 @@ func TestTheCleanupRule(t *testing.T) {
 		t.Fatalf("c: %v %v", held, err)
 	}
 	has(a, b)
-	// Both go at the first start after both end.
+	// Both go at the first start after a's session has ended and b's hold
+	// has passed.
 	releaseA()
 	advance(HoldFor)
 	if held, _ := s.Hold("ath_1", "lt_c2", c); held {
@@ -992,6 +993,30 @@ func TestTheBoundsAreTheSharedOnes(t *testing.T) {
 	}
 	if fmt.Sprint(v.Bounds) != fmt.Sprint(want) {
 		t.Fatalf("the vectors pin %v, the keeper has %v", v.Bounds, want)
+	}
+}
+
+// The idle bound is the shared vectors' pack_waits', well inside a waiting
+// start's wait: an abandoned put is dropped, and the waiting start puts,
+// before that start stops holding again.
+func TestAnAbandonedPutEndsInsideAWaitingStartsWait(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Waits struct {
+			Idle  int64 `json:"put_idle_ms"`
+			Every int64 `json:"busy_every_ms"`
+			Wait  int64 `json:"busy_wait_ms"`
+		} `json:"pack_waits"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	w := v.Waits
+	if IdleFor.Milliseconds() != w.Idle || 2*(w.Idle+w.Every) > w.Wait {
+		t.Fatalf("IdleFor %v against the vectors' %+v", IdleFor, w)
 	}
 }
 

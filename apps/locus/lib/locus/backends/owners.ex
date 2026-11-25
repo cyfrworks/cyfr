@@ -491,7 +491,7 @@ defmodule Locus.Backends.Owners do
         named = lifetime(invoke, message)
 
         with {:ok, _program} <- loading_packs(owner, message),
-             :error <- live_hold(owner, named, message),
+             :error <- live_hold(state, owner, named, message),
              :ok <- admissible(state, named) do
           {:reply, {:ok, session_launcher(state)}, state}
         else
@@ -1160,17 +1160,21 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  # A hold of a lifetime whose session lives names the generation that
-  # session's open named. A session whose open named none holds none, and
-  # its lifetime is spent.
-  defp live_hold(owner, named, %{type: :packs_hold}) do
-    with {_running_or_starting, id} <- running(owner, named),
-         %{packs: digest} when is_binary(digest) <- owner.sessions[id],
-         do: {:held, digest},
-         else: (_none -> :error)
+  # A hold of a lifetime whose session lives, or whose open is still
+  # preparing, names the generation that open named. A session whose open
+  # named none holds none, and its lifetime is spent.
+  defp live_hold(state, owner, named, %{type: :packs_hold}) do
+    case {running(owner, named), preparing(state, named)} do
+      {{_running_or_starting, id}, _preparing} -> named_packs(owner.sessions[id])
+      {:error, {:preparing, ref}} -> named_packs(elem(state.pending[ref].continuation, 2))
+      {:error, :error} -> :error
+    end
   end
 
-  defp live_hold(_owner, _named, %{type: :packs_put}), do: :error
+  defp live_hold(_state, _owner, _named, %{type: :packs_put}), do: :error
+
+  defp named_packs(%{packs: digest}) when is_binary(digest), do: {:held, digest}
+  defp named_packs(_none), do: :error
 
   defp open_program(state, owner, program, invoke, message, from) do
     named = lifetime(invoke, message)

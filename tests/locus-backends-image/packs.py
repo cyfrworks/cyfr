@@ -82,7 +82,10 @@ def stream_of(files):
         add(".cyfr-packs.json", json.dumps({"files": lines}).encode(), 0o644)
         for path, (data, executable) in sorted(files.items()):
             add(path, data, 0o755 if executable else 0o644)
-    return out.getvalue()
+        end = tar.offset
+    # Its two end blocks and no record padding after them, which the keeper
+    # refuses as bytes after the archive's end.
+    return out.getvalue()[:end + 1024]
 
 
 def refusal(code):

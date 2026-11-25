@@ -496,6 +496,12 @@ defmodule Aqua.Harness.Program do
   # session's open: the person reads why, not that the program is away.
   defp refused_open(work, {:refused, :capacity, _boot}), do: refused_open(work, :capacity)
   defp refused_open(work, :capacity), do: {:refused, {:program_full, work.title}}
+
+  # A program that loads the person's packs did not open for them: said
+  # as the refusal says it (`Prima.Refusal`).
+  defp refused_open(_work, packs) when packs in [:packs_unready, :packs_moved],
+    do: {:refused, packs}
+
   defp refused_open(work, _unavailable), do: refused(work, :unreached)
 
   defp refused(work, kind), do: {:refused, {:harness, work.title, kind}}

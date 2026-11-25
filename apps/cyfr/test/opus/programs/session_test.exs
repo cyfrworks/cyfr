@@ -22,6 +22,12 @@ defmodule Opus.Programs.SessionTest do
   @root :crypto.strong_rand_bytes(32)
   @generation_key {Arca.ControlPlane, :generation}
   @part_bytes Prima.LocusBackends.bounds().max_pack_part_bytes
+  # The keeper's idle bound of a put and a start's wait for another, as the
+  # shared vectors pin them.
+  @waits Path.expand("../../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+         |> File.read!()
+         |> Jason.decode!()
+         |> Map.fetch!("pack_waits")
 
   setup do
     Cyfr.Test.Sandbox.setup!()
@@ -41,10 +47,10 @@ defmodule Opus.Programs.SessionTest do
       File.rm_rf!(base)
     end)
 
-    Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
+    box = Scripted.supervise_controller(url: fake.url, root: @root, tick_ms: 3_600_000)
     assert_receive {:control, "hello", %{"g" => 1}, %{boot: "-"}}, 2_000
     assert_receive {:control, "reconcile", %{"keep" => []}, _fields}, 2_000
-    {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx), fake: fake}
+    {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx), fake: fake, box: box}
   end
 
   # A row whose driver loads the athanor's packs (Claude Code's), held by
@@ -426,6 +432,178 @@ defmodule Opus.Programs.SessionTest do
     assert l2 != l1
     assert_receive {:held, "packs_hold", second_again}, 5_000
     {first, second, first_last, second_again, l1, l2}
+  end
+
+  # A copy of two parts, so a put can be held between them.
+  defp two_parts!(actor) do
+    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", @skill)
+
+    {:ok, _} =
+      Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/a/big.txt",
+        String.duplicate("b", @part_bytes + 1)
+      )
+  end
+
+  # Two starts of the person's at once, the second's open due in
+  # `deadline_ms`: the first's put is held at its last part, and the
+  # second, its first part refused packs_busy, waits, holding again. Answers
+  # both starts' tasks, the first's last part, held, and their lifetimes.
+  defp waiting(fake, grant, deadline_ms) do
+    test = self()
+    [l1, l2] = [new_lifetime(grant), new_lifetime(grant)]
+    due = fn ms -> System.system_time(:millisecond) + ms end
+    Scripted.hold(fake, "packs_put")
+    first = Task.async(fn -> Programs.box_open(l1, test, %{}, due.(15_000)) end)
+    assert_receive {:held, "packs_put", first_part}, 5_000
+    Scripted.hold(fake, "packs_put")
+    second = Task.async(fn -> Programs.box_open(l2, test, %{}, due.(deadline_ms)) end)
+    assert_receive {:held, "packs_put", second_part}, 5_000
+    Scripted.hold(fake, "packs_put", 30_000)
+    send(first_part, :go)
+    l1_id = l1.id
+    assert_receive {:session, "packs_put", %{"seq" => 0, "lifetime" => ^l1_id}, _}, 5_000
+    assert_receive {:held, "packs_put", first_last}, 5_000
+    send(second_part, :go)
+    l2_id = l2.id
+    assert_receive {:session, "packs_put", %{"seq" => 0, "lifetime" => ^l2_id}, _}, 5_000
+    # Their first holds, which came before.
+    assert_received {:session, "packs_hold", %{"lifetime" => ^l1_id}, _}
+    assert_received {:session, "packs_hold", %{"lifetime" => ^l2_id}, _}
+    {first, second, first_last, l1, l2}
+  end
+
+  describe "a start over while it waits for another put" do
+    test "closed, it sends no hold, put or open after its close", %{
+      ctx: ctx,
+      actor: actor,
+      fake: fake
+    } do
+      two_parts!(actor)
+      {grant, _program} = held(ctx)
+      {first, second, first_last, _l1, l2} = waiting(fake, grant, 15_000)
+      l2_id = l2.id
+      assert :ok = Programs.box_close(l2)
+      assert {:error, :not_held} = Task.await(second, 5_000)
+      assert_receive {:session, "close", %{"lifetime" => ^l2_id}, _}, 2_000
+      send(first_last, :go)
+      assert {:ok, _} = Task.await(first, 15_000)
+      refute_receive {:session, _type, %{"lifetime" => ^l2_id}, _}, 1_500
+    end
+
+    test "past its deadline, its hold not yet answered and its close not either, it sends no " <>
+           "put or open after",
+         %{ctx: ctx, actor: actor, fake: fake} do
+      two_parts!(actor)
+      {grant, _program} = held(ctx)
+      lifetime = new_lifetime(grant)
+      lifetime_id = lifetime.id
+      Scripted.hold(fake, "packs_hold", 10_000)
+      Scripted.hold(fake, "close", 10_000)
+      due = System.system_time(:millisecond) + 1_000
+      assert {:error, :deadline} = Programs.box_open(lifetime, self(), %{}, due)
+      assert_receive {:held, "packs_hold", hold}, 2_000
+      assert_receive {:held, "close", close}, 2_000
+      send(hold, :go)
+      assert_receive {:session, "packs_hold", %{"lifetime" => ^lifetime_id}, _}, 2_000
+
+      try do
+        refute_receive {:session, _type, %{"lifetime" => ^lifetime_id}, _}, 1_500
+      after
+        send(close, :go)
+      end
+    end
+
+    test "its box gone, it sends no hold, put or open", %{
+      ctx: ctx,
+      actor: actor,
+      fake: fake,
+      box: box
+    } do
+      two_parts!(actor)
+      {grant, _program} = held(ctx)
+      {first, second, first_last, _l1, l2} = waiting(fake, grant, 15_000)
+      l2_id = l2.id
+      ref = Process.monitor(box)
+      Process.exit(box, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^box, :killed}, 2_000
+      Task.shutdown(first, :brutal_kill)
+      Task.shutdown(second, :brutal_kill)
+      send(first_last, :go)
+      refute_receive {:session, _type, %{"lifetime" => ^l2_id}, _}, 1_500
+    end
+  end
+
+  test "a wait for another put ends at the open's deadline when that comes first, the packs " <>
+         "not made ready, and sends no open",
+       %{ctx: ctx, actor: actor, fake: fake} do
+    two_parts!(actor)
+    {grant, _program} = held(ctx)
+    {first, _second, first_last, _l1, _l2} = waiting(fake, grant, 15_000)
+    lifetime = new_lifetime(grant)
+    began = System.monotonic_time(:millisecond)
+
+    answer =
+      Opus.Programs.Session.open(grant, %{lifetime: lifetime, loads_packs: true, within_ms: 1_500})
+
+    took = System.monotonic_time(:millisecond) - began
+    send(first_last, :go)
+    assert {:ok, _} = Task.await(first, 15_000)
+    assert {answer, took >= 1_000 and took < 5_000} == {{:error, :packs_unready}, true}
+    lifetime_id = lifetime.id
+    refute_received {:session, "open", %{"lifetime" => ^lifetime_id}, _}
+  end
+
+  test "a start whose put another start's under way met puts the copy it built, the set not " <>
+         "read again",
+       %{ctx: ctx, actor: actor, fake: fake} do
+    two_parts!(actor)
+    {grant, _program} = held(ctx)
+    d = digest(ctx)
+    {first, second, first_last, second_again, _l1, l2} = two_starts(fake, grant)
+    # The set moves on while the second waits; the first's put fails.
+    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/later.md", "later")
+    Scripted.drop_puts(fake, ctx.athanor_id)
+    send(first_last, :go)
+    _first = Task.await(first, 30_000)
+    send(second_again, :go)
+    assert {_lifetime, {:ok, %{resumed: false}}} = Task.await(second, 30_000)
+    assert_received {:session, "open", %{"lifetime" => ^l2, "packs" => ^d}, _}
+    refute digest(ctx) == d
+  end
+
+  # Real time: the keeper's idle bound passes inside the test.
+  @tag timeout: 120_000
+  test "a start abandoned mid-put leaves its put to the keeper's idle bound, and another start " <>
+         "waiting for it puts and opens inside its wait",
+       %{ctx: ctx, actor: actor, fake: fake} do
+    %{"put_idle_ms" => idle, "busy_every_ms" => every, "busy_wait_ms" => wait} = @waits
+    assert Opus.Programs.Session.busy_bounds() == %{every_ms: every, wait_ms: wait}
+    Scripted.set(fake, :put_idle_ms, idle)
+    two_parts!(actor)
+    {grant, _program} = held(ctx)
+    d = digest(ctx)
+    test = self()
+    due = System.system_time(:millisecond) + 120_000
+    l1 = new_lifetime(grant)
+    Scripted.hold(fake, "packs_put")
+    first = Task.async(fn -> Programs.box_open(l1, test, %{}, due) end)
+    assert_receive {:held, "packs_put", first_part}, 5_000
+    # Its last part never arrives: the start is closed while it is held.
+    Scripted.hold(fake, "packs_put", 110_000)
+    send(first_part, :go)
+    assert_receive {:held, "packs_put", first_last}, 5_000
+    assert :ok = Programs.box_close(l1)
+    assert {:error, :not_held} = Task.await(first, 5_000)
+    l2 = new_lifetime(grant)
+    began = System.monotonic_time(:millisecond)
+    assert {:ok, %{resumed: false}} = Programs.box_open(l2, test, %{}, due)
+    took = System.monotonic_time(:millisecond) - began
+    send(first_last, :go)
+    l2_id = l2.id
+    assert_received {:session, "open", %{"lifetime" => ^l2_id, "packs" => ^d}, _}
+    assert {took >= idle - every, took < wait} == {true, true}
   end
 
   defp resumed({_lifetime, {:ok, %{resumed: resumed}}}), do: {:ok, resumed}

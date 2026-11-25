@@ -51,6 +51,8 @@ defmodule Locus.Backends.ServiceTest do
   # opens.
   @roomy_budget Jason.decode!(@vectors["hello"]["answer"])["memory"]["budget_bytes"]
   @owners Module.concat(__MODULE__, Table)
+  @moved "sha256:" <> String.duplicate("cd", 32)
+  @missing "sha256:" <> String.duplicate("ef", 32)
   # The backends role's count, of this suite's own, for a test whose
   # sessions name it.
   @output Module.concat(__MODULE__, Output)
@@ -65,7 +67,14 @@ defmodule Locus.Backends.ServiceTest do
 
     def pool_stats(agent, "backends") do
       case Agent.get(agent, & &1.pool) do
-        "unavailable" -> {:error, {:launcher_unavailable, :timeout}}
+        "unavailable" ->
+          {:error, {:launcher_unavailable, :timeout}}
+
+        # An open's preparation the test holds until it says go.
+        {:held, test} ->
+          Kernel.send(test, {:preparing, self()})
+          receive do: (:go -> {:ok, %{size: 64, free: 64, quarantined: 0}})
+
         pool -> {:ok, %{size: pool["size"], free: pool["free"], quarantined: pool["quarantined"]}}
       end
     end
@@ -1009,6 +1018,33 @@ defmodule Locus.Backends.ServiceTest do
                put: {LB.status(:lifetime_over), {:ok, :lifetime_over}},
                next: {200, {:ok, %{state: :missing}}},
                calls: [{:hold, @athanor, next, moved}]
+             }
+    end
+
+    test "a hold of a lifetime whose open is preparing is held at the generation that open named, " <>
+           "whatever it names, and reaches no keeper",
+         ctx do
+      packs_sync(ctx)
+      test = self()
+      Agent.update(ctx.launcher, &%{&1 | pool: {:held, test}})
+      lifetime = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      open = Map.put(open_message(lifetime: lifetime), :packs, @digest)
+      opening = Task.async(fn -> invoke(ctx, open) end)
+      assert_receive {:preparing, preparation}, 5_000
+      Agent.update(ctx.launcher, &%{&1 | packs: MapSet.new([{@athanor, @moved}])})
+      warm = invoke(ctx, packs_message(:packs_hold, lifetime, %{digest: @moved}))
+      cold = invoke(ctx, packs_message(:packs_hold, lifetime, %{digest: @missing}))
+      send(preparation, :go)
+      Task.shutdown(opening, :brutal_kill)
+
+      assert %{
+               warm: {warm.status, LB.read_session_answer(:packs_hold, warm.body)},
+               cold: {cold.status, LB.read_session_answer(:packs_hold, cold.body)},
+               calls: packs_calls(ctx)
+             } == %{
+               warm: {200, {:ok, %{state: :held, digest: @digest}}},
+               cold: {200, {:ok, %{state: :held, digest: @digest}}},
+               calls: []
              }
     end
 

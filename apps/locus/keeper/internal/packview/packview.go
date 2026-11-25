@@ -42,10 +42,12 @@
 // sent, and the generation is named by the digest the control plane gave.
 //
 // A hold names an athanor, a start's lifetime and a digest, and holds that
-// generation for HoldFor; a live spawn that names a generation holds it
-// from its Acquire to its release. At each hold the keeper removes every
-// generation of that athanor but the one named that no hold and no live
-// spawn holds. At most one put of an athanor is in progress, and MaxPuts
+// generation for HoldFor from when it is taken, whether or not that
+// start's session has ended since; a live spawn that names a generation
+// holds it from its Acquire to its release. At each hold the keeper
+// removes every generation of that athanor but the one named that no hold
+// and no live spawn holds: a generation goes at the first start after its
+// last session has ended and its start's hold has passed. At most one put of an athanor is in progress, and MaxPuts
 // in all, a put counting from its first part until it has settled: its
 // folder gone or renamed to its generation. A put is dropped with its
 // folder IdleFor after its last part, HoldFor after its first, or at its
@@ -132,10 +134,15 @@ const (
 
 // HoldFor is how long a hold holds its generation: beyond the open's
 // preparation bound (Opus.Programs.Session waits 310 s for an open).
-// IdleFor is how long a put may go without a part.
+// IdleFor is how long a put may go without a part: a start sends its parts
+// one after another, each within milliseconds of the last's answer, and
+// another start of the person's that met the put waits up to 60 s, holding
+// again every 500 ms (Opus.Programs.Session's busy wait), so a put its
+// start abandoned is dropped, and that start puts, well inside its wait.
+// The shared vectors' pack_waits pin the three on both sides.
 const (
 	HoldFor = 10 * time.Minute
-	IdleFor = 60 * time.Second
+	IdleFor = 10 * time.Second
 )
 
 // Put answers.

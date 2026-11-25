@@ -466,7 +466,8 @@ defmodule Opus.Programs.Box do
           params: params,
           deadline: deadline,
           from: from,
-          timer: nil
+          timer: nil,
+          worker: nil
         }
 
         cond do
@@ -726,6 +727,12 @@ defmodule Opus.Programs.Box do
     Prima.LoggerContext.unexpected(__MODULE__, message)
     {:noreply, state}
   end
+
+  # A box that stops of itself ends its opens' workers too: their link
+  # ends them only with an abnormal end of the box's.
+  @impl true
+  def terminate(_reason, state),
+    do: Enum.each(state.opens, fn {_ref, open} -> stop_worker(open) end)
 
   @impl true
   def format_status(status), do: StatusRedaction.format_status(status)
@@ -1996,7 +2003,10 @@ defmodule Opus.Programs.Box do
   # slot at the lifetime's generation and the service runs the lifetime's
   # boot, and in a process of its own, monitored here, whose wait reaches
   # just past the deadline, or to the connect timeout where that is later:
-  # the box's own timer ends the open at the deadline either way.
+  # the box's own timer ends the open at the deadline either way. That
+  # process is the open's worker: linked to the box, so it ends with it,
+  # and stopped at every other end of its open (`stop_worker/1`), so no
+  # hold, put or open of a start already over is ever sent.
   defp start_open(state, %{lifetime: lifetime} = open) do
     cond do
       not holds_slot?(state, lifetime) ->
@@ -2019,20 +2029,48 @@ defmodule Opus.Programs.Box do
         loads_packs = match?(%{packs: true}, state.owners[owner_of(lifetime)])
 
         params =
-          Map.merge(open.params, %{lifetime: lifetime, timeout_ms: wait, loads_packs: loads_packs})
+          Map.merge(open.params, %{
+            lifetime: lifetime,
+            timeout_ms: wait,
+            within_ms: left,
+            loads_packs: loads_packs
+          })
 
         timer = Process.send_after(self(), {:open_deadline, ref}, left)
 
-        {_pid, mref} =
-          spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
+        {worker, mref} =
+          Process.spawn(
+            fn -> send(box, {:session_opened, ref, opened(grant, params)}) end,
+            [:link, :monitor]
+          )
 
         %{
           state
-          | opens: Map.put(state.opens, ref, %{open | timer: timer}),
+          | opens: Map.put(state.opens, ref, %{open | timer: timer, worker: worker}),
             open_tasks: Map.put(state.open_tasks, mref, ref)
         }
     end
   end
+
+  # The worker's open, which never ends the worker abnormally: a worker
+  # linked to the box that crashed would take the box with it.
+  defp opened(grant, params) do
+    Session.open(grant, params)
+  catch
+    kind, reason ->
+      Logger.error(Exception.format(kind, reason, __STACKTRACE__))
+      {:error, :backends_unavailable}
+  end
+
+  # An open over before its worker answered: the worker is unlinked and
+  # ended, and its end, seen here, answers no one.
+  defp stop_worker(%{worker: worker}) when is_pid(worker) do
+    Process.unlink(worker)
+    Process.exit(worker, :kill)
+    :ok
+  end
+
+  defp stop_worker(_open), do: :ok
 
   defp holds_slot?(state, lifetime),
     do: plane_generation(state) == {:ok, lifetime.generation}
@@ -2071,9 +2109,10 @@ defmodule Opus.Programs.Box do
   end
 
   # The caller's deadline passed with the box's open still out: the caller
-  # is told so, and whatever the open does after answers no one.
+  # is told so, and its worker ends.
   defp open_deadline(state, ref) do
     {open, opens} = Map.pop(state.opens, ref)
+    stop_worker(open)
     not_given(%{state | opens: opens}, open, :deadline)
   end
 
@@ -2113,7 +2152,10 @@ defmodule Opus.Programs.Box do
     {sent, opens} =
       Map.split_with(state.opens, fn {_ref, open} -> over?.(open.lifetime, open.holder) end)
 
-    for {_ref, open} <- sent, do: refuse_open(open, :not_held)
+    for {_ref, open} <- sent do
+      stop_worker(open)
+      refuse_open(open, :not_held)
+    end
 
     {given, sessions} =
       Map.split_with(state.sessions, fn {lifetime, held} -> over?.(lifetime, held.holder) end)

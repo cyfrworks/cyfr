@@ -29,8 +29,11 @@ defmodule Opus.Programs.Session do
   or a put that fails `:packs_unready`, before the open is sent. A put
   whose first part meets another put of the person's under way
   (`packs_busy`) holds again every 500 ms, finding the generation held
-  once that put is done or missing, to put, once it failed, for at most
-  60 s, then ends `:packs_unready`. The open
+  once that put is done or missing, to put, once it failed or was
+  abandoned, for at most 60 s or to the open's own deadline
+  (`within_ms`), whichever comes first, then ends `:packs_unready`; the
+  archive it built is put again, the set not read again. The packs are
+  read under the grant's athanor, the one the requests are signed for. The open
   then names as its `packs` the digest the `held` answer named: the one
   read, but for an open of a lifetime whose session lives, which the
   service holds at the generation that session's open named, packs changed
@@ -66,9 +69,18 @@ defmodule Opus.Programs.Session do
   # (`packs_busy`) holds again every @busy_every_ms, for at most
   # @busy_wait_ms from its first such refusal: the largest set the store
   # hands (128 MiB in 8,192 files) is put through the service in under
-  # 5 s on one quarter of the verification host.
+  # 5 s on one quarter of the verification host. A put whose start was
+  # abandoned mid-way is dropped by the keeper its idle bound after its
+  # last part (`packview.IdleFor`, 10 s), so that bound and one more hold
+  # are well inside the wait; the shared vectors' `pack_waits` pin the
+  # three on both sides.
   @busy_every_ms 500
   @busy_wait_ms 60_000
+
+  @doc false
+  # The wait's bounds, which the shared vectors' `pack_waits` pin.
+  @spec busy_bounds() :: %{every_ms: pos_integer(), wait_ms: pos_integer()}
+  def busy_bounds, do: %{every_ms: @busy_every_ms, wait_ms: @busy_wait_ms}
 
   @doc """
   Open the session of `params.lifetime`: the service answers the process running for
@@ -76,7 +88,8 @@ defmodule Opus.Programs.Session do
   `:terminal` on a pseudo-terminal of `rows` by `cols`, in the kept home
   it names, with the person's packs held first when `loads_packs` (see
   the moduledoc). `:timeout_ms` (default #{@open_timeout_ms}) bounds the
-  wait for each answer.
+  wait for each answer, and `:within_ms` (default the same) the wait for
+  another put of the person's.
   """
   @spec open(grant(), %{
           required(:lifetime) => Opus.Programs.Box.lifetime(),
@@ -85,6 +98,7 @@ defmodule Opus.Programs.Session do
           optional(:cols) => pos_integer(),
           optional(:loads_packs) => boolean(),
           optional(:timeout_ms) => pos_integer(),
+          optional(:within_ms) => non_neg_integer(),
           optional(atom()) => term()
         }) ::
           {:ok, %{session: String.t(), resumed: boolean()}}
@@ -93,7 +107,10 @@ defmodule Opus.Programs.Session do
     timeout_ms = Map.get(params, :timeout_ms, @open_timeout_ms)
     argv = params |> Map.get(:argv, Opus.Programs.Words.new([])) |> Opus.Programs.Words.list()
 
-    with {:ok, packs} <- packs(grant, lifetime, Map.get(params, :loads_packs, false), timeout_ms),
+    until = now_ms() + Map.get(params, :within_ms, timeout_ms)
+    loads_packs = Map.get(params, :loads_packs, false)
+
+    with {:ok, packs} <- packs(grant, lifetime, loads_packs, timeout_ms, until),
          message =
            base(:open, grant)
            |> Map.merge(of_lifetime(lifetime))
@@ -109,38 +126,55 @@ defmodule Opus.Programs.Session do
   end
 
   # The digest the open names, the one the service holds for the
-  # lifetime; nil for a program that loads no packs.
-  defp packs(_grant, _lifetime, false, _timeout_ms), do: {:ok, nil}
+  # lifetime; nil for a program that loads no packs. Read under the grant's
+  # athanor, which the requests are signed for. `until` is the open's own
+  # deadline (monotonic milliseconds), which ends a wait for another put.
+  defp packs(_grant, _lifetime, false, _timeout_ms, _until), do: {:ok, nil}
 
-  defp packs(grant, lifetime, true, timeout_ms) do
-    ctx = Sanctum.Context.internal(athanor_id: lifetime.athanor, scope: :athanor)
+  defp packs(grant, lifetime, true, timeout_ms, until) do
+    ctx = Sanctum.Context.internal(athanor_id: grant.athanor, scope: :athanor)
 
-    case Compendium.pack_digest(ctx, lifetime.athanor) do
-      {:ok, digest} -> held(grant, lifetime, ctx, digest, 0, timeout_ms, nil)
+    start = %{
+      grant: grant,
+      lifetime: lifetime,
+      ctx: ctx,
+      timeout_ms: timeout_ms,
+      until: until,
+      busy_until: nil,
+      built: nil
+    }
+
+    case Compendium.pack_digest(ctx, grant.athanor) do
+      {:ok, digest} -> held(start, digest, 0)
       {:error, _unread} -> {:error, :packs_unready}
     end
   end
 
   # `busy_until` is when a start that met a put under way stops holding
-  # again (monotonic milliseconds), nil until it has met one.
-  defp held(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until) do
+  # again (monotonic milliseconds), nil until it has met one; `built` the
+  # archive of a digest it put, kept for its put again.
+  defp held(start, digest, moves) do
     hold =
-      base(:packs_hold, grant) |> Map.merge(of_lifetime(lifetime)) |> Map.put(:digest, digest)
+      base(:packs_hold, start.grant)
+      |> Map.merge(of_lifetime(start.lifetime))
+      |> Map.put(:digest, digest)
 
-    case post(grant, hold, timeout_ms) do
+    case post(start.grant, hold, start.timeout_ms) do
       {:ok, %{state: :held, digest: held}} ->
         {:ok, held}
 
       {:ok, %{state: :missing}} ->
-        case Compendium.pack_view(ctx, lifetime.athanor, digest) do
-          {:ok, %{archive: archive}} ->
-            case put(grant, %{hold | type: :packs_put}, archive, 0, timeout_ms) do
-              :busy -> busy(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until)
+        case built(start, digest) do
+          {:ok, archive} ->
+            start = %{start | built: {digest, archive}}
+
+            case put(start.grant, %{hold | type: :packs_put}, archive, 0, start.timeout_ms) do
+              :busy -> busy(start, digest, moves)
               put -> put
             end
 
           {:moved, now} when moves < @pack_moves ->
-            held(grant, lifetime, ctx, now, moves + 1, timeout_ms, busy_until)
+            held(start, now, moves + 1)
 
           {:moved, _now} ->
             {:error, :packs_moved}
@@ -154,19 +188,30 @@ defmodule Opus.Programs.Session do
     end
   end
 
+  # The archive of `digest`: the one this start built, or read by it.
+  defp built(%{built: {digest, archive}}, digest), do: {:ok, archive}
+
+  defp built(start, digest) do
+    case Compendium.pack_view(start.ctx, start.grant.athanor, digest) do
+      {:ok, %{archive: archive}} -> {:ok, archive}
+      moved_or_unread -> moved_or_unread
+    end
+  end
+
   # Another put of the person's is under way: the start holds again, which
   # finds the generation held once that put is done, or missing, to put,
-  # once it failed; past the bound it is the packs not made ready.
-  defp busy(grant, lifetime, ctx, digest, moves, timeout_ms, nil),
-    do: busy(grant, lifetime, ctx, digest, moves, timeout_ms, now_ms() + @busy_wait_ms)
+  # once it failed or was abandoned; past the wait's bound, or the open's
+  # deadline where that comes first, it is the packs not made ready.
+  defp busy(%{busy_until: nil} = start, digest, moves),
+    do: busy(%{start | busy_until: min(now_ms() + @busy_wait_ms, start.until)}, digest, moves)
 
-  defp busy(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until) do
-    if now_ms() + @busy_every_ms > busy_until do
+  defp busy(start, digest, moves) do
+    if now_ms() + @busy_every_ms > start.busy_until do
       {:error, :packs_unready}
     else
       # sleep-ok: a start whose put met another put of the person's waits a moment before it holds again
       Process.sleep(@busy_every_ms)
-      held(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until)
+      held(start, digest, moves)
     end
   end
 

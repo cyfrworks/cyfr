@@ -96,7 +96,9 @@ defmodule Cyfr.Test.ScriptedBackends do
   the generation held and is answered `held` naming its digest. A part
   out of order, or a stream that does not read so, is refused
   `packs_refused` and drops the put; a first part while another put of
-  its athanor is collected is refused `packs_busy`, as the keeper's. A hold, a put or an open naming
+  its athanor is collected is refused `packs_busy`, as the keeper's. With
+  `set(fake, :put_idle_ms, ms)` a put no part reached for `ms` is dropped,
+  as the keeper drops one its idle bound after its last part. A hold, a put or an open naming
   `packs` for a program its sync did not mark `packs` is refused
   `bad_request`; an open's `packs` is kept on its session.
 
@@ -140,7 +142,9 @@ defmodule Cyfr.Test.ScriptedBackends do
              reset_send: false,
              lose_close: false,
              packs: %{},
-             puts: %{}
+             puts: %{},
+             put_idle_ms: nil,
+             put_touched: %{}
            }
          end},
         id: :scripted_backends
@@ -1035,6 +1039,15 @@ defmodule Cyfr.Test.ScriptedBackends do
       else: put(conn, agent, named, message)
   end
 
+  # Every put no part reached for the idle bound is dropped.
+  defp idled(%{put_idle_ms: nil} = st), do: st
+
+  defp idled(st) do
+    now = System.monotonic_time(:millisecond)
+    idle = for {key, at} <- st.put_touched, now - at >= st.put_idle_ms, do: key
+    %{st | puts: Map.drop(st.puts, idle), put_touched: Map.drop(st.put_touched, idle)}
+  end
+
   defp spent?(st, named),
     do: MapSet.member?(st.spent, named) or not LocusBackends.lifetime_of?(named.lifetime, st.boot)
 
@@ -1043,6 +1056,13 @@ defmodule Cyfr.Test.ScriptedBackends do
 
     state =
       Agent.get_and_update(agent, fn st ->
+        st = idled(st)
+
+        st = %{
+          st
+          | put_touched: Map.put(st.put_touched, key, System.monotonic_time(:millisecond))
+        }
+
         parts = Map.get(st.puts, key, [])
         puts = Map.delete(st.puts, key)
 

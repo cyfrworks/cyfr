@@ -834,8 +834,14 @@ defmodule Prima.LocusBackends do
           | {:missing_field, String.t()}
           | {:invalid_field, String.t()}
           | {:too_large,
-             :control | :answer | :status_answer | :session | :command | :line | :chunk,
-             non_neg_integer(), pos_integer()}
+             :control
+             | :answer
+             | :status_answer
+             | :session
+             | :command
+             | :line
+             | :chunk
+             | :part, non_neg_integer(), pos_integer()}
           | {:too_many, :owners | :programs | :argv, non_neg_integer(), pos_integer()}
           | {:out_of_range, String.t(), integer(), pos_integer()}
           | {:duplicate, String.t()}

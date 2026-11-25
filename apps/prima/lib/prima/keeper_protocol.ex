@@ -13,13 +13,13 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 5` and a `type`, at most `max_line_bytes/0` bytes before
+  carrying `"v": 6` and a `type`, at most `max_line_bytes/0` bytes before
   its newline. A client sends `place`, `drop`, `assign`, `spawn`,
   `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
-  `home_measure`, `home_reset`, `home_retire` and `home_list`; the keeper
-  answers `placed`, `assigned`, `spawned`, `error`, `exited`, `released`,
-  `measured`, `pool`, `home_made`, `home_measured`, `home_retired` and
-  `homes`.
+  `home_measure`, `home_reset`, `home_retire`, `home_list`, `packs_hold`
+  and `packs_put`; the keeper answers `placed`, `assigned`, `spawned`,
+  `error`, `exited`, `released`, `measured`, `pool`, `home_made`,
+  `home_measured`, `home_retired`, `homes` and `packs`.
 
   `encode/1` writes a request's members in name order, `v` and `type`
   among them, and refuses by raising `ArgumentError` what the keeper
