@@ -1572,6 +1572,7 @@ CASES
 PREFIX_SPECS=(
   'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-'
   'tests/compose-proof/run.sh:STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
+  'tests/update-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-$(run_names_prefix "$ROOT")}update-proof-'
   'tests/setup-proof/app.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-app-'
   'tests/compose-proof/tailscale-standin/proof.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-'
   'tests/compose-proof/tailscale-standin/proof.sh:IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:'
