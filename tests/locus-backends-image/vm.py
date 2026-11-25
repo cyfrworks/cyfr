@@ -43,7 +43,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import KEPT_ROOT, POOL_FIRST, POOL_LAST, Stack, expect, require_docker  # noqa: E402
+from harness import KEPT_ROOT, POOL_FIRST, POOL_LAST, RUN_DIR, Stack, expect, require_docker  # noqa: E402
 import imagesuite  # noqa: E402
 from imagesuite import PROJECT_PREFIX, run  # noqa: E402
 
@@ -169,7 +169,7 @@ def main():
         for present in ("/usr/local/bin/cyfr-guest", "/usr/local/bin/cyfr-locus", "/usr/bin/mksquashfs",
                         "/etc/passwd", KEPT_ROOT, GUEST_ROOT, "/proc", "/sys", "/dev"):
             expect(present in paths, f"the device holds {present}", sorted(paths)[:20])
-        for mount in (KEPT_ROOT, GUEST_ROOT, "/proc", "/sys", "/dev", "/run/locus"):
+        for mount in (KEPT_ROOT, GUEST_ROOT, "/proc", "/sys", "/dev", RUN_DIR):
             inside = sorted(p for p in paths if p.startswith(mount + "/"))
             expect(not inside, f"the device holds nothing under the mount point {mount}", inside[:10])
         expect(not any(canary in p for p in paths), "the device holds no canary of the kept homes' volume")

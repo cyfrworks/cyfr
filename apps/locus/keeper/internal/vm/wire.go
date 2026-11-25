@@ -83,9 +83,11 @@ const (
 	// pinned source with apps/locus/guest/kernel.config.
 	Kernel = "/usr/lib/cyfr/guest/vmlinux"
 	// Root is where each machine's working files are: its VMM's API and
-	// vsock sockets, in a folder of its own. It is under /var, which no
-	// space is given (package stage's keptOut).
-	Root = "/var/lib/locus/vm"
+	// vsock sockets, in a folder of its own. It is in the backends
+	// service's `guest` volume beside the machines' device (ProgramsDir),
+	// root's and the VMM's group's alone, and under /var, which no space is
+	// given (package stage's keptOut).
+	Root = "/var/lib/locus/guest/vm"
 )
 
 // HelloVersion is the version of the agent's Hello line, apart from the

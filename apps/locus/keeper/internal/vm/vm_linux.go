@@ -98,6 +98,12 @@ func Start(cfg Config) (*Machine, error) {
 		return nil, err
 	}
 	m := &Machine{id: hex.EncodeToString(raw[:]), done: make(chan struct{})}
+	if err := os.Mkdir(Root, 0o710); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("vm: the machines' folder: %w", err)
+	}
+	if err := os.Chmod(Root, 0o710); err != nil {
+		return nil, fmt.Errorf("vm: the machines' folder: %w", err)
+	}
 	m.dir = filepath.Join(Root, m.id)
 	if err := os.Mkdir(m.dir, 0o770); err != nil {
 		return nil, fmt.Errorf("vm: the machine's folder: %w", err)
