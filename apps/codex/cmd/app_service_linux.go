@@ -47,8 +47,6 @@ import (
 // starting it again whatever apt answered. A caller gone before go
 // installs nothing; one gone after it changes nothing of the install.
 const (
-	// appUpdateSocket is cyfr-update.socket's ListenStream.
-	appUpdateSocket = "/run/cyfr-update.sock"
 	// appUpdateServiceArg is cyfr-update@.service's ExecStart argument,
 	// read before the command line (appUpdateService).
 	appUpdateServiceArg = "--serve-app-update"
@@ -342,6 +340,10 @@ func serveUpdate(ctx context.Context, conn net.Conn, own string, host serviceHos
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// appUpdateSocket is cyfr-update.socket's ListenStream, a variable so
+// tests point serviceAnswers at a socket of their own.
+var appUpdateSocket = "/run/cyfr-update.sock"
 
 // dialAppUpdate connects to the update service; a variable so tests stand
 // in for it.

@@ -747,3 +747,71 @@ func TestTheServiceTellsAReleaseItCannotReachFromOneThatDoesNotVerify(t *testing
 		}
 	}
 }
+
+// Whether the service would take this account's request is read from its
+// socket alone: there only while systemd listens, and writable by this
+// account.
+func TestTheServiceAnswersWhereItsSocketTakesThisAccount(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may write any socket")
+	}
+	saved := appUpdateSocket
+	t.Cleanup(func() { appUpdateSocket = saved })
+	dir := t.TempDir()
+	appUpdateSocket = filepath.Join(dir, "cyfr-update.sock")
+	if why := serviceAnswers(); why != "is not on this machine" {
+		t.Errorf("no socket answered %q", why)
+	}
+	if err := os.WriteFile(appUpdateSocket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if why := serviceAnswers(); why != "is not on this machine" {
+		t.Errorf("a file that is no socket answered %q", why)
+	}
+	os.Remove(appUpdateSocket)
+	l, err := net.Listen("unix", appUpdateSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if why := serviceAnswers(); why != "" {
+		t.Errorf("a socket this account may write answered %q", why)
+	}
+	if err := os.Chmod(appUpdateSocket, 0o440); err != nil {
+		t.Fatal(err)
+	}
+	if why := serviceAnswers(); why != "serves the sudo group's accounts alone" {
+		t.Errorf("a socket this account may not write answered %q", why)
+	}
+}
+
+// Update CYFR's offer asks the road as its run meets it, never by
+// connecting: where the service's socket takes this account the page
+// offers the yes, saying the service makes the update and what happens
+// where it then cannot; where not, why, and the sudo road's check, here
+// a sudo that would ask for a password: no yes, the line to run instead.
+func TestThePageOffersTheServiceWhereItsSocketAnswers(t *testing.T) {
+	for _, c := range []struct {
+		why, says string
+		yes       bool
+	}{
+		{"", "CYFR's update service installs it, with no password; where the service cannot, the update says why and goes through sudo, which needs a terminal to ask for your password.", true},
+		{"is not on this machine", "CYFR's update service is not on this machine, so the update goes through sudo.", false},
+		{"serves the sudo group's accounts alone", "CYFR's update service serves the sudo group's accounts alone, so the update goes through sudo.", false},
+	} {
+		newAppScenario(t, "0.9.0", "0.10.0", "0.9.0")
+		machine.passwordless = func() bool { return false }
+		saved, savedAnswers, savedDial := appRoadHere, serviceAnswers, dialAppUpdate
+		appRoadHere = func() appRoad { return &serviceRoad{} }
+		serviceAnswers = func() string { return c.why }
+		dialAppUpdate = func() (net.Conn, error) {
+			t.Error("the offer connected to the service")
+			return nil, errors.New("not here")
+		}
+		p := windowOffer(context.Background(), t.TempDir(), "")
+		appRoadHere, serviceAnswers, dialAppUpdate = saved, savedAnswers, savedDial
+		if !slices.Contains(p.Says, c.says) || (p.Step == "app") != c.yes || (p.Terminal == "") != c.yes {
+			t.Errorf("with the socket %q the page offered %+v", c.why, p)
+		}
+	}
+}

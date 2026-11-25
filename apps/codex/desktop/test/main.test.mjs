@@ -2503,7 +2503,7 @@ async function screenStarted(project = SCREEN) {
     startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: sayTraced(said), endSelf})
     await settled()
     if (world.exited === undefined) {
-      child.say({type: "ready", url: READY, rail: RAIL})
+      child.say({type: "ready", url: READY, rail: RAIL, update: UPDATE})
       await settled()
     }
   } finally {
