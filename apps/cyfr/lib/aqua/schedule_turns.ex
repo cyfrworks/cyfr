@@ -4,17 +4,21 @@
 defmodule Aqua.ScheduleTurns do
   @moduledoc """
   A schedule that holds a line for Aqua: each of its fires becomes a turn
-  of Aqua, as the schedule's person, in their daily thread current when it
-  fires. No thread is made for a schedule.
+  of Aqua, as the schedule's person, in the workspace thread the schedule
+  names, or else in their daily thread current when it fires. No thread
+  is made for a schedule.
 
   ## Who can make, change and fire one
 
-  Only a person's own signed-in session makes a schedule hold a line for
-  Aqua, or changes the line (`Opus.Schedules.Provider`); a key, a
-  tincture's frame and an agent's call are refused. The scheduler fires
-  it as it fires any schedule, and never calls Aqua: the occurrence its
-  claim writes is the record of the fire, and the claim wakes this
-  consumer (`Cyfr.Bus.schedule_turns/0`).
+  The schedule's person makes a schedule hold a line for Aqua, or changes
+  the line, in their own signed-in session or through a turn of theirs,
+  the soul's or a crew member's alike (`Opus.Schedules.Provider`); a key
+  and a tincture's frame are refused. One a turn made records the turn's
+  agent (`maker`) and, when the turn works under a workspace thread, that
+  thread (`thread_id`). The scheduler fires it as it fires any schedule,
+  and never calls Aqua: the occurrence its claim writes is the record of
+  the fire, and the claim wakes this consumer
+  (`Cyfr.Bus.schedule_turns/0`).
 
   ## Starting a fire's turn
 
@@ -34,11 +38,21 @@ defmodule Aqua.ScheduleTurns do
   answers the turn the first opened, so one claim opens one turn however
   often it is read. It is an ordinary turn of that thread, queued behind
   whatever runs there, its message the schedule's line in the server's
-  voice naming the schedule by id and name, which the person's count
-  counts. The turn carries the schedule and the occurrence, and its root's
-  admission starts the occurrence (`Opus.TurnRoot`).
+  voice, its payload naming the schedule by id and name, which the
+  person's count counts. A schedule a turn made opens its line with
+  "`<maker>` set this schedule:" (`Opus.schedule_fire_text/2`, the
+  wording the schedule tool bounds at every write), so the soul hands that member
+  the job again (`crew.ask`); the name is a label and the line does not say it. The turn carries the schedule and the
+  occurrence, and its root's admission starts the occurrence
+  (`Opus.TurnRoot`).
 
-  ## Which daily thread
+  ## Which thread
+
+  A schedule that names a workspace thread fires there, and a claim sent
+  again lands in that same thread. One archived since the schedule was set
+  is not taken out of the archive: the fire lands nothing and its
+  occurrence ends failed saying so. One that names none joins a daily
+  thread, as below.
 
   A claim is sent again at every drain until its turn's root starts the
   occurrence, and an acceptance is found again only in the thread it is
@@ -62,11 +76,14 @@ defmodule Aqua.ScheduleTurns do
 
   A turn's end ends its occurrence through the scheduler's one ending
   (`Opus.end_schedule_turn/4`, called from `Aqua.Tape.finish/4`),
-  as the turn's root row says. Here, a claim whose turn will never start
-  ends `failed` with the reason: the schedule paused or deleted since its
-  claim, its person or athanor no longer standing, a line that does not
-  read, a thread or a turn refused for good, or a turn that ended before
-  it started its occurrence. A refusal that may pass (`:busy`, a peer
+  as the turn's root row says. A pause or a delete of the schedule ends
+  every claim of it not yet started itself, in its own transaction
+  (`Arca.CronSchedule.update/4`, `soft_delete/2`), so no claim read here
+  is of a stopped schedule, and a turn its line already opened is refused
+  at its admission. Here, a claim whose turn will never start
+  ends `failed` with the reason: its person or athanor no longer standing,
+  a line that does not read, a thread or a turn refused for good, or a
+  turn that ended before it started its occurrence. A refusal that may pass (`:busy`, a peer
   holding the thread, the store or the engine unavailable) waits for the
   next drain, and so does an athanor still being prepared.
 
@@ -88,6 +105,8 @@ defmodule Aqua.ScheduleTurns do
   @terminal ~w(completed failed cancelled uncertain)
   # Refusals no later drain changes: the claim ends failed with them.
   @for_good [
+    # The workspace thread a schedule names is gone.
+    :not_found,
     :archived,
     :denied,
     :not_member,
@@ -183,12 +202,13 @@ defmodule Aqua.ScheduleTurns do
       {:wait, :crashed}
   end
 
-  defp work(%{status: "active"} = claim) do
+  defp work(claim) do
     with {:ok, ctx} <- person(claim),
          {:ok, line} <- line(claim),
          {:ok, thread_id} <- thread(ctx, claim) do
       ctx
-      |> Runner.send_message(thread_id, line,
+      |> Runner.send_message(thread_id, Opus.schedule_fire_text(claim.maker, line),
+        standing: is_binary(claim.thread_id),
         client_id: client_id(claim),
         schedule: %{schedule_id: claim.schedule_id, occurrence_id: claim.id},
         payload: %{"schedule" => %{"id" => claim.schedule_id, "name" => claim.name}}
@@ -198,8 +218,6 @@ defmodule Aqua.ScheduleTurns do
       {:error, reason} -> refused(claim, reason)
     end
   end
-
-  defp work(%{status: status} = claim), do: ended(claim, "the schedule is #{status}")
 
   # One turn per claim: a send of the same claim answers the turn its
   # first send opened, and a claim the scheduler's recovery took over to
@@ -221,8 +239,10 @@ defmodule Aqua.ScheduleTurns do
 
   defp line(_claim), do: {:error, :no_line}
 
-  # The daily thread that already holds this claim's message, else the one
-  # current now.
+  # The workspace thread the schedule names; else the daily thread that
+  # already holds this claim's message, else the one current now.
+  defp thread(_ctx, %{thread_id: thread_id}) when is_binary(thread_id), do: {:ok, thread_id}
+
   defp thread(ctx, claim) do
     case Arca.ThreadStorage.daily_message(Sanctum.Context.actor(ctx), client_id(claim)) do
       {:ok, %{thread_id: thread_id}} ->
@@ -263,6 +283,11 @@ defmodule Aqua.ScheduleTurns do
   defp sent({:error, reason}, _ctx, _thread_id, claim), do: refused(claim, reason)
 
   defp refused(claim, :no_line), do: ended(claim, "the schedule holds no line for Aqua")
+
+  # The workspace thread the schedule names was archived since it was set:
+  # the fire lands nothing there and leaves it archived.
+  defp refused(claim, :thread_archived),
+    do: ended(claim, "its workspace thread was archived since the schedule was set")
 
   # Another message of the thread holds the occurrence's id: the fire's own
   # line can never land under it.

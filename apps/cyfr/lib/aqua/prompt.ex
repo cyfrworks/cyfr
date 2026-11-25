@@ -179,6 +179,12 @@ defmodule Aqua.Prompt do
               "`program.read` reads it again from the `next` an answer gave, `program.send` " <>
               "types on it, and `program.stop` stops it once you have what you need: a run " <>
               "ends with your turn anyway.\n" <>
+              "- To be woken later, make a schedule with `schedule.create` that says when and " <>
+              "for what: a line for Aqua (`reference` `agent:local.aqua`, `input` " <>
+              "`{\"line\": text}`) at one time (`at`) or by `cron_expression`. It fires in this " <>
+              "room as Aqua's turn, which hands the job back to whoever set it. In a daily " <>
+              "thread a wake due another day fires in that day's thread, so its line carries " <>
+              "what the job needs.\n" <>
               "- A call that fails: read why, adjust and try once more, never the same failing " <>
               "call twice. `setup_required` is answered by `request_setup`; " <>
               "`authorization_required` by one retry, then by saying the component is " <>
@@ -339,7 +345,9 @@ defmodule Aqua.Prompt do
       "\n\n---\n\n## Crew\n\nHand a job to one of these with `crew.ask` when it is what the " <>
         "member is good at. Each works it in a thread of its own under this one, with every " <>
         "tool you hold, and replies here when it is done, failed or stopped, or when it " <>
-        "needs the person; nothing waits for the reply.\n",
+        "needs the person; nothing waits for the reply. A schedule's line that opens " <>
+        "with \"<member> set this schedule:\" is that member's wake: hand it to that member " <>
+        "with `crew.ask`, its text as the task.\n",
       Enum.map(members, fn member ->
         [
           "- ",

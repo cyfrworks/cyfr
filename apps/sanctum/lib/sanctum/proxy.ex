@@ -68,8 +68,9 @@ defmodule Sanctum.Proxy do
 
   # The arguments a proxied call never carries to its server: the action
   # the gate routed on and the lineage the host stamps for its own
-  # records, which name internal executions, attempts, threads and calls.
-  @host_stamped ~w(action parent_execution_id root_execution_id attempt thread_id call_id parent_call_id)
+  # records, which name internal executions, attempts, threads and calls,
+  # and whether a page in Aqua's browser made the call.
+  @host_stamped ~w(action parent_execution_id root_execution_id attempt thread_id call_id parent_call_id called_by_page)
 
   @typedoc "The plane a proxied call is made from."
   @type plane :: :in_chain | :external
