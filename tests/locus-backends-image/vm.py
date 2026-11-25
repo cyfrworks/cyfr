@@ -61,9 +61,9 @@ KVM = "/dev/kvm"
 # The machines' folder, the guest volume's mount point, as the role table names it.
 GUEST_ROOT = ROLE["guest_root"]
 BOOT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-# The machines' folders, on the Locus container's /run/locus tmpfs, and the
-# uid a machine's VMM runs as (internal/vm's Root and MachineUID).
-MACHINES = "/run/locus/machines"
+# The machines' folders, on the Locus container's run directory's tmpfs,
+# and the uid a machine's VMM runs as (internal/vm's Root and MachineUID).
+MACHINES = RELEASE["run_dir"] + "/machines"
 MACHINE_UID = 30201
 DEVICE = re.compile(r"^" + re.escape(GUEST_ROOT) + r"/[0-9a-f]{64}\.sqfs$")
 # A session's churn: small objects made and dropped, freed in pieces
@@ -141,8 +141,8 @@ def vmm_confined(report, what):
     mounts = vmm.get("mounts") or []
     points = [m.get("point", "") for m in mounts]
     expect(KVM in points, f"{what}: the VMM's space has /dev/kvm", points)
-    expect(not any(p == KEPT_ROOT or p.startswith(KEPT_ROOT + "/") or p == "/var/lib/locus/homes" or
-                   p.startswith("/var/lib/locus/homes/") for p in points),
+    homes = RELEASE["home_root"]
+    expect(not any(p == KEPT_ROOT or p.startswith(KEPT_ROOT + "/") or p == homes or p.startswith(homes + "/") for p in points),
            f"{what}: the VMM's space holds nothing of the homes", points)
     guest = [p for p in points if p == GUEST_ROOT or p.startswith(GUEST_ROOT + "/")]
     expect(guest == [report.get("device")], f"{what}: of the guest volume the VMM's space holds its device alone", guest)
