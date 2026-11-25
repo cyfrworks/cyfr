@@ -424,8 +424,10 @@ type runningScreen struct {
 	address func() string
 	// offered is whether a page read meanwhile offered the screen's use.
 	offered bool
-	// readyURL is the chooser's address ready named.
+	// readyURL is the chooser's address ready named, and ready the whole
+	// message.
 	readyURL string
+	ready    map[string]any
 }
 
 // watchedPage is what a watched screen shows in these tests, whose CYFR
@@ -451,6 +453,7 @@ func startScreen(t *testing.T) *runningScreen {
 	})
 	ready := app.until("ready")
 	s.readyURL, _ = ready["url"].(string)
+	s.ready = ready
 	s.openBox(ready)
 	return s
 }
@@ -647,6 +650,20 @@ func TestScreenShell_AWatchThatCannotStartShowsWhy(t *testing.T) {
 }
 
 // A watch that starts working again gives the screen back its page.
+// The box's screen is ready with the rail's address and Update CYFR's, as
+// the app on a desktop is: its rail's foot opens Update CYFR there too.
+func TestScreenShell_IsReadyWithTheRailAndUpdateCYFR(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	screenPrograms(t, quietScreen())
+	s := startScreen(t)
+	rail, _ := s.ready["rail"].(string)
+	update, _ := s.ready["update"].(string)
+	if !strings.HasPrefix(rail, shell.Origin+"/rail/#read=") || !strings.HasPrefix(update, shell.Origin+"/update/#read=") {
+		t.Fatalf("the screen was ready with %v", s.ready)
+	}
+}
+
 func TestScreenShell_WatchesThatWorkAgainShowThePage(t *testing.T) {
 	screenProject(t)
 	screenCompositor(t, idletest.Options{})

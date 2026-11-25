@@ -37,8 +37,9 @@ function run(events, accountRoad = false) {
 const RAIL = "http://127.0.0.1:7340/rail/#read=cmVhZA"
 const UPDATE = "http://127.0.0.1:7340/update/#read=cmVhZA"
 const ready = {type: "ready", url: READY, message: {type: "ready", url: READY, rail: RAIL, update: UPDATE}}
-// The box's screen's ready: the chooser and the rail, and no Update CYFR.
-const boxReady = {type: "ready", url: READY, message: {type: "ready", url: READY, rail: RAIL}}
+// The box's screen's ready: the chooser, the rail and Update CYFR, as a
+// desktop's.
+const boxReady = ready
 // Begun by the document showing, unless `over` says another began it.
 const navigate = (over) => ({type: "navigate", window: "content", url: HOME + "/", target: "top", asker: "top", showing: READY,
   by: over.showing ?? READY, ...over})
@@ -390,12 +391,14 @@ test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by
     "the box's screen opens no Update CYFR, --updated or not")
 })
 
-// The box's screen is ready at the chooser with the rail and no Update
-// CYFR: it opens none, --updated or not, and a ready that names one ends it.
-test("the box's screen, ready with its rail, opens no Update CYFR, and a ready naming one ends it", () => {
+// The box's screen is ready at the chooser with the rail and Update CYFR's
+// address, as a desktop is: it opens none by itself, --updated or not,
+// and a ready that names none ends it there too.
+test("the box's screen, ready with its rail and Update CYFR, opens none by itself, and a ready naming none ends it", () => {
   const onBox = step(initial(false, "/home/ana/cyfr", true), boxReady)
   assert.ok(onBox.state.name === "chooser" && !onBox.do.some((e) => e.update), "the box's screen opens no Update CYFR, --updated or not")
-  assert.equal(step(initial(false, "/home/ana/cyfr"), ready).state.name, "ended", "a ready naming one ends it there")
+  const noUpdate = {type: "ready", url: READY, message: {type: "ready", url: READY, rail: RAIL}}
+  assert.equal(step(initial(false, "/home/ana/cyfr"), noUpdate).state.name, "ended", "a ready naming no Update CYFR ends it there")
 })
 
 test("Update CYFR's page loads nothing; its yes sends the offer it names, from its own top frame alone; its close is told to cyfr", () => {
@@ -752,9 +755,11 @@ test("on the box's screen the chooser sets nothing up and offers no passkey's ac
     for (const e of [boxReady, ...events]) s = step(s, e).state
     return s
   }
+  // Update CYFR and its yes are the box's only with a CYFR open, its
+  // device unlocked: on the chooser, its lock page, neither acts.
   const states = {"the chooser": screen([]), "a CYFR open": screen([home(), taken, openedAt(HOME)])}
   for (const [where, s] of Object.entries(states)) {
-    for (const act of ["pick", "external", "reopen", "update", "start"]) {
+    for (const act of where === "the chooser" ? ["pick", "external", "reopen", "update", "start"] : ["pick", "external", "reopen"]) {
       for (const {name, event, acted} of PRESSES[act]) {
         for (const by of ["http://127.0.0.1:7340/", CHOOSER_DOC, atWays, RAIL_DOC, UPDATE_DOC]) {
           const r = step(s, {...event, by, showing: by})
@@ -767,6 +772,22 @@ test("on the box's screen the chooser sets nothing up and offers no passkey's ac
     const setup = step(s, railed("/rail/setup"))
     assert.ok(setup.allow === false && setup.do.length === 0 && setup.state === s, `${where}: Set up on the rail did something`)
   }
+})
+
+// The box's screen opens Update CYFR from the rail's foot as a desktop
+// does, with a CYFR open, and its yes is sent to cyfr; a lock closes the
+// window in the one lock step, as it closes the content.
+test("on the box's screen Update CYFR opens with a CYFR open, its yes goes to cyfr, and a lock closes it", () => {
+  let s = initial(false, "/home/ana/cyfr")
+  for (const e of [boxReady, home(), taken, openedAt(HOME)]) s = step(s, e).state
+  const opened = step(s, railed("/rail/update"))
+  assert.deepEqual(opened.do, [{update: {url: UPDATE}}], "the rail's foot opens Update CYFR")
+  const yes = step(s, {...PRESSES.start[0].event, by: UPDATE_DOC, showing: UPDATE_DOC})
+  assert.ok(PRESSES.start[0].acted(yes), "its yes is sent to cyfr")
+  const locked = step(s, {type: "locked", message: {type: "locked"}})
+  assert.ok(locked.do.some((e) => e.unupdate) && locked.do.some((e) => e.close), `a lock closes Update CYFR with the content: ${JSON.stringify(locked.do)}`)
+  const desk = run([ready, home(), taken, openedAt(HOME)]).s
+  assert.ok(!step(desk, {type: "locked", message: {type: "locked"}}).do.some((e) => e.unupdate), "on a desktop a lock leaves its window to its page")
 })
 
 test("This box on the rail is the box's alone: on its screen it leaves the CYFR open and opens the chooser at This box", () => {

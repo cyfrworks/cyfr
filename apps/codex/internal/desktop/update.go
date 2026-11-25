@@ -226,7 +226,7 @@ func (s *Service) updatePage(w http.ResponseWriter, r *http.Request) {
 // for this computer's own CYFR, its change; it is not bounded by the read
 // that began it.
 func (s *Service) workOffer() {
-	if s.update.offer != nil || s.update.working || s.update.closed || s.Offer == nil {
+	if s.update.offer != nil || s.update.working || s.update.closed || s.Offer == nil || s.boxHeld() {
 		return
 	}
 	s.update.working = true
@@ -338,7 +338,7 @@ func (s *Service) StartUpdate(id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.update.offer
-	if p == nil || p.ID != id || p.Step == "" || s.update.started == id || s.update.running || s.BeginUpdate == nil || s.ended {
+	if p == nil || p.ID != id || p.Step == "" || s.update.started == id || s.update.running || s.BeginUpdate == nil || s.ended || s.boxHeld() {
 		return
 	}
 	s.update.started = id
@@ -366,6 +366,10 @@ func (s *Service) StartUpdate(id uint64) {
 		s.voidOffer()
 	}()
 }
+
+// boxHeld is a box's screen while it is locked, under s.mu: nothing of
+// Update CYFR is offered or started then.
+func (s *Service) boxHeld() bool { return s.Box != "" && s.boxLocked() }
 
 // updateRuns is whether an update runs, under s.mu, by the locks it
 // holds: cyfr update's, and for an offer of this computer's own CYFR the

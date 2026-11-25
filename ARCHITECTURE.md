@@ -115,8 +115,8 @@ The order describes dependencies, not a request's path. Codex shares no code wit
 
 - The `cyfr` binary, speaking MCP to Emissary with an API key alone, its operation catalog generated from the gate's table. It signs no one in and confirms nothing.
 - The machine: its access engine alone owns the deployment file's access settings and the stack's access services (§6.8, §6.9).
-- The device's shell, on the box's screen and in the CYFR app: the one place a protected device's key is unlocked (§9.3).
-- The CYFR app, which shows one home at a time beside the list of homes this computer keeps, each home's sign-in in its own store and each view kept to its home.
+- The device's shell, on the box's screen and in the app: the one place a protected device's key is unlocked (§9.3).
+- The CYFR app: one home shown beside this computer's list, each sign-in in its store, each view kept to its home; on Linux a root service installs only a newer release it verified.
 
 ### Locus: where untrusted things run
 
