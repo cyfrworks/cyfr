@@ -353,7 +353,7 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err != nil {
 		return engineFailure(err)
 	}
-	r := &restorer{updater: updater{ctx: ctx, out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
+	r := &restorer{updater: updater{ctx: ctx, command: "restore", out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
 	return r.run()
 }
 
@@ -408,7 +408,7 @@ func (r *restorer) run() error {
 	// the image's entrypoint, which hands the storage root to the image's
 	// user, and nothing after it until the put-back's writes runs a
 	// container or changes an owner.
-	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers, r.refuseUnwritableParts}
+	steps := []func() error{r.holdConfigFiles, r.freeNetworks, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers, r.refuseUnwritableParts}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {
@@ -495,6 +495,18 @@ func (r *restorer) holdConfigFiles() error {
 	return nil
 }
 
+// freeNetworks removes the networks the compose file in place declares and
+// the snapshot's does not (removeNetworks) before anything runs under the
+// snapshot's, so a network of its may take the address range one of them
+// holds, as an update that failed after its switch leaves the new release's.
+func (r *restorer) freeNetworks() error {
+	snapshot, err := os.ReadFile(r.snap.path("compose"))
+	if err != nil {
+		return err
+	}
+	return r.removeNetworks(r.held["docker-compose.yml"], snapshot, "docker-compose.yml declares and the snapshot's does not")
+}
+
 // withBarrier answers the dotenv text env with restoreBarrier set to the
 // snapshot through the engine's editor (access.EditEnv): its one
 // assignment, every other taken out, so no other line can set it empty,
@@ -569,7 +581,9 @@ func (r *restorer) putConfigFiles() error {
 	if err := writeDurable(".env", barred, 0600); err != nil {
 		return err
 	}
-	// From here every compose call runs under the snapshot's head.
+	// From here every compose call runs under the snapshot's head alone:
+	// the stopped stack's own profiles are its compose file's.
+	r.own, r.beside = nil, nil
 	if r.head, err = r.engine.Head(); err != nil {
 		return engineFailure(err)
 	}

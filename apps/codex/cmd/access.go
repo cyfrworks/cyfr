@@ -33,6 +33,7 @@ type stackEngine interface {
 	Docker() access.Docker
 	Redactor() *access.Redactor
 	ComposeArgs(ctx context.Context, h access.Head, args ...string) ([]string, error)
+	DeclaredProfiles(ctx context.Context) ([]string, error)
 	Head() (access.Head, error)
 	CheckStack(ctx context.Context) error
 	Status(ctx context.Context) (access.Status, error)

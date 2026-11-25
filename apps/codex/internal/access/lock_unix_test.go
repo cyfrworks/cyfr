@@ -359,7 +359,7 @@ func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
 			}
 			// The one read of every access mode's services names their
 			// profiles; nothing the home starts names any.
-			if !slices.Contains(c.Args, "config") || !slices.Contains(accessModeProfiles(), c.Args[i+1]) {
+			if !slices.Contains(c.Args, "config") || !slices.Contains(ModeProfiles(), c.Args[i+1]) {
 				t.Errorf("a compose call selects profile %s: %s", c.Args[i+1], c)
 			}
 		}
