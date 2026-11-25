@@ -213,20 +213,36 @@ defmodule Sanctum.Consent do
 
   @doc """
   Why the name-level `source_ref` has no profile a run could stand on,
-  once `profiles/2` lists none: `:revoked` when any default owner profile
-  of it was ever revoked by its person
-  (`Arca.ConsentStorage.revoked_by_person?/2`), since once a person has
-  said no to a component's default grant only that person's own consent
-  grants it again; `:no_grant` when nobody has granted it or its default
-  profiles were revoked only by removals. A store that could not answer is
-  `{:error, :unavailable}`, never a cause.
+  once `profiles/2` lists none, as a person is told it: `:revoked` when no
+  grant of it stands and the grant of it that ended last was revoked by
+  its person (`Arca.ConsentStorage.absence_cause/2`); `:no_grant` when one
+  stands (several owner profiles are an ambiguity, never told as
+  revoked), when the last to end was taken by a removal, or when nobody
+  ever granted it. It tells the present absence alone: whether CYFR may
+  grant a default again, which an old revocation of its person's refuses
+  whatever followed, is the walk's (`Sanctum.Consent.Bootstrap`, over
+  `Arca.ConsentStorage.revoked_by_person?/2`). Narrowed to
+  `{:profile, id}`, a grant a run pinned, it is that profile's cause
+  alone: `:revoked` only when its person revoked that very profile,
+  `:no_grant` when a removal took it or it stands. A store that could not
+  answer is `{:error, :unavailable}`, never a cause.
   """
-  @spec ungranted(Sanctum.Context.t(), String.t()) ::
+  @spec ungranted(Sanctum.Context.t(), String.t() | {:profile, String.t()}) ::
           {:ok, :no_grant | :revoked} | {:error, :unavailable | :no_athanor}
   def ungranted(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
-    case Arca.ConsentStorage.revoked_by_person?(Sanctum.Context.actor(ctx), source_ref) do
-      {:ok, true} -> {:ok, :revoked}
-      {:ok, false} -> {:ok, :no_grant}
+    case Arca.ConsentStorage.absence_cause(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, :person} -> {:ok, :revoked}
+      {:ok, _standing_removed_or_never} -> {:ok, :no_grant}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  def ungranted(%Sanctum.Context{} = ctx, {:profile, profile_id}) when is_binary(profile_id) do
+    case Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id) do
+      {:ok, %{status: "revoked", revoked_by: "person"}} -> {:ok, :revoked}
+      {:ok, _standing_or_removed} -> {:ok, :no_grant}
+      {:error, :not_found} -> {:ok, :no_grant}
       {:error, :no_athanor} -> {:error, :no_athanor}
       {:error, _unanswered} -> {:error, :unavailable}
     end

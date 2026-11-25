@@ -18,10 +18,9 @@ type Target struct {
 }
 
 // Current is what the head keeps from .env whatever the mode: the loopback
-// listener's port and the builds service's URL, empty when builds are off.
+// listener's port.
 type Current struct {
-	Port      int
-	BuildsURL string
+	Port int
 }
 
 // Join is a tailnet join's record: the machine's name and its stable node
@@ -47,7 +46,6 @@ var envKeys = []struct {
 }{
 	{"CADDY_ACME_EMAIL", func(h Head) string { return h.ACMEEmail }},
 	{"CYFR_HOST", func(h Head) string { return h.Host }},
-	{"CYFR_LOCUS_BUILDS_URL", func(h Head) string { return h.BuildsURL }},
 	{"CYFR_PORT", func(h Head) string { return strconv.Itoa(h.Port) }},
 	{"CYFR_PUBLIC_URL", func(h Head) string { return h.PublicURL }},
 	{"CYFR_ACCESS", func(h Head) string { return h.Mode }},
@@ -67,20 +65,16 @@ const (
 // is read without case; every other input is taken as given. An input that
 // is not UTF-8 is refused first, by the name it would be written under.
 func Derive(t Target, cur Current, join *Join) (Derivation, error) {
-	if key := unreadableInput(t, cur, join); key != "" {
+	if key := unreadableInput(t, join); key != "" {
 		return Derivation{}, refuse("access_setting_invalid", map[string]string{"key": key})
 	}
 	domain := strings.ToLower(strings.TrimSpace(t.Domain))
 	email := strings.TrimSpace(t.ACMEEmail)
-	buildsURL := strings.TrimSpace(cur.BuildsURL)
 	if t.Mode != ModeLocal && t.Mode != ModeTailnet && t.Mode != ModePublic {
 		return Derivation{}, refuse("access_unknown_mode", map[string]string{"value": t.Mode})
 	}
 	if cur.Port < 1 || cur.Port > 65535 {
 		return Derivation{}, refuse("access_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": strconv.Itoa(cur.Port)})
-	}
-	if buildsURL != "" && !BuildsURL(buildsURL) {
-		return Derivation{}, settingInvalid("CYFR_LOCUS_BUILDS_URL", buildsURL)
 	}
 	if t.Mode != ModePublic && domain != "" {
 		return Derivation{}, refuse("access_option_outside_mode", map[string]string{"option": "--domain", "mode": t.Mode})
@@ -88,7 +82,7 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 	if t.Mode != ModePublic && email != "" {
 		return Derivation{}, refuse("access_option_outside_mode", map[string]string{"option": "--acme-email", "mode": t.Mode})
 	}
-	h := Head{Mode: t.Mode, Port: cur.Port, BuildsURL: buildsURL}
+	h := Head{Mode: t.Mode, Port: cur.Port}
 	switch t.Mode {
 	case ModeLocal:
 		h.Host = "localhost"
@@ -115,7 +109,7 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 		}
 		h.Host, h.PublicURL, h.ACMEEmail = domain, "https://"+domain, email
 	}
-	h.Profiles = Profiles(h.Mode, h.BuildsURL)
+	h.Profiles = Profiles(h.Mode)
 
 	d := Derivation{Head: h, Assignments: map[string]string{}, Removals: []string{}}
 	for _, k := range envKeys {
@@ -134,7 +128,7 @@ func invalid(input, kind, rule string) *Refusal {
 
 // unreadableInput is the first name, in byte order, whose input is not
 // UTF-8, or "". Every refusal after it carries only UTF-8 text.
-func unreadableInput(t Target, cur Current, join *Join) string {
+func unreadableInput(t Target, join *Join) string {
 	var name, nodeID string
 	if join != nil {
 		name, nodeID = join.Name, join.NodeID
@@ -143,7 +137,6 @@ func unreadableInput(t Target, cur Current, join *Join) string {
 		{"CADDY_ACME_EMAIL", t.ACMEEmail},
 		{"CYFR_HOST", t.Domain},
 		{"CYFR_HOST", name},
-		{"CYFR_LOCUS_BUILDS_URL", cur.BuildsURL},
 		{"CYFR_ACCESS", t.Mode},
 		{"CYFR_TAILNET_NODE_ID", nodeID},
 	} {
@@ -198,7 +191,7 @@ type Boot struct {
 // accessKeys are every name the boot reads but the compose file's
 // assertion, in byte order: the order a source conflict is looked for.
 var accessKeys = []string{
-	"CADDY_ACME_EMAIL", "CYFR_BIND_ADDRESS", "CYFR_HOST", "CYFR_LOCUS_BUILDS_URL",
+	"CADDY_ACME_EMAIL", "CYFR_BIND_ADDRESS", "CYFR_HOST",
 	"CYFR_PORT", "CYFR_PROXY_BIND_ADDRESS", "CYFR_PROXY_PORT", "CYFR_PUBLIC_URL", "CYFR_ACCESS",
 	"CYFR_TAILNET_NODE_ID", "CYFR_TRUSTED_PROXY_CIDRS", "CYFR_TRUSTED_PROXY_HOPS",
 }
@@ -309,7 +302,7 @@ func ResolveBoot(in BootInput) (Boot, error) {
 // outside the mode, the port.
 func bootHead(mode string, get func(string) string) (Head, error) {
 	host, nodeID, publicURL := get("CYFR_HOST"), get("CYFR_TAILNET_NODE_ID"), get("CYFR_PUBLIC_URL")
-	email, buildsURL := get("CADDY_ACME_EMAIL"), get("CYFR_LOCUS_BUILDS_URL")
+	email := get("CADDY_ACME_EMAIL")
 
 	switch mode {
 	case ModeLocal:
@@ -342,15 +335,12 @@ func bootHead(mode string, get func(string) string) (Head, error) {
 	if err != nil {
 		return Head{}, err
 	}
-	if buildsURL != "" && !BuildsURL(buildsURL) {
-		return Head{}, settingInvalid("CYFR_LOCUS_BUILDS_URL", buildsURL)
-	}
 	if host == "" {
 		host = "localhost"
 	}
 	return Head{
 		Mode: mode, Host: host, NodeID: nodeID, PublicURL: publicURL, Port: p,
-		ACMEEmail: email, BuildsURL: buildsURL, Profiles: Profiles(mode, buildsURL),
+		ACMEEmail: email, Profiles: Profiles(mode),
 	}, nil
 }
 

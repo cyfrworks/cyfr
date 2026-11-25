@@ -7,11 +7,13 @@ package guard
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -191,10 +193,10 @@ func TestTheGuardAnswersTheVectors(t *testing.T) {
 		if got.Type == TypeRefused || got.SpawnID != testSpawn {
 			t.Fatalf("request %d %s answered %s", i, req.Message, out)
 		}
-		if got.Type == TypeAdmitted && i == 0 {
-			// The second admit of the vectors names the same spawn: the
-			// first is cleared so it is answered as a new one.
-			if c := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); c.Type != TypeCleared {
+		if got.Type == TypeAdmitted && i+1 < len(v.Requests) && !strings.Contains(string(v.Requests[i+1].Message), `"clear"`) {
+			// The next admit of the vectors names the same spawn: this one
+			// is cleared so the next is answered as a new one.
+			if c := r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); c.Type != TypeCleared {
 				t.Fatalf("clear: %+v", c)
 			}
 		}
@@ -211,14 +213,21 @@ func TestTheGuardAnswersTheVectors(t *testing.T) {
 	}
 	// A second admit of a held spawn, and a clear of a spawn this
 	// connection holds no route of, are the vectors' refusals.
-	admit := []byte(`{"v":2,"type":"admit","spawn_id":"` + testSpawn + `","reach":"island"}`)
+	admit := []byte(`{"v":3,"type":"admit","spawn_id":"` + testSpawn + `","reach":"island"}`)
 	if got := r.send(t, admit, three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
+	}
+	role := []byte(`{"v":3,"type":"admit","spawn_id":"11112233445566778899aabbccddeeff","reach":"role","port":4200,"private":true}`)
+	if got := r.send(t, role, three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("a role admit: %+v", got)
 	}
 	for _, c := range []struct {
 		packet []byte
 		files  []*os.File
-	}{{admit, three(t)}, {[]byte(`{"v":2,"type":"clear","spawn_id":"ffeeddccbbaa99887766554433221100"}`), nil}} {
+	}{{admit, three(t)}, {[]byte(`{"v":3,"type":"clear","spawn_id":"ffeeddccbbaa99887766554433221100"}`), nil},
+		// A role admit of a port another route holds, refused as the
+		// vectors' answer says.
+		{[]byte(`{"v":3,"type":"admit","spawn_id":"ffeeddccbbaa99887766554433221100","reach":"role","port":4200,"private":false}`), three(t)}} {
 		got := r.send(t, c.packet, c.files...)
 		if got.SpawnID == "ffeeddccbbaa99887766554433221100" {
 			got.SpawnID = testSpawn
@@ -243,10 +252,10 @@ func TestARouteIsAdmittedWholeAndClearedWhole(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
 	admit := func(id string) Message {
-		return r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
+		return r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
 	}
 	clear := func(id string) Message {
-		return r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+id+`"}`))
+		return r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+id+`"}`))
 	}
 	a, b := testSpawn, "ffeeddccbbaa99887766554433221100"
 	if got := admit(a); got.Type != TypeAdmitted {
@@ -276,7 +285,7 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
 	ts.maker.setFail("rules")
-	got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...)
+	got := r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...)
 	if got.Type != TypeRefused || got.SpawnID != testSpawn {
 		t.Fatalf("answered %+v", got)
 	}
@@ -284,13 +293,13 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 		t.Fatalf("steps %v", steps)
 	}
 	ts.maker.setFail("unpair")
-	if got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+	if got := r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
 	// A route whose pair cannot be removed is refused cleared, keeps its
 	// slot and is the guard's to try again; a clear asked again answers
 	// cleared once it is gone.
-	if got := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
+	if got := r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
 		t.Fatalf("a clear whose removal failed answered %+v", got)
 	}
 	ts.s.mu.Lock()
@@ -307,7 +316,7 @@ func TestARefusedRouteLeavesNothing(t *testing.T) {
 		t.Fatal("a route whose pair still cannot be removed lost its slot")
 	}
 	ts.maker.setFail()
-	if got := r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
+	if got := r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
 		t.Fatalf("a clear asked again once the route can go answered %+v", got)
 	}
 	ts.s.mu.Lock()
@@ -332,7 +341,7 @@ func TestARouteThatCannotBeWithdrawnEndsTheGuardPastItsBound(t *testing.T) {
 		}
 	}
 	r := dialRaw(t, ts.path)
-	if got := r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+	if got := r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+testSpawn+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
 	}
 	ts.maker.setFail("unpair")
@@ -365,9 +374,9 @@ func TestAClearOfARouteTheRetryWithdrewTouchesNothing(t *testing.T) {
 	ts := startServer(t, "net:[1]")
 	r := dialRaw(t, ts.path)
 	admit := func(id string) Message {
-		return r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
+		return r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+id+`","reach":"island"}`), three(t)...)
 	}
-	clear := func(id string) Message { return r.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"`+id+`"}`)) }
+	clear := func(id string) Message { return r.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+id+`"}`)) }
 	first, later := testSpawn, "ffeeddccbbaa99887766554433221100"
 	if got := admit(first); got.Type != TypeAdmitted {
 		t.Fatalf("admit: %+v", got)
@@ -441,11 +450,11 @@ func TestALostConnectionWithdrawsItsRoutesAlone(t *testing.T) {
 		r  *raw
 		id string
 	}{{mine, testSpawn}, {mine, "11112233445566778899aabbccddeeff"}, {theirs, "ffeeddccbbaa99887766554433221100"}} {
-		if got := c.r.send(t, []byte(`{"v":2,"type":"admit","spawn_id":"`+c.id+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
+		if got := c.r.send(t, []byte(`{"v":3,"type":"admit","spawn_id":"`+c.id+`","reach":"island"}`), three(t)...); got.Type != TypeAdmitted {
 			t.Fatalf("admit %s: %+v", c.id, got)
 		}
 	}
-	if got := mine.send(t, []byte(`{"v":2,"type":"clear","spawn_id":"11112233445566778899aabbccddeeff"}`)); got.Type != TypeCleared {
+	if got := mine.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"11112233445566778899aabbccddeeff"}`)); got.Type != TypeCleared {
 		t.Fatalf("clear: %+v", got)
 	}
 	before := len(ts.maker.taken())
@@ -501,4 +510,102 @@ func three(t *testing.T) []*os.File {
 	t.Helper()
 	netns, udp, tcp := descriptors(t)
 	return []*os.File{netns, udp, tcp}
+}
+
+// One role per port: a role admit naming a port a route holds is refused,
+// from any connection, and makes nothing; the port is free again once that
+// route is wholly withdrawn, and not before.
+func TestARolesPortIsOneRoutesAtATime(t *testing.T) {
+	ts := startServer(t, "net:[1]")
+	mine, theirs := dialRaw(t, ts.path), dialRaw(t, ts.path)
+	role := func(id string, port int, private bool) []byte {
+		return []byte(fmt.Sprintf(`{"v":3,"type":"admit","spawn_id":%q,"reach":"role","port":%d,"private":%t}`, id, port, private))
+	}
+	other := "ffeeddccbbaa99887766554433221100"
+	if got := mine.send(t, role(testSpawn, 4200, true), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("a role admit: %+v", got)
+	}
+	before := len(ts.maker.taken())
+	for _, c := range []*raw{mine, theirs} {
+		got := c.send(t, role(other, 4200, false), three(t)...)
+		if got.Type != TypeRefused || got.Reason != "the guard could not make the route: port 4200 is another route's" {
+			t.Fatalf("a second role admit of a held port answered %+v", got)
+		}
+	}
+	if steps := ts.maker.taken()[before:]; len(steps) != 0 {
+		t.Fatalf("a refused role admit made %v", steps)
+	}
+	if got := theirs.send(t, role(other, 4101, false), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("a role admit of another port: %+v", got)
+	}
+	// A route whose removal fails keeps its port as it keeps its slot.
+	ts.maker.setFail("unpair")
+	if got := mine.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeRefused {
+		t.Fatalf("a clear whose removal failed answered %+v", got)
+	}
+	if got := theirs.send(t, role("22222233445566778899aabbccddeeff", 4200, false), three(t)...); got.Type != TypeRefused {
+		t.Fatalf("the port of a route not wholly withdrawn was given again: %+v", got)
+	}
+	ts.maker.setFail()
+	if got := mine.send(t, []byte(`{"v":3,"type":"clear","spawn_id":"`+testSpawn+`"}`)); got.Type != TypeCleared {
+		t.Fatalf("the clear asked again: %+v", got)
+	}
+	if got := theirs.send(t, role("22222233445566778899aabbccddeeff", 4200, false), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("the port of a withdrawn route is not given again: %+v", got)
+	}
+	// A connection's end frees the ports of the routes it made.
+	theirs.conn.Close()
+	ts.waitEnded(t)
+	if got := mine.send(t, role(other, 4101, true), three(t)...); got.Type != TypeAdmitted {
+		t.Fatalf("the port of a lost connection's route is not given again: %+v", got)
+	}
+}
+
+// Each reach reaches the guard's script as the route's arguments: a role's
+// port, and `private` for a private one alone.
+func TestARoutesRulesNameItsReach(t *testing.T) {
+	var got [][]string
+	k := kernelRoutes{apply: func(args ...string) error { got = append(got, args); return nil }}
+	gateway, inner := slotAddresses(netip.MustParsePrefix("10.213.0.0/16"), 3)
+	for _, r := range []*route{
+		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachIsland},
+		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachHosts, addresses: []string{"1.2.3.4", "2606:4700::1111"}},
+		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachRole, port: 4200, private: true},
+		{slot: 3, gateway: gateway, inner: inner, mark: 7, reach: ReachRole, port: 4101},
+	} {
+		if err := k.rules(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := [][]string{
+		{"route", "sp3", "10.213.0.14", "7", "island"},
+		{"route", "sp3", "10.213.0.14", "7", "hosts", "1.2.3.4", "2606:4700::1111"},
+		{"route", "sp3", "10.213.0.14", "7", "role", "4200", "private"},
+		{"route", "sp3", "10.213.0.14", "7", "role", "4101"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the script's arguments %q, want %q", got, want)
+	}
+}
+
+// A withdrawn route forgets every connection of its address: one its space
+// opened (the address the original source) and one made into it (the
+// address the reply's source, a role's forwarded connection).
+func TestADumpFindsTheConnectionsOfAnAddressEitherWay(t *testing.T) {
+	addr := netip.MustParseAddr("10.213.0.2")
+	tuple := func(kind uint16, src string) []byte {
+		ip := rtattr(nil, ctaIPv4Src, netip.MustParseAddr(src).AsSlice())
+		return rtattr(nil, kind|unix.NLA_F_NESTED, rtattr(nil, ctaTupleIP|unix.NLA_F_NESTED, ip))
+	}
+	entry := func(orig, reply string) syscall.NetlinkMessage {
+		body := append(make([]byte, 4), tuple(ctaTupleOrig, orig)...)
+		return syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: nfnlSubsysCtnetlink << 8}, Data: append(body, tuple(2, reply)...)}
+	}
+	done := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: syscall.NLMSG_DONE}}
+	found, end, _, err := parseDump([]syscall.NetlinkMessage{
+		entry("10.213.0.2", "1.1.1.1"), entry("172.18.0.5", "10.213.0.2"), entry("172.18.0.5", "10.213.0.6"), done,
+	}, addr)
+	if err != nil || !end || len(found) != 2 {
+		t.Fatalf("found %d entries of %s (%t %v), want the two it is a party to", len(found), addr, end, err)
+	}
 }

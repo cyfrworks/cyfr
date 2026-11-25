@@ -4,7 +4,7 @@
 defmodule Prima.BuilderProtocol do
   @moduledoc """
   The wire between CYFR's build client (`Compendium.Builds.Client`, reached
-  through `CYFR_LOCUS_BUILDS_URL` and `CYFR_LOCUS_BUILDS_KEY`) and the
+  through `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BACKENDS_URL`) and the
   builder Locus serves (`LOCUS_BUILDS_*`, `Locus.Config`): the shapes each
   end writes and reads, the bounds each holds the other to, and how a
   request is authenticated. Data and codec only — no process and no HTTP

@@ -30,8 +30,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   # set.
   @access_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
                  CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
-                 CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS
-                 CYFR_LOCUS_BUILDS_URL)
+                 CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS)
 
   # Enough for the prod branch to reach the database section; everything else
   # has a default or is gated behind a knob this test does not set. A local
@@ -404,11 +403,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         {key, if(overrides?, do: process[key])}
       end
 
-    # A builds URL boots beside its key.
-    builds_key =
-      if process["CYFR_LOCUS_BUILDS_URL"], do: Base.encode16(:crypto.strong_rand_bytes(32))
-
-    with_env(Map.put(env, "CYFR_LOCUS_BUILDS_KEY", builds_key), fun)
+    with_env(env, fun)
   end
 
   defp address(text) do
@@ -759,14 +754,14 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
       with_env(
         %{
-          "CYFR_LOCUS_BACKENDS_URL" => "http://locus-backends:4101/",
+          "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101/",
           "CYFR_LOCUS_BACKENDS_KEY" => Base.encode16(@backends_key),
           "CYFR_LOCUS_BACKENDS_LEASE_MS" => "5000",
           "CYFR_LOCUS_BACKENDS_IDLE_MS" => "600000"
         },
         fn ->
           cyfr = read_prod_config!()[:cyfr]
-          assert cyfr[:locus_backends_url] == "http://locus-backends:4101"
+          assert cyfr[:locus_backends_url] == "http://locus:4101"
           assert cyfr[:locus_backends_key] == @backends_key
           assert {"locus_backends_lease_ms", 5_000} in cyfr[:deployment_pinned]
           assert {"locus_backends_idle_ms", 600_000} in cyfr[:deployment_pinned]
@@ -779,8 +774,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       hex = Base.encode16(@backends_key, case: :lower)
 
       for {key, bad} <- [
-            {"CYFR_LOCUS_BACKENDS_URL", "locus-backends:4101"},
-            {"CYFR_LOCUS_BACKENDS_URL", "http://locus-backends:4101/mcp"},
+            {"CYFR_LOCUS_BACKENDS_URL", "locus:4101"},
+            {"CYFR_LOCUS_BACKENDS_URL", "http://locus:4101/mcp"},
             {"CYFR_LOCUS_BACKENDS_KEY", String.slice(hex, 0..62)},
             {"CYFR_LOCUS_BACKENDS_LEASE_MS", "999"},
             {"CYFR_LOCUS_BACKENDS_LEASE_MS", "30s"},
@@ -797,7 +792,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "the Locus builds service" do
+  describe "Locus's builds role" do
     test "its two keys are declared by config/runtime.exs alone and read through their accessors alone" do
       for key <- ~w(locus_builds_url locus_builds_key) do
         declared =
@@ -820,43 +815,43 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     @builds_key :binary.copy(<<0xB1>>, 32)
 
-    test "neither variable set: this server builds nothing" do
-      with_env(%{"CYFR_LOCUS_BUILDS_URL" => nil, "CYFR_LOCUS_BUILDS_KEY" => nil}, fn ->
-        cyfr = read_prod_config!()[:cyfr]
-        assert cyfr[:locus_builds_url] == nil
-        assert cyfr[:locus_builds_key] == nil
-      end)
+    test "no key: this server builds nothing, whatever the backends URL" do
+      with_env(
+        %{"CYFR_LOCUS_BUILDS_KEY" => nil, "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101"},
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+          assert cyfr[:locus_builds_url] == nil
+          assert cyfr[:locus_builds_key] == nil
+        end
+      )
     end
 
-    test "both set: the URL without its trailing slash, and the key's 32 bytes" do
+    test "the key set: the builds role beside the backends, at its port, and the key's 32 bytes" do
       with_env(
         %{
-          "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100/",
+          "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101/",
           "CYFR_LOCUS_BUILDS_KEY" => Base.encode16(@builds_key)
         },
         fn ->
           cyfr = read_prod_config!()[:cyfr]
-          assert cyfr[:locus_builds_url] == "http://locus-builds:4100"
+          assert cyfr[:locus_builds_url] == "http://locus:#{Prima.LocusRoles.role!(:builds).port}"
           assert cyfr[:locus_builds_key] == @builds_key
         end
       )
     end
 
-    test "one without the other, or a malformed value, refuses the boot by name and never echoes the key" do
+    test "the key without the backends URL, or a malformed key, refuses the boot by name and never echoes the key" do
       hex = Base.encode16(@builds_key, case: :lower)
 
       for {env, named} <- [
-            {%{"CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100"}, "CYFR_LOCUS_BUILDS_KEY"},
-            {%{"CYFR_LOCUS_BUILDS_KEY" => hex}, "CYFR_LOCUS_BUILDS_URL"},
-            {%{"CYFR_LOCUS_BUILDS_URL" => "locus-builds:4100", "CYFR_LOCUS_BUILDS_KEY" => hex},
-             "CYFR_LOCUS_BUILDS_URL"},
+            {%{"CYFR_LOCUS_BUILDS_KEY" => hex}, "CYFR_LOCUS_BACKENDS_URL"},
             {%{
-               "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100",
+               "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101",
                "CYFR_LOCUS_BUILDS_KEY" => String.slice(hex, 0..62)
              }, "CYFR_LOCUS_BUILDS_KEY"}
           ] do
         with_env(
-          Map.merge(%{"CYFR_LOCUS_BUILDS_URL" => nil, "CYFR_LOCUS_BUILDS_KEY" => nil}, env),
+          Map.merge(%{"CYFR_LOCUS_BACKENDS_URL" => nil, "CYFR_LOCUS_BUILDS_KEY" => nil}, env),
           fn ->
             error = assert_raise RuntimeError, fn -> read_prod_config!() end
             message = Exception.message(error)
@@ -1026,7 +1021,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       with_env(
         %{
           "CYFR_LOCUS_RUNTIME_WORKERS" =>
-            "wrk_locus=http://locus-runtime:4200, wrk_b=https://b.internal/",
+            "wrk_locus=http://locus:4200, wrk_b=https://b.internal/",
           "CYFR_HOST_API_BIND" => "0.0.0.0",
           "CYFR_HOST_API_PORT" => "4301",
           "CYFR_HOST_API_URL" => "http://cyfr-1:4301"
@@ -1035,7 +1030,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           cyfr = read_prod_config!()[:cyfr]
 
           assert cyfr[:locus_runtime_workers] == [
-                   %{id: "wrk_locus", url: "http://locus-runtime:4200", components: nil},
+                   %{id: "wrk_locus", url: "http://locus:4200", components: nil},
                    %{id: "wrk_b", url: "https://b.internal", components: nil}
                  ]
 
@@ -1088,8 +1083,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a malformed worker entry, address or port refuses the boot by name" do
       for {var, value} <- [
-            {"CYFR_LOCUS_RUNTIME_WORKERS", "runtime=http://locus-runtime:4200"},
-            {"CYFR_LOCUS_RUNTIME_WORKERS", "wrk_locus=locus-runtime:4200"},
+            {"CYFR_LOCUS_RUNTIME_WORKERS", "runtime=http://locus:4200"},
+            {"CYFR_LOCUS_RUNTIME_WORKERS", "wrk_locus=locus:4200"},
             {"CYFR_HOST_API_BIND", "cyfr"},
             {"CYFR_HOST_API_PORT", "65536"}
           ] do

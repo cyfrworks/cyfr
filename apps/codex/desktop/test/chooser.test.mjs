@@ -38,7 +38,7 @@ const ROAD = "#road=passkey"
 // its requests, so what the page stores, sends and names is recorded
 // (stored, bodies, headers) to show none of it is one.
 async function chooser(notice, state, connected = OPEN, hash = "#road=words" + (notice ? `&notice=${notice}` : ""),
-  {type = "navigate", saved = null, picked = {}, docker = [], setup = {}} = {}) {
+  {type = "navigate", saved = null, picked = {}, docker = [], setup = {}, refused = {}} = {}) {
   const elements = new Map()
   for (const [tag, id] of page.matchAll(/<[a-z0-9]+\b[^>]*\bid="([a-z]+)"[^>]*>/g)) {
     const listeners = {}
@@ -51,7 +51,10 @@ async function chooser(notice, state, connected = OPEN, hash = "#road=words" + (
   went.stored = stored
   went.bodies = []
   went.headers = []
+  // The page's timers, run only as a test says (wait).
+  went.timers = []
   vm.runInNewContext(script, {
+    setTimeout: (f, ms) => { went.timers.push({f, ms}) },
     URLSearchParams,
     document: {getElementById: (id) => elements.get(id)},
     sessionStorage: {getItem: (k) => stored.get(k) ?? null, setItem: (k, v) => stored.set(k, v)},
@@ -66,7 +69,11 @@ async function chooser(notice, state, connected = OPEN, hash = "#road=words" + (
       // The epoch the page was shown in, which every request carries.
       went.epochs = [...(went.epochs ?? []), epoch]
       if (path !== "/bootstrap/state") went.asked.push([path, body])
-      return {ok: true, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : path === "/bootstrap/docker" ? docker.shift() : setup[path] ? setup[path].shift() : connected)}
+      // cyfr's refusals, `refused[path]` answers in turn (a status each)
+      // before it answers OK.
+      const status = refused[path]?.shift()
+      if (status) return {ok: false, status, json: async () => ({})}
+      return {ok: true, status: 200, json: async () => (path === "/bootstrap/state" ? state : path === "/bootstrap/folder" ? picked : path === "/bootstrap/docker" ? docker.shift() : setup[path] ? setup[path].shift() : connected)}
     }
   })
   await settled()
@@ -74,6 +81,14 @@ async function chooser(notice, state, connected = OPEN, hash = "#road=words" + (
 }
 
 const settled = () => new Promise((resolve) => setImmediate(resolve))
+// The page's next timer run, after the time it waits; null with none.
+async function wait(went) {
+  const t = went.timers.shift()
+  if (!t) return null
+  t.f()
+  await settled()
+  return t.ms
+}
 // The chooser that `went` showed, reloaded.
 const reload = (went) => chooser("", OPEN, OPEN, new URL(went.address, "http://127.0.0.1:7340").hash,
   {type: "reload", saved: went.entry})
@@ -233,16 +248,21 @@ test("a CYFR selected last that does not open says why, and Try again presses it
 
 // A proposal whose route main could not set comes back as main's word,
 // naming that CYFR: the chooser says why and offers it again, pressing
-// nothing by itself, the CYFR selected last included.
+// nothing by itself, the CYFR selected last included. On the box's screen
+// too, This box's first opening among them, which the service takes as a
+// press of This box (internal/desktop
+// TestTryAgainOnThisBoxsFirstOpeningPressesThisBox).
 test("a CYFR whose route could not be set is said, and Try again presses it", async () => {
   const OTHER = "https://other.example"
-  const {$, went} = await chooser("", {cyfr: OTHER, resume: OTHER}, OPEN, `#road=words&notice=unrouted&retry=${encodeURIComponent(HOME)}`)
-  assert.equal($("notice").textContent, UNROUTED_WORDS)
-  assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], "Connect and Try again")
-  assert.deepEqual(went.asked, [], "nothing by itself")
-  $("reopen").onclick()
-  await settled()
-  assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]])
+  for (const box of ["", "&box=1"]) {
+    const {$, went} = await chooser("", {cyfr: OTHER, resume: OTHER}, OPEN, `#road=words${box}&notice=unrouted&retry=${encodeURIComponent(HOME)}`)
+    assert.equal($("notice").textContent, UNROUTED_WORDS, box)
+    assert.deepEqual([$("choose").hidden, $("reopen").hidden], [false, false], `${box}: Connect and Try again`)
+    assert.deepEqual(went.asked, [], `${box}: nothing by itself`)
+    $("reopen").onclick()
+    await settled()
+    assert.deepEqual(went.asked, [["/bootstrap/connect", {address: HOME, kept: true}]], box)
+  }
 })
 
 test("a Connect the person makes on the passkey road leaves the opening to main", async () => {
@@ -630,4 +650,42 @@ test("a setup done says so, and offers Open CYFR", async () => {
   const {$} = await chooser("", {folder: "/home/ada/cyfr", ...done}, {}, "#road=words", {})
   assert.equal($("notice").textContent, "CYFR is set up in /home/ada/cyfr and started.")
   assert.equal($("go").hidden, false, "Open CYFR is offered")
+})
+
+// The notice of a page cyfr refuses: one main gives no run token.
+const NOT_OWN = "This page is not the app's own. Quit the app and open it again."
+
+test("the first read of the state, refused for want of the run token, is asked again, and the chooser shows its ways with no notice", async () => {
+  const {$, went} = await chooser("", OPEN, OPEN, ROAD, {refused: {"/bootstrap/state": [403]}})
+  assert.deepEqual([went.bodies.length, $("notice").textContent, $("road").hidden], [1, "", true], "refused, it says nothing yet")
+  assert.equal(await wait(went), 125)
+  assert.equal(went.bodies.length, 2, "asked again")
+  assert.equal($("notice").textContent, "")
+  assert.deepEqual([$("road").hidden, $("passkey").hidden, $("either").hidden], [false, false, false], "both ways on")
+  assert.deepEqual(went.timers, [], "and nothing more is asked")
+})
+
+test("a page cyfr refuses every time says it is not the app's own once its asking is up, under two seconds, and not before", async () => {
+  const {$, went} = await chooser("", OPEN, OPEN, ROAD, {refused: {"/bootstrap/state": Array(9).fill(403)}})
+  const waited = []
+  for (let ms; (ms = await wait(went)) !== null;) {
+    waited.push(ms)
+    if (went.timers.length) assert.equal($("notice").textContent, "", `nothing said after ${waited.join("+")} ms`)
+  }
+  assert.deepEqual(waited, [125, 250, 500, 1000])
+  assert.ok(waited.reduce((a, b) => a + b) < 2000)
+  assert.equal(went.bodies.length, 5, "the state read five times")
+  assert.equal($("notice").textContent, NOT_OWN)
+  assert.deepEqual([$("choose").hidden, $("road").hidden], [false, true], "and no way on")
+})
+
+test("nothing else is asked again: the first read refused otherwise, and a refused press, say so at once", async () => {
+  for (const status of [503, 421, 400]) {
+    const {$, went} = await chooser("", OPEN, OPEN, ROAD, {refused: {"/bootstrap/state": [status]}})
+    assert.deepEqual([went.bodies.length, went.timers, $("notice").textContent], [1, [], NOT_OWN], String(status))
+  }
+  const {$, went} = await chooser("", OPEN, OPEN, ROAD, {refused: {"/bootstrap/connect": [403]}})
+  $("passkey").onclick()
+  await settled()
+  assert.deepEqual([went.asked.length, went.timers, went.pressed, $("notice").textContent], [1, [], [], NOT_OWN], "a press")
 })

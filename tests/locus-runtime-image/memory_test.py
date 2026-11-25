@@ -104,7 +104,7 @@ class ReleaseIdentity(unittest.TestCase):
 class ProcessProbe(unittest.TestCase):
     def probe(self, returncode, stdout):
         with mock.patch.object(memory, "run", lambda *args, **kwargs: answer(returncode, stdout)):
-            return memory.process_alive("cyfr-locus-runtime-1", 4242)
+            return memory.process_alive("cyfr-locus-1", 4242)
 
     def test_a_process_the_probe_finds_running_is_alive(self):
         self.assertTrue(self.probe(0, "alive\n"))
@@ -128,9 +128,10 @@ class ReadGroup(unittest.TestCase):
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root)
         fs = os.path.join(root, "fs")
-        os.makedirs(os.path.join(fs, f"keeper-{UID}", "bound"))
+        role = os.path.basename(memory.ROLE_GROUP)
+        os.makedirs(os.path.join(fs, role, f"keeper-{UID}", "bound"))
         for name, value in self.FIELDS.items():
-            with open(os.path.join(fs, f"keeper-{UID}", "bound", name), "w") as f:
+            with open(os.path.join(fs, role, f"keeper-{UID}", "bound", name), "w") as f:
                 f.write(value + "\n")
         bindir = os.path.join(root, "bin")
         os.makedirs(bindir)

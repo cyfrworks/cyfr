@@ -214,9 +214,9 @@ defmodule Prima.EnvValueTest do
             "http://u:p@builder"
           ] do
         assert {:error, message} =
-                 EnvValue.url(env(%{"CYFR_LOCUS_BUILDS_URL" => bad}), "CYFR_LOCUS_BUILDS_URL")
+                 EnvValue.url(env(%{"CYFR_LOCUS_BACKENDS_URL" => bad}), "CYFR_LOCUS_BACKENDS_URL")
 
-        assert message =~ "CYFR_LOCUS_BUILDS_URL"
+        assert message =~ "CYFR_LOCUS_BACKENDS_URL"
         assert message =~ "http or https URL with a host and no path"
       end
     end

@@ -38,15 +38,15 @@ missing or wrong header fails CI.
 
 `scripts/dev-stack.sh`, from the checkout, runs CYFR from source the way an
 install runs it: Prism, the server and live reload from `mix phx.server`,
-the runtime, the backends service (stdio MCP servers) and the builds
-service in their containers under `cyfr-locus`, each with the shipped
-security options and its egress guard, run from this tree's Locus image,
+and Locus with its runtime, builds and backends (stdio MCP servers) roles
+under `cyfr-locus`, with the shipped security options and its egress
+guard, run from this tree's Locus image,
 and a cyfr.run of its own on this machine as its registry and account
 service. Besides the setup the next section names (the pinned
 `wasm-tools`, the prebuilt binaries and the tailwind CLI), it needs Docker
 with its compose plugin, `python3`, `openssl`, a host that allows
-unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime`
-service says why), on a host with AppArmor this checkout's profile
+unprivileged user namespaces (`docker-compose.yml`'s `locus` service
+says why), on a host with AppArmor this checkout's profile
 `apps/codex/internal/apparmor/cyfr-locus` loaded under the name the file
 `name` beside it holds (the loop refuses before anything starts
 otherwise, naming the one command, and again after a change to that
@@ -121,7 +121,7 @@ is done:
 into it what a `mix` boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the
 runtime root and the backends key, minted as `cyfr init` mints them. Later
 runs keep every value. The builds key, which a `mix` boot refuses without
-the builds URL only the stack sets, is minted for each run unless `.env`
+the backends' URL only the stack sets, is minted for each run unless `.env`
 sets one. It then builds the tree's Locus image with `scripts/image.sh`
 when the host does not hold it already (every worktree at the same inputs
 shares one), starts the containers, and runs `mix phx.server` in the
@@ -297,7 +297,9 @@ same worktree refuses, naming the run that holds it.
   package: the app as the box's screen (`--screen-project`) under Ubuntu
   26.04's labwc in a container, beside the screen's keyboard and watches,
   with no CYFR: its page painted in one frameless window that covers the
-  output, a watch lost hiding it, `cyfr` or the app killed and started
+  output, the list of CYFRs at its left, a switch on that list closing
+  the window as a lock does, a watch lost hiding it, `cyfr` or the app
+  killed and started
   again locked, a project not named explicitly refused. It needs Docker
   and binds no port of the machine.
 
@@ -315,7 +317,10 @@ same worktree refuses, naming the run that holds it.
   names (its own or another account service, or one requiring a company
   sign-in) from the run's app image of the same architecture. Run here, it needs
   127.0.0.1:7340 free on this machine for its whole run, so not beside
-  another such proof or the native smoke, which binds that port on purpose.
+  another such proof or the native smoke, which binds that port on purpose. Its
+  last step, the box's screen with two CYFRs (`tests/desktop-proof/box/box.sh`),
+  is given the machine's Docker socket and runs on GitHub's disposable
+  runners alone.
   The Go tests do not: each gives the commands that serve it a port of its
   own.
 

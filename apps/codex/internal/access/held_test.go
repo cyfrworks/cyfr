@@ -25,7 +25,7 @@ func TestAStartBesideAnotherCYFRSaysThisComputerHasOne(t *testing.T) {
 	}
 	stack := func(project string) []string {
 		return []string{network(project, "default", "172.16.230.0/24"), network(project, "edge", "172.16.234.0/24"),
-			network(project, "locus-runtime", "172.16.231.0/24"), network(project, "locus-builds", "172.20.0.0/16")}
+			network(project, "locus", "172.16.231.0/24")}
 	}
 	start := func(t *testing.T, networks []string, folders map[string]string) string {
 		h := newHome(t)
@@ -76,7 +76,7 @@ func TestAStartBesideAnotherCYFRSaysThisComputerHasOne(t *testing.T) {
 		{"a CYFR stopped, its project named", "cyfr up: the stack did not start: this computer already has a CYFR, the Compose project cyfr-old, and one computer holds one CYFR",
 			stack("cyfr-old"), nil},
 		{"a photo service on one of its ranges", alone, []string{network("photos", "default", "172.16.231.0/24")}, photos},
-		{"a project holding part of them", alone, []string{network("photos", "default", "172.16.230.0/24"), network("photos", "locus-runtime", "172.16.231.0/24")}, photos},
+		{"a project holding part of them", alone, []string{network("photos", "default", "172.16.230.0/24"), network("photos", "locus", "172.16.231.0/24")}, photos},
 		{"this stack's own networks", alone, stack("OWN"), nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {

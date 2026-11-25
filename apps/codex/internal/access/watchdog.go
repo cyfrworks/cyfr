@@ -17,16 +17,20 @@ import (
 
 // watchdogArgs are the watchdog's options before the docker command:
 // the call's deadline, and, when it carries the lock, the lock's
-// descriptor and the descriptor its go-ahead arrives on.
-func watchdogArgs(deadline time.Duration, lock bool) []string {
+// descriptor and the descriptor its go-ahead arrives on, and the container
+// it removes when the call does not end with status 0 (Call.RemoveOnEnd).
+func watchdogArgs(deadline time.Duration, lock bool, remove string) []string {
 	args := []string{"--deadline", deadline.String()}
 	if lock {
 		args = append(args, "--lock-fd", "3", "--go-fd", "4")
 	}
+	if remove != "" {
+		args = append(args, "--remove", remove)
+	}
 	return append(args, "--")
 }
 
-// watchdogMain is WatchdogMain: `--deadline D [--lock-fd N] [--go-fd N]
+// watchdogMain is WatchdogMain: `--deadline D [--lock-fd N] [--go-fd N] [--remove NAME]
 // -- docker args…`. It runs docker in a process group of its own, passing
 // it the lock's descriptor, and kills that group at the deadline (exit
 // 124) or when it is asked to stop. It exits with docker's status; 125
@@ -37,6 +41,8 @@ func watchdogArgs(deadline time.Duration, lock bool) []string {
 // docker never run, so the lock is free again. The deadline runs from
 // before that wait. Once docker runs, its parent's death does not end it:
 // the lock stays held until docker ends, at the latest at the deadline.
+// Given --remove, the container it names is ended and removed, before the
+// lock is free, when docker does not end with status 0 (removeContainer).
 // Docker's own
 // streams pass through to the engine, which says them only by
 // diagnosis; the watchdog's own lines are redacted with the .env of the
@@ -47,6 +53,7 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		fmt.Fprint(stderr, redactorFor(env, nil).text(fmt.Sprintf(format, a...)))
 	}
 	var deadline time.Duration
+	var remove string
 	lockFD, goFD := -1, -1
 	i := 0
 	for ; i < len(args) && args[i] != "--"; i++ {
@@ -64,6 +71,11 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		case "--go-fd":
 			if i+1 < len(args) {
 				goFD, _ = strconv.Atoi(args[i+1])
+			}
+			i++
+		case "--remove":
+			if i+1 < len(args) {
+				remove = args[i+1]
 			}
 			i++
 		default:
@@ -137,7 +149,13 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	case <-stop:
 		killGroup(cmd)
 		err = <-done
+		if remove != "" {
+			removeContainer(command[0], remove)
+		}
 		return 143
+	}
+	if remove != "" && (killed || err != nil) {
+		removeContainer(command[0], remove)
 	}
 	if killed {
 		say("cyfr internal docker-run: killed docker at its %s deadline\n", deadline)
@@ -155,3 +173,26 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 	return 0
 }
+
+// removeContainer ends and removes the container name with the docker
+// binary docker, bounded by removeWithin: a docker client that is killed,
+// or loses the cyfr reading its output, leaves its container running. A
+// container that is gone already is no failure.
+func removeContainer(docker, name string) {
+	rm := exec.Command(docker, "rm", "--force", name)
+	ownGroup(rm)
+	if rm.Start() != nil {
+		return
+	}
+	ended := make(chan struct{})
+	go func() { rm.Wait(); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(removeWithin):
+		killGroup(rm)
+		<-ended
+	}
+}
+
+// removeWithin bounds the removal of a call's container.
+const removeWithin = 30 * time.Second

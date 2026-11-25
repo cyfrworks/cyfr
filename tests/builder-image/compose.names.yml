@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Layered last by stack.py's `Stack(names=True)`: the builds guard's
+# Layered last by stack.py's `Stack(names=True)`: the guard's
 # namespace takes the suites' name listener
 # (tests/locus-backends-image/name-listener.mjs) as its resolver's
 # upstream, so Docker's resolver, which the guard asks for every build's
@@ -9,14 +9,13 @@
 # 127.0.0.53:53, which the guard's rules let the namespace's own processes
 # reach (its loopback).
 services:
-  locus-builds-guard:
+  locus-guard:
     dns:
       - 127.0.0.53
   name-listener:
     image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
     pull_policy: never
-    profiles: ["locus-builds"]
-    network_mode: service:locus-builds-guard
+    network_mode: service:locus-guard
     entrypoint: ["node", "/listener/name-listener.mjs"]
     volumes:
       - ${NAME_LISTENER_DIR:?set NAME_LISTENER_DIR}:/listener:ro

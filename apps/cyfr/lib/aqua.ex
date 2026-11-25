@@ -169,6 +169,10 @@ defmodule Aqua do
   @spec attachments_as_kept(Sanctum.Context.t(), Aqua.Tape.row()) :: [Attachments.ref()]
   defdelegate attachments_as_kept(ctx, message), to: Attachments, as: :as_kept
 
+  @doc "The words a stored line offers its viewer to send again, or nil (`Aqua.Tape.again_text/2`)."
+  @spec again_text(Aqua.Tape.row(), String.t() | nil) :: String.t() | nil
+  defdelegate again_text(row, viewer), to: Aqua.Tape
+
   @doc "The attachment refs a message row carries (`Aqua.Attachments.refs_of/1`)."
   @spec attachment_refs(Aqua.Tape.row()) :: [Attachments.ref()]
   defdelegate attachment_refs(message), to: Attachments, as: :refs_of

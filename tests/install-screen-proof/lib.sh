@@ -526,12 +526,16 @@ candidate_build() {
 # candidate_app_build: the CYFR app's package around that cyfr, built from
 # this tree and stamped $INSTALL_VERSION, which clean_install puts in the
 # guest beside it, so `cyfr screen on` finds the app of its release
-# installed and fetches none; candidate.txt says so. It needs this tree's
-# apps/codex/desktop/node_modules (npm ci --ignore-scripts there).
+# installed and fetches none; candidate.txt says so. The build's packages
+# are installed first, into this tree's apps/codex/desktop from its lock
+# file (npm ci --ignore-scripts, as CI's jobs install them): a fresh
+# checkout has none.
 CANDIDATE_DEB=""
 candidate_app_build() {
   [ -z "$CANDIDATE_DEB" ] || return 0
   step "this tree's CYFR app around that cyfr, stamped $INSTALL_VERSION (stand-in for a signed candidate)"
+  proof_fg timeout 300 env -C "$ROOT/apps/codex/desktop" npm ci --ignore-scripts --no-audit --no-fund >"$OUT/candidate-npm.log" 2>&1 ||
+    fail "the CYFR app's build packages did not install from its lock file, within 300 s or at all ($OUT/candidate-npm.log)"
   # electron-builder reads the package from its working directory.
   proof_fg timeout 600 env -C "$ROOT/apps/codex/desktop" TMPDIR="$WORK" node scripts/build.mjs --cyfr "$CANDIDATE_BIN" \
     --version "$INSTALL_VERSION" --arch amd64 --out "$WORK/app" >"$OUT/candidate-app.log" 2>&1 ||
@@ -629,7 +633,7 @@ ACCOUNT_SERVICE=http://localhost:4000
 # name it does not read, so they are removed here by hand.
 account_settings() {
   printf '%s\n' "CYFR_DIRECTORY_SERVE=writer" "CYFR_DIRECTORY_URL=$ACCOUNT_SERVICE" "CYFR_REGISTRY_URL=${ACCOUNT_SERVICE#http://}" \
-    "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1" |
+    "CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1" |
     guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=/d" .env &&
     { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not made the box's own account service"
   guest_ssh "grep -E '^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-account.txt" 2>&1

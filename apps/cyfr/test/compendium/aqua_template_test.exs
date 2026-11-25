@@ -6,8 +6,8 @@ defmodule Compendium.AquaTemplateTest do
   The shipped Aqua tree as the athanor's own: a fill copies it in, a
   release that changes the seed changes nothing until a reset asks for it,
   an edited copy is restored by `reset/2` while member work is kept
-  (`all: true` for the exact shipped set), a shipped skill is copied whole
-  and refuses deletion, and `seed_check/0` fails loud on a v2 or empty
+  (`all: true` for the exact shipped set), no pack of scrolls is part of
+  the template, and `seed_check/0` fails loud on a v2 or empty
   mount.
   """
 
@@ -62,22 +62,6 @@ defmodule Compendium.AquaTemplateTest do
     """)
   end
 
-  defp write_skill!(template, name, marker) do
-    dir = Path.join([template, "skills", name])
-    File.mkdir_p!(dir)
-
-    File.write!(Path.join(dir, "SKILL.md"), """
-    ---
-    name: #{name}
-    description: does #{name} things
-    ---
-
-    skill instructions #{marker}
-    """)
-
-    File.write!(Path.join(dir, "reference.md"), "extra #{marker}")
-  end
-
   # What a fill does for the tree: every shipped unit copied in.
   defp fill!(ctx),
     do: {:ok, _} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
@@ -126,33 +110,15 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, %{prompt: "soul prompt v2"}} = AquaAgent.get(ctx, "aqua")
   end
 
-  test "a shipped skill is copied whole and refuses deletion; a write inside it is an edit", %{
+  test "status/1 tells shipped, modified, and own apart, and lists no pack", %{
     ctx: ctx,
     template: template
   } do
-    write_skill!(template, "pdf", "v1")
-    fill!(ctx)
-
-    assert {:ok, binary} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest("pdf"))
-    assert binary =~ "skill instructions v1"
-
-    assert {:ok, "extra v1"} =
-             Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf") ++ ["reference.md"])
-
-    assert {:error, :bundled} =
-             Arca.delete_tree(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf"))
-
-    :ok = Arca.put(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
-
-    assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf")) ==
-             {:ok, :shipped}
-
-    {:ok, files} = AquaTemplate.status(ctx)
-    assert %{state: :bundled_modified} = Enum.find(files, &(&1.path == "aqua/skills/pdf"))
-  end
-
-  test "status/1 tells shipped, modified, and own apart", %{ctx: ctx, template: template} do
-    write_skill!(template, "pdf", "v1")
+    # CYFR's own pack ships beside the soul, and is no file of the template.
+    pack = Path.join([template, "scrolls", "cyfr"])
+    File.mkdir_p!(Path.join(pack, "skills/pdf"))
+    File.write!(Path.join(pack, ".cyfr-pack.json"), ~s({"origin": "cyfr", "on": true}))
+    File.write!(Path.join(pack, "skills/pdf/SKILL.md"), "---\nname: pdf\n---\n\nv1\n")
     fill!(ctx)
 
     {:ok, scribe} = AquaAgent.get(ctx, "scribe")
@@ -178,8 +144,7 @@ defmodule Compendium.AquaTemplateTest do
             [
               %{path: "aqua/aqua.md", state: :bundled},
               %{path: "aqua/crew/mine.md", state: :user},
-              %{path: "aqua/crew/scribe.md", state: :bundled_modified},
-              %{path: "aqua/skills/pdf", state: :bundled}
+              %{path: "aqua/crew/scribe.md", state: :bundled_modified}
             ]} = AquaTemplate.status(ctx)
   end
 

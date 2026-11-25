@@ -3,11 +3,11 @@
 
 //go:build linux
 
-// Command cyfr-locus starts processes under uids and in spaces of their own
-// (a user, network and IPC namespace each) on behalf of an unprivileged
-// client.
+// Command cyfr-locus starts a process for each role whose key it is given,
+// and processes under uids on each one's behalf, every one in a space of
+// its own (a user, pid, IPC, mount, cgroup and network namespace each).
 //
-//	cyfr-locus serve --pool <name>:<first>-<last>:<relay|routed> --home-root <dir> [--kept-homes <dir>:<first>-<last>] [--guard <socket>] --client-user <user> -- <command> [args…]
+//	cyfr-locus serve --role <name>:<uid>:<port>:<pool>[:private][:kept] [--role …] --pool <name>:<first>-<last>:<relay|routed> [--pool …] --home-root <dir> [--kept-homes <dir>:<first>-<last>] --guard <socket> -- <command> [args…]
 //	cyfr-locus guard-control <socket> <range>
 //	cyfr-locus guest-check [--kernel-reporting] [-- <command> [args…]]
 //
@@ -17,15 +17,17 @@
 // as does `guest-check`, which boots one person's machine as the keeper
 // does, has the machine's keeper make and end one space, and reports
 // (package vm).
-// Every spawn requires a memory bound. The keeper enforces it only where
-// its cgroup is the root of a cgroup namespace mounted writable (Docker's
-// `writable-cgroups=true` security option, which adds no capability), and
-// refuses spawns anywhere else (package cgroup).
+// Every role and spawn is held in a cgroup group of its own, each role's
+// to its LOCUS_<NAME>_MEMORY_LIMIT and _CPU_LIMIT, each spawn's to its
+// memory bound. The keeper makes them only where its cgroup is the root of
+// a cgroup namespace mounted writable (Docker's `writable-cgroups=true`
+// security option, which adds no capability), and refuses its boot
+// anywhere else (package cgroup).
 // `stage`, `relay`, `retire` and `home` are helpers that read their
 // instructions from a pipe on fd 3. A stage starts in its space with the
 // keeper's ids until its namespace is mapped; retirement helpers start as
 // their pooled uid, home helpers as their kept home's uid, and relays start
-// as the client user.
+// as their spawn's role's uid, in that role's group.
 package main
 
 import (

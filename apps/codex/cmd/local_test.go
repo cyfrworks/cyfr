@@ -436,7 +436,7 @@ func (s localStack) envReached(mode string, port int) string {
 	}
 	home := "https://" + host
 	text := "CYFR_ACCESS=" + mode + "\nCYFR_HOST=" + host + "\nCYFR_PUBLIC_URL=" + home + "\n" + more +
-		"CYFR_PORT=" + strconv.Itoa(port) + "\nCYFR_LOCUS_BUILDS_URL=\n" +
+		"CYFR_PORT=" + strconv.Itoa(port) + "\n" +
 		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n"
 	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
 		s.t.Fatal(err)
@@ -487,7 +487,7 @@ func (s localStack) env(port int, extra ...string) {
 	if port != 80 {
 		home += ":" + strconv.Itoa(port)
 	}
-	text := "CYFR_ACCESS=local\nCYFR_PORT=" + strconv.Itoa(port) + "\nCYFR_LOCUS_BUILDS_URL=\n" +
+	text := "CYFR_ACCESS=local\nCYFR_PORT=" + strconv.Itoa(port) + "\n" +
 		"CYFR_DIRECTORY_URL=" + home + "\n" + setupTokenVar + "=" + testToken + "\n" + strings.Join(extra, "")
 	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(text), 0o600); err != nil {
 		s.t.Fatal(err)

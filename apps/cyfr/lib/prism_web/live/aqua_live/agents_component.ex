@@ -1892,22 +1892,32 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     """
   end
 
-  @grant_states [:consent_absent, :consent_stale, :consent_damaged, :consent_unavailable]
+  @grant_states [
+    :consent_absent,
+    :consent_revoked,
+    :consent_stale,
+    :consent_damaged,
+    :consent_unavailable
+  ]
+
+  # The states Aqua's own confirmation gives a grant for: never given,
+  # revoked by its person, or moved past.
+  @grantable [:consent_absent, :consent_revoked, :consent_stale]
 
   @doc """
   The sentence for a state of the crew's grant, Aqua's
-  (`Aqua.Models.t:status/0`): never given or revoked, stale, damaged or
-  unread; nil for any other state. The one wording of these states, on a
+  (`Aqua.Models.t:status/0`): never given, revoked by its person, stale,
+  damaged or unread; nil for any other state. The one wording of these states, on a
   card, in the setup's step for Aqua and in the daily thread. A damaged
   or unread brain's own grant reads the same, since neither is a key to
   connect.
   """
   @spec grant_sentence(atom()) :: String.t() | nil
-  def grant_sentence(:consent_absent),
-    do: "You have not granted yet what Aqua and its crew members may use."
+  def grant_sentence(:consent_absent), do: Prima.Refusal.message(:ungranted)
 
-  def grant_sentence(:consent_stale),
-    do: "What Aqua and its crew members may use changed since you granted it."
+  def grant_sentence(:consent_revoked), do: Prima.Refusal.message(:grant_revoked)
+
+  def grant_sentence(:consent_stale), do: Prima.Refusal.message(:agent_changed)
 
   def grant_sentence(:consent_damaged),
     do:
@@ -1921,7 +1931,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   @doc """
   The state of the crew's grant (`grant_sentence/1`) with what the page
-  can do about it: a grant never given, or one that moved, opens Aqua's
+  can do about it: a grant never given, revoked, or one that moved, opens Aqua's
   own confirmation (`open_consent`, handled by the Aqua page); damage or
   an outage offers nothing to press, since connecting cannot repair a
   grant that exists. Nothing for any other state.
@@ -1938,7 +1948,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       {grant_sentence(@state)}
     </span>
     <button
-      :if={@state in [:consent_absent, :consent_stale]}
+      :if={grantable?(@state)}
       type="button"
       phx-click="open_consent"
       phx-value-ref={Prima.AgentRef.soul_ref()}
@@ -2557,7 +2567,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       >
         <.grant_line state={@grant} />
         <span
-          :if={@grant in [:consent_absent, :consent_stale]}
+          :if={grantable?(@grant)}
           data-test="aqua-grant-meanwhile"
           class="text-gray-300"
         >
@@ -2618,6 +2628,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   module={PrismWeb.AquaLive.ScrollsComponent}
                   id="aqua-scrolls-section"
                   context={@context}
+                  athanor={@athanor}
                   provenance={@provenance}
                   group={group}
                   tools={@tools}
@@ -2651,6 +2662,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   defp grant_state?(state), do: state in @grant_states
+  defp grantable?(state), do: state in @grantable
 
   # The crew's grant as Aqua's next turn would meet it: its own state, or,
   # on a brain that reads ready, a grant the list has moved past, which

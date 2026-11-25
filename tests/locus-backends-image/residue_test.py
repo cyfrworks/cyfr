@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness  # noqa: E402
 import residue  # noqa: E402
 
-CONTAINER = "cyfr-locus-backends-1"
+CONTAINER = "cyfr-locus-1"
 HELD = [f"{residue.HOME_ROOT}/{residue.TAG}", "/proc/sysvipc/shm: 4242"]
 
 

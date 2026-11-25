@@ -12,6 +12,7 @@ defmodule Aqua.FacadeTest do
 
   @roster [
     action_title: 2,
+    again_text: 2,
     at_work: 2,
     attachment_blob_path: 3,
     attachment_limits: 0,
@@ -111,8 +112,7 @@ defmodule Aqua.FacadeTest do
              "skill_get" => "Read a scroll",
              "skill_create" => "Write a new scroll",
              "skill_update" => "Change a scroll",
-             "skill_delete" => "Remove a scroll",
-             "skill_reset" => "Restore a shipped scroll"
+             "skill_delete" => "Remove a scroll"
            }
   end
 

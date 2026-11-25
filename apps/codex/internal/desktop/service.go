@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cyfr/codex/internal/account"
@@ -40,6 +41,11 @@ type Local struct {
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
 	Answers func(context.Context) error
+	// waits is whether the device's pages at that CYFR wait for it to
+	// answer (shell.Server.Reachable), This box's on a box's screen
+	// (Service.Box), rather than its open being refused while it does not:
+	// the box's own CYFR starts as the box does.
+	waits bool
 	// Work is everything begun for that CYFR here. It has one holder from
 	// the moment it is made until it is ended, with no gap: the one
 	// holding a reading ends it on every way out, panics too, by a
@@ -132,6 +138,19 @@ type Service struct {
 	// begins; its error is the sentence for the person. nil sets up
 	// nothing.
 	Setup func(ctx context.Context, folder string, step func(string)) error
+	// Box is the absolute folder of the CYFR a box's own screen shows,
+	// This box, on that screen alone; "" on a desktop. This box is no row
+	// of the list: its press (/bootstrap/box) reads that folder at the
+	// press and opens the CYFR it names now, adding an entry at an address
+	// the list does not hold, and the rail shows the entry it last made as
+	// This box, which is never forgotten. Only This box's shell makes the
+	// machine's key (shell.Config.KeyElsewhere).
+	Box string
+	// Hide, on a box's screen, hides what the screen shows as every lock
+	// begins, with a CYFR open or none, and only then tells main, through
+	// tell: the lock's locked, or, at the service's end, ending, the run's
+	// last message. nil (a desktop) tells at once, and nothing at the end.
+	Hide func(tell func())
 	// Offer works out what Update CYFR offers (update.go), with project
 	// this computer's own CYFR's folder where it is the one open, "" for a
 	// CYFR elsewhere or none; BeginUpdate starts an offer's run, the app's
@@ -198,6 +217,13 @@ type Service struct {
 	erases   map[uint64]erasing
 	eraseID  uint64
 	unerased map[string]bool
+	// over is whether ending was said (Hide): nothing is said after it.
+	over bool
+	// leaving is the shell a departure detached and is retiring, whose
+	// lock is still a lock of this service's (lockStep), and departed is
+	// closed once that retirement has ended: End waits for it.
+	leaving  *shell.Shell
+	departed chan struct{}
 	// update is Update CYFR's offer and run (update.go).
 	update updating
 }
@@ -373,6 +399,7 @@ var chooserRoutes = map[string]struct {
 	"/bootstrap/start":   {(*Service).start, carriesEpoch | carriesPicks | carriesRun},
 	"/bootstrap/setup":   {(*Service).awaitSetup, 0},
 	"/bootstrap/open":    {(*Service).openFolder, carriesEpoch | carriesPicks | carriesRun},
+	"/bootstrap/box":     {(*Service).box, carriesEpoch},
 }
 
 // mainCarries is what each message of main's that answers something
@@ -508,7 +535,10 @@ type answer struct {
 	Confirm string        `json:"confirm,omitempty"`
 	Next    string        `json:"next,omitempty"`
 	Resume  string        `json:"resume,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	// ResumeBox, on a box's screen with no CYFR selected last, is This
+	// box, which the chooser presses by itself once in its place.
+	ResumeBox bool   `json:"resume_box,omitempty"`
+	Error     string `json:"error,omitempty"`
 	// ended is the service's end, met by a wait: answered 503.
 	ended bool
 }
@@ -567,6 +597,7 @@ func (s *Service) shown() answer {
 	a := answer{Folder: folder, Picks: picks, Setup: setting, Home: list.Last}
 	if !began {
 		a.Resume = list.Last
+		a.ResumeBox = list.Last == "" && s.Box != ""
 	}
 	return a
 }
@@ -596,6 +627,16 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	defer s.finish()
 	if a, open := s.again(run, epoch); open {
 		return a
+	}
+	// On a box's screen a press of the address This box's folder names now
+	// is a press of This box (box): the folder read anew, never a row of
+	// the list, which holds none yet when This box's first opening failed
+	// and the chooser offers it again.
+	if req.Kept {
+		if l, ok := s.thisBox(home); ok {
+			defer l.end()
+			return s.openLocal(run, epoch, s.Box, &l, shell.Typed)
+		}
 	}
 	// One reading of the list decides what a press opens: a row's own,
 	// which refuses one the list no longer keeps before any server is
@@ -758,21 +799,30 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		return answer{Error: fmt.Sprintf("The CYFR in %s names %s as its account service. The app takes an https address, "+
 			"or a plain http one only at a CYFR's own address on this computer.", project, l.Shell.Directory)}
 	}
-	if err := l.Answers(run); err != nil {
-		if !s.live(epoch) {
-			return answer{Error: lockedSentence}
+	// This box is not asked at the press: its pages ask, apart, and wait.
+	l.waits = s.Box != "" && project == s.Box
+	if !l.waits {
+		if err := l.Answers(run); err != nil {
+			if !s.live(epoch) {
+				return answer{Error: lockedSentence}
+			}
+			return answer{Error: err.Error()}
 		}
-		return answer{Error: err.Error()}
 	}
 	sel, err := s.Homes.SelectLocal(home, project, from)
 	if err != nil {
 		return answer{Error: "This computer cannot open the CYFR in " + project + ": " + err.Error() + "."}
 	}
+	// This box's first person is made at the device's pages, which read
+	// the token themselves at their first hello: its proposal carries none,
+	// and its press asks nothing of the CYFR or Docker.
 	setup := ""
-	if l.Shell.SetupToken != nil {
+	if l.Shell.SetupToken != nil && !l.waits {
 		setup, _ = l.Shell.SetupToken(run)
 	}
-	return s.selectHome(run, epoch, sel, l.Shell, l,
+	cfg := l.Shell
+	cfg.KeyElsewhere = s.keyElsewhere(project)
+	return s.selectHome(run, epoch, sel, cfg, l,
 		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Setup: setup})
 }
 
@@ -783,7 +833,8 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 	if err != nil {
 		return answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}
 	}
-	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks}, nil,
+	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks,
+		KeyElsewhere: s.keyElsewhere("")}, nil,
 		Message{Type: TypeHome, Home: home, Account: found.Origin})
 }
 
@@ -800,7 +851,18 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 // under s.mu.
 func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, l *Local, proposal Message) answer {
 	home := proposal.Home
-	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, s.sayLocked
+	// Every lock of this shell, the service's own or the shell's (its
+	// Lock page, its channel ending), reaches the one lock step.
+	var mine atomic.Pointer[shell.Shell]
+	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, func() { s.lockStep(mine.Load()) }
+	if s.Box != "" {
+		// The rail offers Forget only while the box is unlocked (railNow).
+		cfg.Opened = func() {
+			s.mu.Lock()
+			s.changed()
+			s.mu.Unlock()
+		}
+	}
 	if s.Shell != nil {
 		s.Shell(&cfg)
 	}
@@ -808,6 +870,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if err != nil {
 		return answer{Error: err.Error()}
 	}
+	mine.Store(sh)
 	ready := make(chan struct{}, 1)
 	s.mu.Lock()
 	if s.epoch != epoch {
@@ -847,11 +910,79 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 		work = s.here.Work
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh, Work: work}
+	// Its readings run under the CYFR's Work, which its end ends.
+	if work != nil && s.here.waits {
+		s.pages.Reachable = s.here.Answers
+	}
 	s.Tell(Message{Type: TypeOpened, Home: home, Attempt: proposal.Attempt})
 	s.committed = proposal
 	s.changed()
 	s.voidOffer()
 	return s.opened(home)
+}
+
+// keyElsewhere is the sentence a shell at a CYFR other than This box's,
+// the CYFR in project ("" for one elsewhere), shows where the machine has
+// no key yet, on a box's screen: the key is made at This box alone. ""
+// lets the shell make it, This box's and every one on a desktop.
+func (s *Service) keyElsewhere(project string) string {
+	if s.Box == "" || project == s.Box {
+		return ""
+	}
+	return "This box makes its key at its own CYFR first: choose This box on the left, make the key there, then come back here and unlock with it."
+}
+
+// box opens This box (Box): the CYFR its folder names now, read at the
+// press, whatever the list holds, on a first start with no entry too. An
+// address the list does not hold yet is added as an entry of its own, with
+// an admission and storage of its own; an entry an earlier reading made is
+// left as it is, opened by nothing here, and forgotten apart.
+func (s *Service) box(ctx context.Context, epoch uint64, req request) answer {
+	run, refused := s.begin(ctx, req, "")
+	if refused != nil {
+		return *refused
+	}
+	defer s.finish()
+	if s.Box == "" || s.Local == nil {
+		return answer{Error: "This app shows no box's own CYFR."}
+	}
+	l, err := s.Local(s.Box)
+	// This holds the reading until the service takes it as it opens.
+	defer l.end()
+	if err != nil {
+		return answer{Error: fmt.Sprintf("This box cannot read the CYFR in %s (%v).", s.Box, err)}
+	}
+	return s.openLocal(run, epoch, s.Box, &l, shell.Typed)
+}
+
+// boxAt is the address This box's folder (Box) names now, read from its
+// files alone (Local: no Docker, nothing started), and whether it could be
+// read; "", false on a desktop. Which entry of the list is This box is
+// never guessed from the list: it is what the folder names at the reading.
+func (s *Service) boxAt() (string, bool) {
+	if s.Box == "" || s.Local == nil {
+		return "", false
+	}
+	l, err := s.Local(s.Box)
+	defer l.end()
+	if err != nil {
+		return "", false
+	}
+	return l.Shell.Address, true
+}
+
+// thisBox is This box's folder read now, held for its opening, when it
+// names home; any other reading is ended.
+func (s *Service) thisBox(home string) (Local, bool) {
+	if s.Box == "" || s.Local == nil {
+		return Local{}, false
+	}
+	l, err := s.Local(s.Box)
+	if err != nil || l.Shell.Address != home {
+		l.end()
+		return Local{}, false
+	}
+	return l, true
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system
@@ -1121,6 +1252,16 @@ func (s *Service) End() {
 	s.wake()
 	s.mu.Unlock()
 	s.lock("", false)
+	// A departure in flight is retiring the shell it left (Leave): the end
+	// waits for that retirement, which its own bounds end (the shell's
+	// lock: its sessions told within 5 s, its channel closed), and adds
+	// none of its own.
+	s.mu.Lock()
+	departed := s.departed
+	s.mu.Unlock()
+	if departed != nil {
+		<-departed
+	}
 }
 
 // Leave is main's leave numbered id: the device locks and lets go of the
@@ -1137,13 +1278,62 @@ func (s *Service) Leave(id uint64) {
 }
 
 // lock is Lock, which lets go of the CYFR open as well when leave says to
-// (main's leave): the list stays as it is.
+// (main's leave): the list stays as it is. Its one step (lockStep) is
+// reached through the open shell's lock, which hides first, or at once
+// where none is open.
 func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh, here, letGo := s.sh, s.here, leave || s.ended
+	var departed chan struct{}
 	if leave {
 		s.sh, s.pages, s.here, s.committed = nil, nil, nil, Message{}
 		s.changed()
+		if sh != nil {
+			departed = make(chan struct{})
+			s.leaving, s.departed = sh, departed
+		}
+	}
+	s.mu.Unlock()
+	if departed != nil {
+		defer func() {
+			s.mu.Lock()
+			if s.departed == departed {
+				s.leaving, s.departed = nil, nil
+			}
+			s.mu.Unlock()
+			close(departed)
+		}()
+	}
+	// Everything begun for the CYFR here ends as the app lets go of it,
+	// once the lock's one entry has run (locked, hidden, the CYFR told),
+	// and on a panic in it too: the lock holds it from here.
+	if letGo {
+		defer here.end()
+	}
+	if sh != nil {
+		// The shell's lock hides the screen (Restart, lockStep) before it
+		// tells its CYFR, which every lock does.
+		sh.Lock(why)
+	} else {
+		s.lockStep(nil)
+	}
+}
+
+// lockStep is every lock's one step in the service, reached by the
+// service's own locks and by its shell's (Config.Restart): in one hold of
+// s.mu the time since the last lock ends, so every chooser request begun
+// in it, in discovery, awaiting approval or awaiting main's home-ready,
+// publishes nothing more, and main is told locked, naming the CYFR
+// committed, through the screen's hide where there is one (Hide), which
+// marks what it shows first and waits on nothing; at the service's end,
+// ending in its place, once, and nothing after it. Nothing of a later
+// selection can be told before it. A lock of a shell the service holds
+// no more, neither open nor being left, is no lock of the service's.
+func (s *Service) lockStep(from *shell.Shell) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if from != nil && from != s.sh && from != s.leaving {
+		return
 	}
 	s.epoch++
 	if s.stop != nil {
@@ -1156,35 +1346,21 @@ func (s *Service) lock(why string, leave bool) {
 		s.ready, s.selecting, s.current = nil, "", 0
 	}
 	s.wake()
-	s.mu.Unlock()
-	// Everything begun for the CYFR here ends as the app lets go of it,
-	// once the lock's one entry has run (locked, hidden, the CYFR told),
-	// and on a panic in it too: the lock holds it from here.
-	if letGo {
-		defer here.end()
+	if s.Box != "" {
+		s.changed()
 	}
-	if sh != nil {
-		// The shell says locked as it hides the screen (sayLocked), which
-		// every lock does.
-		sh.Lock(why)
-	} else {
-		s.sayLocked()
-	}
-}
-
-// sayLocked tells main the device locked, naming the CYFR committed: the
-// end of every lock, the shell's own among them, so Update CYFR's offer
-// is dropped here too.
-func (s *Service) sayLocked() {
-	s.mu.Lock()
-	m, ended := s.committed, s.ended
-	s.voidOffer()
-	s.mu.Unlock()
-	if ended {
-		return
-	}
+	m := s.committed
 	m.Type = TypeLocked
-	s.Tell(m)
+	switch {
+	case s.ended && (s.Hide == nil || s.over):
+	case s.ended:
+		s.over = true
+		s.Hide(func() { s.Tell(Message{Type: TypeEnding}) })
+	case s.Hide != nil:
+		s.Hide(func() { s.Tell(m) })
+	default:
+		s.Tell(m)
+	}
 }
 
 // Run reads main's messages from in until shutdown or the end of in,

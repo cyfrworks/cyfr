@@ -366,27 +366,27 @@ defmodule Cyfr.RuntimeConfigTest do
     test "entries are <service_id>=<url>, comma-separated, in order, each running any component" do
       assert {:ok,
               [
-                %{id: "wrk_locus", url: "http://locus-runtime:4200", components: nil},
+                %{id: "wrk_locus", url: "http://locus:4200", components: nil},
                 %{id: "wrk_b-2", url: "https://b.internal", components: nil}
               ]} =
                RuntimeConfig.resolve_workers(
                  env(%{
                    "CYFR_LOCUS_RUNTIME_WORKERS" =>
-                     " wrk_locus = http://locus-runtime:4200/ ,, wrk_b-2=https://b.internal "
+                     " wrk_locus = http://locus:4200/ ,, wrk_b-2=https://b.internal "
                  })
                )
     end
 
     test "a malformed id or URL, or an entry that is not a pair, refuses the boot naming the entry" do
       for bad <- [
-            "runtime=http://locus-runtime:4200",
-            "wrk_=http://locus-runtime:4200",
-            "wrk_#{String.duplicate("a", 65)}=http://locus-runtime:4200",
+            "runtime=http://locus:4200",
+            "wrk_=http://locus:4200",
+            "wrk_#{String.duplicate("a", 65)}=http://locus:4200",
             "wrk_locus",
             "wrk_locus=",
-            "wrk_locus=locus-runtime:4200",
-            "wrk_locus=http://locus-runtime:4200/worker",
-            "wrk_locus=ftp://locus-runtime:4200"
+            "wrk_locus=locus:4200",
+            "wrk_locus=http://locus:4200/worker",
+            "wrk_locus=ftp://locus:4200"
           ] do
         assert {:error, message} =
                  RuntimeConfig.resolve_workers(env(%{"CYFR_LOCUS_RUNTIME_WORKERS" => bad}))
@@ -547,60 +547,56 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "resolve_locus_builds/1 — the builds service, both of its variables or neither" do
+  describe "resolve_locus_builds/1 — the builds role, from its key, beside the backends" do
     @key_hex String.duplicate("0f", 32)
 
-    test "unset => no builds service: this server builds nothing" do
+    test "no key => no builds: this server builds nothing, whatever the backends URL" do
       assert {:ok, nil} = RuntimeConfig.resolve_locus_builds(env(%{}))
 
       assert {:ok, nil} =
                RuntimeConfig.resolve_locus_builds(
-                 env(%{"CYFR_LOCUS_BUILDS_URL" => " ", "CYFR_LOCUS_BUILDS_KEY" => ""})
-               )
-    end
-
-    test "a base URL and a 64-digit key => the URL without its slash and the key's 32 bytes" do
-      assert {:ok, %{url: "http://locus-builds:4100", key: key}} =
-               RuntimeConfig.resolve_locus_builds(
                  env(%{
-                   "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100/",
-                   "CYFR_LOCUS_BUILDS_KEY" => String.upcase(@key_hex)
+                   "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101",
+                   "CYFR_LOCUS_BUILDS_KEY" => ""
                  })
                )
-
-      assert key == :binary.copy(<<0x0F>>, 32)
     end
 
-    test "one without the other refuses the boot naming the missing one" do
-      assert {:error, message} =
-               RuntimeConfig.resolve_locus_builds(
-                 env(%{"CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100"})
-               )
+    test "a 64-digit key => the backends' host at the builds role's port, and the key's 32 bytes" do
+      port = Prima.LocusRoles.role!(:builds).port
 
-      assert message =~ "CYFR_LOCUS_BUILDS_KEY is not"
+      for {backends, builds} <- [
+            {"http://locus:4101/", "http://locus:#{port}"},
+            {"http://172.16.240.130:4101", "http://172.16.240.130:#{port}"},
+            {"https://locus.example.net", "https://locus.example.net:#{port}"}
+          ] do
+        assert {:ok, %{url: ^builds, key: key}} =
+                 RuntimeConfig.resolve_locus_builds(
+                   env(%{
+                     "CYFR_LOCUS_BACKENDS_URL" => backends,
+                     "CYFR_LOCUS_BUILDS_KEY" => String.upcase(@key_hex)
+                   })
+                 ),
+               backends
 
+        assert key == :binary.copy(<<0x0F>>, 32)
+      end
+    end
+
+    test "the key without the backends URL refuses the boot, naming it and never the key" do
       assert {:error, message} =
                RuntimeConfig.resolve_locus_builds(env(%{"CYFR_LOCUS_BUILDS_KEY" => @key_hex}))
 
-      assert message =~ "CYFR_LOCUS_BUILDS_URL is not"
+      assert message =~ "CYFR_LOCUS_BACKENDS_URL is not"
       refute message =~ @key_hex
     end
 
-    test "a URL with a path, or a key of another form, refuses the boot and never echoes the key" do
-      for bad <- ["locus-builds:4100", "ftp://locus-builds", "http://locus-builds/locus/v1"] do
-        assert {:error, message} =
-                 RuntimeConfig.resolve_locus_builds(
-                   env(%{"CYFR_LOCUS_BUILDS_URL" => bad, "CYFR_LOCUS_BUILDS_KEY" => @key_hex})
-                 )
-
-        assert message =~ "CYFR_LOCUS_BUILDS_URL"
-      end
-
+    test "a key of another form, or a malformed backends URL, refuses the boot and never echoes the key" do
       for bad <- ["short", @key_hex <> "0", String.replace(@key_hex, "0", "g")] do
         assert {:error, message} =
                  RuntimeConfig.resolve_locus_builds(
                    env(%{
-                     "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100",
+                     "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101",
                      "CYFR_LOCUS_BUILDS_KEY" => bad
                    })
                  )
@@ -608,6 +604,17 @@ defmodule Cyfr.RuntimeConfigTest do
         assert message =~ "CYFR_LOCUS_BUILDS_KEY"
         refute message =~ bad
       end
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_locus_builds(
+                 env(%{
+                   "CYFR_LOCUS_BACKENDS_URL" => "locus:4101",
+                   "CYFR_LOCUS_BUILDS_KEY" => @key_hex
+                 })
+               )
+
+      assert message =~ "CYFR_LOCUS_BACKENDS_URL"
+      refute message =~ @key_hex
     end
   end
 
@@ -792,8 +799,8 @@ defmodule Cyfr.RuntimeConfigTest do
         assert message != Prima.Refusal.unconfirmed(), name
       end
 
-      # Each derived head is its own: a change of port, email, builds URL
-      # or node gives a new digest.
+      # Each derived head is its own: a change of port, email or node
+      # gives a new digest.
       digests = for {_head, vector} <- heads, do: vector["digest"]
       assert Enum.uniq(digests) == digests
     end
@@ -803,8 +810,7 @@ defmodule Cyfr.RuntimeConfigTest do
       assert profiles != []
 
       for %{"mode" => mode, "profiles" => expected} = vector <- profiles do
-        assert RuntimeConfig.access_profiles(mode, vector["builds_url"]) == expected,
-               inspect(vector)
+        assert RuntimeConfig.access_profiles(mode) == expected, inspect(vector)
       end
     end
 
@@ -814,8 +820,7 @@ defmodule Cyfr.RuntimeConfigTest do
       for {section, check} <- [
             {"tailnet_names", &RuntimeConfig.tailnet_name?/1},
             {"node_ids", &RuntimeConfig.tailnet_node_id?/1},
-            {"domains", &RuntimeConfig.public_domain?/1},
-            {"builds_urls", &RuntimeConfig.builds_url?/1}
+            {"domains", &RuntimeConfig.public_domain?/1}
           ] do
         cases = names[section]
         assert Enum.any?(cases, & &1["valid"]) and Enum.any?(cases, &(not &1["valid"])), section
@@ -872,7 +877,7 @@ defmodule Cyfr.RuntimeConfigTest do
         "CYFR_PUBLIC_URL" => "https://cyfr.example.com"
       }
 
-      for key <- ~w(CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL CYFR_HOST CYFR_ACCESS CYFR_PORT) do
+      for key <- ~w(CADDY_ACME_EMAIL CYFR_HOST CYFR_ACCESS CYFR_PORT) do
         assert {:error,
                 %{
                   code: :access_setting_invalid,
@@ -893,25 +898,6 @@ defmodule Cyfr.RuntimeConfigTest do
                  process: %{"CYFR_ACCESS" => "local", "CYFR_HOST" => <<255>>},
                  release?: true
                })
-    end
-
-    test "a malformed builds URL is refused before the head or its profiles" do
-      for url <- [
-            "http://locus-builds:bad",
-            "http://locus-builds:4100/path",
-            "http://locus-builds:4100?token=x",
-            "http://user@locus-builds:4100",
-            "ftp://locus-builds:4100",
-            "not-a-url"
-          ] do
-        assert {:error,
-                %{
-                  code: :access_setting_invalid,
-                  payload: %{key: "CYFR_LOCUS_BUILDS_URL", value: ^url}
-                }} =
-                 resolve_local(%{"CYFR_LOCUS_BUILDS_URL" => url}),
-               url
-      end
     end
   end
 end

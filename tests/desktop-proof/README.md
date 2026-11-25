@@ -1,6 +1,6 @@
 # The CYFR app's proofs
 
-Three kinds, by what they need.
+Four kinds, by what they need.
 
 **`native/smoke.sh`**, home-free: the installed production app on Linux,
 macOS and Windows, with no CYFR and no signing credentials (Codex CI's
@@ -18,6 +18,15 @@ playback ends: a page that held no idle inhibitor, or a control that could
 not fire, fails rather than show nothing. The frame
 stands for an app's, with Prism's sandbox for no grant; no CYFR serves
 it. Its header names the rest.
+
+**`box/box.sh`, the box's screen with two CYFRs that answer** (the Test
+workflow's `desktop-home` job, last, Linux amd64 and arm64): the package as
+the box's screen under Ubuntu 26.04's labwc, This box a folder's CYFR on the
+machine's Docker and `x.test` a CYFR elsewhere, both reading their people's
+accounts at `dir.test`, pressed as a person presses what the screen shows.
+It is given the machine's Docker socket, so it runs on a disposable machine
+alone. Its header lists its rows, its stand-ins and what stays the installed
+box's.
 
 **`*/run.sh`, against a real CYFR**: every tracked `tests/desktop-proof/*/run.sh`,
 in sorted order, run by `home.sh` (the Test workflow's `desktop-home` job, on

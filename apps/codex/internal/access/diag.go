@@ -140,7 +140,7 @@ func (e *Engine) known() known {
 			k.files[filepath.Join(dir, filepath.FromSlash(name))] = name
 		}
 	}
-	for _, name := range slices.Concat([]string{cyfrService, serveService, buildsService}, e.publishedNames()[1:]) {
+	for _, name := range slices.Concat([]string{cyfrService, serveService}, e.publishedNames()[1:]) {
 		k.services[name] = true
 	}
 	return k

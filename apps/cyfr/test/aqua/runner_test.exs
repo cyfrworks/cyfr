@@ -797,9 +797,10 @@ defmodule Aqua.RunnerTest do
   end
 
   # The crew has one grant, Aqua's: under it Aqua's turn and a member's
-  # run; revoked, it refuses every member's turn as it refuses Aqua's,
-  # before a root is claimed or a model is asked, and asks for that one
-  # grant.
+  # run; revoked by its person, it refuses every member's turn as it
+  # refuses Aqua's, before a root is claimed or a model is asked, says in
+  # each thread that it was revoked, read from the record of who revoked
+  # it, and asks there for that one grant.
   test "with the crew's grant revoked, Aqua's turn and every member's claim no root and ask for it",
        %{ctx: ctx, thread: thread} do
     member!(ctx, "planner")
@@ -820,33 +821,198 @@ defmodule Aqua.RunnerTest do
     ran = ScriptedWorker.calls()
     assert Enum.count(ran, &(&1.input["operation"] == "chat")) == 2
 
-    assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, "agent:local.aqua")
+    # Revoked by the person, as the profile's revoke records it.
+    {:ok, %{profile_id: soul}} = Opus.authority_for(ctx, :default, "agent:local.aqua")
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{"action" => "revoke", "profile_id" => soul})
+
     user = ctx.user_id
 
-    for {room, agent} <- [{thread, "aqua"}, {child, "planner"}] do
-      {:ok, %{turn: turn}} =
+    for {room, agent, member} <- [{thread, "aqua", "Aqua"}, {child, "planner", "Planner"}] do
+      {:ok, %{turn: turn, message: message}} =
         Tape.accept(ctx, room.id, %{
           message: %{author: ctx.user_id, sent_by: "person", content: "go"},
           turn: %{agent: agent, requested_by: ctx.user_id}
         })
 
-      assert {:failed, :setup_required} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+      assert {:failed, {:grant_revoked, ^member, :message}} =
+               Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
 
-      assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
+      said =
+        "You revoked your grant of what Aqua and its crew members may use. Your message was " <>
+          "not answered: grant it again here when it is asked, or on your Aqua page, then send " <>
+          "your message again."
+
+      assert {:ok, %{status: "failed", error: ^said, root_execution_id: nil, profile_id: nil}} =
                Tape.turn(ctx, turn.id)
 
+      assert system_lines(ctx, room) == [said]
       assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
       room_id = room.id
+      message_id = message.id
 
       assert_receive %ThreadEvent{
                        thread_id: ^room_id,
                        kind: :consent_required,
-                       data: %{ref: "agent:local.aqua", user_id: ^user}
+                       data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
                      },
                      5_000
     end
 
     assert ScriptedWorker.calls() == ran
+  end
+
+  # A fresh message is told why no grant stands now, never an older
+  # revocation: a grant its person revoked, given again and then taken by
+  # a removal, is one not granted; two grants standing under two labels
+  # are an ambiguity the claim refuses, never said as revoked. No model is
+  # asked.
+  test "a message after a revoked grant was given again and then removed, or given under " <>
+         "two labels, is never told the grant was revoked",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Never.")])
+
+    not_granted =
+      "You have not granted yet what Aqua and its crew members may use. Your message was " <>
+        "not answered: grant it here when it is asked, or on your Aqua page, then send your " <>
+        "message again."
+
+    :ok = Cyfr.Test.AquaTool.revoked_then_removed!(ctx)
+    removed = accepted!(ctx, thread, "after the removal")
+
+    assert {:failed, {:ungranted, "Aqua", :message}} =
+             Aqua.Loop.run(ctx: ctx, turn_id: removed.id)
+
+    assert {:ok, %{status: "failed", error: ^not_granted}} = Tape.turn(ctx, removed.id)
+
+    :ok = Cyfr.Test.AquaTool.grant!(ctx)
+    :ok = Cyfr.Test.AquaTool.grant!(ctx, "work")
+    ambiguous = accepted!(ctx, thread, "under two grants")
+    assert {:failed, reason} = Aqua.Loop.run(ctx: ctx, turn_id: ambiguous.id)
+    refute match?({:grant_revoked, _member, _then}, reason)
+    assert {:ok, %{status: "failed", error: error}} = Tape.turn(ctx, ambiguous.id)
+    refute error =~ "You revoked"
+
+    lines = system_lines(ctx, thread)
+    assert hd(lines) == not_granted
+    refute Enum.any?(lines, &(&1 =~ "You revoked"))
+    assert ScriptedWorker.calls() == []
+  end
+
+  defp accepted!(ctx, thread, text) do
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    turn
+  end
+
+  @stale "What Aqua and its crew members may use changed since you granted it."
+
+  # Aqua's list changed past the crew's grant, as a switch on the Aqua
+  # page moves it: a person's message is refused before a root is claimed,
+  # saying so in its thread and as the turn's error, and that person's
+  # view of the thread is asked for Aqua's grant with the message to offer
+  # again; a schedule's turn says where to grant it, in the error its
+  # occurrence ends with, and asks nobody. No model is asked.
+  test "with Aqua's list changed past its grant, a message and a schedule's turn are refused " <>
+         "saying where to grant it",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Never.")])
+
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    user = ctx.user_id
+    thread_id = thread.id
+
+    asked =
+      @stale <>
+        " Your message was not answered: grant it again here when it is asked, or on your " <>
+        "Aqua page, then send your message again."
+
+    cases = [
+      {:interactive, :message, asked},
+      {:schedule, :none, @stale <> " Grant it again on your Aqua page."}
+    ]
+
+    for {{origin, then, said}, n} <- Enum.with_index(cases, 1) do
+      sender = %{ctx | origin: origin}
+
+      {:ok, %{turn: turn, message: message}} =
+        Tape.accept(sender, thread.id, %{
+          message: %{author: user, sent_by: "person", content: "go #{origin}"},
+          turn: %{agent: "aqua", requested_by: user}
+        })
+
+      assert {:failed, {:agent_changed, "Aqua", ^then}} =
+               Aqua.Loop.run(ctx: sender, turn_id: turn.id)
+
+      assert {:ok, %{status: "failed", error: ^said}} = Tape.turn(ctx, turn.id)
+
+      # Refused before a root is claimed: a schedule's occurrence ends
+      # with the turn's own error (`Aqua.ScheduleTurns`).
+      assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
+
+      # The thread's lines whole: each refusal's one line, and no other.
+      assert system_lines(ctx, thread) == cases |> Enum.take(n) |> Enum.map(&elem(&1, 2))
+
+      if then == :message do
+        message_id = message.id
+
+        assert_receive %ThreadEvent{
+                         thread_id: ^thread_id,
+                         kind: :consent_required,
+                         data: %{ref: "agent:local.aqua", user_id: ^user, message_id: ^message_id}
+                       },
+                       5_000
+      else
+        refute_received %ThreadEvent{kind: :consent_required}
+      end
+    end
+
+    assert ScriptedWorker.calls() == []
+  end
+
+  # A workspace's opening names the person who asked as its author though
+  # Aqua wrote its words (`Aqua.Tape.own_line?/2`): the turn it opens,
+  # refused for Aqua's grant, says where to grant it and asks nobody, never
+  # that the person's message was not answered.
+  test "with Aqua's list changed past its grant, a workspace's opening is refused saying " <>
+         "where to grant it, asking nobody",
+       %{ctx: ctx} do
+    script!([reply("Never.")])
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+    ws = workspace!(ctx)
+    :ok = Runner.subscribe(ws.id, ctx.athanor_id)
+
+    {:ok, opening} =
+      Threads.append(Sanctum.Context.actor(ctx), ws.id, %{
+        kind: "opening",
+        author: ctx.user_id,
+        sent_by: "person",
+        content: "build a tip calculator",
+        payload: %{"ask" => "build a tip calculator", "asked_by" => ctx.user_id}
+      })
+
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, ws.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: opening.content},
+        opening_id: opening.id,
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    assert {:ok, %{message_id: opened}} = Tape.turn(ctx, turn.id)
+    assert opened == opening.id
+
+    said = @stale <> " Grant it again on your Aqua page."
+    assert {:failed, {:agent_changed, "Aqua", :none}} = Aqua.Loop.run(ctx: ctx, turn_id: turn.id)
+    assert {:ok, %{status: "failed", error: ^said}} = Tape.turn(ctx, turn.id)
+    assert system_lines(ctx, ws) == [said]
+    refute_received %ThreadEvent{kind: :consent_required}
+    assert ScriptedWorker.calls() == []
   end
 
   # A brain's own grant that is damaged, or that cannot be read, is the
@@ -2712,17 +2878,58 @@ defmodule Aqua.RunnerTest do
 
     test "the consent restart is the person's act: the thread reads stopped, with no report",
          %{ctx: ctx, workspace: ws} do
+      user = ctx.user_id
       script!([{:probe, self()}, reply("never sent")])
       {:ok, %{turn_id: id}} = Runner.send_message(ctx, ws.id, "@aqua go")
       pids = running!(ws)
 
       assert :ok = Runner.restart_for_consent(ctx, ws.id, %{})
-      assert_receive %ThreadEvent{kind: :restart_prompt}, 10_000
+
+      # The person's own words, offered to them again.
+      assert_receive %ThreadEvent{
+                       kind: :restart_prompt,
+                       data: %{text: "@aqua go", user_id: ^user}
+                     },
+                     10_000
+
       send(pids.call, :continue)
 
       assert {:ok, %{status: "cancelled", error: "restart required"}} = Tape.turn(ctx, id)
       assert thread_state(ctx, ws.id) == "stopped"
       assert reports(ctx) == []
+    end
+
+    # The restart offers the cut turn's own line again only as every stored
+    # line is offered (`Aqua.Tape.again_text/2`): a workspace's opening,
+    # which names the person who asked as its author though Aqua wrote its
+    # words, is no line of theirs.
+    test "the consent restart offers a workspace's opening by nothing",
+         %{ctx: ctx, workspace: ws} do
+      {:ok, opening} =
+        Threads.append(Sanctum.Context.actor(ctx), ws.id, %{
+          kind: "opening",
+          author: ctx.user_id,
+          sent_by: "person",
+          content: "build a tip calculator",
+          payload: %{"ask" => "build a tip calculator", "asked_by" => ctx.user_id}
+        })
+
+      restarted_offering_nothing!(ctx, ws, fn ->
+        Runner.send_message(ctx, ws.id, opening.content, opening: opening)
+      end)
+    end
+
+    # A send again would carry the line's words alone, so a person's own
+    # line with files is not offered either.
+    test "the consent restart offers a person's line with files by nothing",
+         %{ctx: ctx, workspace: ws} do
+      id = Prima.UUID7.generate_id("msg")
+      file = %{"filename" => "notes.txt", "bytes" => "hello", "media_type" => "text/plain"}
+      {:ok, refs} = Aqua.Attachments.store(ctx, ws.id, id, [file])
+
+      restarted_offering_nothing!(ctx, ws, fn ->
+        Runner.send_message(ctx, ws.id, "@aqua read my note", id: id, attachments: refs)
+      end)
     end
 
     test "a turn that ends failed is Aqua that could not run there: the thread reads error, " <>
@@ -2736,6 +2943,39 @@ defmodule Aqua.RunnerTest do
       assert is_binary(error) and error != ""
       assert thread_state(ctx, ws.id) == "error"
       assert [%{"outcome" => "error", "turn_id" => ^id, "summary" => ^error}] = reports(ctx)
+    end
+
+    # No reason a turn's own record answers reaches a turn's end, or the
+    # report its daily thread is told, as its atom: each
+    # (`Prima.Refusal.turn_reasons/0`), the end of a turn failed and
+    # uncertain through the loop's one terminal transaction
+    # (`Aqua.Loop.conclude/2`), reads as its row's sentence.
+    test "every turn reason a turn ends with reads as its sentence, never its atom",
+         %{ctx: ctx} do
+      guest = Sanctum.Context.enter_guest(ctx)
+
+      for reason <- Prima.Refusal.turn_reasons(),
+          {status, result} <- [{"failed", {:failed, reason}}, {"uncertain", {:uncertain, reason}}] do
+        ws = workspace!(ctx)
+
+        {:ok, %{turn: turn}} =
+          Tape.accept(ctx, ws.id, %{
+            message: %{author: ctx.user_id, sent_by: "person", content: "go"},
+            turn: %{agent: "aqua", requested_by: ctx.user_id}
+          })
+
+        state = %Aqua.Loop.State{spec: %Aqua.Loop.Turn{ctx: ctx, guest: guest}, turn: turn}
+        assert Aqua.Loop.conclude(state, {result, state}) == result
+
+        said = Prima.Refusal.message(reason)
+        refute said == Atom.to_string(reason)
+        assert {:ok, %{status: ^status, error: ^said}} = Tape.turn(ctx, turn.id)
+        turn_id = turn.id
+
+        assert [%{"outcome" => "error", "summary" => ^said}] =
+                 Enum.filter(reports(ctx), &(&1["turn_id"] == turn_id)),
+               "#{inspect(result)} reported otherwise"
+      end
     end
 
     test "a loop that crashes leaves its turn uncertain: the thread reads error, with one " <>
@@ -2757,6 +2997,25 @@ defmodule Aqua.RunnerTest do
       assert thread_state(ctx, ws.id) == "error"
       assert [%{"outcome" => "error", "turn_id" => ^id, "summary" => ^error}] = reports(ctx)
     end
+  end
+
+  # The turn `send` opens in the workspace thread `ws`, held at its model,
+  # cut by the consent restart: it ends cancelled, and nothing is offered
+  # to send again.
+  defp restarted_offering_nothing!(ctx, ws, send) do
+    script!([{:probe, self()}, reply("never sent")])
+    {:ok, %{turn_id: id}} = send.()
+    assert {:ok, %{message_id: message_id}} = Tape.turn(ctx, id)
+    assert {:ok, %{content: content}} = Tape.message(ctx, message_id)
+    assert is_binary(content) and content != ""
+    pids = running!(ws)
+
+    # The prompt is broadcast before the restart answers, or never.
+    assert :ok = Runner.restart_for_consent(ctx, ws.id, %{})
+    refute_received %ThreadEvent{kind: :restart_prompt}
+    send(pids.call, :continue)
+
+    assert {:ok, %{status: "cancelled", error: "restart required"}} = Tape.turn(ctx, id)
   end
 
   # A workspace thread of the person's, as a workspace's opening makes one.

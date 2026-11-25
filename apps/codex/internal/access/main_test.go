@@ -198,9 +198,9 @@ func (h *testHome) assertConverged(want ...string) {
 func id(n int) string { return fmt.Sprintf("%032x", n) }
 
 // localStack, publicStack and tailnetStack are the services each mode
-// runs with builds on, as .env.example has them.
+// runs, as docker-compose.yml has them.
 var (
-	baseStack    = []string{"cyfr", "locus-backends", "locus-backends-guard", "locus-builds", "locus-builds-guard", "locus-runtime"}
+	baseStack    = []string{"cyfr", "locus", "locus-guard"}
 	publicStack  = append(slices.Clone(baseStack), "caddy")
 	tailnetStack = append(slices.Clone(baseStack), "tailscale")
 )

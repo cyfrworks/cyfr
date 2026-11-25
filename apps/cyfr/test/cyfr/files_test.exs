@@ -801,10 +801,16 @@ defmodule Arca.FilesTest do
     assert {:ok, _} = Files.write(actor, "aqua/crew/mine.md", "---\ntitle: Mine\n---\n")
 
     assert {:ok, _} =
-             Files.write(actor, "aqua/skills/pdf/SKILL.md", "---\nname: pdf\n---\n\npdf\n")
+             Files.write(
+               actor,
+               "aqua/scrolls/mine/skills/pdf/SKILL.md",
+               "---\nname: pdf\n---\n\npdf\n"
+             )
 
     assert {:ok, %{deleted: "aqua/crew/mine.md"}} = Files.delete(actor, "aqua/crew/mine.md")
-    assert {:ok, %{deleted: "aqua/skills/pdf"}} = Files.delete(actor, "aqua/skills/pdf")
+
+    assert {:ok, %{deleted: "aqua/scrolls/mine/skills/pdf"}} =
+             Files.delete(actor, "aqua/scrolls/mine/skills/pdf")
   end
 
   test "locate/2 names the bytes the download route streams, in any shown folder", %{

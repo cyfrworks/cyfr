@@ -319,14 +319,12 @@ func TestSystemDockerChildren(t *testing.T) {
 }
 
 // Ruling 6's check: COMPOSE_PROFILES=public,tailnet in cyfr's own
-// environment starts neither proxy for a local home with builds off.
+// environment starts neither proxy for a local home.
 // Every compose call names its project, its file, its directory and
 // exactly the head's profiles, none here.
 func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
 	t.Setenv("COMPOSE_PROFILES", "public,tailnet")
 	h, state := binaryHome(t, false)
-	env := strings.Replace(h.env(), "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100", "CYFR_LOCUS_BUILDS_URL=", 1)
-	writeFile(t, filepath.Join(h.dir, ".env"), []byte(env))
 	head := h.head()
 	if len(head.Profiles) != 0 {
 		t.Fatalf("the head selects %v", head.Profiles)
@@ -341,7 +339,7 @@ func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
 	unlock()
 	st := readFakeState(t, state)
 	for name, ct := range st.Containers {
-		if ct.Service == "caddy" || ct.Service == "tailscale" || ct.Service == "locus-builds" {
+		if ct.Service == "caddy" || ct.Service == "tailscale" {
 			t.Errorf("%s started", name)
 		}
 	}
@@ -361,7 +359,7 @@ func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
 			}
 			// The one read of every access mode's services names their
 			// profiles; nothing the home starts names any.
-			if !slices.Contains(c.Args, "config") || !slices.Contains(accessModeProfiles(), c.Args[i+1]) {
+			if !slices.Contains(c.Args, "config") || !slices.Contains(ModeProfiles(), c.Args[i+1]) {
 				t.Errorf("a compose call selects profile %s: %s", c.Args[i+1], c)
 			}
 		}

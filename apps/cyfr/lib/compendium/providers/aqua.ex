@@ -12,8 +12,9 @@ defmodule Compendium.Providers.Aqua do
   (`Compendium.AquaAgent` is the format, `Compendium.AquaPath` the
   layout) — served through the seed overlay: shipped files read through
   until edited, edited ones shadow only themselves, and deleting an
-  edited copy reverts it to shipped. Skills follow the
-  open Agent Skills convention under `aqua/skills/<name>/SKILL.md`.
+  edited copy reverts it to shipped. Scrolls are Agent Skills kept in
+  packs under `aqua/scrolls/<pack>/` (`Compendium.Packs`), each named
+  `<pack>:<scroll>`.
   """
 
   require Logger
@@ -117,7 +118,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             )
           ],
           kind: :read,
@@ -131,7 +132,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             ),
             Arg.new("title", :string,
               description: "Human-readable title (for create/update actions)"
@@ -172,7 +173,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             ),
             Arg.new("title", :string,
               nullable: true,
@@ -256,7 +257,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             )
           ],
           kind: :destructive,
@@ -271,11 +272,11 @@ defmodule Compendium.Providers.Aqua do
           [
             Arg.new("name", :string,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             ),
             Arg.new("all", :boolean,
               description:
-                "For reset: also DELETE the crew members and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)"
+                "For reset: also DELETE the crew members the athanor made, so the soul and the crew become exactly the shipped set (default false keeps them). Reset never touches a pack of scrolls"
             )
           ],
           kind: :destructive,
@@ -300,7 +301,11 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
+            ),
+            Arg.new("path", :string,
+              description:
+                "skill_get: one file of the scroll's pack by its path inside the pack, like 'skills/research/scripts/fetch.sh'; read as outside material"
             )
           ],
           kind: :read,
@@ -315,7 +320,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             ),
             Arg.new("description", :string,
               required: true,
@@ -331,6 +336,10 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("against", :string,
               description:
                 "skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since"
+            ),
+            Arg.new("new_pack", :boolean,
+              description:
+                "skill_create from a person's New pack: the scroll is its pack's first, and the write is refused when a pack of that name is already here (default false writes into the pack, making it when there is none)"
             )
           ],
           kind: :write,
@@ -346,7 +355,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             ),
             Arg.new("description", :string,
               description:
@@ -375,23 +384,7 @@ defmodule Compendium.Providers.Aqua do
             Arg.new("name", :string,
               required: true,
               description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
-            )
-          ],
-          kind: :destructive,
-          planes: [:external],
-          consent: :interactive,
-          permission: :component_manage
-        ),
-        Operation.new(
-          "aqua",
-          "skill_reset",
-          "Restore a shipped scroll",
-          [
-            Arg.new("name", :string,
-              required: true,
-              description:
-                "Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+                "Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)"
             )
           ],
           kind: :destructive,
@@ -401,7 +394,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members and scrolls the athanor made are kept unless all=true).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_delete' to remove one there, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
       title: "Aqua Agent System"
     )
   end
@@ -711,28 +704,25 @@ defmodule Compendium.Providers.Aqua do
 
   # --- skills ---
 
-  # The index is `Compendium.AquaSkills`' — the same read the turn's
-  # prompt makes in-process, so the tool and the prompt cannot list two
-  # different sets of scrolls.
+  # The index is `Compendium.Packs`' — the same read the turn's prompt
+  # makes in-process, so the tool and the prompt cannot list two
+  # different sets of scrolls. It lists the scrolls of the packs
+  # switched on, by their full names.
   def handle(%Context{} = ctx, %{"action" => "skill_list"}) do
-    case Compendium.AquaSkills.index(ctx) do
+    case Compendium.Packs.index(ctx) do
       {:ok, []} ->
-        # An honest empty state: the machinery is live even when the
-        # install ships no skills — a release adding seed/aqua/skills/
-        # needs no code.
         {:ok,
          %{
            skills: [],
            count: 0,
            hint:
-             "No skills installed. Create one at aqua/skills/<name>/SKILL.md " <>
-               "(Agent Skills format: frontmatter name + description); skills a " <>
-               "release ships appear here automatically."
+             "No scrolls in the packs switched on. A scroll is named by its pack and its " <>
+               "name, like mine:research; the person keeps packs on the Aqua page's Scrolls."
          }}
 
       {:ok, skills} ->
         skills = listed(ctx, skills)
-        {:ok, %{skills: skills, count: length(skills)}}
+        {:ok, %{skills: Enum.map(skills, &listed_entry/1), count: length(skills)}}
 
       {:error, reason} ->
         Logger.error("[Compendium.Providers.Aqua] aqua.skill_list failed: #{inspect(reason)}")
@@ -740,25 +730,60 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # One file of a scroll's pack by its path, outside material: a text file
+  # whole or cut at the bound with a note, a binary by its type and size.
+  def handle(%Context{} = ctx, %{"action" => "skill_get", "name" => name, "path" => path})
+      when is_binary(path) do
+    case Compendium.Packs.file(ctx, name, path) do
+      {:ok, %{format: "text"} = file} ->
+        {:ok,
+         %{
+           name: file.name,
+           path: file.path,
+           size: file.size,
+           format: "text",
+           content: file.content
+         }
+         |> then(&if(file.cut, do: Map.put(&1, :note, cut_note(file)), else: &1))}
+
+      {:ok, %{format: "binary"} = file} ->
+        {:ok,
+         %{
+           name: file.name,
+           path: file.path,
+           size: file.size,
+           format: "binary",
+           type: file.type,
+           note: "A binary file of #{file.size} bytes (#{file.type}): not shown."
+         }}
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "File", "#{name} #{path}"}}
+
+      {:error, reason} ->
+        passthrough_or_unavailable(reason, "aqua.skill_get #{name} #{path}")
+    end
+  end
+
   # The one read of a scroll by name (`Compendium.skill/2`). A chain is
-  # never handed a scroll past the bound (`Compendium.AquaSkills`); the
+  # never handed a scroll past the bound (`Compendium.Packs`); the
   # Scrolls editor reads it from outside, to show it and say why.
   def handle(%Context{} = ctx, %{"action" => "skill_get", "name" => name}) do
-    with :ok <- validate_name(name),
-         {:ok, scroll} <- Compendium.skill(ctx, name),
+    with {:ok, scroll} <- Compendium.skill(ctx, name),
          :ok <- carried(ctx, scroll) do
       {:ok,
        %{
-         name: name,
+         name: scroll.name,
          title: scroll.title,
          description: scroll.description,
          format: "markdown",
          content: scroll.body,
-         resources: scroll.files
+         resources: scroll.files,
+         kept: scroll.kept
        }}
     else
       {:error, :not_found} ->
-        {:error, {:not_found, "Scroll", name}}
+        {:error, {:not_found, "Scroll", to_string(name)}}
 
       {:error, {:invalid_argument, _} = refusal} ->
         {:error, refusal}
@@ -767,44 +792,46 @@ defmodule Compendium.Providers.Aqua do
         {:error, reason}
 
       {:error, reason} ->
-        passthrough_or_unavailable(reason, "aqua.skill_get #{name}")
+        passthrough_or_unavailable(reason, "aqua.skill_get #{inspect(name)}")
     end
   end
 
   # A chain's create writes nothing: it answers the scroll as it would be
   # stored, made against no scroll of its name, for the person to save.
   def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_create", "name" => name} = args) do
-    with :ok <- validate_name(name),
-         {:ok, _manifest} <- skill_manifest_bytes(name, args["description"], args["content"]),
+    with {:ok, pack, scroll} <- scroll_name(ctx, name),
+         :ok <- own_pack(ctx, pack),
+         {:ok, _manifest} <- skill_manifest_bytes(scroll, args["description"], args["content"]),
          :ok <- untaken(ctx, name) do
-      {:ok, proposal(name, args["description"], args["content"], @against_none)}
+      proposal = proposal(name, args["description"], args["content"], @against_none)
+
+      # A proposal carries everything Save needs: one that makes a new pack
+      # says so, and Save is then create-only, refused when the pack is
+      # there, as the page's own New pack is.
+      {:ok, if(args["new_pack"] == true, do: Map.put(proposal, :new_pack, true), else: proposal)}
     end
   end
 
-  # A scroll is a dir unit with `SKILL.md` as its sentinel. Creating one
-  # lands the manifest through the overlay's unit commit — sentinel last,
-  # rollback on failure — so a half-written scroll never reads as one. The
-  # name is taken if the union holds it, shipped or the athanor's own, and
-  # the commit asks that while it holds the unit's draft (`if_absent:`),
-  # so two creators of one name cannot both pass a probe and have the
-  # second silently replace the first. A save of a proposal names it made
-  # against none, the one thing a create can be made against.
+  # A scroll is a folder of its pack, `skills/<scroll>/SKILL.md`. Creating
+  # one is a write into the pack as every write into it is
+  # (`Compendium.Packs.put_scroll/4`, under `Compendium.Packs.admit_edit/4`):
+  # into a pack of the person's own, which the write makes when there is
+  # none of that name, and never into a brought pack or `cyfr`. The write
+  # asks whether the name is taken while it holds the pack's draft, so two
+  # creators of one name cannot both land. A save of a proposal names it
+  # made against none, the one thing a create can be made against.
   def handle(%Context{} = ctx, %{"action" => "skill_create", "name" => name} = args) do
-    with :ok <- validate_name(name),
+    with {:ok, _pack, scroll} <- scroll_name(ctx, name),
          :ok <- against_none(args),
-         {:ok, manifest} <- skill_manifest_bytes(name, args["description"], args["content"]) do
-      case Arca.Overlay.commit_unit(
-             Sanctum.Context.actor(ctx),
-             AquaPath.skill_dir(name),
-             {:files, [{[AquaPath.skill_manifest_name()], manifest}]},
-             cap: {:checked, byte_size(manifest)},
-             if_absent: true
-           ) do
-        {:ok, _written} ->
+         {:ok, manifest} <- skill_manifest_bytes(scroll, args["description"], args["content"]) do
+      mode = if args["new_pack"] == true, do: :new_pack, else: :create
+
+      case Compendium.Packs.put_scroll(ctx, name, manifest, mode) do
+        :ok ->
           {:ok, %{created: name}}
 
-        {:error, :exists} ->
-          {:error, {:invalid_argument, taken(name)}}
+        {:error, {:invalid_argument, _} = refusal} ->
+          {:error, refusal}
 
         {:error, {:limit_reached, _, _} = reason} ->
           {:error, reason}
@@ -819,12 +846,13 @@ defmodule Compendium.Providers.Aqua do
   # the update would store it, the fields the call leaves out read now,
   # and the digest of the stored manifest it was made against.
   def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_update", "name" => name} = args) do
-    with :ok <- validate_name(name),
-         {:ok, current} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name)),
+    with {:ok, pack, scroll} <- scroll_name(ctx, name),
+         {:ok, %{bytes: current, origin: origin}} <- Compendium.Packs.manifest(ctx, name),
+         :ok <- own_origin(pack, origin),
          {:ok, meta, body} <- AquaAgent.parse_frontmatter(current),
          description = Map.get(args, "description", meta["description"]),
          content = Map.get(args, "content", body),
-         {:ok, _manifest} <- skill_manifest_bytes(name, description, content) do
+         {:ok, _manifest} <- skill_manifest_bytes(scroll, description, content) do
       {:ok, proposal(name, description, content, Prima.Digest.sha256(current))}
     else
       {:error, :not_found} ->
@@ -841,63 +869,61 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  # Updating rewrites the manifest alone, as one serialized
-  # read-modify-write: the fields the call leaves out are read from the
-  # manifest as it is at the moment of the write, so two concurrent
-  # updates cannot lose one, and a save of a proposal is refused, inside
-  # the same write, when the manifest is no longer the one it was made
-  # against.
-  # The write inside is a plain put, so the scroll's other files stay; a
-  # unit commit here would replace the unit whole and drop them.
+  # Updating rewrites the manifest alone, under the pack's draft: the
+  # fields the call leaves out are read from the manifest as it is at the
+  # moment of the write, so two concurrent updates cannot lose one, and a
+  # save of a proposal is refused, inside the same write, when the
+  # manifest is no longer the one it was made against. The scroll's other
+  # files stay.
   def handle(%Context{} = ctx, %{"action" => "skill_update", "name" => name} = args) do
-    rewrite = fn current ->
-      with :ok <- unchanged(name, current, args["against"]),
-           {:ok, meta, body} <- AquaAgent.parse_frontmatter(current) do
-        skill_manifest_bytes(
-          name,
-          Map.get(args, "description", meta["description"]),
-          Map.get(args, "content", body)
-        )
+    with {:ok, _pack, scroll} <- scroll_name(ctx, name) do
+      rewrite = fn current ->
+        with :ok <- unchanged(name, current, args["against"]),
+             {:ok, meta, body} <- AquaAgent.parse_frontmatter(current) do
+          skill_manifest_bytes(
+            scroll,
+            Map.get(args, "description", meta["description"]),
+            Map.get(args, "content", body)
+          )
+        end
       end
-    end
 
-    with :ok <- validate_name(name),
-         :ok <-
-           Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name), rewrite) do
-      {:ok, %{updated: name}}
-    else
-      {:error, :not_found} ->
-        {:error, {:not_found, "Scroll", name}}
+      case Compendium.Packs.put_scroll(ctx, name, nil, {:update, rewrite}) do
+        :ok ->
+          {:ok, %{updated: name}}
 
-      {:error, {:invalid_argument, _} = refusal} ->
-        {:error, refusal}
+        {:error, :not_found} ->
+          {:error, {:not_found, "Scroll", name}}
 
-      {:error, {:conflict, _} = refusal} ->
-        {:error, refusal}
+        {:error, {:invalid_argument, _} = refusal} ->
+          {:error, refusal}
 
-      {:error, {:limit_reached, _, _} = reason} ->
-        {:error, reason}
+        {:error, {:conflict, _} = refusal} ->
+          {:error, refusal}
 
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
+        {:error, {:limit_reached, _, _} = reason} ->
+          {:error, reason}
 
-      {:error, reason} ->
-        passthrough_or_unavailable(reason, "aqua.skill_update #{name}")
+        {:error, reason} when is_binary(reason) ->
+          {:error, reason}
+
+        {:error, reason} ->
+          passthrough_or_unavailable(reason, "aqua.skill_update #{name}")
+      end
     end
   end
 
-  # Same disposition as an agent: a shipped scroll is restored by a reset,
-  # never deleted; the athanor's own goes.
+  # A scroll's folder goes whole, as a delete through Files takes it: a
+  # write into its pack, which a brought pack and `cyfr` refuse.
   def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
-    with :ok <- validate_name(name) do
-      case Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), AquaPath.skill_dir(name)) do
-        {:ok, :deleted} ->
+    with {:ok, pack, _scroll} <- scroll_name(ctx, name),
+         {:ok, %{folder: folder}} <- Compendium.Packs.manifest(ctx, name) do
+      case Arca.delete_tree(Sanctum.Context.actor(ctx), AquaPath.scroll_dir(pack, folder)) do
+        :ok ->
           {:ok, %{deleted: name}}
 
-        {:error, :bundled} ->
-          {:error,
-           {:invalid_argument,
-            "Scroll '#{name}' ships with the server and cannot be deleted — edit it, or reset"}}
+        {:error, {:invalid_argument, _} = refusal} ->
+          {:error, refusal}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Scroll", name}}
@@ -912,14 +938,9 @@ defmodule Compendium.Providers.Aqua do
 
           {:error, {:unavailable, "Storage"}}
       end
-    end
-  end
-
-  # --- skill_reset ---
-
-  def handle(%Context{} = ctx, %{"action" => "skill_reset", "name" => name}) do
-    with :ok <- validate_name(name) do
-      restore_unit(ctx, AquaPath.skill_dir(name), "Scroll", name)
+    else
+      {:error, :not_found} -> {:error, {:not_found, "Scroll", name}}
+      {:error, _} = refused -> refused
     end
   end
 
@@ -1113,11 +1134,11 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  # The Agent Skills manifest: frontmatter `name` (the directory's) and a
+  # The Agent Skills manifest: frontmatter `name` (the scroll's, its folder's) and a
   # one-line `description` (what the index shows), then the body. Both
   # are required — a scroll nobody can find by its line is not a scroll —
   # and the whole is within the bound every harness carries
-  # (`Compendium.AquaSkills`). Values are JSON-encoded, the one YAML
+  # (`Compendium.Packs`). Values are JSON-encoded, the one YAML
   # scalar spelling that survives any description.
   defp skill_manifest_bytes(name, description, content) do
     description = if is_binary(description), do: String.trim(description), else: ""
@@ -1148,7 +1169,7 @@ defmodule Compendium.Providers.Aqua do
             "\n"
           ])
 
-        if Compendium.AquaSkills.fits?(byte_size(manifest), description),
+        if Compendium.Packs.fits?(byte_size(manifest), description),
           do: {:ok, manifest},
           else: {:error, {:invalid_argument, too_large(name)}}
     end
@@ -1157,8 +1178,8 @@ defmodule Compendium.Providers.Aqua do
   defp too_large(name),
     do:
       "The scroll '#{name}' is too large for Aqua to use: a scroll, its files' names " <>
-        "with it, holds at most #{Compendium.AquaSkills.max_bytes()} bytes and its " <>
-        "description at most #{Compendium.AquaSkills.max_description()} characters"
+        "with it, holds at most #{Compendium.Packs.max_bytes()} bytes and its " <>
+        "description at most #{Compendium.Packs.max_description()} characters"
 
   defp taken(name), do: "Scroll '#{name}' already exists"
 
@@ -1174,14 +1195,56 @@ defmodule Compendium.Providers.Aqua do
   defp listed(_ctx, skills), do: skills
 
   # A chain's proposal of a create names a scroll the athanor has none of
-  # yet, as the save's `if_absent:` will.
+  # yet, as the save's write will ask under the pack's draft.
   defp untaken(ctx, name) do
-    case Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name)) do
+    case Compendium.Packs.manifest(ctx, name) do
       {:ok, _manifest} -> {:error, {:invalid_argument, taken(name)}}
       {:error, :not_found} -> :ok
       {:error, reason} -> passthrough_or_unavailable(reason, "aqua.skill_create #{name}")
     end
   end
+
+  # A scroll's name at this door: its pack and its name. A bare name is
+  # refused with the sentence naming the full names it matches
+  # (`Compendium.Packs.bare_refusal/2`).
+  defp scroll_name(ctx, name) do
+    case Compendium.Packs.split_name(name) do
+      {:ok, pack, scroll} ->
+        {:ok, pack, scroll}
+
+      {:bare, bare} ->
+        Compendium.Packs.bare_refusal(Sanctum.Context.actor(ctx), bare)
+
+      :error ->
+        {:error,
+         {:invalid_argument,
+          "Invalid scroll name #{inspect(name)} — a scroll is named by its pack and its name, " <>
+            "like mine:research, each of letters, digits, '_' and '-'"}}
+    end
+  end
+
+  # A turn proposes only into a pack of the person's own, or one its save
+  # would make.
+  defp own_pack(ctx, pack) do
+    case Compendium.Packs.pack(ctx, pack) do
+      {:ok, %{origin: origin}} ->
+        own_origin(pack, origin)
+
+      {:error, :not_found} ->
+        if pack == Compendium.Packs.cyfr(), do: own_origin(pack, "cyfr"), else: :ok
+    end
+  end
+
+  defp own_origin(_pack, "own"), do: :ok
+  defp own_origin(pack, origin), do: {:error, Compendium.Packs.sealed(pack, origin || "brought")}
+
+  defp listed_entry(entry),
+    do: Map.take(entry, [:name, :title, :description, :carried, :kept])
+
+  defp cut_note(file),
+    do:
+      "The file holds #{file.size} bytes; the first #{byte_size(file.content)} are shown, " <>
+        "cut at a scroll's bound."
 
   # What a chain answers in place of a write: the whole scroll as it would
   # be stored, and what it was made against, which a save sends back.

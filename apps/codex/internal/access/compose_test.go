@@ -177,7 +177,7 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 		{"interpolated bare name", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - $HOSTKEY\n"}, "docker-compose.override.yml", "cyfr", "$HOSTKEY", ""},
 		{"unresolvable key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - ${NOT_SET_ANYWHERE}=localhost\n"}, "docker-compose.override.yml", "cyfr", "${NOT_SET_ANYWHERE}", ""},
 		{"interpolated mapping key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      ${HOSTKEY}: localhost\n"}, "docker-compose.override.yml", "cyfr", "${HOSTKEY}", ""},
-		{"interpolated key in another service", map[string]string{"docker-compose.override.yml": "services:\n  locus-runtime:\n    environment:\n      - ${PREFIX}_SETTING=1\n"}, "docker-compose.override.yml", "locus-runtime", "${PREFIX}_SETTING", ""},
+		{"interpolated key in another service", map[string]string{"docker-compose.override.yml": "services:\n  locus:\n    environment:\n      - ${PREFIX}_SETTING=1\n"}, "docker-compose.override.yml", "locus", "${PREFIX}_SETTING", ""},
 		{"interpolated key in an extended service", map[string]string{
 			"docker-compose.override.yml": "services:\n  helper:\n    image: busybox:latest\n    extends:\n      file: base.yml\n      service: base\n",
 			"base.yml":                    "services:\n  base:\n    environment:\n      - $${HOSTKEY}=1\n",
@@ -297,7 +297,7 @@ func TestComposeArgsFollowsItsInputs(t *testing.T) {
 	for _, change := range []struct{ name, file, from, to, want string }{
 		{"the compose file", "docker-compose.yml", "ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr:0.9.1", "image: ghcr.io/cyfrworks/cyfr:0.9.1"},
 		{"an included file", "extra.yml", "extra:one", "extra:two", "image: extra:two"},
-		{".env", ".env", "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends", "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,db", "CYFR_PRIVATE_EGRESS_TARGETS: locus-backends,db"},
+		{".env", ".env", "CYFR_PRIVATE_EGRESS_TARGETS=locus", "CYFR_PRIVATE_EGRESS_TARGETS=locus,db", "CYFR_PRIVATE_EGRESS_TARGETS: locus,db"},
 	} {
 		before, calls := read(), configs()
 		data, _ := os.ReadFile(filepath.Join(h.dir, change.file))

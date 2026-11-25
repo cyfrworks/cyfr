@@ -17,16 +17,18 @@
 #               pinned version, and Compendium.Cosign verifies with it keyed
 #               and keyless and refuses another signer (scripts/cosign.sh
 #               check)
-#   cyfr-locus  the Locus image as docker-compose.yml's locus-builds service
-#               runs it (x-locus-role's capabilities, options, the keeper's
-#               seccomp profile and the AppArmor profile cyfr-locus, which
-#               scripts/ci/apparmor-profile.sh loads, and tmpfs mounts) with
-#               a fresh builds key, behind its island's egress guard as
-#               compose starts it (locus-builds-guard: the same image as
+#   cyfr-locus  the Locus image as docker-compose.yml's locus service runs
+#               it (its capabilities, options, the keeper's seccomp profile
+#               and the AppArmor profile cyfr-locus, which
+#               scripts/ci/apparmor-profile.sh loads, its tmpfs mounts and
+#               the kept homes' volume) with a fresh builds key alone, so
+#               the keeper starts the builds role, behind its egress guard
+#               as compose starts it (locus-guard: the same image as
 #               cyfr-guard, NET_ADMIN alone, on a network of the script's
 #               own, its control on a volume the service reads), healthy by
-#               the image's own HEALTHCHECK (the builds wire's health
-#               operation) once the guard is healthy by its own
+#               the image's own HEALTHCHECK (apps/locus/health.sh: the
+#               builds wire's health operation at the guard's address) once
+#               the guard is healthy by its own
 #
 # The container is the script's own and is removed however it ends; on a
 # failure its log's last lines are printed. Exit status: 0 healthy, 1 not
@@ -42,7 +44,7 @@ image=$2
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 name="${PROOF_RUN_PREFIX:-}image-boots-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 trap 'docker rm -f "$name" "$name-guard" >/dev/null 2>&1 || true
-docker volume rm "$name-control" >/dev/null 2>&1 || true
+docker volume rm "$name-control" "$name-homes" >/dev/null 2>&1 || true
 docker network rm "$name-net" >/dev/null 2>&1 || true' EXIT
 
 case "$kind" in
@@ -52,11 +54,12 @@ case "$kind" in
       "$image" >/dev/null
     ;;
   cyfr-locus)
-    # The builds island's guard, as compose starts locus-builds-guard: the
-    # builder listens in its network namespace and its keeper refuses to
-    # start until the guard makes a route.
+    # The guard, as compose starts locus-guard: each role process listens
+    # in a space the guard routes, and the keeper refuses to start a role
+    # until the guard makes its route.
     docker network create "$name-net" >/dev/null
     docker volume create "$name-control" >/dev/null
+    docker volume create "$name-homes" >/dev/null
     gateway="$(docker network inspect "$name-net" --format '{{(index .IPAM.Config 0).Gateway}}')"
     docker run --detach --name "$name-guard" --init --cap-drop ALL --cap-add NET_ADMIN \
       --security-opt no-new-privileges:true --read-only --ipc none \
@@ -77,14 +80,19 @@ case "$kind" in
       sleep 1
     done
     docker run --detach --name "$name" --init --network "container:$name-guard" \
-      -v "$name-control:/run/cyfr-guard-control:ro" \
+      -v "$name-control:/run/cyfr-guard-control:ro" -v "$name-homes:/var/lib/locus/kept" \
       --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add KILL \
       --security-opt no-new-privileges:true --security-opt writable-cgroups=true \
       --security-opt "seccomp=$root/apps/locus/keeper/seccomp/keeper.json" \
       --security-opt "apparmor=$(cat "$root/apps/codex/internal/apparmor/name")" --security-opt systempaths=unconfined \
       --read-only --ipc none \
-      --tmpfs /var/lib/locus/homes:mode=1733,exec,size=256m \
-      --tmpfs /run/locus:uid=10001,gid=10001,mode=0700,size=16m \
+      --tmpfs /var/lib/locus/homes/runtime:mode=1733,exec,size=256m \
+      --tmpfs /var/lib/locus/homes/builds:mode=1733,exec,size=2g \
+      --tmpfs /var/lib/locus/homes/backends:mode=1733,exec,size=2g \
+      --tmpfs /run/locus:mode=0711,size=1m \
+      --tmpfs /run/locus/runtime:uid=10011,gid=10011,mode=0700,size=16m \
+      --tmpfs /run/locus/builds:uid=10012,gid=10012,mode=0700,size=16m \
+      --tmpfs /run/locus/backends:uid=10013,gid=10013,mode=0700,size=16m \
       -e "LOCUS_BUILDS_KEY=$(openssl rand -hex 32)" \
       "$image" >/dev/null
     ;;

@@ -884,7 +884,7 @@ func TestScreenSetupOpen_ReadsCyfrsLog(t *testing.T) {
 func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	dir := t.TempDir()
 	compose := func(tag string) {
-		body := "services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:" + tag + "\n  locus-runtime:\n    image: ghcr.io/cyfrworks/cyfr-locus:" + tag + "\n"
+		body := "services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:" + tag + "\n  locus:\n    image: ghcr.io/cyfrworks/cyfr-locus:" + tag + "\n"
 		if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

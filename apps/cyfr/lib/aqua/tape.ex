@@ -1252,6 +1252,34 @@ defmodule Aqua.Tape do
   def message(%Context{} = ctx, message_id),
     do: Threads.get_message(Sanctum.Context.actor(ctx), message_id)
 
+  @doc """
+  Whether `row` is `person`'s own line: a text message they sent
+  (`sent_by` `"person"`) and wrote (`author` theirs). A schedule's line,
+  sent in the person's name and written by the server, is not, nor a
+  crew member's reply, nor a workspace's opening, which names the person
+  who asked as its author whoever wrote its words.
+  """
+  @spec own_line?(row(), String.t() | nil) :: boolean()
+  def own_line?(%{kind: "text", sent_by: "person", author: person}, person)
+      when is_binary(person),
+      do: true
+
+  def own_line?(_row, _person), do: false
+
+  @doc """
+  The words `row` offers `viewer` to send again, as a new turn, or nil:
+  only `viewer`'s own line (`own_line?/2`) with words and no files, since
+  a send again carries its words alone. Every offer to send a stored line
+  again reads this: the consent restart (`Aqua.Runner`) and a grant's
+  retry (`PrismWeb.ThreadPaneLive`).
+  """
+  @spec again_text(row(), String.t() | nil) :: String.t() | nil
+  def again_text(%{content: text} = row, viewer) when is_binary(text) and text != "" do
+    if own_line?(row, viewer) and Aqua.Attachments.refs_of(row) == [], do: text
+  end
+
+  def again_text(_row, _viewer), do: nil
+
   @doc "The thread a turn belongs to."
   @spec thread(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def thread(%Context{} = ctx, thread_id), do: Threads.get(Sanctum.Context.actor(ctx), thread_id)

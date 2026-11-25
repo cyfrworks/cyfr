@@ -204,11 +204,45 @@ func (c Count) Total() int { return c.Live + c.Zombies }
 // their four uids, skipping the process exclude. A process that vanishes
 // during the scan is not counted.
 func ScanUID(root string, uid int, exclude int) (Count, error) {
-	entries, err := os.ReadDir(root)
+	var c Count
+	err := scan(root, exclude, func(st Status) {
+		switch {
+		case !st.HasUID(uid):
+		case st.Zombie():
+			c.Zombies++
+		default:
+			c.Live++
+		}
+	})
 	if err != nil {
 		return Count{}, err
 	}
-	var c Count
+	return c, nil
+}
+
+// HeldUIDs is every uid a process under root (a /proc mount) holds among
+// its four uids, live or awaiting reaping. A process that vanishes during
+// the scan holds none; one whose status cannot be read or parsed fails the
+// scan, since it may hold any uid.
+func HeldUIDs(root string) (map[int]bool, error) {
+	held := map[int]bool{}
+	err := scan(root, 0, func(st Status) {
+		for _, u := range st.UIDs {
+			held[u] = true
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return held, nil
+}
+
+// scan reads the status of every process under root but exclude.
+func scan(root string, exclude int, each func(Status)) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid <= 0 || pid == exclude {
@@ -219,20 +253,13 @@ func ScanUID(root string, uid int, exclude int) (Count, error) {
 			if errors.Is(err, fs.ErrNotExist) || isESRCH(err) {
 				continue
 			}
-			return Count{}, err
+			return err
 		}
 		st, err := ParseStatus(data)
 		if err != nil {
-			return Count{}, fmt.Errorf("pid %d: %w", pid, err)
+			return fmt.Errorf("pid %d: %w", pid, err)
 		}
-		if !st.HasUID(uid) {
-			continue
-		}
-		if st.Zombie() {
-			c.Zombies++
-		} else {
-			c.Live++
-		}
+		each(st)
 	}
-	return c, nil
+	return nil
 }

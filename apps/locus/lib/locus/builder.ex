@@ -295,6 +295,7 @@ defmodule Locus.Builder do
     refusal.
   - `:on_progress` — a `t:on_progress/0`.
   - `:on_line` — a `t:on_line/0`, handed each output line.
+  - `:heir` — the run's heir (`Locus.Executor`'s `:heir`).
 
   `{:error, :cancelled}` answers a run ended by `Locus.Executor.cancel/1`,
   or by a taker that takes no more.
@@ -304,7 +305,8 @@ defmodule Locus.Builder do
           deadline: integer(),
           budget_ms: pos_integer(),
           on_progress: on_progress(),
-          on_line: on_line()
+          on_line: on_line(),
+          heir: {pid(), term()}
         ) :: {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
   def run(%{language: language, target_type: target_type} = plan, opts \\ []) do
     budget_ms = Keyword.get_lazy(opts, :budget_ms, &Locus.Config.timeout_ms/0)
@@ -320,7 +322,7 @@ defmodule Locus.Builder do
          {:ok, executor} <- executor(),
          :ok <- said(on_progress.(:compiling, plan.announce)),
          {:ok, stream} <-
-           execute(executor, plan, place, {deadline, budget_ms}, on_progress, on_line),
+           execute(executor, plan, place, {deadline, budget_ms}, on_progress, on_line, opts),
          {:ok, outputs} <- outputs(plan, stream, on_progress) do
       {:ok, %{language: language, target_type: target_type, outputs: outputs}}
     end
@@ -541,16 +543,17 @@ defmodule Locus.Builder do
   # ============================================================================
 
   # Runs the build's script and reads its output archive as it arrives.
-  defp execute(executor, plan, place, {deadline, budget_ms}, on_progress, on_line) do
+  defp execute(executor, plan, place, {deadline, budget_ms}, on_progress, on_line, opts) do
     command = %{argv: plan.argv, env: toolchain_env(), stdin: plan.archive}
 
-    opts = [
-      place: place,
-      deadline: deadline,
-      max_stdout_bytes: @max_output_archive_bytes,
-      on_stdout: {stream(plan, on_progress, on_line), &take/2},
-      on_output: &on_progress.(:output, &1)
-    ]
+    opts =
+      [
+        place: place,
+        deadline: deadline,
+        max_stdout_bytes: @max_output_archive_bytes,
+        on_stdout: {stream(plan, on_progress, on_line), &take/2},
+        on_output: &on_progress.(:output, &1)
+      ] ++ Keyword.take(opts, [:heir])
 
     case executor.run(command, opts) do
       {:ok, %{exit: {:status, 0}, taken: stream}} ->

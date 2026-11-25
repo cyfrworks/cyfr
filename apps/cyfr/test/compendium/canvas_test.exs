@@ -303,7 +303,7 @@ defmodule Compendium.CanvasTest do
                Canvas.write(ctx, write_args(template: "react", files: react_page()))
 
       assert message =~ "no builds service is configured"
-      assert message =~ "CYFR_LOCUS_BUILDS_URL"
+      assert message =~ "CYFR_LOCUS_BUILDS_KEY"
       assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
       refute version_exists?(ctx, "0.1.0")
 

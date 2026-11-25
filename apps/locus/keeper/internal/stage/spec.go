@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package stage prepares and executes one spawned process in a space of its
-// own: a user, network and IPC namespace the keeper cloned the stage into,
+// Package stage prepares and executes one spawned process, or one role's
+// process (Spec.Role), in a space of its own: a user, network and IPC
+// namespace the keeper cloned the stage into,
 // and a pid, mount and cgroup namespace the stage clones the space's first
 // process into. The stage keeps the keeper's ids until the keeper maps its
 // namespace; after reading its Spec from fd 3 it becomes the allocated ids,
@@ -48,7 +49,14 @@ type Spec struct {
 	// Kept says Home is a kept home, made by its uid before the spawn and
 	// kept after it: the stage uses it as it is, under HomeRoot, the
 	// kept-homes root, and makes only its tmp directory when it is gone.
-	Kept   bool              `json:"kept"`
+	Kept bool `json:"kept"`
+	// Role names the role whose process this space runs, "" for a spawn's:
+	// its Home is the role's run folder, HomeRoot/Role, the keeper made for
+	// its uid; its Env is its whole environment, which the keeper built;
+	// its control channel is its channel to the keeper; it keeps the
+	// keeper's own resource limits, so Limits is zero; and its group is its
+	// role's leaf.
+	Role   string            `json:"role,omitempty"`
 	Argv   []string          `json:"argv"`
 	Env    map[string]string `json:"env"`
 	Limits protocol.Limits   `json:"limits"`
@@ -81,6 +89,9 @@ func (s Spec) Validate() error {
 	if s.User == "" || strings.ContainsAny(s.User, "\x00\n=") {
 		return errors.New("user must be a plain name")
 	}
+	if s.Role != "" {
+		return s.validateRole()
+	}
 	if s.Kept {
 		if err := (home.Kept{Root: s.HomeRoot, First: s.UID, Last: s.UID}).Validate(s.Home, s.UID); err != nil {
 			return err
@@ -102,18 +113,49 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("limits %+v are outside the ceilings %+v", l, c)
 	}
 	// A pooled uid's group is named for its uid; a kept spawn's for the
-	// spawn, since the spawns of one kept home share its uid.
-	if s.Cgroup != "/"+cgroup.Name(s.UID) &&
-		!(s.Kept && strings.HasPrefix(s.Cgroup, "/"+cgroup.SpawnName("")) && cgroup.ValidName(strings.TrimPrefix(s.Cgroup, "/"))) {
+	// spawn, since the spawns of one kept home share its uid. Either is in
+	// its role's group, or at the namespace root.
+	_, name, ok := cgroup.SplitPath(s.Cgroup)
+	if !ok || (name != cgroup.Name(s.UID) && !(s.Kept && strings.HasPrefix(name, cgroup.SpawnName("")))) {
 		return fmt.Errorf("cgroup %q is not the group of uid %d", s.Cgroup, s.UID)
 	}
 	return nil
 }
 
+// validateRole checks a role's spec: its run folder under the run root, a
+// routed space with its channel and nothing a spawn is given, a command
+// and an environment of plain names and values, and its role's leaf.
+func (s Spec) validateRole() error {
+	if !cgroup.ValidRoleName(s.Role) {
+		return fmt.Errorf("role %q", s.Role)
+	}
+	if !filepath.IsAbs(s.HomeRoot) || filepath.Clean(s.HomeRoot) != s.HomeRoot || s.Home != filepath.Join(s.HomeRoot, s.Role) {
+		return fmt.Errorf("the run folder %q is not %s under the run root %q", s.Home, s.Role, s.HomeRoot)
+	}
+	if s.Kept || s.Terminal || !s.Control || s.Reach != pool.ReachRouted || s.Limits != (protocol.Limits{}) {
+		return errors.New("a role's space is routed, holds its channel, and has no kept home, terminal or limits of its own")
+	}
+	if err := protocol.ValidateCommand(s.Argv, nil); err != nil {
+		return err
+	}
+	for name, value := range s.Env {
+		if name == "" || strings.ContainsAny(name, "=\x00") || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("env %q is not a plain name and value", name)
+		}
+	}
+	if s.Cgroup != cgroup.RoleLeaf(s.Role) {
+		return fmt.Errorf("cgroup %q is not role %s's leaf", s.Cgroup, s.Role)
+	}
+	return nil
+}
+
 // SearchPath is the spawn's PATH. A kept program's is CyfrBin, then the
-// home's .local/bin, where what the person installs goes, then Path; every
-// other spawn's is Path.
+// home's .local/bin, where what the person installs goes, then Path; a
+// role's is its own environment's; every other spawn's is Path.
 func (s Spec) SearchPath() string {
+	if s.Role != "" {
+		return s.Env["PATH"]
+	}
 	if s.Kept {
 		return CyfrBin + ":" + filepath.Join(s.Home, ".local", "bin") + ":" + Path
 	}
@@ -126,12 +168,15 @@ func (s Spec) SearchPath() string {
 // and XDG_BIN_HOME in the home's .local, so what it installs lands on its
 // PATH, unless its own variables name them. Nothing is inherited.
 func (s Spec) Environ() []string {
-	env := []string{
-		"HOME=" + s.Home,
-		"LOGNAME=" + s.User,
-		"PATH=" + s.SearchPath(),
-		"TMPDIR=/tmp",
-		"USER=" + s.User,
+	var env []string
+	if s.Role == "" {
+		env = []string{
+			"HOME=" + s.Home,
+			"LOGNAME=" + s.User,
+			"PATH=" + s.SearchPath(),
+			"TMPDIR=/tmp",
+			"USER=" + s.User,
+		}
 	}
 	own := make(map[string]string, len(s.Env)+2)
 	if s.Kept {

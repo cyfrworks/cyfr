@@ -237,7 +237,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 var reads = map[string]func(srv *Server, w http.ResponseWriter, r *http.Request){
 	"/": func(srv *Server, w http.ResponseWriter, r *http.Request) {
 		v := srv.Shell.shownView()
-		if srv.Reachable == nil && (v.Page == PageSetup || v.Page == PageEnroll) {
+		if srv.Reachable == nil && (v.Page == PageSetup && srv.Shell.cfg.KeyElsewhere == "" || v.Page == PageEnroll) {
 			// Reading the account service's configuration changes nothing:
 			// it names the terms the page asks to be accepted. A screen's
 			// page leaves it to its reading (read).
@@ -528,14 +528,17 @@ type pageData struct {
 	Lasting string
 	// Unwatched is why the device may not be unlocked now.
 	Unwatched string
-	Answer    string
-	Warn      []string
-	QR        template.HTML
-	Digits    bool
-	Print     template.JS
-	Close     template.JS
-	Keep      template.JS
-	Fields    [][2]string
+	// KeyElsewhere is Config.KeyElsewhere on the setup page of a shell
+	// that may not make the key: it offers no way to make one.
+	KeyElsewhere string
+	Answer       string
+	Warn         []string
+	QR           template.HTML
+	Digits       bool
+	Print        template.JS
+	Close        template.JS
+	Keep         template.JS
+	Fields       [][2]string
 	// Proof is the proof this answer hands its page, To the ticket's
 	// address it goes on to, and Reveal whether a recovery page without its
 	// code asks for it with the proof the page keeps.
@@ -549,6 +552,9 @@ func (srv *Server) page(w http.ResponseWriter, d pageData) {
 	d.Print, d.Close, d.Keep = template.JS(printScript), template.JS(closeScript), template.JS(keepScript)
 	d.Digits = v.Kind == holder.KindChip || (v.Kind == "" && v.Chip && !v.Drawn)
 	d.Unwatched = srv.Shell.cfg.Unwatched()
+	if v.Page == PageSetup {
+		d.KeyElsewhere = srv.Shell.cfg.KeyElsewhere
+	}
 	if srv.Reachable != nil && (v.Page == PageSetup || v.Page == PageEnroll || v.Page == PageLocked) {
 		answered, lasting := srv.read(v.Page)
 		d.Waiting = !answered && v.Page != PageEnroll

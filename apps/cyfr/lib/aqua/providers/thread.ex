@@ -618,7 +618,7 @@ defmodule Aqua.Providers.Thread do
             ),
             Arg.new("scrolls", {:array, Arg.new(nil, :string)},
               description:
-                "ask: names of this athanor's scrolls the member is to follow, handed over with the job and read after it"
+                "ask: the full names of this athanor's scrolls the member is to follow, each its pack and its name like 'mine:research', handed over with the job and read after it"
             ),
             Arg.new("options", {:map, Arg.new(nil, :json)},
               description: "ask: options for the member's brain, those it declares"

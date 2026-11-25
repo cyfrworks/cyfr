@@ -43,7 +43,9 @@ defmodule PrismWeb.ThreadPaneLive do
   already ended, so once it is granted nothing is cut, and the pane
   offers to send that turn's own message (`message_id` on the event,
   read by its id from this thread) again, as a new turn, or says that
-  the turn ended when it has no such message to offer.
+  the turn ended when it has no such message to offer. A person's turn
+  refused for Aqua's grant asks for it the same way, its message beside
+  it: granted, that message is offered again as a new turn.
 
   Every line is named by who sent it (`sent_by`): a person as the console
   names them, the soul as Aqua, a crew member by its name. A schedule's
@@ -841,15 +843,22 @@ defmodule PrismWeb.ThreadPaneLive do
          {:ok, %{thread_id: ^thread_id} = row} <-
            Threads.get_message(Sanctum.Context.actor(ctx), id),
          %{} = proposal <- proposal(row) do
+      {action, against} = save_action(ctx, proposal)
+
+      args = %{
+        "action" => action,
+        "name" => proposal["name"],
+        "description" => proposal["description"],
+        "content" => proposal["content"],
+        "against" => against
+      }
+
+      # A proposal that makes a new pack is saved create-only, as the
+      # Scrolls page's New pack is: refused when the pack is there.
+      args = if proposal["new_pack"] == true, do: Map.put(args, "new_pack", true), else: args
+
       status =
-        case call_tool(ctx, "aqua", %{
-               "action" =>
-                 if(proposal["against"] == "none", do: "skill_create", else: "skill_update"),
-               "name" => proposal["name"],
-               "description" => proposal["description"],
-               "content" => proposal["content"],
-               "against" => proposal["against"]
-             }) do
+        case call_tool(ctx, "aqua", args) do
           {:ok, _saved} -> :saved
           {:error, reason} -> {:refused, error_message(reason)}
         end
@@ -1536,12 +1545,18 @@ defmodule PrismWeb.ThreadPaneLive do
 
         socket
         |> assign(:grant_prompt, id)
-        |> assign(:grant_retry, if(account, do: {:account, message_id}))
+        |> assign(:grant_retry, retry_of(account, message_id))
 
       {:error, reason} ->
         put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
     end
   end
+
+  # What the pane offers once the grant is given: a launch's account, or
+  # Aqua's grant for a refused message, offers that message again.
+  defp retry_of(nil, nil), do: nil
+  defp retry_of(nil, message_id), do: {:grant, message_id}
+  defp retry_of(_account, message_id), do: {:account, message_id}
 
   defp account_opts(%{name: name} = account) when is_binary(name),
     do: [account: %{name: name, dep: nil, need: Map.get(account, :need)}]
@@ -1550,36 +1565,32 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The text of the ended turn's own message, read by its id from this
   # thread: never a scan of the rows around it, which may hold a line
-  # queued while the turn ran, or not reach back to it at all.
+  # queued while the turn ran, or not reach back to it at all. It is
+  # offered as every stored line is (`Aqua.again_text/2`): this person's
+  # own words with no files; its thread's line says to send it again.
   defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}, message_id)
        when is_binary(message_id) do
     case Threads.get_message(Sanctum.Context.actor(ctx), message_id) do
-      {:ok, %{thread_id: ^thread_id, kind: "text", content: text}}
-      when is_binary(text) and text != "" ->
-        text
-
-      _none ->
-        nil
+      {:ok, %{thread_id: ^thread_id} = row} -> Aqua.again_text(row, ctx.user_id)
+      _none -> nil
     end
   end
 
   defp retry_text(_socket, _message_id), do: nil
 
-  # A grant opened for a launch's account offers its turn's message again,
-  # as a new turn: that turn ended, so nothing is cut, and with no message
-  # of that turn to offer the pane only says so. Any other grant cuts the
-  # running turn for the new consent.
-  defp after_grant(%{assigns: %{grant_retry: {:account, message_id}}} = socket) do
+  # A grant opened for a launch's account, or for a message refused for
+  # Aqua's grant, offers its turn's message again, as a new
+  # turn: that turn ended, so nothing is cut, and with no message of that
+  # turn to offer the pane only says so. Any other grant cuts the running
+  # turn for the new consent.
+  defp after_grant(%{assigns: %{grant_retry: {kind, message_id}}} = socket) do
     socket = assign(socket, :grant_retry, nil)
 
     case retry_text(socket, message_id) do
       text when is_binary(text) ->
         socket
         |> assign(:restart_prompt, text)
-        |> assign(
-          :restart_note,
-          "The account is granted — send that message again, as a new turn?"
-        )
+        |> assign(:restart_note, retry_note(kind))
         |> put_flash(:info, "Granted — re-send to continue.")
 
       nil ->
@@ -1592,6 +1603,11 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp after_grant(socket), do: socket |> assign(:grant_retry, nil) |> restart_for_consent()
+
+  defp retry_note(:account),
+    do: "The account is granted — send that message again, as a new turn?"
+
+  defp retry_note(:grant), do: "Granted — send that message again, as a new turn?"
 
   defp restart_for_consent(socket) do
     case socket.assigns.thread do
@@ -1687,10 +1703,16 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
+  # The crew's grant's state as its refusal row names it (`Prima.Refusal`).
+  defp grant_row(:consent_absent), do: :ungranted
+  defp grant_row(:consent_revoked), do: :grant_revoked
+  defp grant_row(:consent_stale), do: :agent_changed
+
   defp unready_model(statuses) do
     cond do
       Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
       Enum.any?(statuses, &match?({:consent_absent, _}, &1)) -> :consent_absent
+      Enum.any?(statuses, &match?({:consent_revoked, _}, &1)) -> :consent_revoked
       Enum.any?(statuses, &match?({:consent_stale, _}, &1)) -> :consent_stale
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
@@ -2063,12 +2085,13 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua?setup=1")}
                   class="text-blue-400 hover:underline"
                 >
-                  Grant it on your Aqua page.
+                  {Prima.Refusal.grant_action(:ungranted)}
                 </.link>
-              <% @model_ready in [:consent_absent, :consent_stale] -> %>
-                <%!-- The crew's grant was never given, or no longer covers
-                     what the crew may use: granting it on the Aqua page is
-                     all it needs, never a model to connect. --%>
+              <% @model_ready in [:consent_absent, :consent_revoked, :consent_stale] -> %>
+                <%!-- The crew's grant was never given, was revoked by its
+                     person, or no longer covers what the crew may use:
+                     granting it on the Aqua page is all it needs, never a
+                     model to connect. --%>
                 <span data-test="model-consent">
                   {PrismWeb.AquaLive.AgentsComponent.grant_sentence(@model_ready)}
                 </span>
@@ -2076,9 +2099,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  {if @model_ready == :consent_absent,
-                    do: "Grant it on your Aqua page.",
-                    else: "Grant it again on your Aqua page."}
+                  {Prima.Refusal.grant_action(grant_row(@model_ready))}
                 </.link>
               <% @model_ready in [:consent_damaged, :consent_unavailable] -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
@@ -2471,9 +2492,16 @@ defmodule PrismWeb.ThreadPaneLive do
     ~H"""
     <div id={@id} class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1 text-xs">
       <p class="text-gray-400">
-        {if @proposal["against"] == "none",
-          do: "Aqua proposes a new scroll. Nothing is kept until you save it.",
-          else: "Aqua proposes a change to a scroll. Nothing changes until you save it."}
+        {cond do
+          @proposal["new_pack"] == true ->
+            "Aqua proposes a new pack with this scroll as its first. Nothing is kept until you save it."
+
+          @proposal["against"] == "none" ->
+            "Aqua proposes a new scroll. Nothing is kept until you save it."
+
+          true ->
+            "Aqua proposes a change to a scroll. Nothing changes until you save it."
+        end}
       </p>
       <p id={@id <> "-name"} class="font-mono text-gray-200">{@proposal["name"]}</p>
       <p id={@id <> "-description"} class="text-gray-300">{@proposal["description"]}</p>
@@ -2872,12 +2900,42 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp proposal(%{kind: kind} = row) when kind in ["tool_result", "page_result"] do
     case Threads.payload(row)["proposal"] do
-      %{"name" => _, "description" => _, "content" => _, "against" => _} = proposal -> proposal
-      _none -> nil
+      %{"name" => name, "description" => _, "content" => _, "against" => _} = proposal ->
+        proposal
+        |> Map.put("name", full_scroll_name(name))
+        |> Map.put("bare", is_binary(name) and not String.contains?(name, ":"))
+
+      _none ->
+        nil
     end
   end
 
   defp proposal(_row), do: nil
+
+  # What Save writes. A card made against none creates its scroll. A card
+  # made before scrolls had packs, an update of a scroll the release did
+  # not move into `mine` (an unedited shipped one, which `cyfr` holds),
+  # carries the whole scroll as it would be stored, so Save makes it in
+  # `mine`, new. Any other updates the scroll it was made against.
+  defp save_action(_ctx, %{"against" => "none"}), do: {"skill_create", "none"}
+
+  defp save_action(ctx, %{"bare" => true, "name" => name, "against" => against}) do
+    case Compendium.skill(ctx, name) do
+      {:error, :not_found} -> {"skill_create", "none"}
+      _held -> {"skill_update", against}
+    end
+  end
+
+  defp save_action(_ctx, %{"against" => against}), do: {"skill_update", against}
+
+  # A card proposed before scrolls had packs names its scroll bare: such a
+  # scroll is the person's first pack's, `mine`, where the release moved
+  # every scroll an athanor made.
+  defp full_scroll_name(name) when is_binary(name) do
+    if String.contains?(name, ":"), do: name, else: Compendium.first_pack() <> ":" <> name
+  end
+
+  defp full_scroll_name(name), do: name
 
   defp drawn_kinds, do: Threads.post_kinds() ++ ["nudge", "turn_aborted"]
 

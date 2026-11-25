@@ -86,9 +86,24 @@ defmodule Prima.Slots do
     unreaped-kill telemetry from the count `note_unreaped/3` answers.
   - The build slots (Locus's instance, `Locus.BuildSlots`): `max: 2,
     key_max: 1, child_reserve: 0, policy: :reject`, the sweep and hold
-    default. A caller past the total cap is answered `:capacity` at once
-    and one past its key's cap `:key_cap`; the same holder may take several
-    slots, each released on its own ref, and its death releases them all.
+    default, and the fence of Locus's launcher. A caller past the total cap
+    is answered `:capacity` at once and one past its key's cap `:key_cap`;
+    the same holder may take several slots, each released on its own ref,
+    and its death releases them all but the ones that name an heir.
+
+  ## A holding that names an heir
+
+  A slot taken with `heir: tag` stands for work a launcher holds: the
+  holder names this server and `tag` as the heir of the process it starts,
+  and the launcher tells the heir `{launcher, {:heir, tag}, :released}`
+  once nothing of that process is left, which gives the slot back whoever
+  holds it then. The holder's death alone gives back nothing the launcher
+  may still hold: the server asks the instance's `:fence`
+  (`{module, function, args}`, called with `tag` appended) whether the
+  launcher holds a process of the tag. `:none` (the launcher holds none,
+  and starts none naming the tag from then on) gives the slot back; any
+  other answer leaves it held until the heir's word, which the sweep never
+  replaces. An instance with no fence holds such a slot until that word.
 
   One instance is one process on one node: nothing is shared across nodes
   or persisted, and a restart loses every hold and wait. It is not a
@@ -125,6 +140,7 @@ defmodule Prima.Slots do
           | {:sweep_interval_ms, pos_integer()}
           | {:hold_ms, non_neg_integer()}
           | {:unreaped_ttl_ms, pos_integer()}
+          | {:fence, {module(), atom(), [term()]} | nil}
   @type holder :: %{
           pid: String.t(),
           alive: boolean(),
@@ -254,15 +270,20 @@ defmodule Prima.Slots do
 
   - `:wait_ms` — how long to queue under the `:wait` policy: a non-negative
     integer or `:infinity`, default #{@default_wait_ms}.
+  - `:heir` — the tag the holder names this server's heir under ("A
+    holding that names an heir"); none by default.
   """
-  @spec acquire(server(), key(), class(), [{:wait_ms, non_neg_integer() | :infinity}]) ::
+  @spec acquire(server(), key(), class(), [
+          {:wait_ms, non_neg_integer() | :infinity} | {:heir, term()}
+        ]) ::
           {:ok, reference()} | {:error, refusal()}
   def acquire(server, key, class, opts \\ []) when class in @classes and is_list(opts) do
     wait_ms = wait_ms!(Keyword.get(opts, :wait_ms, @default_wait_ms))
+    heir = Keyword.get(opts, :heir)
     ref = make_ref()
 
     try do
-      GenServer.call(server, {:acquire, ref, key, class, wait_ms}, call_timeout(wait_ms))
+      GenServer.call(server, {:acquire, ref, key, class, wait_ms, heir}, call_timeout(wait_ms))
     catch
       :exit, {:timeout, _} ->
         # The server did not answer inside the wait and its grace. The
@@ -382,9 +403,23 @@ defmodule Prima.Slots do
       sweep_interval_ms: positive!(opts, :sweep_interval_ms, @default_sweep_interval_ms),
       hold_ms: non_negative!(opts, :hold_ms, @default_hold_ms),
       unreaped_ttl_ms: positive!(opts, :unreaped_ttl_ms, @default_unreaped_ttl_ms),
-      unreaped_max: unreaped_threshold(key_max)
+      unreaped_max: unreaped_threshold(key_max),
+      fence: fence!(Keyword.get(opts, :fence))
     }
   end
+
+  defp fence!(nil), do: nil
+
+  defp fence!({module, function, args} = fence)
+       when is_atom(module) and is_atom(function) and is_list(args),
+       do: fence
+
+  defp fence!(other),
+    do:
+      raise(
+        ArgumentError,
+        "fence must be {module, function, args}, got: #{Prima.LoggerContext.shape(other)}"
+      )
 
   defp label(nil), do: nil
   defp label(name), do: inspect(name)
@@ -434,8 +469,9 @@ defmodule Prima.Slots do
   # ============================================================================
   # Server — state
   #
-  #   holdings: ref => %{pid, key, class, since}
-  #   waits:    ref => %{from, pid, key, class, timer}
+  #   holdings: ref => %{pid, key, class, since, heir}; a holding of an
+  #             heir whose holder died is in no process's entry
+  #   waits:    ref => %{from, pid, key, class, timer, heir}
   #   pids:     pid => %{monitor, holdings: [ref], waits: [ref]}, newest first,
   #             one monitor per process however many slots it holds or waits for
   #   queues:   class => queue of wait refs, in arrival order
@@ -471,13 +507,13 @@ defmodule Prima.Slots do
   end
 
   @impl true
-  def handle_call({:acquire, ref, key, class, wait_ms}, {pid, _} = from, state) do
+  def handle_call({:acquire, ref, key, class, wait_ms, heir}, {pid, _} = from, state) do
     cond do
       class == :child and state.count < state.max ->
-        {:reply, {:ok, ref}, grant(state, pid, ref, key, class)}
+        {:reply, {:ok, ref}, grant(state, pid, ref, key, class, heir)}
 
       class == :child ->
-        queue_or_refuse(state, from, ref, key, class, wait_ms)
+        queue_or_refuse(state, from, ref, key, class, wait_ms, heir)
 
       # A key with too many recent unreaped kills is in a decay-timed
       # penalty box: its killed work is still burning cores, so fresh slots
@@ -500,13 +536,13 @@ defmodule Prima.Slots do
       # Background work stops at half the key's cap: what is left is for
       # whoever is waiting at the glass.
       class == :background and key_at_background_cap?(state, key) ->
-        queue_or_refuse(state, from, ref, key, class, wait_ms)
+        queue_or_refuse(state, from, ref, key, class, wait_ms, heir)
 
       foreground_free?(state) ->
-        {:reply, {:ok, ref}, grant(state, pid, ref, key, class)}
+        {:reply, {:ok, ref}, grant(state, pid, ref, key, class, heir)}
 
       true ->
-        queue_or_refuse(state, from, ref, key, class, wait_ms)
+        queue_or_refuse(state, from, ref, key, class, wait_ms, heir)
     end
   end
 
@@ -594,6 +630,23 @@ defmodule Prima.Slots do
   def handle_info({:DOWN, _monitor, :process, pid, _reason}, state),
     do: {:noreply, drop_pid(state, pid)}
 
+  def handle_info({_launcher, {:heir, tag}, :released}, state),
+    do: {:noreply, release_heir(state, tag)}
+
+  def handle_info({__MODULE__, :fenced, ref, :none}, state),
+    do: {:noreply, do_release(state, ref)}
+
+  def handle_info({__MODULE__, :fenced, ref, answer}, state) do
+    if Map.has_key?(state.holdings, ref) do
+      Logger.warning(
+        "#{prefix(state)} a slot whose holder died is held until its launcher says its process " <>
+          "is gone: the fence answered #{Prima.LoggerContext.shape(answer)}"
+      )
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info(:sweep, state) do
     {state, _report} = sweep_stale(state)
     schedule_sweep(state.sweep_interval_ms)
@@ -625,7 +678,7 @@ defmodule Prima.Slots do
   # Admission
   # ============================================================================
 
-  defp queue_or_refuse(state, from, ref, key, class, wait_ms) do
+  defp queue_or_refuse(state, from, ref, key, class, wait_ms, heir) do
     cond do
       Map.fetch!(state.policy, class) == :reject ->
         {:reply, {:error, :capacity}, state}
@@ -645,17 +698,17 @@ defmodule Prima.Slots do
         {:reply, {:error, :capacity}, state}
 
       true ->
-        {:noreply, enqueue(state, from, ref, key, class, wait_ms)}
+        {:noreply, enqueue(state, from, ref, key, class, wait_ms, heir)}
     end
   end
 
-  defp enqueue(state, {pid, _tag} = from, ref, key, class, wait_ms) do
+  defp enqueue(state, {pid, _tag} = from, ref, key, class, wait_ms, heir) do
     timer =
       if wait_ms == :infinity,
         do: nil,
         else: Process.send_after(self(), {:wait_expired, ref}, wait_ms)
 
-    wait = %{from: from, pid: pid, key: key, class: class, timer: timer}
+    wait = %{from: from, pid: pid, key: key, class: class, timer: timer, heir: heir}
 
     Logger.debug(
       "#{prefix(state)} queued #{inspect(pid)} (class=#{class}, queue=#{map_size(state.waits) + 1})"
@@ -669,8 +722,8 @@ defmodule Prima.Slots do
     |> bump_background_waiting(key, class, 1)
   end
 
-  defp grant(state, pid, ref, key, class) do
-    holding = %{pid: pid, key: key, class: class, since: now_ms()}
+  defp grant(state, pid, ref, key, class, heir) do
+    holding = %{pid: pid, key: key, class: class, since: now_ms(), heir: heir}
 
     Logger.debug(
       "#{prefix(state)} granted a #{class} slot to #{inspect(pid)} (#{state.count + 1}/#{state.max})"
@@ -732,8 +785,38 @@ defmodule Prima.Slots do
         state = %{state | pids: pids}
         # The waiter is gone: nothing to answer.
         state = Enum.reduce(waits, state, &detach_wait(&2, &1))
-        Enum.reduce(holdings, state, &do_release(&2, &1))
+        Enum.reduce(holdings, state, &drop_holding(&2, &1))
     end
+  end
+
+  # A holding that names an heir stays until the launcher's word, or its
+  # fence's that it holds nothing of the tag; any other goes back now.
+  defp drop_holding(state, ref) do
+    case Map.fetch!(state.holdings, ref) do
+      %{heir: nil} -> do_release(state, ref)
+      %{heir: tag} -> ask_fence(state, ref, tag)
+    end
+  end
+
+  defp ask_fence(%{fence: nil} = state, _ref, _tag), do: state
+
+  # Asked from a process of its own, so a launcher slow to answer holds no
+  # acquire behind it.
+  defp ask_fence(%{fence: {module, function, args}} = state, ref, tag) do
+    server = self()
+
+    spawn(fn ->
+      send(server, {__MODULE__, :fenced, ref, apply(module, function, args ++ [tag])})
+    end)
+
+    state
+  end
+
+  # The holdings whose heir is told `tag`'s process is gone.
+  defp release_heir(state, tag) do
+    state.holdings
+    |> Enum.filter(fn {_ref, holding} -> holding.heir == tag end)
+    |> Enum.reduce(state, fn {ref, _holding}, acc -> do_release(acc, ref) end)
   end
 
   # The freed slot goes to the next eligible waiter: a child first (any slot
@@ -811,7 +894,7 @@ defmodule Prima.Slots do
 
     state
     |> detach_wait(ref)
-    |> grant(wait.pid, ref, wait.key, wait.class)
+    |> grant(wait.pid, ref, wait.key, wait.class, wait.heir)
   end
 
   # Answer a waiter with a refusal and take it off its queue. The process

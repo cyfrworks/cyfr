@@ -150,15 +150,15 @@ defmodule Locus.ApplicationTest do
 
   test "serving without cyfr-locus refuses the boot wherever the direct launcher is unknown" do
     assert_raise RuntimeError,
-                 ~r/every build and every backend only through cyfr-locus.*fd 3 is not that channel.*--pool build:… --/s,
+                 ~r/every build and every backend only through cyfr-locus.*fd 3 is not that channel.*--role builds:… --pool build:… --/s,
                  fn -> App.children(@builds, false, @release_launcher) end
 
     assert_raise RuntimeError,
-                 ~r/fd 3 is not that channel.*`cyfr-locus serve --pool backends:… --/s,
+                 ~r/fd 3 is not that channel.*`cyfr-locus serve --role backends:… --pool backends:… --/s,
                  fn -> App.children(@backends, false, @release_launcher) end
 
     assert_raise RuntimeError,
-                 ~r/--pool build:… --pool backends:… --/s,
+                 ~r/--role builds:… --pool build:… --role backends:… --pool backends:… --/s,
                  fn -> App.children(@both, false, @release_launcher) end
 
     # The test build knows the launcher, and serves through it.
@@ -276,6 +276,8 @@ defmodule Locus.ApplicationTest do
     assert opts[:key_max] == Locus.Config.max_concurrent_per_tenant()
     assert opts[:policy] == :reject
     assert opts[:child_reserve] == 0
+    # A slot whose connection died is given back on the executor's word.
+    assert opts[:fence] == {Locus.Executor, :fence, []}
 
     Application.put_env(:locus, :max_concurrent, 5)
     Application.put_env(:locus, :max_concurrent_per_tenant, 3)

@@ -398,6 +398,7 @@ defmodule Compendium.Provisioning do
     end
 
     heal_shipped(ctx, athanor.id, claim)
+    settle_packs(ctx, athanor.id, claim)
 
     case AutoIndexer.scan(ctx: ctx) do
       {:ok, %{registered: registered}} when registered > 0 ->
@@ -507,6 +508,20 @@ defmodule Compendium.Provisioning do
     :ok
   end
 
+  # The packs made whole against the release: the scrolls of the layout
+  # before packs moved into `mine`, and `cyfr` the seed's again with its
+  # switch kept (`Compendium.Packs.settle/2`). A heal: what fails is said
+  # and the next boot tries again.
+  defp settle_packs(ctx, athanor_id, claim) do
+    case Compendium.Packs.settle(ctx, claim: fence(claim)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Provisioning] #{athanor_id}: packs not settled — #{inspect(reason)}")
+    end
+  end
+
   # Idempotent by construction: every already-consented ref lands in
   # `skipped`, so only what the release just added mints anything, and
   # only a bootstrap-only head the release moved is re-minted.
@@ -573,12 +588,15 @@ defmodule Compendium.Provisioning do
   # or a soul or crew member that does not parse, fails loud here, at the one
   # moment an operator is watching, instead of as an empty roster later),
   # then copied into the athanor's `aqua/` — every shipped unit it does not
-  # yet hold, under the attempt's claim and slot.
+  # yet hold, `cyfr` among them, under the attempt's claim and slot — and
+  # the person's first pack, `mine`, made empty.
   defp aqua_definitions(athanor_id, claim) do
     actor = Context.actor(Athanor.seed_ctx(athanor_id))
 
     with :ok <- Compendium.AquaTemplate.seed_check(),
-         {:ok, _copied} <- Arca.Overlay.materialize_shipped(actor, "aqua", claim: fence(claim)) do
+         {:ok, _copied} <- Arca.Overlay.materialize_shipped(actor, "aqua", claim: fence(claim)),
+         :ok <-
+           Compendium.Packs.settle(Athanor.seed_ctx(athanor_id), claim: fence(claim), fill: true) do
       :ok
     else
       {:error, reason} -> {:error, {:aqua_template, reason}}

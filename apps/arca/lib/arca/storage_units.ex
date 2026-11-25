@@ -333,6 +333,38 @@ defmodule Arca.StorageUnits do
   end
 
   @doc """
+  The content identity of every committed unit under a root whose key
+  starts with `prefix`, by unit key: the journal row's `content_identity`
+  for the revision the pointer names, read in one query from the rows
+  alone, so it names exactly the bytes a reader of that revision gets.
+  A committed pointer whose journal row is missing answers no identity
+  for it (`nil`).
+  """
+  @spec identities_under(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, %{String.t() => {String.t(), String.t() | nil}}} | refusal()
+  def identities_under(%Prima.Actor{} = actor, root, prefix)
+      when is_binary(root) and is_binary(prefix) do
+    with {:ok, athanor} <- tenant(actor) do
+      rescuing_db("identities_under", fn ->
+        rows =
+          from(u in where_athanor(StorageUnit, athanor),
+            left_join: c in StorageCommit,
+            on:
+              c.storage_unit_id == u.id and c.athanor_id == u.athanor_id and
+                c.new_revision == u.current_revision,
+            where: u.root == ^root and u.state == "committed",
+            select: {u.unit_key, u.current_revision, c.content_identity}
+          )
+          |> Arca.Repo.all()
+          |> Enum.filter(fn {key, _revision, _identity} -> String.starts_with?(key, prefix) end)
+
+        {:ok, Map.new(rows, fn {key, revision, identity} -> {key, {revision, identity}} end)}
+      end)
+    end
+    |> Arca.Data.project()
+  end
+
+  @doc """
   Begin a unit's removal: one locking transaction that takes the unit's
   draft under a fresh token — making the row first when the unit never
   had one — moves the row to `retiring` — readers see no unit from here

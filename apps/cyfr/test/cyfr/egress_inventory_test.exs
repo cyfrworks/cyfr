@@ -68,7 +68,8 @@ defmodule Cyfr.EgressInventoryTest do
     # to CYFR's host API (LOCUS_RUNTIME_HOST_API_URL), bounded answers.
     "apps/locus/lib/locus/runtime/host_client.ex" => :host_client,
     # The builds wire, CYFR's side: `Prima.BuilderProtocol` requests to the
-    # operator-configured Locus builds service (CYFR_LOCUS_BUILDS_URL),
+    # operator-configured Locus builds role (CYFR_LOCUS_BUILDS_KEY, beside
+    # CYFR_LOCUS_BACKENDS_URL),
     # signed with the key derived from the service's, the answer bounded
     # while it streams (`Prima.BoundedBody`) and read strictly.
     "apps/cyfr/lib/compendium/builds/client.ex" => :builds_client
@@ -117,7 +118,7 @@ defmodule Cyfr.EgressInventoryTest do
   # The programs controller lives in the execution domain but decides no
   # guest's target: it is the control plane's own caller of its backends
   # service, which the operator's private targets name (compose's
-  # `locus-backends`). Exactly these files, and only for that call.
+  # `locus`). Exactly these files, and only for that call.
   @control_plane_callers ~w(apps/cyfr/lib/opus/programs/box.ex apps/cyfr/lib/opus/programs/session.ex)
 
   defp root, do: Path.expand("../../../..", __DIR__)

@@ -86,16 +86,12 @@ const (
 	workerRootVar    = "CYFR_LOCUS_RUNTIME_ROOT"
 	serviceIDVar     = "LOCUS_RUNTIME_SERVICE_ID"
 	serviceKeyVar    = "LOCUS_RUNTIME_KEY"
-	buildsURLVar     = "CYFR_LOCUS_BUILDS_URL"
 	buildsKeyVar     = "CYFR_LOCUS_BUILDS_KEY"
 	corsOriginsVar   = "CYFR_CORS_ALLOWED_ORIGINS"
 
-	// The locus-runtime service's id when .env names none: docker-compose.yml's
+	// The runtime role's id when .env names none: docker-compose.yml's
 	// default for both LOCUS_RUNTIME_SERVICE_ID and the entry of CYFR_LOCUS_RUNTIME_WORKERS.
 	defaultServiceID = "wrk_locus"
-	// The compose builds service's listener (docker-compose.yml's
-	// `locus-builds`, port 4100).
-	defaultBuildsURL = "http://" + buildsProfile + ":4100"
 )
 
 // serviceIDPattern is the service id grammar Locus.Runtime.Credentials accepts.
@@ -137,21 +133,18 @@ func refuseEnv(format string, args ...any) error {
 // caller writes them through the engine's editor (access.EditEnv). A key that is
 // present is never rewritten, but the AppArmor profile's name, cyfr's own; a malformed root or service id, and a
 // service key that does not derive from the root beside it, are refused,
-// since writing around them would leave cyfr and the locus-runtime
-// service unable to authenticate each other. Each key reads as its last
+// since writing around them would leave cyfr and Locus's runtime role
+// unable to authenticate each other. Each key reads as its last
 // assignment, as compose, the engine and every read of the CLI read it,
 // and the editor writes over that one.
 //
-// The runtime root and the locus-runtime service key are one pair: with neither, both
+// The runtime root and the runtime role's key are one pair: with neither, both
 // are minted; with the root alone, the key is derived from it for
-// LOCUS_RUNTIME_SERVICE_ID (wrk_locus when .env names none). The builds URL
-// and key are one pair too, because cyfr refuses to boot with one and not
-// the other: a URL gets a minted key and a key gets the compose service's
-// URL. Builds are on when .env.example's URL is there; no URL and no key
-// is builds turned off, whether the URL is assigned empty or absent (the
-// access head omits it when builds are off, and a switch removes its line),
-// and is left so.
-func stackKeys(values map[string]string) (map[string]string, []envChange, error) {
+// LOCUS_RUNTIME_SERVICE_ID (wrk_locus when .env names none). The builds
+// key is minted for a fresh .env alone, so a new home builds; in a .env
+// that exists, an empty or absent builds key is builds turned off, and is
+// left so.
+func stackKeys(values map[string]string, fresh bool) (map[string]string, []envChange, error) {
 	add := map[string]string{}
 	var changes []envChange
 	set := func(key, value string) {
@@ -209,7 +202,7 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 	default:
 		key, keyOK := decodeHexKey(serviceKeyText)
 		if !keyOK || !hmac.Equal(key, workerKey(root, serviceID)) {
-			return nil, nil, refuseEnv("%s in .env is not the key %s derives for %s %s, so cyfr and the locus-runtime service could not authenticate each other: remove %s and run cyfr init again to derive it, or set %s to the root it was derived from.", serviceKeyVar, workerRootVar, serviceIDVar, serviceID, serviceKeyVar, workerRootVar)
+			return nil, nil, refuseEnv("%s in .env is not the key %s derives for %s %s, so cyfr and Locus's runtime role could not authenticate each other: remove %s and run cyfr init again to derive it, or set %s to the root it was derived from.", serviceKeyVar, workerRootVar, serviceIDVar, serviceID, serviceKeyVar, workerRootVar)
 		}
 	}
 
@@ -230,15 +223,10 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 		set(appArmorEnv, apparmor.ProfileName)
 	}
 
-	buildsURL, buildsKey := values[buildsURLVar], values[buildsKeyVar]
-	switch {
-	case buildsURL != "" && buildsKey != "":
-	case buildsURL != "":
+	if fresh && values[buildsKeyVar] == "" {
 		if err := mint(buildsKeyVar, generateHexKey); err != nil {
 			return nil, nil, err
 		}
-	case buildsKey != "":
-		set(buildsURLVar, defaultBuildsURL)
 	}
 
 	return add, changes, nil
@@ -253,7 +241,7 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, engineFailure(err))
 	}
-	add, changes, err := stackKeys(values)
+	add, changes, err := stackKeys(values, false)
 	if err != nil || len(changes) == 0 {
 		return nil, err
 	}
@@ -277,7 +265,7 @@ func newEnv(path string) ([]byte, []envChange, access.Derivation, error) {
 		return nil, nil, access.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, engineFailure(err))
 	}
 	set := map[string]string{}
-	add, changes, err := stackKeys(values)
+	add, changes, err := stackKeys(values, true)
 	if err != nil {
 		return nil, nil, access.Derivation{}, err
 	}
@@ -418,7 +406,7 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Set up a new CYFR in this directory, at a terminal: its files, keys and images, ready for cyfr up",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus (the one Locus, whose roles run components, compile them and run stdio MCP servers) behind its egress guard locus-guard, and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the seccomp profile the Locus services run under), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
@@ -430,9 +418,9 @@ On macOS and Windows at a terminal, while Docker does not answer, init offers to
 
 The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT>. 'cyfr access tailnet' reaches it from your phone and laptop too, and 'cyfr access public --domain <your domain>' from the internet. On Ubuntu 26.04 LTS on amd64 or arm64 at a terminal, on a machine with no desktop, init asks before it writes anything whether this machine's screen shows CYFR (1, the default) or keeps its login prompt (2); the first installs what 'cyfr screen on' installs, once .env is written. With --no-interactive nothing is asked, and the screen keeps its login prompt.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. An empty or absent CYFR_LOCUS_BUILDS_KEY in an existing .env is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
   cyfr init --no-interactive --no-pull
   cyfr init --force
@@ -682,8 +670,7 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 	_ = scaffold.MakeDir("aqua")
 
 	// Warm-pull the images docker-compose.yml starts with the head's
-	// profiles (cyfr, and cyfr-locus for locus-runtime and locus-backends,
-	// the same image serving locus-builds with builds on). A release's
+	// profiles (cyfr, and cyfr-locus for locus and locus-guard). A release's
 	// compose names each as <repository>:<version>@<digest>, and `docker
 	// pull` of such a reference pulls by the digest, so the warm pull
 	// fetches exactly the images the verified scaffold names. Falls back to the published cyfr
@@ -786,7 +773,7 @@ func existingAccess(path string) (string, error) {
 }
 
 // localHead is the head a new home's .env starts from, reached from this
-// computer only, its port and builds URL the ones values hold.
+// computer only, its port the one values hold.
 func localHead(values map[string]string) (access.Derivation, error) {
 	cur := access.Current{Port: 4000}
 	if text := values["CYFR_PORT"]; text != "" {
@@ -796,7 +783,6 @@ func localHead(values map[string]string) (access.Derivation, error) {
 		}
 		cur.Port = port
 	}
-	cur.BuildsURL = values[buildsURLVar]
 	d, err := access.Derive(access.Target{Mode: access.ModeLocal}, cur, nil)
 	return d, engineFailure(err)
 }
@@ -817,7 +803,7 @@ func existingSelection(path string) selection {
 		return sel
 	}
 	if mode := values["CYFR_ACCESS"]; mode != "" {
-		sel.profiles = access.Profiles(mode, values[buildsURLVar])
+		sel.profiles = access.Profiles(mode)
 	}
 	if text := values["CYFR_PORT"]; text != "" {
 		if port, err := strconv.Atoi(text); err == nil && port >= 1 && port <= 65535 {
@@ -854,8 +840,8 @@ func fileExists(path string) bool {
 // imagesFromCompose returns every `image:` value referenced by the services
 // of the compose file at path that start with the given profiles active: a
 // service with no `profiles:`, or one naming any of them. Images are in the
-// order the services first name them, each once (locus-builds and
-// locus-backends run one image). A service with only `build:` is skipped.
+// order the services first name them, each once (locus and locus-guard
+// run one image). A service with only `build:` is skipped.
 // Returns nil if the file can't be read or parsed — callers should fall
 // back to a sensible default.
 func imagesFromCompose(path string, profiles []string) []string {
@@ -898,10 +884,6 @@ func startsWith(svc *yaml.Node, profiles []string) bool {
 	}
 	return false
 }
-
-// buildsProfile is the compose profile, and the host, of the Locus builds
-// service (docker-compose.yml's `locus-builds`).
-const buildsProfile = "locus-builds"
 
 // ask prompts on out and reads a line from r, answering def for an empty
 // line and "" for the end of the input (askLine), or ctx's error once ctx
@@ -960,13 +942,13 @@ func readAnswer(r *bufio.Reader, def string) (string, bool) {
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr, locus-runtime, locus-builds, locus-backends; the proxy of tailnet or public access)",
+	Short:   "Start the CYFR stack (cyfr, locus, locus-guard; the proxy of tailnet or public access)",
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode, as .env says CYFR is reached. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
+The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus (the one Locus: its runtime role runs components, its builds role compiles components and tinctures, and its backends role runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), locus-guard (Locus's egress guard), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. On Linux with AppArmor on, before anything starts, cyfr up on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the profile built into this cyfr by its name, at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself, and without one it refuses, naming the one command to run; elsewhere it leaves that to the keeper, which proves at its boot that it runs under its release's profile. cyfr up then takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints.
+cyfr, locus and locus-guard always start; Locus starts its builds role when .env sets CYFR_LOCUS_BUILDS_KEY, which 'cyfr init' writes. CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. On Linux with AppArmor on, before anything starts, cyfr up on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the profile built into this cyfr by its name, at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself, and without one it refuses, naming the one command to run; elsewhere it leaves that to the keeper, which proves at its boot that it runs under its release's profile. cyfr up then takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1254,7 +1236,7 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers, keeping its networks. Every service of the project, the proxy of tailnet or public access and locus-builds included, whatever .env selects now, is checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a CYFR started elsewhere is stopped from here.",
+	Long:    "Stop the CYFR stack and remove its containers, keeping its networks. Every service of the project, the proxy of tailnet or public access included, whatever .env selects now, is checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a CYFR started elsewhere is stopped from here.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

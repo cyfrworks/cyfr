@@ -91,7 +91,7 @@ FILES = {
 }
 SYSTEM = "You are a crew member of this athanor."
 WORK = "trn_brain_1"
-STORE = ".local/share/opencode/opencode.db"
+STORE_DIR = ".local/share/opencode"
 SESSION = re.compile(r"^ses_[0-9a-f]{26}$")
 LISTED = [("opencode/big-pickle", []), ("probe/think", ["low", "medium", "high"]), ("probe/plain", [])]
 TIMEOUT_S = 60
@@ -133,6 +133,13 @@ class Driver:
         expect(event["t"] == t, what, event)
         return event
 
+    def until_each(self, *types):
+        """The events up to the first moment one of each of `types` has come, in whatever order they come."""
+        got = []
+        while not all(any(e["t"] == t for e in got) for t in types):
+            got.append(self.event())
+        return got
+
     def until(self, t):
         got = []
         while True:
@@ -159,8 +166,11 @@ def probe_run(c, key, script):
 
 
 def store(c):
-    """The program's store, as a probe reads it in the folder."""
-    return json.loads(probe_run(c, "store", f'cat "$HOME/{STORE}"'))
+    """The program's store, as a probe reads it in the folder: its sign-in and every session, by id."""
+    printed = probe_run(c, "store", f'cd "$HOME/{STORE_DIR}" && cat opencode.db && '
+                                    'for f in sessions/*.json; do [ -e "$f" ] || continue; echo; cat "$f"; done')
+    first, *sessions = [json.loads(line) for line in printed.splitlines() if line]
+    return {"signin": first["signin"], "sessions": {s["id"]: s for s in sessions}}
 
 
 def fresh_turn(d, work, post, words):
@@ -248,8 +258,10 @@ def main():
 
         # ————— CYFR's call from inside execute, and a post while it is held —————
         d.send({"t": "post", "id": "stp_post_4", "work": WORK, "content": [{"type": "text", "text": "read notes"}]})
-        before = d.until("ask")
-        asked = before[-1]
+        # Execute's start comes on the program's output and CYFR's call on the tool socket: two ways, so either
+        # may come first (as cmd/cyfr-acp's own test holds), and both are awaited.
+        before = d.until_each("ask", "own")
+        asked = [e for e in before if e["t"] == "ask"][0]
         expect([(e["name"], e["phase"]) for e in before if e["t"] == "own"] == [("execute", "start")]
                and asked["name"] == "files" and asked["arguments"] == {"action": "read", "path": "notes.txt"}
                and asked["work"] == WORK and len(asked["ask"]) == 36,

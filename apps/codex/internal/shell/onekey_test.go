@@ -4,7 +4,10 @@
 package shell
 
 import (
+	"errors"
+	"io/fs"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,4 +78,59 @@ func mustLoad(t *testing.T, dir string) HomeList {
 		t.Fatal(err)
 	}
 	return l
+}
+
+// A shell that may not make the key (a box's screen at a CYFR other than
+// its own) offers no way to make one, says where it is made, and refuses
+// every try, a forged one included, with no key written and nothing asked
+// of the CYFR; the same shell given leave makes it.
+func TestAShellThatMayNotMakeTheKeyMakesNone(t *testing.T) {
+	const where = "This box's key is made at This box first."
+	home := newFakeHome(t)
+	dir := t.TempDir()
+	b := newBoxAt(t, home, dir, home.accounts.URL(), func(c *Config) { c.KeyElsewhere = where })
+	page := b.page()
+	if !strings.Contains(page, where) || strings.Contains(page, `action="/setup"`) || strings.Contains(page, `action="/make"`) ||
+		strings.Contains(page, `action="/passphrase"`) {
+		t.Fatalf("the page of a shell that may not make the key:\n%s", page)
+	}
+	// A passphrase shown, if one were, is the one a try would use.
+	pass := "correct horse battery staple again twice"
+	b.post("/passphrase", nil)
+	if drawn := b.shell.drawPassphrase(t.Context()); drawn != "" {
+		pass = drawn
+	}
+	for _, path := range []string{"/setup", "/make"} {
+		b.post(path, url.Values{"name": {"alice"}, "secret": {pass}, "again": {pass}})
+	}
+	if _, err := os.Stat(b.record); !errors.Is(err, fs.ErrNotExist) || len(home.hellosSeen()) != 0 {
+		t.Fatalf("a key was made (%v) or the CYFR was asked (%d hellos)", err, len(home.hellosSeen()))
+	}
+	if page := b.page(); !strings.Contains(page, where) {
+		t.Fatalf("the refusal does not say where the key is made:\n%s", page)
+	}
+	b = newBox(t, home, dir)
+	setUpAndOpen(t, home, b)
+}
+
+// Opened is told at each unlock, the channel open by then, and at nothing
+// else: neither the setup's pages nor a lock.
+func TestOpenedIsToldAtEachUnlock(t *testing.T) {
+	home := newFakeHome(t)
+	var b *box
+	opened, open := 0, []bool{}
+	b = newBoxAt(t, home, t.TempDir(), home.accounts.URL(), func(c *Config) {
+		c.Opened = func() { opened++; open = append(open, b.shell.Unlocked()) }
+	})
+	p := b.setUp("alice")
+	if opened != 0 {
+		t.Fatalf("Opened was told %d times before an unlock", opened)
+	}
+	ticketOf(t, b.post("/saved", nil), home)
+	b.post("/lock", nil)
+	ticketOf(t, b.post("/unlock", url.Values{"secret": {p}}), home)
+	b.post("/lock", nil)
+	if opened != 2 || !open[0] || !open[1] {
+		t.Fatalf("Opened was told %d times, unlocked each time: %v", opened, open)
+	}
 }

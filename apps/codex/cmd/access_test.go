@@ -131,7 +131,7 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 		t.Fatalf("%d switches under %d locks, want one under the lock", len(s.switches), s.locks)
 	}
 	sw := s.switches[0]
-	before := access.Head{Mode: "local", Host: "localhost", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile}}
+	before := access.Head{Mode: "local", Host: "localhost", Port: 4000, Profiles: []string{}}
 	if !requestIDPattern.MatchString(sw.ID) || sw.OldDigest != before.Digest() || sw.NewDigest == "" || sw.Target != (access.Target{Mode: "public", Domain: "cyfr.example.com", ACMEEmail: "ops@example.com"}) {
 		t.Errorf("the switch was %+v", sw)
 	}
@@ -586,19 +586,16 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 // The preview shows every field of the head that changes, in words, and
 // only those: after who will reach CYFR and where, a line for each other
 // changed field, the tailnet machine a new node replaces under the same
-// name, the port on this computer and the builds service, so no change
-// reads as none; no node id is shown.
+// name and the port on this computer, so no change reads as none; no node
+// id is shown.
 func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
-	tailnet := access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile, access.ModeTailnet}}
+	tailnet := access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}
 	for name, c := range map[string]struct {
 		change func(h *access.Head)
 		line   string
 	}{
 		"another node, the same name": {func(h *access.Head) { h.NodeID = "nBBBBBBBBBCNTRL" }, "  Tailnet machine: cyfr.tail1234.ts.net → a new machine, cyfr.tail1234.ts.net\n"},
 		"the port on this computer":   {func(h *access.Head) { h.Port = 4123 }, "  Port on this computer: 4000 → 4123\n"},
-		"builds turned off": {func(h *access.Head) {
-			h.BuildsURL, h.Profiles = "", []string{access.ModeTailnet}
-		}, "  Builds service: " + defaultBuildsURL + " → off\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			next := tailnet
@@ -627,14 +624,14 @@ func TestAccessPreviewShowsEveryChangedField(t *testing.T) {
 	}
 	// A machine joined for the first time shows who will reach CYFR and
 	// where, and nothing that stays as it was.
-	local := access.Head{Mode: access.ModeLocal, Host: "localhost", PublicURL: "http://localhost:4000", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile}}
+	local := access.Head{Mode: access.ModeLocal, Host: "localhost", PublicURL: "http://localhost:4000", Port: 4000, Profiles: []string{}}
 	var out bytes.Buffer
 	printPreview(&out, access.Preview{Old: local, New: tailnet, OldWords: access.Describe(local), NewWords: access.Describe(tailnet), AddressChanges: []string{"Every browser signs in again."}}, false)
 	if want := "CYFR will be reached by your devices on Tailscale at https://cyfr.tail1234.ts.net.\n"; out.String() != want {
 		t.Errorf("the preview of a first join on a CYFR no one is set up on is\n%s\nwant\n%s", out.String(), want)
 	}
 	// Leaving public access closes its ports.
-	public := access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, ACMEEmail: "ops@example.com", BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile, access.ModePublic}}
+	public := access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, ACMEEmail: "ops@example.com", Profiles: []string{access.ModePublic}}
 	out.Reset()
 	printPreview(&out, access.Preview{Old: public, New: local, OldWords: access.Describe(public), NewWords: access.Describe(local)}, true)
 	if want := "CYFR will be reached from this computer at http://localhost:4000.\n  Certificate email: ops@example.com → none\n  Ports opened on this machine: 80 and 443 → none\n"; out.String() != want {

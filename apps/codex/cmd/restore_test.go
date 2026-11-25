@@ -24,14 +24,16 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"gopkg.in/yaml.v3"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
 // the declaration answers from mark.*, the live read as fakeDocker's eval;
 // pg_restore keeps its stdin in pgrestore.stdin and answers from
 // pgrestore.*; <key>.kill kills the calling process with SIGKILL, as a
-// crash would. A call naming the staged compose file sees that file, every
-// other docker-compose.yml.
+// crash would. A network's read and removal answer as fakeDocker's do. A
+// call naming the staged compose file sees that file, every other
+// docker-compose.yml.
 const restoreFakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
 file=docker-compose.yml
@@ -98,6 +100,22 @@ if [ "$1" = compose ]; then
   esac
 fi
 case "$1" in
+  network)
+    last="${@: -1}"
+    case "$2" in
+      ls) answer "network-ls-${last##*=}" ;;
+      rm) answer "network-rm-$3" ;;
+    esac ;;
+  ps)
+    case "$*" in
+      *'.Label "com.docker.compose.service"'*) last="${@: -1}"; answer "containers-${last##*=}" ;;
+      *network=*)
+        n="$*"
+        n="${n##*network=}"
+        n="${n%% *}"
+        case "$*" in *compose.project=*) answer "network-ours-$n" ;; *) answer "network-all-$n" ;; esac ;;
+    esac ;;
+  rm) answer rm ;;
   pull) answer pull ;;
   run)
     case "$*" in
@@ -129,7 +147,7 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 	for _, o := range overrides {
 		files += " -f " + o
 	}
-	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
+	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile public config --format json"
 }
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -147,6 +165,9 @@ type restoreScenario struct {
 // snapshot taken and every docker call of the update forgotten.
 func newRestoreScenario(t *testing.T, compose []byte, env map[string]string, prepare func(*updateScenario)) *restoreScenario {
 	s := newUpdateScenario(t, compose, env)
+	// Both releases ship the scenario's compose file, so the update leaves
+	// it switched as the restore's cases hold it.
+	s.composes = map[string]string{"0.8.0": string(compose), testVersion: string(compose)}
 	for name, data := range map[string]string{"data/cyfr.db": sqliteBytes, "data/cyfr.db-wal": "sqlite-wal"} {
 		if err := os.WriteFile(filepath.Join(s.project, name), []byte(data), 0644); err != nil {
 			t.Fatal(err)
@@ -213,7 +234,7 @@ func read(t *testing.T, path string) string {
 func (r *restoreScenario) stoppedUndeclared() {
 	r.t.Helper()
 	log := r.log()
-	for _, svc := range []string{"caddy", "cyfr", "locus-backends-guard"} {
+	for _, svc := range []string{"caddy", "cyfr", "locus-guard"} {
 		if !slices.Contains(log, profiles+"stop "+svc) {
 			r.t.Errorf("the restore did not stop %s:\n%s", svc, strings.Join(log, "\n"))
 		}
@@ -290,12 +311,11 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop caddy",
 		profiles + "stop tailscale",
 		profiles + "stop cyfr",
-		profiles + "stop locus-runtime",
-		profiles + "stop locus-builds",
-		profiles + "stop locus-backends",
-		profiles + "stop locus-builds-guard",
-		profiles + "stop locus-backends-guard",
+		profiles + "stop locus",
+		profiles + "stop locus-guard",
 		profiles + "stop",
+		containerList(access.ProjectName(r.project)),
+		networkList(access.ProjectName(r.project)),
 		profiles + "rm --force cyfr",
 		r.stagedConfig(),
 		profiles + testOffline + testLive,
@@ -307,14 +327,14 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	if got := r.log(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// The stop and the removal of the stopped cyfr container saw the switched
-	// compose file; from the configuration read on, every call saw the
-	// snapshot's.
+	// The stop, the list of the project's networks and the removal of the
+	// stopped cyfr container saw the switched compose file; from the
+	// configuration read on, every call saw the snapshot's.
 	sum := func(data []byte) string { return fmt.Sprintf("%x", md5.Sum(data)) }
 	for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.fake, "state"))), "\n") {
 		fields := strings.Fields(line)
 		wantSum := sum([]byte(compose))
-		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") {
+		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") || strings.HasPrefix(fields[0], "network-ls-") || strings.HasPrefix(fields[0], "containers-") {
 			wantSum = sum(switched([]byte(compose)))
 		}
 		if fields[1] != wantSum {
@@ -370,6 +390,192 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	// The snapshot is left as it was, for another restore.
 	if _, err := readSnapshot(r.dir); err != nil {
 		t.Errorf("the snapshot no longer reads: %v", err)
+	}
+}
+
+// failedSwitchSnapshot is an update from the three-container release that
+// failed after its switch, its snapshot of that release to restore, with
+// the fake docker swapped for restoreFakeDocker and its log cleared.
+func failedSwitchSnapshot(t *testing.T) *restoreScenario {
+	s := newThreeContainerScenario(t)
+	s.edit("data/cyfr.db", sqliteBytes)
+	s.answer("up.exit", "1")
+	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "cyfr restore "+s.snapshotDir()) {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(s.fake, "docker"), []byte(restoreFakeDocker), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"log", "state", "up.exit"} {
+		if err := os.Remove(filepath.Join(s.fake, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.answer("mark.out", "CYFR_RESTORE_ID="+testRestored+"\n")
+	return &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
+}
+
+// The restore of a snapshot of the three-container release, whose builder
+// and its guard run under a profile of their own, starts the snapshot's
+// head alone and then says that the two are not started and the command
+// that starts them.
+func TestRestoreOfABuildsSnapshotSaysTheBuildsAreNotStarted(t *testing.T) {
+	r := failedSwitchSnapshot(t)
+	r.withProfiles(buildsProfiles)
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	said := "\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
+	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
+	}
+	for _, line := range r.log() {
+		if strings.Contains(line, " up ") && strings.Contains(line, "locus-builds") {
+			t.Errorf("the restore ran %q", line)
+		}
+	}
+}
+
+// A restore left stopped says 'cyfr up' starts it and, since that starts
+// none of the services under the stack's own profiles, which they are and
+// what starts them.
+func TestARestoreLeftStoppedSaysTheBuildsAreNotStarted(t *testing.T) {
+	r := failedSwitchSnapshot(t)
+	r.withProfiles(buildsProfiles)
+	out, err := r.restore(false)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	said := "The stack is left stopped (--no-start); start it with 'cyfr up'.\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
+	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
+	}
+}
+
+// What a restore removes is this project's networks, listed by its compose
+// label, that the snapshot's docker-compose.yml does not use, where one
+// with no networks key uses the default network alone: the project's
+// explicit network locus goes after the stop and before the start, its
+// default network stays, and another project's network is never listed or
+// touched.
+func TestRestoreOfASnapshotOnTheDefaultNetworkRemovesTheProjectsOthers(t *testing.T) {
+	r := newRestoreScenario(t, withoutNetworks(t, shippedCompose(t)), nil, nil)
+	r.edit("docker-compose.yml", string(shippedCompose(t)))
+	project := access.ProjectName(r.project)
+	r.answerNetworks("netd default", "net9 locus")
+	r.answer("network-ours-net9.out", "ctrlocus\n")
+	r.answer("network-all-net9.out", "ctrlocus\n")
+	r.answer("network-ls-other.out", "net7 locus\n")
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	removal := []string{
+		networkList(project),
+		"ps -a -q --no-trunc --filter network=net9 --filter label=com.docker.compose.project=" + project,
+		"ps -a -q --no-trunc --filter network=net9",
+		"rm ctrlocus",
+		"network rm net9",
+	}
+	log := r.log()
+	first := slices.Index(log, removal[0])
+	if first < 0 || first+len(removal) > len(log) || !slices.Equal(log[first:first+len(removal)], removal) {
+		t.Fatalf("the restore did not remove the network locus alone:\n%s", strings.Join(log, "\n"))
+	}
+	if stopped, start := slices.Index(log, profiles+"stop"), slices.Index(log, "ENGINE start restore"); first < stopped || start < first+len(removal) {
+		t.Errorf("the network locus was not removed between the stop and the start:\n%s", strings.Join(log, "\n"))
+	}
+	for _, line := range log {
+		if strings.Contains(line, "net7") || strings.Contains(line, "netd") || (strings.HasPrefix(line, "network ") && line != removal[0] && line != removal[4]) {
+			t.Errorf("the restore ran %q", line)
+		}
+	}
+	if said := "Removed this project's networks the snapshot's docker-compose.yml does not use: locus.\n"; strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not say once %q:\n%s", said, out)
+	}
+}
+
+// withoutNetworks is the compose file data with no networks key, at the top
+// level or in a service: every service on the default network.
+func withoutNetworks(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	drop := func(m *yaml.Node) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == "networks" {
+				m.Content = slices.Delete(m.Content, i, i+2)
+				return
+			}
+		}
+	}
+	doc := root.Content[0]
+	drop(doc)
+	services := mapValue(doc, "services")
+	for i := 1; i < len(services.Content); i += 2 {
+		drop(services.Content[i])
+	}
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte("networks:")) {
+		t.Fatal("the compose file still holds a networks key")
+	}
+	return out
+}
+
+// An update from the three-container release that fails after its switch
+// leaves the new release's network locus holding the address range the
+// old release's locus-runtime takes; the restore of its snapshot removes
+// the project's networks the snapshot's docker-compose.yml does not use,
+// after the stop and before anything runs under the snapshot's file, and
+// the old stack starts.
+func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
+	r := failedSwitchSnapshot(t)
+	r.answerNetworks("netd default", "nete edge", "net9 locus", "net0 locus-backends")
+	r.answerContainers("cc cyfr", "cl locus", "cg locus-guard")
+	r.answer("network-ours-net9.out", "ctrlocus\n")
+	r.answer("network-all-net9.out", "ctrlocus\n")
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	project := access.ProjectName(r.project)
+	removal := []string{
+		containerList(project),
+		"rm cl cg",
+		networkList(project),
+		"ps -a -q --no-trunc --filter network=net9 --filter label=com.docker.compose.project=" + project,
+		"ps -a -q --no-trunc --filter network=net9",
+		"rm ctrlocus",
+		"network rm net9",
+	}
+	log := r.log()
+	first := slices.Index(log, removal[0])
+	if first < 0 || !slices.Equal(log[first:first+len(removal)], removal) {
+		t.Fatalf("the restore did not remove the network locus:\n%s", strings.Join(log, "\n"))
+	}
+	if stopped, staged := slices.Index(log, profiles+"stop"), slices.Index(log, r.stagedConfig()); first < stopped || staged < first {
+		t.Errorf("the network locus was not removed between the stop and the first read of the snapshot's file:\n%s", strings.Join(log, "\n"))
+	}
+	// After the start, the read of the restored file's own services.
+	if !slices.Equal(log[len(log)-3:len(log)-1], started("restore")) {
+		t.Errorf("the old stack was not started:\n%s", strings.Join(log, "\n"))
+	}
+	if got := read(t, filepath.Join(r.project, "docker-compose.yml")); got != lastReleaseCompose(t) {
+		t.Error("docker-compose.yml is not the snapshot's")
+	}
+	for _, said := range []string{
+		"Removed this project's containers of services the snapshot's docker-compose.yml does not run: locus, locus-guard.\n",
+		"Removed this project's networks the snapshot's docker-compose.yml does not use: locus.\n",
+	} {
+		if strings.Count(out, said) != 1 {
+			t.Errorf("the restore did not say once %q:\n%s", said, out)
+		}
 	}
 }
 
@@ -1252,7 +1458,8 @@ func TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred(t *testing.T) {
 	// The old deployment can supply its settings explicitly rather than
 	// loading the whole .env into the container; that is valid Compose.
 	compose = strings.Replace(compose, "    environment:\n", "    environment:\n      - CYFR_SECRET_KEY_BASE="+keyBase+"\n      - 'CYFR_CRYPTO_KEYRING="+keyring+"'\n", 1)
-	r := newRestoreScenario(t, []byte(compose), nil, nil)
+	// The new release ships the repository's compose file, which loads .env.
+	r := newRestoreScenario(t, []byte(compose), nil, func(s *updateScenario) { s.composes = map[string]string{"0.8.0": compose} })
 	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 	if before == compose {
 		t.Fatal("update did not install its new compose configuration")
@@ -1575,8 +1782,8 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	}
 	t.Chdir(dir)
 	for name, content := range map[string]string{
-		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  locus-builds:\n    image: alpine:3.22\n    profiles: [locus-builds]\n",
-		".env":               "CYFR_ACCESS=local\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [public]\n",
+		".env":               "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -1614,7 +1821,7 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 		}
 		return kept
 	}
-	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "locus-builds") {
+	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "public") {
 		t.Errorf("the staged read selects %v, the engine's compose calls %v", got, want)
 	}
 }

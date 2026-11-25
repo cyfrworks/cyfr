@@ -14,7 +14,8 @@
 // (check-package.mjs), and a package that differs is not made.
 // The package is cyfr-desktop_VERSION_OS_ARCH, a DEB on Linux (installed
 // at /opt/cyfr/CYFR, the bundled cyfr linked as /usr/bin/cyfr, its
-// sandbox's AppArmor profile loaded), a DMG on macOS and an MSI on
+// sandbox's AppArmor profile loaded, the app's update service's units in
+// /usr/lib/systemd/system), a DMG on macOS and an MSI on
 // Windows, for this machine's platform. The MSI installs for the person
 // alone and puts its bundled cyfr on their PATH (msi-path.mjs).
 //
@@ -159,12 +160,28 @@ const target = signing?.phase === "app" ? "dir" : {linux: "deb", darwin: "dmg", 
 
 // The Linux package's install script is electron-builder's own, which
 // links the app and loads its AppArmor profile, with the bundled cyfr
-// linked onto PATH after it.
+// linked onto PATH after it and the app's update service's socket enabled
+// at every configure (a reinstall after a removal is told the release
+// before it). Its removal stops the socket and every request it accepted
+// before the units go with the package.
 const template = (name) => readFileSync(path.join(root, "node_modules", "app-builder-lib", "templates", "linux", name), "utf8")
+const systemd = "[ -d /run/systemd/system ]"
 writeFileSync(path.join(stage, "after-install.tpl"), template("after-install.tpl") +
-  "\nln -sf '/opt/${sanitizedProductName}/resources/cyfr' /usr/bin/cyfr\n")
+  "\nln -sf '/opt/${sanitizedProductName}/resources/cyfr' /usr/bin/cyfr\n" +
+  `if ${systemd}; then systemctl daemon-reload; systemctl enable --now cyfr-update.socket || true; fi\n`)
+writeFileSync(path.join(stage, "before-remove.sh"), "#!/bin/sh\n" +
+  `if [ "$1" = remove ] && ${systemd}; then systemctl disable --now cyfr-update.socket || true; systemctl stop 'cyfr-update@*.service' || true; fi\n`)
 writeFileSync(path.join(stage, "after-remove.tpl"), template("after-remove.tpl") +
-  "\nif [ \"$(readlink /usr/bin/cyfr)\" = '/opt/${sanitizedProductName}/resources/cyfr' ]; then rm -f /usr/bin/cyfr; fi\n")
+  "\nif [ \"$(readlink /usr/bin/cyfr)\" = '/opt/${sanitizedProductName}/resources/cyfr' ]; then rm -f /usr/bin/cyfr; fi\n" +
+  `if ${systemd}; then systemctl daemon-reload; fi\n`)
+// The units are staged root's alone to change, whatever the checkout's
+// modes, as fpm keeps them.
+const unit = (name) => {
+  const file = path.join(stage, name)
+  copyFileSync(path.join(root, "linux", name), file)
+  chmodSync(file, 0o644)
+  return `${file}=/usr/lib/systemd/system/${name}`
+}
 
 await build({
   targets: {linux: Platform.LINUX, darwin: Platform.MAC, windows: Platform.WINDOWS}[os]
@@ -215,7 +232,8 @@ await build({
       depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1",
         "libsecret-1-0", "libgbm1", "libasound2t64 | libasound2"],
       afterInstall: path.join(stage, "after-install.tpl"),
-      afterRemove: path.join(stage, "after-remove.tpl")},
+      afterRemove: path.join(stage, "after-remove.tpl"),
+      fpm: ["--before-remove", path.join(stage, "before-remove.sh"), unit("cyfr-update.socket"), unit("cyfr-update@.service")]},
     // A distribution build fails rather than leave the app or its DMG
     // unsigned.
     forceCodeSigning: signing !== null,

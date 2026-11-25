@@ -16,7 +16,6 @@ Usage: python3 -I tests/builder-image/memory_test.py
 
 import json
 import os
-import shlex
 import shutil
 import signal
 import socket
@@ -35,9 +34,9 @@ import memory  # noqa: E402
 import stack  # noqa: E402
 import imagesuite  # noqa: E402
 
-CONTAINER = "cyfr-locus-builds-1"
+CONTAINER = "cyfr-locus-1"
 # The builds pool's first two uids, from the suite's own constants, which read the role table.
-GROUPS = [f"/sys/fs/cgroup/keeper-{stack.POOL_FIRST}", f"/sys/fs/cgroup/keeper-{stack.POOL_FIRST + 1}"]
+GROUPS = [f"{memory.ROLE_GROUP}/keeper-{stack.POOL_FIRST}", f"{memory.ROLE_GROUP}/keeper-{stack.POOL_FIRST + 1}"]
 
 
 def docker(state, status=1):
@@ -136,7 +135,7 @@ class ContainerState(unittest.TestCase):
         with open(tool, "w") as f:
             f.write(f"#!/bin/sh\n{f'echo {value}' if value else ':'}\nexit {status}\n")
         os.chmod(tool, 0o700)
-        reads = {"cat /sys/fs/cgroup/memory.events": events, "cat /sys/fs/cgroup/memory.current": current}
+        reads = {f"cat {memory.ROLE_GROUP}/memory.events": events, f"cat {memory.ROLE_GROUP}/memory.current": current}
 
         class Shell:
             container = "stub-container"
@@ -175,7 +174,7 @@ class ContainerState(unittest.TestCase):
 
 
 class ContainerLimit(unittest.TestCase):
-    """The container's memory.max is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
+    """The builds role's memory.max is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
 
     def exec_answering(self, status, stdout):
         class Observer:
@@ -190,36 +189,6 @@ class ContainerLimit(unittest.TestCase):
 
     def test_the_limit_that_was_read_is_the_control(self):
         self.assertEqual(memory.container_limit(self.exec_answering(0, "1073741824\n")), "1073741824")
-
-
-class ReleaseUser(unittest.TestCase):
-    """The release's user name is read from a lookup that exits 0: a failed lookup is no answer, not an empty name."""
-
-    def lookup(self, status, stdout):
-        """An observer whose exec runs its script under sh, with a fake getent on the path that prints `stdout` and exits `status`."""
-        bin_dir = tempfile.mkdtemp(prefix="builder-release-user-")
-        self.addCleanup(shutil.rmtree, bin_dir, True)
-        tool = os.path.join(bin_dir, "getent")
-        with open(tool, "w") as f:
-            f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(stdout)}\nexit {status}\n")
-        os.chmod(tool, 0o700)
-
-        class Shell:
-            def exec(self, script, user=None):
-                return subprocess.run(["/bin/sh", "-c", script],
-                                      env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
-                                      capture_output=True, text=True)
-
-        return Shell()
-
-    def test_a_failed_lookup_is_no_answer(self):
-        with self.assertRaises(SystemExit):
-            memory.release_user(self.lookup(2, ""))
-
-    def test_the_name_that_was_read_is_the_control(self):
-        uid = stack.POOL_FIRST
-        line = f"cyfr-release:x:{uid}:{uid}::/home/x:/bin/sh\n"
-        self.assertEqual(memory.release_user(self.lookup(0, line)), "cyfr-release")
 
 
 def frame(stream, payload):
@@ -251,10 +220,10 @@ class ClientOutput(unittest.TestCase):
                         parent.settimeout(5)
                         with parent.makefile("rb") as lines:
                             place = json.loads(lines.readline())
-                            parent.sendall(json.dumps({"v": 4, "type": "placed", "id": place["id"]}).encode() + b"\n")
+                            parent.sendall(json.dumps({"v": 5, "type": "placed", "id": place["id"]}).encode() + b"\n")
                             request = json.loads(lines.readline())
-                        self.assertEqual(place, {"v": 4, "type": "place", "id": "p1", "kind": "build"})
-                        self.assertEqual((request["v"], request["type"], request["place"]), (4, "spawn", "p1"))
+                        self.assertEqual(place, {"v": 5, "type": "place", "id": "p1", "kind": "build"})
+                        self.assertEqual((request["v"], request["type"], request["place"]), (5, "spawn", "p1"))
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)
                         self.assertTrue(os.WIFSTOPPED(status))
@@ -269,9 +238,9 @@ class ClientOutput(unittest.TestCase):
                             relay.sendall(packet + frame(1, b"") + frame(2, b""))
                         spawn_id = "a" * 32
                         for reply in (
-                            {"v": 4, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
-                            {"v": 4, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
-                            {"v": 4, "type": "released", "spawn_id": spawn_id},
+                            {"v": 5, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 5, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
+                            {"v": 5, "type": "released", "spawn_id": spawn_id},
                         ):
                             parent.sendall(json.dumps(reply).encode() + b"\n")
                         os.kill(process.pid, signal.SIGCONT)
@@ -307,9 +276,9 @@ def keeper(sock, requests):
         requests.append(request)
         if request["type"] == "place":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 4, "type": "placed", "id": request["id"]})
+            send({"v": 5, "type": "placed", "id": request["id"]})
         elif request["type"] == "spawn":
-            send({"v": 4, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            send({"v": 5, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
             relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             relay.connect(request["attach"]["path"])
             relay.sendall(frame(3, request["attach"]["token"].encode())
@@ -319,15 +288,15 @@ def keeper(sock, requests):
         elif request["type"] == "measure":
             measures += 1
             if free or measures == 1:
-                send({"v": 4, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": 5, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 4, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
+                send({"v": 5, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
                       "age_ms": 0})
             if releasing:
-                send({"v": 4, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+                send({"v": 5, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
                 relay.sendall(frame(1, b"") + frame(2, b""))
                 relay.close()
-                send({"v": 4, "type": "released", "spawn_id": SPAWN_ID})
+                send({"v": 5, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
 
 
@@ -384,12 +353,12 @@ class MeasuredBuild(unittest.TestCase):
         self.assertEqual(types[:2], ["place", "spawn"])
         self.assertEqual(types[-3:], ["release", "measure", "measure"])
         self.assertEqual(set(types[2:-3]), {"measure"})
-        self.assertEqual(self.requests[0], {"v": 4, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
+        self.assertEqual(self.requests[0], {"v": 5, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
         self.assertEqual({key: self.requests[1][key] for key in ("v", "id", "place", "pool", "memory_bytes")},
-                         {"v": 4, "id": "1", "place": "p1", "pool": "probe", "memory_bytes": memory.BOUND})
-        self.assertEqual(self.requests[-3], {"v": 4, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
+                         {"v": 5, "id": "1", "place": "p1", "pool": "probe", "memory_bytes": memory.BOUND})
+        self.assertEqual(self.requests[-3], {"v": 5, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
         measures = [request for request in self.requests if request["type"] == "measure"]
-        self.assertEqual(measures, [{"v": 4, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
+        self.assertEqual(measures, [{"v": 5, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
 
     def test_a_build_read_under_its_owner_and_free_only_after_released_passes(self):
         memory.judge_build(self.spawn())

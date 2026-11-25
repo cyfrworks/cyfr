@@ -3,10 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # cyfr-guard: the egress guard of a Locus island. docker-compose.yml runs
-# one for the builds island (locus-builds-guard) and one for the backends
-# island (locus-backends-guard), each from the Locus image, holding
-# NET_ADMIN and no other capability, in a namespace whose net.ipv4.ip_forward
-# is 1 and net.ipv4.icmp_ratelimit 0 (compose's sysctls; the guard refuses
+# one, locus-guard, from the Locus image, holding NET_ADMIN and no other
+# capability, in a namespace whose net.ipv4.ip_forward is 1 and
+# net.ipv4.icmp_ratelimit 0 (compose's sysctls; the guard refuses
 # to start otherwise). The island's service shares this container's network
 # namespace (`network_mode: service:`), and starts only once this container
 # is healthy: healthy means the ready file is present, the static rules it
@@ -16,9 +15,10 @@
 # file exists, so the island never starts behind a guard that holds fewer
 # rules than these.
 #
-# Every build and every program's session runs in a space of its own, with
-# its own network namespace, which the keeper makes; nothing of a space
-# reaches this namespace's loopback, the island's service or another space.
+# Every build, every program's session and every role's service process
+# runs in a space of its own, with its own network namespace, which the
+# keeper makes; nothing of a space reaches this namespace's loopback, the
+# island's service or another space.
 # A routed space's one way out is its route (apps/locus/keeper/guard): a
 # veth pair whose guard's end is sp<slot> here, a /30 of the route range,
 # and the route's own chains, which `route` installs and `unroute` removes.
@@ -41,9 +41,18 @@
 #      opens nothing, and the guard resolves again when it restarts;
 #   5. every other private address (PRIVATE_V4: loopback, RFC 1918, CGNAT,
 #      the reserved and multicast ranges) is refused (CYFR_GUARD_PRIVATE);
-#   6. a route of reach `island` passes everything else, the public
-#      Internet; a route of reach `hosts` passes the addresses its keeper
-#      admitted for it and refuses every other.
+#   6. a route of reach `island` or `role` passes everything else, the
+#      public Internet; a route of reach `hosts` passes the addresses its
+#      keeper admitted for it and refuses every other.
+# A route of reach `role` that is `private` (the role whose container sat
+# on a network of its own) is judged instead, after rules 1 and 2:
+#   3. core's host API, the one address and TCP port on the island's
+#      subnets CYFR_GUARD_HOST_API names, passes;
+#   4. what rule 3 above refuses stays refused, and so does the route range
+#      (every other space);
+#   5. everything else passes: every other private address and the public
+#      Internet.
+# No other route reaches the host API: the island's subnets refuse it.
 # What passes leaves masqueraded as this namespace's own address, and a
 # connection it opens takes the route's mark as it is made, and never
 # after: CONNMARK sets it only on a connection that carries no mark yet
@@ -59,12 +68,29 @@
 # ICMP, which it sees as EHOSTUNREACH, never a timeout: the namespace's
 # ICMP rate limit is off, so every refusal is answered.
 #
+# A route of reach `role` is a role's service process, listening on its
+# port in its space, and is the one route anything enters by: a new TCP
+# connection to one of this namespace's own island addresses (the
+# addresses of its interfaces on the island's subnets, logged as the guard
+# starts) at the role's port, arriving from the island's network or made
+# by this namespace's own processes (a health probe), is forwarded to the
+# space's address at that port (DNAT, by CYFR_GUARD_ROLES in the nat
+# table). It enters as the route's own: it takes the route's mark as it is
+# forwarded, its packets into the space pass only to that port of the
+# route's address, and the space's replies pass as replies of a forwarded
+# connection carrying the route's mark. The filter judges a connection
+# this namespace's own processes make by the device it was routed to
+# before it was forwarded, the loopback: for those, the forwarding is the
+# one way in. One route holds a port at a time (the control refuses a
+# second), and the forwarding goes with the route.
+#
 # The namespace's own processes (the island's service, its keeper, this
 # guard) are held as before (CYFR_GUARD, in OUTPUT): a packet of a tracked
 # connection passes, and a new one is refused the metadata, the control
 # plane and the island's subnets, and every private address but the
 # namespace's loopback and the private hosts. What it sends into a space is
-# refused, the ICMP that answers a space's refused packet apart.
+# refused, the ICMP that answers a space's refused packet and a connection
+# forwarded to a role apart.
 #
 #   cyfr-guard         install the rules, write the ready file, then serve
 #                      the island's keeper its control on the socket
@@ -75,12 +101,15 @@
 #                      namespace takes no answer from it.
 #   cyfr-guard route <iface> <inner> <mark> island
 #   cyfr-guard route <iface> <inner> <mark> hosts <address…>
+#   cyfr-guard route <iface> <inner> <mark> role <port> [private]
 #                      the control's: install the chains of the route whose
 #                      guard's end is <iface> and space's address <inner>,
 #                      with the connection mark <mark>, and record them
 #                      (ROUTES/<iface>) as installed; only IPv4 addresses
-#                      are installed, IPv6 having no route. A route that
-#                      fails at any step is removed whole and exits 1
+#                      are installed, IPv6 having no route; a role's
+#                      forwarding of <port> is installed with them. A
+#                      route that fails at any step is removed whole and
+#                      exits 1
 #   cyfr-guard unroute <iface>
 #                      the control's: remove the route's chains and record;
 #                      a route already gone is removed; exits 1 where a
@@ -101,6 +130,11 @@
 #                                comma-separated (configuration-guide.md)
 #   CYFR_GUARD_CONTROL           the control's socket, on a volume the
 #                                island's service mounts read-only
+#   CYFR_GUARD_HOST_API          optional: core's host API as
+#                                <IPv4 address>:<port>, the address on one
+#                                of the island's subnets, which a private
+#                                role reaches; a value of any other form
+#                                refuses the guard's start
 #
 # The routes change only under the lock on LOCK, which `route` and
 # `unroute` take whole and `check` takes shared, and each change writes its
@@ -114,14 +148,15 @@ LOCK="$READY_DIR/lock"
 ROUTES="$READY_DIR/routes"
 TARGETS="$READY_DIR/targets"
 RANGE="$READY_DIR/range"
+HOST_API="$READY_DIR/host-api"
 CHAIN=CYFR_GUARD
-KNOWN=CYFR_GUARD_KNOWN
 REFUSE=CYFR_GUARD_REFUSE
 PRIVATE=CYFR_GUARD_PRIVATE
 OUT=CYFR_GUARD_ROUTES
 IN=CYFR_GUARD_REPLIES
 ROUTE_CHAIN=CYFR_GUARD_R
 PASS_CHAIN=CYFR_GUARD_P
+ROLES=CYFR_GUARD_ROLES
 # Set by `cyfr-guard rules` alone, never from the environment.
 PRINT_ONLY=
 
@@ -287,20 +322,23 @@ ff00::/8
 
 log() { echo "[cyfr-guard] $*" >&2; }
 
-# The static rules of both families' filter tables, digested: what the
-# ready file records and the health probe compares. Each table is read on
-# its own and a read that fails answers nothing, with status 1, so neither
-# the ready file nor the probe ever holds a digest of a table that could
-# not be read. The dump's timestamps and the packet counters it prints
-# beside each built-in chain's policy are left out, since both move while
-# the rules stand, and so are the routes (their chains and the jumps to
-# them), which `routes_installed` holds to the guard's record.
+# The static rules of both families' filter tables and the guard's own of
+# the IPv4 nat table (Docker's resolver keeps rules of its own there),
+# digested: what the ready file records and the health probe compares.
+# Each table is read on its own and a read that fails answers nothing,
+# with status 1, so neither the ready file nor the probe ever holds a
+# digest of a table that could not be read. The dump's timestamps and the
+# packet counters it prints beside each built-in chain's policy are left
+# out, since both move while the rules stand, and so are the routes (their
+# chains, the jumps to them and the roles' forwarding), which
+# `routes_installed` holds to the guard's record.
 digest() {
   v4="$(iptables-save -t filter)" || { log "error: iptables-save failed"; return 1; }
   v6="$(ip6tables-save -t filter)" || { log "error: ip6tables-save failed"; return 1; }
-  sum="$(printf '%s\n%s\n' "$v4" "$v6" | sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' \
+  nat="$(iptables-save -t nat)" || { log "error: iptables-save of the nat table failed"; return 1; }
+  sum="$( { printf '%s\n%s\n' "$v4" "$v6"; printf '%s\n' "$nat" | grep -e CYFR_GUARD || true; } | sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' \
     -e "/^:(${ROUTE_CHAIN}|${PASS_CHAIN})[0-9]+ /d" -e "/^-A (${ROUTE_CHAIN}|${PASS_CHAIN})[0-9]+ /d" \
-    -e "/^-A (${OUT}|${IN}) /d" | sha256sum | cut -d' ' -f1)"
+    -e "/^-A (${OUT}|${IN}|${ROLES}) /d" | sha256sum | cut -d' ' -f1)"
   case "$sum" in
     ????????????????????????????????????????????????????????????????) printf '%s\n' "$sum" ;;
     *) log "error: no digest of the rules"; return 1 ;;
@@ -330,16 +368,19 @@ check() {
 }
 
 # What the kernel holds of the route whose guard's end is $1: its two
-# chains and the jumps to them, as iptables lists them.
+# chains, the jumps to them and a role's forwarding, as iptables lists
+# them.
 route_text() {
   slot="${1#sp}"
   r4="$(iptables -w 5 -S "$ROUTE_CHAIN$slot" 2>/dev/null)" || return 1
   p4="$(iptables -w 5 -S "$PASS_CHAIN$slot" 2>/dev/null)" || return 1
   out="$(iptables -w 5 -S "$OUT")" || return 1
   in="$(iptables -w 5 -S "$IN")" || return 1
+  roles="$(iptables -w 5 -t nat -S "$ROLES")" || return 1
   printf '%s\n%s\n' "$r4" "$p4"
   printf '%s\n' "$out" | grep -e "^-A $OUT -i $1 " || true
   printf '%s\n' "$in" | grep -e "^-A $IN -o $1 " || true
+  printf '%s\n' "$roles" | grep -e "^-A $ROLES .* --comment $1 -j " || true
 }
 
 # Whether every route the guard recorded is installed exactly as recorded,
@@ -351,8 +392,10 @@ routes_installed() {
     recorded="$(for record in "$ROUTES"/sp*; do [ -f "$record" ] && basename "$record"; done | grep -E '^sp[0-9]+$' | sort || true)"
   fi
   listed="$(iptables -w 5 -S)" || { log "not ready: the IPv4 rules could not be read"; return 1; }
+  roles="$(iptables -w 5 -t nat -S "$ROLES")" || { log "not ready: the roles' forwarding could not be read"; return 1; }
   chains="$(printf '%s\n' "$listed" | sed -n -E "s/^-N (${ROUTE_CHAIN}|${PASS_CHAIN})([0-9]+)$/sp\2/p" | sort -u)"
-  jumps="$(printf '%s\n' "$listed" | sed -n -E -e "s/^-A ${OUT} -i (sp[0-9]+) .*/\1/p" -e "s/^-A ${IN} -o (sp[0-9]+) .*/\1/p" | sort -u)"
+  jumps="$(printf '%s\n%s\n' "$listed" "$roles" | sed -n -E -e "s/^-A ${OUT} -i (sp[0-9]+) .*/\1/p" -e "s/^-A ${IN} -o (sp[0-9]+) .*/\1/p" \
+    -e "s/^-A ${ROLES} .* --comment (sp[0-9]+) -j .*/\1/p" | sort -u)"
   [ "$chains" = "$recorded" ] || { log "not ready: the routes' chains are not the routes the guard recorded"; return 1; }
   [ "$jumps" = "$recorded" ] || { log "not ready: the jumps to routes are not the routes the guard recorded"; return 1; }
   for iface in $recorded; do
@@ -419,6 +462,57 @@ own_v6_subnets() {
   ' /proc/net/ipv6_route | sort -u
 }
 
+# The IPv4 addresses read one a line that lie in one of the CIDRs given,
+# one an argument.
+within() {
+  awk -v cidrs="$*" '
+    function num(a,    p) { split(a, p, "."); return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4] }
+    BEGIN {
+      n = split(cidrs, list, " ")
+      for (i = 1; i <= n; i++) { split(list[i], c, "/"); size = 2 ^ (32 - c[2]); lo[i] = num(c[1]) - num(c[1]) % size; hi[i] = lo[i] + size - 1 }
+    }
+    { a = num($1); for (i = 1; i <= n; i++) if (lo[i] <= a && a <= hi[i]) { print $1; next } }
+  '
+}
+
+# This namespace's own island addresses: its local IPv4 addresses, from the
+# kernel's routing tables, that lie on the island's subnets given, one an
+# argument.
+island_addresses() {
+  [ -r /proc/net/fib_trie ] || return 0
+  awk '/\|-- / { a = $2 } /\/32 host LOCAL/ { print a }' /proc/net/fib_trie | sort -u | within "$@"
+}
+
+# A dotted IPv4 address in its canonical form (no octet past 255, none
+# with a leading zero), or 1.
+canonical_v4() {
+  case "$1" in "" | *[!0-9.]*) return 1 ;; esac
+  printf '%s\n' "$1" | awk -F. 'NF == 4 { for (i = 1; i <= 4; i++) if ($i !~ /^(0|[1-9][0-9]?[0-9]?)$/ || $i + 0 > 255) exit 1; ok = 1 } END { exit !ok }'
+}
+
+# A port, 1..65535 in its canonical form, or 1.
+canonical_port() {
+  case "$1" in "" | *[!0-9]* | 0*) return 1 ;; esac
+  [ "${#1}" -le 5 ] && [ "$1" -le 65535 ]
+}
+
+# Core's host API that CYFR_GUARD_HOST_API names, as `<address> <port>`,
+# and nothing where it is unset or empty; 1, naming the value, where it is
+# not `<IPv4 address>:<port>` with the address on one of the island's
+# subnets given, one an argument.
+host_api() {
+  value="${CYFR_GUARD_HOST_API:-}"
+  [ -n "$value" ] || return 0
+  address="${value%:*}" port="${value##*:}"
+  if [ "$address" != "$value" ] && canonical_v4 "$address" && canonical_port "$port" \
+    && [ -n "$(printf '%s\n' "$address" | within "$@")" ]; then
+    echo "$address $port"
+    return 0
+  fi
+  log "error: CYFR_GUARD_HOST_API is '$value', not <IPv4 address>:<port> with the address on one of the island's subnets (${*:-none})"
+  return 1
+}
+
 # The addresses and CIDRs CYFR_PRIVATE_EGRESS_TARGETS names, one a line,
 # each name resolved now and logged.
 private_targets() {
@@ -474,13 +568,25 @@ add_rules() {
   # shellcheck disable=SC2046,SC2086 # one argument per route and target
   range="$(route_range $(v4_routes) $v4targets)" || exit 1
   log "routes take $range"
+  # shellcheck disable=SC2086 # one argument per subnet
+  host_api="$(host_api $subnets)" || exit 1
+  [ -z "$host_api" ] || log "host API ${host_api% *}:${host_api#* } passes private roles"
+  # shellcheck disable=SC2086 # one argument per subnet
+  addresses="$(island_addresses $subnets)"
 
-  # The namespace's own processes: OUTPUT.
+  # The chains of the namespace's own processes and of the spaces.
   v4 -N "$CHAIN"
   v6 -N "$CHAIN"
+  v4 -N "$REFUSE"
+  v4 -N "$PRIVATE"
+  v4 -N "$OUT"
+  v4 -N "$IN"
+
+  # The namespace's own processes: OUTPUT.
   v4 -A OUTPUT -j "$CHAIN"
   v6 -A OUTPUT -j "$CHAIN"
-  # Into a space, nothing but the ICMP that answers its refused packets.
+  # Into a space, nothing but the ICMP that answers its refused packets (a
+  # connection forwarded to a role is seen here on the loopback).
   v4 -A "$CHAIN" -o sp+ -p icmp -m conntrack --ctstate RELATED -j ACCEPT
   v4 -A "$CHAIN" -o sp+ -j REJECT --reject-with icmp-admin-prohibited
   v6 -A "$CHAIN" -o sp+ -j REJECT --reject-with icmp6-adm-prohibited
@@ -506,12 +612,8 @@ add_rules() {
   for cidr in $PRIVATE_V4; do v4 -A "$CHAIN" -d "$cidr" -j REJECT --reject-with icmp-admin-prohibited; done
   for cidr in $PRIVATE_V6; do v6 -A "$CHAIN" -d "$cidr" -j REJECT --reject-with icmp6-adm-prohibited; done
 
-  # The spaces: FORWARD, INPUT and the masquerade. A route's chain jumps to
-  # the first two for what every space is refused.
-  v4 -N "$REFUSE"
-  v4 -N "$PRIVATE"
-  v4 -N "$OUT"
-  v4 -N "$IN"
+  # The spaces: FORWARD, INPUT, the roles' forwarding and the masquerade. A
+  # route's chain jumps to the first two for what every space is refused.
   for cidr in $METADATA_V4; do v4 -A "$REFUSE" -d "$cidr" -j REJECT --reject-with icmp-admin-prohibited; done
   v4 -A "$REFUSE" -d "$control_plane/32" -j REJECT --reject-with icmp-admin-prohibited
   for subnet in $subnets; do v4 -A "$REFUSE" -d "$subnet" -j REJECT --reject-with icmp-admin-prohibited; done
@@ -520,10 +622,19 @@ add_rules() {
   v4 -A FORWARD -i sp+ -j REJECT --reject-with icmp-admin-prohibited
   v4 -A FORWARD -o sp+ -j "$IN"
   v4 -A FORWARD -o sp+ -j REJECT --reject-with icmp-admin-prohibited
+  # A role's reply to this namespace's own process: its route's chain
+  # judges it.
+  v4 -A INPUT -i sp+ -p tcp -m conntrack --ctstate DNAT --ctdir REPLY -j "$OUT"
   v4 -A INPUT -i sp+ -j REJECT --reject-with icmp-admin-prohibited
   v6 -A FORWARD -i sp+ -j REJECT --reject-with icmp6-adm-prohibited
   v6 -A FORWARD -o sp+ -j REJECT --reject-with icmp6-adm-prohibited
   v6 -A INPUT -i sp+ -j REJECT --reject-with icmp6-adm-prohibited
+  v4 -t nat -N "$ROLES"
+  for address in $addresses; do
+    log "island address $address"
+    v4 -t nat -A PREROUTING -d "$address/32" ! -i sp+ -p tcp -j "$ROLES"
+    v4 -t nat -A OUTPUT -d "$address/32" -p tcp -j "$ROLES"
+  done
   v4 -t nat -A POSTROUTING -s "$range" ! -o sp+ -j MASQUERADE
 }
 
@@ -555,14 +666,18 @@ dotted() {
   return 1
 }
 
-# Removes every chain and jump of the route whose guard's end is $1, and
-# its record, in one transaction; a route already gone is removed.
+# Removes every chain and jump of the route whose guard's end is $1 and a
+# role's forwarding, the forwarding first, and its record; a route already
+# gone is removed.
 remove_route() {
   iface="$1"
   slot="${iface#sp}"
-  out="$(iptables -w 5 -S "$OUT")" && in="$(iptables -w 5 -S "$IN")" \
+  out="$(iptables -w 5 -S "$OUT")" && in="$(iptables -w 5 -S "$IN")" && roles="$(iptables -w 5 -t nat -S "$ROLES")" \
     || { log "error: the routes' jumps could not be read"; return 1; }
   {
+    echo "*nat"
+    printf '%s\n' "$roles" | grep -e "^-A $ROLES .* --comment $iface -j " | sed 's/^-A /-D /' || true
+    echo "COMMIT"
     echo "*filter"
     printf '%s\n' "$out" | grep -e "^-A $OUT -i $iface " | sed 's/^-A /-D /' || true
     printf '%s\n' "$in" | grep -e "^-A $IN -o $iface " | sed 's/^-A /-D /' || true
@@ -586,9 +701,17 @@ route() {
     "" | *[!0-9]* | 0*) log "error: '$mark' is not a mark"; exit 1 ;;
   esac
   [ "$mark" -le 4294967295 ] || { log "error: '$mark' is not a mark"; exit 1; }
+  port="" private=""
   case "$reach" in
     island) [ $# -eq 0 ] || { log "error: a route of the island's reach names no addresses"; exit 1; } ;;
     hosts) [ $# -ge 1 ] || { log "error: a route of reach hosts names its addresses"; exit 1; } ;;
+    role)
+      { [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = private ]; }; } \
+        || { log "error: a route of reach role names its port and, for a private role, private"; exit 1; }
+      canonical_port "$1" || { log "error: '$1' is not a port"; exit 1; }
+      port="$1" private="${2:-}"
+      set --
+      ;;
     *) log "error: '$reach' is no reach"; exit 1 ;;
   esac
   v4list=""
@@ -601,6 +724,7 @@ route() {
   exec 9>"$LOCK"
   flock 9
   r="$ROUTE_CHAIN${iface#sp}" p="$PASS_CHAIN${iface#sp}"
+  host_api="$(cat "$HOST_API")" range="$(cat "$RANGE")"
   remove_route "$iface" || exit 1
   if {
     echo "*filter"
@@ -609,21 +733,41 @@ route() {
     echo "-A $p -m connmark --mark 0 -j CONNMARK --set-mark $mark"
     echo "-A $p -j ACCEPT"
     echo "-A $r ! -s $inner/32 -j DROP"
+    # A role's replies on the connections forwarded to it.
+    [ -z "$port" ] || echo "-A $r -p tcp --sport $port -m conntrack --ctstate DNAT --ctdir REPLY -m connmark --mark $mark -j ACCEPT"
     echo "-A $r -o sp+ -j REJECT --reject-with icmp-admin-prohibited"
-    echo "-A $r -j $REFUSE"
-    while IFS= read -r target; do
-      if [ -n "$target" ] && [ "$(family "$target")" = 4 ]; then echo "-A $r -d $target -j $p"; fi
-    done < "$TARGETS"
-    echo "-A $r -j $PRIVATE"
-    if [ "$reach" = island ]; then
+    if [ -n "$private" ]; then
+      [ -z "$host_api" ] || echo "-A $r -d ${host_api% *}/32 -p tcp --dport ${host_api#* } -j $p"
+      echo "-A $r -j $REFUSE"
+      echo "-A $r -d $range -j REJECT --reject-with icmp-admin-prohibited"
       echo "-A $r -j $p"
     else
-      for address in $v4list; do echo "-A $r -d $address/32 -j $p"; done
-      echo "-A $r -j REJECT --reject-with icmp-admin-prohibited"
+      echo "-A $r -j $REFUSE"
+      while IFS= read -r target; do
+        if [ -n "$target" ] && [ "$(family "$target")" = 4 ]; then echo "-A $r -d $target -j $p"; fi
+      done < "$TARGETS"
+      echo "-A $r -j $PRIVATE"
+      if [ "$reach" = hosts ]; then
+        for address in $v4list; do echo "-A $r -d $address/32 -j $p"; done
+        echo "-A $r -j REJECT --reject-with icmp-admin-prohibited"
+      else
+        echo "-A $r -j $p"
+      fi
     fi
     echo "-A $OUT -i $iface -j $r"
     echo "-A $IN -o $iface -m connmark --mark $mark -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+    # A connection forwarded to the role, which took the route's mark as
+    # it was forwarded. Through this route's pair, its destination is the
+    # space's address: the rule names none, as iptables lists `-d` before
+    # `-o` and every rule of a route in this chain is found by its `-o`.
+    [ -z "$port" ] || echo "-A $IN -o $iface -p tcp --dport $port -m conntrack --ctstate DNAT --ctdir ORIGINAL -m connmark --mark $mark -j ACCEPT"
     echo "COMMIT"
+    if [ -n "$port" ]; then
+      echo "*nat"
+      echo "-A $ROLES -p tcp --dport $port -m comment --comment $iface -j CONNMARK --set-mark $mark"
+      echo "-A $ROLES -p tcp --dport $port -m comment --comment $iface -j DNAT --to-destination $inner:$port"
+      echo "COMMIT"
+    fi
   } | iptables-restore -w 5 --noflush; then :; else
     log "error: route $iface's rules failed"
     remove_route "$iface" || true
@@ -631,7 +775,7 @@ route() {
   fi
   mkdir -p "$ROUTES" && route_text "$iface" > "$ROUTES/$iface.tmp" && mv "$ROUTES/$iface.tmp" "$ROUTES/$iface" \
     || { log "error: route $iface could not be recorded"; remove_route "$iface" || true; exit 1; }
-  log "route $iface for $inner ($reach$v4list) installed, mark $mark"
+  log "route $iface for $inner ($reach${port:+ $port}${private:+ private}$v4list) installed, mark $mark"
 }
 
 unroute() {
@@ -649,6 +793,7 @@ install_rules() {
   add_rules
   printf '%s\n' "$targets" | sed '/^$/d' > "$TARGETS"
   printf '%s\n' "$range" > "$RANGE"
+  printf '%s\n' "$host_api" > "$HOST_API"
   record || exit 1
   log "ready: every rule installed, routes in $range"
 }
@@ -656,10 +801,10 @@ install_rules() {
 case "${1:-}" in
   "")
     install_rules
-    exec cyfr-locus guard-control "${CYFR_GUARD_CONTROL:?names the control socket the island's keeper reaches the guard on}" "$range"
+    exec cyfr-locus guard-control "${CYFR_GUARD_CONTROL:?names the control socket the keeper of the island reaches the guard on}" "$range"
     ;;
   route)
-    [ $# -ge 5 ] || { log "usage: cyfr-guard route <iface> <inner> <mark> island | hosts <address…>"; exit 2; }
+    [ $# -ge 5 ] || { log "usage: cyfr-guard route <iface> <inner> <mark> island | hosts <address…> | role <port> [private]"; exit 2; }
     shift
     route "$@"
     ;;
@@ -675,7 +820,7 @@ case "${1:-}" in
     add_rules
     ;;
   *)
-    log "usage: cyfr-guard [route <iface> <inner> <mark> island | hosts <address…> | unroute <iface> | check | rules]"
+    log "usage: cyfr-guard [route <iface> <inner> <mark> island | hosts <address…> | role <port> [private] | unroute <iface> | check | rules]"
     exit 2
     ;;
 esac

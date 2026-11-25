@@ -81,7 +81,7 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 		defer cancel()
 		return u.listRunning(ctx)
 	}
-	for _, step := range []func() error{u.readConfig, u.probePostgres, listRunning} {
+	for _, step := range []func() error{u.readConfig, u.placeDatabase, u.probePostgres, listRunning} {
 		if err := step(); err != nil {
 			if ctx.Err() != nil {
 				return errBackupInterrupted
@@ -138,11 +138,14 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	}
 	fmt.Fprintln(out, "Starting the stack again...")
 	if err := u.start("backup"); err != nil {
+		if beside := (besideFailed{}); errors.As(err, &beside) {
+			return fmt.Errorf("The snapshot is whole and the stack runs again, but %v", err)
+		}
 		if local := (startedLocally{}); errors.As(err, &local) {
 			fmt.Fprintf(out, "The stack runs again, on this machine alone: %v\n", err)
 			return nil
 		}
-		return fmt.Errorf("The snapshot is whole, but the stack did not start again (%v); 'cyfr up' starts it", err)
+		return fmt.Errorf("The snapshot is whole, but the stack did not start again (%v); 'cyfr up' starts it.%s", err, u.besideLine())
 	}
 	fmt.Fprintln(out, "The stack runs again.")
 	return nil
@@ -157,11 +160,14 @@ func (u *updater) startAgain(reason error) error {
 	}
 	fmt.Fprintln(u.out, "Starting the stack again...")
 	err := u.start("backup")
+	if beside := (besideFailed{}); errors.As(err, &beside) {
+		return fmt.Errorf("%s.\nThe stack was started again, but %v", text, err)
+	}
 	if local := (startedLocally{}); errors.As(err, &local) {
 		return fmt.Errorf("%s.\nThe stack was started again, on this machine alone. %v", text, err)
 	}
 	if err != nil {
-		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it", text, err)
+		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it.%s", text, err, u.besideLine())
 	}
 	return fmt.Errorf("%s.\nThe stack was started again", text)
 }
@@ -276,46 +282,20 @@ func (u *updater) takeSnapshot(release string, managed []string) error {
 	c := u.config
 	var parts []string
 
-	switch c.adapter {
-	case "sqlite":
-		if err := copyFile(c.sqliteFile, filepath.Join(dir, "database")); err != nil {
-			return err
-		}
-		parts = append(parts, "database")
-		if info, err := os.Stat(c.sqliteFile + "-wal"); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			if err := copyFile(c.sqliteFile+"-wal", filepath.Join(dir, "database-wal")); err != nil {
-				return err
-			}
-			parts = append(parts, "database-wal")
-		}
-	case "postgres":
+	// The storage is read through the stack (readThroughStack), and a
+	// PostgreSQL database dumped from its server.
+	read, err := u.readThroughStack(dir)
+	if err != nil {
+		return err
+	}
+	if c.adapter == "postgres" {
 		if err := u.dumpPostgres(filepath.Join(dir, "database")); err != nil {
 			return err
 		}
 		parts = append(parts, "database")
 	}
-
-	if c.storage == "local" {
-		exclude := map[string]bool{}
-		if c.sqliteFile != "" {
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				exclude[filepath.Clean(c.sqliteFile+suffix)] = true
-			}
-		}
-		// The access engine's state is no part of any snapshot, whatever
-		// mount reaches it: a restored home's lock, journal and receipts
-		// are the machine's own, never the backup's.
-		if state, err := filepath.Abs(".cyfr"); err == nil {
-			if resolved, err := filepath.EvalSymlinks(state); err == nil {
-				state = resolved
-			}
-			exclude[state] = true
-		}
-		if err := copyStorage(c.storageMounts, filepath.Join(dir, "storage"), exclude, u.out); err != nil {
-			return err
-		}
-		parts = append(parts, "storage")
-	} else {
+	parts = append(parts, read...)
+	if c.storage != "local" {
 		fmt.Fprintln(u.out, s3OutsideSnapshot)
 	}
 

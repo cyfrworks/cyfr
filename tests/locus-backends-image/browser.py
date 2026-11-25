@@ -158,7 +158,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, PORT, ROOT, SERVICE, Stack, eventually, expect, owner_of, probe,
+    BOUNDS, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, PORT, RELEASE_UID, ROOT, SERVICE, Stack, eventually, expect, owner_of, probe,
     require_docker, unb64,
 )
 import imagesuite  # noqa: E402
@@ -675,13 +675,19 @@ def net_log_leaving(text):
     return sorted(found)
 
 
-def tcp_listeners(stack):
-    """Every listening TCP socket of the box's namespace, both families: (port, uid)."""
-    table = imagesuite.read_output(stack.exec("cat /proc/net/tcp /proc/net/tcp6"), "the TCP tables")
+# The guard answers a routed space's names on 127.0.0.11:53 (0B00007F:0035
+# in the kernel's table), on sockets of the space's own namespace.
+GUARD_NAMES = "0B00007F:0035"
+
+
+def tcp_listeners(stack, pid):
+    """Every listening TCP socket of the network namespace `pid` runs in, both families, but the guard's name socket:
+    (port, uid)."""
+    table = imagesuite.read_output(stack.exec(f"cat /proc/{pid}/net/tcp /proc/{pid}/net/tcp6"), f"the TCP tables of {pid}")
     listening = []
     for line in table.splitlines():
         fields = line.split()
-        if len(fields) > 7 and fields[3] == "0A":
+        if len(fields) > 7 and fields[3] == "0A" and fields[1] != GUARD_NAMES:
             listening.append((int(fields[1].rsplit(":", 1)[1], 16), int(fields[7])))
     return listening
 
@@ -1852,8 +1858,12 @@ def main():
             read = answer["result"]["content"][0]["text"]
             # Another kept home is not in the program's space at all.
             expect('"ok":false' in read and "ENOENT" in read, f"a program in another kept home finds no {path}", read)
-        listening = tcp_listeners(stack)
+        # The service listens in its role's space, and the browser's
+        # session in a space of its own: each namespace's own table is read.
+        service = next(p["pid"] for p in stack.processes() if p["uids"][0] == RELEASE_UID and "beam.smp" in p["cmd"])
+        listening = tcp_listeners(stack, service)
         expect(any(port == PORT for port, _ in listening), "the TCP tables show the service's own listener", listening)
+        listening = tcp_listeners(stack, main_chrome["pid"])
         expect(not [port for port, owner in listening if owner == uid],
                "nothing of the browser's uid listens on a TCP port", listening)
 

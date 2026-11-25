@@ -61,13 +61,10 @@ defmodule Locus.Test.FakeKeeper do
   - `:hosts_unresolved`, `:guard_unavailable` — every spawn is refused so,
     as a keeper refuses one whose hosts resolve to nothing or whose egress
     its guard does not confirm
-  - `:home_refused` — every home request is refused with `internal`
+  - `{:home_refused, code}` — every home request is refused with `code`
   - `{:home_make_held, test}`: a `home_make` is told to `test` as
     `{:home_make_held, request}` and answered only once released
     (`release_make/2`), having made nothing until then
-  - `{:uid_busy, uids}` — a `home_make` on one of `uids` is refused with
-    `uid_busy`, as cyfr-locus refuses a kept uid that is retiring,
-    quarantined or live under another home
 
   `hold_releases/2` holds every `release` from then on, in any mode: each
   is told to the test as `{:release_held, spawn_id}` and carried out only
@@ -87,12 +84,20 @@ defmodule Locus.Test.FakeKeeper do
   named is refused `bad_request`, a spawn refused under its id alone frees
   its place and one refused under its spawn id keeps it, and a
   `released` frees its spawn's. A `measure` is refused `unmeasured`
-  outside its mode, since nothing here has a group. A
-  home request acts on its path as the test's own user: `home_make` makes
-  the folder 0700, `home_measure` answers the bytes of the files under it, and
-  `home_retire` removes it. A spawn's kept-home and `pty` members are
-  recorded among the requests and run as any other spawn; a `resize` is
-  recorded and changes nothing, since no spawn here runs on a terminal.
+  outside its mode, since nothing here has a group.
+
+  Started with `kept_root: dir` (`start_client!/1`), it keeps homes as
+  cyfr-locus does, one folder per id under `dir`, as the test's own user,
+  whose uid stands in for every home's: `home_make` answers a made home's
+  owner or makes the folder 0700 and answers it, `home_measure` answers the
+  bytes of the files under it or refuses one not made `home_absent`,
+  `home_reset` makes it again empty, `home_retire` removes it, each of the
+  two answering `home_retired` for a home not made, and `home_list` answers
+  the homes in pages of two ids. A kept spawn of a home not made is
+  refused `home_absent`; without a kept root, every home request and kept
+  spawn is refused `unavailable`. A spawn's kept-home and `pty` members
+  are recorded among the requests and run as any other spawn; a `resize`
+  is recorded and changes nothing, since no spawn here runs on a terminal.
   """
 
   use GenServer
@@ -106,6 +111,8 @@ defmodule Locus.Test.FakeKeeper do
   # that moves this node's PATH must not lose a fifo. Signals go through
   # the direct launcher's group signal (`Locus.DirectLauncher.signal_group/2`).
   @mkfifo "/usr/bin/mkfifo"
+  # A home list's page, small so a client gathers several.
+  @home_page 2
 
   @doc "Starts a fake and answers `{fake, client_channel}`, the `:socket` to hand `Locus.Keeper`."
   def start do
@@ -129,10 +136,13 @@ defmodule Locus.Test.FakeKeeper do
   `keeper_opts` beside its channel and attach directory, both stopped and
   the client's attach directory removed when the calling test ends: answers
   `%{fake: fake, name: client, client: client}`, the client addressed
-  by its pid.
+  by its pid. `kept_root: dir` among the options is the fake's own: the
+  root it keeps homes under.
   """
-  def start_client!(keeper_opts \\ []) do
+  def start_client!(opts \\ []) do
+    {kept_root, keeper_opts} = Keyword.pop(opts, :kept_root)
     {fake, channel} = start()
+    :ok = GenServer.call(fake, {:kept_root, kept_root})
     attach_dir = short_tmp_dir()
 
     ExUnit.Callbacks.on_exit(fn ->
@@ -229,6 +239,7 @@ defmodule Locus.Test.FakeKeeper do
        # Who is told of a held release, and the releases held, oldest last.
        release_held: nil,
        held_releases: [],
+       kept_root: nil,
        next: 0
      }}
   end
@@ -246,6 +257,7 @@ defmodule Locus.Test.FakeKeeper do
 
   @impl true
   def handle_call({:mode, mode}, _from, state), do: {:reply, :ok, %{state | mode: mode}}
+  def handle_call({:kept_root, root}, _from, state), do: {:reply, :ok, %{state | kept_root: root}}
 
   def handle_call({:hold_releases, test}, _from, state),
     do: {:reply, :ok, %{state | release_held: test}}
@@ -374,8 +386,12 @@ defmodule Locus.Test.FakeKeeper do
 
   # A spawn names a place held and unnamed, or is refused with nothing done.
   defp handle_request(%{"type" => "spawn", "id" => id, "place" => place} = request, state) do
-    case state.places do
-      %{^place => %{spawn: nil}} ->
+    case {state.places, kept_refusal(request, state)} do
+      {%{^place => %{spawn: nil}}, code} when code != nil ->
+        send(self(), {:send, %{type: "error", id: id, code: code}})
+        %{state | places: Map.delete(state.places, place)}
+
+      {%{^place => %{spawn: nil}}, nil} ->
         spawn_in_place(request, state)
 
       _absent_or_named ->
@@ -384,17 +400,16 @@ defmodule Locus.Test.FakeKeeper do
     end
   end
 
-  defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{mode: :home_refused} = state) do
-    send(self(), {:send, %{type: "error", id: id, code: "internal"}})
+  defp handle_request(
+         %{"type" => "home_" <> _, "id" => id},
+         %{mode: {:home_refused, code}} = state
+       ) do
+    send(self(), {:send, %{type: "error", id: id, code: code}})
     state
   end
 
-  defp handle_request(
-         %{"type" => "home_make", "id" => id, "uid" => uid},
-         %{mode: {:uid_busy, uids}} = state
-       )
-       when is_map_key(uids, uid) do
-    send(self(), {:send, %{type: "error", id: id, code: "uid_busy"}})
+  defp handle_request(%{"type" => "home_" <> _, "id" => id}, %{kept_root: nil} = state) do
+    send(self(), {:send, %{type: "error", id: id, code: "unavailable"}})
     state
   end
 
@@ -406,21 +421,52 @@ defmodule Locus.Test.FakeKeeper do
     state
   end
 
-  defp handle_request(%{"type" => "home_make", "id" => id, "path" => path}, state) do
-    File.mkdir_p!(path)
-    File.chmod!(path, 0o700)
-    send(self(), {:send, %{type: "home_made", id: id}})
+  defp handle_request(%{"type" => "home_list", "id" => id} = request, state) do
+    ids =
+      state.kept_root
+      |> File.ls!()
+      |> Enum.filter(&(Prima.KeeperProtocol.home_id?(&1) and home_owner(state, &1) != nil))
+      |> Enum.sort()
+      |> Enum.filter(&(&1 > Map.get(request, "after", "")))
+
+    {page, rest} = Enum.split(ids, @home_page)
+    reply = %{type: "homes", id: id, ids: page}
+    reply = if rest == [], do: reply, else: Map.put(reply, :next, List.last(page))
+    send(self(), {:send, reply})
     state
   end
 
-  defp handle_request(%{"type" => "home_measure", "id" => id, "path" => path}, state) do
-    send(self(), {:send, %{type: "home_measured", id: id, bytes: measured(path)}})
-    state
-  end
+  defp handle_request(%{"type" => type, "id" => id, "home" => home}, state)
+       when type in ~w(home_make home_measure home_reset home_retire) do
+    path = Path.join(state.kept_root, home)
 
-  defp handle_request(%{"type" => "home_retire", "id" => id, "path" => path}, state) do
-    File.rm_rf!(path)
-    send(self(), {:send, %{type: "home_retired", id: id}})
+    reply =
+      case {type, home_owner(state, home)} do
+        {"home_make", nil} ->
+          %{type: "home_made", id: id, uid: make_home(path)}
+
+        {"home_make", uid} ->
+          %{type: "home_made", id: id, uid: uid}
+
+        {"home_measure", nil} ->
+          %{type: "error", id: id, code: "home_absent"}
+
+        {"home_measure", _uid} ->
+          %{type: "home_measured", id: id, bytes: measured(path)}
+
+        {_change, nil} ->
+          %{type: "home_retired", id: id}
+
+        {"home_retire", _uid} ->
+          File.rm_rf!(path)
+          %{type: "home_retired", id: id}
+
+        {"home_reset", _uid} ->
+          File.rm_rf!(path)
+          %{type: "home_made", id: id, uid: make_home(path)}
+      end
+
+    send(self(), {:send, reply})
     state
   end
 
@@ -519,6 +565,28 @@ defmodule Locus.Test.FakeKeeper do
 
   # Whose a place or an assign says the place is, as a measured reply names it.
   defp whose(request), do: Map.take(request, ["kind", "athanor", "subject"])
+
+  # Why a spawn's kept home refuses it, or nil for a spawn it starts.
+  defp kept_refusal(%{"home_mode" => "kept"}, %{kept_root: nil}), do: "unavailable"
+
+  defp kept_refusal(%{"home_mode" => "kept", "home" => home}, state),
+    do: if(home_owner(state, home), do: nil, else: "home_absent")
+
+  defp kept_refusal(_request, _state), do: nil
+
+  # A home's uid is its folder's owner; nil for no folder.
+  defp home_owner(state, home) do
+    case File.lstat(Path.join(state.kept_root, home)) do
+      {:ok, %File.Stat{type: :directory, uid: uid}} -> uid
+      _absent_or_other -> nil
+    end
+  end
+
+  defp make_home(path) do
+    File.mkdir_p!(path)
+    File.chmod!(path, 0o700)
+    File.lstat!(path).uid
+  end
 
   defp measured(path) do
     path

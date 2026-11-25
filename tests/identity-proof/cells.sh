@@ -42,7 +42,7 @@ identity_inetrc() {
 # its people's accounts at the directory `$2` (its hostname). `$3...` are
 # further NAME=value lines for its deployment file.
 identity_reaches_directory() {
-  local cell="$1" directory="$2" line targets="locus-backends" host
+  local cell="$1" directory="$2" line targets="locus" host
   shift 2
   [ -n "${IDENTITY_FRONTS[$directory]:-}" ] || fail "no directory $directory is declared"
   for host in "${!IDENTITY_FRONTS[@]}"; do targets="$targets,${IDENTITY_FRONTS[$host]}"; done

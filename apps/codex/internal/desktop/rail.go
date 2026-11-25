@@ -43,6 +43,13 @@ var railPage = `<!doctype html>
 <title>CYFR</title><style>` + railStyleText + `</style>
 ` + strings.TrimSuffix(railMarkup, "\n") + `<script>` + railScriptText + `</script></html>`
 
+// boxRailPage is the rail on a box's screen (Service.Box), whose first
+// paint, before its list answers, offers no Set up and no Update: a box
+// sets nothing up, and offers Update only once its list says the box is
+// unlocked (rail.js).
+var boxRailPage = strings.NewReplacer(`<li><a class="way" id="setup"`, `<li hidden><a class="way" id="setup"`,
+	`<li><a class="way" id="update"`, `<li hidden><a class="way" id="update"`).Replace(railPage)
+
 // RailURL is the rail's address main loads, the read token in its
 // fragment, which no request carries but the rail's own reads.
 func (s *Service) RailURL() string { return shell.Origin + "/rail/#read=" + s.ReadToken }
@@ -51,8 +58,12 @@ func (s *Service) RailURL() string { return shell.Origin + "/rail/#read=" + s.Re
 // folder it is set up in when it is one on this computer, whether it is
 // the one open, and whether it is being forgotten and whether its last
 // erase failed (Retry forgets again).
+//
+// On a box's screen (Service.Box) the first is This box: the entry its
+// folder's reading made last, its address "" where none was made yet.
 type RailCYFR struct {
 	Home       string `json:"cyfr"`
+	Box        bool   `json:"box,omitempty"`
 	Folder     string `json:"folder,omitempty"`
 	Open       bool   `json:"open,omitempty"`
 	Forgetting bool   `json:"forgetting,omitempty"`
@@ -62,10 +73,14 @@ type RailCYFR struct {
 // railList is the rail's answer: the list in its order, and the change it
 // shows, from 1, which the rail's next read names as seen (none, 0, is
 // answered at once).
+//
+// On a box's screen Locked says no CYFR's device is unlocked, while which
+// the rail offers no Forget (Service.Forget refuses it).
 type railList struct {
-	CYFRs []RailCYFR `json:"cyfrs"`
-	Seq   uint64     `json:"seq"`
-	Error string     `json:"error,omitempty"`
+	CYFRs  []RailCYFR `json:"cyfrs"`
+	Locked bool       `json:"locked,omitempty"`
+	Seq    uint64     `json:"seq"`
+	Error  string     `json:"error,omitempty"`
 }
 
 // rail serves the rail's page and its one read. A read carries the read
@@ -86,7 +101,11 @@ func (s *Service) rail(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/rail/" {
 		h.Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, railPage)
+		page := railPage
+		if s.Box != "" {
+			page = boxRailPage
+		}
+		_, _ = io.WriteString(w, page)
 		return
 	}
 	if r.URL.Path != "/rail/list" || r.Method != http.MethodPost {
@@ -140,23 +159,41 @@ func (s *Service) rail(w http.ResponseWriter, r *http.Request) {
 
 // railNow is the list as the rail shows it now: its folders' CYFRs and
 // those elsewhere, each by its address, in that address's order. Reading
-// it asks nothing of any CYFR or of Docker.
+// it asks nothing of any CYFR or of Docker. On a box's screen This box is
+// first, whatever the list holds, an unreadable list too: the CYFR its
+// folder names at this reading (boxAt), no address where that cannot be
+// read.
 func (s *Service) railNow() railList {
+	box, _ := s.boxAt()
 	list, err := s.Homes.Load()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := railList{CYFRs: []RailCYFR{}, Seq: s.listed + 1}
+	out := railList{CYFRs: []RailCYFR{}, Seq: s.listed + 1, Locked: s.Box != "" && s.boxLocked()}
 	if err != nil {
 		out.Error = "This computer's list of CYFRs could not be read (" + err.Error() + ")."
-		return out
+	} else {
+		for home, rec := range list.Homes {
+			if box != "" && home == box {
+				continue
+			}
+			out.CYFRs = append(out.CYFRs, RailCYFR{Home: home, Folder: rec.Project, Open: s.pages != nil && s.committed.Home == home,
+				Forgetting: rec.Forgetting, Failed: s.unerased[home]})
+		}
+		slices.SortFunc(out.CYFRs, func(a, b RailCYFR) int { return strings.Compare(a.Home, b.Home) })
 	}
-	for home, rec := range list.Homes {
-		out.CYFRs = append(out.CYFRs, RailCYFR{Home: home, Folder: rec.Project, Open: s.pages != nil && s.committed.Home == home,
-			Forgetting: rec.Forgetting, Failed: s.unerased[home]})
+	if s.Box != "" {
+		out.CYFRs = append([]RailCYFR{{Home: box, Box: true, Folder: s.Box, Open: box != "" && s.pages != nil && s.committed.Home == box}}, out.CYFRs...)
 	}
-	slices.SortFunc(out.CYFRs, func(a, b RailCYFR) int { return strings.Compare(a.Home, b.Home) })
 	return out
 }
+
+// boxLocked is whether no CYFR's device is unlocked on a box's screen,
+// under s.mu.
+func (s *Service) boxLocked() bool { return s.sh == nil || !unlocked(s.sh) }
+
+// unlocked is whether sh's device is unlocked (shell.Shell.Unlocked), which
+// a test stands in for: none of them reaches a CYFR that opens a channel.
+var unlocked = (*shell.Shell).Unlocked
 
 // changed says the list changed to every rail reading it, under s.mu.
 func (s *Service) changed() {
@@ -176,14 +213,34 @@ type erasing struct {
 // (shell.Homes.Forgetting), so nothing opens it from here, and main is
 // asked to erase its content storage and each ceremony's storage the
 // entry recorded; once every one is erased the entry is removed. A CYFR
-// open, or one the list does not hold, is not forgotten. Forget again
-// (Retry, or the next start's resume) asks for every erase again.
+// open, and one the list does not hold, are not forgotten. On a box's
+// screen none is while the box is locked (boxLocked), nor the CYFR open,
+// nor This box, the CYFR its folder names at this reading (boxAt): where
+// the folder cannot be read, no entry of that folder is. One being
+// forgotten already was decided while the box was unlocked, and its
+// Retry, or its resume at the next start, goes on. Forget again (Retry,
+// or the next start's resume) asks for every erase again.
 func (s *Service) Forget(home string) {
 	s.mu.Lock()
 	open := s.pages != nil && s.committed.Home == home
 	s.mu.Unlock()
 	if open {
 		return
+	}
+	if s.Box != "" {
+		box, read := s.boxAt()
+		list, err := s.Homes.Load()
+		s.mu.Lock()
+		rec := list.Homes[home]
+		this := home == box || !read && rec.Project == s.Box
+		refused := err != nil || this || s.boxLocked() && !rec.Forgetting
+		if refused {
+			s.changed()
+		}
+		s.mu.Unlock()
+		if refused {
+			return
+		}
 	}
 	rec, held, err := s.Homes.Forgetting(home)
 	s.mu.Lock()

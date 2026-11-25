@@ -137,6 +137,12 @@ func windowOffer(ctx context.Context, device, project string) desktop.UpdatePlan
 	let()
 	p.Step = "app"
 	say(fmt.Sprintf("Updating closes this app, replaces it with release %s once it is checked against the release's signed checksums, and opens it again.", target))
+	// What the road said of how it makes the update (Linux's service).
+	for _, line := range strings.Split(strings.TrimSpace(said.String()), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			say(line)
+		}
+	}
 	if cask {
 		say("Homebrew replaces it, as it installed it.")
 	}

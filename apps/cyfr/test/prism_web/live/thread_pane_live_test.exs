@@ -1693,6 +1693,124 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # A person's message refused because what Aqua and its crew members may
+  # use moved past Aqua's grant: the pane asks for Aqua's grant there, and
+  # once it is given offers that message again as a new turn, cutting
+  # nothing.
+  test "Aqua's grant asked for a refused message offers the message again once given",
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    ctx = connected!(athanor, user)
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    {_panel, pane} = grant_aqua!(conn, user, thread, line_id!(here, thread, "hello"))
+
+    assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
+    assert render(pane) =~ "Granted — send that message again, as a new turn?"
+    assert has_element?(pane, ~s(button[phx-click="restart_send"]))
+    assert restarts_for_consent() == []
+
+    # Given for the list as it stands: a turn's start holds it covered.
+    {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+    {:ok, %{agent: agent}} = Compendium.agent_snapshot(ctx, "aqua")
+    assert :ok = Aqua.Loop.Turn.consented(ctx, authority, agent.tools, [])
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # Only the person's own line is sent again as theirs, its sender and its
+  # author both theirs: a schedule's line, sent as the person's and written
+  # by the server, is offered by no grant the pane asks, Aqua's or a
+  # launch's account's.
+  test "a schedule's line is offered again by no grant",
+       %{conn: conn, user: user, athanor: athanor, thread: thread, here: here} do
+    ctx = connected!(athanor, user)
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    {:ok, fired} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: Prima.Author.system(),
+        sent_by: "person",
+        content: "read the daily totals",
+        payload: %{"schedule" => %{"id" => "sch_daily", "name" => "Daily"}}
+      })
+
+    {_panel, pane} = grant_aqua!(conn, user, thread, fired.id)
+    offers_nothing!(pane)
+    Cyfr.Test.Sandbox.end_views()
+
+    {_panel, pane} = grant_launch_account!(conn, thread, user, here, fired.id)
+    offers_nothing!(pane)
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # A send again would carry a line's words alone, so a line with files is
+  # not offered, with words or without: its thread's line says to send it
+  # again.
+  test "a refused message with files is not offered again, with words or without",
+       %{conn: conn, user: user, athanor: athanor, thread: thread} do
+    ctx = connected!(athanor, user)
+    actor = Sanctum.Context.actor(ctx)
+
+    for text <- ["Describe my attached note.", ""] do
+      :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+      id = Prima.UUID7.generate_id("msg")
+      file = %{"filename" => "notes.txt", "bytes" => "hello", "media_type" => "text/plain"}
+      {:ok, refs} = Aqua.Attachments.store(ctx, thread.id, id, [file])
+
+      {:ok, row} =
+        Threads.append(actor, thread.id, %{
+          id: id,
+          author: user.user_id,
+          sent_by: "person",
+          content: text,
+          payload: %{"attachments" => refs}
+        })
+
+      assert [_file] = Aqua.Attachments.refs_of(row)
+      {_panel, pane} = grant_aqua!(conn, user, thread, row.id)
+      offers_nothing!(pane)
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # Aqua's grant asked for the refused turn whose message is `message_id`,
+  # in the panel's layer, and given there. Answers the panel and the pane
+  # once the pane has heard its grant.
+  defp grant_aqua!(conn, user, thread, message_id) do
+    {panel, pane} = panel_pane(conn, thread)
+    dialog = "#system-layer-panel-dialog"
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: %{ref: Prima.AgentRef.soul_ref(), user_id: user.user_id, message_id: message_id}
+    })
+
+    render(pane)
+    render(panel)
+    assert has_element?(panel, ~s(#{dialog} [data-kind="grant"]))
+    panel |> element(~s(#{dialog} button[phx-click="confirm"])) |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    {panel, pane}
+  end
+
+  # Granted, the pane offers nothing to send again, says the turn ended and
+  # cuts nothing.
+  defp offers_nothing!(pane) do
+    assigns = :sys.get_state(pane.pid).socket.assigns
+    assert assigns.restart_prompt == nil
+    assert assigns.flash["info"] =~ "The turn that asked has ended"
+    refute has_element?(pane, ~s(button[phx-click="restart_send"]))
+    assert restarts_for_consent() == []
+  end
+
   test "with no message of the turn that asked to offer, the pane cuts nothing and says so",
        %{conn: conn, user: user, thread: thread, here: here} do
     # A line of another thread is no message of this thread's turn.
@@ -1705,7 +1823,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         content: "a line of another thread"
       })
 
-    for message_id <- [nil, foreign.id] do
+    # A line of Aqua's or a crew member's, a reply that opened the turn, is
+    # no line of the person's to send again as theirs.
+    {:ok, theirs} =
+      Threads.append(Sanctum.Context.actor(here), thread.id, %{
+        author: "aqua",
+        sent_by: "aqua",
+        content: "Aqua's own line"
+      })
+
+    for message_id <- [nil, foreign.id, theirs.id] do
       {_panel, pane} = grant_launch_account!(conn, thread, user, here, message_id)
       assigns = :sys.get_state(pane.pid).socket.assigns
 
@@ -2150,6 +2277,89 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute render(pane) =~ "has no model yet"
     refute render(pane) =~ @connect
 
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # Aqua's grant revoked by its person, as the profile's revoke records it:
+  # the empty state says it was revoked, in the sentence a turn refused for
+  # it says (`Prima.Refusal`), and points at the Aqua page to grant it
+  # again, never that it was never granted.
+  test "Aqua whose grant its person revoked says so, granted again on the Aqua page",
+       %{athanor: athanor, user: user, conn: conn} do
+    ctx = connected!(athanor, user)
+    {:ok, %{profile_id: id}} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+    assert {:ok, %{status: "revoked"}} =
+             Sanctum.Providers.Profile.handle(ctx, %{"action" => "revoke", "profile_id" => id})
+
+    pane = empty_pane(conn, athanor)
+
+    assert has_element?(
+             pane,
+             ~s([data-test="model-consent"]),
+             "You revoked your grant of what Aqua and its crew members may use."
+           )
+
+    assert has_element?(
+             pane,
+             ~s(a[href="#{athanor_path("/aqua", athanor)}"]),
+             "Grant it again on your Aqua page."
+           )
+
+    refute render(pane) =~ "You have not granted yet"
+    refute render(pane) =~ @connect
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # The empty state tells why no grant stands now, never an older
+  # revocation: a grant its person revoked, given again and then taken by
+  # a removal, and two grants standing under two labels, an ambiguity, each
+  # read as a grant to give, never as one the person revoked.
+  for {scenario, made} <- [
+        {"given again and then removed", :revoked_then_removed!},
+        {"given again under two labels", :revoked_then_two_standing!}
+      ] do
+    test "Aqua whose grant its person once revoked, #{scenario}, is never said as revoked",
+         %{athanor: athanor, user: user, conn: conn} do
+      ctx = connected!(athanor, user)
+      :ok = apply(Cyfr.Test.AquaTool, unquote(made), [ctx])
+      pane = empty_pane(conn, athanor)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-consent"]),
+               "You have not granted yet what Aqua and its crew members may use."
+             )
+
+      assert has_element?(
+               pane,
+               ~s(a[href="#{athanor_path("/aqua", athanor)}"]),
+               "Grant it on your Aqua page."
+             )
+
+      refute render(pane) =~ "You revoked"
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # Why a revoked grant is absent read from a record the store cannot
+  # answer: the empty state says the grant cannot be read, never that it
+  # was not granted.
+  test "Aqua whose revoked grant's record cannot be read says it cannot be read",
+       %{athanor: athanor, user: user, conn: conn} do
+    ctx = connected!(athanor, user)
+    :ok = Cyfr.Test.AquaTool.revoked_then_unreadable!(ctx)
+    pane = empty_pane(conn, athanor)
+
+    assert has_element?(
+             pane,
+             ~s([data-test="model-consent"]),
+             "A consent this model runs under cannot be read right now — try again."
+           )
+
+    refute render(pane) =~ "You have not granted yet"
+    refute render(pane) =~ "You revoked"
     Cyfr.Test.Sandbox.end_views()
   end
 
@@ -3175,6 +3385,64 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     defp card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
 
+    test "a pending update to the unchanged shipped planner can still be saved", %{
+      conn: conn,
+      athanor: athanor,
+      here: here,
+      thread: thread
+    } do
+      assert :ok = Compendium.Packs.settle(here)
+      {:ok, %{bytes: original}} = Compendium.Packs.manifest(here, "cyfr:planner")
+
+      row =
+        proposed!(here, thread, %{
+          "name" => "planner",
+          "description" => "custom",
+          "content" => "my edit",
+          "against" => Prima.Digest.sha256(original)
+        })
+
+      pane = open_pane(conn, athanor, thread)
+      assert pane |> element(card(row, "name")) |> render() =~ "mine:planner"
+      pane |> element(card(row, "save")) |> render_click()
+      assert has_element?(pane, card(row, "saved"))
+    end
+
+    test "a proposal to make a new pack says so, and its Save is refused when the pack is there",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      actor = Sanctum.Context.actor(here)
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\nred"
+        )
+
+      row =
+        proposed!(here, thread, %{
+          "name" => "garden:tulips",
+          "description" => "How tulips are kept",
+          "content" => "Plant them in autumn.",
+          "against" => "none",
+          "new_pack" => true
+        })
+
+      pane = open_pane(conn, athanor, thread)
+
+      assert render(pane) =~
+               "Aqua proposes a new pack with this scroll as its first. Nothing is kept until you save it."
+
+      pane |> element(card(row, "save")) |> render_click()
+      assert has_element?(pane, card(row, "refused"))
+      refute has_element?(pane, card(row, "saved"))
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls garden skills tulips SKILL.md))
+    end
+
+    # A card proposed before scrolls had packs names its scroll bare; it is
+    # the first pack's, `mine`, where the release moved every made scroll.
     test "its card shows what Save as scroll writes, and a save writes exactly that",
          %{conn: conn, athanor: athanor, here: here, thread: thread} do
       proposal = %{
@@ -3187,16 +3455,16 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       row = proposed!(here, thread, proposal)
       pane = open_pane(conn, athanor, thread)
 
-      assert pane |> element(card(row, "name")) |> render() =~ "fern-care"
+      assert pane |> element(card(row, "name")) |> render() =~ "mine:fern-care"
       assert pane |> element(card(row, "description")) |> render() =~ "How the fern is kept"
 
       assert pane |> element(card(row, "content")) |> render() =~
                "Water it weekly.\nTurn it monthly."
 
-      assert {:error, {:not_found, "Scroll", "fern-care"}} =
+      assert {:error, {:not_found, "Scroll", "mine:fern-care"}} =
                Compendium.Providers.Aqua.handle(here, %{
                  "action" => "skill_get",
-                 "name" => "fern-care"
+                 "name" => "mine:fern-care"
                })
 
       pane |> element(card(row, "save")) |> render_click()
@@ -3211,14 +3479,14 @@ defmodule PrismWeb.ThreadPaneLiveTest do
               }} =
                Compendium.Providers.Aqua.handle(here, %{
                  "action" => "skill_get",
-                 "name" => "fern-care"
+                 "name" => "mine:fern-care"
                })
 
       # A change proposed over a scroll that changed since is refused, in
       # the sentence the card shows, and nothing is written.
       stale =
         proposed!(here, thread, %{
-          "name" => "fern-care",
+          "name" => "mine:fern-care",
           "description" => "How the fern stays green",
           "content" => "Water it weekly.\nTurn it monthly.",
           "against" => Prima.Digest.sha256("an older manifest")
@@ -3239,7 +3507,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert {:ok, %{description: "How the fern is kept"}} =
                Compendium.Providers.Aqua.handle(here, %{
                  "action" => "skill_get",
-                 "name" => "fern-care"
+                 "name" => "mine:fern-care"
                })
     end
 
