@@ -84,8 +84,9 @@ type fakeRouteGuard struct {
 	refuseClears int
 	dead         bool
 	// afterLive runs as Live returns, as a peer's close just after the
-	// check would.
-	afterLive func()
+	// check would; beforeClear runs as a clear arrives, before it answers.
+	afterLive   func()
+	beforeClear func(spawnID string)
 }
 
 type routeCall struct {
@@ -149,6 +150,12 @@ func (g *fakeRouteGuard) Live(r guard.Route) bool {
 }
 
 func (g *fakeRouteGuard) Clear(spawnID string, r guard.Route) error {
+	g.mu.Lock()
+	before := g.beforeClear
+	g.mu.Unlock()
+	if before != nil {
+		before(spawnID)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, routeCall{op: guard.TypeClear, spawnID: spawnID, conn: r.Conn})

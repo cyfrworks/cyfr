@@ -894,7 +894,8 @@ func (rk *rolesKeeper) spawnAdmits() int {
 // A role's end waits for its spawn's start in flight, and that start,
 // held at its route's admission past every earlier check, sends its stage
 // nothing once the end has begun: no route's word, so no command and no
-// relay. It is retired, its route withdrawn, before the role starts again.
+// relay. It is retired, its route withdrawn, before the role starts again:
+// the withdrawal is held, and the role waits for it.
 func TestARolesEndWaitsForItsSpawnsStartWhichNeverLaunches(t *testing.T) {
 	rk := newRolesKeeper(t, nil)
 	rk.routed("alpha")
@@ -935,7 +936,26 @@ func TestARolesEndWaitsForItsSpawnsStartWhichNeverLaunches(t *testing.T) {
 	if again() {
 		t.Fatal("alpha started again while its spawn's start was in flight")
 	}
+	clearing, clear := make(chan struct{}), make(chan struct{})
+	rk.guard.mu.Lock()
+	rk.guard.beforeClear = func(id string) {
+		if id == spawnID {
+			close(clearing)
+			<-clear
+		}
+	}
+	rk.guard.mu.Unlock()
 	release()
+	select {
+	case <-clearing:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the refused start's route was not withdrawn")
+	}
+	time.Sleep(3 * restartAfter) // sleep-ok: alpha would start again within this, were its end not waiting for the refused start's retirement
+	if again() {
+		t.Fatal("alpha started again while its refused spawn was still retiring")
+	}
+	close(clear)
 	alpha.accept(t)
 	_ = alpha.attach.(*net.UnixListener).SetDeadline(time.Now().Add(2 * time.Second))
 	if conn, err := alpha.attach.Accept(); err == nil {
