@@ -72,15 +72,18 @@ const (
 	// retireTimeout bounds the retirement of a role's spawns at its end, and
 	// of every spawn at the keeper's.
 	retireTimeout = 30 * time.Second
-	// startsTimeout bounds the wait of a role's end for its spawns' starts
-	// in flight, longer than a start takes: its hosts' resolution, a kept
-	// uid's retirement and its stage are each bounded within it.
-	startsTimeout = 2 * time.Minute
 )
 
 // restartAfter is how long a role's process waits after its end before it
-// starts again; a variable so a test can shorten it.
-var restartAfter = time.Second
+// starts again; startsTimeout bounds the wait of a role's end for its
+// spawns' starts in flight, longer than a start takes: its hosts'
+// resolution, a kept uid's retirement and its stage are each bounded
+// within it. Past it the keeper ends, its last act the kill of every
+// role's group (serve). Variables so a test can shorten them.
+var (
+	restartAfter  = time.Second
+	startsTimeout = 2 * time.Minute
+)
 
 // RunRoot holds each role's run folder, named for the role.
 const RunRoot = "/run/locus"
@@ -698,10 +701,12 @@ type server struct {
 	// exit ends the keeper (os.Exit in production) and groupKilled kills a
 	// spawn's group and answers whether it is empty (killGroup); tests set
 	// either. readerStarts, nil in production, runs as a role's channel
-	// reader starts, before it reads: tests hold the reader there.
+	// reader starts, before it reads, and roleStarted between a role's
+	// start at the boot and its publication: tests hold either there.
 	exit         func(code int)
 	groupKilled  func(sp *spawn) bool
 	readerStarts func(r *role)
+	roleStarted  func(r *role)
 	waiters      map[int]*child
 	// keptLive counts the live spawns of each kept home's uid; keptOps
 	// holds each such uid's lock, which a spawn's start, the uid's full
@@ -743,18 +748,25 @@ func (s *server) run() int {
 	stop := make(chan os.Signal, 4)
 	signal.Notify(stop, unix.SIGTERM, unix.SIGINT, unix.SIGHUP)
 	go s.reaper(sigchld)
+	return s.serve(stop)
+}
 
-	// A role that cannot start at the boot refuses the boot by its name.
-	for _, r := range s.roles {
-		c, err := s.startRole(r)
-		if err != nil {
-			s.log.Error("refusing to start: role %s: %v", r.spec.Name, err)
-			s.closing.Store(true)
-			s.endRoles()
+// serve boots the roles (bootRoles) and keeps each until a stop signal on
+// stop or the keeper's end, then retires every spawn. Its last act on
+// every exit is the kernel's kill of every role's group (killRoleGroups),
+// so no process of a role, a spawn or a start still in flight, registered
+// or not, outlives the keeper.
+func (s *server) serve(stop <-chan os.Signal) int {
+	defer s.killRoleGroups()
+	if !s.bootRoles() {
+		s.markClosing()
+		s.endRoles()
+		select {
+		case <-s.ended:
+			return s.endCode
+		default:
 			return ExitStart
 		}
-		s.publishRole(r, c)
-		s.log.Info("role %s: pid %d started as %s; pool %s", r.spec.Name, c.proc.pid, r.account.Name, r.spec.Pool)
 	}
 
 	go s.sweeper()
@@ -785,7 +797,7 @@ loop:
 		}
 	}
 
-	s.closing.Store(true)
+	s.markClosing()
 	s.endRoles()
 	s.mu.Lock()
 	live := make([]*spawn, 0, len(s.spawns))
@@ -810,13 +822,57 @@ loop:
 	return ExitStopped
 }
 
+// bootRoles starts every role and publishes each (publishRole), and
+// answers whether all stand. A role that cannot start refuses the boot by
+// its name; once the keeper's end has begun, the guard's loss among its
+// causes, no further role is started.
+func (s *server) bootRoles() bool {
+	for _, r := range s.roles {
+		c, err := s.startRole(r)
+		if err != nil {
+			s.log.Error("refusing to start: role %s: %v", r.spec.Name, err)
+			return false
+		}
+		if s.roleStarted != nil {
+			s.roleStarted(r)
+		}
+		if ending := s.publishRole(r, c); ending {
+			s.log.Error("role %s: the keeper's end began as it started; no further role starts", r.spec.Name)
+			return false
+		}
+		s.log.Info("role %s: pid %d started as %s; pool %s", r.spec.Name, c.proc.pid, r.account.Name, r.spec.Pool)
+	}
+	return true
+}
+
+// killRoleGroups kills every role's group at once, its process, its relays
+// and every spawn group in it, by the kernel's group kill
+// (cgroup.Manager.Kill), and logs a group that will not empty.
+func (s *server) killRoleGroups() {
+	for _, r := range s.roles {
+		if r.groups != nil && !r.groups.Kill() {
+			s.log.Error("role %s: its group did not empty at the keeper's end", r.spec.Name)
+		}
+	}
+}
+
 // end has the keeper end with code, once: every role and spawn ends first.
 func (s *server) end(code int) {
 	s.endOnce.Do(func() {
 		s.endCode = code
-		s.closing.Store(true)
+		s.markClosing()
 		close(s.ended)
 	})
+}
+
+// markClosing begins the keeper's end in the critical section a start's
+// last check takes (owns): a start checked before it sends to its stage
+// before the end, which the group kill of every role then ends, and one
+// checked after it sends nothing.
+func (s *server) markClosing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closing.Store(true)
 }
 
 // awaitRetired waits retireTimeout at most for every one of spawns to be
@@ -1115,9 +1171,12 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		s.mu.Unlock()
 		s.send(c, protocol.NewError(req.ID, "", code))
 	default:
+		// A start refused once made is retired before it counts as done
+		// (c.starts): a role's end waiting for it then finds nothing of it.
 		s.send(c, protocol.NewError(req.ID, made.id, code))
 		made.exitOnce.Do(func() {})
 		s.retire(made, 0, true)
+		<-made.retired
 	}
 }
 
@@ -1218,6 +1277,16 @@ func (s *server) clientEnded(c *client) bool {
 	defer s.mu.Unlock()
 	return c.ended
 }
+
+// owns reports, with s.mu held, whether c still owns what it starts: its
+// end has not begun (endClient marks it under s.mu), nor the keeper's.
+func (s *server) owns(c *client) bool {
+	return !c.ended && !s.closing.Load()
+}
+
+// errNotOwned refuses a start whose role's end, or the keeper's, began
+// before anything of it reached its stage.
+var errNotOwned = errors.New("its role's process, or the keeper, ended as it started")
 
 // hold makes a started spawn one its client holds, unless that client's
 // end has begun, which retires everything it held: such a spawn is refused
@@ -1424,8 +1493,20 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		return protocol.CodeInternal, err
 	}
 
+	// The spec is all a relay space's stage waits for before it executes
+	// the command: it is sent only while the spawn's role owns it, decided
+	// in the critical section the role's end marks it ended in, so no end
+	// comes between the check and the send. A routed space's stage waits
+	// for its route's word too, held to the same rule (admitRoute).
+	s.mu.Lock()
+	if !s.owns(sp.client) {
+		s.mu.Unlock()
+		return protocol.CodeInternal, errNotOwned
+	}
 	_ = specW.SetWriteDeadline(time.Now().Add(stageTimeout))
-	if _, err := specW.Write(spec); err != nil {
+	_, err = specW.Write(spec)
+	s.mu.Unlock()
+	if err != nil {
 		return protocol.CodeExecFailed, err
 	}
 	_ = specW.Close()

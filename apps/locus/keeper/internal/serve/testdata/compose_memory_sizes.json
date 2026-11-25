@@ -1,0 +1,154 @@
+{
+ "compose": "2.40.3",
+ "how": "each value as a service's mem_limit, read back from `docker compose config --format json`; bytes is what Compose resolved, null where it refused the value or left no limit",
+ "vectors": [
+  {
+   "value": "4G",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4g",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4GB",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4gb",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4 GB",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4GiB",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4Gi",
+   "bytes": null
+  },
+  {
+   "value": "4096m",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4294967296",
+   "bytes": 4294967296
+  },
+  {
+   "value": "4096b",
+   "bytes": 4096
+  },
+  {
+   "value": "4096.9",
+   "bytes": 4096
+  },
+  {
+   "value": ".5g",
+   "bytes": 536870912
+  },
+  {
+   "value": "1.5g",
+   "bytes": 1610612736
+  },
+  {
+   "value": "1p",
+   "bytes": 1125899906842624
+  },
+  {
+   "value": "1t",
+   "bytes": 1099511627776
+  },
+  {
+   "value": "64k",
+   "bytes": 65536
+  },
+  {
+   "value": "64ki",
+   "bytes": null
+  },
+  {
+   "value": "64KiB",
+   "bytes": 65536
+  },
+  {
+   "value": "4  G",
+   "bytes": null
+  },
+  {
+   "value": " 4G",
+   "bytes": null
+  },
+  {
+   "value": "4G ",
+   "bytes": null
+  },
+  {
+   "value": "4bi",
+   "bytes": null
+  },
+  {
+   "value": "4GBi",
+   "bytes": null
+  },
+  {
+   "value": "-4G",
+   "bytes": null
+  },
+  {
+   "value": "4x",
+   "bytes": null
+  },
+  {
+   "value": "1.",
+   "bytes": 1
+  },
+  {
+   "value": "1.2.3g",
+   "bytes": null
+  },
+  {
+   "value": "0.3b",
+   "bytes": null
+  },
+  {
+   "value": "4095",
+   "bytes": 4095
+  },
+  {
+   "value": "1e3",
+   "bytes": 1000
+  },
+  {
+   "value": "1E4k",
+   "bytes": 10240000
+  },
+  {
+   "value": "99999999999t",
+   "bytes": -9223372036854775808
+  },
+  {
+   "value": "0",
+   "bytes": null
+  },
+  {
+   "value": "4096B",
+   "bytes": 4096
+  },
+  {
+   "value": "4096 b",
+   "bytes": 4096
+  },
+  {
+   "value": "5.",
+   "bytes": 5
+  },
+  {
+   "value": "1.5",
+   "bytes": 1
+  }
+ ]
+}

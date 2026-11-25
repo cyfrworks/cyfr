@@ -100,7 +100,7 @@ func (s *server) admitSpawn(sp *spawn, route *os.File, e egress) (string, error)
 	if e.listed {
 		reach = guard.ReachHosts
 	}
-	return s.admitRoute(route, &sp.route, func(netns, udp, tcp *os.File) (guard.Route, error) {
+	return s.admitRoute(route, &sp.route, sp.client, func(netns, udp, tcp *os.File) (guard.Route, error) {
 		return s.guard.Admit(sp.id, reach, e.addrs, netns, udp, tcp)
 	})
 }
@@ -111,8 +111,11 @@ func (s *server) admitSpawn(sp *spawn, route *os.File, e egress) (string, error)
 // and its connection has not ended since, is the route the space's, held
 // in held, and the stage told to go on: anything else refuses the space,
 // and the stage, which waits for that word before it executes anything, is
-// killed by its starter's failure path.
-func (s *server) admitRoute(route *os.File, held **guard.Route, admit func(netns, udp, tcp *os.File) (guard.Route, error)) (string, error) {
+// killed by its starter's failure path. A spawn's stage is told only while
+// owner, its role's client, owns it (owns); a role's own start (owner nil)
+// only while the keeper's end has not begun. Such a refusal holds the
+// route admitted in held, for the failure path to withdraw.
+func (s *server) admitRoute(route *os.File, held **guard.Route, owner *client, admit func(netns, udp, tcp *os.File) (guard.Route, error)) (string, error) {
 	if err := route.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
 		return protocol.CodeInternal, fmt.Errorf("the stage's route socket: %w", err)
 	}
@@ -140,6 +143,9 @@ func (s *server) admitRoute(route *os.File, held **guard.Route, admit func(netns
 		return protocol.CodeGuardUnavailable, errors.New("the guard's connection ended as its route was admitted")
 	}
 	*held = &r
+	if owner != nil && !s.owns(owner) || owner == nil && s.closing.Load() {
+		return protocol.CodeInternal, errNotOwned
+	}
 	if err := route.SetWriteDeadline(time.Now().Add(stageTimeout)); err != nil {
 		return protocol.CodeInternal, fmt.Errorf("the stage's route socket: %w", err)
 	}
@@ -290,10 +296,13 @@ func (s *server) guardLost(conn uint64) {
 			}
 		}
 	}
+	// No role starts again from here, nor any spawn: the end is marked in
+	// the critical section every start's last check takes (owns).
+	if len(roles) > 0 {
+		s.closing.Store(true)
+	}
 	s.mu.Unlock()
 	if len(roles) > 0 {
-		// No role starts again from here, nor any spawn.
-		s.closing.Store(true)
 		for _, r := range roles {
 			if !r.leaf.KillBy(time.Now()) {
 				s.log.Error("role %s: processes outlived its group's kill after the guard's connection ended", r.spec.Name)

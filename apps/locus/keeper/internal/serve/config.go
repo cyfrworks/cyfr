@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/docker/go-units"
+
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
@@ -494,18 +496,13 @@ func Keyed(environ []string, r RoleSpec) bool {
 }
 
 var (
-	// sizePattern is Compose's grammar of a memory size (go-units'
-	// RAMInBytes), read without case: a number, an optional space, an
-	// optional unit k, m, g, t or p, an optional i and an optional b.
-	sizePattern = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?) ?([kmgtp]?)i?b?$`)
 	cpusPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
-	sizeUnits   = map[string]int64{"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40, "p": 1 << 50}
 )
 
 // RoleLimits reads the role's bounds from environ, as Compose reads a
-// container's: LOCUS_<NAME>_MEMORY_LIMIT a size in any form Compose takes
-// (sizePattern: 4G, 4g, 4GB, 4 GiB, 4096m, 4294967296), binary multiples,
-// a fraction of a byte dropped as Compose drops it, at least a page;
+// container's: LOCUS_<NAME>_MEMORY_LIMIT a size read by the function
+// Compose reads one with (docker/go-units' RAMInBytes: 4G, 4GB, 4 GiB, .5g,
+// 4096m, 4294967296), at least a page;
 // LOCUS_<NAME>_CPU_LIMIT a number of processors, such as 2 or 0.5, at least
 // a hundredth of one. Each absent or empty is no bound; anything else is
 // refused by its name, never its value.
@@ -518,21 +515,11 @@ func RoleLimits(environ []string, r RoleSpec) (cgroup.Limits, error) {
 		}
 		switch name {
 		case r.envPrefix() + memoryLimitEnv:
-			m := sizePattern.FindStringSubmatch(strings.ToLower(value))
-			bytes, ok := new(big.Rat), m != nil
-			if ok {
-				_, ok = bytes.SetString(m[1])
-			}
-			whole := new(big.Int)
-			if ok {
-				bytes.Mul(bytes, new(big.Rat).SetInt64(sizeUnits[m[2]]))
-				whole.Quo(bytes.Num(), bytes.Denom())
-				ok = whole.IsUint64() && whole.Uint64() >= 4096
-			}
-			if !ok {
+			bytes, err := units.RAMInBytes(value)
+			if err != nil || bytes < 4096 {
 				return cgroup.Limits{}, fmt.Errorf("%s is not a size of at least 4096 bytes, such as 4G, 4GB or 512m", name)
 			}
-			l.MemoryBytes = whole.Uint64()
+			l.MemoryBytes = uint64(bytes)
 		case r.envPrefix() + cpuLimitEnv:
 			cpus, ok := new(big.Rat), cpusPattern.MatchString(value)
 			if ok {

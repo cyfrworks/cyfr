@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -138,7 +139,7 @@ func (s *server) startRole(r *role) (*client, error) {
 		return nil, fmt.Errorf("its space's spec: %w", err)
 	}
 	_ = specW.Close()
-	if _, err := s.admitRoute(keeperRoute, &c.route, func(netns, udp, tcp *os.File) (guard.Route, error) {
+	if _, err := s.admitRoute(keeperRoute, &c.route, nil, func(netns, udp, tcp *os.File) (guard.Route, error) {
 		return s.guard.AdmitRole(c.id, r.spec.Port, r.spec.Private, netns, udp, tcp)
 	}); err != nil {
 		return nil, err
@@ -384,8 +385,9 @@ func makeRunDirs(root string, roles []*role) (err error) {
 
 // makeOwnDir makes path a 0700 folder of uid and gid as they would, on a
 // thread that takes their file ids and ends with its goroutine, never
-// unlocked, so no other goroutine runs with them. The thread takes the
-// keeper's own file ids back before its goroutine ends: a goroutine that
+// unlocked, so no other goroutine runs with them. Before it answers, on
+// success and on failure alike, the thread takes the keeper's own file ids
+// back and reads them from its own status (threadFileIDs): a goroutine that
 // ends locked on the process's main thread leaves that thread parked, not
 // gone, and the main thread's ids are the keeper's as /proc shows them. A
 // folder already there is made 0700 only where it is theirs.
@@ -394,27 +396,58 @@ func makeOwnDir(path string, uid, gid int) error {
 	ownUID, ownGID := unix.Getuid(), unix.Getgid()
 	go func() {
 		runtime.LockOSThread()
-		defer func() {
-			_ = unix.Setfsuid(ownUID)
-			_ = unix.Setfsgid(ownGID)
-		}()
-		_ = unix.Setfsgid(gid)
-		_ = unix.Setfsuid(uid)
-		// setfsuid and setfsgid answer the ids before, never an error: the
-		// ids the thread now holds are read back.
-		if got, _ := unix.SetfsuidRetUid(-1); got != uid {
-			done <- fmt.Errorf("the thread's file uid is %d, not %d", got, uid)
-			return
+		err := asFileIDs(uid, gid, func() error {
+			if err := unix.Mkdir(path, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+				return err
+			}
+			return unix.Chmod(path, 0o700)
+		})
+		_ = unix.Setfsuid(ownUID)
+		_ = unix.Setfsgid(ownGID)
+		if fsUID, fsGID, rerr := threadFileIDs(); rerr != nil || fsUID != ownUID || fsGID != ownGID {
+			err = errors.Join(err, fmt.Errorf("the thread's file ids are %d:%d after their restoration, not the keeper's %d:%d (%v)", fsUID, fsGID, ownUID, ownGID, rerr))
 		}
-		if got, _ := unix.SetfsgidRetGid(-1); got != gid {
-			done <- fmt.Errorf("the thread's file gid is %d, not %d", got, gid)
-			return
-		}
-		if err := unix.Mkdir(path, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
-			done <- err
-			return
-		}
-		done <- unix.Chmod(path, 0o700)
+		done <- err
 	}()
 	return <-done
+}
+
+// asFileIDs runs fn on the calling thread, which the caller has locked,
+// under the file ids uid and gid, which it reads back first.
+func asFileIDs(uid, gid int, fn func() error) error {
+	_ = unix.Setfsgid(gid)
+	_ = unix.Setfsuid(uid)
+	// setfsuid and setfsgid answer the ids before, never an error: the
+	// ids the thread now holds are read back.
+	if got, _ := unix.SetfsuidRetUid(-1); got != uid {
+		return fmt.Errorf("the thread's file uid is %d, not %d", got, uid)
+	}
+	if got, _ := unix.SetfsgidRetGid(-1); got != gid {
+		return fmt.Errorf("the thread's file gid is %d, not %d", got, gid)
+	}
+	return fn()
+}
+
+// threadFileIDs reads the calling thread's file uid and gid, the fourth of
+// the Uid and Gid lines of /proc/thread-self/status.
+func threadFileIDs() (uid, gid int, err error) {
+	status, err := os.ReadFile("/proc/thread-self/status")
+	if err != nil {
+		return 0, 0, err
+	}
+	ids := map[string]int{}
+	for _, line := range strings.Split(string(status), "\n") {
+		name, rest, ok := strings.Cut(line, ":")
+		if f := strings.Fields(rest); ok && (name == "Uid" || name == "Gid") && len(f) == 4 {
+			if ids[name], err = strconv.Atoi(f[3]); err != nil {
+				return 0, 0, err
+			}
+		}
+	}
+	u, okU := ids["Uid"]
+	g, okG := ids["Gid"]
+	if !okU || !okG {
+		return 0, 0, errors.New("no Uid or Gid line of four ids")
+	}
+	return u, g, nil
 }

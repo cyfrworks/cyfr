@@ -4,7 +4,10 @@
 package serve
 
 import (
+	"encoding/json"
+	"os"
 	"os/user"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -226,19 +229,6 @@ func TestRoleLimitsReadComposesSyntaxStrictly(t *testing.T) {
 		{"2g", "0.5", cgroup.Limits{MemoryBytes: 2 << 30, CPUQuota: 50_000}},
 		{"512M", "1.25", cgroup.Limits{MemoryBytes: 512 << 20, CPUQuota: 125_000}},
 		{"1.5g", "0.01", cgroup.Limits{MemoryBytes: 3 << 29, CPUQuota: 1_000}},
-		{"8192", "", cgroup.Limits{MemoryBytes: 8192}},
-		{"64k", "", cgroup.Limits{MemoryBytes: 64 << 10}},
-		{"1t", "", cgroup.Limits{MemoryBytes: 1 << 40}},
-		{"1p", "", cgroup.Limits{MemoryBytes: 1 << 50}},
-		{"4GB", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4gb", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4 GB", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4Gi", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4GiB", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4096m", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4294967296", "", cgroup.Limits{MemoryBytes: 4 << 30}},
-		{"4096b", "", cgroup.Limits{MemoryBytes: 4096}},
-		{"4096.9", "", cgroup.Limits{MemoryBytes: 4096}},
 		{"", "", cgroup.Limits{}},
 	} {
 		environ := []string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + c.memory, "LOCUS_RUNTIME_CPU_LIMIT=" + c.cpu, "LOCUS_BUILDS_MEMORY_LIMIT=nonsense"}
@@ -247,9 +237,32 @@ func TestRoleLimitsReadComposesSyntaxStrictly(t *testing.T) {
 			t.Errorf("memory %q, cpu %q: %+v, %v", c.memory, c.cpu, got, err)
 		}
 	}
-	for _, bad := range []string{"0", "4096b0", "4  G", " 4G", "4G ", "4bi", "4GBi", "-4G", "4x", ".5g", "1.", "1.2.3g", "0.3b", "4095", "4095.9", "99999999999t"} {
-		if _, err := RoleLimits([]string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_MEMORY_LIMIT") || strings.Contains(err.Error(), strconv.Quote(bad)) {
-			t.Errorf("memory %q: %v", bad, err)
+	// Every size reads as Compose resolved it on a real `docker compose
+	// config` (testdata/compose_memory_sizes.json), and one Compose refused
+	// or resolved to less than a page refuses the boot by the variable's
+	// name, never its value.
+	var sizes struct {
+		Vectors []struct {
+			Value string `json:"value"`
+			Bytes *int64 `json:"bytes"`
+		} `json:"vectors"`
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "compose_memory_sizes.json"))
+	if err == nil {
+		err = json.Unmarshal(raw, &sizes)
+	}
+	if err != nil || len(sizes.Vectors) == 0 {
+		t.Fatalf("the vectors: %v", err)
+	}
+	for _, v := range sizes.Vectors {
+		got, err := RoleLimits([]string{"LOCUS_RUNTIME_MEMORY_LIMIT=" + v.Value}, r)
+		switch {
+		case v.Bytes != nil && *v.Bytes >= 4096:
+			if err != nil || got.MemoryBytes != uint64(*v.Bytes) {
+				t.Errorf("memory %q: %+v, %v; Compose read %d", v.Value, got, err, *v.Bytes)
+			}
+		case err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_MEMORY_LIMIT") || strings.Contains(err.Error(), strconv.Quote(v.Value)):
+			t.Errorf("memory %q: %+v, %v; Compose read %v", v.Value, got, err, v.Bytes)
 		}
 	}
 	for _, bad := range []string{"0", "0.009", "0.000001", "-1", "1e2", "two", "2 ", ".5", "0x2"} {

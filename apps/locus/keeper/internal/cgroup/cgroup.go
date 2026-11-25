@@ -63,6 +63,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -395,6 +396,24 @@ func (m *Manager) Role(name string, l Limits) (*Manager, *Group, error) {
 
 // Dir is the directory the manager makes its groups in.
 func (m *Manager) Dir() string { return m.root }
+
+// Kill ends every process of the manager's group and of every group in it
+// at once, by the kernel's group kill (cgroup.kill), and reports whether
+// the group holds no process within the bound (cgroup.events).
+func (m *Manager) Kill() bool {
+	empty := func() bool {
+		events, err := os.ReadFile(filepath.Join(m.root, "cgroup.events"))
+		return err == nil && slices.Contains(strings.Split(string(events), "\n"), "populated 0")
+	}
+	for attempt := 0; attempt < removeAttempts; attempt++ {
+		if empty() {
+			return true
+		}
+		_ = os.WriteFile(filepath.Join(m.root, "cgroup.kill"), []byte("1"), 0o644)
+		time.Sleep(removeInterval)
+	}
+	return empty()
+}
 
 func (g *Group) make(memoryBytes, cpuQuota uint64) error {
 	type setting struct{ file, value string }

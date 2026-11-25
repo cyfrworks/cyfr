@@ -835,6 +835,227 @@ func TestAnEndBeforeItsReaderRunsStartsTheRoleAgain(t *testing.T) {
 	}
 }
 
+// routed gives the role name a routed pool in place of its relay one,
+// before the roles start: its spawns' spaces are admitted by the guard.
+func (rk *rolesKeeper) routed(name string) {
+	r := rk.roles[name].r
+	spec := r.pool
+	spec.Reach = pool.ReachRouted
+	r.pool = spec
+	rk.s.pools[spec.Name] = pool.New(spec)
+	for i := range rk.s.cfg.Pools {
+		if rk.s.cfg.Pools[i].Name == spec.Name {
+			rk.s.cfg.Pools[i] = spec
+		}
+	}
+}
+
+// heldSpawn has the role ask for a spawn of its routed pool with the
+// guard's admits held, and answers once its admit is waiting: the spawn
+// is past every check before its route's word, its stage made and in its
+// group. The guard's admits stay held until release is closed.
+func (rk *rolesKeeper) heldSpawn(t *testing.T, ru *roleUnderTest, id string) (release func()) {
+	t.Helper()
+	if placed := ru.ask(t, `{"v":5,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("role %s's place: %v", ru.r.spec.Name, placed)
+	}
+	hold := make(chan struct{})
+	rk.guard.mu.Lock()
+	rk.guard.hold = hold
+	rk.guard.mu.Unlock()
+	var once sync.Once
+	release = func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	req := fmt.Sprintf(`{"v":5,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
+		id, id, ru.r.pool.Name, 64<<20, protocol.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
+	if _, err := ru.conn.Write([]byte(req + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); rk.spawnAdmits() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the spawn's admit did not arrive")
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded poll for the spawn's admit
+	}
+	return release
+}
+
+// spawnAdmits counts the guard's admits of spawns' routes.
+func (rk *rolesKeeper) spawnAdmits() int {
+	n := 0
+	for _, call := range rk.guard.taken() {
+		if call.op == guard.TypeAdmit && call.reach == guard.ReachIsland {
+			n++
+		}
+	}
+	return n
+}
+
+// A role's end waits for its spawn's start in flight, and that start,
+// held at its route's admission past every earlier check, sends its stage
+// nothing once the end has begun: no route's word, so no command and no
+// relay. It is retired, its route withdrawn, before the role starts again.
+func TestARolesEndWaitsForItsSpawnsStartWhichNeverLaunches(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	rk.routed("alpha")
+	rk.start(t)
+	alpha := rk.roles["alpha"]
+	rk.s.mu.Lock()
+	first := alpha.r.client
+	rk.s.mu.Unlock()
+	release := rk.heldSpawn(t, alpha, "s1")
+	var spawnID string
+	for _, call := range rk.guard.taken() {
+		if call.reach == guard.ReachIsland {
+			spawnID = call.spawnID
+		}
+	}
+	rk.s.signalChild(first.proc, unix.SIGKILL)
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		rk.s.mu.Lock()
+		ended := first.ended
+		rk.s.mu.Unlock()
+		if ended {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("alpha's end did not begin")
+		}
+		time.Sleep(10 * time.Millisecond) // sleep-ok: a bounded poll for alpha's end
+	}
+	time.Sleep(3 * restartAfter) // sleep-ok: alpha would start again within this, were its end not waiting for the start
+	again := func() bool {
+		for _, call := range rk.guard.taken() {
+			if call.op == guard.TypeAdmit && call.reach == guard.ReachRole && call.port == alpha.r.spec.Port && call.spawnID != first.id {
+				return true
+			}
+		}
+		return false
+	}
+	if again() {
+		t.Fatal("alpha started again while its spawn's start was in flight")
+	}
+	release()
+	alpha.accept(t)
+	_ = alpha.attach.(*net.UnixListener).SetDeadline(time.Now().Add(2 * time.Second))
+	if conn, err := alpha.attach.Accept(); err == nil {
+		conn.Close()
+		t.Fatal("the start of a role that ended launched its command: its relay attached")
+	}
+	var ops []string
+	for _, call := range rk.guard.taken() {
+		switch {
+		case call.spawnID == spawnID:
+			ops = append(ops, call.op+" spawn")
+		case call.op == guard.TypeAdmit && call.reach == guard.ReachRole && call.port == alpha.r.spec.Port && call.spawnID != first.id:
+			ops = append(ops, "admit alpha again")
+		}
+	}
+	if want := []string{"admit spawn", "clear spawn", "admit alpha again"}; !reflect.DeepEqual(ops, want) {
+		t.Fatalf("the guard was asked %v, want %v", ops, want)
+	}
+}
+
+// A start that outlives its role's end's bound ends the keeper, and the
+// keeper's last act, the kill of every role's group, takes it: nothing of
+// a start not yet registered outlives the keeper. Served as run serves.
+func TestAStartPastItsRolesEndBoundIsKilledAtTheKeepersEnd(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	rk.routed("alpha")
+	bound := startsTimeout
+	startsTimeout = time.Second
+	t.Cleanup(func() { startsTimeout = bound })
+	code := make(chan int, 1)
+	go func() {
+		code <- rk.s.serve(make(chan os.Signal))
+		close(rk.running)
+	}()
+	for _, ru := range rk.roles {
+		ru.accept(t)
+	}
+	alpha := rk.roles["alpha"]
+	rk.heldSpawn(t, alpha, "s1")
+	rk.s.mu.Lock()
+	var held *spawn
+	for _, sp := range rk.s.routing {
+		held = sp
+	}
+	first := alpha.r.client
+	rk.s.mu.Unlock()
+	if held == nil || held.group == nil || held.leader == nil {
+		t.Fatalf("the start in flight: %+v", held)
+	}
+	if procs, err := held.group.Procs(); err != nil || len(procs) == 0 {
+		t.Fatalf("the start's stage is not in its group: %v, %v", procs, err)
+	}
+	rk.s.signalChild(first.proc, unix.SIGKILL)
+	select {
+	case c := <-code:
+		if c != ExitLost {
+			t.Fatalf("the keeper ends %d", c)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("the keeper did not end past the bound")
+	}
+	if procs, err := held.group.Procs(); err != nil || len(procs) != 0 {
+		t.Fatalf("the start's group after the keeper's end: %v, %v", procs, err)
+	}
+}
+
+// Once the guard's loss has begun the keeper's end, the boot starts no
+// further role, even with the guard's client connected again: the loss
+// comes after the first role's route's word, before it is published.
+func TestTheBootStartsNoRoleOnceTheGuardsLossBegan(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	rk.s.roleStarted = func(r *role) {
+		if r.spec.Name == "alpha" {
+			rk.s.guardLost(1)
+			rk.guard.mu.Lock()
+			rk.guard.conn = 2
+			rk.guard.mu.Unlock()
+		}
+	}
+	code := rk.s.serve(make(chan os.Signal))
+	close(rk.running)
+	if code != ExitLost {
+		t.Fatalf("the boot ends %d", code)
+	}
+	for _, call := range rk.guard.taken() {
+		if call.op == guard.TypeAdmit && call.port == rk.roles["beta"].r.spec.Port {
+			t.Fatalf("beta was started after the guard's loss began: %+v", call)
+		}
+	}
+	if procs, err := rk.roles["alpha"].r.leaf.Procs(); err != nil || len(procs) != 0 {
+		t.Fatalf("alpha's leaf after the guard's loss: %v, %v", procs, err)
+	}
+}
+
+// A run folder's maker gives its thread's file ids back before it answers,
+// on success and on failure: the thread's own status reads the keeper's.
+func TestARunFolderMakerGivesItsFileIDsBack(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("taking another uid's file ids needs root")
+	}
+	base, err := os.MkdirTemp("", "cyfr-own-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	if err := os.Chmod(base, os.ModeSticky|0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeOwnDir(filepath.Join(base, "made"), testRoleUID, testRoleUID); err != nil {
+		t.Fatalf("a folder made: %v", err)
+	}
+	if st := mustStat(t, filepath.Join(base, "made")); st.Uid != testRoleUID {
+		t.Fatalf("the folder is uid %d's", st.Uid)
+	}
+	err = makeOwnDir(filepath.Join(base, "absent", "made"), testRoleUID, testRoleUID)
+	if !errors.Is(err, unix.ENOENT) || strings.Contains(err.Error(), "after their restoration") {
+		t.Fatalf("a folder under no parent: %v", err)
+	}
+}
+
 // The run root opens to the roles only while their folders are made, each
 // by its own uid: then it is the keeper's alone, and a folder there that is
 // not its role's refuses the boot.
