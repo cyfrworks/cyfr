@@ -339,6 +339,8 @@ compose() {
 . "$HERE/cleanup.sh"
 # shellcheck source=tests/compose-proof/predicates.sh
 . "$HERE/predicates.sh"
+# shellcheck source=tests/lib/candidate-release.sh
+. "$ROOT/tests/lib/candidate-release.sh"
 trap cleanup EXIT
 
 step() { echo; echo "==> $*"; }
@@ -2295,44 +2297,6 @@ update_case() {
   return 1
 }
 
-# The digest the image store names `$1` (repository:tag) by: its
-# repository's entry among the image's repository digests, which the
-# containerd image store gives every image it holds.
-store_digest() {
-  local repository="${1%:*}" digest
-  digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" |
-    sed -n "s|^$repository@\(sha256:[0-9a-f]\{64\}\)\$|\1|p" | head -n 1)"
-  [ -n "$digest" ] || fail "the image store names $1 by no digest; the update cases need the containerd image store (scripts/ci/containerd-image-store.sh --check)"
-  printf '%s\n' "$digest"
-}
-
-# A release tag the run is to make, refused when the daemon holds it
-# already: the run takes no name it did not make.
-release_name_free() {
-  ! docker image inspect "$1" >/dev/null 2>&1 || fail "the image store holds $1 already, which this run did not make"
-}
-
-# `$2` tagged as `$1`, the tag removed when the run ends.
-release_tag() {
-  release_name_free "$1"
-  docker tag "$2" "$1" || fail "docker tag $2 $1 failed"
-  RELEASE_IMAGES+=("$1")
-}
-
-# The image `$1` built from the Dockerfile lines on stdin, removed when the
-# run ends.
-release_build() {
-  release_name_free "$1"
-  docker build --quiet --tag "$1" - >"$WORK/build.log" 2>&1 || fail "the image $1 did not build: $(tail -n 20 "$WORK/build.log")"
-  RELEASE_IMAGES+=("$1")
-}
-
-# A managed line's digest in the compose `$2`: `$1` (cyfr or caddy or
-# tailscale/tailscale) pinned there.
-pinned_digest() {
-  sed -nE "s|^[[:space:]]*image:[[:space:]]*$1:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*\$|\1|p" "$2" | head -n 1
-}
-
 # The two releases the update cases move between, both the candidate: the
 # old one its app image tagged under the old version, the new one an image
 # of its own built from it (another digest, so the update has a switch to
@@ -2348,12 +2312,7 @@ pinned_digest() {
 update_releases() {
   local versions schema caddy tailscale v
   TREE_VERSION="$(sed -n 's/^ *version: "\([^"]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs" | head -n 1)"
-  versions="$(python3 -I -c '
-import re, sys
-m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?", sys.argv[1])
-assert m, sys.argv[1]
-base = "%s.%s.%d-%s" % (m.group(1), m.group(2), int(m.group(3)) + 1, sys.argv[2])
-print(base + ".1", base + ".2")' "$TREE_VERSION" "$RUN")" || fail "apps/prima/mix.exs declares no release version: '$TREE_VERSION'"
+  versions="$(candidate_versions "$TREE_VERSION" "$RUN")" || exit 1
   read -r OLD_VERSION NEW_VERSION <<<"$versions"
   step "the releases the update moves between, made from the candidate $TREE_VERSION: $OLD_VERSION and $NEW_VERSION"
   release_tag "ghcr.io/cyfrworks/cyfr:$OLD_VERSION" "$IMAGE"
@@ -2385,10 +2344,7 @@ DOCKERFILE
   "$ROOT/scripts/scaffold-tarball.sh" "$RELEASES/$NEW_VERSION/cyfr-scaffold.tar.gz" "$NEW_VERSION" "$NEW_DIGEST" "$LOCUS_DIGEST" >"$WORK/scaffold.log" 2>&1 ||
     fail "the new release's scaffold did not build: $(tail -n 20 "$WORK/scaffold.log")"
 
-  # As release.yml reads it from the image it publishes.
-  schema="$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-schema"} -e CYFR_ACCESS=local -e "CYFR_SECRET_KEY_BASE=$(od -An -N48 -tx1 /dev/urandom | tr -d ' \n')" \
-    "ghcr.io/cyfrworks/cyfr:$NEW_VERSION" bin/cyfr eval 'IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())' | sed -n 's/^CYFR_SCHEMA=//p')"
-  [[ "$schema" =~ ^[0-9a-f]{64}$ ]] || fail "the new release's image answered no schema fingerprint: '$schema'"
+  schema="$(release_schema "ghcr.io/cyfrworks/cyfr:$NEW_VERSION")" || exit 1
   if [ "$CASE" = update-refused ]; then
     # The one difference INS-3 needs, made without a published release: the
     # new release's schema is not the one the old home's database was built
@@ -2397,20 +2353,10 @@ DOCKERFILE
   fi
   caddy="$(pinned_digest caddy "$ROOT/docker-compose.yml")"
   tailscale="$(pinned_digest tailscale/tailscale "$ROOT/docker-compose.yml")"
-  python3 -I - "$RELEASES/$NEW_VERSION" "$NEW_VERSION" "$NEW_DIGEST" "$LOCUS_DIGEST" "$caddy" "$tailscale" "$schema" <<'PY' ||
-import hashlib, json, os, sys
-folder, version, cyfr, locus, caddy, tailscale, schema = sys.argv[1:]
-scaffold = hashlib.sha256(open(os.path.join(folder, "cyfr-scaffold.tar.gz"), "rb").read()).hexdigest()
-manifest = {"version": version, "images": {"cyfr": cyfr, "cyfr_locus": locus, "caddy": caddy, "tailscale": tailscale},
-            "scaffold": "sha256:" + scaffold, "schema_fingerprint": schema}
-json.dump(manifest, open(os.path.join(folder, "release.json"), "w"), indent=2)
-PY
-    fail "release.json of $NEW_VERSION was not written"
+  release_manifest "$RELEASES/$NEW_VERSION" "$NEW_VERSION" "$NEW_DIGEST" "$LOCUS_DIGEST" "$caddy" "$tailscale" "$schema"
   ok "old $OLD_VERSION (${OLD_DIGEST:7:12}), new $NEW_VERSION (${NEW_DIGEST:7:12}), Locus ${LOCUS_DIGEST:7:12}, schema ${schema:0:12}"
 
-  (cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -mod=readonly -tags releaseproof \
-    -ldflags "-X github.com/cyfr/codex/internal/version.Version=$NEW_VERSION -X github.com/cyfr/codex/cmd.proofReleases=$RELEASES" \
-    -o "$NEW_CYFR" .) || fail "the new release's command line did not build"
+  release_cli "$ROOT/apps/codex" "$NEW_VERSION" "$RELEASES" "$NEW_CYFR"
   ok "built $NEW_CYFR, release $NEW_VERSION, reading its releases from $RELEASES"
 }
 
