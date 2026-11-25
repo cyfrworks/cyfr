@@ -89,8 +89,9 @@ defmodule Arca.ScheduleOccurrences do
 
   A `once` schedule's due time fires however late it is, under either
   policy, and the cursor clears: nothing of it is due again, and the
-  write that records the occurrence's end removes the row
-  (`Arca.CronSchedule.record_run/3`).
+  write that records that occurrence's end removes the row
+  (`Arca.CronSchedule.record_run/4`): the occurrence records that it was
+  claimed as a once fire (`once`).
 
   A due time older than the bound at claim was missed. Under `skip` it
   does not fire: the cursor moves to the first time the bound does not
@@ -176,7 +177,7 @@ defmodule Arca.ScheduleOccurrences do
 
               true ->
                 move_cursor(athanor_id, id, cursor)
-                insert_occurrence(athanor_id, id, due_for, claimant, now)
+                insert_occurrence(athanor_id, id, due_for, row.once, claimant, now)
             end
 
           :none ->
@@ -292,13 +293,14 @@ defmodule Arca.ScheduleOccurrences do
   # `(schedule_id, scheduled_for)`) is another claim's, and this one is
   # held: the transaction rolls back with the cursor unmoved.
   # arca:db-raise-ok inside the claim transaction
-  defp insert_occurrence(athanor_id, id, due_for, claimant, now) do
+  defp insert_occurrence(athanor_id, id, due_for, once, claimant, now) do
     %ScheduleOccurrence{}
     |> ScheduleOccurrence.changeset(%{
       id: Prima.UUID7.generate_id("occ"),
       athanor_id: athanor_id,
       schedule_id: id,
       scheduled_for: due_for,
+      once: once,
       state: "claimed",
       claimed_by: claimant,
       claimed_at: now
@@ -313,30 +315,60 @@ defmodule Arca.ScheduleOccurrences do
   @doc """
   Move a `claimed` occurrence to `started` for `execution_id`, counting
   the attempt, only while `claimed_by` (the admitting boot) is its
-  claimant: the state and the claimant are checked in the one guarded
-  statement that moves it. Answers the rows moved: 0 when the occurrence
-  is not claimed, or is claimed by another boot since a recoverer took
-  it over, so the admission it runs inside rolls back.
+  claimant and its schedule still stands (`active`): the state, the
+  claimant and the schedule are checked in the one guarded statement that
+  moves it. Answers `:started`; `{:schedule_stopped, status}` when the
+  schedule was paused or deleted since its claim, so a fire queued behind
+  other work runs nothing its person stopped; and `:not_claimed` when the
+  occurrence is not claimed, or is claimed by another boot since a
+  recoverer took it over. Either refusal rolls back the admission it runs
+  inside.
   """
-  @spec start!(Prima.Actor.t(), String.t(), String.t(), String.t()) :: non_neg_integer()
+  @spec start!(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
+          :started | :not_claimed | {:schedule_stopped, String.t()}
   # arca:db-raise-ok inside the admission transaction
   def start!(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, claimed_by, execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(claimed_by) do
+    standing =
+      from(s in CronSchedule,
+        where: s.athanor_id == ^athanor_id and s.status == "active",
+        select: s.id
+      )
+
     {count, _} =
       from(o in ScheduleOccurrence,
         where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state == "claimed",
-        where: o.claimed_by == ^claimed_by
+        where: o.claimed_by == ^claimed_by,
+        where: o.schedule_id in subquery(standing)
       )
       |> Arca.Repo.update_all(
         set: [state: "started", execution_id: execution_id],
         inc: [attempts: 1]
       )
 
-    count
+    if count == 1, do: :started, else: not_started(athanor_id, occurrence_id, claimed_by)
   end
 
   def start!(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/4")
+
+  # Why a start moved nothing: the claim this boot holds, of a schedule
+  # stopped since, or no claim of this boot's at all.
+  # arca:db-raise-ok inside the admission transaction
+  defp not_started(athanor_id, occurrence_id, claimed_by) do
+    from(o in ScheduleOccurrence,
+      join: s in CronSchedule,
+      on: s.id == o.schedule_id and s.athanor_id == o.athanor_id,
+      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state == "claimed",
+      where: o.claimed_by == ^claimed_by,
+      select: s.status
+    )
+    |> Arca.Repo.one()
+    |> case do
+      status when status in ["paused", "deleted"] -> {:schedule_stopped, status}
+      _not_ours -> :not_claimed
+    end
+  end
 
   @doc """
   End an open occurrence as `completed`, `failed` or `uncertain`, only

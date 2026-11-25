@@ -306,7 +306,9 @@ defmodule Aqua.Runner do
   A schedule's turn consumer (`Aqua.ScheduleTurns`) sends with
   `:schedule` (`%{schedule_id, occurrence_id}`) and the schedule's name
   as `:payload`'s `"schedule"`, as the schedule's person under the
-  `schedule` origin, into a daily thread: the send is a turn of Aqua
+  `schedule` origin, into a daily thread or the workspace thread the
+  schedule names, which it sends with `:standing` (an archived one
+  refuses it, `Arca.TurnStorage.accept_message/3`): the send is a turn of Aqua
   whatever its line names, it never steers a turn already there, its line
   is written in the server's voice, so the person's count counts it, and
   the turn it opens carries the schedule and the occurrence on its
@@ -1035,6 +1037,7 @@ defmodule Aqua.Runner do
   # sending job's claim.
   defp crew_attrs(attrs, opts) do
     attrs
+    |> put_present(:standing, Keyword.get(opts, :standing))
     |> put_present(:receipt, Keyword.get(opts, :receipt))
     |> put_present(:wait, Keyword.get(opts, :wait))
     |> put_present(:claim, Keyword.get(opts, :claim))

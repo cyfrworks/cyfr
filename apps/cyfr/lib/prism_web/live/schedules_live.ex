@@ -29,7 +29,9 @@ defmodule PrismWeb.SchedulesLive do
   worked under one. Each row names who set it (the person, or that agent)
   and, for a line for Aqua, where it fires: the daily thread, or the
   workspace thread by its title. A schedule set for one time reads as
-  Once; editing it keeps it once unless its time is changed.
+  Once; editing it keeps it once unless its time is changed. The newest
+  25 show first, and Show more adds 25 older ones at a time, so every
+  live schedule can be reached and stopped.
 
   Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
   binding id, component, operation, interval, the time of its last
@@ -61,6 +63,11 @@ defmodule PrismWeb.SchedulesLive do
     "missed_runs" => "skip",
     "catch_up_limit" => ""
   }
+
+  # How many schedules the page shows at first, and how many more each
+  # Show more adds; and the most the `schedule` tool lists in one call.
+  @page 25
+  @tool_page 1000
 
   @cron_presets [
     {"Every minute", "* * * * *"},
@@ -97,6 +104,8 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:page_title, "Schedules")
       |> assign(:active_nav, "schedules")
       |> assign(:schedules, [])
+      |> assign(:shown, @page)
+      |> assign(:more?, false)
       |> assign(:rooms, %{})
       |> assign(:feeds, [])
       |> assign(:components, [])
@@ -118,6 +127,10 @@ defmodule PrismWeb.SchedulesLive do
       do: {:noreply, close_form(socket)},
       else: {:noreply, socket |> fetch_components() |> assign(:show_create, true)}
   end
+
+  # The next older schedules, after the ones shown.
+  def handle_event("show_more", _params, socket),
+    do: {:noreply, socket |> assign(:shown, socket.assigns.shown + @page) |> fetch_schedules()}
 
   # A row's Edit: the one form, prefilled with the schedule as listed.
   def handle_event("edit", %{"id" => id}, socket) do
@@ -495,29 +508,48 @@ defmodule PrismWeb.SchedulesLive do
 
   defp decode_input(_input), do: {:error, "Input must be a valid JSON object"}
 
+  # The newest `shown` live schedules, and whether any older one waits
+  # behind them: read one past them, in the tool's pages of at most
+  # @tool_page.
   defp fetch_schedules(socket) do
-    schedules =
-      case call_tool(socket, "schedule", %{"action" => "list"}) do
-        {:ok, %{schedules: list}} ->
-          list
-
-        other ->
-          Logger.warning("[SchedulesLive] schedule list failed: #{inspect(other)}")
-          []
-      end
+    shown = socket.assigns.shown
+    rows = list_schedules(socket, 0, shown + 1, [])
 
     socket
-    |> assign(:schedules, schedules)
-    |> assign(:rooms, rooms(socket, schedules))
+    |> assign(:schedules, Enum.take(rows, shown))
+    |> assign(:more?, length(rows) > shown)
+    |> assign(:rooms, rooms(socket, Enum.take(rows, shown)))
   end
 
-  # The title of each workspace thread a listed schedule fires in, by id;
-  # one that does not read is shown by its id.
+  defp list_schedules(_socket, _offset, 0, acc), do: acc
+
+  defp list_schedules(socket, offset, wanted, acc) do
+    limit = min(wanted, @tool_page)
+
+    case call_tool(socket, "schedule", %{"action" => "list", "limit" => limit, "offset" => offset}) do
+      {:ok, %{schedules: page}} when length(page) == limit ->
+        list_schedules(socket, offset + limit, wanted - limit, acc ++ page)
+
+      {:ok, %{schedules: page}} ->
+        acc ++ page
+
+      other ->
+        Logger.warning("[SchedulesLive] schedule list failed: #{inspect(other)}")
+        acc
+    end
+  end
+
+  # The title of each workspace thread a shown line for Aqua fires in, by
+  # id; one that does not read is shown by its id. A component's schedule
+  # fires in no thread, so none is read for it.
   defp rooms(socket, schedules) do
     actor = Sanctum.Context.actor(socket.assigns[:context])
 
-    for id <- schedules |> Enum.map(&f(&1, :thread_id)) |> Enum.uniq(),
+    for sched <- schedules,
+        f(sched, :reference) == @aqua_line,
+        id = f(sched, :thread_id),
         is_binary(id),
+        uniq: true,
         into: %{} do
       case Arca.ThreadStorage.get(actor, id) do
         {:ok, %{title: title}} when is_binary(title) -> {id, title}
@@ -985,6 +1017,11 @@ defmodule PrismWeb.SchedulesLive do
               <% end %>
             </tbody>
           </table>
+        </div>
+        <div :if={!@loading && @more?} class="pt-4 text-center">
+          <.button variant="ghost" phx-click="show_more" data-test="schedules-more">
+            Show more schedules
+          </.button>
         </div>
       </.card>
 

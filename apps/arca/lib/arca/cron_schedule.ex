@@ -16,7 +16,7 @@ defmodule Arca.CronSchedule do
   ## Kinds
 
   A row is a `schedule` or a `feed`. The scheduler fires both, so
-  `active_schedules/0`, `get_for_daemon/1`, `record_run/3` and
+  `active_schedules/0`, `get_for_daemon/1`, `record_run/4` and
   `record_error/4` answer either. `list/2` and `get_by_id_or_name/3` take
   a `kind:` option (nil reads both). A live name is unique per kind, so a feed may share a schedule's name.
 
@@ -52,7 +52,7 @@ defmodule Arca.CronSchedule do
 
   ## The generic writers
 
-  The generic writers (`update/3`, `record_run/3`, `record_error/4`,
+  The generic writers (`update/3`, `record_run/4`, `record_error/4`,
   `soft_delete/2`) read and lock their row tenant-scoped in a transaction
   of their own, and check the member's slot in it after the lock
   (`slot_fence/0`), whatever the row's kind: a member that lost its slot
@@ -292,9 +292,10 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Lists the athanor's live rows, newest first. `kind:` lists one kind and
+  Lists the athanor's live rows, newest first (by creation, then id, so
+  a page's edge never moves between reads). `kind:` lists one kind and
   nil (the default) both; `limit:` bounds the answer (50), and `:infinity`
-  answers every live row.
+  answers every live row; `offset:` passes over that many first (0).
   """
   @spec list(Prima.Actor.t(), keyword()) ::
           {:ok, [map()]} | {:error, :database_error}
@@ -303,8 +304,9 @@ defmodule Arca.CronSchedule do
   def list(%Prima.Actor{} = actor, opts) do
     Errors.with_db_rescue("CronSchedule.list", fn ->
       rows =
-        from(s in Row, where: s.status != "deleted", order_by: [desc: s.created_at])
+        from(s in Row, where: s.status != "deleted", order_by: [desc: s.created_at, desc: s.id])
         |> limited(Keyword.get(opts, :limit, 50))
+        |> passed_over(Keyword.get(opts, :offset, 0))
         |> where_tenant_unless_platform(actor)
         |> of_kind(Keyword.get(opts, :kind))
         |> Arca.Repo.all()
@@ -339,18 +341,19 @@ defmodule Arca.CronSchedule do
 
   @doc """
   Records a successful run with tenant-scoped lookup: its run is the last
-  one, and the last failure's reason is cleared. A `once` schedule's one
-  occurrence has ended, so the same write removes it. Every row, whatever
-  its kind, is written only under the member's live slot (`:not_owner`
-  otherwise).
+  one, and the last failure's reason is cleared. When `occurrence_id`
+  was claimed as the schedule's one fire and the schedule, as it now
+  stands, still fires once and awaits nothing else, the same write
+  removes it (`spent/2`). Every row, whatever its kind, is written only
+  under the member's live slot (`:not_owner` otherwise).
   """
-  @spec record_run(Prima.Actor.t(), String.t(), String.t()) ::
+  @spec record_run(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   # Increment atomically; concurrent runs must not overwrite each other’s counts.
-  def record_run(%Prima.Actor{} = actor, id, execution_id) do
+  def record_run(%Prima.Actor{} = actor, id, execution_id, occurrence_id \\ nil) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
       guarded(actor, id, fn schedule ->
         now = DateTime.utc_now()
@@ -363,7 +366,7 @@ defmodule Arca.CronSchedule do
               last_execution_id: execution_id,
               last_error: nil,
               updated_at: now
-            ] ++ spent(schedule),
+            ] ++ spent(schedule, occurrence_id),
           inc: [run_count: 1]
         )
 
@@ -379,9 +382,9 @@ defmodule Arca.CronSchedule do
   names is the one `occurrence_id`'s row records, read in the same
   transaction, or none when the fire failed before a run started or had
   no occurrence (nil). A failure so never names an earlier run, and never
-  loses its run to a read of its own. A failure of a `once` schedule's
-  occurrence ends its one fire, so the same write removes it; one with no
-  occurrence never fired, and it stays. Every row, whatever its kind, is
+  loses its run to a read of its own. A failure of the occurrence claimed
+  as a once schedule's one fire removes it, as `record_run/4` says; one
+  with no occurrence never fired, and it stays. Every row, whatever its kind, is
   written only under the member's live slot (`:not_owner` otherwise).
   """
   @spec record_error(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
@@ -389,7 +392,7 @@ defmodule Arca.CronSchedule do
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
-  # Atomic increment, for the reason spelled out at `record_run/3`.
+  # Atomic increment, for the reason spelled out at `record_run/4`.
   def record_error(%Prima.Actor{} = actor, id, said, occurrence_id)
       when is_binary(said) and (is_binary(occurrence_id) or is_nil(occurrence_id)) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
@@ -401,7 +404,7 @@ defmodule Arca.CronSchedule do
               last_error: said,
               last_execution_id: run_of(schedule, occurrence_id),
               updated_at: DateTime.utc_now()
-            ] ++ if(occurrence_id, do: spent(schedule), else: []),
+            ] ++ spent(schedule, occurrence_id),
           inc: [error_count: 1]
         )
 
@@ -411,10 +414,26 @@ defmodule Arca.CronSchedule do
     |> Arca.Data.project()
   end
 
-  # What an ended occurrence leaves of its schedule: a `once` one, whose
-  # one fire this was, is removed.
-  defp spent(%{once: true}), do: [status: "deleted"]
-  defp spent(_schedule), do: []
+  # What an ended occurrence leaves of its schedule: it is removed when
+  # the occurrence was claimed as its one fire and the row, as it now
+  # stands, still fires once and awaits nothing else. A recurring
+  # occurrence ending after the row was made a wake, or a wake's fire
+  # ending after it was given a new time, leaves it.
+  # arca:db-raise-ok inside the caller's transaction
+  defp spent(%{once: true, next_run_at: nil} = schedule, occurrence_id)
+       when is_binary(occurrence_id) do
+    once_fire? =
+      from(o in Arca.Schemas.ScheduleOccurrence,
+        where: o.athanor_id == ^schedule.athanor_id and o.id == ^occurrence_id,
+        where: o.schedule_id == ^schedule.id and o.once == true,
+        select: true
+      )
+      |> Arca.Repo.one()
+
+    if once_fire?, do: [status: "deleted"], else: []
+  end
+
+  defp spent(_schedule, _occurrence_id), do: []
 
   # The run an occurrence of this schedule records, in its athanor.
   # arca:db-raise-ok inside the caller's transaction
@@ -705,6 +724,11 @@ defmodule Arca.CronSchedule do
   defp limited(query, :infinity), do: query
   defp limited(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
 
+  defp passed_over(query, 0), do: query
+
+  defp passed_over(query, offset) when is_integer(offset) and offset > 0,
+    do: offset(query, ^offset)
+
   defp of_kind(query, nil), do: query
   defp of_kind(query, kind) when kind in @kinds, do: where(query, [s], s.kind == ^kind)
 
@@ -865,7 +889,7 @@ defmodule Arca.CronSchedule do
     end
   end
 
-  # A generic writer's transaction (`update/3`, `record_run/3`,
+  # A generic writer's transaction (`update/3`, `record_run/4`,
   # `record_error/4`, `soft_delete/2`): the row is read and locked
   # tenant-scoped, `:live` reading a row that is not deleted and `:any`
   # any row, then the member's slot is checked, in the same transaction

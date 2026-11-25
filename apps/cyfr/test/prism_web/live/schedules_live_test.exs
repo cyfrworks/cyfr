@@ -222,6 +222,28 @@ defmodule PrismWeb.SchedulesLiveTest do
     defp row_text(view, row),
       do: view |> element("tbody tr", ~r/\A\s*#{Regex.escape(row.name)}\s/) |> render()
 
+    test "with one more than a page, the page offers the rest, and the oldest can be reached and paused",
+         %{conn: conn, ctx: ctx} do
+      oldest = line!(ctx, "Reminder 0", %{maker: "planner"})
+      for n <- 1..25, do: line!(ctx, "Reminder #{n}", %{maker: "planner"})
+      {view, _html} = mount_athanor(conn, "/schedules")
+
+      makers = fn -> length(Regex.scan(~r/data-test="schedule-maker"/, render(view))) end
+      assert makers.() == 25
+      refute render(view) =~ ~s(phx-value-id="#{oldest.id}")
+
+      view |> element(~s([data-test="schedules-more"])) |> render_click()
+      assert makers.() == 26
+      refute has_element?(view, ~s([data-test="schedules-more"]))
+
+      view
+      |> element(~s(button[phx-click="pause"][phx-value-id="#{oldest.id}"]))
+      |> render_click()
+
+      assert {:ok, %{status: "paused"}} =
+               Arca.CronSchedule.get(Sanctum.Context.actor(ctx), oldest.id)
+    end
+
     test "each row names its maker and, for a line for Aqua, its room; one set for one time reads Once and stays once when edited",
          %{conn: conn, ctx: ctx} do
       mine = line!(ctx, "Mine", %{})

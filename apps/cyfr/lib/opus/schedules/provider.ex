@@ -183,8 +183,13 @@ defmodule Opus.Schedules.Provider do
             "List schedule",
             [
               Arg.new("limit", :integer,
-                description: "Maximum results to return (list)",
+                description: "Maximum results to return (list), at most 1000",
                 default: 25
+              ),
+              Arg.new("offset", :integer,
+                description:
+                  "How many of the newest schedules to pass over before the first one listed (list)",
+                default: 0
               )
             ],
             kind: :read,
@@ -343,7 +348,8 @@ defmodule Opus.Schedules.Provider do
          {:ok, timing} <- timing(args, nil),
          :ok <- no_profile(args),
          {:ok, missed} <- missed_runs(args, %{missed_runs: "skip", catch_up_limit: nil}),
-         {:ok, input_json} <- aqua_input(args) do
+         {:ok, input_json} <- aqua_input(args),
+         :ok <- fits(writer.maker, args["name"], input_json) do
       attrs = %{
         user_id: ctx.user_id,
         maker: writer.maker,
@@ -395,8 +401,13 @@ defmodule Opus.Schedules.Provider do
   # List
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
     limit = min(args["limit"] || 25, 1000)
+    offset = max(args["offset"] || 0, 0)
 
-    case Arca.CronSchedule.list(Sanctum.Context.actor(ctx), limit: limit, kind: @kind) do
+    case Arca.CronSchedule.list(Sanctum.Context.actor(ctx),
+           limit: limit,
+           offset: offset,
+           kind: @kind
+         ) do
       {:ok, schedules} ->
         {:ok,
          %{
@@ -427,7 +438,8 @@ defmodule Opus.Schedules.Provider do
          :ok <- Arca.CronSchedule.as_read(schedule, args["definition"]),
          {:ok, timing} <- timing(args, schedule),
          {:ok, missed} <- missed_runs(args, schedule),
-         {:ok, line} <- aqua_update(writer, schedule, args) do
+         {:ok, line} <- aqua_update(writer, schedule, args),
+         :ok <- fits_update(schedule, args, line) do
       update_attrs = Map.merge(missed, timing)
 
       update_attrs =
@@ -972,17 +984,21 @@ defmodule Opus.Schedules.Provider do
 
   # ---- a line for Aqua ---------------------------------------------------------
 
-  # Who calls a write, and what the row records of it: `person?`, whether
-  # the caller is the schedule's person (their own signed-in session, or a
-  # turn of theirs, `own_turn/2`), which only that person's writes to a
-  # line for Aqua need; `maker`, the agent whose turn calls; and `room`,
-  # the workspace thread that turn works under, none for a daily thread.
-  # A call outside any chain is the session's, a person's or a key's, and
-  # names no maker. A call in a chain is a turn's own or nothing: no
-  # component a turn started writes a schedule.
+  # Who calls a write, decided once for all five writes: `person?`,
+  # whether the caller is the schedule's person, which only that person's
+  # writes to a line for Aqua need; `maker`, the agent whose turn calls;
+  # and `room`, the workspace thread that turn works under, none for a
+  # daily thread. A call outside any chain is the session's, a person's or
+  # a key's, and names no maker. A call in a chain is a turn's own, and
+  # that turn is the person's, or the write is refused whatever it writes:
+  # a component's call `:schedule_by_component`, a turn under a key or a
+  # frame, or started by neither the person nor a schedule's fire,
+  # `:schedule_turn_not_yours`.
   defp writer(%Context{plane: :guest} = ctx, args) do
     with {:ok, turn, room} <- own_turn(ctx, args) do
-      {:ok, %{person?: turn_writer?(ctx, turn), maker: turn.agent, room: room}}
+      if turn_writer?(ctx, turn),
+        do: {:ok, %{person?: true, maker: turn.agent, room: room}},
+        else: {:error, :schedule_turn_not_yours}
     end
   end
 
@@ -1084,24 +1100,24 @@ defmodule Opus.Schedules.Provider do
   defp timing(_args, current), do: {:ok, %{next_run_at: next_run(current.cron_expression)}}
 
   # One time: at least a minute ahead as any fire is, rounded up to the
-  # minute, and named by a cron expression whose next time is that
-  # minute, which a time more than a year ahead is not, since an
-  # expression names no year.
+  # minute, and at most a year ahead by the date itself, so the cron
+  # expression naming that minute, which names no year, next matches it.
   defp once_at(at) do
     with {:ok, asked} <- parse_at(at) do
+      now = DateTime.utc_now()
       time = round_up_to_minute(asked)
-      cron = "#{time.minute} #{time.hour} #{time.day} #{time.month} *"
 
       cond do
-        DateTime.diff(asked, DateTime.utc_now(), :second) < 60 ->
+        DateTime.diff(asked, now, :second) < 60 ->
           {:error, {:invalid_argument, "at must be at least a minute ahead"}}
 
-        not match?(%DateTime{}, next_run(cron)) or DateTime.compare(next_run(cron), time) != :eq ->
+        DateTime.compare(time, DateTime.shift(now, year: 1)) == :gt ->
           {:error,
            {:invalid_argument,
             "at must be at most a year ahead: a schedule names no year, so a later wake is a recurring schedule"}}
 
         true ->
+          cron = "#{time.minute} #{time.hour} #{time.day} #{time.month} *"
           {:ok, %{cron_expression: cron, once: true, next_run_at: time}}
       end
     end
@@ -1128,6 +1144,42 @@ defmodule Opus.Schedules.Provider do
   # it was paused fires at once.
   defp resumed_cursor(%{once: true}), do: %{}
   defp resumed_cursor(schedule), do: %{next_run_at: next_run(schedule.cron_expression)}
+
+  @doc """
+  What a fire of a schedule's line for Aqua says (`Opus.schedule_fire_text/3`):
+  the line, opened with "`maker` set this schedule: `name`" when a turn's
+  agent made it. Every write bounds this whole text at the longest
+  message a fire may send, so a saved line always fits its fire.
+  """
+  @spec fire_text(String.t() | nil, String.t(), String.t()) :: String.t()
+  def fire_text(maker, name, line) when is_binary(maker) and is_binary(name) and is_binary(line),
+    do: "#{maker} set this schedule: #{name}\n\n#{line}"
+
+  def fire_text(nil, _name, line) when is_binary(line), do: line
+
+  # A line for Aqua's fire, with who set it and the schedule's name, is
+  # no longer than a message a fire may send.
+  defp fits(maker, name, input_json) do
+    line =
+      case Jason.decode(input_json || "") do
+        {:ok, %{"line" => line}} when is_binary(line) -> line
+        _unread -> ""
+      end
+
+    if byte_size(fire_text(maker, name, line)) > @max_line_bytes,
+      do:
+        {:error,
+         {:invalid_argument,
+          "The line is too long: with who set it and the schedule's name, a fire's message holds at most 32 KiB"}},
+      else: :ok
+  end
+
+  # An update that leaves a line for Aqua leaves its fire within the bound,
+  # its name and line as they will be, its maker as the row records it.
+  defp fits_update(schedule, args, {:aqua, attrs}),
+    do: fits(schedule.maker, args["name"] || schedule.name, attrs[:input] || schedule.input)
+
+  defp fits_update(_schedule, _args, _component), do: :ok
 
   # The line is the input's one field: a non-empty text a person could send.
   defp aqua_input(%{"input" => %{"line" => line} = input})

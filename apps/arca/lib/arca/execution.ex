@@ -94,11 +94,14 @@ defmodule Arca.Execution do
   @doc """
   Whether `reason` is the refusal of one of `admit/2`'s barriers: an
   expired hold, a superseded step, a parent that ended, an occurrence not
-  claimed, a grant whose athanor no longer stands at its generation, an
+  claimed or whose schedule was stopped since its claim, a grant whose athanor no longer stands at its generation, an
   admission that named no grant, or a member that no longer holds its
   slot when the admission checks it in its own transaction (`:not_owner`).
   """
   @spec barrier_refusal?(term()) :: boolean()
+  def barrier_refusal?({:schedule_stopped, status}) when status in ["paused", "deleted"],
+    do: true
+
   def barrier_refusal?(reason),
     do:
       reason in [
@@ -149,7 +152,9 @@ defmodule Arca.Execution do
     claimant (`Arca.ScheduleOccurrences.start!/4`). Admission is refused
     `{:error, :occurrence_not_claimed}` when it is not claimed, or is
     claimed by another boot since a recoverer took it over, so a stale
-    claimant's slow admission starts nothing. A row that names a
+    claimant's slow admission starts nothing, and
+    `{:error, {:schedule_stopped, status}}` when its schedule was paused
+    or deleted since the claim. A row that names a
     `schedule_id` runs an occurrence, and is refused the same way
     without one.
 
@@ -320,13 +325,16 @@ defmodule Arca.Execution do
           :ok
 
         {_schedule, occurrence_id} when is_binary(occurrence_id) ->
-          if Arca.ScheduleOccurrences.start!(
-               Prima.Actor.in_athanor(athanor_id),
-               occurrence_id,
-               Prima.Boot.id(),
-               execution.id
-             ) != 1,
-             do: Arca.Repo.rollback(:occurrence_not_claimed)
+          case Arca.ScheduleOccurrences.start!(
+                 Prima.Actor.in_athanor(athanor_id),
+                 occurrence_id,
+                 Prima.Boot.id(),
+                 execution.id
+               ) do
+            :started -> :ok
+            :not_claimed -> Arca.Repo.rollback(:occurrence_not_claimed)
+            {:schedule_stopped, _status} = stopped -> Arca.Repo.rollback(stopped)
+          end
 
         {_schedule, nil} ->
           Arca.Repo.rollback(:occurrence_not_claimed)

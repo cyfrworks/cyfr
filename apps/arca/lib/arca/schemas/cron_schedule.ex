@@ -37,9 +37,10 @@ defmodule Arca.Schemas.CronSchedule do
   turn (`Opus.Schedules.Provider`) and never changed.
 
   A `once` schedule's expression names one minute: its claim fires it
-  however late, under any missed-run policy, and leaves it no cursor
-  (`Arca.ScheduleOccurrences.claim/3`), and the write that records that
-  occurrence's end removes it (`Arca.CronSchedule.record_run/3`,
+  however late, under any missed-run policy, marks that occurrence as its
+  one fire and leaves it no cursor (`Arca.ScheduleOccurrences.claim/3`),
+  and the write that records that occurrence's end removes it while it
+  still fires once and awaits nothing else (`Arca.CronSchedule.record_run/4`,
   `record_error/4`).
   """
 

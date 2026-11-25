@@ -229,7 +229,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     for schedule <- [forbid, allow] do
       {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
-      assert 1 =
+      assert :started =
                ScheduleOccurrences.start!(
                  actor,
                  occurrence.id,
@@ -265,7 +265,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   test "the claim decides on the row's concurrency, never on the caller's copy", %{actor: actor} do
     forbid = due!(actor, %{concurrency: "forbid"})
     {:ok, open} = ScheduleOccurrences.claim(forbid, "node-a", cadence())
-    assert 1 = ScheduleOccurrences.start!(actor, open.id, "node-a", "exec_#{open.id}")
+    assert :started = ScheduleOccurrences.start!(actor, open.id, "node-a", "exec_#{open.id}")
 
     # A stale or forged copy that says `allow` is read for its id, its
     # athanor and the cursor it saw; the row still forbids an overlap.
@@ -280,8 +280,8 @@ defmodule Arca.ScheduleOccurrencesTest do
     schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
-    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_1")
-    assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_2")
+    assert :started = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_1")
+    assert :not_claimed = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_2")
 
     assert {:ok, %{state: "started", execution_id: "exec_1", attempts: 1}} =
              ScheduleOccurrences.get(actor, occurrence.id)
@@ -356,12 +356,12 @@ defmodule Arca.ScheduleOccurrencesTest do
     schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
-    assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "node-b", "exec_other")
+    assert :not_claimed = ScheduleOccurrences.start!(actor, occurrence.id, "node-b", "exec_other")
 
     assert {:ok, %{state: "claimed", claimed_by: "node-a", execution_id: nil, attempts: 0}} =
              ScheduleOccurrences.get(actor, occurrence.id)
 
-    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_own")
+    assert :started = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_own")
 
     assert {:ok, %{state: "started", execution_id: "exec_own", attempts: 1}} =
              ScheduleOccurrences.get(actor, occurrence.id)
@@ -589,7 +589,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert DateTime.compare(row.claimed_at, abandoned.claimed_at) != :lt
 
     # A started occurrence is not re-run by this door at all.
-    assert 1 = ScheduleOccurrences.start!(actor, abandoned.id, "boot-a", "exec_started")
+    assert :started = ScheduleOccurrences.start!(actor, abandoned.id, "boot-a", "exec_started")
     assert :held = ScheduleOccurrences.recover(actor, abandoned.id, "boot-a", "boot-c")
 
     # Nor is another athanor's.
@@ -945,7 +945,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   test "an execution admitted for an occurrence nobody claimed is refused", %{actor: actor} do
     schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
-    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_first")
+    assert :started = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_first")
 
     assert {:error, :occurrence_not_claimed} =
              Arca.Execution.admit(
@@ -1072,7 +1072,7 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
       # abandoned claim, and its execution's admission starts it.
       recovered_and_started = fn ->
         :ok = ScheduleOccurrences.recover(actor, occurrence.id, slot.owner, successor)
-        1 = ScheduleOccurrences.start!(actor, occurrence.id, successor, "exec_successor")
+        :started = ScheduleOccurrences.start!(actor, occurrence.id, successor, "exec_successor")
       end
 
       # The old member's late callback names its own claim and the

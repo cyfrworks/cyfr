@@ -1870,7 +1870,7 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   # A once schedule is removed by its occurrence's end (the summary's
-  # write, `Arca.CronSchedule.record_run/3`), which is announced as its
+  # write, `Arca.CronSchedule.record_run/4`), which is announced as its
   # removal; any other end as a change. A once schedule the person deleted
   # while its turn ran is announced removed a second time, which a reader
   # takes as the removal it already has.
@@ -1891,7 +1891,12 @@ defmodule Opus.Schedules.Scheduler do
     written =
       case said(actor, occurrence, reason) do
         :completed ->
-          CronSchedule.record_run(actor, occurrence.schedule_id, occurrence.execution_id)
+          CronSchedule.record_run(
+            actor,
+            occurrence.schedule_id,
+            occurrence.execution_id,
+            occurrence.id
+          )
 
         sentence ->
           CronSchedule.record_error(actor, occurrence.schedule_id, sentence, occurrence.id)

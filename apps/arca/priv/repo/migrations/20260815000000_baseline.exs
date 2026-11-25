@@ -2493,6 +2493,9 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :scheduled_for, :utc_datetime_usec, null: false
+      # Claimed as a one-time schedule's one fire: its end removes the
+      # schedule, while the schedule still awaits nothing else.
+      add :once, :boolean, null: false, default: false
       add :state, :string, null: false, check: if(sqlite?, do: occurrence_state)
       add :execution_id, :string
       add :attempts, :integer, null: false, default: 0

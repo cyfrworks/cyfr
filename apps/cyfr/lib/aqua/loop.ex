@@ -2800,6 +2800,8 @@ defmodule Aqua.Loop do
   def describe(:occurrence_not_claimed),
     do: "This scheduled run was already taken up by another turn, so this one did not start."
 
+  def describe({:schedule_stopped, _status} = reason), do: Prima.Refusal.message(reason)
+
   def describe(:read_threads_unrecorded),
     do: "What the model read could not be recorded on the turn, so its answer was not used"
 

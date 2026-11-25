@@ -695,6 +695,12 @@ defmodule Prima.Refusal do
   # A schedule's line for Aqua runs as its person with nobody present, so
   # only the person makes or changes one, signed in or through a turn of
   # theirs (`Opus.Schedules.Provider`).
+  # A schedule's fire whose turn came to start after its person paused or
+  # deleted the schedule (`Arca.ScheduleOccurrences.start!/4`): it runs
+  # nothing.
+  defp row({:schedule_stopped, status}) when status in ["paused", "deleted"],
+    do: {:conflict, "This schedule was #{status} before its turn started, so it did not run."}
+
   defp row(:aqua_line_by_person),
     do:
       {:forbidden,
@@ -703,6 +709,14 @@ defmodule Prima.Refusal do
   # A schedule is made or changed from a chain only by a turn's own call
   # (`Opus.Schedules.Provider`): a component a turn or a key started is
   # not Aqua or a crew member.
+  # A turn's own schedule write that is not its person's: under a key or a
+  # tincture's frame, or started by neither the person nor a schedule's
+  # fire (`Opus.Schedules.Provider`).
+  defp row(:schedule_turn_not_yours),
+    do:
+      {:forbidden,
+       "A turn makes or changes a schedule only when you started it signed in, or a schedule of yours did; a key's or an app's turn cannot"}
+
   defp row(:schedule_by_component),
     do:
       {:forbidden,

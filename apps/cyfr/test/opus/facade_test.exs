@@ -42,6 +42,9 @@ defmodule Opus.FacadeTest do
     run_child: 5,
     run_root: 5,
     run_root_edge: 5,
+    # What a schedule's fire says, which Aqua sends and the schedule tool
+    # bounds at every write: one wording for both.
+    schedule_fire_text: 3,
     service: 0,
     start_lease_watch: 2,
     start_lease_watch: 3,

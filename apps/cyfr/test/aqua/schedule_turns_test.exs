@@ -1156,7 +1156,7 @@ defmodule Aqua.ScheduleTurnsTest do
       started = fire!(ctx, id)
       running = running_execution!(ctx)
 
-      {:ok, 1} =
+      {:ok, :started} =
         Arca.Repo.transaction(fn ->
           ScheduleOccurrences.start!(actor(ctx), started.id, Prima.Boot.id(), running)
         end)
@@ -1391,28 +1391,85 @@ defmodule Aqua.ScheduleTurnsTest do
       await_status(ctx, turn_in(ctx, today.id, occurrence).id, "completed")
     end
 
-    test "a turn's own call under a key or a frame writes no line for Aqua; under the person's sign-in it does",
-         %{ctx: ctx} do
-      script!(held() ++ [reply("Done.")])
-      room = today!(ctx)
-      {turn_id, player} = busy!(ctx, room.id)
-      {:ok, %{root_execution_id: root}} = Tape.turn(ctx, turn_id)
-      chain = %{ctx | plane: :guest, authenticated: true}
-      own = %{"thread_id" => room.id, "root_execution_id" => root, "parent_execution_id" => root}
-      line = %{"reference" => @aqua, "input" => %{"line" => "hi"}}
+    # An open turn of the person's in `room`, started under `origin`, whose
+    # root is named: the lineage its own calls carry, as the gate stamps it.
+    defp turn_lineage!(ctx, room, origin) do
+      {:ok, %{turn: turn}} =
+        Tape.accept(%{ctx | origin: origin}, room.id, %{
+          message: %{author: ctx.user_id, sent_by: "person", content: "go #{origin}"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
 
-      for caller <- [
-            %{chain | api_key_id: "key_x"},
-            %{chain | auth_method: :tincture, frame: %{ref: "tincture:local.x"}}
-          ] do
-        assert create(caller, Map.merge(line, own)) == {:error, :aqua_line_by_person}
+      root = "exec_root_#{System.unique_integer([:positive])}"
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [root_execution_id: root]
+        )
+
+      %{"thread_id" => room.id, "root_execution_id" => root, "parent_execution_id" => root}
+    end
+
+    test "one decision for all five writes: each ineligible caller in a chain writes nothing, the person's own turn writes each",
+         %{ctx: ctx} do
+      room = today!(ctx)
+      chain = %{ctx | plane: :guest, authenticated: true}
+      own = turn_lineage!(ctx, room, :interactive)
+      unattended = turn_lineage!(ctx, room, :programmatic)
+      component = %{own | "parent_execution_id" => "exec_component"}
+      id = schedule!(ctx, "Standing", "look")
+      before = row!(ctx, id)
+
+      writes = fn lineage ->
+        [
+          {"create", Map.merge(lineage, %{"reference" => @aqua, "input" => %{"line" => "x"}})},
+          {"update", Map.merge(lineage, %{"schedule_id" => id, "name" => "Renamed"})},
+          {"pause", Map.put(lineage, "schedule_id", id)},
+          {"resume", Map.put(lineage, "schedule_id", id)},
+          {"delete", Map.put(lineage, "schedule_id", id)}
+        ]
       end
 
-      assert {:ok, []} = CronSchedule.list(actor(ctx), kind: "schedule")
-      assert {:ok, %{maker: maker, thread_id: nil}} = create(chain, Map.merge(line, own))
-      assert maker == Prima.AgentRef.soul_name()
-      release!(player)
-      await_status(ctx, turn_id, "completed")
+      callers = [
+        {"a key's chain", %{chain | api_key_id: "key_x"}, own, :schedule_turn_not_yours},
+        {"a frame's chain", %{chain | auth_method: :tincture, frame: %{ref: "tincture:local.x"}},
+         own, :schedule_turn_not_yours},
+        {"a component's call", chain, component, :schedule_by_component},
+        {"a turn neither the person nor a schedule started", chain, unattended,
+         :schedule_turn_not_yours}
+      ]
+
+      for {who, caller, lineage, reason} <- callers, {action, args} <- writes.(lineage) do
+        args = Map.put(args, "action", action)
+
+        args =
+          if action == "create",
+            do: Map.merge(%{"name" => "made", "cron_expression" => hourly_away()}, args),
+            else: args
+
+        assert Provider.handle("schedule", caller, args) == {:error, reason},
+               "#{who}: #{action}"
+      end
+
+      # Nothing moved: the one schedule stands as it was, and none was made.
+      assert {:ok, [only]} = CronSchedule.list(actor(ctx), kind: "schedule")
+
+      assert Map.take(only, [:id, :name, :status, :updated_at]) ==
+               Map.take(before, [:id, :name, :status, :updated_at])
+
+      # The person's own turn writes each.
+      for {action, args} <- writes.(own) do
+        args = Map.put(args, "action", action)
+
+        args =
+          if action == "create",
+            do: Map.merge(%{"name" => "made", "cron_expression" => hourly_away()}, args),
+            else: args
+
+        assert {:ok, _} = Provider.handle("schedule", chain, args), action
+      end
+
+      assert row!(ctx, id).status == "deleted"
     end
 
     test "a call no turn made writes no schedule", %{ctx: ctx} do
@@ -1558,6 +1615,135 @@ defmodule Aqua.ScheduleTurnsTest do
       assert ScheduleTurns.drain() == %{occurrence.id => {:ended, "the schedule is deleted"}}
       assert threads(ctx) == []
     end
+  end
+
+  describe "round one's cases" do
+    test "a wake queued behind a person's turn and deleted meanwhile ends saying so, with no execution",
+         %{ctx: ctx} do
+      script!(held() ++ [reply("Finished."), reply("Unexpected wake.")])
+      room = today!(ctx)
+      {mine, player} = busy!(ctx, room.id)
+
+      {:ok, %{schedule_id: id}} =
+        create(ctx, %{
+          "at" => in_an_hour(),
+          "cron_expression" => nil,
+          "reference" => @aqua,
+          "input" => %{"line" => "remind me"}
+        })
+
+      fired = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{fired.id => :sent}
+      assert occurrence(ctx, fired.id).execution_id == nil
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{"action" => "delete", "schedule_id" => id})
+
+      release!(player)
+      await_status(ctx, mine, "completed")
+      wake = await_status(ctx, turn_of(ctx, fired).id, "failed")
+      assert wake.error == "This schedule was deleted before its turn started, so it did not run."
+      assert is_nil(wake.root_execution_id)
+      assert %{state: "failed", execution_id: nil} = ended!(ctx, fired, "failed")
+    end
+
+    test "a recurring fire ending after its schedule was made a wake leaves the wake", %{
+      ctx: ctx
+    } do
+      script!(held() ++ [reply("Finished.")])
+      id = schedule!(ctx, "retime", "first occurrence")
+      fired = fire!(ctx, id)
+      assert ScheduleTurns.drain() == %{fired.id => :sent}
+      assert_receive {:scripted_probe, player, _}, 30_000
+
+      assert {:ok, %{once: true}} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => id,
+                 "at" => in_an_hour()
+               })
+
+      release!(player)
+      ended!(ctx, fired, "completed")
+      assert %{status: "active", once: true, next_run_at: %DateTime{}} = row!(ctx, id)
+    end
+
+    test "a wake into a workspace thread archived since ends saying so and leaves it archived",
+         %{ctx: ctx} do
+      room = workspace!(ctx, "Room since archived")
+      script!([wake("w1", "Later", "check"), reply("Set."), reply("Unexpected wake.")])
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, room.id, "set a wake")
+      await_status(ctx, turn_id, "completed")
+
+      {1, _} =
+        Arca.Repo.update_all(from(t in Arca.Schemas.Thread, where: t.id == ^room.id),
+          set: [workspace_state: "done"]
+        )
+
+      assert {:ok, %{archived_at: %DateTime{}}} = Threads.archive(actor(ctx), room.id)
+      fired = fire!(ctx, named!(ctx, "Later").id)
+      said = "its workspace thread was archived since the schedule was set"
+      assert ScheduleTurns.drain() == %{fired.id => {:ended, said}}
+      assert {:ok, %{archived_at: %DateTime{}}} = Threads.get(actor(ctx), room.id)
+      assert under_client_id(ctx, room.id, client_id(fired)) == []
+      assert %{state: "failed", execution_id: nil} = occurrence(ctx, fired.id)
+    end
+
+    test "a time more than a year off by its date is refused, a leap day among them", %{ctx: ctx} do
+      line = %{"cron_expression" => nil, "reference" => @aqua, "input" => %{"line" => "later"}}
+      year_on = DateTime.shift(DateTime.utc_now(), year: 1)
+      leap = next_leap_day_past(year_on)
+
+      for at <- [DateTime.add(year_on, 2 * 86_400, :second), leap] do
+        assert {:error, {:invalid_argument, "at must be at most a year ahead" <> _}} =
+                 create(ctx, Map.put(line, "at", DateTime.to_iso8601(at))),
+               DateTime.to_iso8601(at)
+      end
+
+      # A year ahead less a day is a wake.
+      assert {:ok, %{once: true}} =
+               create(
+                 ctx,
+                 Map.put(line, "at", DateTime.to_iso8601(DateTime.add(year_on, -86_400, :second)))
+               )
+    end
+
+    test "a line that fits its fire with who set it and the name is saved and sent; a byte more is refused",
+         %{ctx: ctx} do
+      room = today!(ctx)
+      script!([wake("w1", "Reminder", "check"), reply("Set."), reply("Received.")])
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, room.id, "set a wake")
+      await_status(ctx, turn_id, "completed")
+      row = named!(ctx, "Reminder")
+      room_left = 32 * 1024 - byte_size(Opus.schedule_fire_text(row.maker, row.name, ""))
+      line = fn bytes -> %{"line" => String.duplicate("a", bytes)} end
+
+      assert {:error, {:invalid_argument, "The line is too long: with who set it" <> _}} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => row.id,
+                 "input" => line.(room_left + 1)
+               })
+
+      assert {:ok, _} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => row.id,
+                 "input" => line.(room_left)
+               })
+
+      fired = fire!(ctx, row.id)
+      assert ScheduleTurns.drain() == %{fired.id => :sent}
+      await_status(ctx, turn_of(ctx, fired).id, "completed")
+    end
+  end
+
+  # The first 29 February at noon UTC after `from`.
+  defp next_leap_day_past(from) do
+    Stream.iterate(from.year, &(&1 + 1))
+    |> Stream.filter(&Calendar.ISO.leap_year?/1)
+    |> Stream.map(&DateTime.new!(Date.new!(&1, 2, 29), ~T[12:00:00], "Etc/UTC"))
+    |> Enum.find(&(DateTime.compare(&1, from) == :gt))
   end
 
   # A workspace thread of the athanor's, as its opening's delivery leaves it.
