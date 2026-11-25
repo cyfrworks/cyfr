@@ -336,11 +336,14 @@ key() {
     windows)
       # The key goes to the foreground window, which any other window on
       # the runner's desktop may hold (System Properties, wsl.exe, Windows'
-      # first-run page): Update CYFR is made the foreground window first
-      # and the key sent only once it is, within 10 s, or nothing is sent
-      # and the press fails naming the window that holds the keys. A
+      # first-run page, Search): Update CYFR is made the foreground window
+      # first and the key sent only once it is, within 10 s, or nothing is
+      # sent and the press fails naming the window that holds the keys. A
       # background process may not hand the foreground on by itself: it
-      # joins the input of the foreground window's thread to do it.
+      # joins the input of the foreground window's thread to do it. Windows'
+      # Search keeps the keys from that: where it holds them, its process
+      # is ended, on this disposable machine, and said, as the first-run
+      # page's is.
       local vk=13
       [ "$1" = Escape ] && vk=27
       VK=$vk pwsh -NoProfile -NonInteractive -Command '
@@ -367,6 +370,7 @@ public static class K {
     }, IntPtr.Zero);
     return found;
   }
+  public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
   public static string Said(IntPtr h) {
     var s = new StringBuilder(512); GetWindowText(h, s, 512);
     uint p; GetWindowThreadProcessId(h, out p); string n = "none";
@@ -388,6 +392,11 @@ public static class K {
         if ($t -eq [IntPtr]::Zero) { [Console]::Error.WriteLine("update: no Update CYFR window to press a key in"); exit 1 }
         $until = (Get-Date).AddSeconds(10)
         while (-not [K]::Front($t)) {
+          $holder = Get-Process -Id ([K]::Pid([K]::GetForegroundWindow())) -ErrorAction SilentlyContinue
+          if ($holder.ProcessName -eq "SearchHost") {
+            Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+            [Console]::Error.WriteLine("update: the Search of Windows (SearchHost, $($holder.Id)) held the keys and was ended: " + $?)
+          }
           if ((Get-Date) -gt $until) {
             [Console]::Error.WriteLine("update: Update CYFR did not take the keys in 10 s; the window that holds them is " + [K]::Said([K]::GetForegroundWindow()))
             exit 1
