@@ -678,9 +678,9 @@ defmodule Locus.Keeper do
   `digest`, for the start of `lifetime`: `{:ok, :taken}`, or `{:ok, :held}`
   for the `last`, the generation then complete and held for that
   lifetime; `{:refused, "packs_refused"}` for a stream cyfr-locus does
-  not take, which leaves nothing of it, and `{:refused, "unavailable"}`
-  for a first part while another put of `athanor`, or the most at once,
-  are under way.
+  not take, which leaves nothing of it; `{:refused, "packs_busy"}` for a
+  first part while another put of `athanor` is under way, and
+  `{:refused, "unavailable"}` for one while the most at once are.
   """
   @impl Locus.Launcher
   def packs_put(server, athanor, lifetime, digest, seq, last, data),

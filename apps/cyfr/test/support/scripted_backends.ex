@@ -95,7 +95,8 @@ defmodule Cyfr.Test.ScriptedBackends do
   files it names, each by size, SHA-256 and executable bit, which makes
   the generation held and is answered `held` naming its digest. A part
   out of order, or a stream that does not read so, is refused
-  `packs_refused` and drops the put. A hold, a put or an open naming
+  `packs_refused` and drops the put; a first part while another put of
+  its athanor is collected is refused `packs_busy`, as the keeper's. A hold, a put or an open naming
   `packs` for a program its sync did not mark `packs` is refused
   `bad_request`; an open's `packs` is kept on its session.
 
@@ -249,6 +250,13 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
+
+  @doc "Drop every put of `athanor` being collected, as a put that failed: its next part is out of order."
+  def drop_puts(%{agent: agent}, athanor),
+    do:
+      Agent.update(agent, fn st ->
+        %{st | puts: Map.reject(st.puts, fn {{a, _d, _l}, _parts} -> a == athanor end)}
+      end)
 
   @doc """
   End every session of `server`'s owner, as an idle period or a crash
@@ -1038,7 +1046,13 @@ defmodule Cyfr.Test.ScriptedBackends do
         parts = Map.get(st.puts, key, [])
         puts = Map.delete(st.puts, key)
 
+        under_way? =
+          Enum.any?(Map.keys(st.puts), fn {a, _d, _l} = other -> other != key and a == athanor end)
+
         cond do
+          message.seq == 0 and under_way? ->
+            {:busy, st}
+
           message.seq != length(parts) ->
             {:refused, %{st | puts: puts}}
 
@@ -1067,6 +1081,9 @@ defmodule Cyfr.Test.ScriptedBackends do
     case state do
       :refused ->
         refuse(conn, Agent.get(agent, & &1), :packs_refused)
+
+      :busy ->
+        refuse(conn, Agent.get(agent, & &1), :packs_busy)
 
       "held" ->
         session_answer(conn, Agent.get(agent, & &1), %{

@@ -26,7 +26,11 @@ defmodule Opus.Programs.Session do
   `packs_put`s, each part awaited before the next. A selection that moved
   on since the digest was read is begun again from the new one, three
   times at most; a fourth move ends the start `:packs_moved`, and a hold
-  or a put that fails `:packs_unready`, before the open is sent. The open
+  or a put that fails `:packs_unready`, before the open is sent. A put
+  whose first part meets another put of the person's under way
+  (`packs_busy`) holds again every 500 ms, finding the generation held
+  once that put is done or missing, to put, once it failed, for at most
+  60 s, then ends `:packs_unready`. The open
   then names as its `packs` the digest the `held` answer named: the one
   read, but for an open of a lifetime whose session lives, which the
   service holds at the generation that session's open named, packs changed
@@ -57,6 +61,14 @@ defmodule Opus.Programs.Session do
 
   # How many times a start begins again from a selection that moved on.
   @pack_moves 3
+
+  # A start whose put meets another put of the person's under way
+  # (`packs_busy`) holds again every @busy_every_ms, for at most
+  # @busy_wait_ms from its first such refusal: the largest set the store
+  # hands (128 MiB in 8,192 files) is put through the service in under
+  # 5 s on one quarter of the verification host.
+  @busy_every_ms 500
+  @busy_wait_ms 60_000
 
   @doc """
   Open the session of `params.lifetime`: the service answers the process running for
@@ -104,12 +116,14 @@ defmodule Opus.Programs.Session do
     ctx = Sanctum.Context.internal(athanor_id: lifetime.athanor, scope: :athanor)
 
     case Compendium.pack_digest(ctx, lifetime.athanor) do
-      {:ok, digest} -> held(grant, lifetime, ctx, digest, 0, timeout_ms)
+      {:ok, digest} -> held(grant, lifetime, ctx, digest, 0, timeout_ms, nil)
       {:error, _unread} -> {:error, :packs_unready}
     end
   end
 
-  defp held(grant, lifetime, ctx, digest, moves, timeout_ms) do
+  # `busy_until` is when a start that met a put under way stops holding
+  # again (monotonic milliseconds), nil until it has met one.
+  defp held(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until) do
     hold =
       base(:packs_hold, grant) |> Map.merge(of_lifetime(lifetime)) |> Map.put(:digest, digest)
 
@@ -120,10 +134,13 @@ defmodule Opus.Programs.Session do
       {:ok, %{state: :missing}} ->
         case Compendium.pack_view(ctx, lifetime.athanor, digest) do
           {:ok, %{archive: archive}} ->
-            put(grant, %{hold | type: :packs_put}, archive, 0, timeout_ms)
+            case put(grant, %{hold | type: :packs_put}, archive, 0, timeout_ms) do
+              :busy -> busy(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until)
+              put -> put
+            end
 
           {:moved, now} when moves < @pack_moves ->
-            held(grant, lifetime, ctx, now, moves + 1, timeout_ms)
+            held(grant, lifetime, ctx, now, moves + 1, timeout_ms, busy_until)
 
           {:moved, _now} ->
             {:error, :packs_moved}
@@ -137,6 +154,24 @@ defmodule Opus.Programs.Session do
     end
   end
 
+  # Another put of the person's is under way: the start holds again, which
+  # finds the generation held once that put is done, or missing, to put,
+  # once it failed; past the bound it is the packs not made ready.
+  defp busy(grant, lifetime, ctx, digest, moves, timeout_ms, nil),
+    do: busy(grant, lifetime, ctx, digest, moves, timeout_ms, now_ms() + @busy_wait_ms)
+
+  defp busy(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until) do
+    if now_ms() + @busy_every_ms > busy_until do
+      {:error, :packs_unready}
+    else
+      # sleep-ok: a start whose put met another put of the person's waits a moment before it holds again
+      Process.sleep(@busy_every_ms)
+      held(grant, lifetime, ctx, digest, moves, timeout_ms, busy_until)
+    end
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
   # The archive in parts of at most the wire's bound, each answered before
   # the next is sent: `taken`, and the last `held`.
   defp put(grant, message, archive, seq, timeout_ms) do
@@ -147,6 +182,7 @@ defmodule Opus.Programs.Session do
     case {post(grant, Map.merge(message, %{seq: seq, last: last, part: part}), timeout_ms), last} do
       {{:ok, %{state: :taken}}, false} -> put(grant, message, rest, seq + 1, timeout_ms)
       {{:ok, %{state: :held, digest: held}}, true} -> {:ok, held}
+      {{:error, {:refused, :packs_busy, _boot}}, _last} when seq == 0 -> :busy
       {failed, _last} -> unready(failed)
     end
   end

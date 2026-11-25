@@ -462,6 +462,7 @@ defmodule Locus.Backends.Service do
 
   defp packs_answer({:ok, state}), do: {:ok, state}
   defp packs_answer({:error, {:refused, "packs_refused"}}), do: {:error, :packs_refused}
+  defp packs_answer({:error, {:refused, "packs_busy"}}), do: {:error, :packs_busy}
   defp packs_answer({:error, {:refused, "unavailable"}}), do: {:error, :unavailable}
   defp packs_answer({:error, {:refused, "bad_request"}}), do: {:error, :bad_request}
   defp packs_answer({:error, {:launcher_unavailable, _kind}}), do: {:error, :unavailable}

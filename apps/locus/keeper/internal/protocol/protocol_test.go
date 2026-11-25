@@ -426,6 +426,7 @@ func TestSharedPacksRepliesMatchTheEncoders(t *testing.T) {
 		NewPacksReply("42", PacksHeld),
 		NewError("42", "", CodePacksRefused),
 		NewError("40", "", CodeUnavailable),
+		NewError("41", "", CodePacksBusy),
 	}
 	want := loadVectors(t).PacksReplies
 	if len(want) != len(built) {

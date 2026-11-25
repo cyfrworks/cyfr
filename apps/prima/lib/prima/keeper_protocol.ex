@@ -117,8 +117,8 @@ defmodule Prima.KeeperProtocol do
   generation's stream of at most `max_pack_part_bytes` (`request_bounds/0`),
   which `encode/1` writes in base64; each part is answered `:taken`, the
   last `:held`, or refused `packs_refused`; a first part while another put
-  of the athanor, or the most at once, are under way is refused
-  `unavailable`. A spawn's optional `packs`,
+  of the athanor is under way is refused `packs_busy`, and one while the
+  most at once are under way `unavailable`. A spawn's optional `packs`,
   `%{athanor: athanor, digest: digest}`, names the generation its space
   binds read only at `/run/cyfr/scrolls`, of its place's athanor. A keeper or a role that keeps no
   homes refuses every packs request `unavailable`.

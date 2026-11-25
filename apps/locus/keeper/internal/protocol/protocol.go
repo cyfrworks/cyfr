@@ -235,8 +235,9 @@
 // "held". A put refused (its stream, a bound, a manifest the files do not
 // match, a seq out of order, a put idle or running past its bound) is
 // refused as CodePacksRefused and leaves nothing behind; a put's first part
-// while another put of its athanor, or the most puts at once, are under way
-// is refused as CodeUnavailable. A spawn's `packs` names a generation by
+// while another put of its athanor is under way is refused as
+// CodePacksBusy, and one while the most puts at once are under way as
+// CodeUnavailable. A spawn's `packs` names a generation by
 // its athanor and digest: the athanor must be its place's when the spawn
 // claims it, which no assign changes from then, and the generation
 // complete; the stage binds it read only at
@@ -388,6 +389,9 @@ const (
 	// CodePacksRefused refuses a packs_put whose stream the keeper does not
 	// take (package packview): the put leaves nothing behind.
 	CodePacksRefused = "packs_refused"
+	// CodePacksBusy refuses a packs_put's first part while another put of
+	// its athanor is under way: the start it is for holds again.
+	CodePacksBusy = "packs_busy"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors

@@ -157,6 +157,26 @@ func TestThePacksRequestsOfTheKeptRole(t *testing.T) {
 		t.Fatalf("a stream that is no archive: %v", bad)
 	}
 
+	// A put's first part while another put of its athanor is under way is
+	// refused packs_busy, by its code, which its start meets by holding
+	// again; the put under way goes on.
+	part := func(lifetime string, seq int, last bool, data []byte) map[string]any {
+		return handle(packsLine(t, map[string]any{
+			"type": protocol.TypePacksPut, "id": "p-" + lifetime, "athanor": testAthanor, "lifetime": lifetime, "digest": setDigest("busy"),
+			"seq": seq, "last": last, "data": base64.StdEncoding.EncodeToString(data),
+		}))
+	}
+	busy := packStream(t, map[string]string{"p/a": "a"})
+	if r := part("lt_7", 0, false, busy[:512]); r["state"] != protocol.PacksTaken {
+		t.Fatalf("the first put's first part: %v", r)
+	}
+	if r := part("lt_8", 0, false, busy[:512]); r["type"] != protocol.TypeError || r["code"] != protocol.CodePacksBusy {
+		t.Fatalf("another start's put while the first is under way: %v", r)
+	}
+	if r := part("lt_7", 1, true, busy[512:]); r["state"] != protocol.PacksHeld {
+		t.Fatalf("the first put's last part: %v", r)
+	}
+
 	// A kept root that cannot take the packs' folder: the hold finds
 	// nothing, and the put is refused unavailable, saying why in the log.
 	blocked := t.TempDir()

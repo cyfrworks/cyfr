@@ -187,8 +187,9 @@ defmodule Prima.LocusBackends do
   `packs` for a program that loads none is refused `bad_request`, a hold
   of a lifetime over, and a put of one whose process started or that is
   over, `lifetime_over`, a put whose stream the keeper does not take
-  `packs_refused`, and a service whose keeper keeps no homes refuses them
-  `unavailable`.
+  `packs_refused`, a put's first part while another put of the person's
+  is under way `packs_busy`, which its holder meets by holding again, and
+  a service whose keeper keeps no homes refuses them `unavailable`.
 
   `send` and `recv` speak to a `run` session; `input`, `output` and
   `resize` to a `terminal` one; a message naming a session of the other
@@ -414,6 +415,7 @@ defmodule Prima.LocusBackends do
     home_over_cap: 409,
     hosts_unresolved: 409,
     packs_refused: 409,
+    packs_busy: 409,
     replay: 409,
     capacity: 409,
     status_too_large: 409,
@@ -796,6 +798,7 @@ defmodule Prima.LocusBackends do
           | :home_over_cap
           | :hosts_unresolved
           | :packs_refused
+          | :packs_busy
           | :replay
           | :capacity
           | :status_too_large

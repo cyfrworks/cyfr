@@ -127,10 +127,13 @@ var ErrRefused = errors.New("packs refused")
 // folder of the keeper's own.
 var ErrNoStore = errors.New("the packs' folder cannot be made")
 
-// ErrBusy refuses a put's first part while one of its athanor is under
-// way, or MaxPuts are: no person's put waits behind another's past the
-// bound of the one in progress.
-var ErrBusy = errors.New("a put is under way")
+// ErrUnderWay refuses a put's first part while another put of its athanor
+// is under way: its start holds again once that put has ended.
+var ErrUnderWay = errors.New("a put of its athanor is under way")
+
+// ErrFull refuses a put's first part while MaxPuts are under way, each
+// ending within its own bound, so no person holds another's start past it.
+var ErrFull = errors.New("the most puts at once are under way")
 
 // ErrAbsent refuses an Acquire of a generation that is not complete.
 var ErrAbsent = errors.New("no such generation")
@@ -434,8 +437,8 @@ func (s *Store) Acquire(athanor, digest string) (path string, empty bool, releas
 // Put applies one part of the put of athanor's digest for lifetime, made
 // by owner: seq 0 begins it, every later seq must follow the last, and the
 // last ends it. A seq 0 of a key in progress begins it again, its first
-// put dropped; one of an athanor with another put under way, or with
-// MaxPuts under way, is refused ErrBusy. It answers Taken, or Held once
+// put dropped; one of an athanor with another put under way is refused
+// ErrUnderWay, and one while MaxPuts are under way ErrFull. It answers Taken, or Held once
 // the generation is complete and held for lifetime.
 func (s *Store) Put(owner *Owner, athanor, lifetime, digest string, seq uint64, last bool, part []byte) (string, error) {
 	d, ok := digestHex(digest)
@@ -513,11 +516,11 @@ func (s *Store) begin(owner *Owner, key putKey, d string) (*put, error) {
 		}
 		for k := range s.puts {
 			if k != key && Person(k.athanor) == a {
-				return fmt.Errorf("%w: a put of its athanor", ErrBusy)
+				return ErrUnderWay
 			}
 		}
 		if old == nil && len(s.puts) >= MaxPuts {
-			return fmt.Errorf("%w: %d puts", ErrBusy, MaxPuts)
+			return ErrFull
 		}
 		if err := s.ensure(); err != nil {
 			return err

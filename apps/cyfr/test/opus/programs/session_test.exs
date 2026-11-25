@@ -400,6 +400,89 @@ defmodule Opus.Programs.SessionTest do
            }
   end
 
+  # Two starts of the person's at once while their copy is missing: the
+  # first's put is held at its first part, then at its last; the second's
+  # first part reaches the service between them and meets that put under
+  # way. Answers the first's lifetime, then the second's.
+  defp two_starts(fake, grant) do
+    test = self()
+    Scripted.hold(fake, "packs_put")
+    first = Task.async(fn -> start(grant, test) end)
+    assert_receive {:held, "packs_put", first_part}, 5_000
+    Scripted.hold(fake, "packs_put")
+    second = Task.async(fn -> start(grant, test) end)
+    assert_receive {:held, "packs_put", second_part}, 5_000
+    Scripted.hold(fake, "packs_put")
+    send(first_part, :go)
+    assert_receive {:session, "packs_put", %{"seq" => 0, "lifetime" => l1}, _}, 5_000
+    assert_receive {:held, "packs_put", first_last}, 5_000
+    send(second_part, :go)
+    assert_receive {:session, "packs_put", %{"seq" => 0, "lifetime" => l2}, _}, 5_000
+    assert l2 != l1
+    {first, second, first_last, l1, l2}
+  end
+
+  defp resumed({_lifetime, {:ok, %{resumed: resumed}}}), do: {:ok, resumed}
+  defp resumed({_lifetime, failed}), do: failed
+
+  test "two starts of one person at once both start: the second, meeting the first's put " <>
+         "under way, holds again until the copy is held, and puts nothing",
+       %{ctx: ctx, actor: actor, fake: fake} do
+    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", @skill)
+
+    {:ok, _} =
+      Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/a/big.txt",
+        String.duplicate("b", @part_bytes + 1)
+      )
+
+    {grant, _program} = held(ctx)
+    d = digest(ctx)
+    {first, second, first_last, l1, l2} = two_starts(fake, grant)
+    # The second has met the put under way and waits; the first ends.
+    send(first_last, :go)
+
+    assert %{
+             first: first |> Task.await(30_000) |> resumed(),
+             second: second |> Task.await(30_000) |> resumed(),
+             copies: fake |> Scripted.generations(ctx.athanor_id) |> Map.keys()
+           } == %{first: {:ok, false}, second: {:ok, false}, copies: [d]}
+
+    assert_received {:session, "open", %{"lifetime" => ^l1, "packs" => ^d}, _}
+    assert_received {:session, "open", %{"lifetime" => ^l2, "packs" => ^d}, _}
+    refute_received {:session, "packs_put", %{"lifetime" => ^l2, "seq" => 1}, _}
+  end
+
+  test "two starts of one person at once both start when the first's put fails: the second, " <>
+         "holding again, finds the copy missing and puts it",
+       %{ctx: ctx, actor: actor, fake: fake} do
+    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", @skill)
+
+    {:ok, _} =
+      Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/a/big.txt",
+        String.duplicate("b", @part_bytes + 1)
+      )
+
+    {grant, _program} = held(ctx)
+    d = digest(ctx)
+    {first, second, first_last, _l1, l2} = two_starts(fake, grant)
+    # The first's put fails: its last part finds it dropped.
+    Scripted.drop_puts(fake, ctx.athanor_id)
+    send(first_last, :go)
+
+    assert %{
+             first: first |> Task.await(30_000) |> resumed(),
+             second: second |> Task.await(30_000) |> resumed(),
+             copies: fake |> Scripted.generations(ctx.athanor_id) |> Map.keys()
+           } == %{first: {:error, :packs_unready}, second: {:ok, false}, copies: [d]}
+
+    assert_received {:session, "packs_put", %{"lifetime" => ^l2, "seq" => 1, "last" => true}, _}
+    assert_received {:session, "open", %{"lifetime" => ^l2, "packs" => ^d}, _}
+  end
+
   test "a row that does not load packs holds nothing and its open names none", %{
     ctx: ctx,
     actor: actor

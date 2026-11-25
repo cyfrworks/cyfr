@@ -108,6 +108,8 @@ defmodule Locus.Backends.ServiceTest do
       end)
     end
 
+    # A first part while another lifetime's put of the athanor is under way
+    # is refused packs_busy, as cyfr-locus refuses it.
     def packs_put(agent, athanor, lifetime, digest, seq, last, data) do
       Agent.get_and_update(agent, fn state ->
         state = %{
@@ -115,9 +117,23 @@ defmodule Locus.Backends.ServiceTest do
           | calls: [{:put, athanor, lifetime, digest, seq, last, data} | state.calls]
         }
 
-        if last,
-          do: {{:ok, :held}, %{state | packs: MapSet.put(state.packs, {athanor, digest})}},
-          else: {{:ok, :taken}, state}
+        under_way = Map.get(state, :under_way, %{})
+
+        cond do
+          seq == 0 and Map.get(under_way, athanor, lifetime) != lifetime ->
+            {{:error, {:refused, "packs_busy"}}, state}
+
+          last ->
+            {{:ok, :held},
+             %{
+               state
+               | packs: MapSet.put(state.packs, {athanor, digest})
+             }
+             |> Map.put(:under_way, Map.delete(under_way, athanor))}
+
+          true ->
+            {{:ok, :taken}, Map.put(state, :under_way, Map.put(under_way, athanor, lifetime))}
+        end
       end)
     end
 
@@ -864,6 +880,22 @@ defmodule Locus.Backends.ServiceTest do
       wait_until(fn -> Agent.get(ctx.launcher, & &1.spawned) != [] end, 5_000)
       [spec] = Agent.get(ctx.launcher, & &1.spawned)
       assert spec.packs == %{athanor: @athanor, digest: @digest}
+    end
+
+    test "a put's first part while another put of the person's is under way is refused packs_busy, apart from unavailable",
+         ctx do
+      packs_sync(ctx)
+      one = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      two = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      assert invoke(ctx, packs_message(:packs_put, one, put_part(0, false, "one"))).status == 200
+
+      assert_refused(
+        invoke(ctx, packs_message(:packs_put, two, put_part(0, false, "one"))),
+        "packs_busy"
+      )
+
+      assert invoke(ctx, packs_message(:packs_put, one, put_part(1, true, "two"))).status == 200
+      assert invoke(ctx, packs_message(:packs_put, two, put_part(0, false, "one"))).status == 200
     end
 
     test "a put is refused before its first part, and again at its last, for another owner's row, a program that loads none or another boot",

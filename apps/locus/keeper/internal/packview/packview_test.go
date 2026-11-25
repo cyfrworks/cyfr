@@ -454,29 +454,99 @@ func TestASecondPutOfOneDigestChangesNothing(t *testing.T) {
 	}
 }
 
-// One athanor has one put in progress: another start of it is refused
-// until that put ends, and then finds the generation held.
+// start is a start as Opus makes one (Opus.Programs.Session): a hold, a
+// put on missing, and, while another put of its athanor is under way, a
+// hold again once a moment has passed, until held. It answers the hold's
+// final state and how many times the start met a put under way.
+func start(t *testing.T, s *Store, owner *Owner, athanor, lifetime, digest string, b []byte) (string, int, error) {
+	t.Helper()
+	waits := 0
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		held, err := s.Hold(athanor, lifetime, digest)
+		if err != nil || held {
+			return Held, waits, err
+		}
+		state, _, err := putAll(s, owner, athanor, lifetime, digest, b)
+		if !errors.Is(err, ErrUnderWay) {
+			return state, waits, err
+		}
+		waits++
+		time.Sleep(5 * time.Millisecond) // sleep-ok: a start waits a moment before it holds again
+	}
+	return "", waits, errors.New("never held")
+}
+
+// Two starts of one person at once both start: the second's put meets the
+// first's under way, and that start holds again until the generation the
+// first put is held. One athanor has one put in progress all along.
 func TestTwoStartsOfOnePersonAtOnce(t *testing.T) {
 	role := &Owner{}
 	s := newStore(t)
 	d := digestOf("both")
-	ps := parts(streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("z"), 5*partBytes)}}))
+	b := streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("z"), 5*partBytes)}})
+	ps := parts(b)
+	// The first start is mid-put when the second starts.
 	if _, err := s.Put(role, "ath_1", "lt_0", d, 0, false, ps[0]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Put(role, "ath_1", "lt_1", d, 0, false, ps[0]); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "athanor") {
-		t.Fatalf("a second start's put: %v", err)
-	}
+	second := make(chan error, 1)
+	var waits int
+	go func() {
+		var state string
+		var err error
+		state, waits, err = start(t, s, role, "ath_1", "lt_1", d, b)
+		if err == nil && state != Held {
+			err = fmt.Errorf("answered %s", state)
+		}
+		second <- err
+	}()
 	for i := 1; i < len(ps); i++ {
+		time.Sleep(5 * time.Millisecond) // sleep-ok: the first put's parts arrive while the second start waits
 		if _, err := s.Put(role, "ath_1", "lt_0", d, uint64(i), i == len(ps)-1, ps[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if held, err := s.Hold("ath_1", "lt_1", d); !held || err != nil {
-		t.Fatalf("the second start's hold: %v %v", held, err)
+	if err := <-second; err != nil || waits == 0 {
+		t.Fatalf("the second start: %v, after %d waits", err, waits)
 	}
 	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("left %v", es)
+	}
+}
+
+// When the first start's put fails, the second, holding again, finds the
+// generation missing and puts it itself.
+func TestTwoStartsOfOnePersonWhenTheFirstPutFails(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	d := digestOf("first fails")
+	b := streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("f"), 3*partBytes)}})
+	ps := parts(b)
+	if _, err := s.Put(role, "ath_1", "lt_0", d, 0, false, ps[0]); err != nil {
+		t.Fatal(err)
+	}
+	second := make(chan error, 1)
+	var waits int
+	go func() {
+		var state string
+		var err error
+		state, waits, err = start(t, s, role, "ath_1", "lt_1", d, b)
+		if err == nil && state != Held {
+			err = fmt.Errorf("answered %s", state)
+		}
+		second <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // sleep-ok: the second start meets the first put under way
+	// The first put's next part is out of order: it is refused and dropped.
+	if _, err := s.Put(role, "ath_1", "lt_0", d, 2, false, ps[2]); !errors.Is(err, ErrRefused) {
+		t.Fatalf("the first put's failing part: %v", err)
+	}
+	if err := <-second; err != nil || waits == 0 {
+		t.Fatalf("the second start: %v, after %d waits", err, waits)
+	}
+	data, err := os.ReadFile(filepath.Join(s.Path("ath_1", d), "p", "a"))
+	if err != nil || len(data) != 3*partBytes {
+		t.Fatalf("the second start's generation: %d bytes %v", len(data), err)
 	}
 }
 
@@ -489,7 +559,7 @@ func TestOneAthanorAskingForSeventeen(t *testing.T) {
 	d := digestOf("many")
 	for i := 0; i <= MaxPuts; i++ {
 		_, err := s.Put(role, "ath_1", fmt.Sprintf("lt_%d", i), d, 0, false, []byte{})
-		if want := i > 0; want != errors.Is(err, ErrBusy) {
+		if want := i > 0; want != errors.Is(err, ErrUnderWay) {
 			t.Fatalf("ath_1's put %d: %v", i, err)
 		}
 	}
@@ -498,7 +568,7 @@ func TestOneAthanorAskingForSeventeen(t *testing.T) {
 			t.Fatalf("athanor %d's put: %v", i, err)
 		}
 	}
-	if _, err := s.Put(role, "ath_17", "lt_1", d, 0, false, []byte{}); !errors.Is(err, ErrBusy) {
+	if _, err := s.Put(role, "ath_17", "lt_1", d, 0, false, []byte{}); !errors.Is(err, ErrFull) {
 		t.Fatalf("a put past %d: %v", MaxPuts, err)
 	}
 	if len(s.puts) != MaxPuts {

@@ -15,8 +15,9 @@ import (
 // handlePacks answers a packs_hold or a packs_put of the kept role, which
 // alone keeps homes and so packs: another role's, a keeper given no
 // --kept-homes, and a put whose store's folder cannot be made, are refused
-// as CodeUnavailable, as is a put begun while one of its athanor, or
-// packview.MaxPuts, are under way. A put is its client's: the client's end
+// as CodeUnavailable, as is a put begun while packview.MaxPuts are under
+// way; one begun while another of its athanor is under way is refused as
+// CodePacksBusy. A put is its client's: the client's end
 // drops every put it had in progress and refuses every later one
 // (endClient).
 func (s *server) handlePacks(c *client, req *protocol.Request) {
@@ -45,7 +46,10 @@ func (s *server) handlePacks(c *client, req *protocol.Request) {
 		case errors.Is(err, packview.ErrNoStore):
 			s.log.Error("packs_put %s refused: %v", req.ID, err)
 			s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
-		case errors.Is(err, packview.ErrBusy):
+		case errors.Is(err, packview.ErrUnderWay):
+			s.log.Info("packs_put %s refused: %v", req.ID, err)
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodePacksBusy))
+		case errors.Is(err, packview.ErrFull):
 			s.log.Warn("packs_put %s refused: %v", req.ID, err)
 			s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		case errors.Is(err, packview.ErrRefused):
