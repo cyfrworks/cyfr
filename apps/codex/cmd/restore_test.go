@@ -1781,7 +1781,9 @@ func TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			r := &restorer{}
+			// A snapshot that holds no seccomp profile: publishCompose puts
+			// none in place.
+			r := &restorer{snap: &snapshotFiles{dir: t.TempDir()}}
 			args, err := r.stagedComposeArgs("config", "--format", "json")
 			if err != nil {
 				t.Fatal(err)
