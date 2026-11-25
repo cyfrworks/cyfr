@@ -134,6 +134,12 @@
 #       The contents of the messages of the person's thread THREAD_ID, in
 #       order, as the storage's own door reads them.
 #
+#   session_thread_read SESSION_TOKEN THREAD_ID
+#       The same read under the session SESSION_TOKEN, by its own actor, as
+#       a request of that session reads: the session established as a
+#       request establishes it (`Sanctum.Caller.establish/1`). Answers the
+#       session's person and the contents.
+#
 #   console SESSION_TOKEN TOOL ARGUMENTS_JSON
 #       TOOL called as the console calls it for the session's person
 #       (`PrismWeb.Ops.call_tool/3`, through the gate): a proxied
@@ -967,5 +973,10 @@ fn args ->
       actor = Sanctum.Context.actor(person_ctx.(user_id))
       messages = Arca.ThreadStorage.messages(actor, thread_id)
       answer.(%{contents: Enum.map(messages, & &1.content)})
+
+    ["session_thread_read", token, thread_id] ->
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      messages = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread_id)
+      answer.(%{user_id: ctx.user_id, contents: Enum.map(messages, & &1.content)})
   end
 end

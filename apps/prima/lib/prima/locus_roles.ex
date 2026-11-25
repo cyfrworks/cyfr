@@ -62,6 +62,12 @@ defmodule Prima.LocusRoles do
   is a member; every other role has none (`nil`). The root is root's and
   that group's, mode 1773.
 
+  The role whose sessions run in a person's machine where the host has KVM,
+  the backends role, names the machines' folder `guest_root` and the compose
+  volume `guest_volume` mounted there: the image's programs as one squashfs
+  the keeper makes, and each machine's sockets (the keeper's package vm);
+  every other role has none (`nil`).
+
   A role's `memory` is what its process holds of its own: the bounds of
   what it counts (`Locus.Output`), `unread` (the backends role's alone,
   `nil` for the others) and `answering`, and the figures of what it holds
@@ -160,6 +166,8 @@ defmodule Prima.LocusRoles do
           kept_uids: Range.t() | nil,
           kept_group: String.t() | nil,
           kept_gid: pos_integer() | nil,
+          guest_root: String.t() | nil,
+          guest_volume: String.t() | nil,
           memory: %{
             unread: pos_integer() | nil,
             answering: pos_integer(),
@@ -223,6 +231,8 @@ defmodule Prima.LocusRoles do
       kept_uids: nil,
       kept_group: nil,
       kept_gid: nil,
+      guest_root: nil,
+      guest_volume: nil,
       memory: %{
         unread: nil,
         answering: 16_777_216,
@@ -252,6 +262,8 @@ defmodule Prima.LocusRoles do
       kept_uids: nil,
       kept_group: nil,
       kept_gid: nil,
+      guest_root: nil,
+      guest_volume: nil,
       memory: %{
         unread: nil,
         answering: 8_388_608,
@@ -281,6 +293,8 @@ defmodule Prima.LocusRoles do
       kept_uids: 40_001..49_999,
       kept_group: "locus",
       kept_gid: 10_001,
+      guest_root: "/var/lib/locus/guest",
+      guest_volume: "guest",
       memory: %{
         unread: 67_108_864,
         answering: 27_262_976,
