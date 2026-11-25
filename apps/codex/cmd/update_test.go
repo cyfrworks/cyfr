@@ -1280,7 +1280,8 @@ func TestUpdateWritesTheReleasesComposeFile(t *testing.T) {
 // old Locus service stops with the rest; the networks the old file
 // declares and the new one does not are removed after the stop and the
 // snapshot and before the switch, each after this project's containers on
-// it, by its compose labels, and no other network; and .env loses
+// it, by its compose labels, and no other network; the offer names each
+// image that changes, never an old service; and .env loses
 // CYFR_LOCUS_BUILDS_URL, which this release does not read, takes the new
 // shipped CYFR_PRIVATE_EGRESS_TARGETS, keeps the builds key, and a worker
 // list the person set naming locus-runtime is left and reported by its key
@@ -1366,6 +1367,8 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL.\n",
 		"Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_PRIVATE_EGRESS_TARGETS=locus.\n",
 		"Removed the networks release 0.8.0 declared and release 0.9.0 does not: locus-backends, locus-builds, locus-runtime.\n",
+		"Its images change:\n  ghcr.io/cyfrworks/cyfr: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n" +
+			"  ghcr.io/cyfrworks/cyfr-locus: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n  caddy: ",
 		"These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
 			"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: write wrk_locus=http://locus:4200 there, release 0.9.0's shipped value\n",
 		"docker-compose.yml is now release 0.9.0's own file; the one it replaced, with any edits you made to it, is " + filepath.Join(s.snapshotDir(), "compose") + ", to copy back from what you still need.\n",
@@ -1374,7 +1377,7 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 			t.Errorf("the update said %d times %q:\n%s", n, said, out)
 		}
 	}
-	for _, unsaid := range []string{editedOffer, "http://locus-runtime:4200", "stopped locus-runtime in "} {
+	for _, unsaid := range []string{editedOffer, "http://locus-runtime:4200", "stopped locus-runtime in ", "  locus-runtime: "} {
 		if strings.Contains(out, unsaid) {
 			t.Errorf("the update said %q:\n%s", unsaid, out)
 		}
@@ -2704,8 +2707,8 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 			for _, line := range []string{
 				"This CYFR is on release 0.8.0; this cyfr is release 0.9.0.\n",
 				"Updating it stops the stack, snapshots it into backups/, replaces docker-compose.yml with release 0.9.0's own, the snapshot keeping this one with any edits you made to it, and starts it. Its images change:\n",
-				"  cyfr: ghcr.io/cyfrworks/cyfr:0.8.0@sha256:" + strings.Repeat("c", 12) + "… → ghcr.io/cyfrworks/cyfr:0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n",
-				"  locus: ghcr.io/cyfrworks/cyfr-locus:latest → ghcr.io/cyfrworks/cyfr-locus:0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n",
+				"  ghcr.io/cyfrworks/cyfr: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n",
+				"  ghcr.io/cyfrworks/cyfr-locus: latest → 0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n",
 				"Read the release notes first: https://github.com/cyfrworks/cyfr/releases/tag/0.9.0\n",
 			} {
 				if !strings.Contains(out.String(), line) {

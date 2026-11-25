@@ -69,7 +69,7 @@ The program: when the newest release is newer than this one, cyfr update install
 The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is not switched again, with no stop and no snapshot: its stack is started as 'cyfr up' starts it and waited for whole, as step 6 waits, so an update run again after one whose services did not come up waits again; and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before the question and before the stack's lock, so the refusal changes nothing (step 2): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, one without a schema fingerprint (any release's before the fingerprint was carried), or no network access to it, refuses.
-2. Read docker-compose.yml, which the release's own replaces at the switch (step 6). It must hold the bundled stack: a service named cyfr and a service, under any name, whose image is ghcr.io/cyfrworks/cyfr-locus; one without either refuses, naming 'cyfr init --force'. The offer names each image line that changes, and each image line that names no managed image (ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale), which the release's file does not keep. Then read the schema fingerprint and the release of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse a fingerprint other than the manifest's, a release newer than this one or an answer that does not read. Then compare docker-compose.yml with the one that release shipped, read from its verified scaffold, the image lines aside: a file you changed is said before anything stops, its differing lines (at most 12, no value of an environment line), that going on writes the release's file and the snapshot keeps yours, and, in a sentence of its own, each managed service whose volumes differ, since the stack would start without the data the folders you mount there hold. The update then asks 'Replace docker-compose.yml with release <version>'s and update this CYFR?', the answer defaulting to no; --yes does not answer it, and with no terminal to ask on the update refuses with the same words. Nothing of your file is merged into the release's.
+2. Read docker-compose.yml, which the release's own replaces at the switch (step 6). It must hold the bundled stack: a service named cyfr and a service, under any name, whose image is ghcr.io/cyfrworks/cyfr-locus; one without either refuses, naming 'cyfr init --force'. The offer names each managed image that changes, by its repository, and each image line that names no managed image (ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale), which the release's file does not keep. Then read the schema fingerprint and the release of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse a fingerprint other than the manifest's, a release newer than this one or an answer that does not read. Then compare docker-compose.yml with the one that release shipped, read from its verified scaffold, the image lines aside: a file you changed is said before anything stops, its differing lines (at most 12, no value of an environment line), that going on writes the release's file and the snapshot keeps yours, and, in a sentence of its own, each managed service whose volumes differ, since the stack would start without the data the folders you mount there hold. The update then asks 'Replace docker-compose.yml with release <version>'s and update this CYFR?', the answer defaulting to no; --yes does not answer it, and with no terminal to ask on the update refuses with the same words. Nothing of your file is merged into the release's.
 3. While the stack still runs: read its configuration, naming the storage root it snapshots, fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts, its .env.example and its docker-compose.yml) without writing them, pull every image the release's docker-compose.yml manages by the manifest's digest, then read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays). A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses. Then, on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the AppArmor profile built into this cyfr, by its name, which carries its content, offer it as 'cyfr init' does, before anything is changed: declined, the stack runs on as it was.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
@@ -635,10 +635,8 @@ func (u *updater) change() (text, edits, none string, err error) {
 		fmt.Fprintf(&b, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
 	}
 	fmt.Fprintf(&b, "Updating it stops the stack, snapshots it into backups/, replaces docker-compose.yml with release %s's own, the snapshot keeping this one with any edits you made to it, and starts it. Its images change:\n", u.version)
-	for _, line := range plan.managed {
-		if line.value != line.replacement {
-			fmt.Fprintf(&b, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
-		}
+	for _, change := range imageChanges(plan.managed) {
+		fmt.Fprintf(&b, "  %s\n", change)
 	}
 	if len(plan.overrides) > 0 {
 		fmt.Fprintf(&b, "Image lines cyfr update does not manage, which release %s's docker-compose.yml does not keep:\n", u.version)
@@ -942,6 +940,28 @@ func shortDigest(ref string) string {
 		return ref[:i+8+12] + "…"
 	}
 	return ref
+}
+
+// imageChanges answers each change of a managed image the switch makes, by
+// image: its repository as the file writes it, then its reference before
+// and after, each change once, in the order the file first names it. No
+// service is named: the release's file may run the images under other
+// names.
+func imageChanges(managed []imageLine) []string {
+	var changes []string
+	for _, line := range managed {
+		if line.value == line.replacement {
+			continue
+		}
+		beside := func(ref string) string {
+			return shortDigest(strings.TrimPrefix(strings.TrimPrefix(ref, line.repository), ":"))
+		}
+		change := line.repository + ": " + beside(line.value) + " → " + beside(line.replacement)
+		if !slices.Contains(changes, change) {
+			changes = append(changes, change)
+		}
+	}
+	return changes
 }
 
 // ---- the compose file ------------------------------------------------------
