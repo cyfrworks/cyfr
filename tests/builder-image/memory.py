@@ -240,7 +240,7 @@ function measure(spawn, phase, before = "") {
   const entry = { phase, id, sent_ms: Date.now() - started };
   measures.set(id, { spawn, entry });
   spawn.measures.push(entry);
-  channel.write(before + JSON.stringify({ v: 5, type: "measure", id, place: spawn.place }) + "\n");
+  channel.write(before + JSON.stringify({ v: 6, type: "measure", id, place: spawn.place }) + "\n");
 }
 
 function measured(spawn, entry, reply) {
@@ -252,7 +252,7 @@ function measured(spawn, entry, reply) {
   if (entry.phase !== "running" || spawn.replies.some((r) => r.type === "released")) return;
   const readAt = reply.type === "measured" ? entry.at_ms - reply.age_ms : -Infinity;
   if (spawn.holding_ms !== undefined && readAt > spawn.holding_ms + scenario.measure.margin_ms) {
-    const release = { v: 5, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
+    const release = { v: 6, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
     measure(spawn, "release", JSON.stringify(release) + "\n");
   } else {
     setTimeout(() => measure(spawn, "running"), scenario.measure.poll_ms);
@@ -263,7 +263,7 @@ function settle(spawn, reply) {
   spawn.replies.push({ ...reply, at_ms: Date.now() - started, seq });
   if (reply.type === "placed") {
     const request = {
-      v: 5, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
+      v: 6, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
       attach: { path: attach, token: spawn.token },
     };
     if ("memory_bytes" in spawn) request.memory_bytes = spawn.memory_bytes;
@@ -327,7 +327,7 @@ server.listen(attach, () => {
     }
   });
   for (const s of spawns) {
-    const place = { v: 5, type: "place", id: s.place, kind: "build" };
+    const place = { v: 6, type: "place", id: s.place, kind: "build" };
     if (s.athanor) place.athanor = s.athanor;
     channel.write(JSON.stringify(place) + "\n");
   }

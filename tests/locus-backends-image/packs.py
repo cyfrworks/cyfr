@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (  # noqa: E402
     KEPT_ROOT, RELEASE_USER, STATUSES, VERSION, Stack, expect, new_lifetime, owner_of, probe, require_docker,
 )
+from imagesuite import read_output  # noqa: E402
 
 OWNER, OTHER = owner_of("packs"), owner_of("other")
 HOME, OTHER_HOME, PLAIN_HOME = "mcp_packs-home", "mcp_other-home", "mcp_packs-plain"
@@ -155,13 +156,14 @@ def main():
         expect(len(mount) == 1 and " ro," in mount[0], "the folder is a read-only mount of the space", mount)
 
         # ————— the warm path: held, nothing put, the same copy —————
-        before = stack.exec(f"stat -c '%i %Y' {generation}").stdout
+        stamp = f"stat -c '%i %Y' {generation}"
+        before = read_output(stack.exec(stamp), "the copy's inode and time")
         state, puts, second = started(c, OWNER, "b", HOME, digest)
         expect(state == "held" and puts == [], "a second start is held and puts nothing")
         again = run(second, "cat /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md")
         expect(again["stdout"] == FILES["pstack/skills/poteto-mode/SKILL.md"][0].decode(),
                "the second session reads the same packs", again)
-        expect(stack.exec(f"stat -c '%i %Y' {generation}").stdout == before and before,
+        expect(read_output(stack.exec(stamp), "the copy's inode and time again") == before and before,
                "the warm start moved no file of the copy", before)
 
         # ————— another person, and a row that loads none —————
@@ -184,11 +186,13 @@ def main():
         expect("No such file or directory" in seen["stdout"], "a row that loads no packs sees no folder", seen)
 
         # ————— the copy is the keeper's alone —————
-        owned = stack.exec(f"stat -c '%a %u' {KEPT_ROOT}/.packs {KEPT_ROOT}/.packs/{person} {generation}").stdout.split()
+        owned = read_output(stack.exec(f"stat -c '%a %u' {KEPT_ROOT}/.packs {KEPT_ROOT}/.packs/{person} {generation}"),
+                            "the copy's modes and owners").split()
         expect(owned == ["711", "0", "711", "0", "555", "0"],
                "the store, the person's folder and the generation are root's, 0711 and 0555", owned)
         listed = stack.exec(f"ls {KEPT_ROOT}/.packs", user=RELEASE_USER)
-        expect(listed.returncode != 0, f"{RELEASE_USER} cannot list the people's packs", listed.stdout + listed.stderr)
+        expect(listed.returncode != 0 and "Permission denied" in listed.stderr,
+               f"{RELEASE_USER} cannot list the people's packs", [listed.returncode, listed.stderr])
         print("ok: a person's packs are a read-only folder of their sessions' space, written once, the keeper's own")
     finally:
         stack.down()
