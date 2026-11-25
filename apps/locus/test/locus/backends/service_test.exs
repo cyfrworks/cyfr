@@ -75,7 +75,8 @@ defmodule Locus.Backends.ServiceTest do
           Kernel.send(test, {:preparing, self()})
           receive do: (:go -> {:ok, %{size: 64, free: 64, quarantined: 0}})
 
-        pool -> {:ok, %{size: pool["size"], free: pool["free"], quarantined: pool["quarantined"]}}
+        pool ->
+          {:ok, %{size: pool["size"], free: pool["free"], quarantined: pool["quarantined"]}}
       end
     end
 

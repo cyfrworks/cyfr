@@ -728,12 +728,6 @@ defmodule Opus.Programs.Box do
     {:noreply, state}
   end
 
-  # A box that stops of itself ends its opens' workers too: their link
-  # ends them only with an abnormal end of the box's.
-  @impl true
-  def terminate(_reason, state),
-    do: Enum.each(state.opens, fn {_ref, open} -> stop_worker(open) end)
-
   @impl true
   def format_status(status), do: StatusRedaction.format_status(status)
 
@@ -2004,9 +1998,10 @@ defmodule Opus.Programs.Box do
   # boot, and in a process of its own, monitored here, whose wait reaches
   # just past the deadline, or to the connect timeout where that is later:
   # the box's own timer ends the open at the deadline either way. That
-  # process is the open's worker: linked to the box, so it ends with it,
-  # and stopped at every other end of its open (`stop_worker/1`), so no
-  # hold, put or open of a start already over is ever sent.
+  # process is the open's worker: a watcher of its own ends it with the box
+  # (`tether/2`), and the box stops it at every other end of its open
+  # (`stop_worker/1`), so no hold, put or open of a start already over is
+  # ever sent. Nothing links them: a worker lost leaves the box running.
   defp start_open(state, %{lifetime: lifetime} = open) do
     cond do
       not holds_slot?(state, lifetime) ->
@@ -2039,10 +2034,9 @@ defmodule Opus.Programs.Box do
         timer = Process.send_after(self(), {:open_deadline, ref}, left)
 
         {worker, mref} =
-          Process.spawn(
-            fn -> send(box, {:session_opened, ref, opened(grant, params)}) end,
-            [:link, :monitor]
-          )
+          spawn_monitor(fn -> send(box, {:session_opened, ref, Session.open(grant, params)}) end)
+
+        tether(worker, box)
 
         %{
           state
@@ -2052,20 +2046,23 @@ defmodule Opus.Programs.Box do
     end
   end
 
-  # The worker's open, which never ends the worker abnormally: a worker
-  # linked to the box that crashed would take the box with it.
-  defp opened(grant, params) do
-    Session.open(grant, params)
-  catch
-    kind, reason ->
-      Logger.error(Exception.format(kind, reason, __STACKTRACE__))
-      {:error, :backends_unavailable}
+  # A watcher that ends `worker` once `box` ends, however it ends, and
+  # itself once the worker has.
+  defp tether(worker, box) do
+    spawn(fn ->
+      box_ref = Process.monitor(box)
+      worker_ref = Process.monitor(worker)
+
+      receive do
+        {:DOWN, ^box_ref, :process, _box, _why} -> Process.exit(worker, :kill)
+        {:DOWN, ^worker_ref, :process, _worker, _why} -> :ok
+      end
+    end)
   end
 
-  # An open over before its worker answered: the worker is unlinked and
-  # ended, and its end, seen here, answers no one.
+  # An open over before its worker answered: the worker is ended, and its
+  # end, seen here, answers no one.
   defp stop_worker(%{worker: worker}) when is_pid(worker) do
-    Process.unlink(worker)
     Process.exit(worker, :kill)
     :ok
   end
