@@ -95,8 +95,10 @@ func TestJoinWithAKeyEnrolsTheMachine(t *testing.T) {
 }
 
 // homeState is what a refused join must leave as it was: every file under
-// .cyfr/ with its bytes, the fake daemon's containers, volumes (each node's
-// identity among them) and networks, and the number of docker calls made.
+// .cyfr/ with its bytes, the engine's lock file by its presence alone (on
+// Windows the engine's own lock makes its bytes unreadable while it is
+// held), the fake daemon's containers, volumes (each node's identity among
+// them) and networks, and the number of docker calls made.
 func homeState(t *testing.T, h *testHome) string {
 	t.Helper()
 	files := map[string]string{}
@@ -104,6 +106,10 @@ func homeState(t *testing.T, h *testHome) string {
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
+		}
+		if p == filepath.Join(root, lockFile) {
+			files[p] = "<present>"
+			return nil
 		}
 		data, err := os.ReadFile(p)
 		files[p] = string(data)
