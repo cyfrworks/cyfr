@@ -153,6 +153,10 @@ var (
 // cyfr.example.com, builds on.
 const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n"
 
+// stackImage is the image the scenarios' cyfr service runs, through which
+// a snapshot reads the storage.
+const stackImage = "ghcr.io/cyfrworks/cyfr:0.8.0"
+
 // updateScenario is one update's project directory, fake docker and fake
 // engine.
 type updateScenario struct {
@@ -302,6 +306,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 		environment[k] = v
 	}
 	config, _ := json.Marshal(map[string]any{"services": map[string]any{"cyfr": map[string]any{
+		"image":       stackImage,
 		"environment": environment,
 		"volumes": []map[string]any{
 			{"type": "bind", "source": filepath.Join(s.project, "data"), "target": "/app/data", "bind": map[string]any{}},
@@ -614,6 +619,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"stop",
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
+		strings.Join(stackReadArgs(stackImage, []composeMount{{Type: "bind", Source: filepath.Join(s.project, "data"), Target: "/app/data"}}, stackRead{dir: "/app/data", members: []string{"."}}), " "),
 		"ENGINE release",
 		"SCAFFOLD WRITE",
 		"ENGINE start update",
@@ -1106,7 +1112,7 @@ func TestEveryDockerCallCarriesItsDeadline(t *testing.T) {
 		switch {
 		case c.Args[0] == "pull":
 			return pullTimeout
-		case strings.Contains(line, "pg_dump") || strings.Contains(line, "pg_restore"):
+		case strings.Contains(line, "pg_dump") || strings.Contains(line, "pg_restore") || stackReadCall(c.Args):
 			return dumpTimeout
 		case slices.Contains(c.Args, "stop"):
 			return stopTimeout

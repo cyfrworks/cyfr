@@ -549,6 +549,11 @@ func (r fakeRunner) Run(ctx context.Context, c access.Call) (access.Result, erro
 		r.s.calls = append(r.s.calls, c)
 		r.s.mu.Unlock()
 	}
+	// A snapshot's read through the stack is answered as its container
+	// would answer it, from the scenario's binds.
+	if stackReadCall(c.Args) {
+		return standInStackRead(c)
+	}
 	if c.Deadline > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.Deadline)

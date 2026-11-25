@@ -276,46 +276,20 @@ func (u *updater) takeSnapshot(release string, managed []string) error {
 	c := u.config
 	var parts []string
 
-	switch c.adapter {
-	case "sqlite":
-		if err := copyFile(c.sqliteFile, filepath.Join(dir, "database")); err != nil {
-			return err
-		}
-		parts = append(parts, "database")
-		if info, err := os.Stat(c.sqliteFile + "-wal"); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			if err := copyFile(c.sqliteFile+"-wal", filepath.Join(dir, "database-wal")); err != nil {
-				return err
-			}
-			parts = append(parts, "database-wal")
-		}
-	case "postgres":
+	// The storage is read through the stack (readThroughStack), and a
+	// PostgreSQL database dumped from its server.
+	read, err := u.readThroughStack(dir)
+	if err != nil {
+		return err
+	}
+	if c.adapter == "postgres" {
 		if err := u.dumpPostgres(filepath.Join(dir, "database")); err != nil {
 			return err
 		}
 		parts = append(parts, "database")
 	}
-
-	if c.storage == "local" {
-		exclude := map[string]bool{}
-		if c.sqliteFile != "" {
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				exclude[filepath.Clean(c.sqliteFile+suffix)] = true
-			}
-		}
-		// The access engine's state is no part of any snapshot, whatever
-		// mount reaches it: a restored home's lock, journal and receipts
-		// are the machine's own, never the backup's.
-		if state, err := filepath.Abs(".cyfr"); err == nil {
-			if resolved, err := filepath.EvalSymlinks(state); err == nil {
-				state = resolved
-			}
-			exclude[state] = true
-		}
-		if err := copyStorage(c.storageMounts, filepath.Join(dir, "storage"), exclude, u.out); err != nil {
-			return err
-		}
-		parts = append(parts, "storage")
-	} else {
+	parts = append(parts, read...)
+	if c.storage != "local" {
 		fmt.Fprintln(u.out, s3OutsideSnapshot)
 	}
 
