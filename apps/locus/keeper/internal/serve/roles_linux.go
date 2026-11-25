@@ -384,12 +384,20 @@ func makeRunDirs(root string, roles []*role) (err error) {
 
 // makeOwnDir makes path a 0700 folder of uid and gid as they would, on a
 // thread that takes their file ids and ends with its goroutine, never
-// unlocked, so no other goroutine runs with them. A folder already there is
-// made 0700 only where it is theirs.
+// unlocked, so no other goroutine runs with them. The thread takes the
+// keeper's own file ids back before its goroutine ends: a goroutine that
+// ends locked on the process's main thread leaves that thread parked, not
+// gone, and the main thread's ids are the keeper's as /proc shows them. A
+// folder already there is made 0700 only where it is theirs.
 func makeOwnDir(path string, uid, gid int) error {
 	done := make(chan error, 1)
+	ownUID, ownGID := unix.Getuid(), unix.Getgid()
 	go func() {
 		runtime.LockOSThread()
+		defer func() {
+			_ = unix.Setfsuid(ownUID)
+			_ = unix.Setfsgid(ownGID)
+		}()
 		_ = unix.Setfsgid(gid)
 		_ = unix.Setfsuid(uid)
 		// setfsuid and setfsgid answer the ids before, never an error: the
