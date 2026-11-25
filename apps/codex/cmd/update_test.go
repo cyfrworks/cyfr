@@ -1255,6 +1255,79 @@ func TestUpdateWritesTheReleasesComposeFile(t *testing.T) {
 	}
 }
 
+// An install of the three-container release, its docker-compose.yml and
+// .env.example as that release shipped them (testdata/three-container),
+// updated to this tree's: no old service's name refuses it; its compose
+// file, the release's own, is replaced without a word about edits; each
+// old Locus service stops with the rest; and .env loses
+// CYFR_LOCUS_BUILDS_URL, which this release does not read, takes the new
+// shipped CYFR_PRIVATE_EGRESS_TARGETS, keeps the builds key, and a worker
+// list the person set naming locus-runtime is left and reported by its key
+// and its line in .env as the update leaves it, with what to write there,
+// never its value.
+func TestUpdateFromThreeContainers(t *testing.T) {
+	old := lastReleaseCompose(t)
+	s := newUpdateScenario(t, []byte(old), nil)
+	s.composes = map[string]string{"0.8.0": old}
+	s.examples = map[string]string{
+		"0.8.0":     read(t, filepath.Join(packageDir, "testdata", "three-container", "env.example")),
+		testVersion: readShippedTemplate(t),
+	}
+	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-builds-guard\nlocus-backends\n")
+	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+	s.edit(".env", scenarioEnv+
+		"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"+
+		"CYFR_LOCUS_BUILDS_KEY="+buildsKey+"\n"+
+		"CYFR_PRIVATE_EGRESS_TARGETS=locus-backends\n"+
+		"CYFR_LOCUS_RUNTIME_WORKERS=wrk_locus=http://locus-runtime:4200\n")
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); got != string(switched(shippedCompose(t))) {
+		t.Errorf("the switched docker-compose.yml is not the release's, pinned:\n%s", got)
+	}
+	log := s.log()
+	for _, call := range []string{profiles + "stop caddy", profiles + "stop cyfr", profiles + "stop"} {
+		if !slices.Contains(log, call) {
+			t.Errorf("the update did not run %q:\n%s", call, strings.Join(log, "\n"))
+		}
+	}
+	got, err := access.ReadEnvValues(filepath.Join(s.project, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, held := got["CYFR_LOCUS_BUILDS_URL"]; held {
+		t.Error(".env still holds CYFR_LOCUS_BUILDS_URL")
+	}
+	for name, want := range map[string]string{
+		"CYFR_LOCUS_BUILDS_KEY":       buildsKey,
+		"CYFR_PRIVATE_EGRESS_TARGETS": "locus",
+		"CYFR_LOCUS_RUNTIME_WORKERS":  "wrk_locus=http://locus-runtime:4200",
+	} {
+		if got[name] != want {
+			t.Errorf(".env's %s is %q, want %q", name, got[name], want)
+		}
+	}
+	for _, said := range []string{
+		"\nstopped locus-backends-guard, locus-runtime, locus-builds, locus-builds-guard, locus-backends in ",
+		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL.\n",
+		"Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_PRIVATE_EGRESS_TARGETS=locus.\n",
+		"These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
+			"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: write wrk_locus=http://locus:4200 there, release 0.9.0's shipped value\n",
+		"docker-compose.yml is now release 0.9.0's own file; the one it replaced, with any edits you made to it, is " + filepath.Join(s.snapshotDir(), "compose") + ", to copy back from what you still need.\n",
+	} {
+		if n := strings.Count(out, said); n != 1 {
+			t.Errorf("the update said %d times %q:\n%s", n, said, out)
+		}
+	}
+	for _, unsaid := range []string{editedOffer, "http://locus-runtime:4200", "stopped locus-runtime in "} {
+		if strings.Contains(out, unsaid) {
+			t.Errorf("the update said %q:\n%s", unsaid, out)
+		}
+	}
+}
+
 // The bundled stack is a service named cyfr and a service running the
 // Locus image, under any name: a compose file without either is refused
 // before any docker call, naming `cyfr init --force`, and one with both

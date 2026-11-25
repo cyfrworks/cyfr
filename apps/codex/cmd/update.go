@@ -73,7 +73,7 @@ The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what cha
 3. While the stack still runs: read its configuration, naming the storage root it snapshots, fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts, its .env.example and its docker-compose.yml) without writing them, pull every image the release's docker-compose.yml manages by the manifest's digest, then read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays). A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses. Then, on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the AppArmor profile built into this cyfr, by its name, which carries its content, offer it as 'cyfr init' does, before anything is changed: declined, the stack runs on as it was.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files and change .env by the .env.example the release this CYFR ran shipped and this release's, both read from the releases' verified scaffolds (the install's own .env.example is the one 'cyfr init' laid down, which no update replaces): remove each setting the old one shipped that the new one no longer declares, the names said (a setting the old .env.example never shipped is yours and stays); set each line that holds the old one's shipped value, where the new one ships another, to the new value, the names and values said; and name, leaving them as you set them, the lines that name as a host a service of the old release's docker-compose.yml that this release's does not run, in any form (a URL, a host and port, a list of them or of id=URL items), by key, line and the service named, never the value, with this release's shipped value for the name or the advice to name a service it runs. A setting assigned more than once is yours: none of its lines changes, and it is named with its lines. No other value you set changes, and a CYFR on no release version changes none. Then write the release's docker-compose.yml in place of the project's, its managed image lines pinned to <image>:<version>@<digest> (Caddy and Tailscale keep their tags), and say once that the file it replaced, with any edits of yours, is the snapshot's compose part; a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again under its own file. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health, then, under the head that start read, for every service of the stack it started, within one deadline 150 s on: healthy where it has a health check, running where it has none. A failure from here leaves the stack stopped and prints the services that did not come up with 'docker compose logs <service>', the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
+6. Write the release's scaffold files and change .env by the .env.example the release this CYFR ran shipped and this release's, both read from the releases' verified scaffolds (the install's own .env.example is the one 'cyfr init' laid down, which no update replaces): remove each setting the old one shipped that the new one no longer declares, the names said (a setting the old .env.example never shipped is yours and stays); set each line that holds the old one's shipped value, where the new one ships another, to the new value, the names and values said; and name, leaving them as you set them, the lines that name as a host a service of the old release's docker-compose.yml that this release's does not run, in any form (a URL, a host and port, a list of them or of id=URL items), by key, line in .env as the update leaves it and the service named, never the value, with this release's shipped value for the name, set or commented in its .env.example, or the advice to name a service it runs. A setting assigned more than once is yours: none of its lines changes, and it is named with its lines. No other value you set changes, and a CYFR on no release version changes none. Then write the release's docker-compose.yml in place of the project's, its managed image lines pinned to <image>:<version>@<digest> (Caddy and Tailscale keep their tags), and say once that the file it replaced, with any edits of yours, is the snapshot's compose part; a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again under its own file. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health, then, under the head that start read, for every service of the stack it started, within one deadline 150 s on: healthy where it has a health check, running where it has none. A failure from here leaves the stack stopped and prints the services that did not come up with 'docker compose logs <service>', the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would; an update killed in that time leaves the start of the old stack to the next cyfr command that takes the lock, which says so. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -1896,21 +1896,35 @@ func (u *updater) writeScaffold() error {
 		fmt.Fprintf(u.out, "Set in .env to release %s's shipped values the settings that held release %s's: %s.\n",
 			u.version, u.oldRelease, strings.Join(set, ", "))
 	}
+	if len(u.stale) == 0 && len(u.twice) == 0 {
+		return nil
+	}
+	// The lines are said as .env holds them now: a line the edit removed
+	// moves every line after it.
+	text, err := os.ReadFile(".env")
+	if err != nil {
+		return fmt.Errorf("Reading .env failed (%v)", err)
+	}
+	lines, err := access.EnvLines(text)
+	if err != nil {
+		return fmt.Errorf("Reading .env failed (%v)", err)
+	}
 	if len(u.stale) > 0 {
 		fmt.Fprintf(u.out, "These .env settings name a service release %s's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n", u.version)
 		for _, line := range u.stale {
+			at := lines[line.name][len(lines[line.name])-1]
 			if line.write != "" {
-				fmt.Fprintf(u.out, "  %s, line %d, names %s: write %s there, release %s's shipped value\n", line.name, line.line, line.host, line.write, u.version)
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: write %s there, release %s's shipped value\n", line.name, at, line.host, line.write, u.version)
 			} else {
-				fmt.Fprintf(u.out, "  %s, line %d, names %s: name a service release %s's docker-compose.yml runs there\n", line.name, line.line, line.host, u.version)
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: name a service release %s's docker-compose.yml runs there\n", line.name, at, line.host, u.version)
 			}
 		}
 	}
 	if len(u.twice) > 0 {
 		fmt.Fprintln(u.out, "These .env settings are assigned more than once, so they are yours and cyfr update changed none of their lines:")
 		for _, line := range u.twice {
-			numbers := make([]string, len(line.lines))
-			for i, n := range line.lines {
+			numbers := make([]string, len(lines[line.name]))
+			for i, n := range lines[line.name] {
 				numbers[i] = strconv.Itoa(n)
 			}
 			at := strings.Join(numbers[:len(numbers)-1], ", ") + " and " + numbers[len(numbers)-1]
@@ -1927,6 +1941,27 @@ func (u *updater) writeScaffold() error {
 // envName is a setting's name as a .env.example declares it, set or
 // commented out: a person may set a commented one.
 var envName = regexp.MustCompile(`(?m)^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=`)
+
+// commentedExample is a .env.example's commented assignment, the
+// assignment itself after the comment's mark.
+var commentedExample = regexp.MustCompile(`(?m)^[ \t]*#[ \t]*((?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=.*)$`)
+
+// commentedValues answers the values a .env.example's commented
+// assignments would set, each read as the line alone would be once
+// uncommented; a line that does not read so is prose and gives none.
+func commentedValues(example []byte) map[string]string {
+	values := map[string]string{}
+	for _, m := range commentedExample.FindAllSubmatch(example, -1) {
+		line, err := access.EnvValues([]byte(string(m[1]) + "\n"))
+		if err != nil {
+			continue
+		}
+		for name, value := range line {
+			values[name] = value
+		}
+	}
+	return values
+}
 
 func envNames(example []byte) map[string]bool {
 	names := map[string]bool{}
@@ -1953,7 +1988,8 @@ func envNames(example []byte) map[string]bool {
 //     a commented line ships no value.
 //   - Any other line that names, as a host, a service of the old
 //     release's docker-compose.yml that the new one does not run is the
-//     person's: it is left, and reported with what to write there.
+//     person's: it is left, and reported with what to write there, the
+//     new .env.example's value for it, set or commented.
 //   - A name assigned more than once is the person's: none of its lines
 //     changes, and one the rules above would change is reported.
 func (u *updater) planEnv() error {
@@ -1993,6 +2029,7 @@ func (u *updater) planEnv() error {
 		return fmt.Errorf("release %s's .env.example did not read (%v)", u.version, err)
 	}
 	declared := envNames(now)
+	commented := commentedValues(now)
 	oldCompose, _ := shipped.File("docker-compose.yml")
 	newCompose, _ := u.scaffold.File("docker-compose.yml")
 	gone := retiredServices(oldCompose, newCompose)
@@ -2007,7 +2044,7 @@ func (u *updater) planEnv() error {
 			// A name assigned more than once is the person's: the edit
 			// would remove every line but its last.
 			if retired || defaulted {
-				u.twice = append(u.twice, twiceLine{name: name, lines: at, retired: retired, write: next})
+				u.twice = append(u.twice, twiceLine{name: name, retired: retired, write: next})
 			}
 			continue
 		}
@@ -2026,7 +2063,11 @@ func (u *updater) planEnv() error {
 		}
 		for _, host := range hostsIn(value) {
 			if gone[host] {
-				u.stale = append(u.stale, staleLine{name: name, line: at[len(at)-1], host: host, write: newValues[name]})
+				write, ships := newValues[name]
+				if !ships {
+					write = commented[name]
+				}
+				u.stale = append(u.stale, staleLine{name: name, host: host, write: write})
 				break
 			}
 		}
@@ -2035,13 +2076,11 @@ func (u *updater) planEnv() error {
 }
 
 // staleLine is a .env line the person set that names a service the
-// release no longer runs: its name, its line, the service it names, and
-// the new release's shipped value for the name, "" when it ships none.
-// Its value is never said: a line that names a host may carry a
-// credential.
+// release no longer runs: its name, the service it names, and the new
+// release's shipped value for the name, "" when it ships none. Its value
+// is never said: a line that names a host may carry a credential.
 type staleLine struct {
 	name  string
-	line  int
 	host  string
 	write string
 }
@@ -2051,7 +2090,6 @@ type staleLine struct {
 // value (write), and leaves as the person wrote it.
 type twiceLine struct {
 	name    string
-	lines   []int
 	retired bool
 	write   string
 }
