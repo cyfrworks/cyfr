@@ -69,13 +69,9 @@ defmodule Prima.Operation do
   at most `longest_wait_ms/0`, the largest time a timer holds; a longer
   one is refused at its arguments in `wait_too_long/1`'s sentence.
 
-  A wake (`wake/1`), sent to the process that called the gate for such a
-  call, answers it early with `woken_answer/0`, but only once its
-  handler, past every check of its own, says it waits (`waiting/0`): a
-  wake before then is kept in that process's mailbox and answers the call
-  the moment the handler says so, and a handler refused before then
-  answers its refusal, so no order of admission and wake loses one or
-  answers early what the gate or the handler would refuse.
+  A wake answers such a call early with `woken_answer/0`, the gate's
+  doing once the call's handler says it waits
+  (`Sanctum.RunningTasks.wake/1`, `Sanctum.RunningTasks.waiting/0`).
   """
 
   alias Prima.Arg
@@ -148,34 +144,6 @@ defmodule Prima.Operation do
       "#{field} is further off than a wait holds, #{@longest_wait_ms} ms (about 49 days); " <>
         "make a schedule to be woken later instead"
 
-  @doc """
-  Wake the call that waits `claimer` runs through the gate
-  (`Sanctum.Dispatch`), the process that called the gate for it: it is
-  answered early (`woken_answer/0`) once its handler says it waits
-  (`waiting/0`), at once if it already has. A claimer running no such
-  call ignores it, and so does one that already answered.
-  """
-  @spec wake(pid()) :: :ok
-  def wake(claimer) when is_pid(claimer) do
-    send(claimer, {__MODULE__, :wake})
-    :ok
-  end
-
-  @doc """
-  Said by the handler of a call that waits, from its own process, once
-  every check of its own has passed and it is about to wait: from then a
-  wake (`wake/1`) answers the call early. Anywhere else it does nothing.
-  """
-  @spec waiting() :: :ok
-  def waiting do
-    case Process.get({__MODULE__, :claimer}) do
-      claimer when is_pid(claimer) -> send(claimer, {__MODULE__, :waiting, self()})
-      nil -> :ok
-    end
-
-    :ok
-  end
-
   @woken_answer "A message arrived, so this wait ended early. What it waited for goes on: " <>
                   "answer the message, and wait again if you still need to."
 
@@ -185,15 +153,6 @@ defmodule Prima.Operation do
   """
   @spec woken_answer() :: String.t()
   def woken_answer, do: @woken_answer
-
-  @doc false
-  # The gate, inside a waiting call's task before its handler runs: the
-  # process `waiting/0` tells.
-  @spec wakeable(pid()) :: :ok
-  def wakeable(claimer) when is_pid(claimer) do
-    Process.put({__MODULE__, :claimer}, claimer)
-    :ok
-  end
 
   @doc "The kinds of resource a `resource:` declaration may name."
   @spec resource_kinds() :: [resource_kind()]

@@ -379,7 +379,8 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Gate` is the gate a turn's tool calls pass. `Sanctum.Catalog` is the " <>
           "table's tool definitions, kinds and actions the assistant reads, and " <>
           "`Sanctum.Annotations` an action's declared kind and recovery. " <>
-          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and " <>
+          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and wakes " <>
+          "a call that waits when a post arrives (`wake/1`), and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
           "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
           "`Sanctum.SharedThreads` is the one place the person's own assistant meets a " <>
@@ -420,7 +421,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
         Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Refusals
-        Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.RegistryCredentials Sanctum.RunningTasks Sanctum.SignIn
         Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
@@ -446,6 +447,8 @@ defmodule Cyfr.Boundaries do
           "entries (`profiles/2`, `head_consent/2`). `Compendium` never names " <>
           "`Sanctum.Tenancy`. " <>
           "`Sanctum.Gate` is the gate the component domain's own calls pass. " <>
+          "`Sanctum.RunningTasks` is where `aqua.wait`'s handler says it waits, past " <>
+          "its own checks, so the gate answers the wait early only then (`waiting/0`). " <>
           "`Sanctum.Catalog` is the stream declarations a tincture's and a canvas's " <>
           "checks read and the kinds and actions an agent's tools read, and " <>
           "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
@@ -465,7 +468,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Gate Sanctum.IdentityFreshness
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy
-        Sanctum.Questions Sanctum.Refusals
+        Sanctum.Questions Sanctum.Refusals Sanctum.RunningTasks
         Sanctum.Session Sanctum.Shares Sanctum.SharedThreads Sanctum.Tenancy
         Sanctum.TinctureAccess Sanctum.Vault Sanctum.VaultReader
       ),
@@ -505,6 +508,9 @@ defmodule Cyfr.Boundaries do
           "and the fill is asked for when it is not. The settings roster reads the " <>
           "mint rate's bounds there (`mint_per_hour_range/0`), the one definition its " <>
           "validator and the mint's own check share. " <>
+          "`Sanctum.RunningTasks` is where `program.wait`'s handler (`Opus.Programs`) " <>
+          "says it waits, past its own checks, so the gate answers the wait early only " <>
+          "then (`waiting/0`). " <>
           "`Sanctum.Questions` decides a catalyst's ask and its wait for the host's side " <>
           "of the call (`Opus.Host.Question`: `find/4`, `ask/4`, `wait/4`), which checks " <>
           "the attempt is live and paces the asks, and hears the questions a write that " <>
@@ -2071,7 +2077,17 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
-    "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
+    # `wake/1`: a turn's loop wakes a call that waits when a post arrives
+    # (`Aqua.Loop`); `waiting/0`: that call's handler says it waits, past
+    # its own checks (`Compendium.Providers.Aqua`, `Opus.Programs`), so the
+    # gate answers it early only then (`Sanctum.Dispatch`).
+    "Sanctum.RunningTasks" => [
+      cancel: 1,
+      cancel_handle: 1,
+      release_handle: 1,
+      waiting: 0,
+      wake: 1
+    ],
     # A catalyst's ask is decided and waited on for the host's side of the
     # call (`Opus.Host.Question`), and a run's end announces the questions
     # it closed (`Opus.Record`); a person's open questions are attention's

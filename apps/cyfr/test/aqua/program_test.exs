@@ -5792,6 +5792,7 @@ defmodule Aqua.ProgramTest do
       terminal = held!(session)
       quiet!(loop.pid)
       Task.shutdown(loop, :brutal_kill)
+      given_back!()
 
       # The run lost with its holder, as a restart of CYFR loses it: its
       # process stopped by its supervisor, as the boot's end stops it.
@@ -5822,6 +5823,7 @@ defmodule Aqua.ProgramTest do
       waiting!(ctx, turn)
       quiet!(loop.pid)
       Task.shutdown(loop, :brutal_kill)
+      given_back!()
       assert {:ok, [{:adopt, _}]} = Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
 
       _adopting =
@@ -5897,6 +5899,7 @@ defmodule Aqua.ProgramTest do
 
       assert Enum.count(result_rows(ctx, turn), &(&1 == waited)) == 1
       assert length(result_rows(ctx, turn)) == 2
+      given_back!()
     end
 
     @tag harness: :program
@@ -6028,6 +6031,7 @@ defmodule Aqua.ProgramTest do
       assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
       Prima.Test.Wait.wait_until(fn -> charges.() == {:ok, []} end, 10_000)
       assert %{charged: 0} = Arca.BudgetReservations.lookup(actor, live.budget_id)
+      given_back!()
     end
 
     # A time no timer holds is refused at the arguments, in one sentence,
@@ -6107,6 +6111,7 @@ defmodule Aqua.ProgramTest do
       assert {:failed, _line} = Task.await(loop, 30_000)
       assert %{dispatch_state: "closed", outcome: outcome} = step_by_key(ctx, turn, key)
       assert outcome != "ok"
+      given_back!()
     end
   end
 
@@ -9432,6 +9437,18 @@ defmodule Aqua.ProgramTest do
   end
 
   # An `aqua.wait`'s handler sits in its wait, past the gate's admission.
+  # Every holder's death the guard was sent is taken, and the give-backs
+  # it started have ended, so none reaches the store after the test.
+  defp given_back! do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        :sys.get_state(Sanctum.Authority.BudgetGuard).guards == %{} and
+          Task.Supervisor.children(Sanctum.TaskSupervisor) == []
+      end,
+      10_000
+    )
+  end
+
   defp handler_waiting!, do: Prima.Test.Wait.wait_until(&handler_waits?/0, 10_000)
 
   # An `aqua.wait` handler holds in its wait, past the gate's admission

@@ -216,8 +216,12 @@ defmodule Sanctum.Authority.BudgetGuard do
     :exit, reason -> not_given_back(reason)
   end
 
+  # Whatever the store does, the task logs one sentence and ends: a raise
+  # or an exit is a give-back that failed.
   defp released(actor, reservation_id, id) do
     Arca.BudgetReservations.release(actor, reservation_id, id)
+  rescue
+    exception -> {:raised, exception.__struct__}
   catch
     :exit, reason -> {:exit, reason}
   end

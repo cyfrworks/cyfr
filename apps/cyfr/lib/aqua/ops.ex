@@ -53,12 +53,12 @@ defmodule Aqua.Ops do
   def cancel_call(handle), do: Sanctum.RunningTasks.cancel_handle(handle)
 
   @doc """
-  Wake the call that waits a worker runs (`Prima.Operation.wake/1`):
+  Wake the call that waits a worker runs (`Sanctum.RunningTasks.wake/1`):
   the gate answers it early once its handler waits, and a worker running
   no such call, or done, ignores it.
   """
   @spec wake_call(pid()) :: :ok
-  def wake_call(worker), do: Prima.Operation.wake(worker)
+  def wake_call(worker), do: Sanctum.RunningTasks.wake(worker)
 
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok

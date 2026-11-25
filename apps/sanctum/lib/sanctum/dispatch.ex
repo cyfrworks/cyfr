@@ -69,10 +69,10 @@ defmodule Sanctum.Dispatch do
   (`Arca.BudgetReservations.sweep/1`), at its holder's death
   (`Sanctum.Authority.BudgetGuard`), or at its own end. It is decided,
   admitted and charged as every call is; it ends at its answer, a cancel,
-  its caller's end, or a wake (`Prima.Operation.wake/1`), which
+  its caller's end, or a wake (`Sanctum.RunningTasks.wake/1`), which
   answers it early (`Prima.Operation.woken_answer/0`) once its
   handler, past every check of its own, says it waits
-  (`Prima.Operation.waiting/0`): the gate and the handler decide a
+  (`Sanctum.RunningTasks.waiting/0`): the gate and the handler decide a
   wait before anything answers it.
 
   ## A handler that does not answer
@@ -1129,23 +1129,25 @@ defmodule Sanctum.Dispatch do
     logger_metadata = Prima.LoggerContext.capture()
     claimer = self()
 
-    task =
-      Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
-        Prima.LoggerContext.restore(logger_metadata)
-        if waits?, do: Prima.Operation.wakeable(claimer)
+    task_fn = fn ->
+      Prima.LoggerContext.restore(logger_metadata)
+      if waits?, do: Sanctum.RunningTasks.wakeable(claimer)
 
-        # A refused registration exits with a reason of its own: the
-        # handler never ran, so the call is cancelled whatever its action.
-        case register_task(request_id, claim, handle) do
-          :ok -> call_handler(execute_fn)
-          _refused -> exit(@not_started)
-        end
-      end)
+      # A refused registration exits with a reason of its own: the
+      # handler never ran, so the call is cancelled whatever its action.
+      case register_task(request_id, claim, handle) do
+        :ok -> call_handler(execute_fn)
+        _refused -> exit(@not_started)
+      end
+    end
 
     awaited =
-      if waits?,
-        do: await_waiting(task, false, false),
-        else: Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      if waits? do
+        run_waiting(task_fn)
+      else
+        task = Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, task_fn)
+        Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      end
 
     result =
       case awaited do
@@ -1179,32 +1181,69 @@ defmodule Sanctum.Dispatch do
     result
   end
 
-  # A call that waits, awaited as long as it takes, and answered early
-  # once both a wake (`Prima.Operation.wake/1`) and its handler's word
-  # that it waits (`Prima.Operation.waiting/0`) have come, in either
-  # order: a handler refused by a check of its own answers its refusal
-  # whatever woke it. A handler that answered meanwhile keeps its answer.
-  defp await_waiting(task, true = _woken?, true = _waiting?) do
-    case Task.shutdown(task, :brutal_kill) do
-      nil -> :woken
-      answered_or_exited -> answered_or_exited
+  # A call that waits runs in a task whose monitor this process holds, so
+  # its answer, its exit, a wake and its handler's word are read in one
+  # receive. The task starts its work only once the monitor is taken, so
+  # its exit is never read as `:noproc`, and it ends with no work done if
+  # this process dies first.
+  defp run_waiting(task_fn) do
+    claimer = self()
+    tag = make_ref()
+
+    started =
+      Task.Supervisor.start_child(Sanctum.Gate.TaskSupervisor, fn ->
+        watch = Process.monitor(claimer)
+
+        receive do
+          {^tag, :go} -> send(claimer, {tag, task_fn.()})
+          {:DOWN, ^watch, :process, _pid, _reason} -> :ok
+        end
+      end)
+
+    case started do
+      {:ok, pid} ->
+        monitor = Process.monitor(pid)
+        send(pid, {tag, :go})
+        await_waiting({pid, monitor, tag}, false, false)
+
+      {:error, reason} ->
+        {:exit, reason}
     end
   end
 
-  defp await_waiting(%Task{ref: ref, pid: pid} = task, woken?, waiting?) do
+  # A call that waits, awaited as long as it takes, and answered early
+  # once both a wake (`Sanctum.RunningTasks.wake/1`) and its handler's word
+  # that it waits (`Sanctum.RunningTasks.waiting/0`) have come, in either
+  # order: a handler refused by a check of its own answers its refusal
+  # whatever woke it. A handler that answered or exited meanwhile keeps
+  # that: its answer comes before its end, so it is read once the end is.
+  defp await_waiting({pid, monitor, tag}, true = _woken?, true = _waiting?) do
+    Process.exit(pid, :kill)
+
     receive do
-      {^ref, outcome} ->
-        Process.demonitor(ref, [:flush])
+      {:DOWN, ^monitor, :process, _pid, reason} ->
+        receive do
+          {^tag, outcome} -> {:ok, outcome}
+        after
+          0 -> if reason == :killed, do: :woken, else: {:exit, reason}
+        end
+    end
+  end
+
+  defp await_waiting({pid, monitor, tag} = running, woken?, waiting?) do
+    receive do
+      {^tag, outcome} ->
+        Process.demonitor(monitor, [:flush])
         {:ok, outcome}
 
-      {:DOWN, ^ref, :process, _pid, reason} ->
+      {:DOWN, ^monitor, :process, _pid, reason} ->
         {:exit, reason}
 
-      {Prima.Operation, :wake} ->
-        await_waiting(task, true, waiting?)
+      {Sanctum.RunningTasks, :wake} ->
+        await_waiting(running, true, waiting?)
 
-      {Prima.Operation, :waiting, ^pid} ->
-        await_waiting(task, woken?, true)
+      {Sanctum.RunningTasks, :waiting, ^pid} ->
+        await_waiting(running, woken?, true)
     end
   end
 

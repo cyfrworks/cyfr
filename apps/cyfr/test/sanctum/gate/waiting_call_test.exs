@@ -90,7 +90,7 @@ defmodule Sanctum.Gate.WaitingCallTest do
     end
 
     defp held(action) do
-      :ok = Prima.Operation.waiting()
+      :ok = Sanctum.RunningTasks.waiting()
 
       receive do
         :answer -> {:ok, %{"answered" => action}}
@@ -193,6 +193,18 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
   defp actor, do: Prima.Actor.in_athanor(@athanor)
 
+  # Every holder's death the guard was sent is taken, and the give-backs
+  # it started have ended, so none reaches the store after the test.
+  defp given_back! do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        :sys.get_state(Sanctum.Authority.BudgetGuard).guards == %{} and
+          Task.Supervisor.children(Sanctum.TaskSupervisor) == []
+      end,
+      10_000
+    )
+  end
+
   # `pid` has read every message sent it and waits for another, or has
   # ended.
   defp took!(pid) do
@@ -268,13 +280,15 @@ defmodule Sanctum.Gate.WaitingCallTest do
       fn -> Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 0 end,
       5_000
     )
+
+    given_back!()
   end
 
   test "a wake before its handler's own check answers nothing early: its refusal stands",
        %{auth: auth} = setup do
     task = call(setup, "check")
     assert_receive {:holding, "check", handler}, 10_000
-    :ok = Prima.Operation.wake(task.pid)
+    :ok = Sanctum.RunningTasks.wake(task.pid)
     # The claimer has taken the wake before the handler's check answers.
     took!(task.pid)
     send(handler, :refuse)
@@ -292,7 +306,7 @@ defmodule Sanctum.Gate.WaitingCallTest do
     # Woken first: the answer waits for the handler's word.
     task = call(setup, "check")
     assert_receive {:holding, "check", handler}, 10_000
-    :ok = Prima.Operation.wake(task.pid)
+    :ok = Sanctum.RunningTasks.wake(task.pid)
     send(handler, :pass)
     assert {:ok, ^early} = Task.await(task, 10_000)
     refute Process.alive?(handler)
@@ -300,7 +314,7 @@ defmodule Sanctum.Gate.WaitingCallTest do
     # Waiting first: the wake answers at once.
     task = call(setup, "hold")
     assert_receive {:holding, "hold", handler}, 10_000
-    :ok = Prima.Operation.wake(task.pid)
+    :ok = Sanctum.RunningTasks.wake(task.pid)
     assert {:ok, ^early} = Task.await(task, 10_000)
     refute Process.alive?(handler)
 
@@ -327,6 +341,8 @@ defmodule Sanctum.Gate.WaitingCallTest do
       end,
       5_000
     )
+
+    given_back!()
   end
 
   test "the flag is read from the operation's one definition, and nowhere else" do
