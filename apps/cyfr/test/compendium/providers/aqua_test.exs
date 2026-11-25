@@ -7,10 +7,13 @@ defmodule Compendium.Providers.AquaTest do
   by its full name, or one file of its pack by its path; a bare name is
   refused with the full names that match it; a write into a brought pack
   is refused, naming it; and a pack switched off is neither listed nor
-  read.
+  read. `wait` answers at the time it names, at once for one past, and
+  refuses one that is not a time.
   """
 
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Arca.Files
   alias Compendium.PackArchive
@@ -209,5 +212,92 @@ defmodule Compendium.Providers.AquaTest do
              Tool.handle(ctx, %{args | "name" => "cyfr:roses"})
 
     assert cyfr =~ "CYFR's own pack"
+  end
+
+  describe "wait" do
+    test "answers a turn's own call at its time, and at once for a time already past",
+         %{ctx: ctx} do
+      {guest, lineage} = running_turn!(ctx)
+      due = DateTime.add(DateTime.utc_now(), 300, :millisecond)
+
+      assert {:ok, %{until: until, now: now}} =
+               Tool.handle(guest, wait(lineage, DateTime.to_iso8601(due)))
+
+      assert until == DateTime.to_iso8601(due)
+      {:ok, answered, _offset} = DateTime.from_iso8601(now)
+      assert DateTime.compare(answered, due) != :lt
+
+      past = DateTime.add(DateTime.utc_now(), -3_600, :second)
+      started = System.monotonic_time(:millisecond)
+
+      assert {:ok, _now} =
+               Tool.handle(guest, wait(lineage, DateTime.to_iso8601(past, :extended, 3600)))
+
+      assert System.monotonic_time(:millisecond) - started < 1_000
+    end
+
+    test "waits for no call that is not a running turn's own, the person's", %{ctx: ctx} do
+      {guest, lineage} = running_turn!(ctx)
+      past = "2000-01-01T00:00:00Z"
+      {paused_guest, paused} = running_turn!(ctx, "paused")
+      {theirs_guest, theirs} = running_turn!(ctx, "running", "someone-else")
+
+      for {who, caller, args} <- [
+            {"a component the turn started", guest,
+             Map.put(lineage, "parent_execution_id", "exe_component")},
+            {"a page through the turn", guest, Map.put(lineage, "called_by_page", true)},
+            {"a call naming no turn", guest, %{}},
+            {"a paused turn", paused_guest, paused},
+            {"another person's turn", theirs_guest, theirs},
+            {"a call outside any chain", ctx, lineage}
+          ] do
+        assert Tool.handle(caller, wait(args, past)) == {:error, :wait_not_a_turn}, who
+      end
+
+      assert Prima.Refusal.message(:wait_not_a_turn) =~ "in a turn of its own"
+    end
+
+    test "refuses what is not a time with its offset", %{ctx: ctx} do
+      {guest, lineage} = running_turn!(ctx)
+
+      for until <- ["tomorrow", "2026-11-26T09:00:00", ""] do
+        assert {:error, {:invalid_argument, "aqua.wait: until must be" <> _}} =
+                 Tool.handle(guest, wait(lineage, until)),
+               until
+      end
+    end
+  end
+
+  defp wait(lineage, until), do: Map.merge(lineage, %{"action" => "wait", "until" => until})
+
+  # A turn of the person's (`by`, the context's by default) in `status`,
+  # with the guest context its chain's calls carry and the lineage the
+  # gate stamps on them.
+  defp running_turn!(ctx, status \\ "running", by \\ nil) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, thread} = Arca.Test.Days.thread(actor)
+    by = by || ctx.user_id
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: by, sent_by: "person", content: "wait"},
+        turn: %{agent: "aqua", requested_by: by, origin: :interactive}
+      })
+
+    root = "exe_root_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: root, status: status]
+      )
+
+    lineage = %{
+      "thread_id" => thread.id,
+      "root_execution_id" => root,
+      "parent_execution_id" => root
+    }
+
+    {Sanctum.Context.enter_guest(ctx), lineage}
   end
 end

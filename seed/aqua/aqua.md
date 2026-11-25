@@ -7,6 +7,7 @@ tools:
   - aqua.skill_get
   - aqua.skill_list
   - aqua.skill_update
+  - aqua.wait
   - browser.click
   - browser.close
   - browser.key

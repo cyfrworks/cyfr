@@ -52,6 +52,14 @@ defmodule Aqua.Ops do
   @spec cancel_call(term()) :: :ok
   def cancel_call(handle), do: Sanctum.RunningTasks.cancel_handle(handle)
 
+  @doc """
+  Wake the call that waits a worker runs (`Sanctum.RunningTasks.wake/1`):
+  the gate answers it early once its handler waits, and a worker running
+  no such call, or done, ignores it.
+  """
+  @spec wake_call(pid()) :: :ok
+  def wake_call(worker), do: Sanctum.RunningTasks.wake(worker)
+
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok
   def release_call(handle), do: Sanctum.RunningTasks.release_handle(handle)
@@ -68,6 +76,14 @@ defmodule Aqua.Ops do
       _ -> false
     end
   end
+
+  @doc """
+  Whether a call of `tool`/`action` waits as long as it takes
+  (`waits: true`, `Sanctum.Catalog.waits?/2`); false for an unknown tool
+  or any other action.
+  """
+  @spec waits?(String.t(), String.t()) :: boolean()
+  def waits?(tool, action), do: Sanctum.Catalog.waits?(tool, action)
 
   @doc """
   One sentence for a refusal: the gate's renderer (`Sanctum.Refusals.render/1`),

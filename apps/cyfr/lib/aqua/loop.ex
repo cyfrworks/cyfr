@@ -1089,8 +1089,8 @@ defmodule Aqua.Loop do
       {Aqua.Harness, ^turn_id, {:ask, _steps}} ->
         {:continue, state}
 
-      {Aqua.Harness, ^turn_id, {:end, finish}} ->
-        harness_end(state, finish)
+      {Aqua.Harness, ^turn_id, {:end, _finish}} = ended ->
+        harness_over(state, ended)
 
       {Aqua.Harness, ^turn_id, event} ->
         case harness_event(state, event) do
@@ -1098,15 +1098,23 @@ defmodule Aqua.Loop do
           unkept -> {:continue, unkept}
         end
 
-      # Stopped on purpose: Stop stops the harness before it stops the
-      # turn, which says nothing more in the thread (`conclude/2`).
-      {:DOWN, ^watch, :process, _pid, :normal} ->
-        {:halt, :stopped, state}
-
-      {:DOWN, ^watch, :process, _pid, _reason} ->
-        harness_ended(state, harness_reason(state, :ended))
+      {:DOWN, ^watch, :process, _pid, _reason} = ended ->
+        harness_over(state, ended)
     end
   end
+
+  # The harness's end, read where the loop waits on it or while calls that
+  # wait ran (`harness_gone/5`).
+  defp harness_over(%State{} = state, {Aqua.Harness, _turn_id, {:end, finish}}),
+    do: harness_end(state, finish)
+
+  # Stopped on purpose: Stop stops the harness before it stops the turn,
+  # which says nothing more in the thread (`conclude/2`).
+  defp harness_over(%State{} = state, {:DOWN, _watch, :process, _pid, :normal}),
+    do: {:halt, :stopped, state}
+
+  defp harness_over(%State{} = state, {:DOWN, _watch, :process, _pid, _reason}),
+    do: harness_ended(state, harness_reason(state, :ended))
 
   # What the harness tells of its work, whichever wait takes it: its start
   # taken, its usage, its own tools and its text, which committed already.
@@ -1462,6 +1470,7 @@ defmodule Aqua.Loop do
 
     case outcome do
       {:uncertain, step, reason, rest} -> stop_uncertain(state, step, reason, rest)
+      {:ended, ended} -> harness_over(state, ended)
       :ok -> {:ok, state}
     end
   end
@@ -1550,14 +1559,23 @@ defmodule Aqua.Loop do
 
   defp collect(state, [], running, _cap) when map_size(running) == 0, do: {:ok, state}
 
+  # A call that waits, with a post its turn has not read as it starts
+  # (`early?/2`), is woken at once: the gate decides it first, and answers
+  # it early only once its handler waits (`Aqua.Ops.wake_call/1`).
   defp collect(state, pending, running, cap) when map_size(running) < cap and pending != [] do
     [item | rest] = pending
     task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
+    if early?(state, item), do: Aqua.Ops.wake_call(task.pid)
     collect(state, rest, Map.put(running, task.ref, %{item: item, task: task}), cap)
   end
 
   defp collect(state, pending, running, cap) do
     turn_id = state.turn.id
+    watch = state.watch
+    # A call that waits ends only by its answer, so the harness's end is
+    # taken while one runs: it ends every one, and is read again where the
+    # loop waits on the harness, which ends the turn saying why.
+    waiting? = Enum.any?(running, fn {_ref, %{item: item}} -> waits?(item) end)
 
     receive do
       {ref, result} when is_map_key(running, ref) ->
@@ -1585,7 +1603,17 @@ defmodule Aqua.Loop do
         end
 
       {:moved, ^turn_id} ->
+        for {_ref, %{item: item, task: task}} <- running,
+            early?(state, item),
+            do: Aqua.Ops.wake_call(task.pid)
+
         state |> owe() |> collect(pending, running, cap)
+
+      {Aqua.Harness, ^turn_id, {:end, _finish}} = ended when waiting? ->
+        harness_gone(state, ended, pending, running, cap)
+
+      {:DOWN, ^watch, :process, _pid, _reason} = ended when waiting? ->
+        harness_gone(state, ended, pending, running, cap)
 
       {Aqua.Harness, ^turn_id, {kind, _} = event} when kind in @told ->
         state |> harness_event(event) |> collect(pending, running, cap)
@@ -1593,6 +1621,35 @@ defmodule Aqua.Loop do
   end
 
   defp pending_items(pending), do: Enum.map(pending, &%{item: &1, task: nil})
+
+  # The harness ended while calls that wait ran: each is stopped and its
+  # step closed once, as a call that did not finish, and the turn ends
+  # saying why (`harness_over/2`) once what else runs has answered. A call
+  # not yet started is never started: it is left proposed, which the
+  # turn's end settles, so no call starts after the end is read.
+  defp harness_gone(state, ended, pending, running, cap) do
+    running
+    |> Enum.reduce_while({:ok, running}, fn {ref, %{item: item, task: task}}, {:ok, left} ->
+      if waits?(item) do
+        case stopped(state, task, item) do
+          {:uncertain, step, why} -> {:halt, {:uncertain, step, why, Map.delete(left, ref)}}
+          _answered -> {:cont, {:ok, Map.delete(left, ref)}}
+        end
+      else
+        {:cont, {:ok, left}}
+      end
+    end)
+    |> case do
+      {:ok, running} ->
+        case collect(state, [], running, cap) do
+          {:ok, state} -> {{:ended, ended}, state}
+          uncertain -> uncertain
+        end
+
+      {:uncertain, step, why, running} ->
+        {{:uncertain, step, why, Map.values(running) ++ pending_items(pending)}, state}
+    end
+  end
 
   # In a worker: the step is dispatched, run, and closed with what it
   # answered. A step that is no longer proposed (skipped, superseded)
@@ -2485,9 +2542,16 @@ defmodule Aqua.Loop do
                 |> Tape.close_step(state.turn, step, "error", %{error: "not reproducible"})
                 |> settled(open)
 
+              # A call that runs a child runs a new one; any other, a
+              # catalog read among them, has none, so its charge has no
+              # admission deadline, as at its first dispatch.
               :replay ->
                 guest
-                |> Tape.next_generation(state.turn, step, Prima.UUID7.execution_id())
+                |> Tape.next_generation(
+                  state.turn,
+                  step,
+                  step.child_execution_id && Prima.UUID7.execution_id()
+                )
                 |> settled(open)
 
               :unknown ->
@@ -2617,6 +2681,80 @@ defmodule Aqua.Loop do
   # as it works, so none skips a step of it.
   defp steered?(%State{facts: %{supersedes?: false}}), do: false
   defp steered?(%State{} = state), do: Tape.steer_pending?(guest(state), state.turn)
+
+  # A turn does not sit in a call that waits (`waits: true`,
+  # `Aqua.Loop.Policy.waits?/1`) while its model has a post it has not
+  # read, on either harness: one no step carried yet, or one a program
+  # was handed while one of its asks was open, which it reads only with
+  # its asks' results (P9), so it counts until every ask open then has
+  # answered. Such a call has no effect to undo and is woken: the gate
+  # answers it early once its handler waits (`Aqua.Ops.wake_call/1`). A
+  # call that does work is never woken, whatever arrives.
+  defp early?(%State{} = state, item),
+    do: waits?(item) and (Tape.steer_pending?(guest(state), state.turn) or unread_post?(state))
+
+  defp waits?(%{call: {:ok, %Call{} = call}}), do: Policy.waits?(call)
+  defp waits?(_item), do: false
+
+  # A post a program was handed while one of its asks was open, and that
+  # it has not read: since it was handed, in the order the turn's steps
+  # were made, the asks open have never all been answered (each answer
+  # handed over is an `answer` delivery, `Aqua.Harness.Program`), since a
+  # program reads a post only with the answers to every ask open then
+  # (P9). A post handed while none was open is read at its next request.
+  defp unread_post?(%State{} = state) do
+    case Tape.steps(guest(state), state.turn) do
+      {:ok, steps} ->
+        answering =
+          for %{result_message_id: result, id: id} = step <- steps,
+              ask?(state, step) and is_binary(result),
+              into: %{},
+              do: {result, id}
+
+        steps
+        |> Enum.reduce({MapSet.new(), false}, fn step, {open, unread?} ->
+          case step do
+            %{kind: "input", action: "answer", message_id: result} ->
+              open = MapSet.delete(open, Map.get(answering, result))
+              {open, unread? and MapSet.size(open) > 0}
+
+            %{kind: "input", action: "post"} ->
+              {open, unread? or MapSet.size(open) > 0}
+
+            step ->
+              if ask?(state, step),
+                do: {MapSet.put(open, step.id), unread?},
+                else: {open, unread?}
+          end
+        end)
+        |> elem(1)
+
+      {:error, _unread} ->
+        false
+    end
+  end
+
+  # An ask the harness answers: a brain's call (`purpose: "brain"`), its
+  # start apart. A page's step, or any other the harness hands no answer
+  # for, is never an open ask.
+  defp ask?(state, %{purpose: "brain", kind: kind} = step),
+    do: kind not in ["model", "input"] and not admission?(state, step)
+
+  defp ask?(_state, _step), do: false
+
+  # A waiting worker the loop stopped, which stops the handler the gate
+  # runs for it however far it got (`Sanctum.RunningTasks` stops a handler
+  # with its claimer). Its slot and its charge's row come back by their
+  # owner, the guard that watches the worker as their holder
+  # (`Sanctum.Authority.BudgetGuard`), as a worker that dies by itself
+  # gives them back. A worker that answered first keeps its answer; any
+  # other step is closed as a call whose session ended.
+  defp stopped(%State{} = state, task, item) do
+    case Aqua.Loop.Worker.shutdown(task) do
+      {:ok, answered} -> answered
+      _stopped_or_exited -> settle_dead(state, item, "its session ended")
+    end
+  end
 
   # Each entry names the call's tool and the sentence a person reads for
   # it, from the one table a kept step is worded by too (`Aqua.Steps`).

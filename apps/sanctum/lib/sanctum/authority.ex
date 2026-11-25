@@ -38,23 +38,43 @@ defmodule Sanctum.Authority do
   The decision is `Prima.Authority.Transition.step/3`'s; a caller that
   dispatches the outcome as spawned work steps through here so no handler
   can forget the charge and no deny path needs a rollback.
+
+  With `:guarded`, a spawn's slot is taken and its holder guarded, the
+  calling process, in one call of the guard (`guarded_acquire_invoke/1`),
+  so a holder stopped at any point after leaves no slot behind; the
+  holder releases it with `release_invoke/1`. With `{:guarded, charge}`,
+  a call that waits, its charge's row is given back at the holder's death
+  too (`Sanctum.Authority.BudgetGuard`). Without, the caller guards the
+  slot itself once it holds it (`guard_invoke/1`).
   """
-  @spec step(Authority.t(), Transition.guest_fn(), Transition.target()) :: Transition.outcome()
-  def step(%Authority{} = auth, guest_fn, target) do
+  @spec step(
+          Authority.t(),
+          Transition.guest_fn(),
+          Transition.target(),
+          :guarded | {:guarded, BudgetGuard.charge()} | :unguarded
+        ) :: Transition.outcome()
+  def step(%Authority{} = auth, guest_fn, target, hold \\ :unguarded) do
     auth
     |> Transition.step(guest_fn, target)
-    |> charge_spawn_budget(auth, guest_fn)
+    |> charge_spawn_budget(auth, guest_fn, hold)
   end
 
-  defp charge_spawn_budget(outcome, auth, :spawn)
+  defp charge_spawn_budget(outcome, auth, :spawn, hold)
        when elem(outcome, 0) in [:child, :child_zero, :allow_tool] do
-    case try_acquire_invoke(auth) do
+    acquired =
+      case hold do
+        :guarded -> guarded_acquire_invoke(auth)
+        {:guarded, charge} -> guarded_acquire_invoke(auth, charge)
+        :unguarded -> try_acquire_invoke(auth)
+      end
+
+    case acquired do
       :ok -> outcome
       {:error, :invoke_budget_exhausted} -> {:deny, :invoke_budget_exhausted}
     end
   end
 
-  defp charge_spawn_budget(outcome, _auth, _fun), do: outcome
+  defp charge_spawn_budget(outcome, _auth, _fun, _hold), do: outcome
 
   # ============================================================================
   # Root budget
@@ -70,6 +90,17 @@ defmodule Sanctum.Authority do
   @spec try_acquire_invoke(Authority.t()) :: :ok | {:error, :invoke_budget_exhausted}
   def try_acquire_invoke(%Authority{budget: %Budget{} = budget}),
     do: BudgetCounter.try_acquire(budget)
+
+  @doc """
+  Take one root-keyed invoke-budget slot held by the calling process,
+  guarded in the same call (`Sanctum.Authority.BudgetGuard.acquire/2`):
+  no instant exists at which the slot is taken and its holder's death
+  would not give it back; with `charge`, nor its charge's row.
+  """
+  @spec guarded_acquire_invoke(Authority.t(), BudgetGuard.charge()) ::
+          :ok | {:error, :invoke_budget_exhausted}
+  def guarded_acquire_invoke(%Authority{budget: %Budget{} = budget}, charge \\ nil),
+    do: BudgetGuard.acquire(budget, self(), charge)
 
   @doc """
   Register the calling process as the holder of one charged slot — see

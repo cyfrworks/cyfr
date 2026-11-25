@@ -771,8 +771,11 @@ defmodule Aqua.Tape do
     end
   end
 
-  @doc "Open the next generation of a replay-safe step with a fresh child id."
-  @spec next_generation(Context.t(), turn(), step(), String.t()) ::
+  @doc """
+  Open the next generation of a replay-safe step, with a fresh child id
+  for a step whose call runs a child and none for one that runs none.
+  """
+  @spec next_generation(Context.t(), turn(), step(), String.t() | nil) ::
           {:ok, step()} | {:error, term()}
   def next_generation(%Context{} = ctx, turn, step, child_execution_id),
     do:

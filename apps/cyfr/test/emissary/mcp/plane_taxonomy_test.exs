@@ -144,8 +144,9 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       # person also reads and sets from a screen; `thread.post` and
       # `workspace.report`: a turn's post into its own thread and its
       # report of a workspace thread's work, under its fence;
-      # `notes.workspace`: a turn's notes of the workspace thread it runs in.
-      assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
+      # `notes.workspace`: a turn's notes of the workspace thread it runs in;
+      # `aqua.wait`: a turn's wait until a time.
+      assert in_chain_only == MapSet.new(~w(aqua.wait source.tree source.read source.grep
                                             source.write source.edit source.delete
                                             crew.ask crew.list threads.list threads.read
                                             program.list program.start program.send

@@ -192,6 +192,14 @@ defmodule Opus.Programs.TurnSessionTest do
   # The backend's id of the session the terminal `id` was given.
   defp backend_session(id), do: :sys.get_state(terminal(id)).session
 
+  # The terminal's waits held now, or nil while it holds none.
+  defp waiters(id) do
+    case Map.values(:sys.get_state(terminal(id)).waiters) do
+      [] -> nil
+      held -> held
+    end
+  end
+
   defp terminal(id) do
     [{pid, _owner}] = Registry.lookup(Opus.Programs.Registry, {:terminal, id})
     pid
@@ -661,6 +669,78 @@ defmodule Opus.Programs.TurnSessionTest do
                call(ctx, lineage, "wait", %{"session" => id, "after" => 0, "ms" => 300})
 
       assert System.monotonic_time(:millisecond) - started >= 300
+    end
+
+    test "a wait that names no time waits as long as it takes, and answers its program's end",
+         %{ctx: ctx, row: row, lineage: lineage, fake: fake} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+      wait = Task.async(fn -> call(ctx, lineage, "wait", %{"session" => id, "after" => 0}) end)
+
+      # Held with no timer of its own: nothing but the run's end, or output
+      # that pauses, answers it, however long that takes.
+      [waiter] = eventually(fn -> waiters(id) end, "wait")
+      assert waiter.timer == nil
+      assert Task.yield(wait, 0) == nil
+
+      Scripted.end_sessions(fake, row.id, 0)
+
+      assert {:ok, %{output: "", running: false, ended: "exited"}} = Task.await(wait, 5_000)
+    end
+
+    test "a wait may name a time past thirty seconds",
+         %{ctx: ctx, row: row, lineage: lineage, fake: fake} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+      ms = 30 * 60_000
+
+      wait =
+        Task.async(fn ->
+          call(ctx, lineage, "wait", %{"session" => id, "after" => 0, "ms" => ms})
+        end)
+
+      [waiter] = eventually(fn -> waiters(id) end, "wait")
+      assert Process.read_timer(waiter.timer) > 29 * 60_000
+
+      Scripted.write(fake, row.id, "done")
+      assert {:ok, %{output: "done\n", running: true}} = Task.await(wait, 5_000)
+    end
+
+    test "a wait its live terminal did not answer in time says the program is still running",
+         %{ctx: ctx, row: row, lineage: lineage} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+      pid = terminal(id)
+      :ok = :sys.suspend(pid)
+
+      answer =
+        try do
+          call(ctx, lineage, "wait", %{"session" => id, "ms" => 0})
+        after
+          :sys.resume(pid)
+        end
+
+      assert answer ==
+               {:error, {:invalid_argument, "The program is still running; wait on it again"}}
+
+      assert {:ok, %{running: true}} = call(ctx, lineage, "read", %{"session" => id})
+    end
+
+    test "a wait on a session of the turn's whose process is gone answers that it ended",
+         %{ctx: ctx, row: row, lineage: lineage} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+
+      # The run lost with its holder, as a restart of CYFR loses it.
+      pid = terminal(id)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 2_000
+
+      assert {:error, {:invalid_argument, "The program is no longer running"}} =
+               call(ctx, lineage, "wait", %{"session" => id, "after" => 0})
+
+      # Another turn's call on it reads nothing of it.
+      {_second, second} = turn!(ctx)
+
+      assert {:error, {:not_found, _, _}} =
+               call(ctx, second, "wait", %{"session" => id, "after" => 0, "ms" => 0})
     end
 
     test "keeps the last 256 KiB counted from the first byte, and answers 64 KiB a read",

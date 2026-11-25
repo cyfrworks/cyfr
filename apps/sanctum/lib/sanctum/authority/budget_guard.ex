@@ -18,12 +18,29 @@ defmodule Sanctum.Authority.BudgetGuard do
   Without a registered guard, release directly. If the guard process is
   unavailable, explicit releases still run but death monitoring is absent.
   A call timeout follows the separate handling in `release/2`.
+
+  A slot taken for a call that waits (`waits: true`, `Prima.Operation`)
+  is guarded with its charge's row (`acquire/3`): the holder's death
+  gives the row back too, off this process, since such a call has no
+  effect left to finish and its row has no window to pass. A give-back
+  that fails is logged and leaves the row to its attempt's end
+  (`Arca.BudgetReservations.sweep/1`). Any other call's row stands at its
+  holder's death until its window passes, so a row reclaimed is never one
+  whose handler can still act.
   """
 
   use GenServer
 
+  require Logger
+
   alias Prima.Authority.Budget
   alias Sanctum.Authority.BudgetCounter
+
+  @typedoc """
+  A waiting call's charge row, given back at its holder's death: the
+  actor whose athanor holds it, the reservation and the row's id.
+  """
+  @type charge :: {Prima.Actor.t(), String.t(), String.t()} | nil
 
   # Explicit rather than inherited: every charge and release in the system
   # funnels through this one process, so its call timeout is a parameter of
@@ -44,6 +61,26 @@ defmodule Sanctum.Authority.BudgetGuard do
     GenServer.call(__MODULE__, {:guard, budget, pid}, @call_timeout_ms)
   catch
     :exit, _ -> :ok
+  end
+
+  @doc """
+  Take one slot of `budget` for `pid` and guard it, in one call of this
+  process (`Sanctum.Authority.BudgetCounter.try_acquire/1`, then the
+  monitor): a holder that dies at any point after the call leaves no slot,
+  and one that dies before it took none. With `charge`, a waiting call's
+  row, the holder's death gives the row back too; a row not yet written
+  then gives back nothing. `{:error, :invoke_budget_exhausted}` when no
+  slot is free. A call that times out answers exhausted, its slot, if
+  the call lands, given back at the holder's death; any other exit means
+  the guard is gone, and the slot is taken unguarded, as `guard/2` leaves
+  it.
+  """
+  @spec acquire(Budget.t(), pid(), charge()) :: :ok | {:error, :invoke_budget_exhausted}
+  def acquire(%Budget{} = budget, pid, charge \\ nil) when is_pid(pid) do
+    GenServer.call(__MODULE__, {:acquire, budget, pid, charge}, @call_timeout_ms)
+  catch
+    :exit, {:timeout, _} -> {:error, :invoke_budget_exhausted}
+    :exit, _ -> BudgetCounter.try_acquire(budget)
   end
 
   @doc """
@@ -99,7 +136,8 @@ defmodule Sanctum.Authority.BudgetGuard do
 
   @impl true
   def init(_opts) do
-    # guards: {budget_id, pid} => {monitor_ref, budget}; refs: ref => key.
+    # guards: {budget_id, pid} => {monitor_ref, budget, charge};
+    # refs: ref => key.
     {:ok, %{guards: %{}, refs: %{}}}
   end
 
@@ -108,15 +146,22 @@ defmodule Sanctum.Authority.BudgetGuard do
     {:reply, :ok, put_guard(state, budget, pid)}
   end
 
+  def handle_call({:acquire, budget, pid, charge}, _from, state) do
+    case BudgetCounter.try_acquire(budget) do
+      :ok -> {:reply, :ok, put_guard(state, budget, pid, charge)}
+      exhausted -> {:reply, exhausted, state}
+    end
+  end
+
   def handle_call({:handover, budget, from, to}, _from, state) do
     case Map.pop(state.guards, {budget.id, from}) do
       {nil, _} ->
         {:reply, :released, state}
 
-      {{ref, guarded}, guards} ->
+      {{ref, guarded, charge}, guards} ->
         Process.demonitor(ref, [:flush])
         state = %{state | guards: guards, refs: Map.delete(state.refs, ref)}
-        {:reply, :ok, put_guard(state, guarded, to)}
+        {:reply, :ok, put_guard(state, guarded, to, charge)}
     end
   end
 
@@ -128,7 +173,7 @@ defmodule Sanctum.Authority.BudgetGuard do
         BudgetCounter.release(budget)
         {:reply, :ok, state}
 
-      {{ref, guarded}, guards} ->
+      {{ref, guarded, _charge}, guards} ->
         Process.demonitor(ref, [:flush])
         BudgetCounter.release(guarded)
         {:reply, :ok, %{state | guards: guards, refs: Map.delete(state.refs, ref)}}
@@ -142,8 +187,9 @@ defmodule Sanctum.Authority.BudgetGuard do
         {:noreply, state}
 
       {key, refs} ->
-        {{^ref, budget}, guards} = Map.pop(state.guards, key)
+        {{^ref, budget, charge}, guards} = Map.pop(state.guards, key)
         BudgetCounter.release(budget)
+        give_back(charge)
         {:noreply, %{state | guards: guards, refs: refs}}
     end
   end
@@ -153,14 +199,48 @@ defmodule Sanctum.Authority.BudgetGuard do
     {:noreply, state}
   end
 
+  # A dead waiting holder's row, given back off this process: every charge
+  # and release passes through it, and a store write has no place on that
+  # path. Idempotent with the holder's own release, which a death after it
+  # finds already made.
+  defp give_back(nil), do: :ok
+
+  defp give_back({actor, reservation_id, id}) do
+    Task.Supervisor.start_child(Sanctum.TaskSupervisor, fn ->
+      case released(actor, reservation_id, id) do
+        :ok -> :ok
+        failed -> not_given_back(failed)
+      end
+    end)
+  catch
+    :exit, reason -> not_given_back(reason)
+  end
+
+  # Whatever the store does, the task logs one sentence and ends: a raise
+  # or an exit is a give-back that failed.
+  defp released(actor, reservation_id, id) do
+    Arca.BudgetReservations.release(actor, reservation_id, id)
+  rescue
+    exception -> {:raised, exception.__struct__}
+  catch
+    :exit, reason -> {:exit, reason}
+  end
+
+  defp not_given_back(reason) do
+    Logger.warning(
+      "[Sanctum.Authority.BudgetGuard] A dead holder's charge was not given back; " <>
+        "its attempt's end reclaims it: #{Prima.LogFilter.inspect_reason(reason)}"
+    )
+  end
+
   # Re-guarding the same holder replaces the old monitor rather than
   # stacking a second release.
-  defp put_guard(state, budget, pid) do
+  defp put_guard(state, budget, pid, charge \\ nil) do
     key = {budget.id, pid}
 
     state =
       case Map.get(state.guards, key) do
-        {old_ref, _} ->
+        {old_ref, _, _} ->
           Process.demonitor(old_ref, [:flush])
           %{state | refs: Map.delete(state.refs, old_ref)}
 
@@ -172,7 +252,7 @@ defmodule Sanctum.Authority.BudgetGuard do
 
     %{
       state
-      | guards: Map.put(state.guards, key, {ref, budget}),
+      | guards: Map.put(state.guards, key, {ref, budget, charge}),
         refs: Map.put(state.refs, ref, key)
     }
   end

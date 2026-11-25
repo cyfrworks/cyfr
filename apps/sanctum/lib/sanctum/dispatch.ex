@@ -62,6 +62,19 @@ defmodule Sanctum.Dispatch do
   one member carries no skew, so the handler has ended before the row can
   be reclaimed.
 
+  A call of an action declared `waits: true` (`Sanctum.Catalog.waits?/2`,
+  read from the operation's one definition) waits as long as it takes: its
+  handler has no timeout and its charge no window, so the row has no
+  `holder_deadline` and is reclaimed when its attempt ends
+  (`Arca.BudgetReservations.sweep/1`), at its holder's death
+  (`Sanctum.Authority.BudgetGuard`), or at its own end. It is decided,
+  admitted and charged as every call is; it ends at its answer, a cancel,
+  its caller's end, or a wake (`Sanctum.RunningTasks.wake/1`), which
+  answers it early (`Prima.Operation.woken_answer/0`) once its
+  handler, past every check of its own, says it waits
+  (`Sanctum.RunningTasks.waiting/0`): the gate and the handler decide a
+  wait before anything answers it.
+
   ## A handler that does not answer
 
   A handler that raises, exits, times out or is cancelled once it may
@@ -640,7 +653,11 @@ defmodule Sanctum.Dispatch do
       raw_input: args
     }
 
-    opts = opts |> Keyword.put(:action, action) |> Keyword.put(:audit, audit)
+    opts =
+      opts
+      |> Keyword.put(:action, action)
+      |> Keyword.put(:audit, audit)
+      |> Keyword.put(:waits, Catalog.waits?(name, action))
 
     # A member that lost its cell slot dispatches nothing, catalogued or
     # proxied, and takes no budget: the endpoint's plug refuses new
@@ -788,7 +805,8 @@ defmodule Sanctum.Dispatch do
          :ok <- authorize_declared_action(name, ctx, args, true),
          {:ok, cast} <- validate_chain_arguments(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, cast),
-         {:ok, resource} <- authority_step(authority, guest_fn, target) do
+         {:ok, resource} <-
+           authority_step(authority, guest_fn, target, hold(ctx, authority, opts)) do
       warn_on_description_drift(ctx, authority, resource)
 
       # The server row the transition was judged on is the one dispatch
@@ -822,8 +840,10 @@ defmodule Sanctum.Dispatch do
     end
   end
 
-  defp authority_step(authority, guest_fn, target) do
-    case Sanctum.Authority.step(authority, guest_fn, target) do
+  defp authority_step(authority, guest_fn, target, hold) do
+    # Taken guarded: the slot's holder, this process, is watched from the
+    # instant it holds it, so a stop inside the charge leaves no slot.
+    case Sanctum.Authority.step(authority, guest_fn, target, hold) do
       {:allow_tool, resource} ->
         {:ok, resource}
 
@@ -837,24 +857,39 @@ defmodule Sanctum.Dispatch do
     end
   end
 
+  # How a slot is guarded: a call that waits names its charge's row, which
+  # its holder's death gives back with the slot, since it has no effect
+  # left to finish and no window to pass (`Sanctum.Authority.BudgetGuard`).
+  # Any other call's row stands until its window passes.
+  defp hold(%Context{athanor_id: athanor_id} = ctx, authority, opts)
+       when is_binary(athanor_id) do
+    case {Keyword.get(opts, :waits, false), Keyword.get(opts, :charge)} do
+      {true, %{id: id}} -> {:guarded, {Context.actor(ctx), authority.budget.id, id}}
+      _ -> :guarded
+    end
+  end
+
+  defp hold(_ctx, _authority, _opts), do: :guarded
+
   # A spawn-shaped transition charged the invoke budget; this process
-  # holds the slot, and the executor's wall-clock kill would skip the
-  # `after` — the guard releases on :DOWN. With a charge identity the hold
-  # is a row too, reclaimable past the dispatcher's own timeout.
+  # holds the slot, guarded from the instant it took it
+  # (`authority_step/4`), and a kill would skip the `after` — the guard
+  # releases on :DOWN. With a charge identity the hold is a row too,
+  # reclaimable past the dispatcher's own timeout; a waiting call's row
+  # has none, and is given back at its end, at its holder's death
+  # (`hold/3`), or at its attempt's end.
   defp charged(name, ctx, args, authority, guest_fn, opts) do
     # The window starts before the charge is taken, so the cell's deadline,
     # set inside the charge's transaction, is after the handler's.
     started = System.monotonic_time(:millisecond)
-    window_ms = Keyword.get(opts, :holder_window_ms, @tool_timeout_ms)
+    window_ms = window(opts)
 
     case charge_row(guest_fn, ctx, authority, opts, window_ms) do
       :ok ->
-        if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
-
         dispatch_opts =
           opts
           |> Keyword.put(:hold, hold_of(authority, Keyword.get(opts, :charge)))
-          |> held_until(guest_fn, started + window_ms - @give_back_margin_ms)
+          |> held_until(guest_fn, window_ms && started + window_ms - @give_back_margin_ms)
           |> Keyword.drop([:guest_fn, :charge, :authority, :holder_window_ms])
 
         try do
@@ -874,14 +909,26 @@ defmodule Sanctum.Dispatch do
         end
 
       {:error, reason} ->
-        # The slot the transition charged goes back: the row refused it.
-        Sanctum.Authority.BudgetCounter.release(authority.budget)
+        # The slot the transition charged goes back, and its guard with
+        # it: the row refused it.
+        Sanctum.Authority.release_invoke(authority)
         refused(opts, args, Refusals.admission({:invoke_denied, reason}))
     end
   end
 
+  # A call's window: none for a call that waits (`Sanctum.Catalog.waits?/2`),
+  # else the one given or the default timeout.
+  defp window(opts) do
+    if Keyword.get(opts, :waits, false),
+      do: nil,
+      else: Keyword.get(opts, :holder_window_ms, @tool_timeout_ms)
+  end
+
   # A call holding a charge row runs until its window's deadline, on this
-  # member's monotonic clock; any other runs for the default timeout.
+  # member's monotonic clock; any other runs for the default timeout, and
+  # one that waits has neither.
+  defp held_until(opts, _guest_fn, nil), do: opts
+
   defp held_until(opts, :spawn, deadline) do
     case Keyword.get(opts, :charge) do
       %{id: _} -> Keyword.put(opts, :deadline, deadline)
@@ -985,7 +1032,7 @@ defmodule Sanctum.Dispatch do
     timeout_ms = handler_timeout(opts)
 
     cond do
-      timeout_ms <= 0 ->
+      is_integer(timeout_ms) and timeout_ms <= 0 ->
         {:error, {:timeout, "Tool #{name} ran out of its time before it started"}}
 
       Keyword.get(opts, :runner, :inline) == :inline ->
@@ -997,11 +1044,12 @@ defmodule Sanctum.Dispatch do
   end
 
   # What is left of a charged call's window (`held_until/3`), else the
-  # default timeout.
+  # default timeout; none for a call that waits.
   defp handler_timeout(opts) do
-    case Keyword.get(opts, :deadline) do
-      nil -> @tool_timeout_ms
-      deadline -> deadline - System.monotonic_time(:millisecond)
+    case {Keyword.get(opts, :deadline), Keyword.get(opts, :waits, false)} do
+      {nil, true} -> :infinity
+      {nil, false} -> @tool_timeout_ms
+      {deadline, _waits} -> deadline - System.monotonic_time(:millisecond)
     end
   end
 
@@ -1049,21 +1097,23 @@ defmodule Sanctum.Dispatch do
   end
 
   defp run_supervised({name, _action} = op, ctx, opts, timeout_ms, execute_fn) do
+    waits? = Keyword.get(opts, :waits, false)
+
     case Keyword.get(opts, :cancel_handle) do
       nil ->
-        supervise(op, ctx, nil, timeout_ms, execute_fn)
+        supervise(op, ctx, nil, {timeout_ms, waits?}, execute_fn)
 
       handle ->
         # Claimed before the task exists, so a cancel that lands first is
         # seen when the task registers, and the handler never runs.
         case Sanctum.RunningTasks.claim(handle) do
-          :ok -> supervise(op, ctx, handle, timeout_ms, execute_fn)
+          :ok -> supervise(op, ctx, handle, {timeout_ms, waits?}, execute_fn)
           :cancelled -> {:error, {:cancelled, "Tool #{name} was cancelled"}}
         end
     end
   end
 
-  defp supervise({name, _action} = op, ctx, handle, timeout_ms, execute_fn) do
+  defp supervise({name, _action} = op, ctx, handle, {timeout_ms, waits?}, execute_fn) do
     # Registered under the request id `do_call/4` guarantees, which is
     # also the request's progress topic (`Cyfr.Bus.progress/2`) — one
     # identity per request across both subsystems. The transport cancels
@@ -1077,21 +1127,33 @@ defmodule Sanctum.Dispatch do
     claim = Sanctum.RunningTasks.claim_request(request_id)
 
     logger_metadata = Prima.LoggerContext.capture()
+    claimer = self()
 
-    task =
-      Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
-        Prima.LoggerContext.restore(logger_metadata)
+    task_fn = fn ->
+      Prima.LoggerContext.restore(logger_metadata)
+      if waits?, do: Sanctum.RunningTasks.wakeable(claimer)
 
-        # A refused registration exits with a reason of its own: the
-        # handler never ran, so the call is cancelled whatever its action.
-        case register_task(request_id, claim, handle) do
-          :ok -> call_handler(execute_fn)
-          _refused -> exit(@not_started)
-        end
-      end)
+      # A refused registration exits with a reason of its own: the
+      # handler never ran, so the call is cancelled whatever its action.
+      case register_task(request_id, claim, handle) do
+        :ok -> call_handler(execute_fn)
+        _refused -> exit(@not_started)
+      end
+    end
+
+    awaited =
+      if waits? do
+        run_waiting(task_fn)
+      else
+        task = Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, task_fn)
+        Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill)
+      end
 
     result =
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      case awaited do
+        :woken ->
+          {:ok, Prima.Operation.woken_answer()}
+
         {:ok, outcome} ->
           answer(op, outcome)
 
@@ -1117,6 +1179,72 @@ defmodule Sanctum.Dispatch do
     Sanctum.RunningTasks.unregister(request_id, claim)
     if handle, do: Sanctum.RunningTasks.release_handle(handle)
     result
+  end
+
+  # A call that waits runs in a task whose monitor this process holds, so
+  # its answer, its exit, a wake and its handler's word are read in one
+  # receive. The task starts its work only once the monitor is taken, so
+  # its exit is never read as `:noproc`, and it ends with no work done if
+  # this process dies first.
+  defp run_waiting(task_fn) do
+    claimer = self()
+    tag = make_ref()
+
+    started =
+      Task.Supervisor.start_child(Sanctum.Gate.TaskSupervisor, fn ->
+        watch = Process.monitor(claimer)
+
+        receive do
+          {^tag, :go} -> send(claimer, {tag, task_fn.()})
+          {:DOWN, ^watch, :process, _pid, _reason} -> :ok
+        end
+      end)
+
+    case started do
+      {:ok, pid} ->
+        monitor = Process.monitor(pid)
+        send(pid, {tag, :go})
+        await_waiting({pid, monitor, tag}, false, false)
+
+      {:error, reason} ->
+        {:exit, reason}
+    end
+  end
+
+  # A call that waits, awaited as long as it takes, and answered early
+  # once both a wake (`Sanctum.RunningTasks.wake/1`) and its handler's word
+  # that it waits (`Sanctum.RunningTasks.waiting/0`) have come, in either
+  # order: a handler refused by a check of its own answers its refusal
+  # whatever woke it. A handler that answered or exited meanwhile keeps
+  # that: its answer comes before its end, so it is read once the end is.
+  defp await_waiting({pid, monitor, tag}, true = _woken?, true = _waiting?) do
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, _pid, reason} ->
+        receive do
+          {^tag, outcome} -> {:ok, outcome}
+        after
+          0 -> if reason == :killed, do: :woken, else: {:exit, reason}
+        end
+    end
+  end
+
+  defp await_waiting({pid, monitor, tag} = running, woken?, waiting?) do
+    receive do
+      {^tag, outcome} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, outcome}
+
+      {:DOWN, ^monitor, :process, _pid, reason} ->
+        {:exit, reason}
+
+      {Sanctum.RunningTasks, :wake} ->
+        await_waiting(running, true, waiting?)
+
+      {Sanctum.RunningTasks, :waiting, ^pid} ->
+        await_waiting(running, woken?, true)
+    end
   end
 
   # A handler that ended without answering once it may have run. An effect
