@@ -84,10 +84,8 @@ func newBinaryRelease(t *testing.T, version string) *binaryRelease {
 	r.assets[ArchiveName(version, "linux", "amd64")] = tarGz(t, "cyfr", []byte("cyfr linux "+version))
 	r.assets[ArchiveName(version, "windows", "arm64")] = zipped(t, "cyfr.exe", []byte("cyfr windows "+version))
 	r.assets[ArchiveName(version, "darwin", "arm64")] = tarGz(t, "other", []byte("no cyfr here"))
-	for _, goos := range []string{"linux", "darwin", "windows"} {
-		for _, goarch := range []string{"amd64", "arm64"} {
-			r.assets[PackageName(version, goos, goarch)] = []byte("the app's installer " + goos + " " + goarch + " " + version)
-		}
+	for _, p := range installers {
+		r.assets[PackageName(version, p[0], p[1])] = []byte("the app's installer " + p[0] + " " + p[1] + " " + version)
 	}
 	r.signChecksums(t, Identity(version), Issuer)
 	return r
@@ -236,13 +234,16 @@ func signedPackage(version, goos, goarch string) ([]byte, error) {
 	return FetchPackage(context.Background(), version, goos, goarch, sum)
 }
 
+// The CYFR app's five installers a release carries: Linux's and Windows'
+// for amd64 and arm64, the Mac's for Apple silicon alone.
+var installers = [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "arm64"}, {"windows", "amd64"}, {"windows", "arm64"}}
+
 // The installers are named as desktop/scripts/build.mjs names them, one
 // format for each system.
 func TestPackageNameIsTheBuildsName(t *testing.T) {
 	for _, c := range []struct{ goos, goarch, want string }{
 		{"linux", "amd64", "cyfr-desktop_0.9.0-rc.1_linux_amd64.deb"},
 		{"linux", "arm64", "cyfr-desktop_0.9.0-rc.1_linux_arm64.deb"},
-		{"darwin", "amd64", "cyfr-desktop_0.9.0-rc.1_darwin_amd64.dmg"},
 		{"darwin", "arm64", "cyfr-desktop_0.9.0-rc.1_darwin_arm64.dmg"},
 		{"windows", "amd64", "cyfr-desktop_0.9.0-rc.1_windows_amd64.msi"},
 		{"windows", "arm64", "cyfr-desktop_0.9.0-rc.1_windows_arm64.msi"},
@@ -254,21 +255,19 @@ func TestPackageNameIsTheBuildsName(t *testing.T) {
 }
 
 // The installer a signed checksums.txt names answers its own bytes, for
-// each of the three systems on either architecture, for a release and a
-// pre-release alike.
+// each of the five, for a release and a pre-release alike.
 func TestFetchPackageAnswersTheVerifiedPackage(t *testing.T) {
 	for _, version := range []string{"0.9.0", "0.9.0-rc.1"} {
 		r := newBinaryRelease(t, version)
 		r.serve(t)
-		for _, goos := range []string{"linux", "darwin", "windows"} {
-			for _, goarch := range []string{"amd64", "arm64"} {
-				got, err := signedPackage(version, goos, goarch)
-				if err != nil {
-					t.Fatalf("FetchPackage %s %s %s: %v", version, goos, goarch, err)
-				}
-				if want := "the app's installer " + goos + " " + goarch + " " + version; string(got) != want {
-					t.Errorf("FetchPackage %s %s %s answered %q, want %q", version, goos, goarch, got, want)
-				}
+		for _, p := range installers {
+			goos, goarch := p[0], p[1]
+			got, err := signedPackage(version, goos, goarch)
+			if err != nil {
+				t.Fatalf("FetchPackage %s %s %s: %v", version, goos, goarch, err)
+			}
+			if want := "the app's installer " + goos + " " + goarch + " " + version; string(got) != want {
+				t.Errorf("FetchPackage %s %s %s answered %q, want %q", version, goos, goarch, got, want)
 			}
 		}
 	}
@@ -277,7 +276,7 @@ func TestFetchPackageAnswersTheVerifiedPackage(t *testing.T) {
 // An unsigned, wrong or missing package is refused, and none of it answered.
 func TestFetchPackageRefusesUnsignedWrongOrMissing(t *testing.T) {
 	const version = "0.9.0"
-	amd, arm := PackageName(version, "darwin", "amd64"), PackageName(version, "darwin", "arm64")
+	amd, arm := PackageName(version, "linux", "amd64"), PackageName(version, "linux", "arm64")
 	msi := PackageName(version, "windows", "amd64")
 	cases := []struct {
 		name       string
@@ -324,7 +323,7 @@ func TestFetchPackageRefusesUnsignedWrongOrMissing(t *testing.T) {
 			r := newBinaryRelease(t, version)
 			c.edit(t, r)
 			r.serve(t)
-			got, err := signedPackage(c.asked, "darwin", "amd64")
+			got, err := signedPackage(c.asked, "linux", "amd64")
 			if got != nil {
 				t.Errorf("FetchPackage answered %d bytes", len(got))
 			}
@@ -357,7 +356,7 @@ func TestFetchPackageRefusesAPackageChangedAfterItsSumWasRead(t *testing.T) {
 	}
 }
 
-// The release sums, and attaches, exactly the CYFR app's six installers,
+// The release sums, and attaches, exactly the CYFR app's five installers,
 // each by the name FetchPackage asks for (PackageName).
 func TestTheReleaseShipsTheNamesFetchPackageAsks(t *testing.T) {
 	raw, err := os.ReadFile("../../.goreleaser.yml")
@@ -378,8 +377,8 @@ func TestTheReleaseShipsTheNamesFetchPackageAsks(t *testing.T) {
 	}
 	const version = "0.9.0-rc.1"
 	var want []string
-	for _, goos := range []string{"linux", "darwin", "windows"} {
-		want = append(want, PackageName(version, goos, "amd64"), PackageName(version, goos, "arm64"))
+	for _, p := range installers {
+		want = append(want, PackageName(version, p[0], p[1]))
 	}
 	for where, list := range map[string]files{"checksum": config.Checksum, "release": config.Release} {
 		var got []string
