@@ -670,7 +670,7 @@ defmodule Cyfr.Test.SeedBundleTest do
   end
 
   test "the artisan scroll names an app as a person does, and tells Aqua never to name a tool, an operation or a tincture to them" do
-    scroll = File.read!(Path.expand("../../../../seed/aqua/skills/artisan/SKILL.md", __DIR__))
+    scroll = File.read!(Path.expand("../../../../seed/aqua/scrolls/cyfr/skills/artisan/SKILL.md", __DIR__))
     [_, description] = Regex.run(~r/^description: "([^"]*)"$/m, scroll)
 
     assert description =~ ~r/\bapp\b/

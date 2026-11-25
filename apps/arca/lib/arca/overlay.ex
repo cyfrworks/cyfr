@@ -117,6 +117,22 @@ defmodule Arca.Overlay do
   written at a unit's own path: every object of a unit is under the
   prefix of a revision its row names, or of one being staged.
 
+  ## Units committed whole
+
+  A unit whose grammar commits it whole
+  (`c:Arca.Storage.UnitLocator.commits_whole?/1`, a pack of scrolls) is
+  never edited in place: every ordinary put, append, rewrite or delete
+  inside it is a new revision of the whole unit, made under its draft by
+  `edit_unit/4`, which asks the domain what the revision holds
+  (`c:Arca.Storage.UnitLocator.admit_edit/4`). Its sentinel is the
+  domain's record of the unit, which no ordinary write reaches. So the
+  journal's content identity of the revision the pointer names is the
+  digest of exactly the bytes a reader reads (`content_identity/1`).
+  A row the grammar no longer names is an orphan of a release that
+  changed it: no status and no listing counts it, and a migration
+  carries its objects into the new grammar's units (`orphan_units/2`)
+  before it retires it (`drop_orphan/2`).
+
   ## Whose unit it is
 
   A unit the seed ships at the same path is a shipped copy, whatever its
@@ -324,22 +340,36 @@ defmodule Arca.Overlay do
   @impl true
   def put(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path) do
-      case edit_target(actor, path) do
-        {:ok, target} -> edit(actor, path, fn -> tenant().put(actor, target, content) end)
-        {:error, :not_found} -> create_by_write(actor, path, content)
-        {:error, _} = refused -> refused
+      case whole_unit(path) do
+        {unit, rel} -> ordinary_edit(actor, unit, rel, {:put, content})
+        nil -> put_in_place(actor, path, content)
       end
+    end
+  end
+
+  defp put_in_place(actor, path, content) do
+    case edit_target(actor, path) do
+      {:ok, target} -> edit(actor, path, fn -> tenant().put(actor, target, content) end)
+      {:error, :not_found} -> create_by_write(actor, path, content)
+      {:error, _} = refused -> refused
     end
   end
 
   @impl true
   def append(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path) do
-      case edit_target(actor, path) do
-        {:ok, target} -> edit(actor, path, fn -> tenant().append(actor, target, content) end)
-        {:error, :not_found} -> create_by_write(actor, path, content)
-        {:error, _} = refused -> refused
+      case whole_unit(path) do
+        {unit, rel} -> ordinary_edit(actor, unit, rel, {:append, content})
+        nil -> append_in_place(actor, path, content)
       end
+    end
+  end
+
+  defp append_in_place(actor, path, content) do
+    case edit_target(actor, path) do
+      {:ok, target} -> edit(actor, path, fn -> tenant().append(actor, target, content) end)
+      {:error, :not_found} -> create_by_write(actor, path, content)
+      {:error, _} = refused -> refused
     end
   end
 
@@ -381,12 +411,15 @@ defmodule Arca.Overlay do
   @impl true
   def delete(%Prima.Actor{} = actor, path) do
     with :ok <- deletable(path) do
-      case at_unit(path) do
-        nil ->
+      case {at_unit(path), whole_unit(path)} do
+        {nil, {unit, rel}} ->
+          ordinary_edit(actor, unit, rel, :delete)
+
+        {nil, nil} ->
           with {:ok, target} <- edit_target(actor, path),
                do: edit(actor, path, fn -> tenant().delete(actor, target) end)
 
-        unit ->
+        {unit, _whole} ->
           removal(actor, unit)
       end
     end
@@ -396,18 +429,25 @@ defmodule Arca.Overlay do
   def delete_tree(%Prima.Actor{} = actor, path) do
     with :ok <- deletable(path),
          :ok <- tree_deletable(actor, path) do
-      case {at_unit(path), Arca.Storage.locate(path)} do
-        {unit, _loc} when is_list(unit) ->
-          removal(actor, unit)
-
-        {nil, :above_unit} ->
-          with :ok <- clear_units_beneath(actor, path),
-               do: edit(actor, path, fn -> tenant().delete_tree(actor, path) end)
-
-        {nil, _inside_or_outside} ->
-          with {:ok, target} <- edit_target(actor, path),
-               do: edit(actor, path, fn -> tenant().delete_tree(actor, target) end)
+      case {at_unit(path), whole_unit(path)} do
+        {nil, {unit, rel}} -> ordinary_edit(actor, unit, rel, :delete_tree)
+        _in_place_or_at_a_unit -> delete_tree_in_place(actor, path)
       end
+    end
+  end
+
+  defp delete_tree_in_place(actor, path) do
+    case {at_unit(path), Arca.Storage.locate(path)} do
+      {unit, _loc} when is_list(unit) ->
+        removal(actor, unit)
+
+      {nil, :above_unit} ->
+        with :ok <- clear_units_beneath(actor, path),
+             do: edit(actor, path, fn -> tenant().delete_tree(actor, path) end)
+
+      {nil, _inside_or_outside} ->
+        with {:ok, target} <- edit_target(actor, path),
+             do: edit(actor, path, fn -> tenant().delete_tree(actor, target) end)
     end
   end
 
@@ -699,6 +739,7 @@ defmodule Arca.Overlay do
   @impl true
   def put_if_none_match(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path),
+         :ok <- in_place(path),
          {:ok, target} <- no_unit(edit_target(actor, path)),
          do: tenant().put_if_none_match(actor, target, content)
   end
@@ -706,6 +747,7 @@ defmodule Arca.Overlay do
   @impl true
   def put_if_match(%Prima.Actor{} = actor, path, content, precondition) do
     with :ok <- writable(path),
+         :ok <- in_place(path),
          {:ok, target} <- no_unit(edit_target(actor, path)),
          do:
            edit(actor, path, fn ->
@@ -726,6 +768,7 @@ defmodule Arca.Overlay do
   @impl true
   def replace_tree(%Prima.Actor{} = actor, path, files) do
     with :ok <- replaceable(path),
+         :ok <- in_place(path),
          {:ok, target} <- no_unit(edit_target(actor, path)) do
       adapter = tenant()
 
@@ -842,7 +885,12 @@ defmodule Arca.Overlay do
   defp typed_above_units(actor, [root | _] = path) do
     with {:ok, entries} <- tenant().list_typed(actor, path),
          {:ok, pointers} <- StorageUnits.current_under(actor, root) do
-      committed = for {key, _} <- pointers, do: UnitLocator.unit_path(root, key)
+      committed =
+        for {key, _} <- pointers,
+            unit = UnitLocator.unit_path(root, key),
+            named_unit?(unit),
+            do: unit
+
       depth = length(path)
 
       synthesized =
@@ -888,7 +936,7 @@ defmodule Arca.Overlay do
                                                    {:ok, acc} ->
         unit = UnitLocator.unit_path(root, key)
 
-        if List.starts_with?(unit, path) do
+        if List.starts_with?(unit, path) and named_unit?(unit) do
           case unit_leaves(actor, unit, revision) do
             {:ok, unit_leaves} -> {:cont, {:ok, acc ++ unit_leaves}}
             {:error, _} = error -> {:halt, error}
@@ -982,7 +1030,7 @@ defmodule Arca.Overlay do
       |> Enum.map(fn {key, %{current_revision: revision}} ->
         {UnitLocator.unit_path(root, key), revision}
       end)
-      |> Enum.filter(fn {unit, _revision} -> List.starts_with?(unit, path) end)
+      |> Enum.filter(fn {unit, _revision} -> List.starts_with?(unit, path) and named_unit?(unit) end)
       |> Enum.reduce_while({:ok, plain}, fn {unit, revision}, {:ok, acc} ->
         case unit_pairs(actor, Arca.Storage.locate(unit), revision) do
           {:ok, pairs} ->
@@ -1085,10 +1133,14 @@ defmodule Arca.Overlay do
         staged = MapSet.new(staged)
         seed_locs = MapSet.new(for leaf <- seed_leaves, loc = leaf_loc(leaf), do: loc)
 
+        # A row the grammar no longer names as a unit is an orphan of a
+        # release that changed it (`orphan_units/2`), and no status.
         committed =
-          Map.new(pointers, fn {key, %{current_revision: revision}} ->
-            {Arca.Storage.locate(UnitLocator.unit_path(root, key)), revision}
-          end)
+          for {key, %{current_revision: revision}} <- pointers,
+              unit = UnitLocator.unit_path(root, key),
+              named_unit?(unit),
+              into: %{},
+              do: {Arca.Storage.locate(unit), revision}
 
         all_locs = MapSet.union(seed_locs, MapSet.new(Map.keys(committed)))
 
@@ -1345,6 +1397,79 @@ defmodule Arca.Overlay do
           {:error, _} = error -> error
         end
     end
+  end
+
+  @doc """
+  Each committed unit under `root` whose key starts with `prefix`, by
+  unit key: `{revision, content_identity}`, the revision its pointer
+  names and the identity the journal recorded for it, read from the rows
+  alone (`Arca.StorageUnits.identities_under/3`).
+  """
+  @spec revision_identities(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, %{String.t() => {String.t(), String.t() | nil}}} | {:error, term()}
+  def revision_identities(%Prima.Actor{} = actor, root, prefix),
+    do: StorageUnits.identities_under(actor, root, prefix)
+
+  @doc """
+  The committed units under `root` that the root's grammar no longer
+  names: each row whose unit path does not locate to itself as a unit,
+  left by a release that changed the grammar, with the objects of the
+  revision it names, `{unit, [{relative, bytes}]}`. What a migration
+  carries into the grammar's new units before `drop_orphan/2` retires
+  each.
+  """
+  @spec orphan_units(Prima.Actor.t(), String.t()) ::
+          {:ok, [{Arca.Storage.path(), [{Arca.Storage.path(), binary()}]}]} | {:error, term()}
+  def orphan_units(%Prima.Actor{} = actor, root) when is_binary(root) do
+    internal = internal_actor(actor)
+
+    with {:ok, pointers} <- StorageUnits.current_under(actor, root) do
+      pointers
+      |> Enum.sort()
+      |> Enum.map(fn {key, %{current_revision: revision}} ->
+        {UnitLocator.unit_path(root, key), revision}
+      end)
+      |> Enum.reject(fn {unit, _revision} -> named_unit?(unit) end)
+      |> Enum.reduce_while({:ok, []}, fn {unit, revision}, {:ok, acc} ->
+        # The row's shape is gone with its grammar: read its prefix as a
+        # directory's, which a file unit's one object answers as `[]`.
+        case orphan_pairs(internal, unit, revision) do
+          {:ok, pairs} -> {:cont, {:ok, [{unit, pairs} | acc]}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, orphans} -> {:ok, Enum.reverse(orphans)}
+        error -> error
+      end
+    end
+  end
+
+  @doc """
+  Retire one unit the root's grammar no longer names (`orphan_units/2`),
+  as a removal retires any unit: its row first, under the removal's
+  lease, then its revision's bytes. Refuses a path the grammar still
+  names as a unit with `{:error, :not_an_orphan}`.
+  """
+  @spec drop_orphan(Prima.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def drop_orphan(%Prima.Actor{} = actor, unit) do
+    if named_unit?(unit), do: {:error, :not_an_orphan}, else: removal(actor, unit)
+  end
+
+  defp named_unit?(unit) do
+    case Arca.Storage.locate(unit) do
+      {:file, ^unit} -> true
+      {:dir, ^unit, _sentinel} -> true
+      _other -> false
+    end
+  end
+
+  defp orphan_pairs(internal, unit, revision) do
+    marker = [UnitLocator.marker_name()]
+    prefix = UnitLocator.revision_prefix(unit, revision)
+
+    with {:ok, pairs} <- Arca.Storage.read_subtree_via(tenant(), internal, prefix),
+         do: {:ok, Enum.reject(pairs, &(elem(&1, 0) == marker))}
   end
 
   # ---------------------------------------------------------------------------
@@ -1680,9 +1805,10 @@ defmodule Arca.Overlay do
              | term()}
   def update(%Prima.Actor{} = actor, path, fun) when is_function(fun, 1) do
     with :ok <- reserved(path) do
-      case Arca.Storage.locate(path) do
-        loc when loc in [:not_overlaid, :above_unit] -> {:error, :not_overlaid}
-        _inside_a_unit -> compare_and_set(actor, path, fun, 1)
+      case {Arca.Storage.locate(path), whole_unit(path)} do
+        {loc, _whole} when loc in [:not_overlaid, :above_unit] -> {:error, :not_overlaid}
+        {_inside, {unit, rel}} -> ordinary_edit(actor, unit, rel, {:rewrite, fun})
+        {_inside_a_unit, nil} -> compare_and_set(actor, path, fun, 1)
       end
     end
   end
@@ -1727,6 +1853,177 @@ defmodule Arca.Overlay do
   defp update_backoff_ms(attempt) do
     ceiling = @update_backoff_base_ms * Integer.pow(2, attempt - 1)
     div(ceiling, 2) + :rand.uniform(div(ceiling, 2))
+  end
+
+  # ---------------------------------------------------------------------------
+  # Units committed whole
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Edit one directory unit whole, as one new revision through the write
+  protocol: under the unit's draft `fun` is given the committed
+  revision's objects, each `{relative, bytes}` with the sentinel among
+  them, or `nil` when no committed row names the unit, and answers the
+  objects the next revision holds, or a refusal. So the edit is made
+  against the revision it read, with no other commit between, and a
+  unit of this kind is never edited in place.
+
+  The domain's own verbs call it for what an ordinary write may not do
+  (a unit's record, a tree in one commit); every ordinary write into a
+  unit whose grammar commits it whole (`c:Arca.Storage.UnitLocator.commits_whole?/1`)
+  comes here too, through `c:Arca.Storage.UnitLocator.admit_edit/4`.
+  The storage cap is checked for the bytes the next revision adds.
+  Answers `:ok` or the refusal: `fun`'s, `{:error, :missing_sentinel}`
+  for objects with no sentinel, or a commit's (`commit_unit/4`).
+  `claim:` holds the commit to a provisioning attempt's claim, as
+  `commit_unit/4`'s does.
+  """
+  @spec edit_unit(
+          Prima.Actor.t(),
+          Arca.Storage.path(),
+          ([{Arca.Storage.path(), binary()}] | nil ->
+             {:ok, [{Arca.Storage.path(), binary()}]} | {:error, term()}),
+          keyword()
+        ) :: :ok | {:error, term()}
+  def edit_unit(%Prima.Actor{} = actor, unit, fun, opts \\ [])
+      when is_function(fun, 1) and is_list(opts) do
+    loc =
+      case Arca.Storage.locate(unit) do
+        {:dir, ^unit, _sentinel} = loc ->
+          loc
+
+        other ->
+          raise ArgumentError,
+                "edit_unit needs a directory unit's path; it locates to " <>
+                  Prima.LoggerContext.shape(other)
+      end
+
+    internal = internal_actor(actor)
+
+    gate = fn draft ->
+      with {:ok, current} <- committed_pairs(internal, loc, draft),
+           {:ok, next} <- fun.(current),
+           :ok <- check_commit_cap(actor, {:checked, added_bytes(current, next)}),
+           do: whole_entries(loc, next)
+    end
+
+    case write(actor, internal, loc, gate, Keyword.take(opts, [:claim])) do
+      {:ok, _relatives} ->
+        Arca.Usage.invalidate(actor)
+        :ok
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
+  # The unit a write inside lands in whole, and the path inside it: a
+  # path below a directory unit whose grammar commits it whole, outside
+  # the internal-write scope, whose writes are a commit's own.
+  defp whole_unit(path) do
+    with false <- internal_writes?(),
+         {:dir, unit, _sentinel} when unit != path <- Arca.Storage.locate(path),
+         true <- UnitLocator.commits_whole?(unit) do
+      {unit, Enum.drop(path, length(unit))}
+    else
+      _in_place -> nil
+    end
+  end
+
+  # A conditional write or a swap has no meaning in a unit committed
+  # whole, where every write is a revision of its own.
+  defp in_place(path) do
+    if whole_unit(path), do: {:error, :unsupported}, else: :ok
+  end
+
+  # An ordinary write into a unit committed whole: never at its
+  # sentinel, which its domain's verbs alone write; otherwise the change
+  # applied to the committed objects, and the domain asked what the next
+  # revision holds.
+  defp ordinary_edit(actor, unit, rel, change) do
+    {:dir, ^unit, sentinel} = Arca.Storage.locate(unit)
+
+    if rel == [sentinel] do
+      {:error, {:reserved_path, unit ++ rel}}
+    else
+      edit_unit(actor, unit, fn current ->
+        with {:ok, next} <- changed(current || [], rel, change),
+             do: UnitLocator.admit_edit(actor, unit, current, next)
+      end)
+    end
+  end
+
+  defp changed(pairs, rel, {:put, content}) do
+    bytes = IO.iodata_to_binary(content)
+
+    cond do
+      Enum.any?(pairs, fn {path, _} -> List.starts_with?(path, rel) and path != rel end) ->
+        {:error, :eisdir}
+
+      Enum.any?(pairs, fn {path, _} -> List.starts_with?(rel, path) and path != rel end) ->
+        {:error, :enotdir}
+
+      true ->
+        {:ok, List.keystore(pairs, rel, 0, {rel, bytes})}
+    end
+  end
+
+  defp changed(pairs, rel, {:append, content}) do
+    case List.keyfind(pairs, rel, 0) do
+      {^rel, bytes} -> changed(pairs, rel, {:put, [bytes, content]})
+      nil -> changed(pairs, rel, {:put, content})
+    end
+  end
+
+  defp changed(pairs, rel, {:rewrite, fun}) do
+    case List.keyfind(pairs, rel, 0) do
+      {^rel, bytes} ->
+        with {:ok, next} when is_binary(next) <- fun.(bytes),
+             do: changed(pairs, rel, {:put, next})
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp changed(pairs, rel, :delete) do
+    case List.keytake(pairs, rel, 0) do
+      {_taken, rest} -> {:ok, rest}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp changed(pairs, rel, :delete_tree) do
+    case Enum.split_with(pairs, fn {path, _} -> List.starts_with?(path, rel) end) do
+      {[], _kept} -> {:error, :not_found}
+      {_gone, kept} -> {:ok, kept}
+    end
+  end
+
+  # The committed revision's objects, read whole from its prefix, or
+  # `nil` for a unit no committed row names.
+  defp committed_pairs(internal, loc, %{state: "committed", current_revision: revision})
+       when is_binary(revision),
+       do: unit_pairs(internal, loc, revision)
+
+  defp committed_pairs(_internal, _loc, _draft), do: {:ok, nil}
+
+  defp added_bytes(current, next) do
+    size = fn pairs -> Enum.reduce(pairs || [], 0, fn {_rel, bytes}, n -> n + byte_size(bytes) end) end
+    max(size.(next) - size.(current), 0)
+  end
+
+  # The next revision's entries, the sentinel last as every commit writes it.
+  defp whole_entries({:dir, _unit, sentinel}, next) do
+    case List.keytake(next, [sentinel], 0) do
+      {{_rel, record}, body} ->
+        {:ok,
+         Enum.map(body, fn {rel, bytes} -> {rel, bytes, :required} end) ++
+           [{[sentinel], record, :required}]}
+
+      nil ->
+        {:error, :missing_sentinel}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1997,10 +2294,17 @@ defmodule Arca.Overlay do
   """
   @type content_manifest :: [{Arca.Storage.path(), String.t(), non_neg_integer()}]
 
-  # The content identity of a revision: each object in path order, framed
-  # as its path, its digest and its size, NUL-separated, hashed. A commit
-  # records it in the journal.
-  defp content_identity(manifest) do
+  @doc """
+  The content identity of a revision, as a commit records it in the
+  journal (`Arca.Schemas.StorageCommit`): each object in the order of its
+  path's segments, framed as the path joined by `/`, its digest
+  (`Prima.Digest.sha256/1`, `sha256:` and lowercase hex) and its size in
+  decimal, each followed by a NUL, the whole hashed
+  (`Prima.Digest.sha256_stream/1`). A reader who holds a revision's
+  objects recomputes it from them to know it holds exactly that revision.
+  """
+  @spec content_identity(content_manifest()) :: String.t()
+  def content_identity(manifest) do
     manifest
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.flat_map(fn {rel, digest, size} ->

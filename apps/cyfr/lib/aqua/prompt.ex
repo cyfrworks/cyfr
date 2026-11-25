@@ -154,7 +154,7 @@ defmodule Aqua.Prompt do
   @standing "## Working in CYFR\n\n" <>
               "- Do the work with your tools. Never tell the person to run a command, visit a " <>
               "site or take a step by hand that a tool can take, and never say a service is " <>
-              "unavailable before you have looked: the `capability-acquisition` scroll says " <>
+              "unavailable before you have looked: the `cyfr:capability-acquisition` scroll says " <>
               "how to find or build the component a task needs.\n" <>
               "- Look before you change anything (`files` reads the athanor's files, `source` " <>
               "a component's source, `storage` its stored state, `http` a page), and check " <>
@@ -171,7 +171,7 @@ defmodule Aqua.Prompt do
               "component that needs one is set up through `request_setup`.\n" <>
               "- Never send, submit, buy or publish anything on a site, accept terms or change " <>
               "an account without the person's word for that one act: nothing but this " <>
-              "instruction stops you. Read the `browser` scroll before you use the " <>
+              "instruction stops you. Read the `cyfr:browser` scroll before you use the " <>
               "browser.\n" <>
               "- A program on the Programs page, such as `gh`, is a command CYFR runs for you: " <>
               "`program.list` names them, `program.start` runs one with the words after its " <>
@@ -413,7 +413,8 @@ defmodule Aqua.Prompt do
 
   # The athanor's scrolls — procedures kept as Agent Skills — as an index
   # of name and line, read on demand with `aqua.skill_get`, the scrolls no
-  # harness carries left out (`Compendium.AquaSkills`). The same
+  # harness carries, and those their authors kept from the model, left out
+  # (`Compendium.Packs`). The same
   # in-process read the `aqua` tool's `skill_list` makes
   # (`Compendium.skills_index/2`), so the two cannot list different
   # sets. Sorted by name and free of anything that changes between turns;
@@ -424,10 +425,11 @@ defmodule Aqua.Prompt do
     case Compendium.skills_index(ctx, Compendium.skills_index_limit()) do
       {:ok, %{entries: [_ | _] = skills, more: more}} ->
         [
-          "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned. Read one with " <>
-            "`aqua.skill_get` before doing what it describes; propose one with " <>
-            "`aqua.skill_create` when a procedure worth repeating has just worked: it waits " <>
-            "in the thread for the person to save it.\n",
+          "\n\n---\n\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack " <>
+            "and its name. Read one with `aqua.skill_get` before doing what it describes; " <>
+            "propose one with `aqua.skill_create` (in `mine`, or a pack of the person's own) " <>
+            "when a procedure worth repeating has just worked: it waits in the thread for the " <>
+            "person to save it.\n",
           Enum.map(skills, fn %{name: name, description: description} ->
             ["- ", name, if(description == "", do: [], else: [" — ", description]), "\n"]
           end),

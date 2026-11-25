@@ -28,7 +28,7 @@ your-project/
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
-        ├── aqua/          # The athanor's Aqua: the soul, its crew, its scrolls
+        ├── aqua/          # The athanor's Aqua: the soul, its crew, its packs of scrolls
         ├── threads/ # Chat attachment files
         ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
@@ -1449,13 +1449,15 @@ counted in its storage. The rules:
   (`forked_from`); when a newer version of that upstream line is present
   locally, status flags it `upstream_superseded`.
 
-The Aqua tree — the soul and its scrolls, and the crew members the
-athanor makes — follows the same model: provisioning copies the shipped
-tree, the soul and the scrolls, into the athanor's `aqua/`, an edited file
-reads as edited by its bytes, and the `aqua` tool's `reset` action (from
-the Aqua page or over MCP) restores edited copies — one by name, or every
-one — while keeping the crew members and scrolls the athanor made;
-`skill_reset` restores one scroll.
+The Aqua tree — the soul, and the crew members the athanor makes —
+follows the same model: provisioning copies the shipped soul into the
+athanor's `aqua/`, an edited file reads as edited by its bytes, and the
+`aqua` tool's `reset` action (from the Aqua page or over MCP) restores
+edited copies — one by name, or every one — while keeping the crew
+members the athanor made. The scrolls are kept in packs under
+`aqua/scrolls/<pack>/` and are no part of a reset: CYFR's own pack,
+`cyfr`, follows the release at each boot, and every other pack is the
+person's, brought in or made on the Aqua page.
 
 ### The Files page
 
@@ -1471,11 +1473,16 @@ the server's, and each folder is one of four tiers.
   folder.
 - **Shaped** — `components/` and `aqua/`. Files are edited in place, but only
   inside a unit the folder's grammar knows: a `local` component's version
-  directory, the soul, a role, a scroll. A write outside one is refused with
-  the shape spelled out; a unit is created and removed by its own verb
-  (scaffold, pull, fork, the Aqua page), and one the server ships is reset,
-  never deleted. An edit inside a component re-registers its row; an edit
-  under `aqua/` rewrites the agent index.
+  directory, the soul, a role, a pack of scrolls. A write outside one is
+  refused with the shape spelled out; a unit is created and removed by its
+  own verb (scaffold, pull, fork, the Aqua page), and one the server ships
+  is reset, never deleted. An edit inside a component re-registers its row;
+  an edit under `aqua/` rewrites the agent index. A pack,
+  `aqua/scrolls/<pack>/`, is the one door to its scrolls: in a pack of your
+  own a write or delete is a new revision of the pack, a write under a new
+  folder makes one, and a delete of the folder removes it; a brought pack
+  and `cyfr` refuse every write, and so does CYFR's record of a pack,
+  `.cyfr-pack.json`.
 - **Read and delete** — `threads/`, the files of Aqua's threads, one folder
   per thread and one per post under it. Shown, downloaded and deleted here
   (a file, a post's folder or a thread's folder, never `threads/` itself),

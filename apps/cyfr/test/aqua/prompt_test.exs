@@ -185,7 +185,7 @@ defmodule Aqua.PromptTest do
     @part_one "## Working in CYFR\n\n- Do the work with your tools. Never tell the person to " <>
                 "run a command, visit a site or take a step by hand that a tool can take, and " <>
                 "never say a service is unavailable before you have looked: the " <>
-                "`capability-acquisition` scroll says how to find or build the component a " <>
+                "`cyfr:capability-acquisition` scroll says how to find or build the component a " <>
                 "task needs.\n- Look before you change anything (`files` reads the athanor's " <>
                 "files, `source` a component's source, `storage` its stored state, `http` a " <>
                 "page), and check the result after: a run's logs, a status read, a reply.\n- " <>
@@ -200,7 +200,7 @@ defmodule Aqua.PromptTest do
                 "a component that needs one is set up through `request_setup`.\n" <>
                 "- Never send, submit, buy or publish anything on a site, accept terms " <>
                 "or change an account without the person's word for that one act: nothing but " <>
-                "this instruction stops you. Read the `browser` scroll before you use the " <>
+                "this instruction stops you. Read the `cyfr:browser` scroll before you use the " <>
                 "browser.\n" <>
                 "- A program on the Programs page, such as `gh`, is a command CYFR runs for you: `program.list` names them, `program.start` runs one with the words after its command and answers what it printed, `program.wait` waits for more and `program.read` reads it again from the `next` an answer gave, `program.send` types on it, and `program.stop` stops it once you have what you need: a run ends with your turn anyway.\n" <>
                 "- A call that fails: read why, adjust and try once more, never the " <>
@@ -300,7 +300,7 @@ defmodule Aqua.PromptTest do
         )
 
       assert opening == @briefing
-      assert context =~ "\n## Scrolls\n\nProcedures this athanor has learned."
+      assert context =~ "\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack and its name."
       assert context =~ "\n- planner — "
     end
   end
@@ -457,8 +457,34 @@ defmodule Aqua.PromptTest do
       {before, rest} = split_last(prompt, "## Scrolls")
       assert before =~ "## Aqua Shell Control"
       [scrolls, _notes] = String.split(rest, "## Notes", parts: 2)
-      assert scrolls =~ "- capability-acquisition — "
+      assert scrolls =~ "- cyfr:capability-acquisition — "
       assert scrolls =~ "`aqua.skill_get`"
+    end
+
+    # The author's word: a scroll kept from the model is in no index a
+    # model reads, and is read when it is named.
+    test "a scroll its author kept from the model is in no index", %{home: home} do
+      actor = Sanctum.Context.actor(home)
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/mine/skills/how/SKILL.md",
+          "---\nname: how\ndescription: kept\ndisable-model-invocation: true\n---\n\nAsk.\n"
+        )
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/mine/skills/shown/SKILL.md",
+          "---\nname: shown\ndescription: listed\n---\n\nDo.\n"
+        )
+
+      prompt = Prompt.compose(home, agent: agent(), authority: nil).text
+      {_before, rest} = split_last(prompt, "## Scrolls")
+      assert rest =~ "- mine:shown — listed"
+      refute rest =~ "mine:how"
+      assert {:ok, %{name: "mine:how", body: "Ask."}} = Compendium.skill(home, "mine:how")
     end
 
     # The composed sections come after the authored prompt, and the shipped

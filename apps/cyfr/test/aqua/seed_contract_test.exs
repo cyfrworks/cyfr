@@ -203,7 +203,7 @@ defmodule Aqua.SeedContractTest do
     refute "canvas.activate" in soul.tools
     refute "canvas.restore" in soul.tools
 
-    skills = Path.join(@seed, "skills")
+    skills = Path.join(@seed, "scrolls/cyfr/skills")
     assert "canvas" in File.ls!(skills)
     assert "capability-acquisition" in File.ls!(skills)
 
@@ -231,11 +231,11 @@ defmodule Aqua.SeedContractTest do
     assert body =~ "Write with `canvas.write` what the person asked for"
     assert body =~ "Each write is the next version, whole"
 
-    artisan = File.read!(Path.join([@seed, "skills", "artisan", "SKILL.md"]))
+    artisan = File.read!(Path.join([@seed, "scrolls", "cyfr", "skills", "artisan", "SKILL.md"]))
     refute artisan =~ "| `canvas` |"
     refute artisan =~ ~r/canvas\.(write|catalog|versions)/
 
-    for {file, text} <- [{"skills/canvas/SKILL.md", body}] do
+    for {file, text} <- [{"scrolls/cyfr/skills/canvas/SKILL.md", body}] do
       refute text =~ ~r/\b(module|modules|toolkit|tree|trees|render)\b/i, file
       refute text =~ ~r/\bglass(es)?\b/i, file
       refute text =~ ~r/\bcards?\b/i, file
@@ -251,7 +251,7 @@ defmodule Aqua.SeedContractTest do
   # is not this.
   test "no shipped prose promises the person's yes before a call, or proposes a call for one" do
     files =
-      [soul_file() | Prima.Test.SourceTree.files!(Path.join([@seed, "skills", "*", "SKILL.md"]))]
+      [soul_file() | Prima.Test.SourceTree.files!(Path.join([@seed, "scrolls", "cyfr", "skills", "*", "SKILL.md"]))]
 
     assert length(files) > 3
 
@@ -342,7 +342,7 @@ defmodule Aqua.SeedContractTest do
   defp canvas_scroll do
     {:ok, _meta, body} =
       Compendium.AquaAgent.parse_frontmatter(
-        File.read!(Path.join([@seed, "skills", "canvas", "SKILL.md"]))
+        File.read!(Path.join([@seed, "scrolls", "cyfr", "skills", "canvas", "SKILL.md"]))
       )
 
     body
@@ -460,7 +460,7 @@ defmodule Aqua.SeedContractTest do
   # reads before doing what it describes.
   defp taught do
     scrolls =
-      for path <- Prima.Test.SourceTree.files!(Path.join([@seed, "skills", "*", "SKILL.md"])) do
+      for path <- Prima.Test.SourceTree.files!(Path.join([@seed, "scrolls", "cyfr", "skills", "*", "SKILL.md"])) do
         {:ok, _meta, body} = Compendium.AquaAgent.parse_frontmatter(File.read!(path))
         body
       end

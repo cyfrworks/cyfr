@@ -2872,12 +2872,24 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp proposal(%{kind: kind} = row) when kind in ["tool_result", "page_result"] do
     case Threads.payload(row)["proposal"] do
-      %{"name" => _, "description" => _, "content" => _, "against" => _} = proposal -> proposal
-      _none -> nil
+      %{"name" => name, "description" => _, "content" => _, "against" => _} = proposal ->
+        %{proposal | "name" => full_scroll_name(name)}
+
+      _none ->
+        nil
     end
   end
 
   defp proposal(_row), do: nil
+
+  # A card proposed before scrolls had packs names its scroll bare: such a
+  # scroll is the person's first pack's, `mine`, where the release moved
+  # every scroll an athanor made.
+  defp full_scroll_name(name) when is_binary(name) do
+    if String.contains?(name, ":"), do: name, else: Compendium.first_pack() <> ":" <> name
+  end
+
+  defp full_scroll_name(name), do: name
 
   defp drawn_kinds, do: Threads.post_kinds() ++ ["nudge", "turn_aborted"]
 

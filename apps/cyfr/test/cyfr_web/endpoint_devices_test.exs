@@ -30,6 +30,7 @@ defmodule CyfrWeb.EndpointDevicesTest do
     {:options, "/_f/v1/invoke", {204, 204, 406}},
     {:get, {:athanor, "/attachments/msg_1/a.png"}, {404, 403, 404}},
     {:get, {:athanor, "/files/download/data/a.png"}, {404, 403, 404}},
+    {:get, {:athanor, "/scrolls/download/none"}, {404, 403, 404}},
     {:get, "/shared/sth_1/attachments/msg_1/a.png", {404, 403, 404}}
   ]
 

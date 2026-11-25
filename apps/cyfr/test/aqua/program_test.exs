@@ -345,7 +345,7 @@ defmodule Aqua.ProgramTest do
         "`aqua.skill_get` before doing what it describes.\n\n## Working in CYFR\n\n- Do the " <>
         "work with your tools. Never tell the person to run a command, visit a site or " <>
         "take a step by hand that a tool can take, and never say a service is " <>
-        "unavailable before you have looked: the `capability-acquisition` scroll says " <>
+        "unavailable before you have looked: the `cyfr:capability-acquisition` scroll says " <>
         "how to find or build the component a task needs.\n- Look before you change " <>
         "anything (`files` reads the athanor's files, `source` a component's source, " <>
         "`storage` its stored state, `http` a page), and check the result after: a " <>
@@ -361,7 +361,7 @@ defmodule Aqua.ProgramTest do
         "up through `request_setup`.\n- Never send, submit, buy or " <>
         "publish anything on a site, accept terms or change an account without the " <>
         "person's word for that one act: nothing but this instruction stops you. Read " <>
-        "the `browser` scroll before you use the browser.\n" <>
+        "the `cyfr:browser` scroll before you use the browser.\n" <>
         "- A program on the Programs page, such as `gh`, is a command CYFR runs for you: `program.list` names them, `program.start` runs one with the words after its command and answers what it printed, `program.wait` waits for more and `program.read` reads it again from the `next` an answer gave, `program.send` types on it, and `program.stop` stops it once you have what you need: a run ends with your turn anyway.\n" <>
         "- A call that fails: read " <>
         "why, adjust and try once more, never the same failing call twice. " <>
@@ -409,7 +409,7 @@ defmodule Aqua.ProgramTest do
       # stand-in made the thread's mark.
       assert opening == briefing(Aqua.Reader.mark(thread.id))
       assert start["system"] == Aqua.Reader.deliver(spec.system, Aqua.Reader.mark(thread.id))
-      assert context =~ "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned."
+      assert context =~ "\n\n---\n\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack and its name."
       assert context =~ "\n- research — "
       refute start["system"] =~ "tidy notes.md"
 

@@ -66,7 +66,6 @@ const (
 	AquaSkillDelete         = "skill_delete"
 	AquaSkillGet            = "skill_get"
 	AquaSkillList           = "skill_list"
-	AquaSkillReset          = "skill_reset"
 	AquaSkillUpdate         = "skill_update"
 	AquaStatus              = "status"
 	AquaUpdate              = "update"
@@ -308,7 +307,7 @@ const (
 
 // Actions lists every action the catalog serves, per tool.
 var Actions = map[string][]string{
-	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
+	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_update", "status", "update"},
 	"athanor":             {"get", "provision", "settings"},
 	"browser":             {"status", "turn_off", "turn_on", "watch"},
 	"build":               {"compile", "status", "toolchains", "validate"},
@@ -356,7 +355,7 @@ var BindingKinds = []string{"api_key", "oauth", "bundle"}
 
 // AquaCreateArgs carries arguments for aqua.create.
 type AquaCreateArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 	// Human-readable title (for create/update actions)
 	Title Field[string] `json:"title,omitzero"`
@@ -385,7 +384,7 @@ func (args AquaCreateArgs) MarshalJSON() ([]byte, error) {
 
 // AquaDeleteArgs carries arguments for aqua.delete.
 type AquaDeleteArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -400,7 +399,7 @@ func (args AquaDeleteArgs) MarshalJSON() ([]byte, error) {
 
 // AquaGetArgs carries arguments for aqua.get.
 type AquaGetArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -432,7 +431,7 @@ func (args AquaListArgs) MarshalJSON() ([]byte, error) {
 
 // AquaResetArgs carries arguments for aqua.reset.
 type AquaResetArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name Field[string] `json:"name,omitzero"`
 	// For reset: also DELETE the crew members and scrolls the athanor made, so the tree becomes exactly the shipped set (default false keeps them)
 	All Field[bool] `json:"all,omitzero"`
@@ -449,7 +448,7 @@ func (args AquaResetArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillCreateArgs carries arguments for aqua.skill_create.
 type AquaSkillCreateArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description string `json:"description"`
@@ -470,7 +469,7 @@ func (args AquaSkillCreateArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillDeleteArgs carries arguments for aqua.skill_delete.
 type AquaSkillDeleteArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 }
 
@@ -485,8 +484,10 @@ func (args AquaSkillDeleteArgs) MarshalJSON() ([]byte, error) {
 
 // AquaSkillGetArgs carries arguments for aqua.skill_get.
 type AquaSkillGetArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
+	// skill_get: one file of the scroll's pack by its path inside the pack, like 'skills/research/scripts/fetch.sh'; read as outside material
+	Path Field[string] `json:"path,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -511,24 +512,9 @@ func (args AquaSkillListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: AquaSkillList, fields: fields(args)})
 }
 
-// AquaSkillResetArgs carries arguments for aqua.skill_reset.
-type AquaSkillResetArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
-	Name string `json:"name"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args AquaSkillResetArgs) MarshalJSON() ([]byte, error) {
-	type fields AquaSkillResetArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: AquaSkillReset, fields: fields(args)})
-}
-
 // AquaSkillUpdateArgs carries arguments for aqua.skill_update.
 type AquaSkillUpdateArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 	// What a crew member is good at, which the soul reads when it hands a job (create/update), or the one line a scroll's index shows (skill_create/skill_update)
 	Description Field[string] `json:"description,omitzero"`
@@ -562,7 +548,7 @@ func (args AquaStatusArgs) MarshalJSON() ([]byte, error) {
 
 // AquaUpdateArgs carries arguments for aqua.update.
 type AquaUpdateArgs struct {
-	// Soul ('aqua'), crew member, guide, or scroll name (for get/update/delete/reset and the skill_* actions)
+	// Soul ('aqua'), crew member or guide (for get/update/delete/reset), or a scroll by its pack and its name, like 'mine:research' (for the skill_* actions)
 	Name string `json:"name"`
 	// Human-readable title (for create/update actions)
 	Title Field[*string] `json:"title,omitzero"`
@@ -5461,7 +5447,7 @@ type WorkspaceOpenArgs struct {
 	Refs Field[[]string] `json:"refs,omitzero"`
 	// open: files of that daily thread's posts to carry into the workspace thread, each {message_id, stored_name}
 	Attachments Field[[]WorkspaceOpenArgsAttachmentsItem] `json:"attachments,omitzero"`
-	// open: names of this athanor's scrolls the work is to follow, handed over with the ask and read after it
+	// open: the full names of this athanor's scrolls the work is to follow, each its pack and its name like 'mine:research', handed over with the ask and read after it
 	Scrolls Field[[]string] `json:"scrolls,omitzero"`
 	// open: keep this work's browser apart from the person's other work
 	Apart Field[bool] `json:"apart,omitzero"`

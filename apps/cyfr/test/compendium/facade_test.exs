@@ -91,14 +91,18 @@ defmodule Compendium.FacadeTest do
     agent_tools_check: 1,
     agent_type_of: 1,
     agents: 1,
+    bring_in_pack: 4,
     canvas_versions: 2,
     complete_registry: 2,
+    copy_scroll: 3,
     crew_grant_row: 1,
     desktop_control: 4,
     desktop_prefs: 3,
     desktop_request: 3,
     discover_components: 1,
+    download_pack: 2,
     encode_activation_graph: 1,
+    first_pack: 0,
     get_blob: 2,
     group_by_component: 1,
     group_search_results: 1,
@@ -107,6 +111,13 @@ defmodule Compendium.FacadeTest do
     local_formula_refs: 1,
     manifest_leaves: 1,
     model_catalysts: 1,
+    pack_archive_bound: 0,
+    pack_digest: 2,
+    pack_dir: 1,
+    pack_file: 4,
+    pack_sheet: 4,
+    pack_view: 3,
+    packs: 1,
     parse_agent_frontmatter: 1,
     parse_component_path: 1,
     plain_entry: 1,
@@ -115,12 +126,13 @@ defmodule Compendium.FacadeTest do
     resolve_activation: 2,
     resolve_agent: 3,
     resolve_verified_activation: 2,
+    scroll_view: 3,
     shipped_versions: 2,
     skill: 2,
     skill_bound: 0,
-    skill_dir: 1,
     skills_index: 2,
     skills_index_limit: 0,
+    switch_pack: 3,
     sync_seeds: 0,
     tincture_allow_attribute: 1,
     tincture_asset_rules: 0,
@@ -218,15 +230,16 @@ defmodule Compendium.FacadeTest do
                Compendium.ComponentPath.manifest_leaves(leaves)
 
       assert Compendium.agent_file_path("scout") == Compendium.AquaPath.agent_file("scout")
-      assert Compendium.skill_dir("summarise") == Compendium.AquaPath.skill_dir("summarise")
+      assert Compendium.pack_dir("summarise") == Compendium.AquaPath.pack_dir("summarise")
     end
 
-    test "agents and skills answer as Compendium.AquaAgent and Compendium.AquaSkills", %{
+    test "agents and skills answer as Compendium.AquaAgent and Compendium.Packs", %{
       ctx: ctx
     } do
       assert Compendium.agent_crew_type() == Compendium.AquaAgent.crew_type()
       assert Compendium.agent_soul_type() == Compendium.AquaAgent.soul_type()
-      assert Compendium.skills_index_limit() == Compendium.AquaSkills.index_limit()
+      assert Compendium.skills_index_limit() == Compendium.Packs.index_limit()
+      assert Compendium.first_pack() == Compendium.Packs.mine()
 
       assert Compendium.parse_agent_frontmatter("no frontmatter") ==
                {:error, :frontmatter_missing}

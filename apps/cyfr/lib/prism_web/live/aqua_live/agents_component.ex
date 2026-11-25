@@ -2618,6 +2618,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
                   module={PrismWeb.AquaLive.ScrollsComponent}
                   id="aqua-scrolls-section"
                   context={@context}
+                  athanor={@athanor}
                   provenance={@provenance}
                   group={group}
                   tools={@tools}
