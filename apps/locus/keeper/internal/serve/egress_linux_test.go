@@ -309,7 +309,7 @@ func TestASpawnResolvingAsItsRoleEndsNeverStarts(t *testing.T) {
 		<-resolve
 		return []netip.Addr{netip.MustParseAddr("203.0.113.7")}, nil
 	}
-	req := spawnRequest(t, k.attach, "r1", "true", nil, false, 64<<20)
+	req := spawnRequest(t, k.attach, "r1", "true", map[string]string{}, false, 64<<20)
 	req.Hosts = []string{"api.example.com"}
 	done := make(chan struct{})
 	go func() {
