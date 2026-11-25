@@ -69,7 +69,7 @@ func keeperMain() int {
 	}
 	argv := []string{vm.GuestKeeper, "serve", "--role", vm.GuestRoleSpec, "--pool", vm.GuestPoolSpec,
 		"--home-root", vm.GuestHomeRoot, "--guard", vm.GuestGuardControl, "--", vm.GuestAgent, "relay"}
-	err := syscall.Exec(argv[0], argv, os.Environ())
+	err = syscall.Exec(argv[0], argv, os.Environ())
 	logf("refusing to start the keeper: %v", err)
 	return 1
 }

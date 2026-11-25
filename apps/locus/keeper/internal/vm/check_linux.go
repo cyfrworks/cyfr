@@ -115,15 +115,15 @@ type Report struct {
 // credentials, its filters and capabilities, as /proc/<pid>/status says
 // them, and the mounts of its mount namespace.
 type VMMView struct {
-	UID        string   `json:"uid"`
-	GID        string   `json:"gid"`
-	Groups     string   `json:"groups"`
-	NoNewPrivs string   `json:"no_new_privs"`
-	Seccomp    string   `json:"seccomp"`
-	CapEff     string   `json:"cap_eff"`
-	CapBnd     string   `json:"cap_bnd"`
-	Mounts     []Mount  `json:"mounts"`
-	Error      string   `json:"error,omitempty"`
+	UID        string  `json:"uid"`
+	GID        string  `json:"gid"`
+	Groups     string  `json:"groups"`
+	NoNewPrivs string  `json:"no_new_privs"`
+	Seccomp    string  `json:"seccomp"`
+	CapEff     string  `json:"cap_eff"`
+	CapBnd     string  `json:"cap_bnd"`
+	Mounts     []Mount `json:"mounts"`
+	Error      string  `json:"error,omitempty"`
 }
 
 // Mount is one mount of the VMM's namespace: where, whether it is mounted
