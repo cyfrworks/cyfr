@@ -5,9 +5,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   @moduledoc """
   The scrolls Aqua can read on demand — Agent Skills under
   `aqua/skills/<name>/SKILL.md` — listed, read, written and removed
-  through the `aqua` tool. A write changes a scroll's provenance, which
-  the page reads for every section at once, so a write here asks the page
-  to re-read it (`{:refresh, :skills}`).
+  through the `aqua` tool, shown as the Scrolls group of what Aqua may use
+  (`PrismWeb.AquaLive.AgentsComponent.group/1`), whose switch and entries,
+  the `aqua.skill_*` keys, are the roster's to write. It reads itself when
+  it is first rendered and when the page tells it to. A write changes a
+  scroll's provenance, which the page reads for every section at once, so
+  a write here asks the page to re-read it (`{:refresh, :skills}`).
   """
 
   use PrismWeb, :live_component
@@ -36,6 +39,9 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
 
     {:ok, socket}
   end
+
+  def update(assigns, %{assigns: %{loaded: false}} = socket),
+    do: update(Map.put(assigns, :load, true), socket)
 
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
 
@@ -222,22 +228,20 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
       <.section_flash flash={@flash} target={@myself} />
 
       <%!-- The scrolls: what Aqua can read on demand. --%>
-      <details
-        :if={@loaded}
-        id="aqua-scrolls"
-        class="rounded-lg border border-gray-800 bg-gray-900/40"
-        open={@skills != [] or @skill_editor != nil}
+      <PrismWeb.AquaLive.AgentsComponent.group
+        group={@group}
+        tools={@tools}
+        target={@target}
+        details_id="aqua-scrolls"
+        open={@skill_editor != nil}
       >
-        <summary class="cursor-pointer px-4 py-2 text-sm font-medium text-gray-200">
-          Scrolls <span class="text-xs text-gray-500">({length(@skills)})</span>
-        </summary>
-        <div class="border-t border-gray-800 px-4 py-2 space-y-2">
+        <div class="space-y-2 px-3">
           <div class="flex items-center justify-between gap-2">
-            <p :if={@skills == []} class="text-xs text-gray-600">
-              No scrolls here. Aqua can write one when it learns a way of working worth keeping — or you can.
+            <p :if={@skills == []} class="text-[11px] text-gray-500">
+              No scrolls here. Aqua can propose one when it learns a way of working worth keeping — or you can write one.
             </p>
-            <p :if={@skills != []} class="text-xs text-gray-600">
-              A way of working Aqua reads when the task calls for it.
+            <p :if={@skills != []} class="text-[11px] text-gray-500">
+              {length(@skills)} {if length(@skills) == 1, do: "scroll", else: "scrolls"}: each a way of working Aqua reads when the task calls for it.
             </p>
             <button
               :if={@skill_editor == nil}
@@ -376,12 +380,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
               </div>
             </div>
             <pre class="whitespace-pre-wrap text-xs text-gray-300 font-mono">{@skill_open.content}</pre>
-            <p :if={@skill_open.resources != []} class="text-[10px] text-gray-500">
+            <p :if={@skill_open.resources != []} class="text-[11px] text-gray-500">
               Files: {Enum.join(@skill_open.resources, ", ")}
             </p>
           </div>
         </div>
-      </details>
+      </PrismWeb.AquaLive.AgentsComponent.group>
     </div>
     """
   end

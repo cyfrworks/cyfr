@@ -902,21 +902,17 @@ func TestScreenSaysWhereTheAppIsAnotherRelease(t *testing.T) {
 	}
 }
 
-// The screen's launcher starts the app on the route its folder's CYFR
-// takes, read at that start: a tailnet folder's proxy and resolver rules,
-// none for another, and none for a folder that cannot be read: there the
-// shell fails before it shows anything, the reason goes to the app's
-// error stream, the app ends itself and the launcher tries again.
-func TestTheScreensAppStartsOnItsFoldersRoute(t *testing.T) {
-	for _, c := range []struct {
-		name, env string
-		route     []string
-	}{
-		{"tailnet", "CYFR_ACCESS=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n",
-			[]string{"--proxy-server=socks5://127.0.0.1:1055", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"}},
-		{"local", "CYFR_ACCESS=local\nCYFR_PORT=4321\n", nil},
-		{"public", "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n", nil},
-		{"unreadable", "", nil},
+// The screen's launcher starts the app on its folder alone, whatever the
+// folder's access: the route to a tailnet folder's CYFR comes with its
+// proposal (screen_app.go), as on a desktop, and the app sets it on that
+// CYFR's own stores. A folder that cannot be read starts it the same way:
+// there the shell fails before it shows anything, the reason goes to the
+// app's error stream, the app ends itself and the launcher tries again.
+func TestTheScreensAppStartsOnItsFolderAlone(t *testing.T) {
+	for _, c := range []struct{ name, env string }{
+		{"tailnet", "CYFR_ACCESS=tailnet\nCYFR_HOST=box.tail1234.ts.net\nCYFR_PUBLIC_URL=https://box.tail1234.ts.net\nCYFR_TAILNET_NODE_ID=nAAAAAAAAACNTRL\nCYFR_PORT=4000\n"},
+		{"local", "CYFR_ACCESS=local\nCYFR_PORT=4321\n"},
+		{"unreadable", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -928,7 +924,7 @@ func TestTheScreensAppStartsOnItsFoldersRoute(t *testing.T) {
 					t.Fatalf("the folder is not read: %v", err)
 				}
 			}
-			want := append([]string{"/opt/cyfr/CYFR", "--screen-project=" + dir}, c.route...)
+			want := []string{"/opt/cyfr/CYFR", "--screen-project=" + dir}
 			if got := screenAppArgs(dir); !slices.Equal(got, want) {
 				t.Fatalf("the app starts as %q, want %q", got, want)
 			}

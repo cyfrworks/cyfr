@@ -185,6 +185,14 @@ type config struct {
 		Profiles    []string           `yaml:"profiles"`
 		Environment map[string]*string `yaml:"environment"`
 	} `yaml:"services"`
+	// Networks are the subnets the stack fixes (heldBy).
+	Networks map[string]struct {
+		Ipam struct {
+			Config []struct {
+				Subnet string `yaml:"subnet"`
+			} `yaml:"config"`
+		} `yaml:"ipam"`
+	} `yaml:"networks"`
 }
 
 var yamlLine = regexp.MustCompile(`line ([0-9]+)`)

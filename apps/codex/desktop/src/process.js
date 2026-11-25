@@ -4,8 +4,9 @@
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 2, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, and id, a departure's or an erase's, whole ones
-// from 1, erased's ok, true or false, erase's home and account, each an
+// the proposal's number, id, a departure's or an erase's, and offer, an
+// update's, whole ones from 1, erased's ok, true or false, erase's home
+// and account, each an
 // origin in its one spelling,
 // folder-picked's path, a
 // folder spelled from a root (absolute) or null, and its epoch and pick,
@@ -15,11 +16,16 @@ export const VERSION = 2
 
 export const MAX_LINE = 64 * 1024
 
+// The header of the chooser's requests that carries the run token, which
+// main adds to those of the chooser's own top document alone (app.js
+// runHeader) and cyfr reads nowhere else (internal/desktop RunHeader).
+export const RUN_HEADER = "Cyfr-Run"
+
 const FIELDS = {
-  ready: {required: ["url"], optional: ["rail"]},
-  home: {required: ["home", "account", "attempt"], optional: ["proxy", "resolver", "setup"]},
+  ready: {required: ["url"], optional: ["rail", "update"]},
+  home: {required: ["home", "account", "attempt"], optional: ["proxy", "setup"]},
   opened: {required: ["home", "attempt"]},
-  locked: {required: [], optional: ["home", "account", "proxy", "resolver"], together: ["home", "account"]},
+  locked: {required: [], optional: ["home", "account", "proxy"], together: ["home", "account"]},
   ending: {required: []},
   left: {required: ["id"]},
   erase: {required: ["id", "home"], optional: ["account"]},
@@ -29,11 +35,13 @@ const FIELDS = {
   shutdown: {required: []},
   "folder-picked": {required: ["path", "epoch", "pick"]},
   forget: {required: ["home"]},
-  erased: {required: ["id", "ok"]}
+  erased: {required: ["id", "ok"]},
+  update: {required: ["offer"]},
+  "update-closed": {required: []}
 }
 
 const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "left", "erase"]
-const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked", "forget", "erased"]
+const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked", "forget", "erased", "update", "update-closed"]
 
 /**
  * Whether `path` is a folder spelled from a root on any system the app
@@ -61,7 +69,7 @@ export function isOrigin(v) {
   }
 }
 // The fields that are a number, a whole one from 1.
-const whole = (key) => key === "attempt" || key === "id"
+const whole = (key) => key === "attempt" || key === "id" || key === "offer"
 
 /** Read one line cyfr sent, or throw `Refused` with its reason. */
 export function readFromCyfr(line) {
@@ -87,7 +95,7 @@ export function readFromCyfr(line) {
   const {together = []} = FIELDS[m.type]
   const named = together.filter((k) => Object.hasOwn(m, k)).length
   if (named !== 0 && named !== together.length) throw new Refused("fields")
-  if (together.length && named === 0 && (Object.hasOwn(m, "proxy") || Object.hasOwn(m, "resolver"))) throw new Refused("fields")
+  if (together.length && named === 0 && Object.hasOwn(m, "proxy")) throw new Refused("fields")
   // A setup token in its one form, which the CYFR's setup page reads.
   if (Object.hasOwn(m, "setup") && !/^[0-9a-f]{64}$/.test(m.setup)) throw new Refused("fields")
   // What an erase names is erased by its origin: nothing else is one.

@@ -644,46 +644,10 @@ defmodule Aqua.Loop do
   # grant is refused, never run under the old grant, whichever member's
   # turn it is. A crew member's own file is in no grant, so its edit
   # refuses nothing here.
-  # The grant's servers and the list's, each server's patterns and entries
-  # narrowed by what the turn's one reading says the server exposes now
-  # (`servers_read/2`), are exactly alike. Consent narrowed the grant by
-  # what each server exposed when it was given, so a server exposing more
-  # than then, a capability it declares since among it, asks for the grant
-  # again; one exposing less, or not answering, narrows both alike and
-  # costs no consent: the turn starts without what it would offer, and the
-  # grant covers that again once the server offers it.
-  defp consented_release(ctx, %{activation: activation} = authority, %{agent: agent}, reading) do
-    exposing = Map.new(reading, &{&1.server_name, &1.tool_patterns})
-
-    with {:ok, row} <- Compendium.crew_grant_row(ctx),
-         consented when is_binary(consented) <- Map.get(activation, @grant),
-         true <- consented == row.release_digest,
-         true <- Enum.sort(agent.tools) == row.manifest["caps"]["tools"],
-         true <- granted_servers(authority, exposing) == listed_servers(agent.tools, exposing) do
-      :ok
-    else
-      {:error, reason} when reason != :not_found -> {:error, reason}
-      _moved -> {:error, :agent_changed}
-    end
-  end
-
-  defp granted_servers(%{resources: %{tool_servers: servers}}, exposing) when is_list(servers) do
-    servers
-    |> Enum.map(
-      &{&1.server_name, exposed(Map.get(exposing, &1.server_name, []), &1.tool_patterns)}
-    )
-    |> Enum.sort()
-  end
-
-  defp granted_servers(_none, _exposing), do: []
-
-  defp listed_servers(tools, exposing) do
-    tools
-    |> outside_entries()
-    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-    |> Enum.map(fn {server, tools} -> {server, exposed(Map.get(exposing, server, []), tools)} end)
-    |> Enum.sort()
-  end
+  # The grant's servers and the list's, as the one comparison the Aqua
+  # page asks too (`Aqua.Loop.Turn.consented/4`).
+  defp consented_release(ctx, authority, %{agent: agent}, reading),
+    do: Turn.consented(ctx, authority, agent.tools, reading)
 
   # The list's servers as Sanctum's port reads them now, asking only those
   # its entries name (`Sanctum.Proxy`'s `list_external_tools/2`): each that
@@ -704,13 +668,6 @@ defmodule Aqua.Loop do
   defp outside_entries(tools),
     do:
       for(key <- tools, [server, tool] <- [String.split(key, ":", parts: 2)], do: {server, tool})
-
-  defp exposed(patterns, tools) do
-    tools
-    |> Enum.filter(fn tool -> Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool)) end)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
 
   # ---------------------------------------------------------------------------
   # Ending

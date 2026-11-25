@@ -7,7 +7,7 @@
 // account service this computer approved.
 
 import {fromCause, processLoss} from "../bound.mjs"
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, childOfFrame, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, rail, childOfFrame, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
@@ -377,6 +377,12 @@ async function forcedCrash(w) {
 // account service, or the device's pages without one.
 async function connected(w) {
   await submitConnect(w.webContents)
+  return landed()
+}
+
+// Where the content went: the question about an account service, or the
+// device's pages without one.
+function landed() {
   return waitFor(async () => {
     const c = content()
     if (!c || c.webContents.isLoading()) return null
@@ -387,12 +393,16 @@ async function connected(w) {
   }, "the device's pages or a question")
 }
 
-// remembered: launched again, the account service this computer approved
-// for the CYFR is not asked about again; Connect opens the device's pages,
-// which ask for the passphrase again: this road keeps no sign-in.
+// remembered: launched again, the app presses the CYFR selected last by
+// itself; the account service this computer approved for it is not asked
+// about again, and the device's pages ask for the passphrase again: this
+// road keeps no sign-in.
 async function rememberedPhase() {
-  const next = await connected(await chooserWindow())
-  row("remembered", next.next === "the device's pages", "launched again, the CYFR's approved account service is not asked about again", next)
+  await judged("remembered", "launched again, the app opens the CYFR selected last by itself, and its approved account service is not asked about again",
+    async () => {
+      const next = await landed()
+      return [next.next === "the device's pages", next]
+    })
   const locked = await js(content().webContents, `!!document.querySelector('form[action="/unlock"]')`)
   row("asks_again", locked && !(await sessionCookie(content())),
     "launched again, the six-word road keeps no session and asks for the passphrase again", {locked})
@@ -403,6 +413,10 @@ async function rememberedPhase() {
 // about that one though the earlier was approved, and the earlier
 // approval has ended: named again, it is asked about again.
 async function changedPhase() {
+  // The CYFR selected last opens by itself at the launch; Connect on the
+  // rail leaves it for the chooser.
+  await landed()
+  await js((await waitFor(() => rail(), "the rail")).webContents, `location.assign("/rail/connect"); 1`)
   const w = await chooserWindow()
   await fault("x.test", "directory", {directory: OTHER_DIRECTORY})
   const other = await connected(w)
