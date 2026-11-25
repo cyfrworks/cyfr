@@ -422,6 +422,71 @@ defmodule Compendium.Providers.AquaConsentTest do
     end
   end
 
+  # A Save the athanor's storage cap refuses says so in a sentence, a
+  # file's and a scroll's alike, never that storage is unavailable.
+  test "a Save past the athanor's storage cap says the storage is at its limit" do
+    ctx = Sanctum.TestContext.local(:prism)
+    actor = Sanctum.Context.actor(ctx)
+    lineage = turn!(ctx)
+
+    {:ok, _} =
+      Arca.Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/fern/SKILL.md",
+        "---\nname: fern\ndescription: d\n---\n\nWater it.\n"
+      )
+
+    bytes = "Keep it shaded.\n"
+
+    {:ok, row} =
+      Arca.ThreadStorage.append(actor, lineage.thread_id, %{
+        author: Prima.Author.agent(),
+        sent_by: "aqua",
+        kind: "tool_result",
+        status: "proposed",
+        content: "proposed",
+        payload: %{
+          "tool_call_id" => "c1",
+          "name" => "aqua",
+          "proposal" => %{
+            "name" => "mine:fern",
+            "path" => "skills/fern/notes.md",
+            "content" => bytes,
+            "size" => byte_size(bytes),
+            "sha256" => Prima.Digest.sha256(bytes),
+            "against" => "none",
+            "against_size" => nil,
+            "runs" => false,
+            "script" => false
+          }
+        }
+      })
+
+    Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
+    Arca.Cache.delete_match({:athanor_usage, :_, :_})
+
+    saves = [
+      %{"action" => "skill_file", "proposal" => row.id, "sha256" => Prima.Digest.sha256(bytes)},
+      %{
+        "action" => "skill_create",
+        "name" => "mine:kept",
+        "description" => "d",
+        "content" => "c",
+        "against" => "none"
+      }
+    ]
+
+    for args <- saves do
+      assert {:error, reason} = Sanctum.Gate.call_external("aqua", ctx, args), args["action"]
+
+      assert Prima.Refusal.message(reason) ==
+               "The athanor's storage is at its limit (1 bytes) — remove something first",
+             args["action"]
+    end
+
+    assert {:error, :not_found} = Arca.get(actor, ~w(aqua scrolls mine skills fern notes.md))
+  end
+
   # A scroll's bound, stated once where it is written: a manifest of at
   # most 131,072 bytes and a description of at most 1,024 characters.
   test "the writer holds a scroll to its bound" do

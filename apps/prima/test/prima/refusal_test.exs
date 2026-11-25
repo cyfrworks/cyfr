@@ -276,6 +276,7 @@ defmodule Prima.RefusalTest do
     {{:limit_reached, :athanors, 3}, :rate_limited},
     {{:limit_reached, :mint_per_hour, 10}, :rate_limited},
     {{:limit_reached, :max_athanors, 100}, :rate_limited},
+    {{:limit_reached, :athanor_storage_bytes, 100}, :invalid_argument},
     {:invalid_bearer, :unauthenticated},
     {{:session_ended, :denied}, :unauthenticated},
     {{:session_ended, :device_removed}, :unauthenticated},

@@ -1997,8 +1997,7 @@ defmodule Compendium.Packs do
 
     with {:ok, pack, scroll} <- scroll_named(actor, name),
          {:ok, record, current} <- own_pairs(actor, pack),
-         {:ok, rel} <- file_admitted(pack, scroll, current, path, bytes, :proposal),
-         next = List.keystore(current, rel, 0, {rel, bytes}),
+         {:ok, rel, next} <- file_admitted(pack, scroll, current, path, bytes, :proposal),
          :ok <- bounded(pack, next),
          :ok <- set_bounded(actor, pack, record, next) do
       runs = executable?(record, path, bytes)
@@ -2041,9 +2040,9 @@ defmodule Compendium.Packs do
 
         current ->
           with {:ok, _record} <- own_record_of(pack, current),
-               {:ok, rel} <- file_admitted(pack, scroll, current, path, bytes, :save),
+               {:ok, rel, next} <- file_admitted(pack, scroll, current, path, bytes, :save),
                :ok <- file_unchanged(current, rel, against, path),
-               do: admit_edit(actor, unit, current, List.keystore(current, rel, 0, {rel, bytes}))
+               do: admit_edit(actor, unit, current, next)
       end)
     end
   end
@@ -2091,8 +2090,10 @@ defmodule Compendium.Packs do
   # Save, each refusal a sentence: the proposal's bound, text alone, the
   # store's path rule, the scroll stored (at the Save; at the proposal a
   # scroll not stored yet is named by its folder, as CYFR's own writes
-  # keep it), the scroll's folder alone, no `SKILL.md`, and no path the
-  # pack's manifest declares.
+  # keep it), the scroll's folder alone, no `SKILL.md`, no path the pack's
+  # manifest declares, and no file and folder sharing a name, by the rule
+  # an ordinary write into the pack meets (`Arca.Overlay.put_object/3`).
+  # Answers the file's place and the pack's files with it.
   defp file_admitted(pack, scroll, pairs, path, bytes, stage) do
     name = full_name(pack, scroll)
 
@@ -2101,7 +2102,15 @@ defmodule Compendium.Packs do
          {:ok, folder} <- folder_at(pairs, scroll, name, stage),
          {:ok, rel} <- beside(path, folder, name),
          :ok <- undeclared(pack, pairs, path),
-         do: {:ok, rel}
+         {:ok, next} <- placed(pairs, rel, path, bytes),
+         do: {:ok, rel, next}
+  end
+
+  defp placed(pairs, rel, path, bytes) do
+    case Arca.Overlay.put_object(pairs, rel, bytes) do
+      {:ok, next} -> {:ok, next}
+      {:error, reason} when reason in [:eisdir, :enotdir] -> {:error, Arca.Files.clash(path)}
+    end
   end
 
   defp proposable(path, bytes) do

@@ -1142,6 +1142,13 @@ defmodule Prima.Refusal do
   defp row({:limit_reached, :max_athanors, _limit}),
     do: {:rate_limited, "This server holds as many athanors as it may — ask its operator"}
 
+  # The athanor's storage cap (`Prima.Caps.check_storage/2`): a write it
+  # refuses wrote nothing, and room is made by removing something.
+  defp row({:limit_reached, :athanor_storage_bytes, cap}) when is_integer(cap),
+    do:
+      {:invalid_argument,
+       "The athanor's storage is at its limit (#{cap} bytes) — remove something first"}
+
   defp row({:limit_reached, _what, _limit}),
     do: {:rate_limited, "A limit on this account was reached — try again later"}
 
