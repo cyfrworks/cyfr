@@ -664,7 +664,6 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // to load closes it, and one lost is loaded again; its close, the
   // person's or main's, is told to cyfr.
   function openUpdate(url) {
-    if (screen) return
     ensureFrame()
     if (updateWindow && !updateWindow.isDestroyed()) {
       updateWindow.focus()

@@ -297,12 +297,12 @@ export const ACTS = {
   // Update CYFR, at the rail's foot: its window over the content, the
   // CYFR open left as it is.
   update: {window: "rail", by: (_, url) => atRail(url),
-    to: (s, e) => railFree(s) && railPress(e.url)?.act === "update" && !!s.updateURL,
+    to: (s, e) => railFree(s) && (!s.screen || s.name === "open") && railPress(e.url)?.act === "update" && !!s.updateURL,
     then: (s) => ({state: s, allow: false, do: [{update: {url: s.updateURL}}]})},
   // Update CYFR's yes, from its own page alone: cyfr is told the offer's
   // number, and starts only the offer it holds under it.
   start: {window: "update", by: (_, url) => atUpdate(url),
-    to: (s, e) => !s.screen && updatePress(e.url)?.act === "start",
+    to: (s, e) => (!s.screen || s.name === "open") && updatePress(e.url)?.act === "start",
     then: (s, e) => ({state: s, allow: false, do: [{send: {type: "update", fields: {offer: updatePress(e.url).offer}}}]})},
   // Its Close.
   close: {window: "update", by: (_, url) => atUpdate(url),
@@ -377,7 +377,8 @@ function lock(s, why, notice, heard = null) {
   const before = s.name === "proposed" ? {home: s.home, account: s.account, proxy: s.proxy ?? "", accountRoad: s.accountRoad} : kept(s)
   const next = {...t, name: "locking", before, notices: adding(s.notices, notice), barrier: heard !== null,
     keep: heard, forgotten: heard === null, returning: null}
-  return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, heard ? {forget: true} : {send: {type: "lock"}}]}
+  return {state: next, do: [{say: `locked: ${why}`}, ...answer, {close: true}, ...(s.screen ? [{unupdate: true}] : []),
+    heard ? {forget: true} : {send: {type: "lock"}}]}
 }
 
 // Away from what the content shows, to `then`: the chooser, connecting to
@@ -445,12 +446,11 @@ function advance(s, e) {
   switch (e.type) {
     // ---- cyfr ----
     case "ready": {
-      // The box's screen shows the rail as a desktop does, and no Update
-      // CYFR in this part.
+      // The box's screen shows the rail and Update CYFR as a desktop does.
       const rail = e.message?.rail ?? ""
       const update = e.message?.update ?? ""
       if (s.name !== "starting" || !e.url.startsWith(LOOPBACK + "/bootstrap/#token=") || !rail.startsWith(LOOPBACK + "/rail/#read=") ||
-        (s.screen ? update : !update.startsWith(LOOPBACK + "/update/#read="))) {
+        !update.startsWith(LOOPBACK + "/update/#read=")) {
         return stopped(s, "its first page was not the chooser")
       }
       // The app the update opened again opens Update CYFR on its record,

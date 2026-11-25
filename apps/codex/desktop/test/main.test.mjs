@@ -2503,7 +2503,7 @@ async function screenStarted(project = SCREEN) {
     startApp({cyfr: "/opt/cyfr/resources/cyfr", accountRoad: true, say: sayTraced(said), endSelf})
     await settled()
     if (world.exited === undefined) {
-      child.say({type: "ready", url: READY, rail: RAIL})
+      child.say({type: "ready", url: READY, rail: RAIL, update: UPDATE})
       await settled()
     }
   } finally {
@@ -2628,6 +2628,23 @@ test("the screen's first page is the chooser with its rail, as a desktop's: the 
   assert.equal(content(), undefined)
   assert.equal(world.endedSelf.length, 1, "the app ends itself")
   assert.ok(child.heard.some((m) => m.type === "shutdown"), "cyfr is shut down")
+})
+
+// On the box's screen Update CYFR opens from the rail's foot over the
+// box's window, as a confirmation window does, with a CYFR open; a lock
+// closes it with the page.
+test("on the box's screen the rail's foot opens Update CYFR over its window, and a lock closes it", ON_LINUX, async () => {
+  await screenStarted()
+  assert.ok(await opens())
+  press("http://127.0.0.1:7340/rail/update")
+  await settled()
+  const u = updateWindow()
+  assert.ok(u, "Update CYFR's window opened")
+  assert.equal(u.options.parent, frame(), "over the box's window")
+  child.say({type: "locked", home: HOME, account: ACCOUNT})
+  await settled()
+  assert.ok(u.destroyed, "a lock closes it")
+  assert.equal(updateWindow(), undefined)
 })
 
 test("a lock on the screen hides the page at once and shows the chooser again, in a new session, which goes on to the device's page", ON_LINUX, async () => {
