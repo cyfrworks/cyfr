@@ -631,7 +631,8 @@ defmodule Cyfr.StackShapeTest do
         {:backends,
          %{
            release.guard => %{
-             "ports" => for(name <- [:builds, :runtime], do: "127.0.0.1::#{role(roles, name).port}")
+             "ports" =>
+               for(name <- [:builds, :runtime], do: "127.0.0.1::#{role(roles, name).port}")
            }
          }, nil},
       # The overlays a role's suites layer last, without writable cgroups:
@@ -1163,9 +1164,8 @@ defmodule Cyfr.StackShapeTest do
        "      #{release.guard}:\n        condition: service_started\n", ["depends_on"]},
       {"with the run root writable by all", "/run/locus:mode=0711,", "/run/locus:mode=1777,",
        ["tmpfs"]},
-      {"with the runtime's run folder another's",
-       "/run/locus/runtime:uid=10011,gid=10011,", "/run/locus/runtime:uid=10012,gid=10012,",
-       ["tmpfs"]}
+      {"with the runtime's run folder another's", "/run/locus/runtime:uid=10011,gid=10011,",
+       "/run/locus/runtime:uid=10012,gid=10012,", ["tmpfs"]}
     ]
 
     # Each plant replaces one exact text, found once; one that is not

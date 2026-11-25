@@ -1477,8 +1477,8 @@ cgroup v2 host** and the container's `security_opt: writable-cgroups=true`,
 which the shipped `docker-compose.yml` sets and which adds no capability.
 Without it nothing runs unbounded and nothing runs: `cyfr-locus` refuses
 to start, saying it can make no cgroup group for a role, and the container
-restart-loops, so no component runs, every build is refused as
-`unavailable`, and no program starts.
+restart-loops, so no component runs, every build is
+refused as `unavailable`, and no program starts.
 
 Docker marks the `locus` container `OOMKilled` whenever a runner, a build
 or a backend is ended at its own bound, though neither the container nor

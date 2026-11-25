@@ -562,11 +562,11 @@ def test_keeper(stack, limit, canary):
     # options behind a guard of its own, whose builds role is the scenario's
     # client over the probe pool, relay spaces that need no route.
     guard = imagesuite.Guard(stack.image, f"{stack.project}-keeper-guard")
-    name = f"{stack.project}-keeper"
     probe = copy.copy(stack)
-    probe.container = name
+    name = None
     try:
-        run("docker", "run", "--detach", "--name", name, *guard.keeper_args(), "-v", f"{canary}:/canary:ro",
+        name = run("docker", "run", "--detach", *imagesuite.run_name(f"{stack.project}-keeper"), *guard.keeper_args(),
+                   "-v", f"{canary}:/canary:ro",
             "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
             "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true",
             "--security-opt", f"seccomp={os.path.join(ROOT, 'apps', 'locus', 'keeper', 'seccomp', 'keeper.json')}",
@@ -577,7 +577,9 @@ def test_keeper(stack, limit, canary):
             "--entrypoint", "cyfr-locus", stack.image, "serve",
             "--role", imagesuite.role_spec(dict(ROLE, pool=PROBE_POOL)),
             "--pool", f"{PROBE_POOL}:{PROBE_FIRST}-{PROBE_LAST}:relay", "--home-root", RELEASE["home_root"],
-            "--guard", imagesuite.Guard.CONTROL, "--", "node", "/canary/memory-client.mjs", "/canary/memory-scenario.json")
+            "--guard", imagesuite.Guard.CONTROL, "--", "node", "/canary/memory-client.mjs",
+                   "/canary/memory-scenario.json").stdout.strip()
+        probe.container = name
         # The role's group is made as the keeper boots, before the role starts.
         deadline = time.monotonic() + 60
         while probe.exec(f"test -f {ROLE_GROUP}/memory.events").returncode != 0:
@@ -596,7 +598,8 @@ def test_keeper(stack, limit, canary):
         homes = probe.homes()
         groups = keeper_groups(probe)
     finally:
-        run("docker", "rm", "--force", name, check=False)
+        if name:
+            run("docker", "rm", "--force", name, check=False)
         guard.down()
     report = json.loads(result.stdout.split("<<<", 1)[1].rsplit(">>>", 1)[0])
     spawns = {spawn["name"]: spawn for spawn in report["spawns"]}

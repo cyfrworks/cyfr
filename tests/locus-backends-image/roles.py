@@ -153,15 +153,18 @@ def old_home(stack, old_image, old_root):
     old = [os.path.join(old_root, "docker-compose.yml"),
            os.path.join(old_root, "tests", "locus-backends-image", "compose.locus-backends.yml")]
     env = stack.env(BACKENDS_IMAGE=old_image, PROBE_DIR=os.path.join(old_root, "tests", "locus-backends-image"))
+    # The backends role as the three-container stack names it, from that stack's own role table.
+    with open(os.path.join(old_root, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as table:
+        then = next(role for role in json.load(table)["roles"] if role["name"] == "backends")
 
     def compose(*args, check=True):
         return run("docker", "compose", "--project-name", stack.project, "--project-directory", stack.project_dir,
                    *[arg for file in old for arg in ("-f", file)], *args, env=env, check=check)
 
     try:
-        compose("up", "--detach", "--no-build", "--force-recreate", "locus-backends")
-        guard = compose("ps", "--quiet", "locus-backends-guard").stdout.strip()
-        address = run("docker", "port", guard, "4101").stdout.strip().splitlines()[0]
+        compose("up", "--detach", "--no-build", "--force-recreate", then["service"])
+        guard = compose("ps", "--quiet", then["guard"]).stdout.strip()
+        address = run("docker", "port", guard, str(then["port"])).stdout.strip().splitlines()[0]
         base = f"http://{address}"
         wait_healthy(base)
         c = Controller(base, stack.key)

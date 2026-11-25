@@ -1315,6 +1315,9 @@ defmodule Cyfr.DocsDriftTest do
     # The keeper sets it for the client it starts; an inherited value is
     # replaced, never read.
     "KEEPER_CHANNEL" => :keeper,
+    # The role's run folder, where its client attaches its spawns' relays,
+    # which the keeper names to each role process it starts.
+    "KEEPER_RUN_DIR" => :keeper,
     # The worker service hands each runner its role and identities
     # (`Locus.Runtime.Settings.runner_environment/1`). cyfr-locus places
     # the control channel and the relay on file descriptors 3 and 4, which

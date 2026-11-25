@@ -415,10 +415,6 @@ DIRECT_READ_CALLS = ("exec", "guard_exec")
 DIRECT_READ_ROSTER = {
     ("locus-runtime-image/memory.py", "group_stat"):
         (1, "diagnostic: printed on the round lines, never checked"),
-    ("locus-runtime-image/runners.py", "test_runner_has_no_route"):
-        (1, "failure message only: the gateway in a failed expect's text"),
-    ("locus-runtime-image/runners.py", "test_pinned_egress"):
-        (1, "failure message only: the gateway in a failed expect's text"),
 }
 
 

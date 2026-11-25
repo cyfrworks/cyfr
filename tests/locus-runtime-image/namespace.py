@@ -214,20 +214,23 @@ CLIENT_DONE = "<<<client done "
 
 
 def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard=None, pool_args=None,
-               apparmor=APPARMOR, guarded=True, name=None):
+               apparmor=APPARMOR, guarded=True, on_start=None):
     """cyfr-locus from the image under the shipped service's options, serving the runtime's role, whose process is
     a shell running `client_script`, and the relay pool, in the network namespace of `guard` (an
     `imagesuite.Guard`), or of a guard of its own made for the run. `guarded=False` names a guard's control no
     guard serves. Without `seccomp` it runs under Docker's default seccomp profile, and with `apparmor` None under
-    Docker's default AppArmor profile. Answers the run as a finished process: the keeper's status where it ended,
-    else the client script's once it is done, and what the container printed."""
+    Docker's default AppArmor profile. `on_start` is told the container's id once it runs. Answers the run as a
+    finished process: the keeper's status where it ended, else the client script's once it is done, and what the
+    container printed."""
     own = None
     if guard is None and guarded:
-        own = guard = imagesuite.Guard(image, f"locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}")
-    name = name or f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"
+        own = guard = imagesuite.Guard(image, f"locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}", runner=run)
+    name = None
     client = f"{client_script}\necho \"{CLIENT_DONE}$?>>>\"; exec sleep 1000000"
     try:
-        args = ["docker", "run", "--detach", "--name", name, *(guard.keeper_args() if guard else []),
+        args = ["docker", "run", "--detach",
+                *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
+                *(guard.keeper_args() if guard else []),
                 *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID",
                 "--cap-add", "SETGID", "--cap-add", "KILL", "--security-opt", "no-new-privileges:true",
                 "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
@@ -241,7 +244,9 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard
         args += ["--entrypoint", "cyfr-locus", image, "serve", "--role", imagesuite.role_spec(ROLE),
                  *(pool_args or ["--pool", POOL]), "--home-root", RELEASE["home_root"],
                  "--guard", imagesuite.Guard.CONTROL, "--", "/bin/sh", "-c", client]
-        run(*args)
+        name = run(*args).stdout.strip()
+        if on_start:
+            on_start(name)
         deadline = time.monotonic() + timeout
         while True:
             logs = run("docker", "logs", name, check=False)
@@ -257,7 +262,8 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard
                          f"{logs.stderr[-3000:]}")
             time.sleep(0.2)  # sleep-ok: polling the client's log for its end
     finally:
-        run("docker", "rm", "--force", name, check=False)
+        if name:
+            run("docker", "rm", "--force", name, check=False)
         if own:
             own.down()
 
@@ -378,7 +384,7 @@ def test_names(image):
     # The guard's resolver asks the listener, which shares its namespace on
     # 127.0.0.53 (compose.names.yml's shape).
     guard = imagesuite.Guard(image, f"locus-names-guard-{os.getpid()}-{tag}", extra=["--dns", "127.0.0.53"])
-    run("docker", "run", "--detach", "--name", listener, "--network", f"container:{guard.name}",
+    run("docker", "run", "--detach", "--name", listener, "--network", f"container:{guard.id}",
         "-v", f"{LISTENER_DIR}:/listener:ro", "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE",
         "--entrypoint", "node", image, "/listener/name-listener.mjs")
     try:
@@ -678,16 +684,17 @@ def assigns():
 class ClientMarks:
     """Where the client leaves its marks for this machine: a folder of the runtime role's run folder, the one place its
     space writes, which this machine reads in the keeper's container as the role's user (`name`, the container that
-    `keeper_run` starts under that name)."""
+    `keeper_run` started, told as it starts)."""
 
     MOUNT = f"{RUN_DIR}/marks"
 
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
+        self.container = None
 
     def marked(self, mark):
-        return run("docker", "exec", "-u", SERVICE_USER, self.name, "test", "-e", f"{self.MOUNT}/{mark}",
-                   check=False).returncode == 0
+        return self.container is not None and run(
+            "docker", "exec", "-u", SERVICE_USER, self.container, "test", "-e", f"{self.MOUNT}/{mark}",
+            check=False).returncode == 0
 
 
 def places_client(env, marks=Attach.MOUNT, client_marks=ClientMarks.MOUNT):
@@ -923,14 +930,15 @@ def held_until_measured(plane, attach):
 def test_measure(image):
     env = runner_env(image)
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
-    name = f"{PROJECT_PREFIX}locus-keeper-measure-{os.getpid()}-{secrets.token_hex(4)}"
-    attach = Attach(ClientMarks(name))
+    marks = ClientMarks()
+    attach = Attach(marks)
     attempt = plane.mint(RUNNER_ENV["RUNTIME_BOOT_ID"], "catalyst", HOG_REF, wasm(HOG), {}, ATHANOR, WORK_TIMEOUT_MS)
     plane.script("push_deltas", held_until_measured(plane, attach), attempt["execution_id"])
     serving = threading.Thread(target=serve_work, args=(attach, plane, attempt), daemon=True)
     serving.start()
     try:
-        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount], name=name)
+        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount],
+                         on_start=lambda container: setattr(marks, "container", container))
         serving.join(60)
     finally:
         attach.close()
