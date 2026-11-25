@@ -79,7 +79,11 @@ defmodule Compendium.Packs do
   @cyfr "cyfr"
   @mine "mine"
   @origins ~w(cyfr brought own)
-  @manifests [".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json"]
+  @manifests [
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    ".cursor-plugin/plugin.json"
+  ]
 
   @path_format ~r/\A[A-Za-z0-9_.\-\/]+\z/
 
@@ -407,9 +411,10 @@ defmodule Compendium.Packs do
   defp read_pack(actor, name, purpose) do
     dir = AquaPath.pack_dir(name)
 
-    with {:ok, leaves} <- Arca.list_recursive(actor, dir) do
+    with {:ok, [_ | _] = leaves} <- Arca.list_recursive(actor, dir) do
       rels = for leaf <- leaves, do: Enum.join(Enum.drop(leaf, length(dir)), "/")
       files = Enum.reject(rels, &(&1 == AquaPath.record_name()))
+
       {record, past, record_bytes} =
         case Arca.get(actor, dir ++ [AquaPath.record_name()]) do
           {:ok, raw} ->
@@ -443,8 +448,8 @@ defmodule Compendium.Packs do
         past: past
       }
     else
-      {:error, :not_found} -> nil
-      {:error, _} -> nil
+      # A folder no pack holds any more, or one that cannot be read.
+      _empty_or_unread -> nil
     end
   end
 
@@ -689,7 +694,8 @@ defmodule Compendium.Packs do
 
   defp named(actor, pack, scroll) do
     case read_pack(actor, pack, :index) do
-      %{on: true, origin: origin, scrolls: entries, paths: files, past: past} when origin != nil ->
+      %{on: true, origin: origin, scrolls: entries, paths: files, past: past}
+      when origin != nil ->
         case Enum.find(entries, &(&1.scroll == scroll and not &1.shadowed)) do
           nil ->
             {:error, :not_found}
@@ -718,7 +724,8 @@ defmodule Compendium.Packs do
          %{paths: files, record: record, origin: origin} = card <- read_pack(actor, pack, :card),
          {:ok, scroll} <- read_scroll(actor, pack, folder, files),
          {:ok, pairs} <- Arca.read_subtree(actor, AquaPath.scroll_dir(pack, folder)) do
-      entry = Enum.find(card.scrolls, &(&1.folder == folder)) || %{shadowed: false, carried: false}
+      entry =
+        Enum.find(card.scrolls, &(&1.folder == folder)) || %{shadowed: false, carried: false}
 
       runs =
         for {rel, bytes} <- pairs, rel != [AquaPath.skill_manifest_name()], into: %{} do
@@ -928,7 +935,11 @@ defmodule Compendium.Packs do
       name: name,
       revision: identity,
       on: on,
-      record: %{path: AquaPath.record_name(), size: byte_size(raw), sha256: Prima.Digest.sha256(raw)},
+      record: %{
+        path: AquaPath.record_name(),
+        size: byte_size(raw),
+        sha256: Prima.Digest.sha256(raw)
+      },
       files: files
     }
   end
@@ -1028,9 +1039,14 @@ defmodule Compendium.Packs do
 
   defp admitted(pack, current, next) do
     case record_of(current) do
-      {:ok, %{origin: "own"} = record} -> {:ok, record, next}
-      {:ok, %{origin: origin}} -> {:error, sealed(pack, origin)}
-      {:error, _} -> refuse("The pack `#{pack}` has a record that cannot be read: nothing was written")
+      {:ok, %{origin: "own"} = record} ->
+        {:ok, record, next}
+
+      {:ok, %{origin: origin}} ->
+        {:error, sealed(pack, origin)}
+
+      {:error, _} ->
+        refuse("The pack `#{pack}` has a record that cannot be read: nothing was written")
     end
   end
 
@@ -1074,8 +1090,7 @@ defmodule Compendium.Packs do
 
           cond do
             byte_size(b) > Arca.Files.max_write() ->
-              {:halt,
-               refuse("`#{path}` is past a file's #{Arca.Files.max_write()} bytes")}
+              {:halt, refuse("`#{path}` is past a file's #{Arca.Files.max_write()} bytes")}
 
             true ->
               case pack_path(path) do
@@ -1357,7 +1372,9 @@ defmodule Compendium.Packs do
     dir = AquaPath.scroll_dir(pack, folder)
 
     with {:ok, pairs} <- Arca.read_subtree(actor, dir),
-         do: {:ok, for({rel, bytes} <- pairs, do: {[AquaPath.skills_dirname(), folder | rel], bytes})}
+         do:
+           {:ok,
+            for({rel, bytes} <- pairs, do: {[AquaPath.skills_dirname(), folder | rel], bytes})}
   end
 
   # ---------------------------------------------------------------------------
@@ -1439,14 +1456,25 @@ defmodule Compendium.Packs do
     }
   end
 
+  # The folder's name, or the archive's for a pack at its top, spelled in
+  # the name grammar: any other character becomes `-`.
   defp default_name("", filename) do
     filename
     |> to_string()
     |> Path.basename()
     |> String.replace(~r/(\.tar\.gz|\.tgz|\.zip)\z/, "")
+    |> grammar_name()
   end
 
-  defp default_name(folder, _filename), do: folder |> String.split("/") |> List.last()
+  defp default_name(folder, _filename),
+    do: folder |> String.split("/") |> List.last() |> grammar_name()
+
+  defp grammar_name(name),
+    do:
+      name
+      |> String.replace(~r/[^A-Za-z0-9_-]/, "-")
+      |> String.trim_leading("-")
+      |> String.trim_leading("_")
 
   defp version_of(read) do
     Enum.find_value(@manifests ++ ["plugin.json"], fn manifest ->
@@ -1470,7 +1498,9 @@ defmodule Compendium.Packs do
         case AquaAgent.parse_frontmatter(bytes) do
           {:ok, meta, _body} ->
             fm = string(meta["name"])
-            {if(AquaPath.valid_name?(fm), do: fm, else: folder), meta["disable-model-invocation"] == true}
+
+            {if(AquaPath.valid_name?(fm), do: fm, else: folder),
+             meta["disable-model-invocation"] == true}
 
           _unread ->
             {folder, false}
@@ -1527,7 +1557,9 @@ defmodule Compendium.Packs do
         old =
           for {rel, bytes} <- pairs, rel != [AquaPath.record_name()], into: %{} do
             path = Enum.join(rel, "/")
-            {path, {Prima.Digest.sha256(bytes), is_map(record) and executable?(record, path, bytes)}}
+
+            {path,
+             {Prima.Digest.sha256(bytes), is_map(record) and executable?(record, path, bytes)}}
           end
 
         new = Map.new(files, &{&1.path, {Prima.Digest.sha256(&1.bytes), &1.executable}})
@@ -1556,7 +1588,9 @@ defmodule Compendium.Packs do
 
   defp first?(path, new, old) do
     executable = match?({_, true}, Map.get(new, path)) or match?({_, true}, Map.get(old, path))
-    executable or String.contains?("/" <> path, "/scripts/") or String.starts_with?(path, "hooks/")
+
+    executable or String.contains?("/" <> path, "/scripts/") or
+      String.starts_with?(path, "hooks/")
   end
 
   @doc """
@@ -1571,8 +1605,16 @@ defmodule Compendium.Packs do
     |> Enum.reject(&(&1.path == AquaPath.record_name()))
     |> Enum.sort_by(& &1.path)
     |> Enum.map(fn %{path: path, bytes: bytes, executable: x} ->
-      [path, 0, Integer.to_string(byte_size(bytes)), 0, Prima.Digest.sha256(bytes), 0,
-       if(x, do: "1", else: "0"), 0]
+      [
+        path,
+        0,
+        Integer.to_string(byte_size(bytes)),
+        0,
+        Prima.Digest.sha256(bytes),
+        0,
+        if(x, do: "1", else: "0"),
+        0
+      ]
     end)
     |> IO.iodata_to_binary()
     |> Prima.Digest.sha256()
@@ -1817,7 +1859,8 @@ defmodule Compendium.Packs do
   end
 
   defp unedited_shipped?([{["SKILL.md"], bytes}]),
-    do: MapSet.member?(@shipped_scrolls, Base.encode16(:crypto.hash(:sha256, bytes), case: :lower))
+    do:
+      MapSet.member?(@shipped_scrolls, Base.encode16(:crypto.hash(:sha256, bytes), case: :lower))
 
   defp unedited_shipped?(_pairs), do: false
 
@@ -1832,7 +1875,10 @@ defmodule Compendium.Packs do
       fn current ->
         base = current || [{[AquaPath.record_name()], encode_record(own_record())}]
         held = MapSet.new(for {[_skills, folder | _], _} <- base, do: folder)
-        {:ok, base ++ Enum.reject(moved, fn {[_skills, folder | _], _} -> MapSet.member?(held, folder) end)}
+
+        {:ok,
+         base ++
+           Enum.reject(moved, fn {[_skills, folder | _], _} -> MapSet.member?(held, folder) end)}
       end,
       claim
     )
@@ -1885,8 +1931,7 @@ defmodule Compendium.Packs do
           end
 
         with {:ok, record} <- record_of(shipped) do
-          {:ok,
-           body(shipped) ++ [{[AquaPath.record_name()], encode_record(%{record | on: on})}]}
+          {:ok, body(shipped) ++ [{[AquaPath.record_name()], encode_record(%{record | on: on})}]}
         end
       end,
       claim

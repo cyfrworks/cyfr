@@ -88,7 +88,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
           {:noreply, socket |> assign(:scroll_open, scroll) |> assign(:editor, nil)}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Could not open that scroll: #{error_message(reason)}")}
+          {:noreply,
+           put_flash(socket, :error, "Could not open that scroll: #{error_message(reason)}")}
       end
     end)
   end
@@ -106,7 +107,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
           {:noreply, load_packs(socket)}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Could not switch #{pack}: #{error_message(reason)}")}
+          {:noreply,
+           put_flash(socket, :error, "Could not switch #{pack}: #{error_message(reason)}")}
       end
     end)
   end
@@ -139,7 +141,9 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   def handle_event("editor_cancel", _params, socket), do: {:noreply, assign(socket, :editor, nil)}
 
   def handle_event("editor_save", params, socket) do
-    CyfrWeb.ContextGuard.guard(socket, fn socket -> save(socket, socket.assigns.editor, params) end)
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      save(socket, socket.assigns.editor, params)
+    end)
   end
 
   # A scroll goes as Files deletes a folder of a pack: its pack refuses it
@@ -159,7 +163,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
            |> put_flash(:info, "Deleted the scroll '#{folder}' from #{pack}.")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Could not delete that scroll: #{error_message(reason)}")}
+          {:noreply,
+           put_flash(socket, :error, "Could not delete that scroll: #{error_message(reason)}")}
       end
     end)
   end
@@ -181,7 +186,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
            |> put_flash(:info, "Removed the pack #{pack}.")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Could not remove #{pack}: #{error_message(reason)}")}
+          {:noreply,
+           put_flash(socket, :error, "Could not remove #{pack}: #{error_message(reason)}")}
       end
     end)
   end
@@ -194,11 +200,11 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
         :ok ->
           send(self(), {:refresh, :skills})
 
-          {:noreply,
-           socket |> load_packs() |> put_flash(:info, "Copied #{name} into #{mine}.")}
+          {:noreply, socket |> load_packs() |> put_flash(:info, "Copied #{name} into #{mine}.")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Could not copy #{name}: #{error_message(reason)}")}
+          {:noreply,
+           put_flash(socket, :error, "Could not copy #{name}: #{error_message(reason)}")}
       end
     end)
   end
@@ -239,7 +245,11 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
     end)
   end
 
-  def handle_event("bring_confirm", _params, %{assigns: %{bring: %{sheet: sheet} = bring}} = socket) do
+  def handle_event(
+        "bring_confirm",
+        _params,
+        %{assigns: %{bring: %{sheet: sheet} = bring}} = socket
+      ) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       params = %{"folder" => sheet.folder, "name" => sheet.name, "agreed" => sheet.agreed}
 
@@ -252,7 +262,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
            |> assign(:bring, nil)
            |> assign(:pack_open, name)
            |> load_packs()
-           |> put_flash(:info, if(sheet.update, do: "Updated #{name}.", else: "Brought in #{name}."))}
+           |> put_flash(
+             :info,
+             if(sheet.update, do: "Updated #{name}.", else: "Brought in #{name}.")
+           )}
 
         {:error, {:changed, sheet}} ->
           {:noreply,
@@ -301,10 +314,15 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
     cond do
       not Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/, pack) ->
         {:noreply,
-         put_flash(socket, :error, "A pack's name is letters, digits, '_' and '-', starting with a letter or digit.")}
+         put_flash(
+           socket,
+           :error,
+           "A pack's name is letters, digits, '_' and '-', starting with a letter or digit."
+         )}
 
       Enum.any?(socket.assigns.packs, &(&1.name == pack)) ->
-        {:noreply, put_flash(socket, :error, "A pack named #{pack} is already here: choose another name.")}
+        {:noreply,
+         put_flash(socket, :error, "A pack named #{pack} is already here: choose another name.")}
 
       true ->
         save(socket, %{editor | pack: pack}, params, :new_pack)
@@ -335,7 +353,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
          |> put_flash(:info, saved_words(kind, editor.pack, name))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not keep that scroll: #{error_message(reason)}")}
+        {:noreply,
+         put_flash(socket, :error, "Could not keep that scroll: #{error_message(reason)}")}
     end
   end
 
@@ -348,7 +367,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
 
   defp origin_words(%{origin: "cyfr"}), do: "CYFR"
   defp origin_words(%{origin: "own"}), do: "yours"
-  defp origin_words(%{origin: "brought", source: source}) when is_binary(source), do: "an upload: #{source}"
+
+  defp origin_words(%{origin: "brought", source: source}) when is_binary(source),
+    do: "an upload: #{source}"
+
   defp origin_words(%{origin: "brought"}), do: "an upload"
   defp origin_words(_pack), do: "unreadable"
 
@@ -375,7 +397,11 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   defp kept_any?(pack), do: Enum.any?(pack.scrolls, & &1.kept)
 
   defp download_href(athanor, pack),
-    do: PrismWeb.Focus.path(athanor, "/scrolls/download/" <> URI.encode(pack, &URI.char_unreserved?/1))
+    do:
+      PrismWeb.Focus.path(
+        athanor,
+        "/scrolls/download/" <> URI.encode(pack, &URI.char_unreserved?/1)
+      )
 
   defp change_words(:added), do: "added"
   defp change_words(:removed), do: "removed"
@@ -388,6 +414,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   attr :pack, :map, required: true
   attr :myself, :any, required: true
   attr :athanor, :any, required: true
+
   defp actions(assigns) do
     ~H"""
     <details class="relative" id={"aqua-pack-menu-" <> @pack.name}>
@@ -497,10 +524,18 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
             class="space-y-2 rounded border border-amber-800/60 bg-gray-950 p-3"
           >
             <% sheet = @bring.sheet %>
-            <form id="aqua-sheet-choose" phx-change="bring_choose" phx-target={@myself} class="space-y-2">
+            <form
+              id="aqua-sheet-choose"
+              phx-change="bring_choose"
+              phx-target={@myself}
+              class="space-y-2"
+            >
               <div :if={length(sheet.candidates) > 1}>
                 <label class="block text-[11px] text-gray-400">This archive holds more than one pack. Which one?</label>
-                <select name="folder" class="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200">
+                <select
+                  name="folder"
+                  class="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200"
+                >
                   <option
                     :for={c <- sheet.candidates}
                     value={c.folder}
@@ -526,18 +561,26 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
             </form>
             <p class="text-xs text-gray-300">
               <span class="font-mono">{sheet.name}</span>
-              <span :if={sheet.version}> · version {sheet.version}</span>
-              · from {sheet.filename}
+              <span :if={sheet.version}> · version {sheet.version}</span> · from {sheet.filename}
             </p>
             <ul class="space-y-0.5 text-[11px] text-gray-400">
-              <li>{count(length(sheet.scrolls), "scroll", "scrolls")}: {Enum.map_join(sheet.scrolls, ", ", & &1.scroll)}</li>
+              <li>
+                {count(length(sheet.scrolls), "scroll", "scrolls")}: {Enum.map_join(
+                  sheet.scrolls,
+                  ", ",
+                  & &1.scroll
+                )}
+              </li>
               <li>{count(sheet.scripts, "script", "scripts")}</li>
               <li :if={sheet.parts.hooks != []}>Hooks: {Enum.join(sheet.parts.hooks, ", ")}</li>
               <li :if={sheet.parts.agents != []}>Agents: {Enum.join(sheet.parts.agents, ", ")}</li>
-              <li :if={sheet.parts.commands != []}>Commands: {Enum.join(sheet.parts.commands, ", ")}</li>
+              <li :if={sheet.parts.commands != []}>
+                Commands: {Enum.join(sheet.parts.commands, ", ")}
+              </li>
               <li id="aqua-sheet-servers">
-                MCP servers it starts:
-                {if sheet.parts.servers == [], do: "none", else: Enum.join(sheet.parts.servers, ", ")}
+                MCP servers it starts: {if sheet.parts.servers == [],
+                  do: "none",
+                  else: Enum.join(sheet.parts.servers, ", ")}
               </li>
             </ul>
             <div :if={sheet.update} id="aqua-sheet-update" class="text-[11px] text-gray-400">
@@ -548,7 +591,9 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
               </ul>
             </div>
             <p id="aqua-sheet-trust" class="text-xs text-amber-200">{@trust}</p>
-            <p :if={sheet.refusal} id="aqua-sheet-refusal" class="text-xs text-red-300">{sheet.refusal}</p>
+            <p :if={sheet.refusal} id="aqua-sheet-refusal" class="text-xs text-red-300">
+              {sheet.refusal}
+            </p>
             <div class="flex items-center justify-end gap-2">
               <button
                 type="button"
@@ -672,7 +717,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                     phx-value-on={to_string(not pack.on)}
                     class={[
                       "rounded px-2 py-0.5 text-[10px] font-medium",
-                      if(pack.on, do: "bg-emerald-900/50 text-emerald-300", else: "bg-gray-800 text-gray-400")
+                      if(pack.on,
+                        do: "bg-emerald-900/50 text-emerald-300",
+                        else: "bg-gray-800 text-gray-400"
+                      )
                     ]}
                   >
                     {if pack.on, do: "On", else: "Off"}
@@ -683,7 +731,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
               <p :if={pack.past} class="text-[11px] text-amber-400">
                 No program uses this pack: {pack.past}.
               </p>
-              <dl :if={@pack_open == pack.name} class="grid grid-cols-1 gap-x-2 text-[11px] sm:grid-cols-[auto_1fr]">
+              <dl
+                :if={@pack_open == pack.name}
+                class="grid grid-cols-1 gap-x-2 text-[11px] sm:grid-cols-[auto_1fr]"
+              >
                 <%= for {who, what} <- carried_by(pack) do %>
                   <dt class="text-gray-500">{who}</dt>
                   <dd class="text-gray-300">{what}</dd>
@@ -692,10 +743,16 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
               <p :if={@pack_open == pack.name and kept_any?(pack)} class="text-[11px] text-gray-500">
                 Some scrolls here are used when named: Claude Code keeps it from the model; Codex shows the model every skill of a pack.
               </p>
-              <p :if={@pack_open == pack.name and pack.origin != "own"} class="text-[11px] text-gray-500">
+              <p
+                :if={@pack_open == pack.name and pack.origin != "own"}
+                class="text-[11px] text-gray-500"
+              >
                 In the sessions CYFR starts, Claude Code loads this pack in place of a plugin of yours named {pack.name}.
               </p>
-              <p :if={@pack_open == pack.name and pack.parts && pack.parts.servers != []} class="text-[11px] text-gray-500">
+              <p
+                :if={(@pack_open == pack.name and pack.parts) && pack.parts.servers != []}
+                class="text-[11px] text-gray-500"
+              >
                 MCP servers it starts: {Enum.join(pack.parts.servers, ", ")}
               </p>
               <ul :if={@pack_open == pack.name} class="divide-y divide-gray-800/60">
@@ -711,7 +768,11 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                     <span class="font-mono">{scroll.name}</span>
                     <span :if={scroll.description != ""} class="ml-2 text-gray-500">{scroll.description}</span>
                   </button>
-                  <p :if={scroll.kept} id={"aqua-scroll-kept-" <> pack.name <> "-" <> scroll.folder} class="text-[11px] text-gray-500">
+                  <p
+                    :if={scroll.kept}
+                    id={"aqua-scroll-kept-" <> pack.name <> "-" <> scroll.folder}
+                    class="text-[11px] text-gray-500"
+                  >
                     used when named
                   </p>
                   <p :if={scroll.shadowed} class="text-[11px] text-amber-400">

@@ -1404,7 +1404,7 @@ defmodule Aqua.CrewTest do
     {:ok, _} =
       Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "skill_create",
-        "name" => "fern-care",
+        "name" => "mine:fern-care",
         "description" => "How the fern is kept",
         "content" => "Water it weekly."
       })
@@ -1414,7 +1414,7 @@ defmodule Aqua.CrewTest do
         "action" => "ask",
         "member" => "planner",
         "task" => "tend the fern",
-        "scrolls" => ["fern-care"]
+        "scrolls" => ["mine:fern-care"]
       }),
       reply("Asked the planner."),
       reply("Tended."),
@@ -1426,7 +1426,11 @@ defmodule Aqua.CrewTest do
 
     request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner" and &1.status))
 
-    assert %{"scrolls" => [%{"name" => "fern-care", "body" => "Water it weekly.", "files" => []}]} =
+    assert %{
+             "scrolls" => [
+               %{"name" => "mine:fern-care", "body" => "Water it weekly.", "files" => []}
+             ]
+           } =
              Tape.payload(request)
 
     assert {:ok, %{"applied" => 1}} = drain(ctx)
@@ -1438,7 +1442,7 @@ defmodule Aqua.CrewTest do
     assert [%{"role" => "user", "content" => [%{"text" => text}]}] = params["messages"]
 
     assert text ==
-             "[aqua]\ntend the fern\n\n⟦#{mark} scroll \"fern-care\"⟧\nWater it weekly.\n" <>
+             "[aqua]\ntend the fern\n\n⟦#{mark} scroll \"mine:fern-care\"⟧\nWater it weekly.\n" <>
                "⟦#{mark} end⟧"
   end
 
@@ -1450,10 +1454,11 @@ defmodule Aqua.CrewTest do
     archive =
       Compendium.PackArchive.tar_gz([
         {"pstack/.claude-plugin/plugin.json", ~s({"name": "pstack", "version": "1.0.0"}), false},
-        {"pstack/skills/sharpen/SKILL.md", "---\nname: sharpen\ndescription: d\n---\n\nSharpen it.\n",
-         false},
+        {"pstack/skills/sharpen/SKILL.md",
+         "---\nname: sharpen\ndescription: d\n---\n\nSharpen it.\n", false},
         {"pstack/skills/how/SKILL.md",
-         "---\nname: how\ndescription: d\ndisable-model-invocation: true\n---\n\nAsk how.\n", false}
+         "---\nname: how\ndescription: d\ndisable-model-invocation: true\n---\n\nAsk how.\n",
+         false}
       ])
 
     {:ok, sheet} = Compendium.Packs.sheet(ctx, archive, "pstack.tar.gz")
@@ -1488,7 +1493,8 @@ defmodule Aqua.CrewTest do
     [bare, named] = Enum.filter(steps, &(&1.tool == "crew" and &1.action == "ask"))
 
     assert {bare.outcome, bare.error} ==
-             {"error", "Error: crew.ask: No scroll is named `sharpen` alone: `pstack:sharpen` is."}
+             {"error",
+              "Error: crew.ask: No scroll is named `sharpen` alone: `pstack:sharpen` is."}
 
     assert named.outcome == "ok"
     request = Enum.find(rows(ctx, room.id), &(&1.addressee == "planner" and &1.status))
@@ -1513,14 +1519,14 @@ defmodule Aqua.CrewTest do
     :ok =
       Arca.put(
         actor(other),
-        Compendium.AquaPath.skill_manifest("theirs"),
+        Compendium.AquaPath.scroll_manifest("mine", "theirs"),
         ~s(---\nname: "theirs"\ndescription: "d"\n---\n\nTheir way.\n)
       )
 
     {:ok, %{content: "Their way."}} =
-      Compendium.Providers.Aqua.handle(other, %{"action" => "skill_get", "name" => "theirs"})
+      Compendium.Providers.Aqua.handle(other, %{"action" => "skill_get", "name" => "mine:theirs"})
 
-    for name <- ["half-a", "half-b"] do
+    for name <- ["mine:half-a", "mine:half-b"] do
       {:ok, _} =
         Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "skill_create",
@@ -1533,16 +1539,16 @@ defmodule Aqua.CrewTest do
     # The two as the member would read them, each in its frame.
     framed =
       for(
-        name <- ["half-a", "half-b"],
+        name <- ["mine:half-a", "mine:half-b"],
         do: %{"name" => name, "body" => String.duplicate("a", 70_000)}
       )
       |> Aqua.Reader.scrolls(Aqua.Reader.token())
       |> byte_size()
 
     asks = [
-      {["nowhere"], "crew.ask: this athanor has no scroll named \"nowhere\""},
-      {["theirs"], "crew.ask: this athanor has no scroll named \"theirs\""},
-      {["half-a", "half-b"],
+      {["mine:nowhere"], "crew.ask: this athanor has no scroll named \"mine:nowhere\""},
+      {["mine:theirs"], "crew.ask: this athanor has no scroll named \"mine:theirs\""},
+      {["mine:half-a", "mine:half-b"],
        "crew.ask: the scrolls named come to #{framed} bytes as the member reads them, more " <>
          "than the 131072 one job carries"}
     ]

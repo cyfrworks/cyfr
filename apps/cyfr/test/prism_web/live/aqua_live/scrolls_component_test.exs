@@ -42,9 +42,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
 
   defp servers_pack do
     PackArchive.tar_gz([
-      {"srv/.claude-plugin/plugin.json", ~s({"name": "srv", "mcpServers": {"inline-one": {"command": "a"}}}),
+      {"srv/.claude-plugin/plugin.json",
+       ~s({"name": "srv", "mcpServers": {"inline-one": {"command": "a"}}}), false},
+      {"srv/.codex-plugin/plugin.json", ~s({"name": "srv", "mcpServers": "./servers.json"}),
        false},
-      {"srv/.codex-plugin/plugin.json", ~s({"name": "srv", "mcpServers": "./servers.json"}), false},
       {"srv/servers.json", ~s({"mcpServers": {"from-file": {"command": "b"}}}), false},
       {"srv/.mcp.json", ~s({"mcpServers": {"dot-mcp": {"command": "c"}}}), false},
       {"srv/skills/look/SKILL.md", "---\nname: look\ndescription: d\n---\n\nLook.\n", false},
@@ -60,7 +61,13 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
     upload!(view, "srv.tar.gz", servers_pack())
 
     sheet = view |> element("#aqua-pack-sheet") |> render()
-    assert sheet =~ PrismWeb.AquaLive.ScrollsComponent.trust_sentence()
+
+    trust =
+      PrismWeb.AquaLive.ScrollsComponent.trust_sentence()
+      |> Phoenix.HTML.html_escape()
+      |> Phoenix.HTML.safe_to_string()
+
+    assert sheet =~ trust
 
     servers = view |> element("#aqua-sheet-servers") |> render()
     for name <- ["inline-one", "from-file", "dot-mcp"], do: assert(servers =~ name)
@@ -73,8 +80,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
     assert {:ok, %{origin: "brought", agreed: agreed}} = Compendium.Packs.decode_record(raw)
     assert agreed == shown.agreed
 
-    # A scroll its author kept from the model is marked so on the card.
-    view |> section() |> render_click("pack_open", %{"pack" => "srv"})
+    # A scroll its author kept from the model is marked so on the card,
+    # which a bring-in leaves open.
     assert view |> element("#aqua-scroll-kept-srv-how") |> render() =~ "used when named"
     refute has_element?(view, "#aqua-scroll-kept-srv-look")
 
@@ -110,7 +117,11 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
     assert {:ok, %{origin: "own", on: true}} = Compendium.Packs.decode_record(raw)
     assert {:ok, %{body: "Prune in March."}} = Compendium.skill(ctx, "garden:roses")
 
-    for {name, says} <- [{"garden", "already here"}, {"cyfr", "already here"}, {"-x", "letters, digits"}] do
+    for {name, says} <- [
+          {"garden", "already here"},
+          {"cyfr", "already here"},
+          {"-x", "letters, digits"}
+        ] do
       view |> section() |> render_click("pack_new", %{})
 
       html =
@@ -133,7 +144,11 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
     view |> section() |> render_click("scroll_new", %{"pack" => "garden"})
 
     view
-    |> form("#aqua-scroll-editor", %{"scroll" => "ivy", "description" => "d", "content" => "Climb."})
+    |> form("#aqua-scroll-editor", %{
+      "scroll" => "ivy",
+      "description" => "d",
+      "content" => "Climb."
+    })
     |> render_submit()
 
     assert {:ok, %{body: "Climb."}} = Compendium.skill(ctx, "garden:ivy")
@@ -187,7 +202,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
   end
 
   test "at narrow width the cards are one column, each card's actions in one menu, and Download is offered on every card",
-       %{conn: conn, athanor: athanor} do
+       %{conn: conn, athanor: athanor, actor: actor} do
+    {:ok, _} =
+      Arca.Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", "---\nname: a\n---\n\nb\n")
+
     {view, _html} = mount_athanor(conn, "/aqua")
 
     # One column below the medium breakpoint, two from it.

@@ -300,8 +300,11 @@ defmodule Aqua.PromptTest do
         )
 
       assert opening == @briefing
-      assert context =~ "\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack and its name."
-      assert context =~ "\n- planner — "
+
+      assert context =~
+               "\n## Scrolls\n\nProcedures this athanor keeps, each named by its pack and its name."
+
+      assert context =~ "\n- cyfr:planner — "
     end
   end
 

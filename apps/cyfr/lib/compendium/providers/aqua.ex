@@ -1216,8 +1216,11 @@ defmodule Compendium.Providers.Aqua do
   # would make.
   defp own_pack(ctx, pack) do
     case Compendium.Packs.pack(ctx, pack) do
-      {:ok, %{origin: origin}} -> own_origin(pack, origin)
-      {:error, :not_found} -> if pack == Compendium.Packs.cyfr(), do: own_origin(pack, "cyfr"), else: :ok
+      {:ok, %{origin: origin}} ->
+        own_origin(pack, origin)
+
+      {:error, :not_found} ->
+        if pack == Compendium.Packs.cyfr(), do: own_origin(pack, "cyfr"), else: :ok
     end
   end
 

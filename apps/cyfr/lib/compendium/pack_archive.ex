@@ -150,7 +150,14 @@ defmodule Compendium.PackArchive do
          {:ok, mode} <- octal(mode) do
       name = trim_nul(name)
       prefix = if String.starts_with?(magic, "ustar"), do: trim_nul(prefix), else: ""
-      {:ok, %{name: if(prefix == "", do: name, else: prefix <> "/" <> name), mode: mode, size: size, type: type}}
+
+      {:ok,
+       %{
+         name: if(prefix == "", do: name, else: prefix <> "/" <> name),
+         mode: mode,
+         size: size,
+         type: type
+       }}
     end
   end
 
@@ -257,19 +264,19 @@ defmodule Compendium.PackArchive do
 
   defp central(bytes, offset, count, acc) do
     case bytes do
-      <<_::binary-size(^offset), "PK", 1, 2, made::little-16, _need::little-16,
-        flags::little-16, method::little-16, _time::little-16, _date::little-16,
-        crc::little-32, csize::little-32, usize::little-32, nlen::little-16,
-        elen::little-16, clen::little-16, _disk::little-16, _iattr::little-16,
-        eattr::little-32, local::little-32, name::binary-size(nlen), _::binary>> ->
-        mode = if (made >>> 8) == 3, do: eattr >>> 16, else: 0
+      <<_::binary-size(^offset), "PK", 1, 2, made::little-16, _need::little-16, flags::little-16,
+        method::little-16, _time::little-16, _date::little-16, crc::little-32, csize::little-32,
+        usize::little-32, nlen::little-16, elen::little-16, clen::little-16, _disk::little-16,
+        _iattr::little-16, eattr::little-32, local::little-32, name::binary-size(nlen),
+        _::binary>> ->
+        mode = if made >>> 8 == 3, do: eattr >>> 16, else: 0
         dir? = String.ends_with?(name, "/")
 
         kind =
           cond do
             (mode &&& 0o170000) == 0o120000 -> :link
             dir? or (mode &&& 0o170000) == 0o040000 -> :dir
-            mode == 0 or (mode &&& 0o170000) == 0o100000 -> :file
+            (mode &&& 0o170000) in [0, 0o100000] -> :file
             true -> :other
           end
 
@@ -331,7 +338,8 @@ defmodule Compendium.PackArchive do
   end
 
   defp unzip(_data, %{name: name}),
-    do: refuse("The archive's file #{inspect(name)} is compressed in a way this reader cannot read")
+    do:
+      refuse("The archive's file #{inspect(name)} is compressed in a way this reader cannot read")
 
   # A file never inflates past what its directory declares.
   defp raw_inflate(z, {state, out}, acc, size, usize, name) do

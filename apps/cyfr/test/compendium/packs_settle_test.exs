@@ -52,7 +52,12 @@ defmodule Compendium.PacksSettleTest do
 
     cyfr = Path.join(seed, "aqua/scrolls/cyfr")
     File.mkdir_p!(Path.join(cyfr, "skills/research"))
-    File.write!(Path.join(cyfr, ".cyfr-pack.json"), Packs.encode_record(%{Packs.own_record() | origin: "cyfr"}))
+
+    File.write!(
+      Path.join(cyfr, ".cyfr-pack.json"),
+      Packs.encode_record(%{Packs.own_record() | origin: "cyfr"})
+    )
+
     File.write!(Path.join(cyfr, "skills/research/SKILL.md"), "---\nname: research\n---\n\nv1\n")
 
     ctx = Sanctum.TestContext.local()
@@ -74,7 +79,10 @@ defmodule Compendium.PacksSettleTest do
   # A shipped scroll's bytes as an earlier release's seed shipped them:
   # `planner`'s, which this release did not change.
   defp shipped_planner,
-    do: File.read!(Path.expand("../../../../seed/aqua/scrolls/cyfr/skills/planner/SKILL.md", __DIR__))
+    do:
+      File.read!(
+        Path.expand("../../../../seed/aqua/scrolls/cyfr/skills/planner/SKILL.md", __DIR__)
+      )
 
   test "a made scroll and an edited shipped one move into mine with their files; an unedited shipped one is dropped; aqua/skills/ is gone",
        %{ctx: ctx, actor: actor} do
@@ -92,7 +100,9 @@ defmodule Compendium.PacksSettleTest do
     assert {:ok, %{origin: "own", on: true}} =
              Packs.pack(ctx, "mine") |> then(fn {:ok, p} -> {:ok, p.record} end)
 
-    assert {:ok, "the reference"} = Arca.get(actor, ~w(aqua scrolls mine skills made references how.md))
+    assert {:ok, "the reference"} =
+             Arca.get(actor, ~w(aqua scrolls mine skills made references how.md))
+
     assert {:ok, %{name: "mine:made", body: "Made here."}} = Packs.skill(ctx, "mine:made")
     assert {:ok, %{body: "edited here"}} = Packs.skill(ctx, "mine:canvas")
     assert {:error, :not_found} = Packs.skill(ctx, "mine:planner")

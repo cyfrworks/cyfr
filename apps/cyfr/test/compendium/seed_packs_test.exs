@@ -58,7 +58,10 @@ defmodule Compendium.SeedPacksTest do
 
     assert bare_names(planted, shipped_scrolls()) == ["builder", "research", "builder"]
 
-    assert bare_names("by the `cyfr:builder` scroll, skill_get(name: \"cyfr:builder\")", shipped_scrolls()) ==
+    assert bare_names(
+             "by the `cyfr:builder` scroll, skill_get(name: \"cyfr:builder\")",
+             shipped_scrolls()
+           ) ==
              []
   end
 
@@ -66,6 +69,7 @@ defmodule Compendium.SeedPacksTest do
     assert File.ls!(Path.join(@seed, "scrolls")) == ["cyfr"]
 
     cyfr = Path.join(@seed, "scrolls/cyfr")
+
     assert {:ok, %{origin: "cyfr", on: true, executable: []}} =
              Packs.decode_record(File.read!(Path.join(cyfr, ".cyfr-pack.json")))
 

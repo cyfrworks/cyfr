@@ -791,7 +791,8 @@ defmodule Arca.Overlay do
       loc ->
         case revision_of(actor, loc) do
           {:ok, revision} ->
-            tenant().usage(actor, UnitLocator.in_revision(loc, revision, path))
+            with {:ok, used} <- tenant().usage(actor, UnitLocator.in_revision(loc, revision, path)),
+                 do: without_marker_usage(actor, loc, revision, path, used)
 
           {:error, :not_found} ->
             tenant().usage(actor, path)
@@ -801,6 +802,20 @@ defmodule Arca.Overlay do
         end
     end
   end
+
+  # A directory unit's own usage is what its readers read: its revision's
+  # in-progress marker, which no reader finds, is left out.
+  defp without_marker_usage(actor, {:dir, unit, _sentinel}, revision, unit, used) do
+    case tenant().usage(actor, UnitLocator.marker_path(unit, revision)) do
+      {:ok, %{files: files, bytes: bytes}} ->
+        {:ok, %{used | files: max(used.files - files, 0), bytes: max(used.bytes - bytes, 0)}}
+
+      {:error, _} ->
+        {:ok, used}
+    end
+  end
+
+  defp without_marker_usage(_actor, _loc, _revision, _path, used), do: {:ok, used}
 
   @impl true
   def ensure_dir(%Prima.Actor{} = actor, path) do
@@ -1030,7 +1045,9 @@ defmodule Arca.Overlay do
       |> Enum.map(fn {key, %{current_revision: revision}} ->
         {UnitLocator.unit_path(root, key), revision}
       end)
-      |> Enum.filter(fn {unit, _revision} -> List.starts_with?(unit, path) and named_unit?(unit) end)
+      |> Enum.filter(fn {unit, _revision} ->
+        List.starts_with?(unit, path) and named_unit?(unit)
+      end)
       |> Enum.reduce_while({:ok, plain}, fn {unit, revision}, {:ok, acc} ->
         case unit_pairs(actor, Arca.Storage.locate(unit), revision) do
           {:ok, pairs} ->
@@ -2009,7 +2026,10 @@ defmodule Arca.Overlay do
   defp committed_pairs(_internal, _loc, _draft), do: {:ok, nil}
 
   defp added_bytes(current, next) do
-    size = fn pairs -> Enum.reduce(pairs || [], 0, fn {_rel, bytes}, n -> n + byte_size(bytes) end) end
+    size = fn pairs ->
+      Enum.reduce(pairs || [], 0, fn {_rel, bytes}, n -> n + byte_size(bytes) end)
+    end
+
     max(size.(next) - size.(current), 0)
   end
 

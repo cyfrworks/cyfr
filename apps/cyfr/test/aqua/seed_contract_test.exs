@@ -251,7 +251,12 @@ defmodule Aqua.SeedContractTest do
   # is not this.
   test "no shipped prose promises the person's yes before a call, or proposes a call for one" do
     files =
-      [soul_file() | Prima.Test.SourceTree.files!(Path.join([@seed, "scrolls", "cyfr", "skills", "*", "SKILL.md"]))]
+      [
+        soul_file()
+        | Prima.Test.SourceTree.files!(
+            Path.join([@seed, "scrolls", "cyfr", "skills", "*", "SKILL.md"])
+          )
+      ]
 
     assert length(files) > 3
 
@@ -460,7 +465,10 @@ defmodule Aqua.SeedContractTest do
   # reads before doing what it describes.
   defp taught do
     scrolls =
-      for path <- Prima.Test.SourceTree.files!(Path.join([@seed, "scrolls", "cyfr", "skills", "*", "SKILL.md"])) do
+      for path <-
+            Prima.Test.SourceTree.files!(
+              Path.join([@seed, "scrolls", "cyfr", "skills", "*", "SKILL.md"])
+            ) do
         {:ok, _meta, body} = Compendium.AquaAgent.parse_frontmatter(File.read!(path))
         body
       end

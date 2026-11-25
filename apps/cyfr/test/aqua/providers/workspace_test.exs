@@ -507,7 +507,8 @@ defmodule Aqua.Providers.WorkspaceTest do
         })
 
       assert {:error,
-              {:invalid_argument, "workspace.open: this athanor has no scroll named \"mine:nowhere\""}} =
+              {:invalid_argument,
+               "workspace.open: this athanor has no scroll named \"mine:nowhere\""}} =
                open(ctx, daily, %{"scrolls" => ["mine:nowhere"]})
 
       assert Threads.list(actor(ctx), kind: "workspace") == []

@@ -43,10 +43,16 @@ defmodule Compendium.Providers.AquaTest do
         "---\nname: fern\ndescription: how the fern is kept\n---\n\nWater it weekly.\n"
       )
 
-    {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/fern/notes.md", "Keep it out of the sun.\n")
+    {:ok, _} =
+      Files.write(actor, "aqua/scrolls/mine/skills/fern/notes.md", "Keep it out of the sun.\n")
 
     {:ok, _} =
-      Files.write(actor, "aqua/scrolls/mine/skills/fern/leaf.png", Base.encode64(<<137, 80, 78, 71, 0, 9>>), "base64")
+      Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/fern/leaf.png",
+        Base.encode64(<<137, 80, 78, 71, 0, 9>>),
+        "base64"
+      )
 
     {:ok, _} =
       Files.write(
@@ -74,10 +80,12 @@ defmodule Compendium.Providers.AquaTest do
 
   test "skill_get reads a scroll's SKILL.md by its full name, another file of its pack as outside material, and a binary by its type and size",
        %{ctx: ctx} do
-    assert {:ok, %{name: "mine:fern", content: "Water it weekly.", resources: ["leaf.png", "notes.md"]}} =
+    assert {:ok,
+            %{name: "mine:fern", content: "Water it weekly.", resources: ["leaf.png", "notes.md"]}} =
              Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:fern"})
 
-    assert {:ok, %{path: "skills/fern/notes.md", format: "text", content: "Keep it out of the sun.\n"}} =
+    assert {:ok,
+            %{path: "skills/fern/notes.md", format: "text", content: "Keep it out of the sun.\n"}} =
              Tool.handle(ctx, %{
                "action" => "skill_get",
                "name" => "mine:fern",
@@ -101,7 +109,10 @@ defmodule Compendium.Providers.AquaTest do
              })
   end
 
-  test "a text file past a scroll's bound is cut, with a note saying so", %{ctx: ctx, actor: actor} do
+  test "a text file past a scroll's bound is cut, with a note saying so", %{
+    ctx: ctx,
+    actor: actor
+  } do
     long = :binary.copy("a", Packs.max_bytes() + 10)
     {:ok, _} = Files.write(actor, "aqua/scrolls/mine/skills/fern/long.md", long)
 
@@ -132,7 +143,13 @@ defmodule Compendium.Providers.AquaTest do
   test "skill_create into a brought pack is refused, naming the pack, from a chain and from the person",
        %{ctx: ctx} do
     name = bring_in!(ctx, [{"tools/skills/x/SKILL.md", "---\nname: x\n---\n\nb\n", false}])
-    args = %{"action" => "skill_create", "name" => "#{name}:y", "description" => "d", "content" => "c"}
+
+    args = %{
+      "action" => "skill_create",
+      "name" => "#{name}:y",
+      "description" => "d",
+      "content" => "c"
+    }
 
     for ctx <- [Sanctum.Context.enter_guest(ctx), ctx] do
       assert {:error, {:invalid_argument, sentence}} = Tool.handle(ctx, args)
@@ -141,12 +158,17 @@ defmodule Compendium.Providers.AquaTest do
     end
 
     assert {:error, {:invalid_argument, _}} =
-             Tool.handle(ctx, %{"action" => "skill_update", "name" => "#{name}:x", "content" => "c"})
+             Tool.handle(ctx, %{
+               "action" => "skill_update",
+               "name" => "#{name}:x",
+               "content" => "c"
+             })
 
     assert {:error, {:invalid_argument, _}} =
              Tool.handle(ctx, %{"action" => "skill_delete", "name" => "#{name}:x"})
 
-    assert {:ok, %{content: "b"}} = Tool.handle(ctx, %{"action" => "skill_get", "name" => "tools:x"})
+    assert {:ok, %{content: "b"}} =
+             Tool.handle(ctx, %{"action" => "skill_get", "name" => "tools:x"})
   end
 
   test "a pack switched off is neither listed nor readable", %{ctx: ctx} do
@@ -161,7 +183,9 @@ defmodule Compendium.Providers.AquaTest do
              Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:fern"})
   end
 
-  test "a scroll kept from the model is read by its full name and listed with its flag", %{ctx: ctx} do
+  test "a scroll kept from the model is read by its full name and listed with its flag", %{
+    ctx: ctx
+  } do
     assert {:ok, %{name: "mine:how", content: "Ask first.", kept: true}} =
              Tool.handle(ctx, %{"action" => "skill_get", "name" => "mine:how"})
 
@@ -171,7 +195,12 @@ defmodule Compendium.Providers.AquaTest do
 
   test "skill_create makes a pack of the person's own the name names, and a second of one name is refused",
        %{ctx: ctx, actor: actor} do
-    args = %{"action" => "skill_create", "name" => "garden:roses", "description" => "d", "content" => "c"}
+    args = %{
+      "action" => "skill_create",
+      "name" => "garden:roses",
+      "description" => "d",
+      "content" => "c"
+    }
 
     assert {:ok, %{created: "garden:roses"}} = Tool.handle(ctx, args)
     assert {:ok, raw} = Arca.get(actor, ~w(aqua scrolls garden .cyfr-pack.json))

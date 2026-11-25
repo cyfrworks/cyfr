@@ -15,7 +15,10 @@ defmodule Compendium.AquaPathTest do
   test "paths compose from the root" do
     assert AquaPath.soul_file() == AquaPath.root() ++ ["aqua.md"]
     assert AquaPath.crew_file("scribe") == AquaPath.crew_root() ++ ["scribe.md"]
-    assert AquaPath.scroll_manifest("mine", "pdf") == AquaPath.scroll_dir("mine", "pdf") ++ ["SKILL.md"]
+
+    assert AquaPath.scroll_manifest("mine", "pdf") ==
+             AquaPath.scroll_dir("mine", "pdf") ++ ["SKILL.md"]
+
     assert AquaPath.scroll_dir("mine", "pdf") == AquaPath.pack_dir("mine") ++ ["skills", "pdf"]
     assert AquaPath.crew_root() == AquaPath.root() ++ ["crew"]
     assert AquaPath.scrolls_root() == AquaPath.root() ++ ["scrolls"]

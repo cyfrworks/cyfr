@@ -2217,7 +2217,9 @@ defmodule Compendium.ProviderTest do
       assert Enum.map(listing.skills, & &1.name) ==
                Enum.sort(["mine:pdf" | Enum.map(shipped.skills, & &1.name)])
 
-      {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
+      {:ok, skill} =
+        Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
+
       assert skill.description == "fills PDF forms"
       assert skill.content =~ "Use the reference."
       assert skill.resources == ["reference.md"]
@@ -2246,7 +2248,9 @@ defmodule Compendium.ProviderTest do
           "content" => "Read it twice."
         })
 
-      {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
+      {:ok, skill} =
+        Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "mine:pdf"})
+
       assert skill.content == "Read it twice."
       assert skill.description == "fills PDF forms"
       assert skill.resources == ["reference.md"]

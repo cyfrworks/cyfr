@@ -666,8 +666,7 @@ defmodule Arca.Files do
         {:error, {:invalid_argument, "'#{path}' is written by the server alone"}}
 
       reason when reason in [:eisdir, :enotdir] ->
-        {:error,
-         {:conflict, "'#{path}' cannot go there: a file and a folder would share a name"}}
+        {:error, {:conflict, "'#{path}' cannot go there: a file and a folder would share a name"}}
 
       reason ->
         storage_error("write", path, reason)
@@ -695,12 +694,23 @@ defmodule Arca.Files do
 
   defp delete_file(actor, physical, path) do
     case Arca.delete(actor, physical) do
-      :ok -> :ok
-      {:error, :not_found} -> {:error, {:not_found, "File", path}}
-      {:error, :bundled} -> {:error, {:invalid_argument, bundled_message(path)}}
-      {:error, {:invalid_argument, _} = refusal} -> {:error, refusal}
-      {:error, {:reserved_path, _}} -> {:error, {:invalid_argument, "'#{path}' is written by the server alone"}}
-      {:error, reason} -> storage_error("delete", path, reason)
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "File", path}}
+
+      {:error, :bundled} ->
+        {:error, {:invalid_argument, bundled_message(path)}}
+
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
+      {:error, {:reserved_path, _}} ->
+        {:error, {:invalid_argument, "'#{path}' is written by the server alone"}}
+
+      {:error, reason} ->
+        storage_error("delete", path, reason)
     end
   end
 
@@ -724,8 +734,7 @@ defmodule Arca.Files do
   end
 
   defp bundled_message(path),
-    do:
-      "'#{path}' ships with the server and cannot be deleted"
+    do: "'#{path}' ships with the server and cannot be deleted"
 
   defp cap_message(cap),
     do: "The athanor's storage is at its limit (#{cap} bytes) — remove something first"

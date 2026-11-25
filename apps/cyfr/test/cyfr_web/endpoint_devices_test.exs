@@ -55,7 +55,7 @@ defmodule CyfrWeb.EndpointDevicesTest do
         {{verb, path, asked}, answer(status, request), {status, [@refused]}}
       end
 
-    assert length(answers) == 42
+    assert length(answers) == 45
 
     assert for({what, got, want} <- answers, got != want, do: {what, got}) == []
   end
