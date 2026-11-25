@@ -1865,8 +1865,20 @@ defmodule Opus.Schedules.Scheduler do
       end
       |> logged_stale(occurrence)
 
-    with {:ok, _ended} <- ended, do: Changes.changed(actor, occurrence.schedule_id)
+    with {:ok, _ended} <- ended, do: announce_end(actor, occurrence.schedule_id)
     ended
+  end
+
+  # A once schedule is removed by its occurrence's end (the summary's
+  # write, `Arca.CronSchedule.record_run/4`), which is announced as its
+  # removal; any other end as a change. A once schedule the person deleted
+  # while its turn ran is announced removed a second time, which a reader
+  # takes as the removal it already has.
+  defp announce_end(actor, schedule_id) do
+    case CronSchedule.get(actor, schedule_id) do
+      {:ok, %{once: true, status: "deleted"} = row} -> Changes.removed(actor, row)
+      _otherwise -> Changes.changed(actor, schedule_id)
+    end
   end
 
   # The schedule's summary of an occurrence that just ended, inside its
@@ -1879,7 +1891,12 @@ defmodule Opus.Schedules.Scheduler do
     written =
       case said(actor, occurrence, reason) do
         :completed ->
-          CronSchedule.record_run(actor, occurrence.schedule_id, occurrence.execution_id)
+          CronSchedule.record_run(
+            actor,
+            occurrence.schedule_id,
+            occurrence.execution_id,
+            occurrence.id
+          )
 
         sentence ->
           CronSchedule.record_error(actor, occurrence.schedule_id, sentence, occurrence.id)
@@ -2094,6 +2111,11 @@ defmodule Opus.Schedules.Scheduler do
               next_run,
               state
             )
+
+      # A one-time schedule with no cursor fired already, and waits only for
+      # that occurrence's end to remove it: nothing of it is due again.
+      {:ok, %{status: "active", once: true}} ->
+        state
 
       {:ok, %{status: "active"} = schedule} ->
         # No cursor: one is derived from the expression, or the schedule

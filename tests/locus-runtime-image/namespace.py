@@ -47,7 +47,12 @@ runner's own uid, outside that namespace, may not):
   namespace so the keeper can isolate each spawn, a runner makes none of
   its own: its clone with CLONE_NEWUSER, alone or with CLONE_NEWNET, is
   refused EPERM, where the same clone without a namespace flag makes a
-  child; `unshare -U` is refused; and it still starts a thread.
+  child; `unshare -U` is refused; and it still starts a thread. It makes
+  an AF_UNIX socket and socket pair, and is refused EPERM an AF_VSOCK one
+  of each, and so with the domain's high bits set, which the kernel reads
+  as AF_VSOCK; on x86_64 its 32-bit socketcall of AF_VSOCK makes no socket,
+  and under the profile alone, outside any space, a 32-bit socketcall of
+  AF_INET or AF_VSOCK is killed, as every 32-bit call is.
 - `measure`: one real runner, the release's own runner command with its
   control channel and relay as the shipped service spawns it, its attach
   connection served by this machine as its worker service: its place is
@@ -550,14 +555,56 @@ NESTED_CLONES = (
 )
 NESTED_THREAD = "$| = 1; print qq{thread=}, threads->create(sub { 7 })->join, qq{\n};"
 CLONE_NR = {"x86_64": 56, "aarch64": 220}
+# The runner's sockets, made with syscall() by socket's and socketpair's
+# numbers on this machine: AF_UNIX, the probe's control; AF_VSOCK (40),
+# which the keeper's profile refuses; and 40 with a high bit set, which the
+# kernel reads as AF_VSOCK too, since it reads a domain's low 32 bits. Each
+# answers `ok` or its errno's name.
+VSOCK_SOCKETS = (
+    "$| = 1; my ($nr, $pnr) = @ARGV; "
+    "sub answer { my $r = shift; return $r >= 0 ? q{ok} : $!{EPERM} ? q{EPERM} : q{errno} . ($! + 0); } "
+    "sub one { answer(syscall($nr, shift, 1, 0)) } "
+    "sub pair { my $sv = qq{\\0} x 8; answer(syscall($pnr, shift, 1, 0, $sv)) } "
+    "print qq{socket_unix=}, one(1), qq{\n}; "
+    "print qq{socket_vsock=}, one(40), qq{\n}; "
+    "print qq{socket_vsock_widened=}, one(0x100000028), qq{\n}; "
+    "print qq{socketpair_unix=}, pair(1), qq{\n}; "
+    "print qq{socketpair_vsock=}, pair(40), qq{\n}; "
+    "print qq{socketpair_vsock_widened=}, pair(0x100000028), qq{\n};"
+)
+SOCKET_NR = {"x86_64": (41, 53), "aarch64": (198, 199)}
+
+
+def socketcall_program(domain):
+    """A 32-bit x86 program that calls socketcall(SYS_SOCKET, {domain, SOCK_STREAM, 0}), the other way into the
+    kernel's socket code, which no 64-bit call names, and exits with the call's negated return: 1 for EPERM, 253
+    for the descriptor 3, which it made. A 32-bit program is the only kind that can make the call."""
+    base = 0x08048000
+    code = (b"\x6a\x00" b"\x6a\x01" b"\x68" + struct.pack("<I", domain) +  # push 0, push 1, push domain
+            b"\x89\xe1" b"\xbb\x01\x00\x00\x00" b"\xb8\x66\x00\x00\x00" b"\xcd\x80" +  # ecx=args, ebx=1, eax=102, int 0x80
+            b"\x89\xc3" b"\xf7\xdb" b"\xb8\x01\x00\x00\x00" b"\xcd\x80")  # exit(-eax)
+    size = 52 + 32 + len(code)
+    header = b"\x7fELF\x01\x01\x01\x00" + b"\x00" * 8 + struct.pack("<HHIIIIIHHHHHH", 2, 3, 1, base + 84, 52, 0, 0, 52, 32, 1, 40, 0, 0)
+    program = struct.pack("<IIIIIIII", 1, 0, base, base, size, size, 5, 0x1000)
+    return base64.b64encode(header + program + code).decode()
+
+
+SOCKETCALL_MADE = 253
 
 
 def test_nested(image):
     command = ('arch=$(uname -m); echo "arch=$arch"; '
-               'case "$arch" in ' + " ".join(f"{arch}) nr={nr};;" for arch, nr in CLONE_NR.items()) + ' *) nr=;; esac; '
+               'case "$arch" in ' + " ".join(f"{arch}) nr={nr} snr={SOCKET_NR[arch][0]} pnr={SOCKET_NR[arch][1]};;"
+                                             for arch, nr in CLONE_NR.items()) +
+               ' *) nr= snr= pnr=;; esac; '
                'u=$(unshare -U true 2>&1); echo "unshare=$u status $?"; '
-               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; perl -Mthreads -e "$THREAD"')
-    got, carried, ran = relay_session(image, command, opens=False, env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD})
+               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; [ -n "$snr" ] && perl -e "$SOCKETS" "$snr" "$pnr"; '
+               'if [ "$arch" = x86_64 ]; then echo "$SOCKETCALL" | base64 -d > "$HOME/socketcall" && chmod 0700 "$HOME/socketcall"; '
+               '"$HOME/socketcall"; echo "socketcall_vsock=$?"; fi; '
+               'perl -Mthreads -e "$THREAD"')
+    got, carried, ran = relay_session(image, command, opens=False,
+                                      env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD, "SOCKETS": VSOCK_SOCKETS,
+                                           "SOCKETCALL": socketcall_program(40)})
     out = (carried or {}).get("got", {}).get(1, b"").decode(errors="replace")
     facts = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     detail = {"stdout": out, "stderr": (carried or {}).get("got", {}).get(2, b"").decode(errors="replace"), "replies": got,
@@ -572,6 +619,39 @@ def test_nested(image):
     expect("Operation not permitted" in facts.get("unshare", "") and not facts.get("unshare", "").endswith(" status 0"),
            "nested: a runner's `unshare -U` is refused", detail)
     expect(facts.get("thread") == "7", "nested: a runner still starts a thread and joins it", detail)
+    expect(facts.get("socket_unix") == "ok", "nested: a runner makes an AF_UNIX socket (the vsock probe's control)", detail)
+    expect(facts.get("socket_vsock") == "EPERM" and facts.get("socket_vsock_widened") == "EPERM",
+           "nested: a runner is refused socket(AF_VSOCK) EPERM, and so with the domain's high bits set, "
+           "which the kernel reads as AF_VSOCK too", detail)
+    expect(facts.get("socketpair_unix") == "ok", "nested: a runner makes an AF_UNIX socket pair (the pair probe's control)", detail)
+    expect(facts.get("socketpair_vsock") == "EPERM" and facts.get("socketpair_vsock_widened") == "EPERM",
+           "nested: a runner is refused socketpair(AF_VSOCK) EPERM by the profile, and so with the domain's high bits set", detail)
+    if facts.get("arch") == "x86_64":
+        expect(facts.get("socketcall_vsock") not in (None, str(SOCKETCALL_MADE)),
+               "nested: a runner's 32-bit socketcall(SYS_SOCKET, AF_VSOCK) makes no socket", detail)
+        test_compat_killed(image)
+    else:
+        print(f"nested: no 32-bit program of {facts.get('arch')} is probed: the 32-bit socketcall is x86's", flush=True)
+
+
+# A 32-bit call is the profile's own to refuse outside a space, where no
+# space's filter stands before it: the keeper's profile names no 32-bit
+# architecture, so every 32-bit and x32 call in the Locus container is
+# killed (SIGSYS, exit 159), and the socketcall whose domain no filter can
+# read, behind its pointer, never reaches the kernel's socket code.
+SIGSYS_EXIT = 128 + 31
+
+
+def test_compat_killed(image):
+    for domain, name in ((2, "AF_INET"), (40, "AF_VSOCK")):
+        ran = run("docker", "run", "--rm", "--network", "none", "--security-opt", f"seccomp={PROFILE}",
+                  *run_name(f"{PROJECT_PREFIX}compat-{domain}"), "--entrypoint", "sh", image, "-c",
+                  f'echo {socketcall_program(domain)} | base64 -d > /tmp/socketcall && chmod 0700 /tmp/socketcall; '
+                  '/tmp/socketcall; echo "exit=$?"', check=False)
+        got = dict(line.split("=", 1) for line in ran.stdout.splitlines() if "=" in line)
+        expect(got.get("exit") == str(SIGSYS_EXIT),
+               f"compat: under the keeper's profile alone, a 32-bit socketcall(SYS_SOCKET, {name}) is killed, "
+               "as every 32-bit call is", {"stdout": ran.stdout, "stderr": ran.stderr[-1000:]})
 
 
 # The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's

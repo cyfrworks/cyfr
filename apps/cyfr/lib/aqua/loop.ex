@@ -1743,6 +1743,8 @@ defmodule Aqua.Loop do
       call_id: spec.call_id,
       attempt: state.turn.attempt,
       thread_id: state.turn.thread_id,
+      # A page's call is the page's, not the turn's own: the gate stamps it.
+      called_by_page: step.purpose == "page",
       charge: Binding.charge(step, state.turn),
       execution_id: step.child_execution_id,
       step_id: step.id,
@@ -2797,8 +2799,11 @@ defmodule Aqua.Loop do
 
   # A schedule's turn whose fire another turn already took up: on another
   # server after a takeover, or by the turn that started it first.
+  # The occurrence is no longer claimed: its schedule's pause or delete
+  # ended it before the turn came to start, or another turn took it up.
   def describe(:occurrence_not_claimed),
-    do: "This scheduled run was already taken up by another turn, so this one did not start."
+    do:
+      "This scheduled run was stopped, or taken up by another turn, before it started, so this one did not run."
 
   def describe(:read_threads_unrecorded),
     do: "What the model read could not be recorded on the turn, so its answer was not used"

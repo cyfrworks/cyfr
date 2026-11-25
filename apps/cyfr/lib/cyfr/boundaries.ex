@@ -1584,6 +1584,14 @@ defmodule Cyfr.Boundaries do
           "housekeeping."
     },
     %{
+      from: "PrismWeb.SchedulesLive",
+      into: "Arca.ThreadStorage",
+      functions: [:get],
+      reason:
+        "the Schedules page names the workspace thread a schedule fires in by its title, " <>
+          "read under the caller's actor; the assistant owns every thread write."
+    },
+    %{
       from: "PrismWeb.ShellLive",
       into: "Arca.Cache",
       functions: [:get],
