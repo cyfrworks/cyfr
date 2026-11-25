@@ -129,7 +129,7 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 	for _, o := range overrides {
 		files += " -f " + o
 	}
-	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
+	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile public config --format json"
 }
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -216,7 +216,7 @@ func read(t *testing.T, path string) string {
 func (r *restoreScenario) stoppedUndeclared() {
 	r.t.Helper()
 	log := r.log()
-	for _, svc := range []string{"caddy", "cyfr", "locus-backends-guard"} {
+	for _, svc := range []string{"caddy", "cyfr", "locus-guard"} {
 		if !slices.Contains(log, profiles+"stop "+svc) {
 			r.t.Errorf("the restore did not stop %s:\n%s", svc, strings.Join(log, "\n"))
 		}
@@ -293,11 +293,8 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop caddy",
 		profiles + "stop tailscale",
 		profiles + "stop cyfr",
-		profiles + "stop locus-runtime",
-		profiles + "stop locus-builds",
-		profiles + "stop locus-backends",
-		profiles + "stop locus-builds-guard",
-		profiles + "stop locus-backends-guard",
+		profiles + "stop locus",
+		profiles + "stop locus-guard",
 		profiles + "stop",
 		profiles + "rm --force cyfr",
 		r.stagedConfig(),
@@ -1579,8 +1576,8 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	}
 	t.Chdir(dir)
 	for name, content := range map[string]string{
-		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  locus-builds:\n    image: alpine:3.22\n    profiles: [locus-builds]\n",
-		".env":               "CYFR_ACCESS=local\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  caddy:\n    image: alpine:3.22\n    profiles: [public]\n",
+		".env":               "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\n",
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -1618,7 +1615,7 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 		}
 		return kept
 	}
-	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "locus-builds") {
+	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "public") {
 		t.Errorf("the staged read selects %v, the engine's compose calls %v", got, want)
 	}
 }

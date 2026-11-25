@@ -585,15 +585,9 @@ func reachedBy(h access.Head) string {
 // and its address, which reachedBy says, each as before → after and only
 // when it changes: the certificate email, the ports opened on this machine
 // unless reachedBy names them, the port of cyfr's listener on this
-// computer, the builds service, and a tailnet machine replaced by a new
-// one, which the address shows only when its name changes too.
+// computer, and a tailnet machine replaced by a new one, which the address
+// shows only when its name changes too.
 func changedRows(p access.Preview) []string {
-	builds := func(h access.Head) string {
-		if h.BuildsURL == "" {
-			return "off"
-		}
-		return h.BuildsURL
-	}
 	old, next := p.Old, p.New
 	if p.OldWords == (access.Words{}) {
 		// .env held no head to compare with.
@@ -611,9 +605,6 @@ func changedRows(p access.Preview) []string {
 	}
 	if old.Port != next.Port {
 		lines = append(lines, fmt.Sprintf("Port on this computer: %d → %d", old.Port, next.Port))
-	}
-	if old.BuildsURL != next.BuildsURL {
-		lines = append(lines, "Builds service: "+builds(old)+" → "+builds(next))
 	}
 	return lines
 }

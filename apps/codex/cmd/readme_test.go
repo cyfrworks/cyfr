@@ -129,8 +129,9 @@ func subcommand(parent *cobra.Command, name string) *cobra.Command {
 // default of the one ${NAME:-default} it reads.
 var composeDefault = regexp.MustCompile(`^(?:\$\{[A-Z_]+:-([^}]+)\}|(.+))$`)
 
-// The README's sizing names the shipped compose file's default limits, so
-// a change to a default changes the sentence.
+// The README's sizing names the shipped compose file's default limits:
+// cyfr's own, and each Locus role's bound in the environment of locus,
+// whose keeper writes it, so a change to a default changes the sentence.
 func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "docker-compose.yml"))
 	if err != nil {
@@ -146,30 +147,42 @@ func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 					} `yaml:"limits"`
 				} `yaml:"resources"`
 			} `yaml:"deploy"`
+			Environment []string `yaml:"environment"`
 		} `yaml:"services"`
 	}
 	if err := yaml.Unmarshal(raw, &compose); err != nil {
 		t.Fatal(err)
 	}
-	limit := func(service, value string) int {
+	limit := func(name, value string) int {
 		t.Helper()
 		m := composeDefault.FindStringSubmatch(value)
+		if m == nil {
+			t.Fatalf("%s has no limit", name)
+		}
 		number := strings.TrimSuffix(m[1]+m[2], "G")
 		n, err := strconv.Atoi(number)
 		if err != nil {
-			t.Fatalf("%s's limit %q is not whole gigabytes or cores", service, value)
+			t.Fatalf("%s's limit %q is not whole gigabytes or cores", name, value)
 		}
 		return n
 	}
-	memory := map[string]int{}
-	cpus := map[string]int{}
-	total := 0
-	for _, service := range []string{"cyfr", "locus-runtime", "locus-builds", "locus-backends"} {
-		limits := compose.Services[service].Deploy.Resources.Limits
-		memory[service] = limit(service, limits.Memory)
-		total += memory[service]
-		if service != "locus-backends" {
-			cpus[service] = limit(service, limits.CPUs)
+	locus := map[string]string{}
+	for _, entry := range compose.Services["locus"].Environment {
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			locus[key] = value
+		}
+	}
+	cyfr := compose.Services["cyfr"].Deploy.Resources.Limits
+	memory := map[string]int{"cyfr": limit("cyfr", cyfr.Memory)}
+	cpus := map[string]int{"cyfr": limit("cyfr", cyfr.CPUs)}
+	total := memory["cyfr"]
+	for _, role := range []string{"RUNTIME", "BUILDS", "BACKENDS"} {
+		key := "LOCUS_" + role + "_MEMORY_LIMIT"
+		memory[role] = limit(key, locus[key])
+		total += memory[role]
+		if role != "BACKENDS" {
+			key = "LOCUS_" + role + "_CPU_LIMIT"
+			cpus[role] = limit(key, locus[key])
 		}
 	}
 	readme, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "README.md"))
@@ -177,10 +190,10 @@ func TestReadmeSizingIsTheComposeLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		fmt.Sprintf("which add up to about %d GB (cyfr %d GB, `locus-runtime` %d GB, `locus-builds` %d GB, `locus-backends` %d GB)",
-			total, memory["cyfr"], memory["locus-runtime"], memory["locus-builds"], memory["locus-backends"]),
-		fmt.Sprintf("Their processor limits are %d cores for cyfr, %d for `locus-runtime` and %d for `locus-builds`",
-			cpus["cyfr"], cpus["locus-runtime"], cpus["locus-builds"]),
+		fmt.Sprintf("which add up to about %d GB (cyfr %d GB, the runtime %d GB, builds %d GB, the backends %d GB)",
+			total, memory["cyfr"], memory["RUNTIME"], memory["BUILDS"], memory["BACKENDS"]),
+		fmt.Sprintf("Their processor bounds are %d cores for cyfr, %d for the runtime and %d for builds",
+			cpus["cyfr"], cpus["RUNTIME"], cpus["BUILDS"]),
 	} {
 		if !strings.Contains(string(readme), want) {
 			t.Errorf("README.md's sizing does not say %q", want)

@@ -164,10 +164,10 @@ func fetchVerifiedScaffold(version string) (scaffoldRelease, error) {
 }
 
 // stopOrder is the order the stop step stops services in: the proxies
-// first, then cyfr, then each Locus service before the guard whose network
-// namespace it shares. A running service it does not name is stopped with
-// the rest after them, so a stack of other names stops whole.
-var stopOrder = []string{"caddy", "tailscale", "cyfr", "locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
+// first, then cyfr, then locus before the guard whose network namespace it
+// shares. A running service it does not name is stopped with the rest
+// after them, so a stack of other names stops whole.
+var stopOrder = []string{"caddy", "tailscale", "cyfr", "locus", "locus-guard"}
 
 // managedRepositories are the repositories the release's manifest carries a
 // digest for, normalized as Docker normalizes a reference.

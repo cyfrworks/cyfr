@@ -365,7 +365,7 @@ func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string
 
 func (e *fakeEngine) derive(t access.Target, joinID string) (access.Derivation, error) {
 	env := envAssignments(filepath.Join(e.dir, ".env"))
-	cur := access.Current{Port: 4000, BuildsURL: env[buildsURLVar]}
+	cur := access.Current{Port: 4000}
 	if text := env["CYFR_PORT"]; text != "" {
 		cur.Port, _ = strconv.Atoi(text)
 	}

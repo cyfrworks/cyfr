@@ -211,13 +211,12 @@ func parseConfig(content []byte) (config, error) {
 	return c, nil
 }
 
-// accessServices are the services of c that h's access profiles select:
-// every profile of h but locus-builds, which a switch never changes.
+// accessServices are the services of c that h's access profiles select.
 func accessServices(c config, h Head) []string {
 	var out []string
 	for name, svc := range c.Services {
 		for _, p := range svc.Profiles {
-			if p != buildsService && slices.Contains(h.Profiles, p) {
+			if slices.Contains(h.Profiles, p) {
 				out = append(out, name)
 				break
 			}
@@ -245,12 +244,11 @@ func (e *Engine) servicesOf(ctx context.Context, h Head, content []byte) ([]stri
 }
 
 // accessModeProfiles are the profiles every mode's head selects to reach
-// the home, as Profiles derives them: locus-builds aside, which no mode
-// owns.
+// the home, as Profiles derives them.
 func accessModeProfiles() []string {
 	var out []string
 	for _, mode := range []string{ModeLocal, ModeTailnet, ModePublic} {
-		out = union(out, slices.DeleteFunc(Profiles(mode, ""), func(p string) bool { return p == buildsService }))
+		out = union(out, Profiles(mode))
 	}
 	return out
 }

@@ -426,7 +426,7 @@ func TestSetupsStartRunsInTheFolderItEnteredThroughTheRealEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stack strings.Builder
-	for _, service := range []string{"cyfr", "locus-backends", "locus-backends-guard", "locus-builds", "locus-builds-guard", "locus-runtime"} {
+	for _, service := range []string{"cyfr", "locus", "locus-guard"} {
 		fmt.Fprintf(&stack, `{"name":"chosen-%s-1","service":%q,"state":"running"}`+"\n", service, service)
 	}
 	p.answer("stack.out", stack.String())

@@ -151,7 +151,7 @@ var (
 
 // scenarioEnv is the .env of the scenarios' home: public at
 // cyfr.example.com, builds on.
-const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n"
+const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
 
 // updateScenario is one update's project directory, fake docker and fake
 // engine.
@@ -309,7 +309,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 		},
 	}}})
 	s.answer("config.out", string(config))
-	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\ntailscale\nlocus-runtime\nlocus-builds\nlocus-builds-guard\nlocus-backends\nsidecar\n")
+	s.answer("ps.out", "locus-guard\ncyfr\ncaddy\ntailscale\nlocus\nsidecar\n")
 	s.answer("rpc.out", "warming up\nCYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
 	s.answer("eval.out", "booting\nCYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[]}`+"\n")
 	s.answer("eval-live.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
@@ -385,21 +385,17 @@ func (s *updateScenario) answer(name, content string) {
 
 // stackServices are the services the scenarios' started stack runs, as
 // `docker compose config --services` names them under the head.
-var stackServices = []string{"caddy", "cyfr", "locus-backends", "locus-backends-guard", "locus-builds", "locus-builds-guard", "locus-runtime"}
+var stackServices = []string{"caddy", "cyfr", "locus", "locus-guard"}
 
 // stackAnswer sets the started stack's containers, as `docker compose ps
 // --format json` writes them, one line each: every service of
-// stackServices running and healthy (locus-builds, which has no health
-// check, running), but those states names, each as "state" or
-// "state/health".
+// stackServices running and healthy, but those states names, each as
+// "state" or "state/health".
 func (s *updateScenario) stackAnswer(states map[string]string) {
 	s.t.Helper()
 	var lines []string
 	for _, svc := range stackServices {
 		state, health := "running", "healthy"
-		if svc == "locus-builds" {
-			health = ""
-		}
 		if given, ok := states[svc]; ok {
 			state, health, _ = strings.Cut(given, "/")
 		}
@@ -558,7 +554,7 @@ func (s *updateScenario) schemaRead(running bool) []string {
 }
 
 // scenarioHead is the access head scenarioEnv holds.
-var scenarioHead = access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, BuildsURL: "http://locus-builds:4100", Profiles: []string{"locus-builds", "public"}}
+var scenarioHead = access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, Profiles: []string{"public"}}
 
 // profiles is the engine's compose selection for the scenario's head and
 // project, as the fake docker logs it (newUpdateScenario sets it).
@@ -606,11 +602,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"stop caddy",
 		profiles+"stop tailscale",
 		profiles+"stop cyfr",
-		profiles+"stop locus-runtime",
-		profiles+"stop locus-builds",
-		profiles+"stop locus-backends",
-		profiles+"stop locus-builds-guard",
-		profiles+"stop locus-backends-guard",
+		profiles+"stop locus",
+		profiles+"stop locus-guard",
 		profiles+"stop",
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
@@ -647,8 +640,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	if !bytes.Equal(got, switched(s.compose)) {
 		t.Errorf("the switched docker-compose.yml is\n%s", got)
 	}
-	if n := strings.Count(string(got), "@sha256:"); n != 8 {
-		t.Errorf("the switched docker-compose.yml pins %d images, want 8 (cyfr, five cyfr-locus, caddy, tailscale)", n)
+	if n := strings.Count(string(got), "@sha256:"); n != 5 {
+		t.Errorf("the switched docker-compose.yml pins %d images, want 5 (cyfr, locus and locus-guard on cyfr-locus, caddy, tailscale)", n)
 	}
 	if info, err := os.Stat("docker-compose.yml"); err != nil || info.Mode().Perm() != 0640 {
 		t.Errorf("the switched docker-compose.yml's mode is %v (error %v), want 0640 kept", info.Mode().Perm(), err)
@@ -752,7 +745,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	storageRoot := "Storage root /app/data is " + hostRoot + " on the host."
-	for _, line := range []string{storageRoot, "stopped caddy in ", "stopped tailscale in ", "stopped cyfr in ", "stopped locus-backends-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
+	for _, line := range []string{storageRoot, "stopped caddy in ", "stopped tailscale in ", "stopped cyfr in ", "stopped locus-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
 		if !strings.Contains(out, line) {
 			t.Errorf("the output lacks %q:\n%s", line, out)
 		}
@@ -974,9 +967,9 @@ func TestUpdateReadsNoAnswerAsNoRoster(t *testing.T) {
 // A failed stop restarts the old stack.
 func TestUpdateRestartsTheOldStackAfterAFailedStop(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	s.answer("stop-locus-runtime.exit", "1")
+	s.answer("stop-locus.exit", "1")
 	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "stop locus-runtime failed") {
+	if err == nil || !strings.Contains(err.Error(), "stop locus failed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
 	if log := s.log(); !slices.Equal(log[len(log)-2:], started("update")) || s.hasCall(profiles+"run") {
@@ -1171,18 +1164,15 @@ func TestUpdateRewritesOnlyManagedImageLines(t *testing.T) {
 		return compose[:line] + "    image: " + image + compose[end:]
 	}
 	compose := replaceImage(shipped, "cyfr", "myregistry.example/cyfr:custom")
-	compose = replaceImage(compose, "locus-builds", `"${LOCUS_IMAGE:-ghcr.io/cyfrworks/cyfr-locus:latest}"`)
-	compose = replaceImage(compose, "locus-runtime", "ghcr.io/cyfrworks/cyfr-locus-dev:1")
-	compose = replaceImage(compose, "locus-backends", "'ghcr.io/cyfrworks/cyfr-locus:latest' # quoted")
+	compose = replaceImage(compose, "locus", `"${LOCUS_IMAGE:-ghcr.io/cyfrworks/cyfr-locus:latest}"`)
+	compose = replaceImage(compose, "locus-guard", "'ghcr.io/cyfrworks/cyfr-locus:latest' # quoted")
 	s := newUpdateScenario(t, []byte(compose), nil)
 	s.composes = map[string]string{testVersion: compose}
 	out, err := s.run(context.Background())
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
-	want := replaceImage(compose, "locus-backends", "'ghcr.io/cyfrworks/cyfr-locus:"+testVersion+"@"+digestLocus+"' # quoted")
-	want = replaceImage(want, "locus-builds-guard", "ghcr.io/cyfrworks/cyfr-locus:"+testVersion+"@"+digestLocus)
-	want = replaceImage(want, "locus-backends-guard", "ghcr.io/cyfrworks/cyfr-locus:"+testVersion+"@"+digestLocus)
+	want := replaceImage(compose, "locus-guard", "'ghcr.io/cyfrworks/cyfr-locus:"+testVersion+"@"+digestLocus+"' # quoted")
 	_, caddyTag, _ := strings.Cut(string(regexp.MustCompile(`image: caddy:[^@\n]+`).Find([]byte(shipped))), "caddy:")
 	want = replaceImage(want, "caddy", "caddy:"+caddyTag+"@"+digestCaddy)
 	_, tailscaleTag, _ := strings.Cut(string(regexp.MustCompile(`image: tailscale/tailscale:[^@\n]+`).Find([]byte(shipped))), "tailscale/tailscale:")
@@ -1192,8 +1182,7 @@ func TestUpdateRewritesOnlyManagedImageLines(t *testing.T) {
 	}
 	for _, line := range []string{
 		"  cyfr: myregistry.example/cyfr:custom\n",
-		"  locus-builds: ${LOCUS_IMAGE:-ghcr.io/cyfrworks/cyfr-locus:latest}\n",
-		"  locus-runtime: ghcr.io/cyfrworks/cyfr-locus-dev:1\n",
+		"  locus: ${LOCUS_IMAGE:-ghcr.io/cyfrworks/cyfr-locus:latest}\n",
 	} {
 		if !strings.Contains(out, line) {
 			t.Errorf("the output does not report %q:\n%s", line, out)
@@ -1204,21 +1193,18 @@ func TestUpdateRewritesOnlyManagedImageLines(t *testing.T) {
 	}
 }
 
-// lastReleaseCompose is a compose file of the last release's shape: its
-// images on release 0.8.0, the runtime's pool of the old kind and the
-// Locus services without their AppArmor and system-path options.
+// lastReleaseCompose is the compose file of the last release's shape,
+// three Locus containers (testdata/three-container, as main shipped it at
+// bfb14c188), its images on release 0.8.0.
 func lastReleaseCompose(t *testing.T) string {
 	t.Helper()
-	old := string(shippedCompose(t))
+	old := read(t, filepath.Join(packageDir, "testdata", "three-container", "compose.yml"))
 	for _, edit := range []struct{ from, to string }{
 		{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr:0.8.0@" + digestOld},
 		{"ghcr.io/cyfrworks/cyfr-locus:latest", "ghcr.io/cyfrworks/cyfr-locus:0.8.0@" + digestOld},
-		{"runner:30101-30108:relay", "runner:30101-30108:netns"},
-		{"      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}\n", ""},
-		{"      - systempaths=unconfined\n", ""},
 	} {
 		if !strings.Contains(old, edit.from) {
-			t.Fatalf("the shipped docker-compose.yml holds no %q", edit.from)
+			t.Fatalf("the three-container docker-compose.yml holds no %q", edit.from)
 		}
 		old = strings.ReplaceAll(old, edit.from, edit.to)
 	}
@@ -1314,10 +1300,10 @@ func TestUpdateFailsWhenAServiceDoesNotComeUp(t *testing.T) {
 		states map[string]string
 		want   string
 	}{
-		"restart loop": {map[string]string{"locus-runtime": "restarting/starting"}, "locus-runtime (restarting)"},
-		"unhealthy":    {map[string]string{"locus-backends-guard": "running/unhealthy"}, "locus-backends-guard (unhealthy)"},
-		"no health":    {map[string]string{"locus-builds": "exited/"}, "locus-builds (exited)"},
-		"two":          {map[string]string{"locus-runtime": "running/starting", "locus-backends": "restarting/"}, "locus-backends (restarting), locus-runtime (starting)"},
+		"restart loop": {map[string]string{"locus": "restarting/starting"}, "locus (restarting)"},
+		"unhealthy":    {map[string]string{"locus-guard": "running/unhealthy"}, "locus-guard (unhealthy)"},
+		"no health":    {map[string]string{"locus": "exited/"}, "locus (exited)"},
+		"two":          {map[string]string{"locus": "running/starting", "locus-guard": "restarting/"}, "locus (starting), locus-guard (restarting)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
@@ -1419,9 +1405,9 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 	s.composes = map[string]string{"0.8.0": legacy}
 	s.examples = map[string]string{
 		"0.8.0": "CYFR_DEFAULTED=old\nCYFR_CHANGED=old\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4100\n# CYFR_COMMENTED=old\nCYFR_TWICE=old\n",
-		"0.9.0": "CYFR_DEFAULTED=new\nCYFR_CHANGED=new\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-runtime:4100\nCYFR_COMMENTED=new\nCYFR_TWICE=new\n",
+		"0.9.0": "CYFR_DEFAULTED=new\nCYFR_CHANGED=new\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus:4100\nCYFR_COMMENTED=new\nCYFR_TWICE=new\n",
 	}
-	lines := "CYFR_DEFAULTED=old\nCYFR_CHANGED=mine\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4200/?token=tok-secret-123\nCYFR_COMMENTED=old\nCYFR_PEER=locus-legacy:7\nCYFR_OTHER=http://locus-runtime:1\nCYFR_NAMED_URLS=wrk_one=http://locus-runtime:4201,wrk_locus=http://locus-legacy:4201\nCYFR_TWICE=mine\nCYFR_TWICE=old\n"
+	lines := "CYFR_DEFAULTED=old\nCYFR_CHANGED=mine\nCYFR_SAME=same\nCYFR_LEGACY_URL=http://locus-legacy:4200/?token=tok-secret-123\nCYFR_COMMENTED=old\nCYFR_PEER=locus-legacy:7\nCYFR_OTHER=http://locus:1\nCYFR_NAMED_URLS=wrk_one=http://locus:4201,wrk_locus=http://locus-legacy:4201\nCYFR_TWICE=mine\nCYFR_TWICE=old\n"
 	env := scenarioEnv + lines
 	s.edit(".env", env)
 	out, err := s.run(context.Background())
@@ -1439,7 +1425,7 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 		"CYFR_LEGACY_URL": "http://locus-legacy:4200/?token=tok-secret-123",
 		"CYFR_COMMENTED":  "old",
 		"CYFR_PEER":       "locus-legacy:7",
-		"CYFR_OTHER":      "http://locus-runtime:1",
+		"CYFR_OTHER":      "http://locus:1",
 	} {
 		if got[name] != want {
 			t.Errorf(".env's %s is %q, want %q", name, got[name], want)
@@ -1453,14 +1439,14 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 		t.Errorf("the update said %d times %q:\n%s", n, said, out)
 	}
 	report := "These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-		"  CYFR_LEGACY_URL, line 9, names locus-legacy: write http://locus-runtime:4100 there, release 0.9.0's shipped value\n" +
-		"  CYFR_NAMED_URLS, line 13, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
-		"  CYFR_PEER, line 11, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n"
+		"  CYFR_LEGACY_URL, line 8, names locus-legacy: write http://locus:4100 there, release 0.9.0's shipped value\n" +
+		"  CYFR_NAMED_URLS, line 12, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
+		"  CYFR_PEER, line 10, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n"
 	if n := strings.Count(out, report); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, report, out)
 	}
 	twice := "These .env settings are assigned more than once, so they are yours and cyfr update changed none of their lines:\n" +
-		"  CYFR_TWICE, lines 14 and 15: release 0.9.0 ships CYFR_TWICE=new\n"
+		"  CYFR_TWICE, lines 13 and 14: release 0.9.0 ships CYFR_TWICE=new\n"
 	if n := strings.Count(out, twice); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, twice, out)
 	}
@@ -1559,26 +1545,26 @@ func TestUpdateAsksBeforeReplacingAnEditedComposeFile(t *testing.T) {
 }
 
 // The wait and the cleanup after it run under the head the start started:
-// a .env change of the switch that moves builds to another host drops the
-// builds profile, and neither the wait nor the stop names it.
+// a .env change of the switch that moves cyfr's port changes the head, and
+// the wait and the stop run under the new one.
 func TestUpdateWaitsUnderTheHeadItStarted(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.examples = map[string]string{
-		"0.8.0": "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
-		"0.9.0": "CYFR_LOCUS_BUILDS_URL=https://builds.example.com\n",
+		"0.8.0": "CYFR_PORT=4000\n",
+		"0.9.0": "CYFR_PORT=4100\n",
 	}
 	saved, savedPoll := stackHealthWindow, stackHealthPoll
 	t.Cleanup(func() { stackHealthWindow, stackHealthPoll = saved, savedPoll })
 	stackHealthWindow, stackHealthPoll = 300*time.Millisecond, 20*time.Millisecond
-	s.stackAnswer(map[string]string{"locus-runtime": "restarting/"})
+	s.stackAnswer(map[string]string{"locus": "restarting/"})
 	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "locus-runtime (restarting)") {
+	if err == nil || !strings.Contains(err.Error(), "locus (restarting)") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
 	env := envAssignments(filepath.Join(s.project, ".env"))
 	b, err := access.ResolveBoot(access.BootInput{File: env, Process: env, Release: true})
-	if err != nil || slices.Contains(b.Head.Profiles, "locus-builds") {
-		t.Fatalf("the switched .env's head is %+v (error %v), want one without builds", b.Head, err)
+	if err != nil || b.Head.Port != 4100 {
+		t.Fatalf("the switched .env's head is %+v (error %v), want one on port 4100", b.Head, err)
 	}
 	started := strings.Join(composePrefixArgs(access.ProjectName(s.project), b.Head), " ") + " "
 	log := s.log()
@@ -1624,9 +1610,9 @@ func TestUpdateWaitsAgainOnItsRelease(t *testing.T) {
 	saved, savedPoll := stackHealthWindow, stackHealthPoll
 	t.Cleanup(func() { stackHealthWindow, stackHealthPoll = saved, savedPoll })
 	stackHealthWindow, stackHealthPoll = 300*time.Millisecond, 20*time.Millisecond
-	s.stackAnswer(map[string]string{"locus-runtime": "restarting/"})
+	s.stackAnswer(map[string]string{"locus": "restarting/"})
 	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "locus-runtime (restarting)") || !strings.Contains(err.Error(), "docker compose logs locus-runtime") {
+	if err == nil || !strings.Contains(err.Error(), "locus (restarting)") || !strings.Contains(err.Error(), "docker compose logs locus") {
 		t.Fatalf("an update on its release answered %v\n%s", err, out)
 	}
 	if !slices.Contains(s.log(), profiles+"ps --format json") {
@@ -1799,7 +1785,7 @@ func TestUpdateOnASignal(t *testing.T) {
 			}
 			log := s.log()
 			if c.restart {
-				for _, svc := range []string{"caddy", "cyfr", "locus-runtime", "locus-backends-guard"} {
+				for _, svc := range []string{"caddy", "cyfr", "locus", "locus-guard"} {
 					if !slices.Contains(log, profiles+"stop "+svc) {
 						t.Errorf("the stop step did not finish: no stop of %s", svc)
 					}
@@ -2568,7 +2554,7 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 				"This CYFR is on release 0.8.0; this cyfr is release 0.9.0.\n",
 				"Updating it stops the stack, snapshots it into backups/, replaces docker-compose.yml with release 0.9.0's own, the snapshot keeping this one with any edits you made to it, and starts it. Its images change:\n",
 				"  cyfr: ghcr.io/cyfrworks/cyfr:0.8.0@sha256:" + strings.Repeat("c", 12) + "… → ghcr.io/cyfrworks/cyfr:0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n",
-				"  locus-runtime: ghcr.io/cyfrworks/cyfr-locus:latest → ghcr.io/cyfrworks/cyfr-locus:0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n",
+				"  locus: ghcr.io/cyfrworks/cyfr-locus:latest → ghcr.io/cyfrworks/cyfr-locus:0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n",
 				"Read the release notes first: https://github.com/cyfrworks/cyfr/releases/tag/0.9.0\n",
 			} {
 				if !strings.Contains(out.String(), line) {
@@ -2840,7 +2826,7 @@ func TestUpdateRefusesAHomeOnANewerReleaseWhateverItsTags(t *testing.T) {
 
 	t.Run("not running", func(t *testing.T) {
 		s := newUpdateScenario(t, []byte(shipped), nil)
-		s.answer("ps.out", "locus-runtime\nlocus-backends\n")
+		s.answer("ps.out", "locus\nlocus-guard\n")
 		s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"1.0.0","slots":[]}`+"\n")
 		out, err := s.run(context.Background())
 		if err == nil || !strings.Contains(err.Error(), "This CYFR is on release 1.0.0, newer than this cyfr's 0.9.0") || !strings.Contains(err.Error(), "The old stack was started again") {
@@ -2948,7 +2934,7 @@ func TestUpdateReadsTheSchemaOfAStoppedCyfrOffline(t *testing.T) {
 	stopped := func(t *testing.T) *updateScenario {
 		s := newUpdateScenario(t, shippedCompose(t), nil)
 		s.answer("cyfrps.out", "")
-		s.answer("ps.out", "locus-runtime\nlocus-backends\n")
+		s.answer("ps.out", "locus\nlocus-guard\n")
 		return s
 	}
 

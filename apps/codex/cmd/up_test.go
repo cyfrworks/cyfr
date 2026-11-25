@@ -100,7 +100,7 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 
 	// A Locus service's refusal, in its own container's log, is read too.
 	const locusFatal = "[Locus] FATAL: a server holding LOCUS_RUNTIME_KEY serves the runtime alone."
-	s.answer("logs.out", "locus-runtime starting\n"+locusFatal+"\n")
+	s.answer("logs.out", "locus starting\n"+locusFatal+"\n")
 	err = runUp(context.Background(), &bytes.Buffer{})
 	if err == nil || !strings.HasSuffix(err.Error(), "\nA service refused to boot, and its log says why:\n  "+locusFatal) {
 		t.Fatalf("cyfr up answered %v, want Locus's FATAL line", err)
@@ -864,7 +864,7 @@ func newTailnetHome(t *testing.T) string {
 	}
 	text, _ := newEnvFromTemplate(t)
 	t.Chdir(dir)
-	d, err := access.Derive(access.Target{Mode: access.ModeTailnet}, access.Current{Port: 4000, BuildsURL: defaultBuildsURL}, &access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
+	d, err := access.Derive(access.Target{Mode: access.ModeTailnet}, access.Current{Port: 4000}, &access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
 	if err != nil {
 		t.Fatal(err)
 	}

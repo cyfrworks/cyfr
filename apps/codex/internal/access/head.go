@@ -16,7 +16,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 // The three ways a home is reached.
@@ -25,10 +24,6 @@ const (
 	ModeTailnet = "tailnet"
 	ModePublic  = "public"
 )
-
-// buildsService is the compose service, and the host, of the Locus builds
-// service, and the profile that starts it.
-const buildsService = "locus-builds"
 
 // Head is the complete selection every access setting derives from. A
 // string field that is empty is absent: it is omitted from the canonical
@@ -40,7 +35,6 @@ type Head struct {
 	PublicURL string   `json:"public_url,omitempty"`
 	Port      int      `json:"port"`
 	ACMEEmail string   `json:"acme_email,omitempty"`
-	BuildsURL string   `json:"builds_url,omitempty"`
 	Profiles  []string `json:"profiles"`
 }
 
@@ -98,19 +92,13 @@ func refuse(code string, payload map[string]string) *Refusal {
 	return &Refusal{Code: code, Class: class, Payload: payload}
 }
 
-// Profiles is a head's complete compose selection, sorted: the mode's
-// proxy profile, and locus-builds exactly when buildsURL's host is that
-// compose service.
-func Profiles(mode, buildsURL string) []string {
-	profiles := []string{}
-	if mode != ModeLocal {
-		profiles = append(profiles, mode)
+// Profiles is a head's complete compose selection: the mode's proxy
+// profile, none in local.
+func Profiles(mode string) []string {
+	if mode == ModeLocal {
+		return []string{}
 	}
-	if host, ok := buildsHost(buildsURL); ok && host == buildsService {
-		profiles = append(profiles, buildsService)
-	}
-	slices.Sort(profiles)
-	return profiles
+	return []string{mode}
 }
 
 // Canonical is the head's RFC 8785 canonical JSON, as Prima.JCS writes it:
@@ -139,7 +127,6 @@ func (h Head) Canonical() []byte {
 	// The keys in byte order, which for these ASCII names is RFC 8785's
 	// UTF-16 order.
 	str("acme_email", h.ACMEEmail)
-	str("builds_url", h.BuildsURL)
 	str("host", h.Host)
 	str("mode", h.Mode)
 	str("node_id", h.NodeID)
@@ -198,40 +185,6 @@ func writeString(b *strings.Builder, s string) {
 		}
 	}
 	b.WriteByte('"')
-}
-
-// buildsURLGrammar is Cyfr.RuntimeConfig's @builds_url, anchored the Go
-// way: http or https, a host, an optional port, and nothing after but one
-// slash.
-var buildsURLGrammar = regexp.MustCompile(`^(?:http|https)://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)(?::([0-9]{1,5}))?/?$`)
-
-// BuildsURL reports whether raw is a builds service's URL: http or https,
-// a host (a DNS name, an IPv4 address or a bracketed IPv6 address), an
-// optional port from 1 to 65535, and nothing after but one slash: no
-// path, query, fragment or credentials.
-func BuildsURL(raw string) bool {
-	_, ok := buildsHost(raw)
-	return ok
-}
-
-// buildsHost is a builds URL's host, lowercased.
-func buildsHost(raw string) (string, bool) {
-	m := buildsURLGrammar.FindStringSubmatch(raw)
-	if m == nil || !utf8.ValidString(raw) {
-		return "", false
-	}
-	if m[2] != "" {
-		if n, err := strconv.Atoi(m[2]); err != nil || n < 1 || n > 65535 {
-			return "", false
-		}
-	}
-	if strings.HasPrefix(m[1], "[") {
-		address := strings.TrimSuffix(strings.TrimPrefix(m[1], "["), "]")
-		if !strings.Contains(address, ":") || ipLiteral(address) == nil {
-			return "", false
-		}
-	}
-	return strings.ToLower(m[1]), true
 }
 
 var (
