@@ -586,6 +586,14 @@ defmodule Compendium do
   @spec agent_type_of(AquaAgent.t()) :: String.t()
   defdelegate agent_type_of(agent), to: AquaAgent, as: :type_of
 
+  @doc """
+  A `tools` list against the grammar the `aqua` tool's write applies
+  (`Compendium.AquaAgent.check_tools/1`): what the Aqua page may offer to
+  put on the list.
+  """
+  @spec agent_tools_check(term()) :: :ok | {:error, AquaAgent.tools_error()}
+  defdelegate agent_tools_check(tools), to: AquaAgent, as: :check_tools
+
   @doc "The type a crew member carries (`Compendium.AquaAgent.crew_type/0`)."
   @spec agent_crew_type() :: String.t()
   defdelegate agent_crew_type(), to: AquaAgent, as: :crew_type

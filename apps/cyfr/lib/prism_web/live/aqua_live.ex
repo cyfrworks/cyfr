@@ -20,8 +20,9 @@ defmodule PrismWeb.AquaLive do
 
   Four sections, each a `Phoenix.LiveComponent` that owns its reads and
   its writes (`PrismWeb.AquaLive.Section` states the contract): the roster
-  (`AgentsComponent`), the pinned page and the notes (`NotesComponent`),
-  the scrolls (`ScrollsComponent`) and the shipped files
+  (`AgentsComponent`), whose soul's card holds what Aqua may use with the
+  scrolls (`ScrollsComponent`) as one of its groups, the pinned page and
+  the notes (`NotesComponent`), and the shipped files
   (`RestoreComponent`). The page holds what they share — the provenance
   of every file in the tree, the model catalogue, the grant it asked its
   system layer for — and loads one section per message, so a child
@@ -1381,13 +1382,6 @@ defmodule PrismWeb.AquaLive do
       />
 
       <.live_component module={NotesComponent} id="aqua-notes-section" context={@context} />
-
-      <.live_component
-        module={ScrollsComponent}
-        id="aqua-scrolls-section"
-        context={@context}
-        provenance={@provenance}
-      />
 
       <.live_component
         module={RestoreComponent}
