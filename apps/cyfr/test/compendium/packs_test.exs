@@ -101,14 +101,14 @@ defmodule Compendium.PacksTest do
             do: at
 
       cut = at + 24
-      <<head::binary-size(cut), _usize::little-32, rest::binary>> = bytes
+      <<head::binary-size(^cut), _usize::little-32, rest::binary>> = bytes
       head <> <<size::little-32>> <> rest
     end)
   end
 
   defp central_named?(bytes, at, name) do
     skip = at + 28
-    <<_::binary-size(skip), nlen::little-16, _::binary>> = bytes
+    <<_::binary-size(^skip), nlen::little-16, _::binary>> = bytes
     binary_part(bytes, at + 46, nlen) == name
   end
 

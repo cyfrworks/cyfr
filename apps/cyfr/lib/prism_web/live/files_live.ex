@@ -705,6 +705,12 @@ defmodule PrismWeb.FilesLive do
       "A shaped folder: files live inside a component's version directory and are edited " <>
         "in place. Create, pull or reset a component from the Components page."
 
+  defp tier_hint(:shaped, "aqua/scrolls" <> _),
+    do:
+      "Your packs of scrolls, one folder each, as their authors published them. A pack of " <>
+        "your own is written here: a scroll's skills/<name>/SKILL.md under a new folder " <>
+        "makes one. A pack you brought in, and cyfr, change only by an update."
+
   defp tier_hint(:shaped, "aqua" <> _),
     do:
       "A shaped folder: the soul, its crew and its scrolls, edited in place. Create, " <>

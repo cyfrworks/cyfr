@@ -530,8 +530,27 @@ defmodule Arca.Files do
 
   defp listing(actor, physical, path) do
     with {:ok, entries} <- list_typed(actor, physical, path) do
+      record = record_name(physical)
+
       {:ok,
-       for({name, kind} <- entries, do: {name, kind, fn -> size(actor, physical, name, kind) end})}
+       for(
+         {name, kind} <- entries,
+         not (kind == :file and name == record),
+         do: {name, kind, fn -> size(actor, physical, name, kind) end}
+       )}
+    end
+  end
+
+  # A unit its grammar commits whole (a pack of `aqua/scrolls/`) keeps its
+  # domain's record at its sentinel, which no ordinary write reaches: it is
+  # no file of the person's, so the folder's listing leaves it out.
+  defp record_name(physical) do
+    case Arca.Storage.locate(physical) do
+      {:dir, ^physical, sentinel} ->
+        if Arca.Storage.UnitLocator.commits_whole?(physical), do: sentinel
+
+      _other ->
+        nil
     end
   end
 

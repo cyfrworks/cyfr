@@ -336,6 +336,13 @@ defmodule PrismWeb.FilesLiveTest do
     # The packs are folders of aqua/scrolls/; CYFR's own ships and refuses to go.
     {view, html} = mount_athanor(conn, "/files?p=aqua/scrolls")
     assert html =~ "cyfr/"
+    assert html =~ "makes one. A pack you brought in, and cyfr, change only by an update."
+
+    # CYFR's record of a pack is no file of the person's: the folder's
+    # listing leaves it out.
+    {_view, html} = mount_athanor(conn, "/files?p=aqua/scrolls/cyfr")
+    assert html =~ "skills/"
+    refute html =~ ".cyfr-pack.json"
 
     html =
       view
