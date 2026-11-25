@@ -403,7 +403,9 @@ defmodule Opus.Programs.SessionTest do
   # Two starts of the person's at once while their copy is missing: the
   # first's put is held at its first part, then at its last; the second's
   # first part reaches the service between them and meets that put under
-  # way. Answers the first's lifetime, then the second's.
+  # way, and its hold again is held. Answers both starts' tasks, the
+  # first's last part and the second's hold again, held, and their
+  # lifetimes.
   defp two_starts(fake, grant) do
     test = self()
     Scripted.hold(fake, "packs_put")
@@ -416,10 +418,14 @@ defmodule Opus.Programs.SessionTest do
     send(first_part, :go)
     assert_receive {:session, "packs_put", %{"seq" => 0, "lifetime" => l1}, _}, 5_000
     assert_receive {:held, "packs_put", first_last}, 5_000
+    # The second's next hold, which only a first part refused packs_busy
+    # sends, is held too, until the first has ended.
+    Scripted.hold(fake, "packs_hold")
     send(second_part, :go)
     assert_receive {:session, "packs_put", %{"seq" => 0, "lifetime" => l2}, _}, 5_000
     assert l2 != l1
-    {first, second, first_last, l1, l2}
+    assert_receive {:held, "packs_hold", second_again}, 5_000
+    {first, second, first_last, second_again, l1, l2}
   end
 
   defp resumed({_lifetime, {:ok, %{resumed: resumed}}}), do: {:ok, resumed}
@@ -439,12 +445,15 @@ defmodule Opus.Programs.SessionTest do
 
     {grant, _program} = held(ctx)
     d = digest(ctx)
-    {first, second, first_last, l1, l2} = two_starts(fake, grant)
-    # The second has met the put under way and waits; the first ends.
+    {first, second, first_last, second_again, l1, l2} = two_starts(fake, grant)
+    # The second has met the put under way and holds again once the first
+    # has ended.
     send(first_last, :go)
+    first = first |> Task.await(30_000) |> resumed()
+    send(second_again, :go)
 
     assert %{
-             first: first |> Task.await(30_000) |> resumed(),
+             first: first,
              second: second |> Task.await(30_000) |> resumed(),
              copies: fake |> Scripted.generations(ctx.athanor_id) |> Map.keys()
            } == %{first: {:ok, false}, second: {:ok, false}, copies: [d]}
@@ -468,13 +477,16 @@ defmodule Opus.Programs.SessionTest do
 
     {grant, _program} = held(ctx)
     d = digest(ctx)
-    {first, second, first_last, _l1, l2} = two_starts(fake, grant)
-    # The first's put fails: its last part finds it dropped.
+    {first, second, first_last, second_again, _l1, l2} = two_starts(fake, grant)
+    # The first's put fails: its last part finds it dropped. The second then
+    # holds again.
     Scripted.drop_puts(fake, ctx.athanor_id)
     send(first_last, :go)
+    first = first |> Task.await(30_000) |> resumed()
+    send(second_again, :go)
 
     assert %{
-             first: first |> Task.await(30_000) |> resumed(),
+             first: first,
              second: second |> Task.await(30_000) |> resumed(),
              copies: fake |> Scripted.generations(ctx.athanor_id) |> Map.keys()
            } == %{first: {:error, :packs_unready}, second: {:ok, false}, copies: [d]}
