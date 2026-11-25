@@ -8,7 +8,7 @@ import {test} from "node:test"
 import {fragment} from "../../../cyfr/assets/account/sign_in.js"
 import {
   LOOPBACK, SWITCHES, accountLoad, contentNavigation, contentOpen, documentHeaders, grants, homeMessage, printed, readHop,
-  relyingParty, screenProject, setupProject, unlistedSwitch
+  railPress, relyingParty, screenProject, setupProject, unlistedSwitch, updatePress
 } from "../src/policy.js"
 
 const processes = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
@@ -39,6 +39,30 @@ test("a content window loads the device's pages, then the selected CYFR, and not
     "javascript:alert(1)", "data:text/html,x", home.replace("https", "http") + "/", "not a url"]) {
     assert.equal(top(elsewhere, ready), "block", elsewhere)
   }
+})
+
+test("no content window and no frame loads the rail's or Update CYFR's pages or presses, however spelled", () => {
+  for (const own of ["/rail/", "/rail/update", "/update/", "/update/#read=t", "/update/start?offer=1", "/update/close", "/update/read",
+    "/%75pdate/start?offer=1", "/update%2Fstart?offer=1"]) {
+    for (const state of [before, ready, linux]) {
+      assert.equal(top(LOOPBACK + own, state, LOOPBACK + "/"), "block", own)
+      assert.equal(frame(LOOPBACK + own, state), "block", own)
+    }
+  }
+})
+
+test("a press on the rail's foot opens Update CYFR; Update CYFR's presses name an offer by its number, or close it", () => {
+  assert.deepEqual(railPress(LOOPBACK + "/rail/update"), {act: "update"})
+  for (const no of ["/rail/update?x=1", "/rail/update#x", "/rail/updates"]) assert.equal(railPress(LOOPBACK + no), null, no)
+  assert.deepEqual(updatePress(LOOPBACK + "/update/start?offer=4"), {act: "start", offer: 4})
+  assert.deepEqual(updatePress(LOOPBACK + "/update/close"), {act: "close"})
+  for (const no of ["/update/start", "/update/start?offer=0", "/update/start?offer=04", "/update/start?offer=-1", "/update/start?offer=1.5",
+    "/update/start?offer=4&offer=5", "/update/start?offer=4&target=9.9.9", "/update/start?offer=99999999999999999",
+    "/update/start?offer=4#x", "/update/close?x=1", "/update/", "/update/read"]) {
+    assert.equal(updatePress(LOOPBACK + no), null, no)
+  }
+  assert.equal(updatePress("http://127.0.0.1:7341/update/start?offer=4"), null, "another port")
+  assert.equal(updatePress("http://user@127.0.0.1:7340/update/start?offer=4"), null, "with a user")
 })
 
 test("only the content window's top frame, showing the selected CYFR's page, hops, to the sign-in route and the page that makes an account alone", () => {
@@ -243,9 +267,10 @@ test("the account window's document frames nothing, keeping its own policies, wh
   }
 })
 
-test("the app takes the screen's project, setup's folder and --quit, and refuses every other switch, a route's among them", () => {
-  assert.deepEqual(SWITCHES, ["screen-project", "setup-project", "quit"])
+test("the app takes the screen's project, setup's folder, --quit and --updated, and refuses every other switch, a route's among them", () => {
+  assert.deepEqual(SWITCHES, ["screen-project", "setup-project", "quit", "updated"])
   assert.equal(unlistedSwitch(["--quit"], "linux"), null)
+  assert.equal(unlistedSwitch(["--updated"], "linux"), null)
   assert.equal(unlistedSwitch(["--screen-project=/home/ana/cyfr"], "linux"), null)
   assert.equal(unlistedSwitch(["--setup-project=/home/ana/setup-here"], "linux"), null)
   assert.equal(unlistedSwitch([], "linux"), null)

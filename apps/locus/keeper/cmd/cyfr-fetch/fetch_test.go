@@ -112,7 +112,7 @@ func serveFiles(t *testing.T, files map[string][]byte) *origin {
 }
 
 func (o *origin) fetcher(notice io.Writer) fetcher {
-	return fetcher{client: o.server.Client(), notice: notice, maxDownload: maxDownload, maxProgram: maxProgram}
+	return fetcher{client: o.server.Client(), notice: notice, maxDownload: maxDownload, maxProgram: maxProgram, maxEntries: maxEntries}
 }
 
 func (o *origin) pinned(path string, body []byte) program {

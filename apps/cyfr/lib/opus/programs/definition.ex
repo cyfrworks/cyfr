@@ -243,6 +243,19 @@ defmodule Opus.Programs.Definition do
           "#c691f7840dd3429952c6508b0bad427f1e8611f2038b339c4ba3a78dfadcbca27eeb492e76d30d06733e3a37a8eea944e90ccff960b5f5a5d3aa43674873b2b9 " <>
           "arm64=https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-arm64.tar.gz" <>
           "#2b72b08a1a2f8a8784d6c272b551578ff98bc6c67ff44c137e70aaeceece50a9dce2810c084405ecfcb61b7b7e8754d1f0450e7030107741ccda6655d25e5582"
+    },
+    # Cursor's agent is no npm package: `cyfr-fetch` fetches Cursor's own
+    # archive of it, a tree run by its `cursor-agent`, and the program is
+    # told not to replace itself, since the row pins its version.
+    %{
+      name: "cursor",
+      title: "Cursor",
+      command:
+        "cyfr-cursor cyfr-fetch cursor-agent 2026.11.22-e9042b2 --tree=cursor-agent " <>
+          "amd64=https://downloads.cursor.com/lab/2026.11.22-e9042b2/linux/x64/agent-cli-package.tar.gz" <>
+          "#7990c25fd56ffabe6ab3fd5c79029954d0bcb65483eed94be9b6318279826d54a6514ecbd52461b2267805b4c52d2a847cd67a7017337dd4d07499f19296801b " <>
+          "arm64=https://downloads.cursor.com/lab/2026.11.22-e9042b2/linux/arm64/agent-cli-package.tar.gz" <>
+          "#9ac0796d77a5fef5daeb849c6be9dfeba4cbd5eb6f62f5f247e14e7a98eed6e66e755c51e5504fd450e8e2958f0346b77d6bf323a015d2b1eb23cd3fd0c50b24 -- --disable-auto-update"
     }
   ]
 

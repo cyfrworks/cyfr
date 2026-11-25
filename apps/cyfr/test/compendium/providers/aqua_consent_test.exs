@@ -340,32 +340,32 @@ defmodule Compendium.Providers.AquaConsentTest do
              Aqua.Crew.scrolls(ctx, ["many-files"], "crew.ask")
   end
 
-  # A job's bound is on what the member reads: many small scrolls whose
-  # names and bodies fit it, each in its frame, delimiters and separators
-  # with it, do not, and the ask is refused in the sentence that names the
-  # bound.
-  test "many small scrolls that fit as parts and not as framed are refused for one job", %{
-    ctx: ctx
-  } do
-    names = for n <- 1..1_400, do: "s" <> String.pad_leading("#{n}", 4, "0")
+  # A job's bound is on what the member reads: scrolls whose names and
+  # bodies fit it, each in its frame, delimiters and separators with it,
+  # do not, and the ask is refused in the sentence that names the bound.
+  # Two near the bound make the case here; many small ones are reckoned
+  # alike (`Aqua.CrewBoundTest`).
+  test "scrolls that fit as parts and not as framed are refused for one job", %{ctx: ctx} do
+    body = String.duplicate("b", 65_500)
+    names = ["s1", "s2"]
 
     for name <- names do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
           Compendium.AquaPath.skill_manifest(name),
-          ~s(---\nname: "#{name}"\ndescription: "d"\n---\n\nb\n)
+          ~s(---\nname: "#{name}"\ndescription: "d"\n---\n\n#{body}\n)
         )
     end
 
     assert {:error, {:invalid_argument, refusal}} = Aqua.Crew.scrolls(ctx, names, "crew.ask")
 
     framed =
-      for(name <- names, do: %{"name" => name, "body" => "b", "files" => []})
+      for(name <- names, do: %{"name" => name, "body" => body, "files" => []})
       |> Aqua.Reader.scrolls(Aqua.Reader.token())
       |> byte_size()
 
-    assert Enum.sum(Enum.map(names, &(byte_size(&1) + 1))) < 131_072
+    assert Enum.sum(Enum.map(names, &(byte_size(&1) + byte_size(body)))) < 131_072
     assert framed > 131_072
 
     assert refusal ==

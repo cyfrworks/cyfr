@@ -17,19 +17,21 @@ import (
 // is CYFR's only by the driver's own record: the arguments of a call that
 // reached its socket while the update was open, or before the update was
 // first seen, equal to an argument object the update shows
-// (profile.callArguments), and no other open update's. Nothing the program
-// names or titles makes a call CYFR's, so a person's server named as
-// CYFR's is shown as theirs. Since the socket call comes after the update
+// (profile.callArguments), and no other open update's; where the program
+// names a call's server, only a call of the server named as CYFR's own was
+// named in this session, which no server of the person's has (relay.go).
+// Nothing else the program names or titles makes a call CYFR's, so a
+// person's server named as CYFR's is shown as theirs. Since the socket call comes after the update
 // opens, only a call of a kind the program gives a stub server's call
 // (profile.stubKinds) can be CYFR's, and only its end says whether it was:
 // such a call is shown, start and end, once it ends unmatched, and one
 // still open when the native turn ends is shown then. A call of any other
 // kind is the program's own, shown from its start while it runs. A call
 // that cannot be told apart from another is shown as the program's own, so
-// none of a person's is ever hidden. A tool of the person's that shows the
-// same arguments just before a call of CYFR's can be shown in that call's
-// place: that is the activity shown alone, since the gated call goes
-// through the socket whatever is shown.
+// none of a person's is ever hidden. Where the program names no server, a
+// tool of the person's that shows the same arguments just before a call of
+// CYFR's can be shown in that call's place: that is the activity shown
+// alone, since the gated call goes through the socket whatever is shown.
 //
 // Nothing of this grows through a turn: a call is dropped when it ends, a
 // call of CYFR's keeps nothing but its id once matched, until its end, and
@@ -90,35 +92,54 @@ func (d *driver) ownUpdate(callID, status, kind, name string, rawInput json.RawM
 	call, seen := d.own[callID]
 	if !seen {
 		call = &ownCall{name: d.ownName(kind, name, rawInput), seen: len(d.own), waits: kind == "" || d.p.stubKinds[kind]}
-		if !call.waits {
-			call.started = true
-			if err := d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "start")); err != nil {
-				return err
-			}
-		}
-		if d.p.callArguments != nil {
-			for _, raw := range d.p.callArguments(rawInput) {
-				if v, ok := decoded(raw); ok {
-					call.arguments = append(call.arguments, v)
-				}
-			}
-		}
 		d.own[callID] = call
-		// A socket call that came before its update was first seen.
-		for i, arguments := range d.unclaimed {
-			if call.waits && call.shows(arguments) {
-				call.cyfr = true
-				call.arguments = nil
-				d.unclaimed = append(d.unclaimed[:i:i], d.unclaimed[i+1:]...)
-				break
-			}
+	} else if call.waits && !call.cyfr && len(rawInput) > 0 {
+		// A call first announced with less than its input (Cursor's, empty)
+		// is read again from each update that shows more.
+		if server, tool, ok := d.p.mcpCall(rawInput); ok && mcpPart.MatchString(server) && mcpPart.MatchString(tool) {
+			call.name = "mcp:" + server + "/" + tool
 		}
 	}
+	// A call that names its server, and names one other than the name CYFR
+	// gave its own, is the program's own whatever its arguments: it is
+	// shown from now.
+	if server, _, ok := d.p.mcpCall(rawInput); ok && call.waits && !call.cyfr && server != d.server {
+		call.waits, call.arguments = false, nil
+	}
+	if !call.waits && !call.started {
+		call.started = true
+		if err := d.c.Emit(d.event("own").Set("name", call.name).Set("phase", "start")); err != nil {
+			return err
+		}
+	}
+	d.learn(call, rawInput)
 	if status != "completed" && status != "failed" {
 		return nil
 	}
 	delete(d.own, callID)
 	return d.showOwn(call)
+}
+
+// learn keeps the argument objects a waiting call's input shows, each
+// once, and matches it to a socket call that came before its update
+// showed them.
+func (d *driver) learn(call *ownCall, rawInput json.RawMessage) {
+	if d.p.callArguments == nil || !call.waits || call.cyfr {
+		return
+	}
+	for _, raw := range d.p.callArguments(rawInput) {
+		if v, ok := decoded(raw); ok && !call.shows(v) {
+			call.arguments = append(call.arguments, v)
+		}
+	}
+	for i, arguments := range d.unclaimed {
+		if call.shows(arguments) {
+			call.cyfr = true
+			call.arguments = nil
+			d.unclaimed = append(d.unclaimed[:i:i], d.unclaimed[i+1:]...)
+			return
+		}
+	}
 }
 
 func (c *ownCall) shows(arguments any) bool {

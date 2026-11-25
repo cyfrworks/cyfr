@@ -422,7 +422,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/brain_antigravity.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_claude_code.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_openai_codex.py", ~w(version events refuse)},
-      {"tests/locus-backends-image/brain_opencode.py", ~w(version events)}
+      {"tests/locus-backends-image/brain_opencode.py", ~w(version events)},
+      {"tests/locus-backends-image/brain_cursor.py", ~w(version events)}
     ],
     "browser_frames.json" => [
       {"apps/cyfr/test/opus/browser/frame_test.exs",

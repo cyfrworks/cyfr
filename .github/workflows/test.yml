@@ -1720,6 +1720,19 @@ jobs:
       - name: OpenCode's brain driver
         run: python3 tests/locus-backends-image/brain_opencode.py cyfr-locus:backends
 
+      # Cursor's brain driver, cyfr-acp as cyfr-cursor, beside a fake
+      # `agent acp` in a kept folder: a listing whose session folder is
+      # removed, a start answered before its tools are listed at the first
+      # prompt, CYFR's server named beside the person's `cyfr` once when the
+      # session is made, a failed turn read as an error in CYFR's words, a
+      # post mid-turn later, CYFR's call as Cursor makes it an ask, a second
+      # session of the same home, a load in a new process with the kept
+      # name and no listing, gone, a forget by the session's folder
+      # confirmed by the program's load, nothing of stderr, the folder or
+      # the sign-in on the wire, and the program unchanged on a terminal.
+      - name: Cursor's brain driver
+        run: python3 tests/locus-backends-image/brain_cursor.py cyfr-locus:backends
+
       # A program's network list: a row's hosts admitted for its uid at the
       # guard, pooled or kept, its listed host reached and an unlisted
       # address refused on its own chain over IPv4 and IPv6, on every

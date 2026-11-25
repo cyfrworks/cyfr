@@ -18,7 +18,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,12 +37,23 @@ const releaseProofMarker = "cyfr release proof build: it reads releases from a l
 // proofReleases is the folder of the releases this build updates between,
 // set at the build (-ldflags -X): VERSION/release.json,
 // VERSION/cyfr-scaffold.tar.gz, and the app's installers by their release
-// names with VERSION/checksums.txt naming their sums, for each, unsigned.
+// names with VERSION/checksums.txt naming their sums, for each, unsigned;
+// and the file latest, naming the newest release, which none is without.
 var proofReleases string
 
 func init() {
 	if proofReleases == "" {
 		panic(releaseProofMarker + "; a releaseproof build names its releases folder with -ldflags -X github.com/cyfr/codex/cmd.proofReleases=DIR")
+	}
+	latestRelease = func(context.Context) (string, error) {
+		data, err := os.ReadFile(filepath.Join(proofReleases, "latest"))
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", release.ErrNoRelease
+		}
+		if err != nil {
+			return "", fmt.Errorf("the proof's newest release: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
 	}
 	fetchManifest = func(_ context.Context, version string) (*release.Manifest, error) {
 		data, err := os.ReadFile(filepath.Join(proofReleases, version, "release.json"))
