@@ -193,13 +193,14 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
   defp actor, do: Prima.Actor.in_athanor(@athanor)
 
-  # `pid` has read every message sent it and waits for another.
+  # `pid` has read every message sent it and waits for another, or has
+  # ended.
   defp took!(pid) do
     Prima.Test.Wait.wait_until(
       fn ->
-        Process.info(pid, [:message_queue_len, :status]) == [
-          message_queue_len: 0,
-          status: :waiting
+        Process.info(pid, [:message_queue_len, :status]) in [
+          nil,
+          [message_queue_len: 0, status: :waiting]
         ]
       end,
       5_000
