@@ -9,7 +9,8 @@ defmodule Arca.Schemas.ScheduleOccurrence do
   `started` (an execution was admitted for it), then `completed`,
   `failed` or `uncertain`. `note_revision_read` is the revision of the
   schedule's note as the run first read it, 0 for no note, and nil while
-  the run has read none. Owned by the athanor through its schedule.
+  the run has read none. `once` says it was claimed as a one-time
+  schedule's one fire. Owned by the athanor through its schedule.
   """
 
   use Ecto.Schema
@@ -23,6 +24,7 @@ defmodule Arca.Schemas.ScheduleOccurrence do
     field :athanor_id, :string
     field :schedule_id, :string
     field :scheduled_for, :utc_datetime_usec
+    field :once, :boolean, default: false
     field :state, :string
     field :execution_id, :string
     field :attempts, :integer, default: 0
@@ -37,6 +39,7 @@ defmodule Arca.Schemas.ScheduleOccurrence do
     :athanor_id,
     :schedule_id,
     :scheduled_for,
+    :once,
     :state,
     :execution_id,
     :attempts,

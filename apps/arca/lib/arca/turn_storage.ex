@@ -240,6 +240,10 @@ defmodule Arca.TurnStorage do
     exactly when its row lands; a claim lost answers `{:error, :taken}`
     or `{:error, :lapsed}` and a receipt already written
     `{:error, :receipted}`, with nothing written.
+  - `:standing` — `true` for a schedule's fire into the room it names
+    (`Aqua.ScheduleTurns`): the thread must not be archived
+    (`{:error, :thread_archived}`, with nothing written), and the fire
+    never takes it out of the archive as other new work does.
   - `:wait` — `%{waits_since, quiet}`: the row is the server's post of a
     workspace thread's wait on its person (`Aqua.Nudge`), naming it in
     `:workspace_id`. It lands only while that wait stands under the
@@ -299,6 +303,10 @@ defmodule Arca.TurnStorage do
           workspace = from_workspace!(actor, thread_id, message)
           thread = locked_thread!(athanor_id, thread_id)
           if thread.retired_at, do: Arca.Repo.rollback(:thread_retired)
+
+          if Map.get(attrs, :standing) == true and thread.archived_at,
+            do: Arca.Repo.rollback(:thread_archived)
+
           still_waits!(workspace, thread, Map.get(attrs, :wait))
           still_asked!(athanor_id, Map.get(attrs, :reply_address))
           opens = if stopped_answer?(athanor_id, thread, attrs), do: nil, else: opens

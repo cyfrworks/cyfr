@@ -19,6 +19,25 @@ defmodule PrismWeb.DisplayHelpersTest do
     end
   end
 
+  describe "relative_time/1" do
+    # A few seconds' slack either way, so a slow line between the clock
+    # read here and the helper's own never moves a span across its edge.
+    defp from_now(seconds), do: DateTime.utc_now() |> DateTime.add(seconds, :second)
+
+    test "a time ahead, such as a schedule's next run, reads as how far ahead" do
+      assert relative_time(from_now(2 * 3600 + 30)) == "in 2h"
+      assert relative_time(from_now(10 * 60 + 30)) == "in 10m"
+      assert relative_time(from_now(3 * 86_400 + 30)) == "in 3d"
+    end
+
+    test "a time past reads as how long ago, a time within a minute as just now" do
+      assert relative_time(from_now(-(2 * 3600 + 30))) == "2h ago"
+      assert relative_time(from_now(-(10 * 60 + 30))) == "10m ago"
+      assert relative_time(from_now(-5)) == "just now"
+      assert relative_time(from_now(5)) == "just now"
+    end
+  end
+
   describe "principal_label/1" do
     test "the server's synthetic principals read as what they are" do
       assert principal_label("system") == "System"

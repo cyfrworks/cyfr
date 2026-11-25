@@ -202,6 +202,7 @@ defmodule Sanctum.Dispatch do
         "parent_execution_id",
         "root_execution_id",
         "thread_id",
+        "called_by_page",
         "attempt",
         "call_id",
         "parent_call_id"
@@ -347,6 +348,13 @@ defmodule Sanctum.Dispatch do
     # execution ids, so a tool that records provenance reads it from here
     # and never from what the model wrote.
     |> Prima.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))
+    # `true` when a page in Aqua's browser made the call through the turn
+    # (`Aqua.Loop`'s step of purpose `page`): the page's call, which a
+    # provider that answers only a turn's own call refuses.
+    |> Prima.MapUtil.put_present(
+      "called_by_page",
+      if(Map.get(lineage, :called_by_page) == true, do: true)
+    )
   end
 
   # Discovery pruning for in-chain callers: `tools.list` shows a chain only

@@ -81,7 +81,7 @@ defmodule Arca.CronScheduleTest do
       assert String.starts_with?(schedule.id, "sched_")
     end
 
-    test "a schedule holding a line for Aqua names no thread: neither its row nor the table holds one",
+    test "a schedule holding a line for Aqua made by its person names no maker and no thread",
          %{actor: actor} do
       aqua = CronSchedule.aqua_line()
 
@@ -100,11 +100,9 @@ defmodule Arca.CronScheduleTest do
       assert {:ok, read} = CronSchedule.get(actor, created.id)
 
       for row <- [created, read] do
-        assert %{reference: ^aqua, profile_id: nil} = row
-        refute Map.has_key?(row, :thread_id)
+        assert %{reference: ^aqua, profile_id: nil, maker: nil, thread_id: nil, once: false} =
+                 row
       end
-
-      refute "thread_id" in Arca.Repo.query!("SELECT * FROM cron_schedules WHERE 1 = 0").columns
     end
 
     test "requires name", %{actor: actor} do

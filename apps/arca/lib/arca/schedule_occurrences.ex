@@ -87,6 +87,12 @@ defmodule Arca.ScheduleOccurrences do
   slot lease, so neither a timer that fires a few seconds late nor a
   successor taking over a slot is downtime.
 
+  A `once` schedule's due time fires however late it is, under either
+  policy, and the cursor clears: nothing of it is due again, and the
+  write that records that occurrence's end removes the row
+  (`Arca.CronSchedule.record_run/4`): the occurrence records that it was
+  claimed as a once fire (`once`).
+
   A due time older than the bound at claim was missed. Under `skip` it
   does not fire: the cursor moves to the first time the bound does not
   call missed, and the claim answers `:skipped`. Under `catch_up` it
@@ -171,7 +177,7 @@ defmodule Arca.ScheduleOccurrences do
 
               true ->
                 move_cursor(athanor_id, id, cursor)
-                insert_occurrence(athanor_id, id, due_for, claimant, now)
+                insert_occurrence(athanor_id, id, due_for, row.once, claimant, now)
             end
 
           :none ->
@@ -202,6 +208,7 @@ defmodule Arca.ScheduleOccurrences do
         where: s.status == "active" and s.next_run_at == ^due_for and s.next_run_at <= ^now,
         select:
           map(s, [
+            :once,
             :concurrency,
             :missed_runs,
             :catch_up_limit,
@@ -215,6 +222,9 @@ defmodule Arca.ScheduleOccurrences do
   # What the claim does with the due time and where the cursor goes, as
   # `{:fire | :skip, cursor}` with the episode columns the cursor carries,
   # or `:none` when the expression names no later time.
+  defp advance(%{once: true}, _due_for, _horizon, _next_after),
+    do: {:fire, episode(nil, nil, 0)}
+
   defp advance(%{catch_up_left: left, catch_up_until: until}, due_for, horizon, next_after)
        when left > 0 do
     # An open episode: the cursor's time is one of its missed times.
@@ -283,13 +293,14 @@ defmodule Arca.ScheduleOccurrences do
   # `(schedule_id, scheduled_for)`) is another claim's, and this one is
   # held: the transaction rolls back with the cursor unmoved.
   # arca:db-raise-ok inside the claim transaction
-  defp insert_occurrence(athanor_id, id, due_for, claimant, now) do
+  defp insert_occurrence(athanor_id, id, due_for, once, claimant, now) do
     %ScheduleOccurrence{}
     |> ScheduleOccurrence.changeset(%{
       id: Prima.UUID7.generate_id("occ"),
       athanor_id: athanor_id,
       schedule_id: id,
       scheduled_for: due_for,
+      once: once,
       state: "claimed",
       claimed_by: claimant,
       claimed_at: now
@@ -305,9 +316,12 @@ defmodule Arca.ScheduleOccurrences do
   Move a `claimed` occurrence to `started` for `execution_id`, counting
   the attempt, only while `claimed_by` (the admitting boot) is its
   claimant: the state and the claimant are checked in the one guarded
-  statement that moves it. Answers the rows moved: 0 when the occurrence
-  is not claimed, or is claimed by another boot since a recoverer took
-  it over, so the admission it runs inside rolls back.
+  statement that moves it, and nothing else is read: an occurrence's own
+  state is the one answer to whether it may start. Answers the rows
+  moved: 0 when the occurrence is not claimed (a pause or a delete of its
+  schedule ended it, `end_unstarted!/2`, or it ended otherwise), or is
+  claimed by another boot since a recoverer took it over, so the
+  admission it runs inside rolls back.
   """
   @spec start!(Prima.Actor.t(), String.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the admission transaction
@@ -328,6 +342,34 @@ defmodule Arca.ScheduleOccurrences do
 
   def start!(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/4")
+
+  @doc """
+  End every occurrence of the schedule `schedule_id` still `claimed`,
+  `failed`, on the cell's clock, and answer the times they were due for:
+  a pause or a delete of the schedule does this inside its own write's
+  transaction (`Arca.CronSchedule.update/4`, `soft_delete/2`), after the
+  schedule's row lock. An occurrence already started is left to its run.
+  Its admission's one conditional write (`start!/4`) and this end each
+  move the occurrence only from `claimed`, so exactly one of them does,
+  on either adapter, and a fire its person stopped never starts.
+  """
+  @spec end_unstarted!(Prima.Actor.t(), String.t()) :: [DateTime.t()]
+  # arca:db-raise-ok inside the caller's transaction
+  def end_unstarted!(%Prima.Actor{athanor_id: athanor_id}, schedule_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(schedule_id) do
+    {_ended, due} =
+      from(o in ScheduleOccurrence,
+        where: o.athanor_id == ^athanor_id and o.schedule_id == ^schedule_id,
+        where: o.state == "claimed",
+        select: o.scheduled_for
+      )
+      |> Arca.Repo.update_all(set: [state: "failed", ended_at: Arca.ServerMetaStorage.now!()])
+
+    due
+  end
+
+  def end_unstarted!(%Prima.Actor{}, _schedule_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.end_unstarted!/2")
 
   @doc """
   End an open occurrence as `completed`, `failed` or `uncertain`, only
@@ -420,12 +462,21 @@ defmodule Arca.ScheduleOccurrences do
     end)
   end
 
+  # The occurrence's schedule's row is locked before the occurrence's, the
+  # one order a claim (`claim/3`), a pause or a delete
+  # (`Arca.CronSchedule.update/4`, `end_unstarted!/2`) and an end take
+  # them in, so an end, which writes its schedule's summary under that
+  # row's lock, never waits on a pause that waits on it.
   # arca:db-raise-ok inside the end's transaction
   defp lock_occurrence(athanor_id, occurrence_id) do
-    from(o in ScheduleOccurrence,
-      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id,
-      select: o.id
-    )
+    occurrence =
+      from(o in ScheduleOccurrence, where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id)
+
+    with schedule_id when is_binary(schedule_id) <-
+           Arca.Repo.one(from(o in occurrence, select: o.schedule_id)),
+         do: lock_schedule(athanor_id, schedule_id)
+
+    from(o in occurrence, select: o.id)
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()
   end
@@ -986,7 +1037,7 @@ defmodule Arca.ScheduleOccurrences do
     )
   end
 
-  # arca:db-raise-ok inside the claim transaction
+  # arca:db-raise-ok inside the claim's or the end's transaction
   defp lock_schedule(athanor_id, schedule_id) do
     from(s in CronSchedule,
       where: s.id == ^schedule_id and s.athanor_id == ^athanor_id,
