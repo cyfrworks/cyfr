@@ -1497,7 +1497,9 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 	// the command: it is sent only while the spawn's role owns it, decided
 	// in the critical section the role's end marks it ended in, so no end
 	// comes between the check and the send. A routed space's stage waits
-	// for its route's word too, held to the same rule (admitRoute).
+	// for its route's word too, held to the same rule in the same section
+	// (admitRoute): the relay space's send and the routed one's word are
+	// one check under s.mu.
 	s.mu.Lock()
 	if !s.owns(sp.client) {
 		s.mu.Unlock()

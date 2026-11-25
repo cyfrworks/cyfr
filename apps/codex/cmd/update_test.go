@@ -1490,6 +1490,21 @@ func TestUpdateRecoveryWhoseBuildsDoNotStartSaysWhatStartsThem(t *testing.T) {
 	}
 }
 
+// A recovery whose own start fails says 'cyfr up' starts the old stack and,
+// since that starts none of the services that ran beside it, which they
+// are and what starts them.
+func TestUpdateRecoveryWhoseStartFailsSaysTheBuildsStayStopped(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(buildsProfiles)
+	s.answer("network-rm-net0.exit", "1")
+	s.engine.startErr = errors.New("cyfr did not become healthy")
+	out, err := s.run(context.Background())
+	said := "; docker-compose.yml is unchanged, so 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them."
+	if err == nil || !strings.HasSuffix(err.Error(), said) || strings.Count(err.Error(), said) != 1 {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+}
+
 func TestUpdateFromThreeContainers(t *testing.T) {
 	s := newThreeContainerScenario(t)
 	const buildsKey = threeContainerBuildsKey

@@ -2623,9 +2623,25 @@ func (u *updater) unselectedLine() string {
 	for _, svc := range services {
 		profiles = append(profiles, apart[svc]...)
 	}
-	slices.Sort(profiles)
-	profiles = slices.Compact(profiles)
+	return notStartedLine(services, profiles)
+}
+
+// notStartedLine is the sentence that names services of the stack's own,
+// under profiles .env's head does not select, as not started, and the
+// command that starts them.
+func notStartedLine(services, profiles []string) string {
+	profiles = slices.Compact(slices.Sorted(slices.Values(profiles)))
 	return fmt.Sprintf("These services are not started, since .env selects none of their profiles: %s; %s starts them.", strings.Join(services, ", "), startCommand(services, profiles))
+}
+
+// besideLine is notStartedLine of the services that ran beside the head's
+// (updater.beside), after " " for a sentence that says 'cyfr up' starts the
+// stack, which starts none of them; "" when none ran.
+func (u *updater) besideLine() string {
+	if len(u.beside) == 0 {
+		return ""
+	}
+	return " " + notStartedLine(u.beside, u.own)
 }
 
 // onTarget reports whether slot's member runs the release this update
@@ -3110,7 +3126,7 @@ func (u *updater) restartOld(reason error) error {
 		return fmt.Errorf("%v.\nThe old stack was started again, on this machine alone; docker-compose.yml is unchanged. %v", u.redactor().Text(reason.Error()), err)
 	}
 	if err != nil {
-		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redactor().Text(reason.Error()), err)
+		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it.%s", u.redactor().Text(reason.Error()), err, u.besideLine())
 	}
 	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redactor().Text(reason.Error()))
 }

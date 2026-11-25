@@ -145,7 +145,7 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 			fmt.Fprintf(out, "The stack runs again, on this machine alone: %v\n", err)
 			return nil
 		}
-		return fmt.Errorf("The snapshot is whole, but the stack did not start again (%v); 'cyfr up' starts it", err)
+		return fmt.Errorf("The snapshot is whole, but the stack did not start again (%v); 'cyfr up' starts it.%s", err, u.besideLine())
 	}
 	fmt.Fprintln(out, "The stack runs again.")
 	return nil
@@ -167,7 +167,7 @@ func (u *updater) startAgain(reason error) error {
 		return fmt.Errorf("%s.\nThe stack was started again, on this machine alone. %v", text, err)
 	}
 	if err != nil {
-		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it", text, err)
+		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it.%s", text, err, u.besideLine())
 	}
 	return fmt.Errorf("%s.\nThe stack was started again", text)
 }

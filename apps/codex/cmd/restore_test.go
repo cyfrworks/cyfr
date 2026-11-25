@@ -435,6 +435,22 @@ func TestRestoreOfABuildsSnapshotSaysTheBuildsAreNotStarted(t *testing.T) {
 	}
 }
 
+// A restore left stopped says 'cyfr up' starts it and, since that starts
+// none of the services under the stack's own profiles, which they are and
+// what starts them.
+func TestARestoreLeftStoppedSaysTheBuildsAreNotStarted(t *testing.T) {
+	r := failedSwitchSnapshot(t)
+	r.withProfiles(buildsProfiles)
+	out, err := r.restore(false)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	said := "The stack is left stopped (--no-start); start it with 'cyfr up'.\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
+	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
+	}
+}
+
 // What a restore removes is this project's networks, listed by its compose
 // label, that the snapshot's docker-compose.yml does not use, where one
 // with no networks key uses the default network alone: the project's

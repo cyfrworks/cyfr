@@ -172,6 +172,39 @@ func TestTheNextCommandSaysAnInterruptedUpdatesBuildsAreNotStarted(t *testing.T)
 	}
 }
 
+// A recovery of an interrupted update whose start failed says 'cyfr up'
+// starts CYFR once the cause is fixed, and which services of the stack's
+// own that leaves stopped.
+func TestTheNextCommandSaysAFailedRecoverysBuildsStayStopped(t *testing.T) {
+	s := newUpdateScenario(t, []byte(lastReleaseCompose(t)), nil)
+	s.withProfiles(buildsProfiles)
+	s.engine.resume = []access.Receipt{{RequestID: "0123abcd", Op: "hold", Cause: "update", State: "completed", Outcome: "failed", Payload: map[string]string{"reason": "cyfr did not become healthy"}}}
+	var out bytes.Buffer
+	recovered := "CYFR was stopped by an interrupted cyfr update and did not start again (request 0123abcd). cyfr did not become healthy. 'cyfr up' starts it once that is fixed."
+	if err := runAccessResume(context.Background(), &out); err == nil || err.Error() != recovered {
+		t.Fatalf("cyfr access --resume answered %v\n%s", err, out.String())
+	}
+	want := "Recovered: " + recovered + "\n" +
+		"These services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
+	if out.String() != want {
+		t.Errorf("cyfr access --resume said\n%s\nwant\n%s", out.String(), want)
+	}
+}
+
+// A backup whose start again fails says 'cyfr up' starts the stack and,
+// since that starts none of the services that ran beside it, which they
+// are and what starts them.
+func TestBackupWhoseStartFailsSaysTheBuildsStayStopped(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(buildsProfiles)
+	s.engine.startErr = errors.New("cyfr did not become healthy")
+	out, err := s.backup()
+	said := "; 'cyfr up' starts it. These services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them."
+	if err == nil || !strings.HasSuffix(err.Error(), said) {
+		t.Fatalf("cyfr backup answered %v\n%s", err, out)
+	}
+}
+
 // When the server's container owns a managed file's directory, as it
 // does once the stack has run, the closing line names the restore with
 // sudo, the form that puts the snapshot back.

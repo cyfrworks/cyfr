@@ -439,6 +439,7 @@ func (r *restorer) run() error {
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
+		r.sayUnselected()
 		return nil
 	}
 	if r.ctx.Err() != nil {
