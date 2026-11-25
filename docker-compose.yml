@@ -198,10 +198,11 @@ services:
     # namespace and every mount, so Locus runs under keeper.seccomp.json,
     # shipped beside this file (the image's /etc/cyfr/keeper.json):
     # Docker's default with those clones and the space's mounts allowed,
-    # unshare, setns and socketcall denied, and socket's and socketpair's
-    # domain and personality's persona compared by their low 32 bits, so a
-    # domain whose low 32 bits are AF_VSOCK's is AF_VSOCK to the profile, as
-    # it is to the kernel.
+    # unshare, setns and socketcall denied, socket's and socketpair's domain
+    # and personality's persona compared by their low 32 bits, so a domain
+    # whose low 32 bits are AF_VSOCK's is AF_VSOCK to the profile, as it is
+    # to the kernel, and every 32-bit and x32 call killed: no 32-bit program
+    # runs in Locus.
     # apparmor: on a host with AppArmor, the container runs under the
     # profile .env's CYFR_LOCUS_APPARMOR names, cyfr-locus- and 12 hex
     # digits of its content's hash, which cyfr carries and `cyfr init` and

@@ -47,7 +47,12 @@ runner's own uid, outside that namespace, may not):
   namespace so the keeper can isolate each spawn, a runner makes none of
   its own: its clone with CLONE_NEWUSER, alone or with CLONE_NEWNET, is
   refused EPERM, where the same clone without a namespace flag makes a
-  child; `unshare -U` is refused; and it still starts a thread.
+  child; `unshare -U` is refused; and it still starts a thread. It makes
+  an AF_UNIX socket and socket pair, and is refused EPERM an AF_VSOCK one
+  of each, and so with the domain's high bits set, which the kernel reads
+  as AF_VSOCK; on x86_64 its 32-bit socketcall of AF_VSOCK makes no socket,
+  and under the profile alone, outside any space, a 32-bit socketcall of
+  AF_INET or AF_VSOCK is killed, as every 32-bit call is.
 - `measure`: one real runner, the release's own runner command with its
   control channel and relay as the shipped service spawns it, its attach
   connection served by this machine as its worker service: its place is
@@ -624,6 +629,29 @@ def test_nested(image):
     if facts.get("arch") == "x86_64":
         expect(facts.get("socketcall_vsock") not in (None, str(SOCKETCALL_MADE)),
                "nested: a runner's 32-bit socketcall(SYS_SOCKET, AF_VSOCK) makes no socket", detail)
+        test_compat_killed(image)
+    else:
+        print(f"nested: no 32-bit program of {facts.get('arch')} is probed: the 32-bit socketcall is x86's", flush=True)
+
+
+# A 32-bit call is the profile's own to refuse outside a space, where no
+# space's filter stands before it: the keeper's profile names no 32-bit
+# architecture, so every 32-bit and x32 call in the Locus container is
+# killed (SIGSYS, exit 159), and the socketcall whose domain no filter can
+# read, behind its pointer, never reaches the kernel's socket code.
+SIGSYS_EXIT = 128 + 31
+
+
+def test_compat_killed(image):
+    for domain, name in ((2, "AF_INET"), (40, "AF_VSOCK")):
+        ran = run("docker", "run", "--rm", "--network", "none", "--security-opt", f"seccomp={PROFILE}",
+                  *run_name(f"{PROJECT_PREFIX}compat-{domain}"), "--entrypoint", "sh", image, "-c",
+                  f'echo {socketcall_program(domain)} | base64 -d > /tmp/socketcall && chmod 0700 /tmp/socketcall; '
+                  '/tmp/socketcall; echo "exit=$?"', check=False)
+        got = dict(line.split("=", 1) for line in ran.stdout.splitlines() if "=" in line)
+        expect(got.get("exit") == str(SIGSYS_EXIT),
+               f"compat: under the keeper's profile alone, a 32-bit socketcall(SYS_SOCKET, {name}) is killed, "
+               "as every 32-bit call is", {"stdout": ran.stdout, "stderr": ran.stderr[-1000:]})
 
 
 # The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
