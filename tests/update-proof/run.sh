@@ -528,9 +528,13 @@ build_runs() {
 # of the line kept), then `cyfr up`. A report with an edit and no closing
 # sentence, or a closing sentence with no edit, is no sane report.
 follow_report() {
-  local edits closing
+  local edits closing named
   edits="$(sed -nE 's/^  ([A-Z0-9_]+), line ([0-9]+), names ([a-z0-9-]+): put ([a-z0-9.-]+) in place of \3 in (its URL|that line), keeping .*$/\2 \1 \3 \4/p' "$PROOF/logs/update.log")"
   closing="$(grep -c -E "^Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach " "$PROOF/logs/update.log" || true)"
+  named="$(grep -E '^  [A-Z0-9_]+, line [0-9]+, names [a-z0-9-]+: ' "$PROOF/logs/update.log" || true)"
+  if [ "$(grep -c . <<<"$named")" != "$(grep -c . <<<"$edits")" ]; then
+    fail "the update names .env lines whose advice is no edit a person can follow: $(grep -vE ': put [a-z0-9.-]+ in place of [a-z0-9-]+ in (its URL|that line), keeping ' <<<"$named" | head -n 3)"
+  fi
   if [ -z "$edits" ]; then
     [ "$closing" = 0 ] || fail "the update says CYFR cannot reach a host until lines are changed, and names no line to change"
     ok "the update names no .env line to change"
@@ -561,12 +565,12 @@ PY
 # file, its networks, its images, and the update's own sentences.
 update_readings() {
   local services networks used containers name image want running restarts removed
-  stack_healthy
   services="$(compose config --services | sort)"
   containers="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Label "com.docker.compose.service"}}' | sort)"
   for name in $containers; do
     grep -qxF "$name" <<<"$services" || fail "after the update the project holds a container of $name, a service release $NEW_VERSION does not declare: $(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$name" --format '{{.Names}} {{.Status}}')"
   done
+  stack_healthy
   for name in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT"); do
     restarts="$(docker inspect --format '{{.Name}} {{.RestartCount}}' "$name")"
     [ "${restarts##* }" = 0 ] || fail "after the update ${restarts% *} restarted ${restarts##* } times"
