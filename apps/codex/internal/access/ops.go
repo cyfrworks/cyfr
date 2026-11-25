@@ -144,7 +144,10 @@ func (e *Engine) doStop(ctx context.Context, cause string, all bool) (Receipt, e
 		services = nil
 		if headErr == nil && all {
 			// Compose stops services in dependency order; the sweep removes
-			// every project container, including orphans, and keeps networks.
+			// every project container, including orphans, and keeps networks:
+			// on Docker Desktop for macOS a published port answers nothing
+			// after the stack's networks are removed and made again, until
+			// the container or Docker Desktop restarts.
 			// A release that changes a network's subnet needs its own teardown.
 			if args, err := e.composeArgsFor(ctx, h, "stop"); err == nil {
 				e.docker.Run(ctx, Call{Args: args, Deadline: StopDeadline})

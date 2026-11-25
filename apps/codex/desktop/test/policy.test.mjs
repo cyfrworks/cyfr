@@ -243,13 +243,12 @@ test("the account window's document frames nothing, keeping its own policies, wh
   }
 })
 
-test("the app takes its route's switches, the screen's project and setup's folder, and refuses every other switch", () => {
-  assert.deepEqual(SWITCHES, ["proxy-server", "host-resolver-rules", "screen-project", "setup-project", "quit"])
+test("the app takes the screen's project, setup's folder and --quit, and refuses every other switch, a route's among them", () => {
+  assert.deepEqual(SWITCHES, ["screen-project", "setup-project", "quit"])
   assert.equal(unlistedSwitch(["--quit"], "linux"), null)
   assert.equal(unlistedSwitch(["--screen-project=/home/ana/cyfr"], "linux"), null)
   assert.equal(unlistedSwitch(["--setup-project=/home/ana/setup-here"], "linux"), null)
   assert.equal(unlistedSwitch([], "linux"), null)
-  assert.equal(unlistedSwitch(["--proxy-server=socks5://127.0.0.1:1055", "--host-resolver-rules=MAP * ~NOTFOUND"], "linux"), null)
   assert.equal(unlistedSwitch(["https://cyfr.example.com"], "linux"), null, "an address is no switch")
   for (const [args, platform, name] of [
     [["--ignore-certificate-errors"], "linux", "ignore-certificate-errors"],
@@ -258,7 +257,9 @@ test("the app takes its route's switches, the screen's project and setup's folde
     [["-no-sandbox"], "linux", "no-sandbox"],
     [["--Inspect"], "linux", "inspect"],
     [["/inspect"], "win32", "inspect"],
-    [["--proxy-server=x", "--user-data-dir=/tmp/x"], "linux", "user-data-dir"]
+    [["--proxy-server=socks5://127.0.0.1:1055"], "linux", "proxy-server"],
+    [["--host-resolver-rules=MAP * ~NOTFOUND"], "linux", "host-resolver-rules"],
+    [["--user-data-dir=/tmp/x"], "linux", "user-data-dir"]
   ]) {
     assert.equal(unlistedSwitch(args, platform), name, args.join(" "))
   }
