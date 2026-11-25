@@ -384,9 +384,18 @@ test("Update CYFR opens from the rail's foot over the CYFR open, which stays; by
   for (const before of [[], [ready, home()], [...open, selects(BOB)]]) {
     assert.deepEqual(step(run(before, true).s, railed("/rail/update")).do, [], "not while cyfr starts, a proposal or a departure waits")
   }
+  const SCREEN_PAGE = "http://127.0.0.1:7340/"
+  const screen = initial(false, "/home/ana/cyfr", true)
+  assert.ok(!step(screen, {type: "ready", url: SCREEN_PAGE, message: {type: "ready", url: SCREEN_PAGE}}).do.some((e) => e.update),
+    "the box's screen opens no Update CYFR, --updated or not")
+})
+
+// The box's screen is ready at the chooser with the rail and no Update
+// CYFR: it opens none, --updated or not, and a ready that names one ends it.
+test("the box's screen, ready with its rail, opens no Update CYFR, and a ready naming one ends it", () => {
   const onBox = step(initial(false, "/home/ana/cyfr", true), boxReady)
   assert.ok(onBox.state.name === "chooser" && !onBox.do.some((e) => e.update), "the box's screen opens no Update CYFR, --updated or not")
-  assert.equal(step(initial(false, "/home/ana/cyfr"), ready).state.name, "ended", "and a ready naming one ends it there")
+  assert.equal(step(initial(false, "/home/ana/cyfr"), ready).state.name, "ended", "a ready naming one ends it there")
 })
 
 test("Update CYFR's page loads nothing; its yes sends the offer it names, from its own top frame alone; its close is told to cyfr", () => {
