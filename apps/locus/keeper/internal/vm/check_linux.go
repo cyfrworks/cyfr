@@ -25,7 +25,7 @@ import (
 )
 
 // CheckUsage is `cyfr-locus guest-check`'s command line.
-const CheckUsage = "cyfr-locus guest-check --device <path> [--kernel-reporting] [-- <command> [args…]]"
+const CheckUsage = "cyfr-locus guest-check [--kernel-reporting] [-- <command> [args…]]"
 
 // Exit statuses of the check: it ran and the report says what it found,
 // or the command line, or the machine could not run.
@@ -54,7 +54,13 @@ var defaultCommand = []string{"/bin/sh", "-c", "id -u; cat /proc/sys/kernel/rand
 
 // Report is what the check found, one JSON object on standard output.
 type Report struct {
-	BootID string `json:"boot_id"`
+	// Device is the image's programs' device the machine booted from;
+	// DeviceMade is that this check made it, and DeviceMs how long this
+	// check spent on it, making it or waiting for another start's making.
+	Device     string `json:"device"`
+	DeviceMade bool   `json:"device_made"`
+	DeviceMs   int64  `json:"device_ms"`
+	BootID     string `json:"boot_id"`
 	// ReadyMs is from the guest's boot to the agent's Hello.
 	ReadyMs int64 `json:"ready_ms"`
 	// Spawned is the guest keeper's answer to the space's spawn.
@@ -83,16 +89,16 @@ type Report struct {
 	Error            string `json:"error,omitempty"`
 }
 
-// CheckMain is `cyfr-locus guest-check`: it boots one machine as the keeper
-// would, under the Locus role's own confinement, says hello to its agent,
+// CheckMain is `cyfr-locus guest-check`: it has the image's programs'
+// device, making it if this image has none (Programs), boots one machine as
+// the keeper would, under the Locus role's own confinement, says hello to its agent,
 // has the guest's keeper make one space and end it, ends the machine, and
 // reports. It is the boot check the keeper reads (plan V3) and the image
 // case's entry (tests/locus-backends-image/vm.py).
 func CheckMain(args []string) int {
 	fs := flag.NewFlagSet("guest-check", flag.ContinueOnError)
-	device := fs.String("device", "", "the image's programs, a read-only filesystem image")
 	kernelReporting := fs.Bool("kernel-reporting", false, "report free pages from the kernel's own order, not 0 (a measurement's)")
-	if err := fs.Parse(args); err != nil || *device == "" {
+	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "usage: "+CheckUsage)
 		return CheckUsageE
 	}
@@ -101,7 +107,7 @@ func CheckMain(args []string) int {
 		argv = defaultCommand
 	}
 	report := Report{ReportFromOrder0: !*kernelReporting}
-	err := check(*device, argv, &report)
+	err := check(argv, &report)
 	if err != nil {
 		report.Error = err.Error()
 	}
@@ -113,7 +119,7 @@ func CheckMain(args []string) int {
 	return CheckPassed
 }
 
-func check(device string, argv []string, report *Report) error {
+func check(argv []string, report *Report) error {
 	raw, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return err
@@ -128,6 +134,13 @@ func check(device string, argv []string, report *Report) error {
 	// The VMM's sockets are made under this umask and reached by their
 	// group, the keeper's (Config.UID).
 	syscall.Umask(0o007)
+	began := time.Now()
+	device, made, err := Programs(&prefixed{w: os.Stderr, tag: "maker: "}).Device()
+	report.DeviceMs = time.Since(began).Milliseconds()
+	report.Device, report.DeviceMade = device, made
+	if err != nil {
+		return err
+	}
 	self, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return err
@@ -150,7 +163,7 @@ func check(device string, argv []string, report *Report) error {
 		args = bootArgs(false)
 	}
 	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, UID: checkUID,
-		Group: group, BootArgs: args, Console: &prefixed{w: os.Stderr}})
+		Group: group, BootArgs: args, Console: &prefixed{w: os.Stderr, tag: "guest: "}})
 	if err != nil {
 		return err
 	}
@@ -330,10 +343,11 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// prefixed marks the guest's console lines on the check's standard error,
-// a whole line at a time: the console arrives in pieces.
+// prefixed marks the guest's console lines, and the maker's, on the check's
+// standard error, a whole line at a time: the console arrives in pieces.
 type prefixed struct {
 	w       io.Writer
+	tag     string
 	pending []byte
 }
 
@@ -344,7 +358,7 @@ func (p *prefixed) Write(b []byte) (int, error) {
 		if i < 0 {
 			return len(b), nil
 		}
-		if _, err := io.WriteString(p.w, "guest: "+string(p.pending[:i+1])); err != nil {
+		if _, err := io.WriteString(p.w, p.tag+string(p.pending[:i+1])); err != nil {
 			return 0, err
 		}
 		p.pending = p.pending[i+1:]

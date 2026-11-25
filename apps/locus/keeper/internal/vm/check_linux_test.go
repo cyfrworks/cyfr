@@ -12,7 +12,7 @@ import (
 
 func TestPrefixedWritesWholeLinesOnly(t *testing.T) {
 	var out strings.Builder
-	p := &prefixed{w: &out}
+	p := &prefixed{w: &out, tag: "guest: "}
 	in := "first line\nsecond\npartial"
 	for i := 0; i < len(in); i++ {
 		n, err := p.Write([]byte{in[i]})
