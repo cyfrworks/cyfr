@@ -32,7 +32,9 @@ var backupCmd = &cobra.Command{
 
 The snapshot holds the database, the local storage root, the managed scaffold files this directory holds (the guides, the WIT definitions, the keeper's seccomp profile and the shipped Aqua files), the keyring, .env and docker-compose.yml, then snapshot.json, written last. A snapshot holds the keyring and the database: keep it as you keep the data. Storage on S3 is not in it.
 
-It takes the stack's lock first. A running CYFR is stopped for the snapshot, as cyfr update stops it, and started again afterwards, also when the snapshot fails; a stopped one stays stopped. A backup killed while it holds CYFR stopped leaves the start to the next cyfr command that takes the lock, which says so.`,
+It takes the stack's lock first. A running CYFR is stopped for the snapshot, as cyfr update stops it, and started again afterwards, also when the snapshot fails; a stopped one stays stopped. A backup killed while it holds CYFR stopped leaves the start to the next cyfr command that takes the lock, which says so.
+
+A database or storage root this account may not read, as on Linux once the server's container owns it, refuses before anything stops, naming 'sudo <this cyfr's path> backup'; run through sudo, what the backup writes in the folder goes back to the account that ran sudo.`,
 	Example: "  cyfr backup",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
