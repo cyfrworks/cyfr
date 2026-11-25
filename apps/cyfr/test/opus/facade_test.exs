@@ -11,6 +11,9 @@ defmodule Opus.FacadeTest do
   under its context beside `Sanctum.PolicyLog`'s own reads.
   `read_threads/2` is the read Aqua's loop makes of a child whose step
   closes without a completion result to carry its read threads.
+  `ungranted/2` is why a grant a turn needs is missing, revoked by its
+  person or not: Aqua's loop must say which and reaches Sanctum only
+  through this door.
   """
 
   use ExUnit.Case, async: true
@@ -46,6 +49,7 @@ defmodule Opus.FacadeTest do
     stop_lease_watch: 1,
     subscribe_events: 2,
     suspend_lease_watch: 1,
+    ungranted: 2,
     unsubscribe_events: 2
   ]
 
