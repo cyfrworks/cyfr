@@ -108,6 +108,7 @@ case "$1" in
     esac ;;
   ps)
     case "$*" in
+      *'.Label "com.docker.compose.service"'*) last="${@: -1}"; answer "containers-${last##*=}" ;;
       *network=*)
         n="$*"
         n="${n##*network=}"
@@ -313,6 +314,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop locus",
 		profiles + "stop locus-guard",
 		profiles + "stop",
+		containerList(access.ProjectName(r.project)),
 		networkList(access.ProjectName(r.project)),
 		profiles + "rm --force cyfr",
 		r.stagedConfig(),
@@ -332,7 +334,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.fake, "state"))), "\n") {
 		fields := strings.Fields(line)
 		wantSum := sum([]byte(compose))
-		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") || strings.HasPrefix(fields[0], "network-ls-") {
+		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") || strings.HasPrefix(fields[0], "network-ls-") || strings.HasPrefix(fields[0], "containers-") {
 			wantSum = sum(switched([]byte(compose)))
 		}
 		if fields[1] != wantSum {
@@ -535,6 +537,7 @@ func withoutNetworks(t *testing.T, data []byte) []byte {
 func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
 	r := failedSwitchSnapshot(t)
 	r.answerNetworks("netd default", "nete edge", "net9 locus", "net0 locus-backends")
+	r.answerContainers("cc cyfr", "cl locus", "cg locus-guard")
 	r.answer("network-ours-net9.out", "ctrlocus\n")
 	r.answer("network-all-net9.out", "ctrlocus\n")
 	out, err := r.restore(true)
@@ -543,6 +546,8 @@ func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
 	}
 	project := access.ProjectName(r.project)
 	removal := []string{
+		containerList(project),
+		"rm cl cg",
 		networkList(project),
 		"ps -a -q --no-trunc --filter network=net9 --filter label=com.docker.compose.project=" + project,
 		"ps -a -q --no-trunc --filter network=net9",
@@ -564,8 +569,13 @@ func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
 	if got := read(t, filepath.Join(r.project, "docker-compose.yml")); got != lastReleaseCompose(t) {
 		t.Error("docker-compose.yml is not the snapshot's")
 	}
-	if said := "Removed this project's networks the snapshot's docker-compose.yml does not use: locus.\n"; strings.Count(out, said) != 1 {
-		t.Errorf("the restore did not say once %q:\n%s", said, out)
+	for _, said := range []string{
+		"Removed this project's containers of services the snapshot's docker-compose.yml does not run: locus, locus-guard.\n",
+		"Removed this project's networks the snapshot's docker-compose.yml does not use: locus.\n",
+	} {
+		if strings.Count(out, said) != 1 {
+			t.Errorf("the restore did not say once %q:\n%s", said, out)
+		}
 	}
 }
 

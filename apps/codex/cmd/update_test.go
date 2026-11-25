@@ -123,6 +123,7 @@ case "$1" in
     esac ;;
   ps)
     case "$*" in
+      *'.Label "com.docker.compose.service"'*) last="${@: -1}"; answer "containers-${last##*=}" ;;
       *network=*)
         n="$*"
         n="${n##*network=}"
@@ -636,6 +637,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive)
 	want = append(append(want, s.snapshotReads()...),
+		containerList(access.ProjectName(s.project)),
 		networkList(access.ProjectName(s.project)),
 		"ENGINE release",
 		"SCAFFOLD WRITE",
@@ -660,7 +662,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		switch {
 		case fields[0] == "up" || fields[0] == "services" || fields[0] == "stack":
 			wantSum, wantSnapshots = sum(switched(s.compose)), "1"
-		case strings.HasPrefix(fields[0], "network-ls-"):
+		case strings.HasPrefix(fields[0], "network-ls-") || strings.HasPrefix(fields[0], "containers-"):
 			wantSnapshots = "1"
 		}
 		if fields[1] != wantSum || fields[2] != wantSnapshots {
@@ -1138,7 +1140,7 @@ func TestEveryDockerCallCarriesItsDeadline(t *testing.T) {
 			return dumpTimeout
 		case stackReadCall(c.Args):
 			return stackReadBackstop
-		case slices.Contains(c.Args, "stop") || c.Args[0] == "network":
+		case slices.Contains(c.Args, "stop") || c.Args[0] == "network" || line == containerList(access.ProjectName(".")):
 			return stopTimeout
 		}
 		return composeRunTimeout
@@ -1356,6 +1358,18 @@ func (s *updateScenario) answerNetworks(lines ...string) {
 	s.answer("network-ls-"+access.ProjectName(s.project)+".out", strings.Join(lines, "\n")+"\n")
 }
 
+// containerList is the list of the compose project's containers
+// removeContainers reads, each container's id and compose service.
+func containerList(project string) string {
+	return `ps -a --no-trunc --format {{.ID}} {{.Label "com.docker.compose.service"}} --filter label=com.docker.compose.project=` + project
+}
+
+// answerContainers answers the list of the scenario's project's containers
+// with lines, each a container's id and compose service.
+func (s *updateScenario) answerContainers(lines ...string) {
+	s.answer("containers-"+access.ProjectName(s.project)+".out", strings.Join(lines, "\n")+"\n")
+}
+
 // networkList is the list of the compose project's networks removeNetworks
 // reads, each network's id and compose name.
 func networkList(project string) string {
@@ -1384,6 +1398,7 @@ func newThreeContainerScenario(t *testing.T) *updateScenario {
 		s.answer("network-all-"+id+".out", "ctr"+id+"\n")
 	}
 	s.answerNetworks(networks...)
+	s.answerContainers("c0 cyfr", "c1 locus-runtime", "c2 locus-builds", "c3 locus-builds-guard", "c4 locus-backends", "c5 locus-backends-guard", "c6 caddy")
 	s.edit(".env", scenarioEnv+
 		"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"+
 		"CYFR_LOCUS_BUILDS_KEY="+threeContainerBuildsKey+"\n"+
@@ -1539,7 +1554,7 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		}
 	}
 	project := access.ProjectName(s.project)
-	want := []string{networkList(project)}
+	want := []string{"rm c1 c2 c3 c4 c5", networkList(project)}
 	for i := range retiredNetworks {
 		id := fmt.Sprintf("net%d", i)
 		want = append(want,
@@ -1588,6 +1603,7 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		"\nstopped locus-backends-guard, locus-runtime, locus-builds, locus-builds-guard, locus-backends in ",
 		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL.\n",
 		"Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_PRIVATE_EGRESS_TARGETS=locus.\n",
+		"Removed this project's containers of services release 0.9.0 does not run: locus-backends, locus-backends-guard, locus-builds, locus-builds-guard, locus-runtime.\n",
 		"Removed this project's networks release 0.9.0 does not use: locus-backends, locus-builds, locus-runtime.\n",
 		"Its images change:\n  ghcr.io/cyfrworks/cyfr: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n" +
 			"  ghcr.io/cyfrworks/cyfr-locus: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n  caddy: ",

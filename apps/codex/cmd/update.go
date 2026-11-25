@@ -541,6 +541,9 @@ func (u *updater) run() error {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
 	}
 	newCompose, _ := u.scaffold.File("docker-compose.yml")
+	if err := u.removeContainers(newCompose, "release "+u.version); err != nil {
+		return u.restartOld(err)
+	}
 	if err := u.removeNetworks(newCompose, "release "+u.version); err != nil {
 		return u.restartOld(err)
 	}
@@ -2240,6 +2243,61 @@ func usedNetworks(data []byte) map[string]bool {
 		}
 	}
 	return used
+}
+
+// declaredServices are the services the compose file data declares, by
+// name; nil when data does not read as a compose file.
+func declaredServices(data []byte) map[string]bool {
+	var root yaml.Node
+	if yaml.Unmarshal(data, &root) != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	declared := map[string]bool{}
+	if entries := mapValue(root.Content[0], "services"); entries != nil && entries.Kind == yaml.MappingNode {
+		for i := 0; i < len(entries.Content); i += 2 {
+			declared[entries.Content[i].Value] = true
+		}
+	}
+	return declared
+}
+
+// removeContainers removes, with the stack stopped and before anything
+// starts under the compose file to, each container of this compose
+// project, listed by its compose labels and so never another project's,
+// whose service to does not declare (declaredServices): a container that
+// shares another's network namespace is on no network of its own, so the
+// networks' removal (removeNetworks) never finds it. which names to in what
+// is said. A to that does not read removes nothing.
+func (u *updater) removeContainers(to []byte, which string) error {
+	declared := declaredServices(to)
+	if declared == nil {
+		return nil
+	}
+	ctx, cancel := u.detached(stopTimeout)
+	defer cancel()
+	project := access.ProjectName(".")
+	listed, err := u.dockerOutput(ctx, nil, "ps", "-a", "--no-trunc", "--format", `{{.ID}} {{.Label "com.docker.compose.service"}}`, "--filter", "label=com.docker.compose.project="+project)
+	if err != nil {
+		return fmt.Errorf("cyfr %s could not list this project's containers (%v)", u.command, err)
+	}
+	var ids, services []string
+	for _, line := range strings.Split(listed, "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && !declared[fields[1]] {
+			ids = append(ids, fields[0])
+			if !slices.Contains(services, fields[1]) {
+				services = append(services, fields[1])
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(services)
+	if _, err := u.dockerOutput(ctx, nil, append([]string{"rm"}, ids...)...); err != nil {
+		return fmt.Errorf("cyfr %s could not remove this project's containers of %s, which %s does not run (%v)", u.command, strings.Join(services, ", "), which, err)
+	}
+	fmt.Fprintf(u.out, "Removed this project's containers of services %s does not run: %s.\n", which, strings.Join(services, ", "))
+	return nil
 }
 
 // removeNetworks removes, with the stack stopped and before anything

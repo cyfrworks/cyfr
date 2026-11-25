@@ -508,13 +508,18 @@ func (r *restorer) holdConfigFiles() error {
 	return nil
 }
 
-// freeNetworks removes this project's networks the snapshot's compose file
-// does not use (removeNetworks) before anything runs under it, so a network
-// of its may take the address range one of them holds, as an update that
-// failed after its switch leaves the new release's.
+// freeNetworks removes this project's containers of services the
+// snapshot's compose file does not declare (removeContainers) and its
+// networks that file does not use (removeNetworks) before anything runs
+// under it, so a network of its may take the address range one of them
+// holds, as an update that failed after its switch leaves the new
+// release's.
 func (r *restorer) freeNetworks() error {
 	snapshot, err := os.ReadFile(r.snap.path("compose"))
 	if err != nil {
+		return err
+	}
+	if err := r.removeContainers(snapshot, "the snapshot's docker-compose.yml"); err != nil {
 		return err
 	}
 	return r.removeNetworks(snapshot, "the snapshot's docker-compose.yml")
