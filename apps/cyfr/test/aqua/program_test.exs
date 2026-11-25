@@ -6324,6 +6324,50 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  # A scroll a turn proposes carries everything Save needs: one that would
+  # make a new pack says so on its row, so Save is create-only.
+  describe "a scroll a turn proposes" do
+    @tag harness: :api
+    test "a proposal to make a new pack keeps new_pack on its row and writes nothing",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\nred"
+        )
+
+      ask =
+        {"ask-1", "aqua",
+         %{
+           "action" => "skill_create",
+           "name" => "garden:tulips",
+           "description" => "How tulips are kept",
+           "content" => "Plant them in autumn.",
+           "new_pack" => true
+         }}
+
+      turn = api_turn!(ctx, thread, "make a pack for tulips", [asking([ask]), answer("Done.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+
+      proposals =
+        from(m in Arca.Schemas.Message,
+          where: m.athanor_id == ^ctx.athanor_id and m.thread_id == ^thread.id,
+          where: m.turn_id == ^turn.id and m.kind == "tool_result",
+          select: m.payload
+        )
+        |> Arca.Repo.all()
+        |> Enum.flat_map(&List.wrap(Jason.decode!(&1)["proposal"]))
+
+      assert [%{"name" => "garden:tulips", "new_pack" => true, "against" => "none"}] = proposals
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls garden skills tulips SKILL.md))
+    end
+  end
+
   # The one removal, proved over the whole: the thread's mark seeded into
   # every kind of input the assembly of what a model reads takes (rows of
   # every kind, a compaction's summary, cited posts, a post's file by its

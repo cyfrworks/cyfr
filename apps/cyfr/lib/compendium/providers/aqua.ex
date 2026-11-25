@@ -803,7 +803,12 @@ defmodule Compendium.Providers.Aqua do
          :ok <- own_pack(ctx, pack),
          {:ok, _manifest} <- skill_manifest_bytes(scroll, args["description"], args["content"]),
          :ok <- untaken(ctx, name) do
-      {:ok, proposal(name, args["description"], args["content"], @against_none)}
+      proposal = proposal(name, args["description"], args["content"], @against_none)
+
+      # A proposal carries everything Save needs: one that makes a new pack
+      # says so, and Save is then create-only, refused when the pack is
+      # there, as the page's own New pack is.
+      {:ok, if(args["new_pack"] == true, do: Map.put(proposal, :new_pack, true), else: proposal)}
     end
   end
 

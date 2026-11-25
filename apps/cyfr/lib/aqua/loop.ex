@@ -1931,14 +1931,15 @@ defmodule Aqua.Loop do
   defp proposed(%Call{kind: :catalog, tool: "aqua", action: action}, {:ok, %{} = answer}, payload)
        when action in ["skill_create", "skill_update"] do
     case answer |> Jason.encode!() |> Jason.decode!() do
-      %{"proposed" => name, "description" => d, "content" => c, "against" => against}
+      %{"proposed" => name, "description" => d, "content" => c, "against" => against} = kept
       when is_binary(name) and is_binary(d) and is_binary(c) and is_binary(against) ->
-        Map.put(payload, "proposal", %{
-          "name" => name,
-          "description" => d,
-          "content" => c,
-          "against" => against
-        })
+        proposal = %{"name" => name, "description" => d, "content" => c, "against" => against}
+
+        Map.put(
+          payload,
+          "proposal",
+          if(kept["new_pack"] == true, do: Map.put(proposal, "new_pack", true), else: proposal)
+        )
 
       _written ->
         payload

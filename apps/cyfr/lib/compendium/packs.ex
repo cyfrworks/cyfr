@@ -1177,21 +1177,17 @@ defmodule Compendium.Packs do
     {[{_rel, raw}], body} = Enum.split_with(pairs, &(elem(&1, 0) == record_name))
     record = with {:ok, r} <- decode_record(raw), do: r
 
-    on = match?(%{on: true}, record)
+    handed = handed(name, record, body)
+    on = handed != :off
 
-    # A pack past its bounds (a migrated `mine` that holds more than a pack
-    # may, say) stays in the store and is handed to no program: its files
-    # are left out, with the sentence its card says.
     withheld =
-      if on do
-        case bounded(name, body) do
-          :ok -> nil
-          {:error, {:invalid_argument, sentence}} -> sentence
-        end
+      case handed do
+        {:withheld, sentence} -> sentence
+        _handed_or_off -> nil
       end
 
     files =
-      if on and is_nil(withheld) do
+      if handed == :handed do
         for {rel, bytes} <- Enum.sort_by(body, &elem(&1, 0)) do
           path = Enum.join(rel, "/")
 
@@ -1220,6 +1216,22 @@ defmodule Compendium.Packs do
     }
   end
 
+  # The one rule of what a program is handed of a pack, which `pack_view/3`
+  # and `pack_file/4` both ask: a pack switched off is handed nothing, and
+  # one switched on but past a pack's bounds (a migrated `mine` that holds
+  # more than a pack may, say) stays in the store and is handed nothing
+  # either, with the sentence its card says.
+  defp handed(name, record, body) do
+    if match?(%{on: true}, record) do
+      case bounded(name, body) do
+        :ok -> :handed
+        {:error, {:invalid_argument, sentence}} -> {:withheld, sentence}
+      end
+    else
+      :off
+    end
+  end
+
   defp recomputed(pairs) do
     pairs
     |> Enum.map(fn {rel, bytes} -> {rel, Prima.Digest.sha256(bytes), byte_size(bytes)} end)
@@ -1228,7 +1240,10 @@ defmodule Compendium.Packs do
 
   @doc """
   One file of a pack by its path inside the pack, for `athanor` under the
-  actor: its bytes. The record is no file of the pack.
+  actor: its bytes, from one reading of the pack. Only a pack a program
+  is handed answers (`pack_view/3`'s rule: switched on and within a
+  pack's bounds); a pack switched off or withheld answers no file, by any
+  path, `{:error, :not_found}`. The record is no file of the pack.
   """
   @spec pack_file(Context.t(), String.t(), String.t(), String.t()) ::
           {:ok, binary()} | {:error, term()}
@@ -1236,12 +1251,31 @@ defmodule Compendium.Packs do
     with :ok <- own_athanor(ctx, athanor),
          true <- AquaPath.valid_name?(pack) and is_binary(path),
          :ok <- pack_path(path),
-         false <- path == AquaPath.record_name() do
-      Arca.get(Context.actor(ctx), AquaPath.pack_dir(pack) ++ String.split(path, "/"))
+         false <- path == AquaPath.record_name(),
+         {:ok, pairs} <- Arca.read_subtree(Context.actor(ctx), AquaPath.pack_dir(pack)) do
+      handed_file(pack, pairs, String.split(path, "/"))
     else
       {:error, {:invalid_argument, _}} -> {:error, :not_found}
       {:error, _} = error -> error
       _not_a_file -> {:error, :not_found}
+    end
+  end
+
+  defp handed_file(pack, pairs, rel) do
+    record_name = [AquaPath.record_name()]
+    {raw, body} = Enum.split_with(pairs, &(elem(&1, 0) == record_name))
+
+    record =
+      case raw do
+        [{_rel, bytes}] -> with {:ok, r} <- decode_record(bytes), do: r
+        [] -> nil
+      end
+
+    with :handed <- handed(pack, record, body),
+         {^rel, bytes} <- List.keyfind(body, rel, 0) do
+      {:ok, bytes}
+    else
+      _off_withheld_or_absent -> {:error, :not_found}
     end
   end
 
@@ -1753,7 +1787,8 @@ defmodule Compendium.Packs do
       end
 
     scrolls = sheet_scrolls(files)
-    existing = existing(ctx, name)
+    held = destination(ctx, name)
+    existing = existing_of(held)
 
     %{
       filename: filename,
@@ -1768,8 +1803,8 @@ defmodule Compendium.Packs do
       files: length(files),
       bytes: Enum.reduce(files, 0, &(&2 + byte_size(&1.bytes))),
       agreed: files_digest(files),
-      against: held_digest(ctx, name),
-      update: update_of(ctx, existing, name, files),
+      against: pairs_digest(held),
+      update: update_of(existing, held, files),
       refusal: sheet_refusal(ctx, name, existing, files)
     }
   end
@@ -1828,12 +1863,33 @@ defmodule Compendium.Packs do
     end
   end
 
-  defp existing(ctx, name) do
-    if AquaPath.valid_name?(name) do
-      case read_pack(Context.actor(ctx), name, :card) do
-        nil -> nil
-        pack -> pack
+  # What the destination holds, read once: whether a pack is there, and
+  # its files, from which the sheet's "this replaces" and the files digest
+  # it carries (`against`) are both made, so the two can never describe
+  # two different moments. `nil` when no pack of that name is here. The
+  # event after the reading is where a test holds the sheet to change the
+  # destination meanwhile.
+  defp destination(ctx, name) do
+    held =
+      if AquaPath.valid_name?(name) do
+        case Arca.read_subtree(Context.actor(ctx), AquaPath.pack_dir(name)) do
+          {:ok, [_ | _] = pairs} -> pairs
+          _absent -> nil
+        end
       end
+
+    :telemetry.execute([:cyfr, :packs, :sheet, :destination], %{}, %{name: name})
+    held
+  end
+
+  # The pack the destination holds, as far as the sheet asks: its origin,
+  # `nil` for a folder whose record does not read.
+  defp existing_of(nil), do: nil
+
+  defp existing_of(pairs) do
+    case record_of(pairs) do
+      {:ok, %{origin: origin}} -> %{origin: origin}
+      _unread -> %{origin: nil}
     end
   end
 
@@ -1865,11 +1921,9 @@ defmodule Compendium.Packs do
 
   # What an update would change, scripts and hooks first, then the rest,
   # each in path order: `nil` when no brought pack of that name is here.
-  defp update_of(ctx, %{origin: "brought"} = _existing, name, files) do
-    actor = Context.actor(ctx)
-
-    case Arca.read_subtree(actor, AquaPath.pack_dir(name)) do
-      {:ok, pairs} ->
+  defp update_of(%{origin: "brought"}, pairs, files) do
+    case pairs do
+      [_ | _] ->
         record = with {:ok, r} <- record_of(pairs), do: r
 
         old =
@@ -1897,7 +1951,7 @@ defmodule Compendium.Packs do
     end
   end
 
-  defp update_of(_ctx, _existing, _name, _files), do: nil
+  defp update_of(_existing, _pairs, _files), do: nil
 
   defp change(nil, _new), do: :added
   defp change(_old, nil), do: :removed
@@ -1936,17 +1990,6 @@ defmodule Compendium.Packs do
     end)
     |> IO.iodata_to_binary()
     |> Prima.Digest.sha256()
-  end
-
-  # The files digest of what the destination holds now, the place the
-  # sheet's pack would go: `nil` when no pack of that name is here.
-  defp held_digest(ctx, name) do
-    if AquaPath.valid_name?(name) do
-      case Arca.read_subtree(Context.actor(ctx), AquaPath.pack_dir(name)) do
-        {:ok, [_ | _] = pairs} -> pairs_digest(pairs)
-        _absent -> nil
-      end
-    end
   end
 
   defp pairs_digest(nil), do: nil
@@ -2225,21 +2268,30 @@ defmodule Compendium.Packs do
 
   defp unedited_shipped?(_name, _pairs), do: false
 
-  # What moves lands in `mine` beside what it holds; a folder `mine`
-  # already holds (a migration that ran before) is kept as it is. The
+  # What moves lands in `mine` beside what it holds. A scroll `mine`
+  # already holds is known by its exact place, `skills/<name>/SKILL.md`
+  # (a migration that ran before), and is kept as it is; a folder of the
+  # same name elsewhere (`docs/planner/`) is no scroll and holds nothing
+  # back. A file `mine` already holds at a moved file's path is kept. The
   # bounds do not refuse it: a migrated `mine` past them stays in the
   # store, in no index, and its card says why.
   defp into_mine(actor, moved, claim) do
+    skills = AquaPath.skills_dirname()
+    manifest = AquaPath.skill_manifest_name()
+
     Arca.Overlay.edit_unit(
       actor,
       AquaPath.pack_dir(@mine),
       fn current ->
         base = current || [{[AquaPath.record_name()], encode_record(own_record())}]
-        held = MapSet.new(for {[_skills, folder | _], _} <- base, do: folder)
+        held = MapSet.new(for {[^skills, name, ^manifest], _} <- base, do: name)
+        paths = MapSet.new(base, &elem(&1, 0))
 
         {:ok,
          base ++
-           Enum.reject(moved, fn {[_skills, folder | _], _} -> MapSet.member?(held, folder) end)}
+           Enum.reject(moved, fn {[_skills, name | _] = rel, _} ->
+             MapSet.member?(held, name) or MapSet.member?(paths, rel)
+           end)}
       end,
       claim
     )

@@ -99,6 +99,12 @@ defmodule Compendium.PacksSettleTest do
     {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
     mine = Enum.find(view.packs, &(&1.name == "mine"))
     assert Enum.map(mine.files, & &1.path) == []
+    assert is_binary(mine.withheld)
+
+    # The same rule answers a file by its path: a withheld pack hands none.
+    for path <- ["skills/large/SKILL.md", "skills/large/a"] do
+      assert {:error, :not_found} = Packs.pack_file(ctx, ctx.athanor_id, "mine", path)
+    end
   end
 
   test "a personal copy of the shipped planner keeps its own folder", %{actor: actor, ctx: ctx} do
@@ -140,6 +146,26 @@ defmodule Compendium.PacksSettleTest do
     assert :ok = Packs.settle(ctx)
     {:ok, %{scrolls: scrolls}} = Packs.pack(ctx, "mine")
     assert Enum.map(scrolls, & &1.name) == ["mine:canvas", "mine:made"]
+  end
+
+  test "mine holds a scroll only at skills/<name>/SKILL.md: a folder of that name elsewhere holds no edited scroll back",
+       %{ctx: ctx, actor: actor} do
+    {:ok, _} =
+      Arca.Files.write(
+        actor,
+        "aqua/scrolls/mine/skills/kept/SKILL.md",
+        "---\nname: kept\n---\nkept"
+      )
+
+    {:ok, _} = Arca.Files.write(actor, "aqua/scrolls/mine/docs/planner/readme.md", "how I plan")
+    before_packs!(actor, "planner", [{["SKILL.md"], "---\nname: planner\n---\n\nedited here\n"}])
+
+    assert :ok = Packs.settle(ctx)
+
+    # The edited planner arrived, and only then was its old unit retired.
+    assert {:ok, %{body: "edited here"}} = Packs.skill(ctx, "mine:planner")
+    assert {:ok, "how I plan"} = Arca.get(actor, ~w(aqua scrolls mine docs planner readme.md))
+    assert {:ok, []} = Arca.Overlay.orphan_units(actor, "aqua")
   end
 
   test "cyfr is copied in, made the seed's again with its switch kept, and a fill makes an empty mine",

@@ -559,6 +559,64 @@ defmodule Compendium.PacksTest do
       assert shown.against != stale.against
       assert {:ok, "two"} = Arca.get(actor, ["aqua", "scrolls", name, "NEW.md"])
     end
+
+    test "the sheet reads the destination once: a pack brought in while the sheet is made is shown or refused at the press",
+         %{ctx: ctx, actor: actor} do
+      shown = tgz([{"same/skills/one/SKILL.md", "---\nname: one\n---\nfirst", false}])
+      other = tgz([{"same/skills/two/SKILL.md", "---\nname: two\n---\nsecond", false}])
+      test = self()
+      handler = "packs-sheet-hold-#{System.unique_integer([:positive])}"
+
+      # The sheet is held right after it read whether a pack is there: the
+      # other pack is brought in then, before the sheet goes on.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :packs, :sheet, :destination],
+          fn _event, _measures, _meta, _config ->
+            if Process.delete(:hold_sheet) do
+              send(test, {:sheet_holds, self()})
+
+              receive do
+                :go -> :ok
+              end
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      making =
+        Task.async(fn ->
+          Process.put(:hold_sheet, true)
+          Packs.sheet(ctx, shown, "same.tar.gz")
+        end)
+
+      assert_receive {:sheet_holds, holder}, 60_000
+      {"same", _} = bring_in!(ctx, other, "same.tar.gz")
+      send(holder, :go)
+      {:ok, sheet} = Task.await(making, 60_000)
+
+      press =
+        Packs.bring_in(ctx, shown, "same.tar.gz", %{
+          "name" => sheet.name,
+          "folder" => sheet.folder,
+          "agreed" => sheet.agreed,
+          "against" => sheet.against
+        })
+
+      # Either the sheet showed the replacement, or its press is refused
+      # and the pack brought in meanwhile is kept.
+      case sheet.update do
+        nil ->
+          assert {:error, {:changed, _again}} = press
+          assert {:ok, _} = Arca.get(actor, ~w(aqua scrolls same skills two SKILL.md))
+
+        [_ | _] ->
+          assert {:ok, "same"} = press
+      end
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -810,6 +868,35 @@ defmodule Compendium.PacksTest do
   # ---------------------------------------------------------------------------
   # Executable bits, Download and tenancy
   # ---------------------------------------------------------------------------
+
+  describe "what a program is handed" do
+    test "pack_file/4 answers for no file of a pack switched off, by any path", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\nred"
+        )
+
+      {:ok, _} = Files.write(actor, "aqua/scrolls/garden/skills/roses/notes.md", "thorns")
+
+      assert {:ok, "thorns"} =
+               Packs.pack_file(ctx, ctx.athanor_id, "garden", "skills/roses/notes.md")
+
+      assert :ok = Packs.switch(ctx, "garden", false)
+
+      for path <- ["skills/roses/SKILL.md", "skills/roses/notes.md"] do
+        assert {:error, :not_found} = Packs.pack_file(ctx, ctx.athanor_id, "garden", path)
+      end
+
+      {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+      {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+      assert %{on: false, files: []} = Enum.find(view.packs, &(&1.name == "garden"))
+    end
+  end
 
   describe "executable bits and Download" do
     test "in mine a file beginning #! runs, in the view and in Download, and the round trip keeps it",

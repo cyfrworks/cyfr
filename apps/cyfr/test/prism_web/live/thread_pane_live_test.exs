@@ -3325,6 +3325,39 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert has_element?(pane, card(row, "saved"))
     end
 
+    test "a proposal to make a new pack says so, and its Save is refused when the pack is there",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      actor = Sanctum.Context.actor(here)
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\nred"
+        )
+
+      row =
+        proposed!(here, thread, %{
+          "name" => "garden:tulips",
+          "description" => "How tulips are kept",
+          "content" => "Plant them in autumn.",
+          "against" => "none",
+          "new_pack" => true
+        })
+
+      pane = open_pane(conn, athanor, thread)
+
+      assert render(pane) =~
+               "Aqua proposes a new pack with this scroll as its first. Nothing is kept until you save it."
+
+      pane |> element(card(row, "save")) |> render_click()
+      assert has_element?(pane, card(row, "refused"))
+      refute has_element?(pane, card(row, "saved"))
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls garden skills tulips SKILL.md))
+    end
+
     # A card proposed before scrolls had packs names its scroll bare; it is
     # the first pack's, `mine`, where the release moved every made scroll.
     test "its card shows what Save as scroll writes, and a save writes exactly that",

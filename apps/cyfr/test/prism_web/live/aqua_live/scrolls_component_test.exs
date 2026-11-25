@@ -260,7 +260,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
   end
 
   test "Download gives a pack as the archive it would be brought in by, and another athanor's is not found",
-       %{conn: conn, actor: actor} do
+       %{conn: conn, actor: actor, athanor: athanor} do
     {:ok, _} =
       Arca.Files.write(actor, "aqua/scrolls/mine/skills/a/SKILL.md", "---\nname: a\n---\n\nb\n")
 
@@ -270,6 +270,20 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
     {:ok, entries} = PackArchive.read(response.resp_body)
     assert Enum.map(entries, & &1.path) == ["mine/skills/a/SKILL.md"]
 
-    assert get(conn, athanor_path("/scrolls/download/absent")).status == 404
+    # Another athanor, where the signed-in person holds no seat, holds a
+    # pack of that very name: its route answers as a missing one does.
+    other = Sanctum.Test.People.athanor!(test_user().user_id)
+    refute other.id == athanor.id
+    theirs = Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: other.id})
+
+    {:ok, _} =
+      Arca.Files.write(
+        theirs,
+        "aqua/scrolls/mine/skills/a/SKILL.md",
+        "---\nname: a\n---\n\ntheirs\n"
+      )
+
+    slug = Sanctum.Tenancy.Athanors.route_slug(other)
+    assert get(conn, "/a/#{slug}/scrolls/download/mine").status == 404
   end
 end

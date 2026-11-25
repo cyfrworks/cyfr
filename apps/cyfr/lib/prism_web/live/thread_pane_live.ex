@@ -845,14 +845,20 @@ defmodule PrismWeb.ThreadPaneLive do
          %{} = proposal <- proposal(row) do
       {action, against} = save_action(ctx, proposal)
 
+      args = %{
+        "action" => action,
+        "name" => proposal["name"],
+        "description" => proposal["description"],
+        "content" => proposal["content"],
+        "against" => against
+      }
+
+      # A proposal that makes a new pack is saved create-only, as the
+      # Scrolls page's New pack is: refused when the pack is there.
+      args = if proposal["new_pack"] == true, do: Map.put(args, "new_pack", true), else: args
+
       status =
-        case call_tool(ctx, "aqua", %{
-               "action" => action,
-               "name" => proposal["name"],
-               "description" => proposal["description"],
-               "content" => proposal["content"],
-               "against" => against
-             }) do
+        case call_tool(ctx, "aqua", args) do
           {:ok, _saved} -> :saved
           {:error, reason} -> {:refused, error_message(reason)}
         end
@@ -2481,9 +2487,16 @@ defmodule PrismWeb.ThreadPaneLive do
     ~H"""
     <div id={@id} class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1 text-xs">
       <p class="text-gray-400">
-        {if @proposal["against"] == "none",
-          do: "Aqua proposes a new scroll. Nothing is kept until you save it.",
-          else: "Aqua proposes a change to a scroll. Nothing changes until you save it."}
+        {cond do
+          @proposal["new_pack"] == true ->
+            "Aqua proposes a new pack with this scroll as its first. Nothing is kept until you save it."
+
+          @proposal["against"] == "none" ->
+            "Aqua proposes a new scroll. Nothing is kept until you save it."
+
+          true ->
+            "Aqua proposes a change to a scroll. Nothing changes until you save it."
+        end}
       </p>
       <p id={@id <> "-name"} class="font-mono text-gray-200">{@proposal["name"]}</p>
       <p id={@id <> "-description"} class="text-gray-300">{@proposal["description"]}</p>
