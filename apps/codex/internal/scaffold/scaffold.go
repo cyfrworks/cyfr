@@ -323,10 +323,18 @@ func HoldsManaged(dir string) bool {
 	return false
 }
 
-// SeccompProfile is the keeper's seccomp profile, which the locus service of
-// docker-compose.yml names beside it. It follows the image it lets start,
-// so `cyfr update`, which pulls the image, refreshes it too.
-const SeccompProfile = "keeper.seccomp.json"
+// The seccomp profiles docker-compose.yml names beside it: the keeper's,
+// which the locus service runs under, and the stack's container profile,
+// which every other service runs under, and the tailnet join's container
+// too. They follow the images they let start, so `cyfr update`, which
+// pulls the images, refreshes them too.
+const (
+	KeeperProfile    = "keeper.seccomp.json"
+	ContainerProfile = "container.seccomp.json"
+)
+
+// SeccompProfiles are both, as one managed set.
+var SeccompProfiles = []string{KeeperProfile, ContainerProfile}
 
 // Guides are the guides the scaffold tarball ships at a project's root
 // (scripts/scaffold-tarball.sh's items), each managed, so `cyfr update`
@@ -344,11 +352,11 @@ var Guides = []string{
 
 // IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an update (guides, WIT interface definitions, the
-// keeper's seccomp profile, and the shipped Aqua soul and scrolls).
+// seccomp profiles, and the shipped Aqua soul and scrolls).
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
 func IsManaged(path string) bool {
-	if path == SeccompProfile || slices.Contains(Guides, path) {
+	if slices.Contains(SeccompProfiles, path) || slices.Contains(Guides, path) {
 		return true
 	}
 	// Everything under wit/ is managed.

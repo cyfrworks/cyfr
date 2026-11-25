@@ -309,14 +309,18 @@ PY
 
 # The capability set and security options of a running proxy: `$1` the
 # service, `$2` its container's `docker inspect` HostConfig (JSON), `$3`
-# its process's /proc/1/status. caddy drops every capability and adds back
-# NET_BIND_SERVICE alone, which its binary's file capability needs, and
-# tailscale keeps none, each with no-new-privileges and nothing else; the
-# effective set is exactly that.
+# its process's /proc/1/status, `$4` the stack's container seccomp profile
+# (a file). caddy drops every capability and adds back NET_BIND_SERVICE
+# alone, which its binary's file capability needs, and tailscale keeps
+# none, each with no-new-privileges and the container profile, which
+# Docker reports inline, and nothing else; the effective set is exactly
+# that.
 capabilities_hold() {
   python3 -I - "$@" <<'PY'
 import json, re, sys
-service, host_config, proc_status = sys.argv[1:4]
+service, host_config, proc_status, profile_path = sys.argv[1:5]
+with open(profile_path) as f:
+    profile = json.load(f)
 CAPS = {"NET_BIND_SERVICE": 10}
 WANT = {"caddy": (["ALL"], ["NET_BIND_SERVICE"]), "tailscale": (["ALL"], [])}
 if service not in WANT:
@@ -332,8 +336,18 @@ if norm(config.get("CapDrop")) != drop:
     problems.append(f"{service} drops {norm(config.get('CapDrop'))}, not {drop}")
 if norm(config.get("CapAdd")) != add:
     problems.append(f"{service} adds {norm(config.get('CapAdd'))}, not {add}")
-if sorted(config.get("SecurityOpt") or []) != ["no-new-privileges:true"]:
-    problems.append(f"{service}'s security options are {config.get('SecurityOpt')}, not [no-new-privileges:true]")
+options = config.get("SecurityOpt") or []
+seccomp = [o.removeprefix("seccomp=") for o in options if o.startswith("seccomp=")]
+others = sorted(o for o in options if not o.startswith("seccomp="))
+if others != ["no-new-privileges:true"]:
+    problems.append(f"{service}'s security options beside its seccomp profile are {others}, not [no-new-privileges:true]")
+try:
+    under = [json.loads(s) for s in seccomp]
+except ValueError:
+    under = None
+if under != [profile]:
+    under_what = "another seccomp profile" if seccomp else "Docker's default seccomp profile"
+    problems.append(f"{service} runs under {under_what}, not {profile_path}")
 eff = re.search(r"^CapEff:\s*([0-9a-f]+)$", proc_status, re.M)
 want_eff = sum(1 << CAPS[c] for c in add)
 if not eff:

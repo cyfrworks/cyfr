@@ -35,7 +35,12 @@ import sys
 
 # The prefix of every name the loop gives, whatever the worktree's seed.
 NAME_PREFIX = "cyfr-dev-"
-PROFILE = "apps/locus/keeper/seccomp/keeper.json"
+# The seccomp profiles by the name the scaffold ships each under beside
+# docker-compose.yml, at the path a checkout tracks it.
+PROFILES = {
+    "keeper.seccomp.json": "apps/locus/keeper/seccomp/keeper.json",
+    "container.seccomp.json": "apps/locus/keeper/seccomp/container.json",
+}
 LOCUS = "locus"
 GUARD = "locus-guard"
 NETWORK = "locus"
@@ -85,6 +90,10 @@ def expected_service(name, base, dev, project, image):
     want["image"] = image
     want["pull_policy"] = "never"
     want["container_name"] = f"{project}-{name}"
+    # Each service names its profile at its tracked path.
+    if "security_opt" in base:
+        tracked = {f"seccomp=./{shipped}": f"seccomp=./{path}" for shipped, path in PROFILES.items()}
+        want["security_opt"] = [tracked.get(opt, opt) for opt in base["security_opt"]]
     url = dev["services"][LOCUS].get("environment", {}).get("LOCUS_RUNTIME_HOST_API_URL", "")
     port = url.rsplit(":", 1)[-1]
     port = port if port.isdigit() else "<port>"
@@ -94,10 +103,6 @@ def expected_service(name, base, dev, project, image):
             LOCUS_RUNTIME_SERVICE_ID="wrk_local",
             LOCUS_RUNTIME_HOST_API_URL=f"http://{gateway(dev, NETWORK)}:{port}",
         )
-        # Locus names the keeper's profile at its tracked path.
-        want["security_opt"] = [
-            f"seccomp=./{PROFILE}" if opt.startswith("seccomp=") else opt for opt in base["security_opt"]
-        ]
     if name == GUARD:
         have = dev["services"][name]
         published = have.get("ports", [{}])[0].get("published")
@@ -138,8 +143,8 @@ def shape(base_path, dev_path, checkout, project, image):
         diff(f"services.{name}", dev["services"][name], want, errors)
     for name in NETWORKS:
         diff(f"networks.{name}", dev["networks"][name], expected_network(name, base["networks"][name], dev, project), errors)
-    # The profile Locus names is the checkout's, the one the scaffold ships
-    # as keeper.seccomp.json.
+    # The profile each service names is the checkout's, the one the scaffold
+    # ships beside docker-compose.yml.
     for name in SERVICES:
         for opt in dev["services"][name].get("security_opt", []):
             if opt.startswith("seccomp=") and not os.path.isfile(os.path.join(checkout, opt.removeprefix("seccomp="))):

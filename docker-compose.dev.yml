@@ -84,6 +84,12 @@ services:
     environment:
       - CYFR_GUARD_CONTROL_PLANE=${DEV_STACK_LOCUS_NET}.1
       - CYFR_GUARD_HOST_API=${DEV_STACK_LOCUS_NET}.1:${DEV_STACK_HOST_API_PORT}
+    # The shipped list with the stack's container profile at its tracked
+    # path: the scaffold ships it beside docker-compose.yml as
+    # container.seccomp.json, which a checkout does not hold.
+    security_opt: !override
+      - no-new-privileges:true
+      - seccomp=./apps/locus/keeper/seccomp/container.json
     networks:
       locus:
         ipv4_address: ${DEV_STACK_LOCUS_NET}.2

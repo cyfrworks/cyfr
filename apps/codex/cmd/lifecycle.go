@@ -322,14 +322,14 @@ func describeChanges(changes []envChange) string {
 
 // forceRefetched names the deploy files `cyfr init --force` removes so the
 // scaffold tarball lays them down again: docker-compose.yml, the Caddyfile
-// and the keeper's seccomp profile beside them, which `cyfr update` also
+// and the seccomp profiles beside them, which `cyfr update` also
 // refreshes. On a dev build the tarball is a no-op, so nothing is removed
 // that could not be replaced.
 func forceRefetched(releaseBuild bool) []string {
 	if !releaseBuild {
 		return nil
 	}
-	return []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile}
+	return append([]string{"docker-compose.yml", "Caddyfile"}, scaffold.SeccompProfiles...)
 }
 
 // downloadScaffold lays the release's scaffold files down, keeping every
@@ -395,7 +395,7 @@ func refuseUndeclaredRestore() error {
 }
 
 func init() {
-	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json even if they already exist (never replaces .env or .env.example)")
+	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile, keeper.seccomp.json and container.seccomp.json even if they already exist (never replaces .env or .env.example)")
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
@@ -408,7 +408,7 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus (the one Locus, whose roles run components, compile them and run stdio MCP servers) behind its egress guard locus-guard, and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
-Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the seccomp profile the Locus services run under), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
+Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json and container.seccomp.json (the seccomp profiles Locus and every other service run under), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
 On Ubuntu 26.04 with AppArmor on, before it writes anything, init offers the AppArmor profile built into this cyfr where the kernel has not loaded it by its name, which carries its content (cyfr-locus- and 12 hex digits): at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself; without one it refuses, naming the one command; declined, nothing is written. .env's CYFR_LOCUS_APPARMOR, which docker-compose.yml's security_opt reads, names it; the keeper proves at its boot that it runs under it.
 
@@ -420,7 +420,7 @@ The CYFR init makes is reached from this machine, at http://localhost:<CYFR_PORT
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with their account, and once someone is set up it opens nothing. Without the screen, on a machine with no display, init also prints the ssh command that brings the address to another computer. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. An empty or absent CYFR_LOCUS_BUILDS_KEY in an existing .env is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. An empty or absent CYFR_LOCUS_BUILDS_KEY in an existing .env is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile, keeper.seccomp.json and container.seccomp.json.`,
 	Example: `  cyfr init
   cyfr init --no-interactive --no-pull
   cyfr init --force

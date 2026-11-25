@@ -10,9 +10,9 @@ the temporary directories removed at exit (`temporary_directory`), the
 default bridge's gateway (`bridge_gateway`), the reading of a guard's
 failure from its inspect record (`guard_failed`), and the part of a
 compose stack that does not depend on the service (`Stack`: its project
-name, its project directory and `down`). What differs between them
-(compose files, services, the seccomp copy, their logs) stays in each
-harness's own subclass.
+name, its project directory holding the seccomp profiles docker-compose.yml
+names, and `down`). What differs between them (compose files, services,
+their logs) stays in each harness's own subclass.
 
 Importing this module calls no Docker and binds nothing: CI's static job
 imports the runtime harness on every change.
@@ -38,8 +38,29 @@ PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")
 # The name of this tree's AppArmor profile, which a Locus container runs
 # under (docker-compose.yml's CYFR_LOCUS_APPARMOR): the file cyfr's package
 # apparmor holds it in.
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps", "codex", "internal", "apparmor", "name")) as _name:
+_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+with open(os.path.join(_ROOT, "apps", "codex", "internal", "apparmor", "name")) as _name:
     APPARMOR = _name.read().strip()
+
+# The seccomp profiles docker-compose.yml names beside it, each by the name a
+# scaffolded project holds it under, at the path this tree tracks it: the
+# keeper's, which Locus runs under, and the container profile, which its
+# guard and every other service run under.
+SECCOMP_PROFILES = {
+    "keeper.seccomp.json": os.path.join(_ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json"),
+    "container.seccomp.json": os.path.join(_ROOT, "apps", "locus", "keeper", "seccomp", "container.json"),
+}
+
+
+def seccomp_profile_named(inline):
+    """The name, of SECCOMP_PROFILES, of the profile Docker reports inline as
+    `inline` (its JSON); exits naming the failure when it is none of them."""
+    profile = json.loads(inline)
+    for name, path in SECCOMP_PROFILES.items():
+        with open(path) as f:
+            if json.load(f) == profile:
+                return name
+    sys.exit("FAIL: a container runs under a seccomp profile that is none of " + ", ".join(SECCOMP_PROFILES))
 
 
 def run_name(name):
@@ -243,7 +264,9 @@ class Stack:
 
     The project is named from `PROOF_RUN_PREFIX` and `project`; its
     directory is a new temporary directory holding an empty `.env`, which
-    the stack's definition names. A subclass gives `compose` and `logs`.
+    the stack's definition names, and the seccomp profiles under the names
+    docker-compose.yml reads them by from the project directory, as a
+    scaffolded project holds them. A subclass gives `compose` and `logs`.
     """
 
     def __init__(self, project):
@@ -251,6 +274,8 @@ class Stack:
         self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
         _stacks.append(self)
         open(os.path.join(self.project_dir, ".env"), "w").close()
+        for name, path in SECCOMP_PROFILES.items():
+            shutil.copyfile(path, os.path.join(self.project_dir, name))
 
     def compose(self, *args, check=True):
         raise NotImplementedError

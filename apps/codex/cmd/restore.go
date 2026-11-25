@@ -42,9 +42,9 @@ var restoreCmd = &cobra.Command{
 1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops. So does a project directory or scaffold directory this account cannot write, and a scaffold file whose path leads outside the project.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar CYFR from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
-4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
+4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, the seccomp profiles the snapshot holds with it, since its services name them, so the compose file in place delivers the setting at every step and each one-off container it runs has its profile. A refusal here puts those files back as they were, which lifts the bar.
 5. Read the cluster's live slots offline, in the snapshot's image: a live server on any host refuses, whatever its release, since every server of the cluster shares the database.
-6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major). The storage root and the SQLite file are written through the stack, as the snapshot read them: one-off containers of the snapshot's image (pulled first when this machine has none), the binds they replace writable and every other mount of the cyfr service read only, with no network, from what cyfr streams them of the snapshot; the declaration's run hands them to the image's user, as every start does. cyfr itself runs as you, so the restore needs no sudo where the server's container owns ./data.
+6. Put the scaffold files back as they stood before the update (the seccomp profiles among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major). The storage root and the SQLite file are written through the stack, as the snapshot read them: one-off containers of the snapshot's image (pulled first when this machine has none), the binds they replace writable and every other mount of the cyfr service read only, with no network, from what cyfr streams them of the snapshot; the declaration's run hands them to the image's user, as every start does. cyfr itself runs as you, so the restore needs no sudo where the server's container owns ./data.
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
 8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own tailnet machine, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
@@ -379,9 +379,11 @@ type restorer struct {
 	updater
 	snap  *snapshotFiles
 	start bool
-	// held are docker-compose.yml's and .env's bytes before the restore put
-	// the snapshot's back, nil for a file that was absent.
-	held map[string][]byte
+	// held are the bytes of each of restoreFiles before the restore put the
+	// snapshot's back, nil for a file that was absent, and heldMode the
+	// permissions of each that was there.
+	held     map[string][]byte
+	heldMode map[string]os.FileMode
 	// sqliteLive reports whether the restored configuration's SQLite file
 	// exists, so a member may hold a slot in it.
 	sqliteLive bool
@@ -401,8 +403,11 @@ type restorer struct {
 }
 
 // restoreFiles are the configuration files the restore replaces with the
-// snapshot's, held to be put back on a refusal.
-var restoreFiles = []struct{ file string }{{"docker-compose.yml"}, {".env"}}
+// snapshot's, held to be put back on a refusal: docker-compose.yml, .env,
+// and the seccomp profiles the compose file's services name, which go into
+// place with it (publishCompose), since compose refuses to run a container
+// of a service whose profile is not there.
+var restoreFiles = append([]string{"docker-compose.yml", ".env"}, scaffold.SeccompProfiles...)
 
 func (r *restorer) run() error {
 	m := r.snap.manifest
@@ -453,7 +458,7 @@ func (r *restorer) run() error {
 	// Putting the parts back and declaring the restore run to their end, so
 	// the cell is never left half-restored by an interrupt.
 	if err := r.putParts(); err != nil {
-		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml and .env are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir)
+		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml, .env and the seccomp profiles are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir)
 	}
 	if err := r.declare(); err != nil {
 		return fmt.Errorf("Every part of the snapshot is back, but the restore could not be declared: %v.\nThe stack is left stopped and barred from starting undeclared (%s in .env). Fix the cause and run 'cyfr restore %s' again, or declare it by hand with:\n  docker compose run --rm --no-deps -T -e %s= cyfr bin/cyfr eval '%s'\nthen take the %s line out of .env", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir, restoreBarrier, markRestoreExpr, restoreBarrier)
@@ -539,8 +544,8 @@ func (r *restorer) sayUnselected() {
 	}
 }
 
-// refuseStopped puts docker-compose.yml and .env back as they were and
-// refuses with reason, the stack left stopped.
+// refuseStopped puts docker-compose.yml, .env and the seccomp profiles back
+// as they were and refuses with reason, the stack left stopped.
 func (r *restorer) refuseStopped(reason error) error {
 	for i := len(r.made) - 1; i >= 0; i-- {
 		// Each is empty, made by this restore since the stop: a directory
@@ -549,25 +554,29 @@ func (r *restorer) refuseStopped(reason error) error {
 	}
 	message := fmt.Sprintf("%v.\nThe stack is left stopped and nothing of the snapshot was put back", r.redactor().Text(reason.Error()))
 	if err := r.putBackHeld(); err != nil {
-		return fmt.Errorf("%s; docker-compose.yml and .env could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
+		return fmt.Errorf("%s; docker-compose.yml, .env and the seccomp profiles could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
 	}
-	return fmt.Errorf("%s; docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'", message)
+	return fmt.Errorf("%s; docker-compose.yml, .env and the seccomp profiles are as they were. Start the stack again with 'cyfr up'", message)
 }
 
-// holdConfigFiles reads the project's docker-compose.yml and .env, for a
-// refusal to put back.
+// holdConfigFiles reads the project's docker-compose.yml, .env and seccomp
+// profiles, for a refusal to put back.
 func (r *restorer) holdConfigFiles() error {
 	r.barredBy, _ = restoreBarred(".env")
-	r.held = map[string][]byte{}
+	r.held, r.heldMode = map[string][]byte{}, map[string]os.FileMode{}
 	for _, f := range restoreFiles {
-		data, err := os.ReadFile(f.file)
+		data, err := os.ReadFile(f)
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(f)
+		}
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			r.held[f.file] = nil
+			r.held[f] = nil
 		case err != nil:
-			return fmt.Errorf("%s does not read (%v)", f.file, err)
+			return fmt.Errorf("%s does not read (%v)", f, err)
 		default:
-			r.held[f.file] = data
+			r.held[f], r.heldMode[f] = data, info.Mode().Perm()
 		}
 	}
 	return nil
@@ -681,10 +690,31 @@ func (r *restorer) putConfigFiles() error {
 	return writeDurable(stagedCompose, compose, mode)
 }
 
-// publishCompose renames the staged compose file, whose configuration
+// publishCompose puts each seccomp profile the snapshot holds in place,
+// then renames the staged compose file, whose configuration
 // readRestoredConfig read with the bar reaching cyfr, over
-// docker-compose.yml.
+// docker-compose.yml: the first container run under it (refuseLiveMembers'
+// offline read) is of a service that names one. A profile the snapshot
+// does not hold is one its compose file does not name, and putParts
+// removes it with the other scaffold files the snapshot lacks.
 func (r *restorer) publishCompose() error {
+	for _, name := range scaffold.SeccompProfiles {
+		if !slices.Contains(r.snap.manifest.Scaffold, name) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(r.snap.dir, "scaffold", name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := putProjectFile(name, data, 0644); err != nil {
+			return fmt.Errorf("put %s in place: %w", name, err)
+		}
+	}
+	// The profiles first: the compose file in place never names one that
+	// is not there yet.
 	if err := access.ReplaceFile(stagedCompose, "docker-compose.yml"); err != nil {
 		return err
 	}
@@ -718,25 +748,22 @@ func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
 	return slices.Concat(files, args), nil
 }
 
-// putBackHeld writes the held configuration files back.
+// putBackHeld writes the held configuration files back, each with the
+// permissions it had.
 func (r *restorer) putBackHeld() error {
 	var errs []error
 	for _, f := range restoreFiles {
-		data, held := r.held[f.file]
+		data, held := r.held[f]
 		switch {
 		case !held:
 		case data == nil:
-			if err := os.Remove(f.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, err)
 			} else {
 				errs = append(errs, access.SyncDir("."))
 			}
 		default:
-			mode := os.FileMode(0600)
-			if info, err := os.Stat(f.file); err == nil {
-				mode = info.Mode().Perm()
-			}
-			errs = append(errs, writeDurable(f.file, data, mode))
+			errs = append(errs, writeDurable(f, data, r.heldMode[f]))
 		}
 	}
 	if err := os.Remove(stagedCompose); err != nil && !errors.Is(err, fs.ErrNotExist) {

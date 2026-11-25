@@ -35,7 +35,8 @@ import (
 // pgrestore.*; an image's inspection answers from image.*; <key>.kill kills the calling process with SIGKILL, as a
 // crash would. A network's read and removal answer as fakeDocker's do. A
 // call naming the staged compose file sees that file, every other
-// docker-compose.yml.
+// docker-compose.yml. With compose.profiles, a compose run refuses, as
+// compose does, a seccomp profile its file names that the project lacks.
 const restoreFakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
 file=docker-compose.yml
@@ -90,6 +91,11 @@ if [ "$1" = compose ]; then
       fi
       answer config ;;
     run)
+      if [ -f "$d/compose.profiles" ]; then
+        for p in $(sed -n 's|^ *- seccomp=\./\(.*\)$|\1|p' "$file"); do
+          [ -f "$p" ] || { echo "opening seccomp profile (./$p) failed: open $PWD/$p: no such file or directory"; exit 1; }
+        done
+      fi
       case "$*" in *mark_restore*) answer mark ;; esac
       # The live read opens the database, as the release does: a file that
       # is not one, an empty one among them, does not answer.
@@ -657,6 +663,88 @@ func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 	}
 	r.stoppedUndeclared()
 	r.configAsBefore(before, string(r.live))
+}
+
+// A restore puts the seccomp profiles the snapshot holds in place with its
+// compose file, before it runs a container under that file: a project that
+// lacks one, as a restore of a snapshot taken before the release shipped it
+// leaves the project, is restored from a snapshot that holds it, where
+// compose would refuse the live read's container of the cyfr service, which
+// names it. A refusal after that leaves the profile as the project held it:
+// absent where it was absent, and where the project had one the snapshot
+// does not hold, the project's, with its permissions.
+func TestARestorePutsTheSnapshotsProfilesInPlaceWithItsComposeFile(t *testing.T) {
+	const profile = `{"defaultAction":"SCMP_ACT_ERRNO","container":"0.8.0"}` + "\n"
+	const kept = `{"defaultAction":"SCMP_ACT_ERRNO","container":"the project's"}` + "\n"
+	for name, c := range map[string]struct{ refused, snapshotHolds, projectHas bool }{
+		"restored":                 {false, true, false},
+		"refused by a live member": {true, true, false},
+		"a snapshot without it, refused, the project's kept":                 {true, false, true},
+		"a snapshot with another, refused, the project's kept with its mode": {true, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+			own := filepath.Join(r.project, "container.seccomp.json")
+			if c.snapshotHolds {
+				if err := os.WriteFile(filepath.Join(r.dir, "scaffold", "container.seccomp.json"), []byte(profile), 0600); err != nil {
+					t.Fatal(err)
+				}
+				manifest := filepath.Join(r.dir, "snapshot.json")
+				var m snapshotManifest
+				if err := json.Unmarshal([]byte(read(t, manifest)), &m); err != nil {
+					t.Fatal(err)
+				}
+				m.Scaffold = append(m.Scaffold, "container.seccomp.json")
+				data, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manifest, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Remove(own); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				t.Fatal(err)
+			}
+			if c.projectHas {
+				if err := os.WriteFile(own, []byte(kept), 0640); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(own, 0640); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.answer("compose.profiles", "")
+			if c.refused {
+				r.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@other-host","owner":"o2","release":"0.8.0","lease_until":"2026-10-16T12:00:12Z"}]}`+"\n")
+			}
+			out, err := r.restore(false)
+			got := read(t, own)
+			if c.refused {
+				if err == nil || !strings.Contains(err.Error(), "cyfr@other-host") || !strings.Contains(err.Error(), "the seccomp profiles are as they were") {
+					t.Fatalf("restore answered %v\n%s", err, out)
+				}
+				if !c.projectHas && got != "<absent>" {
+					t.Errorf("the refused restore left container.seccomp.json holding %q, which the project did not hold", got)
+				}
+				if c.projectHas {
+					if got != kept {
+						t.Errorf("the refused restore left container.seccomp.json holding %q, not the project's %q", got, kept)
+					}
+					if info, err := os.Stat(own); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0640 {
+						t.Errorf("the refused restore left container.seccomp.json as %v (%v), not 0640", info.Mode(), err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("restore answered %v\n%s", err, out)
+			}
+			if got != profile {
+				t.Errorf("container.seccomp.json holds %q after the restore, not the snapshot's %q", got, profile)
+			}
+		})
+	}
 }
 
 // A scaffold directory this person cannot write refuses the same way, on
@@ -1720,7 +1808,9 @@ func TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			r := &restorer{}
+			// A snapshot that holds no seccomp profile: publishCompose puts
+			// none in place.
+			r := &restorer{snap: &snapshotFiles{dir: t.TempDir()}}
 			args, err := r.stagedComposeArgs("config", "--format", "json")
 			if err != nil {
 				t.Fatal(err)

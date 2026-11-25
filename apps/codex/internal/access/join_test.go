@@ -5,9 +5,12 @@ package access
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -66,7 +69,7 @@ func TestJoinWithAKeyEnrolsTheMachine(t *testing.T) {
 	}
 	args := strings.Join(calls[run].Args, " ")
 	for _, want := range []string{
-		"-d -i --rm", "--label com.cyfr.access.project=home", "--label com.cyfr.access.join-id=" + rec.JoinID,
+		"-d -i --rm --name home-tailnet-join-" + rec.JoinID[:12] + " --security-opt seccomp=" + filepath.Join(h.dir, "container.seccomp.json") + " ", "--label com.cyfr.access.project=home", "--label com.cyfr.access.join-id=" + rec.JoinID,
 		"--label com.cyfr.access.join-deadline=2026-10-19T12:", "--network home_tailnet-join", "-v home_tailscale_state:/var/lib/tailscale",
 		"-e TS_USERSPACE=true -e TS_STATE_DIR=/var/lib/tailscale -e TS_AUTH_ONCE=true -e TS_ACCEPT_DNS=false -e TS_SOCKET=/var/run/tailscale/tailscaled.sock -e TS_HOSTNAME=cyfr",
 		"tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d timeout -s TERM 600 sh -c IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec containerboot",
@@ -89,6 +92,128 @@ func TestJoinWithAKeyEnrolsTheMachine(t *testing.T) {
 		t.Error("the join container still runs")
 	}
 	assertNoKey(t, h, testKey)
+}
+
+// homeState is what a refused join must leave as it was: every file under
+// .cyfr/ with its bytes, the engine's lock file by its presence alone (on
+// Windows the engine's own lock makes its bytes unreadable while it is
+// held), the fake daemon's containers, volumes (each node's identity among
+// them) and networks, and the number of docker calls made.
+func homeState(t *testing.T, h *testHome) string {
+	t.Helper()
+	files := map[string]string{}
+	root := filepath.Join(h.dir, stateDir)
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if p == filepath.Join(root, lockFile) {
+			files[p] = "<present>"
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		files[p] = string(data)
+		return err
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	h.fake.mu.Lock()
+	daemon, err := json.Marshal(map[string]any{"containers": h.fake.st.Containers, "volumes": h.fake.st.Volumes, "networks": h.fake.st.Networks, "calls": len(h.fake.st.Calls)})
+	h.fake.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := json.Marshal(map[string]any{"files": files, "daemon": string(daemon)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(state)
+}
+
+// refusedForTheProfile fails unless the join was refused before it was
+// accepted, naming the profile and what lays it down, and changed nothing.
+func refusedForTheProfile(t *testing.T, h *testHome, before string, rc Receipt, err error) {
+	t.Helper()
+	profile := filepath.Join(h.dir, "container.seccomp.json")
+	if err == nil || !strings.Contains(err.Error(), profile) || !strings.Contains(err.Error(), "nothing was changed") ||
+		!strings.Contains(err.Error(), "'cyfr update' or 'cyfr init --force' lays it down") || rc.Code != "" {
+		t.Errorf("the join answered %+v, %v", rc, err)
+	}
+	if after := homeState(t, h); after != before {
+		t.Errorf("the refused join changed the home:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// A home without the container profile refuses a join before it accepts
+// it, with or without an auth key: no journal, no join record, no docker
+// call, no network or volume made, and the reason names the file and what
+// lays it down, never an outcome to resume.
+func TestAJoinWithoutTheContainerProfileChangesNothing(t *testing.T) {
+	for name, key := range map[string]string{"with an auth key": testKey, "with an approval link": ""} {
+		t.Run(name, func(t *testing.T) {
+			h := newHome(t)
+			if err := os.Remove(filepath.Join(h.dir, "container.seccomp.json")); err != nil {
+				t.Fatal(err)
+			}
+			before := homeState(t, h)
+			r := JoinRequest{ID: id(1)}
+			if key != "" {
+				r.AuthKey = strings.NewReader(key + "\n")
+			}
+			rc, err := h.e.Join(bg, r)
+			refusedForTheProfile(t, h, before, rc, err)
+			// Nothing was accepted, so a resume finds nothing to finish.
+			if rcs, err := h.e.Resume(bg); err != nil || len(rcs) != 0 {
+				t.Errorf("a resume after the refusal answered %+v, %v", rcs, err)
+			}
+		})
+	}
+}
+
+// A new node asked of an enrolled home whose container profile is gone
+// keeps the node: its identity, its state volume and its join record stay.
+func TestANewNodeWithoutTheContainerProfileKeepsTheEnrolledNode(t *testing.T) {
+	h := newHome(t)
+	h.join(1, testKey, false)
+	if err := os.Remove(filepath.Join(h.dir, "container.seccomp.json")); err != nil {
+		t.Fatal(err)
+	}
+	before := homeState(t, h)
+	rc, err := h.e.Join(bg, JoinRequest{ID: id(2), NewNode: true, AuthKey: strings.NewReader(testKey + "\n")})
+	refusedForTheProfile(t, h, before, rc, err)
+	if rec, _ := h.e.readJoin(); rec == nil || rec.State != "joined" || rec.NodeID != "n0001CNTRL" {
+		t.Errorf("join.json is %+v after the refusal", rec)
+	}
+}
+
+// A profile docker could not read is refused as a missing one: a directory
+// in its place, and a file this account cannot read.
+func TestAJoinRefusesAProfileItCannotRead(t *testing.T) {
+	for name, place := range map[string]func(path string) error{
+		"a directory": func(path string) error {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			return os.Mkdir(path, 0o755)
+		},
+		"a file of mode 0000": func(path string) error { return os.Chmod(path, 0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "a file of mode 0000" && (runtime.GOOS == "windows" || os.Geteuid() == 0) {
+				t.Skip("root reads every file, and Windows has no such mode")
+			}
+			h := newHome(t)
+			path := filepath.Join(h.dir, "container.seccomp.json")
+			if err := place(path); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(path, 0o644) })
+			before := homeState(t, h)
+			rc, err := h.e.Join(bg, JoinRequest{ID: id(1), AuthKey: strings.NewReader(testKey + "\n")})
+			refusedForTheProfile(t, h, before, rc, err)
+		})
+	}
 }
 
 // assertNoKey checks the raw key is nowhere but on a call's standard

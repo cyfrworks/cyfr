@@ -57,6 +57,10 @@ defmodule Cyfr.StackShapeTest do
   ]
   @security_opt ["no-new-privileges:true", "writable-cgroups=true" | @confinement]
 
+  # Every other service runs under the stack's container profile: Docker's
+  # default with its comparisons corrected, shipped beside the compose file.
+  @container_seccomp "seccomp=./container.seccomp.json"
+
   # Keys that would hand Locus the host's privileges, namespaces, devices,
   # a network of its own or a compose limit: each role's bounds are the
   # keeper's to write into the role's group, from `@bounds`.
@@ -194,7 +198,8 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # The guard as compose runs it, whole: the Locus image running
-  # cyfr-guard, NET_ADMIN alone, forwarding with no ICMP rate limit (its
+  # cyfr-guard, NET_ADMIN alone, under the stack's container seccomp
+  # profile, forwarding with no ICMP rate limit (its
   # sysctls), the ready file's tmpfs and its control's volume, whose socket
   # its environment names, its only writable surfaces, cyfr's fixed
   # endpoint address in its environment with the private hosts the
@@ -211,7 +216,7 @@ defmodule Cyfr.StackShapeTest do
       "init" => true,
       "cap_drop" => ["ALL"],
       "cap_add" => ["NET_ADMIN"],
-      "security_opt" => ["no-new-privileges:true"],
+      "security_opt" => ["no-new-privileges:true", @container_seccomp],
       "read_only" => true,
       "ipc" => "none",
       "sysctls" => %{"net.ipv4.ip_forward" => "1", "net.ipv4.icmp_ratelimit" => "0"},
@@ -1250,10 +1255,17 @@ defmodule Cyfr.StackShapeTest do
   # the keeper to prove; a project without the one, or a host without the
   # other, does not start the service. The image makes the directory a
   # space's files are built under, which the profile lets a space mount.
-  test "Locus runs under the keeper's seccomp and AppArmor profiles, shipped beside the compose file" do
+  test "Locus runs under the keeper's seccomp and AppArmor profiles, every other service under the container profile, both shipped beside the compose file" do
     compose = read!("docker-compose.yml")
     locus = services(compose)[LocusRoles.release().service]
     for option <- @confinement, do: assert(option in locus["security_opt"])
+
+    for {name, service} <- services(compose), name != LocusRoles.release().service do
+      assert Enum.filter(service["security_opt"] || [], &String.starts_with?(&1, "seccomp=")) ==
+               [@container_seccomp],
+             "#{name} runs under #{inspect(service["security_opt"])}, not the container profile alone"
+    end
+
     assert compose =~ "user.max_user_namespaces"
 
     for role <- LocusRoles.roles(), do: assert(role.reach in LocusRoles.reaches())
@@ -1280,10 +1292,15 @@ defmodule Cyfr.StackShapeTest do
     {listing, 0} = System.cmd("tar", ["-tzf", tarball], env: bare_env())
     entries = String.split(listing, "\n", trim: true)
     assert "docker-compose.yml" in entries
-    assert "keeper.seccomp.json" in entries
 
-    {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"], env: bare_env())
-    assert profile == read!("apps/locus/keeper/seccomp/keeper.json")
+    for {shipped, tracked} <- [
+          {"keeper.seccomp.json", "apps/locus/keeper/seccomp/keeper.json"},
+          {"container.seccomp.json", "apps/locus/keeper/seccomp/container.json"}
+        ] do
+      assert shipped in entries
+      {profile, 0} = System.cmd("tar", ["-xOzf", tarball, shipped], env: bare_env())
+      assert profile == read!(tracked)
+    end
   end
 
   # A child's environment: every inherited name unset but where it finds

@@ -67,6 +67,9 @@ func newHome(t *testing.T) *testHome {
 	}
 	writeFile(t, filepath.Join(dir, "docker-compose.yml"), repoFile(t, "docker-compose.yml"))
 	writeFile(t, filepath.Join(dir, ".env"), repoFile(t, ".env.example"))
+	// The container profile the scaffold lays down beside the compose file,
+	// which the tailnet join's container runs under.
+	writeFile(t, filepath.Join(dir, "container.seccomp.json"), repoFile(t, "apps/locus/keeper/seccomp/container.json"))
 	clock := newFakeClock()
 	h := &testHome{t: t, dir: dir, clock: clock, fake: newFakeDocker(dir, clock)}
 	h.open()

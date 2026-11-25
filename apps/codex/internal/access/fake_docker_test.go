@@ -386,6 +386,15 @@ func (f *fakeDocker) run(args []string) fakeAnswer {
 			if !f.st.Networks[args[i]] {
 				return fail(125, "network %s not found", args[i])
 			}
+		case "--security-opt":
+			// docker reads a seccomp profile's file itself, refusing a run
+			// whose file it cannot read.
+			i++
+			if path, ok := strings.CutPrefix(args[i], "seccomp="); ok {
+				if _, err := os.ReadFile(path); err != nil {
+					return fail(125, "opening seccomp profile (%s) failed: %v", path, err)
+				}
+			}
 		case "-v":
 			i++
 			ct.Volume, _, _ = strings.Cut(args[i], ":")

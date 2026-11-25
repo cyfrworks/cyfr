@@ -22,6 +22,7 @@ seed() {
     CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1
   cp "$ROOT/docker-compose.yml" "$ROOT/Caddyfile" "$D/"
   cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$D/keeper.seccomp.json"
+  cp "$ROOT/apps/locus/keeper/seccomp/container.json" "$D/container.seccomp.json"
   {
     printf '%s\n' services: "  cyfr:" "    image: $IMAGE" "    pull_policy: never" "    container_name: !reset null"
     if [ -n "${SEED_MOUNTS:-}" ]; then

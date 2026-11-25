@@ -11,10 +11,14 @@ import (
 	"io"
 	"maps"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cyfr/codex/internal/scaffold"
 )
 
 // JoinDeadline is how long a join waits for its approval. The join
@@ -167,6 +171,11 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 	digest := joinDigest(hostname, r.NewNode, authKeyFingerprint(key))
 	if rc, blocked, err := e.blocked(r.ID, digest, "join"); blocked || err != nil {
 		return rc, err
+	}
+	// Before the join is accepted, and before anything is written or any
+	// docker call made: without the profile no join container could run.
+	if _, err := e.containerProfile(); err != nil {
+		return Receipt{}, err
 	}
 	refuse := func(err error) (Receipt, error) {
 		var ref *Refusal
@@ -348,10 +357,35 @@ func (e *Engine) prepareJoin(ctx context.Context, a *joinAttempt) string {
 	return ""
 }
 
+// containerProfile is the project's container seccomp profile, which the
+// join's container runs under as the tailscale service does: a regular
+// file this account can read, never Docker's default profile in its
+// place. Join refuses without it, before it accepts anything, saying what
+// lays it down.
+func (e *Engine) containerProfile() (string, error) {
+	path := filepath.Join(e.dir, scaffold.ContainerProfile)
+	f, err := os.Open(path)
+	if err == nil {
+		var info os.FileInfo
+		info, err = f.Stat()
+		f.Close()
+		if err == nil && !info.Mode().IsRegular() {
+			err = errors.New("it is not a regular file")
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("access: the tailnet join's container runs under the seccomp profile %s, which is not a file this account can read (%v); nothing was changed. 'cyfr update' or 'cyfr init --force' lays it down beside docker-compose.yml; then run the command again", path, err)
+	}
+	return path, nil
+}
+
 // startJoinContainer runs the one-off join container: the tailscale
 // service's image on its own network with the state volume, labelled
-// with its join id and deadline, ending by itself at the deadline.
+// with its join id and deadline, ending by itself at the deadline, under
+// the project's container seccomp profile (containerProfile, which Join
+// checked before it accepted the join).
 func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string, string) {
+	profile := filepath.Join(e.dir, scaffold.ContainerProfile)
 	seconds := int(math.Ceil(a.Deadline.Sub(e.now()).Seconds()))
 	if seconds < 1 {
 		seconds = 1
@@ -361,7 +395,7 @@ func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string
 	if a.Key {
 		args = append(args, "-i")
 	}
-	args = append(args, "--rm", "--name", name,
+	args = append(args, "--rm", "--name", name, "--security-opt", "seccomp="+profile,
 		"--label", labelJoinProject+"="+e.project,
 		"--label", labelJoinID+"="+a.JoinID,
 		"--label", labelJoinDeadline+"="+a.Deadline.UTC().Format(time.RFC3339),

@@ -685,12 +685,12 @@ func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 }
 
 // `cyfr init --force` lays the tarball's deploy files down again, the
-// keeper's seccomp profile among them as `cyfr update` refreshes it, so a
-// forced init never keeps a profile older than the image it pulls; a dev
+// seccomp profiles among them as `cyfr update` refreshes them, so a forced
+// init never keeps a profile older than the images it pulls; a dev
 // build, whose tarball is a no-op, removes none.
-func TestForceRefetchesTheSeccompProfile(t *testing.T) {
+func TestForceRefetchesTheSeccompProfiles(t *testing.T) {
 	got := forceRefetched(true)
-	for _, want := range []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile} {
+	for _, want := range append([]string{"docker-compose.yml", "Caddyfile"}, scaffold.SeccompProfiles...) {
 		if !slices.Contains(got, want) {
 			t.Errorf("init --force re-fetches %v, which lacks %s", got, want)
 		}

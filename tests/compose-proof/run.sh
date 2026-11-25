@@ -28,7 +28,12 @@
 #          file's, as `docker compose config` resolves it alone and as
 #          `docker port` reads the running project. No Locus network
 #          reaches the loopback listener, while the runtime's network
-#          reaches the host API.
+#          reaches the host API. cyfr and the mode's proxy (Caddy; the
+#          Tailscale stand-in, not tailscaled) run under the stack's
+#          container seccomp profile as Docker reports it, and in a
+#          container of each one's shape (`seccomp_holds`) an AF_VSOCK
+#          socket is refused, its domain's high word set too, every 32-bit
+#          call is killed, and the sockets a service makes are made.
 #
 #   modes  one project switched with `cyfr access`, running, through every
 #          ordered pair of the three modes: after each switch the whole
@@ -145,7 +150,9 @@
 #          the worker URL the shipped file names and the runtime calls back
 #          at the host API address it names, each side checking the other's
 #          signature. The worker URL and the host API URL resolve to the
-#          shipped file's values. A signed-in person grants the seed's
+#          shipped file's values. Locus runs under the keeper's seccomp
+#          profile and its guard under the container profile, held as the
+#          bind case holds cyfr. A signed-in person grants the seed's
 #          catalyst:local.files through the consent walk (plan, preview,
 #          commit) and runs it through the console twice, writing a mark
 #          to their athanor's files and reading it back, so both runs reach
@@ -894,7 +901,7 @@ print(json.dumps(head))' "$mode" "$host" "$public_url" "$node" "$profiles")"
     case " $want " in
       *" $proxy "*)
         id="$(compose ps -q "$proxy")"
-        why="$(capabilities_hold "$proxy" "$(docker inspect -f '{{json .HostConfig}}' "$id")" "$(docker exec "$id" cat /proc/1/status)")" ||
+        why="$(capabilities_hold "$proxy" "$(docker inspect -f '{{json .HostConfig}}' "$id")" "$(docker exec "$id" cat /proc/1/status)" "$CONTAINER_PROFILE")" ||
           fail "the $proxy proxy runs with other privileges than the shipped file's: $why"
         ;;
       *) ! has_container "$proxy" || fail "in $mode the project still has a $proxy container: stopped, but not removed" ;;
@@ -964,6 +971,7 @@ project_new() {
     cp -R "$ROOT/seed/aqua" "$WORK/aqua"
     cp "$HERE/compose.yml" "$WORK/docker-compose.override.yml"
     cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$WORK/keeper.seccomp.json"
+    cp "$ROOT/apps/locus/keeper/seccomp/container.json" "$WORK/container.seccomp.json"
     cp "$ROOT/.env.example" "$WORK/.env.example"
   fi
   cli_ok init init --no-interactive --no-pull
@@ -1036,6 +1044,157 @@ import json, sys
 project = json.load(sys.stdin)
 config = project["networks"][sys.argv[1]]["ipam"]["config"][0]
 print(sys.argv[1], config["subnet"], config["ip_range"])' "$(table network)")"
+}
+
+# ---------------------------------------------------------------------------
+# Seccomp profiles
+# ---------------------------------------------------------------------------
+
+# The tracked profiles the scaffold ships beside docker-compose.yml.
+KEEPER_PROFILE="$ROOT/apps/locus/keeper/seccomp/keeper.json"
+CONTAINER_PROFILE="$ROOT/apps/locus/keeper/seccomp/container.json"
+
+# The probes a container of a service's shape runs (`seccomp_probe`), each
+# a static program of its own, laid down once in $WORK/seccomp-probes:
+# x86-64 programs that call socket or socketpair with a domain and exit
+# with the call's negated return (253 for the descriptor 3 it made, 0 for
+# a pair, 1 for EPERM), and 32-bit x86 programs that call
+# socketcall(SYS_SOCKET, {domain, SOCK_STREAM, 0}), the way into the
+# kernel's socket code whose domain lies behind a pointer no filter reads.
+# A domain of 0x100000028 is AF_VSOCK to the kernel, which reads its low
+# 32 bits; Docker's own profile compares it whole and lets it by.
+seccomp_probes() {
+  [ -d "$WORK/seccomp-probes" ] && return
+  mkdir -m 755 "$WORK/seccomp-probes"
+  python3 -I - "$WORK/seccomp-probes" <<'PY' || fail "the seccomp probes could not be written"
+import os, struct, sys
+
+out = sys.argv[1]
+SOCK_STREAM, SOCK_RAW = 1, 3
+
+
+def elf64(code):
+    base = 0x400000
+    size = 64 + 56 + len(code)
+    header = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8 + struct.pack(
+        "<HHIQQQIHHHHHH", 2, 0x3E, 1, base + 120, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    program = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base, size, size, 0x1000)
+    return header + program + code
+
+
+def socket64(nr, domain, kind):
+    # sub rsp, 16; mov r10, rsp (socketpair's sv); mov rdi, domain;
+    # mov esi, kind; xor edx, edx; mov eax, nr; syscall; exit(-rax)
+    return elf64(b"\x48\x83\xec\x10" b"\x49\x89\xe2" b"\x48\xbf" + struct.pack("<Q", domain) +
+                 b"\xbe" + struct.pack("<I", kind) + b"\x31\xd2" b"\xb8" + struct.pack("<I", nr) + b"\x0f\x05" +
+                 b"\x48\x89\xc7" b"\x48\xf7\xdf" b"\xb8\x3c\x00\x00\x00" b"\x0f\x05")
+
+
+def socketcall32(domain):
+    base = 0x08048000
+    code = (b"\x6a\x00" b"\x6a\x01" b"\x68" + struct.pack("<I", domain) +
+            b"\x89\xe1" b"\xbb\x01\x00\x00\x00" b"\xb8\x66\x00\x00\x00" b"\xcd\x80" +
+            b"\x89\xc3" b"\xf7\xdb" b"\xb8\x01\x00\x00\x00" b"\xcd\x80")
+    size = 52 + 32 + len(code)
+    header = b"\x7fELF\x01\x01\x01\x00" + b"\x00" * 8 + struct.pack(
+        "<HHIIIIIHHHHHH", 2, 3, 1, base + 84, 52, 0, 0, 52, 32, 1, 40, 0, 0)
+    program = struct.pack("<IIIIIIII", 1, 0, base, base, size, size, 5, 0x1000)
+    return header + program + code
+
+
+probes = {
+    "socket_unix": socket64(41, 1, SOCK_STREAM),
+    "socket_inet": socket64(41, 2, SOCK_STREAM),
+    "socket_inet6": socket64(41, 10, SOCK_STREAM),
+    "socket_netlink": socket64(41, 16, SOCK_RAW),
+    "socket_vsock": socket64(41, 40, SOCK_STREAM),
+    "socket_vsock_widened": socket64(41, 0x100000028, SOCK_STREAM),
+    "socketpair_unix": socket64(53, 1, SOCK_STREAM),
+    "socketpair_vsock_widened": socket64(53, 0x100000028, SOCK_STREAM),
+    "socketcall_inet": socketcall32(2),
+    "socketcall_vsock": socketcall32(40),
+}
+for name, program in probes.items():
+    path = os.path.join(out, name)
+    with open(path, "wb") as f:
+        f.write(program)
+    os.chmod(path, 0o755)
+PY
+}
+
+# Holds the running service `$1` to the seccomp profile `$2`, as Docker
+# reports it inline, and, when `$3` is `probe`, runs every probe in a
+# container of the service's shape: its image, user, capabilities,
+# read-only root and security options, that profile among them, with no
+# network. Under the container profile a socket of AF_UNIX, AF_INET,
+# AF_INET6 and AF_NETLINK and an AF_UNIX pair are made; AF_VSOCK, by its
+# number and with the high word set, is refused EPERM, for a socket and a
+# pair; and every 32-bit call is killed (SIGSYS, exit 159), so socketcall
+# makes no socket of any family. Under Docker's default the widened
+# socket is made and the 32-bit socketcall makes an AF_INET socket.
+seccomp_holds() {
+  local service="$1" profile="$2" probe="${3:-}" id args=() got arch
+  id="$(compose ps -q "$service")"
+  [ -n "$id" ] || fail "no $service container runs to hold to its seccomp profile"
+  docker inspect "$id" >"$WORK/seccomp-$service.inspect" || fail "docker inspect $service failed"
+  python3 -I - "$WORK/seccomp-$service.inspect" "$profile" "$WORK/seccomp-$service.json" >"$WORK/seccomp-$service.args" 2>"$WORK/seccomp-$service.why" <<'PY' ||
+import json, sys
+inspect, profile_path, out = sys.argv[1:]
+info = json.load(open(inspect))[0]
+host, config = info["HostConfig"], info["Config"]
+seccomp = [o.removeprefix("seccomp=") for o in host.get("SecurityOpt") or [] if o.startswith("seccomp=")]
+if len(seccomp) != 1:
+    sys.exit(f"it runs under Docker's default seccomp profile, not {profile_path}")
+if json.loads(seccomp[0]) != json.load(open(profile_path)):
+    sys.exit(f"it runs under another seccomp profile than {profile_path}")
+open(out, "w").write(seccomp[0])
+args = ["--network", "none", "--entrypoint", "sh"]
+if config.get("User"):
+    args += ["--user", config["User"]]
+if host.get("ReadonlyRootfs"):
+    args.append("--read-only")
+for cap in host.get("CapDrop") or []:
+    args += ["--cap-drop", cap]
+for cap in host.get("CapAdd") or []:
+    args += ["--cap-add", cap]
+for option in host.get("SecurityOpt") or []:
+    args += ["--security-opt", f"seccomp={out}" if option.startswith("seccomp=") else option]
+args.append(config["Image"])
+sys.stdout.write("".join(a + "\0" for a in args))
+PY
+    fail "$service: $(cat "$WORK/seccomp-$service.why")"
+  mapfile -d '' -t args <"$WORK/seccomp-$service.args"
+  [ "${#args[@]}" -gt 0 ] || fail "$service: no container shape was read"
+  ok "$service runs under $profile, as Docker reports it"
+  [ "$probe" = probe ] || return 0
+  arch="$(docker version --format '{{.Server.Arch}}')"
+  if [ "$arch" != amd64 ]; then
+    ok "$service: the seccomp probes are x86-64 programs, and this Docker host is $arch: none ran"
+    return 0
+  fi
+  seccomp_probes
+  got="$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-seccomp-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    --volume "$WORK/seccomp-probes:/cyfr-seccomp-probes:ro" "${args[@]}" \
+    -c 'for p in /cyfr-seccomp-probes/*; do "$p"; echo "${p##*/}=$?"; done' 2>&1)" ||
+    fail "$service: the probe container did not run: $got"
+  python3 -I - "$service" "$got" <<'PY' || fail "$service: the seccomp probes answered otherwise than its profile decides:
+$got"
+import sys
+service, text = sys.argv[1:]
+got = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+MADE, PAIR, EPERM, KILLED = "253", "0", "1", "159"
+want = {
+    "socket_unix": MADE, "socket_inet": MADE, "socket_inet6": MADE, "socket_netlink": MADE,
+    "socket_vsock": EPERM, "socket_vsock_widened": EPERM,
+    "socketpair_unix": PAIR, "socketpair_vsock_widened": EPERM,
+    "socketcall_inet": KILLED, "socketcall_vsock": KILLED,
+}
+wrong = [f"{name}: exit {got.get(name)}, want {code}" for name, code in want.items() if got.get(name) != code]
+for w in wrong:
+    print(w)
+sys.exit(1 if wrong else 0)
+PY
+  ok "$service: AF_UNIX, AF_INET, AF_INET6 and AF_NETLINK sockets and an AF_UNIX pair made; AF_VSOCK refused EPERM, with the high word set too; a 32-bit socketcall killed"
 }
 
 # ---------------------------------------------------------------------------
@@ -1142,6 +1301,13 @@ assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, pu
   esac
   why="$(published_ports_hold "$answer" "$expected")" || fail "in $mode: $why"
   ok "the shipped file publishes in $mode: $(printf '%s' "$answer" | tr '\n' ';')"
+
+  step "$mode: cyfr and the mode's proxy run under the stack's container seccomp profile"
+  seccomp_holds cyfr "$CONTAINER_PROFILE" probe
+  case "$mode" in
+    public) seccomp_holds caddy "$CONTAINER_PROFILE" probe ;;
+    tailnet) seccomp_holds tailscale "$CONTAINER_PROFILE" probe ;;
+  esac
 
   step "$mode: the loopback listener answers the host's loopback, and nothing else"
   curl -fsS -m 10 "http://$(published)/api/health/ready" >"$WORK/ready.json" || fail "GET http://$(published)/api/health/ready did not answer 200"
@@ -2636,6 +2802,10 @@ runtime_case() {
   [ "$health" = healthy ] ||
     fail "Locus is ${health:-not running} after 120 s: $(docker logs --tail 30 "$runtime_id" 2>&1 || true)"
   ok "Locus runs $LOCUS_IMAGE and is healthy, its runtime among its roles"
+
+  step "Locus runs under the keeper's seccomp profile, its guard under the stack's container profile"
+  seccomp_holds "$(table service)" "$KEEPER_PROFILE"
+  seccomp_holds "$(table guard)" "$CONTAINER_PROFILE" probe
 
   step "a person signed in on cyfr, as the release proofs sign one in"
   signed_in="$(cyfr_fixture person compose-proof-runtime)"

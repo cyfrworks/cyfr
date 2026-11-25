@@ -57,14 +57,22 @@ ITEMS=(
   # One example per env file docker-compose.yml names beside .env.
   .env.locus.example
 )
-# The keeper's seccomp profile, which docker-compose.yml's locus service
-# names as ./keeper.seccomp.json, ships beside it under that name.
-PROFILE=apps/locus/keeper/seccomp/keeper.json
-PROFILE_NAME=keeper.seccomp.json
+# The seccomp profiles docker-compose.yml names beside it, each SOURCE:NAME
+# shipped under the name the compose file gives it: the keeper's, which the
+# locus service runs under, and the stack's container profile, which every
+# other service runs under.
+PROFILES=(
+  apps/locus/keeper/seccomp/keeper.json:keeper.seccomp.json
+  apps/locus/keeper/seccomp/container.json:container.seccomp.json
+)
+PROFILE_NAMES=()
+for profile in "${PROFILES[@]}"; do
+  PROFILE_NAMES+=("${profile#*:}")
+done
 # Every item is shipped or the script fails: a file renamed or removed
 # without this list following must not leave the tarball quietly short.
 MISSING=()
-for item in "${ITEMS[@]}" "$PROFILE"; do
+for item in "${ITEMS[@]}" "${PROFILES[@]%%:*}"; do
   [ -e "$item" ] || MISSING+=("$item")
 done
 
@@ -79,7 +87,9 @@ fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-cp "$PROFILE" "$STAGE/$PROFILE_NAME"
+for profile in "${PROFILES[@]}"; do
+  cp "${profile%%:*}" "$STAGE/${profile#*:}"
+done
 
 TAR_ITEMS=("${ITEMS[@]}")
 if [ -n "$VERSION" ]; then
@@ -127,5 +137,5 @@ if [ -n "$VERSION" ]; then
   done
 fi
 
-tar czf "$OUTPUT" "${TAR_ITEMS[@]}" -C seed aqua -C "$STAGE" "$PROFILE_NAME"
+tar czf "$OUTPUT" "${TAR_ITEMS[@]}" -C seed aqua -C "$STAGE" "${PROFILE_NAMES[@]}"
 echo "Created $OUTPUT ($(du -h "$OUTPUT" | cut -f1) compressed)"
