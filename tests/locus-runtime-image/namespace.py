@@ -1027,7 +1027,7 @@ def group_removed(stack, uid):
     A failed exec is no answer whatever its status, and a stopped or
     restarting container is not taken for a removed group either.
     """
-    probe = f"test -e /sys/fs/cgroup/keeper-{uid} && echo present || echo absent"
+    probe = f"test -e /sys/fs/cgroup/role-{ROLE['name']}/keeper-{uid} && echo present || echo absent"
     return read_word(stack.exec(probe), ("present", "absent"), f"the keeper group of uid {uid}") == "absent"
 
 
@@ -1068,10 +1068,19 @@ def test_reuse(stack):
 
 
 def test_restart(stack):
+    # The runtime role killed starts again alone; the container then
+    # restarts, its keeper draining the cgroup the last one left.
     state = stack.container_state()
     beam = stack.service_beam_pid()
     stack.exec(f"kill -9 {beam}")
-    stack.wait_restarted(state, 60)
+    wait_until(lambda: stack.service_beam_pid() not in (None, beam), 60, "the runtime role to start again")
+    expect(stack.container_state()["restarts"] == state["restarts"],
+           "restart: the runtime role killed starts again alone, in the same container", stack.container_state())
+    stack.wait_listener()
+    stack.wait_pool(timeout=BOOT_S)
+    for runner in stack.runner_processes():
+        assert_isolated(stack, runner, "role restart")
+    run("docker", "restart", stack.container)
     stack.wait_listener()
     logs = stack.logs()
     unavailable = [line for line in logs.splitlines() if "CPU bounds are unavailable" in line]

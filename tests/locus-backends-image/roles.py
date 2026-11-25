@@ -98,7 +98,7 @@ REACH = (
                            + [ROLES["backends"]["kept_root"]]) + "; do\n"
     '  if ls -A "$p" >/dev/null 2>&1; then echo "path $p:listed"; else echo "path $p:refused"; fi\n'
     "done\n"
-    'echo "beam:$(grep -l beam /proc/[0-9]*/cmdline 2>/dev/null | wc -l)"\n'
+    'echo "beam:$(grep -l "beam[.]smp" /proc/[0-9]*/cmdline 2>/dev/null | wc -l)"\n'
     "echo \"keys:$(cat /proc/[0-9]*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c '^LOCUS_.*_KEY=')\"\n"
     "echo \"ipc:$(cat /proc/sysvipc/shm /proc/sysvipc/sem /proc/sysvipc/msg 2>/dev/null | grep -vc '^ *key')\"\n"
     "for port in " + " ".join(str(role["port"]) for role in ROLES.values()) + "; do\n"
@@ -241,7 +241,7 @@ def judge_reach(where, got, own):
 
 
 def test_reach(stack, c):
-    ran = sh(c, OWNER, REACH)
+    ran = sh(c, OWNER, REACH, program="scratch")
     judge_reach("a program", reach_lines(ran["stdout"]), "backends")
     b = builder.Stack.__new__(builder.Stack)
     b.base, b.key = stack.port("builds"), stack.builds_key
@@ -274,7 +274,7 @@ def test_bounds(stack):
 
 def test_restart_alone(stack, c, victim):
     before = stack.role_pids()
-    session = c.mcp(OWNER, "probe", key="steady")
+    session = c.mcp(OWNER, "scratch", key="steady")
     steady = session.call("whoami", {})
     expect(steady[0] == 200, "a program's session runs before a role is killed", steady)
     stack.exec(f"kill -9 {before[victim]}")
@@ -285,7 +285,7 @@ def test_restart_alone(stack, c, victim):
             expect(after[name] == before[name], f"killing the {victim} role leaves the {name} role's process", [before, after])
     stack.healthy()
     if victim != "backends":
-        again = c.mcp(OWNER, "probe", key="steady").call("whoami", {})
+        again = c.mcp(OWNER, "scratch", key="steady").call("whoami", {})
         expect(again[0] == 200 and json.loads(again[1]["result"]["content"][0]["text"])["pid"]
                == json.loads(steady[1]["result"]["content"][0]["text"])["pid"],
                f"a program's session keeps running while the {victim} role starts again", [steady, again])
@@ -314,9 +314,9 @@ def main():
                "the image's probe answers for all three roles")
         c = stack.controller()
         expect(c.hello()[0] == 200, "the backends role is greeted")
-        status, answer, _ = c.sync(OWNER, [probe(), probe(home="kept")])
+        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
         expect(status == 200, "an owner of a pooled and a kept program is synced", answer)
-        ran = sh(c, OWNER, "echo answered")
+        ran = sh(c, OWNER, "echo answered", program="scratch")
         expect(ran["stdout"] == "answered\n", "a program of the backends role answers", ran)
 
         pids = stack.role_pids()
@@ -343,7 +343,7 @@ def main():
             test_restart_alone(stack, c, victim)
         c = stack.controller()
         expect(c.hello()[0] == 200, "the backends role started again is greeted")
-        status, answer, _ = c.sync(OWNER, [probe(), probe(home="kept")])
+        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
         expect(status == 200, "the owner is synced again", answer)
         opens_as_before(c, uid, "after the backends role restarts")
 
@@ -352,7 +352,7 @@ def main():
         stack.healthy()
         c = stack.controller()
         expect(c.hello()[0] == 200, "the container started again is greeted")
-        status, answer, _ = c.sync(OWNER, [probe(), probe(home="kept")])
+        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
         expect(status == 200, "the owner is synced after the container restarts", answer)
         opens_as_before(c, uid, "after the container restarts")
 

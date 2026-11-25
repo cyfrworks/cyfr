@@ -228,7 +228,10 @@ function finish(timedOut) {
     { name, place, uid, replies, measures, holding_ms, stdout: stdout.slice(-400), done }));
   process.stdout.write("<<<" + JSON.stringify({ timed_out: timedOut, spawns: report }) + ">>>\n", () => {
     fs.rmSync(dir, { recursive: true, force: true });
-    process.exit(timedOut ? 1 : 0);
+    // A role's process that ends is started again by its keeper, which
+    // would run the scenario twice: one that `stays` waits to be stopped.
+    if (scenario.stay) setInterval(() => {}, 1 << 30);
+    else process.exit(timedOut ? 1 : 0);
   });
 }
 
@@ -549,7 +552,7 @@ def test_keeper(stack, limit, canary):
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)
     with open(os.path.join(canary, "memory-scenario.json"), "w") as out:
-        json.dump({"pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario()}, out)
+        json.dump({"pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario(), "stay": True}, out)
     # The container's user reads them, whatever the caller's umask.
     os.chmod(os.path.join(canary, "memory-client.mjs"), 0o644)
     os.chmod(os.path.join(canary, "memory-scenario.json"), 0o644)
@@ -575,6 +578,12 @@ def test_keeper(stack, limit, canary):
             "--role", imagesuite.role_spec(dict(ROLE, pool=PROBE_POOL)),
             "--pool", f"{PROBE_POOL}:{PROBE_FIRST}-{PROBE_LAST}:relay", "--home-root", RELEASE["home_root"],
             "--guard", imagesuite.Guard.CONTROL, "--", "node", "/canary/memory-client.mjs", "/canary/memory-scenario.json")
+        # The role's group is made as the keeper boots, before the role starts.
+        deadline = time.monotonic() + 60
+        while probe.exec(f"test -f {ROLE_GROUP}/memory.events").returncode != 0:
+            expect(time.monotonic() < deadline, "the second cyfr-locus makes the builds role's group",
+                   run("docker", "logs", name, check=False).stderr[-2000:])
+            time.sleep(0.2)  # sleep-ok: polling for the group the keeper makes as it boots
         before = container_state(probe)
         sampler = Sampler(name)
         sampler.start()

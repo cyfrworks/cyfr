@@ -64,7 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from control_plane import ControlPlane  # noqa: E402
 from stack import (  # noqa: E402
-    COMPOSE_SERVICE, HERE, POOL_FIRST, POOL_LAST, ROOT, SERVICE, Stack, expect, run, wait_until,
+    COMPOSE_SERVICE, HERE, POOL_FIRST, POOL_LAST, ROLE, ROOT, SERVICE, Stack, expect, run, wait_until,
 )
 import imagesuite  # noqa: E402
 
@@ -109,12 +109,18 @@ MODELS = {
 MARGIN = 1.8
 
 
+# The runtime role's group, which the keeper bounds at the role's
+# LOCUS_RUNTIME_MEMORY_LIMIT and LOCUS_RUNTIME_CPU_LIMIT: each runner's group
+# inside it, and its leaf `service`, the role's process and its relays.
+ROLE_GROUP = f"/sys/fs/cgroup/role-{ROLE['name']}"
+
+
 def group(uid):
-    return f"/sys/fs/cgroup/keeper-{uid}/bound"
+    return f"{ROLE_GROUP}/keeper-{uid}/bound"
 
 
-# The keeper's group: cyfr-locus, the service and every spawn without a bound.
-KEEPER_GROUP = "/sys/fs/cgroup/keeper"
+# The service's group: the runtime role's process and its relays.
+KEEPER_GROUP = f"{ROLE_GROUP}/service"
 
 
 def read_group(stack, uid):
@@ -144,10 +150,11 @@ def read_group(stack, uid):
 
 
 def container_memory(stack):
-    """The container's own cgroup: its limit, current use, and the events of its own limit alone."""
+    """The runtime role's group, which stands where its container's cgroup stood: its bound, current use, and the
+    events of its own bound alone."""
     out = imagesuite.read_output(
-        stack.exec("cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.events.local"),
-        "the container's own memory files")
+        stack.exec(f"cat {ROLE_GROUP}/memory.max {ROLE_GROUP}/memory.current; cat {ROLE_GROUP}/memory.events.local"),
+        "the runtime role's memory files")
     lines = out.split("\n")
     events = imagesuite.parse_counters("\n".join(line for line in lines[2:] if line), ("oom", "oom_kill"),
                                        "the container's own events")
@@ -224,7 +231,7 @@ class GroupSampler(threading.Thread):
       while :; do
         p=; c=; k=; o=; ok=
         { read -r p < $g/memory.peak; read -r c < $g/memory.current; } 2>/dev/null
-        read -r k < /sys/fs/cgroup/memory.current
+        read -r k < ROLE_GROUP/memory.current
         { while read -r name value; do
             case $name in oom) o=$value ;; oom_kill) ok=$value ;; esac
           done < $g/memory.events; } 2>/dev/null
@@ -236,7 +243,7 @@ class GroupSampler(threading.Thread):
         self.container = container
         self.pid = None
         self.process = subprocess.Popen(
-            ["docker", "exec", container, "sh", "-c", self.SCRIPT.replace("GROUP", path)],
+            ["docker", "exec", container, "sh", "-c", self.SCRIPT.replace("ROLE_GROUP", ROLE_GROUP).replace("GROUP", path)],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         self.samples = []
 

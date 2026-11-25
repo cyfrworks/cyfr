@@ -128,9 +128,10 @@ class ReadGroup(unittest.TestCase):
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root)
         fs = os.path.join(root, "fs")
-        os.makedirs(os.path.join(fs, f"keeper-{UID}", "bound"))
+        role = os.path.basename(memory.ROLE_GROUP)
+        os.makedirs(os.path.join(fs, role, f"keeper-{UID}", "bound"))
         for name, value in self.FIELDS.items():
-            with open(os.path.join(fs, f"keeper-{UID}", "bound", name), "w") as f:
+            with open(os.path.join(fs, role, f"keeper-{UID}", "bound", name), "w") as f:
                 f.write(value + "\n")
         bindir = os.path.join(root, "bin")
         os.makedirs(bindir)

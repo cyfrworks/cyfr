@@ -17,8 +17,9 @@ scrubbed, the container's CPU flat).
 - A sibling subtree in another runner completes while the first is
   killed, and its runner survives.
 - Killing the service's VM ends every runner with it (cyfr-locus retires
-  every spawn when its client dies), the container restarts, and the new
-  boot inherits nothing.
+  every spawn when its role's process dies), the keeper starts the runtime
+  role again alone in the same container, and the new boot inherits
+  nothing.
 - With the control plane cut, a running attempt keeps running to its
   deadline and settles there: the runner stops, is retired, and the
   service tried to report it; nothing of it reaches the control plane
@@ -128,7 +129,7 @@ import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
 from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane, Raw  # noqa: E402
 from stack import (  # noqa: E402
-    KEEPER_CAPS, POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run,
+    KEEPER_CAPS, POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, SERVICE, SERVICE_UID, SERVICE_USER, Stack, StatusSampler, expect, run,
     wait_until,
 )
 from imagesuite import run_name  # noqa: E402
@@ -507,7 +508,7 @@ def test_process_model(stack):
     expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == KEEPER_CAPS,
            "cyfr-locus runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(service) == 1 and [p for p in procs if p["pid"] == service[0]["pid"]][0]["cap_eff"] == "0000000000000000",
-           "the service runs as locus with no capability", procs)
+           f"the service runs as {SERVICE_USER} with no capability", procs)
     expect(len(runners) == stack.pool_size and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners)
            and len({r["uid"] for r in runners}) == len(runners) and all(r["runner"] for r in runners),
            f"{stack.pool_size} fresh runners run ahead, each a VM under a pooled uid of its own", runners)
@@ -544,15 +545,18 @@ def dial(stack, pid, target):
 
 def test_runner_has_no_route(stack, plane):
     """A connect from inside a runner fails: its namespace holds no route,
-    while the container's own namespace has one to the same address. The
+    while the runtime role's namespace has one to the same address. The
     control plane's own address, where the service posts every host call,
     is unreachable from a runner too."""
     gateway = stack.host_gateway()
     expect(gateway is not None, f"the container reaches this machine at {gateway}", plane.host)
     expect(run("docker", "exec", stack.container, "sh", "-c", "command -v nsenter", check=False).returncode == 0,
            "prerequisite: the image has nsenter, to enter a runner's namespace")
-    own, said = dial(stack, None, f"{gateway}:9")
-    expect(own != "unreachable", f"from the container's own namespace {gateway} has a route ({own})", said)
+    # The runtime's role process is the private role: its route reaches
+    # every private address, this machine's among them.
+    service = stack.service_beam_pid()
+    own, said = dial(stack, service, f"{gateway}:9")
+    expect(own != "unreachable", f"from the runtime role's own namespace {gateway} has a route ({own})", said)
     for runner in stack.runner_processes():
         for target in (f"{gateway}:9", "127.0.0.1:9", f"{gateway}:{plane.port}"):
             met, said = dial(stack, runner["pid"], target)
@@ -982,9 +986,7 @@ def test_service_death(stack, plane):
     expect(beam is not None, f"the service's VM is pid {beam}", stack.processes())
 
     # From the kill until the restarted service answers, the processes are
-    # listed from the host: an exec landing as the container restarts
-    # would leave runc's own processes in the cgroup the new keeper drains
-    # (Stack.host_processes).
+    # listed from the host (Stack.host_processes).
     def host_gone(uid):
         return not any(uid in p["uids"] for p in stack.host_processes())
 
@@ -1000,9 +1002,13 @@ def test_service_death(stack, plane):
            f"detection: every runner was retired {ms(gone - t_kill)} ms after the service's VM died (cyfr-locus's lost grace is {LOST_GRACE_S} s)",
            stack.runner_processes())
 
-    restarted = stack.wait_restarted(state, 60)
+    # The keeper starts the role again alone, in the same container.
+    again = wait_until(lambda: (lambda pid: pid if pid not in (None, beam) else None)(stack.service_beam_pid()), 60,
+                       "the runtime role to start again")
     stack.wait_listener()
-    expect(stack.boot != old_boot, f"detection: the restarted service is a new boot ({stack.boot}) after restart {restarted['restarts']}", restarted)
+    expect(stack.boot != old_boot and stack.container_state()["restarts"] == state["restarts"],
+           f"detection: the runtime role started again alone (pid {again}), a new boot ({stack.boot}) in the same container",
+           stack.container_state())
     stack.wait_pool()
     expect(stack.attempts() == [], "settlement: the new boot holds no attempt", stack.attempts())
     code, answer = stack.kill(attempt["execution_id"])
