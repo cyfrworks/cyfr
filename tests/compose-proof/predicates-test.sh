@@ -277,24 +277,41 @@ expect fail "the forged page request got no answer" anon page "$page_refused_cur
 
 # ---- capabilities_hold -------------------------------------------------------
 
-caddy='{"CapDrop":["ALL"],"CapAdd":["NET_BIND_SERVICE"],"SecurityOpt":["no-new-privileges:true"]}'
-tailscale='{"CapDrop":["ALL"],"CapAdd":null,"SecurityOpt":["no-new-privileges:true"]}'
+# A HostConfig of capability drops `$1` and adds `$2` (JSON) and security
+# options `$3...`, the word `profile` standing for the container profile as
+# Docker reports it inline.
+profile="$ROOT/apps/locus/keeper/seccomp/container.json"
+host_config() {
+  python3 -I - "$profile" "$@" <<'PY'
+import json, sys
+path, drop, add, *options = sys.argv[1:]
+inline = "seccomp=" + json.dumps(json.load(open(path)), separators=(",", ":"))
+print(json.dumps({"CapDrop": json.loads(drop), "CapAdd": json.loads(add),
+                  "SecurityOpt": [inline if o == "profile" else o for o in options] or None}))
+PY
+}
+caddy="$(host_config '["ALL"]' '["NET_BIND_SERVICE"]' no-new-privileges:true profile)"
+tailscale="$(host_config '["ALL"]' null no-new-privileges:true profile)"
 status_with() { printf 'Name:\tx\nCapInh:\t0000000000000000\nCapPrm:\t%s\nCapEff:\t%s\nCapBnd:\t%s\n' "$1" "$1" "$1"; }
-expect pass "caddy: ALL dropped, NET_BIND_SERVICE added and effective alone" capabilities_hold caddy "$caddy" "$(status_with 0000000000000400)"
+expect pass "caddy: ALL dropped, NET_BIND_SERVICE added and effective alone" capabilities_hold caddy "$caddy" "$(status_with 0000000000000400)" "$profile"
 expect pass "caddy, its capability named as Docker may name it" \
-  capabilities_hold caddy '{"CapDrop":["ALL"],"CapAdd":["CAP_NET_BIND_SERVICE"],"SecurityOpt":["no-new-privileges:true"]}' "$(status_with 0000000000000400)"
-expect pass "tailscale: nothing effective" capabilities_hold tailscale "$tailscale" "$(status_with 0000000000000000)"
-expect fail "caddy with NET_RAW effective too" capabilities_hold caddy "$caddy" "$(status_with 0000000000002400)"
+  capabilities_hold caddy "$(host_config '["ALL"]' '["CAP_NET_BIND_SERVICE"]' no-new-privileges:true profile)" "$(status_with 0000000000000400)" "$profile"
+expect pass "tailscale: nothing effective" capabilities_hold tailscale "$tailscale" "$(status_with 0000000000000000)" "$profile"
+expect fail "caddy with NET_RAW effective too" capabilities_hold caddy "$caddy" "$(status_with 0000000000002400)" "$profile"
 expect fail "caddy with NET_RAW added" \
-  capabilities_hold caddy '{"CapDrop":["ALL"],"CapAdd":["NET_BIND_SERVICE","NET_RAW"],"SecurityOpt":["no-new-privileges:true"]}' "$(status_with 0000000000000400)"
+  capabilities_hold caddy "$(host_config '["ALL"]' '["NET_BIND_SERVICE","NET_RAW"]' no-new-privileges:true profile)" "$(status_with 0000000000000400)" "$profile"
 expect fail "caddy keeping the default set" \
-  capabilities_hold caddy '{"CapDrop":null,"CapAdd":["NET_BIND_SERVICE"],"SecurityOpt":["no-new-privileges:true"]}' "$(status_with 00000000a80425fb)"
-expect fail "tailscale with a capability effective" capabilities_hold tailscale "$tailscale" "$(status_with 0000000000000400)"
+  capabilities_hold caddy "$(host_config null '["NET_BIND_SERVICE"]' no-new-privileges:true profile)" "$(status_with 00000000a80425fb)" "$profile"
+expect fail "tailscale with a capability effective" capabilities_hold tailscale "$tailscale" "$(status_with 0000000000000400)" "$profile"
 expect fail "tailscale without no-new-privileges" \
-  capabilities_hold tailscale '{"CapDrop":["ALL"],"CapAdd":null,"SecurityOpt":null}' "$(status_with 0000000000000000)"
+  capabilities_hold tailscale "$(host_config '["ALL"]' null profile)" "$(status_with 0000000000000000)" "$profile"
 expect fail "tailscale with another security option" \
-  capabilities_hold tailscale '{"CapDrop":["ALL"],"CapAdd":null,"SecurityOpt":["no-new-privileges:true","apparmor=unconfined"]}' "$(status_with 0000000000000000)"
-expect fail "a process status with no CapEff" capabilities_hold tailscale "$tailscale" "Name: x"
+  capabilities_hold tailscale "$(host_config '["ALL"]' null no-new-privileges:true profile apparmor=unconfined)" "$(status_with 0000000000000000)" "$profile"
+expect fail "tailscale under Docker's default seccomp profile" \
+  capabilities_hold tailscale "$(host_config '["ALL"]' null no-new-privileges:true)" "$(status_with 0000000000000000)" "$profile"
+expect fail "tailscale under another seccomp profile" \
+  capabilities_hold tailscale "$(host_config '["ALL"]' null no-new-privileges:true 'seccomp={"defaultAction":"SCMP_ACT_ALLOW"}')" "$(status_with 0000000000000000)" "$profile"
+expect fail "a process status with no CapEff" capabilities_hold tailscale "$tailscale" "Name: x" "$profile"
 
 echo "$cases cases, $failures failed"
 [ "$failures" -eq 0 ]

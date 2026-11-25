@@ -60,7 +60,6 @@ import hmac
 import json
 import os
 import secrets
-import shutil
 import socket
 import sys
 import time
@@ -999,11 +998,6 @@ class Stack(imagesuite.Stack):
         self.names = names
         self.image = image
         self.canary_dir = canary_dir or HERE
-        # The service names the keeper's seccomp profile beside the
-        # project's .env, which compose reads from the project directory, as
-        # a scaffolded project holds it.
-        shutil.copyfile(os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json"),
-                        os.path.join(self.project_dir, "keeper.seccomp.json"))
         # The directory first on the guard's PATH: empty, so the guard runs
         # the image's own tools, unless a test gives it one.
         self.guard_tools_dir = guard_tools_dir or imagesuite.temporary_directory("cyfr-guard-tools-", 0o755)
@@ -1147,9 +1141,10 @@ class Stack(imagesuite.Stack):
             args += ["--cap-add", cap]
         for option in host.get("SecurityOpt") or []:
             # Docker reports a seccomp profile inline, as its JSON; the run
-            # takes it as the file the project holds.
+            # takes it as the file the project holds it in.
             if option.startswith("seccomp="):
-                option = f"seccomp={os.path.join(self.project_dir, 'keeper.seccomp.json')}"
+                named = imagesuite.seccomp_profile_named(option.removeprefix("seccomp="))
+                option = f"seccomp={os.path.join(self.project_dir, named)}"
             args += ["--security-opt", option]
         # Docker reports `systempaths=unconfined` as empty lists of masked
         # and read-only paths, never among the security options.

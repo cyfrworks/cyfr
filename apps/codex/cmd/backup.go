@@ -30,7 +30,7 @@ var backupCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Take a snapshot of the CYFR in this directory into backups/<UTC timestamp>/, the one cyfr update takes before it changes anything, which 'cyfr restore backups/<timestamp>' puts back.
 
-The snapshot holds the database, the local storage root, the managed scaffold files this directory holds (the guides, the WIT definitions, the keeper's seccomp profile and the shipped Aqua files), the keyring, .env and docker-compose.yml, then snapshot.json, written last. A snapshot holds the keyring and the database: keep it as you keep the data. Storage on S3 is not in it.
+The snapshot holds the database, the local storage root, the managed scaffold files this directory holds (the guides, the WIT definitions, the seccomp profiles and the shipped Aqua files), the keyring, .env and docker-compose.yml, then snapshot.json, written last. A snapshot holds the keyring and the database: keep it as you keep the data. Storage on S3 is not in it.
 
 It takes the stack's lock first. A running CYFR is stopped for the snapshot, as cyfr update stops it, and started again afterwards, also when the snapshot fails; a stopped one stays stopped. A backup killed while it holds CYFR stopped leaves the start to the next cyfr command that takes the lock, which says so.`,
 	Example: "  cyfr backup",
@@ -169,8 +169,8 @@ func (u *updater) startAgain(reason error) error {
 }
 
 // managedPresent answers the managed scaffold files (scaffold.IsManaged)
-// the working directory holds, sorted: the guides, the keeper's seccomp
-// profile and what is managed under wit/ and aqua/. A backup holds every
+// the working directory holds, sorted: the guides, the seccomp
+// profiles and what is managed under wit/ and aqua/. A backup holds every
 // one or is not made, so a managed name that is there as something other
 // than a regular file refuses as update's fetchScaffold refuses one, and a
 // directory managed files may lie under (scaffold.HoldsManaged) that is
@@ -181,7 +181,7 @@ func managedPresent() ([]string, error) {
 		return fmt.Errorf("%s, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed", name)
 	}
 	var names []string
-	for _, name := range append(slices.Clone(scaffold.Guides), scaffold.SeccompProfile) {
+	for _, name := range append(slices.Clone(scaffold.Guides), scaffold.SeccompProfiles...) {
 		info, err := os.Lstat(name)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):

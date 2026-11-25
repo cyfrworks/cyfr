@@ -35,7 +35,14 @@
 # Locus runs under keeper.seccomp.json, shipped beside this file, and on a
 # host with AppArmor under the profile .env names (CYFR_LOCUS_APPARMOR),
 # which cyfr carries and `cyfr init` and `cyfr update` load, on a host that
-# allows unprivileged user namespaces (the locus service says each).
+# allows unprivileged user namespaces (the locus service says each). Every
+# other service runs under container.seccomp.json, shipped beside it:
+# Docker's default seccomp profile with socket's and socketpair's domain and
+# personality's persona compared by their low 32 bits, as the kernel reads
+# them, socketcall denied and every 32-bit and x32 call killed. Docker's
+# own compares those arguments whole, so a domain whose low 32 bits are
+# AF_VSOCK's passes it and makes an AF_VSOCK socket. keeper.seccomp.json is
+# this profile and the keeper's three differences.
 #   caddy      — TLS and the reverse proxy in front of a public home, on
 #                 :80 and :443, forwarding to cyfr's proxy listener on the
 #                 edge network.                           [profile: public]
@@ -152,6 +159,9 @@ services:
           cpus: "${CYFR_CPU_LIMIT:-4}"
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
+    # The stack's container profile (the header says it).
+    security_opt:
+      - seccomp=./container.seccomp.json
 
   # The one Locus: the image's entrypoint, cyfr-locus serving every role
   # whose key this environment holds (Dockerfile.locus). Pulled as
@@ -380,6 +390,7 @@ services:
       - NET_ADMIN
     security_opt:
       - no-new-privileges:true
+      - seccomp=./container.seccomp.json
     read_only: true
     ipc: none
     # A route forwards a space's packets, and every refusal is answered at
@@ -460,6 +471,7 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
+      - seccomp=./container.seccomp.json
     depends_on:
       cyfr:
         condition: service_healthy
@@ -529,6 +541,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      - seccomp=./container.seccomp.json
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "tailscale", "status"]

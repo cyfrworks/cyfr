@@ -230,6 +230,8 @@ mutate serviceid "the shipped service id, which CYFR does not dispatch to" 's/LO
 mutate joined "the security options joined to the shipped ones" 's/security_opt: !override/security_opt:/'
 mutate seccomp "the keeper's profile dropped" '/seccomp=\.\/apps/d'
 mutate noprofile "a profile the checkout does not hold" 's|seccomp=\./apps/locus/keeper/seccomp/keeper\.json|seccomp=./keeper.seccomp.json|'
+mutate guardprofile "the guard's profile at a name the checkout does not hold" 's|seccomp=\./apps/locus/keeper/seccomp/container\.json|seccomp=./container.seccomp.json|'
+mutate guardjoined "the guard's security options joined to the shipped ones" '/^  locus-guard:$/,$s/security_opt: !override/security_opt:/'
 mutate nnp "no-new-privileges dropped" '/- no-new-privileges:true/d'
 mutate capability "a capability added to Locus" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus)$/\1\n    cap_add: [NET_ADMIN]/'
 mutate writable "a writable root for Locus" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus)$/\1\n    read_only: false/'

@@ -6,8 +6,8 @@ A Stack runs docker-compose.yml's `locus` service behind its guard with the
 runtime's key alone, layered with compose.runtime.yml, which adds only the
 image under test, a loopback port on the guard,
 the host gateway the scripted control plane (control_plane.py, on this
-machine) is reached through and the pool settings a test chooses; its project directory holds the keeper's seccomp
-profile the service names, as a scaffolded project does.
+machine) is reached through and the pool settings a test chooses; its project directory holds the seccomp
+profiles the services name, as a scaffolded project does.
 Everything else — cyfr-locus's capabilities, the security options, the
 read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
 policy — is the shipped service. A Stack made with
@@ -27,7 +27,6 @@ does not depend on the service come from tests/imagesuite.py.
 
 import json
 import os
-import shutil
 import sys
 import time
 import urllib.error
@@ -44,9 +43,8 @@ import worker_auth as auth  # noqa: E402
 from imagesuite import listing, read_output, run  # noqa: E402
 
 imagesuite.stop_on_signals()
-# The keeper's seccomp profile and the name the locus-runtime service reads it by.
-PROFILE = os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json")
-PROFILE_NAME = "keeper.seccomp.json"
+# The keeper's seccomp profile, which the image carries too.
+PROFILE = imagesuite.SECCOMP_PROFILES["keeper.seccomp.json"]
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
     _TABLE = json.load(_roles)
@@ -103,10 +101,6 @@ class Stack(imagesuite.Stack):
         self.idle_ttl_ms = idle_ttl_ms
         self.watchdog_grace_ms = watchdog_grace_ms
         self.release_grace_ms = release_grace_ms
-        # The locus-runtime service names the keeper's seccomp profile beside
-        # the project's .env, which compose reads from the project directory,
-        # as a scaffolded project holds it.
-        shutil.copyfile(PROFILE, os.path.join(self.project_dir, PROFILE_NAME))
         self.container = None
         self.base = None
         self.boot = None

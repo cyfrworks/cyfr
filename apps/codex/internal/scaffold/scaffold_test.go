@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,6 +43,7 @@ func TestIsManaged(t *testing.T) {
 		"identity-guide.md",
 		"devices-guide.md",
 		"keeper.seccomp.json",
+		"container.seccomp.json",
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
@@ -131,41 +133,57 @@ func TestShippedGuidesAreManaged(t *testing.T) {
 	}
 }
 
-// TestShippedProfileIsManaged binds the seccomp profile the scaffold tarball
-// packs beside docker-compose.yml to the managed set and to the name the
-// locus service gives it: a profile shipped but not managed would stay
-// behind the image `cyfr update` pulls, and one named otherwise than the
-// compose file names it would never be read.
-func TestShippedProfileIsManaged(t *testing.T) {
+// TestShippedProfilesAreManaged binds the seccomp profiles the scaffold
+// tarball packs beside docker-compose.yml to the managed set and to the
+// names the compose file gives them: a profile shipped but not managed
+// would stay behind the images `cyfr update` pulls, and one named otherwise
+// than the compose file names it would never be read.
+func TestShippedProfilesAreManaged(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..")
 	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
 	if err != nil {
 		t.Fatalf("read scaffold-tarball.sh: %v", err)
 	}
 	script := string(raw)
-	source := regexp.MustCompile(`(?m)^PROFILE=(\S+)$`).FindStringSubmatch(script)
-	name := regexp.MustCompile(`(?m)^PROFILE_NAME=(\S+)$`).FindStringSubmatch(script)
-	if source == nil || name == nil {
-		t.Fatal("scaffold-tarball.sh names no PROFILE and PROFILE_NAME")
+	block := regexp.MustCompile(`(?m)^PROFILES=\(\n((?:  \S+\n)+)\)$`).FindStringSubmatch(script)
+	if block == nil {
+		t.Fatal("scaffold-tarball.sh names no PROFILES")
 	}
-	if source[1] != "apps/locus/keeper/seccomp/keeper.json" || name[1] != SeccompProfile {
-		t.Errorf("the tarball ships %s as %s, want apps/locus/keeper/seccomp/keeper.json as %s", source[1], name[1], SeccompProfile)
+	want := map[string]string{
+		"keeper.seccomp.json":    "apps/locus/keeper/seccomp/keeper.json",
+		"container.seccomp.json": "apps/locus/keeper/seccomp/container.json",
 	}
-	if !strings.Contains(script, `-C "$STAGE" "$PROFILE_NAME"`) {
-		t.Error("scaffold-tarball.sh does not pack the staged profile")
+	shipped := map[string]string{}
+	for _, line := range strings.Fields(block[1]) {
+		source, name, ok := strings.Cut(line, ":")
+		if !ok {
+			t.Fatalf("scaffold-tarball.sh's PROFILES entry %q is not SOURCE:NAME", line)
+		}
+		shipped[name] = source
+		if _, err := os.Stat(filepath.Join(root, source)); err != nil {
+			t.Errorf("the profile the tarball ships: %v", err)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(root, source[1])); err != nil {
-		t.Errorf("the profile the tarball ships: %v", err)
+	if !maps.Equal(shipped, want) {
+		t.Errorf("the tarball ships %v, want %v", shipped, want)
 	}
-	if !IsManaged(SeccompProfile) {
-		t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", SeccompProfile)
+	if !strings.Contains(script, `-C "$STAGE" "${PROFILE_NAMES[@]}"`) {
+		t.Error("scaffold-tarball.sh does not pack the staged profiles")
+	}
+	if got := slices.Sorted(maps.Keys(want)); !slices.Equal(got, slices.Sorted(slices.Values(SeccompProfiles))) {
+		t.Errorf("SeccompProfiles is %v, want %v", SeccompProfiles, got)
 	}
 	compose, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
 	if err != nil {
 		t.Fatalf("read docker-compose.yml: %v", err)
 	}
-	if !strings.Contains(string(compose), "      - seccomp=./"+SeccompProfile+"\n") {
-		t.Errorf("docker-compose.yml does not name ./%s", SeccompProfile)
+	for _, name := range SeccompProfiles {
+		if !IsManaged(name) {
+			t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", name)
+		}
+		if !strings.Contains(string(compose), "      - seccomp=./"+name+"\n") {
+			t.Errorf("docker-compose.yml does not name ./%s", name)
+		}
 	}
 }
 
