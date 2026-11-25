@@ -555,7 +555,10 @@ defmodule Cyfr.RuntimeConfigTest do
 
       assert {:ok, nil} =
                RuntimeConfig.resolve_locus_builds(
-                 env(%{"CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101", "CYFR_LOCUS_BUILDS_KEY" => ""})
+                 env(%{
+                   "CYFR_LOCUS_BACKENDS_URL" => "http://locus:4101",
+                   "CYFR_LOCUS_BUILDS_KEY" => ""
+                 })
                )
     end
 
@@ -604,7 +607,10 @@ defmodule Cyfr.RuntimeConfigTest do
 
       assert {:error, message} =
                RuntimeConfig.resolve_locus_builds(
-                 env(%{"CYFR_LOCUS_BACKENDS_URL" => "locus:4101", "CYFR_LOCUS_BUILDS_KEY" => @key_hex})
+                 env(%{
+                   "CYFR_LOCUS_BACKENDS_URL" => "locus:4101",
+                   "CYFR_LOCUS_BUILDS_KEY" => @key_hex
+                 })
                )
 
       assert message =~ "CYFR_LOCUS_BACKENDS_URL"

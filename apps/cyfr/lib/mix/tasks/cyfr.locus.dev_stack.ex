@@ -376,15 +376,20 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     backends = Integer.to_string(LocusRoles.role!(:backends).port)
     builds = Integer.to_string(LocusRoles.role!(:builds).port)
 
-    with %{"expose" => exposed, "networks" => %{@network => %{"ipv4_address" => address}}} <-
-           get_in(json, ["services", @guard]),
-         true <- backends in exposed and builds in exposed do
-      {:ok, %{address: address, backends_port: backends}}
-    else
+    case get_in(json, ["services", @guard]) do
+      %{"expose" => exposed, "networks" => %{@network => %{"ipv4_address" => address}}}
+      when is_list(exposed) and is_binary(address) ->
+        if backends in exposed and builds in exposed,
+          do: {:ok, %{address: address, backends_port: backends}},
+          else: undeclared_guard()
+
       _ ->
-        undeclared("#{@guard} exposing the backends' and builds' ports, fixed on #{@network}")
+        undeclared_guard()
     end
   end
+
+  defp undeclared_guard,
+    do: undeclared("#{@guard} exposing the backends' and builds' ports, fixed on #{@network}")
 
   defp undeclared(what), do: {:error, "docker-compose.dev.yml does not declare #{what}."}
 

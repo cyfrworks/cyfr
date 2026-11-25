@@ -171,9 +171,11 @@ defmodule Cyfr.StackShapeTest do
     expected = locus_service(release, LocusRoles.roles())
 
     Enum.sort(
-      for(key <- Enum.uniq(Map.keys(locus) ++ Map.keys(expected)), key not in @forbidden_keys,
-          Map.get(locus, key) != Map.get(expected, key),
-          do: key
+      for(
+        key <- Enum.uniq(Map.keys(locus) ++ Map.keys(expected)),
+        key not in @forbidden_keys,
+        Map.get(locus, key) != Map.get(expected, key),
+        do: key
       ) ++ for(key <- @forbidden_keys, Map.has_key?(locus, key), do: key)
     )
   end
@@ -365,7 +367,8 @@ defmodule Cyfr.StackShapeTest do
   defp role_users(dockerfile) do
     case Regex.run(@role_loop, dockerfile, capture: :all_but_first) do
       [pairs] ->
-        for pair <- String.split(pairs), [name, uid] = String.split(pair, ":"),
+        for pair <- String.split(pairs),
+            [name, uid] = String.split(pair, ":"),
             do: {name, String.to_integer(uid)}
 
       nil ->
@@ -396,7 +399,10 @@ defmodule Cyfr.StackShapeTest do
         Regex.scan(~r/\binstall -d -m (\d+) -o (\S+) -g (\S+) (\/\S+)/, dockerfile,
           capture: :all_but_first
         ) ==
-          [["1773", "root", kept.kept_group, kept.kept_root], ["0755", "root", "root", space_root()]] and
+          [
+            ["1773", "root", kept.kept_group, kept.kept_root],
+            ["0755", "root", "root", space_root()]
+          ] and
         Regex.scan(~r/\bchmod (\d+) (\S+)/, dockerfile, capture: :all_but_first) ==
           [["0711", run_dir], ["0755", home_root]] and
         not (dockerfile =~ "RELEASE_TMP=")
@@ -477,9 +483,10 @@ defmodule Cyfr.StackShapeTest do
     # Each address cyfr names for Locus is a role's port at Locus's name.
     reached =
       for entry <- cyfr,
-          [port] <- Regex.scan(~r{http://#{Regex.escape(release.service)}:(\d+)}, entry,
-            capture: :all_but_first
-          ),
+          [port] <-
+            Regex.scan(~r{http://#{Regex.escape(release.service)}:(\d+)}, entry,
+              capture: :all_but_first
+            ),
           do: String.to_integer(port)
 
     strays =
@@ -493,8 +500,11 @@ defmodule Cyfr.StackShapeTest do
           {path, spelled?} <- [
             {@compose,
              "#{role.port}" in exposed and
-               Enum.all?(told, &(not String.starts_with?(&1, variable <> "=") or
-                                   &1 == "#{variable}=#{role.port}"))},
+               Enum.all?(
+                 told,
+                 &(not String.starts_with?(&1, variable <> "=") or
+                     &1 == "#{variable}=#{role.port}")
+               )},
             {@health, health_probe?(health, role)},
             {@config,
              defaults[role.name] == role.port and
@@ -611,11 +621,13 @@ defmodule Cyfr.StackShapeTest do
       # The overlays a role's suites layer last, without writable cgroups:
       # the service's own security options but that one.
       "tests/builder-image/compose.no-writable-cgroups.yml" =>
-        {:builds, %{release.service => %{"security_opt" => @security_opt -- ["writable-cgroups=true"]}},
+        {:builds,
+         %{release.service => %{"security_opt" => @security_opt -- ["writable-cgroups=true"]}},
          nil},
       "tests/locus-runtime-image/compose.no-writable-cgroups.yml" =>
         {:runtime,
-         %{release.service => %{"security_opt" => @security_opt -- ["writable-cgroups=true"]}}, nil}
+         %{release.service => %{"security_opt" => @security_opt -- ["writable-cgroups=true"]}},
+         nil}
     }
   end
 
@@ -961,7 +973,9 @@ defmodule Cyfr.StackShapeTest do
     release = LocusRoles.release()
 
     assert parsed["networks"][release.network] == %{
-             "ipam" => %{"config" => [%{"subnet" => release.subnet, "ip_range" => release.ip_range}]}
+             "ipam" => %{
+               "config" => [%{"subnet" => release.subnet, "ip_range" => release.ip_range}]
+             }
            }
 
     attached =
@@ -970,7 +984,9 @@ defmodule Cyfr.StackShapeTest do
           do: service
 
     assert Enum.sort(attached) == Enum.sort(["cyfr", release.guard])
-    assert Enum.sort(Map.keys(parsed["networks"])) == Enum.sort(["default", "edge", release.network])
+
+    assert Enum.sort(Map.keys(parsed["networks"])) ==
+             Enum.sort(["default", "edge", release.network])
   end
 
   # cyfr holds three fixed addresses, each bound by one listener and never
@@ -1104,7 +1120,8 @@ defmodule Cyfr.StackShapeTest do
     release = LocusRoles.release()
 
     plants = [
-      {"without no-new-privileges:true", "\n      - no-new-privileges:true\n      - writable-cgroups=true\n",
+      {"without no-new-privileges:true",
+       "\n      - no-new-privileges:true\n      - writable-cgroups=true\n",
        "\n      - writable-cgroups=true\n", ["security_opt"]},
       {"without its AppArmor profile",
        "\n      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}\n      - systempaths=unconfined\n",
@@ -1171,8 +1188,9 @@ defmodule Cyfr.StackShapeTest do
       {"serving no control",
        "      - CYFR_GUARD_CONTROL=/run/cyfr-guard-control/guard.sock\n      - CYFR_GUARD_HOST_API",
        "      - CYFR_GUARD_HOST_API", ["environment"]},
-      {"naming no host API", "      - CYFR_GUARD_HOST_API=172.16.231.2:${CYFR_HOST_API_PORT:-4300}\n",
-       "", ["environment"]},
+      {"naming no host API",
+       "      - CYFR_GUARD_HOST_API=172.16.231.2:${CYFR_HOST_API_PORT:-4300}\n", "",
+       ["environment"]},
       {"exposing the builds' port no more", "      - \"4100\"\n      - \"4101\"\n",
        "      - \"4101\"\n", ["expose"]},
       {"forwarding with the ICMP rate limit on",
@@ -1291,9 +1309,12 @@ defmodule Cyfr.StackShapeTest do
 
     assert health =~ ~s([ "$status" = "401" ])
 
-    for role <- LocusRoles.roles(), do: assert(health_probe?(health, role), "#{role.name}'s probe")
+    for role <- LocusRoles.roles(),
+        do: assert(health_probe?(health, role), "#{role.name}'s probe")
 
-    assert dockerfile =~ ~r{^COPY --chmod=0755 apps/locus/health\.sh /usr/local/bin/locus-health$}m
+    assert dockerfile =~
+             ~r{^COPY --chmod=0755 apps/locus/health\.sh /usr/local/bin/locus-health$}m
+
     assert dockerfile =~ ~r{^    CMD \["locus-health"\]$}m
 
     refute Map.has_key?(compose!()["services"][LocusRoles.release().service], "healthcheck")
@@ -1356,8 +1377,8 @@ defmodule Cyfr.StackShapeTest do
        {@dockerfile, ~s("#{pool_spec(runtime)}"), ~s("#{runtime.pool}:#{first}-#{last}")},
        [{@dockerfile, :entrypoint, :release}]},
       {"the runtime role no longer private",
-       {@dockerfile, ~s("#{role_spec(runtime)}"), ~s("#{role_spec(%{runtime | private: false})}")},
-       [{@dockerfile, :entrypoint, :release}]},
+       {@dockerfile, ~s("#{role_spec(runtime)}"),
+        ~s("#{role_spec(%{runtime | private: false})}")}, [{@dockerfile, :entrypoint, :release}]},
       {"compose naming an entrypoint of its own",
        {@compose, "    container_name: #{release.container}\n",
         "    container_name: #{release.container}\n    entrypoint: [\"cyfr-locus\"]\n"},
@@ -1481,7 +1502,8 @@ defmodule Cyfr.StackShapeTest do
       # An overlay compose reads otherwise than its parse is no overlay:
       # every reading of it is drift.
       {"the runtime overlay resetting its ports",
-       {runtime_overlay, "    ports:\n", "    ports: !reset\n"}, unread.(runtime_overlay, :runtime)},
+       {runtime_overlay, "    ports:\n", "    ports: !reset\n"},
+       unread.(runtime_overlay, :runtime)},
       {"the runtime overlay resetting an entrypoint it names",
        {runtime_overlay, "    pull_policy: never\n    environment:\n",
         ~s(    pull_policy: never\n    entrypoint: !reset #{Jason.encode!(keeper_argv(release, roles))}\n    environment:\n)},
@@ -1531,15 +1553,18 @@ defmodule Cyfr.StackShapeTest do
         "      - seccomp=./keeper.seccomp.json\n      - seccomp=unconfined\n      - systempaths=unconfined\n"},
        [{runtime_last_overlay, :service, :runtime}]},
       {"the runtime overlay naming its container after the shipped one",
-       {runtime_overlay, "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
+       {runtime_overlay,
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
         "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: #{release.container}\n"},
        [{runtime_overlay, :service, :runtime}]},
       {"the runtime overlay keeping the deployed container name through an untagged null",
-       {runtime_overlay, "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
+       {runtime_overlay,
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
         "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: null\n"},
        [{runtime_overlay, :service, :runtime}]},
       {"the runtime overlay naming its container what stands in for the reset",
-       {runtime_overlay, "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
+       {runtime_overlay,
+        "  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: !reset null\n",
         ~s(  #{release.service}:\n    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}\n    container_name: "!reset null"\n)},
        unread.(runtime_overlay, :runtime)},
       {"the guard under another container name",
