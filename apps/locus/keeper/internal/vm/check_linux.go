@@ -134,6 +134,10 @@ func check(argv []string, report *Report) error {
 	// The VMM's sockets are made under this umask and reached by their
 	// group, the keeper's (Config.UID).
 	syscall.Umask(0o007)
+	// Without KVM no machine runs, so no device is made for one.
+	if _, err := os.Stat(KVM); err != nil {
+		return ErrNoKVM
+	}
 	began := time.Now()
 	device, made, err := Programs(&prefixed{w: os.Stderr, tag: "maker: "}).Device()
 	report.DeviceMs = time.Since(began).Milliseconds()
