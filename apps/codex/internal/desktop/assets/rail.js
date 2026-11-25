@@ -130,9 +130,10 @@ function show(answer) {
   const cyfrs = answer.cyfrs.filter((c) => !c.box).map((c) => box.some((b) => b.folder && b.folder === c.folder) ? {...c, folder: ""} : c)
   const shown = labels(cyfrs)
   list.replaceChildren(...box.map(boxRow), ...cyfrs.map((c, i) => row(c, shown[i], box.length > 0 && (!!answer.locked || !!c.open))))
-  // A box sets nothing up, its screen showing its own CYFR, and updates
-  // by cyfr update alone.
-  for (const way of ["setup", "update"]) document.getElementById(way).parentElement.hidden = box.length > 0
+  // A box sets nothing up, its screen showing its own CYFR, and offers
+  // Update only while it is unlocked: nothing of it shows on a locked box.
+  document.getElementById("setup").parentElement.hidden = box.length > 0
+  document.getElementById("update").parentElement.hidden = box.length > 0 && !!answer.locked
   said.textContent = answer.error || ""
 }
 async function watch() {

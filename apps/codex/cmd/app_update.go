@@ -4,11 +4,13 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,26 +86,37 @@ type appRoad interface {
 	finish(out io.Writer, s *staged, confirmed bool) error
 	// closesTheBox is the root commands that stop the box's screen and
 	// start it again, through the same elevation, where the road has one;
-	// nil elsewhere.
+	// empty where the road's replace stops and starts it itself; nil
+	// elsewhere.
 	closesTheBox() (stop, start []string)
 }
 
 // staged is release target's installer fetch verified: file, its sha256
 // sum, in dir, the folder of its own fetch made; a road whose installer
-// fetches for itself (Homebrew) stages no file. kept is what a road's
-// replace kept to go back to, which its finish removes or puts back (the
-// Mac's old app, Windows' cyfr set aside), and swapped whether the Mac's
-// swap was made.
+// fetches for itself (Homebrew) stages no file, and one whose service
+// fetched it holds the service's connection and its answers. kept is
+// what a road's replace kept to go back to, which its finish removes or
+// puts back (the Mac's old app, Windows' cyfr set aside), and swapped
+// whether the Mac's swap was made.
 type staged struct {
 	target, dir, file, sum string
 	kept                   string
 	swapped                bool
+	service                net.Conn
+	answers                *bufio.Reader
 }
 
-// remove removes the folder fetch made.
+// remove removes the folder fetch made and lets the service go: one let
+// go before it was told to install installs nothing.
 func (s *staged) remove() {
-	if s != nil && s.dir != "" {
+	if s == nil {
+		return
+	}
+	if s.dir != "" {
 		_ = os.RemoveAll(s.dir)
+	}
+	if s.service != nil {
+		_ = s.service.Close()
 	}
 }
 
@@ -123,7 +136,7 @@ func fetchInstaller(ctx context.Context, out io.Writer, target, goos, goarch str
 	}
 	switch {
 	case errors.Is(err, release.ErrUnverified):
-		return nil, fmt.Errorf("The CYFR app of release %s did not verify (%v); nothing was changed and CYFR runs as it did", target, err)
+		return nil, fmt.Errorf("The CYFR app of release %s did not verify (%w); nothing was changed and CYFR runs as it did", target, err)
 	case err != nil:
 		return nil, fmt.Errorf("cyfr update could not download the CYFR app of release %s (%v); nothing was changed and CYFR runs as it did. Run 'cyfr update' again", target, err)
 	}
@@ -202,14 +215,14 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 		box = active
 	}
 	ran := false
-	if box {
+	if box && len(stop) > 0 {
 		fmt.Fprintln(out, "Stopping this machine's screen, so its launcher does not start the old CYFR app again while it is replaced...")
 		if err := applyWithin(appQuitWithin, stop); err != nil {
 			// A stop that failed may have stopped it: it is started again.
 			_ = applyWithin(appQuitWithin, start)
 			return fmt.Errorf("The screen could not be stopped (%v); nothing was replaced and the CYFR app is as it was", err)
 		}
-	} else {
+	} else if !box {
 		fmt.Fprintln(out, "Closing the CYFR app...")
 		r, err := quitApp()
 		if err != nil {
@@ -218,7 +231,14 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 		ran = r
 	}
 
+	// The app opened again as it was, or why it could not be: a road's
+	// replacement that installed the app with the box's screen not started
+	// again says so in its place.
+	var reopen string
 	replaced := road.replace(out, s, older)
+	if unstarted := screenUnstarted(""); errors.As(replaced, &unstarted) {
+		replaced, reopen = nil, string(unstarted)
+	}
 	answered := machine.appRelease()
 	confirmed := replaced == nil && answered == target
 	finished := road.finish(out, s, confirmed)
@@ -229,8 +249,7 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	// The app is opened again as it was, whatever came before; one that
 	// is not stops the update before the stack, whose next run finishes
 	// it.
-	var reopen string
-	if box {
+	if box && len(start) > 0 {
 		if err := applyWithin(appQuitWithin, start); err != nil {
 			reopen = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start cyfr-screen'", err)
 		}
@@ -258,6 +277,14 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	fmt.Fprintf(out, "The CYFR app is release %s.\n", target)
 	return nil
 }
+
+// screenUnstarted is a replacement that installed the app with the box's
+// screen not started again, saying how to start it: the update stops
+// before the stack, as one whose screen does not start again through sudo
+// does (updateApp).
+type screenUnstarted string
+
+func (s screenUnstarted) Error() string { return string(s) }
 
 // refusedReplacement says why a replacement is refused and which release
 // the app is now, once what was kept went back (after): its installer's

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# The CYFR app's update service (apps/codex/cmd/app_service_linux.go):
+# only root and the sudo group may connect, one request at a time.
+[Unit]
+Description=Updates of the CYFR app
+
+[Socket]
+ListenStream=/run/cyfr-update.sock
+SocketMode=0660
+SocketGroup=sudo
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
