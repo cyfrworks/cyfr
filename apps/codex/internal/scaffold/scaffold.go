@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/release"
+	"github.com/cyfr/codex/internal/written"
 )
 
 // The release assets the scaffold comes from, by version tag. They are
@@ -215,6 +216,7 @@ func (r *Release) Write(overwriteManaged bool) error {
 		if err = errors.Join(err, f.Close()); err != nil {
 			return fmt.Errorf("write %s: %w", e.name, err)
 		}
+		written.File(e.name)
 	}
 	return nil
 }
@@ -256,6 +258,7 @@ func makeDir(root *os.Root, name string) error {
 	if err != nil {
 		return err
 	}
+	written.Dir(name)
 	return root.Chmod(name, 0755)
 }
 
@@ -289,7 +292,11 @@ func replaceFile(root *os.Root, name string, data []byte, mode os.FileMode) erro
 	if err = errors.Join(err, f.Chmod(mode), f.Sync(), f.Close()); err != nil {
 		return err
 	}
-	return root.Rename(tmp, name)
+	if err := root.Rename(tmp, name); err != nil {
+		return err
+	}
+	written.File(name)
+	return nil
 }
 
 // The Aqua files the scaffold ships and owns, so `cyfr update` refreshes

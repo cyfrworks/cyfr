@@ -34,6 +34,7 @@ import (
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
+	"github.com/cyfr/codex/internal/written"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -315,6 +316,7 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+	written.File(target)
 	return nil
 }
 

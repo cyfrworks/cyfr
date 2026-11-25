@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/cyfr/codex/internal/written"
 	"github.com/spf13/cobra"
 )
 
@@ -66,11 +67,14 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	}
 	u := &updater{ctx: ctx, command: "backup", out: out, errOut: errOut,
 		compose: &composePlan{path: "docker-compose.yml", original: original}}
-	var managed []string
-	// Run as root through sudo, what the backup writes of the project goes
-	// back to the person who ran sudo, after the lock is released, on
-	// every way out.
-	defer func() { returnToSudoAccount("backup", append(slices.Clone(managed), u.stateWritten()...), errOut) }()
+	// Run as root through sudo, what the backup writes goes back to the
+	// person who ran sudo, after the lock is released, on every way out.
+	wrote := written.Begin()
+	defer returnToSudoAccount("backup", wrote, errOut)
+	defer wrote.End()
+	if err := u.checkBeforeLock(".cyfr", "backups"); err != nil {
+		return err
+	}
 	e, unlock, receipts, err := openLocked(ctx, "backup", out)
 	if err != nil {
 		return err
@@ -99,7 +103,7 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 			return errBackupInterrupted
 		}
 	}
-	managed, err = managedPresent()
+	managed, err := managedPresent()
 	if err != nil {
 		return err
 	}
@@ -265,16 +269,25 @@ type snapshotManifest struct {
 // holds the keyring. cyfr update and cyfr backup both take it.
 func (u *updater) takeSnapshot(release string, managed []string) error {
 	now := updateNow().UTC()
-	if err := os.Mkdir("backups", 0700); err != nil && !errors.Is(err, fs.ErrExist) {
+	switch err := os.Mkdir("backups", 0700); {
+	case err == nil:
+		written.Dir("backups")
+	case !errors.Is(err, fs.ErrExist):
 		return err
 	}
-	if err := writeNewFile(filepath.Join("backups", ".gitignore"), []byte(backupsIgnore)); err != nil && !errors.Is(err, fs.ErrExist) {
+	ignore := filepath.Join("backups", ".gitignore")
+	switch err := writeNewFile(ignore, []byte(backupsIgnore)); {
+	case err == nil:
+		written.File(ignore)
+	case !errors.Is(err, fs.ErrExist):
 		return err
 	}
 	dir := filepath.Join("backups", now.Format("20060102T150405Z"))
 	if err := os.Mkdir(dir, 0700); err != nil {
 		return err
 	}
+	// Made by this run, so every entry under it is this run's.
+	written.Dir(dir)
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
@@ -371,24 +384,6 @@ func (u *updater) takeSnapshot(release string, managed []string) error {
 		d.Close()
 	}
 	return nil
-}
-
-// stateWritten names, as project paths, what an update or a backup writes
-// of the project besides scaffold files, which a run through sudo gives
-// back (returnToSudoAccount): the engine's state under .cyfr/, which the
-// stack's lock writes, backups/.gitignore with backups/, and the snapshot
-// directory takeSnapshot made.
-func (u *updater) stateWritten() []string {
-	written := []string{".cyfr", filepath.Join("backups", ".gitignore")}
-	if u.snapshot == "" {
-		return written
-	}
-	if wd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(wd, u.snapshot); err == nil && filepath.IsLocal(rel) {
-			written = append(written, rel)
-		}
-	}
-	return written
 }
 
 // backupsIgnore is backups/.gitignore: nothing under backups/ is tracked.

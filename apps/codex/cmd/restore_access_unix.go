@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cyfr/codex/internal/written"
 	"golang.org/x/sys/unix"
 )
 
@@ -101,18 +102,23 @@ func sudoAccount() (uid, gid int, ok bool, err error) {
 	return uid, gid, uid != 0, nil
 }
 
-// returnToSudoAccount gives the project files a command run through sudo
-// wrote back to the account that ran sudo, so the person's own commands
-// read them afterwards: .env, docker-compose.yml, and each of written, a
-// project path, with the directories it lies in and, for a directory,
-// every entry under it (a restore's scaffold files and the engine's state
-// under .cyfr/; an update's and a backup's besides, backups/ and the
-// snapshot), each entry root owns. The storage root and the database stay
-// as the command left them: the image's entrypoint hands them to the
-// image's user at the next start. Nothing is given back through a link, at
-// any level of its path, so no entry outside the project changes owner.
-// What is not given back is said, and the command's outcome stands.
-func returnToSudoAccount(command string, written []string, errOut io.Writer) {
+// returnToSudoAccount gives what this run of command wrote (set, filled
+// as the writes happened) back to the account that ran sudo, so the
+// person's own commands read them afterwards: each file it created or
+// replaced, and each directory it made with every entry under it, at the
+// real path the write landed on, each entry root owns. A file the run
+// only read is in no set, and a directory that was there before is not
+// entered. The storage root and the database stay as the command left
+// them: the image's entrypoint hands them to the image's user at the next
+// start; a write that landed there, or outside the project, is said and
+// left as it is. Nothing is given back through a link, at any level of
+// its path, so no entry outside the project changes owner. What is not
+// given back is said, and the command's outcome stands.
+func returnToSudoAccount(command string, set *written.Set, errOut io.Writer) {
+	entries := set.Entries()
+	if len(entries) == 0 {
+		return
+	}
 	uid, gid, ok, err := sudoAccount()
 	if err != nil {
 		fmt.Fprintf(errOut, "Warning: %v, so nothing the %s wrote was given back to the account that ran sudo.\n", err, command)
@@ -121,18 +127,31 @@ func returnToSudoAccount(command string, written []string, errOut io.Writer) {
 	if !ok {
 		return
 	}
-	paths := []string{".env", "docker-compose.yml"}
-	for _, name := range written {
-		for p := name; p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
-			paths = append(paths, p)
+	project, err := os.Getwd()
+	if err == nil {
+		project, err = filepath.EvalSymlinks(project)
+	}
+	if err != nil {
+		fmt.Fprintf(errOut, "Warning: cyfr %s could not tell which folder it ran in (%v), so nothing it wrote was given back to the account that ran sudo.\n", command, err)
+		return
+	}
+	var paths []string
+	for _, e := range entries {
+		rel, err := filepath.Rel(project, e.Path)
+		if err != nil || !filepath.IsLocal(rel) || inStorage(rel) {
+			fmt.Fprintf(errOut, "Warning: %s is outside this folder or in CYFR's storage, so it was left as it is, owned by root.\n", e.Path)
+			continue
 		}
-		// WalkDir lists a link without entering it.
-		_ = filepath.WalkDir(name, func(p string, _ fs.DirEntry, err error) error {
-			if err == nil {
-				paths = append(paths, p)
-			}
-			return nil
-		})
+		paths = append(paths, rel)
+		if e.Made {
+			// WalkDir lists a link without entering it.
+			_ = filepath.WalkDir(rel, func(p string, _ fs.DirEntry, err error) error {
+				if err == nil && p != rel {
+					paths = append(paths, p)
+				}
+				return nil
+			})
+		}
 	}
 	seen := map[string]bool{}
 	for _, p := range paths {
@@ -148,6 +167,53 @@ func returnToSudoAccount(command string, written []string, errOut io.Writer) {
 			fmt.Fprintf(errOut, "Warning: %s is still root's (%v); give it back with: sudo chown -h %d:%d %s\n", p, err, uid, gid, p)
 		}
 	}
+}
+
+// refuseLinkOut refuses, for a process run as root, a project path among
+// paths that is a link, or crosses one, whose target lies outside the
+// project or nowhere: run as root, command writes nothing through a link
+// out of the folder. As the person, a link of their own is their own
+// affair, written through as before.
+func refuseLinkOut(command string, paths ...string) error {
+	if restoreEuid() != 0 {
+		return nil
+	}
+	project, err := os.Getwd()
+	if err == nil {
+		project, err = filepath.EvalSymlinks(project)
+	}
+	if err != nil {
+		return fmt.Errorf("cyfr %s could not tell which folder it runs in (%v); nothing was changed", command, err)
+	}
+	for _, p := range paths {
+		at := ""
+		for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(p)), "/") {
+			at = filepath.Join(at, part)
+			info, err := os.Lstat(at)
+			if err != nil {
+				break
+			}
+			if info.Mode()&fs.ModeSymlink == 0 {
+				continue
+			}
+			if real, err := filepath.EvalSymlinks(at); err == nil {
+				if rel, err := filepath.Rel(project, real); err == nil && filepath.IsLocal(rel) {
+					continue
+				}
+			}
+			target, _ := os.Readlink(at)
+			return fmt.Errorf("%s is a link to %s, outside this folder, and cyfr %s run as root writes nothing through a link out of the folder; nothing was changed. Make %s a folder of its own here, then run it again", at, target, command, at)
+		}
+	}
+	return nil
+}
+
+// inStorage reports whether the project path rel lies in data/, CYFR's
+// storage root as the scaffold lays it out, which the image's entrypoint
+// hands to the image's own user.
+func inStorage(rel string) bool {
+	first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+	return first == "data"
 }
 
 // errThroughLink refuses an entry whose path crosses a link.
@@ -169,7 +235,9 @@ func projectDir(dir string, create bool) (int, error) {
 	if clean == "." {
 		return dirfd, nil
 	}
+	at := ""
 	for _, part := range strings.Split(clean, "/") {
+		at = filepath.Join(at, part)
 		made := false
 		if create {
 			switch err := unix.Mkdirat(dirfd, part, 0o755); {
@@ -189,6 +257,7 @@ func projectDir(dir string, create bool) (int, error) {
 			return -1, err
 		}
 		if made {
+			written.Dir(at)
 			if err := unix.Fchmod(next, 0o755); err != nil {
 				unix.Close(next)
 				return -1, err
@@ -240,8 +309,10 @@ func putProjectFile(name string, data []byte, mode os.FileMode) error {
 	}
 	if err != nil {
 		unix.Unlinkat(dirfd, tmp, 0)
+		return err
 	}
-	return err
+	written.File(name)
+	return nil
 }
 
 // removeProjectFile removes the project's file name, in the directory

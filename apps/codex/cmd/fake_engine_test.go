@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/written"
 )
 
 // fakeStack is what the package's tests stand in for the access engine
@@ -251,11 +252,23 @@ func (e *fakeEngine) CloseServe(ctx context.Context) error {
 	e.s.mu.Lock()
 	e.s.serveClosed = true
 	e.s.mu.Unlock()
-	serve := filepath.Join(e.dir, ".cyfr", "tailscale-serve", "serve.json")
-	if err := os.MkdirAll(filepath.Dir(serve), 0755); err != nil {
+	// What it makes and writes is recorded as the engine's writers record
+	// theirs (written), so a run through sudo gives it back.
+	state := filepath.Join(e.dir, ".cyfr")
+	serve := filepath.Join(state, "tailscale-serve", "serve.json")
+	for _, dir := range []string{state, filepath.Dir(serve)} {
+		if written.Missing(dir) {
+			if err := os.Mkdir(dir, 0755); err != nil {
+				return err
+			}
+			written.Dir(dir)
+		}
+	}
+	if err := os.WriteFile(serve, []byte("{}"), 0644); err != nil {
 		return err
 	}
-	return os.WriteFile(serve, []byte("{}"), 0644)
+	written.File(serve)
+	return nil
 }
 
 func (e *fakeEngine) Docker() access.Docker { return fakeRunner{e.s} }
@@ -277,6 +290,20 @@ func (e *fakeEngine) ComposeArgs(ctx context.Context, h access.Head, args ...str
 		return nil, errors.New("access: ComposeArgs without the lock")
 	}
 	return append(composePrefixArgs(e.name(), h), args...), nil
+}
+
+// Config answers the configuration the scenario's fake docker answers
+// `docker compose config` with (config.out), without the lock and
+// without running it, as the engine's reads and writes nothing.
+func (e *fakeEngine) Config(ctx context.Context, h access.Head) ([]byte, error) {
+	if e.s.composeErr != nil {
+		return nil, e.s.composeErr
+	}
+	dir := os.Getenv("FAKE_DOCKER_DIR")
+	if dir == "" {
+		return nil, errors.New("access: no fake docker answers the configuration")
+	}
+	return os.ReadFile(filepath.Join(dir, "config.out"))
 }
 
 // name is compose's project of the engine.

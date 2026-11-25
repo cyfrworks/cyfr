@@ -34,6 +34,7 @@ type stackEngine interface {
 	Redactor() *access.Redactor
 	ComposeArgs(ctx context.Context, h access.Head, args ...string) ([]string, error)
 	Head() (access.Head, error)
+	Config(ctx context.Context, h access.Head) ([]byte, error)
 	CheckStack(ctx context.Context) error
 	Status(ctx context.Context) (access.Status, error)
 	Preview(ctx context.Context, t access.Target, joinID string) (access.Preview, error)

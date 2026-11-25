@@ -8,13 +8,13 @@ package cmd
 import (
 	"bytes"
 	"errors"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/written"
 )
 
 // chownStandIn makes this process root, run through sudo for uid and gid
@@ -44,10 +44,11 @@ func chownStandIn(t *testing.T, uid, gid, refused string) map[string][2]int {
 	return changed
 }
 
-// Run through sudo, the restore gives .env, docker-compose.yml, the
-// scaffold files with their directories and the engine's state back to
-// the account that ran sudo, and nothing of the storage root or the
-// database; root's own login, with no sudo account, changes no owner.
+// Run through sudo, the restore gives what it wrote back to the account
+// that ran sudo: .env and docker-compose.yml, the scaffold files it put
+// back and the engine's state it wrote; a directory it did not make, the
+// storage root and the database are left as they are. Root's own login,
+// with no sudo account, changes no owner.
 func TestRestoreGivesTheProjectBackToTheSudoAccount(t *testing.T) {
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
 	changed := chownStandIn(t, "4242", "4343", "")
@@ -59,23 +60,12 @@ func TestRestoreGivesTheProjectBackToTheSudoAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][2]int{".env": {4242, 4343}, "docker-compose.yml": {4242, 4343}}
+	want := map[string][2]int{".env": {4242, 4343}, "docker-compose.yml": {4242, 4343}, ".cyfr/tailscale-serve/serve.json": {4242, 4343}}
 	for _, name := range snap.manifest.Scaffold {
-		for p := name; p != "."; p = filepath.Dir(p) {
-			// The put-back removes a scaffold file the update made.
-			if _, err := os.Lstat(p); err == nil {
-				want[p] = [2]int{4242, 4343}
-			}
+		// The put-back removes a scaffold file the update made.
+		if _, err := os.Lstat(name); err == nil {
+			want[name] = [2]int{4242, 4343}
 		}
-	}
-	filepath.WalkDir(".cyfr", func(p string, _ fs.DirEntry, err error) error {
-		if err == nil {
-			want[p] = [2]int{4242, 4343}
-		}
-		return nil
-	})
-	if _, ok := want[".cyfr"]; !ok {
-		t.Fatalf("the project has no .cyfr: %v", slices.Sorted(maps.Keys(want)))
 	}
 	if !maps.Equal(changed, want) {
 		t.Errorf("the restore gave back %v, want %v", changed, want)
@@ -113,10 +103,10 @@ func TestRestoreSaysAnOwnerItCannotGiveBack(t *testing.T) {
 	}
 }
 
-// Nothing is given back through a link at any level of a path: with wit a
-// link out of the project, neither wit/cyfr nor wit/cyfr/added.wit, both
-// outside, changes owner, and each is said; wit itself, the link in the
-// project, is changed without being followed.
+// What a run wrote is given back at the real path it landed on: a write
+// through wit, a link out of the project, landed outside it, so nothing
+// changes owner and the file is named as left as it is; wit itself, which
+// the run did not write, is not given back.
 func TestRestoreGivesNothingBackThroughALink(t *testing.T) {
 	t.Chdir(t.TempDir())
 	outside := t.TempDir()
@@ -130,13 +120,15 @@ func TestRestoreGivesNothingBackThroughALink(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := chownStandIn(t, "4242", "4343", "")
+	wrote := written.Begin()
+	written.File("wit/cyfr/added.wit")
+	wrote.End()
 	var out bytes.Buffer
-	returnToSudoAccount("restore", []string{"wit/cyfr/added.wit"}, &out)
-	if want := map[string][2]int{"wit": {4242, 4343}}; !maps.Equal(changed, want) {
-		t.Errorf("the restore gave back %v, want %v", changed, want)
+	returnToSudoAccount("restore", wrote, &out)
+	if len(changed) != 0 {
+		t.Errorf("the restore gave back %v, want nothing", changed)
 	}
-	want := "Warning: wit/cyfr/added.wit was not given back to the account that ran sudo: its path crosses a link, which nothing is written or given back through.\n" +
-		"Warning: wit/cyfr was not given back to the account that ran sudo: its path crosses a link, which nothing is written or given back through.\n"
+	want := "Warning: " + filepath.Join(resolvedPath(t, outside), "cyfr", "added.wit") + " is outside this folder or in CYFR's storage, so it was left as it is, owned by root.\n"
 	if out.String() != want {
 		t.Errorf("the restore said:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -152,8 +144,11 @@ func TestRestoreRefusesASudoAccountNotInSudosForm(t *testing.T) {
 				t.Fatal(err)
 			}
 			changed := chownStandIn(t, ids[0], ids[1], "")
+			wrote := written.Begin()
+			written.File(".env")
+			wrote.End()
 			var out bytes.Buffer
-			returnToSudoAccount("restore", nil, &out)
+			returnToSudoAccount("restore", wrote, &out)
 			want := "Warning: SUDO_UID and SUDO_GID must each be a plain decimal number, and they are \"" + ids[0] + "\" and \"" + ids[1] + "\", so nothing the restore wrote was given back to the account that ran sudo.\n"
 			if out.String() != want || len(changed) != 0 {
 				t.Errorf("the restore said %q and gave back %v; want %q and nothing", out.String(), changed, want)

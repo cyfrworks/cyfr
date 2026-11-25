@@ -165,6 +165,16 @@ func (e *Engine) ComposeArgs(ctx context.Context, h Head, args ...string) ([]str
 	return out, e.redactor().err(err)
 }
 
+// Config is the configuration of head h as `docker compose config
+// --format json` resolves it over the default file set, .env's values
+// inlined: what ComposeArgs' materialized file holds, read without the
+// lock and writing nothing, so a command can refuse what it would refuse
+// under the lock before it takes it.
+func (e *Engine) Config(ctx context.Context, h Head) ([]byte, error) {
+	out, err := e.flatten(ctx, h, "--format", "json")
+	return out, e.redactor().err(err)
+}
+
 // Head is the head .env holds now, or the boot refusal that says why it
 // holds none (ResolveBoot with .env's own read, Release true).
 func (e *Engine) Head() (Head, error) {

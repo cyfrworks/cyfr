@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/cyfr/codex/internal/written"
 )
 
 // holderRecord is who holds the lock, as access_busy reports it: the
@@ -38,9 +40,13 @@ func (e *Engine) lockProject(command string) (func(), error) {
 	if err := e.ensureState(); err != nil {
 		return nil, err
 	}
+	made := written.Missing(e.path(lockFile))
 	f, err := os.OpenFile(e.path(lockFile), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("access: open the lock: %w", err)
+	}
+	if made {
+		written.File(e.path(lockFile))
 	}
 	host, _ := os.Hostname()
 	// A lock another handle holds while no live holder record names its

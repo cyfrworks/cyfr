@@ -41,7 +41,7 @@ func (e *Engine) selection(files []string, h Head) []string {
 // flatten is `docker compose config` of h over the default file set: the
 // configuration compose would run for h's selection, .env's values
 // inlined.
-func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
+func (e *Engine) flatten(ctx context.Context, h Head, format ...string) ([]byte, error) {
 	// compose reads COMPOSE_* from .env: no compose call runs over one
 	// that sets any.
 	if _, err := e.readEnv(); err != nil {
@@ -51,7 +51,7 @@ func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), "config"), Deadline: StopDeadline})
+	res, err := e.docker.Run(ctx, Call{Args: append(append(e.selection(files, h), "config"), format...), Deadline: StopDeadline})
 	if err != nil {
 		return nil, fmt.Errorf("access: %s", e.callFailed("docker compose config", err, res.Stderr))
 	}

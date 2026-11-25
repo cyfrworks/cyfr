@@ -25,6 +25,7 @@ import (
 	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/cyfr/codex/internal/written"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -333,7 +334,9 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	// Run as root through sudo, what the restore writes of the project goes
 	// back to the person who ran sudo, after the lock is released, on every
 	// way out.
-	defer returnToSudoAccount("restore", append(slices.Clone(snap.manifest.Scaffold), ".cyfr"), errOut)
+	wrote := written.Begin()
+	defer returnToSudoAccount("restore", wrote, errOut)
+	defer wrote.End()
 	// The lock an up, an update and an access change hold too, held from
 	// before the first docker call to the restore's end; a change recovery
 	// could not finish leaves the stack in no known state, and the restore
@@ -591,6 +594,7 @@ func (r *restorer) publishCompose() error {
 	if err := access.ReplaceFile(stagedCompose, "docker-compose.yml"); err != nil {
 		return err
 	}
+	written.File("docker-compose.yml")
 	return access.SyncDir(".")
 }
 

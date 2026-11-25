@@ -18,6 +18,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cyfr/codex/internal/written"
 )
 
 // The engine's state under the project directory. Every file is written
@@ -63,15 +65,23 @@ func resolvedName(digest string) string {
 // it.
 func (e *Engine) ensureState() error {
 	for _, dir := range []string{e.path(), e.path(receiptsDir)} {
+		made := written.Missing(dir)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("access: create %s: %w", dir, err)
+		}
+		if made {
+			written.Dir(dir)
 		}
 	}
 	// Its mode is set, not left to the umask: the tailscale container's
 	// root holds no capability, so it enters only a directory its mode
 	// opens to it.
+	made := written.Missing(e.path(serveDir))
 	if err := os.MkdirAll(e.path(serveDir), serveDirMode); err != nil {
 		return fmt.Errorf("access: create %s: %w", e.path(serveDir), err)
+	}
+	if made {
+		written.Dir(e.path(serveDir))
 	}
 	if err := os.Chmod(e.path(serveDir), serveDirMode); err != nil {
 		return fmt.Errorf("access: create %s: %w", e.path(serveDir), err)
@@ -116,6 +126,7 @@ func writeDurable(name string, data []byte, mode os.FileMode, fail func(name, st
 		os.Remove(tmp.Name())
 		return fmt.Errorf("access: write %s: %w", name, err)
 	}
+	written.File(name)
 	if err := inject("sync"); err != nil {
 		return err
 	}

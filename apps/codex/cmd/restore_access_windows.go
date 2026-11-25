@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/cyfr/codex/internal/written"
 )
 
 // canReplaceIn is nil on Windows, whose engine (Docker Desktop) hands a
@@ -18,6 +19,9 @@ func canReplaceIn(string) error { return nil }
 // canRead is nil on Windows, as canReplaceIn is.
 func canRead(string, bool) error { return nil }
 
+// refuseLinkOut is nil on Windows, which has no sudo.
+func refuseLinkOut(string, ...string) error { return nil }
+
 // closedToYou is false on Windows, which has no sudo.
 func closedToYou(error) bool { return false }
 
@@ -25,7 +29,7 @@ func closedToYou(error) bool { return false }
 func keepOwner(string, string) error { return nil }
 
 // returnToSudoAccount does nothing on Windows, which has no sudo.
-func returnToSudoAccount(string, []string, io.Writer) {}
+func returnToSudoAccount(string, *written.Set, io.Writer) {}
 
 // noLinkIn is nil on Windows, where no restore runs as another account.
 func noLinkIn(string) error { return nil }

@@ -36,6 +36,7 @@ import (
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
+	"github.com/cyfr/codex/internal/written"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -306,16 +307,11 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) 
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
 	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut}
-	// Run as root through sudo, what the update writes of the project goes
-	// back to the person who ran sudo, after the lock is released, on
-	// every way out.
-	defer func() {
-		var written []string
-		if u.scaffold != nil {
-			written = u.scaffold.Managed()
-		}
-		returnToSudoAccount("update", append(written, u.stateWritten()...), errOut)
-	}()
+	// Run as root through sudo, what the update writes goes back to the
+	// person who ran sudo, after the lock is released, on every way out.
+	wrote := written.Begin()
+	defer returnToSudoAccount("update", wrote, errOut)
+	defer wrote.End()
 	if err := u.fetchManifest(); err != nil {
 		return err
 	}
@@ -342,6 +338,9 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) 
 	// the stack is stopped for its snapshot. A change an interrupted
 	// command left is finished first; one recovery could not finish leaves
 	// the stack in no known state, and the update does nothing.
+	if err := u.checkBeforeLock(".cyfr", "backups", ".env", "docker-compose.yml"); err != nil {
+		return err
+	}
 	e, unlock, receipts, err := openLocked(ctx, "update", out)
 	if err != nil {
 		return err
@@ -1541,8 +1540,47 @@ func (u *updater) readConfig() error {
 	if err != nil {
 		return fmt.Errorf("docker compose could not read the stack's configuration (%v); nothing was changed", err)
 	}
+	return u.useConfig([]byte(raw))
+}
+
+// checkBeforeLock refuses, before the stack's lock is taken and before
+// recovery, so before the command writes anything, what it would refuse
+// under the lock for who runs it: run as root, a path among writes it
+// writes that is, or crosses, a link out of the folder (refuseLinkOut);
+// as the person, storage this account may not read (asRoot), read from
+// the configuration the engine resolves without the lock. Any other
+// refusal is left to the reads under the lock, which the work relies on.
+func (u *updater) checkBeforeLock(writes ...string) error {
+	if err := refuseLinkOut(u.command, writes...); err != nil {
+		return err
+	}
+	e, err := openEngine(".")
+	if err != nil {
+		return nil
+	}
+	h, err := e.Head()
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
+	defer cancel()
+	raw, err := e.Config(ctx, h)
+	if err != nil {
+		return nil
+	}
+	first := &updater{ctx: u.ctx, command: u.command, out: io.Discard, errOut: io.Discard}
+	if err := first.useConfig(raw); errors.As(err, new(rootRefusal)) {
+		return err
+	}
+	return nil
+}
+
+// useConfig derives what the snapshot copies from raw, the stack's
+// configuration as `docker compose config --format json` writes it,
+// refusing a setting it cannot snapshot.
+func (u *updater) useConfig(raw []byte) error {
 	var config composeConfig
-	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+	if err := json.Unmarshal(raw, &config); err != nil {
 		return errors.New("docker compose's configuration did not read as JSON; nothing was changed")
 	}
 	cyfr, ok := config.Services["cyfr"]
@@ -1728,16 +1766,28 @@ func (u *updater) readable(p, what string, accept func(os.FileInfo) bool) (strin
 	return resolved, info, nil
 }
 
-// asRoot is the refusal of storage this account may not read, said
-// before anything stops: the command this program would run as root,
-// by its own path, since sudo's PATH may not hold the folder it is in.
+// rootRefusal is the refusal of storage this account may not read, said
+// before anything is written: the command this program would run as
+// root, by its own path, since sudo's PATH may not hold the folder it is
+// in, quoted for a shell where the path needs it.
+type rootRefusal struct{ text string }
+
+func (r rootRefusal) Error() string { return r.text }
+
+// asRoot is the rootRefusal of what, which names it.
 func (u *updater) asRoot(what string) error {
 	self, err := selfExecutable()
 	if err != nil {
 		self = "cyfr"
 	}
-	return fmt.Errorf("cyfr %s cannot read %s as you: the server's container owns CYFR's storage once the stack has run, so run 'sudo %s %s' in this folder; nothing was changed", u.command, what, self, u.command)
+	if !plainWord.MatchString(self) {
+		self = shellQuote([]string{self})
+	}
+	return rootRefusal{fmt.Sprintf("cyfr %s cannot read %s as you: the server's container owns CYFR's storage once the stack has run, so nothing was changed; run it as root in this folder: sudo %s %s", u.command, what, self, u.command)}
 }
+
+// plainWord is a word a shell reads back as it is, unquoted.
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./+:@%,=-]+$`)
 
 // serviceSetting answers a service's environment setting, trimmed; empty
 // when unset.
