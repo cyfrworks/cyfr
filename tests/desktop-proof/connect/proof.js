@@ -6,8 +6,41 @@
 // the road itself, then `remembered` and `changed`, which read the
 // account service this computer approved.
 
+import {app} from "electron"
+
+import {atChooser} from "../../../apps/codex/desktop/src/states.js"
 import {fromCause, processLoss} from "../bound.mjs"
-import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, rail, childOfFrame, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
+import {DIRECTORY, HOME, LOOPBACK, NAME, appWindows, arm, rail, childOfFrame, atBootstrap, atDevice, atHome, bare, childOfThis, chooserWindow, content, contentAt, decided, decisions, fault, frontLength, afterLock, closedAtLock, harvest, history, historyAtLock, inputs, js, judged, literal, load, PHASE, lockDetail, lockedOut, log, machine, openCYFR, opens, pageKilled, processState, question, reachedSince, record, refused, reloaded, row, run, secondClient, section, seen, sessionCookie, shownAgain, signOutsSince, signedOutOnward, sleep, submit, submitConnect, text, throughComputerLock, toldUnanswered, unansweredLoad, undisturbed, waitFor} from "../lib.js"
+
+// The chooser's first request (assets/chooser.js) and main's word that the
+// chooser's document committed (did-navigate) reach main on different
+// pipes, in either order. In the connect phase main hears the launch's
+// first commit of the chooser only once that page's first request has
+// passed main's header hook (onSendHeaders follows the hook's answer), so
+// that request goes without the run token, as it can on a slow machine.
+// The listeners are added as a page is made, before main's (../lib.js).
+// Every answer to a read of the chooser's state, its status, in order.
+const stateReads = []
+const firstRequests = new Map()
+const watched = new WeakSet()
+let holding = PHASE === "connect"
+app.on("web-contents-created", (_event, wc) => {
+  if (!watched.has(wc.session)) {
+    watched.add(wc.session)
+    wc.session.webRequest.onSendHeaders({urls: [`${LOOPBACK}/bootstrap/*`]}, (d) => {
+      if (d.method === "POST") firstRequests.get(d.webContentsId)?.()
+    })
+    wc.session.webRequest.onCompleted({urls: [`${LOOPBACK}/bootstrap/state`]}, (d) => stateReads.push(d.statusCode))
+  }
+  const sent = new Promise((resolve) => firstRequests.set(wc.id, resolve))
+  const on = wc.on.bind(wc)
+  wc.on = (name, listener) => on(name, name !== "did-navigate" ? listener : (event, url, ...rest) => {
+    if (!holding || !atChooser(url)) return listener(event, url, ...rest)
+    holding = false
+    log(`window ${wc.id} did-navigate held until the chooser's first request`)
+    sent.then(() => listener(event, url, ...rest))
+  })
+})
 
 // An account service the CYFR names once reconfigured (the front's
 // directory fault); nothing answers at it.
@@ -65,10 +98,11 @@ async function connectPhase() {
   const chooser = await waitFor(async () => {
     const c = await js(w.webContents, `({choose: !document.querySelector("#choose").hidden, notice: document.querySelector("#notice").textContent,
       ways: ["#passkey"].filter((id) => document.querySelector(id).getClientRects().length > 0)})`)
-    return c.choose ? c : null
-  }, "the chooser")
-  row("chooser", chooser.notice === "" && chooser.ways.length === 0,
-    "the app opens at Connect to a CYFR, with nothing to tell", chooser)
+    return c.choose && (c.notice || stateReads.includes(200)) ? c : null
+  }, "the chooser's answer")
+  row("chooser", chooser.notice === "" && chooser.ways.length === 0 && stateReads[0] === 403,
+    "the app opens at Connect to a CYFR, with nothing to tell, though its first request went before main heard of the page",
+    {...chooser, reads: [...stateReads]})
 
   // custom_directory: an account service other than cyfr.run is shown
   // whole and asked about.
