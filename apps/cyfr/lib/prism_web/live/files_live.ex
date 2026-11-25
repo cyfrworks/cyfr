@@ -871,7 +871,7 @@ defmodule PrismWeb.FilesLive do
         </form>
       </.card>
 
-      <div class="grid gap-6 lg:grid-cols-5">
+      <div class="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <.card class={if @open, do: "lg:col-span-2", else: "lg:col-span-5"}>
           <div :if={@path != "" and writable?(@listing)} class="mb-3 space-y-2">
             <.button
@@ -1024,7 +1024,7 @@ defmodule PrismWeb.FilesLive do
             phx-change="validate"
             class="mt-4 border-t border-gray-800 pt-4 space-y-2"
           >
-            <label class="block text-xs text-gray-500 uppercase">Upload into {@path}/</label>
+            <label class="block break-all text-xs text-gray-500 uppercase">Upload into {@path}/</label>
             <.live_file_input upload={@uploads.files} class="text-sm text-gray-400" />
             <div :for={entry <- @uploads.files.entries} class="text-xs text-gray-400 flex gap-2">
               <span class="font-mono">{entry.client_name}</span>
@@ -1046,7 +1046,7 @@ defmodule PrismWeb.FilesLive do
         <.card :if={@open} class="lg:col-span-3">
           <div id="files-open" class="space-y-3">
             <div class="flex items-center justify-between gap-2">
-              <span class="font-mono text-sm text-gray-200 truncate">{@open.path}</span>
+              <span class="min-w-0 font-mono text-sm text-gray-200 truncate">{@open.path}</span>
               <div class="flex items-center gap-1 shrink-0">
                 <span class="text-xs text-gray-500">{size_label(@open.size)}</span>
                 <a
