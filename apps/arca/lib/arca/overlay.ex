@@ -684,36 +684,6 @@ defmodule Arca.Overlay do
     end
   end
 
-  # Units a grammar commits whole and that sit side by side in one folder
-  # (the packs of `aqua/scrolls/`) may be bounded together by their domain,
-  # which reads its siblings while it admits a write (`admit_edit/4`): two
-  # siblings growing at once must not both pass a shared bound. So a
-  # commit of such a unit also holds one lock its siblings share, taken
-  # before the unit's own and held through the commit, on every connected
-  # node. Unlike the unit's own lock it is waited for, within a bound,
-  # since a sibling's commit is never this unit's; a lock not had in that
-  # bound answers `{:error, :stale_writer}`, and the writer asks again.
-  @siblings_retries 30
-
-  defp siblings_fenced(%Prima.Actor{athanor_id: athanor}, unit, fun) do
-    if UnitLocator.commits_whole?(unit) do
-      id = {{__MODULE__, :siblings, athanor, Enum.drop(unit, -1)}, self()}
-      nodes = [node() | Node.list()]
-
-      if :global.set_lock(id, nodes, @siblings_retries) do
-        try do
-          fun.()
-        after
-          :global.del_lock(id, nodes)
-        end
-      else
-        {:error, :stale_writer}
-      end
-    else
-      fun.()
-    end
-  end
-
   defp at_unit(path) do
     case Arca.Storage.locate(path) do
       {:file, ^path} -> path
@@ -2152,21 +2122,19 @@ defmodule Arca.Overlay do
     token = StorageUnits.new_writer_token()
 
     served =
-      siblings_fenced(actor, unit, fn ->
-        fenced(actor, unit, fn ->
-          with {:ok, draft} <- StorageUnits.register_draft(actor, root, key, token) do
-            case gate.(draft) do
-              {:ok, entries} ->
-                with_internal_writes(fn ->
-                  publish(actor, internal, loc, draft, token, entries, commit_opts)
-                end)
+      fenced(actor, unit, fn ->
+        with {:ok, draft} <- StorageUnits.register_draft(actor, root, key, token) do
+          case gate.(draft) do
+            {:ok, entries} ->
+              with_internal_writes(fn ->
+                publish(actor, internal, loc, draft, token, entries, commit_opts)
+              end)
 
-              {:error, _} = refusal ->
-                StorageUnits.abandon_draft(actor, draft, token)
-                refusal
-            end
+            {:error, _} = refusal ->
+              StorageUnits.abandon_draft(actor, draft, token)
+              refusal
           end
-        end)
+        end
       end)
 
     case served do

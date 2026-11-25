@@ -393,8 +393,30 @@ defmodule Compendium.Packs do
     actor = Context.actor(ctx)
 
     with {:ok, names} <- pack_names(actor) do
-      {:ok, Enum.flat_map(names, &List.wrap(read_pack(actor, &1, :card)))}
+      cards = Enum.flat_map(names, &List.wrap(read_pack(actor, &1, :card)))
+      verdicts = standing(Enum.map(cards, &card_measured/1))
+
+      {:ok,
+       Enum.map(cards, fn card ->
+         case verdicts[card.name] do
+           {:past_set, sentence} -> %{card | past: sentence}
+           _handed_off_or_past -> card
+         end
+       end)}
     end
+  end
+
+  # A card as the set's standing counts it, from the card's own count and
+  # bytes: a pack switched on and within its own bounds may be handed.
+  defp card_measured(%{name: name, on: on, past: past, files: files, bytes: bytes}) do
+    verdict =
+      cond do
+        not on -> :off
+        is_nil(past) -> :handed
+        true -> {:withheld, past}
+      end
+
+    {name, verdict, files, bytes}
   end
 
   @doc "One pack by name, as `list/1` lists it, or `{:error, :not_found}`."
@@ -446,9 +468,13 @@ defmodule Compendium.Packs do
         end
 
       # The pack's file content, its record left out, as the bounds count it.
-      bytes = max(pack_bytes(actor, dir) - record_bytes, 0)
+      {bytes, unread} =
+        case pack_bytes(actor, dir) do
+          {:ok, used} -> {max(used - record_bytes, 0), nil}
+          :unread -> {0, "its size cannot be read"}
+        end
 
-      past = past || pack_past(length(files), bytes)
+      past = past || unread || pack_past(length(files), bytes)
       scrolls = scrolls_of(actor, name, files, past)
 
       %{
@@ -473,8 +499,8 @@ defmodule Compendium.Packs do
 
   defp pack_bytes(actor, dir) do
     case Arca.usage(actor, dir) do
-      {:ok, %{bytes: bytes}} -> bytes
-      _unread -> 0
+      {:ok, %{bytes: bytes}} -> {:ok, bytes}
+      _unread -> :unread
     end
   end
 
@@ -1147,7 +1173,7 @@ defmodule Compendium.Packs do
       case Arca.read_subtree(actor, AquaPath.pack_dir(name)) do
         {:ok, pairs} ->
           if recomputed(pairs) == identity,
-            do: {:cont, {:ok, [view_pack(name, identity, pairs) | acc]}},
+            do: {:cont, {:ok, [split_pack(name, identity, pairs) | acc]}},
             else: {:halt, :moved}
 
         {:error, :not_found} ->
@@ -1158,8 +1184,10 @@ defmodule Compendium.Packs do
       end
     end)
     |> case do
-      {:ok, packs} ->
-        {:ok, %{digest: digest, packs: Enum.reverse(packs)}}
+      {:ok, read} ->
+        read = Enum.reverse(read)
+        verdicts = standing(Enum.map(read, &measured(&1.name, &1.record, &1.body)))
+        {:ok, %{digest: digest, packs: Enum.map(read, &view_pack(&1, verdicts[&1.name]))}}
 
       :moved ->
         case revisions(actor) do
@@ -1172,17 +1200,22 @@ defmodule Compendium.Packs do
     end
   end
 
-  defp view_pack(name, identity, pairs) do
+  # One pack as read for the view: its record's bytes and reading, and
+  # every other file of it.
+  defp split_pack(name, identity, pairs) do
     record_name = [AquaPath.record_name()]
     {[{_rel, raw}], body} = Enum.split_with(pairs, &(elem(&1, 0) == record_name))
     record = with {:ok, r} <- decode_record(raw), do: r
+    %{name: name, identity: identity, raw: raw, record: record, body: body}
+  end
 
-    handed = handed(name, record, body)
+  defp view_pack(%{name: name, identity: identity, raw: raw, record: record, body: body}, handed) do
     on = handed != :off
 
     withheld =
       case handed do
         {:withheld, sentence} -> sentence
+        {:past_set, sentence} -> capitalized(sentence)
         _handed_or_off -> nil
       end
 
@@ -1216,11 +1249,13 @@ defmodule Compendium.Packs do
     }
   end
 
-  # The one rule of what a program is handed of a pack, which `pack_view/3`
-  # and `pack_file/4` both ask: a pack switched off is handed nothing, and
-  # one switched on but past a pack's bounds (a migrated `mine` that holds
-  # more than a pack may, say) stays in the store and is handed nothing
-  # either, with the sentence its card says.
+  # The one rule of what a program is handed of a pack, which `pack_view/3`,
+  # `pack_file/4` and the cards all ask: a pack switched off is handed
+  # nothing; one switched on but past a pack's bounds (a migrated `mine`
+  # that holds more than a pack may, say) stays in the store and is handed
+  # nothing either, with the sentence its card says; and of the rest,
+  # taken in name order, each is handed while the sum of those handed
+  # stays within the set's bound (`standing/1`).
   defp handed(name, record, body) do
     if match?(%{on: true}, record) do
       case bounded(name, body) do
@@ -1231,6 +1266,52 @@ defmodule Compendium.Packs do
       :off
     end
   end
+
+  defp measured(name, record, body),
+    do: {name, handed(name, record, body), length(body), body_bytes(body)}
+
+  defp body_bytes(body), do: Enum.reduce(body, 0, fn {_rel, b}, n -> n + byte_size(b) end)
+
+  # The set's bound, decided where the packs are read: the packs a program
+  # may be handed (switched on, within their own bounds), in name order,
+  # are handed while their sum stays within the set's 8,192 files and
+  # 128 MiB; each past it is withheld with its sentence. It holds under any
+  # order of writes on any number of nodes, with no lock and no row: the
+  # check at a write (`set_bounded/4`) is the early notice, this is the
+  # guard. `packs` are `{name, verdict, files, bytes}` in name order.
+  defp standing(packs) do
+    {verdicts, _sum} =
+      Enum.map_reduce(packs, {0, 0}, fn
+        {name, :handed, files, bytes}, {fs, bs} ->
+          cond do
+            fs + files > @set_files ->
+              {{name, {:past_set, set_past(:files, fs + files)}}, {fs, bs}}
+
+            bs + bytes > @set_bytes ->
+              {{name, {:past_set, set_past(:bytes, bs + bytes)}}, {fs, bs}}
+
+            true ->
+              {{name, :handed}, {fs + files, bs + bytes}}
+          end
+
+        {name, verdict, _files, _bytes}, sum ->
+          {{name, verdict}, sum}
+      end)
+
+    Map.new(verdicts)
+  end
+
+  defp set_past(:files, sum),
+    do:
+      "your packs together are past the #{@set_files} files they may hold, at #{sum} " <>
+        "with this one; switch one off"
+
+  defp set_past(:bytes, sum),
+    do:
+      "your packs together are past the #{@set_bytes} bytes they may hold, at #{sum} " <>
+        "with this one; switch one off"
+
+  defp capitalized(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
 
   defp recomputed(pairs) do
     pairs
@@ -1252,8 +1333,12 @@ defmodule Compendium.Packs do
          true <- AquaPath.valid_name?(pack) and is_binary(path),
          :ok <- pack_path(path),
          false <- path == AquaPath.record_name(),
-         {:ok, pairs} <- Arca.read_subtree(Context.actor(ctx), AquaPath.pack_dir(pack)) do
-      handed_file(pack, pairs, String.split(path, "/"))
+         actor = Context.actor(ctx),
+         {:ok, revisions} <- revisions(actor),
+         true <- List.keymember?(revisions, pack, 0),
+         {:ok, earlier} <- earlier_measured(actor, revisions, pack),
+         {:ok, pairs} <- Arca.read_subtree(actor, AquaPath.pack_dir(pack)) do
+      handed_file(earlier, pack, pairs, String.split(path, "/"))
     else
       {:error, {:invalid_argument, _}} -> {:error, :not_found}
       {:error, _} = error -> error
@@ -1261,7 +1346,30 @@ defmodule Compendium.Packs do
     end
   end
 
-  defp handed_file(pack, pairs, rel) do
+  # The packs before `pack` in name order, each as the set's standing
+  # counts it: read whole when switched on, since its own bounds decide
+  # whether it counts; a pack that cannot be read answers its error, never
+  # nothing.
+  defp earlier_measured(actor, revisions, pack) do
+    revisions
+    |> Enum.take_while(fn {name, _identity} -> name < pack end)
+    |> Enum.reduce_while({:ok, []}, fn {name, _identity}, {:ok, acc} ->
+      case Arca.read_subtree(actor, AquaPath.pack_dir(name)) do
+        {:ok, pairs} ->
+          %{record: record, body: body} = split_any(name, pairs)
+          {:cont, {:ok, [measured(name, record, body) | acc]}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, measured} -> {:ok, Enum.reverse(measured)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp split_any(name, pairs) do
     record_name = [AquaPath.record_name()]
     {raw, body} = Enum.split_with(pairs, &(elem(&1, 0) == record_name))
 
@@ -1271,7 +1379,14 @@ defmodule Compendium.Packs do
         [] -> nil
       end
 
-    with :handed <- handed(pack, record, body),
+    %{name: name, record: record, body: body}
+  end
+
+  defp handed_file(earlier, pack, pairs, rel) do
+    %{record: record, body: body} = split_any(pack, pairs)
+    verdicts = standing(earlier ++ [measured(pack, record, body)])
+
+    with :handed <- verdicts[pack],
          {^rel, bytes} <- List.keyfind(body, rel, 0) do
       {:ok, bytes}
     else
@@ -1468,15 +1583,12 @@ defmodule Compendium.Packs do
     set_check(actor, pack, length(body), Enum.reduce(body, 0, &(&2 + byte_size(elem(&1, 1)))))
   end
 
+  # The early notice of the set's bound (`standing/1` is its guard): the
+  # other packs switched on, each measured; one whose size cannot be read
+  # refuses the write, never counts as nothing.
   defp set_check(actor, pack, files, bytes) do
-    with {:ok, names} <- pack_names(actor) do
-      {others_files, others_bytes} =
-        for name <- names,
-            name != pack,
-            %{on: true, files: f, bytes: b} <- [read_pack(actor, name, :index)],
-            reduce: {0, 0} do
-          {fs, bs} -> {fs + f, bs + b}
-        end
+    with {:ok, names} <- pack_names(actor),
+         {:ok, {others_files, others_bytes}} <- others_on(actor, names, pack) do
 
       total_files = others_files + files
       total_bytes = others_bytes + bytes
@@ -1497,6 +1609,48 @@ defmodule Compendium.Packs do
         true ->
           :ok
       end
+    end
+  end
+
+  defp others_on(actor, names, pack) do
+    Enum.reduce_while(names -- [pack], {:ok, {0, 0}}, fn name, {:ok, {fs, bs}} ->
+      case on_size(actor, name) do
+        {:ok, {f, b}} ->
+          {:cont, {:ok, {fs + f, bs + b}}}
+
+        {:error, _} ->
+          {:halt,
+           refuse(
+             "The size of the pack `#{name}` cannot be read, so whether the packs switched " <>
+               "on stay within what they may hold together is not known: try again"
+           )}
+      end
+    end)
+  end
+
+  # A pack's file count and bytes when switched on, its record left out;
+  # `{0, 0}` for one switched off, gone, or whose record cannot be read,
+  # none of which a program is handed.
+  defp on_size(actor, name) do
+    dir = AquaPath.pack_dir(name)
+
+    case Arca.get(actor, dir ++ [AquaPath.record_name()]) do
+      {:ok, raw} ->
+        case decode_record(raw) do
+          {:ok, %{on: true}} ->
+            with {:ok, leaves} <- Arca.list_recursive(actor, dir),
+                 {:ok, %{bytes: used}} <- Arca.usage(actor, dir),
+                 do: {:ok, {max(length(leaves) - 1, 0), max(used - byte_size(raw), 0)}}
+
+          _off_or_unreadable ->
+            {:ok, {0, 0}}
+        end
+
+      {:error, :not_found} ->
+        {:ok, {0, 0}}
+
+      {:error, _} = error ->
+        error
     end
   end
 

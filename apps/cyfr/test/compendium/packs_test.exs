@@ -1,6 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A store that cannot say how much one pack, `sib`, holds; every other read
+# is the local adapter's.
+defmodule Compendium.PacksTest.UnmeasurableSibling do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  def usage(actor, path) do
+    if "sib" in path,
+      do: {:error, :eacces},
+      else: Arca.Adapters.Local.usage(actor, path)
+  end
+end
+
 defmodule Compendium.PacksTest do
   @moduledoc """
   The packs of scrolls at their public boundaries: an archive brought in
@@ -822,46 +835,6 @@ defmodule Compendium.PacksTest do
       assert updated =~ "#{bound + 1} bytes together"
       assert %{on: false} = record!(actor, "extra")
       assert {:error, :not_found} = Packs.pack(ctx, "small")
-
-      # Two packs growing at once, each within the room left alone and past
-      # it together: the sum is checked under one lock the packs share, so
-      # the second waits for the first and is refused. `big2`'s edit holds
-      # in its own rewrite, past its pack's lock, while `big3` is written.
-      room = bound - 5 * pack_bytes
-      grow = :binary.copy("g", div(room, 2) + 1)
-      test = self()
-
-      first =
-        Task.async(fn ->
-          Packs.put_scroll(
-            ctx,
-            "big2:s",
-            nil,
-            {:update,
-             fn bytes ->
-               send(test, :first_holds)
-
-               receive do
-                 :go -> {:ok, bytes <> grow}
-               end
-             end}
-          )
-        end)
-
-      assert_receive :first_holds, 60_000
-
-      second =
-        Task.async(fn -> Files.write(actor, "aqua/scrolls/big3/skills/s/grow", grow) end)
-
-      # The second write may not land while the first holds the lock: a
-      # bounded check that it has not answered.
-      refute Task.yield(second, 2_000)
-      send(first.pid, :go)
-
-      assert :ok = Task.await(first, 60_000)
-      assert {:error, {:invalid_argument, together}} = Task.await(second, 60_000)
-      assert together =~ "bytes together"
-      assert {:error, :not_found} = Arca.get(actor, ~w(aqua scrolls big3 skills s grow))
     end
   end
 
@@ -870,6 +843,78 @@ defmodule Compendium.PacksTest do
   # ---------------------------------------------------------------------------
 
   describe "what a program is handed" do
+    test "a pack whose size cannot be read refuses a write into another, never counting as nothing",
+         %{ctx: ctx, actor: actor} do
+      {:ok, _} =
+        Files.write(actor, "aqua/scrolls/sib/skills/a/SKILL.md", "---\nname: a\n---\nb")
+
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Compendium.PacksTest.UnmeasurableSibling)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
+      end)
+
+      assert {:error, {:invalid_argument, refused}} =
+               Files.write(actor, "aqua/scrolls/other/skills/b/SKILL.md", "---\nname: b\n---\nc")
+
+      assert refused =~ "The size of the pack `sib` cannot be read"
+      assert {:error, :not_found} = Packs.pack(ctx, "other")
+    end
+
+    @tag timeout: 600_000
+    test "packs committed past the set's bound together are not all handed: the later in name order is withheld",
+         %{ctx: ctx, actor: actor} do
+      # Four packs of 2,048 files, each within its own bounds, hold the
+      # set's 8,192 between them; a fifth of one file takes the set past it.
+      # Each is committed around the early check, as two writers out of each
+      # other's sight could, so only the reading stands between them.
+      manifest = "---\nname: s\ndescription: d\n---\n\nb\n"
+      full = [{"skills/s/SKILL.md", manifest} | for(j <- 1..2_047, do: {"skills/s/f#{j}", "x"})]
+
+      for {pack, files} <- [
+            {"a1", full},
+            {"a2", full},
+            {"a3", full},
+            {"a4", full},
+            {"a5", [{"skills/s/SKILL.md", manifest}]}
+          ] do
+        :ok =
+          Arca.Overlay.edit_unit(actor, ["aqua", "scrolls", pack], fn nil ->
+            {:ok,
+             Enum.map(files, fn {path, bytes} -> {String.split(path, "/"), bytes} end) ++
+               [{[".cyfr-pack.json"], Packs.encode_record(Packs.own_record())}]}
+          end)
+      end
+
+      {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+      {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+      by_name = Map.new(view.packs, &{&1.name, &1})
+
+      for pack <- ~w(a1 a2 a3 a4) do
+        assert %{on: true, withheld: nil, files: files} = by_name[pack]
+        assert length(files) == 2_048
+      end
+
+      assert %{on: true, files: [], withheld: withheld} = by_name["a5"]
+
+      assert withheld ==
+               "Your packs together are past the 8192 files they may hold, at 8193 with this " <>
+                 "one; switch one off"
+
+      assert {:error, :not_found} =
+               Packs.pack_file(ctx, ctx.athanor_id, "a5", "skills/s/SKILL.md")
+
+      assert {:ok, ^manifest} = Packs.pack_file(ctx, ctx.athanor_id, "a4", "skills/s/SKILL.md")
+
+      {:ok, cards} = Packs.list(ctx)
+      assert %{past: past} = Enum.find(cards, &(&1.name == "a5"))
+      assert past =~ "your packs together are past the 8192 files"
+      assert %{past: nil} = Enum.find(cards, &(&1.name == "a4"))
+    end
+
     test "pack_file/4 answers for no file of a pack switched off, by any path", %{
       ctx: ctx,
       actor: actor
