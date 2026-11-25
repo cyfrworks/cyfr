@@ -3943,8 +3943,10 @@ func (args ScheduleGetArgs) MarshalJSON() ([]byte, error) {
 
 // ScheduleListArgs carries arguments for schedule.list.
 type ScheduleListArgs struct {
-	// Maximum results to return (list)
+	// Maximum results to return (list), at most 1000
 	Limit Field[int] `json:"limit,omitzero"`
+	// How many of the newest schedules to pass over before the first one listed (list)
+	Offset Field[int] `json:"offset,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
