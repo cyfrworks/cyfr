@@ -4,7 +4,7 @@
 """A person's machine boots from the image's programs, as the keeper makes them (plan V1).
 
 Each run is `cyfr-locus guest-check` in a container with docker-compose.yml's
-locus-backends configuration (copied from the running service, as
+locus configuration (copied from the running service, as
 harness.py's second instances are), given `--device /dev/kvm` and nothing
 else beyond its role's own confinement, on a kept-homes volume and a
 `guest` volume of the run's own:
@@ -14,8 +14,10 @@ else beyond its role's own confinement, on a kept-homes volume and a
   the guest volume, named by the image's digest, and removes a device of
   another image once its own is whole. Its time is printed: on a runner,
   whose disk has never read the image, it is the cold making.
-- The machine answers the hello with its boot identity; the guest's keeper
-  makes one space under a pool uid, whose root is the image's programs
+- The guest's own guard, the image's cyfr-guard with NET_ADMIN alone, is
+  ready before the guest's keeper starts, and the keeper proves it at its
+  boot. The machine answers the hello with its boot identity; the guest's
+  keeper makes one space under a pool uid, with no route, IPv4 or IPv6, whose root is the image's programs
   bound read only from the guest's squashfs root, which reads the same boot
   identity, exits 0 and is released; the machine ends by itself once the
   control connection ends, and its group holds no process.
@@ -43,12 +45,13 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import KEPT_ROOT, POOL_FIRST, POOL_LAST, RUN_DIR, Stack, expect, require_docker  # noqa: E402
+from harness import KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE, ROLE, Stack, expect, require_docker  # noqa: E402
 import imagesuite  # noqa: E402
 from imagesuite import PROJECT_PREFIX, run  # noqa: E402
 
 KVM = "/dev/kvm"
-GUEST_ROOT = "/var/lib/locus/guest"
+# The machines' folder, the guest volume's mount point, as the role table names it.
+GUEST_ROOT = ROLE["guest_root"]
 BOOT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DEVICE = re.compile(r"^" + re.escape(GUEST_ROOT) + r"/[0-9a-f]{64}\.sqfs$")
 # A session's churn: small objects made and dropped, freed in pieces
@@ -113,6 +116,8 @@ def booted(code, report, stderr, what):
     out = report.get("stdout", "").splitlines()
     expect(len(out) > 2 and out[0] == str(spawned.get("uid")), f"{what}: the space's own uid is its pool uid", out[:2])
     expect(out[1] == report["boot_id"], f"{what}: the space reads the guest's boot identity", out[:2])
+    expect(len(out) > 2 and out[2] == "routes 0 0", f"{what}: the space has no route, IPv4 or IPv6", out[2:3])
+    expect("ready: every rule installed" in stderr, f"{what}: the guest's guard was ready before its keeper", stderr[-2000:])
     mounts = {}
     for line in out[2:]:
         fields = line.split()
@@ -169,7 +174,7 @@ def main():
         for present in ("/usr/local/bin/cyfr-guest", "/usr/local/bin/cyfr-locus", "/usr/bin/mksquashfs",
                         "/etc/passwd", KEPT_ROOT, GUEST_ROOT, "/proc", "/sys", "/dev"):
             expect(present in paths, f"the device holds {present}", sorted(paths)[:20])
-        for mount in (KEPT_ROOT, GUEST_ROOT, "/proc", "/sys", "/dev", RUN_DIR):
+        for mount in (KEPT_ROOT, GUEST_ROOT, "/proc", "/sys", "/dev", RELEASE["run_dir"]):
             inside = sorted(p for p in paths if p.startswith(mount + "/"))
             expect(not inside, f"the device holds nothing under the mount point {mount}", inside[:10])
         expect(not any(canary in p for p in paths), "the device holds no canary of the kept homes' volume")

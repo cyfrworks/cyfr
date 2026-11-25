@@ -1,5 +1,5 @@
 {
-  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role shares: the compose service and container that run the one Locus, its egress guard's service and container, whose network namespace the service shares, the one network the guard and cyfr join (its subnet and dynamic range) with cyfr's fixed address there, where its host API binds, the binary each role process runs, the root of the role folders of every spawn's home, the run directory and the size of its tmpfs, and the endpoint network's and the edge network's names, subnets and dynamic ranges with the fixed addresses of cyfr's loopback listener, its proxy listener, Caddy and Tailscale on them. Each role, in the module's order, names the key variable that starts it, the user and uid its process runs as (its gid the same), its listener's port, whether its space reaches private addresses and core's host API (private), its run folder and the size of its tmpfs, its spawns' homes' root and the size of their tmpfs, its uid pool, the prefix of its pooled users' names, its first and last pooled uid and the reach of its spawns' spaces (relay or routed, the keeper's --pool suffix). A role whose programs keep their folders names their root, the compose volume mounted there, the uid range the keeper's --kept-homes flag draws from and the group the root is shared with and its gid (kept_root, kept_volume, kept_first_uid, kept_last_uid, kept_group, kept_gid); every other role names none (null). Each role's memory and the release's are what a role's process holds of its own (Prima.LocusRoles, Locus.Output's table): a role's counted bounds (unread, null for a role that keeps none, and answering) and the runtime's uncounted figures (one pinned fetch's transport read, the larger read a fetch takes with its count's room, the most of a fetch's head the HTTP client reads, the freed segments its VM keeps; null for every other role), and the release's factor of resident bytes to a byte held, one held keeper read and its copies, and the kernel's queues of a relay connection and of a TCP connection's sends, from which each image suite computes its allowance.",
+  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role shares: the compose service and container that run the one Locus, its egress guard's service and container, whose network namespace the service shares, the one network the guard and cyfr join (its subnet and dynamic range) with cyfr's fixed address there, where its host API binds, the binary each role process runs, the root of the role folders of every spawn's home, the run directory and the size of its tmpfs, and the endpoint network's and the edge network's names, subnets and dynamic ranges with the fixed addresses of cyfr's loopback listener, its proxy listener, Caddy and Tailscale on them. Each role, in the module's order, names the key variable that starts it, the user and uid its process runs as (its gid the same), its listener's port, whether its space reaches private addresses and core's host API (private), its run folder and the size of its tmpfs, its spawns' homes' root and the size of their tmpfs, its uid pool, the prefix of its pooled users' names, its first and last pooled uid and the reach of its spawns' spaces (relay or routed, the keeper's --pool suffix). A role whose programs keep their folders names their root, the compose volume mounted there, the uid range the keeper's --kept-homes flag draws from and the group the root is shared with and its gid (kept_root, kept_volume, kept_first_uid, kept_last_uid, kept_group, kept_gid); every other role names none (null). The role whose sessions run in a person's machine names the machines' folder and the compose volume mounted there (guest_root, guest_volume); every other role names none (null). Each role's memory and the release's are what a role's process holds of its own (Prima.LocusRoles, Locus.Output's table): a role's counted bounds (unread, null for a role that keeps none, and answering) and the runtime's uncounted figures (one pinned fetch's transport read, the larger read a fetch takes with its count's room, the most of a fetch's head the HTTP client reads, the freed segments its VM keeps; null for every other role), and the release's factor of resident bytes to a byte held, one held keeper read and its copies, and the kernel's queues of a relay connection and of a TCP connection's sends, from which each image suite computes its allowance.",
   "release": {
     "service": "locus",
     "container": "cyfr-locus",
@@ -54,6 +54,8 @@
       "kept_last_uid": null,
       "kept_group": null,
       "kept_gid": null,
+      "guest_root": null,
+      "guest_volume": null,
       "memory": {
         "unread": null,
         "answering": 16777216,
@@ -85,6 +87,8 @@
       "kept_last_uid": null,
       "kept_group": null,
       "kept_gid": null,
+      "guest_root": null,
+      "guest_volume": null,
       "memory": {
         "unread": null,
         "answering": 8388608,
@@ -116,6 +120,8 @@
       "kept_last_uid": 49999,
       "kept_group": "locus",
       "kept_gid": 10001,
+      "guest_root": "/var/lib/locus/guest",
+      "guest_volume": "guest",
       "memory": {
         "unread": 67108864,
         "answering": 27262976,

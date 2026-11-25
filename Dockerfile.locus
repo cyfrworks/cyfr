@@ -94,7 +94,48 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-claude-code ./cmd/cyfr-claude-code \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-codex ./cmd/cyfr-codex \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-acp ./cmd/cyfr-acp \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-fetch ./cmd/cyfr-fetch
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-fetch ./cmd/cyfr-fetch \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-guest ./cmd/cyfr-guest
+
+# ---- A person's machine (apps/locus/keeper/internal/vm): the guest kernel
+# and its VMM, on amd64 alone. Linux, pinned by its archive's sha256, built
+# from Firecracker's microVM configuration at the pinned release (each file
+# pinned by its sha256) with apps/locus/guest/kernel.config over it, and
+# Firecracker itself, pinned by its release archive's sha256. The arm64
+# image carries neither: its keeper runs no machine, as on a host without
+# KVM, until a Raspberry Pi 5 proves one. ----
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS guest
+ARG TARGETARCH
+ARG LINUX_VERSION=6.18.65
+ARG LINUX_SHA256=c92606f956f09dc50b5a0e2af9e86763fce27ada1647de97f8d1ac8cfc95801d
+ARG FIRECRACKER_VERSION=v1.18.0
+ARG FIRECRACKER_SHA256=1ac8eec866dd5eea14efecf6323e22b23eea24054545338a5b34bc5bca6623cd
+ARG FIRECRACKER_CONFIG_SHA256=ba22401a0c7292a4c024ebcd10a562d4a1f1bfd2faed671406d3b159c0cf5215
+ARG FIRECRACKER_CI_CONFIG_SHA256=6ce47107d9fb695a873ffc4733a1d8e1b4941c4f272e20dac4bf163dfb77f47e
+COPY apps/locus/guest/kernel.config /tmp/kernel.config
+RUN mkdir -p /out && if [ "$TARGETARCH" != amd64 ]; then exit 0; fi \
+    && apt-get update && apt-get install -y --no-install-recommends build-essential flex bison bc libelf-dev \
+       libssl-dev xz-utils cpio kmod python3 dwarves ca-certificates curl \
+    && cd /tmp \
+    && curl -fsSL "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz" -o linux.tar.xz \
+    && echo "${LINUX_SHA256}  linux.tar.xz" | sha256sum -c - \
+    && configs="https://raw.githubusercontent.com/firecracker-microvm/firecracker/${FIRECRACKER_VERSION}/resources/guest_configs" \
+    && curl -fsSL "$configs/microvm-kernel-ci-x86_64-6.18.config" -o microvm.config \
+    && curl -fsSL "$configs/ci.config" -o ci.config \
+    && echo "${FIRECRACKER_CONFIG_SHA256}  microvm.config" | sha256sum -c - \
+    && echo "${FIRECRACKER_CI_CONFIG_SHA256}  ci.config" | sha256sum -c - \
+    && curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" -o firecracker.tgz \
+    && echo "${FIRECRACKER_SHA256}  firecracker.tgz" | sha256sum -c - \
+    && tar -xzf firecracker.tgz "release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" \
+    && install -m 0755 "release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /out/firecracker \
+    && mkdir linux && tar -xJf linux.tar.xz -C linux --strip-components=1 && cd linux \
+    && cp ../microvm.config .config \
+    && scripts/kconfig/merge_config.sh -m .config ../ci.config /tmp/kernel.config \
+    && make olddefconfig \
+    && grep '^CONFIG_.*=y' /tmp/kernel.config | while read -r option; do grep -qx "$option" .config || { echo "the guest kernel lacks $option"; exit 1; }; done \
+    && make -j"$(nproc)" vmlinux \
+    && install -m 0644 vmlinux /out/vmlinux \
+    && cd / && rm -rf /tmp/linux /tmp/*.tar.xz /tmp/*.tgz
 
 # ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
@@ -184,6 +225,7 @@ RUN --mount=type=bind,source=scripts/apt-key.sh,target=/tmp/apt-key.sh \
     locales \
     build-essential \
     iptables \
+    squashfs-tools \
     procps \
     && apt-get install -y --no-install-recommends fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-noto-cjk \
     && dpkg-query -W -f '${Package}\n' | sort > /tmp/before-browser \
@@ -318,6 +360,15 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
+# A person's machine: the guest agent, which a guest's kernel runs as its
+# first process from the image's programs (squashfs-tools' mksquashfs, above,
+# makes them into the machines' device in the `guest` volume), and on amd64
+# the guest kernel and Firecracker (package vm).
+# The volume's mount point, /var/lib/locus/guest, is Docker's to make: a
+# new volume is root's, 0755, and each machine's sockets are kept there
+# too, in a folder root's and its VMM's group's alone.
+COPY --from=keeper /out/cyfr-guest /usr/local/bin/cyfr-guest
+COPY --from=guest /out/ /usr/lib/cyfr/guest/
 # CYFR's drivers and the stub, in /opt/cyfr/bin alone, which is first on a
 # kept program's PATH (apps/locus/keeper/internal/stage/spec.go), so a
 # command of the same name a person installs is never found in their place.
@@ -385,6 +436,12 @@ RUN LOCUS_BUILDS_KEY="$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')"
          CARGO_HOME="$LOCUS_BUILDS_CARGO_SEED" cargo fetch --manifest-path "$manifest" || exit 1; \
        done \
     && rm -rf /tmp/cargo-seed
+
+# The image's identity, last of every file: a digest of its root's contents,
+# which names the machines' device the keeper makes from it, so a new image
+# makes a new one (package vm's Programs).
+RUN find / -xdev -type f ! -path /etc/cyfr/image-digest -print0 | sort -z | xargs -0 sha256sum \
+    | sha256sum | cut -c1-64 > /etc/cyfr/image-digest
 
 # The release starts no Erlang distribution: a listener any guest, build
 # or backend could reach, authenticated by a cookie any of them could read.

@@ -48,9 +48,11 @@ const (
 )
 
 // defaultCommand is the check's space's command when none is given: it
-// shows the space's root, which must be the image's programs bound from
-// the guest's read-only root, its uid and its boot.
-var defaultCommand = []string{"/bin/sh", "-c", "id -u; cat /proc/sys/kernel/random/boot_id; cat /proc/self/mountinfo"}
+// shows the space's uid, its boot, its IPv4 and IPv6 routes, which must be
+// none, and its root, which must be the image's programs bound from the
+// guest's read-only root.
+var defaultCommand = []string{"/bin/sh", "-c", "id -u; cat /proc/sys/kernel/random/boot_id; " +
+	"echo routes $(($(wc -l < /proc/net/route) - 1)) $(wc -l < /proc/net/ipv6_route); cat /proc/self/mountinfo"}
 
 // Report is what the check found, one JSON object on standard output.
 type Report struct {

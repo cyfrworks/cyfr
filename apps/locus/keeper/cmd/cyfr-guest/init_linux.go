@@ -4,6 +4,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cyfr/locus/keeper/internal/vm"
 	"golang.org/x/sys/unix"
@@ -28,10 +31,15 @@ const keeperGroup = "/sys/fs/cgroup/locus"
 // take, so no space's growth ends the agent, whose end is the machine's.
 const guestReserve = 64 << 20
 
+// guardWait bounds the guest's guard's start to its ready file: every rule
+// in, before the keeper proves it.
+const guardWait = 10 * time.Second
+
 // initMain is the guest's first process. It makes the guest's mounts and
-// the keeper's group, starts the keeper, reaps every orphan, and ends the
-// machine when the keeper ends: the keeper ends when its client, the
-// agent's relay, does, which is when the host's control connection does.
+// the keeper's group, starts the guest's guard and, once the guard is
+// ready, the keeper, reaps every orphan, and ends the machine when the
+// keeper ends: the keeper ends when its one role, the agent's relay, does,
+// which is when the host's control connection does.
 // It returns only when it cannot go on, which ends the machine too
 // (panic=-1, vm's boot arguments).
 func initMain() int {
@@ -49,8 +57,17 @@ func initMain() int {
 		logf("refusing to start: %v", err)
 		return 1
 	}
+	if err := startGuard(self); err != nil {
+		logf("refusing to start: the guard: %v", err)
+		return 1
+	}
+	key, err := roleKey()
+	if err != nil {
+		logf("refusing to start: %v", err)
+		return 1
+	}
 	cmd := exec.Command(self, "keeper")
-	cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	cmd.Env = []string{path, vm.GuestRoleKey + "=" + key}
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	// Born in the keeper's group, then a cgroup namespace rooted there and a
 	// mount namespace of its own, where the keeper step mounts that
@@ -98,12 +115,16 @@ func describe(ws unix.WaitStatus) string {
 	return "exit " + strconv.Itoa(ws.ExitStatus())
 }
 
+const path = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 // mounts are the guest's own filesystems over its read-only root, the
-// image's programs. They are the Locus container's, so the keeper finds
-// what it finds there: a /proc, /sys and /dev of the guest's own, the
-// POSIX message queues the keeper's residue check reads, the cgroup2 tree,
-// a /run with the client's 0700 folder, and the home root, mode 1733. There
-// is no writable /tmp or /dev/shm, which the keeper refuses.
+// image's programs. They are the Locus container's, so the keeper and the
+// guard find what they find there: a /proc, /sys and /dev of the guest's
+// own, the POSIX message queues the keeper's residue check reads, the
+// cgroup2 tree, a /run holding the guard's folders and /run/locus, root's,
+// 0711, with the role's run folder, its uid's own, 0700, and the role's
+// homes, mode 1733. There is no writable /tmp or /dev/shm, which the keeper
+// refuses.
 func mounts() error {
 	type m struct {
 		source, target, fstype string
@@ -119,7 +140,7 @@ func mounts() error {
 		{"mqueue", "/dev/mqueue", "mqueue", hidden, ""},
 		{"cgroup2", "/sys/fs/cgroup", "cgroup2", hidden, "nsdelegate"},
 		{"run", "/run", "tmpfs", unix.MS_NOSUID | unix.MS_NODEV, "mode=0755,size=16m"},
-		{"homes", vm.GuestHomeRoot, "tmpfs", unix.MS_NOSUID | unix.MS_NODEV, "mode=1733"},
+		{"homes", filepath.Join(vm.GuestHomeRoot, vm.GuestRole), "tmpfs", unix.MS_NOSUID | unix.MS_NODEV, "mode=1733"},
 	} {
 		if mt.target == "/dev/pts" || mt.target == "/dev/mqueue" {
 			if err := os.MkdirAll(mt.target, 0o755); err != nil {
@@ -135,17 +156,78 @@ func mounts() error {
 			return fmt.Errorf("mounting %s at %s: %w", mt.fstype, mt.target, err)
 		}
 	}
-	client, err := user.Lookup(vm.GuestClientUser)
+	role, err := user.Lookup("locus-" + vm.GuestRole)
 	if err != nil {
 		return err
 	}
-	uid, _ := strconv.Atoi(client.Uid)
-	gid, _ := strconv.Atoi(client.Gid)
-	run := filepath.Dir(vm.GuestAttachPath)
-	if err := os.Mkdir(run, 0o700); err != nil {
+	uid, _ := strconv.Atoi(role.Uid)
+	gid, _ := strconv.Atoi(role.Gid)
+	for _, dir := range []struct {
+		path     string
+		mode     os.FileMode
+		uid, gid int
+	}{
+		{"/run/cyfr-guard", 0o755, 0, 0},
+		{filepath.Dir(vm.GuestGuardControl), 0o700, 0, 0},
+		{filepath.Dir(vm.GuestRunDir), 0o711, 0, 0},
+		{vm.GuestRunDir, 0o700, uid, gid},
+	} {
+		if err := os.Mkdir(dir.path, dir.mode); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir.path, dir.mode); err != nil {
+			return err
+		}
+		if err := os.Chown(dir.path, dir.uid, dir.gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startGuard starts the guest's guard, the image's cyfr-guard, as the
+// Locus container's guard runs: forwarding on, ICMP unlimited, NET_ADMIN
+// alone, its control on GuestGuardControl. It waits guardWait for the ready
+// file, written once every rule is in. The guest has no network card, so
+// the guard's routes lead nowhere: a space it routes reaches only what the
+// guard's own namespace does, which is nothing past the guest. Its control
+// plane is a documentation address (RFC 5737), refused as cyfr's would be.
+func startGuard(self string) error {
+	for file, value := range map[string]string{
+		"/proc/sys/net/ipv4/ip_forward":     "1",
+		"/proc/sys/net/ipv4/icmp_ratelimit": "0",
+	} {
+		if err := os.WriteFile(file, []byte(value), 0o644); err != nil {
+			return err
+		}
+	}
+	cmd := exec.Command(self, "guard")
+	cmd.Env = []string{path, "CYFR_GUARD_CONTROL=" + vm.GuestGuardControl, "CYFR_GUARD_CONTROL_PLANE=192.0.2.1",
+		"CYFR_PRIVATE_EGRESS_TARGETS="}
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return os.Chown(run, uid, gid)
+	deadline := time.Now().Add(guardWait)
+	for {
+		if _, err := os.Stat("/run/cyfr-guard/ready"); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no ready file within %s", guardWait)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// roleKey is the role's key: the keeper starts a role only with one. The
+// relay reads none; it is random so nothing holds it.
+func roleKey() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // keeperCgroup makes the keeper's group, bounded below the guest's memory

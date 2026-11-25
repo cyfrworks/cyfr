@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cyfr/locus/keeper/internal/frame"
+	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/vm"
 	"golang.org/x/sys/unix"
 )
@@ -21,8 +22,10 @@ import (
 // the host's for a spawn's relay, or a spawn relay's for the host's.
 var pairWait = 30 * time.Second
 
-// relayMain is the guest keeper's client, on its channel at file
-// descriptor 3. It listens before anything can be spawned: on the attach
+// relayMain is the guest keeper's one role, in the role's own space, on
+// its channel at file descriptor 3. vsock is not a network namespace's: the
+// role's space, routed by the guest's guard to nothing, still listens on
+// the guest's vsock ports. It listens before anything can be spawned: on the attach
 // socket for the keeper's relays, and on vsock for the host. The host's
 // first control connection gets the Hello and then the keeper's channel;
 // each attach connection of the host's is joined to the spawn relay that
@@ -35,6 +38,12 @@ func relayMain() int {
 	keeper, err := net.FileConn(os.NewFile(3, "keeper"))
 	if err != nil {
 		logf("relay: the keeper's channel on fd 3: %v", err)
+		return 1
+	}
+	// The keeper names the role's run folder, where its relays reach the
+	// attach socket: it must be the one the host names in each spawn.
+	if dir := os.Getenv(protocol.RunDirEnv); dir != vm.GuestRunDir {
+		logf("relay: the role's run folder is %q, not %s", dir, vm.GuestRunDir)
 		return 1
 	}
 	raw, err := os.ReadFile("/proc/sys/kernel/random/boot_id")

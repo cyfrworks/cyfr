@@ -39,7 +39,7 @@ func keeperMain() int {
 		logf("refusing to start the keeper: mounting its cgroup namespace: %v", err)
 		return 1
 	}
-	if err := dropBounding(); err != nil {
+	if err := dropBounding(keeperCaps); err != nil {
 		logf("refusing to start the keeper: %v", err)
 		return 1
 	}
@@ -47,14 +47,32 @@ func keeperMain() int {
 		logf("refusing to start the keeper: clearing the ambient set: %v", err)
 		return 1
 	}
-	argv := []string{vm.GuestKeeper, "serve", "--pool", vm.GuestPoolSpec, "--home-root", vm.GuestHomeRoot,
-		"--client-user", vm.GuestClientUser, "--", vm.GuestAgent, "relay"}
+	argv := []string{vm.GuestKeeper, "serve", "--role", vm.GuestRoleSpec, "--pool", vm.GuestPoolSpec,
+		"--home-root", vm.GuestHomeRoot, "--guard", vm.GuestGuardControl, "--", vm.GuestAgent, "relay"}
 	err := syscall.Exec(argv[0], argv, os.Environ())
 	logf("refusing to start the keeper: %v", err)
 	return 1
 }
 
-func dropBounding() error {
+// guardMain is the guard's start: every capability but NET_ADMIN dropped
+// from the bounding set, as compose's guard holds NET_ADMIN alone, then the
+// image's cyfr-guard.
+func guardMain() int {
+	runtime.LockOSThread()
+	if err := dropBounding(map[int]bool{unix.CAP_NET_ADMIN: true}); err != nil {
+		logf("refusing to start the guard: %v", err)
+		return 1
+	}
+	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
+		logf("refusing to start the guard: clearing the ambient set: %v", err)
+		return 1
+	}
+	err := syscall.Exec(vm.GuestGuard, []string{vm.GuestGuard}, os.Environ())
+	logf("refusing to start the guard: %v", err)
+	return 1
+}
+
+func dropBounding(keep map[int]bool) error {
 	raw, err := os.ReadFile("/proc/sys/kernel/cap_last_cap")
 	if err != nil {
 		return err
@@ -64,7 +82,7 @@ func dropBounding() error {
 		return err
 	}
 	for c := 0; c <= last; c++ {
-		if keeperCaps[c] {
+		if keep[c] {
 			continue
 		}
 		if err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(c), 0, 0, 0); err != nil {

@@ -48,31 +48,47 @@ const (
 	GuestCID uint32 = 3
 )
 
-// The guest's side of its keeper, as cmd/cyfr-guest starts it.
+// The guest's side of its keeper, as cmd/cyfr-guest starts it: the Locus
+// container's own keeper, guard and role, one role of it.
 const (
-	// GuestAttachPath is the Unix socket the guest's keeper's relays
-	// connect to with their spawn's attach token: the host names it in
-	// each spawn it asks the guest for.
-	GuestAttachPath = "/run/locus/attach.sock"
-	// GuestPool is the guest keeper's one pool, which the host names in
-	// each spawn. It is a relay pool, so a space in it has no route: the
-	// guest's guard, and with it routed spaces, come with a person's
-	// sessions (plan V2).
+	// GuestRole is the guest keeper's one role, whose process is the
+	// guest agent's relay (`cyfr-guest relay`): the image's backends role,
+	// its uid the image's locus-backends and its port the role table's.
+	GuestRole = "backends"
+	// GuestRoleSpec is that role on the guest keeper's command line. Its
+	// space is routed by the guest's guard as every role's is; with no
+	// network card in the guest the route leads nowhere.
+	GuestRoleSpec = GuestRole + ":10013:4101:" + GuestPool
+	// GuestRoleKey is the role's key variable, which the keeper starts the
+	// role for. The relay reads no key: the init gives it one of its own.
+	GuestRoleKey = "LOCUS_BACKENDS_KEY"
+	// GuestPool is the role's one pool, which the host names in each
+	// spawn. It is a relay pool, so a space in it has no route at all: the
+	// routed sessions of a person, and the host's guard of their machine,
+	// are V2's.
 	GuestPool = "backends"
 	// GuestPoolSpec is that pool on the guest keeper's command line: the
 	// backend uids the image already defines.
 	GuestPoolSpec = GuestPool + ":20001-20032:relay"
-	// GuestHomeRoot is the guest keeper's home root, a tmpfs of the
-	// guest's own.
+	// GuestHomeRoot is the guest keeper's home root; the role's homes are
+	// a tmpfs of the guest's own at GuestHomeRoot/GuestRole.
 	GuestHomeRoot = "/var/lib/locus/homes"
-	// GuestClientUser runs the guest agent's relay, as the release runs as
-	// it in the Locus container.
-	GuestClientUser = "locus"
+	// GuestRunDir is the role's run folder, its uid's own, 0700, where the
+	// keeper's relays reach the attach socket it listens on.
+	GuestRunDir = "/run/locus/" + GuestRole
+	// GuestAttachPath is that socket: the host names it in each spawn it
+	// asks the guest for.
+	GuestAttachPath = GuestRunDir + "/attach.sock"
+	// GuestGuardControl is the guest's guard's control socket, which the
+	// keeper proves the guard by at its boot and routes every role by.
+	GuestGuardControl = "/run/cyfr-guard-control/guard.sock"
 	// GuestAgent is the guest agent's path in the image's programs, which
 	// the kernel runs as the guest's first process.
 	GuestAgent = "/usr/local/bin/cyfr-guest"
-	// GuestKeeper is the keeper's path in the image's programs.
+	// GuestKeeper and GuestGuard are the keeper's and the guard's paths in
+	// the image's programs.
 	GuestKeeper = "/usr/local/bin/cyfr-locus"
+	GuestGuard  = "/usr/local/bin/cyfr-guard"
 )
 
 // The guest's files in the Locus image.

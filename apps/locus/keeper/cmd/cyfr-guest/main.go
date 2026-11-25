@@ -8,10 +8,13 @@
 // which are the guest's read-only root.
 //
 //	cyfr-guest           as the guest's first process: its mounts, the
-//	                     keeper's group, the keeper, and the machine's end
+//	                     guard, the keeper's group, the keeper, and the
+//	                     machine's end
+//	cyfr-guest guard     the guard's start: NET_ADMIN alone, then the
+//	                     image's cyfr-guard
 //	cyfr-guest keeper    the keeper's start, in the group and namespaces the
 //	                     first process gave it: execs `cyfr-locus serve`
-//	cyfr-guest relay     the guest keeper's client, run by that keeper:
+//	cyfr-guest relay     the guest keeper's one role, run by that keeper:
 //	                     carries its channel and its spawns' attach
 //	                     connections to the host over vsock
 //
@@ -31,13 +34,15 @@ func main() {
 	}
 	if len(os.Args) == 2 {
 		switch os.Args[1] {
+		case "guard":
+			os.Exit(guardMain())
 		case "keeper":
 			os.Exit(keeperMain())
 		case "relay":
 			os.Exit(relayMain())
 		}
 	}
-	fmt.Fprintln(os.Stderr, "usage: cyfr-guest (as the guest's first process) | cyfr-guest keeper | cyfr-guest relay")
+	fmt.Fprintln(os.Stderr, "usage: cyfr-guest (as the guest's first process) | cyfr-guest guard | cyfr-guest keeper | cyfr-guest relay")
 	os.Exit(64)
 }
 
