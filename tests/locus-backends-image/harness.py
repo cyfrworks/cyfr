@@ -1066,7 +1066,7 @@ class Stack(imagesuite.Stack):
         return run("docker", "run", "--rm", "--name", f"{self.project}-beside-{os.getpid()}", "--network", f"{self.project}_{network}",
                    "--entrypoint", command[0], self.image, *command[1:], check=False, timeout=60)
 
-    def alone(self, suffix, publish=False):
+    def alone(self, suffix, publish=False, env=None):
         """A second instance of the shipped service, started as the project's `suffix` (PROJECT-SUFFIX) behind a guard of its own on the island's network.
 
         `compose run` would put it in the guard's namespace, beside the
@@ -1078,7 +1078,8 @@ class Stack(imagesuite.Stack):
         spells none of it. Its guard serves its keeper the control on a
         volume of their own: every program's session runs in a routed
         space, which no keeper starts without its guard. With `publish`,
-        its port is published on the loopback, read with `docker port`.
+        its port is published on the loopback, read with `docker port`;
+        `env` sets variables over the running service's.
         `alone_down(suffix)` removes both and their volumes.
         """
         guard_name = f"{self.project}-{suffix}-guard"
@@ -1093,10 +1094,10 @@ class Stack(imagesuite.Stack):
                    f"{guard_name} to turn healthy", timeout_s=60)
         info = self.inspect(self.container)
         args = ["docker", "run", "--detach", "--name", f"{self.project}-{suffix}", "--network", f"container:{guard_name}"]
-        args += self.copied(info, control=True, guard_name=guard_name)
+        args += self.copied(info, control=True, guard_name=guard_name, env=env)
         run(*args)
 
-    def copied(self, info, control, guard_name=None):
+    def copied(self, info, control, guard_name=None, env=None):
         """The `docker run` arguments that give a container `info`'s configuration, its control volume shared with
         `guard_name`'s where `control` is set, and a fresh volume of its own for every other volume mount."""
         host, config = info["HostConfig"], info["Config"]
@@ -1149,6 +1150,8 @@ class Stack(imagesuite.Stack):
             args += ["--health-cmd", " ".join(test[1:]), "--health-interval", "1s"]
         for entry in config.get("Env") or []:
             args += ["--env", entry]
+        for name, value in (env or {}).items():
+            args += ["--env", f"{name}={value}"]
         entrypoint = list(config.get("Entrypoint") or [])
         args += ["--entrypoint", entrypoint[0], self.image, *entrypoint[1:], *(config.get("Cmd") or [])]
         return args

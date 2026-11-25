@@ -24,8 +24,9 @@ Driven only by requests signed as CYFR signs them (harness.py):
   exits ends its session, is counted as a crash and retired, and the next
   call starts it again, initialized afresh, in a new home.
 - The release refuses to start without a valid backends key; when it dies,
-  cyfr-locus retires every backend and exits 70; when cyfr-locus is lost,
-  the container ends with every backend in it; cyfr-locus refuses Docker's
+  cyfr-locus retires every backend and starts the role again alone, the
+  container running on; when cyfr-locus is lost, the container ends with
+  every backend in it; cyfr-locus refuses Docker's
   default capabilities; and stopping the service retires every backend.
 - Every backend runs in a space of its own, a user, network and IPC
   namespace, with its own loopback and one route, its guard's. The service
@@ -53,9 +54,9 @@ Driven only by requests signed as CYFR signs them (harness.py):
 - A session's name lookup reaches an upstream resolver the suite runs
   (name-listener.mjs, beside the guard as its resolver's upstream), which
   hears the session's own name.
-- When the guard's control dies, the keeper kills every routed space at
-  once: a session's processes are gone within a second, before any guard
-  is dialled again.
+- When the guard's control dies, the keeper kills every routed space, its
+  roles' among them, and ends: the container stops within seconds and
+  starts again behind a guard, a session's processes gone with it.
 - A guard started with an ip6tables that fails writes no ready file, never
   turns healthy, names the rule that failed, and the service behind it is
   never started.
@@ -416,7 +417,8 @@ def test_names(image):
 
 
 def test_guard_death(image):
-    """The guard's control dies: every routed space is killed at once, before any redial."""
+    """The guard's control dies: every routed space is killed at once, and the keeper ends with every role, so the
+    container starts again behind a guard."""
     stack = Stack("locus-backends-isolation-guard-dies", image)
     try:
         stack.up()
@@ -426,17 +428,22 @@ def test_guard_death(image):
         sync_probe(c, owner)
         c.tool(owner, "probe__spawn_daemon")
         who = c.tool(owner, "probe__whoami")
-        uid = who["uid"]
         eventually(lambda: stack.outside(who, DAEMON), "the session's daemon to start")
         control = stack.guard_exec("for p in /proc/[0-9]*; do grep -qa guard-control $p/cmdline 2>/dev/null && echo ${p#/proc/}; done")
         pids = control.stdout.split()
         expect(pids, "the guard's control runs", control.stdout + control.stderr)
+        restarts = stack.inspect(stack.container)["RestartCount"]
         killed = time.monotonic()
         stack.guard_exec(f"kill -KILL {' '.join(pids)}")
-        gone = eventually(lambda: not stack.under_uid(uid), f"every process of uid {uid} to be gone", timeout_s=5)
+
+        def ended():
+            info = stack.inspect(stack.container)
+            return info["RestartCount"] > restarts or not info["State"]["Running"]
+
+        gone = eventually(ended, "the keeper to end with every role and space", timeout_s=10)
         took = time.monotonic() - killed
-        expect(gone and took < 2.0, f"the keeper killed the routed session, daemon included, {took:.2f} s after the guard's "
-               "control died (the poll's own cost included)", took)
+        expect(gone and took < 5.0, f"the keeper ended with the routed session, daemon included, {took:.2f} s after the "
+               "guard's control died (the poll's own cost included), and the container starts again", took)
         # The keeper says so once every group it killed is empty, which
         # comes just after the processes are seen gone.
         expect(eventually(lambda: "routed spaces are killed" in stack.logs(), "the keeper to say it killed the routed spaces"),
@@ -650,11 +657,28 @@ def main():
                "the next call starts the program again, initialized afresh, in a new home", again)
 
         # ————— the service's lifetime —————
-        for key in ["", "not-a-key", "00" * 31]:
-            result = stack.compose("run", "--rm", "--no-deps", "-T", "-e", f"LOCUS_BACKENDS_KEY={key}", SERVICE,
-                                   check=False)
-            expect(result.returncode != 0 and "LOCUS_BACKENDS_KEY" in result.stdout + result.stderr,
-                   f"the release refuses to start with the key {key!r}", result.stdout[-2000:] + result.stderr[-2000:])
+        # Each a second instance of the service (harness.py `alone`), whose
+        # role refuses to start: with no key the keeper starts no role and
+        # refuses its boot; with a key of another form the release refuses
+        # and the keeper starts it again, alone, refused again.
+        for n, key in enumerate(["", "not-a-key", "00" * 31]):
+            suffix = f"key-{n}"
+            stack.alone_down(suffix)
+            stack.alone(suffix, env={"LOCUS_BACKENDS_KEY": key})
+            try:
+                name = f"{stack.project}-{suffix}"
+
+                def refused():
+                    logs = run("docker", "logs", name, check=False)
+                    text = logs.stdout + logs.stderr
+                    return text if "LOCUS_BACKENDS_KEY" in text and ("refusing" in text or "FATAL" in text) else None
+
+                text = eventually(refused, f"the instance with the key {key!r} to refuse it", timeout_s=60)
+                expect("Running Locus.Backends.Service" not in text,
+                       f"the backends role refuses to start with the key {key!r}, naming LOCUS_BACKENDS_KEY",
+                       text[-2000:])
+            finally:
+                stack.alone_down(suffix)
 
         # A second instance of the service, in a namespace of its own
         # (harness.py `alone`): in the guard's it would meet the running
@@ -671,12 +695,17 @@ def main():
             orphan.tool(owner_of("orphan"), "probe__spawn_daemon")
             orphan_who = orphan.tool(owner_of("orphan"), "probe__whoami")
             eventually(lambda: stack.outside(orphan_who, DAEMON, lost), "the orphan's daemon to start")
-            _keeper, lost_release = keeper_and_release(stack, lost)
+            keeper, lost_release = keeper_and_release(stack, lost)
             kill_in(lost, lost_release["pid"], "the kill reached the release")
-            expect(run("docker", "wait", lost).stdout.strip() == "70", "cyfr-locus exits 70 when the release dies")
+            eventually(lambda: not stack.outside(orphan_who, DAEMON, lost), "the orphan's daemon to be retired")
+            again = eventually(lambda: (lambda k, r: r if r and r["pid"] != lost_release["pid"] else None)(
+                *keeper_and_release(stack, lost)), "the backends role to start again", timeout_s=60)
+            expect(keeper_and_release(stack, lost)[0]["pid"] == keeper["pid"]
+                   and json.loads(run("docker", "inspect", lost).stdout)[0]["State"]["Running"],
+                   "when the release dies, cyfr-locus starts the role again alone, in the same container", again)
             logs = run("docker", "logs", lost, check=False)
             text = logs.stdout + logs.stderr
-            expect("client channel lost; every spawn retired" in text and "quarantined" not in text
+            expect("its channel ended; every spawn it held is retired" in text and "quarantined" not in text
                    and "did not finish" not in text, "every backend was retired cleanly", text[-3000:])
         finally:
             stack.alone_down("lost")

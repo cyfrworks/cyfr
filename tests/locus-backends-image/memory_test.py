@@ -72,9 +72,9 @@ class GroupMemory(unittest.TestCase):
         read = memory.group_memory(observer)
         self.assertEqual((read["current"], read["peak"], read["events"]["oom"], read["events"]["oom_kill"]),
                          (1048576, 2097152, 0, 0))
-        self.assertEqual(observer.scripts, ["cat /sys/fs/cgroup/keeper/memory.events",
-                                            "cat /sys/fs/cgroup/keeper/memory.current",
-                                            "cat /sys/fs/cgroup/keeper/memory.peak"])
+        self.assertEqual(observer.scripts, ["cat /sys/fs/cgroup/role-backends/service/memory.events",
+                                            "cat /sys/fs/cgroup/role-backends/service/memory.current",
+                                            "cat /sys/fs/cgroup/role-backends/service/memory.peak"])
 
     def test_a_failed_read_of_any_fails_it(self):
         for answers in [[(1, "")], [(0, EVENTS), (1, "")], [(0, EVENTS), (0, "1\n"), (1, "")]]:

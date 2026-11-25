@@ -36,7 +36,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, PROBE, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE,
+    HOME_ROOT, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, PROBE, RELEASE, RELEASE_BIN, ROLE,
     RUN_DIR, Stack, build_canary, eventually, expect, owner_of, probe, require_docker, run,
 )
 import imagesuite  # noqa: E402
