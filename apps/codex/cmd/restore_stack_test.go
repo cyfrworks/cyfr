@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cyfr/codex/internal/access"
 )
 
 // shortLog is the fake docker's log with each run through the stack as
@@ -75,7 +77,7 @@ func writableIn(line string) []string {
 // The put-back writes the storage and the database through one-off
 // containers of the restored service's image, as the read does but for
 // what it writes, holding no capability but writing past permissions,
-// never pulling, with no network or log, every mount of the service read
+// labelled the project's, never pulling, with no network or log, every mount of the service read
 // only but those that write writes: the clear and the storage's archive
 // the storage root's bind and one under it, the database's writes (its
 // staged file and log, their sync, the old log's and index's removal, the
@@ -91,7 +93,7 @@ func TestTheRestoreWritesThroughTheStack(t *testing.T) {
 	if out, err := r.restore(false); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
-	head := "run --rm --name NAME --pull never --network none --log-driver none --user 0:0 --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges --read-only"
+	head := "run --rm --name NAME --label cyfr.restore-write=" + access.ProjectName(r.project) + " --pull never --network none --log-driver none --user 0:0 --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges --read-only"
 	mounts := func(storage bool) string {
 		ro := map[bool]string{true: "", false: ",readonly"}
 		return " --mount type=bind,source=" + filepath.Join(r.project, "data") + ",target=/app/data" +
@@ -968,5 +970,56 @@ func TestAWriteWhoseProducerStopsIsEnded(t *testing.T) {
 		pr.Close()
 		<-done
 		t.Fatal("the write whose producer stopped was not ended")
+	}
+}
+
+// A container an earlier restore's write of this project left, as cyfr
+// killed on Windows leaves one running, is removed before anything stops
+// and before the first write; a container of another name is not.
+func TestARestoreRemovesTheWriteAnEarlierOneLeft(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	r.answer("writes-left.out", "cyfr-restore-write-0123456789ab\ncyfr-restore-writer\n")
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Removed cyfr-restore-write-0123456789ab, the container an earlier restore's write left.") {
+		t.Errorf("the restore did not say it removed the container:\n%s", out)
+	}
+	log := r.log()
+	removed := slices.Index(log, "rm --force cyfr-restore-write-0123456789ab")
+	stop := slices.IndexFunc(log, func(l string) bool { return strings.HasSuffix(l, "stop caddy") })
+	write := slices.IndexFunc(log, func(l string) bool { return strings.Contains(l, "--cap-add DAC_OVERRIDE") })
+	if removed < 0 || stop < removed || write < removed {
+		t.Errorf("the left container was not removed before the stop and the first write (at %d, %d, %d):\n%s", removed, stop, write, strings.Join(log, "\n"))
+	}
+	for _, line := range log {
+		if strings.Contains(line, "cyfr-restore-writer") {
+			t.Errorf("the restore touched a container of another name: %s", line)
+		}
+	}
+}
+
+// The bar's snapshot and the snapshot restored are one folder however
+// either is spelled: a bar naming the snapshot through a link to it is
+// this restore's own, and a database that does not answer passes under it.
+func TestTheBarNamesThisSnapshotThroughALink(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	link := filepath.Join(t.TempDir(), "snapshot-link")
+	if err := os.Symlink(r.dir, link); err != nil {
+		t.Fatal(err)
+	}
+	env, err := withBarrier(r.live, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.edit(".env", string(env))
+	r.edit("data/cyfr.db", "not a database")
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "and the bar this restore left in .env when it was cut short has kept every server off it since") {
+		t.Errorf("the restore did not take the bar for its own:\n%s", out)
 	}
 }

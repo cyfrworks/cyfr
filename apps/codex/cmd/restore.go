@@ -419,6 +419,9 @@ func (r *restorer) run() error {
 	if err != nil {
 		return err
 	}
+	if err := r.removeLeftWrites(); err != nil {
+		return err
+	}
 	// A join waiting for approval would enrol the machine under the
 	// configuration the restore replaces, so it is cancelled first.
 	if err := r.engine.CancelWaitingJoin(r.ctx); err != nil {
@@ -497,6 +500,34 @@ func (r *restorer) run() error {
 	r.sayUnselected()
 	return nil
 }
+
+// removeLeftWrites removes, before anything stops, every container of a
+// write through the stack this project's earlier restore left: one whose
+// client died with cyfr, where no watchdog removed it (Windows), runs on
+// until its program ends, and a clear still deleting must never delete
+// what this restore puts back. Only this project's (restoreWriteLabel)
+// are asked for, and only by the names a write takes (stackRunName).
+func (r *restorer) removeLeftWrites() error {
+	ctx, cancel := r.detached(composeRunTimeout)
+	defer cancel()
+	names, err := r.dockerOutput(ctx, nil, "ps", "-a", "--filter", "label="+restoreWriteLabel+"="+access.ProjectName("."), "--format", "{{.Names}}")
+	if err != nil {
+		return fmt.Errorf("cyfr restore could not look for a container an earlier restore's write left (%v); nothing was changed", err)
+	}
+	for _, name := range strings.Fields(names) {
+		if !leftWrite.MatchString(name) {
+			continue
+		}
+		if err := r.docker(ctx, nil, nil, "rm", "--force", name); err != nil {
+			return fmt.Errorf("cyfr restore could not remove %s, the container an earlier restore's write left (%v); nothing was changed", name, err)
+		}
+		fmt.Fprintf(r.out, "Removed %s, the container an earlier restore's write left.\n", name)
+	}
+	return nil
+}
+
+// leftWrite is the name a write through the stack takes (stackRunName).
+var leftWrite = regexp.MustCompile(`^cyfr-restore-write-[0-9a-f]{12}$`)
 
 // sayUnselected says, after the restored stack's start under the
 // snapshot's head alone, which services of the restored compose file's own
@@ -927,6 +958,19 @@ func hostPath(p string, dir bool) (string, error) {
 	return filepath.Clean(p), nil
 }
 
+// sameFolder reports whether a and b name one folder, each made absolute
+// (from the project) and its links resolved where it resolves: 'snap',
+// './snap', its absolute path and a link to it are one snapshot.
+func sameFolder(a, b string) bool {
+	resolved := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		return resolvedOr(p)
+	}
+	return resolved(a) == resolved(b)
+}
+
 // within reports whether p is root or lies under it.
 func within(p, root string) bool {
 	return p == root || strings.HasPrefix(p, strings.TrimSuffix(root, string(filepath.Separator))+string(filepath.Separator))
@@ -1063,7 +1107,7 @@ func (r *restorer) refuseLiveMembers() error {
 	}
 	_, live, err := r.waitLiveSlots(func(rosterSlot) bool { return false })
 	if err != nil && r.barredBy != "" && r.config.adapter == "sqlite" {
-		if r.barredBy != r.snap.dir {
+		if !sameFolder(r.barredBy, r.snap.dir) {
 			return fmt.Errorf("The SQLite database at %s does not answer for its live slots (%v), and the bar in .env is that of a restore of %s cut short, which may have left it half written; run 'cyfr restore %s' again first, which puts every part of that snapshot back", r.config.dbPath, err, r.barredBy, r.barredBy)
 		}
 		// This restore cut short may have left the file it wrote in place

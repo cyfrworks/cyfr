@@ -117,6 +117,7 @@ case "$1" in
     esac ;;
   ps)
     case "$*" in
+      *label=cyfr.restore-write=*) answer writes-left ;;
       *'.Label "com.docker.compose.service"'*) last="${@: -1}"; answer "containers-${last##*=}" ;;
       *network=*)
         n="$*"
@@ -319,6 +320,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		"ENGINE lock restore",
 		"ENGINE resume",
 		profiles + "ps --services --status running",
+		"ps -a --filter label=cyfr.restore-write=" + access.ProjectName(r.project) + " --format {{.Names}}",
 		"ENGINE cancel-waiting-join",
 		"ENGINE close-serve",
 		profiles + "stop caddy",
@@ -352,14 +354,15 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	if got := r.shortLog(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// The stop, the list of the project's networks and the removal of the
-	// stopped cyfr container saw the switched compose file; from the
+	// The look for a write an earlier restore left, the stop, the list of
+	// the project's networks and the removal of the stopped cyfr container
+	// saw the switched compose file; from the
 	// configuration read on, every call saw the snapshot's.
 	sum := func(data []byte) string { return fmt.Sprintf("%x", md5.Sum(data)) }
 	for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.fake, "state"))), "\n") {
 		fields := strings.Fields(line)
 		wantSum := sum([]byte(compose))
-		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") || strings.HasPrefix(fields[0], "network-ls-") || strings.HasPrefix(fields[0], "containers-") {
+		if fields[0] == "ps" || fields[0] == "writes-left" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") || strings.HasPrefix(fields[0], "network-ls-") || strings.HasPrefix(fields[0], "containers-") {
 			wantSum = sum(switched([]byte(compose)))
 		}
 		if fields[1] != wantSum {

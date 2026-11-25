@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cyfr/codex/internal/access"
 )
 
 // A snapshot reads CYFR's storage (the SQLite database with its
@@ -69,14 +71,20 @@ type stackEntry struct {
 // standard input. A read (writable nil) mounts every mount of the service
 // read only and holds no capability but reading past permissions; a
 // write mounts the mounts at the container paths writable writable, every
-// other read only, and holds no capability but writing past permissions.
+// other read only, and holds no capability but writing past permissions,
+// and is labelled the project's (restoreWriteLabel), so a later restore of
+// the project removes one an earlier one left (removeLeftWrites).
 func stackRunArgs(name string, c *stackConfig, stdin bool, writable []string, program string, args ...string) []string {
 	capability := "DAC_READ_SEARCH"
 	if writable != nil {
 		capability = "DAC_OVERRIDE"
 	}
-	run := []string{"run", "--rm", "--name", name, "--pull", "never", "--network", "none", "--log-driver", "none",
-		"--user", "0:0", "--cap-drop", "ALL", "--cap-add", capability, "--security-opt", "no-new-privileges", "--read-only"}
+	run := []string{"run", "--rm", "--name", name}
+	if writable != nil {
+		run = append(run, "--label", restoreWriteLabel+"="+access.ProjectName("."))
+	}
+	run = append(run, "--pull", "never", "--network", "none", "--log-driver", "none",
+		"--user", "0:0", "--cap-drop", "ALL", "--cap-add", capability, "--security-opt", "no-new-privileges", "--read-only")
 	if stdin {
 		run = append(run, "-i")
 	}
@@ -111,6 +119,9 @@ func mountField(key, value string) string {
 	}
 	return field
 }
+
+// restoreWriteLabel labels a write through the stack with its project.
+const restoreWriteLabel = "cyfr.restore-write"
 
 // stackRunName names one run through the stack, a read or a write, so its
 // container can be ended and removed whatever ends the run early.
