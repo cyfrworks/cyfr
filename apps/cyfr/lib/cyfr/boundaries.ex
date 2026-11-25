@@ -1881,7 +1881,16 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ApiKey" => [admit_tool: 2, looks_like_key?: 1, permissions: 0, presets: 0],
     "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth.OIDC" => [issuer: 0],
-    "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
+    # `release_charge/3`: a turn's loop gives back the charge of a call
+    # that waits it stopped, whose worker's own release the stop skipped
+    # (`Aqua.Loop`).
+    "Sanctum.Authority" => [
+      guard_invoke: 1,
+      release_charge: 3,
+      release_invoke: 1,
+      step: 3,
+      take_over_invoke: 2
+    ],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
     # `stands?/1`: a program's terminal session belongs to a person, not

@@ -112,4 +112,22 @@ defmodule Sanctum.Authority do
   @spec release_invoke(Authority.t()) :: :ok
   def release_invoke(%Authority{budget: %Budget{} = budget}),
     do: BudgetGuard.release(budget, self())
+
+  @doc """
+  Give back the charge row `charge_id` of the authority's reservation, in
+  `actor`'s athanor (`Arca.BudgetReservations.release/3`), idempotently:
+  what a charged call's own end gives back (`Sanctum.Dispatch`), and what
+  the caller that stopped a call with no effect to finish gives back for
+  it, a call that waits (`waits: true`), whose worker's own release a stop
+  skips. A call that does work is never given back for: its row stands
+  until its window passes or its attempt ends, so a row reclaimed is
+  never one whose handler can still act. The slot is the guard's to
+  return (`release_invoke/1`, or its holder's death).
+  """
+  @spec release_charge(Prima.Actor.t(), Authority.t(), String.t()) :: :ok
+  def release_charge(%Prima.Actor{} = actor, %Authority{budget: %Budget{id: id}}, charge_id)
+      when is_binary(charge_id) do
+    _ = Arca.BudgetReservations.release(actor, id, charge_id)
+    :ok
+  end
 end

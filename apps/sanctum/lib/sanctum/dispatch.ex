@@ -332,7 +332,7 @@ defmodule Sanctum.Dispatch do
   defp release_row(%Context{athanor_id: athanor_id} = ctx, authority, opts)
        when is_binary(athanor_id) do
     case Keyword.get(opts, :charge) do
-      %{id: id} -> Arca.BudgetReservations.release(Context.actor(ctx), authority.budget.id, id)
+      %{id: id} -> Sanctum.Authority.release_charge(Context.actor(ctx), authority, id)
       _ -> :ok
     end
   end
