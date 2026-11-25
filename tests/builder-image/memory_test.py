@@ -220,9 +220,9 @@ class ClientOutput(unittest.TestCase):
                         parent.settimeout(5)
                         with parent.makefile("rb") as lines:
                             place = json.loads(lines.readline())
-                            parent.sendall(json.dumps({"v": 5, "type": "placed", "id": place["id"]}).encode() + b"\n")
+                            parent.sendall(json.dumps({"v": 6, "type": "placed", "id": place["id"]}).encode() + b"\n")
                             request = json.loads(lines.readline())
-                        self.assertEqual(place, {"v": 5, "type": "place", "id": "p1", "kind": "build"})
+                        self.assertEqual(place, {"v": 6, "type": "place", "id": "p1", "kind": "build"})
                         self.assertEqual((request["v"], request["type"], request["place"]), (5, "spawn", "p1"))
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)
@@ -238,9 +238,9 @@ class ClientOutput(unittest.TestCase):
                             relay.sendall(packet + frame(1, b"") + frame(2, b""))
                         spawn_id = "a" * 32
                         for reply in (
-                            {"v": 5, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
-                            {"v": 5, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
-                            {"v": 5, "type": "released", "spawn_id": spawn_id},
+                            {"v": 6, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 6, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
+                            {"v": 6, "type": "released", "spawn_id": spawn_id},
                         ):
                             parent.sendall(json.dumps(reply).encode() + b"\n")
                         os.kill(process.pid, signal.SIGCONT)
@@ -276,9 +276,9 @@ def keeper(sock, requests):
         requests.append(request)
         if request["type"] == "place":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 5, "type": "placed", "id": request["id"]})
+            send({"v": 6, "type": "placed", "id": request["id"]})
         elif request["type"] == "spawn":
-            send({"v": 5, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            send({"v": 6, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
             relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             relay.connect(request["attach"]["path"])
             relay.sendall(frame(3, request["attach"]["token"].encode())
@@ -288,15 +288,15 @@ def keeper(sock, requests):
         elif request["type"] == "measure":
             measures += 1
             if free or measures == 1:
-                send({"v": 5, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": 6, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 5, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
+                send({"v": 6, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
                       "age_ms": 0})
             if releasing:
-                send({"v": 5, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+                send({"v": 6, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
                 relay.sendall(frame(1, b"") + frame(2, b""))
                 relay.close()
-                send({"v": 5, "type": "released", "spawn_id": SPAWN_ID})
+                send({"v": 6, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
 
 
@@ -353,12 +353,12 @@ class MeasuredBuild(unittest.TestCase):
         self.assertEqual(types[:2], ["place", "spawn"])
         self.assertEqual(types[-3:], ["release", "measure", "measure"])
         self.assertEqual(set(types[2:-3]), {"measure"})
-        self.assertEqual(self.requests[0], {"v": 5, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
+        self.assertEqual(self.requests[0], {"v": 6, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
         self.assertEqual({key: self.requests[1][key] for key in ("v", "id", "place", "pool", "memory_bytes")},
-                         {"v": 5, "id": "1", "place": "p1", "pool": "probe", "memory_bytes": memory.BOUND})
-        self.assertEqual(self.requests[-3], {"v": 5, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
+                         {"v": 6, "id": "1", "place": "p1", "pool": "probe", "memory_bytes": memory.BOUND})
+        self.assertEqual(self.requests[-3], {"v": 6, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
         measures = [request for request in self.requests if request["type"] == "measure"]
-        self.assertEqual(measures, [{"v": 5, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
+        self.assertEqual(measures, [{"v": 6, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
 
     def test_a_build_read_under_its_owner_and_free_only_after_released_passes(self):
         memory.judge_build(self.spawn())

@@ -3,7 +3,7 @@
 
 // Package protocol defines the messages between `cyfr-locus serve` and its
 // clients, one role process each, over each one's inherited socket (fd 3):
-// one JSON object per line, each carrying `"v": 5` and a `type`.
+// one JSON object per line, each carrying `"v": 6` and a `type`.
 //
 // Each role's channel is its own. A request names only what is its role's:
 // a pool another role draws from is unknown (CodeUnknownPool), a spawn
@@ -15,35 +15,38 @@
 //
 // Client to keeper:
 //
-//	{"v":5,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":5,"type":"drop","place":…}
-//	{"v":5,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
-//	{"v":5,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…]}
-//	{"v":5,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
-//	{"v":5,"type":"resize","spawn_id":…,"rows":…,"cols":…}
-//	{"v":5,"type":"release","spawn_id":…,"grace_ms":…}
-//	{"v":5,"type":"measure","id":…,"place":…}
-//	{"v":5,"type":"pool","id":…,"pool":…}
-//	{"v":5,"type":"home_make","id":…,"home":…}
-//	{"v":5,"type":"home_measure","id":…,"home":…}
-//	{"v":5,"type":"home_reset","id":…,"home":…}
-//	{"v":5,"type":"home_retire","id":…,"home":…}
-//	{"v":5,"type":"home_list","id":…,"after":…}
+//	{"v":6,"type":"place","id":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":6,"type":"drop","place":…}
+//	{"v":6,"type":"assign","id":…,"place":…,"kind":…,"athanor":…,"subject":…}
+//	{"v":6,"type":"spawn","id":…,"place":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"cpu_quota":…,"control":true,"attach":{"path":…,"token":…},"home_mode":"kept","home":…,"home_max_bytes":…,"pty":{"rows":…,"cols":…},"hosts":[…],"packs":{"athanor":…,"digest":…}}
+//	{"v":6,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
+//	{"v":6,"type":"resize","spawn_id":…,"rows":…,"cols":…}
+//	{"v":6,"type":"release","spawn_id":…,"grace_ms":…}
+//	{"v":6,"type":"measure","id":…,"place":…}
+//	{"v":6,"type":"pool","id":…,"pool":…}
+//	{"v":6,"type":"home_make","id":…,"home":…}
+//	{"v":6,"type":"home_measure","id":…,"home":…}
+//	{"v":6,"type":"home_reset","id":…,"home":…}
+//	{"v":6,"type":"home_retire","id":…,"home":…}
+//	{"v":6,"type":"home_list","id":…,"after":…}
+//	{"v":6,"type":"packs_hold","id":…,"athanor":…,"lifetime":…,"digest":…}
+//	{"v":6,"type":"packs_put","id":…,"athanor":…,"lifetime":…,"digest":…,"seq":…,"last":…,"data":…}
 //
 // Keeper to client:
 //
-//	{"v":5,"type":"placed","id":…}
-//	{"v":5,"type":"assigned","id":…}
-//	{"v":5,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
-//	{"v":5,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
-//	{"v":5,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
-//	{"v":5,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
-//	{"v":5,"type":"released","spawn_id":…}
-//	{"v":5,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
-//	{"v":5,"type":"home_made","id":…,"uid":…}
-//	{"v":5,"type":"home_measured","id":…,"bytes":…}
-//	{"v":5,"type":"home_retired","id":…}
-//	{"v":5,"type":"homes","id":…,"ids":[…],"next":…}
+//	{"v":6,"type":"placed","id":…}
+//	{"v":6,"type":"assigned","id":…}
+//	{"v":6,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
+//	{"v":6,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request; a spawn refused once made carries both)
+//	{"v":6,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory":null | "cap" | "machine" | "either"}
+//	{"v":6,"type":"measured","id":…,"kind":…,"athanor":…,"subject":…,"bytes":…,"lesser":…,"age_ms":…}
+//	{"v":6,"type":"released","spawn_id":…}
+//	{"v":6,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
+//	{"v":6,"type":"home_made","id":…,"uid":…}
+//	{"v":6,"type":"home_measured","id":…,"bytes":…}
+//	{"v":6,"type":"home_retired","id":…}
+//	{"v":6,"type":"homes","id":…,"ids":[…],"next":…}
+//	{"v":6,"type":"packs","id":…,"state":"held" | "missing" | "taken"}
 //
 // A place follows one piece of work from before its preparation to its
 // release. The client names it with an `id` of its own minted before any
@@ -218,6 +221,25 @@
 // died or its answer failed, the keeper kills every routed spawn before it
 // dials again, and those spawns end as any killed spawn does.
 //
+// The keeper holds a read-only copy of each person's packs, one generation
+// for each set digest, under its kept-homes root (package packview, which
+// defines the stream, its manifest, the bounds and the cleanup rule). A
+// `packs_hold` names an `athanor`, the `lifetime` of the start it is for
+// and a set `digest` (`sha256:` and 64 lowercase hex digits), and is
+// answered `packs` with `state` "held" when the keeper holds that
+// generation complete and now holds it for the lifetime, or "missing".
+// A `packs_put` sends the generation's stream, one part of at most
+// MaxPackPartBytes bytes in base64 as its `data`, `seq` from 0 by one,
+// `last` on the final part; each part is answered "taken", the last
+// "held". A put refused (its stream, a bound, a manifest the files do not
+// match, a seq out of order, a put idle past its bound) is refused as
+// CodePacksRefused and leaves nothing behind. A spawn's `packs` names a
+// generation by its athanor and digest: the athanor must be its place's,
+// and the generation complete; the stage binds it read only at
+// /run/cyfr/scrolls in the space, and binds nothing for a generation that
+// holds no pack. A keeper given no --kept-homes, and a role whose spawns
+// keep no home, refuse every packs request as CodeUnavailable.
+//
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
 // runtime opens descriptors of its own before it can inspect fd 3 tells the
@@ -227,6 +249,7 @@ package protocol
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -239,7 +262,7 @@ import (
 )
 
 // Version is the protocol version every message carries as `v`.
-const Version = 5
+const Version = 6
 
 // A place's kinds: a runner at rest and one given a run, a build, and a
 // program's and a terminal's session.
@@ -307,6 +330,16 @@ const (
 	TypeHomeMeasured = "home_measured"
 	TypeHomeRetired  = "home_retired"
 	TypeHomes        = "homes"
+	TypePacksHold    = "packs_hold"
+	TypePacksPut     = "packs_put"
+	TypePacks        = "packs"
+)
+
+// A `packs` reply's states.
+const (
+	PacksHeld    = "held"
+	PacksMissing = "missing"
+	PacksTaken   = "taken"
 )
 
 // Error codes carried by an `error` reply.
@@ -348,6 +381,9 @@ const (
 	// did not confirm: no guard (--guard), a guard that cannot be reached
 	// or judges another network namespace, or one that refused the change.
 	CodeGuardUnavailable = "guard_unavailable"
+	// CodePacksRefused refuses a packs_put whose stream the keeper does not
+	// take (package packview): the put leaves nothing behind.
+	CodePacksRefused = "packs_refused"
 )
 
 // Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
@@ -389,6 +425,12 @@ const (
 	// MaxHomeListIDs is the most ids one `homes` reply carries: a page of
 	// the longest ids fits one frame's payload (frame.MaxPayload).
 	MaxHomeListIDs = 512
+	// MaxPackPartBytes is the most one packs_put part carries, before its
+	// base64: a part's line stays within MaxLineBytes.
+	MaxPackPartBytes = 512 << 10
+	// MaxPackSeq is the highest seq a packs_put may carry: a set's stream
+	// at its bounds is far fewer parts.
+	MaxPackSeq = 1 << 16
 )
 
 // Signals a `signal` request may name.
@@ -414,6 +456,11 @@ var (
 	// 256 printable ASCII characters, no space. Prima.RunnerControl's @id
 	// holds the grammar.
 	athanorPattern = regexp.MustCompile(`^[\x21-\x7E]{1,256}$`)
+	// lifetimePattern is a start's lifetime as the backends wire gives it
+	// (Prima.LocusBackends' lt_ ids), which the keeper keeps opaque.
+	lifetimePattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+	// digestPattern is a set digest: `sha256:` and 64 lowercase hex digits.
+	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	// hostPattern is an exact hostname of the egress domain grammar
 	// (Prima.Destination's): lowercase labels of letters, digits, hyphens
 	// and underscores, neither starting nor ending with a hyphen, of at
@@ -535,6 +582,18 @@ func ValidateAttach(a Attach) error {
 	return nil
 }
 
+// SpawnPacks names a pack generation by its athanor and set digest.
+type SpawnPacks struct {
+	Athanor string `json:"athanor"`
+	Digest  string `json:"digest"`
+}
+
+// Part is a parsed packs_put's part, decoded from its base64.
+func (r *Request) Part() []byte { return r.part }
+
+// ValidDigest reports whether d is a set digest.
+func ValidDigest(d string) bool { return digestPattern.MatchString(d) }
+
 // PtySize is a pseudo-terminal's size; a spawn's `pty` carries both members.
 type PtySize struct {
 	Rows *uint64 `json:"rows"`
@@ -597,6 +656,17 @@ type Request struct {
 	// Rows and Cols are a resize's new size.
 	Rows *uint64 `json:"rows,omitempty"`
 	Cols *uint64 `json:"cols,omitempty"`
+	// Lifetime, Digest, Seq, Last and Data are a packs request's.
+	Lifetime string  `json:"lifetime,omitempty"`
+	Digest   string  `json:"digest,omitempty"`
+	Seq      *uint64 `json:"seq,omitempty"`
+	Last     *bool   `json:"last,omitempty"`
+	Data     *string `json:"data,omitempty"`
+	// Packs names the generation a spawn's space binds.
+	Packs *SpawnPacks `json:"packs,omitempty"`
+
+	// part is a packs_put's data, decoded.
+	part []byte
 
 	// present names the members the line carried, whatever their values:
 	// a member is judged by its presence, never by a zero value standing
@@ -767,10 +837,58 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 		if req.present["after"] && !home.ValidID(req.After) {
 			return nil, refuse("after must be a kept home's id")
 		}
+	case TypePacksHold:
+		if !req.only("id", "athanor", "lifetime", "digest") {
+			return nil, refuse("packs_hold carries only id, athanor, lifetime and digest")
+		}
+		if err := validatePacks(&req); err != nil {
+			return nil, refuse(err.Error())
+		}
+	case TypePacksPut:
+		if !req.only("id", "athanor", "lifetime", "digest", "seq", "last", "data") {
+			return nil, refuse("packs_put carries only id, athanor, lifetime, digest, seq, last and data")
+		}
+		if err := validatePacks(&req); err != nil {
+			return nil, refuse(err.Error())
+		}
+		if req.Seq == nil || *req.Seq > MaxPackSeq {
+			return nil, refuse(fmt.Sprintf("seq must be within 0..%d", MaxPackSeq))
+		}
+		if req.Last == nil {
+			return nil, refuse("last is required")
+		}
+		if req.Data == nil {
+			return nil, refuse("data is required")
+		}
+		if base64.StdEncoding.DecodedLen(len(*req.Data)) > MaxPackPartBytes+2 {
+			return nil, refuse(fmt.Sprintf("data must be at most %d bytes", MaxPackPartBytes))
+		}
+		part, err := base64.StdEncoding.Strict().DecodeString(*req.Data)
+		if err != nil || len(part) > MaxPackPartBytes {
+			return nil, refuse(fmt.Sprintf("data must be the base64 of at most %d bytes", MaxPackPartBytes))
+		}
+		req.part = part
 	default:
 		return nil, refuse("unknown type")
 	}
 	return &req, nil
+}
+
+// validatePacks checks a packs request's id, athanor, lifetime and digest.
+func validatePacks(req *Request) error {
+	if !idPattern.MatchString(req.ID) {
+		return errors.New("id must match " + idPattern.String())
+	}
+	if !athanorPattern.MatchString(req.Athanor) {
+		return errors.New("athanor must match " + athanorPattern.String())
+	}
+	if !lifetimePattern.MatchString(req.Lifetime) {
+		return errors.New("lifetime must match " + lifetimePattern.String())
+	}
+	if !digestPattern.MatchString(req.Digest) {
+		return errors.New("digest must match " + digestPattern.String())
+	}
+	return nil
 }
 
 // validateWhose checks whose a place or an assign says it is: one of Kinds,
@@ -790,8 +908,11 @@ func validateWhose(req *Request) error {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "attach", "home_mode", "home", "home_max_bytes", "pty", "hosts") {
-		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, attach, home_mode, home, home_max_bytes, pty and hosts")
+	if !req.only("id", "place", "pool", "argv", "env", "rlimits", "memory_bytes", "cpu_quota", "control", "attach", "home_mode", "home", "home_max_bytes", "pty", "hosts", "packs") {
+		return errors.New("spawn carries only id, place, pool, argv, env, rlimits, memory_bytes, cpu_quota, control, attach, home_mode, home, home_max_bytes, pty, hosts and packs")
+	}
+	if p := req.Packs; p != nil && (!athanorPattern.MatchString(p.Athanor) || !digestPattern.MatchString(p.Digest)) {
+		return errors.New("packs must name an athanor and a set digest")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -1165,6 +1286,19 @@ func NewHomes(id string, ids []string, next string) Homes {
 		ids = []string{}
 	}
 	return Homes{V: Version, Type: TypeHomes, ID: id, IDs: ids, Next: next}
+}
+
+// PacksReply answers a packs_hold or a packs_put.
+type PacksReply struct {
+	V     int    `json:"v"`
+	Type  string `json:"type"`
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+// NewPacksReply builds a `packs` reply.
+func NewPacksReply(id, state string) PacksReply {
+	return PacksReply{V: Version, Type: TypePacks, ID: id, State: state}
 }
 
 // Encode renders a reply as one line.

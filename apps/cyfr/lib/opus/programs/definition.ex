@@ -301,7 +301,8 @@ defmodule Opus.Programs.Definition do
           home: :scratch | :kept,
           memory_bytes: pos_integer() | nil,
           home_max_bytes: pos_integer() | nil,
-          hosts: [String.t(), ...] | nil
+          hosts: [String.t(), ...] | nil,
+          packs: boolean()
         }
 
   @doc """
@@ -450,8 +451,9 @@ defmodule Opus.Programs.Definition do
 
   @doc """
   The program a stored row defines from its validated definition, with the
-  row's program settings, or the refusal of a row whose stored hosts do
-  not read.
+  row's program settings and whether it loads the athanor's packs
+  (`loads_packs?/1`), or the refusal of a row whose stored hosts do not
+  read.
   """
   @spec program(map(), definition()) ::
           {:ok, program()} | {:error, {:invalid_argument, String.t()}}
@@ -465,7 +467,8 @@ defmodule Opus.Programs.Definition do
          home: if(Map.get(row, :home) == "kept", do: :kept, else: :scratch),
          memory_bytes: Map.get(row, :memory_bytes),
          home_max_bytes: Map.get(row, :home_max_bytes),
-         hosts: hosts
+         hosts: hosts,
+         packs: loads_packs?(Arca.McpServerStorage.driver(row))
        }}
     end
   end
@@ -480,7 +483,8 @@ defmodule Opus.Programs.Definition do
       home: program.home,
       memory_bytes: program.memory_bytes,
       home_max_bytes: program.home_max_bytes,
-      hosts: program.hosts
+      hosts: program.hosts,
+      packs: program.packs
     }
   end
 

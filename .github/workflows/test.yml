@@ -1669,6 +1669,13 @@ jobs:
       - name: Kept homes
         run: python3 tests/locus-backends-image/kept_home.py cyfr-locus:backends
 
+      # A person's packs: a first start held missing, put in parts and
+      # opened once in that lifetime, a second held with nothing put, the
+      # folder read only in the session as written, another person's and a
+      # row that loads none seeing nothing, and the copy the keeper's own.
+      - name: A person's packs
+        run: python3 tests/locus-backends-image/packs.py cyfr-locus:backends
+
       # Aqua's browser: cyfr-browser on a terminal in a kept home, driving
       # the image's Chromium headless shell over its debugging pipe, framed
       # as tests/fixtures/browser_frames.json says: a megabyte read whole in

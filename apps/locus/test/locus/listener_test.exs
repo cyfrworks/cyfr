@@ -929,7 +929,7 @@ defmodule Locus.ListenerTest do
   defp close_route, do: LB.route(:close)
   defp backends_health_route, do: LB.route(:health)
 
-  defp lb(code), do: ~s({"error":"#{code}","version":4})
+  defp lb(code), do: ~s({"error":"#{code}","version":5})
 
   defp seq, do: System.unique_integer([:positive, :monotonic]) + 1_000
 
@@ -1453,7 +1453,7 @@ defmodule Locus.ListenerTest do
       for {body, status, code} <- [
             {~s({"version":2}), 409, :version},
             {~s({}), 409, :version},
-            {~s({"version":4,"x":1}), 400, :bad_request}
+            {~s({"version":5,"x":1}), 400, :bad_request}
           ] do
         client = ctx.port |> connect() |> send_request("POST", backends_health_route(), [], body)
         {_answer, client} = assert_refused(client, status, lb(code), :open)

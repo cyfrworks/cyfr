@@ -28,6 +28,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/logx"
+	"github.com/cyfr/locus/keeper/internal/packview"
 	"github.com/cyfr/locus/keeper/internal/pool"
 	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
@@ -172,6 +173,13 @@ func Main(args []string) int {
 		}
 		keptRoot = cfg.Kept.Root
 	}
+	var packs *packview.Store
+	if cfg.Kept != nil {
+		if packs, err = packview.Open(filepath.Join(cfg.Kept.Root, packview.DirName)); err != nil {
+			log.Error("refusing to start: the packs' folder: %v", err)
+			return ExitConfig
+		}
+	}
 	if err := residue.CheckMounts(mounts, homeRoots, keptRoot, PoolAccounts(accounts)); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
@@ -213,6 +221,7 @@ func Main(args []string) int {
 		waiters:   map[int]*child{},
 		keptLive:  map[int]int{},
 		keptOps:   map[int]*sync.Mutex{},
+		packs:     packs,
 		ended:     make(chan struct{}),
 	}
 	for _, spec := range cfg.Pools {
@@ -619,6 +628,17 @@ type spawn struct {
 	// retired closes when retirement has finished.
 	retired    chan struct{}
 	retireOnce sync.Once
+	// packs is the generation its space binds (packview.Store.Acquire),
+	// whose release its retirement's end calls; nil for none.
+	packs func()
+}
+
+// releasePacks lets go of the generation the spawn's space binds, at the
+// end of its retirement.
+func (sp *spawn) releasePacks() {
+	if sp.packs != nil {
+		sp.packs()
+	}
 }
 
 // role is one role the keeper runs: its spec and account, its run folder,
@@ -732,6 +752,9 @@ type server struct {
 	keptMaking      map[int]bool
 	keptDraw        sync.Mutex
 	homeOps         map[string]*homeLock
+	// packs is every person's packs (package packview) under the kept
+	// homes' root; nil for a keeper that keeps no homes.
+	packs *packview.Store
 
 	stopping atomic.Bool
 	closing  atomic.Bool
@@ -1032,6 +1055,8 @@ func (s *server) handle(c *client, req *protocol.Request) {
 		s.handleHome(c, req)
 	case protocol.TypeHomeList:
 		s.handleHomeList(c, req)
+	case protocol.TypePacksHold, protocol.TypePacksPut:
+		s.handlePacks(c, req)
 	}
 }
 
@@ -1157,8 +1182,19 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		return
 	}
 	defer c.starts.Done()
-	if s.claimPlace(c, req.Place) == nil {
+	pl := s.claimPlace(c, req.Place)
+	if pl == nil {
 		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
+		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
+		return
+	}
+	// A space binds only its own person's packs: the generation's athanor
+	// is its place's, of the kept role, whose keeper keeps them.
+	if req.Packs != nil && (req.Packs.Athanor != pl.whose.Athanor || s.packs == nil || !c.role.spec.Kept) {
+		s.log.Warn("spawn %s refused: its packs are not its place's athanor's, or role %s keeps none", req.ID, c.role.spec.Name)
+		s.mu.Lock()
+		delete(c.places, req.Place)
+		s.mu.Unlock()
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
@@ -1397,6 +1433,17 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		return protocol.CodeInternal, err
 	}
 	sp.group = group
+	packs := ""
+	if req.Packs != nil {
+		path, empty, release, err := s.packs.Acquire(req.Packs.Athanor, req.Packs.Digest)
+		if err != nil {
+			return protocol.CodeBadRequest, fmt.Errorf("its packs: %w", err)
+		}
+		sp.packs = release
+		if !empty {
+			packs = path
+		}
+	}
 
 	spec, err := json.Marshal(stage.Spec{
 		UID:      sp.account.UID,
@@ -1412,6 +1459,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request, e egress) (string, err
 		Terminal: req.Pty != nil,
 		Reach:    sp.reach,
 		Cgroup:   group.Path(),
+		Packs:    packs,
 	})
 	if err != nil {
 		return protocol.CodeInternal, err
@@ -1715,6 +1763,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
 		go func() {
 			defer close(sp.retired)
+			defer sp.releasePacks()
 			uid := sp.account.UID
 			var paths []string
 			if sp.home != "" {

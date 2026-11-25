@@ -327,6 +327,23 @@ defmodule Locus.Backends.Owners do
     :exit, _reason -> {:error, :unavailable}
   end
 
+  @doc """
+  Where a `packs_hold` or a `packs_put` of the owner `invoke` names goes:
+  the launcher that keeps its person's packs, for a program of that owner
+  that loads packs (its sync's `packs`, else `bad_request`) and a lifetime
+  of this boot that no fence names (else `lifetime_over`), the owner
+  admitted at exactly its version as a session message's is. Nothing of
+  the lifetime is spent: no admission, slot, uid or home. The caller sends
+  the request itself, so no part of a put passes through this table.
+  """
+  @spec packs(GenServer.server(), map(), map()) ::
+          {:ok, {module(), term()}} | {:error, LocusBackends.code()}
+  def packs(server \\ __MODULE__, invoke, message) do
+    GenServer.call(server, {:packs, invoke, message}, @call_timeout_ms)
+  catch
+    :exit, _reason -> {:error, :unavailable}
+  end
+
   @doc "The session `id` of the owner `invoke` names: its process and its mode."
   @spec session(GenServer.server(), map(), String.t()) ::
           {:ok, pid() | nil, LocusBackends.mode()} | {:error, LocusBackends.code()}
@@ -461,8 +478,23 @@ defmodule Locus.Backends.Owners do
   # What a request signed for another table's boot is refused with, however
   # long its body took to arrive: that table's fences went with it.
   def handle_call({kind, %{boot: boot}, _message}, _from, %{boot: current} = state)
-      when kind in [:open, :close] and boot != current,
+      when kind in [:open, :close, :packs] and boot != current,
       do: {:reply, {:error, :stale_boot}, state}
+
+  def handle_call({:packs, invoke, message}, _from, state) do
+    case admit_owner(state, invoke) do
+      {:ok, owner, state} ->
+        with {:ok, _program} <- loading_packs(owner, message),
+             :ok <- admissible(state, lifetime(invoke, message)) do
+          {:reply, {:ok, session_launcher(state)}, state}
+        else
+          {:error, code} -> {:reply, {:error, code}, state}
+        end
+
+      {:error, code, state} ->
+        {:reply, {:error, code}, state}
+    end
+  end
 
   def handle_call({:open, invoke, message}, from, state) do
     case open(state, invoke, message, from) do
@@ -1111,6 +1143,16 @@ defmodule Locus.Backends.Owners do
     end
   end
 
+  # The program a packs request or an open naming packs is for: one of the
+  # owner's that loads packs, as its sync says.
+  defp loading_packs(owner, message) do
+    case Enum.find(owner.definition, &(&1.name == message.program)) do
+      nil -> {:error, :unknown_program}
+      %{packs: true} = program -> {:ok, program}
+      _loads_none -> {:error, :bad_request}
+    end
+  end
+
   defp open_program(state, owner, program, invoke, message, from) do
     named = lifetime(invoke, message)
 
@@ -1125,6 +1167,7 @@ defmodule Locus.Backends.Owners do
       lifetime: message.lifetime,
       mode: message.mode,
       argv: message.argv,
+      packs: Map.get(message, :packs),
       size: if(message.mode == :terminal, do: %{rows: message.rows, cols: message.cols}),
       memory_bytes: program.memory_bytes || state.memory_bytes,
       # What it is opened again from, should it be held once prepared.
@@ -1133,6 +1176,7 @@ defmodule Locus.Backends.Owners do
     }
 
     with :ok <- shape(program, message),
+         :ok <- packs_shape(program, message),
          :ok <- not_failed(owner, program, ask.key),
          :error <- running(owner, named),
          :ok <- admissible(state, named),
@@ -1214,6 +1258,11 @@ defmodule Locus.Backends.Owners do
     do: {:error, :bad_request}
 
   defp shape(_program, _message), do: :ok
+
+  # An open names packs only for a program that loads them.
+  defp packs_shape(%{packs: true}, _message), do: :ok
+  defp packs_shape(_program, %{packs: digest}) when is_binary(digest), do: {:error, :bad_request}
+  defp packs_shape(_program, _message), do: :ok
 
   defp not_failed(owner, program, key) do
     if MapSet.member?(owner.programs[program.name].failed_keys, key),
@@ -1509,6 +1558,7 @@ defmodule Locus.Backends.Owners do
     |> put_given(:home_max_bytes, program.home_max_bytes)
     |> put_given(:pty, ask.size)
     |> put_given(:hosts, program.hosts)
+    |> put_given(:packs, ask.packs && %{athanor: owner.athanor, digest: ask.packs})
   end
 
   defp put_given(map, _key, nil), do: map

@@ -18,6 +18,17 @@ defmodule Opus.Programs.Session do
   through `Sanctum.Egress.pinned_request/5` under the operator's private
   egress policy.
 
+  An open of a program that loads the person's packs (`loads_packs: true`,
+  which the box gives from its owner's sync) first makes the service hold
+  their copy for the lifetime, spending nothing of it: it reads the set's
+  digest (`Compendium.pack_digest/2`) and sends `packs_hold`; a `missing`
+  copy is read by that digest (`Compendium.pack_view/3`) and put in
+  `packs_put`s, each part awaited before the next. A selection that moved
+  on since the digest was read is begun again from the new one, three
+  times at most; a fourth move ends the start `:packs_moved`, and a hold
+  or a put that fails `:packs_unready`, before the open is sent. The open
+  then names the digest as its `packs`.
+
   Answers are the wire's (`Prima.LocusBackends.read_session_answer/2`).
   A refusal is `{:error, {:refused, code, boot}}` with the code a box
   answers it as (`Opus.Programs.Box.refusal_name/1`) and the service boot
@@ -40,37 +51,106 @@ defmodule Opus.Programs.Session do
           | {:unreadable, term()}
           | {:invalid, term()}
 
+  # How many times a start begins again from a selection that moved on.
+  @pack_moves 3
+
   @doc """
   Open the session of `params.lifetime`: the service answers the process running for
   it, or starts its program with `argv`, mode `:run` on pipes and mode
   `:terminal` on a pseudo-terminal of `rows` by `cols`, in the kept home
-  it names. `:timeout_ms` (default #{@open_timeout_ms}) bounds the wait
-  for the answer.
+  it names, with the person's packs held first when `loads_packs` (see
+  the moduledoc). `:timeout_ms` (default #{@open_timeout_ms}) bounds the
+  wait for each answer.
   """
   @spec open(grant(), %{
           required(:lifetime) => Opus.Programs.Box.lifetime(),
           optional(:argv) => Opus.Programs.Words.t(),
           optional(:rows) => pos_integer(),
           optional(:cols) => pos_integer(),
+          optional(:loads_packs) => boolean(),
           optional(:timeout_ms) => pos_integer(),
           optional(atom()) => term()
         }) ::
           {:ok, %{session: String.t(), resumed: boolean()}}
-          | {:error, refusal()}
+          | {:error, refusal() | :packs_unready | :packs_moved}
   def open(grant, %{lifetime: lifetime} = params) do
-    message =
-      base(:open, grant)
-      |> Map.merge(of_lifetime(lifetime))
-      |> Map.merge(%{
-        argv: params |> Map.get(:argv, Opus.Programs.Words.new([])) |> Opus.Programs.Words.list(),
-        rows: Map.get(params, :rows),
-        cols: Map.get(params, :cols)
-      })
+    timeout_ms = Map.get(params, :timeout_ms, @open_timeout_ms)
+    argv = params |> Map.get(:argv, Opus.Programs.Words.new([])) |> Opus.Programs.Words.list()
 
-    with {:ok, answer} <- post(grant, message, Map.get(params, :timeout_ms, @open_timeout_ms)) do
+    with {:ok, packs} <- packs(grant, lifetime, Map.get(params, :loads_packs, false), timeout_ms),
+         message =
+           base(:open, grant)
+           |> Map.merge(of_lifetime(lifetime))
+           |> Map.merge(%{
+             argv: argv,
+             rows: Map.get(params, :rows),
+             cols: Map.get(params, :cols),
+             packs: packs
+           }),
+         {:ok, answer} <- post(grant, message, timeout_ms) do
       {:ok, Map.take(answer, [:session, :resumed])}
     end
   end
+
+  # The digest the open names, once the service holds its copy for the
+  # lifetime; nil for a program that loads no packs.
+  defp packs(_grant, _lifetime, false, _timeout_ms), do: {:ok, nil}
+
+  defp packs(grant, lifetime, true, timeout_ms) do
+    ctx = Sanctum.Context.internal(athanor_id: lifetime.athanor, scope: :athanor)
+
+    case Compendium.pack_digest(ctx, lifetime.athanor) do
+      {:ok, digest} -> held(grant, lifetime, ctx, digest, 0, timeout_ms)
+      {:error, _unread} -> {:error, :packs_unready}
+    end
+  end
+
+  defp held(grant, lifetime, ctx, digest, moves, timeout_ms) do
+    hold =
+      base(:packs_hold, grant) |> Map.merge(of_lifetime(lifetime)) |> Map.put(:digest, digest)
+
+    case post(grant, hold, timeout_ms) do
+      {:ok, %{state: :held}} ->
+        {:ok, digest}
+
+      {:ok, %{state: :missing}} ->
+        case Compendium.pack_view(ctx, lifetime.athanor, digest) do
+          {:ok, %{archive: archive}} ->
+            put(grant, %{hold | type: :packs_put}, archive, 0, timeout_ms)
+
+          {:moved, now} when moves < @pack_moves ->
+            held(grant, lifetime, ctx, now, moves + 1, timeout_ms)
+
+          {:moved, _now} ->
+            {:error, :packs_moved}
+
+          {:error, _unread} ->
+            {:error, :packs_unready}
+        end
+
+      failed ->
+        unready(failed)
+    end
+  end
+
+  # The archive in parts of at most the wire's bound, each answered before
+  # the next is sent: `taken`, and the last `held`.
+  defp put(grant, message, archive, seq, timeout_ms) do
+    size = min(byte_size(archive), LocusBackends.bounds().max_pack_part_bytes)
+    <<part::binary-size(^size), rest::binary>> = archive
+    last = rest == ""
+
+    case {post(grant, Map.merge(message, %{seq: seq, last: last, part: part}), timeout_ms), last} do
+      {{:ok, %{state: :taken}}, false} -> put(grant, message, rest, seq + 1, timeout_ms)
+      {{:ok, %{state: :held}}, true} -> {:ok, message.digest}
+      {failed, _last} -> unready(failed)
+    end
+  end
+
+  # A boot the service no longer runs keeps its meaning for the box; every
+  # other failure of a hold or a put is the packs not made ready.
+  defp unready({:error, {:refused, :stale_boot, _boot}} = stale), do: stale
+  defp unready(_failed), do: {:error, :packs_unready}
 
   @doc """
   Write `lines` to the session's process; `:ended` once it no longer runs.

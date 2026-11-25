@@ -104,6 +104,22 @@ defmodule Prima.KeeperProtocol do
   1 and that of a `home_measured` from 0, each up to 2^53 - 1, the largest
   every JSON reader carries exactly.
 
+  ## Packs
+
+  The keeper holds a read-only copy of each person's packs, one generation
+  for each set digest (its `internal/packview`). `packs_hold` carries
+  exactly `id`, `athanor`, `lifetime` (a start's, opaque to the keeper)
+  and `digest` (`sha256:` and 64 lowercase hex digits), and is answered
+  `packs` with `state` `:held`, the generation complete and now held for
+  the lifetime, or `:missing`. `packs_put` carries those and `seq`, from 0
+  by one up to `max_pack_seq`, `last` and `data`, one part of the
+  generation's stream of at most `max_pack_part_bytes` (`request_bounds/0`),
+  which `encode/1` writes in base64; each part is answered `:taken`, the
+  last `:held`, or refused `packs_refused`. A spawn's optional `packs`,
+  `%{athanor: athanor, digest: digest}`, names the generation its space
+  binds read only at `/run/cyfr/scrolls`. A keeper or a role that keeps no
+  homes refuses every packs request `unavailable`.
+
   ## Homes
 
   A spawn's `home_mode` is `"scratch"`, today's home scrubbed at
@@ -194,7 +210,7 @@ defmodule Prima.KeeperProtocol do
 
   alias Prima.RunnerControl
 
-  @version 5
+  @version 6
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -224,6 +240,8 @@ defmodule Prima.KeeperProtocol do
   @max_home_bytes 1024 * 1024 * 1024 * 1024 * 1024
   @max_hosts 32
   @max_pty_size 1000
+  @max_pack_part_bytes 524_288
+  @max_pack_seq 65_536
   @home_modes ~w(scratch kept)
   @kinds ~w(warm run build program terminal)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
@@ -253,6 +271,10 @@ defmodule Prima.KeeperProtocol do
   # home.ValidID).
   @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
   @signal ~r/\A[\x20-\x7E]{1,64}\z/
+  # A start's lifetime as the keeper keeps it, opaque, and a set digest.
+  @lifetime ~r/\A[A-Za-z0-9._:-]{1,128}\z/
+  @digest ~r/\Asha256:[0-9a-f]{64}\z/
+  @packs_states %{"held" => :held, "missing" => :missing, "taken" => :taken}
 
   # Every request type, its wire name and its members: required or not.
   @requests %{
@@ -278,7 +300,8 @@ defmodule Prima.KeeperProtocol do
          home: :optional,
          home_max_bytes: :optional,
          pty: :optional,
-         hosts: :optional
+         hosts: :optional,
+         packs: :optional
        ]},
     signal: {"signal", [spawn_id: :required, sig: :required]},
     resize: {"resize", [spawn_id: :required, rows: :required, cols: :required]},
@@ -289,8 +312,22 @@ defmodule Prima.KeeperProtocol do
     home_measure: {"home_measure", [id: :required, home: :required]},
     home_reset: {"home_reset", [id: :required, home: :required]},
     home_retire: {"home_retire", [id: :required, home: :required]},
-    home_list: {"home_list", [id: :required, after: :optional]}
+    home_list: {"home_list", [id: :required, after: :optional]},
+    packs_hold:
+      {"packs_hold", [id: :required, athanor: :required, lifetime: :required, digest: :required]},
+    packs_put:
+      {"packs_put",
+       [
+         id: :required,
+         athanor: :required,
+         lifetime: :required,
+         digest: :required,
+         seq: :required,
+         last: :required,
+         data: :required
+       ]}
   }
+  @packs_requests [:packs_hold, :packs_put]
   @home_requests [:home_make, :home_measure, :home_reset, :home_retire]
 
   # Every reply type and its members in the order they are read.
@@ -323,7 +360,8 @@ defmodule Prima.KeeperProtocol do
     "home_made" => {:home_made, [id: :id, uid: :count]},
     "home_measured" => {:home_measured, [id: :id, bytes: :measured_bytes]},
     "home_retired" => {:home_retired, [id: :id]},
-    "homes" => {:homes, [id: :id, ids: :home_ids, next: :home_id]}
+    "homes" => {:homes, [id: :id, ids: :home_ids, next: :home_id]},
+    "packs" => {:packs, [id: :id, state: :packs_state]}
   }
 
   # An `error` names its request by `id` or `spawn_id`, and a request the
@@ -387,7 +425,8 @@ defmodule Prima.KeeperProtocol do
               optional(:home) => String.t(),
               optional(:home_max_bytes) => pos_integer(),
               optional(:pty) => %{rows: pos_integer(), cols: pos_integer()},
-              optional(:hosts) => [String.t(), ...]
+              optional(:hosts) => [String.t(), ...],
+              optional(:packs) => %{athanor: String.t(), digest: String.t()}
             }
           | %{type: :signal, spawn_id: String.t(), sig: signal()}
           | %{type: :resize, spawn_id: String.t(), rows: pos_integer(), cols: pos_integer()}
@@ -403,6 +442,23 @@ defmodule Prima.KeeperProtocol do
               required(:type) => :home_list,
               required(:id) => String.t(),
               optional(:after) => String.t()
+            }
+          | %{
+              type: :packs_hold,
+              id: String.t(),
+              athanor: String.t(),
+              lifetime: String.t(),
+              digest: String.t()
+            }
+          | %{
+              type: :packs_put,
+              id: String.t(),
+              athanor: String.t(),
+              lifetime: String.t(),
+              digest: String.t(),
+              seq: non_neg_integer(),
+              last: boolean(),
+              data: binary()
             }
 
   @typedoc "How a spawn's leader ended: its exit status or the signal that ended it."
@@ -454,6 +510,7 @@ defmodule Prima.KeeperProtocol do
           | {:home_measured, id :: String.t(), bytes :: non_neg_integer()}
           | {:home_retired, id :: String.t()}
           | {:homes, id :: String.t(), ids :: [String.t()], next :: String.t() | nil}
+          | {:packs, id :: String.t(), :held | :missing | :taken}
 
   @typedoc "Why a line is not a reply (see the module's decoding order)."
   @type reason ::
@@ -520,7 +577,9 @@ defmodule Prima.KeeperProtocol do
       max_cpu_quota: @max_cpu_quota,
       max_home_bytes: @max_home_bytes,
       max_hosts: @max_hosts,
-      max_pty_size: @max_pty_size
+      max_pty_size: @max_pty_size,
+      max_pack_part_bytes: @max_pack_part_bytes,
+      max_pack_seq: @max_pack_seq
     }
   end
 
@@ -773,7 +832,7 @@ defmodule Prima.KeeperProtocol do
   defp write(type, {:kind, kind}) when type in [:place, :assign] and kind in @kinds,
     do: {"kind", kind}
 
-  defp write(type, {:athanor, athanor}) when type in [:place, :assign],
+  defp write(type, {:athanor, athanor}) when type in [:place, :assign | @packs_requests],
     do: {"athanor", matching!(RunnerControl.athanor_id_pattern(), "athanor", athanor)}
 
   defp write(type, {:subject, subject}) when type in [:place, :assign],
@@ -809,6 +868,28 @@ defmodule Prima.KeeperProtocol do
     do: {"home", matching!(@home_id, "home", id)}
 
   defp write(:home_list, {:after, id}), do: {"after", matching!(@home_id, "after", id)}
+
+  defp write(type, {:lifetime, lifetime}) when type in @packs_requests,
+    do: {"lifetime", matching!(@lifetime, "lifetime", lifetime)}
+
+  defp write(type, {:digest, digest}) when type in @packs_requests,
+    do: {"digest", matching!(@digest, "digest", digest)}
+
+  defp write(:packs_put, {:seq, seq}) when seq in 0..@max_pack_seq//1, do: {"seq", seq}
+  defp write(:packs_put, {:last, last}) when is_boolean(last), do: {"last", last}
+
+  defp write(:packs_put, {:data, data})
+       when is_binary(data) and byte_size(data) <= @max_pack_part_bytes,
+       do: {"data", Base.encode64(data)}
+
+  defp write(:spawn, {:packs, %{athanor: athanor, digest: digest} = packs})
+       when map_size(packs) == 2 do
+    {"packs",
+     Jason.OrderedObject.new([
+       {"athanor", matching!(RunnerControl.athanor_id_pattern(), "packs.athanor", athanor)},
+       {"digest", matching!(@digest, "packs.digest", digest)}
+     ])}
+  end
 
   defp write(:signal, {:sig, sig}) when sig in @signals, do: {"sig", sig}
   defp write(:resize, {:rows, rows}) when rows in 1..@max_pty_size//1, do: {"rows", rows}
@@ -1017,6 +1098,13 @@ defmodule Prima.KeeperProtocol do
   end
 
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
+
+  defp read(:packs_state, _name, value) when is_map_key(@packs_states, value),
+    do: {:ok, Map.fetch!(@packs_states, value)}
+
+  defp read(:packs_state, name, value) when is_binary(value),
+    do: {:error, {:invalid_field, name}}
+
   defp read(:kind, _name, value) when value in @kinds, do: {:ok, value}
   defp read(:kind, name, value) when is_binary(value), do: {:error, {:invalid_field, name}}
 
@@ -1062,4 +1150,5 @@ defmodule Prima.KeeperProtocol do
   defp reply(:home_retired, %{id: id}), do: {:ok, {:home_retired, id}}
 
   defp reply(:homes, %{id: id, ids: ids, next: next}), do: {:ok, {:homes, id, ids, next}}
+  defp reply(:packs, %{id: id, state: state}), do: {:ok, {:packs, id, state}}
 end

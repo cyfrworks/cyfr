@@ -100,6 +100,7 @@ defmodule Compendium.PacksSettleTest do
     mine = Enum.find(view.packs, &(&1.name == "mine"))
     assert Enum.map(mine.files, & &1.path) == []
     assert is_binary(mine.withheld)
+    refute view.archive =~ "mine/"
 
     # The same rule answers a file by its path: a withheld pack hands none.
     for path <- ["skills/large/SKILL.md", "skills/large/a"] do

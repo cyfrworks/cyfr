@@ -312,7 +312,7 @@ func First(probe bool) int {
 	if err != nil {
 		return fail("the stage's binary: %v", err)
 	}
-	if err := buildFiles(spec.Home); err != nil {
+	if err := buildFiles(spec.Home, spec.Packs); err != nil {
 		return fail("the space's files: %v", err)
 	}
 	if spec.Terminal {
@@ -386,7 +386,14 @@ func setAttr(path string, set uint64, recursive bool) error {
 // bind binds source and every mount below it at the same path under Root,
 // read-only unless writable, and never with setuid.
 func bind(source string, writable bool) error {
-	target := filepath.Join(Root, source)
+	return bindAt(source, filepath.Join(Root, source), writable)
+}
+
+// bindAt binds source and every mount below it at target, read-only unless
+// writable, and never with setuid: a recursive bind, as the profile allows
+// one onto the space (apps/codex/internal/apparmor/cyfr-locus), made read
+// only by mount_setattr.
+func bindAt(source, target string, writable bool) error {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}
@@ -405,9 +412,11 @@ func bind(source string, writable bool) error {
 // gives a space; a fresh /proc of the space's processes; a read-only sysfs
 // and, read-only, the cgroup tree whose root is the space's own group; its
 // own /dev with the container's few device nodes, its own terminals and
-// /dev/shm; its own /tmp, /var/tmp and /run; and its home, writable, at its
-// path, the only home it sees. The root itself is read-only once pivoted.
-func buildFiles(home string) error {
+// /dev/shm; its own /tmp, /var/tmp and /run; its home, writable, at its
+// path, the only home it sees; and, given packs, its person's pack
+// generation read only at ScrollsPath in its own /run. The root itself is
+// read-only once pivoted.
+func buildFiles(home, packs string) error {
 	steps := []func() error{
 		func() error { return mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "") },
 		func() error { return mount("space", Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m") },
@@ -452,6 +461,12 @@ func buildFiles(home string) error {
 				return nil
 			}
 			return bind(home, true)
+		},
+		func() error {
+			if packs == "" {
+				return nil
+			}
+			return bindAt(packs, filepath.Join(Root, ScrollsPath), false)
 		},
 		func() error {
 			if err := unix.PivotRoot(Root, Root+"/.old"); err != nil {

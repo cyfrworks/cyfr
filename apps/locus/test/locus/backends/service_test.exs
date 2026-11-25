@@ -70,8 +70,9 @@ defmodule Locus.Backends.ServiceTest do
       end
     end
 
-    def spawn(agent, _spec) do
+    def spawn(agent, spec) do
       ref = make_ref()
+      Agent.update(agent, &%{&1 | spawned: [spec | &1.spawned]})
 
       case Agent.get(agent, & &1.stderr_bytes) do
         0 -> :ok
@@ -97,6 +98,29 @@ defmodule Locus.Backends.ServiceTest do
     def home_reset(_agent, _id), do: :ok
     def home_retire(_agent, _id), do: :ok
 
+    # The packs the keeper holds, and every packs call it was asked, last
+    # first.
+    def packs_hold(agent, athanor, lifetime, digest) do
+      Agent.get_and_update(agent, fn state ->
+        held? = MapSet.member?(state.packs, {athanor, digest})
+        call = {:hold, athanor, lifetime, digest}
+        {{:ok, if(held?, do: :held, else: :missing)}, %{state | calls: [call | state.calls]}}
+      end)
+    end
+
+    def packs_put(agent, athanor, lifetime, digest, seq, last, data) do
+      Agent.get_and_update(agent, fn state ->
+        state = %{
+          state
+          | calls: [{:put, athanor, lifetime, digest, seq, last, data} | state.calls]
+        }
+
+        if last,
+          do: {{:ok, :held}, %{state | packs: MapSet.put(state.packs, {athanor, digest})}},
+          else: {{:ok, :taken}, state}
+      end)
+    end
+
     # The homes the vectors' `homes` answer names, in another order: the
     # service answers them sorted.
     def home_list(_agent),
@@ -115,7 +139,10 @@ defmodule Locus.Backends.ServiceTest do
          fn ->
            %{
              pool: given["pool"] || %{"size" => 64, "free" => 64, "quarantined" => 0},
-             stderr_bytes: given["stderr_bytes"] || 0
+             stderr_bytes: given["stderr_bytes"] || 0,
+             packs: MapSet.new(),
+             calls: [],
+             spawned: []
            }
          end},
         id: :launcher
@@ -175,6 +202,7 @@ defmodule Locus.Backends.ServiceTest do
      clock: clock,
      now: now,
      supervisor: supervisor,
+     launcher: launcher,
      owners: @owners,
      owners_opts: owners_opts}
   end
@@ -342,9 +370,10 @@ defmodule Locus.Backends.ServiceTest do
     epoch = Keyword.get(opts, :epoch, @e)
     owner = %{athanor: @athanor, server: @server, generation: @g, epoch: epoch}
     {:ok, owner_key} = LB.owner_key(@key, owner)
+    boot = Keyword.get(opts, :boot, @boot)
 
     fields =
-      Map.merge(owner, %{boot: @boot, ts: ts, nonce: "n_#{System.unique_integer([:positive])}"})
+      Map.merge(owner, %{boot: boot, ts: ts, nonce: "n_#{System.unique_integer([:positive])}"})
 
     {:ok, header} = LB.invoke_header(owner_key, fields, Keyword.get(opts, :signed, body))
     post(ctx.port, route("session"), body, [{"x-cyfr-auth", header}])
@@ -456,12 +485,12 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 4, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 5, "release" => Prima.Version.current()}
 
       assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":4,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":5,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -570,7 +599,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":4,"type":"status","owners":[]})
+      body = ~s({"version":5,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)
@@ -774,6 +803,135 @@ defmodule Locus.Backends.ServiceTest do
   end
 
   # ————— sessions —————
+
+  # ————— packs —————
+
+  @digest "sha256:" <> String.duplicate("ab", 32)
+
+  defp packs_sync(ctx, opts \\ []) do
+    program = Map.put(program("fetch", "exec cat"), :packs, Keyword.get(opts, :packs, true))
+    env = %{"fetch" => %{"API_TOKEN" => @canary}}
+    answer = control(ctx, sync_message([program], env, Keyword.take(opts, [:e])))
+    assert answer.status == 200, answer.body
+  end
+
+  defp packs_message(type, lifetime, extra \\ %{}) do
+    %{type: type, program: "fetch", home_id: nil, key: "mcp", mode: :run, lifetime: lifetime}
+    |> Map.merge(%{digest: @digest})
+    |> Map.merge(extra)
+  end
+
+  defp put_part(seq, last, part), do: %{seq: seq, last: last, part: part}
+
+  defp packs_calls(ctx), do: ctx.launcher |> Agent.get(& &1.calls) |> Enum.reverse()
+
+  describe "packs" do
+    test "a hold and a put reach the keeper of the owner's person, a warm hold puts nothing, and the open names the generation",
+         ctx do
+      packs_sync(ctx)
+      lifetime = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+
+      answer = invoke(ctx, packs_message(:packs_hold, lifetime))
+      assert answer.status == 200, answer.body
+      assert {:ok, %{state: :missing}} = LB.read_session_answer(:packs_hold, answer.body)
+
+      for {seq, last, part, state} <- [{0, false, "one", :taken}, {1, true, "two", :held}] do
+        answer = invoke(ctx, packs_message(:packs_put, lifetime, put_part(seq, last, part)))
+        assert answer.status == 200, answer.body
+        assert {:ok, %{state: ^state}} = LB.read_session_answer(:packs_put, answer.body)
+      end
+
+      again = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      answer = invoke(ctx, packs_message(:packs_hold, again))
+      assert {:ok, %{state: :held}} = LB.read_session_answer(:packs_hold, answer.body)
+
+      assert packs_calls(ctx) == [
+               {:hold, @athanor, lifetime, @digest},
+               {:put, @athanor, lifetime, @digest, 0, false, "one"},
+               {:put, @athanor, lifetime, @digest, 1, true, "two"},
+               {:hold, @athanor, again, @digest}
+             ]
+
+      # The open names the generation, its person's, and the spawn binds it.
+      answer = invoke(ctx, Map.put(open_message(lifetime: again), :packs, @digest))
+      assert answer.status == 200, answer.body
+
+      wait_until(fn -> Agent.get(ctx.launcher, & &1.spawned) != [] end, 5_000)
+      [spec] = Agent.get(ctx.launcher, & &1.spawned)
+      assert spec.packs == %{athanor: @athanor, digest: @digest}
+    end
+
+    test "a put is refused before its first part, and again at its last, for another owner's row, a program that loads none or another boot",
+         ctx do
+      packs_sync(ctx)
+      lifetime = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+      first = packs_message(:packs_put, lifetime, put_part(0, false, "one"))
+
+      # Another owner's row, named in the body under this owner's signature.
+      {:ok, other} =
+        first
+        |> Map.merge(%{owner: %{athanor: @athanor, server: "mcp_other"}, e: @e})
+        |> LB.encode_session()
+
+      assert_refused(invoke(ctx, other), "bad_request")
+      # Another boot's signature.
+      assert_refused(invoke(ctx, first, boot: "bb_" <> String.duplicate("0", 32)), "stale_boot")
+      # A lifetime of another boot.
+      other_boot =
+        LB.new_lifetime("bb_" <> String.duplicate("1", 32), :crypto.strong_rand_bytes(16))
+
+      assert_refused(invoke(ctx, %{first | lifetime: other_boot}), "lifetime_over")
+      assert packs_calls(ctx) == []
+
+      # The first part lands; the owner then loads none at its next epoch,
+      # and the last part, signed by the version that sent the first, is
+      # refused and never reaches the keeper.
+      assert invoke(ctx, first).status == 200
+      packs_sync(ctx, packs: false, e: @e + 1)
+      last = packs_message(:packs_put, lifetime, put_part(1, true, "two"))
+      refused = invoke(ctx, last)
+      assert refused.status in [409], refused.body
+      assert {:ok, code} = LB.read_refusal(refused.body)
+      assert code in [:stale_epoch, :unknown_owner, :lapsed]
+
+      # At that epoch the program loads none: the last part is refused there too.
+      assert_refused(invoke(ctx, last, epoch: @e + 1), "bad_request")
+      assert packs_calls(ctx) == [{:put, @athanor, lifetime, @digest, 0, false, "one"}]
+    end
+
+    test "an open naming packs, a hold or a put, for a program that loads none, is refused and spends nothing",
+         ctx do
+      packs_sync(ctx, packs: false)
+      lifetime = LB.new_lifetime(@boot, :crypto.strong_rand_bytes(16))
+
+      assert_refused(invoke(ctx, packs_message(:packs_hold, lifetime)), "bad_request")
+
+      assert_refused(
+        invoke(ctx, packs_message(:packs_put, lifetime, put_part(0, true, ""))),
+        "bad_request"
+      )
+
+      assert_refused(
+        invoke(ctx, Map.put(open_message(lifetime: lifetime), :packs, @digest)),
+        "bad_request"
+      )
+
+      assert packs_calls(ctx) == []
+      assert Agent.get(ctx.launcher, & &1.spawned) == []
+
+      # The lifetime is still to open: nothing of it was fenced.
+      assert invoke(ctx, open_message(lifetime: lifetime)).status == 200
+    end
+
+    test "a hold of a lifetime its close has fenced is refused", ctx do
+      packs_sync(ctx)
+      closed = open_message()
+      assert_closed(close(ctx, closed))
+
+      assert_refused(invoke(ctx, packs_message(:packs_hold, closed.lifetime)), "lifetime_over")
+      assert packs_calls(ctx) == []
+    end
+  end
 
   describe "the session route" do
     test "each session message reads and verifies as the vectors say", ctx do

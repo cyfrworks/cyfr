@@ -80,6 +80,10 @@ defmodule Locus.DirectLauncher do
   `resize/3` sets the size of that terminal (`stty -F`), which signals its
   foreground processes as the keeper's does.
 
+  It holds pack generations with no file (`packs_hold/4`, `packs_put/7`):
+  a generation is held once a put's last part has arrived, and a spawn
+  naming one runs as any other, since it makes no space to bind it in.
+
   A spec with `control: true` is a runner's: its standard input and
   output are its control channel (`RUNTIME_CONTROL_FD=0`), since a port
   hands a child no other descriptor, and its relay (`Prima.RunnerRelay`)
@@ -463,6 +467,37 @@ defmodule Locus.DirectLauncher do
       end
 
     {:ok, tags}
+  end
+
+  # ————— packs —————
+
+  # A generation is held once a put's last part has arrived; nothing is
+  # written, and a spawn naming one runs as any other, with no folder.
+  @impl Locus.Launcher
+  def packs_hold(opts, athanor, _lifetime, digest) do
+    with :ok <- keeps_homes(opts) do
+      if :ets.member(heirs(), {:packs, athanor, digest}),
+        do: {:ok, :held},
+        else: {:ok, :missing}
+    end
+  end
+
+  @impl Locus.Launcher
+  def packs_put(opts, athanor, _lifetime, digest, _seq, last, _data) do
+    with :ok <- keeps_homes(opts) do
+      if last do
+        :ets.insert(heirs(), {{:packs, athanor, digest}, :held, nil})
+        {:ok, :held}
+      else
+        {:ok, :taken}
+      end
+    end
+  end
+
+  defp keeps_homes(opts) do
+    if Keyword.keyword?(opts) and Keyword.get(opts, :kept_root),
+      do: :ok,
+      else: {:error, {:refused, "unavailable"}}
   end
 
   # ————— kept homes —————

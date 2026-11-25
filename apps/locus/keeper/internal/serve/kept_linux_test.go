@@ -470,7 +470,7 @@ func TestAResizeReachesAPtySpawnsTerminal(t *testing.T) {
 	spawnID := spawned["spawn_id"].(string)
 	rc := k.accept(t)
 	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "24 80") })
-	resize, rerr := protocol.ParseRequest([]byte(`{"v":5,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
+	resize, rerr := protocol.ParseRequest([]byte(`{"v":6,"type":"resize","spawn_id":"` + spawnID + `","rows":50,"cols":132}`))
 	if rerr != nil {
 		t.Fatal(rerr.Detail)
 	}
@@ -796,7 +796,7 @@ func TestHomeListPagesTheHomesInOrder(t *testing.T) {
 	kept.Root = filepath.Join(kept.Root, "absent")
 	s.handle(c, &protocol.Request{V: protocol.Version, Type: protocol.TypeHomeList, ID: "l"})
 	line, _, _ := replies.Next()
-	if want := `{"v":5,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
+	if want := `{"v":6,"type":"error","id":"l","code":"unavailable"}`; string(line) != want {
 		t.Fatalf("a list of a root that cannot be read: %s", line)
 	}
 }

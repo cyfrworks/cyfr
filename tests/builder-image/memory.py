@@ -363,14 +363,14 @@ def reading(entry, athanor):
     reply = entry.get("reply")
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 5, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
+    owner = {"v": 6, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(entry):
-    return entry.get("reply") == {"v": 5, "type": "error", "id": entry["id"], "code": "unmeasured"}
+    return entry.get("reply") == {"v": 6, "type": "error", "id": entry["id"], "code": "unmeasured"}
 
 
 def judge_build(spawn):
@@ -378,7 +378,7 @@ def judge_build(spawn):
     replies = spawn["replies"]
     types = [reply["type"] for reply in replies]
     expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
-           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 5, "type": "placed", "id": spawn["place"]},
+           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 6, "type": "placed", "id": spawn["place"]},
            "the build's place is placed before its spawn names it, and the build is released", spawn)
     released = replies[-1]["seq"]
     phases = {phase: [entry for entry in spawn["measures"] if entry["phase"] == phase] for phase in ("running", "release", "after")}

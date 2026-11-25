@@ -80,6 +80,20 @@ defmodule Cyfr.Test.ScriptedBackends do
   A `homes` message answers the kept homes the script holds (`homes`, a
   set: each an open names, until its retire; `set(fake, :homes, …)`).
 
+  The person's packs are held as the keeper holds them, one generation
+  for each set digest of each athanor (`generations/2`). A `packs_hold`
+  answers `held` when the athanor's generation of its digest is held, and
+  `missing` otherwise. A `packs_put`'s parts are collected by athanor,
+  digest and lifetime, each answered `taken`; at its `last` the stream is
+  read with `:erl_tar`, as another reader than CYFR's own writer: its
+  first entry the manifest `.cyfr-packs.json`, then exactly the regular
+  files it names, each by size, SHA-256 and executable bit, which makes
+  the generation held and is answered `held`. A part out of order, or a
+  stream that does not read so, is refused `packs_refused` and drops the
+  put. A hold, a put or an open naming `packs` for a program its sync did
+  not mark `packs` is refused `bad_request`; an open's `packs` is kept on
+  its session.
+
   A status reports `stderr_bytes` of stderr per program (none unless set),
   as its tail for a scratch program and as its length for a kept one: the script does not bound its answers, so a test can see what the
   box makes of an unbounded one. `answer_version` is the protocol version
@@ -118,7 +132,9 @@ defmodule Cyfr.Test.ScriptedBackends do
              answer_version: LocusBackends.version(),
              refuse: %{},
              reset_send: false,
-             lose_close: false
+             lose_close: false,
+             packs: %{},
+             puts: %{}
            }
          end},
         id: :scripted_backends
@@ -299,6 +315,14 @@ defmodule Cyfr.Test.ScriptedBackends do
       for {id, s} <- st.sessions, elem(s.owner, 1) == server, into: %{}, do: {id, s}
     end)
   end
+
+  @doc """
+  The packs' generations held for `athanor`, by set digest: each its
+  manifest's lines (`path`, `size`, `sha256`, `executable`, as the JSON
+  says them) and its files' bytes by path.
+  """
+  def generations(%{agent: agent}, athanor),
+    do: Agent.get(agent, &Map.get(&1.packs, athanor, %{}))
 
   @doc "Write `line` into every running session of `server`, as its program would."
   def write(%{agent: agent}, server, line) do
@@ -884,9 +908,22 @@ defmodule Cyfr.Test.ScriptedBackends do
     end)
   end
 
-  defp handle_session(conn, agent, fields, %{type: :open} = message) do
-    bound = now() + LocusBackends.close_wait_ms()
-    opening(conn, agent, lifetime(fields, message), message, bound)
+  defp handle_session(conn, agent, fields, %{type: type} = message)
+       when type in [:open, :packs_hold, :packs_put] do
+    st = Agent.get(agent, & &1)
+
+    cond do
+      (type != :open or message.packs != nil) and
+          not loads_packs?(st, {fields.athanor, fields.server}, message.program) ->
+        refuse(conn, st, :bad_request)
+
+      type == :open ->
+        bound = now() + LocusBackends.close_wait_ms()
+        opening(conn, agent, lifetime(fields, message), message, bound)
+
+      true ->
+        packs(conn, agent, fields.athanor, message)
+    end
   end
 
   defp handle_session(conn, agent, fields, %{session: id} = message) do
@@ -952,6 +989,85 @@ defmodule Cyfr.Test.ScriptedBackends do
     end
   end
 
+  defp loads_packs?(st, owner, program),
+    do: Enum.any?(Map.get(st.programs, owner, []), &(&1["name"] == program and &1["packs"]))
+
+  defp packs(conn, agent, athanor, %{type: :packs_hold, digest: digest}) do
+    st = Agent.get(agent, & &1)
+    held = Map.has_key?(Map.get(st.packs, athanor, %{}), digest)
+    session_answer(conn, st, %{"state" => if(held, do: "held", else: "missing")})
+  end
+
+  defp packs(conn, agent, athanor, %{type: :packs_put} = message) do
+    key = {athanor, message.digest, message.lifetime}
+
+    state =
+      Agent.get_and_update(agent, fn st ->
+        parts = Map.get(st.puts, key, [])
+        puts = Map.delete(st.puts, key)
+
+        cond do
+          message.seq != length(parts) ->
+            {:refused, %{st | puts: puts}}
+
+          not message.last ->
+            {"taken", %{st | puts: Map.put(st.puts, key, [message.part | parts])}}
+
+          true ->
+            case generation(IO.iodata_to_binary(Enum.reverse([message.part | parts]))) do
+              {:ok, held} ->
+                packs =
+                  Map.update(
+                    st.packs,
+                    athanor,
+                    %{message.digest => held},
+                    &Map.put(&1, message.digest, held)
+                  )
+
+                {"held", %{st | puts: puts, packs: packs}}
+
+              :error ->
+                {:refused, %{st | puts: puts}}
+            end
+        end
+      end)
+
+    case state do
+      :refused -> refuse(conn, Agent.get(agent, & &1), :packs_refused)
+      state -> session_answer(conn, Agent.get(agent, & &1), %{"state" => state})
+    end
+  end
+
+  # A put's stream, read as the keeper reads it.
+  defp generation(tar) do
+    with {:ok, [{~c".cyfr-packs.json", :regular, _, _, _, _, _} | entries]} <-
+           :erl_tar.table({:binary, tar}, [:verbose]),
+         true <- Enum.all?(entries, &(elem(&1, 1) == :regular)),
+         {:ok, [{_manifest, manifest} | files]} <- :erl_tar.extract({:binary, tar}, [:memory]),
+         {:ok, %{"files" => lines}} when is_list(lines) <- Jason.decode(manifest) do
+      written =
+        for {{name, bytes}, entry} <- Enum.zip(files, entries) do
+          %{
+            "path" => List.to_string(name),
+            "size" => byte_size(bytes),
+            "sha256" => Prima.Digest.sha256(bytes),
+            "executable" => Bitwise.band(elem(entry, 4), 0o100) != 0
+          }
+        end
+
+      if Enum.sort(written) == Enum.sort(lines),
+        do:
+          {:ok,
+           %{
+             manifest: lines,
+             files: Map.new(files, fn {name, bytes} -> {List.to_string(name), bytes} end)
+           }},
+        else: :error
+    else
+      _unread -> :error
+    end
+  end
+
   defp opened(id, resumed?),
     do: %{"status" => "running", "session" => id, "resumed" => resumed?}
 
@@ -967,6 +1083,7 @@ defmodule Cyfr.Test.ScriptedBackends do
       home_id: message.home_id,
       mode: message.mode,
       size: message.rows && {message.rows, message.cols},
+      packs: message.packs,
       lines: [],
       seq: 0,
       running: true,

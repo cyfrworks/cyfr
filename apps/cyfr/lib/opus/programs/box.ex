@@ -141,9 +141,11 @@ defmodule Opus.Programs.Box do
   mints another. The box makes
   the open itself, in a process it monitors, and only while this member
   holds its slot at that lifetime's generation, read as the open is sent
-  and again as its answer is handed over. The answer is given to the
-  caller that asked while it waits inside its deadline and its holder
-  holds the owner. An open never given, however it failed, has its
+  and again as its answer is handed over. An owner whose last sync defined
+  a program that loads the person's packs has them held for the lifetime
+  first, in that process, by `Opus.Programs.Session.open/2`. The answer is
+  given to the caller that asked while it waits inside its deadline and
+  its holder holds the owner. An open never given, however it failed, has its
   lifetime closed, so whatever it started is ended and nothing of it
   starts later. A holder may ask again for a lifetime it was given, which
   the service answers while that process runs.
@@ -790,6 +792,9 @@ defmodule Opus.Programs.Box do
           live?: false,
           names: [],
           programs: 0,
+          # Whether the program its sync defined loads the person's packs,
+          # which its opens hold first (`Opus.Programs.Session`).
+          packs: false,
           waiters: [from],
           # The athanor ceiling the service last confirmed for this owner,
           # and the session opens waiting for it to be the one read.
@@ -1384,7 +1389,7 @@ defmodule Opus.Programs.Box do
 
       case post(spec, keys.control, body) do
         {:http, _status, _boot, _body} = answer ->
-          {:synced, answer, Definition.entry_names(definition), 1}
+          {:synced, answer, Definition.entry_names(definition), 1, program.packs}
 
         error ->
           error
@@ -1677,7 +1682,7 @@ defmodule Opus.Programs.Box do
   defp stale_boot?(sent_under, answered), do: is_binary(answered) and answered != sent_under
 
   defp answer_boot({:http, _status, boot, _body}), do: boot
-  defp answer_boot({:synced, answer, _names, _count}), do: answer_boot(answer)
+  defp answer_boot({:synced, answer, _names, _count, _packs}), do: answer_boot(answer)
   defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
   defp answer_boot({:claimed, _claim, result}), do: answer_boot(result)
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
@@ -1746,7 +1751,7 @@ defmodule Opus.Programs.Box do
          state,
          {:sync, key},
          spec,
-         {:synced, {:http, 200, _boot, %{status: _status}}, names, count}
+         {:synced, {:http, 200, _boot, %{status: _status}}, names, count, packs}
        ) do
     case state.owners[key] do
       %{epoch: epoch} = entry when epoch == spec.epoch ->
@@ -1756,6 +1761,7 @@ defmodule Opus.Programs.Box do
             generation: spec.generation,
             names: names,
             programs: count,
+            packs: packs,
             ceiling: spec.athanor_memory_bytes
         }
 
@@ -2010,7 +2016,10 @@ defmodule Opus.Programs.Box do
         # A request's timeout below the connect timeout becomes that timeout
         # (`Prima.Network.pin/3`), and each distinct one a connection pool.
         wait = max(left + @open_transport_ms, Prima.Network.connect_timeout_ms())
-        params = Map.merge(open.params, %{lifetime: lifetime, timeout_ms: wait})
+        loads_packs = match?(%{packs: true}, state.owners[owner_of(lifetime)])
+
+        params =
+          Map.merge(open.params, %{lifetime: lifetime, timeout_ms: wait, loads_packs: loads_packs})
 
         timer = Process.send_after(self(), {:open_deadline, ref}, left)
 
@@ -2338,7 +2347,7 @@ defmodule Opus.Programs.Box do
   @spec refusal_name(LocusBackends.code()) :: atom()
   def refusal_name(code), do: Map.get(@renamed_refusals, code, code)
 
-  defp refusal({:synced, answer, _names, _count}), do: refusal(answer)
+  defp refusal({:synced, answer, _names, _count, _packs}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:claimed, _claim, result}), do: refusal(result)
   defp refusal({:released, answer, _given_up}), do: refusal(answer)

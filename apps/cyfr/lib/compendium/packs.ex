@@ -49,8 +49,9 @@ defmodule Compendium.Packs do
   `pack_digest/2` is the SHA-256 of every pack's name and revision digest
   (the journal's `content_identity`, `Arca.Overlay.content_identity/1`),
   switched off ones included, in name order, read from the rows alone.
-  `pack_view/3` answers the packs that digest names (see its doc), or
-  `{:moved, current}` when the store has moved on.
+  `pack_view/3` answers the packs that digest names and the archive a
+  keeper's copy of them is put by (see its doc), or `{:moved, current}`
+  when the store has moved on.
 
   ## A scroll's bound
 
@@ -78,6 +79,9 @@ defmodule Compendium.Packs do
 
   @cyfr "cyfr"
   @mine "mine"
+  # The first entry of a view's `archive`, named as the keeper reads it
+  # (its `internal/packview`).
+  @archive_manifest ".cyfr-packs.json"
   @origins ~w(cyfr brought own)
   @manifests [
     ".claude-plugin/plugin.json",
@@ -1140,7 +1144,8 @@ defmodule Compendium.Packs do
                   record: %{path: ".cyfr-pack.json", size: n, sha256: "sha256:…"},
                   files: [%{path: "skills/x/SKILL.md", size: n, sha256: "sha256:…",
                             executable: boolean}],
-                  withheld: nil | "the sentence a pack past its bounds is left out with"}]}
+                  withheld: nil | "the sentence a pack past its bounds is left out with"}],
+        archive: binary}
 
   in name order: every pack's name, revision digest and its record's
   line, and for each pack switched on every other file of it by its path
@@ -1150,6 +1155,15 @@ defmodule Compendium.Packs do
   record's line is what a keeper needs to recompute each revision digest
   (`content_identity` over every path of the unit, the record's among
   them) and the set's; it writes the files alone.
+
+  `archive` is the stream a keeper's copy of the packs is put by
+  (`Opus.Programs.Session`), made from the same one reading of each pack:
+  a plain ustar archive (`Compendium.PackArchive.tar/1`) whose first entry
+  is the manifest `#{@archive_manifest}`, the JSON `{"files": [line, …]}`
+  of every file handed, each line as `files` gives it with its path
+  `<pack>/<path inside the pack>`, then each of those files under that
+  path, in the manifest's order. A set that hands no file is the manifest
+  `{"files":[]}` alone. No record is in it.
   """
   @spec pack_view(Context.t(), String.t(), String.t()) ::
           {:ok, map()} | {:moved, String.t()} | {:error, term()}
@@ -1187,7 +1201,14 @@ defmodule Compendium.Packs do
       {:ok, read} ->
         read = Enum.reverse(read)
         verdicts = standing(Enum.map(read, &measured(&1.name, &1.record, &1.body)))
-        {:ok, %{digest: digest, packs: Enum.map(read, &view_pack(&1, verdicts[&1.name]))}}
+        viewed = Enum.map(read, &view_pack(&1, verdicts[&1.name]))
+
+        {:ok,
+         %{
+           digest: digest,
+           packs: Enum.map(viewed, fn {pack, _handed} -> pack end),
+           archive: archive(viewed)
+         }}
 
       :moved ->
         case revisions(actor) do
@@ -1224,18 +1245,18 @@ defmodule Compendium.Packs do
         for {rel, bytes} <- Enum.sort_by(body, &elem(&1, 0)) do
           path = Enum.join(rel, "/")
 
-          %{
-            path: path,
-            size: byte_size(bytes),
-            sha256: Prima.Digest.sha256(bytes),
-            executable: executable?(record, path, bytes)
-          }
+          {%{
+             path: path,
+             size: byte_size(bytes),
+             sha256: Prima.Digest.sha256(bytes),
+             executable: executable?(record, path, bytes)
+           }, bytes}
         end
       else
         []
       end
 
-    %{
+    pack = %{
       name: name,
       revision: identity,
       on: on,
@@ -1244,9 +1265,27 @@ defmodule Compendium.Packs do
         size: byte_size(raw),
         sha256: Prima.Digest.sha256(raw)
       },
-      files: files,
+      files: Enum.map(files, fn {line, _bytes} -> line end),
       withheld: withheld
     }
+
+    {pack, files}
+  end
+
+  # The view's `archive`: the manifest of every file handed, then those
+  # files, each under `<pack>/<path inside the pack>`.
+  defp archive(viewed) do
+    handed =
+      for {%{name: name}, files} <- viewed,
+          {line, bytes} <- files,
+          do: {%{line | path: name <> "/" <> line.path}, bytes}
+
+    manifest = Jason.encode!(%{files: Enum.map(handed, fn {line, _bytes} -> line end)})
+
+    PackArchive.tar([
+      {@archive_manifest, manifest, false}
+      | for({line, bytes} <- handed, do: {line.path, bytes, line.executable})
+    ])
   end
 
   # The one rule of what a program is handed of a pack, which `pack_view/3`,
