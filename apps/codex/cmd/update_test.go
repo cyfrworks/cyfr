@@ -1608,7 +1608,8 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		"Its images change:\n  ghcr.io/cyfrworks/cyfr: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n" +
 			"  ghcr.io/cyfrworks/cyfr-locus: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n  caddy: ",
 		"These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-			"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: write wrk_locus=http://locus:4200 there, release 0.9.0's shipped value\n",
+			"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: put locus in place of locus-runtime in its URL, keeping the rest of the line as it is\n" +
+			"Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach locus.\n",
 		"docker-compose.yml is now release 0.9.0's own file; the one it replaced, with any edits you made to it, is " + filepath.Join(s.snapshotDir(), "compose") + ", to copy back from what you still need.\n",
 	} {
 		if n := strings.Count(out, said); n != 1 {
@@ -1618,6 +1619,40 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 	for _, unsaid := range []string{editedOffer, "http://locus-runtime:4200", "stopped locus-runtime in ", "  locus-runtime: "} {
 		if strings.Contains(out, unsaid) {
 			t.Errorf("the update said %q:\n%s", unsaid, out)
+		}
+	}
+}
+
+// A line the person set that names a retired service is reported with the
+// exact edit, in its own terms: in a list, the service's name replaced by
+// the one the release ships, the rest of the list kept; in a URL, its host
+// so replaced. The report says CYFR cannot reach Locus until each line is
+// changed and 'cyfr up' is run, and says none of the lines' values.
+func TestUpdateSaysTheEditOfAListAndOfAURLLine(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	env := read(t, filepath.Join(s.project, ".env"))
+	s.edit(".env", strings.Replace(env, "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends\n", "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,api.example.com\n", 1))
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	report := "These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
+		"  CYFR_LOCUS_RUNTIME_WORKERS, line 7, names locus-runtime: put locus in place of locus-runtime in its URL, keeping the rest of the line as it is\n" +
+		"  CYFR_PRIVATE_EGRESS_TARGETS, line 6, names locus-backends: put locus in place of locus-backends in that line, keeping the rest of it as it is\n" +
+		"Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach locus.\n"
+	if n := strings.Count(out, report); n != 1 {
+		t.Errorf("the update reported %d times %q:\n%s", n, report, out)
+	}
+	got, err := access.ReadEnvValues(filepath.Join(s.project, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["CYFR_PRIVATE_EGRESS_TARGETS"] != "locus-backends,api.example.com" {
+		t.Errorf(".env's egress line is %q", got["CYFR_PRIVATE_EGRESS_TARGETS"])
+	}
+	for _, shown := range []string{"api.example.com", "http://locus-runtime:4200", "wrk_locus="} {
+		if strings.Contains(out, shown) {
+			t.Errorf("the update said %q:\n%s", shown, out)
 		}
 	}
 }
@@ -1831,9 +1866,10 @@ func TestUpdateRewritesTheReleasesDefaultsInEnv(t *testing.T) {
 		t.Errorf("the update said %d times %q:\n%s", n, said, out)
 	}
 	report := "These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
-		"  CYFR_LEGACY_URL, line 8, names locus-legacy: write http://locus:4100 there, release 0.9.0's shipped value\n" +
+		"  CYFR_LEGACY_URL, line 8, names locus-legacy: put locus in place of locus-legacy in its URL, keeping the rest of the line as it is\n" +
 		"  CYFR_NAMED_URLS, line 12, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
-		"  CYFR_PEER, line 10, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n"
+		"  CYFR_PEER, line 10, names locus-legacy: name a service release 0.9.0's docker-compose.yml runs there\n" +
+		"Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach locus.\n"
 	if n := strings.Count(out, report); n != 1 {
 		t.Errorf("the update reported %d times %q:\n%s", n, report, out)
 	}
