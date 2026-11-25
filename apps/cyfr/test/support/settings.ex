@@ -16,11 +16,12 @@ defmodule Cyfr.Test.Settings do
 
   A row lives in the calling test's sandbox transaction and is gone when
   that test's connection is checked in, but the accessor's cache is one
-  per node: the sandbox owner ages it once the transaction is rolled back
-  (`Arca.Test.Sandbox`), and `put/2` drops the key's cached value again
-  when the test exits, for a connection the test process holds itself.
-  Only a synchronous test, which runs alone, may call it. A caller that
-  reaches no connection checks one out, owned by the test process.
+  per node: the sandbox owner ages every cached setting once it has rolled
+  the transaction back (`Arca.Test.Sandbox`). A caller that reaches no
+  connection checks one out, owned by the test process, whose rollback
+  comes as the test process ends, and the same aging is registered for
+  the test's exit. Only a synchronous test, which runs alone, may call
+  `put/2` or `reset/1`.
   """
 
   import ExUnit.Assertions, only: [flunk: 1]
@@ -70,8 +71,6 @@ defmodule Cyfr.Test.Settings do
       end
 
     connect!()
-    ExUnit.Callbacks.on_exit({__MODULE__, key}, fn -> Store.invalidate(key) end)
-
     {:ok, %{revision: revision}} = Store.all()
     {:ok, _next} = Store.put(key, validated, revision, "test")
     Store.invalidate(key)
@@ -96,11 +95,14 @@ defmodule Cyfr.Test.Settings do
 
   # A process that reaches a connection already (its own, an allowance or
   # a shared owner's) writes through it, so every process the test shares
-  # it with reads the row; only one with none checks one out.
+  # it with reads the row; only one with none checks one out, and ages the
+  # cache when the test has ended, as an owner does.
   defp connect! do
     Arca.Repo.query!("SELECT 1")
     :ok
   rescue
-    DBConnection.OwnershipError -> :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    DBConnection.OwnershipError ->
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      ExUnit.Callbacks.on_exit({__MODULE__, :checkout}, fn -> Store.invalidate(:all) end)
   end
 end

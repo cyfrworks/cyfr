@@ -51,6 +51,18 @@ defmodule Arca.Test.SandboxTest do
     assert PlatformSettings.effective(@key) == {:ok, 1_000_000}
   end
 
+  test "a setting written and read in a transaction the test rolled back itself is not read " <>
+         "from the cache after the owner's rollback" do
+    assert {:error, :undone} =
+             Arca.Repo.transaction(fn ->
+               put!(1_000_000)
+               assert PlatformSettings.effective(@key) == {:ok, 1_000_000}
+               Arca.Repo.rollback(:undone)
+             end)
+
+    assert PlatformSettings.get(@key) == {:error, :not_found}
+  end
+
   test "a setting read after the test's own invalidation, as its work ends, is not read from " <>
          "the cache after its rollback" do
     put!(1_000_000)
