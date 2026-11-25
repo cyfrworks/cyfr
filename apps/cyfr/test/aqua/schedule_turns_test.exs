@@ -1391,8 +1391,31 @@ defmodule Aqua.ScheduleTurnsTest do
       await_status(ctx, turn_in(ctx, today.id, occurrence).id, "completed")
     end
 
-    test "a turn started by a key, or a call no turn made, writes no line for Aqua",
+    test "a turn's own call under a key or a frame writes no line for Aqua; under the person's sign-in it does",
          %{ctx: ctx} do
+      script!(held() ++ [reply("Done.")])
+      room = today!(ctx)
+      {turn_id, player} = busy!(ctx, room.id)
+      {:ok, %{root_execution_id: root}} = Tape.turn(ctx, turn_id)
+      chain = %{ctx | plane: :guest, authenticated: true}
+      own = %{"thread_id" => room.id, "root_execution_id" => root, "parent_execution_id" => root}
+      line = %{"reference" => @aqua, "input" => %{"line" => "hi"}}
+
+      for caller <- [
+            %{chain | api_key_id: "key_x"},
+            %{chain | auth_method: :tincture, frame: %{ref: "tincture:local.x"}}
+          ] do
+        assert create(caller, Map.merge(line, own)) == {:error, :aqua_line_by_person}
+      end
+
+      assert {:ok, []} = CronSchedule.list(actor(ctx), kind: "schedule")
+      assert {:ok, %{maker: maker, thread_id: nil}} = create(chain, Map.merge(line, own))
+      assert maker == Prima.AgentRef.soul_name()
+      release!(player)
+      await_status(ctx, turn_id, "completed")
+    end
+
+    test "a call no turn made writes no schedule", %{ctx: ctx} do
       room = today!(ctx)
       chain = %{ctx | plane: :guest, authenticated: true}
 
