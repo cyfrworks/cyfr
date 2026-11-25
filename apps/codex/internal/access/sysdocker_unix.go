@@ -19,7 +19,7 @@ import (
 // the engine holds the lock, else directly, bounded by deadline either
 // way. A cancelled ctx ends the call: the watchdog is asked to kill
 // docker, a direct child's process group is killed.
-func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadline time.Duration, streams func(*exec.Cmd)) (int, error) {
+func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadline time.Duration, remove string, streams func(*exec.Cmd)) (int, error) {
 	lock := s.e.lockFile()
 	if lock == nil {
 		ctx, cancel := context.WithTimeout(ctx, deadline)
@@ -37,7 +37,7 @@ func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadl
 	if err != nil {
 		return -1, err
 	}
-	cmd := exec.Command(argv[0], append(append(argv[1:len(argv):len(argv)], watchdogArgs(deadline, true)...), append([]string{bin}, args...)...)...)
+	cmd := exec.Command(argv[0], append(append(argv[1:len(argv):len(argv)], watchdogArgs(deadline, true, remove)...), append([]string{bin}, args...)...)...)
 	streams(cmd)
 	// The watchdog starts docker only when told to go ahead, a byte on
 	// this pipe written once the holder record names it: a holder killed

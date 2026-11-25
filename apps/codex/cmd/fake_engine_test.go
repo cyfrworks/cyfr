@@ -549,6 +549,20 @@ func (r fakeRunner) Run(ctx context.Context, c access.Call) (access.Result, erro
 		r.s.calls = append(r.s.calls, c)
 		r.s.mu.Unlock()
 	}
+	// A snapshot's read through the stack is answered as its container
+	// would answer it, from the scenario's binds.
+	if stackReadCall(c.Args) {
+		res, err := standInStackRead(ctx, c)
+		// As the engine's, a call whose container must not outlive it
+		// removes it when it does not end with status 0.
+		if c.RemoveOnEnd != "" && (err != nil || res.ExitCode != 0) {
+			if f, ferr := os.OpenFile(filepath.Join(os.Getenv("FAKE_DOCKER_DIR"), "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); ferr == nil {
+				fmt.Fprintln(f, "rm --force "+c.RemoveOnEnd)
+				f.Close()
+			}
+		}
+		return res, err
+	}
 	if c.Deadline > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.Deadline)
