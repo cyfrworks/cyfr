@@ -1860,7 +1860,7 @@ defmodule Compendium.Packs do
 
   defp unedited_shipped?([{["SKILL.md"], bytes}]),
     do:
-      MapSet.member?(@shipped_scrolls, Base.encode16(:crypto.hash(:sha256, bytes), case: :lower))
+      MapSet.member?(@shipped_scrolls, Prima.Digest.sha256_hex(bytes))
 
   defp unedited_shipped?(_pairs), do: false
 

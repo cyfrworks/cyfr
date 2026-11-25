@@ -308,9 +308,7 @@ defmodule Compendium.PackArchive do
     do: refuse("The archive expands past #{@max_expanded} bytes")
 
   defp zip_data(bytes, %{local: local} = h) do
-    with <<_::binary-size(^local), "PK", 3, 4, _::binary-size(22), nlen::little-16,
-           elen::little-16, _::binary>> <- bytes,
-         start = local + 30 + nlen + elen,
+    with {:ok, start} <- local_start(bytes, local),
          true <- start + h.csize <= byte_size(bytes),
          {:ok, data} <- unzip(binary_part(bytes, start, h.csize), h) do
       if byte_size(data) == h.usize and :erlang.crc32(data) == h.crc,
@@ -319,6 +317,19 @@ defmodule Compendium.PackArchive do
     else
       {:error, _} = refused -> refused
       _short -> refuse("The archive's file #{inspect(h.name)} is damaged")
+    end
+  end
+
+  # Where a file's bytes begin: past its local header, whose name and extra
+  # field may differ in length from the central directory's.
+  defp local_start(bytes, local) do
+    case bytes do
+      <<_::binary-size(^local), "PK", 3, 4, _::binary-size(22), nlen::little-16,
+        elen::little-16, _::binary>> ->
+        {:ok, local + 30 + nlen + elen}
+
+      _short ->
+        :short
     end
   end
 
