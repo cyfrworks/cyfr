@@ -18,9 +18,15 @@ defmodule Arca.Files do
     * `:shaped` (`components/`, `aqua/`) — files are read and edited in
       place, but only inside a unit the root's grammar recognises: a
       component version directory of the `local` publisher, the soul, a
-      crew member or a scroll. Units are made and removed by their own verbs
-      (scaffold, pull, fork, the Aqua page); a unit the server ships is
-      restored, never deleted. The storage layer stamps a write here with
+      crew member or a pack of scrolls. Units are made and removed by their
+      own verbs (scaffold, pull, fork, the Aqua page); a unit the server
+      ships is restored, never deleted. A pack, `aqua/scrolls/<pack>/`, is
+      one door for every change to it: a write, a replace or a delete
+      inside a pack of the person's own is a new revision of the whole
+      pack, a write under a new folder makes one, a delete of the folder
+      removes it, and a write or delete inside a brought pack or `cyfr`,
+      or of a pack's record, is refused with the pack's own sentence
+      (`Compendium.Packs.admit_edit/4`). The storage layer stamps a write here with
       a pending projection generation (`Arca.StorageProjectionChanges`),
       so the component and agent indexes' next read reflects it or
       answers unavailable.
@@ -491,7 +497,8 @@ defmodule Arca.Files do
 
   defp above_unit_message(["aqua" | _], segments) do
     "'#{join(segments)}' is outside any Aqua unit: the soul is aqua/aqua.md, a crew member is " <>
-      "aqua/crew/{name}.md, a scroll is aqua/skills/{name}/SKILL.md — create one from the Aqua page"
+      "aqua/crew/{name}.md, a scroll is aqua/scrolls/{pack}/skills/{name}/SKILL.md in a pack " <>
+      "named with letters, digits, '_' and '-' — create one from the Aqua page"
   end
 
   defp inside_file_message(segments),
@@ -523,8 +530,27 @@ defmodule Arca.Files do
 
   defp listing(actor, physical, path) do
     with {:ok, entries} <- list_typed(actor, physical, path) do
+      record = record_name(physical)
+
       {:ok,
-       for({name, kind} <- entries, do: {name, kind, fn -> size(actor, physical, name, kind) end})}
+       for(
+         {name, kind} <- entries,
+         not (kind == :file and name == record),
+         do: {name, kind, fn -> size(actor, physical, name, kind) end}
+       )}
+    end
+  end
+
+  # A unit its grammar commits whole (a pack of `aqua/scrolls/`) keeps its
+  # domain's record at its sentinel, which no ordinary write reaches: it is
+  # no file of the person's, so the folder's listing leaves it out.
+  defp record_name(physical) do
+    case Arca.Storage.locate(physical) do
+      {:dir, ^physical, sentinel} ->
+        if Arca.Storage.UnitLocator.commits_whole?(physical), do: sentinel
+
+      _other ->
+        nil
     end
   end
 
@@ -651,6 +677,16 @@ defmodule Arca.Files do
       :no_unit ->
         {:error, :no_unit}
 
+      # A unit's own rule refused it, in its own words (a pack's).
+      {:invalid_argument, _} = refusal ->
+        {:error, refusal}
+
+      {:reserved_path, _} ->
+        {:error, {:invalid_argument, "'#{path}' is written by the server alone"}}
+
+      reason when reason in [:eisdir, :enotdir] ->
+        {:error, {:conflict, "'#{path}' cannot go there: a file and a folder would share a name"}}
+
       reason ->
         storage_error("write", path, reason)
     end
@@ -677,10 +713,23 @@ defmodule Arca.Files do
 
   defp delete_file(actor, physical, path) do
     case Arca.delete(actor, physical) do
-      :ok -> :ok
-      {:error, :not_found} -> {:error, {:not_found, "File", path}}
-      {:error, :bundled} -> {:error, {:invalid_argument, bundled_message(path)}}
-      {:error, reason} -> storage_error("delete", path, reason)
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "File", path}}
+
+      {:error, :bundled} ->
+        {:error, {:invalid_argument, bundled_message(path)}}
+
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
+      {:error, {:reserved_path, _}} ->
+        {:error, {:invalid_argument, "'#{path}' is written by the server alone"}}
+
+      {:error, reason} ->
+        storage_error("delete", path, reason)
     end
   end
 
@@ -695,14 +744,16 @@ defmodule Arca.Files do
       {:error, :above_unit} ->
         {:error, {:invalid_argument, "'#{path}' holds units — remove them one at a time"}}
 
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
       {:error, reason} ->
         storage_error("delete", path, reason)
     end
   end
 
   defp bundled_message(path),
-    do:
-      "'#{path}' ships with the server and cannot be deleted — reset it from the Components or Aqua page"
+    do: "'#{path}' ships with the server and cannot be deleted"
 
   defp cap_message(cap),
     do: "The athanor's storage is at its limit (#{cap} bytes) — remove something first"

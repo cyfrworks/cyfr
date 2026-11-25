@@ -8,7 +8,7 @@ description: "Use your own Chrome: open a site in this thread's window, read it,
 How to use your browser: a real Chrome that is the person's alone, with a
 window for each thread. Use it for a page that needs a browser — one that
 runs scripts, needs a sign-in the person made there, or that you act on.
-To read one known address once, the `web` scroll's `http` reads are
+To read one known address once, the `cyfr:web` scroll's `http` reads are
 quicker.
 
 ## Working Style
@@ -36,7 +36,7 @@ quicker.
 ## A page you show calls as you
 
 Every page you show has the SDK in its entry and no frame around it: its
-script reaches CYFR through `window.cyfr`, as the `artisan` scroll says.
+script reaches CYFR through `window.cyfr`, as the `cyfr:artisan` scroll says.
 Its `cyfr.invoke` and `cyfr.action` are your own calls in this thread,
 decided as yours are, and the page goes on calling after your turn ends.
 A component the person granted runs at once, within its grant, and one

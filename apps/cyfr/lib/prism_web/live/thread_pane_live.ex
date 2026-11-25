@@ -843,15 +843,22 @@ defmodule PrismWeb.ThreadPaneLive do
          {:ok, %{thread_id: ^thread_id} = row} <-
            Threads.get_message(Sanctum.Context.actor(ctx), id),
          %{} = proposal <- proposal(row) do
+      {action, against} = save_action(ctx, proposal)
+
+      args = %{
+        "action" => action,
+        "name" => proposal["name"],
+        "description" => proposal["description"],
+        "content" => proposal["content"],
+        "against" => against
+      }
+
+      # A proposal that makes a new pack is saved create-only, as the
+      # Scrolls page's New pack is: refused when the pack is there.
+      args = if proposal["new_pack"] == true, do: Map.put(args, "new_pack", true), else: args
+
       status =
-        case call_tool(ctx, "aqua", %{
-               "action" =>
-                 if(proposal["against"] == "none", do: "skill_create", else: "skill_update"),
-               "name" => proposal["name"],
-               "description" => proposal["description"],
-               "content" => proposal["content"],
-               "against" => proposal["against"]
-             }) do
+        case call_tool(ctx, "aqua", args) do
           {:ok, _saved} -> :saved
           {:error, reason} -> {:refused, error_message(reason)}
         end
@@ -2485,9 +2492,16 @@ defmodule PrismWeb.ThreadPaneLive do
     ~H"""
     <div id={@id} class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1 text-xs">
       <p class="text-gray-400">
-        {if @proposal["against"] == "none",
-          do: "Aqua proposes a new scroll. Nothing is kept until you save it.",
-          else: "Aqua proposes a change to a scroll. Nothing changes until you save it."}
+        {cond do
+          @proposal["new_pack"] == true ->
+            "Aqua proposes a new pack with this scroll as its first. Nothing is kept until you save it."
+
+          @proposal["against"] == "none" ->
+            "Aqua proposes a new scroll. Nothing is kept until you save it."
+
+          true ->
+            "Aqua proposes a change to a scroll. Nothing changes until you save it."
+        end}
       </p>
       <p id={@id <> "-name"} class="font-mono text-gray-200">{@proposal["name"]}</p>
       <p id={@id <> "-description"} class="text-gray-300">{@proposal["description"]}</p>
@@ -2886,12 +2900,42 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp proposal(%{kind: kind} = row) when kind in ["tool_result", "page_result"] do
     case Threads.payload(row)["proposal"] do
-      %{"name" => _, "description" => _, "content" => _, "against" => _} = proposal -> proposal
-      _none -> nil
+      %{"name" => name, "description" => _, "content" => _, "against" => _} = proposal ->
+        proposal
+        |> Map.put("name", full_scroll_name(name))
+        |> Map.put("bare", is_binary(name) and not String.contains?(name, ":"))
+
+      _none ->
+        nil
     end
   end
 
   defp proposal(_row), do: nil
+
+  # What Save writes. A card made against none creates its scroll. A card
+  # made before scrolls had packs, an update of a scroll the release did
+  # not move into `mine` (an unedited shipped one, which `cyfr` holds),
+  # carries the whole scroll as it would be stored, so Save makes it in
+  # `mine`, new. Any other updates the scroll it was made against.
+  defp save_action(_ctx, %{"against" => "none"}), do: {"skill_create", "none"}
+
+  defp save_action(ctx, %{"bare" => true, "name" => name, "against" => against}) do
+    case Compendium.skill(ctx, name) do
+      {:error, :not_found} -> {"skill_create", "none"}
+      _held -> {"skill_update", against}
+    end
+  end
+
+  defp save_action(_ctx, %{"against" => against}), do: {"skill_update", against}
+
+  # A card proposed before scrolls had packs names its scroll bare: such a
+  # scroll is the person's first pack's, `mine`, where the release moved
+  # every scroll an athanor made.
+  defp full_scroll_name(name) when is_binary(name) do
+    if String.contains?(name, ":"), do: name, else: Compendium.first_pack() <> ":" <> name
+  end
+
+  defp full_scroll_name(name), do: name
 
   defp drawn_kinds, do: Threads.post_kinds() ++ ["nudge", "turn_aborted"]
 

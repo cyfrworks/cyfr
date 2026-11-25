@@ -7,7 +7,7 @@ description: "Find, verify and synthesize information on the web: several search
 
 How to answer a question from the web: find the information, verify it
 against more than one source, and synthesize it into an answer that
-leads, followed by its evidence. To read one known address, the `web`
+leads, followed by its evidence. To read one known address, the `cyfr:web`
 scroll's `http` reads are quicker.
 
 ## Working Style

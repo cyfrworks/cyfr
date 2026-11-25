@@ -37,10 +37,10 @@ defmodule Compendium do
     AgentSource,
     AquaAgent,
     AquaPath,
-    AquaSkills,
     Catalogue,
     Component,
     ComponentPath,
+    Packs,
     Registry,
     Tincture
   }
@@ -639,35 +639,102 @@ defmodule Compendium do
   @spec crew_grant_row(Context.t()) :: {:ok, map()} | {:error, term()}
   def crew_grant_row(%Context{} = ctx), do: AgentSource.latest_row(ctx, AquaPath.soul_name())
 
-  @doc "The athanor's skills, at most `limit` of them (`Compendium.AquaSkills.index/2`)."
-  @spec skills_index(Context.t(), pos_integer() | :all) ::
-          {:ok, %{entries: [AquaSkills.entry()], more: non_neg_integer()}} | {:error, term()}
-  defdelegate skills_index(ctx, limit), to: AquaSkills, as: :index
-
   @doc """
-  One scroll by name, read under the caller's actor
-  (`Compendium.AquaSkills.skill/2`): the one read of a scroll by its name,
-  which `aqua.skill_get` and a job's scrolls make alike.
+  The scrolls of the packs switched on, at most `limit` of them
+  (`Compendium.Packs.index/2`).
   """
-  @spec skill(Context.t(), term()) :: {:ok, AquaSkills.scroll()} | {:error, term()}
-  defdelegate skill(ctx, name), to: AquaSkills
+  @spec skills_index(Context.t(), pos_integer() | :all) ::
+          {:ok, %{entries: [Packs.entry()], more: non_neg_integer()}} | {:error, term()}
+  defdelegate skills_index(ctx, limit), to: Packs, as: :index
 
   @doc """
-  A scroll's bound (`Compendium.AquaSkills`): the most bytes its manifest
+  One scroll by its full name, `<pack>:<scroll>`, read under the caller's
+  actor (`Compendium.Packs.skill/2`): the one read of a scroll by its
+  name, which `aqua.skill_get` and a job's scrolls make alike. A bare name
+  is refused with a sentence naming the full names that match it.
+  """
+  @spec skill(Context.t(), term()) :: {:ok, Packs.scroll()} | {:error, term()}
+  defdelegate skill(ctx, name), to: Packs
+
+  @doc """
+  A scroll's bound (`Compendium.Packs`): the most bytes its manifest
   holds and the most characters its description holds.
   """
   @spec skill_bound() :: %{bytes: pos_integer(), description: pos_integer()}
-  def skill_bound, do: %{bytes: AquaSkills.max_bytes(), description: AquaSkills.max_description()}
+  def skill_bound, do: %{bytes: Packs.max_bytes(), description: Packs.max_description()}
 
-  @doc "The most skills a prompt lists (`Compendium.AquaSkills.index_limit/0`)."
+  @doc "The most skills a prompt lists (`Compendium.Packs.index_limit/0`)."
   @spec skills_index_limit() :: pos_integer()
-  defdelegate skills_index_limit(), to: AquaSkills, as: :index_limit
+  defdelegate skills_index_limit(), to: Packs, as: :index_limit
+
+  @doc "The name of a person's first pack of their own, `mine` (`Compendium.Packs.mine/0`)."
+  @spec first_pack() :: String.t()
+  defdelegate first_pack(), to: Packs, as: :mine
+
+  @doc "The most bytes an archive a pack is brought in by may hold (`Compendium.PackArchive.max_input/0`)."
+  @spec pack_archive_bound() :: pos_integer()
+  defdelegate pack_archive_bound(), to: Compendium.PackArchive, as: :max_input
+
+  @doc "Every pack the athanor holds, switched on or off (`Compendium.Packs.list/1`)."
+  @spec packs(Context.t()) :: {:ok, [map()]} | {:error, term()}
+  defdelegate packs(ctx), to: Packs, as: :list
+
+  @doc """
+  One scroll of any pack, switched on or off, as the Scrolls page shows it
+  (`Compendium.Packs.view_scroll/3`).
+  """
+  @spec scroll_view(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  defdelegate scroll_view(ctx, pack, folder), to: Packs, as: :view_scroll
+
+  @doc "The sheet an archive's pack is brought in after (`Compendium.Packs.sheet/4`)."
+  @spec pack_sheet(Context.t(), binary(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  defdelegate pack_sheet(ctx, archive, filename, opts), to: Packs, as: :sheet
+
+  @doc """
+  Bring a pack in, or take an update of a brought one, as the sheet showed
+  it (`Compendium.Packs.bring_in/4`).
+  """
+  @spec bring_in_pack(Context.t(), binary(), String.t(), map()) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate bring_in_pack(ctx, archive, filename, params), to: Packs, as: :bring_in
+
+  @doc "Switch a pack on or off (`Compendium.Packs.switch/3`)."
+  @spec switch_pack(Context.t(), String.t(), boolean()) :: :ok | {:error, term()}
+  defdelegate switch_pack(ctx, pack, on?), to: Packs, as: :switch
+
+  @doc "Copy a scroll into a pack of the person's own (`Compendium.Packs.copy/3`)."
+  @spec copy_scroll(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  defdelegate copy_scroll(ctx, name, to), to: Packs, as: :copy
+
+  @doc "A pack as the archive it would be brought in by (`Compendium.Packs.download/2`)."
+  @spec download_pack(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  defdelegate download_pack(ctx, pack), to: Packs, as: :download
+
+  @doc """
+  The set's digest of the athanor's packs, read from the units' rows
+  alone (`Compendium.Packs.pack_digest/2`).
+  """
+  @spec pack_digest(Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  defdelegate pack_digest(ctx, athanor), to: Packs
+
+  @doc """
+  The packs a set digest names, or `{:moved, current}`
+  (`Compendium.Packs.pack_view/3`).
+  """
+  @spec pack_view(Context.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:moved, String.t()} | {:error, term()}
+  defdelegate pack_view(ctx, athanor, digest), to: Packs
+
+  @doc "One file of a pack by its path inside it (`Compendium.Packs.pack_file/4`)."
+  @spec pack_file(Context.t(), String.t(), String.t(), String.t()) ::
+          {:ok, binary()} | {:error, term()}
+  defdelegate pack_file(ctx, athanor, pack, path), to: Packs
 
   @doc "The storage path of an agent's file (`Compendium.AquaPath.agent_file/1`)."
   @spec agent_file_path(String.t()) :: [String.t()]
   defdelegate agent_file_path(name), to: AquaPath, as: :agent_file
 
-  @doc "The storage path of a skill's directory (`Compendium.AquaPath.skill_dir/1`)."
-  @spec skill_dir(String.t()) :: [String.t()]
-  defdelegate skill_dir(name), to: AquaPath
+  @doc "The storage path of a pack's folder (`Compendium.AquaPath.pack_dir/1`)."
+  @spec pack_dir(String.t()) :: [String.t()]
+  defdelegate pack_dir(pack), to: AquaPath
 end

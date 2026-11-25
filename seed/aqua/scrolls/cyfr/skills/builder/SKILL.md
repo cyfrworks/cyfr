@@ -7,7 +7,7 @@ description: "Create, fix or improve a WASM component — a catalyst, reagent or
 
 How to create, fix and improve a WASM component — a catalyst, a reagent
 or a formula: Rust source, WIT, Cargo and the manifest. A tincture is the
-`artisan` scroll's.
+`cyfr:artisan` scroll's.
 
 ## Working Style
 
@@ -60,7 +60,7 @@ A component is not done until `setup_plan` says ready and a real run succeeds.
 | Reagent  | No  | No     | Pure compute — parsing, transforms |
 | Catalyst | Yes | Yes    | External I/O — HTTP, secrets, files |
 | Formula  | Yes | Yes    | Chains components; tincture gateway |
-| Tincture | No  | No     | Frontend — the `artisan` scroll |
+| Tincture | No  | No     | Frontend — the `cyfr:artisan` scroll |
 
 References: `type:namespace.name:version`. Shorthands: `c:`, `r:`, `f:`, `t:`
 

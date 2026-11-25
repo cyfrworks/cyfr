@@ -207,7 +207,7 @@ func (s *uninstallScenario) fill(dir string) {
 		"a-link-to-a-file":   filepath.Join(s.outside, "target.txt"),
 		"a-link-to-a-folder": s.outside,
 		"a-dangling-link":    filepath.Join(s.outside, "gone"),
-		"aqua/skills":        s.outside,
+		"aqua/scrolls":       s.outside,
 	} {
 		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
 			s.t.Fatal(err)

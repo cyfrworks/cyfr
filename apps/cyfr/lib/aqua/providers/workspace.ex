@@ -119,7 +119,7 @@ defmodule Aqua.Providers.Workspace do
             ),
             Arg.new("scrolls", {:array, Arg.new(nil, :string)},
               description:
-                "open: names of this athanor's scrolls the work is to follow, handed over with the ask and read after it"
+                "open: the full names of this athanor's scrolls the work is to follow, each its pack and its name like 'mine:research', handed over with the ask and read after it"
             ),
             Arg.new("apart", :boolean,
               description: "open: keep this work's browser apart from the person's other work"
