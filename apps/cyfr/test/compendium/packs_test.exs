@@ -981,6 +981,31 @@ defmodule Compendium.PacksTest do
       assert "#{first}" == manifest
     end
 
+    test "the archive of a pack at the longest name and path is the shared vectors' pack_archive, which the keeper extracts",
+         %{ctx: ctx, actor: actor} do
+      %{"pack" => pack, "path" => path, "data" => data, "archive" => archive} =
+        Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("pack_archive")
+
+      bounds = Packs.bounds()
+      assert {byte_size(pack), byte_size(path)} == {bounds.name_bytes, bounds.path_bytes}
+
+      :ok =
+        Arca.Overlay.edit_unit(actor, ["aqua", "scrolls", pack], fn nil ->
+          {:ok,
+           [
+             {[".cyfr-pack.json"], Packs.encode_record(Packs.own_record())},
+             {String.split(path, "/"), data}
+           ]}
+        end)
+
+      {:ok, digest} = Packs.pack_digest(ctx, ctx.athanor_id)
+      {:ok, view} = Packs.pack_view(ctx, ctx.athanor_id, digest)
+      assert view.archive == Base.decode64!(archive)
+    end
+
     test "a path's bound is on the path inside its pack, the keeper's too, at the shared vectors' edge" do
       %{"held" => held, "refused" => refused} =
         Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)

@@ -537,12 +537,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/registry-stand-in/standin_test.py", ~w(chains directory entries)}
     ],
     "keeper_protocol.json" => [
-      {"apps/cyfr/test/compendium/packs_test.exs", ~w(pack_bounds pack_paths)},
+      {"apps/cyfr/test/compendium/packs_test.exs", ~w(pack_bounds pack_archive pack_paths)},
       {"apps/cyfr/test/opus/programs/definition_test.exs",
        ~w(reserved_env_prefixes request_bounds)},
       {"apps/locus/keeper/internal/protocol/protocol_test.go",
        ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)},
-      {"apps/locus/keeper/internal/packview/packview_test.go", ~w(pack_bounds pack_paths)},
+      {"apps/locus/keeper/internal/packview/packview_test.go", ~w(pack_bounds pack_archive pack_paths)},
       {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
       {"apps/locus/keeper/internal/serve/serve_linux_test.go", ~w(home_requests)},
       {"apps/locus/test/locus/config_test.exs", ~w(valid_requests invalid_requests)},

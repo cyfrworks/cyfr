@@ -36,6 +36,10 @@ defmodule Prima.PathSafety do
   @max_depth 32
   @max_path_bytes 1024
 
+  @doc "The most bytes one segment of a storage path holds."
+  @spec max_segment_bytes() :: pos_integer()
+  def max_segment_bytes, do: @max_segment_bytes
+
   @doc """
   Validate a list of path segments. Raises `ArgumentError` on the first
   unsafe segment. Returns `:ok`.

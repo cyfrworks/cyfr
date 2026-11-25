@@ -237,13 +237,19 @@ defmodule Compendium.Packs do
   @spec max_description() :: pos_integer()
   def max_description, do: @max_description
 
-  @doc "A pack's bounds and the bounds of the packs switched on together."
+  @doc """
+  A pack's bounds and the bounds of the packs switched on together: a
+  file's (`Arca.Files.max_write/0`) and a pack's name's, a segment of the
+  store's path (`Prima.PathSafety.max_segment_bytes/0`), among them.
+  """
   @spec bounds() :: %{
           pack_files: pos_integer(),
           pack_bytes: pos_integer(),
           set_files: pos_integer(),
           set_bytes: pos_integer(),
-          path_bytes: pos_integer()
+          path_bytes: pos_integer(),
+          file_bytes: pos_integer(),
+          name_bytes: pos_integer()
         }
   def bounds,
     do: %{
@@ -251,7 +257,9 @@ defmodule Compendium.Packs do
       pack_bytes: @pack_bytes,
       set_files: @set_files,
       set_bytes: @set_bytes,
-      path_bytes: @path_bytes
+      path_bytes: @path_bytes,
+      file_bytes: Arca.Files.max_write(),
+      name_bytes: Prima.PathSafety.max_segment_bytes()
     }
 
   @doc """

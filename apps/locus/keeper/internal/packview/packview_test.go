@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -361,6 +364,22 @@ func TestARefusedPutLeavesNothing(t *testing.T) {
 		}
 		refused(t, "set bytes", stream(t, lines, nil, nil), 0)
 	})
+	t.Run("a pack's name past its bound", func(t *testing.T) {
+		refused(t, "name", streamOf(t, []file{{path: strings.Repeat("n", MaxNameBytes+1) + "/a", data: []byte("x")}}), 0)
+	})
+	t.Run("a manifest past its bound", func(t *testing.T) {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		body := append([]byte(`{"files":[]}`), bytes.Repeat([]byte(" "), int(MaxManifestBytes)-11)...)
+		_ = tw.WriteHeader(&tar.Header{Name: ManifestName, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write(body)
+		_ = tw.Close()
+		refused(t, "manifest", buf.Bytes(), 0)
+	})
+	t.Run("bytes after the archive's end", func(t *testing.T) {
+		b := append(streamOf(t, []file{{path: "p/a", data: []byte("a")}}), bytes.Repeat([]byte("x"), 3*partBytes)...)
+		refused(t, "after", b, 0)
+	})
 	t.Run("a part out of order", func(t *testing.T) {
 		s := newStore(t)
 		d := digestOf("order")
@@ -405,17 +424,26 @@ func TestTheLegalWorstCasesGoThroughWhole(t *testing.T) {
 			}
 		}
 	})
-	t.Run("four packs of 2,048 files making 128 MiB", func(t *testing.T) {
+	// The largest manifest a legal set makes: every file at the longest
+	// pack name and path the store holds, each segment within the store's.
+	t.Run("four packs of 2,048 files making 128 MiB, at the longest names", func(t *testing.T) {
 		s := newStore(t)
 		var files []file
 		each := (128 << 20) / (4 * MaxPackFiles)
 		for p := 0; p < 4; p++ {
+			name := fmt.Sprintf("%d", p) + strings.Repeat("n", MaxNameBytes-1)
 			for f := 0; f < MaxPackFiles; f++ {
-				files = append(files, file{path: fmt.Sprintf("p%d/skills/s%d/SKILL.md", p, f), data: bytes.Repeat([]byte{byte(f)}, each)})
+				inside := strings.Repeat("a", 120) + "/" + fmt.Sprintf("%04d", f) + strings.Repeat("b", MaxPathBytes-125)
+				files = append(files, file{path: name + "/" + inside, data: bytes.Repeat([]byte{byte(f)}, each)})
 			}
 		}
+		b := streamOf(t, files)
+		hdr, err := tar.NewReader(bytes.NewReader(b)).Next()
+		if err != nil || hdr.Size <= 4<<20 {
+			t.Fatalf("the manifest is %d bytes: %v", hdr.Size, err)
+		}
 		d := digestOf("files")
-		if state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, files)); err != nil || state != Held {
+		if state, _, err := putAll(s, role, "ath_1", "lt_1", d, b); err != nil || state != Held {
 			t.Fatalf("%q %v", state, err)
 		}
 		n := 0
@@ -682,6 +710,62 @@ func TestARoleEndingMidStream(t *testing.T) {
 	}
 }
 
+// A put being finished stays registered until it has settled: another put
+// of its athanor is refused under way meanwhile, and its role's End
+// returns once it is dropped, its folder gone and no generation made.
+func TestAPutBeingFinishedStaysRegistered(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	paused, resume := make(chan struct{}), make(chan struct{})
+	s.finishing = func() { close(paused); <-resume }
+	d := digestOf("finishing")
+	first := make(chan error, 1)
+	go func() {
+		_, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}}))
+		first <- err
+	}()
+	<-paused
+	if _, err := s.Put(&Owner{}, "ath_1", "lt_2", digestOf("other"), 0, false, []byte{}); !errors.Is(err, ErrUnderWay) {
+		t.Errorf("another put of the athanor while the first is finished: %v", err)
+	}
+	type seen struct {
+		folders []string
+		gen     error
+	}
+	ended := make(chan seen, 1)
+	go func() {
+		s.End(role)
+		_, err := os.Stat(s.Path("ath_1", d))
+		var folders []string
+		es, _ := os.ReadDir(filepath.Join(s.Dir(), Person("ath_1")))
+		for _, e := range es {
+			folders = append(folders, e.Name())
+		}
+		ended <- seen{folders, err}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s.mu.Lock()
+		e := role.ended
+		s.mu.Unlock()
+		if e || time.Now().After(deadline) {
+			break
+		}
+		runtime.Gosched()
+	}
+	close(resume)
+	at := <-ended
+	if len(at.folders) != 0 || !errors.Is(at.gen, fs.ErrNotExist) {
+		t.Errorf("once End returned: folders %v, generation %v", at.folders, at.gen)
+	}
+	if err := <-first; !errors.Is(err, ErrRefused) {
+		t.Errorf("the first put, its role ended while it was finished: %v", err)
+	}
+	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 || len(s.puts) != 0 {
+		t.Fatalf("left %v, %d registered", es, len(s.puts))
+	}
+}
+
 func TestTheCleanupRule(t *testing.T) {
 	role := &Owner{}
 	s := newStore(t)
@@ -765,7 +849,7 @@ func TestAnIdlePutIsDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
-	p := s.puts[putKey{"ath_1", d, "lt_1"}]
+	p := s.current(putKey{"ath_1", d, "lt_1"})
 	s.mu.Unlock()
 	// Before its time the timer re-arms; after it, the put goes.
 	s.idled(p)
@@ -903,6 +987,7 @@ func TestTheBoundsAreTheSharedOnes(t *testing.T) {
 	want := map[string]any{
 		"set_files": float64(MaxSetFiles), "set_bytes": float64(MaxSetBytes),
 		"pack_files": float64(MaxPackFiles), "pack_bytes": float64(MaxPackBytes),
+		"file_bytes": float64(MaxFileBytes), "name_bytes": float64(MaxNameBytes),
 		"path_bytes": float64(MaxPathBytes), "manifest": ManifestName,
 	}
 	if fmt.Sprint(v.Bounds) != fmt.Sprint(want) {
@@ -923,7 +1008,7 @@ func TestAManifestsSizesAreCheckedBeforeTheyAreAdded(t *testing.T) {
 	for name, lines := range map[string][]Line{
 		"the reviewer's manifest": {small, at("mine/b", math.MaxInt64)},
 		"a negative size":         {small, at("mine/b", -1)},
-		"a file past its bound":   {at("mine/b", MaxPackBytes+1)},
+		"a file past its bound":   {at("mine/b", MaxFileBytes+1)},
 		"a pack's sum past it":    {at("mine/b", MaxPackBytes), at("mine/c", 1)},
 		"a set's sum past it":     {at("p0/a", MaxPackBytes), at("p1/a", MaxPackBytes), at("p2/a", MaxPackBytes), at("p3/a", MaxPackBytes), at("p4/a", 1)},
 		"two that wrap together":  {at("p0/a", math.MaxInt64/2+1), at("p1/a", math.MaxInt64/2+1)},
@@ -936,10 +1021,64 @@ func TestAManifestsSizesAreCheckedBeforeTheyAreAdded(t *testing.T) {
 			t.Errorf("%s was taken", name)
 		}
 	}
-	full := []Line{at("p0/a", MaxPackBytes), at("p1/a", MaxPackBytes), at("p2/a", MaxPackBytes), at("p3/a", MaxPackBytes)}
+	var full []Line
+	for p := 0; p < 4; p++ {
+		full = append(full, at(fmt.Sprintf("p%d/a", p), MaxPackBytes/2), at(fmt.Sprintf("p%d/b", p), MaxPackBytes/2))
+	}
 	body, _ := json.Marshal(Manifest{Files: full})
 	if _, err := readManifest(bytes.NewReader(body), int64(len(body))); err != nil {
 		t.Errorf("a set at its budget: %v", err)
+	}
+}
+
+// The store's own archive of a pack at the longest name and path, the
+// shared vectors' pack_archive, extracts, and a set of MaxSetFiles of its
+// manifest's line, each with a size of MaxFileBytes's digits, is within
+// the manifest's bound: the largest manifest the store makes puts.
+func TestTheStoresArchiveAtTheLongestNamesExtracts(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Archive struct {
+			Pack    string `json:"pack"`
+			Path    string `json:"path"`
+			Data    string `json:"data"`
+			Archive string `json:"archive"`
+		} `json:"pack_archive"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	a := v.Archive
+	if len(a.Pack) != MaxNameBytes || len(a.Path) != MaxPathBytes {
+		t.Fatalf("the vectors' pack_archive is at %d and %d bytes", len(a.Pack), len(a.Path))
+	}
+	archive, err := base64.StdEncoding.DecodeString(a.Archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := Extract(bytes.NewReader(archive), dir); err != nil {
+		t.Fatalf("the store's archive: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, a.Pack, a.Path)); err != nil || string(got) != a.Data {
+		t.Fatalf("its file: %q %v", got, err)
+	}
+	tr := tar.NewReader(bytes.NewReader(archive))
+	hdr, err := tr.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m Manifest
+	if err := json.NewDecoder(tr).Decode(&m); err != nil || len(m.Files) != 1 {
+		t.Fatalf("its manifest: %+v %v", m, err)
+	}
+	around := int64(len(`{"files":[]}`))
+	line := hdr.Size - around + int64(len(strconv.Itoa(MaxFileBytes))-len(strconv.FormatInt(m.Files[0].Size, 10)))
+	if full := around + MaxSetFiles*(line+1) - 1; full > MaxManifestBytes {
+		t.Fatalf("a full set of the store's longest lines makes %d bytes, past %d", full, MaxManifestBytes)
 	}
 }
 
