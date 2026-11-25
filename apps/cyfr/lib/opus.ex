@@ -253,12 +253,17 @@ defmodule Opus do
   Why the name-level `source_ref` has no grant a run could stand on, once
   `authority_for/4` finds none: `:revoked` when its person revoked it,
   `:no_grant` when nobody granted it or a removal took it, as the record
-  of who revoked it says (`Sanctum.Consent.ungranted/2`).
+  of who revoked it says (`Sanctum.Consent.ungranted/2`). Narrowed to
+  `{:profile, id}`, the grant a turn pinned, it answers for that grant
+  alone: `:revoked` only when its person revoked that very grant.
   """
-  @spec ungranted(Context.t(), String.t()) ::
+  @spec ungranted(Context.t(), String.t() | {:profile, String.t()}) ::
           {:ok, :no_grant | :revoked} | {:error, :unavailable | :no_athanor}
   def ungranted(%Context{} = ctx, source_ref) when is_binary(source_ref),
     do: Sanctum.Consent.ungranted(ctx, source_ref)
+
+  def ungranted(%Context{} = ctx, {:profile, profile_id} = pinned) when is_binary(profile_id),
+    do: Sanctum.Consent.ungranted(ctx, pinned)
 
   @doc """
   Subscribe the calling process to an execution's event stream. Pass the

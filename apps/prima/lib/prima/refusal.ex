@@ -369,6 +369,15 @@ defmodule Prima.Refusal do
   def credential_reasons, do: @credential |> Map.keys() |> Enum.sort()
 
   @doc """
+  The turn refusals' reasons, each a typed reason of this table: what a
+  turn's own record or its runner refuses a write or a read of the turn
+  for, and what a turn's start finds moved. `Aqua.Loop` ends a turn with
+  each as it is answered, and its end and line read as its sentence here.
+  """
+  @spec turn_reasons() :: [atom()]
+  def turn_reasons, do: Enum.sort(@turn_conflicts ++ @turn_internal ++ @turn_not_found)
+
+  @doc """
   The normalized refusal for `reason`. A `%Prima.Refusal{}` classifies as
   itself; a reason the table does not know is `internal`, with the fixed
   sentence, and is logged by its shape.
@@ -428,7 +437,7 @@ defmodule Prima.Refusal do
   """
   @spec grant_action(:agent_changed | :ungranted | :grant_revoked) :: String.t()
   def grant_action(state) when is_map_key(@grant_states, state),
-    do: granting(nil, :none, elem(@grant_states[state], 1))
+    do: on_aqua_page(elem(@grant_states[state], 1))
 
   @doc """
   The JSON-RPC code name a row answers with in place of its class's code,
@@ -1999,8 +2008,10 @@ defmodule Prima.Refusal do
       "#{member} did not do this job: #{grant} on your Aqua page, then ask #{member} for it " <>
         "again."
 
-  defp granting(_member, :none, grant), do: String.capitalize(grant) <> " on your Aqua page."
+  defp granting(_member, :none, grant), do: on_aqua_page(grant)
   defp granting(_member, _unknown, _grant), do: nil
+
+  defp on_aqua_page(grant), do: String.capitalize(grant) <> " on your Aqua page."
 
   defp again(_member, :message), do: " Send a message to try again."
   defp again(member, :ask), do: " Ask #{member} for it again."

@@ -6692,6 +6692,40 @@ defmodule Aqua.ProgramTest do
              ]
     end
 
+    # The cause a takeover names is the pinned grant's own, never the
+    # source's history: a grant its person revoked and then gave again is
+    # not the grant the turn was started under, and that one, taken by a
+    # removal, says it changed.
+    @tag harness: :api
+    test "a turn taken over after a removal took the grant it started under says its grant " <>
+           "changed, though an earlier grant was revoked",
+         %{ctx: ctx, thread: thread} do
+      soul = Prima.AgentRef.soul_ref()
+      {:ok, %{profile_id: revoked}} = Opus.authority_for(ctx, :default, soul)
+
+      assert {:ok, %{status: "revoked"}} =
+               Sanctum.Providers.Profile.handle(ctx, %{
+                 "action" => "revoke",
+                 "profile_id" => revoked
+               })
+
+      :ok = consent_again!(ctx)
+      {:ok, %{profile_id: pinned}} = Opus.authority_for(ctx, :default, soul)
+      refute pinned == revoked
+
+      turn =
+        taken_over!(ctx, thread, fn ->
+          assert {:ok, %{revoked: [_]}} = Sanctum.Consent.revoke_source(ctx, soul)
+        end)
+
+      assert {:ok, %{profile_id: ^pinned}} = Tape.turn(ctx, turn.id)
+
+      assert {:error, {:consent_moved, @title, :message}} =
+               Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+
+      assert system_lines(ctx, thread, turn) == [@regranted]
+    end
+
     # Aqua's grant taken back by a removal, not by its person, while a
     # turn's loop is gone: the turn taken over says its grant changed.
     @tag harness: :api

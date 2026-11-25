@@ -1558,24 +1558,14 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The text of the ended turn's own message, read by its id from this
   # thread: never a scan of the rows around it, which may hold a line
-  # queued while the turn ran, or not reach back to it at all. Only this
-  # person's own line, its sender and its author both theirs, is sent again
-  # as theirs: never a schedule's line or a crew member's reply that opened
-  # the turn. A line with files is not offered, since a send again would
-  # carry its words alone; its thread's line says to send it again.
+  # queued while the turn ran, or not reach back to it at all. It is
+  # offered as every stored line is (`Aqua.again_text/2`): this person's
+  # own words with no files; its thread's line says to send it again.
   defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}, message_id)
        when is_binary(message_id) do
-    person = ctx.user_id
-
     case Threads.get_message(Sanctum.Context.actor(ctx), message_id) do
-      {:ok,
-       %{thread_id: ^thread_id, kind: "text", sent_by: "person", author: ^person, content: text} =
-           row}
-      when is_binary(text) and text != "" ->
-        if Aqua.attachment_refs(row) == [], do: text
-
-      _none ->
-        nil
+      {:ok, %{thread_id: ^thread_id} = row} -> Aqua.again_text(row, ctx.user_id)
+      _none -> nil
     end
   end
 

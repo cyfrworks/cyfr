@@ -4,17 +4,13 @@
 defmodule Aqua.Loop.RefusedWordsTest do
   @moduledoc """
   What a refused turn says: the action follows what opened the turn
-  (`Aqua.Loop.Turn.again/1`), and no reason the loop can store reaches a
-  thread or a turn's error as its atom (`Aqua.Loop.describe/1`).
+  (`Aqua.Loop.Turn.again/1`), and a refusal for Aqua's grant reads as its
+  row's sentence (`Prima.Refusal`).
   """
 
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog, only: [with_log: 1]
-
   alias Aqua.Loop.Turn
-
-  @lib Path.expand("../../../lib/aqua", __DIR__)
 
   test "a refused turn's action follows what opened it" do
     person = %{origin: "interactive", sent_by: "person", request_id: nil}
@@ -32,43 +28,16 @@ defmodule Aqua.Loop.RefusedWordsTest do
     assert Turn.again(%{person | origin: "programmatic"}) == :none
   end
 
-  test "no reason the loop can store as a turn's end or line reads as its atom" do
-    sources =
-      [Path.join(@lib, "loop.ex") | Path.wildcard(Path.join(@lib, "{loop,harness}/*.ex"))]
-
-    # A name only a comment or a doc spells is no atom the running code
-    # holds, and no reason the loop can store.
-    atoms =
-      for path <- sources,
-          [_, name] <- Regex.scan(~r/\{:(?:error|failed), :([a-z_]+)\}/, File.read!(path)),
-          atom = existing(name),
-          atom != nil,
-          uniq: true,
-          do: atom
-
-    assert :agent_moved in atoms and :no_pin in atoms
-
-    {said, _log} =
-      with_log(fn ->
-        for atom <- atoms, do: {atom, Aqua.Loop.turn_words(atom)}
-      end)
-
-    for {atom, text} <- said do
-      assert is_binary(text) and text != "", "#{inspect(atom)} reads as nothing"
-      refute text == Atom.to_string(atom), "#{inspect(atom)} reads as its atom"
-    end
-
+  # A turn refused for Aqua's grant, by the grant's state, reads as its
+  # row's sentence with what starts it again where it is read; that no
+  # reason a turn's record answers ends a turn as its atom is the runner's
+  # proof (`Aqua.RunnerTest`), which ends turns through the loop's end.
+  test "a turn refused for Aqua's grant reads as a sentence in every state and ending" do
     for state <- [:agent_changed, :ungranted, :grant_revoked, :consent_moved, :consent_revoked],
         then <- [:message, :ask, :none] do
       text = Aqua.Loop.turn_words({state, "Aqua", then})
       assert String.ends_with?(text, "."), "#{inspect({state, then})} reads as #{inspect(text)}"
       refute text =~ Atom.to_string(state)
     end
-  end
-
-  defp existing(name) do
-    String.to_existing_atom(name)
-  rescue
-    ArgumentError -> nil
   end
 end

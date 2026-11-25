@@ -265,10 +265,9 @@ defmodule Aqua.Loop do
   defp revoked(_ctx, reason), do: reason
 
   # What starts the member again where its refusal is read
-  # (`Aqua.Loop.Turn.again/1`), a message held to the person's own line,
-  # its sender and its author both theirs: a line in their name they did
-  # not write, a workspace's opening Aqua wrote among them, is no message
-  # of theirs to send again.
+  # (`Aqua.Loop.Turn.again/1`), a message held to the person's own line
+  # (`Aqua.Tape.own_line?/2`): a line in their name they did not write, a
+  # workspace's opening among them, is no message of theirs to send again.
   defp source(ctx, turn) do
     case Turn.again(turn) do
       :message -> if own_line?(ctx, turn), do: :message, else: :none
@@ -278,8 +277,8 @@ defmodule Aqua.Loop do
 
   defp own_line?(ctx, %{message_id: id, requested_by: person}) when is_binary(id) do
     case Tape.message(ctx, id) do
-      {:ok, %{sent_by: "person", author: ^person}} -> true
-      _other -> false
+      {:ok, row} -> Tape.own_line?(row, person)
+      _unread -> false
     end
   end
 
@@ -697,10 +696,10 @@ defmodule Aqua.Loop do
         {:error, :consent_moved}
 
       {:error, :not_found} ->
-        taken_back(ctx)
+        taken_back(ctx, profile_id)
 
       {:error, {:not_found, _profile}} ->
-        taken_back(ctx)
+        taken_back(ctx, profile_id)
 
       {:error, _} = error ->
         error
@@ -711,11 +710,12 @@ defmodule Aqua.Loop do
 
   # A pinned grant that no longer loads was taken back: revoked by its
   # person when Aqua has no grant to stand on any more and the record of
-  # who revoked says so (`Opus.ungranted/2`), else taken back some other
-  # way, as a removal takes it.
-  defp taken_back(ctx) do
+  # who revoked that very grant says so (`Opus.ungranted/2`, narrowed to
+  # the pinned profile, never the source's history), else taken back some
+  # other way, as a removal takes it, or given again.
+  defp taken_back(ctx, profile_id) do
     with {:error, :no_profile} <- Opus.authority_for(ctx, :default, @grant),
-         {:ok, :revoked} <- Opus.ungranted(ctx, @grant) do
+         {:ok, :revoked} <- Opus.ungranted(ctx, {:profile, profile_id}) do
       {:error, :consent_revoked}
     else
       _standing_removed_or_unread -> {:error, :consent_moved}
@@ -768,8 +768,11 @@ defmodule Aqua.Loop do
   # ended and exits this process before the release stops it; a steer that
   # keeps the turn going resumes it. Every return of the loop comes here,
   # and here alone decides what a write on the turn's path that was not
-  # kept makes of it (`kept/2`).
-  defp conclude(%State{} = state, {result, ended}) do
+  # kept makes of it (`kept/2`). Public for the proof that no reason ends a
+  # turn as its atom (`Aqua.RunnerTest`), which ends turns here.
+  @doc false
+  @spec conclude(State.t(), {result() | :stopped, State.t()}) :: result()
+  def conclude(%State{} = state, {result, ended}) do
     case kept(result, ended) do
       {:paused, _} = result ->
         unwatch(ended)
