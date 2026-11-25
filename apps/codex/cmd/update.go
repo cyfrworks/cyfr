@@ -439,7 +439,12 @@ type updater struct {
 	// envChanged is
 	// whether the switch changed .env, so a revert puts .env back from the
 	// snapshot.
-	retired    []string
+	retired []string
+	// networks are the networks of this compose project that the release
+	// being left declared and this release does not (retiredNames),
+	// removed before the switch since one may hold an address range a
+	// network of this release takes.
+	networks   []string
 	defaults   map[string]string
 	stale      []staleLine
 	twice      []twiceLine
@@ -533,6 +538,9 @@ func (u *updater) run() error {
 	}
 	if u.ctx.Err() != nil {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
+	}
+	if err := u.removeNetworks(); err != nil {
+		return u.restartOld(err)
 	}
 	// From the switch on the old stack never starts over a database the
 	// new release may have migrated, so no recovery may start it: the hold
@@ -1977,7 +1985,8 @@ func envNames(example []byte) map[string]bool {
 // own .env.example is no witness: `cyfr init` laid it down and no update
 // replaces it (scaffold.IsManaged), so after one update it is not the
 // release being left's. A CYFR on no release version, or on this one,
-// gets no change.
+// gets no change. The two releases' compose files name the networks the
+// switch removes (removeNetworks) and the services a line may still name.
 //
 //   - A setting the old .env.example declared, set or commented, that the
 //     new one no longer declares is removed, since the new server refuses
@@ -2003,6 +2012,9 @@ func (u *updater) planEnv() error {
 			return fmt.Errorf("cyfr update could not fetch the scaffold files of release %s, which name the settings it shipped in .env.example (%v)", u.oldRelease, err)
 		}
 	}
+	oldCompose, _ := shipped.File("docker-compose.yml")
+	newCompose, _ := u.scaffold.File("docker-compose.yml")
+	u.networks = slices.Sorted(maps.Keys(retiredNames(oldCompose, newCompose, "networks")))
 	old, oldOK := shipped.File(".env.example")
 	now, nowOK := u.scaffold.File(".env.example")
 	if !oldOK || !nowOK {
@@ -2030,9 +2042,7 @@ func (u *updater) planEnv() error {
 	}
 	declared := envNames(now)
 	commented := commentedValues(now)
-	oldCompose, _ := shipped.File("docker-compose.yml")
-	newCompose, _ := u.scaffold.File("docker-compose.yml")
-	gone := retiredServices(oldCompose, newCompose)
+	gone := retiredNames(oldCompose, newCompose, "services")
 	shippedOld := envNames(old)
 	for _, name := range slices.Sorted(maps.Keys(held)) {
 		value, at := held[name], lines[name]
@@ -2094,21 +2104,22 @@ type twiceLine struct {
 	write   string
 }
 
-// retiredServices answers the services of the old release's compose file
-// the new release's does not have, by name; none when either does not read.
-func retiredServices(old, now []byte) map[string]bool {
+// retiredNames answers the entries of a top-level section of the old release's
+// compose file (its services, its networks) that the new release's does
+// not have, by name; none when either does not read.
+func retiredNames(old, now []byte, section string) map[string]bool {
 	names := func(data []byte) map[string]bool {
 		var root yaml.Node
 		if yaml.Unmarshal(data, &root) != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
 			return nil
 		}
-		services := mapValue(root.Content[0], "services")
-		if services == nil || services.Kind != yaml.MappingNode {
+		entries := mapValue(root.Content[0], section)
+		if entries == nil || entries.Kind != yaml.MappingNode {
 			return nil
 		}
 		out := map[string]bool{}
-		for i := 0; i < len(services.Content); i += 2 {
-			out[services.Content[i].Value] = true
+		for i := 0; i < len(entries.Content); i += 2 {
+			out[entries.Content[i].Value] = true
 		}
 		return out
 	}
@@ -2123,6 +2134,61 @@ func retiredServices(old, now []byte) map[string]bool {
 		}
 	}
 	return gone
+}
+
+// removeNetworks removes, with the stack stopped and before the switch,
+// each network of this compose project the release being left declared
+// and this release does not (u.networks), found by its compose labels, so
+// never another project's: first this project's containers attached to it,
+// stopped, which the next start makes again, then the network. A container
+// of another project on it refuses, naming both, and nothing of that
+// network is removed.
+func (u *updater) removeNetworks() error {
+	if len(u.networks) == 0 {
+		return nil
+	}
+	ctx, cancel := u.detached(stopTimeout)
+	defer cancel()
+	project := access.ProjectName(".")
+	failed := func(name string, why any) error {
+		return fmt.Errorf("cyfr update could not remove the network %s, which release %s declared and release %s does not (%v)", name, u.oldRelease, u.version, why)
+	}
+	for _, name := range u.networks {
+		ids, err := u.dockerOutput(ctx, nil, "network", "ls", "-q", "--filter", "label=com.docker.compose.project="+project, "--filter", "label=com.docker.compose.network="+name)
+		if err != nil {
+			return failed(name, err)
+		}
+		for _, id := range strings.Fields(ids) {
+			attached, err := u.dockerOutput(ctx, nil, "ps", "-a", "-q", "--no-trunc", "--filter", "network="+id, "--filter", "label=com.docker.compose.project="+project)
+			if err != nil {
+				return failed(name, err)
+			}
+			all, err := u.dockerOutput(ctx, nil, "ps", "-a", "-q", "--no-trunc", "--filter", "network="+id)
+			if err != nil {
+				return failed(name, err)
+			}
+			for _, c := range strings.Fields(all) {
+				if !slices.Contains(strings.Fields(attached), c) {
+					return failed(name, "container "+shortID(c)+" of another Compose project is attached to it")
+				}
+			}
+			if ours := strings.Fields(attached); len(ours) > 0 {
+				if _, err := u.dockerOutput(ctx, nil, append([]string{"rm"}, ours...)...); err != nil {
+					return failed(name, err)
+				}
+			}
+			if _, err := u.dockerOutput(ctx, nil, "network", "rm", id); err != nil {
+				return failed(name, err)
+			}
+		}
+	}
+	fmt.Fprintf(u.out, "Removed the networks release %s declared and release %s does not: %s.\n", u.oldRelease, u.version, strings.Join(u.networks, ", "))
+	return nil
+}
+
+// shortID is a container id as docker ps shows it, its first 12 digits.
+func shortID(id string) string {
+	return id[:min(len(id), 12)]
 }
 
 // hostsIn answers the hosts a setting's value names in any form it takes:
