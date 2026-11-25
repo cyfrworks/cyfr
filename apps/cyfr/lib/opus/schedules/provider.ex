@@ -62,7 +62,7 @@ defmodule Opus.Schedules.Provider do
   plane as well; `re_resolve` stays external. A chain's call is a turn's
   own or nothing: the open turn the gate's lineage names, in the caller's
   athanor, asked for by its person, whose root made the call. A call a
-  page in Aqua's browser made through the turn (the gate's `page` mark,
+  page in Aqua's browser made through the turn (the gate's `called_by_page` mark,
   stamped from the step's purpose, `Aqua.Loop`) is the page's, not the
   turn's, and is refused `:schedule_by_page`; a component's call, one
   whose parent is not its root or that names no turn,
@@ -1020,7 +1020,8 @@ defmodule Opus.Schedules.Provider do
   # schedule began, `:schedule_turn_not_yours` (the moduledoc's "From a
   # turn" says why a crew member's turn and a member's reply are the
   # person's when that work is).
-  defp writer(%Context{plane: :guest}, %{"page" => true}), do: {:error, :schedule_by_page}
+  defp writer(%Context{plane: :guest}, %{"called_by_page" => true}),
+    do: {:error, :schedule_by_page}
 
   defp writer(%Context{plane: :guest} = ctx, args) do
     with {:ok, turn, room} <- own_turn(ctx, args) do

@@ -1838,7 +1838,7 @@ defmodule Aqua.ScheduleTurnsTest do
       own = turn_lineage!(ctx, room, :interactive)
       unattended = turn_lineage!(ctx, room, :programmatic)
       component = %{own | "parent_execution_id" => "exec_component"}
-      page = Map.put(own, "page", true)
+      page = Map.put(own, "called_by_page", true)
       lines = [:create, "rename", "retime", "change its line", "pause", "resume", "delete"]
 
       # Who calls, on which plane, and what each write of a turn-made line

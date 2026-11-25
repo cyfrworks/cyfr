@@ -1744,7 +1744,7 @@ defmodule Aqua.Loop do
       attempt: state.turn.attempt,
       thread_id: state.turn.thread_id,
       # A page's call is the page's, not the turn's own: the gate stamps it.
-      page: step.purpose == "page",
+      called_by_page: step.purpose == "page",
       charge: Binding.charge(step, state.turn),
       execution_id: step.child_execution_id,
       step_id: step.id,

@@ -342,7 +342,7 @@ defmodule Aqua.Loop.Binding do
         attempt: Map.get(dispatch, :attempt),
         thread_id: Map.get(dispatch, :thread_id),
         # Whether a page in Aqua's browser made the call through the turn.
-        page: Map.get(dispatch, :page),
+        called_by_page: Map.get(dispatch, :called_by_page),
         # The admission the turn's root execution was started under, read
         # off its row: the parent call of every call the turn makes.
         call_id: Map.get(dispatch, :call_id)
