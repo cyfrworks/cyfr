@@ -376,7 +376,7 @@ defmodule Cyfr.Cluster.Boot do
     {:ok, occurrence} = Arca.ScheduleOccurrences.claim(schedule, Prima.Boot.id(), cadence)
     execution_id = Prima.UUID7.execution_id()
 
-    {:ok, :started} =
+    {:ok, 1} =
       Arca.Repo.transaction(fn ->
         Arca.ScheduleOccurrences.start!(actor, occurrence.id, Prima.Boot.id(), execution_id)
       end)

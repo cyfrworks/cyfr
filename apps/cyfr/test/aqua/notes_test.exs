@@ -526,7 +526,7 @@ defmodule Aqua.NotesRunReadTest do
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "boot_read", cadence)
     execution_id = Prima.UUID7.execution_id()
 
-    {:ok, :started} =
+    {:ok, 1} =
       Arca.Repo.transaction(fn ->
         ScheduleOccurrences.start!(actor, occurrence.id, "boot_read", execution_id)
       end)

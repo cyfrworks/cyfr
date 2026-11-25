@@ -177,7 +177,7 @@ defmodule Aqua.ScheduleNotesTest do
     execution_id = Prima.UUID7.execution_id()
     actor = Prima.Actor.in_athanor(schedule.athanor_id)
 
-    {:ok, :started} =
+    {:ok, 1} =
       Arca.Repo.transaction(fn ->
         ScheduleOccurrences.start!(actor, occurrence.id, Prima.Boot.id(), execution_id)
       end)

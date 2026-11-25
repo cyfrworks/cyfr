@@ -177,7 +177,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
     assert :ok =
              ScheduleOccurrences.recover(actor, occurrence_id, Prima.Boot.id(), "boot-successor")
 
-    assert :started =
+    assert 1 =
              ScheduleOccurrences.start!(actor, occurrence_id, "boot-successor", "exec_successor")
 
     log =
