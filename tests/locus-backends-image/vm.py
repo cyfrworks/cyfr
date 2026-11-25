@@ -245,7 +245,8 @@ def keeper_killed(stack, image, kept, guest, project):
             expect(time.monotonic() < deadline, "the killed keeper's machine boots",
                    run("docker", "exec", container, "tail", "-c", "3000", errors, check=False).stdout)
             time.sleep(0.2)  # sleep-ok: polls the container's processes until the VMM is up, bounded above
-        keepers = [pid for pid, _, _, cmdline in processes(container) if cmdline.startswith("cyfr-locus guest-check")]
+        keepers = [pid for pid, _, comm, cmdline in processes(container)
+                   if comm == "cyfr-locus" and cmdline.split()[1:2] == ["guest-check"]]
         expect(len(keepers) == 1, "one keeper runs the machine", processes(container))
         run("docker", "exec", container, "sh", "-c", f"kill -KILL {keepers[0]}")
         deadline = time.monotonic() + 20
