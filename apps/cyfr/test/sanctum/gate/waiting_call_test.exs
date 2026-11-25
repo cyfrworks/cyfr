@@ -90,7 +90,7 @@ defmodule Sanctum.Gate.WaitingCallTest do
     end
 
     defp held(action) do
-      :ok = Sanctum.RunningTasks.waiting()
+      :ok = Prima.Operation.waiting()
 
       receive do
         :answer -> {:ok, %{"answered" => action}}
@@ -274,7 +274,7 @@ defmodule Sanctum.Gate.WaitingCallTest do
        %{auth: auth} = setup do
     task = call(setup, "check")
     assert_receive {:holding, "check", handler}, 10_000
-    :ok = Sanctum.RunningTasks.wake(task.pid)
+    :ok = Prima.Operation.wake(task.pid)
     # The claimer has taken the wake before the handler's check answers.
     took!(task.pid)
     send(handler, :refuse)
@@ -287,12 +287,12 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
   test "a wake answers a waiting call early once its handler waits, in either order",
        %{auth: auth} = setup do
-    early = Sanctum.RunningTasks.woken_answer()
+    early = Prima.Operation.woken_answer()
 
     # Woken first: the answer waits for the handler's word.
     task = call(setup, "check")
     assert_receive {:holding, "check", handler}, 10_000
-    :ok = Sanctum.RunningTasks.wake(task.pid)
+    :ok = Prima.Operation.wake(task.pid)
     send(handler, :pass)
     assert {:ok, ^early} = Task.await(task, 10_000)
     refute Process.alive?(handler)
@@ -300,7 +300,7 @@ defmodule Sanctum.Gate.WaitingCallTest do
     # Waiting first: the wake answers at once.
     task = call(setup, "hold")
     assert_receive {:holding, "hold", handler}, 10_000
-    :ok = Sanctum.RunningTasks.wake(task.pid)
+    :ok = Prima.Operation.wake(task.pid)
     assert {:ok, ^early} = Task.await(task, 10_000)
     refute Process.alive?(handler)
 

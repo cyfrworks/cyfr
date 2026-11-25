@@ -796,7 +796,7 @@ defmodule Sanctum.Catalog do
   does not hold and a proxied tool among them. The gate gives such a call
   no handler timeout and no holder window (`Sanctum.Dispatch`), and a
   turn's loop wakes it on a post, which the gate answers early once its
-  handler waits (`Aqua.Loop`, `Sanctum.RunningTasks.wake/1`).
+  handler waits (`Aqua.Loop`, `Prima.Operation.wake/1`).
   """
   @spec waits?(term(), term()) :: boolean()
   def waits?(tool, action) when is_binary(tool) and is_binary(action) do

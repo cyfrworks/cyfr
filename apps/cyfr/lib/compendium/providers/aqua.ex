@@ -977,8 +977,8 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- waiting_turn(ctx, args),
          {:ok, due, left_ms} <- due(until) do
       # Every check has passed: from here a post answers the wait early
-      # (`Sanctum.RunningTasks.wake/1`).
-      :ok = Sanctum.RunningTasks.waiting()
+      # (`Prima.Operation.wake/1`).
+      :ok = Prima.Operation.waiting()
 
       receive do
       after

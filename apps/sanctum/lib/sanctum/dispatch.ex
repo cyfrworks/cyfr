@@ -69,10 +69,10 @@ defmodule Sanctum.Dispatch do
   (`Arca.BudgetReservations.sweep/1`), at its holder's death
   (`Sanctum.Authority.BudgetGuard`), or at its own end. It is decided,
   admitted and charged as every call is; it ends at its answer, a cancel,
-  its caller's end, or a wake (`Sanctum.RunningTasks.wake/1`), which
-  answers it early (`Sanctum.RunningTasks.woken_answer/0`) once its
+  its caller's end, or a wake (`Prima.Operation.wake/1`), which
+  answers it early (`Prima.Operation.woken_answer/0`) once its
   handler, past every check of its own, says it waits
-  (`Sanctum.RunningTasks.waiting/0`): the gate and the handler decide a
+  (`Prima.Operation.waiting/0`): the gate and the handler decide a
   wait before anything answers it.
 
   ## A handler that does not answer
@@ -1132,7 +1132,7 @@ defmodule Sanctum.Dispatch do
     task =
       Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
         Prima.LoggerContext.restore(logger_metadata)
-        if waits?, do: Sanctum.RunningTasks.wakeable(claimer)
+        if waits?, do: Prima.Operation.wakeable(claimer)
 
         # A refused registration exits with a reason of its own: the
         # handler never ran, so the call is cancelled whatever its action.
@@ -1150,7 +1150,7 @@ defmodule Sanctum.Dispatch do
     result =
       case awaited do
         :woken ->
-          {:ok, Sanctum.RunningTasks.woken_answer()}
+          {:ok, Prima.Operation.woken_answer()}
 
         {:ok, outcome} ->
           answer(op, outcome)
@@ -1180,8 +1180,8 @@ defmodule Sanctum.Dispatch do
   end
 
   # A call that waits, awaited as long as it takes, and answered early
-  # once both a wake (`Sanctum.RunningTasks.wake/1`) and its handler's word
-  # that it waits (`Sanctum.RunningTasks.waiting/0`) have come, in either
+  # once both a wake (`Prima.Operation.wake/1`) and its handler's word
+  # that it waits (`Prima.Operation.waiting/0`) have come, in either
   # order: a handler refused by a check of its own answers its refusal
   # whatever woke it. A handler that answered meanwhile keeps its answer.
   defp await_waiting(task, true = _woken?, true = _waiting?) do
@@ -1200,10 +1200,10 @@ defmodule Sanctum.Dispatch do
       {:DOWN, ^ref, :process, _pid, reason} ->
         {:exit, reason}
 
-      {Sanctum.RunningTasks, :wake} ->
+      {Prima.Operation, :wake} ->
         await_waiting(task, true, waiting?)
 
-      {Sanctum.RunningTasks, :waiting, ^pid} ->
+      {Prima.Operation, :waiting, ^pid} ->
         await_waiting(task, woken?, true)
     end
   end

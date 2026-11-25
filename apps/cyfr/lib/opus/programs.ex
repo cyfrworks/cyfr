@@ -690,8 +690,8 @@ defmodule Opus.Programs do
 
         pid ->
           # Every check has passed: from here a post answers a turn's wait
-          # early (`Sanctum.RunningTasks.wake/1`).
-          :ok = Sanctum.RunningTasks.waiting()
+          # early (`Prima.Operation.wake/1`).
+          :ok = Prima.Operation.waiting()
           waited(pid, {:wait, principal, offset, ms}, answer_timeout(ms), caller, session_id)
       end
     end

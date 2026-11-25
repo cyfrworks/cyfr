@@ -2071,17 +2071,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
-    # `wake/1`: a turn's loop wakes a call that waits when a post arrives,
-    # which the gate then answers early (`Aqua.Loop`); `waiting/0`: the handler of such a call says
-    # it waits, past its own checks (`Compendium.Providers.Aqua`,
-    # `Opus.Programs`), so the early answer never comes before them.
-    "Sanctum.RunningTasks" => [
-      cancel: 1,
-      cancel_handle: 1,
-      release_handle: 1,
-      wake: 1,
-      waiting: 0
-    ],
+    "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     # A catalyst's ask is decided and waited on for the host's side of the
     # call (`Opus.Host.Question`), and a run's end announces the questions
     # it closed (`Opus.Record`); a person's open questions are attention's
