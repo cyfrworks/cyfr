@@ -92,10 +92,8 @@ def expected_service(name, base, dev, project, image):
     want["container_name"] = f"{project}-{name}"
     # Each service names its profile at its tracked path.
     if "security_opt" in base:
-        want["security_opt"] = [
-            f"seccomp=./{PROFILES.get(opt.removeprefix('seccomp=./'), opt)}" if opt.startswith("seccomp=") else opt
-            for opt in base["security_opt"]
-        ]
+        tracked = {f"seccomp=./{shipped}": f"seccomp=./{path}" for shipped, path in PROFILES.items()}
+        want["security_opt"] = [tracked.get(opt, opt) for opt in base["security_opt"]]
     url = dev["services"][LOCUS].get("environment", {}).get("LOCUS_RUNTIME_HOST_API_URL", "")
     port = url.rsplit(":", 1)[-1]
     port = port if port.isdigit() else "<port>"
