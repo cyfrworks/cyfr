@@ -974,7 +974,7 @@ func TestAStartPastItsRolesEndBoundIsKilledAtTheKeepersEnd(t *testing.T) {
 		ru.accept(t)
 	}
 	alpha := rk.roles["alpha"]
-	rk.heldSpawn(t, alpha, "s1")
+	release := rk.heldSpawn(t, alpha, "s1")
 	rk.s.mu.Lock()
 	var held *spawn
 	for _, sp := range rk.s.routing {
@@ -999,6 +999,13 @@ func TestAStartPastItsRolesEndBoundIsKilledAtTheKeepersEnd(t *testing.T) {
 	}
 	if procs, err := held.group.Procs(); err != nil || len(procs) != 0 {
 		t.Fatalf("the start's group after the keeper's end: %v, %v", procs, err)
+	}
+	// Released, the start is refused and retired, its group removed with it.
+	release()
+	select {
+	case <-held.retired:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the released start was not retired")
 	}
 }
 
