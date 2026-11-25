@@ -515,7 +515,7 @@ defmodule Opus.Programs.SessionTest do
       end
     end
 
-    test "its box gone, it sends no hold, put or open", %{
+    test "its box gone, its open's worker ends too", %{
       ctx: ctx,
       actor: actor,
       fake: fake,
@@ -523,15 +523,29 @@ defmodule Opus.Programs.SessionTest do
     } do
       two_parts!(actor)
       {grant, _program} = held(ctx)
-      {first, second, first_last, _l1, l2} = waiting(fake, grant, 15_000)
-      l2_id = l2.id
+      {first, second, first_last, _l1, _l2} = waiting(fake, grant, 15_000)
+      # The opens' workers, the second's waiting, the first's putting: a
+      # box restarted forgets their owner, so what they would send is
+      # refused unseen, and the workers themselves are watched.
+      workers = for {_ref, open} <- :sys.get_state(box).opens, do: open.worker
+      watched = for worker <- workers, do: Process.monitor(worker)
       ref = Process.monitor(box)
       Process.exit(box, :kill)
       assert_receive {:DOWN, ^ref, :process, ^box, :killed}, 2_000
       Task.shutdown(first, :brutal_kill)
       Task.shutdown(second, :brutal_kill)
+
+      ended =
+        for watch <- watched do
+          receive do
+            {:DOWN, ^watch, :process, _worker, _why} -> :ended
+          after
+            2_000 -> :running
+          end
+        end
+
       send(first_last, :go)
-      refute_receive {:session, _type, %{"lifetime" => ^l2_id}, _}, 1_500
+      assert {length(workers), ended} == {2, [:ended, :ended]}
     end
   end
 
@@ -544,13 +558,20 @@ defmodule Opus.Programs.SessionTest do
     lifetime = new_lifetime(grant)
     began = System.monotonic_time(:millisecond)
 
-    answer =
-      Opus.Programs.Session.open(grant, %{lifetime: lifetime, loads_packs: true, within_ms: 1_500})
+    opening =
+      Task.async(fn ->
+        Opus.Programs.Session.open(grant, %{
+          lifetime: lifetime,
+          loads_packs: true,
+          within_ms: 1_500
+        })
+      end)
 
+    answer = Task.yield(opening, 5_000) || Task.shutdown(opening, :brutal_kill)
     took = System.monotonic_time(:millisecond) - began
     send(first_last, :go)
     assert {:ok, _} = Task.await(first, 15_000)
-    assert {answer, took >= 1_000 and took < 5_000} == {{:error, :packs_unready}, true}
+    assert {answer, took >= 1_000 and took < 5_000} == {{:ok, {:error, :packs_unready}}, true}
     lifetime_id = lifetime.id
     refute_received {:session, "open", %{"lifetime" => ^lifetime_id}, _}
   end
