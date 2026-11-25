@@ -161,8 +161,9 @@ defmodule Arca.CronSchedule do
   overwritten by one made against what it replaced.
 
   With `verify:`, the higher owner's check of the row as the write leaves
-  it (`ARCHITECTURE.md` §4.4), answering `:ok` or `{:error, reason}`, the
-  write is refused with that reason unless the row it would leave passes:
+  it (`ARCHITECTURE.md` §4.4), answering `:ok` or
+  `{:error, {:invalid_argument, said}}`, the write is refused with that
+  reason, `said` a sentence for the caller, unless the row it would leave passes:
   asked under the lock, so two writes that each pass on the row they read
   cannot together leave one that does not. It reads only the row it is
   handed.
@@ -183,6 +184,7 @@ defmodule Arca.CronSchedule do
              | :aqua_line_by_person
              | :schedule_changed
              | {:validation, %{atom() => [String.t()]}}
+             | {:invalid_argument, String.t()}
              | :database_error}
   # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   def update(%Prima.Actor{} = actor, id, attrs, opts \\ []) do
@@ -211,7 +213,7 @@ defmodule Arca.CronSchedule do
   defp verified(%Ecto.Changeset{valid?: true} = changeset, verify) do
     case verify.(Ecto.Changeset.apply_changes(changeset)) do
       :ok -> :ok
-      {:error, _reason} = refused -> refused
+      {:error, {:invalid_argument, said}} = refused when is_binary(said) -> refused
     end
   end
 
