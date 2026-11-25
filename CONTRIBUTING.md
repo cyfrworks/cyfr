@@ -262,7 +262,8 @@ same worktree refuses, naming the run that holds it.
     reports the night to GitHub (the nightly, below).
 
   Codex CI's `desktop-native` job builds the CYFR app's package from the
-  tree's `cyfr` on Linux, macOS and Windows, each on amd64 and arm64,
+  tree's `cyfr` on Linux and Windows, each on amd64 and arm64, and on
+  macOS on Apple silicon (arm64; CYFR builds nothing for Intel Macs),
   installs it as a person does (DEB, DMG, MSI) and runs
   `tests/desktop-proof/native/smoke.sh` against the installed app with no
   CYFR server and no signing credentials: the refused switches,

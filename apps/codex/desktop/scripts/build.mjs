@@ -65,6 +65,11 @@ function refuse(e) {
 }
 
 const os = {linux: "linux", darwin: "darwin", win32: "windows"}[process.platform]
+// A Mac is Apple silicon: CYFR builds nothing for an Intel Mac, and
+// amd64 is Linux's and Windows'.
+if (os === "darwin" && values.arch !== "arm64") {
+  refuse(new Refused("CYFR runs on Apple silicon Macs, so a Mac package is built for arm64 alone"))
+}
 const artifact = `cyfr-desktop_${values.version}_${os}_${values.arch}.\${ext}`
 const built = artifact.replace("${ext}", {linux: "deb", darwin: "dmg", windows: "msi"}[os])
 if (values.rehearse && os !== "darwin") {

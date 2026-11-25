@@ -420,12 +420,20 @@ run_case "an Intel Mac is refused" fail \
     "sysctl() { echo 0; }
      detect_mac_arch" \
     "Error: CYFR runs on Apple silicon Macs, and this Mac has an Intel processor; nothing was installed."
+# Asked for a release, the stand-in leaves its mark and fails, so no
+# release is ever fetched; the Intel row asserts the mark is not there.
+asked="$(mktemp -u)"
 run_case "the install on an Intel Mac stops before it asks for any release" fail \
     "uname() { case \"\$1\" in -s) echo Darwin ;; -m) echo x86_64 ;; esac; }
      sysctl() { echo 0; }
-     resolve_version() { echo 'asked for a release' >&2; exit 0; }
+     resolve_version() { : > '$asked'; return 1; }
      main" \
     "Error: CYFR runs on Apple silicon Macs, and this Mac has an Intel processor; nothing was installed."
+if [ -e "$asked" ]; then
+    printf 'FAIL: %s (a release was asked for)\n' "the install on an Intel Mac stops before it asks for any release"
+    failures=$((failures + 1))
+    rm -f "$asked"
+fi
 run_case "a Mac that does not answer is refused as an Intel Mac" fail \
     "sysctl() { return 1; }
      detect_mac_arch" \
