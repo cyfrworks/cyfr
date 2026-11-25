@@ -173,16 +173,19 @@ func Main(args []string) int {
 		}
 		keptRoot = cfg.Kept.Root
 	}
-	var packs *packview.Store
-	if cfg.Kept != nil {
-		if packs, err = packview.Open(filepath.Join(cfg.Kept.Root, packview.DirName)); err != nil {
-			log.Error("refusing to start: the packs' folder: %v", err)
-			return ExitConfig
-		}
-	}
 	if err := residue.CheckMounts(mounts, homeRoots, keptRoot, PoolAccounts(accounts)); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
+	}
+	// The packs' folder is made by its first put: nothing of it decides
+	// whether the keeper starts. What an earlier keeper left half put is
+	// removed now, and a folder that cannot be swept is only said.
+	var packs *packview.Store
+	if cfg.Kept != nil {
+		packs = packview.New(filepath.Join(cfg.Kept.Root, packview.DirName))
+		if err := packs.Sweep(); err != nil {
+			log.Warn("the packs' folder holds what an earlier keeper left, and it was not removed: %v", err)
+		}
 	}
 	self, err := os.Executable()
 	if err != nil {

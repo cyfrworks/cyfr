@@ -44,6 +44,11 @@
 // spawn holds, and every put folder of it no put in progress writes. A
 // put idle for IdleFor, or whose owner ended, is dropped with its folder;
 // the keeper's start removes every put folder left by an earlier keeper.
+//
+// The store's folder is made by the first put, not at the keeper's start:
+// a kept root that cannot take it leaves the keeper serving every program
+// that loads no packs, each hold answered missing and each put refused
+// (ErrNoStore), which the start it was for takes as packs not made ready.
 package packview
 
 import (
@@ -112,6 +117,10 @@ const (
 // ErrRefused refuses a put: its stream, a bound, its order or its state.
 var ErrRefused = errors.New("packs refused")
 
+// ErrNoStore refuses a put whose store's folder cannot be made or is no
+// folder of the keeper's own.
+var ErrNoStore = errors.New("the packs' folder cannot be made")
+
 // ErrAbsent refuses an Acquire of a generation that is not complete.
 var ErrAbsent = errors.New("no such generation")
 
@@ -166,46 +175,82 @@ type Store struct {
 	puts  map[putKey]*put
 }
 
-// Open makes dir, 0711, and removes every put folder an earlier keeper
-// left in it.
-func Open(dir string) (*Store, error) {
-	if err := os.Mkdir(dir, 0o711); err != nil && !errors.Is(err, fs.ErrExist) {
-		return nil, err
+// New is the store at dir, which it does not touch: the folder is made by
+// the first put that needs it (ensure), so a keeper whose kept root cannot
+// take it boots and serves every program that loads no packs, and only a
+// put is refused.
+func New(dir string) *Store {
+	return &Store{dir: dir, now: time.Now, holds: map[string]map[string]hold{}, live: map[string]map[string]int{}, puts: map[putKey]*put{}}
+}
+
+// Sweep removes every put folder an earlier keeper left, at the keeper's
+// start; a store whose folder is not there, or is no folder of the
+// keeper's own, has none to remove.
+func (s *Store) Sweep() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		if absent(err) {
+			return nil
+		}
+		return err
 	}
-	// The folder must be the keeper's own: a link, or an entry another uid
-	// made in the root first, is no store.
-	var st unix.Stat_t
-	if err := unix.Lstat(dir, &st); err != nil {
-		return nil, err
-	}
-	if st.Mode&unix.S_IFMT != unix.S_IFDIR || int(st.Uid) != os.Geteuid() {
-		return nil, fmt.Errorf("%s is not a folder of the keeper's own", dir)
-	}
-	if err := os.Chmod(dir, 0o711); err != nil {
-		return nil, err
-	}
-	s := &Store{dir: dir, now: time.Now, holds: map[string]map[string]hold{}, live: map[string]map[string]int{}, puts: map[putKey]*put{}}
-	people, err := os.ReadDir(dir)
+	people, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, p := range people {
 		if !hexDigest.MatchString(p.Name()) {
 			continue
 		}
-		entries, err := os.ReadDir(filepath.Join(dir, p.Name()))
+		entries, err := os.ReadDir(filepath.Join(s.dir, p.Name()))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, e := range entries {
 			if partName.MatchString(e.Name()) {
-				if err := removeTree(filepath.Join(dir, p.Name(), e.Name())); err != nil {
-					return nil, err
+				if err := removeTree(filepath.Join(s.dir, p.Name(), e.Name())); err != nil {
+					return err
 				}
 			}
 		}
 	}
-	return s, nil
+	return nil
+}
+
+// usable answers why the store's folder cannot be read now: absent, or no
+// folder of the keeper's own (a link, or an entry another uid made in the
+// kept root first), which is no store; s.mu is held.
+func (s *Store) usable() error {
+	var st unix.Stat_t
+	if err := unix.Lstat(s.dir, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR || int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("%s is not a folder of the keeper's own", s.dir)
+	}
+	return nil
+}
+
+// ensure makes the store's folder, 0711, when it is not there yet, and
+// answers why it cannot be one; s.mu is held.
+func (s *Store) ensure() error {
+	if err := os.Mkdir(s.dir, 0o711); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%w: %v", ErrNoStore, err)
+	}
+	if err := s.usable(); err != nil {
+		return fmt.Errorf("%w: %v", ErrNoStore, err)
+	}
+	if err := os.Chmod(s.dir, 0o711); err != nil {
+		return fmt.Errorf("%w: %v", ErrNoStore, err)
+	}
+	return nil
+}
+
+// absent says err finds nothing there: no entry, or a path through one
+// that is no folder.
+func absent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ENOTDIR)
 }
 
 // Dir is the store's folder.
@@ -241,12 +286,15 @@ func (s *Store) Hold(athanor, lifetime, digest string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expire()
+	if s.usable() != nil {
+		return false, nil
+	}
 	if err := s.clean(a, d); err != nil {
 		return false, err
 	}
 	info, err := os.Lstat(filepath.Join(s.dir, a, d))
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case absent(err):
 		return false, nil
 	case err != nil:
 		return false, err
@@ -284,7 +332,7 @@ func (s *Store) expire() {
 // writes; s.mu is held.
 func (s *Store) clean(a, named string) error {
 	entries, err := os.ReadDir(filepath.Join(s.dir, a))
-	if errors.Is(err, fs.ErrNotExist) {
+	if absent(err) {
 		return nil
 	}
 	if err != nil {
@@ -331,8 +379,11 @@ func (s *Store) Acquire(athanor, digest string) (path string, empty bool, releas
 	path = filepath.Join(s.dir, a, d)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.usable() != nil {
+		return "", false, nil, ErrAbsent
+	}
 	f, err := os.Open(path)
-	if errors.Is(err, fs.ErrNotExist) {
+	if absent(err) {
 		return "", false, nil, ErrAbsent
 	}
 	if err != nil {
@@ -440,6 +491,9 @@ func (s *Store) begin(owner any, key putKey, d string) (*put, error) {
 	err := func() error {
 		if len(s.puts) >= MaxPuts {
 			return ErrRefused
+		}
+		if err := s.ensure(); err != nil {
+			return err
 		}
 		// A space's first process passes through the person's folder as
 		// the session's uid, whatever the keeper's umask.

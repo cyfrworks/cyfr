@@ -22,6 +22,10 @@ AppArmor profile, and driven only by requests signed as CYFR signs them
   naming it without a put of their own is refused, and their session sees
   no /run/cyfr/scrolls; a row that loads no packs is refused a hold and
   its session sees none.
+- A kept root that cannot take the packs' folder (a file in its place)
+  leaves the keeper starting and serving a program that loads no packs: a
+  hold there finds nothing, and a put is refused `unavailable`, the keeper
+  saying why. Once the place is free, the first put makes the folder.
 - The keeper holds the copy outside every home, the keeper's own, mode
   0555 for its folders: a pooled uid's space and the backends role's user
   reach none of it.
@@ -42,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (  # noqa: E402
     KEPT_ROOT, RELEASE_USER, STATUSES, VERSION, Stack, expect, new_lifetime, owner_of, probe, require_docker,
 )
-from imagesuite import read_output  # noqa: E402
+from imagesuite import read_output, run  # noqa: E402
 
 OWNER, OTHER = owner_of("packs"), owner_of("other")
 HOME, OTHER_HOME, PLAIN_HOME = "mcp_packs-home", "mcp_other-home", "mcp_packs-plain"
@@ -79,7 +83,7 @@ def refusal(code):
     return STATUSES[code], {"version": VERSION, "error": code}
 
 
-def run(client, script):
+def run_in(client, script):
     """`script` run by `sh -c` in the client's session: its result."""
     status, answer = client.call("run", {"argv": ["/bin/sh", "-c", script]})
     result = (answer or {}).get("result") or {}
@@ -111,12 +115,34 @@ def main():
     stack = Stack("locus-backends-packs", sys.argv[1])
     try:
         stack.up()
+
+        # ————— a kept root that cannot take the packs' folder —————
+        # A file where the folder would be, as a kept root that cannot take
+        # it: the keeper still starts, a program that loads no packs runs, a
+        # hold finds nothing and a put is refused, saying why.
+        blocker = f"{KEPT_ROOT}/.packs"
+        expect(stack.exec(f"touch {blocker}").returncode == 0, "a file takes the packs' folder's place")
+        run("docker", "restart", stack.container)
+        stack.published()
         c = stack.controller()
-        expect(c.hello()[0] == 200, "the service is greeted")
-        for owner in (OWNER, OTHER):
+        expect(c.hello()[0] == 200, "the keeper starts with a kept root that cannot take the packs' folder")
+        status, answer, _ = c.sync(OWNER, PROGRAMS)
+        expect(status == 200, "a program that loads packs and one that loads none are synced", answer)
+        plain = c.mcp(OWNER, "plain", key="early", home_id=PLAIN_HOME)
+        ran = run_in(plain, "echo served")
+        expect(ran["stdout"] == "served\n", "a program that loads no packs is served", ran)
+        lifetime = new_lifetime(c.boot)
+        digest = digest_of(FILES)
+        status, held = c.packs_hold(OWNER, "probe", lifetime, digest, key="early", home_id=HOME)
+        expect((status, held.get("state")) == (200, "missing"), "a hold there finds nothing", held)
+        puts = c.packs_put(OWNER, "probe", lifetime, digest, stream_of(FILES), key="early", home_id=HOME)
+        expect(puts[-1] == refusal("unavailable") and len(puts) == 1,
+               "the put is refused unavailable at its first part", puts)
+        expect("the packs' folder cannot be made" in stack.logs(), "the keeper says why it refused the put")
+        expect(stack.exec(f"rm {blocker}").returncode == 0, "the file is taken away")
+        for owner in (OTHER,):
             status, answer, _ = c.sync(owner, PROGRAMS)
             expect(status == 200, f"{owner['athanor']}'s programs are synced, one loading packs", answer)
-        digest = digest_of(FILES)
         person = hashlib.sha256(OWNER["athanor"].encode()).hexdigest()
         generation = f"{KEPT_ROOT}/.packs/{person}/{digest[7:]}"
 
@@ -126,7 +152,7 @@ def main():
         expect(len(puts) >= 2 and all(s == 200 for s, _a in puts)
                and [a["state"] for _s, a in puts] == ["taken"] * (len(puts) - 1) + ["held"],
                "its put's parts are taken, the last held", puts)
-        listing = run(first, "find /run/cyfr/scrolls -type f | sort; echo; "
+        listing = run_in(first, "find /run/cyfr/scrolls -type f | sort; echo; "
                              "find /run/cyfr/scrolls -type f | sort | xargs sha256sum")
         expect(first.resumed is False, "the one open starts the program in the lifetime the hold and the put named")
         want = sorted(f"/run/cyfr/scrolls/{p}" for p in FILES)
@@ -137,15 +163,15 @@ def main():
                    f"{path} is the bytes put", sums)
 
         # ————— the folder is read only —————
-        tried = run(first,
-                    "/run/cyfr/scrolls/pstack/skills/poteto-mode/scripts/hello; "
-                    "stat -c '%a %U' /run/cyfr/scrolls/pstack /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md "
-                    "/run/cyfr/scrolls/pstack/skills/poteto-mode/scripts/hello; "
-                    "touch /run/cyfr/scrolls/pstack/new 2>&1; echo rc=$?; "
-                    "mkdir /run/cyfr/scrolls/pstack/skills/poteto-mode/scripts/node_modules 2>&1; echo rc=$?; "
-                    "mv /run/cyfr/scrolls/taste /run/cyfr/scrolls/gone 2>&1; echo rc=$?; "
-                    "sh -c 'echo x >> /run/cyfr/scrolls/taste/skills/taste/SKILL.md' 2>&1; echo rc=$?; "
-                    "grep ' /run/cyfr/scrolls ' /proc/self/mountinfo")
+        tried = run_in(first,
+                       "/run/cyfr/scrolls/pstack/skills/poteto-mode/scripts/hello; "
+                       "stat -c '%a %U' /run/cyfr/scrolls/pstack /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md "
+                       "/run/cyfr/scrolls/pstack/skills/poteto-mode/scripts/hello; "
+                       "touch /run/cyfr/scrolls/pstack/new 2>&1; echo rc=$?; "
+                       "mkdir /run/cyfr/scrolls/pstack/skills/poteto-mode/scripts/node_modules 2>&1; echo rc=$?; "
+                       "mv /run/cyfr/scrolls/taste /run/cyfr/scrolls/gone 2>&1; echo rc=$?; "
+                       "sh -c 'echo x >> /run/cyfr/scrolls/taste/skills/taste/SKILL.md' 2>&1; echo rc=$?; "
+                       "grep ' /run/cyfr/scrolls ' /proc/self/mountinfo")
         out = tried["stdout"]
         expect(out.startswith("hello from a pack\n"), "a pack's executable runs from the folder", out)
         expect("555 " in out and "444 " in out, "its folders are 0555 and its files 0444 or 0555", out)
@@ -160,7 +186,7 @@ def main():
         before = read_output(stack.exec(stamp), "the copy's inode and time")
         state, puts, second = started(c, OWNER, "b", HOME, digest)
         expect(state == "held" and puts == [], "a second start is held and puts nothing")
-        again = run(second, "cat /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md")
+        again = run_in(second, "cat /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md")
         expect(again["stdout"] == FILES["pstack/skills/poteto-mode/SKILL.md"][0].decode(),
                "the second session reads the same packs", again)
         expect(read_output(stack.exec(stamp), "the copy's inode and time again") == before and before,
@@ -174,7 +200,7 @@ def main():
         status, answer = c.open(OTHER, "probe", key="a", home_id=OTHER_HOME, lifetime=lifetime, packs=digest)
         expect(status != 200, "another person's open naming a generation they never put is refused", answer)
         theirs = c.mcp(OTHER, "probe", key="b", home_id=OTHER_HOME)
-        seen = run(theirs, "ls /run/cyfr/scrolls 2>&1; ls " + KEPT_ROOT + " 2>&1; echo done")
+        seen = run_in(theirs, "ls /run/cyfr/scrolls 2>&1; ls " + KEPT_ROOT + " 2>&1; echo done")
         expect("pstack" not in seen["stdout"] and "No such file or directory" in seen["stdout"],
                "another person's session sees no packs and no kept root", seen)
 
@@ -182,7 +208,7 @@ def main():
         status, answer = c.packs_hold(OWNER, "plain", lifetime, digest, key="p", home_id=PLAIN_HOME)
         expect((status, answer) == refusal("bad_request"), "a row that loads no packs is refused a hold", answer)
         plain = c.mcp(OWNER, "plain", key="p", home_id=PLAIN_HOME)
-        seen = run(plain, "ls /run/cyfr/scrolls 2>&1; echo done")
+        seen = run_in(plain, "ls /run/cyfr/scrolls 2>&1; echo done")
         expect("No such file or directory" in seen["stdout"], "a row that loads no packs sees no folder", seen)
 
         # ————— the copy is the keeper's alone —————

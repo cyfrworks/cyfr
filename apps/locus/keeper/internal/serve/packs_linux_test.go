@@ -118,10 +118,7 @@ func TestThePacksRequestsOfTheKeptRole(t *testing.T) {
 	me := os.Getuid()
 	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
 	s, c, replies := channelServer(t, kept)
-	store, err := packview.Open(filepath.Join(kept.Root, packview.DirName))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := packview.New(filepath.Join(kept.Root, packview.DirName))
 	s.packs = store
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(kept.Root, packview.DirName), 0o700); chmodTree(kept.Root) })
 	handle := func(req *protocol.Request) map[string]any {
@@ -160,6 +157,21 @@ func TestThePacksRequestsOfTheKeptRole(t *testing.T) {
 		t.Fatalf("a stream that is no archive: %v", bad)
 	}
 
+	// A kept root that cannot take the packs' folder: the hold finds
+	// nothing, and the put is refused unavailable, saying why in the log.
+	blocked := t.TempDir()
+	if err := os.WriteFile(filepath.Join(blocked, packview.DirName), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.packs = packview.New(filepath.Join(blocked, packview.DirName))
+	if r := hold("lt_6"); r["type"] != protocol.TypePacks || r["state"] != protocol.PacksMissing {
+		t.Fatalf("a hold where no packs' folder can be: %v", r)
+	}
+	if got := putAll(t, handle, testAthanor, "lt_6", digest, packStream(t, map[string]string{"p/a": "a"})); got[0]["type"] != protocol.TypeError || got[0]["code"] != protocol.CodeUnavailable {
+		t.Fatalf("a put where no packs' folder can be: %v", got)
+	}
+	s.packs = store
+
 	c.role.spec.Kept = false
 	if r := hold("lt_4"); r["type"] != protocol.TypeError || r["code"] != protocol.CodeUnavailable {
 		t.Fatalf("a hold of a role that keeps no homes: %v", r)
@@ -191,10 +203,7 @@ func chmodTree(root string) {
 // cleanup rule).
 func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 	k := keptKeeper(t)
-	store, err := packview.Open(filepath.Join(k.s.cfg.Kept.Root, packview.DirName))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := packview.New(filepath.Join(k.s.cfg.Kept.Root, packview.DirName))
 	k.s.packs = store
 	uid := testKeptFirst
 	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_packs")

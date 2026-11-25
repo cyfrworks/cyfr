@@ -125,10 +125,7 @@ func putAll(s *Store, owner any, athanor, lifetime, digest string, b []byte) (st
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), ".packs"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := New(filepath.Join(t.TempDir(), ".packs"))
 	t.Cleanup(func() { _ = removeTree(s.Dir()) })
 	return s
 }
@@ -592,10 +589,7 @@ func TestAPutOfAnotherOwnerIsRefused(t *testing.T) {
 
 func TestAKeeperStartRemovesEveryPutFolder(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".packs")
-	s, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := New(dir)
 	t.Cleanup(func() { _ = removeTree(dir) })
 	d := digestOf("kept")
 	if _, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}})); err != nil {
@@ -612,11 +606,57 @@ func TestAKeeperStartRemovesEveryPutFolder(t *testing.T) {
 	if err := os.Chmod(half, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(dir); err != nil {
+	if err := New(dir).Sweep(); err != nil {
 		t.Fatal(err)
 	}
 	if es := entries(t, filepath.Join(dir, Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("left %v", es)
+	}
+}
+
+// A store whose folder is not there yet, or that its kept root cannot
+// take, has nothing to sweep and holds nothing; its first put makes the
+// folder, and a put that cannot is refused saying so. None needs root.
+func TestTheStoresFolderIsMadeByItsFirstPut(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".packs")
+	s := New(dir)
+	if err := s.Sweep(); err != nil {
+		t.Fatalf("a sweep of a store not made: %v", err)
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Fatalf("New or Sweep made the folder: %v", err)
+	}
+	d := digestOf("first")
+	if held, err := s.Hold("ath_1", "lt_1", d); held || err != nil {
+		t.Fatalf("a hold of a store not made: %v %v", held, err)
+	}
+	if state, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}})); err != nil || state != Held {
+		t.Fatalf("the first put: %q %v", state, err)
+	}
+	t.Cleanup(func() { _ = removeTree(dir) })
+	if info, err := os.Lstat(dir); err != nil || info.Mode().Perm() != 0o711 {
+		t.Fatalf("the first put's folder: %v %v", info, err)
+	}
+
+	// A kept root where the folder's name is taken by a file: whatever the
+	// uid, nothing can be made under it.
+	blocked := t.TempDir()
+	if err := os.WriteFile(filepath.Join(blocked, ".packs"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := New(filepath.Join(blocked, ".packs"))
+	if err := b.Sweep(); err == nil {
+		t.Fatal("a sweep of a file in the folder's place says nothing")
+	}
+	if held, err := b.Hold("ath_1", "lt_1", d); held || err != nil {
+		t.Fatalf("a hold where no folder can be: %v %v", held, err)
+	}
+	if _, _, _, err := b.Acquire("ath_1", d); !errors.Is(err, ErrAbsent) {
+		t.Fatalf("an acquire where no folder can be: %v", err)
+	}
+	if _, err := b.Put("role", "ath_1", "lt_1", d, 0, true, []byte{}); !errors.Is(err, ErrNoStore) || !strings.Contains(err.Error(), "not a folder") {
+		t.Fatalf("a put where no folder can be: %v", err)
 	}
 }
 

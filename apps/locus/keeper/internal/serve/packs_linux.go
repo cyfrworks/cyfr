@@ -13,8 +13,9 @@ import (
 )
 
 // handlePacks answers a packs_hold or a packs_put of the kept role, which
-// alone keeps homes and so packs: another role's, and a keeper given no
-// --kept-homes, are refused as CodeUnavailable. A put is its client's: the
+// alone keeps homes and so packs: another role's, a keeper given no
+// --kept-homes, and a put whose store's folder cannot be made, are refused
+// as CodeUnavailable. A put is its client's: the
 // client's end drops every put it had in progress (endClient).
 func (s *server) handlePacks(c *client, req *protocol.Request) {
 	if s.keepsNoHomes(c, req) {
@@ -39,6 +40,9 @@ func (s *server) handlePacks(c *client, req *protocol.Request) {
 	case protocol.TypePacksPut:
 		state, err := s.packs.Put(c, req.Athanor, req.Lifetime, req.Digest, *req.Seq, *req.Last, req.Part())
 		switch {
+		case errors.Is(err, packview.ErrNoStore):
+			s.log.Error("packs_put %s refused: %v", req.ID, err)
+			s.send(c, protocol.NewError(req.ID, "", protocol.CodeUnavailable))
 		case errors.Is(err, packview.ErrRefused):
 			s.log.Warn("packs_put %s refused at part %d", req.ID, *req.Seq)
 			s.send(c, protocol.NewError(req.ID, "", protocol.CodePacksRefused))
