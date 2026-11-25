@@ -31,7 +31,7 @@ defmodule Prima.LocusRolesTest do
                    host_api_address ip_range memory network run_dir run_size service subnet)
   @role_keys ~w(first_uid home_root home_size kept_first_uid kept_gid kept_group kept_last_uid
                 kept_root kept_volume key last_uid memory name pool port private reach run_dir
-                uid user user_prefix)
+                run_size uid user user_prefix)
   @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
                           socket_queue_bytes)
   @role_memory_keys ~w(answering fetch_head_bytes fetch_read_ahead_bytes fetch_read_bytes freed_segments_bytes unread)

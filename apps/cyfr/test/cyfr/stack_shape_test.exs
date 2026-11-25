@@ -117,10 +117,17 @@ defmodule Cyfr.StackShapeTest do
   defp services(compose), do: YamlElixir.read_from_string!(compose)["services"]
 
   # The Locus service's tmpfs mounts as the table spells them: each role's
-  # spawns' homes, then the release's run directory, root's.
+  # spawns' homes, the release's run directory, root's, and each role's run
+  # folder, its own uid's.
   defp tmpfs(release) do
-    for(role <- LocusRoles.roles(), do: "#{role.home_root}:mode=1733,exec,size=#{role.home_size}") ++
-      ["#{release.run_dir}:mode=0711,size=#{release.run_size}"]
+    roles = LocusRoles.roles()
+
+    for(role <- roles, do: "#{role.home_root}:mode=1733,exec,size=#{role.home_size}") ++
+      ["#{release.run_dir}:mode=0711,size=#{release.run_size}"] ++
+      for(
+        role <- roles,
+        do: "#{role.run_dir}:uid=#{role.uid},gid=#{role.uid},mode=0700,size=#{role.run_size}"
+      )
   end
 
   # The kept homes at their root, and the guard's control, read-only.
@@ -841,7 +848,7 @@ defmodule Cyfr.StackShapeTest do
     # `cyfr-locus`, which a suite spells to run it: it is no spelling of
     # the table's.
     names =
-      [role.user_prefix, role.user, role.home_size, release.run_size] ++
+      [role.user_prefix, role.user, role.home_size, role.run_size, release.run_size] ++
         [release.service, release.guard, release.guard_container]
 
     pool = Regex.escape(role.pool)
@@ -873,8 +880,11 @@ defmodule Cyfr.StackShapeTest do
     attach_dir: ~r/(?:@attach_dir |\battach_dir: )"([^"]*)"/
   ]
 
-  # The variable whose documented default is the release's run directory.
+  # The variable whose documented default is the role's run folder, which
+  # the keeper names to each role in `@run_dir_variable`; a client named
+  # none attaches at the release's run directory.
   @attach_variable "LOCUS_RUNTIME_ATTACH_DIR"
+  @run_dir_variable "KEEPER_RUN_DIR"
 
   defp pool_drift(texts, release, roles) do
     spelled =
@@ -892,12 +902,12 @@ defmodule Cyfr.StackShapeTest do
     end
 
     # `Locus.Config` documents the attach directory's default for the role
-    # whose variable it is.
+    # whose variable it is: the run folder the keeper names.
     documented =
       for role <- roles,
           @attach_variable in Locus.Config.variables(role.name),
           documented_default(Map.fetch!(texts, @config), @attach_variable) !=
-            "`#{release.run_dir}`",
+            "the role's run folder (`#{@run_dir_variable}`)",
           do: {@config, :pool, role.name}
 
     wrong =
@@ -1143,6 +1153,9 @@ defmodule Cyfr.StackShapeTest do
        "      #{release.guard}:\n        condition: service_healthy\n",
        "      #{release.guard}:\n        condition: service_started\n", ["depends_on"]},
       {"with the run root writable by all", "/run/locus:mode=0711,", "/run/locus:mode=1777,",
+       ["tmpfs"]},
+      {"with the runtime's run folder another's",
+       "/run/locus/runtime:uid=10011,gid=10011,", "/run/locus/runtime:uid=10012,gid=10012,",
        ["tmpfs"]}
     ]
 
@@ -1475,7 +1488,7 @@ defmodule Cyfr.StackShapeTest do
        {@config, "| 1..65535 | #{backends.port} |", "| 1..65535 | #{backends.port + 2} |"},
        [{@config, :port, :backends}]},
       {"the documented attach directory",
-       {@config, "| `#{release.run_dir}` |", "| `#{release.run_dir}/attach` |"},
+       {@config, "| the role's run folder (`KEEPER_RUN_DIR`) |", "| `#{release.run_dir}` |"},
        [{@config, :pool, :runtime}]},
       # An overlay is read whole, so no blank line, comment or spelling of
       # a key ends the reading early.

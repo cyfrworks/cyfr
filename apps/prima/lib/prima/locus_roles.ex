@@ -20,7 +20,7 @@ defmodule Prima.LocusRoles do
   runs as the container's root and starts one role process for each role
   whose key is set, running `bin`; the role's spawns' homes lie under
   `home_root`, the role's folder of it, and `run_dir`, a tmpfs of
-  `run_size` owned by root, holds a folder of each role's own.
+  `run_size` owned by root, holds each role's run folder.
 
   The release's endpoint, which cyfr serves, binds its loopback listener
   to one fixed address under compose: `endpoint_address`, on the network
@@ -44,7 +44,9 @@ defmodule Prima.LocusRoles do
   API besides where `private` is true (the runtime's). The role's run
   folder is `run_dir` (its own, 0700, under the release's), and its
   spawns' homes lie on a tmpfs of `home_size` at `home_root`, the
-  release's root and the role's name. Its spawns are drawn from the uid
+  release's root and the role's name. Its run folder is a tmpfs of
+  `run_size` of its own, so no role fills another's. Its spawns are drawn
+  from the uid
   pool `pool`, whose uids `uids` are named `user_prefix` and a two-digit
   ordinal, each spawn in a space of its own whose reach is `reach`
   (`reaches/0`, the keeper's `--pool` suffix): the runtime's runners
@@ -146,6 +148,7 @@ defmodule Prima.LocusRoles do
           port: :inet.port_number(),
           private: boolean(),
           run_dir: String.t(),
+          run_size: String.t(),
           home_root: String.t(),
           home_size: String.t(),
           pool: String.t(),
@@ -179,7 +182,7 @@ defmodule Prima.LocusRoles do
     bin: "/app/bin/locus",
     home_root: "/var/lib/locus/homes",
     run_dir: "/run/locus",
-    run_size: "48m",
+    run_size: "1m",
     endpoint_network: "default",
     endpoint_subnet: "172.16.230.0/24",
     endpoint_ip_range: "172.16.230.128/25",
@@ -208,6 +211,7 @@ defmodule Prima.LocusRoles do
       port: 4200,
       private: true,
       run_dir: "/run/locus/runtime",
+      run_size: "16m",
       home_root: "/var/lib/locus/homes/runtime",
       home_size: "256m",
       pool: "runner",
@@ -236,6 +240,7 @@ defmodule Prima.LocusRoles do
       port: 4100,
       private: false,
       run_dir: "/run/locus/builds",
+      run_size: "16m",
       home_root: "/var/lib/locus/homes/builds",
       home_size: "2g",
       pool: "build",
@@ -264,6 +269,7 @@ defmodule Prima.LocusRoles do
       port: 4101,
       private: false,
       run_dir: "/run/locus/backends",
+      run_size: "16m",
       home_root: "/var/lib/locus/homes/backends",
       home_size: "2g",
       pool: "backends",

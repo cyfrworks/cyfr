@@ -89,7 +89,10 @@ case "$kind" in
       --tmpfs /var/lib/locus/homes/runtime:mode=1733,exec,size=256m \
       --tmpfs /var/lib/locus/homes/builds:mode=1733,exec,size=2g \
       --tmpfs /var/lib/locus/homes/backends:mode=1733,exec,size=2g \
-      --tmpfs /run/locus:mode=0711,size=48m \
+      --tmpfs /run/locus:mode=0711,size=1m \
+      --tmpfs /run/locus/runtime:uid=10011,gid=10011,mode=0700,size=16m \
+      --tmpfs /run/locus/builds:uid=10012,gid=10012,mode=0700,size=16m \
+      --tmpfs /run/locus/backends:uid=10013,gid=10013,mode=0700,size=16m \
       -e "LOCUS_BUILDS_KEY=$(openssl rand -hex 32)" \
       "$image" >/dev/null
     ;;

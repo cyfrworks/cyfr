@@ -314,14 +314,19 @@ services:
     # it create one without listing the others, and spawns run from there,
     # so it allows exec. What a spawn writes to its home counts against its
     # memory bound, and the mount's size bounds what all of a role's spawns
-    # write. /run/locus is root's, 0711: the keeper makes a 0700 folder of
-    # each role's own there, holding its release's temporary files and the
-    # socket its spawns' relays attach to, and no role reaches another's.
+    # write. /run/locus is root's, 0711, holding each role's run folder, a
+    # tmpfs of the role's own uid, 0700, which the keeper takes as the
+    # role's: its release's temporary files and the socket its spawns'
+    # relays attach to, bounded apart so no role fills another's, and no
+    # role reaches another's.
     tmpfs:
       - /var/lib/locus/homes/runtime:mode=1733,exec,size=256m
       - /var/lib/locus/homes/builds:mode=1733,exec,size=2g
       - /var/lib/locus/homes/backends:mode=1733,exec,size=2g
-      - /run/locus:mode=0711,size=48m
+      - /run/locus:mode=0711,size=1m
+      - /run/locus/runtime:uid=10011,gid=10011,mode=0700,size=16m
+      - /run/locus/builds:uid=10012,gid=10012,mode=0700,size=16m
+      - /run/locus/backends:uid=10013,gid=10013,mode=0700,size=16m
     # Kept homes: a program's home that outlives its process, one 0700
     # folder per login entry under a uid of its own, which the keeper alone
     # finds, lists and draws. The volume is the homes' whole disk and their

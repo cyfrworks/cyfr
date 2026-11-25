@@ -50,7 +50,7 @@ defmodule Locus.Config do
   | `LOCUS_RUNTIME_RELEASE_GRACE_MS` | `:runtime`, `:release_grace_ms` | 1..600000 | 2000 |
   | `LOCUS_RUNTIME_MEMORY_BYTES` | `:runtime`, `:runner_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 402653184 (384 MiB) |
   | `LOCUS_RUNTIME_CPU_QUOTA` | `:runtime`, `:runner_cpu_quota` | 1000..102400000 microseconds of every 100000 | 100000 (one CPU) |
-  | `LOCUS_RUNTIME_ATTACH_DIR` | `:runtime`, `:attach_dir` | a clean absolute directory path | `/run/locus` |
+  | `LOCUS_RUNTIME_ATTACH_DIR` | `:runtime`, `:attach_dir` | a clean absolute directory path | the role's run folder (`KEEPER_RUN_DIR`) |
 
   An unset runtime identity or listener row takes the default above; a
   pool row is written only when its variable is set, so

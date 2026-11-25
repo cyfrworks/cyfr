@@ -222,15 +222,18 @@ defmodule Locus.Application do
       if(backends?, do: Locus.Backends.children(), else: [])
   end
 
-  # The `--pool` argument of each role served under the launcher, its pool
-  # named as the role table names it.
+  # The `--role` and `--pool` arguments of each role served under the
+  # launcher, each named as the role table names it.
   defp pools(%{builds: builds?, backends: backends?}) do
-    [if(builds?, do: pool(:builds)), if(backends?, do: pool(:backends))]
+    [if(builds?, do: :builds), if(backends?, do: :backends)]
     |> Enum.reject(&is_nil/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &pool/1)
   end
 
-  defp pool(role), do: "--pool #{Prima.LocusRoles.role!(role).pool}:…"
+  defp pool(name) do
+    role = Prima.LocusRoles.role!(name)
+    "--role #{role.name}:… --pool #{role.pool}:…"
+  end
 
   @doc """
   The build slots, `Locus.BuildSlots`: one `Prima.Slots` instance whose caps
