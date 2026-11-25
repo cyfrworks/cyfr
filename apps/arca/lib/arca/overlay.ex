@@ -791,7 +791,8 @@ defmodule Arca.Overlay do
       loc ->
         case revision_of(actor, loc) do
           {:ok, revision} ->
-            with {:ok, used} <- tenant().usage(actor, UnitLocator.in_revision(loc, revision, path)),
+            with {:ok, used} <-
+                   tenant().usage(actor, UnitLocator.in_revision(loc, revision, path)),
                  do: without_marker_usage(actor, loc, revision, path, used)
 
           {:error, :not_found} ->
