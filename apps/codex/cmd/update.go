@@ -1477,9 +1477,6 @@ func (u *updater) detached(timeout time.Duration) (context.Context, context.Canc
 // stackConfig is what the snapshot needs from cyfr's effective environment.
 type stackConfig struct {
 	adapter string // sqlite | postgres
-	// sqliteFile is the SQLite database's host path, which a restore puts
-	// back.
-	sqliteFile string
 	// image is the image the cyfr service runs and mounts every mount of
 	// the service as resolved, through which a snapshot reads the storage
 	// as the server sees it (readThroughStack): dbPath is the SQLite
@@ -1495,21 +1492,16 @@ type stackConfig struct {
 	pgURL   string
 	pgMajor int
 	storage string // local | s3
-	// storageMounts are the mounts that make up the local storage root as cyfr
-	// sees it: the root's own bind first, then every bind mounted under it,
-	// shallower before deeper.
-	storageMounts []storageMount
 	// keyring is the snapshot's keyring file, dotenv lines.
 	keyring string
 }
 
 // storageMount is one bind making up the storage root: rel is where it
-// sits under the root (empty for the root itself), host its resolved host
-// path, and dir whether that path is a directory.
+// sits under the root (empty for the root itself), and host its resolved
+// host path.
 type storageMount struct {
 	rel  string
 	host string
-	dir  bool
 }
 
 // composeConfig is the part of `docker compose config --format json` the
@@ -1810,7 +1802,20 @@ func settingPathIn(environment map[string]*string, name, fallback string) (strin
 // longest prefix, which is the one cyfr sees the path through; ok is false
 // unless that mount is a bind.
 func mountedHost(mounts []composeMount, p string) (string, bool) {
-	best, host, bind := -1, "", false
+	m, rel, ok := holdingMount(mounts, p)
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(m.Source, filepath.FromSlash(rel)), true
+}
+
+// holdingMount answers the bind cyfr sees the container path p through,
+// the mount whose target is its longest prefix, and where p lies under its
+// target; ok is false unless that mount is a bind.
+func holdingMount(mounts []composeMount, p string) (composeMount, string, bool) {
+	best, bind := -1, false
+	var held composeMount
+	var under string
 	for _, v := range mounts {
 		target := path.Clean(v.Target)
 		rel, ok := strings.CutPrefix(p, target)
@@ -1819,15 +1824,14 @@ func mountedHost(mounts []composeMount, p string) (string, bool) {
 		}
 		switch isBind := v.Type == "bind" && v.Source != ""; {
 		case len(target) > best:
-			best, bind = len(target), isBind
-			host = filepath.Join(v.Source, filepath.FromSlash(rel))
+			best, bind, held, under = len(target), isBind, v, rel
 		case len(target) == best && !isBind:
 			// Two mounts at one target: which one cyfr sees is not
 			// the configuration's to say, so the path is not mapped.
 			bind = false
 		}
 	}
-	return host, best >= 0 && bind
+	return held, under, best >= 0 && bind
 }
 
 // nestedMount is a mount whose target lies under a container path, rel
