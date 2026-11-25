@@ -675,13 +675,19 @@ def net_log_leaving(text):
     return sorted(found)
 
 
+# The guard answers a routed space's names on 127.0.0.11:53 (0B00007F:0035
+# in the kernel's table), on sockets of the space's own namespace.
+GUARD_NAMES = "0B00007F:0035"
+
+
 def tcp_listeners(stack, pid):
-    """Every listening TCP socket of the network namespace `pid` runs in, both families: (port, uid)."""
+    """Every listening TCP socket of the network namespace `pid` runs in, both families, but the guard's name socket:
+    (port, uid)."""
     table = imagesuite.read_output(stack.exec(f"cat /proc/{pid}/net/tcp /proc/{pid}/net/tcp6"), f"the TCP tables of {pid}")
     listening = []
     for line in table.splitlines():
         fields = line.split()
-        if len(fields) > 7 and fields[3] == "0A":
+        if len(fields) > 7 and fields[3] == "0A" and fields[1] != GUARD_NAMES:
             listening.append((int(fields[1].rsplit(":", 1)[1], 16), int(fields[7])))
     return listening
 
