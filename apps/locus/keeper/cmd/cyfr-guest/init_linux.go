@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -40,17 +41,42 @@ const keeperStop = 5 * time.Second
 const guardWait = 10 * time.Second
 
 // initMain is the guest's first process. It makes the guest's mounts and
-// the keeper's group, starts the guest's guard and, once the guard is
-// ready, the keeper, reaps every orphan, and ends the machine when the
-// keeper ends: the keeper ends when its one role, the agent's relay, does,
-// which is when the host's control connection does.
+// the keeper's group, the guest's only vsock sockets, its three listeners,
+// before anything else runs, starts the guest's guard and, once the guard
+// is ready, the keeper, which runs under the keeper's own system-call
+// policy (keeperMain) and so can make no vsock socket of its own; it hands
+// the relay its two listeners on vm.GuestHandoffPath, answers the end's
+// port itself, reaps every orphan, and ends the machine when the keeper
+// ends.
 // It returns only when it cannot go on, which ends the machine too
 // (panic=-1, vm's boot arguments).
 func initMain() int {
-	if err := mounts(); err != nil {
+	roleUID, err := mounts()
+	if err != nil {
 		logf("refusing to start: %v", err)
 		return 1
 	}
+	control, err := listenVsock(vm.ControlPort)
+	if err != nil {
+		logf("refusing to start: the control port: %v", err)
+		return 1
+	}
+	attach, err := listenVsock(vm.AttachPort)
+	if err != nil {
+		logf("refusing to start: the attach port: %v", err)
+		return 1
+	}
+	end, err := listenVsock(vm.EndPort)
+	if err != nil {
+		logf("refusing to start: the end's port: %v", err)
+		return 1
+	}
+	handoff, err := handoffListener(roleUID)
+	if err != nil {
+		logf("refusing to start: the relay's handoff: %v", err)
+		return 1
+	}
+	go handOff(handoff, roleUID, control, attach)
 	group, err := keeperCgroup()
 	if err != nil {
 		logf("refusing to start: %v", err)
@@ -88,17 +114,13 @@ func initMain() int {
 	}
 	_ = group.Close()
 	keeper := cmd.Process.Pid
-	end, err := listenVsock(vm.EndPort)
-	if err != nil {
-		logf("refusing to start: the end's port: %v", err)
-		return 1
-	}
 	go func() {
 		conn, err := acceptHost(end)
 		if err != nil {
 			logf("the end's port: %v", err)
 			return
 		}
+		_, _ = conn.Write([]byte(vm.EndAck))
 		_ = conn.Close()
 		logf("the host ends the machine: its keeper stops")
 		_ = unix.Kill(keeper, unix.SIGTERM)
@@ -146,7 +168,7 @@ const path = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 // 0711, with the role's run folder, its uid's own, 0700, and the role's
 // homes, mode 1733. There is no writable /tmp or /dev/shm, which the keeper
 // refuses.
-func mounts() error {
+func mounts() (roleUID int, err error) {
 	type m struct {
 		source, target, fstype string
 		flags                  uintptr
@@ -165,7 +187,7 @@ func mounts() error {
 	} {
 		if mt.target == "/dev/pts" || mt.target == "/dev/mqueue" {
 			if err := os.MkdirAll(mt.target, 0o755); err != nil {
-				return err
+				return 0, err
 			}
 		}
 		err := unix.Mount(mt.source, mt.target, mt.fstype, mt.flags, mt.data)
@@ -174,12 +196,12 @@ func mounts() error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("mounting %s at %s: %w", mt.fstype, mt.target, err)
+			return 0, fmt.Errorf("mounting %s at %s: %w", mt.fstype, mt.target, err)
 		}
 	}
 	role, err := user.Lookup("locus-" + vm.GuestRole)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	uid, _ := strconv.Atoi(role.Uid)
 	gid, _ := strconv.Atoi(role.Gid)
@@ -194,16 +216,65 @@ func mounts() error {
 		{vm.GuestRunDir, 0o700, uid, gid},
 	} {
 		if err := os.Mkdir(dir.path, dir.mode); err != nil {
-			return err
+			return 0, err
 		}
 		if err := os.Chmod(dir.path, dir.mode); err != nil {
-			return err
+			return 0, err
 		}
 		if err := os.Chown(dir.path, dir.uid, dir.gid); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return uid, nil
+}
+
+// handoffListener listens on vm.GuestHandoffPath, in the role's run folder,
+// a socket the role's uid alone may connect to.
+func handoffListener(roleUID int) (*net.UnixListener, error) {
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: vm.GuestHandoffPath, Net: "unix"})
+	if err != nil {
+		return nil, err
+	}
+	l.SetUnlinkOnClose(false)
+	if err := os.Chmod(vm.GuestHandoffPath, 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.Chown(vm.GuestHandoffPath, roleUID, -1); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+// handOff gives each connection of the role's uid the control and attach
+// listeners, one byte and two descriptors, and closes it: each start of
+// the role, the relay, takes them again. A peer of another uid gets
+// nothing.
+func handOff(l *net.UnixListener, roleUID, control, attach int) {
+	for {
+		conn, err := l.AcceptUnix()
+		if err != nil {
+			logf("the relay's handoff: %v", err)
+			return
+		}
+		go func() {
+			defer conn.Close()
+			raw, err := conn.SyscallConn()
+			if err != nil {
+				return
+			}
+			var cred *unix.Ucred
+			_ = raw.Control(func(fd uintptr) {
+				cred, err = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+			})
+			if err != nil || cred == nil || int(cred.Uid) != roleUID {
+				logf("the relay's handoff: refused a peer that is not uid %d", roleUID)
+				return
+			}
+			if _, _, err := conn.WriteMsgUnix([]byte{'l'}, unix.UnixRights(control, attach), nil); err != nil {
+				logf("the relay's handoff: %v", err)
+			}
+		}()
+	}
 }
 
 // startGuard starts the guest's guard, the image's cyfr-guard, as the

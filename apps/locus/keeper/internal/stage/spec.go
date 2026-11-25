@@ -77,6 +77,13 @@ type Spec struct {
 	// only from inside it: a spec naming none is refused, so no command runs
 	// outside a bound.
 	Cgroup string `json:"cgroup"`
+	// Machine names the image's programs' device a person's machine boots
+	// from (package vm), "" for every other space. A machine's space is a
+	// relay space whose relay leads nowhere, holding its VMM alone: its
+	// home is the machine's folder, and beside the container's directories
+	// it is given this device, read only at its path, and /dev/kvm in its
+	// /dev, which no other space is.
+	Machine string `json:"machine,omitempty"`
 }
 
 // Validate checks the spec independently of the keeper: a non-root uid
@@ -91,6 +98,14 @@ func (s Spec) Validate() error {
 	}
 	if s.Role != "" {
 		return s.validateRole()
+	}
+	if s.Machine != "" {
+		if !filepath.IsAbs(s.Machine) || filepath.Clean(s.Machine) != s.Machine || !strings.HasSuffix(s.Machine, ".sqfs") {
+			return fmt.Errorf("machine device %q is not a clean absolute path to a .sqfs", s.Machine)
+		}
+		if s.Kept || s.Control || s.Terminal || s.Reach != pool.ReachRelay {
+			return errors.New("a machine's space is a relay space with no kept home, control channel or terminal")
+		}
 	}
 	if s.Kept {
 		if err := (home.Kept{Root: s.HomeRoot, First: s.UID, Last: s.UID}).Validate(s.Home, s.UID); err != nil {

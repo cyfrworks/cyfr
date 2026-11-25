@@ -14,13 +14,21 @@ else beyond its role's own confinement, on a kept-homes volume and a
   the guest volume, named by the image's digest, and removes a device of
   another image once its own is whole. Its time is printed: on a runner,
   whose disk has never read the image, it is the cold making.
+- The VMM runs in a space the stage makes, as a spawn's: under the
+  machine's uid, with no group but /dev/kvm's, no capability, no_new_privs
+  and a seccomp filter, and a mount namespace with nothing of the kept
+  homes, no other machine's folder and of the guest volume the device
+  alone, beside its own folder and /dev/kvm.
 - The guest's own guard, the image's cyfr-guard with NET_ADMIN alone, is
-  ready before the guest's keeper starts, and the keeper proves it at its
+  ready before the guest's keeper says anything, and the keeper proves it at its
   boot. The machine answers the hello with its boot identity; the guest's
-  keeper makes one space under a pool uid, with no route, IPv4 or IPv6, whose root is the image's programs
+  keeper makes one space under a pool uid, with no route, IPv4 or IPv6, a
+  read-only root, whose directories are the image's programs
   bound read only from the guest's squashfs root, which reads the same boot
-  identity, exits 0 and is released; the machine ends by itself once the
-  control connection ends, and its group holds no process.
+  identity, is refused socket(AF_VSOCK) and io_uring_setup with EPERM by the
+  keeper's own policy, exits 0 and is released (through the relay, which
+  serves on the listeners the guest's first process made); the machine's end
+  is the acknowledged one, and its group holds no process.
 - The device holds the image's own files and the mount points as empty
   folders, and nothing of another filesystem: not the canary a sign-in left
   in the kept-homes volume, nor Docker's bound /etc/hosts, resolv.conf and
@@ -53,6 +61,10 @@ KVM = "/dev/kvm"
 # The machines' folder, the guest volume's mount point, as the role table names it.
 GUEST_ROOT = ROLE["guest_root"]
 BOOT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# The machines' folders, on the Locus container's /run/locus tmpfs, and the
+# uid a machine's VMM runs as (internal/vm's Root and MachineUID).
+MACHINES = "/run/locus/machines"
+MACHINE_UID = 30201
 DEVICE = re.compile(r"^" + re.escape(GUEST_ROOT) + r"/[0-9a-f]{64}\.sqfs$")
 # A session's churn: small objects made and dropped, freed in pieces
 # smaller than the kernel's own reporting order, then a wait in which the
@@ -107,6 +119,47 @@ def listing(image, volume, device):
     return {line.strip() for line in out.splitlines() if line.startswith("/")}
 
 
+def kvm_gid():
+    return os.stat(KVM).st_gid
+
+
+def guest_lines(stderr):
+    """The guest's console as the check kept it, without its mark."""
+    return [line[len("guest: "):] for line in stderr.splitlines() if line.startswith("guest: ")]
+
+
+def vmm_confined(report, what):
+    vmm = report.get("vmm") or {}
+    expect(not vmm.get("error"), f"{what}: the VMM's process is read from the host", vmm)
+    uid, gid = str(MACHINE_UID), str(kvm_gid())
+    expect(vmm.get("uid") == " ".join([uid] * 4), f"{what}: the VMM runs as the machine's uid alone", vmm)
+    expect(vmm.get("gid") == " ".join([gid] * 4) and vmm.get("groups") == "",
+           f"{what}: the VMM's one group is /dev/kvm's", vmm)
+    expect(vmm.get("no_new_privs") == "1" and vmm.get("seccomp") == "2", f"{what}: the VMM runs under no_new_privs and a filter", vmm)
+    expect(int(vmm.get("cap_eff", "1"), 16) == 0 and int(vmm.get("cap_bnd", "1"), 16) == 0,
+           f"{what}: the VMM holds no capability, its bounding set empty", vmm)
+    mounts = vmm.get("mounts") or []
+    points = [m.get("point", "") for m in mounts]
+    expect(KVM in points, f"{what}: the VMM's space has /dev/kvm", points)
+    expect(not any(p == KEPT_ROOT or p.startswith(KEPT_ROOT + "/") or p == "/var/lib/locus/homes" or
+                   p.startswith("/var/lib/locus/homes/") for p in points),
+           f"{what}: the VMM's space holds nothing of the homes", points)
+    guest = [p for p in points if p == GUEST_ROOT or p.startswith(GUEST_ROOT + "/")]
+    expect(guest == [report.get("device")], f"{what}: of the guest volume the VMM's space holds its device alone", guest)
+    machines = [p for p in points if p == MACHINES or p.startswith(MACHINES + "/")]
+    expect(len(machines) == 1 and machines[0].startswith(f"{MACHINES}/{uid}-"),
+           f"{what}: the VMM's space holds its own machine's folder and no other", machines)
+    # What it may write: its folder, the space's own fresh mounts and /dev's
+    # nodes, kvm among them. The image's directories, the device and the
+    # rest are read only.
+    own = set(machines) | {"/proc", "/tmp", "/var/tmp", "/run", "/dev", "/dev/pts", "/dev/shm"} | \
+        {f"/dev/{node}" for node in ("null", "zero", "full", "random", "urandom", "tty", "kvm")}
+    writable = sorted(m.get("point") for m in mounts if m.get("access") != "ro")
+    expect(set(writable) <= own, f"{what}: nothing is writable in the VMM's space but its own", writable)
+    expect(any(m.get("point") == "/usr" and m.get("access") == "ro" for m in mounts),
+           f"{what}: the VMM's space shows the image's directories read only, as every space", mounts)
+
+
 def booted(code, report, stderr, what):
     expect(code == 0 and not report.get("error"), f"{what}: guest-check passes", f"exit {code}: {report}\n{stderr[-4000:]}")
     expect(DEVICE.match(report.get("device", "")), f"{what}: the device is named by the image's digest", report)
@@ -117,21 +170,30 @@ def booted(code, report, stderr, what):
     expect(len(out) > 2 and out[0] == str(spawned.get("uid")), f"{what}: the space's own uid is its pool uid", out[:2])
     expect(out[1] == report["boot_id"], f"{what}: the space reads the guest's boot identity", out[:2])
     expect(len(out) > 2 and out[2] == "routes 0 0", f"{what}: the space has no route, IPv4 or IPv6", out[2:3])
-    expect("ready: every rule installed" in stderr, f"{what}: the guest's guard was ready before its keeper", stderr[-2000:])
+    expect(len(out) > 3 and out[3] == "outer vsock -1 1 io_uring -1 1",
+           f"{what}: the space is refused socket(AF_VSOCK) and io_uring_setup with EPERM", out[3:4])
+    console = guest_lines(stderr)
+    ready = [i for i, line in enumerate(console) if line.startswith("[cyfr-guard] ready: every rule installed")]
+    keeper = [i for i, line in enumerate(console) if line.startswith("[cyfr-locus]")]
+    expect(ready and keeper and ready[0] < keeper[0],
+           f"{what}: the guest's guard was ready before its keeper said anything", "\n".join(console[-40:]))
     mounts = {}
-    for line in out[2:]:
+    for line in out[4:]:
         fields = line.split()
         if " - " in line and len(fields) > 5:
             after = line.split(" - ", 1)[1].split()
             mounts[fields[4]] = (after[0], fields[5])
+    fstype, options = mounts.get("/", ("", ""))
+    expect(options.split(",")[0] == "ro", f"{what}: the space's root is read only", mounts.get("/"))
     for path in ("/usr", "/etc", "/app"):
         fstype, options = mounts.get(path, ("", ""))
         expect(fstype == "squashfs" and options.split(",")[0] == "ro",
                f"{what}: the space's {path} is the image's programs, read only from the guest's root", mounts.get(path))
     expect((report.get("exited") or {}).get("code") == 0, f"{what}: the space exits 0", report.get("exited"))
     expect(report.get("released") is True, f"{what}: the guest's keeper releases the space", report)
-    expect(report.get("ended_by_itself") is True, f"{what}: the machine ends by itself", report)
+    expect(report.get("end") == "acknowledged", f"{what}: the machine's end is the acknowledged one", report)
     expect(report.get("group_procs") == [], f"{what}: no process is left in the machine's group", report)
+    vmm_confined(report, what)
 
 
 def main():

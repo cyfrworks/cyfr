@@ -23,14 +23,17 @@ import (
 var pairWait = 30 * time.Second
 
 // relayMain is the guest keeper's one role, in the role's own space, on
-// its channel at file descriptor 3. vsock is not a network namespace's: the
-// role's space, routed by the guest's guard to nothing, still listens on
-// the guest's vsock ports. It listens before anything can be spawned: on the attach
-// socket for the keeper's relays, and on vsock for the host. The host's
-// first control connection gets the Hello and then the keeper's channel;
-// each attach connection of the host's is joined to the spawn relay that
-// presented the same token. It returns when the control connection or the
-// keeper's channel ends, and so ends the guest.
+// its channel at file descriptor 3. It makes no vsock socket, which the
+// keeper's policy refuses every process under the keeper: the guest's first
+// process hands it the control and attach ports' listeners on
+// vm.GuestHandoffPath, and vsock is not a network namespace's, so the
+// role's space, routed by the guest's guard to nothing, accepts on them.
+// It listens before anything can be spawned: on the attach socket for the
+// keeper's relays, and on vsock for the host. The host's first control
+// connection gets the Hello and then the keeper's channel; each attach
+// connection of the host's is joined to the spawn relay that presented the
+// same token. It returns when the control connection or the keeper's
+// channel ends, and the keeper starts the role again.
 func relayMain() int {
 	// The keeper's channel is a socket: as a net.Conn its writing side ends
 	// apart (CloseWrite), which the keeper reads as its client's end, even
@@ -62,14 +65,9 @@ func relayMain() int {
 		logf("relay: %v", err)
 		return 1
 	}
-	control, err := listenVsock(vm.ControlPort)
+	control, hostAttach, err := takeListeners()
 	if err != nil {
-		logf("relay: %v", err)
-		return 1
-	}
-	hostAttach, err := listenVsock(vm.AttachPort)
-	if err != nil {
-		logf("relay: %v", err)
+		logf("relay: the vsock listeners: %v", err)
 		return 1
 	}
 	p := &pairs{waiting: map[string]*half{}}
@@ -91,7 +89,38 @@ func relayMain() int {
 	return 0
 }
 
-// listenVsock listens on port of this guest.
+// takeListeners takes the control and attach ports' listeners from the
+// guest's first process.
+func takeListeners() (control, attach int, err error) {
+	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: vm.GuestHandoffPath, Net: "unix"})
+	if err != nil {
+		return -1, -1, err
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(pairWait))
+	oob := make([]byte, unix.CmsgSpace(2*4))
+	_, oobn, _, _, err := conn.ReadMsgUnix(make([]byte, 1), oob)
+	if err != nil {
+		return -1, -1, err
+	}
+	msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(msgs) != 1 {
+		return -1, -1, errors.New("the handoff carried no descriptors")
+	}
+	fds, err := unix.ParseUnixRights(&msgs[0])
+	if err != nil || len(fds) != 2 {
+		for _, fd := range fds {
+			_ = unix.Close(fd)
+		}
+		return -1, -1, errors.New("the handoff did not carry two listeners")
+	}
+	for _, fd := range fds {
+		unix.CloseOnExec(fd)
+	}
+	return fds[0], fds[1], nil
+}
+
+// listenVsock listens on port of this guest: the first process's alone.
 func listenVsock(port uint32) (int, error) {
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {

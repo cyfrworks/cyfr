@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/cyfr/locus/keeper/internal/outer"
 	"github.com/cyfr/locus/keeper/internal/vm"
 	"golang.org/x/sys/unix"
 )
@@ -19,12 +20,20 @@ import (
 // starts with (procfs.CheckKeeperCaps): the Locus container's cap_add.
 var keeperCaps = map[int]bool{unix.CAP_SETUID: true, unix.CAP_SETGID: true, unix.CAP_KILL: true}
 
+// keeperCapNames are keeperCaps as the seccomp profile names them, which
+// decide its rules' includes and excludes as Docker decides them for the
+// Locus container.
+var keeperCapNames = []string{"CAP_SETUID", "CAP_SETGID", "CAP_KILL"}
+
 // keeperMain runs in the keeper's group, at the root of a cgroup namespace
 // and in a mount namespace of its own, as the first process made them. It
 // mounts that namespace's cgroup2 over the guest's, drops every capability
-// but the keeper's from its bounding set, and executes the keeper: the
-// keeper then holds what it holds in the Locus container, and nothing it
-// starts can regain the rest.
+// but the keeper's from its bounding set, installs the keeper's own
+// system-call policy, the Locus container's seccomp profile compiled for
+// the guest kernel's table and the keeper's capabilities (package outer),
+// and executes the keeper: the keeper then holds what it holds in the Locus
+// container, under the same outer policy, beneath each space's own filter,
+// and nothing it starts can regain the rest or lift either.
 func keeperMain() int {
 	// The bounding and ambient sets are a thread's: they are changed on the
 	// thread that executes the keeper.
@@ -45,6 +54,17 @@ func keeperMain() int {
 	}
 	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
 		logf("refusing to start the keeper: clearing the ambient set: %v", err)
+		return 1
+	}
+	// Installed while this process still holds SYS_ADMIN in its effective
+	// set, so it needs no no_new_privs, which the keeper's stage would carry.
+	policy, err := outer.Load(vm.GuestPolicy, vm.GuestSyscalls, keeperCapNames)
+	if err != nil {
+		logf("refusing to start the keeper: its system-call policy: %v", err)
+		return 1
+	}
+	if err := outer.Install(policy); err != nil {
+		logf("refusing to start the keeper: installing its system-call policy: %v", err)
 		return 1
 	}
 	argv := []string{vm.GuestKeeper, "serve", "--role", vm.GuestRoleSpec, "--pool", vm.GuestPoolSpec,

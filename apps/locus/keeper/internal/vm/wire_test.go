@@ -63,25 +63,40 @@ func TestParseHelloRefusesAnythingButAHelloOfThisVersion(t *testing.T) {
 }
 
 func TestBootArgsCarryV1sArguments(t *testing.T) {
-	args := strings.Fields(BootArgs())
-	for _, want := range []string{"page_reporting.page_reporting_order=0", "i8042.noaux", "i8042.nomux",
-		"i8042.nopnp", "i8042.dumbkbd", "lsm=landlock,yama", "reboot=k", "panic=-1"} {
-		if !contains(args, want) {
-			t.Errorf("BootArgs() %q lacks %s", BootArgs(), want)
+	for _, console := range []bool{false, true} {
+		args := strings.Fields(BootArgs(console))
+		for _, want := range []string{"page_reporting.page_reporting_order=0", "i8042.noaux", "i8042.nomux",
+			"i8042.nopnp", "i8042.dumbkbd", "lsm=landlock,yama", "reboot=k", "panic=-1"} {
+			if !contains(args, want) {
+				t.Errorf("BootArgs(%v) %q lacks %s", console, BootArgs(console), want)
+			}
+		}
+		if last := args[len(args)-1]; last != "init="+GuestAgent || GuestAgent != "/usr/local/bin/cyfr-guest" {
+			t.Errorf("BootArgs(%v) ends with %q, not init=/usr/local/bin/cyfr-guest", console, last)
 		}
 	}
-	if last := args[len(args)-1]; last != "init="+GuestAgent || GuestAgent != "/usr/local/bin/cyfr-guest" {
-		t.Errorf("BootArgs() ends with %q, not init=/usr/local/bin/cyfr-guest", last)
+}
+
+// A machine that serves has no serial console: its guest is given none,
+// and only guest-check's boots with one.
+func TestOnlyAMachineWithAConsoleBootsWithOne(t *testing.T) {
+	for _, arg := range strings.Fields(BootArgs(false)) {
+		if strings.HasPrefix(arg, "console=") {
+			t.Fatalf("BootArgs(false) %q names a console", BootArgs(false))
+		}
+	}
+	if !contains(strings.Fields(BootArgs(true)), "console=ttyS0") {
+		t.Fatalf("BootArgs(true) %q has no serial console", BootArgs(true))
 	}
 }
 
 func TestBootArgsWithoutOrderZeroLeaveTheKernelsOrder(t *testing.T) {
-	args := bootArgs(false)
+	args := bootArgs(false, true)
 	if strings.Contains(args, "page_reporting") {
-		t.Fatalf("bootArgs(false) %q names page reporting", args)
+		t.Fatalf("bootArgs(false, true) %q names page reporting", args)
 	}
-	if want := strings.Replace(BootArgs(), " page_reporting.page_reporting_order=0", "", 1); args != want {
-		t.Fatalf("bootArgs(false) is %q, not BootArgs() without the order: %q", args, want)
+	if want := strings.Replace(BootArgs(true), " page_reporting.page_reporting_order=0", "", 1); args != want {
+		t.Fatalf("bootArgs(false, true) is %q, not BootArgs(true) without the order: %q", args, want)
 	}
 }
 

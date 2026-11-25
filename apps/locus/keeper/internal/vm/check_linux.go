@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,12 +40,16 @@ const (
 const (
 	checkVCPUs     = 2
 	checkMemoryMiB = 2560
-	// checkUID is the check's VMM's uid: nobody, which owns nothing.
-	checkUID = 65534
 	// checkSpawnMemory is the bound of the check's one space.
 	checkSpawnMemory = 1 << 30
 	// stepWait bounds each step of the keeper protocol inside the guest.
 	stepWait = 60 * time.Second
+	// consoleTail is how much of the guest's console, and of the maker's
+	// output, the check keeps: the last bytes, the rest dropped and said so.
+	consoleTail = 64 << 10
+	// outputBound is how much of the space's standard output, and of its
+	// standard error, the check keeps: the first bytes, the rest counted.
+	outputBound = 256 << 10
 )
 
 // keeperEnd is the guest keeper's own bound on its end, cyfr-guest's
@@ -53,10 +58,14 @@ const keeperEnd = 5 * time.Second
 
 // defaultCommand is the check's space's command when none is given: it
 // shows the space's uid, its boot, its IPv4 and IPv6 routes, which must be
-// none, and its root, which must be the image's programs bound from the
-// guest's read-only root.
+// none, what the kernel answers it for socket(AF_VSOCK) and io_uring_setup
+// (the return and errno of each, which the keeper's outer policy makes
+// -1 and EPERM), and its root, which must be the image's programs bound
+// from the guest's read-only root.
 var defaultCommand = []string{"/bin/sh", "-c", "id -u; cat /proc/sys/kernel/random/boot_id; " +
 	"echo routes $(awk 'NR > 1 && $1 != \"lo\"' /proc/net/route | wc -l) $(awk '$10 != \"lo\"' /proc/net/ipv6_route | wc -l); " +
+	"perl -e 'my $p = \"\\0\" x 120; my $v = syscall(41, 40, 1, 0); my $ve = $! + 0; my $u = syscall(425, 1, $p); " +
+	"print \"outer vsock $v $ve io_uring $u \", $! + 0, \"\\n\"'; " +
 	"cat /proc/self/mountinfo"}
 
 // Report is what the check found, one JSON object on standard output.
@@ -72,16 +81,22 @@ type Report struct {
 	ReadyMs int64 `json:"ready_ms"`
 	// Spawned is the guest keeper's answer to the space's spawn.
 	Spawned json.RawMessage `json:"spawned"`
-	// Exited is its exit, and Stdout what it wrote.
-	Exited json.RawMessage `json:"exited"`
-	Stdout string          `json:"stdout"`
-	Stderr string          `json:"stderr"`
+	// Exited is its exit, and Stdout and Stderr the first outputBound
+	// bytes of what it wrote, StdoutDropped and StderrDropped how many
+	// more.
+	Exited        json.RawMessage `json:"exited"`
+	Stdout        string          `json:"stdout"`
+	Stderr        string          `json:"stderr"`
+	StdoutDropped int64           `json:"stdout_dropped"`
+	StderrDropped int64           `json:"stderr_dropped"`
+	// VMM is how the VMM ran, read from the host while the guest served.
+	VMM VMMView `json:"vmm"`
 	// Released is that the guest keeper released the space.
 	Released bool `json:"released"`
-	// EndedByItself is that the VMM ended within its bound of the end's
-	// request, without being killed.
-	EndedByItself bool  `json:"ended_by_itself"`
-	EndMs         int64 `json:"end_ms"`
+	// End is how the machine ended (Ended): acknowledged, the VMM's own
+	// exit, or killed past its bound.
+	End   Ended `json:"end"`
+	EndMs int64 `json:"end_ms"`
 	// GroupProcs are the processes left in the VMM's group after its end.
 	GroupProcs []int `json:"group_procs"`
 	// CPUUsec is the processor time the VMM's group used, guest included.
@@ -94,6 +109,29 @@ type Report struct {
 	// ReportFromOrder0 is whether the guest reported free pages from order 0.
 	ReportFromOrder0 bool   `json:"report_from_order0"`
 	Error            string `json:"error,omitempty"`
+}
+
+// VMMView is the VMM's process as the host's kernel shows it: its
+// credentials, its filters and capabilities, as /proc/<pid>/status says
+// them, and the mounts of its mount namespace.
+type VMMView struct {
+	UID        string   `json:"uid"`
+	GID        string   `json:"gid"`
+	Groups     string   `json:"groups"`
+	NoNewPrivs string   `json:"no_new_privs"`
+	Seccomp    string   `json:"seccomp"`
+	CapEff     string   `json:"cap_eff"`
+	CapBnd     string   `json:"cap_bnd"`
+	Mounts     []Mount  `json:"mounts"`
+	Error      string   `json:"error,omitempty"`
+}
+
+// Mount is one mount of the VMM's namespace: where, whether it is mounted
+// read-write ("rw") or read only ("ro"), and its filesystem's type.
+type Mount struct {
+	Point  string `json:"point"`
+	Access string `json:"access"`
+	Type   string `json:"type"`
 }
 
 // CheckMain is `cyfr-locus guest-check`: it has the image's programs'
@@ -114,10 +152,14 @@ func CheckMain(args []string) int {
 		argv = defaultCommand
 	}
 	report := Report{ReportFromOrder0: !*kernelReporting}
-	err := check(argv, &report)
+	console := &tail{max: consoleTail}
+	maker := &tail{max: consoleTail}
+	err := check(argv, &report, console, maker)
 	if err != nil {
 		report.Error = err.Error()
 	}
+	maker.print(os.Stderr, "maker: ")
+	console.print(os.Stderr, "guest: ")
 	out, _ := json.Marshal(report)
 	fmt.Println(string(out))
 	if err != nil {
@@ -126,7 +168,7 @@ func CheckMain(args []string) int {
 	return CheckPassed
 }
 
-func check(argv []string, report *Report) error {
+func check(argv []string, report *Report, console, maker io.Writer) error {
 	raw, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return err
@@ -138,20 +180,29 @@ func check(argv []string, report *Report) error {
 	if err := procfs.CheckKeeperCaps(st); err != nil {
 		return err
 	}
-	// The VMM's sockets are made under this umask and reached by their
-	// group, the keeper's (Config.UID).
-	syscall.Umask(0o007)
+	// The keeper's own groups: a space is given none (package stage).
+	if err := syscall.Setgroups([]int{}); err != nil {
+		return fmt.Errorf("clearing the supplementary groups: %w", err)
+	}
 	// Without KVM no machine runs, so no device is made for one.
 	if _, err := os.Stat(KVM); err != nil {
 		return ErrNoKVM
 	}
 	began := time.Now()
-	device, made, err := Programs(&prefixed{w: os.Stderr, tag: "maker: "}).Device()
+	device, made, err := Programs(maker).Device()
 	report.DeviceMs = time.Since(began).Milliseconds()
-	report.Device, report.DeviceMade = device, made
 	if err != nil {
 		return err
 	}
+	report.Device, report.DeviceMade = device.Path, made
+	// The machine takes the device, and closes it at its end; until Start
+	// has it, the check does.
+	held := device
+	defer func() {
+		if held != nil {
+			_ = held.Close()
+		}
+	}()
 	self, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return err
@@ -160,21 +211,15 @@ func check(argv []string, report *Report) error {
 	if err != nil {
 		return err
 	}
-	id, err := randomHex(16)
-	if err != nil {
-		return err
-	}
-	group, err := groups.Create(cgroup.SpawnName(id), (checkMemoryMiB+64)<<20, checkVCPUs*cgroup.CPUPeriod)
+	group, err := groups.Create(cgroup.Name(MachineUID), (checkMemoryMiB+64)<<20, checkVCPUs*cgroup.CPUPeriod)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = group.Remove() }()
-	args := BootArgs()
-	if !report.ReportFromOrder0 {
-		args = bootArgs(false)
-	}
-	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, UID: checkUID,
-		Group: group, BootArgs: args, Console: &prefixed{w: os.Stderr, tag: "guest: "}})
+	args := bootArgs(report.ReportFromOrder0, true)
+	held = nil
+	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, UID: MachineUID,
+		Group: group, BootArgs: args, Console: console})
 	if err != nil {
 		return err
 	}
@@ -190,6 +235,7 @@ func check(argv []string, report *Report) error {
 	}
 	report.BootID = c.Hello.BootID
 	report.ReadyMs = time.Since(m.Started()).Milliseconds()
+	report.VMM = vmmView(group)
 
 	spaceErr := space(m, c, argv, report)
 	report.HeldBytes = groupNumber(group, "memory.current")
@@ -199,7 +245,7 @@ func check(argv []string, report *Report) error {
 	// ends the role and every space, and resets the guest.
 	_ = c.Close()
 	closed := time.Now()
-	report.EndedByItself = m.End(EndWait + keeperEnd)
+	report.End = m.End(EndWait + keeperEnd)
 	ended = true
 	report.EndMs = time.Since(closed).Milliseconds()
 	report.CPUUsec = cpuUsec(group)
@@ -211,8 +257,11 @@ func check(argv []string, report *Report) error {
 	if spaceErr != nil {
 		return spaceErr
 	}
-	if !report.EndedByItself {
-		return errors.New("the machine did not end by itself after its control connection ended")
+	if err := m.Left(); err != nil {
+		return err
+	}
+	if report.End != EndAcknowledged {
+		return fmt.Errorf("the machine's end was not the acknowledged one: %s", report.End)
 	}
 	if len(report.GroupProcs) > 0 {
 		return fmt.Errorf("processes %v are left in the machine's group", report.GroupProcs)
@@ -258,7 +307,7 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 	if err != nil {
 		return fmt.Errorf("spawning the space: %w", err)
 	}
-	var stdout, stderr strings.Builder
+	stdout, stderr := &bounded{max: outputBound}, &bounded{max: outputBound}
 	_ = attach.SetReadDeadline(time.Now().Add(stepWait))
 	buf := make([]byte, frame.MaxPayload)
 	for open := 2; open > 0; {
@@ -281,7 +330,8 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 			open--
 		}
 	}
-	report.Stdout, report.Stderr = stdout.String(), stderr.String()
+	report.Stdout, report.Stderr = stdout.buf.String(), stderr.buf.String()
+	report.StdoutDropped, report.StderrDropped = stdout.dropped, stderr.dropped
 	exited, err := expect(c, "exited", "")
 	report.Exited = json.RawMessage(strings.TrimSpace(string(exited)))
 	if err != nil {
@@ -354,24 +404,125 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// prefixed marks the guest's console lines, and the maker's, on the check's
-// standard error, a whole line at a time: the console arrives in pieces.
-type prefixed struct {
-	w       io.Writer
-	tag     string
-	pending []byte
+// tail keeps the last max bytes written to it, and counts what it dropped:
+// the guest's console and the maker's output reach the check's standard
+// error only through one, after the machine's end.
+type tail struct {
+	mu      sync.Mutex
+	max     int
+	buf     []byte
+	dropped int64
 }
 
-func (p *prefixed) Write(b []byte) (int, error) {
-	p.pending = append(p.pending, b...)
-	for {
-		i := strings.IndexByte(string(p.pending), '\n')
-		if i < 0 {
-			return len(b), nil
-		}
-		if _, err := io.WriteString(p.w, p.tag+string(p.pending[:i+1])); err != nil {
-			return 0, err
-		}
-		p.pending = p.pending[i+1:]
+func (t *tail) Write(b []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, b...)
+	if over := len(t.buf) - t.max; over > 0 {
+		t.dropped += int64(over)
+		t.buf = append(t.buf[:0:0], t.buf[over:]...)
 	}
+	return len(b), nil
+}
+
+// print writes what t kept, each line marked with tag, after a line saying
+// how much was dropped before it, if any was.
+func (t *tail) print(w io.Writer, tag string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.dropped > 0 {
+		fmt.Fprintf(w, "%s(the first %d bytes were dropped: the check keeps the last %d)\n", tag, t.dropped, t.max)
+	}
+	for _, line := range strings.SplitAfter(string(t.buf), "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasSuffix(line, "\n") {
+			line += "\n"
+		}
+		_, _ = io.WriteString(w, tag+line)
+	}
+}
+
+// bounded keeps the first max bytes written to it and counts the rest.
+type bounded struct {
+	max     int
+	buf     strings.Builder
+	dropped int64
+}
+
+func (b *bounded) Write(p []byte) (int, error) {
+	keep := b.max - b.buf.Len()
+	if keep > len(p) {
+		keep = len(p)
+	}
+	if keep > 0 {
+		b.buf.Write(p[:keep])
+	}
+	b.dropped += int64(len(p) - keep)
+	return len(p), nil
+}
+
+// vmmView reads the VMM's process, the one of its group named
+// firecracker, from the host's /proc.
+func vmmView(group *cgroup.Group) VMMView {
+	var v VMMView
+	procs, err := group.Procs()
+	if err != nil {
+		v.Error = err.Error()
+		return v
+	}
+	for _, pid := range procs {
+		dir := filepath.Join("/proc", strconv.Itoa(pid))
+		comm, err := os.ReadFile(filepath.Join(dir, "comm"))
+		if err != nil || strings.TrimSpace(string(comm)) != "firecracker" {
+			continue
+		}
+		status, err := os.ReadFile(filepath.Join(dir, "status"))
+		if err != nil {
+			v.Error = err.Error()
+			return v
+		}
+		for _, line := range strings.Split(string(status), "\n") {
+			name, value, ok := strings.Cut(line, ":")
+			value = strings.Join(strings.Fields(value), " ")
+			if !ok {
+				continue
+			}
+			switch name {
+			case "Uid":
+				v.UID = value
+			case "Gid":
+				v.GID = value
+			case "Groups":
+				v.Groups = value
+			case "NoNewPrivs":
+				v.NoNewPrivs = value
+			case "Seccomp":
+				v.Seccomp = value
+			case "CapEff":
+				v.CapEff = value
+			case "CapBnd":
+				v.CapBnd = value
+			}
+		}
+		mounts, err := os.ReadFile(filepath.Join(dir, "mountinfo"))
+		if err != nil {
+			v.Error = err.Error()
+			return v
+		}
+		v.Mounts = []Mount{}
+		for _, line := range strings.Split(string(mounts), "\n") {
+			fields := strings.Fields(line)
+			_, after, ok := strings.Cut(line, " - ")
+			if len(fields) < 6 || !ok || len(strings.Fields(after)) == 0 {
+				continue
+			}
+			v.Mounts = append(v.Mounts, Mount{Point: fields[4], Access: strings.Split(fields[5], ",")[0],
+				Type: strings.Fields(after)[0]})
+		}
+		return v
+	}
+	v.Error = fmt.Sprintf("no process named firecracker in the VMM's group, of %v", procs)
+	return v
 }

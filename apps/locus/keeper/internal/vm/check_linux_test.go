@@ -4,30 +4,44 @@
 package vm
 
 import (
-	"bufio"
 	"net"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cyfr/locus/keeper/internal/protocol"
 )
 
-func TestPrefixedWritesWholeLinesOnly(t *testing.T) {
-	var out strings.Builder
-	p := &prefixed{w: &out, tag: "guest: "}
-	in := "first line\nsecond\npartial"
-	for i := 0; i < len(in); i++ {
-		n, err := p.Write([]byte{in[i]})
-		if err != nil || n != 1 {
-			t.Fatalf("Write of byte %d: %d, %v", i, n, err)
+// The console's tail keeps its last bytes and says how many it dropped,
+// each kept line marked.
+func TestTailKeepsTheLastBytesAndSaysWhatItDropped(t *testing.T) {
+	tl := &tail{max: 16}
+	for _, piece := range []string{"first line\n", "second line\n", "third\n"} {
+		if n, err := tl.Write([]byte(piece)); err != nil || n != len(piece) {
+			t.Fatalf("Write %q: %d, %v", piece, n, err)
 		}
 	}
-	if got, want := out.String(), "guest: first line\nguest: second\n"; got != want {
-		t.Fatalf("wrote %q, want %q", got, want)
+	var out strings.Builder
+	tl.print(&out, "guest: ")
+	want := "guest: (the first 13 bytes were dropped: the check keeps the last 16)\nguest: cond line\nguest: third\n"
+	if out.String() != want {
+		t.Fatalf("printed %q, want %q", out.String(), want)
 	}
-	if _, err := p.Write([]byte(" end\n")); err != nil {
-		t.Fatal(err)
+	if len(tl.buf) != 16 {
+		t.Fatalf("kept %d bytes, not 16", len(tl.buf))
 	}
-	if got, want := out.String(), "guest: first line\nguest: second\nguest: partial end\n"; got != want {
-		t.Fatalf("wrote %q, want %q", got, want)
+}
+
+// The space's output is kept to its first bytes, the rest counted.
+func TestBoundedKeepsTheFirstBytesAndCountsTheRest(t *testing.T) {
+	b := &bounded{max: 5}
+	for _, piece := range []string{"abc", "defg", "hi"} {
+		if n, err := b.Write([]byte(piece)); err != nil || n != len(piece) {
+			t.Fatalf("Write %q: %d, %v", piece, n, err)
+		}
+	}
+	if b.buf.String() != "abcde" || b.dropped != 4 {
+		t.Fatalf("kept %q and dropped %d, want abcde and 4", b.buf.String(), b.dropped)
 	}
 }
 
@@ -44,7 +58,7 @@ func control(t *testing.T, lines ...string) *Control {
 			}
 		}
 	}()
-	return &Control{conn: host, lines: bufio.NewReader(host)}
+	return &Control{conn: host, lines: protocol.NewLineReader(host)}
 }
 
 func TestExpectSkipsOtherTypesAndIDs(t *testing.T) {
@@ -79,5 +93,20 @@ func TestExpectRefusesAnErrorLineNamingItsCode(t *testing.T) {
 	_, err := expect(c, "placed", "p1")
 	if err == nil || !strings.Contains(err.Error(), "bad_request") {
 		t.Fatalf("expect gave %v, not a refusal naming bad_request", err)
+	}
+}
+
+// A line from the guest past the keeper protocol's bound is refused, and
+// the next is read whole.
+func TestControlRefusesALinePastTheBound(t *testing.T) {
+	long := strings.Repeat("x", protocol.MaxLineBytes+1)
+	want := `{"v":4,"type":"placed","id":"p1"}`
+	c := control(t, long, want)
+	if _, err := c.Next(10 * time.Second); err != ErrLineTooLong {
+		t.Fatalf("a line of %d bytes: %v, not ErrLineTooLong", len(long), err)
+	}
+	line, err := c.Next(10 * time.Second)
+	if err != nil || string(line) != want {
+		t.Fatalf("the next line: %q, %v", line, err)
 	}
 }

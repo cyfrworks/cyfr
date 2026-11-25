@@ -97,8 +97,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus . \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-fetch ./cmd/cyfr-fetch \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-guest ./cmd/cyfr-guest
 
-# ---- A person's machine (apps/locus/keeper/internal/vm): the guest kernel
-# and its VMM, on amd64 alone. Linux, pinned by its archive's sha256, built
+# ---- A person's machine (apps/locus/keeper/internal/vm): the guest kernel,
+# its system-call table, by which the guest's first process compiles the
+# keeper's seccomp profile (package outer), and its VMM, on amd64 alone. Linux, pinned by its archive's sha256, built
 # from Firecracker's microVM configuration at the pinned release (each file
 # pinned by its sha256) with apps/locus/guest/kernel.config over it, and
 # Firecracker itself, pinned by its release archive's sha256. The arm64
@@ -132,9 +133,10 @@ RUN mkdir -p /out && if [ "$TARGETARCH" != amd64 ]; then exit 0; fi \
     && cp ../microvm.config .config \
     && scripts/kconfig/merge_config.sh -m .config ../ci.config /tmp/kernel.config \
     && make olddefconfig \
-    && grep '^CONFIG_.*=y' /tmp/kernel.config | while read -r option; do grep -qx "$option" .config || { echo "the guest kernel lacks $option"; exit 1; }; done \
+    && grep -E '^CONFIG_.*=y|^# CONFIG_.* is not set' /tmp/kernel.config | while read -r option; do grep -qx "$option" .config || { echo "the guest kernel's configuration lacks: $option"; exit 1; }; done \
     && make -j"$(nproc)" vmlinux \
     && install -m 0644 vmlinux /out/vmlinux \
+    && install -m 0644 arch/x86/entry/syscalls/syscall_64.tbl /out/syscall_64.tbl \
     && cd / && rm -rf /tmp/linux /tmp/*.tar.xz /tmp/*.tgz
 
 # ---- The release build ----
