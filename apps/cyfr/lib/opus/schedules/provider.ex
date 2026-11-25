@@ -1020,9 +1020,6 @@ defmodule Opus.Schedules.Provider do
   # schedule began, `:schedule_turn_not_yours` (the moduledoc's "From a
   # turn" says why a crew member's turn and a member's reply are the
   # person's when that work is).
-  defp writer(%Context{plane: :guest}, %{"called_by_page" => true}),
-    do: {:error, :schedule_by_page}
-
   defp writer(%Context{plane: :guest} = ctx, args) do
     with {:ok, turn, room} <- own_turn(ctx, args) do
       if turn_writer?(ctx, turn),
@@ -1059,36 +1056,28 @@ defmodule Opus.Schedules.Provider do
 
   defp turn_writer?(_ctx, _turn), do: false
 
-  # The open turn a chain's call is the own call of, from the lineage the
-  # gate stamps (`Sanctum.Dispatch` drops what a guest sends under those
-  # names): a turn of that thread, in the context's athanor, asked for by
-  # its person, whose root made the call itself. Opus reads the rows, as
-  # `Opus.Programs` does, since it does not call Aqua. Anything else is
-  # no turn's call.
-  defp own_turn(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, %{
-         "thread_id" => thread_id,
-         "root_execution_id" => root,
-         "parent_execution_id" => root
-       })
-       when is_binary(thread_id) and is_binary(root) and is_binary(athanor_id) and
-              athanor_id != "" and is_binary(user_id) and user_id != "" do
+  # The open turn a chain's call is the own call of, by the store's one
+  # rule (`Arca.TurnStorage.own_turn/3`), and the room it works under: a
+  # page's call through the turn is refused `:schedule_by_page`, a
+  # component's, whether a turn started it or a key's run did,
+  # `:schedule_by_component`, and one naming no open turn
+  # `:schedule_turn_ended`.
+  defp own_turn(%Context{athanor_id: athanor_id, user_id: user_id} = ctx, args)
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and user_id != "" do
     actor = Sanctum.Context.actor(ctx)
 
-    with {:ok, turns} <- Arca.TurnStorage.open_turns(actor, thread_id),
-         %{} = turn <-
-           Enum.find(turns, &(&1.root_execution_id == root and &1.requested_by == user_id)),
-         {:ok, thread} <- Arca.ThreadStorage.get(actor, thread_id),
+    with {:ok, turn} <- Arca.TurnStorage.own_turn(actor, user_id, args),
+         {:ok, thread} <- Arca.ThreadStorage.get(actor, turn.thread_id),
          {:ok, room} <- room(actor, thread) do
       {:ok, turn, room}
     else
-      nil -> {:error, :schedule_turn_ended}
-      {:error, :not_found} -> {:error, :schedule_turn_ended}
+      {:error, :by_page} -> {:error, :schedule_by_page}
+      {:error, :by_component} -> {:error, :schedule_by_component}
+      {:error, reason} when reason in [:not_open, :not_found] -> {:error, :schedule_turn_ended}
       {:error, _unread} -> {:error, format_store_error(:database_error)}
     end
   end
 
-  # A chain's call that is not a turn's own: a component's, whether a
-  # turn started it or a key's run did.
   defp own_turn(_ctx, _args), do: {:error, :schedule_by_component}
 
   # The room a turn works in: a workspace thread is its own, a member's

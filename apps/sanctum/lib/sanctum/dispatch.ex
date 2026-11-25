@@ -68,7 +68,7 @@ defmodule Sanctum.Dispatch do
   `holder_deadline` and is reclaimed when its attempt ends
   (`Arca.BudgetReservations.sweep/1`). It is decided, admitted and
   charged as every call is; it ends at its answer, a cancel, or its
-  caller's end.
+  caller's end, and a caller that stops it gives its row back.
 
   ## A handler that does not answer
 
@@ -835,7 +835,9 @@ defmodule Sanctum.Dispatch do
   end
 
   defp authority_step(authority, guest_fn, target) do
-    case Sanctum.Authority.step(authority, guest_fn, target) do
+    # Taken guarded: the slot's holder, this process, is watched from the
+    # instant it holds it, so a stop inside the charge leaves no slot.
+    case Sanctum.Authority.step(authority, guest_fn, target, :guarded) do
       {:allow_tool, resource} ->
         {:ok, resource}
 
@@ -850,9 +852,12 @@ defmodule Sanctum.Dispatch do
   end
 
   # A spawn-shaped transition charged the invoke budget; this process
-  # holds the slot, and the executor's wall-clock kill would skip the
-  # `after` — the guard releases on :DOWN. With a charge identity the hold
-  # is a row too, reclaimable past the dispatcher's own timeout.
+  # holds the slot, guarded from the instant it took it
+  # (`authority_step/3`), and a kill would skip the `after` — the guard
+  # releases on :DOWN. With a charge identity the hold is a row too,
+  # reclaimable past the dispatcher's own timeout; a waiting call's row
+  # has none, and the caller that stops it gives the row back
+  # (`Aqua.Loop`), or its attempt's end does.
   defp charged(name, ctx, args, authority, guest_fn, opts) do
     # The window starts before the charge is taken, so the cell's deadline,
     # set inside the charge's transaction, is after the handler's.
@@ -861,8 +866,6 @@ defmodule Sanctum.Dispatch do
 
     case charge_row(guest_fn, ctx, authority, opts, window_ms) do
       :ok ->
-        if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
-
         dispatch_opts =
           opts
           |> Keyword.put(:hold, hold_of(authority, Keyword.get(opts, :charge)))
@@ -886,8 +889,9 @@ defmodule Sanctum.Dispatch do
         end
 
       {:error, reason} ->
-        # The slot the transition charged goes back: the row refused it.
-        Sanctum.Authority.BudgetCounter.release(authority.budget)
+        # The slot the transition charged goes back, and its guard with
+        # it: the row refused it.
+        Sanctum.Authority.release_invoke(authority)
         refused(opts, args, Refusals.admission({:invoke_denied, reason}))
     end
   end

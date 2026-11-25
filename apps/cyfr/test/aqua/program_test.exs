@@ -5701,6 +5701,240 @@ defmodule Aqua.ProgramTest do
     end
   end
 
+  # A call that waits (`waits: true`): what ends it, what it gives back and
+  # how a restart takes it up. No clock reaches the gate's five minutes or
+  # a terminal's timers from a test, so a wait "as long as it takes" is
+  # shown to hold with no timer at all and to answer only its run's end.
+  describe "a call that waits" do
+    @tag harness: :api
+    test "a program's wait answers its run's end in its own call, with no clock over it, on " <>
+           "the model's harness",
+         %{ctx: ctx, thread: thread, fake: fake} do
+      cli = terminal_row!(ctx)
+
+      turn =
+        api_turn!(ctx, thread, "run it", [
+          asking([{"ask-1", "program", start_args(cli)}]),
+          {:hold, self()}
+        ])
+
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      session = started_session(ctx, turn)
+
+      ScriptedWorker.script([
+        asking([{"ask-2", "program", %{"action" => "wait", "session" => session, "after" => 0}}]),
+        answer("It ended.")
+      ])
+
+      send(model, :continue)
+      held!(session)
+      assert unbounded_charge?(ctx, turn, "wait")
+      Scripted.end_sessions(fake, cli.id, 0)
+      assert :completed = Task.await(loop, 60_000)
+      assert %{"running" => false, "ended" => "exited"} = answered(ctx, turn, "wait")
+    end
+
+    @tag harness: :program
+    test "a program's wait answers its run's end in its own call, with no clock over it, on " <>
+           "a program, its ask held open meanwhile",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      cli = terminal_row!(ctx)
+      turn = accept!(ctx, thread, row, "run it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-start", "program", start_args(cli)))
+      started = accept_next!(fake, row)
+      session = started["content"] |> outside_answer(thread, "program") |> Jason.decode!()
+      session = session["session"]
+      wait = %{"action" => "wait", "session" => session, "after" => 0}
+      say(fake, row, ask(turn, "ask-wait", "program", wait))
+      held!(session)
+      assert unbounded_charge?(ctx, turn, "wait")
+      Scripted.end_sessions(fake, cli.id, 0)
+
+      assert %{"t" => "answer", "ask" => "ask-wait", "content" => content} =
+               accept_next!(fake, row)
+
+      assert %{"running" => false, "ended" => "exited"} =
+               content |> outside_answer(thread, "program") |> Jason.decode!()
+
+      say(fake, row, said(turn, "msg_1", "It ended."))
+      say(fake, row, idle(turn, [input.id]))
+      assert :completed = Task.await(loop, 30_000)
+    end
+
+    @tag harness: :api
+    test "a restart dispatches a wait again with no deadline, and a run lost with its holder " <>
+           "answers that it ended",
+         %{ctx: ctx, thread: thread} do
+      cli = terminal_row!(ctx)
+
+      turn =
+        api_turn!(ctx, thread, "run it", [
+          asking([{"ask-1", "program", start_args(cli)}]),
+          {:hold, self()}
+        ])
+
+      loop = run(ctx, turn)
+      assert_receive {:scripted_probe, model, _child}, 30_000
+      session = started_session(ctx, turn)
+
+      ScriptedWorker.script([
+        asking([{"ask-2", "program", %{"action" => "wait", "session" => session, "after" => 0}}]),
+        answer("It ended.")
+      ])
+
+      send(model, :continue)
+      terminal = held!(session)
+      quiet!(loop.pid)
+      Task.shutdown(loop, :brutal_kill)
+
+      # The run lost with its holder, as a restart of CYFR loses it: its
+      # process stopped by its supervisor, as the boot's end stops it.
+      ref = Process.monitor(terminal)
+      :ok = DynamicSupervisor.terminate_child(Opus.Programs.Relays, terminal)
+      assert_receive {:DOWN, ^ref, :process, ^terminal, _shutdown}, 5_000
+
+      assert {:ok, [{:adopt, _}]} = Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+      assert :completed = Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt)
+
+      assert [%{generation: 1, dispatch_state: "closed", outcome: "error"} = again] =
+               steps_of(ctx, turn, "wait")
+
+      {:ok, result} = Tape.message(ctx, again.result_message_id)
+      assert result.content =~ "The program is no longer running"
+    end
+
+    @tag harness: :api
+    test "a wait dispatched again after a restart has no deadline on its charge",
+         %{ctx: ctx, thread: thread} do
+      turn =
+        api_turn!(ctx, thread, "wait", [
+          asking([{"ask-1", "aqua", waiting()}]),
+          answer("finished")
+        ])
+
+      loop = run(ctx, turn)
+      waiting!(ctx, turn)
+      quiet!(loop.pid)
+      Task.shutdown(loop, :brutal_kill)
+      assert {:ok, [{:adopt, _}]} = Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
+
+      _adopting =
+        Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :adopt) end)
+
+      actor = Sanctum.Context.actor(ctx)
+
+      again = fn ->
+        {:ok, live} = Tape.turn(ctx, turn.id)
+        {:ok, rows} = Arca.BudgetReservations.charges(actor, live.budget_id)
+        Enum.find(rows, &(&1.generation == 1))
+      end
+
+      Prima.Test.Wait.wait_until(fn -> again.() != nil end, 10_000)
+      charge = again.()
+
+      assert {charge.holder_execution_id, charge.admit_by, charge.holder_deadline} ==
+               {nil, nil, nil}
+    end
+
+    @tag harness: :program
+    test "the early answer gives its charge back while the turn still runs",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "wait for it")
+      _loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-1", "aqua", waiting()))
+      waiting!(ctx, turn)
+      {:ok, live} = Tape.turn(ctx, turn.id)
+      actor = Sanctum.Context.actor(ctx)
+      key = TurnStorage.brain_ask_key(turn.id, "ask-1") <> ":g0"
+
+      charges = fn ->
+        {:ok, rows} = Arca.BudgetReservations.charges(actor, live.budget_id)
+        Enum.filter(rows, &(&1.id == key))
+      end
+
+      Prima.Test.Wait.wait_until(fn -> match?([%{holder_deadline: nil}], charges.()) end, 10_000)
+      _steer = steer!(ctx, thread, turn, "stop waiting")
+      assert %{"ask" => "ask-1"} = accept_next!(fake, row)
+      assert {:ok, %{status: "running"}} = Tape.turn(ctx, turn.id)
+      assert {:ok, _} = Arca.BudgetReservations.sweep(actor)
+      assert charges.() == []
+      assert %{charged: 0} = Arca.BudgetReservations.lookup(actor, live.budget_id)
+    end
+
+    @tag harness: :program
+    test "a session lost while a wait runs ends the wait once and the turn, saying so",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "wait for it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-1", "aqua", waiting()))
+      waiting!(ctx, turn)
+      :ok = forgotten!(ctx, thread, row)
+
+      line =
+        "#{@title} stopped: its record of this thread was removed while it worked. Send a " <>
+          "message to start over."
+
+      assert {:failed, ^line} = Task.await(loop, 30_000)
+      assert system_lines(ctx, thread, turn) == [line]
+      # Closed once: one result of its own, beside the start's.
+      assert [%{dispatch_state: "closed", outcome: "error", result_message_id: waited}] =
+               steps_of(ctx, turn, "wait")
+
+      assert Enum.count(result_rows(ctx, turn), &(&1 == waited)) == 1
+      assert length(result_rows(ctx, turn)) == 2
+    end
+
+    @tag harness: :program
+    test "a post handed over while an earlier ask runs answers the wait asked beside it early",
+         %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "run then wait")
+      _loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      opening = held_start!(fake, row, turn, "ask-1")
+      say(fake, row, ask(turn, "ask-2", "aqua", waiting()))
+      key = TurnStorage.brain_ask_key(turn.id, "ask-2")
+
+      Prima.Test.Wait.wait_until(
+        fn -> match?(%{dispatch_state: "proposed"}, step_by_key(ctx, turn, key)) end,
+        10_000
+      )
+
+      # The post is handed over at once, while the first ask runs, so it
+      # waits on no step, and the program reads it only with the answers.
+      _steer = steer!(ctx, thread, turn, "change direction")
+      assert %{"t" => "post", "id" => id} = accept_next!(fake, row)
+      [_input, carried] = inputs(ctx, turn)
+      assert carried.id == id
+      closed!(ctx, turn, carried.idempotency_key)
+      refute Tape.steer_pending?(ctx, turn)
+      send(opening, :go)
+
+      assert %{"t" => "answer", "ask" => "ask-1"} = accept_next!(fake, row)
+
+      assert %{"t" => "answer", "ask" => "ask-2", "content" => @early_answer} =
+               accept_next!(fake, row)
+
+      assert %{dispatch_state: "closed", outcome: "ok"} = step_by_key(ctx, turn, key)
+    end
+  end
+
   # One table over both harnesses (`Aqua.Harness`): each row runs once on a
   # scripted catalyst (`Aqua.Harness.Api`) and once on a scripted driver
   # (`Aqua.Harness.Program`), and both meet one expectation: what a person
@@ -8950,6 +9184,55 @@ defmodule Aqua.ProgramTest do
       "action" => "wait",
       "until" => DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_iso8601()
     }
+
+  # The session a turn's `program.start` answered.
+  defp started_session(ctx, turn) do
+    Prima.Test.Wait.wait_until(
+      fn -> match?([%{dispatch_state: "closed"}], steps_of(ctx, turn, "start")) end,
+      10_000
+    )
+
+    answered(ctx, turn, "start")["session"]
+  end
+
+  # What a turn's one `program.<action>` answered, read from its result row.
+  defp answered(ctx, turn, action) do
+    [%{result_message_id: id}] = steps_of(ctx, turn, action)
+    {:ok, row} = Tape.message(ctx, id)
+    {:outside, "program", content} = as_compared(row)
+    Jason.decode!(content)
+  end
+
+  defp steps_of(ctx, turn, action) do
+    {:ok, steps} = Tape.steps(ctx, turn)
+    Enum.filter(steps, &(&1.action == action and &1.kind not in ["model", "input"]))
+  end
+
+  # The terminal `session` holds a wait with no timer of its own: its pid.
+  defp held!(session) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        case Registry.lookup(Opus.Programs.Registry, {:terminal, session}) do
+          [{pid, _owner}] -> match?([%{timer: nil}], Map.values(:sys.get_state(pid).waiters))
+          [] -> false
+        end
+      end,
+      10_000
+    )
+
+    [{pid, _owner}] = Registry.lookup(Opus.Programs.Registry, {:terminal, session})
+    pid
+  end
+
+  # The turn's one call of `action` holds a charge with no deadline of a
+  # window's or an admission's.
+  defp unbounded_charge?(ctx, turn, action) do
+    [step] = steps_of(ctx, turn, action)
+    {:ok, live} = Tape.turn(ctx, turn.id)
+    id = "#{step.idempotency_key}:g#{step.generation}"
+    {:ok, rows} = Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), live.budget_id)
+    match?([%{holder_deadline: nil, admit_by: nil}], Enum.filter(rows, &(&1.id == id)))
+  end
 
   # The turn's wait has been dispatched, so it runs.
   defp waiting!(ctx, turn) do

@@ -1508,7 +1508,7 @@ defmodule Aqua.Loop do
 
   defp run_exclusive(%State{} = state, item) do
     state = activity(state, [item], :running)
-    {answer, state} = worker(state, fn -> run_one(state, item) end, item)
+    {answer, state} = worker(state, fn -> run_one(state, item) end)
 
     outcome =
       case answer do
@@ -1553,14 +1553,32 @@ defmodule Aqua.Loop do
 
   defp collect(state, [], running, _cap) when map_size(running) == 0, do: {:ok, state}
 
+  # A call that waits, with a post its turn has not read (`early?/2`),
+  # is answered early as it starts, and runs no worker.
   defp collect(state, pending, running, cap) when map_size(running) < cap and pending != [] do
     [item | rest] = pending
-    task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
-    collect(state, rest, Map.put(running, task.ref, %{item: item, task: task}), cap)
+
+    if early?(state, item) do
+      case answer_unstarted(state, item) do
+        {:uncertain, step, why} ->
+          {{:uncertain, step, why, Map.values(running) ++ pending_items(rest)}, owe(state)}
+
+        _answered ->
+          collect(owe(state), rest, running, cap)
+      end
+    else
+      task = Aqua.Loop.Worker.async(fn -> run_one(state, item) end)
+      collect(state, rest, Map.put(running, task.ref, %{item: item, task: task}), cap)
+    end
   end
 
   defp collect(state, pending, running, cap) do
     turn_id = state.turn.id
+    watch = state.watch
+    # A call that waits ends only by its answer, so the harness's end is
+    # taken while one runs: it ends every one, and is read again where the
+    # loop waits on the harness, which ends the turn saying why.
+    waiting? = Enum.any?(running, fn {_ref, %{item: item}} -> waits?(item) end)
 
     receive do
       {ref, result} when is_map_key(running, ref) ->
@@ -1588,13 +1606,19 @@ defmodule Aqua.Loop do
         end
 
       {:moved, ^turn_id} ->
-        case answer_early(state, running) do
+        case answer_early(state, running, &early?(state, &1), &settle_early/2) do
           {:ok, running} ->
             state |> owe() |> collect(pending, running, cap)
 
           {:uncertain, step, why, running} ->
             {{:uncertain, step, why, Map.values(running) ++ pending_items(pending)}, owe(state)}
         end
+
+      {Aqua.Harness, ^turn_id, {:end, _finish}} = ended when waiting? ->
+        harness_gone(state, ended, pending, running, cap)
+
+      {:DOWN, ^watch, :process, _pid, _reason} = ended when waiting? ->
+        harness_gone(state, ended, pending, running, cap)
 
       {Aqua.Harness, ^turn_id, {kind, _} = event} when kind in @told ->
         state |> harness_event(event) |> collect(pending, running, cap)
@@ -1603,12 +1627,12 @@ defmodule Aqua.Loop do
 
   defp pending_items(pending), do: Enum.map(pending, &%{item: &1, task: nil})
 
-  # Each running call of a group that waits, answered early when a post
-  # waits (`early?/2`); the others run on.
-  defp answer_early(state, running) do
+  # Each running call of a group that `stop?` takes is stopped and its
+  # step settled by `settle`; the others run on.
+  defp answer_early(state, running, stop?, settle) do
     Enum.reduce_while(running, {:ok, running}, fn {ref, %{item: item, task: task}}, {:ok, left} ->
-      if early?(state, item) do
-        case early(state, task, item) do
+      if stop?.(item) do
+        case stopped(state, task, item, settle) do
           {:uncertain, step, why} -> {:halt, {:uncertain, step, why, Map.delete(left, ref)}}
           _answered -> {:cont, {:ok, Map.delete(left, ref)}}
         end
@@ -1616,6 +1640,22 @@ defmodule Aqua.Loop do
         {:cont, {:ok, left}}
       end
     end)
+  end
+
+  # The harness ended while calls that wait ran: each is stopped and its
+  # step closed once, as a call that did not finish, and the end is put
+  # back for the loop's wait on the harness (`harness_wait/1`), which ends
+  # the turn saying why once what else runs has answered.
+  defp harness_gone(state, ended, pending, running, cap) do
+    send(self(), ended)
+
+    case answer_early(state, running, &waits?/1, &settle_dead(&1, &2, "its session ended")) do
+      {:ok, running} ->
+        collect(state, pending, running, cap)
+
+      {:uncertain, step, why, running} ->
+        {{:uncertain, step, why, Map.values(running) ++ pending_items(pending)}, state}
+    end
   end
 
   # In a worker: the step is dispatched, run, and closed with what it
@@ -2509,9 +2549,16 @@ defmodule Aqua.Loop do
                 |> Tape.close_step(state.turn, step, "error", %{error: "not reproducible"})
                 |> settled(open)
 
+              # A call that runs a child runs a new one; any other, a
+              # catalog read among them, has none, so its charge has no
+              # admission deadline, as at its first dispatch.
               :replay ->
                 guest
-                |> Tape.next_generation(state.turn, step, Prima.UUID7.execution_id())
+                |> Tape.next_generation(
+                  state.turn,
+                  step,
+                  step.child_execution_id && Prima.UUID7.execution_id()
+                )
                 |> settled(open)
 
               :unknown ->
@@ -2642,43 +2689,122 @@ defmodule Aqua.Loop do
   defp steered?(%State{facts: %{supersedes?: false}}), do: false
   defp steered?(%State{} = state), do: Tape.steer_pending?(guest(state), state.turn)
 
-  # A post that waits answers a running call that waits (`waits: true`,
-  # `Aqua.Loop.Policy.waits?/1`) early, on every harness: the call has no
-  # effect to undo, and the turn reads the post at its next model round,
-  # a program's in the request that carries this answer. A call that does
-  # work is never answered early, whatever arrives.
-  defp early?(%State{} = state, %{call: {:ok, %Call{} = call}}),
-    do: Policy.waits?(call) and Tape.steer_pending?(guest(state), state.turn)
+  # A turn does not sit in a call that waits (`waits: true`,
+  # `Aqua.Loop.Policy.waits?/1`) while its model has a post it has not
+  # read, on either harness: one no step carried yet, or one a program
+  # was handed while one of its asks was open, which it reads only with
+  # its asks' results (P9), so it counts until every ask open then has
+  # answered. Such a call has no effect to undo and is answered early. A
+  # call that does work is never answered early, whatever arrives.
+  defp early?(%State{} = state, item),
+    do: waits?(item) and (Tape.steer_pending?(guest(state), state.turn) or unread_post?(state))
 
-  defp early?(_state, _item), do: false
+  defp waits?(%{call: {:ok, %Call{} = call}}), do: Policy.waits?(call)
+  defp waits?(_item), do: false
 
-  # The waiting call's worker is stopped, which stops the handler the gate
-  # runs for it however far it got (`Sanctum.RunningTasks` stops a
-  # handler with its claimer, and a cancel by handle could land before the
-  # claim and be lost), and its step answers the early answer. A worker
-  # that answered first keeps its answer; a step it had not dispatched is
-  # skipped, as a dead worker's is.
-  defp early(%State{} = state, task, item) do
-    case Aqua.Loop.Worker.shutdown(task) do
-      {:ok, answered} -> answered
-      {:exit, reason} -> settle_dead(state, item, reason)
-      nil -> settle_early(state, item)
+  # A post a program was handed while one of its asks was open, and that
+  # it has not read: since it was handed, in the order the turn's steps
+  # were made, the asks open have never all been answered (each answer
+  # handed over is an `answer` delivery, `Aqua.Harness.Program`), since a
+  # program reads a post only with the answers to every ask open then
+  # (P9). A post handed while none was open is read at its next request.
+  defp unread_post?(%State{} = state) do
+    case Tape.steps(guest(state), state.turn) do
+      {:ok, steps} ->
+        answering =
+          for %{result_message_id: result, id: id} = step <- steps,
+              ask?(state, step) and is_binary(result),
+              into: %{},
+              do: {result, id}
+
+        steps
+        |> Enum.reduce({MapSet.new(), false}, fn step, {open, unread?} ->
+          case step do
+            %{kind: "input", action: "answer", message_id: result} ->
+              open = MapSet.delete(open, Map.get(answering, result))
+              {open, unread? and MapSet.size(open) > 0}
+
+            %{kind: "input", action: "post"} ->
+              {open, unread? or MapSet.size(open) > 0}
+
+            step ->
+              if ask?(state, step),
+                do: {MapSet.put(open, step.id), unread?},
+                else: {open, unread?}
+          end
+        end)
+        |> elem(1)
+
+      {:error, _unread} ->
+        false
     end
   end
 
+  # A call asked in the turn, its harness's start apart.
+  defp ask?(state, %{kind: kind} = step),
+    do: kind not in ["model", "input"] and not admission?(state, step)
+
+  # A worker stopped by the loop, which stops the handler the gate runs
+  # for it however far it got (`Sanctum.RunningTasks` stops a handler with
+  # its claimer; a cancel by handle could land before the claim and be
+  # lost). The local slot comes back by its guard
+  # (`Sanctum.Authority.BudgetGuard`); the charge's row, which the
+  # worker's own release no longer gives back, is given back here. A
+  # worker that answered first keeps its answer, and gave its row back
+  # itself; any other step is settled by `settle`.
+  defp stopped(%State{} = state, task, item, settle) do
+    case Aqua.Loop.Worker.shutdown(task) do
+      {:ok, answered} ->
+        answered
+
+      _stopped_or_exited ->
+        give_back(state, item.step)
+        settle.(state, item)
+    end
+  end
+
+  defp give_back(%State{spec: spec} = state, step) do
+    %{id: id} = Binding.charge(step, state.turn)
+
+    _ =
+      Arca.BudgetReservations.release(
+        Sanctum.Context.actor(ctx(state)),
+        spec.authority.budget.id,
+        id
+      )
+
+    :ok
+  end
+
+  # The early answer, as its step's result: a step its worker dispatched
+  # is closed with it, its handler stopped; one it had not is answered as
+  # one not started, as a dead worker's is.
   defp settle_early(%State{} = state, %{step: step, call: call} = item) do
     case Tape.step(guest(state), step.id) do
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
         Aqua.Ops.cancel_call(handle(state, step))
         Aqua.Ops.release_call(handle(state, step))
-
-        case close(state, fresh, unwrap(call), {:ok, @early_answer}) do
-          {:ok, _closed} -> :ok
-          other -> {:uncertain, fresh, describe({:result_lost, other})}
-        end
+        early_close(state, fresh, call)
 
       _proposed_or_closed ->
         settle_dead(state, item, :cancelled)
+    end
+  end
+
+  # A call that waits answered early before any worker ran it: marked
+  # dispatched and closed with the early answer, nothing of it started.
+  defp answer_unstarted(%State{} = state, %{step: step, call: call}) do
+    case Tape.mark_dispatched(guest(state), state.turn, step) do
+      {:ok, step} -> early_close(state, step, call)
+      {:error, :not_proposed} -> :skipped
+      {:error, reason} -> {:uncertain, step, describe({:result_lost, reason})}
+    end
+  end
+
+  defp early_close(state, step, call) do
+    case close(state, step, unwrap(call), {:ok, @early_answer}) do
+      {:ok, _closed} -> :ok
+      other -> {:uncertain, step, describe({:result_lost, other})}
     end
   end
 
@@ -2815,22 +2941,9 @@ defmodule Aqua.Loop do
   # holder's death stops its workers (`Aqua.Loop.Worker`). What the turn's
   # harness tells of its work meanwhile (`harness_event/2`) is taken while
   # the call runs, and the state answered goes on with it.
-  # A call that waits is answered early by a post that waits when it
-  # starts or arrives while it runs (`early?/2`).
-  defp worker(%State{} = state, fun, item \\ nil) do
-    task = Aqua.Loop.Worker.async(fun)
+  defp worker(%State{} = state, fun), do: awaiting(state, Aqua.Loop.Worker.async(fun))
 
-    if early?(state, item),
-      do: answered_early(state, task, item),
-      else: awaiting(state, task, item)
-  end
-
-  # The thread moved for the post, so the harness is told: a program is
-  # written the answer and the post.
-  defp answered_early(%State{} = state, task, item),
-    do: {{:ok, early(state, task, item)}, owe(state)}
-
-  defp awaiting(%State{} = state, %Aqua.Loop.Worker.Handle{ref: ref} = task, item) do
+  defp awaiting(%State{} = state, %Aqua.Loop.Worker.Handle{ref: ref} = task) do
     turn_id = state.turn.id
 
     receive do
@@ -2842,12 +2955,10 @@ defmodule Aqua.Loop do
         {{:exit, reason}, state}
 
       {:moved, ^turn_id} ->
-        if early?(state, item),
-          do: answered_early(state, task, item),
-          else: state |> owe() |> awaiting(task, item)
+        state |> owe() |> awaiting(task)
 
       {Aqua.Harness, ^turn_id, {kind, _} = event} when kind in @told ->
-        state |> harness_event(event) |> awaiting(task, item)
+        state |> harness_event(event) |> awaiting(task)
     end
   end
 

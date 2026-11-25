@@ -47,6 +47,24 @@ defmodule Sanctum.Authority.BudgetGuard do
   end
 
   @doc """
+  Take one slot of `budget` for `pid` and guard it, in one call of this
+  process (`Sanctum.Authority.BudgetCounter.try_acquire/1`, then the
+  monitor): a holder that dies at any point after the call leaves no slot,
+  and one that dies before it took none. `{:error,
+  :invoke_budget_exhausted}` when no slot is free. A call that times out
+  answers exhausted, its slot, if the call lands, given back at the
+  holder's death; any other exit means the guard is gone, and the slot is
+  taken unguarded, as `guard/2` leaves it.
+  """
+  @spec acquire(Budget.t(), pid()) :: :ok | {:error, :invoke_budget_exhausted}
+  def acquire(%Budget{} = budget, pid) when is_pid(pid) do
+    GenServer.call(__MODULE__, {:acquire, budget, pid}, @call_timeout_ms)
+  catch
+    :exit, {:timeout, _} -> {:error, :invoke_budget_exhausted}
+    :exit, _ -> BudgetCounter.try_acquire(budget)
+  end
+
+  @doc """
   Move the guard on one slot of `budget` from `from` to `to`, which then
   holds the slot: it is released when `to` releases it or dies. Answers
   `:ok` when the slot moved, and `:released` when `from` holds no guard on
@@ -106,6 +124,13 @@ defmodule Sanctum.Authority.BudgetGuard do
   @impl true
   def handle_call({:guard, budget, pid}, _from, state) do
     {:reply, :ok, put_guard(state, budget, pid)}
+  end
+
+  def handle_call({:acquire, budget, pid}, _from, state) do
+    case BudgetCounter.try_acquire(budget) do
+      :ok -> {:reply, :ok, put_guard(state, budget, pid)}
+      exhausted -> {:reply, exhausted, state}
+    end
   end
 
   def handle_call({:handover, budget, from, to}, _from, state) do

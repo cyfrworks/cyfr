@@ -408,6 +408,7 @@ defmodule Compendium.Providers.Aqua do
           ],
           kind: :read,
           planes: [:in_chain],
+          consent: :interactive,
           recovery: :replay_safe,
           waits: true
         )
@@ -965,23 +966,48 @@ defmodule Compendium.Providers.Aqua do
 
   # --- wait ---
 
-  # Held in the gate's handler process until the time, which the gate
-  # bounds by nothing but the call's end (`waits: true`): the turn's end,
-  # a Stop, a lost lease or a post (`Aqua.Loop`) stop it.
-  def handle(_ctx, %{"action" => "wait", "until" => until}) when is_binary(until) do
-    case DateTime.from_iso8601(until) do
-      {:ok, due, _offset} ->
-        :ok = wait_until(due)
-        {:ok, %{until: DateTime.to_iso8601(due), now: DateTime.to_iso8601(DateTime.utc_now())}}
+  # A turn's own call, as `program.wait` is: the person's running turn,
+  # by the store's one rule (`Arca.TurnStorage.own_turn/3`), never a
+  # component's or a page's. Held in the gate's handler process until the
+  # time, which the gate bounds by nothing but the call's end
+  # (`waits: true`): the turn's end, a Stop, a lost lease or a post
+  # (`Aqua.Loop`) stop it.
+  def handle(%Context{} = ctx, %{"action" => "wait", "until" => until} = args)
+      when is_binary(until) do
+    with :ok <- waiting_turn(ctx, args) do
+      case DateTime.from_iso8601(until) do
+        {:ok, due, _offset} ->
+          :ok = wait_until(due)
+          {:ok, %{until: DateTime.to_iso8601(due), now: DateTime.to_iso8601(DateTime.utc_now())}}
 
-      {:error, _unparsed} ->
-        {:error,
-         {:invalid_argument,
-          "aqua.wait: until must be an ISO 8601 time with its offset, like 2026-11-26T09:00:00+01:00"}}
+        {:error, _unparsed} ->
+          {:error,
+           {:invalid_argument,
+            "aqua.wait: until must be an ISO 8601 time with its offset, like 2026-11-26T09:00:00+01:00"}}
+      end
     end
   end
 
   # --- helpers ---
+
+  defp waiting_turn(%Context{plane: :guest, user_id: user_id} = ctx, args)
+       when is_binary(user_id) do
+    case Arca.TurnStorage.own_turn(Sanctum.Context.actor(ctx), user_id, args) do
+      {:ok, %{status: "running"}} ->
+        :ok
+
+      {:ok, _not_running} ->
+        {:error, :wait_not_a_turn}
+
+      {:error, reason} when reason in [:by_page, :by_component, :not_open] ->
+        {:error, :wait_not_a_turn}
+
+      {:error, _unread} ->
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
+
+  defp waiting_turn(_ctx, _args), do: {:error, :wait_not_a_turn}
 
   # The longest one `receive ... after` holds; a longer wait is held in
   # steps, each measured again from the clock.

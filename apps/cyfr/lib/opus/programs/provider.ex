@@ -288,6 +288,9 @@ defmodule Opus.Programs.Provider do
   defp refused({:error, :ended}),
     do: {:error, {:invalid_argument, "The program is no longer running"}}
 
+  defp refused({:error, :still_running}),
+    do: {:error, {:invalid_argument, "The program is still running; wait on it again"}}
+
   defp refused({:error, reason}) when reason in [:disabled, :not_a_program],
     do: {:error, {:invalid_argument, "That program cannot be started"}}
 

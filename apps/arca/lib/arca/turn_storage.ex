@@ -5459,6 +5459,40 @@ defmodule Arca.TurnStorage do
   def open_turns(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   @doc """
+  The open turn a chain's call is the own call of, read from the lineage
+  the gate stamps on the call's arguments (`Sanctum.Dispatch` drops what a
+  guest sends under those names and writes its own): an open turn of the
+  lineage's thread (`thread_id`), in the actor's athanor, asked for by
+  `user_id`, whose root made the call itself (`parent_execution_id` is
+  `root_execution_id`). The one rule for which turn a call is the
+  person's own (`Opus.Programs`, `Opus.Schedules.Provider`, `aqua.wait`).
+  `{:error, :by_page}` for a page's call through a turn
+  (`called_by_page`), `{:error, :by_component}` for a call whose
+  parent is not its root or that names no turn, `{:error, :not_open}`
+  when no open turn of the thread is that one. Its status is the
+  caller's to read: a turn's own call is made while it runs.
+  """
+  @spec own_turn(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, :by_page | :by_component | :not_open | term()}
+  def own_turn(%Prima.Actor{}, _user_id, %{"called_by_page" => true}), do: {:error, :by_page}
+
+  def own_turn(%Prima.Actor{} = actor, user_id, %{
+        "thread_id" => thread_id,
+        "root_execution_id" => root,
+        "parent_execution_id" => root
+      })
+      when is_binary(user_id) and user_id != "" and is_binary(thread_id) and is_binary(root) do
+    with {:ok, turns} <- open_turns(actor, thread_id) do
+      case Enum.find(turns, &(&1.root_execution_id == root and &1.requested_by == user_id)) do
+        nil -> {:error, :not_open}
+        turn -> {:ok, turn}
+      end
+    end
+  end
+
+  def own_turn(%Prima.Actor{}, _user_id, _lineage), do: {:error, :by_component}
+
+  @doc """
   Every thread holding an open root turn, across all tenants, as
   `{athanor_id, thread_id}` pairs — the boot's recovery scan.
   `{:error, :unavailable}` when the database cannot answer, never an

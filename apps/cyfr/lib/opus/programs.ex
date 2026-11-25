@@ -397,7 +397,9 @@ defmodule Opus.Programs do
   """
   @spec turn(Sanctum.Context.t(), map()) :: caller()
   def turn(%Sanctum.Context{} = ctx, args) when is_map(args),
-    do: {:turn, ctx, Map.take(args, ~w(thread_id root_execution_id parent_execution_id))}
+    do:
+      {:turn, ctx,
+       Map.take(args, ~w(thread_id root_execution_id parent_execution_id called_by_page))}
 
   @doc """
   The person's browser as a caller: the owner of the session Aqua's
@@ -667,10 +669,12 @@ defmodule Opus.Programs do
   `read/3`, once the session has printed past `offset` and then printed
   nothing for half a second (`Opus.Programs.Terminal`), or its program
   has ended, or `ms` has passed, whichever comes first: with `:infinity`,
-  as long as that takes. A session of the caller's own whose process is
-  gone, its run lost with the holder at a restart of CYFR, answers
+  as long as that takes. A session of the caller's own with no process,
+  its run lost with the holder at a restart of CYFR, answers
   `{:error, :ended}`, read from what its id names (`Opus.Programs.Box`,
-  "A terminal's id"); any other `{:error, :not_found}`.
+  "A terminal's id"); any other `{:error, :not_found}`. A session whose
+  process lives but did not answer in time is still running:
+  `{:error, :still_running}`.
   """
   @spec wait(caller(), String.t(), non_neg_integer(), non_neg_integer() | :infinity) ::
           {:ok, transcript()} | {:error, term()}
@@ -679,10 +683,21 @@ defmodule Opus.Programs do
              ((is_integer(ms) and ms >= 0) or ms == :infinity) do
     timeout = if ms == :infinity, do: :infinity, else: ms + @answer_margin_ms + 5_000
 
-    case terminal_call(caller, session_id, &{:wait, &1, offset, ms}, timeout) do
-      {:error, :not_found} -> lost(caller, session_id)
-      answer -> answer
+    with {:ok, principal} <- who(caller) do
+      case terminal_pid(session_id, principal, :owner) do
+        nil -> lost(caller, session_id)
+        pid -> waited(pid, {:wait, principal, offset, ms}, timeout, caller, session_id)
+      end
     end
+  end
+
+  # A wait the process answers; one it did not answer in time still runs,
+  # and one whose process went meanwhile is read as gone.
+  defp waited(pid, message, timeout, caller, session_id) do
+    GenServer.call(pid, message, timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :still_running}
+    :exit, _gone -> lost(caller, session_id)
   end
 
   # A session with no process to answer: ended, when its id names one of
@@ -911,28 +926,22 @@ defmodule Opus.Programs do
   # running again is a stranger to its own sessions: they stay and go on
   # printing, and it uses them once it runs. The lineage is the gate's
   # (`Sanctum.Dispatch` drops what a guest sends under its names and stamps
-  # its own). Anything else is a stranger.
-  defp turn_of(%Sanctum.Context{plane: :guest, authenticated: true} = ctx, %{
-         "thread_id" => thread_id,
-         "root_execution_id" => root,
-         "parent_execution_id" => root
-       })
-       when is_binary(thread_id) and is_binary(root) and is_binary(ctx.athanor_id) and
-              ctx.athanor_id != "" and is_binary(ctx.user_id) and ctx.user_id != "" do
+  # its own), and which turn is the person's own is the store's one rule
+  # (`Arca.TurnStorage.own_turn/3`): a page's call through the turn and a
+  # component's are none. Anything else is a stranger.
+  defp turn_of(%Sanctum.Context{plane: :guest, authenticated: true} = ctx, lineage)
+       when is_binary(ctx.athanor_id) and ctx.athanor_id != "" and is_binary(ctx.user_id) and
+              ctx.user_id != "" do
     %{athanor_id: athanor_id, user_id: user_id} = ctx
 
     with {:ok, :interactive} <- Sanctum.Consent.authorize_interactive_in_chain(ctx),
          {:ok, true} <- stands(athanor_id, user_id),
-         {:ok, turns} <- Arca.TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread_id) do
-      case Enum.find(
-             turns,
-             &(&1.status == "running" and &1.root_execution_id == root and
-                 &1.requested_by == user_id)
-           ) do
-        %{id: turn_id} -> {:ok, {athanor_id, user_id, turn_id}}
-        nil -> {:ok, :stranger}
-      end
+         {:ok, %{status: "running", id: turn_id}} <-
+           Arca.TurnStorage.own_turn(Sanctum.Context.actor(ctx), user_id, lineage) do
+      {:ok, {athanor_id, user_id, turn_id}}
     else
+      {:ok, %{status: _not_running}} -> {:ok, :stranger}
+      {:error, reason} when reason in [:by_page, :by_component, :not_open] -> {:ok, :stranger}
       {:error, {:surface_not_permitted, _method}} -> {:ok, :stranger}
       {:error, :not_authenticated} -> {:ok, :stranger}
       {:ok, false} -> {:error, :not_standing}

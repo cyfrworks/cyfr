@@ -242,6 +242,7 @@ defmodule Prima.RefusalTest do
     {:schedule_turn_not_yours, :forbidden},
     {:schedule_by_page, :forbidden},
     {:schedule_turn_ended, :conflict},
+    {:wait_not_a_turn, :forbidden},
     {:schedule_changed, :conflict},
     {:no_agent, :setup_required},
     {:execution_unavailable, :unavailable},

@@ -704,6 +704,25 @@ defmodule Opus.Programs.TurnSessionTest do
       assert {:ok, %{output: "done\n", running: true}} = Task.await(wait, 5_000)
     end
 
+    test "a wait its live terminal did not answer in time says the program is still running",
+         %{ctx: ctx, row: row, lineage: lineage} do
+      {id, _open, _answer} = start!(ctx, lineage, row)
+      pid = terminal(id)
+      :ok = :sys.suspend(pid)
+
+      answer =
+        try do
+          call(ctx, lineage, "wait", %{"session" => id, "ms" => 0})
+        after
+          :sys.resume(pid)
+        end
+
+      assert answer ==
+               {:error, {:invalid_argument, "The program is still running; wait on it again"}}
+
+      assert {:ok, %{running: true}} = call(ctx, lineage, "read", %{"session" => id})
+    end
+
     test "a wait on a session of the turn's whose process is gone answers that it ended",
          %{ctx: ctx, row: row, lineage: lineage} do
       {id, _open, _answer} = start!(ctx, lineage, row)

@@ -84,7 +84,9 @@ defmodule Sanctum.Gate.WaitingCallTest do
             "batch_timeout" => "1m"
           },
           "edges" => %{
-            "@ingress" => %{"tools" => ["waiting_probe.hold", "waiting_probe.work"]}
+            "@ingress" => %{
+              "tools" => ["aqua.wait", "waiting_probe.hold", "waiting_probe.work"]
+            }
           }
         }
       }
@@ -158,6 +160,61 @@ defmodule Sanctum.Gate.WaitingCallTest do
     Prima.Test.Wait.wait_until(
       fn -> System.monotonic_time(:millisecond) - since > 2 * @window_ms end,
       10_000
+    )
+  end
+
+  test "a formula's call, which no turn of a person's made, is refused a wait", setup do
+    assert {:error, reason} =
+             Sanctum.Gate.call_in_chain(
+               "aqua",
+               setup.ctx,
+               %{"action" => "wait", "until" => "2000-01-01T00:00:00Z"},
+               setup.auth,
+               guest_fn: :spawn,
+               charge: setup.charge,
+               lineage: setup.lineage
+             )
+
+    assert %Prima.Refusal{class: :forbidden} = Sanctum.Refusals.classify(reason)
+    assert {:ok, []} = Arca.BudgetReservations.charges(actor(), setup.auth.budget.id)
+    assert Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 0
+  end
+
+  # A waiter stopped inside the charge's transaction, once its slot is
+  # taken: the slot was guarded as it was taken, so its death gives it back.
+  test "a waiter stopped inside its charge leaves no slot taken", setup do
+    test = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if meta.source == "budget_charges" and meta.query =~ "INSERT" and
+               test in List.wrap(Process.get(:"$callers")) do
+            send(test, {:at_charge, self()})
+
+            receive do
+              :release -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    task = call(setup, "hold")
+    pid = task.pid
+    assert_receive {:at_charge, ^pid}, 10_000
+    assert Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 1
+    Task.shutdown(task, :brutal_kill)
+
+    Prima.Test.Wait.wait_until(
+      fn -> Sanctum.TestContext.invoke_budget(setup.auth).in_flight == 0 end,
+      5_000
     )
   end
 
