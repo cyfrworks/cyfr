@@ -1187,7 +1187,7 @@ func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup
 	// The press says what the page shows: the time since the last lock,
 	// the pick and the setup there, as the state answered them; main
 	// answers the pick the page asked for.
-	raw, _ := json.Marshal(map[string]any{"token": svc.Token})
+	raw, _ := json.Marshal(map[string]any{})
 	var shown struct {
 		Epoch, Picks uint64
 		Folder       string
@@ -1195,7 +1195,7 @@ func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup
 	}
 	read := func() {
 		t.Helper()
-		if w := pressed(svc, "/bootstrap/state", "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil {
+		if w := chosen(svc, svc.Token, "/bootstrap/state", "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil {
 			t.Fatalf("/bootstrap/state answered %d %s", w.Code, w.Body)
 		}
 	}
@@ -1204,7 +1204,7 @@ func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup
 	if read(); shown.Folder != folder {
 		t.Fatalf("the chooser shows %s, not the folder picked %s", shown.Folder, folder)
 	}
-	press := map[string]any{"token": svc.Token, "epoch": shown.Epoch, "picks": shown.Picks}
+	press := map[string]any{"epoch": shown.Epoch, "picks": shown.Picks}
 	if shown.Setup != nil {
 		press["run"] = shown.Setup.Run
 	}
@@ -1214,7 +1214,7 @@ func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup
 			Setup *appSetup
 			Error string
 		}
-		if w := pressed(svc, path, "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Setup == nil {
+		if w := chosen(svc, svc.Token, path, "application/json", string(raw)); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Setup == nil {
 			t.Fatalf("%s answered %d %s", path, w.Code, w.Body)
 		}
 		return *got.Setup
@@ -1224,7 +1224,7 @@ func setUpFromTheApp(t *testing.T, svc *desktop.Service, folder string) appSetup
 		t.Fatalf("Set up and start set up %q, not the folder picked %q", s.Folder, folder)
 	}
 	for !s.Done && s.Error == "" {
-		s = ask("/bootstrap/setup", map[string]any{"token": svc.Token, "seen": s.Seq})
+		s = ask("/bootstrap/setup", map[string]any{"seen": s.Seq})
 	}
 	return s
 }

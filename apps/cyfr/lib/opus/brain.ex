@@ -168,9 +168,15 @@ defmodule Opus.Brain do
   (`:dropped`), on a line that does
   not read or past a bound (`:unreadable`, `:too_large`), on its row's
   change (`:row_changed`, `Opus.Programs.end_mounts/2` or the box telling
-  it to stand down), when the driver's process ends (`:exited`), when the
-  service could not be read for a minute (`:unavailable`), and after a
-  write whose answer did not come (`:interrupted`). Its attendant's exit
+  it to stand down), when the driver's process ends (`:exited`, or
+  `{:exited, why}` when its last line, an `ending`, said why: one of
+  `Opus.Brain.Wire.endings/0` as an atom, the driver's own finding), when
+  the service it ran on started again (`:restarted`: a read refused for a
+  stale boot, or the box syncing the owner again under another boot; a
+  sync under the same boot leaves the session going on under the new
+  grant), when the service could
+  not be read for a minute (`:unavailable`), and after a write whose
+  answer did not come (`:interrupted`). Its attendant's exit
   ends it too. However it ends, killed included, the box closes its
   process's lifetime (`Opus.Programs.box_open/4`), and on its way out it
   asks so itself.
@@ -226,6 +232,9 @@ defmodule Opus.Brain do
   # The refusals of a session route that say the session is not on the
   # service any more.
   @gone [:unknown_session, :stale_boot, :epoch_ahead, :unknown_owner, :lapsed]
+  # A driver's `ending`, by the atom its end names (`{:exited, why}`): the
+  # wire's fixed list, so no line makes an atom.
+  @endings Map.new(Wire.endings(), &{&1, String.to_atom(&1)})
   # What a send's failure says of its line: these may follow its writing.
   @uncertain [:backends_unavailable]
 
@@ -739,6 +748,12 @@ defmodule Opus.Brain do
     end
   end
 
+  # A one command's driver that ends says why first: its end answers it.
+  defp exchanged(state, seq, %{"t" => "ending"}) do
+    send(state.reader, {:go, seq})
+    {:noreply, %{state | after: seq}}
+  end
+
   defp exchanged(%{once: %{command: command}} = state, _seq, event) do
     result = answer(event, command)
     with {:ok, answered} <- result, do: learn(state.owner, answered)
@@ -955,7 +970,8 @@ defmodule Opus.Brain do
        generation: nil,
        hold_asked: false,
        until: nil,
-       once: nil
+       once: nil,
+       ending: nil
      }}
   end
 
@@ -1114,7 +1130,8 @@ defmodule Opus.Brain do
   def handle_info({:read_failed, reader, reason}, %{reader: reader} = state) do
     reason =
       case reason do
-        {:refused, code, _boot} when code in @gone -> :exited
+        {:refused, :stale_boot, _boot} -> :restarted
+        {:refused, code, _boot} when code in @gone -> exited(state)
         _unanswered -> :unavailable
       end
 
@@ -1139,10 +1156,17 @@ defmodule Opus.Brain do
   def handle_info({Opus.Programs, :stand_down, _key}, state),
     do: {:stop, :normal, ended(state, :row_changed)}
 
-  # A new grant means the box synced the owner again: the service the
-  # session ran on is not the one it runs on now.
+  # A new grant means the box synced the owner again. Under the boot the
+  # session was held under, the service kept it, the athanor's ceiling
+  # alone having moved, say: it goes on under the new grant, its reader
+  # too. Under another, the service the session ran on started again.
+  def handle_info({Opus.Programs, :owner, %{boot: boot} = grant}, %{grant: %{boot: boot}} = state) do
+    if state.reader, do: send(state.reader, {:grant, grant})
+    {:noreply, %{state | grant: grant}}
+  end
+
   def handle_info({Opus.Programs, :owner, _grant}, state),
-    do: {:stop, :normal, ended(state, :exited)}
+    do: {:stop, :normal, ended(state, :restarted)}
 
   def handle_info({:EXIT, reader, _reason}, %{reader: reader} = state),
     do: {:stop, :normal, ended(state, :unavailable)}
@@ -1310,6 +1334,15 @@ defmodule Opus.Brain do
     %{state | reader: reader}
   end
 
+  # The reader waits for the holder's word to read on, under the grant the
+  # holder holds now.
+  defp await_go(holder, grant, session) do
+    receive do
+      {:grant, grant} -> await_go(holder, grant, session)
+      {:go, after_seq} -> reader(holder, grant, session, after_seq, 0)
+    end
+  end
+
   # The reader: one read at a time, each past the last line the attendant
   # took, so a lost answer is read again by the same `after`, and the next
   # only once the holder says. A service that does not answer is asked
@@ -1318,10 +1351,7 @@ defmodule Opus.Brain do
     case Session.recv(grant, session, after_seq, @recv_wait_ms) do
       {:ok, answer} ->
         send(holder, {:read, self(), answer})
-
-        receive do
-          {:go, after_seq} -> reader(holder, grant, session, after_seq, 0)
-        end
+        await_go(holder, grant, session)
 
       {:error, {:refused, _code, _boot} = refused} ->
         send(holder, {:read_failed, self(), refused})
@@ -1338,10 +1368,19 @@ defmodule Opus.Brain do
   # ---------------------------------------------------------------------------
   # Lines
 
+  # A driver's `ending` is its last line: what it writes after one is
+  # read past and acted on in nothing, until its process ends.
+  defp lines(%{ending: why} = state, %{lines: [_ | _] = lines}) when why != nil do
+    last = List.last(lines).seq
+    send(state.reader, {:go, last})
+    {:noreply, %{state | after: last}}
+  end
+
   defp lines(state, %{dropped: dropped}) when dropped > 0,
     do: {:stop, :normal, ended(state, :dropped)}
 
-  defp lines(state, %{lines: [], running: false}), do: {:stop, :normal, ended(state, :exited)}
+  defp lines(state, %{lines: [], running: false}),
+    do: {:stop, :normal, ended(state, exited(state))}
 
   # Nothing came within the wait: read on from the same place.
   defp lines(state, %{lines: []}) do
@@ -1375,7 +1414,10 @@ defmodule Opus.Brain do
   defp decode([%{seq: seq, text: text} | rest], state, events) do
     with {:ok, event} <- Wire.decode(text),
          {:ok, applied} <- apply_event(state, seq, event) do
-      decode(rest, applied, [{seq, event} | events])
+      # Nothing after an `ending` is read: the batch ends there.
+      if event["t"] == "ending",
+        do: {:ok, Enum.reverse([{seq, event} | events]), applied},
+        else: decode(rest, applied, [{seq, event} | events])
     else
       {:error, :too_large} -> {:error, :too_large, state}
       {:error, _unreadable_or_unknown} -> {:error, :unreadable, state}
@@ -1421,6 +1463,10 @@ defmodule Opus.Brain do
     do: {:ok, %{state | outstanding: nil}}
 
   defp answered(_state, %{"t" => "later"}), do: {:error, :unreadable}
+
+  # The driver's last line says why it ends, which its end names.
+  defp answered(state, %{"t" => "ending", "why" => why}),
+    do: {:ok, %{state | ending: Map.fetch!(@endings, why)}}
 
   defp answered(state, %{"t" => "ask", "ask" => ask} = event),
     do: {:ok, %{state | asks: Map.put(state.asks, ask, Map.get(event, "work"))}}
@@ -1499,13 +1545,16 @@ defmodule Opus.Brain do
       {:ok, :ended} ->
         {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)}
 
+      {:error, {:refused, :stale_boot, _boot}} ->
+        {:stop, :normal, {:error, :ended}, ended(state, :restarted)}
+
       {:error, {:refused, code, _boot}} when code in @gone ->
-        {:stop, :normal, {:error, :ended}, ended(state, :exited)}
+        {:stop, :normal, {:error, :ended}, ended(state, exited(state))}
 
       {:error, reason} ->
         if uncertain?(reason),
           do: {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)},
-          else: {:stop, :normal, {:error, :not_written}, ended(state, :exited)}
+          else: {:stop, :normal, {:error, :not_written}, ended(state, exited(state))}
     end
   end
 
@@ -1528,6 +1577,10 @@ defmodule Opus.Brain do
     do: %{state | outstanding: {"answer", id}, asks: Map.delete(state.asks, ask)}
 
   defp written(state, %{"t" => t, "id" => id}), do: %{state | outstanding: {t, id}}
+
+  # The driver's process ended: why, when its `ending` said.
+  defp exited(%{ending: nil}), do: :exited
+  defp exited(%{ending: why}), do: {:exited, why}
 
   # The attendant is told once how the session ended.
   defp ended(%{attendant: pid} = state, reason) when is_pid(pid) do

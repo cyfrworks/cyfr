@@ -117,9 +117,9 @@ that fails. The proof has 29 rows over three launches of the app (`run.sh`): `co
 | `opened_again` | that chooser's way on shows the device's unlocked page, and Open CYFR there opens Prism with no passphrase asked | exactly that one page on the way, unlocked; Prism connected |
 | `offline_lock` | with the CYFR unreachable, Prism's Lock still closes Prism at once and goes on to the locked device's page | the front taking `down`; the content closed before anything is awaited; nothing told and the passphrase asked; no sign-out; the cookie refused, looked for from the press on and seen within one minute of it |
 | `process_loss` | `cyfr` killed while Prism holds a session: the app closes its content for good and tells the person, and the session ends with the device's channel | the app's message, saying nothing of a sign-out; none posted; the cookie opening a page before and refused, looked for from the kill on and seen within one minute of it (`bound.mjs`) |
-| `remembered` | launched again, the CYFR's approved account service is not asked about again | the device's pages, with no question |
+| `remembered` | launched again, the app opens the CYFR selected last by itself, and its approved account service is not asked about again | the device's pages, with no press and no question |
 | `asks_again` | launched again, this road keeps no sign-in | the device's page asking for the passphrase, and no cookie |
-| `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
+| `directory_changed` | a CYFR that names another account service than the one approved is asked about afresh, at a Connect after the rail's Connect left the CYFR reopened | the question, with the front standing in for a CYFR reconfigured (fault `directory`) |
 | `approval_ended` | that earlier approval has ended: named again, the first account service is asked about again, and nothing of the app reaches it | the question; the front of `dir.test` |
 
 After `renderer_killed` the proof crashes Prism's page the engine's own
@@ -277,7 +277,7 @@ being erased; `resumed`, ended by the system.
 | `a_socket_first` | A's live socket is closed at A's server before the app's first request reaches B | A's front: each upgrade open at the press and when it closed; B's front: the app's first request after the press |
 | `apart` | each CYFR's store holds its own alone; B's pages, at A's account service's origin, carry nothing A's ceremonies keep there, and A's front sees nothing of B's | each store's cookies by name and site and its local storage at both origins; the cookie names each front saw on the app's requests |
 | `a_again` | A on the rail opens A again under the session it had, asking nothing | the session cookie's digest and expiry before and after; A's store |
-| `read_only` | the rail's page keeps its read credential alone, in no address, and `cyfr` refuses it every change | the rail's own requests with that credential, each 403; its session storage's keys; its address |
+| `read_only` | the rail's page keeps its read credential alone, in no address, and `cyfr` refuses it every change | the rail's own requests with that credential, each 403 where the run token goes (the chooser's header) and each 400 in a body, where cyfr reads none; its session storage's keys; its address |
 | `sign_out_alone` | Sign out at A ends A's session alone | A's cookie refused; B's still opening B |
 | `kill_selecting` | killed while B is being selected, A left, the app opens A again by itself; both stay signed in | the view and store; each store's session against the first launch's mark, and each opening its CYFR; the rail |
 | `forget_resumed` | Forget of B, killed while B's store is erased, is finished at the next start; A is as it was | B's content and ceremony stores empty; A's marks and session; the rail without B |

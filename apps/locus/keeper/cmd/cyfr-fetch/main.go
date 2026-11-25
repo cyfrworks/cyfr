@@ -7,10 +7,13 @@
 // own folder, fetching it there first, pinned and checksummed, when it is
 // not there yet. A program row's command names it after its driver word:
 //
-//	cyfr-fetch NAME VERSION ARCH=URL#SHA512… [--] [ARG…]
+//	cyfr-fetch NAME VERSION [--tree=ENTRY] ARCH=URL#SHA512… [--] [ARG…]
 //
 // NAME is a plain file name (`[a-z0-9][a-z0-9._-]*`, at most 64
-// characters) and VERSION likewise (`[0-9A-Za-z][0-9A-Za-z._-]*`). Each
+// characters) and VERSION likewise (`[0-9A-Za-z][0-9A-Za-z._-]*`). ENTRY,
+// given for a program that is a tree of files, is the way down to the file
+// that runs it inside the archive's one top folder: plain names
+// (`[A-Za-z0-9][A-Za-z0-9._-]*`) joined by `/`, at most 255 characters. Each
 // ARCH is a Go GOARCH name, given at most once, with an https URL and the
 // download's SHA-512 as 128 hex digits of either case. The pairs end at
 // `--` or at the first argument that is not of the form ARCH=…; the
@@ -19,7 +22,8 @@
 // architecture.
 //
 // The program lives at
-// $HOME/.local/share/cyfr/programs/NAME/VERSION-SHA512/NAME: the version
+// $HOME/.local/share/cyfr/programs/NAME/VERSION-SHA512/NAME, or, a tree's,
+// in the folder of that name, run by its ENTRY: the version
 // folder is named by the version and the download's whole SHA-512, so a
 // row whose checksum changes names another folder, and its program is
 // fetched and checked anew. The whole hash and not a prefix of it, so the
@@ -41,7 +45,27 @@
 // entry, a regular file of any name, which is the program; any other URL's
 // download is the program itself. A program larger than 1 GiB is refused.
 // The program is written 0755 under a temporary name in the version folder
-// and renamed into place, so the folder only ever holds it whole.
+// and renamed into place, so the folder only ever holds it whole. What an
+// interrupted run left beside an installed program, its download or a
+// tree's staging, is removed under the lock by the next run.
+//
+// With --tree the URL's path must end in .tar.gz or .tgz, and the archive,
+// once its checksum matched, is unpacked whole into a temporary folder of
+// the version folder, opened by name through internal/homepath at every
+// step, then renamed into place as the folder NAME, so the version folder
+// only ever holds the tree whole. Every entry must lie under one top
+// folder, which the unpacked tree stands for: a name that is absolute,
+// that holds `..` or `.` or an empty step, or that names another top
+// folder is refused, as is every link, inside the tree or out, a hard
+// link, a device and every other entry that is no folder or regular file.
+// A file is written 0700 when its archive mode lets anyone run it, else
+// 0600, and every folder 0700; a name given twice, a folder's too, is
+// refused. The tree may hold at most 1 GiB of files in at most 100,000
+// entries, each folder or file made counting once, the folders a name
+// implies among them, and ENTRY must be a regular executable file in it;
+// anything else installs nothing. The
+// installed tree is run by ENTRY only once each folder on its way, and
+// ENTRY itself, is no link.
 //
 // The pin proves the download: the bytes fetched were the release its
 // checksum names when they were installed. It proves nothing of the file
@@ -73,6 +97,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -83,30 +108,34 @@ import (
 const (
 	maxDownload  = 2 << 30
 	maxProgram   = 1 << 30
+	maxEntries   = 100_000
 	fetchTimeout = 10 * time.Minute
 	// tempPrefix begins every temporary file's name in a version folder;
 	// a NAME begins with a letter or digit, so never with it.
 	tempPrefix = ".fetch-"
 )
 
-const usage = "usage: cyfr-fetch NAME VERSION ARCH=URL#SHA512... [--] [ARG...]"
+const usage = "usage: cyfr-fetch NAME VERSION [--tree=ENTRY] ARCH=URL#SHA512... [--] [ARG...]"
 
 var (
 	namePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	versionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$`)
 	pairPattern    = regexp.MustCompile(`^[a-z0-9]+=`)
 	sumPattern     = regexp.MustCompile(`^[0-9A-Fa-f]{128}$`)
+	entryPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
 )
 
 // usageError is an error in the command's arguments.
 type usageError struct{ error }
 
 // program is what a run names: the program, the download for this
-// machine's architecture with its SHA-512 in lowercase hex, and the
-// program's own arguments.
+// machine's architecture with its SHA-512 in lowercase hex, the way down a
+// tree's archive to the file that runs it (none for a program of one
+// file), and the program's own arguments.
 type program struct {
 	name, version string
 	url, sum      string
+	entry         string
 	args          []string
 }
 
@@ -122,7 +151,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cyfr-fetch: no home folder to install into:", err)
 		os.Exit(1)
 	}
-	f := fetcher{client: &http.Client{}, notice: os.Stderr, maxDownload: maxDownload, maxProgram: maxProgram}
+	f := fetcher{client: &http.Client{}, notice: os.Stderr, maxDownload: maxDownload, maxProgram: maxProgram, maxEntries: maxEntries}
 	path, err := f.install(home, p)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cyfr-fetch:", err)
@@ -151,6 +180,12 @@ func parse(args []string, arch string) (program, error) {
 	type pin struct{ url, sum string }
 	pins := map[string]pin{}
 	rest := args[2:]
+	if entry, ok := strings.CutPrefix(rest[0], "--tree="); ok {
+		if len(entry) > 255 || !entryPattern.MatchString(entry) {
+			return program{}, usageError{fmt.Errorf("%q is no way down a tree: plain names joined by /, at most 255 characters", entry)}
+		}
+		p.entry, rest = entry, rest[1:]
+	}
 	for i, arg := range rest {
 		if arg == "--" {
 			p.args = rest[i+1:]
@@ -186,6 +221,9 @@ func parse(args []string, arch string) (program, error) {
 		return program{}, usageError{fmt.Errorf("%s %s has no download for this machine's architecture, %s", p.name, p.version, arch)}
 	}
 	p.url, p.sum = chosen.url, chosen.sum
+	if u, _ := url.Parse(p.url); p.entry != "" && !archived(u) {
+		return program{}, usageError{fmt.Errorf("a tree is fetched from a .tar.gz or .tgz archive, which %q is not", p.url)}
+	}
 	return p, nil
 }
 
@@ -196,6 +234,8 @@ type fetcher struct {
 	notice      io.Writer
 	maxDownload int64
 	maxProgram  int64
+	// maxEntries bounds a tree's archive.
+	maxEntries int
 }
 
 // install is the path of p's program in home, fetched there first when it
@@ -225,9 +265,13 @@ func (f fetcher) install(home string, p program) (string, error) {
 	}
 	defer dir.Close()
 	path := filepath.Join(dir.Path(), p.name)
+	if p.entry != "" {
+		path = filepath.Join(path, filepath.FromSlash(p.entry))
+	}
 	if ok, err := installed(dir, p, shown); err != nil {
 		return "", err
 	} else if ok {
+		leftovers(dir)
 		return path, nil
 	}
 	// The lock makes the sweep below safe: every temporary file in the
@@ -238,6 +282,10 @@ func (f fetcher) install(home string, p program) (string, error) {
 	if ok, err := installed(dir, p, shown); err != nil {
 		return "", err
 	} else if ok {
+		// Another run installed it while this one waited: what that run
+		// left beside it, interrupted after its rename, is swept by
+		// whoever holds the lock.
+		_ = sweep(dir)
 		return path, nil
 	}
 	if err := sweep(dir); err != nil {
@@ -249,8 +297,19 @@ func (f fetcher) install(home string, p program) (string, error) {
 		return "", err
 	}
 	defer dir.Remove(download)
+	if p.entry != "" {
+		staged, err := f.extractTree(dir, download, p)
+		if err != nil {
+			return "", err
+		}
+		defer dir.RemoveAll(staged)
+		if err := dir.Rename(staged, p.name); err != nil {
+			return "", fmt.Errorf("%s %s cannot be put in place: %w", p.name, p.version, err)
+		}
+		return path, nil
+	}
 	staged := download
-	if u, _ := url.Parse(p.url); strings.HasSuffix(u.Path, ".tar.gz") || strings.HasSuffix(u.Path, ".tgz") {
+	if u, _ := url.Parse(p.url); archived(u) {
 		if staged, err = f.extract(dir, download, p); err != nil {
 			return "", err
 		}
@@ -275,6 +334,11 @@ func (f fetcher) install(home string, p program) (string, error) {
 	return path, nil
 }
 
+// archived says the URL names a .tar.gz archive.
+func archived(u *url.URL) bool {
+	return u != nil && (strings.HasSuffix(u.Path, ".tar.gz") || strings.HasSuffix(u.Path, ".tgz"))
+}
+
 // reason is what a folder on the way is, in the command's words.
 func reason(err error) error {
 	if homepath.Refused(err) {
@@ -284,7 +348,8 @@ func reason(err error) error {
 }
 
 // installed is true when p's program is in place in dir, a regular
-// executable file, and false when nothing is there; anything else there is
+// executable file, or a tree whose entry is one, every folder on its way
+// no link, and false when nothing is there; anything else there is
 // refused. shown is its folder as the person reads it.
 func installed(dir *homepath.Dir, p program, shown string) (bool, error) {
 	info, err := dir.Lstat(p.name)
@@ -293,10 +358,70 @@ func installed(dir *homepath.Dir, p program, shown string) (bool, error) {
 		return false, nil
 	case err != nil:
 		return false, err
-	case info.Mode.IsRegular() && info.Mode.Perm()&0o111 != 0:
+	case p.entry == "" && info.Mode.IsRegular() && info.Mode.Perm()&0o111 != 0:
 		return true, nil
+	case p.entry != "" && info.Mode.IsDir():
+		if runnable(dir, p.name+"/"+p.entry) {
+			return true, nil
+		}
+		return false, fmt.Errorf("the installed %s %s (%s/%s) has no executable %s that is no link, so it is not run", p.name, p.version, shown, p.name, p.entry)
 	}
 	return false, fmt.Errorf("the installed %s %s (%s/%s) is a link or not an executable file, so it is not run", p.name, p.version, shown, p.name)
+}
+
+// runnable says the way `rel` down dir is a regular executable file of
+// this user's own, every folder on its way opened by name and no link.
+func runnable(dir *homepath.Dir, rel string) bool {
+	steps := strings.Split(rel, "/")
+	ok := false
+	_ = within(dir, steps[:len(steps)-1], false, func(parent *homepath.Dir) error {
+		info, err := parent.Lstat(steps[len(steps)-1])
+		ok = err == nil && info.Mode.IsRegular() && info.Mode.Perm()&0o111 != 0 && info.Uid == uint32(os.Getuid())
+		return nil
+	})
+	return ok
+}
+
+// within runs `in` on the folder `steps` down from dir, each step opened by
+// its name in the last as homepath's Folder does, a missing one made when
+// create is set, and closes every folder it opened.
+func within(dir *homepath.Dir, steps []string, create bool, in func(*homepath.Dir) error) error {
+	at := dir
+	for _, step := range steps {
+		next, err := at.Folder(step, create)
+		if at != dir {
+			at.Close()
+		}
+		if err != nil {
+			return err
+		}
+		at = next
+	}
+	if at != dir {
+		defer at.Close()
+	}
+	return in(at)
+}
+
+// leftovers sweeps, under the folder's lock, what a run interrupted after
+// its install left beside the installed program (its download, a tree's
+// staging), so nothing of a download outlives its install. It is run only
+// when the folder holds such a name; one that cannot be removed is left to
+// the next run, and the installed program runs all the same.
+func leftovers(dir *homepath.Dir) {
+	names, err := dir.Names()
+	if err != nil {
+		return
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, tempPrefix) {
+			if syscall.Flock(int(dir.Fd()), syscall.LOCK_EX) == nil {
+				_ = sweep(dir)
+				_ = syscall.Flock(int(dir.Fd()), syscall.LOCK_UN)
+			}
+			return
+		}
+	}
 }
 
 // sweep removes the temporary files an interrupted run left in dir.
@@ -307,7 +432,8 @@ func sweep(dir *homepath.Dir) error {
 	}
 	for _, name := range names {
 		if strings.HasPrefix(name, tempPrefix) {
-			if err := dir.Remove(name); err != nil && !homepath.Absent(err) {
+			// A tree's temporary folder, with all it holds, or a file.
+			if err := dir.RemoveAll(name); err != nil && !homepath.Absent(err) {
 				return err
 			}
 		}
@@ -429,4 +555,156 @@ func (f fetcher) extract(dir *homepath.Dir, archive string, p program) (string, 
 	}
 	kept = true
 	return name, nil
+}
+
+// extractTree is a temporary folder in dir, by its name, holding the tree
+// under the one top folder of the tar.gz archive named archive there, with
+// the entry p names a regular executable file in it.
+func (f fetcher) extractTree(dir *homepath.Dir, archive string, p program) (string, error) {
+	in, err := dir.Open(archive, os.O_RDONLY, 0)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	refused := func(why string) error {
+		return fmt.Errorf("the download of %s %s %s, so nothing was installed", p.name, p.version, why)
+	}
+	gz, err := gzip.NewReader(in)
+	if err != nil {
+		return "", refused("is no gzip archive")
+	}
+	name := tempPrefix + "tree-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	root, err := dir.Folder(name, true)
+	if err != nil {
+		return "", err
+	}
+	kept := false
+	defer func() {
+		root.Close()
+		if !kept {
+			_ = dir.RemoveAll(name)
+		}
+	}()
+	tr := tar.NewReader(gz)
+	top := ""
+	var total int64
+	// made are the ways down the tree made so far, each once: every one
+	// counts against the entry bound, the folders a header's name implies
+	// among them; named are the ways the headers gave, each at most once.
+	made, named := map[string]bool{}, map[string]bool{}
+	count := func(way string) bool {
+		if !made[way] {
+			if len(made) >= f.maxEntries {
+				return false
+			}
+			made[way] = true
+		}
+		return true
+	}
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", refused("does not read as a tar archive")
+		}
+		steps, ok := treeSteps(header.Name)
+		switch {
+		case !ok:
+			return "", refused(fmt.Sprintf("holds %q, a name that is absolute or leaves its folder", header.Name))
+		case top == "":
+			top = steps[0]
+		case steps[0] != top:
+			return "", refused("holds more than one top folder")
+		}
+		rel := steps[1:]
+		way := strings.Join(rel, "/")
+		if named[way] {
+			return "", refused(fmt.Sprintf("names %q twice", header.Name))
+		}
+		named[way] = true
+		for i := 0; i <= len(rel); i++ {
+			if !count(strings.Join(rel[:i], "/")) {
+				return "", refused(fmt.Sprintf("holds more than %d entries", f.maxEntries))
+			}
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if within(root, rel, true, func(*homepath.Dir) error { return nil }) != nil {
+				return "", refused(fmt.Sprintf("holds %q, which cannot be made a folder", header.Name))
+			}
+		case tar.TypeReg:
+			if len(rel) == 0 {
+				return "", refused("holds a file where its top folder should be")
+			}
+			if total, ok = added(total, header.Size, f.maxProgram); !ok {
+				return "", refused(fmt.Sprintf("holds files larger than %d bytes", f.maxProgram))
+			}
+			if err := writeEntry(root, rel, header, tr); err != nil {
+				return "", refused(fmt.Sprintf("holds %q, which cannot be written (%v)", header.Name, err))
+			}
+		default:
+			return "", refused(fmt.Sprintf("holds %q, which is a link or no folder or regular file", header.Name))
+		}
+	}
+	if top == "" {
+		return "", refused("holds no file")
+	}
+	if !runnable(root, p.entry) {
+		return "", refused(fmt.Sprintf("holds no executable %s", p.entry))
+	}
+	kept = true
+	return name, nil
+}
+
+// added is total with size added, or not ok when size is negative or the
+// sum would pass bound, overflow among it.
+func added(total, size, bound int64) (int64, bool) {
+	if size < 0 || size > bound-total {
+		return total, false
+	}
+	return total + size, true
+}
+
+// treeSteps are an archive entry's name as steps down, or not ok when it
+// is absolute or holds an empty step, `.` or `..`; a folder's last `/` is
+// no step.
+func treeSteps(name string) ([]string, bool) {
+	if strings.HasPrefix(name, "/") || !filepath.IsLocal(strings.TrimSuffix(name, "/")) {
+		return nil, false
+	}
+	steps := strings.Split(strings.TrimSuffix(name, "/"), "/")
+	for _, s := range steps {
+		if s == "" || s == "." || s == ".." {
+			return nil, false
+		}
+	}
+	return steps, true
+}
+
+// writeEntry writes a regular file of the archive at the way rel down
+// root, a new file of its own, its folders made as it goes.
+func writeEntry(root *homepath.Dir, rel []string, header *tar.Header, from io.Reader) error {
+	perm := uint32(0o600)
+	if header.Mode&0o111 != 0 {
+		perm = 0o700
+	}
+	return within(root, rel[:len(rel)-1], true, func(parent *homepath.Dir) error {
+		out, err := parent.Open(rel[len(rel)-1], os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if err != nil {
+			return err
+		}
+		n, err := io.Copy(out, io.LimitReader(from, header.Size))
+		if err == nil && n != header.Size {
+			err = io.ErrUnexpectedEOF
+		}
+		if err == nil {
+			err = out.Sync()
+		}
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+		return err
+	})
 }

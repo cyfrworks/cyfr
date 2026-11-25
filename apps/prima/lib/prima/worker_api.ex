@@ -13,7 +13,7 @@ defmodule Prima.WorkerAPI do
   (`Prima.WorkerAuth.request_header/3`); the worker service verifies it
   (`Prima.WorkerAuth.verify_request/4`), refuses a request addressed to
   another worker service and refuses a nonce it has already seen. It reports each runner's exit to CYFR itself
-  (`c:Prima.HostAPI.runner_exited/3`).
+  (`c:Prima.HostAPI.runner_exited/4`).
 
   A request whose answer is lost is retried as `retry/1` says: `kill` and
   `status` again, `start` never — its assignment's claim window bounds it,
@@ -104,6 +104,15 @@ defmodule Prima.WorkerAPI do
   @refusal_members ~w(reason message)
   @reason ~r/\A[a-z][a-z0-9_]{0,63}\z/
   @max_message_bytes 1024
+  # The keeper's refusals of a runner that a run's failure names, by code
+  # (`runner_refusal/1`): CYFR's words, never the keeper's.
+  @runner_refusals %{
+    "capacity" => "there was no room for another run",
+    "memory_unavailable" => "its memory and CPU could not be bounded where it would run",
+    "exec_failed" => "it could not be started",
+    "guard_unavailable" => "its network access could not be confirmed",
+    "hosts_unresolved" => "a host it reaches did not resolve to an address"
+  }
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
 
@@ -211,6 +220,21 @@ defmodule Prima.WorkerAPI do
   defp read_refusal(_refusal), do: :error
 
   @doc """
+  What a run its runner never took says of the keeper's refusal of that
+  runner, by the refusal's code (`t:refusal/0`'s `reason`), which a worker
+  service's report carries and nothing beside it
+  (`c:Prima.HostAPI.runner_exited/4`): a sentence of CYFR's own for each
+  code of this list, and `nil` for any other, which the run's failure
+  names no reason for. A service sends no code outside the list.
+  """
+  @spec runner_refusal(term()) :: String.t() | nil
+  def runner_refusal(code), do: Map.get(@runner_refusals, code)
+
+  @doc "Whether `code` is a refusal's code a report may carry: a code's shape, of the list or not."
+  @spec refusal_code?(term()) :: boolean()
+  def refusal_code?(code), do: is_binary(code) and Regex.match?(@reason, code)
+
+  @doc """
   `status` as its JSON answer spells it, every member a string, which
   `read_status/1` reads back; raises `ArgumentError` for a status
   `valid_status?/1` refuses, since it is the caller's own.
@@ -262,7 +286,7 @@ defmodule Prima.WorkerAPI do
   Stop an execution a runner of this worker service runs. For a subtree
   root, the kill ends the runner: the worker service terminates the
   runner's process and reports its exit
-  (`c:Prima.HostAPI.runner_exited/3`). For a child, the kill ends the
+  (`c:Prima.HostAPI.runner_exited/4`). For a child, the kill ends the
   child's process inside the runner (`Prima.RunnerControl`'s
   `cancel_child`), and the runner keeps running the rest of its subtree.
   Either kill taints the runner: it is never assigned again, and is
