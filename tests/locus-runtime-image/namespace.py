@@ -111,9 +111,11 @@ import secrets
 import shutil
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -206,19 +208,26 @@ class IsolatedStack(Stack):
 # ---------------------------------------------------------------------------
 
 
+# What the client's shell prints once its script is done, with the script's status: a role's process that ends is
+# started again by its keeper, so the client stays until the run stops it.
+CLIENT_DONE = "<<<client done "
+
+
 def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard=None, pool_args=None,
-               apparmor=APPARMOR, guarded=True):
+               apparmor=APPARMOR, guarded=True, name=None):
     """cyfr-locus from the image under the shipped service's options, serving the runtime's role, whose process is
     a shell running `client_script`, and the relay pool, in the network namespace of `guard` (an
     `imagesuite.Guard`), or of a guard of its own made for the run. `guarded=False` names a guard's control no
     guard serves. Without `seccomp` it runs under Docker's default seccomp profile, and with `apparmor` None under
-    Docker's default AppArmor profile."""
+    Docker's default AppArmor profile. Answers the run as a finished process: the keeper's status where it ended,
+    else the client script's once it is done, and what the container printed."""
     own = None
     if guard is None and guarded:
         own = guard = imagesuite.Guard(image, f"locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}")
+    name = name or f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"
+    client = f"{client_script}\necho \"{CLIENT_DONE}$?>>>\"; exec sleep 1000000"
     try:
-        args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
-                *(guard.keeper_args() if guard else []),
+        args = ["docker", "run", "--detach", "--name", name, *(guard.keeper_args() if guard else []),
                 *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID",
                 "--cap-add", "SETGID", "--cap-add", "KILL", "--security-opt", "no-new-privileges:true",
                 "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
@@ -231,9 +240,24 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=(), guard
         args += ["--security-opt", "systempaths=unconfined"]
         args += ["--entrypoint", "cyfr-locus", image, "serve", "--role", imagesuite.role_spec(ROLE),
                  *(pool_args or ["--pool", POOL]), "--home-root", RELEASE["home_root"],
-                 "--guard", imagesuite.Guard.CONTROL, "--", "/bin/sh", "-c", client_script]
-        return run(*args, check=False, timeout=timeout)
+                 "--guard", imagesuite.Guard.CONTROL, "--", "/bin/sh", "-c", client]
+        run(*args)
+        deadline = time.monotonic() + timeout
+        while True:
+            logs = run("docker", "logs", name, check=False)
+            if CLIENT_DONE in logs.stdout:
+                head, tail = logs.stdout.split(CLIENT_DONE, 1)
+                return subprocess.CompletedProcess(args, int(tail.split(">>>", 1)[0]), head, logs.stderr)
+            state = json.loads(run("docker", "inspect", name).stdout)[0]["State"]
+            if not state["Running"]:
+                logs = run("docker", "logs", name, check=False)
+                return subprocess.CompletedProcess(args, state["ExitCode"], logs.stdout, logs.stderr)
+            if time.monotonic() > deadline:
+                sys.exit(f"FAIL: the keeper's client was not done within {timeout} s\n{logs.stdout[-3000:]}\n"
+                         f"{logs.stderr[-3000:]}")
+            time.sleep(0.2)  # sleep-ok: polling the client's log for its end
     finally:
+        run("docker", "rm", "--force", name, check=False)
         if own:
             own.down()
 
@@ -291,8 +315,8 @@ def test_refusals(image):
     # boot, naming the guard's socket.
     guard = imagesuite.Guard.CONTROL
     unguarded = keeper_run(image, "exec sleep 5", timeout=60, guarded=False)
-    expect(unguarded.returncode == 78 and "does not make a route" in unguarded.stderr and guard in unguarded.stderr,
-           f"a routed keeper whose guard is not there refuses to start, naming {guard} (exit {unguarded.returncode})",
+    expect(unguarded.returncode != 0 and "its route was not made" in unguarded.stderr and guard in unguarded.stderr,
+           f"a keeper whose guard is not there refuses to start the role, naming {guard} (exit {unguarded.returncode})",
            unguarded.stderr[-2000:])
     for name, extra in [("naming hosts", {"hosts": ["api.example.com"]}), ("carrying isolation", {"isolation": "netns"})]:
         client = PLACE_FIRST + (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], **extra)}' >&3; "
@@ -308,8 +332,8 @@ def test_connect(image):
     # The command dials the container's loopback and the container's own
     # address and exits 42 when both are unreachable. Its output has no
     # reader, since no client listens on the attach socket, so its exit
-    # status is the answer. The client's shell, in the container's own
-    # namespace, dials the same two first.
+    # status is the answer. The client's shell, the role's process in its
+    # own space, dials its own loopback and address first.
     # Then it asks for a name, which no resolver of its own answers (the
     # loopback is down), within a second, and it reads its IPC namespace,
     # which is not the container's: exit 42 for all of it.
@@ -321,7 +345,7 @@ def test_connect(image):
                '[ $n -eq 2 ] && exit 42; exit $n')
     request = spawn_line("1", ["/bin/sh", "-c", command], env={"TARGET": "@ADDR@", "IPC": "@IPC@"})
     assert "'" not in request
-    client = ('addr=$(getent hosts "$(cat /etc/hostname)" | awk "{print \\$1; exit}"); '
+    client = ('addr=$(awk \'/\\|-- / {a = $2} /\\/32 host LOCAL/ && a !~ /^127\\./ {print a; exit}\' /proc/net/fib_trie); '
               'for t in 127.0.0.1:9 "$addr:9"; do '
               'echo "own $t:$(curl -sv --max-time 3 "http://$t/" 2>&1 | grep -o "Connection refused\\|Network is unreachable" | head -n1)"; done; '
               'ipc=$(readlink /proc/self/ns/ipc); '
@@ -333,9 +357,9 @@ def test_connect(image):
            "connect: under the profile the keeper serves and spawns a command of the relay pool", ran.stdout + ran.stderr)
     own = re.findall(r"^own (\S+):(.*)$", ran.stdout, re.M)
     expect(len(own) == 2 and all(answer == "Connection refused" for _, answer in own),
-           "connect: from the container's own namespace its loopback and its address answer (the dial is refused, not unreachable)", own)
+           "connect: from the role's own space its loopback and its address answer (the dial is refused, not unreachable)", own)
     expect(got[1]["type"] == "exited" and got[1]["code"] == 42,
-           "connect: from the command's namespace neither the loopback nor the container's address is reachable (no route "
+           "connect: from the command's namespace neither the loopback nor the role's address is reachable (no route "
            "exists), no name resolves at once, and its IPC namespace is its own",
            {"replies": got, "stdout": ran.stdout, "stderr": ran.stderr[-2000:]})
 
@@ -379,16 +403,19 @@ def test_names(image):
 
 
 class Attach:
-    """The client's attach socket, on this machine in a directory mounted into the container, speaking the keeper's frames."""
+    """The client's attach socket, on this machine in a directory mounted into the container, speaking the keeper's frames.
 
-    MOUNT = "/run/cyfr-attach"
+    The mount is outside /run, whose run folder alone a role's space holds, so the client, in its space, reads this
+    machine's marks there; it leaves its own in its run folder (`ClientMarks`), the one place its space writes."""
+
+    MOUNT = "/cyfr-attach"
 
     def __init__(self, client_marks=None):
         self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-attach-")
-        # This machine leaves its marks for the client here (`mark`); the client leaves its own in `client_marks`
-        # (`ClientMarks`): cyfr-locus refuses to start with a mount a pooled uid could write.
+        # This machine leaves its marks for the client here (`mark`): cyfr-locus refuses to start with a mount a
+        # pooled uid could write.
         os.chmod(self.dir, 0o755)
-        self.client_marks = client_marks or self.dir
+        self.client_marks = client_marks
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(os.path.join(self.dir, "a.sock"))
         os.chmod(os.path.join(self.dir, "a.sock"), 0o777)
@@ -457,7 +484,9 @@ class Attach:
         open(os.path.join(self.dir, name), "w").close()
 
     def marked(self, name):
-        return os.path.exists(os.path.join(self.client_marks, name))
+        if self.client_marks is None:
+            return False
+        return self.client_marks.marked(name)
 
     def close(self):
         self.server.close()
@@ -602,7 +631,7 @@ assign() {
   done
   return 1
 }
-mark() { : > "$own_marks/$1"; }
+mark() { mkdir -p "$own_marks" && : > "$own_marks/$1"; }
 marked() {
   tries=0
   until [ -e "$marks/$1" ]; do
@@ -647,27 +676,18 @@ def assigns():
 
 
 class ClientMarks:
-    """Where the client leaves its marks for this machine: a directory mounted at MOUNT, the service user's and
-    writable by it alone, as cyfr-locus requires of every mount, which a root container of the image makes so."""
+    """Where the client leaves its marks for this machine: a folder of the runtime role's run folder, the one place its
+    space writes, which this machine reads in the keeper's container as the role's user (`name`, the container that
+    `keeper_run` starts under that name)."""
 
-    MOUNT = "/run/cyfr-marks"
+    MOUNT = f"{RUN_DIR}/marks"
 
-    def __init__(self, image):
-        self.image = image
-        self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-marks-")
-        self._as_root(f"chown {SERVICE_UID}:{SERVICE_UID} /m && chmod 0755 /m")
+    def __init__(self, name):
+        self.name = name
 
-    def _as_root(self, script):
-        run("docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-marks-{os.getpid()}-{secrets.token_hex(4)}"),
-            "--user", "0", "-v", f"{self.dir}:/m", "--entrypoint", "/bin/sh", self.image, "-c", script)
-
-    @property
-    def mount(self):
-        return f"{self.dir}:{self.MOUNT}"
-
-    def close(self):
-        self._as_root("rm -rf /m/*")
-        shutil.rmtree(self.dir, ignore_errors=True)
+    def marked(self, mark):
+        return run("docker", "exec", "-u", SERVICE_USER, self.name, "test", "-e", f"{self.MOUNT}/{mark}",
+                   check=False).returncode == 0
 
 
 def places_client(env, marks=Attach.MOUNT, client_marks=ClientMarks.MOUNT):
@@ -903,18 +923,17 @@ def held_until_measured(plane, attach):
 def test_measure(image):
     env = runner_env(image)
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
-    client_marks = ClientMarks(image)
-    attach = Attach(client_marks.dir)
+    name = f"{PROJECT_PREFIX}locus-keeper-measure-{os.getpid()}-{secrets.token_hex(4)}"
+    attach = Attach(ClientMarks(name))
     attempt = plane.mint(RUNNER_ENV["RUNTIME_BOOT_ID"], "catalyst", HOG_REF, wasm(HOG), {}, ATHANOR, WORK_TIMEOUT_MS)
     plane.script("push_deltas", held_until_measured(plane, attach), attempt["execution_id"])
     serving = threading.Thread(target=serve_work, args=(attach, plane, attempt), daemon=True)
     serving.start()
     try:
-        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount, client_marks.mount])
+        ran = keeper_run(image, places_client(env), timeout=180, mounts=[attach.mount], name=name)
         serving.join(60)
     finally:
         attach.close()
-        client_marks.close()
         plane.stop()
     read = transcript(ran.stdout)
     served = attach.result or {}
@@ -959,8 +978,11 @@ def runner_facts(stack, runner):
 
 def service_namespaces(stack):
     beam = stack.service_beam_pid()
-    out = stack.as_uid(SERVICE_UID, f"readlink /proc/{beam}/ns/net; readlink /proc/{beam}/ns/user; readlink /proc/{beam}/ns/ipc; "
-                                    f"readlink /proc/{beam}/fd/3").stdout.split()
+    # Read by the observer (`Stack.observe`): the role's uid outside its own
+    # user namespace reads none of its links, and the container's root
+    # holds no capability to.
+    out = stack.observe(f"readlink /proc/{beam}/ns/net; readlink /proc/{beam}/ns/user; readlink /proc/{beam}/ns/ipc; "
+                     f"readlink /proc/{beam}/fd/3").stdout.split()
     return {"net": out[0], "user": out[1], "ipc": out[2], "channel": out[3]} if len(out) == 4 else None
 
 
@@ -986,7 +1008,7 @@ def test_spawn(stack):
 def test_cgroup(stack):
     for runner in stack.runner_processes():
         facts = runner_facts(stack, runner)
-        expect(facts.get("cgroup") == f"0::/keeper-{runner['uid']}/bound",
+        expect(facts.get("cgroup") == f"0::/role-{ROLE['name']}/keeper-{runner['uid']}/bound",
                f"cgroup: runner uid {runner['uid']} runs in its own group, placed from the parent side before it ran", facts)
 
 
