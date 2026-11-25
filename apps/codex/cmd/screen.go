@@ -543,7 +543,7 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 	}
 	ran := make(chan error, 1)
 	if ctx.Err() == nil {
-		app.show(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL()})
+		app.show(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL(), Update: svc.UpdateURL()})
 		go func() { ran <- svc.Run(in) }()
 	}
 

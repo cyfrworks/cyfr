@@ -503,3 +503,39 @@ func TestAYesWhileAnUpdateRunsIsRefusedBeforeTheRecordIsTouched(t *testing.T) {
 		})
 	}
 }
+
+// On a box's screen Update CYFR is offered and its yes starts only while
+// the box is unlocked: a read while it is locked works out no offer, and
+// a yes to the offer held starts nothing once the box locks.
+func TestABoxUpdatesOnlyWhileUnlocked(t *testing.T) {
+	var open atomic.Bool
+	unlockedAs(t, &open)
+	b := newOnBox(t)
+	u := newUpdating(t, b.app, appPlan)
+	b.openBox(t, localAddress)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	w := b.readUpdate(ctx, b.ReadToken, 0)
+	cancel()
+	var got updateRead
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Offer != nil {
+		t.Fatalf("a locked box's read answered %s", w.Body)
+	}
+	u.mu.Lock()
+	asked := len(u.asked)
+	u.mu.Unlock()
+	if asked != 0 {
+		t.Fatal("a locked box worked out an offer")
+	}
+	open.Store(true)
+	b.shown(t, offeredAs(1))
+	open.Store(false)
+	b.StartUpdate(1)
+	if len(u.begun) != 0 {
+		t.Fatal("a yes started an update on a locked box")
+	}
+	open.Store(true)
+	b.StartUpdate(1)
+	if len(u.begun) != 1 {
+		t.Fatalf("a yes on the unlocked box started %+v", u.begun)
+	}
+}
