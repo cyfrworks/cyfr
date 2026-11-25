@@ -414,6 +414,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   attr :pack, :map, required: true
   attr :myself, :any, required: true
   attr :athanor, :any, required: true
+  attr :upload, :string, required: true
 
   defp actions(assigns) do
     ~H"""
@@ -434,7 +435,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
         </button>
         <label
           :if={@pack.origin == "brought"}
-          for="aqua-bring-file"
+          for={@upload}
           class="block w-full cursor-pointer rounded px-2 py-1 text-left text-[11px] text-blue-400 hover:bg-gray-800"
         >
           Check for an update
@@ -491,12 +492,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                 class="flex items-center gap-1"
               >
                 <label
-                  for="aqua-bring-file"
+                  for={@uploads.pack.ref}
                   class="cursor-pointer rounded px-2 py-1 text-[11px] text-blue-400 hover:bg-gray-800 hover:text-blue-300"
                 >
                   Bring in a pack
                 </label>
-                <.live_file_input upload={@uploads.pack} id="aqua-bring-file" class="sr-only" />
+                <.live_file_input upload={@uploads.pack} class="sr-only" />
                 <button
                   :if={@uploads.pack.entries != []}
                   type="submit"
@@ -725,7 +726,12 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
                   >
                     {if pack.on, do: "On", else: "Off"}
                   </button>
-                  <.actions pack={pack} myself={@myself} athanor={@athanor} />
+                  <.actions
+                    pack={pack}
+                    myself={@myself}
+                    athanor={@athanor}
+                    upload={@uploads.pack.ref}
+                  />
                 </div>
               </div>
               <p :if={pack.past} class="text-[11px] text-amber-400">
