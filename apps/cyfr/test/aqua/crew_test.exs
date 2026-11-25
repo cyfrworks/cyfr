@@ -1132,6 +1132,37 @@ defmodule Aqua.CrewTest do
     assert pending_records(ctx) == []
   end
 
+  # Aqua's list changed past the crew's grant: the member's turn is
+  # refused before it asks its model, said in its own thread, and its
+  # reply answers the person's request failed in the same words, which say
+  # where to grant it and to ask the member again.
+  test "with Aqua's list changed past its grant, a person's @name is answered failed with " <>
+         "where to grant it, as the member's thread says",
+       %{ctx: ctx, room: room} do
+    script!([reply("Never.")])
+
+    :ok = Cyfr.Test.AquaTool.switch!(ctx, "native_search")
+
+    said =
+      "What Aqua and its crew members may use changed since you granted it. planner did " <>
+        "not do this job: grant it again on your Aqua page, then ask planner for it again."
+
+    assert {:ok, %{admitted: :request, message_id: request_id}} =
+             Runner.send_message(ctx, room.id, "@planner plan the move")
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    child = child!(ctx, room, "planner")
+    turn_id = delivered_turn(ctx, child, request_id)
+    await_status(ctx, turn_id, "failed")
+    assert {:ok, %{error: ^said}} = Tape.turn(ctx, turn_id)
+    assert [^said] = for(%{kind: "system", content: text} <- rows(ctx, child.id), do: text)
+
+    assert {:ok, %{"applied" => 1}} = drain(ctx)
+    reply = Enum.find(rows(ctx, room.id), &(&1.reply_to == request_id))
+    assert %{sent_by: "planner", addressee: "person", outcome: "failed", content: ^said} = reply
+    assert ScriptedWorker.calls() == []
+  end
+
   # A room's view reads its crew threads as a request lands, before the
   # delivery made the member's thread: the delivery tells it again.
   test "a delivered request is heard again on its room, whose pane then lists the member's " <>

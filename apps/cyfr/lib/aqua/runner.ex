@@ -654,11 +654,13 @@ defmodule Aqua.Runner do
   defp handle_owned_call({:restart_for_consent, ctx, _result}, _from, state) do
     case Admission.standing(ctx, state.athanor_id) do
       :ok ->
+        # The cut turn's own line is offered to the person who granted only
+        # as the pane offers any stored line again (`Aqua.Tape.again_text/2`).
         prompt =
           with %{turn_id: turn_id} <- state.live || state.paused,
                {:ok, turn} <- Tape.turn(state.ctx, turn_id),
                {:ok, row} <- Tape.message(state.ctx, turn.message_id) do
-            row.content
+            Tape.again_text(row, ctx.user_id)
           else
             _ -> nil
           end

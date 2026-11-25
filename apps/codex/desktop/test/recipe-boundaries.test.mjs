@@ -88,3 +88,38 @@ test("the worker takes only its owner's word: a null, partial or foreign configu
     // The owner's own word, from its own process, reaches the packer.
     assert.equal(worker(t, {config: complete(), env: word}).reached, true, "the owner's worker did not reach the packer")
   })
+
+// build.mjs on a stand-in system, with esbuild and electron-builder stand-ins
+// and the packer writing a marker if it is ever reached.
+function packs(t, platform, arch) {
+  const dir = mkdtempSync(path.join(tmpdir(), "cyfr-target-"))
+  t.after(() => rmSync(dir, {recursive: true, force: true}))
+  const reached = path.join(dir, "reached")
+  const script = `
+import {writeFileSync} from "node:fs"
+import {mock} from "node:test"
+Object.defineProperty(process, "platform", {value: ${JSON.stringify(platform)}})
+mock.module(${JSON.stringify(esbuild)}, {namedExports: {build: async ({outfile}) => writeFileSync(outfile, "")}})
+mock.module(${JSON.stringify(builder)}, {namedExports: {Arch: {arm64: 1, x64: 0}, Platform: {MAC: {createTarget: () => []},
+  LINUX: {createTarget: () => []}, WINDOWS: {createTarget: () => []}},
+  build: async () => { writeFileSync(${JSON.stringify(reached)}, "the packer ran"); process.exit(0) }}})
+process.argv = [process.execPath, ${JSON.stringify(path.join(scripts, "build.mjs"))}, "--cyfr", "/bin/sh", "--version", "1.2.3",
+  "--arch", ${JSON.stringify(arch)}, "--out", ${JSON.stringify(path.join(dir, "out"))}]
+await import(${JSON.stringify(new URL("../scripts/build.mjs", import.meta.url).href)})
+`
+  const entry = path.join(dir, "entry.mjs")
+  writeFileSync(entry, script)
+  const r = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--no-warnings", entry], {encoding: "utf8"})
+  return {status: r.status, err: r.stderr, reached: existsSync(reached)}
+}
+
+test("a Mac package is built for Apple silicon alone, and amd64 stays Linux's and Windows'", {skip: process.platform === "win32"}, (t) => {
+  const intel = packs(t, "darwin", "amd64")
+  assert.equal(intel.status, 1, intel.err)
+  assert.equal(intel.err.trim(), "refused: CYFR runs on Apple silicon Macs, so a Mac package is built for arm64 alone")
+  assert.equal(intel.reached, false, "an Intel Mac package reached the packer")
+  for (const [platform, arch] of [["darwin", "arm64"], ["linux", "amd64"], ["win32", "amd64"]]) {
+    const r = packs(t, platform, arch)
+    assert.equal(r.reached, true, `${platform} ${arch} did not reach the packer: ${r.err}`)
+  }
+})

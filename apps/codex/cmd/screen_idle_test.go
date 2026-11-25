@@ -6,9 +6,12 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/idle"
 	"github.com/cyfr/codex/internal/idle/idletest"
 	"github.com/cyfr/codex/internal/shell"
@@ -420,6 +424,8 @@ type runningScreen struct {
 	address func() string
 	// offered is whether a page read meanwhile offered the screen's use.
 	offered bool
+	// readyURL is the chooser's address ready named.
+	readyURL string
 }
 
 // watchedPage is what a watched screen shows in these tests, whose CYFR
@@ -443,7 +449,72 @@ func startScreen(t *testing.T) *runningScreen {
 		cancel()
 		<-s.done
 	})
+	ready := app.until("ready")
+	s.readyURL, _ = ready["url"].(string)
+	s.openBox(ready)
 	return s
+}
+
+// openBox opens This box as main and its chooser do after ready: the
+// chooser's press of This box, its run token main's header, again until a
+// lock no longer cuts it, each proposal answered home-ready, until opened.
+func (s *runningScreen) openBox(ready map[string]any) map[string]any {
+	s.t.Helper()
+	_, token, _ := strings.Cut(ready["url"].(string), "#token=")
+	chooser := func(path string, body string) (string, uint64) {
+		req, err := http.NewRequest(http.MethodPost, "http://"+s.address()+path, strings.NewReader(body))
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		req.Host = shell.Listen
+		req.Header.Set("Origin", shell.Origin)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(desktop.RunHeader, token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", 0
+		}
+		defer resp.Body.Close()
+		var a struct {
+			Next  string `json:"next"`
+			Epoch uint64 `json:"epoch"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&a)
+		return a.Next, a.Epoch
+	}
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
+		_, epoch := chooser("/bootstrap/state", "{}")
+		pressed := make(chan string, 1)
+		go func() { next, _ := chooser("/bootstrap/box", fmt.Sprintf(`{"epoch":%d}`, epoch)); pressed <- next }()
+		var home map[string]any
+		for waiting := pressed; ; {
+			select {
+			case m := <-s.app.said:
+				switch {
+				case m["type"] == "home":
+					home = m
+					s.app.send(fmt.Sprintf(`{"version":2,"type":"home-ready","home":%q,"attempt":%v}`, m["home"], m["attempt"]))
+				case m["type"] == "opened" && home != nil && m["home"] == home["home"]:
+					if waiting != nil {
+						<-waiting
+					}
+					return home
+				}
+				continue
+			case next := <-waiting:
+				if next == "/" {
+					// Opened: its message is on its way.
+					waiting = nil
+					continue
+				}
+			case <-time.After(10 * time.Second):
+				s.t.Fatal("This box's press answered nothing")
+			}
+			break
+		}
+	}
+	s.t.Fatal("This box never opened")
+	return nil
 }
 
 // ask sends what the screen's own browser sends to the shell's one
@@ -780,76 +851,57 @@ func TestScreenShell_AKilledShellLeavesNoChildBehind(t *testing.T) {
 	}
 }
 
-// A folder that names another CYFR than the one the screen opened ends
-// the screen's shell, which its launcher starts again on that reading.
-func TestScreenShell_AChangedFolderEndsTheShellForANewReading(t *testing.T) {
+// A folder that names another CYFR than the one This box opened says so
+// on its page, sending it nothing, and This box pressed again after the
+// departure opens the address it names now.
+func TestScreenShell_AChangedFolderIsOpenedAfreshByThisBox(t *testing.T) {
 	screenProject(t)
 	screenCompositor(t, idletest.Options{})
-	if err := os.MkdirAll(screenDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	screenPrograms(t, quietScreen())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	listen, address := ownListener()
-	app, in, out := newAppSide(t)
-	ended := make(chan error, 1)
-	go func() { ended <- runScreenShell(ctx, listen, in, out) }()
-	app.next("ready")
+	s := startScreen(t)
 	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\nCYFR_PORT=4322\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest(http.MethodGet, "http://"+address()+"/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Host = "127.0.0.1:7340"
-	if resp, err := http.DefaultClient.Do(req); err == nil {
-		resp.Body.Close()
-	}
-	select {
-	case err := <-ended:
-		if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "starts again") {
-			t.Fatalf("the screen ended with %v", err)
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("the screen kept the CYFR it read before")
+	s.shows("changed after it was opened here")
+	s.app.send(`{"version":2,"type":"leave","id":1}`)
+	s.app.until("left")
+	if home := s.openBox(map[string]any{"url": s.readyURL}); home["home"] != "http://localhost:4322" {
+		t.Fatalf("This box pressed again opened %v", home["home"])
 	}
 }
 
 // The screen shell with the app as its browser: once the keyboard and the
-// watches are up it says ready with its own pages' address, then home with
-// the CYFR in its folder; main's home-ready is answered opened; a lock says
-// locked, naming no CYFR, and proposes that one again as the next attempt;
-// the end of main's pipe ends the shell, whose last lock says ending.
+// watches are up it says ready with the chooser's address and the rail's,
+// as desktop-serve does; This box's press proposes the CYFR in its folder,
+// with no setup token, and main's home-ready is answered opened; a lock
+// says locked, naming that CYFR, and proposes nothing more; the end of
+// main's pipe ends the shell, whose last lock says ending.
 func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 	screenProject(t)
 	compositor := screenCompositor(t, idletest.Options{})
 	screenPrograms(t, quietScreen())
 	app, in, out := newAppSide(t)
-	listen, _ := ownListener()
+	listen, address := ownListener()
 	ended := make(chan error, 1)
 	go func() { ended <- runScreenShell(context.Background(), listen, in, out) }()
 
-	if ready := app.next("ready"); ready["url"] != shell.Origin+"/" {
+	ready := app.next("ready")
+	if url, _ := ready["url"].(string); !strings.HasPrefix(url, shell.Origin+"/bootstrap/#token=") {
 		t.Fatalf("ready named %v", ready["url"])
 	}
-	home := app.next("home")
-	if home["home"] == "" || home["account"] == "" || home["attempt"] != float64(1) {
+	if rail, _ := ready["rail"].(string); !strings.HasPrefix(rail, shell.Origin+"/rail/#read=") {
+		t.Fatalf("ready named the rail %v", ready["rail"])
+	}
+	s := &runningScreen{t: t, app: app, address: address}
+	home := s.openBox(ready)
+	if home["home"] != "http://localhost:4321" || home["account"] == "" || home["attempt"] != float64(1) || home["setup"] != nil {
 		t.Fatalf("home was %v", home)
 	}
-	app.send(`{"version":2,"type":"home-ready","home":"` + home["home"].(string) + `","attempt":1}`)
-	if opened := app.next("opened"); opened["home"] != home["home"] {
-		t.Fatalf("opened named %v, home %v", opened["home"], home["home"])
-	}
 	// The idle watch lost: what is on the screen gives way to the page
-	// that says why, and the CYFR is proposed again as the next attempt.
+	// that says why, and nothing is proposed again.
 	compositor.Stop()
-	if locked := app.next("locked"); locked["home"] != nil || locked["account"] != nil {
+	if locked := app.next("locked"); locked["home"] != home["home"] {
 		t.Fatalf("locked named %v", locked)
-	}
-	if again := app.next("home"); again["home"] != home["home"] || again["attempt"] != float64(2) {
-		t.Fatalf("after the lock home was %v", again)
 	}
 	app.reply.Close()
 	select {
@@ -861,4 +913,48 @@ func TestScreenShell_TheAppIsItsBrowser(t *testing.T) {
 		t.Fatal("the end of main's pipe did not end the shell")
 	}
 	app.next("ending")
+}
+
+// A screen whose listener another program holds ends saying so, and
+// writes nothing of the list it shares with the CYFR app.
+func TestScreenShell_WritesTheSharedListOnlyHoldingItsListener(t *testing.T) {
+	screenProject(t)
+	screenPrograms(t, quietScreen())
+	listen, _ := ownListener()
+	held, err := listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	app, in, out := newAppSide(t)
+	_ = app
+	err = runScreenShell(t.Context(), listen, in, out)
+	if err == nil || !strings.Contains(err.Error(), "another program holds") {
+		t.Fatalf("the screen without its listener ended with %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".cyfr", "device", "homes.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a screen without its listener wrote the list (%v)", err)
+	}
+}
+
+// The screen's own end (SIGTERM, SIGINT or SIGHUP, its context's end) is
+// its last lock too: it hides, says ending and returns.
+func TestScreenShell_ItsOwnEndSaysEnding(t *testing.T) {
+	screenProject(t)
+	screenCompositor(t, idletest.Options{})
+	screenPrograms(t, quietScreen())
+	app, in, out := newAppSide(t)
+	listen, address := ownListener()
+	ctx, cancel := context.WithCancel(context.Background())
+	ended := make(chan error, 1)
+	go func() { ended <- runScreenShell(ctx, listen, in, out) }()
+	s := &runningScreen{t: t, app: app, address: address}
+	s.openBox(app.next("ready"))
+	cancel()
+	app.until("ending")
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the screen's own end did not end it")
+	}
 }

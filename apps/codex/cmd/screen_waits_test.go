@@ -189,7 +189,6 @@ func TestScreenShell_TheAppsLockLocksAnUnlockInFlight(t *testing.T) {
 // typed passphrase handed the page ends with that page.
 func TestScreenShell_TheAppsLockLocksWithNothingInFlight(t *testing.T) {
 	h := startHungScreen(t, func(r *holder.Record) { r.Identifier, r.Directory = "", "" })
-	h.app.until("ready")
 	post := h.posted
 	_, after, ok := strings.Cut(post("/create", url.Values{"name": {"ada"}, "secret": {h.passphrase}}), `data-proof="`)
 	proof, _, _ := strings.Cut(after, `"`)

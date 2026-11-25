@@ -30,6 +30,12 @@ defmodule Aqua.SeatTest do
   @context "\n\n---\n\n## Runtime Context\n\n"
   # A rebuilt turn whose pins moved since its root was claimed.
   @moved_on "The turn moved on — read the thread again and retry"
+  # A turn whose pinned grant, Aqua's or its brain's, was given again or
+  # taken back while it worked, said as its member's.
+  @regranted " stopped because a grant it was working under, Aqua's or its model's key, " <>
+               "changed while it worked. Send a message to go on."
+  @aqua_regranted "Aqua" <> @regranted
+  @member_regranted "claude" <> @regranted
 
   setup do
     # Deliberate crashes in other tests must not spend this test's restart budget.
@@ -405,8 +411,8 @@ defmodule Aqua.SeatTest do
   # brain under the same grant.
   # The crew's grant is Aqua's whatever brain its member runs on: Aqua on a
   # member whose brain is a program that stands reads the grant's stale
-  # state, as Aqua on a catalyst does, and its refused turn asks for the
-  # grant.
+  # state, as Aqua on a catalyst does, and its refused turn says so and
+  # asks for the grant.
   test "Aqua on a program brain reads the crew's stale grant, and its refused turn asks for it",
        %{ctx: ctx, room: room} do
     {:ok, _row} =
@@ -429,7 +435,7 @@ defmodule Aqua.SeatTest do
     assert %{"aqua" => {:consent_stale, "claude"}} = Aqua.Models.model_status(ctx, agents)
 
     turn = accept!(ctx, room, "hello?")
-    assert {:failed, :setup_required} = run(ctx, turn)
+    assert {:failed, {:agent_changed, "Aqua", :message}} = run(ctx, turn)
     assert {:ok, %{status: "failed", root_execution_id: nil}} = Tape.turn(ctx, turn.id)
     room_id = room.id
 
@@ -669,7 +675,7 @@ defmodule Aqua.SeatTest do
 
       dead = take_over!(pids)
       send(dead, :continue)
-      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
+      assert {:ok, %{status: "failed", error: @member_regranted}} = Tape.turn(ctx, job)
       assert answers(ctx, child, job) == []
       assert [%{authority: %{consent_id: ^brain}}] = chats(ctx, holder)
     end
@@ -699,7 +705,7 @@ defmodule Aqua.SeatTest do
 
       dead = take_over!(pids)
       send(dead, :continue)
-      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, job)
+      assert {:ok, %{status: "failed", error: @member_regranted}} = Tape.turn(ctx, job)
       assert answers(ctx, child, job) == []
       assert [%{authority: %{profile_id: ^brain, consent_id: ^pinned}}] = chats(ctx, holder)
     end
@@ -728,8 +734,8 @@ defmodule Aqua.SeatTest do
 
       held = take_over!(pids)
       send(held, :continue)
-      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
-      assert system_lines(ctx, room) == [@moved_on]
+      assert {:ok, %{status: "failed", error: @aqua_regranted}} = Tape.turn(ctx, turn)
+      assert system_lines(ctx, room) == [@aqua_regranted]
       assert answers(ctx, room, turn) == []
       assert chats(ctx, "aqua") == []
 
@@ -739,9 +745,9 @@ defmodule Aqua.SeatTest do
 
     # The same, the brain's grant taken back instead of its key bound
     # again: the pinned grant no longer loads, and the recovered turn ends
-    # as one that moved on, never as a key to enter.
+    # saying its grant changed, never as a key to enter.
     test "a turn whose runner dies while its brain is described, its grant taken back " <>
-           "meanwhile, ends as a turn that moved on once taken over",
+           "meanwhile, ends saying its grant changed once taken over",
          %{ctx: ctx, room: room} do
       start_supervised!(
         {ScriptedWorker,
@@ -759,8 +765,8 @@ defmodule Aqua.SeatTest do
 
       held = take_over!(pids)
       send(held, :continue)
-      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
-      assert system_lines(ctx, room) == [@moved_on]
+      assert {:ok, %{status: "failed", error: @aqua_regranted}} = Tape.turn(ctx, turn)
+      assert system_lines(ctx, room) == [@aqua_regranted]
       assert answers(ctx, room, turn) == []
       assert chats(ctx, "aqua") == []
     end
@@ -788,7 +794,7 @@ defmodule Aqua.SeatTest do
       refute match?({:ok, %{consent_id: ^before}}, Opus.authority_for(ctx, :default, @model))
 
       _ = take_over!(pids)
-      assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
+      assert {:ok, %{status: "failed", error: @aqua_regranted}} = Tape.turn(ctx, turn)
       assert answers(ctx, room, turn) == []
       assert chats(ctx, "aqua") == asked
 
@@ -798,10 +804,10 @@ defmodule Aqua.SeatTest do
 
     # A model call refused because the brain's grant the turn pinned moved
     # since, its key bound again or the grant taken back while the turn
-    # waited on its model, ends the turn as one that moved on, in the
+    # waited on its model, ends the turn saying its grant changed, in the
     # thread and as its error: never as a key to enter.
     test "a turn whose brain's key is bound again, or whose brain's grant is taken back, while " <>
-           "it waits on its model ends as a turn that moved on at its next model call",
+           "it waits on its model ends saying its grant changed at its next model call",
          %{ctx: ctx, room: room} do
       script!([])
 
@@ -836,8 +842,8 @@ defmodule Aqua.SeatTest do
         refute match?({:ok, %{consent_id: ^pinned}}, Opus.authority_for(ctx, :default, @model))
 
         finish!(pids)
-        assert {:ok, %{status: "failed", error: @moved_on}} = Tape.turn(ctx, turn)
-        assert system_lines(ctx, room) == List.duplicate(@moved_on, n)
+        assert {:ok, %{status: "failed", error: @aqua_regranted}} = Tape.turn(ctx, turn)
+        assert system_lines(ctx, room) == List.duplicate(@aqua_regranted, n)
         refute "Under a grant that moved." in answers(ctx, room, turn)
       end
 
