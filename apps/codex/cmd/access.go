@@ -151,8 +151,10 @@ func openLocked(ctx context.Context, command string, out io.Writer) (stackEngine
 }
 
 // lockedEngine takes e's lock for command and runs recovery, printing each
-// receipt recovery wrote. It answers the engine, the function that
-// releases the lock, and those receipts.
+// receipt recovery wrote and, after a hold's receipt whose start ran, which
+// starts .env's head alone, the sentence naming the services of the
+// stack's own that start left stopped (unselectedLine). It answers the
+// engine, the function that releases the lock, and those receipts.
 func lockedEngine(ctx context.Context, e stackEngine, command string, out io.Writer) (stackEngine, func(), []access.Receipt, error) {
 	unlock, err := e.Lock(command)
 	if err != nil {
@@ -161,6 +163,15 @@ func lockedEngine(ctx context.Context, e stackEngine, command string, out io.Wri
 	receipts, err := e.Resume(ctx)
 	for _, r := range receipts {
 		fmt.Fprintln(out, "Recovered: "+describeReceipt(r))
+		if r.Op != "hold" || r.State != "completed" || r.Outcome == "failed" {
+			continue
+		}
+		if head, err := e.Head(); err == nil {
+			u := updater{ctx: ctx, out: out, errOut: io.Discard, engine: e, head: head}
+			if line := u.unselectedLine(); line != "" {
+				fmt.Fprintln(out, line)
+			}
+		}
 	}
 	if err != nil {
 		unlock()

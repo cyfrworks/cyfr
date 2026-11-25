@@ -452,6 +452,7 @@ func (r *restorer) run() error {
 	err = r.updater.start("restore")
 	if local := (startedLocally{}); errors.As(err, &local) {
 		fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s. It runs on this machine alone.\n", m.Version, m.TakenAt, r.restoreID)
+		r.sayUnselected()
 		return err
 	}
 	if err != nil {
@@ -464,7 +465,18 @@ func (r *restorer) run() error {
 		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read its log with 'docker compose logs cyfr', fix the cause and run 'cyfr up'", message, r.restoreID)
 	}
 	fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s.\n", m.Version, m.TakenAt, r.restoreID)
+	r.sayUnselected()
 	return nil
+}
+
+// sayUnselected says, after the restored stack's start under the
+// snapshot's head alone, which services of the restored compose file's own
+// that start left stopped and how to start them (unselectedLine), as the
+// snapshot holds no record of which of them ran.
+func (r *restorer) sayUnselected() {
+	if line := r.unselectedLine(); line != "" {
+		fmt.Fprintln(r.out, line)
+	}
 }
 
 // refuseStopped puts docker-compose.yml and .env back as they were and
@@ -495,16 +507,16 @@ func (r *restorer) holdConfigFiles() error {
 	return nil
 }
 
-// freeNetworks removes the networks the compose file in place declares and
-// the snapshot's does not (removeNetworks) before anything runs under the
-// snapshot's, so a network of its may take the address range one of them
-// holds, as an update that failed after its switch leaves the new release's.
+// freeNetworks removes this project's networks the snapshot's compose file
+// does not use (removeNetworks) before anything runs under it, so a network
+// of its may take the address range one of them holds, as an update that
+// failed after its switch leaves the new release's.
 func (r *restorer) freeNetworks() error {
 	snapshot, err := os.ReadFile(r.snap.path("compose"))
 	if err != nil {
 		return err
 	}
-	return r.removeNetworks(r.held["docker-compose.yml"], snapshot, "docker-compose.yml declares and the snapshot's does not")
+	return r.removeNetworks(snapshot, "the snapshot's docker-compose.yml")
 }
 
 // withBarrier answers the dotenv text env with restoreBarrier set to the

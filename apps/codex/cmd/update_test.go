@@ -53,11 +53,14 @@ func unsetenv(t *testing.T, key string) {
 // scenario's files: <key>.out on stdout and <key>.exit as its status;
 // <key>.edit is appended to docker-compose.yml, as an edit made while the
 // update runs; the schema read finds the running cyfr from cyfrps.* and
-// answers from schema.*, through it or offline; a network's read answers
-// from network-ls-<compose name>.*, the containers attached to network id
-// from network-ours-<id>.* (this project's) and network-all-<id>.*, and
-// its removal from network-rm-<id>.*; <key>.signal sends SIGTERM to the updating process first and <key>.block
-// waits for <key>.release. eval.live answers that many live reads first.
+// answers from schema.*, through it or offline; the list of a project's
+// networks answers from network-ls-<project>.*, a line of id and compose
+// network name each, the containers attached to network id from
+// network-ours-<id>.* (this project's) and network-all-<id>.*, and its
+// removal from network-rm-<id>.*; an `up -d --no-deps`, the start of the
+// services beside the head's, answers from up-no-deps.*; <key>.signal
+// sends SIGTERM to the updating process first and <key>.block waits for
+// <key>.release. eval.live answers that many live reads first.
 const fakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
 note=""
@@ -96,6 +99,7 @@ if [ "$1" = compose ]; then
   case "$sub" in
     exec) answer rpc ;;
     stop) answer "stop-${1:-all}" ;;
+    up) case "$*" in *--no-deps*) answer up-no-deps ;; *) answer up ;; esac ;;
     ps) case "$*" in *--format*) answer stack ;; *) answer ps ;; esac ;;
     config) case "$*" in *--services*) answer services ;; *) answer config ;; esac ;;
     run)
@@ -625,6 +629,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"stop",
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
+		networkList(access.ProjectName(s.project)),
 		"ENGINE release",
 		"SCAFFOLD WRITE",
 		"ENGINE start update",
@@ -636,15 +641,19 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 
-	// Before the switch every call saw the old compose file and no complete
-	// snapshot; the start saw the switched file and the snapshot.
+	// Before the switch every call saw the old compose file, and every one
+	// before the list of the project's networks no complete snapshot; the
+	// start saw the switched file and the snapshot.
 	sum := func(data []byte) string { return fmt.Sprintf("%x", md5.Sum(data)) }
 	state, _ := os.ReadFile(filepath.Join(s.fake, "state"))
 	for _, line := range strings.Split(strings.TrimSpace(string(state)), "\n") {
 		fields := strings.Fields(line)
 		wantSum, wantSnapshots := sum(s.compose), "0"
-		if fields[0] == "up" || fields[0] == "services" || fields[0] == "stack" {
+		switch {
+		case fields[0] == "up" || fields[0] == "services" || fields[0] == "stack":
 			wantSum, wantSnapshots = sum(switched(s.compose)), "1"
+		case strings.HasPrefix(fields[0], "network-ls-"):
+			wantSnapshots = "1"
 		}
 		if fields[1] != wantSum || fields[2] != wantSnapshots {
 			t.Errorf("docker %s saw compose %s and %s snapshots, want %s and %s", fields[0], fields[1], fields[2], wantSum, wantSnapshots)
@@ -1119,7 +1128,7 @@ func TestEveryDockerCallCarriesItsDeadline(t *testing.T) {
 			return pullTimeout
 		case strings.Contains(line, "pg_dump") || strings.Contains(line, "pg_restore"):
 			return dumpTimeout
-		case slices.Contains(c.Args, "stop"):
+		case slices.Contains(c.Args, "stop") || c.Args[0] == "network":
 			return stopTimeout
 		}
 		return composeRunTimeout
@@ -1277,10 +1286,10 @@ func TestUpdateWritesTheReleasesComposeFile(t *testing.T) {
 // .env.example as that release shipped them (testdata/three-container),
 // updated to this tree's: no old service's name refuses it; its compose
 // file, the release's own, is replaced without a word about edits; each
-// old Locus service stops with the rest; the networks the old file
-// declares and the new one does not are removed after the stop and the
-// snapshot and before the switch, each after this project's containers on
-// it, by its compose labels, and no other network; the offer names each
+// old Locus service stops with the rest; this project's networks, listed
+// by its compose label, that the new file does not use are removed after
+// the stop and the snapshot and before the switch, each after this
+// project's containers on it, and no other network; the offer names each
 // image that changes, never an old service; and .env loses
 // CYFR_LOCUS_BUILDS_URL, which this release does not read, takes the new
 // shipped CYFR_PRIVATE_EGRESS_TARGETS, keeps the builds key, and a worker
@@ -1326,14 +1335,27 @@ func cyfrBackendsURL(t *testing.T, composePath, envPath string) string {
 const threeContainerBuildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
 
 // retiredNetworks are the networks the three-container release declares
-// and this one does not, in order; the scenario's network i is net<i>,
+// and this one does not use, in order; the scenario's network i is net<i>,
 // its one container of the project ctrnet<i>.
 var retiredNetworks = []string{"locus-backends", "locus-builds", "locus-runtime"}
 
+// answerNetworks answers the list of the scenario's project's networks
+// with lines, each a network's id and compose name.
+func (s *updateScenario) answerNetworks(lines ...string) {
+	s.answer("network-ls-"+access.ProjectName(s.project)+".out", strings.Join(lines, "\n")+"\n")
+}
+
+// networkList is the list of the compose project's networks removeNetworks
+// reads, each network's id and compose name.
+func networkList(project string) string {
+	return `network ls --format {{.ID}} {{.Label "com.docker.compose.network"}} --filter label=com.docker.compose.project=` + project
+}
+
 // newThreeContainerScenario is an update from the three-container release
 // with builds on: every service of its stack running, the builder and its
-// guard among them, each retired network holding one container of the
-// project, and .env as that release left it.
+// guard among them, the project's networks those the release declares,
+// each retired one holding one container of the project, and .env as that
+// release left it.
 func newThreeContainerScenario(t *testing.T) *updateScenario {
 	old := lastReleaseCompose(t)
 	s := newUpdateScenario(t, []byte(old), nil)
@@ -1343,12 +1365,14 @@ func newThreeContainerScenario(t *testing.T) *updateScenario {
 		testVersion: readShippedTemplate(t),
 	}
 	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-builds-guard\nlocus-backends\n")
+	networks := []string{"netd default", "nete edge"}
 	for i, name := range retiredNetworks {
 		id := fmt.Sprintf("net%d", i)
-		s.answer("network-ls-"+name+".out", id+"\n")
+		networks = append(networks, id+" "+name)
 		s.answer("network-ours-"+id+".out", "ctr"+id+"\n")
 		s.answer("network-all-"+id+".out", "ctr"+id+"\n")
 	}
+	s.answerNetworks(networks...)
 	s.edit(".env", scenarioEnv+
 		"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"+
 		"CYFR_LOCUS_BUILDS_KEY="+threeContainerBuildsKey+"\n"+
@@ -1395,7 +1419,7 @@ func (s *updateScenario) buildsSelection() string {
 // stopped.
 func TestUpdateStopsTheThreeContainerBuildsUnderTheirProfile(t *testing.T) {
 	s := newThreeContainerScenario(t)
-	s.withProfiles(map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}})
+	s.withProfiles(buildsProfiles)
 	if out, err := s.run(context.Background()); err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
@@ -1415,16 +1439,54 @@ func TestUpdateStopsTheThreeContainerBuildsUnderTheirProfile(t *testing.T) {
 // builder and its guard under the builds' own profile.
 func TestUpdateRecoveryStartsTheThreeContainerBuildsAgain(t *testing.T) {
 	s := newThreeContainerScenario(t)
-	s.withProfiles(map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}})
+	s.withProfiles(buildsProfiles)
 	s.answer("network-rm-net0.exit", "1")
 	out, err := s.run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "could not remove the network locus-backends") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
 	s.composeUnchanged()
-	want := append(started("update"), s.buildsSelection()+"up -d locus-builds locus-builds-guard")
+	want := append(started("update"), s.buildsSelection()+"up -d --no-deps locus-builds locus-builds-guard")
 	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
 		t.Errorf("the old stack was not started again as it ran:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// buildsProfiles are the three-container stack's services under a profile,
+// as its compose file declares them.
+var buildsProfiles = map[string][]string{"caddy": {"public"}, "locus-builds": {"locus-builds"}, "locus-builds-guard": {"locus-builds"}}
+
+// The recovery after a failure before the switch starts exactly the
+// services that ran: with the builder running and its guard, a dependency
+// of its under the same profile, stopped, the builder starts alone and
+// nothing it depends on starts.
+func TestUpdateRecoveryStartsNoServiceTheBuildsDependOn(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(buildsProfiles)
+	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-backends\n")
+	s.answer("network-rm-net0.exit", "1")
+	if out, err := s.run(context.Background()); err == nil || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	want := append(started("update"), s.buildsSelection()+"up -d --no-deps locus-builds")
+	if log := s.log(); len(log) < len(want) || !slices.Equal(log[len(log)-len(want):], want) {
+		t.Errorf("the recovery did not start the builder alone:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// A recovery whose head's services started and whose builder did not says
+// so, naming the services and the command that starts them, never that
+// 'cyfr up' starts the old stack.
+func TestUpdateRecoveryWhoseBuildsDoNotStartSaysWhatStartsThem(t *testing.T) {
+	s := newThreeContainerScenario(t)
+	s.withProfiles(buildsProfiles)
+	s.answer("network-rm-net0.exit", "1")
+	s.answer("up-no-deps.exit", "1")
+	out, err := s.run(context.Background())
+	said := ".\nThe old stack was started again and docker-compose.yml is unchanged, but locus-builds, locus-builds-guard did not start ("
+	starts := "); 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them"
+	if err == nil || strings.Count(err.Error(), said) != 1 || !strings.HasSuffix(err.Error(), starts) || strings.Contains(err.Error(), "'cyfr up'") {
+		t.Fatalf("update answered %v\n%s", err, out)
 	}
 }
 
@@ -1451,11 +1513,10 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		}
 	}
 	project := access.ProjectName(s.project)
-	want := []string{}
-	for i, name := range retiredNetworks {
+	want := []string{networkList(project)}
+	for i := range retiredNetworks {
 		id := fmt.Sprintf("net%d", i)
 		want = append(want,
-			"network ls -q --filter label=com.docker.compose.project="+project+" --filter label=com.docker.compose.network="+name,
 			"ps -a -q --no-trunc --filter network="+id+" --filter label=com.docker.compose.project="+project,
 			"ps -a -q --no-trunc --filter network="+id,
 			"rm ctr"+id,
@@ -1501,7 +1562,7 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 		"\nstopped locus-backends-guard, locus-runtime, locus-builds, locus-builds-guard, locus-backends in ",
 		"Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_LOCUS_BUILDS_URL.\n",
 		"Set in .env to release 0.9.0's shipped values the settings that held release 0.8.0's: CYFR_PRIVATE_EGRESS_TARGETS=locus.\n",
-		"Removed the networks release 0.8.0 declared and release 0.9.0 does not: locus-backends, locus-builds, locus-runtime.\n",
+		"Removed this project's networks release 0.9.0 does not use: locus-backends, locus-builds, locus-runtime.\n",
 		"Its images change:\n  ghcr.io/cyfrworks/cyfr: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n" +
 			"  ghcr.io/cyfrworks/cyfr-locus: 0.8.0@sha256:" + strings.Repeat("c", 12) + "… → 0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n  caddy: ",
 		"These .env settings name a service release 0.9.0's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n" +
@@ -1526,11 +1587,11 @@ func TestUpdateRefusesARetiredNetworkAnotherProjectUses(t *testing.T) {
 	old := lastReleaseCompose(t)
 	s := newUpdateScenario(t, []byte(old), nil)
 	s.composes = map[string]string{"0.8.0": old}
-	s.answer("network-ls-locus-backends.out", "net0\n")
+	s.answerNetworks("net0 locus-backends")
 	s.answer("network-ours-net0.out", "ctrours\n")
 	s.answer("network-all-net0.out", "ctrours\n0123456789abcdef0123\n")
 	out, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "cyfr update could not remove the network locus-backends, which release 0.8.0 declared and release 0.9.0 does not (container 0123456789ab of another Compose project is attached to it)") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
+	if err == nil || !strings.Contains(err.Error(), "cyfr update could not remove the network locus-backends, which release 0.9.0 does not use (container 0123456789ab of another Compose project is attached to it)") || !strings.Contains(err.Error(), "The old stack was started again; docker-compose.yml is unchanged") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
 	s.composeUnchanged()

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"gopkg.in/yaml.v3"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
@@ -312,6 +313,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop locus",
 		profiles + "stop locus-guard",
 		profiles + "stop",
+		networkList(access.ProjectName(r.project)),
 		profiles + "rm --force cyfr",
 		r.stagedConfig(),
 		profiles + testOffline + testLive,
@@ -323,14 +325,14 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	if got := r.log(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// The stop and the removal of the stopped cyfr container saw the switched
-	// compose file; from the configuration read on, every call saw the
-	// snapshot's.
+	// The stop, the list of the project's networks and the removal of the
+	// stopped cyfr container saw the switched compose file; from the
+	// configuration read on, every call saw the snapshot's.
 	sum := func(data []byte) string { return fmt.Sprintf("%x", md5.Sum(data)) }
 	for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.fake, "state"))), "\n") {
 		fields := strings.Fields(line)
 		wantSum := sum([]byte(compose))
-		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") {
+		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") || strings.HasPrefix(fields[0], "network-ls-") {
 			wantSum = sum(switched([]byte(compose)))
 		}
 		if fields[1] != wantSum {
@@ -389,13 +391,10 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	}
 }
 
-// An update from the three-container release that fails after its switch
-// leaves the new release's network locus holding the address range the
-// old release's locus-runtime takes; the restore of its snapshot removes
-// the project's networks the switched docker-compose.yml declares and the
-// snapshot's does not, after the stop and before anything runs under the
-// snapshot's file, and the old stack starts.
-func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
+// failedSwitchSnapshot is an update from the three-container release that
+// failed after its switch, its snapshot of that release to restore, with
+// the fake docker swapped for restoreFakeDocker and its log cleared.
+func failedSwitchSnapshot(t *testing.T) *restoreScenario {
 	s := newThreeContainerScenario(t)
 	s.edit("data/cyfr.db", sqliteBytes)
 	s.answer("up.exit", "1")
@@ -411,17 +410,124 @@ func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
 		}
 	}
 	s.answer("mark.out", "CYFR_RESTORE_ID="+testRestored+"\n")
-	s.answer("network-ls-locus.out", "net9\n")
-	s.answer("network-ours-net9.out", "ctrlocus\n")
-	s.answer("network-all-net9.out", "ctrlocus\n")
-	r := &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
+	return &restoreScenario{updateScenario: s, dir: s.snapshotDir()}
+}
+
+// The restore of a snapshot of the three-container release, whose builder
+// and its guard run under a profile of their own, starts the snapshot's
+// head alone and then says that the two are not started and the command
+// that starts them.
+func TestRestoreOfABuildsSnapshotSaysTheBuildsAreNotStarted(t *testing.T) {
+	r := failedSwitchSnapshot(t)
+	r.withProfiles(buildsProfiles)
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	said := "\nThese services are not started, since .env selects none of their profiles: locus-builds, locus-builds-guard; 'docker compose --profile locus-builds up -d locus-builds locus-builds-guard' starts them.\n"
+	if !strings.HasSuffix(out, said) || strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not end saying once %q:\n%s", said, out)
+	}
+	for _, line := range r.log() {
+		if strings.Contains(line, " up ") && strings.Contains(line, "locus-builds") {
+			t.Errorf("the restore ran %q", line)
+		}
+	}
+}
+
+// What a restore removes is this project's networks, listed by its compose
+// label, that the snapshot's docker-compose.yml does not use, where one
+// with no networks key uses the default network alone: the project's
+// explicit network locus goes after the stop and before the start, its
+// default network stays, and another project's network is never listed or
+// touched.
+func TestRestoreOfASnapshotOnTheDefaultNetworkRemovesTheProjectsOthers(t *testing.T) {
+	r := newRestoreScenario(t, withoutNetworks(t, shippedCompose(t)), nil, nil)
+	r.edit("docker-compose.yml", string(shippedCompose(t)))
+	project := access.ProjectName(r.project)
+	r.answerNetworks("netd default", "net9 locus")
+	r.answer("network-ours-net9.out", "ctrlocus\n")
+	r.answer("network-all-net9.out", "ctrlocus\n")
+	r.answer("network-ls-other.out", "net7 locus\n")
+	out, err := r.restore(true)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	removal := []string{
+		networkList(project),
+		"ps -a -q --no-trunc --filter network=net9 --filter label=com.docker.compose.project=" + project,
+		"ps -a -q --no-trunc --filter network=net9",
+		"rm ctrlocus",
+		"network rm net9",
+	}
+	log := r.log()
+	first := slices.Index(log, removal[0])
+	if first < 0 || first+len(removal) > len(log) || !slices.Equal(log[first:first+len(removal)], removal) {
+		t.Fatalf("the restore did not remove the network locus alone:\n%s", strings.Join(log, "\n"))
+	}
+	if stopped, start := slices.Index(log, profiles+"stop"), slices.Index(log, "ENGINE start restore"); first < stopped || start < first+len(removal) {
+		t.Errorf("the network locus was not removed between the stop and the start:\n%s", strings.Join(log, "\n"))
+	}
+	for _, line := range log {
+		if strings.Contains(line, "net7") || strings.Contains(line, "netd") || (strings.HasPrefix(line, "network ") && line != removal[0] && line != removal[4]) {
+			t.Errorf("the restore ran %q", line)
+		}
+	}
+	if said := "Removed this project's networks the snapshot's docker-compose.yml does not use: locus.\n"; strings.Count(out, said) != 1 {
+		t.Errorf("the restore did not say once %q:\n%s", said, out)
+	}
+}
+
+// withoutNetworks is the compose file data with no networks key, at the top
+// level or in a service: every service on the default network.
+func withoutNetworks(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	drop := func(m *yaml.Node) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == "networks" {
+				m.Content = slices.Delete(m.Content, i, i+2)
+				return
+			}
+		}
+	}
+	doc := root.Content[0]
+	drop(doc)
+	services := mapValue(doc, "services")
+	for i := 1; i < len(services.Content); i += 2 {
+		drop(services.Content[i])
+	}
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte("networks:")) {
+		t.Fatal("the compose file still holds a networks key")
+	}
+	return out
+}
+
+// An update from the three-container release that fails after its switch
+// leaves the new release's network locus holding the address range the
+// old release's locus-runtime takes; the restore of its snapshot removes
+// the project's networks the snapshot's docker-compose.yml does not use,
+// after the stop and before anything runs under the snapshot's file, and
+// the old stack starts.
+func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
+	r := failedSwitchSnapshot(t)
+	r.answerNetworks("netd default", "nete edge", "net9 locus", "net0 locus-backends")
+	r.answer("network-ours-net9.out", "ctrlocus\n")
+	r.answer("network-all-net9.out", "ctrlocus\n")
 	out, err := r.restore(true)
 	if err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
 	project := access.ProjectName(r.project)
 	removal := []string{
-		"network ls -q --filter label=com.docker.compose.project=" + project + " --filter label=com.docker.compose.network=locus",
+		networkList(project),
 		"ps -a -q --no-trunc --filter network=net9 --filter label=com.docker.compose.project=" + project,
 		"ps -a -q --no-trunc --filter network=net9",
 		"rm ctrlocus",
@@ -435,13 +541,14 @@ func TestRestoreAfterAFailedSwitchRemovesTheNewReleasesNetworks(t *testing.T) {
 	if stopped, staged := slices.Index(log, profiles+"stop"), slices.Index(log, r.stagedConfig()); first < stopped || staged < first {
 		t.Errorf("the network locus was not removed between the stop and the first read of the snapshot's file:\n%s", strings.Join(log, "\n"))
 	}
-	if !slices.Equal(log[len(log)-2:], started("restore")) {
+	// After the start, the read of the restored file's own services.
+	if !slices.Equal(log[len(log)-3:len(log)-1], started("restore")) {
 		t.Errorf("the old stack was not started:\n%s", strings.Join(log, "\n"))
 	}
 	if got := read(t, filepath.Join(r.project, "docker-compose.yml")); got != lastReleaseCompose(t) {
 		t.Error("docker-compose.yml is not the snapshot's")
 	}
-	if said := "Removed the networks docker-compose.yml declares and the snapshot's does not: locus.\n"; strings.Count(out, said) != 1 {
+	if said := "Removed this project's networks the snapshot's docker-compose.yml does not use: locus.\n"; strings.Count(out, said) != 1 {
 		t.Errorf("the restore did not say once %q:\n%s", said, out)
 	}
 }
