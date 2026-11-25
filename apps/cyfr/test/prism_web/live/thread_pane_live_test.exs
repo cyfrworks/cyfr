@@ -3555,10 +3555,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   end
 
   # A file a turn proposed beside a scroll waits for the person: its card
-  # shows its path, size and digest, the whole file when it is text, a
-  # script marked as one that runs with the pack sheet's sentence, and
-  # Save file writes exactly that from the person's own session, or says
-  # why it did not. A script the card cannot show whole offers no Save.
+  # shows its path, its size and digest, what it replaces, the whole text,
+  # and the two things true of a script, each by its rule; Save file keeps
+  # the proposal on that row as the card showed it, from the person's own
+  # session, or says why it did not.
   describe "a file a turn proposed" do
     defp file_proposed!(here, thread, proposal) do
       {:ok, row} =
@@ -3581,19 +3581,19 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     defp file_card(row, part), do: ~s([id$="-proposal-#{row.id}-#{part}"])
 
+    # A proposal as the loop keeps it on its row (`Aqua.Loop`).
     defp a_file(path, bytes, extra \\ %{}) do
-      text = String.valid?(bytes) and not String.contains?(bytes, <<0>>)
       runs = match?(<<"#!", _::binary>>, bytes)
 
       Map.merge(
         %{
           "name" => "mine:fern",
           "path" => path,
-          "encoding" => if(text, do: "utf8", else: "base64"),
-          "content" => if(text, do: bytes, else: Base.encode64(bytes)),
+          "content" => bytes,
           "size" => byte_size(bytes),
           "sha256" => Prima.Digest.sha256(bytes),
           "against" => "none",
+          "against_size" => nil,
           "runs" => runs,
           "script" => runs or String.contains?(path, "/scripts/")
         },
@@ -3610,7 +3610,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         )
     end
 
-    test "a script's card shows all of it, marked as one that runs, and Save file writes exactly it",
+    test "a script's card shows all of it and what is true of it, and Save file writes exactly it",
          %{conn: conn, athanor: athanor, here: here, thread: thread} do
       fern!(here)
       actor = Sanctum.Context.actor(here)
@@ -3624,10 +3624,14 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       size = pane |> element(file_card(row, "size")) |> render()
       assert size =~ "#{byte_size(script)} bytes"
       assert size =~ Prima.Digest.sha256(script)
+      refute has_element?(pane, file_card(row, "replaces"))
 
-      runs = pane |> element(file_card(row, "runs")) |> render()
-      assert runs =~ "This file is a script: it runs in your programs&#39; sessions."
-      assert runs =~ "Bring in only packs you trust."
+      assert pane |> element(file_card(row, "executable")) |> render() =~
+               "It begins with #!, so it will be executable."
+
+      may = pane |> element(file_card(row, "script")) |> render()
+      assert may =~ "your programs may run it in their sessions."
+      assert may =~ "Bring in only packs you trust."
 
       # The whole script, its last line among it, never a cut view.
       shown = pane |> element(file_card(row, "content")) |> render()
@@ -3660,32 +3664,56 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert {:ok, ^script} = Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
     end
 
-    test "a file that is not text shows its size and digest, and a script that is not text offers no Save",
+    # Each line is said by its own rule: a reference under scripts/ that
+    # does not begin with `#!` is no executable file, while a program may
+    # still run it; a file beside the scroll is neither. A replacement says
+    # what it replaces, by the old file's size and digest.
+    test "a card says only what is true of its file, and what a replacement replaces",
+         %{conn: conn, athanor: athanor, here: here, thread: thread} do
+      fern!(here)
+      readme = file_proposed!(here, thread, a_file("skills/fern/scripts/README.txt", "Notes.\n"))
+
+      notes =
+        file_proposed!(
+          here,
+          thread,
+          a_file("skills/fern/notes.md", "Shade.\n", %{
+            "against" => Prima.Digest.sha256("Sun.\n"),
+            "against_size" => 5
+          })
+        )
+
+      pane = open_pane(conn, athanor, thread)
+
+      refute has_element?(pane, file_card(readme, "executable"))
+      assert has_element?(pane, file_card(readme, "script"))
+      refute has_element?(pane, file_card(notes, "executable"))
+      refute has_element?(pane, file_card(notes, "script"))
+
+      assert pane |> element(file_card(notes, "replaces")) |> render() =~
+               "It replaces the file as Aqua read it: 5 bytes, #{Prima.Digest.sha256("Sun.\n")}."
+    end
+
+    # Save keeps the proposal as the card showed it: a row changed after the
+    # card was drawn is not saved by the old card.
+    test "a card whose row changed after it was drawn saves nothing",
          %{conn: conn, athanor: athanor, here: here, thread: thread} do
       fern!(here)
       actor = Sanctum.Context.actor(here)
-      leaf = <<137, 80, 78, 71, 0, 9>>
-      tool = <<127, 69, 76, 70, 0, 1>>
-      image = file_proposed!(here, thread, a_file("skills/fern/leaf.png", leaf))
-      binary = file_proposed!(here, thread, a_file("skills/fern/scripts/tool", tool))
+      path = "skills/fern/notes.txt"
+      row = file_proposed!(here, thread, a_file(path, "version one"))
       pane = open_pane(conn, athanor, thread)
+      assert pane |> element(file_card(row, "content")) |> render() =~ "version one"
 
-      assert has_element?(pane, file_card(image, "binary"))
-      refute has_element?(pane, file_card(image, "content"))
-      refute has_element?(pane, file_card(image, "runs"))
-      pane |> element(file_card(image, "save")) |> render_click()
-      assert has_element?(pane, file_card(image, "saved"))
-      assert {:ok, ^leaf} = Arca.get(actor, ~w(aqua scrolls mine skills fern leaf.png))
+      next = Map.put(Threads.payload(row), "proposal", a_file(path, "version two"))
+      {:ok, _} = Threads.update_message(actor, row.id, %{payload: next})
 
-      assert has_element?(pane, file_card(binary, "runs"))
-      assert pane |> element(file_card(binary, "unshown")) |> render() =~ "use Files"
-      refute has_element?(pane, file_card(binary, "save"))
+      pane |> element(file_card(row, "save")) |> render_click()
 
-      # Its Save sent anyway writes nothing.
-      render_click(pane, "save_file", %{"id" => binary.id})
+      assert pane |> element(file_card(row, "refused")) |> render() =~
+               "This proposal is not the file its card showed"
 
-      assert {:error, :not_found} =
-               Arca.get(actor, ~w(aqua scrolls mine skills fern scripts tool))
+      assert {:error, :not_found} = Arca.get(actor, ~w(aqua scrolls mine skills fern notes.txt))
     end
 
     test "a file whose scroll is not saved yet is refused, saying to save the scroll first",

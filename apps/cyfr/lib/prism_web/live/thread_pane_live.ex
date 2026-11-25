@@ -873,24 +873,22 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # A file a turn proposed beside a scroll, saved from the person's own
-  # session: exactly the bytes the card shows, read again from the row,
-  # and what the proposal was made against. A file the card cannot show
-  # whole is not saved from here.
-  def handle_event("save_file", %{"id" => id}, socket) do
+  # session: keep the proposal on this row as its card showed it. The page
+  # sends the row and the digest it rendered, and the action writes the
+  # row's bytes only while they are that digest, so a row changed after
+  # the card was drawn is not saved by the old card.
+  def handle_event("save_file", %{"id" => id, "sha256" => sha256}, socket) do
     with %{id: thread_id} <- socket.assigns.thread,
          ctx = socket.assigns.context,
          {:ok, %{thread_id: ^thread_id} = row} <-
            Threads.get_message(Sanctum.Context.actor(ctx), id),
-         %{"path" => _} = proposal <- proposal(row),
-         true <- shown_whole?(proposal) do
-      args =
-        Map.merge(
-          Map.take(proposal, ~w(name path content encoding against)),
-          %{"action" => "skill_file"}
-        )
-
+         true <- file_proposal?(row) do
       status =
-        case call_tool(ctx, "aqua", args) do
+        case call_tool(ctx, "aqua", %{
+               "action" => "skill_file",
+               "proposal" => id,
+               "sha256" => sha256
+             }) do
           {:ok, _saved} -> :saved
           {:error, reason} -> {:refused, error_message(reason)}
         end
@@ -2522,20 +2520,19 @@ defmodule PrismWeb.ThreadPaneLive do
   attr :msg, :map, required: true
   attr :status, :any, default: nil
 
-  # A file a turn proposed beside a scroll: its path, size and digest,
-  # what it replaces, a text file whole, a script marked as one that runs
-  # with the pack sheet's sentence, and Save, which writes exactly that. A
-  # script the page cannot show whole (one that is not text) offers no
-  # Save: the person reads and keeps it through Files.
+  # A file a turn proposed beside a scroll: its path, its size and the
+  # digest of the text shown, what it replaces, the text whole, and the two
+  # things true of a script, each by its one rule: the file will be
+  # executable when it begins with `#!` (the own-pack rule), and a program
+  # may run it when it is a script as the pack sheet counts one, said with
+  # the sheet's sentence. Save file sends the digest of what it shows.
   defp file_proposal(assigns) do
     proposal = proposal(assigns.msg)
 
     assigns =
       assigns
       |> assign(:proposal, proposal)
-      |> assign(:text, proposal["encoding"] == "utf8")
-      |> assign(:script, proposal["script"] == true or proposal["runs"] == true)
-      |> assign(:whole, shown_whole?(proposal))
+      |> assign(:sha256, Prima.Digest.sha256(proposal["content"]))
       |> assign(:trust, PrismWeb.AquaLive.ScrollsComponent.trust())
 
     ~H"""
@@ -2545,27 +2542,28 @@ defmodule PrismWeb.ThreadPaneLive do
           do:
             "Aqua proposes a new file beside the scroll #{@proposal["name"]}. Nothing is kept until you save it.",
           else:
-            "Aqua proposes a change to a file beside the scroll #{@proposal["name"]}, made against the file as it read it (#{@proposal["against"]}). Nothing changes until you save it."}
+            "Aqua proposes a change to a file beside the scroll #{@proposal["name"]}. Nothing changes until you save it."}
       </p>
       <p id={@id <> "-path"} class="font-mono text-gray-200">{@proposal["path"]}</p>
       <p id={@id <> "-size"} class="text-gray-400">
-        {@proposal["size"]} bytes, {@proposal["sha256"]}
+        {byte_size(@proposal["content"])} bytes, {@sha256}
       </p>
-      <div :if={@script} id={@id <> "-runs"} class="space-y-1 text-amber-200">
-        <p>This file is a script: it runs in your programs' sessions.</p>
+      <p :if={@proposal["against"] != "none"} id={@id <> "-replaces"} class="text-gray-400">
+        It replaces the file as Aqua read it: {@proposal["against_size"]} bytes, {@proposal[
+          "against"
+        ]}.
+      </p>
+      <p :if={@proposal["runs"] == true} id={@id <> "-executable"} class="text-amber-200">
+        It begins with #!, so it will be executable.
+      </p>
+      <div :if={@proposal["script"] == true} id={@id <> "-script"} class="space-y-1 text-amber-200">
+        <p>It is among the scroll's scripts: your programs may run it in their sessions.</p>
         <p>{@trust}</p>
       </div>
       <pre
-        :if={@text}
         id={@id <> "-content"}
         class="whitespace-pre-wrap font-mono text-gray-300 max-h-64 overflow-y-auto"
       >{@proposal["content"]}</pre>
-      <p :if={not @text and @whole} id={@id <> "-binary"} class="text-gray-300">
-        A file that is not text: shown by its size and digest.
-      </p>
-      <p :if={not @whole} id={@id <> "-unshown"} class="text-gray-300">
-        This script cannot be shown here, so it is not saved from here: use Files to read it and put it beside the scroll.
-      </p>
       <div class="flex flex-wrap items-center justify-end gap-2">
         <span :if={@status == :saved} id={@id <> "-saved"} class="text-green-400">
           Saved beside the scroll.
@@ -2574,11 +2572,12 @@ defmodule PrismWeb.ThreadPaneLive do
           {elem(@status, 1)}
         </span>
         <button
-          :if={@status != :saved and @whole}
+          :if={@status != :saved}
           id={@id <> "-save"}
           type="button"
           phx-click="save_file"
           phx-value-id={@msg.id}
+          phx-value-sha256={@sha256}
           class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white"
         >
           Save file
@@ -2587,14 +2586,6 @@ defmodule PrismWeb.ThreadPaneLive do
     </div>
     """
   end
-
-  # Whether the card shows all of what Save would write: a text file
-  # whole, or a file that is no script by its size and digest. A script
-  # that is not text is never saved unseen.
-  defp shown_whole?(proposal),
-    do:
-      proposal["encoding"] == "utf8" or
-        not (proposal["script"] == true or proposal["runs"] == true)
 
   # A scroll a turn proposed: exactly the name, description and body that
   # Save as scroll writes, and what came of a save.
@@ -3015,9 +3006,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp proposal(%{kind: "tool_result"} = row) do
     case Threads.payload(row)["proposal"] do
-      %{"name" => name, "path" => path, "content" => _, "encoding" => _, "against" => _} =
-          proposal
-      when is_binary(name) and is_binary(path) ->
+      %{"name" => name, "path" => path, "content" => content, "against" => _} = proposal
+      when is_binary(name) and is_binary(path) and is_binary(content) ->
         proposal
 
       %{"name" => name, "description" => _, "content" => _, "against" => _} = proposal ->

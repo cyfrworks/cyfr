@@ -41,13 +41,7 @@ defmodule Compendium.Providers.AquaConsentTest do
     calls = [
       {"skill_create", %{"name" => "mine:sneak", "description" => "d", "content" => "c"}},
       {"skill_update", %{"name" => "cyfr:capability-acquisition", "content" => "c"}},
-      {"skill_file",
-       %{
-         "name" => "mine:sneak",
-         "path" => "skills/sneak/a.sh",
-         "content" => "c",
-         "against" => "none"
-       }},
+      {"skill_file", %{"proposal" => "msg_sneak", "sha256" => Prima.Digest.sha256("c")}},
       {"reset", %{"all" => true}},
       {"update", %{"name" => "aqua", "content" => "x"}},
       {"create", %{"name" => "sneak", "content" => "x"}},
@@ -231,10 +225,11 @@ defmodule Compendium.Providers.AquaConsentTest do
              save.(proposal, "skill_create")
   end
 
-  # Every proposal is a turn's own call (`Arca.TurnStorage.own_turn/3`): a
-  # component a turn started, a page's call through the turn and a call
-  # naming no open turn of the person's propose nothing, a scroll or a file
-  # alike; the turn's own call proposes each.
+  # Every proposal is a running turn's own call
+  # (`Arca.TurnStorage.own_turn/3`): a component a turn started, a page's
+  # call through the turn, a call naming no open turn of the person's, and
+  # a call of a turn paused or not yet started propose nothing, a scroll or
+  # a file alike; the running turn's own call proposes each.
   test "only a turn's own call proposes a scroll or a file" do
     auth = granting(["aqua.skill_create", "aqua.skill_update", "aqua.skill_file"])
     ctx = Sanctum.TestContext.local(:prism)
@@ -253,7 +248,9 @@ defmodule Compendium.Providers.AquaConsentTest do
       {"a component the turn started",
        %{lineage | parent_execution_id: component.parent_execution_id, attempt: component.attempt}},
       {"a page through the turn", Map.put(lineage, :called_by_page, true)},
-      {"a call naming no turn", caller!(ctx)}
+      {"a call naming no turn", caller!(ctx)},
+      {"a paused turn", turn!(ctx, "paused")},
+      {"a turn not yet started", turn!(ctx, "accepted")}
     ]
 
     proposals = [
@@ -292,11 +289,13 @@ defmodule Compendium.Providers.AquaConsentTest do
   end
 
   # A file a turn proposes beside a scroll waits for the person: in the
-  # turn's own call it answers the file as Save would write it and writes
-  # nothing; the person's Save sends exactly that back from their own
-  # session, and is refused once the file is not as the proposal read it.
-  # The action saves a proposal and nothing else.
-  test "a chain proposes a file and writes nothing; Save writes exactly what it showed" do
+  # turn's own call it answers what the card says of the file, never its
+  # bytes, and writes nothing. The person's Save names the proposal's row
+  # and the digest its card showed, and nothing of the file: it writes the
+  # row's bytes only while they are that digest and the file is as the
+  # proposal read it, and a row of no proposal, of another athanor, or a
+  # file's bytes from the caller save nothing.
+  test "a chain proposes a file and writes nothing; Save keeps the proposal its card showed" do
     auth = granting(["aqua.skill_file"])
     ctx = Sanctum.TestContext.local(:prism)
     actor = Sanctum.Context.actor(ctx)
@@ -315,60 +314,112 @@ defmodule Compendium.Providers.AquaConsentTest do
       )
     end
 
-    save = fn proposal ->
+    # The proposal's row as the loop keeps it (`Aqua.Loop`): the answer,
+    # with the bytes from the call's own arguments.
+    row! = fn answer, bytes ->
+      proposal =
+        answer
+        |> Map.take([:path, :size, :sha256, :against, :against_size, :runs, :script])
+        |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+        |> Map.merge(%{"name" => answer.proposed, "content" => bytes})
+
+      {:ok, row} =
+        Arca.ThreadStorage.append(actor, lineage.thread_id, %{
+          author: Prima.Author.agent(),
+          sent_by: "aqua",
+          kind: "tool_result",
+          status: "proposed",
+          content: "proposed",
+          payload: %{"tool_call_id" => "c1", "name" => "aqua", "proposal" => proposal}
+        })
+
+      row
+    end
+
+    save = fn id, sha256 ->
       Sanctum.Gate.call_external("aqua", ctx, %{
         "action" => "skill_file",
-        "name" => proposal.proposed,
-        "path" => proposal.path,
-        "content" => proposal.content,
-        "encoding" => proposal.encoding,
-        "against" => proposal.against
+        "proposal" => id,
+        "sha256" => sha256
       })
     end
 
     script = "#!/bin/sh\necho water\n"
+    other_script = "#!/bin/sh\necho\n"
     path = ~w(aqua scrolls mine skills fern scripts water.sh)
 
     ask = %{
       "action" => "skill_file",
       "name" => "mine:fern",
       "path" => "skills/fern/scripts/water.sh",
-      "content" => Base.encode64(script),
-      "encoding" => "base64"
+      "content" => script
     }
 
-    assert {:ok, proposal} = in_chain.(ask)
+    assert {:ok, answer} = in_chain.(ask)
 
-    # Sent as base64, a text file is kept as text, for the card to show.
-    assert Map.delete(proposal, :note) == %{
+    assert Map.delete(answer, :note) == %{
              proposed: "mine:fern",
              path: "skills/fern/scripts/water.sh",
-             encoding: "utf8",
-             content: script,
              size: byte_size(script),
              sha256: Prima.Digest.sha256(script),
              against: "none",
+             against_size: nil,
              runs: true,
              script: true
            }
 
-    assert {:ok, second} = in_chain.(%{ask | "content" => Base.encode64("#!/bin/sh\necho\n")})
+    assert {:ok, second} = in_chain.(%{ask | "content" => other_script})
     assert {:error, :not_found} = Arca.get(actor, path)
 
-    assert {:ok, %{written: "mine:fern"}} = save.(proposal)
+    first_row = row!.(answer, script)
+    second_row = row!.(second, other_script)
+
+    # A digest that is not of the row's bytes, as a card drawn before the
+    # row changed sends, saves nothing.
+    assert {:error, {:conflict, "This proposal is not the file its card showed" <> _}} =
+             save.(first_row.id, Prima.Digest.sha256(other_script))
+
+    assert {:error, :not_found} = Arca.get(actor, path)
+
+    assert {:ok, %{written: "mine:fern"}} = save.(first_row.id, Prima.Digest.sha256(script))
     assert {:ok, ^script} = Arca.get(actor, path)
 
-    assert {:error, {:conflict, refusal}} = save.(second)
+    # The second read the same absence: saved after the first, it is
+    # refused and the first stays.
+    assert {:error, {:conflict, refusal}} =
+             save.(second_row.id, Prima.Digest.sha256(other_script))
+
     assert refusal =~ "changed since Aqua proposed this"
     assert {:ok, ^script} = Arca.get(actor, path)
 
-    # With nothing it was made against, it is no writer of its own.
-    assert {:error, {:invalid_argument, "aqua.skill_file saves a file Aqua proposed" <> _}} =
-             Sanctum.Gate.call_external(
-               "aqua",
-               ctx,
-               Map.delete(%{ask | "content" => "x", "encoding" => "utf8"}, "against")
-             )
+    # A row that holds no proposal, and another athanor's row, are none.
+    {:ok, post} =
+      Arca.ThreadStorage.append(actor, lineage.thread_id, %{
+        author: ctx.user_id,
+        sent_by: "person",
+        kind: "text",
+        content: script
+      })
+
+    assert {:error, {:not_found, "Proposal", _}} = save.(post.id, Prima.Digest.sha256(script))
+
+    {_a, b} = Sanctum.TestContext.two_contexts()
+
+    assert {:error, {:not_found, "Proposal", _}} =
+             Sanctum.Gate.call_external("aqua", Sanctum.TestContext.via(b, :prism), %{
+               "action" => "skill_file",
+               "proposal" => first_row.id,
+               "sha256" => Prima.Digest.sha256(script)
+             })
+
+    # A file's bytes from the caller are no Save.
+    for args <- [
+          %{ask | "content" => "x"},
+          Map.merge(ask, %{"proposal" => first_row.id, "sha256" => Prima.Digest.sha256(script)})
+        ] do
+      assert {:error, {:invalid_argument, "aqua.skill_file saves a file Aqua proposed" <> _}} =
+               Sanctum.Gate.call_external("aqua", ctx, args)
+    end
   end
 
   # A scroll's bound, stated once where it is written: a manifest of at
@@ -619,7 +670,7 @@ defmodule Compendium.Providers.AquaConsentTest do
   # The lineage of a call a running turn of the person's makes itself: its
   # thread, and the turn's root as the call's parent and root, as the loop
   # stamps it (`Aqua.Loop.Binding`).
-  defp turn!(ctx) do
+  defp turn!(ctx, status \\ "running") do
     actor = Sanctum.Context.actor(ctx)
     lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
     {:ok, thread} = Arca.Test.Days.thread(actor)
@@ -633,7 +684,7 @@ defmodule Compendium.Providers.AquaConsentTest do
     {1, _} =
       Arca.Repo.update_all(
         from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [root_execution_id: lineage.root_execution_id, status: "running"]
+        set: [root_execution_id: lineage.root_execution_id, status: status]
       )
 
     Map.put(lineage, :thread_id, thread.id)

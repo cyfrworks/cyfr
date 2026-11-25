@@ -1879,7 +1879,7 @@ defmodule Aqua.Loop do
           {"ok", text, false}
 
         other ->
-          %{text: text, is_error: error?} = render(call, shown(call, other))
+          %{text: text, is_error: error?} = render(call, other)
           {if(error?, do: "error", else: "ok"), text, error?}
       end
 
@@ -2006,23 +2006,29 @@ defmodule Aqua.Loop do
   end
 
   # A file a chain's `aqua.skill_file` proposed beside a scroll, kept on
-  # its result row whole: the bytes Save writes and the card shows, how
-  # they are held, what they were made against and whether they run.
+  # its result row whole: what the answer says of it, and the bytes Save
+  # writes and the card shows, taken from the call's own arguments and held
+  # to the answer's digest, so the provider's answer, and the request log
+  # that keeps it, carry none.
   defp proposed(
-         %Call{kind: :catalog, tool: "aqua", action: "skill_file"},
+         %Call{kind: :catalog, tool: "aqua", action: "skill_file", args: %{"content" => bytes}},
          {:ok, %{} = answer},
          payload
-       ) do
+       )
+       when is_binary(bytes) do
     case answer |> Jason.encode!() |> Jason.decode!() do
-      %{"proposed" => name, "path" => path, "content" => c, "against" => against} = kept
-      when is_binary(name) and is_binary(path) and is_binary(c) and is_binary(against) ->
-        Map.put(
-          payload,
-          "proposal",
-          kept
-          |> Map.take(~w(path encoding content size sha256 against runs script))
-          |> Map.put("name", name)
-        )
+      %{"proposed" => name, "path" => path, "sha256" => sha256, "against" => against} = kept
+      when is_binary(name) and is_binary(path) and is_binary(against) ->
+        if Prima.Digest.sha256(bytes) == sha256,
+          do:
+            Map.put(
+              payload,
+              "proposal",
+              kept
+              |> Map.take(~w(path size sha256 against against_size runs script))
+              |> Map.merge(%{"name" => name, "content" => bytes})
+            ),
+          else: payload
 
       _written ->
         payload
@@ -2030,13 +2036,6 @@ defmodule Aqua.Loop do
   end
 
   defp proposed(_call, _result, payload), do: payload
-
-  # What the model reads of a file it proposed: everything but the bytes
-  # it just wrote, which its row keeps for the person's Save.
-  defp shown(%Call{kind: :catalog, tool: "aqua", action: "skill_file"}, {:ok, %{} = answer}),
-    do: {:ok, Map.drop(answer, [:content, "content"])}
-
-  defp shown(_call, result), do: result
 
   defp page_value(%Call{kind: :hand}, {:ok, %{output: output}}),
     do: {:ok, Aqua.PageCalls.data(output)}

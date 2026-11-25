@@ -446,6 +446,14 @@ defmodule Compendium.PacksTest do
                agents: ["reviewer", "tester"],
                commands: ["about", "status"],
                skills: ["SKILL.md", "extra/one/SKILL.md"],
+               paths: [
+                 "custom/reviewer.md",
+                 "custom/tester.md",
+                 "cmds/status.md",
+                 "config/hooks.json",
+                 "servers.json",
+                 "extra"
+               ],
                unread: []
              }
 
@@ -477,6 +485,13 @@ defmodule Compendium.PacksTest do
                agents: ["reviewer"],
                commands: ["extra", "status"],
                skills: ["extra/one/SKILL.md"],
+               paths: [
+                 "custom/reviewer.md",
+                 "cmds",
+                 "more/extra.md",
+                 "config/hooks.json",
+                 "extra"
+               ],
                unread: []
              }
 
@@ -1210,7 +1225,7 @@ defmodule Compendium.PacksTest do
       second = "#!/bin/sh\necho more water\n"
       before = revision(ctx, "mine")
 
-      assert {:ok, %{against: "none", runs: true, script: true, text: true}} =
+      assert {:ok, %{against: "none", against_size: nil, runs: true, script: true}} =
                Packs.file_proposal(ctx, "mine:fern", path, first)
 
       assert {:ok, %{against: "none"}} = Packs.file_proposal(ctx, "mine:fern", path, second)
@@ -1240,20 +1255,27 @@ defmodule Compendium.PacksTest do
       # Proposed again over the file as it is now, the Save replaces it.
       against = Prima.Digest.sha256(first)
 
-      assert {:ok, %{against: ^against}} = Packs.file_proposal(ctx, "mine:fern", path, second)
+      size = byte_size(first)
+
+      assert {:ok, %{against: ^against, against_size: ^size}} =
+               Packs.file_proposal(ctx, "mine:fern", path, second)
+
+      # The file's digest is what a replacement was read against: changed
+      # and changed back through Files, it is the file the person saw.
+      full = "aqua/scrolls/mine/" <> path
+      {:ok, _} = Files.write(actor, full, "#!/bin/sh\necho meanwhile\n")
+      {:ok, _} = Files.write(actor, full, first)
+
       assert :ok = Packs.put_file(ctx, "mine:fern", path, second, against)
       assert {:ok, ^second} = Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
 
-      # A reference runs not; a file under scripts/ is a script as the sheet
-      # counts one, running only with `#!`; a binary is no text.
-      assert {:ok, %{runs: false, script: false, text: true}} =
+      # A reference is no script; a file under scripts/ is one as the sheet
+      # counts it, and will be executable only with `#!`.
+      assert {:ok, %{runs: false, script: false}} =
                Packs.file_proposal(ctx, "mine:fern", "skills/fern/notes.md", "Keep it shaded.\n")
 
       assert {:ok, %{runs: false, script: true}} =
-               Packs.file_proposal(ctx, "mine:fern", "skills/fern/scripts/x.py", "print(1)\n")
-
-      assert {:ok, %{text: false}} =
-               Packs.file_proposal(ctx, "mine:fern", "skills/fern/leaf.png", <<137, 80, 0, 1>>)
+               Packs.file_proposal(ctx, "mine:fern", "skills/fern/scripts/README.txt", "Notes.\n")
     end
 
     test "only a path beside a stored scroll of a pack of the person's own is proposed and saved",
@@ -1262,8 +1284,25 @@ defmodule Compendium.PacksTest do
         Files.write(
           actor,
           "aqua/scrolls/mine/.claude-plugin/plugin.json",
-          ~s({"name": "mine", "skills": "./skills/", "hooks": "./skills/fern/hooks.json"})
+          Jason.encode!(%{
+            "name" => "mine",
+            "description" => "See ./skills/fern/notes.md for background.",
+            "skills" => ["./skills/", "./skills/fern/extra"],
+            "hooks" => "./skills/fern/hooks.json",
+            "agents" => ["./skills/fern/agent.md"],
+            "commands" => %{"water" => %{"source" => "./skills/fern/water.md"}},
+            "mcpServers" => "./skills/fern/servers.json"
+          })
         )
+
+      {:ok, _} =
+        Files.write(
+          actor,
+          "aqua/scrolls/garden/skills/roses/SKILL.md",
+          "---\nname: roses\n---\n\nb\n"
+        )
+
+      {:ok, _} = Files.write(actor, "aqua/scrolls/garden/.claude-plugin/plugin.json", "{not json")
 
       {:ok, _} =
         Files.write(
@@ -1285,9 +1324,9 @@ defmodule Compendium.PacksTest do
           "Aqua proposes stays beside its scroll"
       end
 
-      named = fn path, manifest ->
-        "`#{path}` is named by the pack's own `#{manifest}`, which decides what its programs " <>
-          "load and run: change it through Files"
+      declared = fn path ->
+        "`#{path}` is declared by the pack's `.claude-plugin/plugin.json` as part of what its " <>
+          "programs load: change it through Files"
       end
 
       manifest =
@@ -1302,10 +1341,18 @@ defmodule Compendium.PacksTest do
         {"mine:fern", "skills/fern", "x", outside.("skills/fern")},
         {"mine:fern", "skills/fern/SKILL.md", "x", manifest},
         {"mine:fern", "skills/fern/sub/SKILL.md", "x", manifest},
-        {"mine:fern", "skills/fern/hooks.json", "{}",
-         named.("skills/fern/hooks.json", ".claude-plugin/plugin.json")},
-        {"mine:fern", "skills/fern/scripts/guard.sh", "#!/bin/sh\n",
-         named.("skills/fern/scripts/guard.sh", "hooks/hooks.json")},
+        {"mine:fern", "skills/fern/hooks.json", "{}", declared.("skills/fern/hooks.json")},
+        {"mine:fern", "skills/fern/agent.md", "a", declared.("skills/fern/agent.md")},
+        {"mine:fern", "skills/fern/water.md", "w", declared.("skills/fern/water.md")},
+        {"mine:fern", "skills/fern/servers.json", "{}", declared.("skills/fern/servers.json")},
+        {"mine:fern", "skills/fern/extra/tool/run.sh", "#!/bin/sh\n",
+         declared.("skills/fern/extra/tool/run.sh")},
+        {"garden:roses", "skills/roses/a.txt", "a",
+         "The pack `garden`'s `.claude-plugin/plugin.json` cannot be read, so what it " <>
+           "declares is not known: mend it through Files"},
+        {"mine:fern", "skills/fern/leaf.png", <<137, 80, 0, 1>>,
+         "A file Aqua proposes is text, which its card shows whole, and " <>
+           "`skills/fern/leaf.png` is not: put it in through Files"},
         {"mine:fern", "skills/fern/../x", "x",
          "`skills/fern/../x` is not a path a pack may hold: letters, digits, `_`, `-`, `.` " <>
            "and `/`, with no `..`"},
@@ -1331,13 +1378,56 @@ defmodule Compendium.PacksTest do
                path
       end
 
-      # The plugin manifest's `skills` names where scrolls are, no path a
-      # program runs: a reference beside the scroll is proposed and saved.
-      assert {:ok, %{against: "none"}} =
-               Packs.file_proposal(ctx, "mine:fern", "skills/fern/notes.md", "n\n")
+      # The default `skills/` declares nothing beyond the scrolls' folder, a
+      # path the manifest's prose mentions is an ordinary file, and a hook
+      # that names a file as a program's argument declares no path (a
+      # stated limit): each is proposed and saved.
+      for path <- ["skills/fern/notes.md", "skills/fern/scripts/guard.sh"] do
+        assert {:ok, %{against: "none"}} = Packs.file_proposal(ctx, "mine:fern", path, "n\n"),
+               path
 
-      assert :ok = Packs.put_file(ctx, "mine:fern", "skills/fern/notes.md", "n\n", "none")
-      assert length(revision(ctx, "mine").files) == 4
+        assert :ok = Packs.put_file(ctx, "mine:fern", path, "n\n", "none"), path
+      end
+
+      assert length(revision(ctx, "mine").files) == 5
+    end
+
+    # The Save would refuse a file the pack or the packs switched on have
+    # no room for; the proposal says so first, as its early notice.
+    test "a proposal the pack or the set has no room for is refused at the proposal",
+         %{ctx: ctx, actor: actor} do
+      fill = fn pack, count ->
+        :ok =
+          Arca.Overlay.edit_unit(actor, ["aqua", "scrolls", pack], fn current ->
+            base = current || [{[".cyfr-pack.json"], Packs.encode_record(Packs.own_record())}]
+            {:ok, base ++ for(i <- 1..count, do: {["skills", "fern", "file#{i}"], "a"})}
+          end)
+      end
+
+      fill.("mine", 2_047)
+      path = "skills/fern/extra.txt"
+      full = "The pack `mine` would hold 2049 files, past a pack's 2048"
+
+      assert {:error, {:invalid_argument, ^full}} =
+               Packs.file_proposal(ctx, "mine:fern", path, "x")
+
+      assert {:error, {:invalid_argument, ^full}} =
+               Packs.put_file(ctx, "mine:fern", path, "x", "none")
+
+      # A pack with room, while the packs switched on together have none:
+      # with `zz`'s scroll they hold 8,192 files, the most they may.
+      fill.("a1", 2_048)
+      fill.("a2", 2_048)
+      fill.("a3", 2_047)
+
+      {:ok, _} =
+        Files.write(actor, "aqua/scrolls/zz/skills/fern/SKILL.md", "---\nname: fern\n---\n\nb\n")
+
+      set =
+        "The packs switched on would hold 8193 files together, past the 8192 they may " <>
+          "hold: switch one off first"
+
+      assert {:error, {:invalid_argument, ^set}} = Packs.file_proposal(ctx, "zz:fern", path, "x")
     end
 
     test "a file for a scroll not stored yet is proposed, and its Save waits for the scroll",

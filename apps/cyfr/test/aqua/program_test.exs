@@ -6899,8 +6899,10 @@ defmodule Aqua.ProgramTest do
     end
 
     # A file a turn proposes beside a scroll is kept whole on its result
-    # row, the bytes Save writes; the model, which wrote them, reads the
-    # proposal without them; nothing is written.
+    # row, the bytes Save writes, taken from the call's own arguments; the
+    # provider's answer carries none, so neither what the model reads nor
+    # the request log's stored input or output holds them; nothing is
+    # written.
     @tag harness: :api
     test "a file a turn proposes keeps its bytes on its row, out of what the model reads",
          %{ctx: ctx, thread: thread} do
@@ -6939,7 +6941,6 @@ defmodule Aqua.ProgramTest do
       assert %{
                "name" => "mine:fern",
                "path" => "skills/fern/scripts/water.sh",
-               "encoding" => "utf8",
                "content" => ^script,
                "against" => "none",
                "runs" => true,
@@ -6948,6 +6949,14 @@ defmodule Aqua.ProgramTest do
 
       assert row.content =~ "skills/fern/scripts/water.sh"
       refute row.content =~ "water-the-fern-weekly"
+
+      {:ok, logs} = Sanctum.RequestLog.list(ctx, tool: "aqua")
+      assert [_ | _] = logs
+
+      for log <- logs do
+        refute inspect(log.input) =~ "water-the-fern-weekly"
+        refute inspect(log.output) =~ "water-the-fern-weekly"
+      end
 
       assert {:error, :not_found} =
                Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
