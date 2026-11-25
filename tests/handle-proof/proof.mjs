@@ -285,9 +285,12 @@ async function main(chromium) {
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
   const keys = passkeys();
-  // The zone every page of this browser reports, as the desktop's socket
-  // sends it (app.js, `appearance`).
-  S.zone = await desk.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  // The language and zone every page of this browser reports, as the
+  // desktop's socket sends them (app.js, `appearance`).
+  ({ locale: S.locale, zone: S.zone } = await desk.evaluate(() => {
+    const { locale, timeZone } = Intl.DateTimeFormat().resolvedOptions();
+    return { locale: navigator.language || locale, zone: timeZone };
+  }));
   let from = clock();
   const made = await createAccount(desk, keys, { directory: REG, name: HANDLE, secrets });
   windowed("make", from, "the account made at registry.test's pages");
