@@ -29,6 +29,7 @@ import (
 	"syscall"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
@@ -134,7 +135,7 @@ func refuseEnv(format string, args ...any) error {
 // stackKeys answers the assignments that give a .env whose values are
 // values the keys the stack needs and it lacks, and nothing else; the
 // caller writes them through the engine's editor (access.EditEnv). A key that is
-// present is never rewritten; a malformed root or service id, and a
+// present is never rewritten, but the AppArmor profile's name, cyfr's own; a malformed root or service id, and a
 // service key that does not derive from the root beside it, are refused,
 // since writing around them would leave cyfr and the locus-runtime
 // service unable to authenticate each other. Each key reads as its last
@@ -221,6 +222,12 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 	// this stack is cross-origin. Never a wildcard.
 	if _, assigned := values[corsOriginsVar]; !assigned {
 		set(corsOriginsVar, "")
+	}
+
+	// The AppArmor profile the Locus services run under is cyfr's to name,
+	// so it is written whatever .env held: the one built into this cyfr.
+	if values[appArmorEnv] != apparmor.ProfileName {
+		set(appArmorEnv, apparmor.ProfileName)
 	}
 
 	buildsURL, buildsKey := values[buildsURLVar], values[buildsKeyVar]
@@ -415,6 +422,8 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the seccomp profile the Locus services run under), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
+On Ubuntu 26.04 with AppArmor on, before it writes anything, init offers the AppArmor profile built into this cyfr where the kernel has not loaded it by its name, which carries its content (cyfr-locus- and 12 hex digits): at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself; without one it refuses, naming the one command; declined, nothing is written. .env's CYFR_LOCUS_APPARMOR, which docker-compose.yml's security_opt reads, names it; the keeper proves at its boot that it runs under it.
+
 On Ubuntu 26.04 LTS at a terminal, when this account cannot reach Docker, init first shows the commands that install what is missing (docker.io, docker-compose-v2 and apparmor, the running service and this account's membership of the docker group), asks, and runs them through one sudo; answered no, init installs nothing, writes nothing and exits 0. CYFR never asks for, reads or keeps a password: when sudo will ask, init first says it asks for the password you log in to this machine with, and sudo asks in its own prompt before any command runs, so a refused password changes nothing. An account outside the sudo and admin groups is told so before anything is asked, with the commands as one sudo line for whoever administers the machine, and nothing is changed; answered 1 at the screen question, it is told before anything is written, in words alone, that whoever administers the machine can add it to the sudo group. The rest of init then runs in a process that has the group, and 'cyfr up' gets the group the same way.
 
 On macOS and Windows at a terminal, while Docker does not answer, init offers to open Docker's installer page for Docker Desktop and says what the system's prompt will be (a Mac's login password or Touch ID; Windows asking to allow the app to make changes), or, with Docker Desktop installed, says to start it; then it waits, writing nothing, until Docker answers, and goes on. Answered no, init opens and writes nothing and exits 0.
@@ -575,6 +584,12 @@ func initProject(ctx context.Context, o initOptions, step func(name string), out
 		if step != nil {
 			step(name)
 		}
+	}
+
+	// The profile the Locus services run under is offered before anything
+	// is written, so a person who declines it keeps the folder as it was.
+	if err := ensureAppArmor(ctx, out, "cyfr init"); err != nil {
+		return err
 	}
 
 	// An existing .env gains the keys it lacks before anything else
@@ -951,7 +966,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. On Linux with AppArmor on, before anything starts, cyfr up on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the profile built into this cyfr by its name, at a terminal it shows the two commands that install and load it, asks, and runs them through one sudo, giving root the profile from cyfr itself, and without one it refuses, naming the one command to run; elsewhere it leaves that to the keeper, which proves at its boot that it runs under its release's profile. cyfr up then takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A start prints Prism's address; when cyfr's log says no one is set up on it yet, cyfr up then says how its first person is set up: with this machine's screen showing CYFR (the cyfr-screen service), by a reboot when the screen has not started yet, or on that screen (Ctrl+Alt+F1); otherwise by opening the setup link, from a phone or laptop with Tailscale on for tailnet access, and for local access on a machine with no display through the ssh command it prints.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -988,6 +1003,10 @@ func upWith(ctx context.Context, opened stackEngine, out io.Writer) error {
 	// tokens on CYFR's Registry page. There are no static registry
 	// credentials to configure.
 	if err := refuseUndeclaredRestore(); err != nil {
+		return err
+	}
+	// Before the lock, whose recovery may start the stack.
+	if err := ensureAppArmor(ctx, out, "cyfr up"); err != nil {
 		return err
 	}
 	// The start holds the lock an update, a restore and an access change

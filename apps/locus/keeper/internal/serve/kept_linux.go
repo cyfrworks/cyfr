@@ -6,7 +6,6 @@
 package serve
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,13 +16,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/protocol"
+	"github.com/cyfr/locus/keeper/internal/stage"
 )
 
 const (
@@ -208,42 +207,39 @@ func (s *server) startKeptSpawn(req *protocol.Request, reach string, e egress) (
 	return sp, ""
 }
 
-// endInOrder ends a kept spawn's group by levels, by deadline: TERM to the
-// leader alone, which has until then to end what it started; once the keeper
-// has reaped it, TERM to the processes the leader had started when the end
-// began, so a program the session's own shell runs is asked as a leader is
-// and closes what it started before the rest is asked; once those have
-// exited, TERM to whatever of the group is left, so a process neither level
-// told is still asked; at the deadline the group's kill (cgroup.Group.KillBy),
-// which waits for the group until the same deadline, never past it, and
-// kills within one poll of it. One level below the leader and no deeper: the
-// shell is the one layer CYFR puts in front of a program, and a program's
-// own tree is its own to end. Every step looks at the deadline before it
-// acts, none is taken past it, and the end does not wait for the scan of
-// the leader's children past it: a scan still running then is left to end
-// by itself and what it held is let go. The leader is signalled through
-// signalChild, which holds the reaper's lock, and each of its children
-// through a pidfd held from before the end (leaderChildren), so no pid
-// already reaped and given to another process is ever signalled. When the
-// leader ran as the end began and its children's level was skipped or
-// incomplete, the log says so once for the spawn, with why: then a program
-// and its own children are asked together. A leader already reaped as the
-// end begins is the ordinary end and says nothing. It reports whether the
-// group is empty.
+// endInOrder ends a kept spawn's group by the levels a kept session ends
+// by (stage.Ender, whose order the space's init runs too), by deadline:
+// TERM to the leader alone, which has until then to end what it started;
+// once the keeper has reaped it, TERM to the processes the leader had
+// started when the end began, and in turn to theirs (Ender.InTurn), each
+// level waited for; then the group's kill (cgroup.Group.KillBy), which asks
+// whatever is left once, waits for the group until the same deadline, never
+// past it, and kills within one poll of it. Every step looks at the deadline
+// before it acts, none is taken past it, and the end does not wait for the
+// scan of the leader's children past it: a scan still running then is left
+// to end by itself and what it held is let go. The leader is signalled
+// through signalChild, which holds the reaper's lock, and each process of
+// a level through a pidfd held from before its level was asked
+// (leaderChildren, Ender.Children), so no pid already reaped and given to
+// another process is ever signalled. When the leader ran as the end began
+// and its children's level was skipped or incomplete, the log says so once
+// for the spawn, with why: then a program and its own children are asked
+// together. A leader already reaped as the end begins is the ordinary end
+// and says nothing. It reports whether the group is empty.
 func (s *server) endInOrder(spawnID string, uid int, group endable, leader *child, deadline time.Time) bool {
 	if leader != nil && !leader.reaped() && time.Now().Before(deadline) {
+		e := keptEnder(uid, group)
 		scanning := make(chan scanned, 1)
-		go func() { scanning <- s.leaderChildren(uid, group, leader, deadline) }()
+		go func() { scanning <- s.leaderChildren(e, group, leader, deadline) }()
 		var children scanned
 		timer := time.NewTimer(time.Until(deadline))
 		select {
 		case children = <-scanning:
 		case <-timer.C:
 			children = scanned{why: "the scan of its leader's children did not end before the deadline"}
-			go func() { late := <-scanning; releaseHeld(uid, late.fds) }()
+			go func() { late := <-scanning; e.Release(late.held) }()
 		}
 		timer.Stop()
-		defer releaseHeld(uid, children.fds)
 		if children.why != "" {
 			s.log.Warn("spawn %s: %s; its leader's children are asked to end with the rest of its group", spawnID, children.why)
 		}
@@ -252,17 +248,13 @@ func (s *server) endInOrder(spawnID string, uid int, group endable, leader *chil
 			timer := time.NewTimer(time.Until(deadline))
 			select {
 			case <-leader.done:
-				for _, fd := range children.fds {
-					if !time.Now().Before(deadline) {
-						break
-					}
-					_ = unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0)
-				}
-				awaitExits(children.fds, deadline)
+				e.InTurn(children.held, deadline)
+				children.held = nil
 			case <-timer.C:
 			}
 			timer.Stop()
 		}
+		e.Release(children.held)
 	}
 	return group.KillBy(deadline)
 }
@@ -277,8 +269,8 @@ type endable interface {
 // scanned is what a scan of the leader's children held, and why, when it is
 // not empty, the children's level is skipped or incomplete.
 type scanned struct {
-	fds []int
-	why string
+	held []stage.Held
+	why  string
 }
 
 // The pidfds the ends hold. One end holds at most endHeld, for the leader's
@@ -331,108 +323,55 @@ func unreserve(uid, n int) {
 	}
 }
 
-// releaseHeld closes the pidfds an end of uid's held and gives back their
-// places.
-func releaseHeld(uid int, fds []int) {
-	for _, fd := range fds {
-		_ = unix.Close(fd)
+// keptEnder is the end by levels (stage.Ender) as the keeper runs it on
+// group, a kept spawn's: one end holds at most endHeld pidfds at once,
+// each in uid's budget and the keeper's.
+func keptEnder(uid int, group endable) stage.Ender {
+	held := 0
+	return stage.Ender{
+		Procs: group.Procs,
+		Reserve: func() bool {
+			if held >= endHeld || !reserve(uid) {
+				return false
+			}
+			held++
+			return true
+		},
+		Unreserve:    func(n int) { held -= n; unreserve(uid, n) },
+		Poll:         func(fds []unix.PollFd, ms int) (int, error) { return poll(fds, ms) },
+		Probe:        func(fd int) error { return probe(fd) },
+		PollInterval: cgroup.PollInterval,
 	}
-	unreserve(uid, len(fds))
 }
 
 // leaderChildren holds, each by a pidfd, the processes of group whose parent
-// is the leader, as they stand now, and says why when it could not hold them
-// all. It never holds the keeper's lock across its scan: it lists the group,
-// opens a pidfd for each process and reads its parent from the kernel with
-// the lock released, keeping a pidfd only when, after it was opened, the
-// parent read is the leader's pid and the process still runs, so the pidfd
-// names that process and no other that took its pid since. Then it takes
-// the lock once to ask whether the leader is still not reaped. Only the
-// reaper frees the leader's pid, and it does so under that lock, so a leader
-// not reaped then was not reaped at any moment of the scan: every parent
-// read as its pid was the leader, and what is held is the leader's children.
-// A leader reaped meanwhile, or a scan that ends past the deadline, keeps
-// nothing. A process that may be the leader's child and is not held (its
-// parent cannot be read, its pidfd cannot be opened or asked for a reason
-// other than its end, or a bound is reached) is counted.
-func (s *server) leaderChildren(uid int, group endable, leader *child, deadline time.Time) scanned {
-	pids, err := group.Procs()
+// is the leader, as they stand now (Ender.Children), and says why when it
+// could not hold them all. It never holds the keeper's lock across its scan;
+// then it takes the lock once to ask whether the leader is still not
+// reaped. Only the reaper frees the leader's pid, and it does so under that
+// lock, so a leader not reaped then was not reaped at any moment of the
+// scan: every parent read as its pid was the leader, and what is held is
+// the leader's children. A leader reaped meanwhile, or a scan that ends
+// past the deadline, keeps nothing.
+func (s *server) leaderChildren(e stage.Ender, group endable, leader *child, deadline time.Time) scanned {
+	held, unheld, err := e.Children([]int{leader.pid}, deadline)
 	if err != nil {
 		return scanned{why: "its group could not be listed"}
-	}
-	var fds []int
-	unheld := 0
-	mayBeChild := func(pid int) bool {
-		parent := parentOf(pid)
-		return parent == leader.pid || parent == 0
-	}
-	for _, pid := range pids {
-		if pid == leader.pid {
-			continue
-		}
-		if !time.Now().Before(deadline) {
-			releaseHeld(uid, fds)
-			return scanned{why: "the scan of its leader's children did not end before the deadline"}
-		}
-		if len(fds) >= endHeld || !reserve(uid) {
-			if mayBeChild(pid) {
-				unheld++
-			}
-			continue
-		}
-		fd, err := unix.PidfdOpen(pid, 0)
-		if err != nil {
-			unreserve(uid, 1)
-			if !errors.Is(err, unix.ESRCH) && mayBeChild(pid) {
-				unheld++
-			}
-			continue
-		}
-		parent := parentOf(pid)
-		running := unix.PidfdSendSignal(fd, 0, nil, 0)
-		if running == nil && parent == leader.pid {
-			fds = append(fds, fd)
-			continue
-		}
-		_ = unix.Close(fd)
-		unreserve(uid, 1)
-		if !errors.Is(running, unix.ESRCH) && (parent == leader.pid || parent == 0) {
-			unheld++
-		}
 	}
 	s.mu.Lock()
 	reaped := leader.reaped()
 	s.mu.Unlock()
 	switch {
 	case reaped:
-		releaseHeld(uid, fds)
+		e.Release(held)
 		return scanned{why: "its leader was reaped during the scan"}
 	case !time.Now().Before(deadline):
-		releaseHeld(uid, fds)
+		e.Release(held)
 		return scanned{why: "the scan of its leader's children did not end before the deadline"}
 	case unheld > 0:
-		return scanned{fds: fds, why: fmt.Sprintf("%d of its leader's children could not be held", unheld)}
+		return scanned{held: held, why: fmt.Sprintf("%d of its leader's children could not be held", unheld)}
 	}
-	return scanned{fds: fds}
-}
-
-// parentOf is the parent pid /proc gives pid, 0 when it is unreadable.
-func parentOf(pid int) int {
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0
-	}
-	// The command name may hold spaces and parentheses; the fields after
-	// the last ')' are the state and then the parent's pid.
-	fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
-	if len(fields) < 2 {
-		return 0
-	}
-	ppid, err := strconv.Atoi(fields[1])
-	if err != nil {
-		return 0
-	}
-	return ppid
+	return scanned{held: held}
 }
 
 // poll is unix.Poll; a test fails it.
@@ -441,59 +380,6 @@ var poll = unix.Poll
 // probe asks whether the process a pidfd names is still there: ESRCH says
 // it is gone. A test watches it.
 var probe = func(fd int) error { return unix.PidfdSendSignal(fd, 0, nil, 0) }
-
-// awaitExits waits until every process the pidfds name has exited, or until
-// the deadline. Each pidfd turns readable at its process's exit; a wait that
-// cannot poll waits all the same, asking each pidfd on KillBy's interval
-// whether its process is still there.
-func awaitExits(fds []int, deadline time.Time) {
-	waiting := make([]unix.PollFd, 0, len(fds))
-	for _, fd := range fds {
-		waiting = append(waiting, unix.PollFd{Fd: int32(fd), Events: unix.POLLIN})
-	}
-	for len(waiting) > 0 {
-		left := time.Until(deadline)
-		if left <= 0 {
-			return
-		}
-		n, err := poll(waiting, int(left.Milliseconds())+1)
-		if errors.Is(err, unix.EINTR) {
-			continue
-		}
-		if err != nil {
-			probeExits(waiting, deadline)
-			return
-		}
-		if n == 0 {
-			continue
-		}
-		still := waiting[:0]
-		for _, p := range waiting {
-			if p.Revents == 0 {
-				still = append(still, p)
-			}
-		}
-		waiting = still
-	}
-}
-
-// probeExits waits until no process the pidfds name is still there, asking
-// each with signal 0 on KillBy's interval, or until the deadline. Only ESRCH
-// proves a process gone; any other answer keeps the wait.
-func probeExits(waiting []unix.PollFd, deadline time.Time) {
-	for len(waiting) > 0 && time.Now().Before(deadline) {
-		still := waiting[:0]
-		for _, p := range waiting {
-			if !errors.Is(probe(int(p.Fd)), unix.ESRCH) {
-				still = append(still, p)
-			}
-		}
-		waiting = still
-		if len(waiting) > 0 {
-			time.Sleep(min(cgroup.PollInterval, time.Until(deadline)))
-		}
-	}
-}
 
 // retireKept ends a kept spawn once: the processes of its own group, which
 // are everything it started, its leader first (endInOrder); then, when no other spawn holds its uid, the
@@ -706,36 +592,23 @@ func (s *server) runHomeHelper(acct Account, spec home.HelperSpec) (string, erro
 	return string(out), nil
 }
 
-// openPty opens a pseudo-terminal of rows by cols: its master, which the
-// relay holds, and its slave, which becomes the spawn's stdin, stdout and
-// stderr and its controlling terminal.
-func openPty(rows, cols uint16) (master, slave *os.File, err error) {
-	mfd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ptmx: %w", err)
+// receiveTerminal reads the master of a pty spawn's terminal, which the
+// space's first process opened in the space's own devpts and handed up, and
+// sets its size to rows by cols, within stageTimeout.
+func receiveTerminal(from *os.File, rows, cols uint16) (*os.File, error) {
+	if err := from.SetReadDeadline(time.Now().Add(stageTimeout)); err != nil {
+		return nil, fmt.Errorf("its socket: %w", err)
 	}
-	master = os.NewFile(uintptr(mfd), "pty-master")
-	fail := func(err error) (*os.File, *os.File, error) {
+	fds, err := receiveDescriptors(from, 1)
+	if err != nil {
+		return nil, err
+	}
+	master := os.NewFile(uintptr(fds[0]), "pty-master")
+	if err := unix.IoctlSetWinsize(fds[0], unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols}); err != nil {
 		_ = master.Close()
-		return nil, nil, err
+		return nil, fmt.Errorf("its size: %w", err)
 	}
-	unlock := 0
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(mfd), unix.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); errno != 0 {
-		return fail(fmt.Errorf("unlocking the pty: %w", errno))
-	}
-	n, err := unix.IoctlGetUint32(mfd, unix.TIOCGPTN)
-	if err != nil {
-		return fail(fmt.Errorf("the pty's number: %w", err))
-	}
-	sfd, err := unix.Open("/dev/pts/"+strconv.FormatUint(uint64(n), 10), unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fail(fmt.Errorf("the pty's slave: %w", err))
-	}
-	if err := unix.IoctlSetWinsize(sfd, unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols}); err != nil {
-		_ = unix.Close(sfd)
-		return fail(fmt.Errorf("the pty's size: %w", err))
-	}
-	return master, os.NewFile(uintptr(sfd), "pty-slave"), nil
+	return master, nil
 }
 
 // dupFile duplicates f, close-on-exec.

@@ -22,6 +22,9 @@ defmodule Compendium.Providers.Aqua do
   alias Compendium.AquaPath
   alias Sanctum.Context
 
+  # What a save of a proposed new scroll names it made against.
+  @against_none "none"
+
   # Find the repository root by mix.exs and component-guide.md for compile-time
   # document embedding. Fail compilation if the root cannot be found.
   # arca:bypass-ok=C — compile-time repo-root discovery.
@@ -77,11 +80,13 @@ defmodule Compendium.Providers.Aqua do
     # registry's dispatch gate and does not see these actions in
     # `tools/list`.
     #
-    # A scroll is a procedure the athanor learns. Writing one is a
-    # member's act at the door, and a chain's. In-chain the
-    # interactive class keeps its surface half, so the write needs an
-    # `:oidc`-rooted turn: a schedule- or key-started turn cannot write a
-    # scroll, exactly like a note. Deleting stays a member's act alone.
+    # A scroll is a procedure the athanor learns, and the person writes
+    # it. A chain's create or update writes nothing: it answers the scroll
+    # as it would be stored and what it was made against, which the
+    # thread shows for the person to save from their own session. In-chain
+    # the interactive class keeps its surface half, so even the proposal
+    # needs an `:oidc`-rooted turn: a schedule- or key-started turn
+    # proposes nothing. Deleting stays a member's act alone.
     # Reset restores shipped units — one agent by name, else every
     # edited copy. With all=true it also deletes the crew members and
     # scrolls the athanor made.
@@ -322,6 +327,10 @@ defmodule Compendium.Providers.Aqua do
               bulk: true,
               description:
                 "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
+            ),
+            Arg.new("against", :string,
+              description:
+                "skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since"
             )
           ],
           kind: :write,
@@ -347,6 +356,10 @@ defmodule Compendium.Providers.Aqua do
               bulk: true,
               description:
                 "The soul's prompt in markdown (update; a crew member has none: how it does a kind of job is a scroll), or the scroll's body (skill_create/skill_update)"
+            ),
+            Arg.new("against", :string,
+              description:
+                "skill_create/skill_update from a person's Save as scroll: what the proposal was made against, the stored scroll's digest for an update or none for a create; the write is refused when the scroll changed since"
             )
           ],
           kind: :write,
@@ -718,6 +731,7 @@ defmodule Compendium.Providers.Aqua do
          }}
 
       {:ok, skills} ->
+        skills = listed(ctx, skills)
         {:ok, %{skills: skills, count: length(skills)}}
 
       {:error, reason} ->
@@ -726,34 +740,28 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # The one read of a scroll by name (`Compendium.skill/2`). A chain is
+  # never handed a scroll past the bound (`Compendium.AquaSkills`); the
+  # Scrolls editor reads it from outside, to show it and say why.
   def handle(%Context{} = ctx, %{"action" => "skill_get", "name" => name}) do
     with :ok <- validate_name(name),
-         {:ok, meta, body} <- Compendium.AquaSkills.read_manifest(ctx, name) do
-      resources =
-        case Arca.list_recursive(Sanctum.Context.actor(ctx), AquaPath.skill_dir(name)) do
-          {:ok, leaves} ->
-            leaves
-            |> Enum.map(&Enum.drop(&1, length(AquaPath.skill_dir(name))))
-            |> Enum.reject(&(&1 == [AquaPath.skill_manifest_name()]))
-            |> Enum.map(&Enum.join(&1, "/"))
-            |> Enum.sort()
-
-          _ ->
-            []
-        end
-
+         {:ok, scroll} <- Compendium.skill(ctx, name),
+         :ok <- carried(ctx, scroll) do
       {:ok,
        %{
          name: name,
-         title: meta["name"] || name,
-         description: meta["description"] || "",
+         title: scroll.title,
+         description: scroll.description,
          format: "markdown",
-         content: body,
-         resources: resources
+         content: scroll.body,
+         resources: scroll.files
        }}
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Scroll", name}}
+
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -763,15 +771,27 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # A chain's create writes nothing: it answers the scroll as it would be
+  # stored, made against no scroll of its name, for the person to save.
+  def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_create", "name" => name} = args) do
+    with :ok <- validate_name(name),
+         {:ok, _manifest} <- skill_manifest_bytes(name, args["description"], args["content"]),
+         :ok <- untaken(ctx, name) do
+      {:ok, proposal(name, args["description"], args["content"], @against_none)}
+    end
+  end
+
   # A scroll is a dir unit with `SKILL.md` as its sentinel. Creating one
   # lands the manifest through the overlay's unit commit — sentinel last,
   # rollback on failure — so a half-written scroll never reads as one. The
   # name is taken if the union holds it, shipped or the athanor's own, and
   # the commit asks that while it holds the unit's draft (`if_absent:`),
   # so two creators of one name cannot both pass a probe and have the
-  # second silently replace the first.
+  # second silently replace the first. A save of a proposal names it made
+  # against none, the one thing a create can be made against.
   def handle(%Context{} = ctx, %{"action" => "skill_create", "name" => name} = args) do
     with :ok <- validate_name(name),
+         :ok <- against_none(args),
          {:ok, manifest} <- skill_manifest_bytes(name, args["description"], args["content"]) do
       case Arca.Overlay.commit_unit(
              Sanctum.Context.actor(ctx),
@@ -784,7 +804,7 @@ defmodule Compendium.Providers.Aqua do
           {:ok, %{created: name}}
 
         {:error, :exists} ->
-          {:error, {:invalid_argument, "Scroll '#{name}' already exists"}}
+          {:error, {:invalid_argument, taken(name)}}
 
         {:error, {:limit_reached, _, _} = reason} ->
           {:error, reason}
@@ -795,15 +815,44 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # A chain's update writes nothing either: it answers the whole scroll as
+  # the update would store it, the fields the call leaves out read now,
+  # and the digest of the stored manifest it was made against.
+  def handle(%Context{plane: :guest} = ctx, %{"action" => "skill_update", "name" => name} = args) do
+    with :ok <- validate_name(name),
+         {:ok, current} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name)),
+         {:ok, meta, body} <- AquaAgent.parse_frontmatter(current),
+         description = Map.get(args, "description", meta["description"]),
+         content = Map.get(args, "content", body),
+         {:ok, _manifest} <- skill_manifest_bytes(name, description, content) do
+      {:ok, proposal(name, description, content, Prima.Digest.sha256(current))}
+    else
+      {:error, :not_found} ->
+        {:error, {:not_found, "Scroll", name}}
+
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        passthrough_or_unavailable(reason, "aqua.skill_update #{name}")
+    end
+  end
+
   # Updating rewrites the manifest alone, as one serialized
   # read-modify-write: the fields the call leaves out are read from the
   # manifest as it is at the moment of the write, so two concurrent
-  # updates cannot lose one.
+  # updates cannot lose one, and a save of a proposal is refused, inside
+  # the same write, when the manifest is no longer the one it was made
+  # against.
   # The write inside is a plain put, so the scroll's other files stay; a
   # unit commit here would replace the unit whole and drop them.
   def handle(%Context{} = ctx, %{"action" => "skill_update", "name" => name} = args) do
     rewrite = fn current ->
-      with {:ok, meta, body} <- AquaAgent.parse_frontmatter(current) do
+      with :ok <- unchanged(name, current, args["against"]),
+           {:ok, meta, body} <- AquaAgent.parse_frontmatter(current) do
         skill_manifest_bytes(
           name,
           Map.get(args, "description", meta["description"]),
@@ -821,6 +870,9 @@ defmodule Compendium.Providers.Aqua do
         {:error, {:not_found, "Scroll", name}}
 
       {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
+      {:error, {:conflict, _} = refusal} ->
         {:error, refusal}
 
       {:error, {:limit_reached, _, _} = reason} ->
@@ -1063,9 +1115,10 @@ defmodule Compendium.Providers.Aqua do
 
   # The Agent Skills manifest: frontmatter `name` (the directory's) and a
   # one-line `description` (what the index shows), then the body. Both
-  # are required — a scroll nobody can find by its line is not a scroll.
-  # Values are JSON-encoded, the one YAML scalar spelling that survives
-  # any description.
+  # are required — a scroll nobody can find by its line is not a scroll —
+  # and the whole is within the bound every harness carries
+  # (`Compendium.AquaSkills`). Values are JSON-encoded, the one YAML
+  # scalar spelling that survives any description.
   defp skill_manifest_bytes(name, description, content) do
     description = if is_binary(description), do: String.trim(description), else: ""
     content = if is_binary(content), do: String.trim(content), else: ""
@@ -1081,20 +1134,83 @@ defmodule Compendium.Providers.Aqua do
         {:error, {:invalid_argument, "A scroll needs content"}}
 
       true ->
-        {:ok,
-         IO.iodata_to_binary([
-           "---\n",
-           "name: ",
-           Jason.encode!(name),
-           "\n",
-           "description: ",
-           Jason.encode!(description),
-           "\n",
-           "---\n\n",
-           content,
-           "\n"
-         ])}
+        manifest =
+          IO.iodata_to_binary([
+            "---\n",
+            "name: ",
+            Jason.encode!(name),
+            "\n",
+            "description: ",
+            Jason.encode!(description),
+            "\n",
+            "---\n\n",
+            content,
+            "\n"
+          ])
+
+        if Compendium.AquaSkills.fits?(byte_size(manifest), description),
+          do: {:ok, manifest},
+          else: {:error, {:invalid_argument, too_large(name)}}
     end
+  end
+
+  defp too_large(name),
+    do:
+      "The scroll '#{name}' is too large for Aqua to use: a scroll, its files' names " <>
+        "with it, holds at most #{Compendium.AquaSkills.max_bytes()} bytes and its " <>
+        "description at most #{Compendium.AquaSkills.max_description()} characters"
+
+  defp taken(name), do: "Scroll '#{name}' already exists"
+
+  # A chain is never handed a scroll past the bound; the person's own
+  # session reads it, to see it and change it.
+  defp carried(%Context{plane: :guest}, %{carried: false, name: name}),
+    do: {:error, {:invalid_argument, too_large(name)}}
+
+  defp carried(_ctx, _scroll), do: :ok
+
+  # A chain's listing leaves out what no harness carries, as its index does.
+  defp listed(%Context{plane: :guest}, skills), do: Enum.filter(skills, & &1.carried)
+  defp listed(_ctx, skills), do: skills
+
+  # A chain's proposal of a create names a scroll the athanor has none of
+  # yet, as the save's `if_absent:` will.
+  defp untaken(ctx, name) do
+    case Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name)) do
+      {:ok, _manifest} -> {:error, {:invalid_argument, taken(name)}}
+      {:error, :not_found} -> :ok
+      {:error, reason} -> passthrough_or_unavailable(reason, "aqua.skill_create #{name}")
+    end
+  end
+
+  # What a chain answers in place of a write: the whole scroll as it would
+  # be stored, and what it was made against, which a save sends back.
+  defp proposal(name, description, content, against) do
+    %{
+      proposed: name,
+      description: String.trim(description),
+      content: String.trim(content),
+      against: against,
+      note: "Nothing is written: this waits in the thread for the person to save it as a scroll."
+    }
+  end
+
+  defp against_none(%{"against" => against}) when against not in [nil, @against_none],
+    do: {:error, {:invalid_argument, "A new scroll is made against none"}}
+
+  defp against_none(_args), do: :ok
+
+  # A save of a proposal writes only over the manifest it was made against.
+  defp unchanged(_name, _current, nil), do: :ok
+
+  defp unchanged(name, current, against) do
+    if Prima.Digest.sha256(current) == against,
+      do: :ok,
+      else:
+        {:error,
+         {:conflict,
+          "The scroll '#{name}' changed since Aqua proposed this, so nothing was saved: " <>
+            "open it from Scrolls to see it as it is now"}}
   end
 
   # What the soul says of the crew member it runs on: its name, and while

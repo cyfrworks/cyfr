@@ -75,9 +75,8 @@ defmodule Opus.Programs.DefinitionTest do
     Definition.warnings(normalized)
   end
 
-  @exposed "on the command line, where every process on the backends service, other " <>
-             "athanors' programs included, can read it; the safe route is to let the " <>
-             "program read it from its environment."
+  @exposed "on the command line, where every process of the program's own session " <>
+             "can read it; the safe route is to let the program read it from its environment."
 
   describe "a vault-bound env name on the command line is warned of" do
     test "a command that expands a vault-bound name is accepted, with a warning naming it" do
@@ -332,6 +331,7 @@ defmodule Opus.Programs.DefinitionTest do
     assert drivers == Enum.uniq(drivers)
     assert Definition.brain("claude-code").title == "Claude Code"
     assert Definition.brain("antigravity").title == "Antigravity"
+    assert Definition.brain("opencode").title == "OpenCode"
     assert Definition.brain("nope") == nil
   end
 end

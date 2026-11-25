@@ -88,6 +88,7 @@ defmodule Compendium.FacadeTest do
     agent_snapshot: 2,
     agent_soul_type: 0,
     agent_source_refs: 1,
+    agent_tools_check: 1,
     agent_type_of: 1,
     agents: 1,
     canvas_versions: 2,
@@ -115,6 +116,8 @@ defmodule Compendium.FacadeTest do
     resolve_agent: 3,
     resolve_verified_activation: 2,
     shipped_versions: 2,
+    skill: 2,
+    skill_bound: 0,
     skill_dir: 1,
     skills_index: 2,
     skills_index_limit: 0,
@@ -158,6 +161,15 @@ defmodule Compendium.FacadeTest do
   end
 
   describe "delegating entries" do
+    test "a tools list is checked as the aqua tool's write checks it" do
+      for tools <- [["docs:read", "files.read", "native_search"], ["docs:ns:read"], ["a.b:c"]] do
+        assert Compendium.agent_tools_check(tools) == Compendium.AquaAgent.check_tools(tools)
+      end
+
+      assert {:error, {:tools_invalid_entry, "docs:ns:read"}} =
+               Compendium.agent_tools_check(["docs:read", "docs:ns:read"])
+    end
+
     test "components: blobs, resolution and activation answer as their internals", %{ctx: ctx} do
       assert Compendium.get_blob(ctx, "sha256:absent") ==
                Compendium.Component.get_blob(ctx, "sha256:absent")

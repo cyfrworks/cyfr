@@ -1831,7 +1831,7 @@ test("an account window whose route cannot be set says why in main's own page, a
   const shown = decodeURIComponent(account.webContents.url)
   assert.ok(shown.startsWith("data:text/html"), "main's own page")
   assert.ok(shown.includes(`The app could not reach the CYFR at ${HOME} through this computer&#39;s tailnet, so it loaded nothing of the sign-in.`), shown)
-  assert.ok(!world.loads.some(({url}) => url.startsWith(ACCOUNT)), "nothing of the account service")
+  assert.ok(!world.loads.some(({url}) => new URL(url).origin === ACCOUNT), "nothing of the account service")
   account.destroy()
   await turns()
   assert.equal(content(), page)
@@ -1884,7 +1884,7 @@ test("a route set after its CYFR was left loads nothing into the view the depart
   accountRouted()
   await turns()
   assert.equal(lateAccount, 0)
-  assert.ok(!world.loads.some(({url}) => url.startsWith(ACCOUNT)))
+  assert.ok(!world.loads.some(({url}) => new URL(url).origin === ACCOUNT))
 })
 
 // A route that could not be set leaves its store's unknown: what that

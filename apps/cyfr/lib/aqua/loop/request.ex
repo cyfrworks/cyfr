@@ -182,10 +182,14 @@ defmodule Aqua.Loop.Request do
   description, input_schema}`, `name` the entry's key), `:accounts` (the
   apps a launch may name an account of, `t:Aqua.Hands.launch_accounts/0`,
   which the `connection` argument's description lists; absent or nil, as
-  when they could not be read, the declared description stands).
+  when they could not be read, the declared description stands), `:mark`
+  (the turn's thread's mark, `Aqua.Reader.mark/1`).
 
   An outside tool is handed under the one name its key spells
-  (`Aqua.Loop.Binding.outside_name/1`) only when every harness carries
+  (`Aqua.Loop.Binding.outside_name/1`), never one that holds the thread's
+  mark or the frames' stand-in (`Aqua.Reader.token/0`), which delivery
+  would rename after the name is bound (`Aqua.Reader.deliver/2`), only
+  when every harness carries
   its definition whole, so every harness is handed the same list: in key
   order, while the list's tools fit their line (`Opus.Brain.max_tools/0`), and
   none after the first that does not.
@@ -201,7 +205,14 @@ defmodule Aqua.Loop.Request do
 
     catalog = with_accounts(catalog_tools(offered), Keyword.get(opts, :accounts))
     last = [@ui_schema, hand_tool("request_setup", ["open"])]
-    {outside, unhanded} = outside(Keyword.get(opts, :external, []), hands ++ catalog ++ last)
+
+    {outside, unhanded} =
+      outside(
+        Keyword.get(opts, :external, []),
+        hands ++ catalog ++ last,
+        Keyword.get(opts, :mark)
+      )
+
     {hands ++ catalog ++ outside ++ last, unhanded}
   end
 
@@ -209,7 +220,7 @@ defmodule Aqua.Loop.Request do
   # each other is not. A tool joins a list of `own` and those before it as
   # its share of the line, its stub argument and a comma
   # (`Opus.Brain.tools_bytes/1`).
-  defp outside(entries, own) do
+  defp outside(entries, own, mark) do
     max = Opus.Brain.max_tools()
     room = {max.bytes - Opus.Brain.tools_bytes(own), max.count - length(own)}
 
@@ -217,7 +228,7 @@ defmodule Aqua.Loop.Request do
       entries
       |> Enum.sort_by(& &1.name)
       |> Enum.reduce({[], %{}, room}, fn entry, {handed, unhanded, room} ->
-        case outside_tool(entry, room) do
+        case outside_tool(entry, room, mark) do
           {:ok, tool, room} -> {[tool | handed], unhanded, room}
           {:error, reason, room} -> {handed, Map.put(unhanded, entry.name, reason), room}
         end
@@ -226,8 +237,8 @@ defmodule Aqua.Loop.Request do
     {Enum.reverse(handed), unhanded}
   end
 
-  defp outside_tool(entry, room) do
-    with {:ok, name} <- outside_name(entry.name),
+  defp outside_tool(entry, room, mark) do
+    with {:ok, name} <- outside_name(entry.name, mark),
          tool = %{
            "name" => name,
            "description" => entry.description || "",
@@ -240,10 +251,17 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp outside_name(key) do
+  # A name delivery would leave as it is: none that holds the thread's mark
+  # or the frames' stand-in.
+  defp outside_name(key, mark) do
     case Aqua.Loop.Binding.outside_name(key) do
-      {:ok, name} -> {:ok, name}
-      :error -> {:error, :name}
+      {:ok, name} ->
+        if String.contains?(name, Enum.reject([mark, Aqua.Reader.token()], &is_nil/1)),
+          do: {:error, :name},
+          else: {:ok, name}
+
+      :error ->
+        {:error, :name}
     end
   end
 
@@ -463,6 +481,7 @@ defmodule Aqua.Loop.Request do
     |> Enum.map(&finish_message/1)
     |> answer_dangling_calls()
     |> merge_same_role()
+    |> Enum.map(&joined_text/1)
     |> attach_blocks(blocks, Keyword.get(opts, :task_message_id))
     |> attach(:excerpt, Keyword.get(opts, :excerpt))
   end
@@ -615,14 +634,15 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%{kind: "tool_result"} = row, acc, _reading) do
+  # A call's result, in the frame its row keeps (`Aqua.Reader.result/2`).
+  defp shape(%{kind: "tool_result"} = row, acc, reading) do
     payload = Tape.payload(row)
 
     block = %{
       "type" => "tool_result",
       "tool_call_id" => payload["tool_call_id"],
       "name" => payload["name"],
-      "content" => row.content || "",
+      "content" => Reader.result(row, Map.get(reading, :frames)),
       "is_error" => payload["is_error"] == true
     }
 
@@ -721,6 +741,26 @@ defmodule Aqua.Loop.Request do
   defp answer_dangling_calls([]), do: []
 
   defp calls(blocks), do: for(%{"type" => "tool_call"} = b <- blocks, do: b["id"])
+
+  # An assistant message's texts as one block before its calls, in their
+  # order: the one string the providers that join an assistant's texts
+  # make of them, so what a model reads of them is what
+  # `Aqua.Reader.deliver/2` read.
+  defp joined_text(%{"role" => "assistant", "content" => blocks} = message) do
+    case Enum.split_with(blocks, &match?(%{"type" => "text"}, &1)) do
+      {[_one], _calls} ->
+        message
+
+      {[], _calls} ->
+        message
+
+      {texts, calls} ->
+        text = %{"type" => "text", "text" => Enum.map_join(texts, & &1["text"])}
+        %{message | "content" => [text | calls]}
+    end
+  end
+
+  defp joined_text(message), do: message
 
   defp merge_same_role(messages) do
     Enum.reduce(messages, [], fn

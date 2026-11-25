@@ -113,7 +113,7 @@ func spawn(argv []string, errOut io.Writer) (*Process, error) {
 // has ended, which ends the driver.
 func (p *Process) Write(line []byte) error {
 	if _, err := p.stdin.Write(append(line, '\n')); err != nil {
-		return &Fatal{1, "the harness's input: " + err.Error()}
+		return Fail(1, WhyEnded, "the harness's input: "+err.Error())
 	}
 	return nil
 }

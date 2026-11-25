@@ -135,6 +135,8 @@ func TestRunnerFilterNamesTheListedCalls(t *testing.T) {
 		unix.SYS_UNSHARE: true, unix.SYS_SETNS: true, unix.SYS_MOUNT: true, unix.SYS_UMOUNT2: true,
 		unix.SYS_PIVOT_ROOT: true, unix.SYS_KEYCTL: true, unix.SYS_ADD_KEY: true, unix.SYS_REQUEST_KEY: true,
 		unix.SYS_BPF: true, unix.SYS_USERFAULTFD: true, unix.SYS_PERF_EVENT_OPEN: true,
+		unix.SYS_OPEN_TREE: true, unix.SYS_MOVE_MOUNT: true, unix.SYS_FSOPEN: true, unix.SYS_FSCONFIG: true,
+		unix.SYS_FSMOUNT: true, unix.SYS_FSPICK: true, unix.SYS_MOUNT_SETATTR: true,
 	}
 	seen := map[uint32]bool{}
 	for _, nr := range calls.refused {
@@ -161,8 +163,12 @@ type kernelAnswers struct {
 	Unshare string `json:"unshare"`
 	Clone   string `json:"clone"`
 	Clone3  string `json:"clone3"`
-	Threads int    `json:"threads"`
-	Child   string `json:"child"`
+	// OpenTree and MountSetattr are two of the newer mount calls, each
+	// refused EINVAL for its flags before the kernel asks for a capability.
+	OpenTree     string `json:"open_tree"`
+	MountSetattr string `json:"mount_setattr"`
+	Threads      int    `json:"threads"`
+	Child        string `json:"child"`
 }
 
 func errnoName(err error) string {
@@ -191,6 +197,14 @@ func probeKernel() kernelAnswers {
 	var args [8]uint64
 	_, _, errno = unix.RawSyscall(unix.SYS_CLONE3, uintptr(unsafe.Pointer(&args[0])), 1, 0)
 	answers.Clone3 = errnoName(errnoOrNil(errno))
+	root := []byte("/\x00")
+	cwd := unix.AT_FDCWD
+	_, _, errno = unix.RawSyscall(unix.SYS_OPEN_TREE, uintptr(cwd), uintptr(unsafe.Pointer(&root[0])), 0xffffffff)
+	answers.OpenTree = errnoName(errnoOrNil(errno))
+	var attr unix.MountAttr
+	_, _, errno = unix.RawSyscall6(unix.SYS_MOUNT_SETATTR, uintptr(cwd), uintptr(unsafe.Pointer(&root[0])), 0xffffffff,
+		uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+	answers.MountSetattr = errnoName(errnoOrNil(errno))
 	if tasks, err := os.ReadDir("/proc/self/task"); err == nil {
 		answers.Threads = len(tasks)
 	}
@@ -282,8 +296,8 @@ func seccompMode(t *testing.T) string {
 
 // Installed on a thread that holds no_new_privs, the filter stays with the
 // program that thread executes: there the kernel never sees a namespace
-// call (each is refused EPERM where, unfiltered, the kernel answers
-// EINVAL), clone3 answers ENOSYS, and the program still runs threads and
+// call and no newer mount call (each is refused EPERM where, unfiltered,
+// the kernel answers EINVAL), clone3 answers ENOSYS, and the program still runs threads and
 // starts a child process.
 //
 // The control is the kernel's own answer only in a process no filter
@@ -296,11 +310,13 @@ func TestRunnerFilterInstalls(t *testing.T) {
 		t.Skipf("this process already runs under seccomp (Seccomp: %s in /proc/self/status), so the control cannot show the kernel's own answers", mode)
 	}
 	control := runHelper(t, "control")
-	if control.Unshare != "EINVAL" || control.Clone != "EINVAL" || control.Clone3 != "EINVAL" {
+	if control.Unshare != "EINVAL" || control.Clone != "EINVAL" || control.Clone3 != "EINVAL" ||
+		control.OpenTree != "EINVAL" || control.MountSetattr != "EINVAL" {
 		t.Fatalf("unfiltered, the kernel answers %+v, not EINVAL to each invalid call", control)
 	}
 	filtered := runHelper(t, "install")
-	want := kernelAnswers{Unshare: "EPERM", Clone: "EPERM", Clone3: "ENOSYS", Threads: filtered.Threads, Child: "ok"}
+	want := kernelAnswers{Unshare: "EPERM", Clone: "EPERM", Clone3: "ENOSYS", OpenTree: "EPERM", MountSetattr: "EPERM",
+		Threads: filtered.Threads, Child: "ok"}
 	if filtered != want {
 		t.Fatalf("under the filter the kernel answers %+v, want %+v", filtered, want)
 	}

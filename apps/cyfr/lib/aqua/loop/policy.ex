@@ -31,6 +31,10 @@ defmodule Aqua.Loop.Policy do
   sends, and a component with none is answered `consent_required` by the
   gate.
 
+  `answer_of/1` says what a call's answer is to the model that asked:
+  a scroll, CYFR's own words, or outside data, which the loop frames its
+  result row by (`Aqua.Reader`).
+
   `threads_of/3` names the threads whose posts a call's result carries
   into its turn: a catalog action's as its operation declares them
   (`Prima.Operation.read_threads/3`), and a hand's child's read threads,
@@ -260,6 +264,25 @@ defmodule Aqua.Loop.Policy do
 
   def child_threads({:error, %Prima.Refusal{stage: :admission}}), do: :nothing_ran
   def child_threads(_answer), do: :unknown
+
+  # The families whose answers are CYFR's own words: its records of the
+  # athanor's agents, notes, crew, threads, schedules, layout, shares and
+  # system. Every other family is outside until it is named here.
+  @own_families ~w(aqua notes crew thread threads workspace schedule layout share system)
+
+  @doc """
+  What `call`'s answer is: `:scroll` for a scroll read by name
+  (`aqua.skill_get`); `:own` for a family whose answers are CYFR's own
+  words, and the `ui` and `request_setup` calls; `:outside` for every
+  other, an outside server's tool, a launch and a family not named among
+  them, whose answer is what an outside source returned.
+  """
+  @spec answer_of(Call.t()) :: :scroll | :own | :outside
+  def answer_of(%Call{kind: kind}) when kind in [:external, :launch], do: :outside
+  def answer_of(%Call{kind: :ui}), do: :own
+  def answer_of(%Call{tool: "aqua", action: "skill_get"}), do: :scroll
+  def answer_of(%Call{tool: tool}) when tool in @own_families, do: :own
+  def answer_of(%Call{}), do: :outside
 
   @doc """
   The threads whose posts `call`'s `result` carries into its turn, read

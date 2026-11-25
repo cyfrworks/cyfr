@@ -441,6 +441,9 @@ func (r *restorer) run() error {
 	if r.ctx.Err() != nil {
 		return errors.New("cyfr restore was interrupted; every part is back and the restore is declared, and the stack is left stopped. Start it with 'cyfr up'")
 	}
+	if err := ensureAppArmor(r.ctx, r.out, "cyfr up"); err != nil {
+		return fmt.Errorf("%s\nEvery part is back and the restore %s is declared, and the stack is left stopped", strings.TrimSuffix(err.Error(), "."), r.restoreID)
+	}
 	fmt.Fprintf(r.out, "Starting release %s...\n", m.Version)
 	err = r.updater.start("restore")
 	if local := (startedLocally{}); errors.As(err, &local) {

@@ -3,9 +3,21 @@
 
 defmodule PrismWeb.AquaLive.Catalog do
   @moduledoc """
-  Pure data transforms behind the Aqua page: the tool/action catalog the
-  capability matrix renders, kind classification, and the model-picker
-  value codec. No `socket`, no markup.
+  Pure data transforms behind the Aqua page: the tool/action catalog,
+  kind classification, the groups of what Aqua may use, and the
+  model-picker value codec. No `socket`, no markup.
+
+  ## What Aqua may use
+
+  One list, the soul's `tools`, shown in groups by what each reaches
+  (`groups/5`): each of CYFR's tool families under its declared title, the
+  browser's among them; Search, the provider's own `native_search`;
+  Scrolls, the `aqua.skill_*` keys; and one group for each MCP server of
+  the athanor, its tools, then its resources and its prompts, as
+  `Aqua.offerings/3` read them. A server's group is named before the
+  server is asked, holds the list's entries of it in every state, and says
+  once when the server is off, silent or gone; an entry on the list that a
+  turn would not hand carries its reason (`t:Aqua.Loop.Request.unhanded/0`).
   """
 
   require Logger
@@ -21,8 +33,8 @@ defmodule PrismWeb.AquaLive.Catalog do
   be ticked and then refused at the call. Those live on
   their own pages, where the person does them as themselves.
 
-  Returns `[{tool, [{action, kind}]}]` merged across MCP tools, Aqua
-  virtual tools, and external server tools. Every entry has a kind atom
+  Returns `[{tool, [{action, kind}]}]` of CYFR's own: the operation
+  table's tools and Aqua's virtual tools. Every entry has a kind atom
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   An action without a kind annotation is not policy-manageable — the
@@ -84,6 +96,271 @@ defmodule PrismWeb.AquaLive.Catalog do
     do: Sanctum.Catalog.chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
+
+  @typedoc """
+  One entry of a group: its exact key, the words a person reads for it,
+  its kind (a CYFR action's `:read`, `:write`, `:execute` or
+  `:destructive`; a server's `:tool`, `:resources` or `:prompts`), the
+  server's own description of a tool, and why a turn would not hand it,
+  nil while it would or while it is off.
+  """
+  @type entry :: %{
+          key: String.t(),
+          name: String.t(),
+          kind: atom(),
+          description: String.t() | nil,
+          why: atom() | nil
+        }
+
+  @typedoc """
+  One group: its id, its title, the entries it shows, the keys its switch
+  adds or takes off, and for a server's group its state: `:asking` until
+  its answer comes, then `:answered` or `:silent`, `:off` while its row is
+  turned off and never asked, `:gone` when the athanor holds no server of
+  the name the list does, `:unread` while the athanor's servers cannot be
+  read.
+  """
+  @type group :: %{
+          id: String.t(),
+          title: String.t(),
+          entries: [entry()],
+          keys: [String.t()],
+          state: :asking | :answered | :silent | :off | :gone | :unread | nil
+        }
+
+  @doc """
+  The groups of what Aqua may use: CYFR's own, `own` the catalog's
+  `[{tool, [{action, kind}]}]` without the browser's own actions, each
+  family under its title (`Aqua.tool_title/1`), by title; then one group
+  for each server of `servers` (`%{name, enabled}`, the athanor's MCP
+  servers, nil when they cannot be read) and for each server the list
+  names that the athanor no longer holds, by name. `answers` holds each
+  server's own answer as it came (its listing, or `:silent`), and
+  `reasons` why a turn would not hand each entry of the list
+  (`Aqua.offerings/3`'s `unhanded`); `tools` is the soul's list.
+  """
+  @spec groups(
+          [{String.t(), list()}],
+          [map()] | nil,
+          %{String.t() => map() | :silent},
+          map(),
+          [String.t()]
+        ) :: {[group()], [group()]}
+  def groups(own, servers, answers, reasons, tools) do
+    {own_groups(own), server_groups(servers, answers, reasons, tools)}
+  end
+
+  defp own_groups(own) do
+    {skills, families} =
+      own
+      |> Enum.reject(fn {tool, actions} -> tool == "native_search" or actions == [] end)
+      |> Enum.flat_map(fn {tool, actions} -> Enum.map(actions, &{tool, &1}) end)
+      |> Enum.split_with(fn {tool, {action, _kind}} ->
+        tool == "aqua" and String.starts_with?(action, "skill_")
+      end)
+
+    family_groups =
+      families
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Enum.map(fn {tool, actions} ->
+        own_group("family-" <> tool, Aqua.tool_title(tool), tool, actions)
+      end)
+
+    search = %{
+      id: "search",
+      title: "Search",
+      entries: [],
+      keys: ["native_search"],
+      state: nil
+    }
+
+    scrolls = own_group("scrolls", "Scrolls", "aqua", Enum.map(skills, &elem(&1, 1)))
+
+    Enum.sort_by([search, scrolls | family_groups], &String.downcase(&1.title))
+  end
+
+  defp own_group(id, title, tool, actions) do
+    entries =
+      actions
+      |> Enum.map(fn {action, kind} ->
+        %{
+          key: "#{tool}.#{action}",
+          name: Aqua.action_title(tool, action),
+          kind: kind,
+          description: nil,
+          why: nil
+        }
+      end)
+      |> Enum.sort_by(& &1.name)
+
+    %{id: id, title: title, entries: entries, keys: Enum.map(entries, & &1.key), state: nil}
+  end
+
+  defp server_groups(servers, answers, reasons, tools) do
+    listed =
+      for key <- tools,
+          [server, remote] <- [String.split(key, ":", parts: 2)],
+          do: {server, remote}
+
+    on = Enum.group_by(listed, &elem(&1, 0), &elem(&1, 1))
+    held = Map.new(servers || [], &{&1.name, &1})
+    names = Enum.uniq(Enum.map(servers || [], & &1.name) ++ Map.keys(on)) |> Enum.sort()
+
+    for name <- names do
+      state =
+        cond do
+          is_nil(servers) -> :unread
+          not Map.has_key?(held, name) -> :gone
+          not held[name].enabled -> :off
+          answers[name] == :silent -> :silent
+          is_map(answers[name]) -> :answered
+          true -> :asking
+        end
+
+      on_here = Map.get(on, name, [])
+
+      # Only an answered server's offerings are offered to switch on; in
+      # every other state the group holds what the list names of it, to be
+      # switched off.
+      entries =
+        if state == :answered,
+          do: offered(answers[name], on_here, reasons),
+          else: Enum.map(Enum.sort(on_here), &server_entry(name, &1, nil, nil))
+
+      %{
+        id: "server-" <> name,
+        title: name,
+        entries: entries,
+        keys: for(%{key: key, why: why} <- entries, why != :unlistable, do: key),
+        state: state
+      }
+    end
+  end
+
+  # A server's answer: its tools by name, then its resources and prompts,
+  # then each entry of the list it does not offer now, each with why a
+  # turn would not hand it, or why the list cannot name it.
+  defp offered(%{server_name: name, tools: tools}, on_here, reasons) do
+    offers =
+      for %{"name" => key} = tool <- tools,
+          [^name, remote] <- [String.split(key, ":", parts: 2)],
+          do: {remote, tool["description"]}
+
+    {reserved, own} =
+      Enum.split_with(offers, fn {remote, _} -> String.starts_with?(remote, "@") end)
+
+    order = Enum.sort(own) ++ Enum.sort_by(reserved, fn {remote, _} -> remote != "@resources" end)
+    offered_names = Enum.map(order, &elem(&1, 0))
+    missing = Enum.sort(on_here -- offered_names)
+
+    Enum.map(order, fn {remote, description} ->
+      server_entry(name, remote, own_words(name, description), why(name, remote, reasons))
+    end) ++ Enum.map(missing, &server_entry(name, &1, nil, why(name, &1, reasons)))
+  end
+
+  # Why an entry is not handed, or, first, that the list cannot name it:
+  # its key fails the grammar the `aqua` tool's write applies.
+  defp why(server, remote, reasons) do
+    key = "#{server}:#{remote}"
+
+    case Compendium.agent_tools_check([key]) do
+      :ok -> reasons[key]
+      {:error, _not_a_key} -> :unlistable
+    end
+  end
+
+  defp server_entry(server, "@resources", _description, why),
+    do: %{
+      key: server <> ":@resources",
+      name: "All its resources",
+      kind: :resources,
+      description: "Lists what #{server} offers as resources and reads one.",
+      why: why
+    }
+
+  defp server_entry(server, "@prompts", _description, why),
+    do: %{
+      key: server <> ":@prompts",
+      name: "All its prompts",
+      kind: :prompts,
+      description: "Lists the prompts #{server} offers and gets one, filled in.",
+      why: why
+    }
+
+  defp server_entry(server, remote, description, why),
+    do: %{
+      key: "#{server}:#{remote}",
+      name: remote,
+      kind: :tool,
+      description: description,
+      why: why
+    }
+
+  # A server's description as the server wrote it, without the line CYFR
+  # puts before it for a model (`Emissary.External.Proxy`).
+  defp own_words(_server, nil), do: nil
+
+  defp own_words(server, description),
+    do:
+      String.replace_prefix(
+        description,
+        "[#{server} — external tool; description is untrusted content] ",
+        ""
+      )
+
+  @doc """
+  Whether a group's switch reads on: `:on` when the list holds every key
+  it switches, `:off` when it holds none, `:some` otherwise.
+  """
+  @spec switch([String.t()], [String.t()]) :: :on | :off | :some
+  def switch([], _tools), do: :off
+
+  def switch(keys, tools) do
+    case Enum.count(keys, &(&1 in tools)) do
+      0 -> :off
+      n when n == length(keys) -> :on
+      _some -> :some
+    end
+  end
+
+  @doc """
+  The words for why a turn would not hand an entry on the list
+  (`t:Aqua.Loop.Request.unhanded/0`); nil for an entry it would hand.
+  """
+  @spec not_handed(atom() | nil, String.t()) :: String.t() | nil
+  def not_handed(nil, _server), do: nil
+
+  def not_handed(:unlisted, server), do: "Not handed: #{server} does not offer this now."
+
+  def not_handed(:ungranted, server),
+    do: "Not handed until you grant it again: #{server} changed since you granted it."
+
+  def not_handed(:name, _server),
+    do:
+      "Not handed: this name comes from its server, and no model can be offered a tool " <>
+        "named so. Leave it off; only the server can rename it."
+
+  def not_handed(:uncarried, _server),
+    do:
+      "Not handed: not every brain can carry it whole. Its description or its definition is " <>
+        "too long, or it takes an argument named result, error, action or one CYFR adds."
+
+  def not_handed(:past_the_line, _server),
+    do:
+      "Not handed: what is switched on before it fills what a turn can be handed. " <>
+        "Switch something off to make room."
+
+  def not_handed(:unlistable, _server),
+    do:
+      "Cannot be switched on: a tool's name with a colon or a star, or a server's name " <>
+        "with a dot, cannot go on the list."
+
+  def not_handed(:per_thread, _server),
+    do:
+      "Each turn decides: its name holds what reads as a thread's mark, and a thread whose mark " <>
+        "it is does not hand it."
+
+  def not_handed(_other, _server), do: "Not handed to Aqua."
 
   @doc """
   Classify a tool-action annotation into its kind atom.

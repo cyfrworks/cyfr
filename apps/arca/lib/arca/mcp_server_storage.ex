@@ -52,7 +52,7 @@ defmodule Arca.McpServerStorage do
 
   # The brains' drivers, each a command's first word (`driver/1`), by its
   # name or by the path the box installs it at (`Dockerfile.locus`).
-  @drivers ~w(cyfr-claude-code cyfr-codex cyfr-antigravity)
+  @drivers ~w(cyfr-claude-code cyfr-codex cyfr-antigravity cyfr-opencode)
   @driver_dir "/opt/cyfr/bin"
 
   # A program's settings, which `update/4` writes as named (nil clears one).

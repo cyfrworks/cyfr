@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/version"
 	"gopkg.in/yaml.v3"
@@ -2050,8 +2051,8 @@ func TestUpdateRetiresTheHeadlessSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
-	if got := read(t, filepath.Join(s.project, ".env")); got != scenarioEnv {
-		t.Errorf(".env after the update is %q, want %q", got, scenarioEnv)
+	if got, want := read(t, filepath.Join(s.project, ".env")), scenarioEnv+appArmorEnv+"="+apparmor.ProfileName+"\n"; got != want {
+		t.Errorf(".env after the update is %q, want %q", got, want)
 	}
 	if !strings.Contains(out, "Removed from .env the settings release 0.8.0 shipped and release 0.9.0 no longer reads: CYFR_HEADLESS.\n") {
 		t.Errorf("the update did not say it removed CYFR_HEADLESS:\n%s", out)

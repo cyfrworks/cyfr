@@ -67,12 +67,13 @@ defmodule Prima.LocusRoles do
   queue (`socket_queue_bytes`). What each is, its cap and how many there
   can be at once, is `Locus.Output`'s table ("What each role holds").
 
-  Every spawn's space is a user, network and IPC namespace of its own, so
-  no spawn shares a loopback, an abstract unix socket or a System V
-  object with another or with its service: a `"relay"` space has its
-  loopback down and no route, a `"routed"` space its own loopback and the
-  one route its guard makes for it. Its processes and files are still its
-  container's, held apart by uid.
+  Every spawn's space is a user, network, IPC, pid, mount and cgroup
+  namespace of its own, so no spawn shares a loopback, an abstract unix
+  socket, a System V object, a process list or a file outside its home
+  with another or with its service: a `"relay"` space has its loopback
+  down and no route, a `"routed"` space its own loopback and the one route
+  its guard makes for it. It sees the image read-only, its own /proc,
+  /tmp, /dev/shm, terminals and group, and its home alone.
 
   `tests/fixtures/locus_roles.json` holds the same table for the image
   suites, which cannot read this module: `Prima.LocusRolesTest` holds the

@@ -586,6 +586,14 @@ defmodule Compendium do
   @spec agent_type_of(AquaAgent.t()) :: String.t()
   defdelegate agent_type_of(agent), to: AquaAgent, as: :type_of
 
+  @doc """
+  A `tools` list against the grammar the `aqua` tool's write applies
+  (`Compendium.AquaAgent.check_tools/1`): what the Aqua page may offer to
+  put on the list.
+  """
+  @spec agent_tools_check(term()) :: :ok | {:error, AquaAgent.tools_error()}
+  defdelegate agent_tools_check(tools), to: AquaAgent, as: :check_tools
+
   @doc "The type a crew member carries (`Compendium.AquaAgent.crew_type/0`)."
   @spec agent_crew_type() :: String.t()
   defdelegate agent_crew_type(), to: AquaAgent, as: :crew_type
@@ -635,6 +643,21 @@ defmodule Compendium do
   @spec skills_index(Context.t(), pos_integer() | :all) ::
           {:ok, %{entries: [AquaSkills.entry()], more: non_neg_integer()}} | {:error, term()}
   defdelegate skills_index(ctx, limit), to: AquaSkills, as: :index
+
+  @doc """
+  One scroll by name, read under the caller's actor
+  (`Compendium.AquaSkills.skill/2`): the one read of a scroll by its name,
+  which `aqua.skill_get` and a job's scrolls make alike.
+  """
+  @spec skill(Context.t(), term()) :: {:ok, AquaSkills.scroll()} | {:error, term()}
+  defdelegate skill(ctx, name), to: AquaSkills
+
+  @doc """
+  A scroll's bound (`Compendium.AquaSkills`): the most bytes its manifest
+  holds and the most characters its description holds.
+  """
+  @spec skill_bound() :: %{bytes: pos_integer(), description: pos_integer()}
+  def skill_bound, do: %{bytes: AquaSkills.max_bytes(), description: AquaSkills.max_description()}
 
   @doc "The most skills a prompt lists (`Compendium.AquaSkills.index_limit/0`)."
   @spec skills_index_limit() :: pos_integer()

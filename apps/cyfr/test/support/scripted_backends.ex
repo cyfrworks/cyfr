@@ -1031,17 +1031,23 @@ defmodule Cyfr.Test.ScriptedBackends do
   # A recv counts as the session's use when it arrives, as Locus counts it,
   # not while it waits: a session no line reaches is ended by its idle
   # period even with a recv waiting on it.
-  defp handle_mode(conn, agent, _fields, %{type: type} = message)
+  defp handle_mode(conn, agent, fields, %{type: type} = message)
        when type in [:recv, :output] do
     Agent.update(agent, &touch(&1, message.session))
     deadline = now() + message.max_wait_ms
-    recv(conn, agent, message.session, message.after, deadline)
+    recv(conn, agent, message.session, message.after, deadline, fields.boot)
   end
 
-  defp recv(conn, agent, id, after_seq, deadline) do
+  # A recv waiting while the service starts again is of a lifetime it no
+  # longer runs: Locus's connection for it ends with that process, and the
+  # asker's next try is refused `stale_boot`, which this answers at once.
+  defp recv(conn, agent, id, after_seq, deadline, boot) do
     st = Agent.get(agent, & &1)
 
     case st.sessions[id] do
+      _any when st.boot != boot ->
+        refuse(conn, st, :stale_boot)
+
       nil ->
         refuse(conn, st, :unknown_session)
 
@@ -1071,7 +1077,7 @@ defmodule Cyfr.Test.ScriptedBackends do
           # deadline
           Process.sleep(10)
           expire_idle(agent)
-          recv(conn, agent, id, after_seq, deadline)
+          recv(conn, agent, id, after_seq, deadline, boot)
         end
     end
   end
@@ -1118,14 +1124,23 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp emit(s, text), do: %{s | seq: s.seq + 1, lines: [{s.seq + 1, text} | s.lines]}
 
-  defp reply(st, server, _s, "initialize", _params),
-    do:
-      {:ok,
-       %{
-         "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
-         "capabilities" => Map.new(offers(st, server), &{&1, %{}}),
-         "serverInfo" => %{"name" => "scripted", "version" => "1"}
-       }}
+  # A program set to refuse its `initialize` (`set(fake,
+  # :refuse_initialize, %{row_id => words})`) answers it with a JSON-RPC
+  # error of those words.
+  defp reply(st, server, _s, "initialize", _params) do
+    case Map.get(st, :refuse_initialize, %{}) do
+      %{^server => words} ->
+        {:error, %{"code" => -32_000, "message" => words}}
+
+      _initialized ->
+        {:ok,
+         %{
+           "protocolVersion" => Prima.MCP.Protocol.legacy_version(),
+           "capabilities" => Map.new(offers(st, server), &{&1, %{}}),
+           "serverInfo" => %{"name" => "scripted", "version" => "1"}
+         }}
+    end
+  end
 
   defp reply(st, server, s, "resources/" <> _ = method, params),
     do: offered(st, server, s, "resources", method, params)

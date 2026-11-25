@@ -7,6 +7,8 @@
 // was probed writing, and keeps its sessions in its HOME, the kept folder,
 // as agy does.
 //
+// - Run with `mcp list` it prints agy's listing of no MCP server, "No MCP
+//   servers configured.", as agy does for a folder that holds none.
 // - It refuses to start without the one argument a session takes, `acp`.
 // - `initialize` answers agy's protocol 1, its version and capabilities:
 //   load, resume, close and list of a session, and a place for one
@@ -53,6 +55,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+if (process.argv.slice(2).join(' ') === 'mcp list') {
+  process.stdout.write('No MCP servers configured.\n');
+  process.exit(0);
+}
 if (process.argv.slice(2).join(' ') !== 'acp') {
   process.stderr.write(`fake-acp: started with ${process.argv.slice(2).join(' ')}, not acp\n`);
   process.exit(2);

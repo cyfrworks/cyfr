@@ -481,7 +481,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
     expect(last is not None, f"the runner was ended before its {CHILDREN} children all held their memory",
            [(n, g) for n, _, g in holding])
     n_last, ending, _seen = last
-    gone = wait_until(lambda: stack.uid_processes(runner["uid"]) == [] and time.time(), 30,
+    gone = wait_until(lambda: stack.runner_left(runner) == [] and time.time(), 30,
                       "the formula's runner's process to be gone")
     exits = plane.wait_for(lambda: [r for r in plane.seen("runner_exited") if formula["attempt"] in r["attempts"]], 15,
                            "the service's report of the formula's runner's exit")
