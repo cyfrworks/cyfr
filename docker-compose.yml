@@ -338,9 +338,12 @@ services:
     # locus group's, 1773, which a new volume takes; no role mounts it or
     # is of that group. The guard's control, read-only here: its folder is
     # root's own, 0700, so in this container the keeper alone reaches it.
+    # The machines' device and each machine's sockets, the `guest` volume
+    # below, the keeper's alone: no role mounts it.
     volumes:
       - homes:/var/lib/locus/kept
       - guard-control:/run/cyfr-guard-control:ro
+      - guest:/var/lib/locus/guest
     # Shutdown ends every role: running attempts close or are reported and
     # every backend is retired; compose's default 10s grace would SIGKILL
     # mid-report.
@@ -589,6 +592,12 @@ networks:
 
 volumes:
   homes:
+  # The machines' device: the image's programs as one read-only squashfs,
+  # which the keeper makes from its own root the first time it starts a
+  # person's machine under an image, named by the image's digest. A new
+  # release makes its own and removes the old; it holds nothing of a
+  # person's.
+  guest:
   # The guard's control socket, which the guard alone writes; locus mounts
   # it read-only. Nothing in it outlives the guard: a guard that starts
   # removes a socket an earlier one left.
