@@ -550,14 +550,29 @@ NESTED_CLONES = (
 )
 NESTED_THREAD = "$| = 1; print qq{thread=}, threads->create(sub { 7 })->join, qq{\n};"
 CLONE_NR = {"x86_64": 56, "aarch64": 220}
+# The runner's sockets, made with syscall() by socket's number on this
+# machine: AF_UNIX, the probe's control; AF_VSOCK (40), which the keeper's
+# profile refuses; and 40 with a high bit set, which the kernel reads as
+# AF_VSOCK too, since it reads a domain's low 32 bits. Each answers `ok` or
+# its errno's name.
+VSOCK_SOCKETS = (
+    "$| = 1; my $nr = shift; "
+    "sub attempt { my $fd = syscall($nr, shift, 1, 0); return $fd >= 0 ? q{ok} : $!{EPERM} ? q{EPERM} : q{errno} . ($! + 0); } "
+    "print qq{socket_unix=}, attempt(1), qq{\n}; "
+    "print qq{socket_vsock=}, attempt(40), qq{\n}; "
+    "print qq{socket_vsock_widened=}, attempt(0x100000028), qq{\n};"
+)
+SOCKET_NR = {"x86_64": 41, "aarch64": 198}
 
 
 def test_nested(image):
     command = ('arch=$(uname -m); echo "arch=$arch"; '
-               'case "$arch" in ' + " ".join(f"{arch}) nr={nr};;" for arch, nr in CLONE_NR.items()) + ' *) nr=;; esac; '
+               'case "$arch" in ' + " ".join(f"{arch}) nr={nr} snr={SOCKET_NR[arch]};;" for arch, nr in CLONE_NR.items()) +
+               ' *) nr= snr=;; esac; '
                'u=$(unshare -U true 2>&1); echo "unshare=$u status $?"; '
-               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; perl -Mthreads -e "$THREAD"')
-    got, carried, ran = relay_session(image, command, opens=False, env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD})
+               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; [ -n "$snr" ] && perl -e "$SOCKETS" "$snr"; perl -Mthreads -e "$THREAD"')
+    got, carried, ran = relay_session(image, command, opens=False,
+                                      env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD, "SOCKETS": VSOCK_SOCKETS})
     out = (carried or {}).get("got", {}).get(1, b"").decode(errors="replace")
     facts = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     detail = {"stdout": out, "stderr": (carried or {}).get("got", {}).get(2, b"").decode(errors="replace"), "replies": got,
@@ -572,6 +587,10 @@ def test_nested(image):
     expect("Operation not permitted" in facts.get("unshare", "") and not facts.get("unshare", "").endswith(" status 0"),
            "nested: a runner's `unshare -U` is refused", detail)
     expect(facts.get("thread") == "7", "nested: a runner still starts a thread and joins it", detail)
+    expect(facts.get("socket_unix") == "ok", "nested: a runner makes an AF_UNIX socket (the vsock probe's control)", detail)
+    expect(facts.get("socket_vsock") == "EPERM" and facts.get("socket_vsock_widened") == "EPERM",
+           "nested: a runner is refused socket(AF_VSOCK) EPERM, and so with the domain's high bits set, "
+           "which the kernel reads as AF_VSOCK too", detail)
 
 
 # The runner as the shipped service spawns it from a release (Locus.Runtime.Release.runner_command/1): the release's
