@@ -2049,9 +2049,12 @@ jobs:
         run: tests/compose-proof/tailscale-standin/proof.sh
       # The update proof's choice of the release it updates from, both of
       # its answers on a scratch repository: the host's nightly takes the
-      # published one on few nights.
-      - name: The update proof's choice of its old side
-        run: bash tests/update-proof/choose-test.sh
+      # published one on few nights. Then its readings and teardown on
+      # stand-ins, each red on what a broken update or teardown shows it.
+      - name: The update proof's choice of its old side, readings and teardown
+        run: |
+          bash tests/update-proof/choose-test.sh
+          bash tests/update-proof/lib-test.sh
 
   # A release boots on each database. The `cyfr` release, built as
   # Dockerfile builds it (MIX_ENV=prod, the adapter chosen at compile time),

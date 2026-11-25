@@ -22,6 +22,10 @@
 #       word and its name, the second the sentence the proof's log opens
 #       with, saying which and why. A tag that names no commit here is
 #       passed over.
+#
+# The run passes the 50 newest published releases (`gh release list
+# --limit 50`): a release on head's schema older than those fifty is not
+# found, and the base is the old side instead.
 
 MIGRATIONS=apps/arca/priv/repo/migrations
 

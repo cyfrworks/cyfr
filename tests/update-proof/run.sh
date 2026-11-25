@@ -36,40 +36,61 @@
 # release holds a person signed in, a message in their thread, a program
 # whose home is kept with a file in it, and a build made through the
 # builds role. The update's report is followed as a person follows it:
-# each .env line it names gets the edit it says, then `cyfr up`. Then:
+# each .env line it names gets the edit it says, then `cyfr up`. The
+# readings are tests/update-proof/lib.sh's, each held to stand-ins by
+# tests/update-proof/lib-test.sh. Then:
 #
-#   - every service the new file declares is healthy (running where it has
-#     no health check) with no restart, the project holds no container of
-#     a service the new file does not declare and no network it does not
-#     use, and cyfr runs the new release's image, which the compose file
-#     names by its digest;
-#   - the person is still signed in by the session from before the update
-#     and their message is served; the program, started again, finds its file
-#     in its kept home under the uid it had; a build runs;
-#   - the update's snapshot says it is complete, every file of it is the
+#   - every service the new file declares (under every profile but the
+#     access proxies', public and tailnet, which a local install never
+#     starts) has a container, running, healthy where it has a health
+#     check, none restarted; the project holds no container of a service
+#     the file does not declare and no network it does not use; and cyfr
+#     runs the new release's image, which the compose file names by its
+#     digest;
+#   - the report's advice: every line it names comes with an edit a person
+#     can follow, and the egress line, when it names a service the update
+#     retires, gets advice naming the host the new release ships for it,
+#     and followed holds exactly what it must (the three-container start's
+#     locus-backends,fixture.test becomes locus,fixture.test); a line that
+#     names none gets no advice and stays as it was;
+#   - the update's sentences: it updated to the new release, printed no
+#     FATAL line, and the containers and networks it says it removed are
+#     exactly what the proof's inventory before the update held and the
+#     one after does not;
+#   - the person is still signed in by the session from before the update,
+#     under which their thread reads exactly their one message; the
+#     program, started again, finds its file in its kept home, the home
+#     and the file owned by the uid it ran as before; a build of its own
+#     (not the first one's record) compiles;
+#   - the update's snapshot says it is complete, holds every part its
+#     manifest lists, each there and not empty, every file of it is the
 #     person's, and its database copy passes PRAGMA integrity_check and
-#     holds the person's row;
-#   - the update's own sentences: it says it updated to the new release,
-#     names the snapshot it took, and each service and network it says it
-#     removed is gone, and it printed no FATAL line.
+#     holds the person's row.
 #
 # The stack's fixed names and subnets: the shipped file names its
 # containers (cyfr, cyfr-locus, ...) and fixes its networks' subnets, and
 # an overlay cannot follow the update's switch of the file, so the run
 # holds them, as a person's install does. Before the old release's first
-# `cyfr up` it looks: a container of a name either release's file fixes,
-# or a network holding a subnet either fixes, ends the run with 69 (not
-# run), naming what holds it, before anything starts. It holds them from
-# that `cyfr up` until its teardown and prints how long as `held: <n>s`.
+# `cyfr up` it looks: another project's container of a name either
+# release's file fixes, or a network whose subnet overlaps one either
+# fixes (Docker refuses an overlapping pool), ends the run with 69 (not
+# run), naming what holds it, before anything starts; and a start that
+# fails later is looked at once more, ending 69 when a holder is there
+# then and red when none is. It holds them from that `cyfr up` until its
+# teardown and prints how long as `held: <n>s`.
 # Everything else is the run's own: the project, its networks and volumes
 # (named from the project, which its folder names), the folder
 # /var/tmp/cyfr/<RUN> and the release tags (<repository>:<version>, the
-# version carrying RUN). The teardown takes it all down on every exit: the
-# project's containers, networks and volumes by the project's label, the
-# release tags, the base worktree, and the folder, whose data/ the
-# server's container owns and gives back through a container of the app
-# image first. A run killed past its trap leaves what the next run's start
-# sweeps, by the label of a project whose run's process is gone.
+# version carrying RUN). The teardown takes it all down on every exit, in
+# the order of what depends on what: the project's containers, networks
+# and volumes by the project's label (a listing that fails is nothing
+# known gone), the release tags, the old side's worktree, and only once
+# those are known gone the folder, whose data/ the server's container owns
+# and gives back through a container of the app image first. A teardown
+# that fails keeps the folder, says so and is red, whatever the run came
+# to. A run killed past its trap leaves its folder, from which the next
+# run's start sweeps its project by the project's label and its tags by
+# their version.
 #
 # What this cannot show: the program step that downloads and replaces the
 # command line, the signature check of a candidate's manifest (it has
@@ -93,6 +114,8 @@ ROOT=$(cd "$HERE/../.." && pwd)
 . "$HERE/choose.sh"
 # shellcheck source=tests/lib/candidate-release.sh
 . "$ROOT/tests/lib/candidate-release.sh"
+# shellcheck source=tests/update-proof/lib.sh
+. "$HERE/lib.sh"
 
 for name in $(compgen -e); do
   case "$name" in COMPOSE_*) unset "$name" ;; esac
@@ -137,70 +160,24 @@ done
 # The teardown, and the sweep of what a killed run left
 # ---------------------------------------------------------------------------
 
-# Runs the command after `$1`, its description, until it succeeds, at most
-# three times; a third failure is named and fails the run.
-removal() {
-  local what="$1" attempt err=""
-  shift
-  for attempt in 1 2 3; do
-    if err="$("$@" 2>&1 >/dev/null)"; then return 0; fi
-    [ "$attempt" = 3 ] || sleep 3
-  done
-  echo "::error::update proof teardown: $what failed three times: ${err:0:600}" >&2
-  return 1
-}
-
-# What the project `$1` holds on the daemon, by its label: containers,
-# then networks, then volumes, each removed.
-project_gone() {
-  local project="$1" id failed=""
-  for id in $(docker ps -aq --filter "label=com.docker.compose.project=$project"); do
-    removal "docker rm --force $id" docker rm --force --volumes "$id" || failed=1
-  done
-  for id in $(docker network ls -q --filter "label=com.docker.compose.project=$project"); do
-    removal "docker network rm $id" docker network rm "$id" || failed=1
-  done
-  for id in $(docker volume ls -q --filter "label=com.docker.compose.project=$project"); do
-    removal "docker volume rm $id" docker volume rm "$id" || failed=1
-  done
-  [ -z "$failed" ]
-}
-
-# The folder `$1` given back to this user through a container of the image
-# `$2` (data/ is the server's), then removed.
-folder_gone() {
-  [ -d "$1" ] || return 0
-  removal "taking $1 back from the image's user" docker run --rm --name "$RUN-chown-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
-    --network none --user 0 --volume "$1:/work" --entrypoint chown "$2" -R "$(id -u):$(id -g)" /work || return 1
-  removal "removing $1" rm -rf "$1"
-}
-
 cleanup() {
-  local code=$? failed="" made id
+  local code=$? id torn
   trap '' INT TERM
   if [ "$code" -ne 0 ] && [ -n "$PROJECT" ]; then
     echo "----- the project's containers -----" >&2
     docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Names}} {{.Status}}' >&2 || true
-    for id in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=cyfr"); do
+    for id in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=cyfr" 2>/dev/null); do
       echo "----- the last lines of cyfr's log -----" >&2
       docker logs --tail 120 "$id" 2>&1 | cut -c1-400 >&2 || true
     done
   fi
-  if [ -n "$PROJECT" ]; then project_gone "$PROJECT" || failed=1; fi
+  torn=0
+  teardown "$PROJECT" "$WORK" "$APP_IMAGE" "$OLD_TREE" ${RELEASE_IMAGES[@]+"${RELEASE_IMAGES[@]}"} || torn=$?
+  code="$(exit_status "$code" "$torn")"
   if [ -n "$HELD_AT" ]; then
     echo "held: $((SECONDS - HELD_AT))s"
     echo "the fixed names and subnets were held from the old release's first start to the teardown's end"
   fi
-  if [ -n "$APP_IMAGE" ]; then folder_gone "$WORK" "$APP_IMAGE" || failed=1; fi
-  for made in ${RELEASE_IMAGES[@]+"${RELEASE_IMAGES[@]}"}; do
-    removal "docker image rm $made" docker image rm "$made" || failed=1
-  done
-  if [ -n "$OLD_TREE" ]; then
-    git -C "$ROOT" worktree remove --force "$BASE_TREE" >/dev/null 2>&1 || true
-    git -C "$ROOT" worktree prune
-  fi
-  [ ! -d "$WORK" ] || removal "removing $WORK" rm -rf "$WORK" || failed=1
-  if [ -n "$failed" ] && [ "$code" -eq 0 ]; then code=1; fi
   exit "$code"
 }
 trap cleanup EXIT
@@ -211,7 +188,7 @@ trap 'exit 143' TERM
 # named for a run whose pid is gone, its project's containers, networks and
 # volumes by the project's label, its release tags, and the folder itself.
 sweep_dead_runs() {
-  local dir run base pid project name
+  local dir run base pid project tags
   for dir in "$TMP_ROOT"/*update-proof-*; do
     [ -d "$dir" ] && [ -O "$dir" ] && [ "$dir" != "$WORK" ] || continue
     run=${dir##*/} base=${dir##*/}
@@ -220,16 +197,12 @@ sweep_dead_runs() {
     pid=${BASH_REMATCH[1]}
     ! ps -p "$pid" >/dev/null 2>&1 || continue
     project="$(project_name "$run")"
-    if project_gone "$project"; then
-      while IFS= read -r name; do
-        [[ $name == *"-$run".[12] ]] || continue
-        docker image rm "$name" >/dev/null 2>&1 || echo "::warning::update proof: could not remove the tag $name" >&2
-      done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter 'reference=ghcr.io/cyfrworks/*')
-      if folder_gone "$dir" "$(fallback_image)"; then
-        echo "removed $dir and its project $project, left by the run $pid, which is gone"
-      fi
+    tags="$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter 'reference=ghcr.io/cyfrworks/*' | grep -F -- "-$run." || true)"
+    # shellcheck disable=SC2086
+    if teardown "$project" "$dir" "$(fallback_image)" "" $tags; then
+      echo "removed $dir and its project $project, left by the run $pid, which is gone"
     else
-      echo "::warning::update proof: could not remove the project $project, left by the run $pid" >&2
+      echo "::warning::update proof: could not remove what the run $pid left ($dir, the project $project)" >&2
     fi
   done
   git -C "$ROOT" worktree prune
@@ -340,40 +313,49 @@ network_subnets() {
   done
 }
 
-# Nothing on the daemon holds a name or subnet either compose file fixes:
-# otherwise the run ends here with 69, naming the holder.
+# Who holds a name or subnet either compose file fixes, the project's own
+# aside (holders, tests/update-proof/lib.sh).
+fixed_holders() {
+  holders <(sort -u "$PROOF/fixed-old" "$PROOF/fixed-new") \
+    "$(docker ps -a --format '{{.Names}} {{.Label "com.docker.compose.project"}} {{.Status}}')" "$(network_subnets)" "$PROJECT"
+}
+
+# Nothing holds a name or subnet the stack fixes: otherwise the run ends
+# here with 69, naming the holder.
 names_free() {
-  local kind value holder
-  while read -r kind value; do
-    case "$kind" in
-      name)
-        holder="$(docker ps -a --filter "name=^/${value}\$" --format '{{.Names}} ({{.Label "com.docker.compose.project"}}, {{.Status}})')"
-        [ -z "$holder" ] || missing "the container name $value, which the stack fixes, is held by the container $holder"
-        ;;
-      subnet)
-        holder="$(network_subnets | awk -v s="$value" '{ for (i = 2; i <= NF; i++) if ($i == s) print $1 }' | head -n 1)"
-        [ -z "$holder" ] || missing "the subnet $value, which the stack fixes, is held by the network $holder"
-        ;;
-    esac
-  done < <(sort -u "$@")
+  local held
+  held="$(fixed_holders)" || fail "who holds the stack's fixed names and subnets could not be read"
+  [ -z "$held" ] || missing "$(head -n 1 <<<"$held")"
   ok "no container holds a name the stack fixes, and no network a subnet it fixes"
 }
 
-# Every service of the running project healthy (running where it has no
-# health check), within 180 s: cyfr's container in cyfr_id.
+# The project's containers, `SERVICE=STATE/STATUS` one a line, sorted.
+states() {
+  docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+    --format '{{.Label "com.docker.compose.service"}}={{.State}}/{{.Status}}' | sort
+}
+
+# Every service the compose file `$1` declares under the profiles a local
+# install runs has a container, running, healthy where it has a health
+# check, within 180 s, and the project holds none of a service it does not
+# declare: cyfr's container in cyfr_id. A local install runs every profile
+# of the file but the access proxies' (public, tailnet), which builds on
+# (the old releases' locus-builds) makes true of this one.
 stack_healthy() {
-  local closes=$((SECONDS + 180)) states=""
-  while [ "$SECONDS" -lt "$closes" ]; do
-    states="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
-      --format '{{.Label "com.docker.compose.service"}}={{.State}}/{{.Status}}' | sort)"
-    if [ -n "$states" ] && ! grep -v -E '=running/.*\(healthy\)$|=running/Up [^()]*$' <<<"$states" | grep -q .; then
-      cyfr_id="$(compose ps -q cyfr)"
-      [ -n "$cyfr_id" ] || fail "the project has no cyfr container"
-      return 0
-    fi
+  local closes=$((SECONDS + 180)) declared now why profiles=() profile
+  for profile in $(docker compose -f "$1" --project-directory "$WORK" config --profiles); do
+    case "$profile" in public | tailnet) ;; *) profiles+=(--profile "$profile") ;; esac
+  done
+  declared="$(compose ${profiles[@]+"${profiles[@]}"} config --services | sort)"
+  now="$(states)" || fail "the project's containers could not be listed"
+  why="$(undeclared "$declared" "$now")" || fail "$why"
+  while :; do
+    now="$(states)" || fail "the project's containers could not be listed"
+    if why="$(all_running "$declared" "$now")"; then break; fi
+    [ "$SECONDS" -lt "$closes" ] || fail "after 180 s $why: $(tr '\n' ' ' <<<"$now")"
     sleep 2
   done
-  fail "the project's services are not all healthy after 180 s: $(tr '\n' ' ' <<<"$states")"
+  cyfr_id="$(compose ps -q cyfr)"
 }
 
 # One command of the release fixture of the tree `$1` in the running cyfr,
@@ -389,20 +371,6 @@ fixture() {
   done
   docker exec -u app "$cyfr_id" /app/bin/cyfr rpc "{answer, _} = Code.eval_file(\"/tmp/fixture.exs\"); IO.puts(answer.([${args%,}]))" |
     sed -n 's/^FIXTURE=//p' | tail -n 1 || true
-}
-
-# The value at path `$2...` of the JSON `$1`: a string as itself, anything
-# else as JSON, null for a step that is not there.
-jget() {
-  printf '%s' "${1:-null}" | python3 -I -c '
-import json, sys
-value = json.load(sys.stdin)
-for step in sys.argv[1:]:
-    if isinstance(value, list):
-        value = value[int(step)] if -len(value) <= int(step) < len(value) else None
-    else:
-        value = value.get(step) if isinstance(value, dict) else None
-print(value if isinstance(value, str) else json.dumps(value))' "${@:2}"
 }
 
 # ---------------------------------------------------------------------------
@@ -459,36 +427,37 @@ program_call() {
 }
 
 # A stdio MCP server in node, which the Locus image has, holding two tools
-# that write and read the file `mark` in its home and answer the uid, the
-# home and the file's bytes. No backslash, so each quoting layer passes it.
+# that write and read the file `mark` in its home and answer the uid it
+# runs as, the home, the owners of the home and of the file as the
+# filesystem gives them, and the file's bytes. No backslash, so each
+# quoting layer passes it.
 # shellcheck disable=SC2016
-PROGRAM_COMMAND='node -e '\''const fs=require("fs"),NL=String.fromCharCode(10);let b="";const s=m=>process.stdout.write(JSON.stringify(m)+NL);process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf(NL))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;const m=JSON.parse(l);if(m.id==null)continue;const r=x=>s({jsonrpc:"2.0",id:m.id,result:x});if(m.method==="initialize")r({protocolVersion:"2025-03-26",capabilities:{tools:{}},serverInfo:{name:"kept",version:"0"}});else if(m.method==="tools/list")r({tools:["write","read"].map(n=>({name:n,description:n,inputSchema:{type:"object"}}))});else if(m.method==="tools/call"){const f=process.env.HOME+"/mark";if(m.params.name==="write")fs.writeFileSync(f,String(m.params.arguments.mark));let t=null;try{t=fs.readFileSync(f,"utf8")}catch(e){}r({content:[{type:"text",text:JSON.stringify({uid:process.getuid(),home:process.env.HOME,mark:t})}]})}else s({jsonrpc:"2.0",id:m.id,error:{code:-32601,message:"unknown"}})}})'\'
+PROGRAM_COMMAND='node -e '\''const fs=require("fs"),NL=String.fromCharCode(10);let b="";const s=m=>process.stdout.write(JSON.stringify(m)+NL);process.stdin.on("data",c=>{b+=c;let i;while((i=b.indexOf(NL))>=0){const l=b.slice(0,i).trim();b=b.slice(i+1);if(!l)continue;const m=JSON.parse(l);if(m.id==null)continue;const r=x=>s({jsonrpc:"2.0",id:m.id,result:x});if(m.method==="initialize")r({protocolVersion:"2025-03-26",capabilities:{tools:{}},serverInfo:{name:"kept",version:"0"}});else if(m.method==="tools/list")r({tools:["write","read"].map(n=>({name:n,description:n,inputSchema:{type:"object"}}))});else if(m.method==="tools/call"){const h=process.env.HOME,f=h+"/mark";if(m.params.name==="write")fs.writeFileSync(f,String(m.params.arguments.mark));let t=null,o=null;try{t=fs.readFileSync(f,"utf8");o=fs.statSync(f).uid}catch(e){}r({content:[{type:"text",text:JSON.stringify({uid:process.getuid(),home:h,home_owner:fs.statSync(h).uid,mark:t,mark_owner:o})}]})}else s({jsonrpc:"2.0",id:m.id,error:{code:-32601,message:"unknown"}})}})'\'
 PROGRAM_UID="" PROGRAM_HOME=""
 
 # The person's program, its home kept, made through the console as Prism
 # makes one (a definition the person's device confirms), and the file
 # written into its home.
 program_make() {
-  local args made said
+  local args made said why
   fill_ready
   args="$(python3 -I -c 'import json, sys; print(json.dumps({"action": "create", "name": "update-proof-kept", "config": {"transport": "program", "mark": "mcp", "home": "kept", "console": True, "command": sys.argv[1], "env": {}}}))' "$PROGRAM_COMMAND")"
   made="$(until_ok 60 "$OLD_TREE" confirmed "$TOKEN" mcp_servers "$args")" || exit 1
   [ "$(jget "$made" ok home)" = kept ] || fail "the program was not made with its home kept: $made"
   said="$(program_call write "$OLD_TREE" "{\"mark\":\"$MARK\"}")" || exit 1
   PROGRAM_UID="$(jget "$said" uid)" PROGRAM_HOME="$(jget "$said" home)"
-  [ "$(jget "$said" mark)" = "$MARK" ] || fail "the program did not write $MARK into its home: $said"
   [[ $PROGRAM_UID =~ ^[0-9]+$ ]] && [ "$PROGRAM_UID" -ne 0 ] || fail "the program runs under no uid of its own: $said"
-  ok "the program update-proof-kept wrote $MARK into its kept home $PROGRAM_HOME as uid $PROGRAM_UID"
+  why="$(kept_home "$said" "$PROGRAM_HOME" "$MARK" "$PROGRAM_UID")" || fail "before the update, $why"
+  ok "the program update-proof-kept wrote $MARK into its kept home $PROGRAM_HOME, home and file owned by uid $PROGRAM_UID, its own"
 }
 
 # The program started again by the new release finds its file in its home
 # under the uid it had.
 program_reopened() {
-  local said
+  local said why
   said="$(program_call read "$ROOT" '{}')" || exit 1
-  [ "$(jget "$said" mark)" = "$MARK" ] && [ "$(jget "$said" uid)" = "$PROGRAM_UID" ] && [ "$(jget "$said" home)" = "$PROGRAM_HOME" ] ||
-    fail "after the update the program's kept home is not what it was ($PROGRAM_HOME, uid $PROGRAM_UID, $MARK): $said"
-  ok "the program, started again by release $NEW_VERSION, reads $MARK in $PROGRAM_HOME as uid $PROGRAM_UID"
+  why="$(kept_home "$said" "$PROGRAM_HOME" "$MARK" "$PROGRAM_UID")" || fail "after the update, $why"
+  ok "the program, started again by release $NEW_VERSION, reads $MARK in $PROGRAM_HOME, home and file owned by uid $PROGRAM_UID as before"
 }
 
 # A build through the builds role, as `cyfr new tincture --template vite`
@@ -496,8 +465,9 @@ program_reopened() {
 # release, then compiled by the release `$1` names, the fixture of the
 # tree `$2`.
 BUILD_REF="tincture:local.update-proof-build:0.1.0"
+FIRST_BUILD=""
 build_runs() {
-  local tree="$2" started id status closes
+  local tree="$2" started id status closes why
   if [ "$tree" = "$OLD_TREE" ]; then
     fill_ready
     until_ok 60 "$tree" console "$TOKEN" component/create '{"type":"tincture","name":"update-proof-build","template":"vite"}' >/dev/null || exit 1
@@ -515,6 +485,11 @@ build_runs() {
     [ "$SECONDS" -lt "$closes" ] || fail "$1's build of $BUILD_REF reads '$status' after 300 s"
     sleep 3
   done
+  if [ -z "$FIRST_BUILD" ]; then
+    FIRST_BUILD="$id"
+  else
+    why="$(another_build "$FIRST_BUILD" "$id" "$status")" || fail "$why"
+  fi
   ok "$1 built $BUILD_REF through the builds role ($id)"
 }
 
@@ -522,32 +497,35 @@ build_runs() {
 # The readings after the update
 # ---------------------------------------------------------------------------
 
-# The update's report followed as a person follows it: each .env line it
-# names as naming a service the release no longer runs gets the edit the
-# report says (that service's name replaced by the host it gives, the rest
-# of the line kept), then `cyfr up`. A report with an edit and no closing
-# sentence, or a closing sentence with no edit, is no sane report.
+# The update's report read and followed as a person follows it: it is sane
+# (report_sane, tests/update-proof/lib.sh), knowing what the egress line
+# must become (EGRESS_BEFORE to EGRESS_WANT); each .env line it names gets
+# the edit it says (that service's name replaced by the host it gives,
+# the rest of the line kept), then `cyfr up`; and the egress line then
+# holds exactly what it must.
 follow_report() {
-  local edits closing named
-  edits="$(sed -nE 's/^  ([A-Z0-9_]+), line ([0-9]+), names ([a-z0-9-]+): put ([a-z0-9.-]+) in place of \3 in (its URL|that line), keeping .*$/\2 \1 \3 \4/p' "$PROOF/logs/update.log")"
-  closing="$(grep -c -E "^Until each of these lines is changed so and 'cyfr up' is run, CYFR cannot reach " "$PROOF/logs/update.log" || true)"
-  named="$(grep -E '^  [A-Z0-9_]+, line [0-9]+, names [a-z0-9-]+: ' "$PROOF/logs/update.log" || true)"
-  if [ "$(grep -c . <<<"$named")" != "$(grep -c . <<<"$edits")" ]; then
-    fail "the update names .env lines whose advice is no edit a person can follow: $(grep -vE ': put [a-z0-9.-]+ in place of [a-z0-9-]+ in (its URL|that line), keeping ' <<<"$named" | head -n 3)"
-  fi
+  local edits why at key host put line
+  why="$(report_sane "$PROOF/logs/update.log" "$EGRESS_BEFORE" "$EGRESS_WANT")" || fail "$why"
+  edits="$(report_edits "$PROOF/logs/update.log")"
   if [ -z "$edits" ]; then
-    [ "$closing" = 0 ] || fail "the update says CYFR cannot reach a host until lines are changed, and names no line to change"
     ok "the update names no .env line to change"
-    return 0
+  else
+    while read -r at key host put; do
+      line="$(sed -n "${at}p" "$WORK/.env")"
+      [[ $line == "$key="* ]] || fail "the update names line $at of .env as $key, and that line is: ${line%%=*}"
+      grep -qE "(^|[^a-z0-9-])$host([^a-z0-9-]|$)" <<<"${line#*=}" || fail "the update says line $at ($key) names $host, and it does not"
+      python3 -I -c "$ENV_EDIT" "$WORK/.env" "$at" "$host" "$put" || fail "line $at of .env could not be edited"
+      ok "followed the report: $key (line $at), $put in place of $host"
+    done <<<"$edits"
+    start "$NEW_CYFR" up-after-edits up
   fi
-  [ "$closing" = 1 ] || fail "the update names .env lines to change and does not say what cannot work until they are"
-  local at key host put line
-  while read -r at key host put; do
-    line="$(sed -n "${at}p" "$WORK/.env")"
-    [[ $line == "$key="* ]] || fail "the update names line $at of .env as $key, and that line is: ${line%%=*}"
-    grep -qE "(^|[^a-z0-9-])$host([^a-z0-9-]|$)" <<<"${line#*=}" || fail "the update says line $at ($key) names $host, and it does not"
-    python3 -I - "$WORK/.env" "$at" "$host" "$put" <<'PY' || fail "line $at of .env could not be edited"
-import re, sys
+  [ "$(env_value CYFR_PRIVATE_EGRESS_TARGETS)" = "$EGRESS_WANT" ] ||
+    fail "after the report was followed the egress line holds $(env_value CYFR_PRIVATE_EGRESS_TARGETS), not $EGRESS_WANT"
+  ok "the egress line holds $EGRESS_WANT, as it must"
+}
+# The edit of one .env line: the host named replaced by what to put, each
+# where it stands as a whole name, the rest of the line kept.
+ENV_EDIT='import re, sys
 path, at, host, put = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 lines = open(path).read().split("\n")
 key, value = lines[at - 1].split("=", 1)
@@ -555,32 +533,36 @@ lines[at - 1] = key + "=" + re.sub(r"(?<![a-z0-9-])" + re.escape(host) + r"(?![a
 with open(path, "r+") as f:
     f.truncate(0)
     f.write("\n".join(lines))
-PY
-    ok "followed the report: $key (line $at), $put in place of $host"
-  done <<<"$edits"
-  cli_ok "$NEW_CYFR" up-after-edits up
+'
+
+# What the project's networks are, one a line, sorted.
+project_networks() {
+  docker network ls --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Label "com.docker.compose.network"}}' | sort
+}
+
+# The services the compose file `$1` declares under every profile, one a
+# line, sorted.
+services_of() {
+  docker compose -f "$1" --project-directory "$WORK" --profile '*' config --services | sort
 }
 
 # What the update left running: the project's services against the new
-# file, its networks, its images, and the update's own sentences.
+# file, its networks, its images, the update's own sentences against the
+# proof's inventories, and the person's message through their session.
 update_readings() {
-  local services networks used containers name image want running restarts removed
-  services="$(compose config --services | sort)"
-  containers="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Label "com.docker.compose.service"}}' | sort)"
-  for name in $containers; do
-    grep -qxF "$name" <<<"$services" || fail "after the update the project holds a container of $name, a service release $NEW_VERSION does not declare: $(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$name" --format '{{.Names}} {{.Status}}')"
-  done
-  stack_healthy
+  local networks used containers name image want running restarts why answer
+  stack_healthy "$PROOF/new-compose.yml"
+  containers="$(states | cut -d= -f1)"
   for name in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT"); do
     restarts="$(docker inspect --format '{{.Name}} {{.RestartCount}}' "$name")"
     [ "${restarts##* }" = 0 ] || fail "after the update ${restarts% *} restarted ${restarts##* } times"
   done
-  ok "release $NEW_VERSION runs $(tr '\n' ' ' <<<"$containers")every one healthy or running, none restarted, none of a service it does not declare"
+  ok "release $NEW_VERSION runs $(tr '\n' ' ' <<<"$containers")each declared service healthy or running, none restarted, none of a service it does not declare"
   used="$(compose config --format json | python3 -I -c '
 import json, sys
 project = json.load(sys.stdin)
 print("\n".join(sorted({n for s in project["services"].values() for n in (s.get("networks") or {})})))')"
-  networks="$(docker network ls --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Label "com.docker.compose.network"}}' | sort)"
+  networks="$(project_networks)" || fail "the project's networks could not be listed"
   for name in $networks; do
     grep -qxF "$name" <<<"$used" || fail "after the update the project holds the network $name, which release $NEW_VERSION's services do not use"
   done
@@ -594,36 +576,25 @@ print("\n".join(sorted({n for s in project["services"].values() for n in (s.get(
 
   grep -qxF "Updated to release $NEW_VERSION." "$PROOF/logs/update.log" || fail "the update never says it updated to release $NEW_VERSION"
   ! grep -q 'FATAL' "$PROOF/logs/update.log" || fail "the update printed a FATAL line: $(grep FATAL "$PROOF/logs/update.log" | head -n 3)"
-  removed="$(sed -nE "s/^Removed this project's containers of services release [^ ]+ does not run: (.*)\.$/\1/p" "$PROOF/logs/update.log" | tr -d ',')"
-  for name in $removed; do
-    grep -qw -- "$name" <<<"$before_services" || fail "the update says it removed the container of $name, which the old release never ran"
-    ! grep -qxF "$name" <<<"$containers" || fail "the update says it removed the container of $name, which is still there"
-  done
-  removed="$(sed -nE "s/^Removed this project's networks release [^ ]+ does not use: (.*)\.$/\1/p" "$PROOF/logs/update.log" | tr -d ',')"
-  for name in $removed; do
-    ! grep -qxF "$name" <<<"$networks" || fail "the update says it removed the network $name, which is still there"
-  done
-  ok "the update's sentences hold: it updated to $NEW_VERSION, and what it says it removed is gone"
+  why="$(removed_as_said "Removed this project's containers of services" "$PROOF/logs/update.log" "$BEFORE_SERVICES" "$containers" "containers of")" || fail "$why"
+  why="$(removed_as_said "Removed this project's networks" "$PROOF/logs/update.log" "$BEFORE_NETWORKS" "$networks" networks)" || fail "$why"
+  ok "the update's sentences hold: it updated to $NEW_VERSION, and what it says it removed is what was there before and is gone after"
 
   # The session the person signed in with before the update: a person
-  # stays signed in across it, and every call below is made under it.
-  signed_in="$(docker exec -u app "$cyfr_id" /app/bin/cyfr rpc "case Sanctum.Caller.establish({:session, \"$TOKEN\"}) do
-      {:ok, ctx} -> IO.puts(\"PERSON=#{ctx.user_id}\")
-      other -> IO.puts(\"PERSON=#{inspect(other)}\")
-    end" | sed -n 's/^PERSON=//p')"
-  [ "$signed_in" = "$PERSON" ] || fail "after the update the person's session opens as '$signed_in', not $PERSON"
-  thread_answer="$(fixture "$ROOT" thread_read "$PERSON" "$THREAD")"
-  grep -qF "$MARK" <<<"$(jget "$thread_answer" contents)" || fail "release $NEW_VERSION does not serve the person's message $MARK: '$thread_answer'"
-  ok "the person $PERSON is still signed in by the session from before the update, and their message $MARK is served"
+  # stays signed in across it, and the message is read under it.
+  answer="$(fixture "$ROOT" session_thread_read "$TOKEN" "$THREAD")"
+  why="$(thread_as_said "$answer" "$PERSON" "$MARK")" || fail "after the update $why"
+  ok "the person $PERSON is still signed in by the session from before the update, under which their thread reads exactly [$MARK]"
 }
 
 # The update's snapshot: complete, every file the person's, and its
 # database copy whole, holding the person.
 snapshot_readings() {
-  local snapshot others copy
+  local snapshot others copy why
   snapshot="$(sed -nE 's/^Taking a snapshot into (.*)\.\.\.$/\1/p' "$PROOF/logs/update.log" | tail -n 1)"
   [ -n "$snapshot" ] && [ -f "$snapshot/snapshot.json" ] || fail "the update names no snapshot that holds a snapshot.json: '$snapshot'"
   [ "$(jget "$(cat "$snapshot/snapshot.json")" complete)" = true ] || fail "the snapshot $snapshot does not say complete"
+  why="$(snapshot_parts "$snapshot")" || fail "$why"
   others="$(find "$snapshot" ! -user "$(id -u)" | head -n 5)"
   [ -z "$others" ] || fail "the snapshot holds files that are not the person's: $others"
   copy="$PROOF/snapshot-db"
@@ -636,7 +607,7 @@ db = sqlite3.connect(sys.argv[1])
 assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "integrity_check"
 assert db.execute("SELECT count(*) FROM users WHERE id = ?", (sys.argv[2],)).fetchone()[0] == 1, "the person"
 PY
-  ok "the snapshot $snapshot is complete and the person's, its database passes integrity_check and holds the person"
+  ok "the snapshot $snapshot holds every part its manifest lists ($(jget "$(cat "$snapshot/snapshot.json")" parts)), every file the person's, its database passes integrity_check and holds the person"
 }
 
 # ---------------------------------------------------------------------------
@@ -745,15 +716,22 @@ env_set CYFR_DIRECTORY_URL http://127.0.0.1:9
 [ -n "$(env_value CYFR_LOCUS_BUILDS_KEY)" ] || env_set CYFR_LOCUS_BUILDS_KEY "$(openssl rand -hex 32)"
 egress="$(env_value CYFR_PRIVATE_EGRESS_TARGETS)"
 env_set CYFR_PRIVATE_EGRESS_TARGETS "${egress:+$egress,}fixture.test"
+# What the egress line must become: each service the update retires (one
+# the old file runs and the new one does not) replaced by the host the new
+# release ships for the setting.
+EGRESS_BEFORE="$(env_value CYFR_PRIVATE_EGRESS_TARGETS)"
+retired="$(comm -23 <(services_of "$PROOF/old-compose.yml") <(services_of "$PROOF/new-compose.yml"))"
+shipped="$(NAME=CYFR_PRIVATE_EGRESS_TARGETS awk 'index($0, ENVIRON["NAME"] "=") == 1 { print substr($0, length(ENVIRON["NAME"]) + 2) }' "$ROOT/.env.example" | tail -n 1)"
+[ -n "$shipped" ] || fail "release $NEW_VERSION's .env.example ships no CYFR_PRIVATE_EGRESS_TARGETS"
+EGRESS_WANT="$(expected_egress "$EGRESS_BEFORE" "$retired" "$shipped")"
 PROJECT="$(compose config --format json | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["name"])')"
-ok "the install's .env: port $port, builds on, the egress list the person's own ($(env_value CYFR_PRIVATE_EGRESS_TARGETS)); the project $PROJECT"
+ok "the install's .env: port $port, builds on, the egress list the person's own ($EGRESS_BEFORE, which the update's advice must make $EGRESS_WANT); the project $PROJECT"
 
 names_free "$PROOF/fixed-old" "$PROOF/fixed-new"
 HELD_AT=$SECONDS
 step "the old release up, holding the person's data"
-cli_ok "$OLD_CYFR" up-old up
-stack_healthy
-before_services="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Label "com.docker.compose.service"}}' | sort | tr '\n' ' ')"
+start "$OLD_CYFR" up-old up
+stack_healthy "$PROOF/old-compose.yml"
 signed_in="$(fixture "$OLD_TREE" person update-proof)"
 PERSON="$(jget "$signed_in" user_id)"
 [ -n "$PERSON" ] && [ "$PERSON" != null ] || fail "the release fixture made nobody: '$signed_in'"
@@ -762,15 +740,15 @@ MARK="update-proof-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 written="$(fixture "$OLD_TREE" thread "$PERSON" "$MARK")"
 THREAD="$(jget "$written" thread_id)"
 [ -n "$THREAD" ] && [ "$THREAD" != null ] || fail "the person's message was not written: '$written'"
-ok "release $OLD_VERSION runs $before_services; the person $PERSON wrote $MARK"
+ok "release $OLD_VERSION runs $(states | cut -d= -f1 | tr '\n' ' ')and the person $PERSON wrote $MARK"
 program_make
 build_runs "release $OLD_VERSION" "$OLD_TREE"
 
 step "cyfr update to $NEW_VERSION, as the person"
-update_status=0
-cli "$NEW_CYFR" update update --continue-as "$NEW_VERSION" --yes || update_status=$?
+BEFORE_SERVICES="$(states | cut -d= -f1)" || fail "the project's containers could not be listed"
+BEFORE_NETWORKS="$(project_networks)" || fail "the project's networks could not be listed"
+start "$NEW_CYFR" update update --continue-as "$NEW_VERSION" --yes
 cat "$PROOF/logs/update.log"
-[ "$update_status" -eq 0 ] || fail "cyfr update exited $update_status"
 follow_report
 update_readings
 program_reopened

@@ -92,6 +92,8 @@ out=$(old_side "$repo" "$c_head2" v1)
 check "a release on head's schema that an older change made is the old side" "$(head -n 1 <<<"$out")" "release v1"
 out=$(old_side "$repo" "$c_head2")
 check "the base is the commit the schema went back at, not one before the change between" "$(head -n 1 <<<"$out")" "base $c_back"
+out=$(old_side "$repo" "$c_head2" v2 v1)
+check "a newest release on another schema is passed over for an older one on head's" "$(head -n 1 <<<"$out")" "release v1"
 
 out=$(old_side "$repo" "$c_feature")
 check "a schema no commit of the line changed has the line's root as its base" "$(head -n 1 <<<"$out")" "base $c_root"
