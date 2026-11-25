@@ -62,6 +62,13 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # The image's maker of the machines' device and its lister, which the
+      # vm package's bound mounts test runs for real.
+      - name: squashfs-tools, which the machines' device's tests run
+        run: |
+          ../../../scripts/ci/retry.sh sudo apt-get update
+          ../../../scripts/ci/retry.sh sudo apt-get install -y --no-install-recommends squashfs-tools
+
       # The total coverage goes to the job summary: it is reported, never a
       # floor, so only a failing test fails the step.
       - name: go test

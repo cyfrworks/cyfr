@@ -146,12 +146,16 @@ func check(argv []string, report *Report) error {
 		return ErrNoKVM
 	}
 	began := time.Now()
-	device, made, err := Programs(&prefixed{w: os.Stderr, tag: "maker: "}).Device()
+	held, made, err := Programs(&prefixed{w: os.Stderr, tag: "maker: "}).Device()
 	report.DeviceMs = time.Since(began).Milliseconds()
-	report.Device, report.DeviceMade = device, made
+	report.DeviceMade = made
 	if err != nil {
 		return err
 	}
+	// Deferred first, the hold ends after the VMM's end below.
+	defer held.Close()
+	device := held.Path
+	report.Device = device
 	self, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return err

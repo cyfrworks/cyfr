@@ -437,10 +437,12 @@ RUN LOCUS_BUILDS_KEY="$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')"
        done \
     && rm -rf /tmp/cargo-seed
 
-# The image's identity, last of every file: a digest of its root's contents,
-# which names the machines' device the keeper makes from it, so a new image
-# makes a new one (package vm's Programs).
-RUN find / -xdev -type f ! -path /etc/cyfr/image-digest -print0 | sort -z | xargs -0 sha256sum \
+# The image's identity, last of every file: a digest of its root, every
+# path's type, mode, owner and link target and every file's contents, which
+# names the machines' device the keeper makes from it, so a new image makes
+# a new one (package vm's Programs).
+RUN { find / -xdev ! -path /etc/cyfr/image-digest -printf '%y %#m %U:%G %p -> %l\0' | sort -z; \
+      find / -xdev -type f ! -path /etc/cyfr/image-digest -print0 | sort -z | xargs -0 sha256sum; } \
     | sha256sum | cut -c1-64 > /etc/cyfr/image-digest
 
 # The release starts no Erlang distribution: a listener any guest, build
