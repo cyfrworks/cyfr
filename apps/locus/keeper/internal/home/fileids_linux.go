@@ -16,14 +16,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// AsFileIDs runs fn as uid and gid would reach files, on a thread that takes
-// their file ids (setfsuid and setfsgid, which the keeper's SETUID and
-// SETGID allow) and ends with its goroutine, never unlocked, so no other
-// goroutine runs with them. Before it answers, on success and on failure
-// alike, the thread takes the caller's own file ids back and reads them from
-// its own status (threadFileIDs): a goroutine that ends locked on the
-// process's main thread leaves that thread parked, not gone, and the main
-// thread's ids are the caller's as /proc shows them.
+// AsFileIDs runs fn as uid and gid would reach files, on a thread of its own
+// that takes their file ids (setfsuid and setfsgid, which the keeper's
+// SETUID and SETGID allow), locked to its goroutine so no other goroutine
+// runs with them. Before it answers, on success and on failure alike, the
+// thread takes the caller's own file ids back and reads them from its own
+// status (threadFileIDs). Only a thread whose ids read back as the caller's
+// is unlocked and lives on; one that does not ends with its goroutine, never
+// unlocked (a goroutine that ends locked on the process's main thread leaves
+// that thread parked, not gone, and the main thread's ids are the caller's as
+// /proc shows them). A thread that ended would also fire the parent-death
+// signal of every process it had started, a stage's among them, so a thread
+// is ended only for ids it could not give back.
 func AsFileIDs(uid, gid int, fn func() error) error {
 	done := make(chan error, 1)
 	ownUID, ownGID := unix.Getuid(), unix.Getgid()
@@ -32,8 +36,11 @@ func AsFileIDs(uid, gid int, fn func() error) error {
 		err := withFileIDs(uid, gid, fn)
 		_ = unix.Setfsuid(ownUID)
 		_ = unix.Setfsgid(ownGID)
-		if fsUID, fsGID, rerr := threadFileIDs(); rerr != nil || fsUID != ownUID || fsGID != ownGID {
+		fsUID, fsGID, rerr := threadFileIDs()
+		if rerr != nil || fsUID != ownUID || fsGID != ownGID {
 			err = errors.Join(err, fmt.Errorf("the thread's file ids are %d:%d after their restoration, not the caller's %d:%d (%v)", fsUID, fsGID, ownUID, ownGID, rerr))
+		} else {
+			runtime.UnlockOSThread()
 		}
 		done <- err
 	}()
