@@ -166,11 +166,11 @@ defmodule PrismWeb.DisplayHelpers do
   @doc """
   Returns a human-readable relative time string from an ISO8601 timestamp.
 
-  - < 60s: "just now"
-  - < 60m: "2m ago"
-  - < 24h: "1h ago"
-  - < 7d: "3d ago"
-  - >= 7d: the date string directly
+  - < 60s either way: "just now"
+  - < 60m: "2m ago", or "in 2m" for a time ahead
+  - < 24h: "1h ago", or "in 1h"
+  - < 7d: "3d ago", or "in 3d"
+  - >= 7d either way: the date string directly
   """
   def relative_time(nil), do: "-"
   def relative_time("-"), do: "-"
@@ -189,11 +189,14 @@ defmodule PrismWeb.DisplayHelpers do
     diff = DateTime.diff(DateTime.utc_now(), dt, :second)
 
     cond do
-      diff < 60 -> "just now"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86_400 -> "#{div(diff, 3600)}h ago"
-      diff < 604_800 -> "#{div(diff, 86_400)}d ago"
-      true -> Calendar.strftime(dt, "%Y-%m-%d %H:%M")
+      abs(diff) < 60 -> "just now"
+      abs(diff) >= 604_800 -> Calendar.strftime(dt, "%Y-%m-%d %H:%M")
+      diff > 0 -> span(diff) <> " ago"
+      true -> "in " <> span(-diff)
     end
   end
+
+  defp span(seconds) when seconds < 3600, do: "#{div(seconds, 60)}m"
+  defp span(seconds) when seconds < 86_400, do: "#{div(seconds, 3600)}h"
+  defp span(seconds), do: "#{div(seconds, 86_400)}d"
 end
