@@ -38,11 +38,11 @@ defmodule Aqua.ScheduleTurns do
   answers the turn the first opened, so one claim opens one turn however
   often it is read. It is an ordinary turn of that thread, queued behind
   whatever runs there, its message the schedule's line in the server's
-  voice naming the schedule by id and name, which the person's count
-  counts. A schedule a turn made opens its line with
-  "`<maker>` set this schedule: `<name>`" (`Opus.schedule_fire_text/3`, the
+  voice, its payload naming the schedule by id and name, which the
+  person's count counts. A schedule a turn made opens its line with
+  "`<maker>` set this schedule:" (`Opus.schedule_fire_text/2`, the
   wording the schedule tool bounds at every write), so the soul hands that member
-  the job again (`crew.ask`). The turn carries the schedule and the
+  the job again (`crew.ask`); the name is a label and the line does not say it. The turn carries the schedule and the
   occurrence, and its root's admission starts the occurrence
   (`Opus.TurnRoot`).
 
@@ -76,11 +76,14 @@ defmodule Aqua.ScheduleTurns do
 
   A turn's end ends its occurrence through the scheduler's one ending
   (`Opus.end_schedule_turn/4`, called from `Aqua.Tape.finish/4`),
-  as the turn's root row says. Here, a claim whose turn will never start
-  ends `failed` with the reason: the schedule paused or deleted since its
-  claim, its person or athanor no longer standing, a line that does not
-  read, a thread or a turn refused for good, or a turn that ended before
-  it started its occurrence. A refusal that may pass (`:busy`, a peer
+  as the turn's root row says. A pause or a delete of the schedule ends
+  every claim of it not yet started itself, in its own transaction
+  (`Arca.CronSchedule.update/4`, `soft_delete/2`), so no claim read here
+  is of a stopped schedule, and a turn its line already opened is refused
+  at its admission. Here, a claim whose turn will never start
+  ends `failed` with the reason: its person or athanor no longer standing,
+  a line that does not read, a thread or a turn refused for good, or a
+  turn that ended before it started its occurrence. A refusal that may pass (`:busy`, a peer
   holding the thread, the store or the engine unavailable) waits for the
   next drain, and so does an athanor still being prepared.
 
@@ -199,12 +202,12 @@ defmodule Aqua.ScheduleTurns do
       {:wait, :crashed}
   end
 
-  defp work(%{status: "active"} = claim) do
+  defp work(claim) do
     with {:ok, ctx} <- person(claim),
          {:ok, line} <- line(claim),
          {:ok, thread_id} <- thread(ctx, claim) do
       ctx
-      |> Runner.send_message(thread_id, Opus.schedule_fire_text(claim.maker, claim.name, line),
+      |> Runner.send_message(thread_id, Opus.schedule_fire_text(claim.maker, line),
         standing: is_binary(claim.thread_id),
         client_id: client_id(claim),
         schedule: %{schedule_id: claim.schedule_id, occurrence_id: claim.id},
@@ -215,8 +218,6 @@ defmodule Aqua.ScheduleTurns do
       {:error, reason} -> refused(claim, reason)
     end
   end
-
-  defp work(%{status: status} = claim), do: ended(claim, "the schedule is #{status}")
 
   # One turn per claim: a send of the same claim answers the turn its
   # first send opened, and a claim the scheduler's recovery took over to

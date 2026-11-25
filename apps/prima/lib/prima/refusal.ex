@@ -693,28 +693,35 @@ defmodule Prima.Refusal do
   # A schedule's line for Aqua runs as its person with nobody present, so
   # only the person makes or changes one, signed in or through a turn of
   # theirs (`Opus.Schedules.Provider`).
-  # A schedule's fire whose turn came to start after its person paused or
-  # deleted the schedule (`Arca.ScheduleOccurrences.start!/4`): it runs
-  # nothing.
-  defp row({:schedule_stopped, status}) when status in ["paused", "deleted"],
-    do: {:conflict, "This schedule was #{status} before its turn started, so it did not run."}
-
   defp row(:aqua_line_by_person),
     do:
       {:forbidden,
-       "Only you, signed in or through Aqua's turn, can give a schedule a line for Aqua or change it"}
+       "Only you, signed in or through Aqua's turn, can give a schedule a line for Aqua or change its line or its time"}
 
-  # A schedule is made or changed from a chain only by a turn's own call
-  # (`Opus.Schedules.Provider`): a component a turn or a key started is
-  # not Aqua or a crew member.
   # A turn's own schedule write that is not its person's: under a key or a
-  # tincture's frame, or started by neither the person nor a schedule's
-  # fire (`Opus.Schedules.Provider`).
+  # tincture's frame, or in work neither the person nor a schedule's fire
+  # began (`Opus.Schedules.Provider`).
   defp row(:schedule_turn_not_yours),
     do:
       {:forbidden,
        "A turn makes or changes a schedule only when you started it signed in, or a schedule of yours did; a key's or an app's turn cannot"}
 
+  # A schedule write a page in Aqua's browser made through the turn: the
+  # page's call, not the turn's own (`Opus.Schedules.Provider`).
+  defp row(:schedule_by_page),
+    do:
+      {:forbidden,
+       "A page in Aqua's browser cannot make or change a schedule; Aqua or one of its members does, in its own turn"}
+
+  # A turn's schedule write that names a turn no longer open.
+  defp row(:schedule_turn_ended),
+    do:
+      {:conflict,
+       "The turn that made this call has ended, so it can no longer make or change a schedule"}
+
+  # A schedule is made or changed from a chain only by a turn's own call
+  # (`Opus.Schedules.Provider`): a component a turn or a key started is
+  # not Aqua or a crew member.
   defp row(:schedule_by_component),
     do:
       {:forbidden,

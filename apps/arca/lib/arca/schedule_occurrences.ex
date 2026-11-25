@@ -315,60 +315,61 @@ defmodule Arca.ScheduleOccurrences do
   @doc """
   Move a `claimed` occurrence to `started` for `execution_id`, counting
   the attempt, only while `claimed_by` (the admitting boot) is its
-  claimant and its schedule still stands (`active`): the state, the
-  claimant and the schedule are checked in the one guarded statement that
-  moves it. Answers `:started`; `{:schedule_stopped, status}` when the
-  schedule was paused or deleted since its claim, so a fire queued behind
-  other work runs nothing its person stopped; and `:not_claimed` when the
-  occurrence is not claimed, or is claimed by another boot since a
-  recoverer took it over. Either refusal rolls back the admission it runs
-  inside.
+  claimant: the state and the claimant are checked in the one guarded
+  statement that moves it, and nothing else is read: an occurrence's own
+  state is the one answer to whether it may start. Answers the rows
+  moved: 0 when the occurrence is not claimed (a pause or a delete of its
+  schedule ended it, `end_unstarted!/2`, or it ended otherwise), or is
+  claimed by another boot since a recoverer took it over, so the
+  admission it runs inside rolls back.
   """
-  @spec start!(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
-          :started | :not_claimed | {:schedule_stopped, String.t()}
+  @spec start!(Prima.Actor.t(), String.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the admission transaction
   def start!(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, claimed_by, execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(claimed_by) do
-    standing =
-      from(s in CronSchedule,
-        where: s.athanor_id == ^athanor_id and s.status == "active",
-        select: s.id
-      )
-
     {count, _} =
       from(o in ScheduleOccurrence,
         where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state == "claimed",
-        where: o.claimed_by == ^claimed_by,
-        where: o.schedule_id in subquery(standing)
+        where: o.claimed_by == ^claimed_by
       )
       |> Arca.Repo.update_all(
         set: [state: "started", execution_id: execution_id],
         inc: [attempts: 1]
       )
 
-    if count == 1, do: :started, else: not_started(athanor_id, occurrence_id, claimed_by)
+    count
   end
 
   def start!(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/4")
 
-  # Why a start moved nothing: the claim this boot holds, of a schedule
-  # stopped since, or no claim of this boot's at all.
-  # arca:db-raise-ok inside the admission transaction
-  defp not_started(athanor_id, occurrence_id, claimed_by) do
-    from(o in ScheduleOccurrence,
-      join: s in CronSchedule,
-      on: s.id == o.schedule_id and s.athanor_id == o.athanor_id,
-      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state == "claimed",
-      where: o.claimed_by == ^claimed_by,
-      select: s.status
-    )
-    |> Arca.Repo.one()
-    |> case do
-      status when status in ["paused", "deleted"] -> {:schedule_stopped, status}
-      _not_ours -> :not_claimed
-    end
+  @doc """
+  End every occurrence of the schedule `schedule_id` still `claimed`,
+  `failed`, on the cell's clock, and answer the times they were due for:
+  a pause or a delete of the schedule does this inside its own write's
+  transaction (`Arca.CronSchedule.update/4`, `soft_delete/2`), after the
+  schedule's row lock. An occurrence already started is left to its run.
+  Its admission's one conditional write (`start!/4`) and this end each
+  move the occurrence only from `claimed`, so exactly one of them does,
+  on either adapter, and a fire its person stopped never starts.
+  """
+  @spec end_unstarted!(Prima.Actor.t(), String.t()) :: [DateTime.t()]
+  # arca:db-raise-ok inside the caller's transaction
+  def end_unstarted!(%Prima.Actor{athanor_id: athanor_id}, schedule_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(schedule_id) do
+    {_ended, due} =
+      from(o in ScheduleOccurrence,
+        where: o.athanor_id == ^athanor_id and o.schedule_id == ^schedule_id,
+        where: o.state == "claimed",
+        select: o.scheduled_for
+      )
+      |> Arca.Repo.update_all(set: [state: "failed", ended_at: Arca.ServerMetaStorage.now!()])
+
+    due
   end
+
+  def end_unstarted!(%Prima.Actor{}, _schedule_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.end_unstarted!/2")
 
   @doc """
   End an open occurrence as `completed`, `failed` or `uncertain`, only
@@ -461,12 +462,21 @@ defmodule Arca.ScheduleOccurrences do
     end)
   end
 
+  # The occurrence's schedule's row is locked before the occurrence's, the
+  # one order a claim (`claim/3`), a pause or a delete
+  # (`Arca.CronSchedule.update/4`, `end_unstarted!/2`) and an end take
+  # them in, so an end, which writes its schedule's summary under that
+  # row's lock, never waits on a pause that waits on it.
   # arca:db-raise-ok inside the end's transaction
   defp lock_occurrence(athanor_id, occurrence_id) do
-    from(o in ScheduleOccurrence,
-      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id,
-      select: o.id
-    )
+    occurrence =
+      from(o in ScheduleOccurrence, where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id)
+
+    with schedule_id when is_binary(schedule_id) <-
+           Arca.Repo.one(from(o in occurrence, select: o.schedule_id)),
+         do: lock_schedule(athanor_id, schedule_id)
+
+    from(o in occurrence, select: o.id)
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()
   end
@@ -1027,7 +1037,7 @@ defmodule Arca.ScheduleOccurrences do
     )
   end
 
-  # arca:db-raise-ok inside the claim transaction
+  # arca:db-raise-ok inside the claim's or the end's transaction
   defp lock_schedule(athanor_id, schedule_id) do
     from(s in CronSchedule,
       where: s.id == ^schedule_id and s.athanor_id == ^athanor_id,

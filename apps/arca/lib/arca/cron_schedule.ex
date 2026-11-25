@@ -152,10 +152,26 @@ defmodule Arca.CronSchedule do
   decided by `Opus.Schedules.Provider`): who may write is
   decided against the row being written, never one read before.
 
+  The time of a row that holds a line for Aqua (`cron_expression`,
+  `once`) is part of what its fire reads, and is held to the same rule.
+
   With `definition:` (the row's `definition/1` as the caller read it), the
   write is refused `:schedule_changed` unless the row under its lock still
   has that definition: a change made since the caller read it is never
   overwritten by one made against what it replaced.
+
+  With `fits:`, a function of the row as the write leaves it, answering
+  `:ok` or `{:error, reason}`, the write is refused with that reason
+  unless the row it would leave fits: asked under the lock, so two writes
+  that each fit the row they read cannot together leave one that does not.
+
+  A write that pauses the row ends every occurrence of it claimed and not
+  yet started, in the same transaction, and records why (`last_error`,
+  "Last run did not start: the schedule is paused"), as `soft_delete/2`
+  does for a delete: admission starts only a claimed occurrence
+  (`Arca.ScheduleOccurrences.start!/4`), so no fire its person stopped
+  runs, and a resume revives none. A once row whose fire it ended gets
+  that fire's time back as its cursor, so a resume fires it.
   """
   @spec update(Prima.Actor.t(), String.t(), map(), keyword()) ::
           {:ok, map()}
@@ -170,22 +186,63 @@ defmodule Arca.CronSchedule do
   def update(%Prima.Actor{} = actor, id, attrs, opts \\ []) do
     by_person = Keyword.get(opts, :by_person, false) == true
     read = Keyword.get(opts, :definition)
+    fits = Keyword.get(opts, :fits, fn _row -> :ok end)
 
     Errors.with_db_rescue("CronSchedule.update", fn ->
       guarded(actor, id, :live, fn schedule ->
-        with :ok <- as_read(schedule, read),
-             :ok <- aqua_target(schedule, attrs, by_person) do
-          attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
+        changeset =
+          Row.update_changeset(schedule, Map.put(attrs, :updated_at, DateTime.utc_now()))
 
-          schedule
-          |> Row.update_changeset(attrs)
-          |> Arca.Repo.update()
-          |> mapped_validation()
+        with :ok <- as_read(schedule, read),
+             :ok <- aqua_target(schedule, attrs, by_person),
+             :ok <- fitting(changeset, fits),
+             {:ok, updated} <- changeset |> Arca.Repo.update() |> mapped_validation() do
+          {:ok, stopped(schedule.status, updated)}
         end
       end)
     end)
     |> Arca.Data.project()
   end
+
+  # The row a valid write leaves, as the caller's bound reads it; an
+  # invalid one is refused by its own validation.
+  defp fitting(%Ecto.Changeset{valid?: true} = changeset, fits) do
+    case fits.(Ecto.Changeset.apply_changes(changeset)) do
+      :ok -> :ok
+      {:error, _reason} = refused -> refused
+    end
+  end
+
+  defp fitting(%Ecto.Changeset{}, _fits), do: :ok
+
+  # A row the write just paused or deleted: every occurrence of it claimed
+  # and not started ends here, in the write's transaction, saying why on
+  # the row; a once row whose one fire ended gets that fire's time back as
+  # its cursor. Answers the row as it now stands.
+  # arca:db-raise-ok inside the caller's transaction
+  defp stopped(before, %Row{status: status} = row)
+       when status in ["paused", "deleted"] and before != status do
+    case Arca.ScheduleOccurrences.end_unstarted!(Prima.Actor.in_athanor(row.athanor_id), row.id) do
+      [] ->
+        row
+
+      due ->
+        cursor =
+          if row.once and is_nil(row.next_run_at),
+            do: [next_run_at: Enum.max(due, DateTime)],
+            else: []
+
+        {1, [stopped]} =
+          from(s in Row, where: s.id == ^row.id and s.athanor_id == ^row.athanor_id, select: s)
+          |> Arca.Repo.update_all(
+            set: [last_error: "Last run did not start: the schedule is #{status}"] ++ cursor
+          )
+
+        stopped
+    end
+  end
+
+  defp stopped(_before, row), do: row
 
   @doc """
   A digest of what a schedule is defined to do: its name, time (and
@@ -342,9 +399,10 @@ defmodule Arca.CronSchedule do
   @doc """
   Records a successful run with tenant-scoped lookup: its run is the last
   one, and the last failure's reason is cleared. When `occurrence_id`
-  was claimed as the schedule's one fire and the schedule, as it now
-  stands, still fires once and awaits nothing else, the same write
-  removes it (`spent/2`). Every row, whatever its kind, is written only
+  started, was claimed as the schedule's one fire and is still its last
+  (no later fire claimed, no time given since: the schedule, as it now
+  stands, fires once and awaits nothing else), the same write removes it
+  (`spent/2`). Every row, whatever its kind, is written only
   under the member's live slot (`:not_owner` otherwise).
   """
   @spec record_run(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
@@ -382,9 +440,9 @@ defmodule Arca.CronSchedule do
   names is the one `occurrence_id`'s row records, read in the same
   transaction, or none when the fire failed before a run started or had
   no occurrence (nil). A failure so never names an earlier run, and never
-  loses its run to a read of its own. A failure of the occurrence claimed
-  as a once schedule's one fire removes it, as `record_run/4` says; one
-  with no occurrence never fired, and it stays. Every row, whatever its kind, is
+  loses its run to a read of its own. A failed run of the occurrence
+  claimed as a once schedule's one fire removes it, as `record_run/4`
+  says; a fire that never started, or no occurrence, leaves it. Every row, whatever its kind, is
   written only under the member's live slot (`:not_owner` otherwise).
   """
   @spec record_error(Prima.Actor.t(), String.t(), String.t(), String.t() | nil) ::
@@ -415,22 +473,35 @@ defmodule Arca.CronSchedule do
   end
 
   # What an ended occurrence leaves of its schedule: it is removed when
-  # the occurrence was claimed as its one fire and the row, as it now
-  # stands, still fires once and awaits nothing else. A recurring
-  # occurrence ending after the row was made a wake, or a wake's fire
-  # ending after it was given a new time, leaves it.
+  # the occurrence started (a run was admitted for it), was claimed as the
+  # row's one fire, and is still the row's last: no later fire was claimed
+  # and no time given since (the row, under its lock, still fires once
+  # with no cursor). A recurring occurrence ending after the row was made
+  # a wake, a wake's fire ending after it was given a new time or after
+  # that time's own fire was claimed, and a fire that never started leave
+  # it; so does one a pause ended, which never comes here.
   # arca:db-raise-ok inside the caller's transaction
   defp spent(%{once: true, next_run_at: nil} = schedule, occurrence_id)
        when is_binary(occurrence_id) do
-    once_fire? =
+    last? =
       from(o in Arca.Schemas.ScheduleOccurrence,
-        where: o.athanor_id == ^schedule.athanor_id and o.id == ^occurrence_id,
-        where: o.schedule_id == ^schedule.id and o.once == true,
+        as: :ended,
+        where: o.athanor_id == ^schedule.athanor_id and o.schedule_id == ^schedule.id,
+        where: o.id == ^occurrence_id and o.once == true and not is_nil(o.execution_id),
+        where:
+          not exists(
+            from(later in Arca.Schemas.ScheduleOccurrence,
+              where: later.athanor_id == parent_as(:ended).athanor_id,
+              where: later.schedule_id == parent_as(:ended).schedule_id,
+              where: later.scheduled_for > parent_as(:ended).scheduled_for,
+              select: 1
+            )
+          ),
         select: true
       )
       |> Arca.Repo.one()
 
-    if once_fire?, do: [status: "deleted"], else: []
+    if last?, do: [status: "deleted"], else: []
   end
 
   defp spent(_schedule, _occurrence_id), do: []
@@ -452,7 +523,9 @@ defmodule Arca.CronSchedule do
   Soft-deletes a live row with tenant-scoped lookup, and answers the row
   as the delete's own locked read found it, the moment before it was
   deleted. A row already deleted is `:not_found`, decided in that read,
-  so of two deletes that race exactly one answers the removed row. Every
+  so of two deletes that race exactly one answers the removed row. The
+  delete ends every occurrence of the row claimed and not yet started, in
+  its transaction, as a pause does (`update/4`). Every
   row, whatever its kind, is written only under the member's live slot
   (`:not_owner` otherwise).
   """
@@ -469,8 +542,12 @@ defmodule Arca.CronSchedule do
         |> Arca.Repo.update()
         |> mapped_validation()
         |> case do
-          {:ok, _deleted} -> {:ok, schedule}
-          refused -> refused
+          {:ok, deleted} ->
+            _ = stopped(schedule.status, deleted)
+            {:ok, schedule}
+
+          refused ->
+            refused
         end
       end)
     end)
@@ -481,12 +558,13 @@ defmodule Arca.CronSchedule do
 
   @doc """
   The occurrences `claimed_by` (a boot) holds still `claimed` of every
-  schedule that holds a line for Aqua (`Row.aqua_line/0`), whatever the
-  schedule's status, oldest due first: what that boot's turn consumer
-  (`Aqua.ScheduleTurns`) has to start or end. Each is the occurrence's
-  `id`, `athanor_id`, `schedule_id`, `scheduled_for` and `claimed_by`,
-  with its schedule's `user_id`, `name`, `input` (the line), `status`,
-  `maker` and `thread_id`.
+  schedule that holds a line for Aqua (`Row.aqua_line/0`), oldest due
+  first: what that boot's turn consumer (`Aqua.ScheduleTurns`) has to
+  start or end. Each is the occurrence's `id`, `athanor_id`,
+  `schedule_id`, `scheduled_for` and `claimed_by`, with its schedule's
+  `user_id`, `name`, `input` (the line), `maker` and `thread_id`. A
+  paused or deleted schedule has none: its pause or delete ended them
+  (`update/4`, `soft_delete/2`).
 
   The claimed row is the record of the fire, written in the claim's own
   transaction (`Arca.ScheduleOccurrences.claim/3`); nothing else records
@@ -513,7 +591,6 @@ defmodule Arca.CronSchedule do
             user_id: s.user_id,
             name: s.name,
             input: s.input,
-            status: s.status,
             maker: s.maker,
             thread_id: s.thread_id
           }
@@ -753,11 +830,12 @@ defmodule Arca.CronSchedule do
 
   # ---- schedule internals -----------------------------------------------------
 
-  @targets [:reference, :resolved_reference, :input]
+  @targets [:reference, :resolved_reference, :input, :cron_expression, :once]
 
   # A line for Aqua runs as its person with nobody present: a write that
-  # touches the target of a row that holds one, before or after the write,
-  # is that person's own act or nothing. `row` is the row as the write's
+  # touches what a fire of a row that holds one reads (its target, its
+  # line and its time), before or after the write, is that person's own
+  # act or nothing. `row` is the row as the write's
   # transaction holds it (none for a create).
   defp aqua_target(row, attrs, by_person) do
     touches? = Enum.any?(@targets, &Map.has_key?(attrs, &1))

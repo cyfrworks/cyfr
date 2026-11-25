@@ -43,26 +43,42 @@ defmodule Opus.Schedules.Provider do
   `agent:local.aqua` (`Arca.CronSchedule.aqua_line/0`) and input
   `{"line": text}`, binding no profile, since each fire is a turn of Aqua
   as the schedule's person, with nobody present (`Aqua.ScheduleTurns`).
-  Only that person makes one, turns a schedule into one or out of one, or
-  changes its line: in their own signed-in session (`aqua_writer/1`), or
-  through a turn of theirs, the soul's or a crew member's alike, under
-  Aqua's grant (`writer/2`). A key's call, a tincture's and any other
-  caller is refused `:aqua_line_by_person`. Pausing, resuming, deleting,
-  renaming and retiming one are a schedule's ordinary writes. No other
-  agent is a schedule's reference, and an Aqua line has no version to
-  re-resolve.
+  What Aqua reads when one fires is its line, its time and its room
+  (`thread_id`, set at create and never changed). Only that person makes
+  one, turns a schedule into one or out of one, or changes its line or its
+  time (`cron_expression`, `at`): in their own signed-in session
+  (`aqua_writer/1`), or through a turn of theirs, the soul's or a crew
+  member's alike, under Aqua's grant (`writer/2`). A key's call, a
+  tincture's and any other caller is refused `:aqua_line_by_person`, and
+  the store holds the same rule under the row's lock
+  (`Arca.CronSchedule.update/4`). Its name is a label, which the fire does
+  not say: renaming, pausing, resuming and deleting one are a schedule's
+  ordinary writes, as for any schedule. No other agent is a schedule's
+  reference, and an Aqua line has no version to re-resolve.
 
   ## From a turn
 
   `create`, `update`, `pause`, `resume` and `delete` take the in-chain
   plane as well; `re_resolve` stays external. A chain's call is a turn's
   own or nothing: the open turn the gate's lineage names, in the caller's
-  athanor, asked for by its person, whose root made the call. A
-  component's call, one whose parent is not its root or that names no
-  turn, is refused `:schedule_by_component`, and one naming a turn no
-  longer open `:not_in_a_turn`. Such a turn
-  is the person's for a line for Aqua when it runs under a sign-in with no
-  key and no frame and started from the person or from a schedule's fire.
+  athanor, asked for by its person, whose root made the call. A call a
+  page in Aqua's browser made through the turn (the gate's `page` mark,
+  stamped from the step's purpose, `Aqua.Loop`) is the page's, not the
+  turn's, and is refused `:schedule_by_page`; a component's call, one
+  whose parent is not its root or that names no turn,
+  `:schedule_by_component`; and one naming a turn no longer open
+  `:schedule_turn_ended`.
+
+  A turn's own call writes only when the turn is the person's: it runs
+  under a sign-in with no key and no frame, and belongs to work the person
+  began or a schedule of theirs began, which its row's origin records
+  (`interactive` or `schedule`), or `:schedule_turn_not_yours`. That
+  covers the soul's turn and a crew member's alike, by decision: a
+  member's job turn and the soul's turn a member's reply opens carry the
+  origin of the work they belong to (`Aqua.Crew` carries the asking turn's
+  origin onto the job and its reply), so a reply inside the person's own
+  work writes as the person's turn does, and one inside work a key or an
+  app began (`programmatic`, `webhook`) writes nothing.
   A schedule a turn makes records the turn's agent as its `maker` and,
   when the turn works under a workspace thread, that thread as its
   `thread_id`, where its fires land (`Aqua.ScheduleTurns`); both come from
@@ -74,9 +90,12 @@ defmodule Opus.Schedules.Provider do
   least a minute and at most a year ahead, rounded up to the minute: the
   row holds the cron expression naming that minute in UTC and `once`. It
   fires once, however late (`Arca.ScheduleOccurrences.claim/3`), and is
-  removed when that occurrence ends. An update naming neither keeps a
-  once schedule's cursor, a resume keeps it too, and a `cron_expression`
-  makes it recurring.
+  removed when that occurrence's run ends, unless the schedule was given
+  another time since (`Arca.CronSchedule.record_run/4`). An update naming
+  neither keeps a once schedule's cursor and a `cron_expression` makes it
+  recurring. A pause ends a fire claimed and not yet started and puts its
+  time back (`Arca.CronSchedule.update/4`), and a resume fires a once
+  schedule whose time has passed at once.
 
   The cap is the platform setting `max_schedules_per_athanor` (0 is no
   ceiling), read at each create and handed to `Arca.CronSchedule.create/2`,
@@ -349,7 +368,7 @@ defmodule Opus.Schedules.Provider do
          :ok <- no_profile(args),
          {:ok, missed} <- missed_runs(args, %{missed_runs: "skip", catch_up_limit: nil}),
          {:ok, input_json} <- aqua_input(args),
-         :ok <- fits(writer.maker, args["name"], input_json) do
+         :ok <- fire_fits(%{reference: @aqua_line, maker: writer.maker, input: input_json}) do
       attrs = %{
         user_id: ctx.user_id,
         maker: writer.maker,
@@ -438,8 +457,7 @@ defmodule Opus.Schedules.Provider do
          :ok <- Arca.CronSchedule.as_read(schedule, args["definition"]),
          {:ok, timing} <- timing(args, schedule),
          {:ok, missed} <- missed_runs(args, schedule),
-         {:ok, line} <- aqua_update(writer, schedule, args),
-         :ok <- fits_update(schedule, args, line) do
+         {:ok, line} <- aqua_update(writer, schedule, args) do
       update_attrs = Map.merge(missed, timing)
 
       update_attrs =
@@ -463,7 +481,8 @@ defmodule Opus.Schedules.Provider do
 
         case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs,
                by_person: writer.person?,
-               definition: args["definition"]
+               definition: args["definition"],
+               fits: &fire_fits/1
              ) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.update(updated.id)
@@ -917,6 +936,10 @@ defmodule Opus.Schedules.Provider do
        when reason in [:not_owner, :no_athanor, :aqua_line_by_person, :schedule_changed],
        do: {:error, reason}
 
+  # The store's own refusal of what a fire would say (`fire_fits/1`, asked
+  # under the row's lock) is answered as the tool's.
+  defp store_refusal({:invalid_argument, _said} = refused, _id), do: {:error, refused}
+
   defp store_refusal(reason, id), do: {:error, format_store_error(reason, id)}
 
   defp format_store_error(reason, id \\ nil)
@@ -986,14 +1009,19 @@ defmodule Opus.Schedules.Provider do
 
   # Who calls a write, decided once for all five writes: `person?`,
   # whether the caller is the schedule's person, which only that person's
-  # writes to a line for Aqua need; `maker`, the agent whose turn calls;
-  # and `room`, the workspace thread that turn works under, none for a
-  # daily thread. A call outside any chain is the session's, a person's or
-  # a key's, and names no maker. A call in a chain is a turn's own, and
-  # that turn is the person's, or the write is refused whatever it writes:
-  # a component's call `:schedule_by_component`, a turn under a key or a
-  # frame, or started by neither the person nor a schedule's fire,
-  # `:schedule_turn_not_yours`.
+  # writes to what an Aqua line's fire reads need; `maker`, the agent
+  # whose turn calls; and `room`, the workspace thread that turn works
+  # under, none for a daily thread. A call outside any chain is the
+  # session's, a person's or a key's, and names no maker. A call in a
+  # chain is a turn's own, and that turn is the person's, or the write is
+  # refused whatever it writes: a page's call through the turn
+  # `:schedule_by_page`, a component's call `:schedule_by_component`, a
+  # turn under a key or a frame, or in work neither the person nor a
+  # schedule began, `:schedule_turn_not_yours` (the moduledoc's "From a
+  # turn" says why a crew member's turn and a member's reply are the
+  # person's when that work is).
+  defp writer(%Context{plane: :guest}, %{"page" => true}), do: {:error, :schedule_by_page}
+
   defp writer(%Context{plane: :guest} = ctx, args) do
     with {:ok, turn, room} <- own_turn(ctx, args) do
       if turn_writer?(ctx, turn),
@@ -1018,8 +1046,10 @@ defmodule Opus.Schedules.Provider do
   defp aqua_writer(_ctx), do: {:error, :aqua_line_by_person}
 
   # A turn of the person's: a sign-in's chain with no key and no frame,
-  # started by the person or by a schedule's fire (whose turn, and the
-  # member it hands the job to, set the next wake), as its row stores it.
+  # in work the person or a schedule's fire began (whose turn, and the
+  # member it hands the job to, set the next wake), as its row's origin
+  # records it. A crew member's job turn and the soul's turn its reply
+  # opens carry the origin of the work they belong to (`Aqua.Crew`).
   defp turn_writer?(
          %Context{authenticated: true, auth_method: :oidc, api_key_id: nil, frame: nil},
          turn
@@ -1050,8 +1080,8 @@ defmodule Opus.Schedules.Provider do
          {:ok, room} <- room(actor, thread) do
       {:ok, turn, room}
     else
-      nil -> {:error, :not_in_a_turn}
-      {:error, :not_found} -> {:error, :not_in_a_turn}
+      nil -> {:error, :schedule_turn_ended}
+      {:error, :not_found} -> {:error, :schedule_turn_ended}
       {:error, _unread} -> {:error, format_store_error(:database_error)}
     end
   end
@@ -1140,46 +1170,52 @@ defmodule Opus.Schedules.Provider do
   end
 
   # Where a resumed schedule's cursor goes: a recurring one's to its next
-  # time; a once one's stays where it was, so one whose time passed while
-  # it was paused fires at once.
+  # time; a once one's stays where it was while that is ahead, and one
+  # whose time passed while it was paused, or whose fire the pause ended
+  # (`Arca.CronSchedule.update/4` put that fire's time back), is due now,
+  # a time no occurrence of it holds. A once one with no cursor fired
+  # already, and its run's end removes it.
+  defp resumed_cursor(%{once: true, next_run_at: %DateTime{} = at}) do
+    now = DateTime.utc_now()
+    if DateTime.compare(at, now) == :gt, do: %{}, else: %{next_run_at: now}
+  end
+
   defp resumed_cursor(%{once: true}), do: %{}
   defp resumed_cursor(schedule), do: %{next_run_at: next_run(schedule.cron_expression)}
 
   @doc """
-  What a fire of a schedule's line for Aqua says (`Opus.schedule_fire_text/3`):
-  the line, opened with "`maker` set this schedule: `name`" when a turn's
-  agent made it. Every write bounds this whole text at the longest
-  message a fire may send, so a saved line always fits its fire.
+  What a fire of a schedule's line for Aqua says (`Opus.schedule_fire_text/2`):
+  the line, opened with "`maker` set this schedule:" when a turn's agent
+  made it. The schedule's name is a label and no part of it. Every write
+  bounds this whole text at the longest message a fire may send
+  (`fire_fits/1`), so a saved line always fits its fire.
   """
-  @spec fire_text(String.t() | nil, String.t(), String.t()) :: String.t()
-  def fire_text(maker, name, line) when is_binary(maker) and is_binary(name) and is_binary(line),
-    do: "#{maker} set this schedule: #{name}\n\n#{line}"
+  @spec fire_text(String.t() | nil, String.t()) :: String.t()
+  def fire_text(maker, line) when is_binary(maker) and is_binary(line),
+    do: "#{maker} set this schedule:\n\n#{line}"
 
-  def fire_text(nil, _name, line) when is_binary(line), do: line
+  def fire_text(nil, line) when is_binary(line), do: line
 
-  # A line for Aqua's fire, with who set it and the schedule's name, is
-  # no longer than a message a fire may send.
-  defp fits(maker, name, input_json) do
+  # A row's fire, with who set it, is no longer than a message a fire may
+  # send; a component's row fires no line. The store asks it of the row as
+  # an update leaves it, under the row's lock (`Arca.CronSchedule.update/4`),
+  # and a create of the row it makes.
+  defp fire_fits(%{reference: @aqua_line} = row) do
     line =
-      case Jason.decode(input_json || "") do
+      case Jason.decode(row.input || "") do
         {:ok, %{"line" => line}} when is_binary(line) -> line
         _unread -> ""
       end
 
-    if byte_size(fire_text(maker, name, line)) > @max_line_bytes,
+    if byte_size(fire_text(row.maker, line)) > @max_line_bytes,
       do:
         {:error,
          {:invalid_argument,
-          "The line is too long: with who set it and the schedule's name, a fire's message holds at most 32 KiB"}},
+          "The line is too long: with who set it, a fire's message holds at most 32 KiB"}},
       else: :ok
   end
 
-  # An update that leaves a line for Aqua leaves its fire within the bound,
-  # its name and line as they will be, its maker as the row records it.
-  defp fits_update(schedule, args, {:aqua, attrs}),
-    do: fits(schedule.maker, args["name"] || schedule.name, attrs[:input] || schedule.input)
-
-  defp fits_update(_schedule, _args, _component), do: :ok
+  defp fire_fits(_component), do: :ok
 
   # The line is the input's one field: a non-empty text a person could send.
   defp aqua_input(%{"input" => %{"line" => line} = input})
@@ -1219,14 +1255,17 @@ defmodule Opus.Schedules.Provider do
 
   # What an update does to the schedule's target: a component's as before
   # (`:component`), or an Aqua line's, which only the person changes. An
-  # update that touches an Aqua line's reference or input, or makes a
-  # schedule one, is the person's; one that leaves it names the profile
-  # the component binds.
+  # update that touches what an Aqua line's fire reads (its reference,
+  # input or time), or makes a schedule one, is the person's; one that
+  # leaves it names the profile the component binds.
   defp aqua_update(writer, schedule, args) do
     aqua? = schedule.reference == @aqua_line
     to_aqua? = args["reference"] == @aqua_line
     leaving? = aqua? and Map.has_key?(args, "reference") and not to_aqua?
-    touches? = Map.has_key?(args, "reference") or Map.has_key?(args, "input")
+
+    touches? =
+      Map.has_key?(args, "reference") or Map.has_key?(args, "input") or
+        is_binary(args["cron_expression"]) or is_binary(args["at"])
 
     cond do
       not aqua? and not to_aqua? ->
