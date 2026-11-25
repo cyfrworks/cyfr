@@ -78,6 +78,14 @@ defmodule Compendium.FacadeTest do
     :ok
   end
 
+  # Widened by the packs of scrolls (`Compendium.Packs`), a stated decision
+  # of that change: the Scrolls page reaches what Files cannot say through
+  # the facade under the person's actor (`pack_sheet/4`, `bring_in_pack/4`,
+  # `switch_pack/3`, `copy_scroll/3`, `packs/1`, `scroll_view/3`,
+  # `pack_dir/1`, `first_pack/0`, `pack_archive_bound/0`), Download reads a
+  # pack (`download_pack/2`), and the programs' folder reads the store
+  # through `pack_digest/2`, `pack_view/3` and `pack_file/4`. `skill_dir/1`
+  # went with the layout before packs.
   @roster [
     acknowledged_projection_epoch: 2,
     acknowledged_projection_epoch: 3,
