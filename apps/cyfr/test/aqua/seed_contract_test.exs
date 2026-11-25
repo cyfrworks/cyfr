@@ -49,7 +49,13 @@ defmodule Aqua.SeedContractTest do
     notes.forget notes.keep notes.list notes.pin notes.read notes.search notes.workspace
     program.list program.read program.send program.start program.stop program.wait
     request_setup.open
+    schedule.create
+    schedule.delete
+    schedule.get
     schedule.list
+    schedule.pause
+    schedule.resume
+    schedule.update
     share.list share.offered share.usage
     source.edit source.grep source.read source.tree source.write
     storage.delete storage.list storage.read
@@ -63,7 +69,7 @@ defmodule Aqua.SeedContractTest do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert soul.tools == @shipped_tools
-    assert length(soul.tools) == 90
+    assert length(soul.tools) == 96
     # The browser's switch is the person's alone: no member is offered it.
     refute "browser.turn_on" in soul.tools
   end

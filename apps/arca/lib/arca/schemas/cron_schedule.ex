@@ -29,6 +29,20 @@ defmodule Arca.Schemas.CronSchedule do
   profile (its turn runs under Aqua's own consent), and each fire is a turn
   of the person's daily thread current when it fires (`Aqua.ScheduleTurns`).
   Every other row binds a profile; the table's CHECK holds both.
+
+  `maker` is the agent whose turn made the schedule, none for one its
+  person made themselves, and `thread_id` the workspace thread its fires
+  join, none for the person's daily thread current when it fires
+  (`Aqua.ScheduleTurns`). Both are written at create from the calling
+  turn (`Opus.Schedules.Provider`) and never changed.
+
+  A `once` schedule's expression names one minute: its claim fires it
+  however late, under any missed-run policy, marks that occurrence as its
+  one fire and leaves it no cursor (`Arca.ScheduleOccurrences.claim/3`),
+  and the write that records the end of that occurrence's run removes it
+  while that fire is still its last (`Arca.CronSchedule.record_run/4`,
+  `record_error/4`). A pause that ends the fire before it started gives
+  the row that fire's time back instead (`Arca.CronSchedule.update/4`).
   """
 
   use Ecto.Schema
@@ -49,8 +63,11 @@ defmodule Arca.Schemas.CronSchedule do
   schema "cron_schedules" do
     field :kind, :string, default: "schedule"
     field :user_id, :string
+    field :maker, :string
+    field :thread_id, :string
     field :name, :string
     field :cron_expression, :string
+    field :once, :boolean, default: false
     field :reference, :string
     # The pinned version a fire runs: the reference as resolved when the
     # row was created or last repointed.
@@ -110,8 +127,11 @@ defmodule Arca.Schemas.CronSchedule do
     |> cast(Map.new(attrs), [
       :id,
       :user_id,
+      :maker,
+      :thread_id,
       :name,
       :cron_expression,
+      :once,
       :reference,
       :resolved_reference,
       :input,
@@ -202,6 +222,7 @@ defmodule Arca.Schemas.CronSchedule do
     |> cast(Map.new(attrs), [
       :name,
       :cron_expression,
+      :once,
       :reference,
       :resolved_reference,
       :input,

@@ -536,7 +536,8 @@ defmodule Emissary.External.ProxyTest do
           "action" => "probe",
           "thread_id" => "thr_stamped",
           "call_id" => "call_stamped",
-          "parent_call_id" => "call_parent_stamped"
+          "parent_call_id" => "call_parent_stamped",
+          "called_by_page" => true
         })
 
       assert {:ok, %{"content" => [_]}} = call("upstream:probe", ctx, args, :in_chain)
