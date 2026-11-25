@@ -1589,7 +1589,6 @@ defmodule Compendium.Packs do
   defp set_check(actor, pack, files, bytes) do
     with {:ok, names} <- pack_names(actor),
          {:ok, {others_files, others_bytes}} <- others_on(actor, names, pack) do
-
       total_files = others_files + files
       total_bytes = others_bytes + bytes
 
