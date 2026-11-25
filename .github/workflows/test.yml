@@ -1562,7 +1562,7 @@ jobs:
   # run here, in the workflow release.yml calls before it publishes, so the
   # release gates on them.
   locus-backends-image:
-    name: Backends image (isolation, refusals, residue, memory bound, kept homes, Aqua's browser, brain drivers, network list)
+    name: Backends image (isolation, refusals, residue, memory bound, kept homes, Aqua's browser, brain drivers, network list, three roles)
     runs-on: ubuntu-latest
     # The longest of these suites, Aqua's browser, takes about two minutes.
     timeout-minutes: 45
@@ -1742,6 +1742,17 @@ jobs:
       # refusing them.
       - name: A program's network list
         run: python3 tests/locus-backends-image/egress.py cyfr-locus:backends
+
+      # The one Locus with all three keys (tests/locus-backends-image/roles.py):
+      # healthy by the image's probe, a run, a build and a program answered;
+      # each role a process of its own user in namespaces of its own,
+      # serving its own port alone, its view holding its own run folder
+      # alone; from a build and a program, no other role's run folder, home
+      # root, kept root, process, key, IPC object or port; each role's group
+      # holding its container's bounds of before; each role killed starting
+      # again alone, and the container started again serving all three.
+      - name: One Locus, three roles
+        run: python3 tests/locus-backends-image/roles.py cyfr-locus:backends
 
   # The suites that run the app image this run built (the app-image job),
   # in groups, each a runner of its own: a step runs in the group whose

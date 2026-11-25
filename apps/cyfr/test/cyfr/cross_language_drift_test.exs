@@ -588,6 +588,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/compose-proof/run.sh", ~w(release)},
       {"tests/locus-backends-image/harness.py", ~w(release roles)},
       {"tests/locus-backends-image/roles.py", ~w(roles)},
+      {"tests/locus-backends-image/roles_update.py", ~w(roles)},
       {"tests/locus-runtime-image/stack.py", ~w(release roles)}
     ],
     "login_directory.json" => [

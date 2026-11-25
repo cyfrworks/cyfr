@@ -22,12 +22,8 @@ signed as CYFR signs them:
   4G of memory and as much swap, 4 processors; builds 4G and 2; backends 2G
   and no processor bound.
 - A role killed starts again alone: the other two keep their processes and
-  a program's session keeps running.
-- A kept home a three-container image made (OLD_IMAGE, the backends service
-  of before, on the same `homes` volume) opens under the new image with its
-  file under its own uid, is listed and is reset under that uid; after the
-  backends role restarts, and after the container restarts, it opens so
-  again, and a new home never draws its uid.
+  a program's session keeps running; the container started again serves
+  all three.
 
 A request on a role's channel naming another role's pool, spawn, place or
 home is refused by the keeper itself, and a role's environment holds its
@@ -38,28 +34,30 @@ TestRoleEnvironHoldsTheRolesOwnAndNothingOfAnothers): no client of this
 suite holds a role's channel, and a role's environment is not readable
 from outside its space.
 
-Prerequisites: harness.py's. Usage: tests/locus-backends-image/roles.py IMAGE OLD_IMAGE
+It serves nothing on the host's port 4000 (every role's port is published
+on a loopback port of Docker's choosing) and reaches no cyfr.run: the
+runtime's host API is a control plane on this machine, and no program
+fetches anything. The update from the three-container image, which needs
+that image, is roles_update.py's, run by hand.
+
+Prerequisites: harness.py's. Usage: tests/locus-backends-image/roles.py IMAGE
 """
 
 import importlib.util
 import json
 import os
 import secrets
-import shutil
 import sys
-import time
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from harness import (  # noqa: E402
-    GUARD, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, POOL_LAST, RELEASE, ROOT, VERSION, Controller, Stack, eventually,
-    expect,
-    owner_of, probe, require_docker, run, wait_healthy,
+    GUARD, KEPT_ROOT, RELEASE, ROOT, Stack, eventually, expect, owner_of, probe, require_docker, run, wait_healthy,
 )
 import imagesuite  # noqa: E402
-from kept_home import sh, whoami  # noqa: E402
+from kept_home import sh  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
     ROLES = {role["name"]: role for role in json.load(_roles)["roles"]}
@@ -78,7 +76,6 @@ builder = load("builder_stack", os.path.join(ROOT, "tests", "builder-image", "st
 plane_module = load("runtime_control_plane", os.path.join(ROOT, "tests", "locus-runtime-image", "control_plane.py"))
 
 OWNER = owner_of("roles")
-HOME = "mcp_roles-kept"
 SERVICE_ID = "wrk_roles"
 ECHO = os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "echo.wasm")
 ECHO_REF = "reagent:local.echo:0.1.0"
@@ -145,49 +142,6 @@ class RolesStack(Stack):
             state = run("docker", "inspect", "--format", "{{.State.Health.Status}}", self.container, check=False)
             return state.stdout.strip() == "healthy"
         return eventually(health, "the container to be healthy", timeout_s=timeout_s)
-
-
-def old_home(stack, old_image, old_root):
-    """A kept home the three-container image makes: its backends service on the project's `homes` volume, a probe
-    program writing a file in its home. Answers the home's uid; the project is then taken down, the volume kept."""
-    old = [os.path.join(old_root, "docker-compose.yml"),
-           os.path.join(old_root, "tests", "locus-backends-image", "compose.locus-backends.yml")]
-    env = stack.env(BACKENDS_IMAGE=old_image, PROBE_DIR=os.path.join(old_root, "tests", "locus-backends-image"))
-    # The backends role as the three-container stack names it, from that stack's own role table.
-    with open(os.path.join(old_root, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as table:
-        then = next(role for role in json.load(table)["roles"] if role["name"] == "backends")
-
-    def compose(*args, check=True):
-        return run("docker", "compose", "--project-name", stack.project, "--project-directory", stack.project_dir,
-                   *[arg for file in old for arg in ("-f", file)], *args, env=env, check=check)
-
-    try:
-        compose("up", "--detach", "--no-build", "--force-recreate", then["service"])
-        guard = compose("ps", "--quiet", then["guard"]).stdout.strip()
-        address = run("docker", "port", guard, str(then["port"])).stdout.strip().splitlines()[0]
-        base = f"http://{address}"
-        wait_healthy(base)
-        c = Controller(base, stack.key)
-        expect(c.hello()[0] == 200, "the three-container image's backends service is greeted")
-        status, answer, _ = c.sync(OWNER, [probe(home="kept")])
-        expect(status == 200, "under the three-container image an owner of a kept program is synced", answer)
-        made = whoami(c, OWNER, home_id=HOME)
-        sh(c, OWNER, 'echo made-before > "$HOME/before.txt"', home_id=HOME)
-        expect(KEPT_FIRST <= made["uid"] <= KEPT_LAST and made["home"] == f"{KEPT_ROOT}/{HOME}",
-               "the three-container image makes a kept home with a file, under a kept uid", made)
-        c.close(OWNER, c.mcp(OWNER, "probe", home_id=HOME).session)
-        return made["uid"]
-    finally:
-        compose("down", "--remove-orphans", check=False)
-
-
-def opens_as_before(c, uid, what):
-    seen = whoami(c, OWNER, home_id=HOME)
-    read = sh(c, OWNER, 'cat "$HOME/before.txt"; stat -c %u "$HOME/before.txt"', home_id=HOME)
-    expect(seen["uid"] == uid and seen["home"] == f"{KEPT_ROOT}/{HOME}" and read["stdout"] == f"made-before\n{uid}\n",
-           f"{what}: the home the three-container image made opens with its file under its own uid {uid}",
-           [seen, read])
-    c.close(OWNER, c.mcp(OWNER, "probe", home_id=HOME).session)
 
 
 def namespaces(stack, pid):
@@ -298,74 +252,43 @@ def test_restart_alone(stack, c, victim):
     return after
 
 
+def serving(stack):
+    """The stack up with all three roles: healthy by the image's probe, the backends role greeted and its owner
+    synced. Answers the controller."""
+    stack.up()
+    stack.healthy()
+    expect(imagesuite.read_output(stack.exec("locus-health && echo answered"), "the image's probe").strip() == "answered",
+           "the image's probe answers for all three roles")
+    c = stack.controller()
+    expect(c.hello()[0] == 200, "the backends role is greeted")
+    status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
+    expect(status == 200, "an owner of a pooled and a kept program is synced", answer)
+    return c
+
+
 def main():
-    if len(sys.argv) != 3:
-        sys.exit("usage: roles.py IMAGE OLD_IMAGE")
-    image, old_image = sys.argv[1:]
+    if len(sys.argv) != 2:
+        sys.exit("usage: roles.py IMAGE")
     require_docker()
-    old_root = os.environ.get("OLD_TREE")
-    expect(old_root and os.path.isfile(os.path.join(old_root, "tests", "locus-backends-image", "compose.locus-backends.yml")),
-           "OLD_TREE names a checkout of the three-container stack", old_root)
     plane = plane_module.ControlPlane(secrets.token_bytes(32), SERVICE_ID).serve()
-    stack = RolesStack("locus-roles", image, plane)
-    shutil.copyfile(os.path.join(old_root, "apps", "locus", "keeper", "seccomp", "keeper.json"),
-                    os.path.join(stack.project_dir, "keeper.seccomp.json"))
+    stack = RolesStack("locus-roles", sys.argv[1], plane)
     try:
-        uid = old_home(stack, old_image, old_root)
-        shutil.copyfile(os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json"),
-                        os.path.join(stack.project_dir, "keeper.seccomp.json"))
-        stack.up()
-        stack.healthy()
-        expect(imagesuite.read_output(stack.exec("locus-health && echo answered"), "the image's probe").strip() == "answered",
-               "the image's probe answers for all three roles")
-        c = stack.controller()
-        expect(c.hello()[0] == 200, "the backends role is greeted")
-        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
-        expect(status == 200, "an owner of a pooled and a kept program is synced", answer)
+        c = serving(stack)
         ran = sh(c, OWNER, "echo answered", program="scratch")
         expect(ran["stdout"] == "answered\n", "a program of the backends role answers", ran)
-
         pids = stack.role_pids()
         expect(sorted(pids) == sorted(ROLES), "one process runs for each role", pids)
         test_apart(stack, pids)
         test_run(stack, plane)
         test_reach(stack, c)
         test_bounds(stack)
-
-        # ————— the home of before —————
-        opens_as_before(c, uid, "under the one container")
-        status, listed, _ = c.control({"type": "homes"})
-        expect(status == 200 and HOME in listed["homes"], "the home of before is listed", listed)
-        status, reset, _ = c.home(OWNER["athanor"], HOME, "reset")
-        expect((status, reset) == (200, {"version": VERSION, "home_id": HOME, "state": "empty"}),
-               "the home of before is reset", reset)
-        empty = whoami(c, OWNER, home_id=HOME)
-        expect(empty["uid"] == uid, "after its reset the home opens under its own uid again", empty)
-        sh(c, OWNER, 'echo made-before > "$HOME/before.txt"', home_id=HOME)
-        c.close(OWNER, c.mcp(OWNER, "probe", home_id=HOME).session)
-
-        # ————— a role killed starts again alone —————
         for victim in ("builds", "runtime", "backends"):
             test_restart_alone(stack, c, victim)
-        c = stack.controller()
-        expect(c.hello()[0] == 200, "the backends role started again is greeted")
-        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
-        expect(status == 200, "the owner is synced again", answer)
-        opens_as_before(c, uid, "after the backends role restarts")
-
         run("docker", "restart", stack.container)
         stack.published()
         stack.healthy()
-        c = stack.controller()
-        expect(c.hello()[0] == 200, "the container started again is greeted")
-        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
-        expect(status == 200, "the owner is synced after the container restarts", answer)
-        opens_as_before(c, uid, "after the container restarts")
-
-        fresh = whoami(c, OWNER, home_id="mcp_roles-fresh")
-        expect(KEPT_FIRST <= fresh["uid"] <= KEPT_LAST and fresh["uid"] != uid
-               and not POOL_FIRST <= fresh["uid"] <= POOL_LAST,
-               f"a new home draws a kept uid, never the home of before's {uid}", fresh)
+        expect(sorted(stack.role_pids()) == sorted(ROLES), "the container started again runs every role",
+               stack.role_pids())
     finally:
         stack.down()
         plane.stop()
