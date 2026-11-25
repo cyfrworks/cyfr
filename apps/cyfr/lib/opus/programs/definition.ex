@@ -259,6 +259,23 @@ defmodule Opus.Programs.Definition do
     }
   ]
 
+  # The drivers that point their program at the athanor's packs in its
+  # session's space, which the program loads as its own skills (T5).
+  @pack_drivers ~w(cyfr-claude-code cyfr-codex)
+
+  @doc """
+  Whether a program row's driver points its program at the athanor's
+  packs in its session's space (`/run/cyfr/scrolls`), each loaded by the
+  program as its own skills: the one fact that decides it, from the row's
+  driver word (`Arca.McpServerStorage.driver/1`). True for Claude Code's
+  driver and Codex's; false for every other driver, an ACP program's
+  among them, and for a row that names none. Such a program's own loader
+  is the list of its scrolls, so its turn's briefing carries no index of
+  them (`Aqua.Harness.facts/1`, `loader?`).
+  """
+  @spec loads_packs?(String.t() | nil) :: boolean()
+  def loads_packs?(driver), do: driver in @pack_drivers
+
   @typedoc "A program brain CYFR ships a driver for (`brains/0`)."
   @type brain :: %{name: String.t(), title: String.t(), command: String.t()}
 

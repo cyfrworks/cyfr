@@ -335,4 +335,43 @@ defmodule Opus.Programs.DefinitionTest do
     assert Definition.brain("cursor").title == "Cursor"
     assert Definition.brain("nope") == nil
   end
+
+  describe "loads_packs?/1" do
+    test "only Claude Code's and Codex's drivers point their program at the packs" do
+      assert Definition.loads_packs?("cyfr-claude-code")
+      assert Definition.loads_packs?("cyfr-codex")
+
+      for driver <- [
+            "cyfr-antigravity",
+            "cyfr-opencode",
+            "cyfr-cursor",
+            "cyfr-acp",
+            "claude",
+            nil
+          ] do
+        refute Definition.loads_packs?(driver), inspect(driver)
+      end
+    end
+
+    test "each shipped brain's command is decided by its own driver word" do
+      decided =
+        for %{name: name, command: command} <- Definition.brains(),
+            do:
+              {name,
+               Definition.loads_packs?(
+                 Arca.McpServerStorage.driver(%{
+                   transport: "program",
+                   config_json: Jason.encode!(%{"command" => command})
+                 })
+               )}
+
+      assert Map.new(decided) == %{
+               "claude-code" => true,
+               "openai-codex" => true,
+               "antigravity" => false,
+               "opencode" => false,
+               "cursor" => false
+             }
+    end
+  end
 end
