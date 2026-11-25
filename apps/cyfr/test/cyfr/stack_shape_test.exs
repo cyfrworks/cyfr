@@ -855,10 +855,11 @@ defmodule Cyfr.StackShapeTest do
     paths = [release.bin, release.home_root, release.run_dir, role.home_root, role.run_dir]
 
     # The release's container is named as the keeper's binary is,
-    # `cyfr-locus`, which a suite spells to run it: it is no spelling of
-    # the table's.
+    # `cyfr-locus`, which a suite spells to run it, and its run root's size,
+    # `1m`, as a rate limit's window is: neither is a spelling of the
+    # table's.
     names =
-      [role.user_prefix, role.user, role.home_size, role.run_size, release.run_size] ++
+      [role.user_prefix, role.user, role.home_size, role.run_size] ++
         [release.service, release.guard, release.guard_container]
 
     pool = Regex.escape(role.pool)
@@ -1438,7 +1439,8 @@ defmodule Cyfr.StackShapeTest do
          {@health, :port, :builds},
          {backends_overlay, :entrypoint, :backends},
          {builds_overlay, :entrypoint, :builds},
-         {builds_overlay, :port, :builds}
+         {builds_overlay, :port, :builds},
+         {"tests/locus-backends-image/compose.roles.yml", :port, :backends}
        ]},
       {"the builds' harness reading no vector file",
        {builds_harness, ~s("fixtures", "locus_roles.json"), ~s("fixtures", "locus_builds.json")},
