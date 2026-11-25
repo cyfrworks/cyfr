@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"github.com/cyfr/locus/keeper/internal/cgroup"
 	"github.com/cyfr/locus/keeper/internal/home"
 	"github.com/cyfr/locus/keeper/internal/pool"
+	"github.com/cyfr/locus/keeper/internal/procfs"
 	"github.com/cyfr/locus/keeper/internal/protocol"
 	"github.com/cyfr/locus/keeper/internal/retire"
 	"github.com/cyfr/locus/keeper/internal/stage"
@@ -51,6 +53,9 @@ const (
 	EndWait = 5 * time.Second
 	// retireWait bounds the retirement of the VMM's uid and its folder.
 	retireWait = 15 * time.Second
+	// groupSlackMiB is the VMM's own memory beside its guest's, which its
+	// group's bound adds to the guest's.
+	groupSlackMiB = 64
 	// consoleWait bounds the console's last bytes after the VMM's end.
 	consoleWait = 2 * time.Second
 	// dialAgain is the pause between two connections the guest refused
@@ -72,11 +77,10 @@ type Config struct {
 	// memory is a ceiling, touched only as it is used.
 	VCPUs     int
 	MemoryMiB int
-	// UID is the VMM's, its own (MachineUID).
-	UID int
-	// Group holds the VMM, its stage and its space from before the VMM is
-	// executed: the group of UID (cgroup.Name), as the stage requires.
-	Group *cgroup.Group
+	// Groups is where the machine makes its group, which holds the VMM,
+	// its stage and its space from before the VMM is executed, bounded to
+	// the guest's memory and groupSlackMiB beside it and to its processors.
+	Groups *cgroup.Manager
 	// BootArgs is the guest kernel's command line, BootArgs(Console != nil)
 	// unless a measurement asks otherwise.
 	BootArgs string
@@ -91,11 +95,15 @@ type Config struct {
 type Machine struct {
 	id  string
 	dir string
-	uid int
-	gid int
-	cmd *exec.Cmd
+	// uid is the VMM's, allotted from MachineUIDs (allot) and its alone
+	// until the machine's end gives it back.
+	uid   int
+	gid   int
+	group *cgroup.Group
+	cmd   *exec.Cmd
 	// done closes when the VMM's stage, which ends as the VMM ends, has
-	// exited and been reaped.
+	// exited and been reaped, and its waiter has cleared what the machine
+	// held (remove): on any end, the VMM's own exit among them.
 	done chan struct{}
 	// started is when the VMM was told to boot the guest.
 	started time.Time
@@ -104,9 +112,51 @@ type Machine struct {
 	console chan struct{}
 	// clear ends what is left of the machine's uid and removes its folder
 	// (runRetire), at its end.
-	clear    func() error
-	ended    sync.Once
-	leftOver error
+	clear func() error
+	// mu guards how the machine ended: asked is that End or Kill began
+	// it, exited that the VMM's stage was reaped, and how what End, Kill
+	// or the waiter recorded first.
+	mu     sync.Mutex
+	asked  bool
+	exited bool
+	how    Ended
+	// What the end found, once done has closed: what it could not clear,
+	// the processes left in the group, and the group's processor time.
+	leftOver  error
+	leftProcs []int
+	cpuUsec   uint64
+}
+
+// machineUIDs is MachineUIDs' allotment in this keeper.
+var machineUIDs = struct {
+	sync.Mutex
+	p *pool.Pool
+}{p: pool.New(MachineUIDs)}
+
+// allot takes a uid of MachineUIDs for one machine: a uid that still runs
+// a process, or has a folder left under Root, is withheld instead.
+func allot() (int, error) {
+	machineUIDs.Lock()
+	defer machineUIDs.Unlock()
+	uid, ok := machineUIDs.p.Allocate(func(uid int) bool {
+		c, err := procfs.ScanUID("/proc", uid, 0)
+		if err != nil || c.Total() > 0 {
+			return true
+		}
+		left, err := filepath.Glob(filepath.Join(Root, strconv.Itoa(uid)+"-*"))
+		return err != nil || len(left) > 0
+	})
+	if !ok {
+		return 0, fmt.Errorf("vm: every machine uid of %d-%d is in use", MachineUIDs.First, MachineUIDs.Last)
+	}
+	return uid, nil
+}
+
+// giveBack returns a machine's uid to the allotment.
+func giveBack(uid int) {
+	machineUIDs.Lock()
+	defer machineUIDs.Unlock()
+	_ = machineUIDs.p.Release(uid)
 }
 
 // Start starts the VMM in a space the stage makes for it, as it makes a
@@ -120,28 +170,36 @@ type Machine struct {
 // nothing writable but its folder and the space's own fresh mounts. It is
 // the space every spawn has, the image's directories read only with it,
 // built by the same code. Its relay leads nowhere. Firecracker's own filter then holds it tighter.
+// Its uid is its own, allotted from MachineUIDs, and so is its group,
+// cgroup.Name of that uid.
 // Start takes cfg.Device: it is closed at the machine's end, or on an
-// error.
+// error, as its group is removed and its uid given back.
 func Start(cfg Config) (*Machine, error) {
 	m, err := start(cfg)
-	if err != nil && cfg.Device != nil && (m == nil || m.cmd == nil || m.cmd.Process == nil) {
-		_ = cfg.Device.Close()
-	}
 	if err != nil {
+		if m == nil {
+			if cfg.Device != nil {
+				_ = cfg.Device.Close()
+			}
+		} else if m.cmd == nil || m.cmd.Process == nil {
+			// No stage ran, so no waiter clears the machine.
+			m.remove()
+		} else {
+			m.Kill()
+		}
 		return nil, err
 	}
 	return m, nil
 }
 
-// start is Start; a machine it answers with an error has its stage
-// started when its device is closed already (Kill).
+// start is Start; a machine it answers with an error is Start's to clear.
 func start(cfg Config) (*Machine, error) {
 	var st syscall.Stat_t
 	if err := syscall.Stat(KVM, &st); err != nil {
 		return nil, ErrNoKVM
 	}
-	if cfg.Group == nil || cfg.UID <= 0 || cfg.VCPUs < 1 || cfg.MemoryMiB < 128 || cfg.Device == nil {
-		return nil, errors.New("vm: a machine needs a group, a uid other than root's, a processor, 128 MiB and a device")
+	if cfg.Groups == nil || cfg.VCPUs < 1 || cfg.MemoryMiB < 128 || cfg.Device == nil {
+		return nil, errors.New("vm: a machine needs its groups, a processor, 128 MiB and a device")
 	}
 	if st.Gid == 0 {
 		return nil, errors.New("vm: " + KVM + "'s group is root's, and a VMM holds no group but KVM's")
@@ -156,24 +214,31 @@ func start(cfg Config) (*Machine, error) {
 	if err := machinesRoot(); err != nil {
 		return nil, err
 	}
-	name, err := home.NewName(cfg.UID)
+	uid, err := allot()
 	if err != nil {
 		return nil, err
 	}
-	m := &Machine{id: name, dir: filepath.Join(Root, name), uid: cfg.UID, gid: int(st.Gid), device: cfg.Device,
-		done: make(chan struct{})}
+	m := &Machine{uid: uid, gid: int(st.Gid), device: cfg.Device, done: make(chan struct{})}
+	m.group, err = cfg.Groups.Create(cgroup.Name(uid), uint64(cfg.MemoryMiB+groupSlackMiB)<<20,
+		uint64(cfg.VCPUs)*cgroup.CPUPeriod)
+	if err != nil {
+		return m, fmt.Errorf("vm: the machine's group: %w", err)
+	}
+	if m.id, err = home.NewName(uid); err != nil {
+		return m, err
+	}
+	m.dir = filepath.Join(Root, m.id)
 	m.clear = func() error { return runRetire(m.uid, m.gid, m.dir) }
 	spec := stage.Spec{UID: m.uid, GID: m.gid, User: MachineUser, HomeRoot: Root, Home: m.dir,
 		Argv:   []string{Firecracker, "--api-sock", m.api(), "--id", m.id, "--level", "Warning"},
-		Limits: machineLimits, Reach: pool.ReachRelay, Cgroup: cfg.Group.Path(), Machine: cfg.Device.Path}
+		Limits: machineLimits, Reach: pool.ReachRelay, Cgroup: m.group.Path(), Machine: cfg.Device.Path}
 	if err := spec.Validate(); err != nil {
-		return nil, fmt.Errorf("vm: the VMM's space: %w", err)
+		return m, fmt.Errorf("vm: the VMM's space: %w", err)
 	}
-	if err := m.startStage(self, spec, cfg.Group, cfg.Console); err != nil {
+	if err := m.startStage(self, spec, cfg.Console); err != nil {
 		return m, err
 	}
 	if err := m.configure(cfg); err != nil {
-		m.Kill()
 		return m, err
 	}
 	return m, nil
@@ -194,8 +259,9 @@ func machinesRoot() error {
 
 // startStage starts the VMM's stage, maps its ids, places it in its group
 // and hands it its spec, in that order, as the keeper does a spawn's, and
-// waits for the VMM's exec. It leaves nothing running on an error.
-func (m *Machine) startStage(self string, spec stage.Spec, group *cgroup.Group, console io.Writer) error {
+// waits for the VMM's exec. A stage it started is Start's to kill on an
+// error.
+func (m *Machine) startStage(self string, spec stage.Spec, console io.Writer) error {
 	data, err := json.Marshal(spec)
 	if err != nil {
 		return err
@@ -260,39 +326,65 @@ func (m *Machine) startStage(self string, spec stage.Spec, group *cgroup.Group, 
 		}
 		return fmt.Errorf("vm: starting the VMM's stage: %w", err)
 	}
-	go func() {
-		_ = m.cmd.Wait()
-		close(m.done)
-	}()
-	fail := func(err error) error {
-		m.Kill()
-		return err
-	}
+	go m.wait()
 	if err := stage.MapIDs(m.cmd.Process.Pid, spec.UID, spec.GID); err != nil {
-		return fail(fmt.Errorf("vm: the VMM's ids: %w", err))
+		return fmt.Errorf("vm: the VMM's ids: %w", err)
 	}
-	if err := group.Add(m.cmd.Process.Pid); err != nil {
-		return fail(fmt.Errorf("vm: the VMM's group: %w", err))
+	if err := m.group.Add(m.cmd.Process.Pid); err != nil {
+		return fmt.Errorf("vm: the VMM's group: %w", err)
 	}
 	_ = specW.SetWriteDeadline(time.Now().Add(stageWait))
 	if _, err := specW.Write(data); err != nil {
-		return fail(fmt.Errorf("vm: the VMM's spec: %w", err))
+		return fmt.Errorf("vm: the VMM's spec: %w", err)
 	}
 	_ = specW.Close()
 	_ = statusW.Close()
 	_ = statusR.SetReadDeadline(time.Now().Add(stageWait))
 	reason, err := io.ReadAll(io.LimitReader(statusR, 4096))
 	if err != nil {
-		return fail(fmt.Errorf("vm: the VMM's stage: %w", err))
+		return fmt.Errorf("vm: the VMM's stage: %w", err)
 	}
 	if len(reason) > 0 {
-		return fail(fmt.Errorf("vm: the VMM's stage: %s", reason))
+		return fmt.Errorf("vm: the VMM's stage: %s", reason)
 	}
 	return nil
 }
 
+// wait is the VMM's waiter: once its stage is reaped it clears what the
+// machine held, whoever ended it, and records an end that neither End nor
+// Kill began as the VMM's own exit, before Done closes.
+func (m *Machine) wait() {
+	_ = m.cmd.Wait()
+	m.mu.Lock()
+	m.exited = true
+	if !m.asked {
+		m.how = EndOwnExit
+	}
+	m.mu.Unlock()
+	m.remove()
+	close(m.done)
+}
+
+// settle records how the machine ended unless an end is recorded already.
+func (m *Machine) settle(how Ended) {
+	m.mu.Lock()
+	if m.how == "" {
+		m.how = how
+	}
+	m.mu.Unlock()
+}
+
 // ID is the machine's own, which names its folder.
 func (m *Machine) ID() string { return m.id }
+
+// UID is the VMM's, the machine's own.
+func (m *Machine) UID() int { return m.uid }
+
+// Folder is the machine's folder, under Root.
+func (m *Machine) Folder() string { return m.dir }
+
+// Group is the machine's group while it runs; the machine's end removes it.
+func (m *Machine) Group() *cgroup.Group { return m.group }
 
 // Done closes when the VMM has exited and been reaped.
 func (m *Machine) Done() <-chan struct{} { return m.done }
@@ -303,36 +395,78 @@ func (m *Machine) State() *os.ProcessState { return m.cmd.ProcessState }
 // Started is when the guest was booted.
 func (m *Machine) Started() time.Time { return m.started }
 
-// Left is what the machine's end could not clear, its uid's processes or
-// its folder, or nil, once the machine has ended.
+// Left is what the machine's end could not clear, its uid's processes, its
+// folder or its group, or nil, once the machine has ended.
 func (m *Machine) Left() error { return m.leftOver }
 
-// Kill ends the VMM, and with it the guest, at once, waits for its reaping
-// and clears what it held.
-func (m *Machine) Kill() {
-	_ = m.cmd.Process.Kill()
-	<-m.done
-	m.remove()
+// LeftProcs are the processes the machine's end found in its group, once
+// the machine has ended: none, unless Left says so.
+func (m *Machine) LeftProcs() []int { return m.leftProcs }
+
+// CPUUsec is the processor time the machine's group used, guest included,
+// once the machine has ended.
+func (m *Machine) CPUUsec() uint64 { return m.cpuUsec }
+
+// HowEnded is how the machine ended, once Done has closed.
+func (m *Machine) HowEnded() Ended {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.how
 }
 
-// remove clears what the machine held, once: every process of its uid and
-// its folder, by `cyfr-locus retire` as that uid as a spawn's are, the
-// console's last bytes, and its device's lock.
+// Kill ends the VMM, and with it the guest, at once, and waits for its
+// waiter to clear what it held.
+func (m *Machine) Kill() {
+	m.mu.Lock()
+	if !m.exited && m.how == "" {
+		m.how = EndKilled
+	}
+	m.asked = true
+	m.mu.Unlock()
+	_ = m.cmd.Process.Kill()
+	<-m.done
+}
+
+// remove clears what the machine held, once, from its waiter (or from Start
+// when no stage ran): every process of its uid and its folder, by
+// `cyfr-locus retire` as that uid as a spawn's are, the console's last
+// bytes, its group, its device's lock, and then its uid, given back only
+// when nothing of the machine is left.
 func (m *Machine) remove() {
-	m.ended.Do(func() {
-		if m.clear != nil {
-			m.leftOver = m.clear()
+	var left []error
+	if m.clear != nil {
+		if err := m.clear(); err != nil {
+			left = append(left, err)
 		}
-		if m.console != nil {
-			select {
-			case <-m.console:
-			case <-time.After(consoleWait):
+	}
+	if m.console != nil {
+		select {
+		case <-m.console:
+		case <-time.After(consoleWait):
+		}
+	}
+	if m.group != nil {
+		m.cpuUsec = groupCPUUsec(m.group)
+		procs, err := m.group.Procs()
+		switch {
+		case err != nil:
+			left = append(left, fmt.Errorf("the machine's group: %w", err))
+		case len(procs) > 0:
+			m.leftProcs = append([]int{}, procs...)
+			left = append(left, fmt.Errorf("processes %v are left in the machine's group", procs))
+		default:
+			if err := m.group.Remove(); err != nil {
+				left = append(left, fmt.Errorf("the machine's group: %w", err))
 			}
 		}
-		if m.device != nil {
-			_ = m.device.Close()
-		}
-	})
+	}
+	if m.device != nil {
+		_ = m.device.Close()
+	}
+	m.leftOver = errors.Join(left...)
+	if m.uid > 0 && m.leftOver == nil {
+		giveBack(m.uid)
+	}
 }
 
 // runRetire runs `cyfr-locus retire` as uid, which ends every process of
@@ -541,10 +675,13 @@ const (
 // acknowledged and the VMM exits, or the VMM has exited of its own, or it
 // is killed; End says which.
 func (m *Machine) End(d time.Duration) Ended {
+	m.mu.Lock()
+	m.asked = true
+	m.mu.Unlock()
 	select {
 	case <-m.done:
-		m.remove()
-		return EndOwnExit
+		m.settle(EndOwnExit)
+		return m.HowEnded()
 	default:
 	}
 	deadline := time.Now().Add(d)
@@ -560,20 +697,19 @@ func (m *Machine) End(d time.Duration) Ended {
 	defer timer.Stop()
 	select {
 	case <-m.done:
-		m.remove()
 		if acked {
-			return EndAcknowledged
+			m.settle(EndAcknowledged)
 		}
-		return EndOwnExit
 	case <-timer.C:
 		m.Kill()
-		return EndKilled
 	}
+	m.settle(EndOwnExit)
+	return m.HowEnded()
 }
 
 // Control is the host's control connection to the guest: the relay's
 // Hello, then the guest keeper's channel, each line within the keeper
-// protocol's bound.
+// protocol's bound, read by a deadline the caller gives (Next).
 type Control struct {
 	Hello Hello
 	conn  net.Conn
@@ -592,7 +728,7 @@ func (m *Machine) Connect() (*Control, error) {
 		return nil, err
 	}
 	c := &Control{conn: conn, lines: protocol.NewLineReader(conn)}
-	line, err := c.Next(left)
+	line, err := c.Next(time.Now().Add(left))
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("vm: the guest's hello: %w", err)
@@ -616,10 +752,11 @@ func (c *Control) Send(v any) error {
 	return err
 }
 
-// Next reads the guest keeper's next line, without its newline, waiting at
-// most d; a line past the bound is refused, unread.
-func (c *Control) Next(d time.Duration) ([]byte, error) {
-	_ = c.conn.SetReadDeadline(time.Now().Add(d))
+// Next reads the guest keeper's next line, without its newline, by
+// deadline, which a caller gives once for a whole exchange: a line that
+// comes does not move it. A line past the bound is refused, unread.
+func (c *Control) Next(deadline time.Time) ([]byte, error) {
+	_ = c.conn.SetReadDeadline(deadline)
 	line, tooLong, err := c.lines.Next()
 	if err != nil {
 		return nil, err

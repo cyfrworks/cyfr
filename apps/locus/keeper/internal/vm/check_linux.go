@@ -26,7 +26,7 @@ import (
 )
 
 // CheckUsage is `cyfr-locus guest-check`'s command line.
-const CheckUsage = "cyfr-locus guest-check [--kernel-reporting] [-- <command> [args…]]"
+const CheckUsage = "cyfr-locus guest-check [--kernel-reporting] [--beside] [-- <command> [args…]]"
 
 // Exit statuses of the check: it ran and the report says what it found,
 // or the command line, or the machine could not run.
@@ -42,8 +42,10 @@ const (
 	checkMemoryMiB = 2560
 	// checkSpawnMemory is the bound of the check's one space.
 	checkSpawnMemory = 1 << 30
-	// stepWait bounds each step of the keeper protocol inside the guest.
-	stepWait = 60 * time.Second
+	// exchangeWait bounds the whole control exchange of the check's one
+	// space, from its placing to its release, however many lines the guest
+	// sends.
+	exchangeWait = 3 * time.Minute
 	// consoleTail is how much of the guest's console, and of the maker's
 	// output, the check keeps: the last bytes, the rest dropped and said so.
 	consoleTail = 64 << 10
@@ -76,7 +78,11 @@ type Report struct {
 	Device     string `json:"device"`
 	DeviceMade bool   `json:"device_made"`
 	DeviceMs   int64  `json:"device_ms"`
-	BootID     string `json:"boot_id"`
+	// UID is the machine's VMM's, allotted from MachineUIDs, and Folder
+	// the machine's folder.
+	UID    int    `json:"uid"`
+	Folder string `json:"folder"`
+	BootID string `json:"boot_id"`
 	// ReadyMs is from the guest's boot to the agent's Hello.
 	ReadyMs int64 `json:"ready_ms"`
 	// Spawned is the guest keeper's answer to the space's spawn.
@@ -107,8 +113,20 @@ type Report struct {
 	HeldBytes uint64 `json:"held_bytes"`
 	PeakBytes uint64 `json:"peak_bytes"`
 	// ReportFromOrder0 is whether the guest reported free pages from order 0.
-	ReportFromOrder0 bool   `json:"report_from_order0"`
-	Error            string `json:"error,omitempty"`
+	ReportFromOrder0 bool `json:"report_from_order0"`
+	// Beside is the second machine --beside booted beside this one in the
+	// same keeper and ended before this one's space ran.
+	Beside *Beside `json:"beside,omitempty"`
+	Error  string  `json:"error,omitempty"`
+}
+
+// Beside is the machine booted beside the check's own: its uid, its
+// folder, its boot and how it ended.
+type Beside struct {
+	UID    int    `json:"uid"`
+	Folder string `json:"folder"`
+	BootID string `json:"boot_id"`
+	End    Ended  `json:"end"`
 }
 
 // VMMView is the VMM's process as the host's kernel shows it: its
@@ -138,11 +156,14 @@ type Mount struct {
 // device, making it if this image has none (Programs), boots one machine as
 // the keeper would, under the Locus role's own confinement, says hello to its agent,
 // has the guest's keeper make one space and end it, ends the machine, and
-// reports. It is the boot check the keeper reads (plan V3) and the image
+// reports. With --beside it first boots a second machine beside the first,
+// says hello to it and ends it: the first's space then shows that ending
+// one machine leaves another running. It is the boot check the keeper reads (plan V3) and the image
 // case's entry (tests/locus-backends-image/vm.py).
 func CheckMain(args []string) int {
 	fs := flag.NewFlagSet("guest-check", flag.ContinueOnError)
 	kernelReporting := fs.Bool("kernel-reporting", false, "report free pages from the kernel's own order, not 0 (a measurement's)")
+	beside := fs.Bool("beside", false, "boot a second machine beside the first and end it before the first's space")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, "usage: "+CheckUsage)
 		return CheckUsageE
@@ -154,7 +175,7 @@ func CheckMain(args []string) int {
 	report := Report{ReportFromOrder0: !*kernelReporting}
 	console := &tail{max: consoleTail}
 	maker := &tail{max: consoleTail}
-	err := check(argv, &report, console, maker)
+	err := check(argv, *beside, &report, console, maker)
 	if err != nil {
 		report.Error = err.Error()
 	}
@@ -168,7 +189,7 @@ func CheckMain(args []string) int {
 	return CheckPassed
 }
 
-func check(argv []string, report *Report, console, maker io.Writer) error {
+func check(argv []string, beside bool, report *Report, console, maker io.Writer) error {
 	raw, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return err
@@ -211,18 +232,14 @@ func check(argv []string, report *Report, console, maker io.Writer) error {
 	if err != nil {
 		return err
 	}
-	group, err := groups.Create(cgroup.Name(MachineUID), (checkMemoryMiB+64)<<20, checkVCPUs*cgroup.CPUPeriod)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = group.Remove() }()
 	args := bootArgs(report.ReportFromOrder0, true)
 	held = nil
-	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, UID: MachineUID,
-		Group: group, BootArgs: args, Console: console})
+	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups,
+		BootArgs: args, Console: console})
 	if err != nil {
 		return err
 	}
+	report.UID, report.Folder = m.UID(), m.Folder()
 	ended := false
 	defer func() {
 		if !ended {
@@ -235,11 +252,16 @@ func check(argv []string, report *Report, console, maker io.Writer) error {
 	}
 	report.BootID = c.Hello.BootID
 	report.ReadyMs = time.Since(m.Started()).Milliseconds()
-	report.VMM = vmmView(group)
+	report.VMM = vmmView(m.Group())
+	if beside {
+		if report.Beside, err = besideMachine(groups, maker, report.ReportFromOrder0); err != nil {
+			return err
+		}
+	}
 
 	spaceErr := space(m, c, argv, report)
-	report.HeldBytes = groupNumber(group, "memory.current")
-	report.PeakBytes = groupNumber(group, "memory.peak")
+	report.HeldBytes = groupNumber(m.Group(), "memory.current")
+	report.PeakBytes = groupNumber(m.Group(), "memory.peak")
 
 	// The machine's end: the guest's first process stops its keeper, which
 	// ends the role and every space, and resets the guest.
@@ -248,12 +270,8 @@ func check(argv []string, report *Report, console, maker io.Writer) error {
 	report.End = m.End(EndWait + keeperEnd)
 	ended = true
 	report.EndMs = time.Since(closed).Milliseconds()
-	report.CPUUsec = cpuUsec(group)
-	if procs, err := group.Procs(); err == nil {
-		report.GroupProcs = append([]int{}, procs...)
-	} else if spaceErr == nil {
-		spaceErr = err
-	}
+	report.CPUUsec = m.CPUUsec()
+	report.GroupProcs = append([]int{}, m.LeftProcs()...)
 	if spaceErr != nil {
 		return spaceErr
 	}
@@ -269,9 +287,41 @@ func check(argv []string, report *Report, console, maker io.Writer) error {
 	return nil
 }
 
+// besideMachine boots a second machine in the same keeper, with a hold of
+// its own on the device and no console, says hello to it and ends it, and
+// refuses an end that was not the acknowledged one or left anything.
+func besideMachine(groups *cgroup.Manager, maker io.Writer, order0 bool) (*Beside, error) {
+	device, _, err := Programs(maker).Device()
+	if err != nil {
+		return nil, err
+	}
+	m, err := Start(Config{Device: device, VCPUs: checkVCPUs, MemoryMiB: checkMemoryMiB, Groups: groups,
+		BootArgs: bootArgs(order0, false)})
+	if err != nil {
+		return nil, fmt.Errorf("the machine beside: %w", err)
+	}
+	b := &Beside{UID: m.UID(), Folder: m.Folder()}
+	c, err := m.Connect()
+	if err != nil {
+		m.Kill()
+		return b, fmt.Errorf("the machine beside: %w", err)
+	}
+	b.BootID = c.Hello.BootID
+	_ = c.Close()
+	b.End = m.End(EndWait + keeperEnd)
+	if err := m.Left(); err != nil {
+		return b, fmt.Errorf("the machine beside: %w", err)
+	}
+	if b.End != EndAcknowledged {
+		return b, fmt.Errorf("the machine beside's end was not the acknowledged one: %s", b.End)
+	}
+	return b, nil
+}
+
 // space has the guest's keeper place and spawn one space, reads its output
-// and waits for its exit and release.
+// and waits for its exit and release, all within one exchangeWait.
 func space(m *Machine, c *Control, argv []string, report *Report) error {
+	deadline := time.Now().Add(exchangeWait)
 	place, err := randomHex(16)
 	if err != nil {
 		return err
@@ -283,7 +333,7 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 	if err := c.Send(protocol.Request{V: protocol.Version, Type: "place", ID: place, Kind: protocol.KindRun}); err != nil {
 		return err
 	}
-	if line, err := expect(c, "placed", place); err != nil {
+	if line, err := expect(c, deadline, "placed", place, ""); err != nil {
 		return fmt.Errorf("placing the space: %w (%s)", err, line)
 	}
 	memory, quota := uint64(checkSpawnMemory), uint64(cgroup.CPUPeriod)
@@ -294,7 +344,7 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 		return err
 	}
 	// The host's half of the space's attach connection, by its token.
-	attach, err := m.Dial(AttachPort, stepWait)
+	attach, err := m.Dial(AttachPort, time.Until(deadline))
 	if err != nil {
 		return err
 	}
@@ -302,13 +352,19 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 	if err := frame.Write(attach, frame.StreamAttach, []byte(token)); err != nil {
 		return err
 	}
-	line, err := expect(c, "spawned", "s-"+place)
+	line, err := expect(c, deadline, "spawned", "s-"+place, "")
 	report.Spawned = json.RawMessage(strings.TrimSpace(string(line)))
 	if err != nil {
 		return fmt.Errorf("spawning the space: %w", err)
 	}
+	var spawned struct {
+		SpawnID string `json:"spawn_id"`
+	}
+	if err := json.Unmarshal(line, &spawned); err != nil || spawned.SpawnID == "" {
+		return fmt.Errorf("the space's spawned line names no spawn: %s", line)
+	}
 	stdout, stderr := &bounded{max: outputBound}, &bounded{max: outputBound}
-	_ = attach.SetReadDeadline(time.Now().Add(stepWait))
+	_ = attach.SetReadDeadline(deadline)
 	buf := make([]byte, frame.MaxPayload)
 	for open := 2; open > 0; {
 		stream, payload, err := frame.Read(attach, buf)
@@ -332,30 +388,32 @@ func space(m *Machine, c *Control, argv []string, report *Report) error {
 	}
 	report.Stdout, report.Stderr = stdout.buf.String(), stderr.buf.String()
 	report.StdoutDropped, report.StderrDropped = stdout.dropped, stderr.dropped
-	exited, err := expect(c, "exited", "")
+	exited, err := expect(c, deadline, "exited", "", spawned.SpawnID)
 	report.Exited = json.RawMessage(strings.TrimSpace(string(exited)))
 	if err != nil {
 		return fmt.Errorf("the space's exit: %w", err)
 	}
-	if _, err := expect(c, "released", ""); err != nil {
+	if _, err := expect(c, deadline, "released", "", spawned.SpawnID); err != nil {
 		return fmt.Errorf("the space's release: %w", err)
 	}
 	report.Released = true
 	return nil
 }
 
-// expect reads the guest keeper's lines until one of type typ (and of id,
-// where one is given), and refuses an error line.
-func expect(c *Control, typ, id string) ([]byte, error) {
+// expect reads the guest keeper's lines until one of type typ, of id and
+// of spawnID where each is given, by deadline however many other lines
+// come first, and refuses an error line.
+func expect(c *Control, deadline time.Time, typ, id, spawnID string) ([]byte, error) {
 	for {
-		line, err := c.Next(stepWait)
+		line, err := c.Next(deadline)
 		if err != nil {
 			return line, err
 		}
 		var head struct {
-			Type string          `json:"type"`
-			ID   string          `json:"id"`
-			Code json.RawMessage `json:"code"`
+			Type    string          `json:"type"`
+			ID      string          `json:"id"`
+			SpawnID string          `json:"spawn_id"`
+			Code    json.RawMessage `json:"code"`
 		}
 		if err := json.Unmarshal(line, &head); err != nil {
 			return line, err
@@ -363,15 +421,15 @@ func expect(c *Control, typ, id string) ([]byte, error) {
 		if head.Type == "error" {
 			return line, fmt.Errorf("the guest keeper refused it: %s", string(head.Code))
 		}
-		if head.Type == typ && (id == "" || head.ID == id) {
+		if head.Type == typ && (id == "" || head.ID == id) && (spawnID == "" || head.SpawnID == spawnID) {
 			return line, nil
 		}
 	}
 }
 
-// cpuUsec is the processor time a group's processes used, from its
+// groupCPUUsec is the processor time a group's processes used, from its
 // cpu.stat, or 0 where it cannot be read.
-func cpuUsec(g *cgroup.Group) uint64 {
+func groupCPUUsec(g *cgroup.Group) uint64 {
 	raw, err := os.ReadFile(filepath.Join("/sys/fs/cgroup", g.Path(), "cpu.stat"))
 	if err != nil {
 		return 0

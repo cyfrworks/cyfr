@@ -15,10 +15,12 @@ else beyond its role's own confinement, on a kept-homes volume and a
   another image once its own is whole. Its time is printed: on a runner,
   whose disk has never read the image, it is the cold making.
 - The VMM runs in a space the stage makes, as a spawn's: under the
-  machine's uid, with no group but /dev/kvm's, no capability, no_new_privs
-  and a seccomp filter, and a mount namespace with nothing of the kept
-  homes, no other machine's folder and of the guest volume the device
-  alone, beside its own folder and /dev/kvm.
+  machine's own uid, which is no pool's, with no group but /dev/kvm's, no
+  capability, no_new_privs and a seccomp filter, and a mount namespace with
+  nothing of the kept homes, no other machine's folder and of the guest
+  volume the device alone, beside its own folder, the one the check names,
+  and /dev/kvm; each mount it may write is the filesystem its place holds,
+  and nothing else is writable.
 - The guest's own guard, the image's cyfr-guard with NET_ADMIN alone, is
   ready before the guest's keeper says anything, and the keeper proves it at its
   boot. The machine answers the hello with its boot identity; the guest's
@@ -26,14 +28,19 @@ else beyond its role's own confinement, on a kept-homes volume and a
   read-only root, whose directories are the image's programs
   bound read only from the guest's squashfs root, which reads the same boot
   identity, is refused socket(AF_VSOCK) and io_uring_setup with EPERM by the
-  keeper's own policy, exits 0 and is released (through the relay, which
+  keeper's own policy, exits 0, the exit its own spawn's, and is released
+  (through the relay, which
   serves on the listeners the guest's first process made); the machine's end
   is the acknowledged one, and its group holds no process.
 - The device holds the image's own files and the mount points as empty
   folders, and nothing of another filesystem: not the canary a sign-in left
   in the kept-homes volume, nor Docker's bound /etc/hosts, resolv.conf and
   hostname. A maker that crossed into other mounts fails here.
-- A second start finds the device and makes none, and boots a new guest.
+- A second start finds the device and makes none, and boots a new guest,
+  and a second machine beside it in the same keeper, under a uid of its
+  own, ends acknowledged while the first goes on to answer for its space.
+- The keeper killed while its container's PID namespace lives on leaves
+  no VMM and no process of a machine's uid.
 - Two first starts at once on a fresh volume: one makes the device, the
   other waits for it, and both boot from it.
 - A session's churn of small objects, with the guest reporting free pages
@@ -61,10 +68,16 @@ KVM = "/dev/kvm"
 # The machines' folder, the guest volume's mount point, as the role table names it.
 GUEST_ROOT = ROLE["guest_root"]
 BOOT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-# The machines' folders, on the Locus container's run directory's tmpfs,
-# and the uid a machine's VMM runs as (internal/vm's Root and MachineUID).
+# The machines' folders, on the Locus container's run directory's tmpfs
+# (internal/vm's Root). Each machine's uid is its own, which the report
+# names and the VMM's process is held to.
 MACHINES = RELEASE["run_dir"] + "/machines"
-MACHINE_UID = 30201
+# What the VMM's space may write, by its filesystem: the space's own fresh
+# mounts, and /dev's nodes, kvm among them, bound from the container's /dev.
+# Its own machine's folder, a tmpfs too, is the one the report names.
+VMM_WRITABLE = {"/proc": "proc", "/tmp": "tmpfs", "/var/tmp": "tmpfs", "/run": "tmpfs", "/dev": "tmpfs",
+                "/dev/pts": "devpts", "/dev/shm": "tmpfs",
+                **{f"/dev/{node}": "tmpfs" for node in ("null", "zero", "full", "random", "urandom", "tty", "kvm")}}
 DEVICE = re.compile(r"^" + re.escape(GUEST_ROOT) + r"/[0-9a-f]{64}\.sqfs$")
 # A session's churn: small objects made and dropped, freed in pieces
 # smaller than the kernel's own reporting order, then a wait in which the
@@ -131,7 +144,9 @@ def guest_lines(stderr):
 def vmm_confined(report, what):
     vmm = report.get("vmm") or {}
     expect(not vmm.get("error"), f"{what}: the VMM's process is read from the host", vmm)
-    uid, gid = str(MACHINE_UID), str(kvm_gid())
+    machine = report.get("uid", 0)
+    expect(machine > 0 and not POOL_FIRST <= machine <= POOL_LAST, f"{what}: the machine's uid is its own, no pool's", machine)
+    uid, gid = str(machine), str(kvm_gid())
     expect(vmm.get("uid") == " ".join([uid] * 4), f"{what}: the VMM runs as the machine's uid alone", vmm)
     expect(vmm.get("gid") == " ".join([gid] * 4) and vmm.get("groups") == "",
            f"{what}: the VMM's one group is /dev/kvm's", vmm)
@@ -147,15 +162,20 @@ def vmm_confined(report, what):
     guest = [p for p in points if p == GUEST_ROOT or p.startswith(GUEST_ROOT + "/")]
     expect(guest == [report.get("device")], f"{what}: of the guest volume the VMM's space holds its device alone", guest)
     machines = [p for p in points if p == MACHINES or p.startswith(MACHINES + "/")]
-    expect(len(machines) == 1 and machines[0].startswith(f"{MACHINES}/{uid}-"),
-           f"{what}: the VMM's space holds its own machine's folder and no other", machines)
-    # What it may write: its folder, the space's own fresh mounts and /dev's
-    # nodes, kvm among them. The image's directories, the device and the
-    # rest are read only.
-    own = set(machines) | {"/proc", "/tmp", "/var/tmp", "/run", "/dev", "/dev/pts", "/dev/shm"} | \
-        {f"/dev/{node}" for node in ("null", "zero", "full", "random", "urandom", "tty", "kvm")}
-    writable = sorted(m.get("point") for m in mounts if m.get("access") != "ro")
-    expect(set(writable) <= own, f"{what}: nothing is writable in the VMM's space but its own", writable)
+    folder = report.get("folder", "")
+    expect(folder.startswith(f"{MACHINES}/{uid}-") and machines == [folder],
+           f"{what}: the VMM's space holds its own machine's folder, the one the check names, and no other",
+           f"{machines}, the check's {folder!r}")
+    # What it may write, each by the filesystem its place holds: its folder,
+    # the space's own fresh mounts and /dev's nodes. The image's directories,
+    # the device and the rest are read only.
+    own = {**VMM_WRITABLE, folder: "tmpfs"}
+    for m in mounts:
+        point = m.get("point")
+        if point in own:
+            expect(m.get("type") == own[point], f"{what}: the VMM's {point} is {own[point]}", m)
+        else:
+            expect(m.get("access") == "ro", f"{what}: nothing is writable in the VMM's space but its own", m)
     expect(any(m.get("point") == "/usr" and m.get("access") == "ro" for m in mounts),
            f"{what}: the VMM's space shows the image's directories read only, as every space", mounts)
 
@@ -189,11 +209,55 @@ def booted(code, report, stderr, what):
         fstype, options = mounts.get(path, ("", ""))
         expect(fstype == "squashfs" and options.split(",")[0] == "ro",
                f"{what}: the space's {path} is the image's programs, read only from the guest's root", mounts.get(path))
-    expect((report.get("exited") or {}).get("code") == 0, f"{what}: the space exits 0", report.get("exited"))
+    exited = report.get("exited") or {}
+    expect(exited.get("spawn_id") and exited.get("spawn_id") == spawned.get("spawn_id"),
+           f"{what}: the exit is the space's own spawn's", f"{exited}, spawned {spawned}")
+    expect(exited.get("code") == 0, f"{what}: the space exits 0", exited)
     expect(report.get("released") is True, f"{what}: the guest's keeper releases the space", report)
     expect(report.get("end") == "acknowledged", f"{what}: the machine's end is the acknowledged one", report)
     expect(report.get("group_procs") == [], f"{what}: no process is left in the machine's group", report)
     vmm_confined(report, what)
+
+
+def processes(container):
+    """The container's processes, as (pid, uid, comm, cmdline)."""
+    out = run("docker", "exec", container, "sh", "-c",
+              "for d in /proc/[0-9]*; do [ -r $d/status ] || continue; "
+              "printf '%s\\t%s\\t%s\\t%s\\n' \"${d#/proc/}\" \"$(awk '/^Uid:/ {print $2}' $d/status)\" "
+              "\"$(cat $d/comm)\" \"$(tr '\\0' ' ' < $d/cmdline)\"; done", check=False).stdout
+    return [tuple(line.split("\t", 3)) for line in out.splitlines() if line.count("\t") == 3]
+
+
+def keeper_killed(stack, image, kept, guest, project):
+    """The keeper killed while its container's PID namespace lives on leaves no VMM: its stage's parent-death
+    signal, armed again after the stage became the machine's uid, ends the stage, and with it the VMM's space."""
+    container = f"{project}-keeper-killed"
+    run("docker", "run", "-d", "--name", container, "--network", "none", *role_args(stack),
+        "--mount", f"type=volume,source={kept},target={KEPT_ROOT}",
+        "--mount", f"type=volume,source={guest},target={GUEST_ROOT}", "--device", KVM,
+        "--entrypoint", "sh", image, "-c", "exec sleep 900")
+    try:
+        errors = RELEASE["run_dir"] + "/keeper-killed.err"
+        run("docker", "exec", "-d", container, "sh", "-c",
+            f"exec cyfr-locus guest-check -- /bin/sh -c 'sleep 600' 2>{errors}")
+        deadline = time.monotonic() + 60
+        while not any(comm == "firecracker" for _, _, comm, _ in processes(container)):
+            expect(time.monotonic() < deadline, "the killed keeper's machine boots",
+                   run("docker", "exec", container, "tail", "-c", "3000", errors, check=False).stdout)
+            time.sleep(0.2)  # sleep-ok: polls the container's processes until the VMM is up, bounded above
+        keepers = [pid for pid, _, _, cmdline in processes(container) if cmdline.startswith("cyfr-locus guest-check")]
+        expect(len(keepers) == 1, "one keeper runs the machine", processes(container))
+        run("docker", "exec", container, "sh", "-c", f"kill -KILL {keepers[0]}")
+        deadline = time.monotonic() + 20
+        while True:
+            left = [p for p in processes(container) if p[2] == "firecracker" or p[1] != "0"]
+            if not left:
+                break
+            expect(time.monotonic() < deadline, "the keeper killed with its PID namespace alive leaves no VMM "
+                   "and no process of a machine's uid", left)
+            time.sleep(0.2)  # sleep-ok: polls until the killed keeper's space has ended, bounded above
+    finally:
+        run("docker", "rm", "--force", container, check=False)
 
 
 def main():
@@ -243,11 +307,22 @@ def main():
         for bound in ("/etc/hosts", "/etc/resolv.conf", "/etc/hostname"):
             expect(bound not in paths, f"the device holds no Docker-bound {bound}")
 
-        code, second, stderr = guest_check(stack, image, kept, guest)
+        code, second, stderr = guest_check(stack, image, kept, guest, extra=("--beside",))
         booted(code, second, stderr, "the second start")
         expect(second["device_made"] is False and second["device"] == first["device"],
                "the second start finds the device and makes none", second)
         expect(second["boot_id"] != first["boot_id"], "the second start boots a new guest", second)
+        beside = second.get("beside") or {}
+        expect(beside.get("uid", 0) > 0 and beside.get("uid") != second["uid"],
+               "the machine beside runs under a uid of its own", f"{beside}, the first's {second['uid']}")
+        expect(beside.get("folder", "").startswith(f"{MACHINES}/{beside.get('uid')}-") and beside["folder"] != second["folder"],
+               "the machine beside has a folder of its own", beside)
+        expect(BOOT_ID.match(beside.get("boot_id", "")) and beside["boot_id"] != second["boot_id"],
+               "the machine beside is a guest of its own", beside)
+        expect(beside.get("end") == "acknowledged",
+               "the machine beside ends acknowledged, and the first answered for its space after it", beside)
+
+        keeper_killed(stack, image, kept, guest, project)
 
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(2) as pool:

@@ -67,7 +67,7 @@ func TestExpectSkipsOtherTypesAndIDs(t *testing.T) {
 		`{"v":4,"type":"measured","id":"p1"}`,
 		`{"v":4,"type":"placed","id":"p0"}`,
 		want)
-	line, err := expect(c, "placed", "p1")
+	line, err := expect(c, time.Now().Add(10*time.Second), "placed", "p1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,21 +76,55 @@ func TestExpectSkipsOtherTypesAndIDs(t *testing.T) {
 	}
 }
 
-func TestExpectWithoutAnIDTakesTheFirstOfItsType(t *testing.T) {
+// The check's space's exit and release are its own spawn's: another
+// spawn's exit is read past, never taken for it.
+func TestExpectTakesTheExitOfItsOwnSpawnAlone(t *testing.T) {
 	want := `{"v":4,"type":"exited","spawn_id":"s","code":0}`
-	c := control(t, `{"v":4,"type":"spawned","id":"x"}`, want)
-	line, err := expect(c, "exited", "")
+	c := control(t, `{"v":4,"type":"spawned","id":"x"}`, `{"v":4,"type":"exited","spawn_id":"other","code":0}`, want)
+	line, err := expect(c, time.Now().Add(10*time.Second), "exited", "", "s")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.TrimSpace(string(line)); got != want {
 		t.Fatalf("expect returned %s, want %s", got, want)
+	}
+}
+
+// One deadline holds the whole exchange: a guest that keeps sending well
+// formed lines of another kind does not move it.
+func TestExpectHoldsOneDeadlineHoweverManyLinesCome(t *testing.T) {
+	host, guest := net.Pipe()
+	t.Cleanup(func() { _ = host.Close(); _ = guest.Close() })
+	go func() {
+		for {
+			if _, err := guest.Write([]byte(`{"v":4,"type":"measured","id":"p0"}` + "\n")); err != nil {
+				return
+			}
+		}
+	}()
+	c := &Control{conn: host, lines: protocol.NewLineReader(host)}
+	answered := make(chan error, 1)
+	began := time.Now()
+	go func() {
+		_, err := expect(c, began.Add(200*time.Millisecond), "placed", "p1", "")
+		answered <- err
+	}()
+	select {
+	case err := <-answered:
+		if err == nil {
+			t.Fatal("expect took a line it was never sent")
+		}
+		if waited := time.Since(began); waited > 5*time.Second {
+			t.Fatalf("expect answered %s after its deadline", waited)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a guest that keeps talking held the exchange past its deadline")
 	}
 }
 
 func TestExpectRefusesAnErrorLineNamingItsCode(t *testing.T) {
 	c := control(t, `{"v":4,"type":"error","id":"p1","code":"bad_request"}`, `{"v":4,"type":"placed","id":"p1"}`)
-	_, err := expect(c, "placed", "p1")
+	_, err := expect(c, time.Now().Add(10*time.Second), "placed", "p1", "")
 	if err == nil || !strings.Contains(err.Error(), "bad_request") {
 		t.Fatalf("expect gave %v, not a refusal naming bad_request", err)
 	}
@@ -102,10 +136,10 @@ func TestControlRefusesALinePastTheBound(t *testing.T) {
 	long := strings.Repeat("x", protocol.MaxLineBytes+1)
 	want := `{"v":4,"type":"placed","id":"p1"}`
 	c := control(t, long, want)
-	if _, err := c.Next(10 * time.Second); err != ErrLineTooLong {
+	if _, err := c.Next(time.Now().Add(10 * time.Second)); err != ErrLineTooLong {
 		t.Fatalf("a line of %d bytes: %v, not ErrLineTooLong", len(long), err)
 	}
-	line, err := c.Next(10 * time.Second)
+	line, err := c.Next(time.Now().Add(10 * time.Second))
 	if err != nil || string(line) != want {
 		t.Fatalf("the next line: %q, %v", line, err)
 	}
