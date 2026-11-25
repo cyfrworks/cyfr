@@ -5,9 +5,9 @@ defmodule Arca.RemovalRevokeRaceTest do
   @moduledoc """
   A removal's revocation of a source (`Arca.ProfileStorage.revoke_for_source/2`)
   and its person's revocation of one of its profiles, under real
-  concurrency, on connections of their own: the person's revocation
-  committed while the removal runs keeps its cause, `person`, so the
-  component installed again is not granted over it.
+  concurrency, on connections of their own: the person's revocation sent
+  while the removal runs keeps its cause, `person`, so the component
+  installed again is not granted over it.
 
   PostgreSQL only: SQLite takes its one write lock at each transaction's
   start (`Arca.Repo.locking_transaction/2`), so the two never interleave
@@ -52,8 +52,8 @@ defmodule Arca.RemovalRevokeRaceTest do
     {:ok, actor: actor, source: source, profile: profile}
   end
 
-  # The removal is held after its first statement on `profiles`, and the
-  # person's revocation commits there, before the removal goes on.
+  # The removal is held after its first statement on `profiles`, inside
+  # its transaction, while the person's revocation is sent.
   def hold_after_profiles(_event, _measurements, meta, test) do
     if Process.get(:hold_removal) && meta[:source] == "profiles" do
       Process.delete(:hold_removal)
@@ -67,7 +67,11 @@ defmodule Arca.RemovalRevokeRaceTest do
     end
   end
 
-  test "a person's revocation committed while a removal runs keeps its cause",
+  # The removal holds the row its write revoked until its transaction
+  # commits, so the person's revocation, sent while the removal is held,
+  # lands on a row the removal already revoked: it names the person, the
+  # removal's stamp kept.
+  test "a person's revocation sent while a removal runs keeps its cause",
        %{actor: actor, source: source, profile: profile} do
     test = self()
     handler = "removal-race-#{System.unique_integer([:positive])}"
@@ -86,9 +90,13 @@ defmodule Arca.RemovalRevokeRaceTest do
       end)
 
     assert_receive {:holding, removal}, 5_000
-    assert :ok = unboxed(fn -> ProfileStorage.revoke_by_person(actor, profile.id) end)
+
+    person =
+      Task.async(fn -> unboxed(fn -> ProfileStorage.revoke_by_person(actor, profile.id) end) end)
+
     send(removal, :go)
     assert {:ok, _revoked} = Task.await(removing, 10_000)
+    assert :ok = Task.await(person, 10_000)
 
     assert {:ok, %{status: "revoked", revoked_by: "person"}} =
              unboxed(fn -> ProfileStorage.get(actor, profile.id) end)

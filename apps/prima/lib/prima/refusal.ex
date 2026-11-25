@@ -797,7 +797,7 @@ defmodule Prima.Refusal do
   # (`Aqua.Loop.Turn.consented/4`), never given, or revoked. Bare, as the
   # Aqua page and an empty thread say it; a turn refused for it, with what
   # to do where it is read (`Aqua.Loop.Turn.again/1`).
-  defp row(state) when state in [:agent_changed, :ungranted],
+  defp row(state) when state in [:agent_changed, :ungranted, :grant_revoked],
     do: {:consent_required, elem(@grant_states[state], 0)}
 
   defp row({state, member, then}) when is_map_key(@grant_states, state) and is_binary(member) do

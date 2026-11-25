@@ -4,9 +4,13 @@
 //
 // A stand-in for OpenCode's ACP server, `opencode acp`, run under
 // cyfr-opencode by brain_opencode.py: it speaks the lines OpenCode 2.4.1
-// was probed writing, and keeps its sessions, with its sign-in, in one
-// store of its own in its HOME, the kept folder, as OpenCode keeps them in
-// its one database.
+// was probed writing, and keeps its sign-in and its sessions in a store of
+// its own in its HOME, the kept folder, as OpenCode keeps them in its one
+// database, which every process of the folder shares: the sign-in in
+// `opencode.db`, and each session in a file of its own under `sessions/`,
+// written whole (a new file renamed over it) by the process that holds the
+// session alone, so two processes of one folder never write one file and
+// none reads a file half written.
 //
 // - Run with `debug config --standalone` it prints its configuration
 //   documents as OpenCode does, the person's own server `cyfr` under
@@ -65,12 +69,23 @@ if (process.argv.slice(2).join(' ') !== 'acp') {
 const home = process.env.HOME;
 const data = path.join(home, '.local', 'share', 'opencode');
 fs.mkdirSync(data, { recursive: true });
-// The store: one JSON file of the sign-in and every session, by id.
-const storeFile = path.join(data, 'opencode.db');
+// The store: the sign-in, and each session by its id.
+const signinFile = path.join(data, 'opencode.db');
+const sessionsDir = path.join(data, 'sessions');
+fs.mkdirSync(sessionsDir, { recursive: true });
 const SIGNIN = { provider: 'probe', key: 'FAKE-SIGNIN-CANARY the key a person connected' };
-const readStore = () => (fs.existsSync(storeFile) ? JSON.parse(fs.readFileSync(storeFile, 'utf8')) : { signin: SIGNIN, sessions: {} });
-const writeStore = (store) => fs.writeFileSync(storeFile, JSON.stringify(store));
-if (!fs.existsSync(storeFile)) writeStore(readStore());
+const writeWhole = (file, text) => {
+  const part = `${file}.${process.pid}.part`;
+  fs.writeFileSync(part, text);
+  fs.renameSync(part, file);
+};
+// A session id is OpenCode's own form; any other names no session's file.
+const sessionFile = (id) => (typeof id === 'string' && /^ses_[0-9a-f]+$/.test(id) ? path.join(sessionsDir, `${id}.json`) : null);
+const readSession = (id) => {
+  const file = sessionFile(id);
+  return file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
+};
+if (!fs.existsSync(signinFile)) writeWhole(signinFile, JSON.stringify({ signin: SIGNIN }));
 fs.writeFileSync(path.join(home, 'notes.md'), 'FAKE-FOLDER-CANARY the notes OpenCode reads with its own tool\n');
 process.stderr.write('FAKE-STDERR-CANARY OpenCode writes this to its stderr\n');
 
@@ -98,9 +113,7 @@ function options() {
 }
 
 function save() {
-  const store = readStore();
-  store.sessions[session.id] = session;
-  writeStore(store);
+  writeWhole(sessionFile(session.id), JSON.stringify(session));
 }
 
 // ---- MCP servers, started as OpenCode starts the stdio servers a session names ----
@@ -208,7 +221,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line);
   const p = message.params || {};
   if (message.method === undefined) return undefined;
-  const held = (id) => typeof id === 'string' && readStore().sessions[id] !== undefined;
+  const held = (id) => readSession(id) !== undefined;
   switch (message.method) {
     case 'initialize':
       return answer(message.id, { protocolVersion: 1, agentCapabilities: { loadSession: true, mcpCapabilities: { http: true, sse: false },
@@ -224,13 +237,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return (p.mcpServers || []).forEach(startServer);
     case 'session/resume':
       if (!held(p.sessionId)) return notFound(message.id, p.sessionId);
-      session = readStore().sessions[p.sessionId];
+      session = readSession(p.sessionId);
       openedBy = 'resume';
       answer(message.id, { configOptions: options() });
       return (p.mcpServers || []).forEach(startServer);
     case 'session/load':
       if (!held(p.sessionId)) return notFound(message.id, p.sessionId);
-      session = readStore().sessions[p.sessionId];
+      session = readSession(p.sessionId);
       for (const { user, agent } of session.history) {
         update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: user } });
         if (agent) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: agent } });
@@ -239,9 +252,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       answer(message.id, { configOptions: options() });
       return (p.mcpServers || []).forEach(startServer);
     case 'session/delete': {
-      const store = readStore();
-      delete store.sessions[p.sessionId];
-      writeStore(store);
+      const file = sessionFile(p.sessionId);
+      if (file) fs.rmSync(file, { force: true });
       return answer(message.id, {});
     }
     case 'session/set_config_option': {

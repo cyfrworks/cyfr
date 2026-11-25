@@ -1703,10 +1703,16 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
+  # The crew's grant's state as its refusal row names it (`Prima.Refusal`).
+  defp grant_row(:consent_absent), do: :ungranted
+  defp grant_row(:consent_revoked), do: :grant_revoked
+  defp grant_row(:consent_stale), do: :agent_changed
+
   defp unready_model(statuses) do
     cond do
       Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
       Enum.any?(statuses, &match?({:consent_absent, _}, &1)) -> :consent_absent
+      Enum.any?(statuses, &match?({:consent_revoked, _}, &1)) -> :consent_revoked
       Enum.any?(statuses, &match?({:consent_stale, _}, &1)) -> :consent_stale
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
@@ -2081,10 +2087,11 @@ defmodule PrismWeb.ThreadPaneLive do
                 >
                   {Prima.Refusal.grant_action(:ungranted)}
                 </.link>
-              <% @model_ready in [:consent_absent, :consent_stale] -> %>
-                <%!-- The crew's grant was never given, or no longer covers
-                     what the crew may use: granting it on the Aqua page is
-                     all it needs, never a model to connect. --%>
+              <% @model_ready in [:consent_absent, :consent_revoked, :consent_stale] -> %>
+                <%!-- The crew's grant was never given, was revoked by its
+                     person, or no longer covers what the crew may use:
+                     granting it on the Aqua page is all it needs, never a
+                     model to connect. --%>
                 <span data-test="model-consent">
                   {PrismWeb.AquaLive.AgentsComponent.grant_sentence(@model_ready)}
                 </span>
@@ -2092,9 +2099,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   navigate={PrismWeb.Focus.path(@athanor, "/aqua")}
                   class="text-blue-400 hover:underline"
                 >
-                  {Prima.Refusal.grant_action(
-                    if(@model_ready == :consent_absent, do: :ungranted, else: :agent_changed)
-                  )}
+                  {Prima.Refusal.grant_action(grant_row(@model_ready))}
                 </.link>
               <% @model_ready in [:consent_damaged, :consent_unavailable] -> %>
                 <%!-- A consent that exists but is damaged, or could not be read,
