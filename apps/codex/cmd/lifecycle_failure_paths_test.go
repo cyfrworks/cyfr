@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -180,12 +181,12 @@ func TestInitForceDescribesFilesMissingAfterDownloadFailure(t *testing.T) {
 
 // An update that ends before the stop, by an interrupt, a failed pull or a
 // failed scaffold fetch, reports the compose file as it is: an edit made
-// while it pulled is kept and named, never reported as unchanged.
+// while it fetched the scaffold is kept and named, never reported as
+// unchanged.
 func TestPreStopExitsReportTheComposeFileAsItIs(t *testing.T) {
 	for _, phase := range []string{"interrupt", "pull failure", "scaffold fetch failure"} {
 		t.Run(phase, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
-			s.answer("pull.edit", "\nname: person-edited-before-stop\n")
 			if phase == "pull failure" {
 				s.answer("pull.fail", "cyfr-locus")
 			}
@@ -194,11 +195,22 @@ func TestPreStopExitsReportTheComposeFileAsItIs(t *testing.T) {
 			originalFetch := fetchScaffold
 			t.Cleanup(func() { fetchScaffold = originalFetch })
 			fetchScaffold = func(v string) (scaffoldRelease, error) {
+				// The offer's read of the release being left is the
+				// person's to pass; the edit lands at the new release's.
+				if v != testVersion {
+					return originalFetch(v)
+				}
+				edited := append(slices.Clone(s.compose), "\nname: person-edited-before-stop\n"...)
+				if err := os.WriteFile(filepath.Join(s.project, "docker-compose.yml"), edited, 0640); err != nil {
+					t.Fatal(err)
+				}
 				if phase == "scaffold fetch failure" {
 					return nil, fmt.Errorf("scaffold unavailable")
 				}
 				got, err := originalFetch(v)
-				cancel()
+				if phase == "interrupt" {
+					cancel()
+				}
 				return got, err
 			}
 			out, err := s.run(ctx)

@@ -35,6 +35,9 @@ var pages = template.Must(template.New("page").Parse(`<!doctype html>
 <h1>Done</h1><p>This window closes by itself.</p><script>{{.Close}}</script>
 {{else if eq .Answer "ended"}}
 <h1>Add a passkey to your account</h1>
+{{else if and (eq .Page "setup") .KeyElsewhere}}
+<h1>This device has no key yet</h1>
+<p>{{.KeyElsewhere}}</p>
 {{else if eq .Page "setup"}}
 {{range .Warn}}<p class="warn">{{.}}</p>{{end}}
 <h1>Set up CYFR</h1>

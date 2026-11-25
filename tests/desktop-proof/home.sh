@@ -101,25 +101,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The release the cells run is the image's: bin/cyfr here runs the
-# image's /app/bin/cyfr on this host's network, as this user, with the
-# cell's environment (release.sh cell_env) and the run's folders where
-# they are here, and the image's own validator. A start runs in a
-# container named for its node, which cleanup removes whatever happens.
-REL="$WORK/image-release"
-mkdir -p "$REL/bin"
-cat >"$REL/bin/cyfr" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-args=(run --rm --network host --user "$(id -u):$(id -g)" --entrypoint /app/bin/cyfr
-  -v "$WORK:$WORK" -v "$ROOT:$ROOT:ro" -w "\$PWD" -e CYFR_WASM_TOOLS=/usr/local/bin/wasm-tools)
-for name in \$(compgen -e); do
-  case "\$name" in PATH | PWD | OLDPWD | SHLVL | _ | CYFR_WASM_TOOLS) ;; *) args+=(-e "\$name") ;; esac
-done
-if [ "\${1:-}" = start ]; then args+=(--name "$CELLS-\$RELEASE_NODE"); fi
-exec docker "\${args[@]}" "$IMAGE" "\$@"
-EOF
-chmod +x "$REL/bin/cyfr"
+# The release the cells run is the image's (image-release.sh).
+# shellcheck source=image-release.sh
+source "$HERE/image-release.sh"
+image_release "$IMAGE" "$CELLS"
 
 # The CYFR a script runs against (README.md), named by its folder's
 # `home` file, `separate` without one:

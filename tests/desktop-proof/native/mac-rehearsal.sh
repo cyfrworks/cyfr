@@ -27,8 +27,8 @@
 # app launches; Apple's notarisation and its ticket; Gatekeeper's first
 # launch of a downloaded copy; Touch ID.
 #
-# Usage: bash tests/desktop-proof/native/mac-rehearsal.sh CYFR ARCH
-# CYFR is the cyfr the package carries, ARCH amd64 or arm64. It runs on a
+# Usage: bash tests/desktop-proof/native/mac-rehearsal.sh CYFR
+# CYFR is the cyfr the Apple silicon package carries. It runs on a
 # disposable macOS runner of GitHub's alone (GITHUB_ACTIONS=true and
 # RUNNER_ENVIRONMENT=github-hosted, which GitHub sets on its own runners
 # and on no person's Mac) and refuses anywhere else first: it trusts its
@@ -48,8 +48,7 @@ if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-ho
 fi
 [ "$(uname -s)" = Darwin ] || { echo "rehearsal: refused: it rehearses the Mac package, on macOS alone" >&2; exit 64; }
 CYFR=${1:-}
-ARCH=${2:-}
-[ -x "$CYFR" ] && [ -n "$ARCH" ] || { echo "usage: bash $0 CYFR ARCH" >&2; exit 64; }
+[ -x "$CYFR" ] || { echo "usage: bash $0 CYFR" >&2; exit 64; }
 CYFR=$(cd "$(dirname "$CYFR")" && pwd)/$(basename "$CYFR")
 DESKTOP=$(cd "$(dirname "$0")/../../../apps/codex/desktop" && pwd)
 
@@ -146,7 +145,7 @@ CYFR_REHEARSAL_CERTIFICATE=$(base64 -i "$RUN/id.p12")
 
 # The rehearsed build, bounded by SECONDS.
 build() {
-  (cd "$DESKTOP" && bounded "$1" "the rehearsed build" node scripts/build.mjs --cyfr "$CYFR" --version 0.0.0-rehearsal --arch "$ARCH" \
+  (cd "$DESKTOP" && bounded "$1" "the rehearsed build" node scripts/build.mjs --cyfr "$CYFR" --version 0.0.0-rehearsal --arch arm64 \
     --out "$RUN/dist" --distribution --rehearse)
 }
 
@@ -167,7 +166,7 @@ APP_ID=$(cd "$DESKTOP" && node --input-type=module -e 'import {APP_ID} from "./s
 refused profile "the provisioning profile is not for $APP_ID" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_APP"
 refused group "the provisioning profile does not authorise the app's WebAuthn group" CYFR_REHEARSAL_PROVISIONING_PROFILE="$OTHER_GROUP"
 
-DMG="$RUN/dist/cyfr-desktop_0.0.0-rehearsal_darwin_$ARCH.dmg"
+DMG="$RUN/dist/cyfr-desktop_0.0.0-rehearsal_darwin_arm64.dmg"
 # The build's own lines as they come, for the record of where it is.
 build 1800 2>&1 | tee "$RUN/build.log"
 if [ "${PIPESTATUS[0]}" = 0 ] && [ -f "$DMG" ]; then

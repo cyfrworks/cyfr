@@ -34,7 +34,11 @@ BINARY_NAME="cyfr"
 
 main() {
     os="$(detect_os)"
-    arch="$(detect_arch)"
+    if [ "$os" = "darwin" ]; then
+        arch="$(detect_mac_arch)"
+    else
+        arch="$(detect_arch)"
+    fi
     version="$(resolve_version)"
 
     if [ "$os" = "windows" ]; then
@@ -137,6 +141,18 @@ detect_arch() {
             exit 1
             ;;
     esac
+}
+
+# A Mac is Apple silicon: CYFR builds nothing for an Intel Mac. A shell
+# running under Rosetta reads x86_64 from uname on Apple silicon, so the
+# processor itself is asked.
+detect_mac_arch() {
+    if [ "$(sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; then
+        echo "arm64"
+    else
+        printf "Error: CYFR runs on Apple silicon Macs, and this Mac has an Intel processor; nothing was installed.\n" >&2
+        exit 1
+    fi
 }
 
 resolve_version() {

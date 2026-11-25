@@ -163,6 +163,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let child = null
   let frame = null // the app's one window, holding the rail and the content
   let rail = null // the rail's view
+  let railURL = "" // its address, as the last ready gave it
+  let menuOpen = null // the row menu shown, or its Forget's dialog: {menu, asked}
   let content = null // the content's view
   let contentSession = null
   let contentKept = false // whether contentSession is a CYFR's kept one
@@ -285,17 +287,37 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // A row's menu on the rail, drawn by main: Forget, confirmed by the
   // person in a dialog that names the CYFR's address and what it loses.
   // The context key or a long press opens it as a right-click does.
+  // Each closes with the window (closeContent), a lock's or a departure's,
+  // as cancelled: no answer of a menu shown before reaches the state after.
   function rowMenu(home) {
     if (!frame || frame.isDestroyed()) return
-    const confirm = () => dialog.showMessageBox(frame, {
-      type: "warning", title: "CYFR", message: `Forget the CYFR at ${home} on this computer?`,
-      detail: "This computer's sign-in there, its approval and its admission are removed. Your account, the CYFR itself " +
-        "and this computer's key stay as they are.",
-      buttons: ["Forget", "Cancel"], cancelId: 1, defaultId: 1, noLink: true
-    }).then(({response}) => {
-      if (response === 0) on({type: "forget-confirmed", home})
-    }, () => {})
-    Menu.buildFromTemplate([{label: "Forget this CYFR on this computer", click: confirm}]).popup({window: frame})
+    unmenu()
+    const shown = {asked: new AbortController(), menu: null, frame}
+    menuOpen = shown
+    const confirm = () => {
+      if (menuOpen !== shown) return
+      dialog.showMessageBox(frame, {
+        type: "warning", title: "CYFR", message: `Forget the CYFR at ${home} on this computer?`,
+        detail: "This computer's sign-in there, its approval and its admission are removed. Your account, the CYFR itself " +
+          "and this computer's key stay as they are.",
+        buttons: ["Forget", "Cancel"], cancelId: 1, defaultId: 1, noLink: true, signal: shown.asked.signal
+      }).then(({response}) => {
+        const mine = menuOpen === shown && !shown.asked.signal.aborted
+        if (mine) menuOpen = null
+        if (mine && response === 0) on({type: "forget-confirmed", home})
+      }, () => {
+        if (menuOpen === shown) menuOpen = null
+      })
+    }
+    shown.menu = Menu.buildFromTemplate([{label: "Forget this CYFR on this computer", click: confirm}])
+    shown.menu.popup({window: frame})
+  }
+  function unmenu() {
+    const shown = menuOpen
+    menuOpen = null
+    if (!shown) return
+    shown.asked.abort()
+    if (shown.frame && !shown.frame.isDestroyed()) shown.menu?.closePopup(shown.frame)
   }
 
   // The app's one way out, `end`. It waits END_WAITS_MS at the most for
@@ -322,8 +344,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // policy.js chooserPath): cyfr's own, with the road this app offers,
   // what main has to tell, and where it goes on. The run token in ready's
   // address is main's to keep (runToken), and none of the chooser's.
-  const chooserAddress = (notices, {connect = "", way = "", retry = ""} = {}) => screen ? state.readyURL
-    : `${LOOPBACK}/bootstrap/#road=${accountRoad ? "passkey" : "words"}` + (notices.length ? `&notice=${notices.join(",")}` : "") +
+  // On the box's screen it says so (box), and the chooser offers no setup.
+  const chooserAddress = (notices, {connect = "", way = "", retry = ""} = {}) =>
+    `${LOOPBACK}/bootstrap/#road=${accountRoad ? "passkey" : "words"}` + (screen ? "&box=1" : "") +
+      (notices.length ? `&notice=${notices.join(",")}` : "") +
       (connect ? `&connect=${encodeURIComponent(connect)}` : "") + (way ? `&way=${way}` : "") +
       (retry ? `&retry=${encodeURIComponent(retry)}` : "")
   const runToken = () => new URLSearchParams(state.readyURL.split("#")[1] ?? "").get("token") ?? ""
@@ -483,9 +507,10 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // The content's views whose document is the chooser's (openContent).
   const choosers = new WeakSet()
 
-  // The app's one window, made once: the rail at its left (none on the
-  // box's screen, in this part) and the content beside it, both laid out
-  // again as it is resized, the on-screen keyboard's too.
+  // The app's one window: the rail at its left and the content beside it,
+  // both laid out again as it is resized, the on-screen keyboard's too.
+  // On the box's screen every lock and every departure closes it
+  // (closeContent), and the next comes up with the rail loaded again.
   function ensureFrame() {
     if (frame && !frame.isDestroyed()) return frame
     const f = new BaseWindow({width: 1280, height: 860, show: false, title: "CYFR", autoHideMenuBar: true, backgroundColor: "#071013",
@@ -498,11 +523,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     if (screen) f.maximize()
     f.show()
+    if (railURL) openRail(railURL)
     return f
   }
   // The frames main closed itself, whose close is no quit.
   const retired = new WeakSet()
   function closeFrame() {
+    unmenu()
     const f = frame
     frame = null
     closeUpdate()
@@ -616,8 +643,9 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // The rail's view, in the app's own session: loaded again at each
   // ready, whose read token is new.
   function openRail(url) {
-    if (screen) return
-    ensureFrame()
+    railURL = url
+    // A window made now loads it itself (ensureFrame).
+    if (!frame || frame.isDestroyed()) return void ensureFrame()
     if (!rail) {
       rail = new WebContentsView({webPreferences: {...SECURE, session: appSession()}})
       confine(rail.webContents, "rail")
@@ -863,6 +891,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
       w.destroy()
     }
     dropContent()
+    unmenu()
     // On the box's screen a lock is confirmed by the compositor's list of
     // windows: every window shown at the lock closed (internal/wayland).
     // So the content's close closes the app's window too, and what shows
