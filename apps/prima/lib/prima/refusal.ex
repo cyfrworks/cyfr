@@ -693,10 +693,12 @@ defmodule Prima.Refusal do
     do: {:forbidden, "This crew member's thread is retired — ask the member again from its room"}
 
   # A schedule's line for Aqua runs as its person with nobody present, so
-  # only the person, signed in, makes or changes one
-  # (`Opus.Schedules.Provider`).
+  # only the person makes or changes one, signed in or through a turn of
+  # theirs (`Opus.Schedules.Provider`).
   defp row(:aqua_line_by_person),
-    do: {:forbidden, "Only you, signed in, can give a schedule a line for Aqua or change it"}
+    do:
+      {:forbidden,
+       "Only you, signed in or through Aqua's turn, can give a schedule a line for Aqua or change it"}
 
   # A schedule's update made against a definition the schedule no longer
   # has (`Arca.CronSchedule.update/4`'s `definition:`).

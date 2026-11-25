@@ -43,14 +43,38 @@ defmodule Opus.Schedules.Provider do
   `agent:local.aqua` (`Arca.CronSchedule.aqua_line/0`) and input
   `{"line": text}`, binding no profile, since each fire is a turn of Aqua
   as the schedule's person, with nobody present (`Aqua.ScheduleTurns`).
-  Only that person's own signed-in session (`aqua_writer/1`) makes one,
-  turns a schedule into one or out of one, or changes its line: a key's
-  call, a tincture's and any other caller is refused
-  `:aqua_line_by_person`, and an agent cannot reach these writes at all,
-  since they take the external plane alone. Pausing, resuming, deleting,
+  Only that person makes one, turns a schedule into one or out of one, or
+  changes its line: in their own signed-in session (`aqua_writer/1`), or
+  through a turn of theirs, the soul's or a crew member's alike, under
+  Aqua's grant (`writer/2`). A key's call, a tincture's and any other
+  caller is refused `:aqua_line_by_person`. Pausing, resuming, deleting,
   renaming and retiming one are a schedule's ordinary writes. No other
   agent is a schedule's reference, and an Aqua line has no version to
   re-resolve.
+
+  ## From a turn
+
+  `create`, `update`, `pause`, `resume` and `delete` take the in-chain
+  plane as well; `re_resolve` stays external. A chain's call is a turn's
+  own or nothing (`:not_in_a_turn`): the open turn the gate's lineage
+  names, in the caller's athanor, asked for by its person, whose root made
+  the call, so no component a turn started writes a schedule. Such a turn
+  is the person's for a line for Aqua when it runs under a sign-in with no
+  key and no frame and started from the person or from a schedule's fire.
+  A schedule a turn makes records the turn's agent as its `maker` and,
+  when the turn works under a workspace thread, that thread as its
+  `thread_id`, where its fires land (`Aqua.ScheduleTurns`); both come from
+  the lineage and the turn's row, never the arguments.
+
+  ## One time
+
+  `at` in place of `cron_expression` sets a schedule for one time, at
+  least a minute and at most a year ahead, rounded up to the minute: the
+  row holds the cron expression naming that minute in UTC and `once`. It
+  fires once, however late (`Arca.ScheduleOccurrences.claim/3`), and is
+  removed when that occurrence ends. An update naming neither keeps a
+  once schedule's cursor, a resume keeps it too, and a `cron_expression`
+  makes it recurring.
 
   The cap is the platform setting `max_schedules_per_athanor` (0 is no
   ceiling), read at each create and handed to `Arca.CronSchedule.create/2`,
