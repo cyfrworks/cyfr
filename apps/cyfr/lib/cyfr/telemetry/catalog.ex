@@ -501,6 +501,14 @@ defmodule Cyfr.Telemetry.Catalog do
           "retry, so no runner was recovered on this boot: an open turn waits until its " <>
           "thread's runner next starts, and this is where an operator learns it"
     },
+    # ——— packs of scrolls ———
+    [:cyfr, :packs, :sheet, :destination] => %{
+      consumers: [:operator],
+      note:
+        "a bring-in's sheet has read its destination, once, the reading its \"this " <>
+          "replaces\" and the digest it carries both come from (`Compendium.Packs.sheet/4`): " <>
+          "pinned by the test that brings a pack in under the sheet's name right then"
+    },
 
     # ——— the boot's seed offer ———
     [:cyfr, :seed_offer, :completed] => %{
