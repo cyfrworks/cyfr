@@ -12,16 +12,8 @@ defmodule PrismWeb.AquaLive.ScrollsComponentTest do
 
   setup %{conn: conn} do
     test_path = Path.join(System.tmp_dir!(), "scrolls_page_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-
-    on_exit(fn ->
-      File.rm_rf(test_path)
-
-      if original,
-        do: Application.put_env(:arca, :base_path, original),
-        else: Application.delete_env(:arca, :base_path)
-    end)
+    Prima.Test.Env.put_app_env(:arca, :base_path, test_path)
+    on_exit(fn -> File.rm_rf(test_path) end)
 
     user = test_user()
     conn = log_in_user(conn, user)

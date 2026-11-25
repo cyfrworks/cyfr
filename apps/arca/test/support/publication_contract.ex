@@ -1006,8 +1006,8 @@ defmodule Arca.PublicationContract do
           assert Enum.sort(staged(actor, unit)) == Enum.sort([@sentinel, "a.txt", "b.txt"])
         end
 
-        test "a crew member is created by writing its own file, which is its one commit; a scroll by " <>
-               "its SKILL.md, and nothing lands inside it before that",
+        test "a crew member is created by writing its own file, which is its one commit; a pack by " <>
+               "the write of its first file, and each write after is a revision of it whole",
              %{actor: actor} do
           n = System.unique_integer([:positive])
           role = ["aqua", "crew", "made-#{n}.md"]
@@ -1027,13 +1027,19 @@ defmodule Arca.PublicationContract do
           assert {:ok, "# edited"} = Arca.get(actor, role)
           assert [_the_one_commit] = journal(actor, role)
 
-          scroll = ["aqua", "skills", "made-#{n}"]
-          assert {:error, :no_unit} = Arca.put(actor, scroll ++ ["reference.md"], "body")
-          assert :ok = Arca.put(actor, scroll ++ ["SKILL.md"], "# scroll")
-          assert :ok = Arca.put(actor, scroll ++ ["reference.md"], "body")
-          assert {:ok, "body"} = Arca.get(actor, scroll ++ ["reference.md"])
-          assert [_one_commit] = journal(actor, scroll)
-          assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, scroll)
+          pack = ["aqua", "scrolls", "made-#{n}"]
+          assert :ok = Arca.put(actor, pack ++ ["skills", "x", "SKILL.md"], "# scroll")
+          assert [_made] = journal(actor, pack)
+          assert {:ok, _record} = Arca.get(actor, pack ++ [".cyfr-pack.json"])
+
+          assert {:error, {:reserved_path, _}} =
+                   Arca.put(actor, pack ++ [".cyfr-pack.json"], "{}")
+
+          assert :ok = Arca.put(actor, pack ++ ["skills", "x", "reference.md"], "body")
+          assert {:ok, "body"} = Arca.get(actor, pack ++ ["skills", "x", "reference.md"])
+          assert {:ok, "# scroll"} = Arca.get(actor, pack ++ ["skills", "x", "SKILL.md"])
+          assert [_made, _edited] = journal(actor, pack)
+          assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, pack)
         end
 
         test "a subtree replacement needs a committed unit", %{actor: actor, unit: unit} do

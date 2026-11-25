@@ -1478,7 +1478,7 @@ the server's, and each folder is one of four tiers.
   own verb (scaffold, pull, fork, the Aqua page), and one the server ships
   is reset, never deleted. An edit inside a component re-registers its row;
   an edit under `aqua/` rewrites the agent index. A pack,
-  `aqua/scrolls/<pack>/`, is the one door to its scrolls: in a pack of your
+  `aqua/scrolls/<pack>/`, takes every change to its scrolls one way: in a pack of your
   own a write or delete is a new revision of the pack, a write under a new
   folder makes one, and a delete of the folder removes it; a brought pack
   and `cyfr` refuse every write, and so does CYFR's record of a pack,

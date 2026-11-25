@@ -38,15 +38,11 @@ defmodule Compendium.PacksSettleTest do
 
     base = Path.join(System.tmp_dir!(), "packs_settle_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")
-    prev_base = Application.fetch_env!(:arca, :base_path)
-    prev_seed = Application.fetch_env!(:arca, :seed_path)
-    Application.put_env(:arca, :base_path, Path.join(base, "data"))
-    Application.put_env(:arca, :seed_path, seed)
+    Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(base, "data"))
+    Prima.Test.Env.put_app_env(:arca, :seed_path, seed)
 
     on_exit(fn ->
       Arca.Storage.UnitLocator.install!(@locators)
-      Application.put_env(:arca, :base_path, prev_base)
-      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

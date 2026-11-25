@@ -21,15 +21,11 @@ defmodule Compendium.Providers.AquaTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "aqua_tool_#{System.unique_integer([:positive])}")
-    prev_base = Application.fetch_env!(:arca, :base_path)
-    prev_seed = Application.fetch_env!(:arca, :seed_path)
-    Application.put_env(:arca, :base_path, Path.join(base, "data"))
-    Application.put_env(:arca, :seed_path, Path.join(base, "seed"))
+    Prima.Test.Env.put_app_env(:arca, :base_path, Path.join(base, "data"))
+    Prima.Test.Env.put_app_env(:arca, :seed_path, Path.join(base, "seed"))
     File.mkdir_p!(Path.join(base, "seed/aqua"))
 
     on_exit(fn ->
-      Application.put_env(:arca, :base_path, prev_base)
-      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

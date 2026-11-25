@@ -485,15 +485,6 @@
         },
         %{
           verb: "GET",
-          path: "/a/:athanor/scrolls/download/:pack",
-          plug: "PrismWeb.FileController",
-          plug_opts: ":pack",
-          auth: "browser_focus_handler",
-          live_view: nil,
-          pipe_through: ["attachment", "attachment_throttle"]
-        },
-        %{
-          verb: "GET",
           path: "/a/:athanor/legal",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
@@ -536,6 +527,15 @@
           auth: "browser_authenticated",
           live_view: "PrismWeb.SchedulesLive",
           pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/a/:athanor/scrolls/download/:pack",
+          plug: "PrismWeb.FileController",
+          plug_opts: ":pack",
+          auth: "browser_focus_handler",
+          live_view: nil,
+          pipe_through: ["attachment", "attachment_throttle"]
         },
         %{
           verb: "GET",
