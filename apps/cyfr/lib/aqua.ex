@@ -114,6 +114,24 @@ defmodule Aqua do
     end
   end
 
+  @doc """
+  The words a person reads for the tool family `tool`: the title its
+  operations are declared with (`Prima.Operation`), or a virtual tool's
+  family title; its name while it declares none.
+  """
+  @spec tool_title(String.t()) :: String.t()
+  def tool_title(tool) do
+    declared = Enum.find_value(Sanctum.Catalog.list_tools(), &(&1["name"] == tool && &1["title"]))
+
+    with nil <- declared,
+         %{title: title} <- Sanctum.VirtualTools.table()[tool] do
+      title
+    else
+      title when is_binary(title) -> title
+      _undeclared -> tool
+    end
+  end
+
   defp declared_words(tool, action) do
     case Sanctum.Catalog.operations() do
       %{^tool => {_module, %{operations: operations}}} ->
@@ -123,6 +141,15 @@ defmodule Aqua do
         nil
     end
   end
+
+  @doc """
+  What the person's MCP servers named `servers` offer now, and why each
+  outside entry of `tools`, the soul's list, is not handed, as a turn
+  would say: the Aqua page's one read of them. See
+  `Aqua.Loop.Turn.offerings/3`.
+  """
+  @spec offerings(Context.t(), [String.t()], [String.t()]) :: Aqua.Loop.Turn.offerings()
+  defdelegate offerings(ctx, tools, servers), to: Aqua.Loop.Turn
 
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::
