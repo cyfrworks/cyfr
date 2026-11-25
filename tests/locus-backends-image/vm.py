@@ -241,22 +241,22 @@ def keeper_killed(stack, image, kept, guest, project):
         run("docker", "exec", "-d", container, "sh", "-c",
             f"exec cyfr-locus guest-check -- /bin/sh -c 'sleep 600' 2>{errors}")
         deadline = time.monotonic() + 60
-        while not any(comm == "firecracker" for _, _, comm, _ in processes(container)):
-            expect(time.monotonic() < deadline, "the killed keeper's machine boots",
-                   run("docker", "exec", container, "tail", "-c", "3000", errors, check=False).stdout)
+        while not any(comm == "firecracker" for _, _, comm, _ in processes(container)) and time.monotonic() < deadline:
             time.sleep(0.2)  # sleep-ok: polls the container's processes until the VMM is up, bounded above
+        expect(any(comm == "firecracker" for _, _, comm, _ in processes(container)), "the killed keeper's machine boots",
+               run("docker", "exec", container, "tail", "-c", "3000", errors, check=False).stdout)
         keepers = [pid for pid, _, comm, cmdline in processes(container)
                    if comm == "cyfr-locus" and cmdline.split()[1:2] == ["guest-check"]]
         expect(len(keepers) == 1, "one keeper runs the machine", processes(container))
         run("docker", "exec", container, "sh", "-c", f"kill -KILL {keepers[0]}")
         deadline = time.monotonic() + 20
-        while True:
-            left = [p for p in processes(container) if p[2] == "firecracker" or p[1] != "0"]
-            if not left:
-                break
-            expect(time.monotonic() < deadline, "the keeper killed with its PID namespace alive leaves no VMM "
-                   "and no process of a machine's uid", left)
+
+        def left():
+            return [p for p in processes(container) if p[2] == "firecracker" or p[1] != "0"]
+        while left() and time.monotonic() < deadline:
             time.sleep(0.2)  # sleep-ok: polls until the killed keeper's space has ended, bounded above
+        expect(not left(), "the keeper killed with its PID namespace alive leaves no VMM and no process of a "
+               "machine's uid", left())
     finally:
         run("docker", "rm", "--force", container, check=False)
 
