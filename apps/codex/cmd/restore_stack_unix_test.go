@@ -351,3 +351,80 @@ precious
 		t.Errorf("after the entrypoint the storage is owned by %q", owners)
 	}
 }
+
+// sqliteRead opens a copy of the SQLite database db, with its write-ahead
+// log where one is there, so the read changes nothing of it, and answers
+// its integrity check and the rows of its table t, in order.
+func sqliteRead(t *testing.T, db string) string {
+	t.Helper()
+	return sqlite(t, db, "import os, tempfile\nd = tempfile.mkdtemp()\nfor s in ['', '-wal']:\n    if os.path.exists(db + s):\n        shutil.copyfile(db + s, os.path.join(d, 'c.db' + s))\nc = sqlite3.connect(os.path.join(d, 'c.db'))\nprint(c.execute('pragma integrity_check').fetchone()[0], sorted(r[0] for r in c.execute('select v from t')))\nc.close()\nshutil.rmtree(d)")
+}
+
+// sqliteWithLog makes db a SQLite database in write-ahead mode whose file
+// holds the row inFile and whose log holds the committed row inLog.
+func sqliteWithLog(t *testing.T, db, inFile, inLog string) {
+	t.Helper()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		os.Remove(db + suffix)
+	}
+	sqlite(t, db, "c = sqlite3.connect(db)\nc.execute('pragma journal_mode=wal')\nc.execute('pragma wal_autocheckpoint=0')\nc.execute('create table t (v text)')\nc.execute(\"insert into t values ('"+inFile+"')\")\nc.commit()\nc.execute('pragma wal_checkpoint(truncate)')\nshutil.copyfile(db, db + '.file')\nc.execute(\"insert into t values ('"+inLog+"')\")\nc.commit()\nshutil.copyfile(db + '-wal', db + '.frames')\nc.close()\nshutil.move(db + '.file', db)\nshutil.move(db + '.frames', db + '-wal')")
+	os.Remove(db + "-shm")
+}
+
+// A restore killed at each step of the database's write leaves a
+// database SQLite opens whole: the old one with its log until the old log
+// goes, then, from the old log's removal to the last rename, under the
+// bar alone, a whole file without what a log held; and the same restore
+// run again puts the snapshot's database back, every row of its file and
+// its log.
+func TestARestoreKilledInTheDatabasesSwapRunsAgainToTheSnapshot(t *testing.T) {
+	for _, c := range []struct {
+		name, kill, step, rows string
+	}{
+		{"in the staged write", "3 1", "tar -x -f - -C /app/data", "['live file', 'live log']"},
+		{"before the staged files' sync", "4 x", "sync -- /app/data/.cyfr.db.restore /app/data/.cyfr.db-wal.restore", "['live file', 'live log']"},
+		{"before the old log goes", "5 x", "rm -f -- /app/data/cyfr.db-wal", "['live file', 'live log']"},
+		{"before the file's rename", "6 x", "mv -f -T -- /app/data/.cyfr.db.restore /app/data/cyfr.db", "['live file']"},
+		{"before the log's rename", "7 x", "mv -f -T -- /app/data/.cyfr.db-wal.restore /app/data/cyfr.db-wal", "['snapshot file']"},
+		{"before the folder's sync", "8 x", "sync -- /app/data", "['snapshot file', 'snapshot log']"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
+				sqliteWithLog(t, filepath.Join(s.project, "data", "cyfr.db"), "snapshot file", "snapshot log")
+			})
+			if !r.snap().parts["database-wal"] {
+				t.Fatal("the snapshot holds no log")
+			}
+			db := filepath.Join(r.project, "data", "cyfr.db")
+			sqliteWithLog(t, db, "live file", "live log")
+			r.edit("data/blobs/new", "written after the snapshot")
+			r.answer("write.kill", c.kill)
+			out, err := r.restore(true)
+			if err == nil || !strings.Contains(err.Error(), "Putting the snapshot back failed") {
+				t.Fatalf("restore answered %v\n%s", err, out)
+			}
+			var last string
+			for _, line := range r.shortLog() {
+				if strings.HasPrefix(line, "STACK write ") {
+					last = line
+				}
+			}
+			if !strings.HasPrefix(last, "STACK write "+c.step) {
+				t.Fatalf("the write killed was %q, want %s", last, c.step)
+			}
+			r.barred()
+			if got := sqliteRead(t, db); got != "ok "+c.rows+"\n" {
+				t.Errorf("killed at %s, SQLite reads the database as %s", c.step, got)
+			}
+			for _, name := range []string{"write.kill", "write.count"} {
+				os.Remove(filepath.Join(r.fake, name))
+			}
+			if out, err := r.restore(true); err != nil {
+				t.Fatalf("the restore run again: %v\n%s", err, out)
+			}
+			if got := sqliteRead(t, db); got != "ok ['snapshot file', 'snapshot log']\n" {
+				t.Errorf("after the restore run again SQLite reads the database as %s", got)
+			}
+		})
+	}
+}

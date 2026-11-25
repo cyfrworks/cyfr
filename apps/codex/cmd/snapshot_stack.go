@@ -148,7 +148,8 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 // arrives. The run ends when it has taken and given nothing for
 // stackReadStall, or at stackReadBackstop; when consume fails; and when
 // its standard input fails, which then is what it answers, so a write is
-// never taken for whole from a stream cut short. Whatever ends it early,
+// never taken for whole from a stream cut short; a standard input that is
+// an io.Closer is closed as the run ends. Whatever ends it early,
 // its container is ended and removed (access.Call.RemoveOnEnd), by the
 // engine's watchdog also when cyfr itself is gone. base is the command's
 // context before the stop, which an interrupt ends, and one free of the
@@ -171,6 +172,12 @@ func (u *updater) runStack(base context.Context, call stackCall, program string,
 	if call.stdin != nil {
 		in = &stdinReader{progressReader: progressReader{r: call.stdin, p: clock}, cancel: cancel}
 		stdin = in
+		if closer, ok := call.stdin.(io.Closer); ok {
+			// A producer that stalls leaves docker's copy of the standard
+			// input blocked in a read no ending of the process releases
+			// (exec's WaitDelay included): ending the run closes it.
+			defer context.AfterFunc(ctx, func() { closer.Close() })()
+		}
 	}
 	pr, pw := io.Pipe()
 	ran := make(chan error, 1)
@@ -262,7 +269,9 @@ type stdinReader struct {
 
 func (s *stdinReader) Read(b []byte) (int, error) {
 	n, err := s.progressReader.Read(b)
-	if err != nil && !errors.Is(err, io.EOF) {
+	// A pipe closed on this side is the run's own end (runStack), no
+	// failure of what feeds it.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
 		s.mu.Lock()
 		if s.err == nil {
 			s.err = err
@@ -403,7 +412,8 @@ func (u *updater) placeThroughStack(base context.Context, p string) (real string
 // storageEntries lists, with the stack stopped, what a snapshot reads
 // and a restore replaces: the storage root, every entry under it, for
 // local storage (listing); the SQLite database's own files that are there,
-// by their path (trio: the database, its -wal and its -shm); and left, the
+// by their path (trio: the database, its -wal and its -shm, and the names a
+// restore stages the database and its log at, stagedNames); and left, the
 // identities of the database's files and of the access engine's state,
 // which no snapshot's storage holds and no restore's clear removes, by
 // which file they are (device and inode), however a mount spells their
@@ -424,7 +434,7 @@ func (u *updater) storageEntries(base context.Context) (listing []stackEntry, tr
 			}
 		}
 		for _, e := range near {
-			if e.path == c.dbReal || e.path == c.dbReal+"-wal" || e.path == c.dbReal+"-shm" {
+			if e.path == c.dbReal || e.path == c.dbReal+"-wal" || e.path == c.dbReal+"-shm" || slices.Contains(stagedNames(c.dbReal), e.path) {
 				trio[e.path] = e
 				left[e.id] = true
 			}

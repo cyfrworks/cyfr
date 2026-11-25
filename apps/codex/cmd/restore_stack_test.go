@@ -425,15 +425,13 @@ func mapsEqual(a, b map[string]string) bool {
 // killed after the clear, in the middle of the storage or before the
 // database ends the restore with the stack stopped and barred, its
 // container removed, and the same restore run again puts every part back,
-// whole.
+// whole. The database at each step of its own write is read with SQLite
+// (TestARestoreKilledInTheDatabasesSwapRunsAgainToTheSnapshot).
 func TestARestoreWhoseHelperIsKilledPutsEveryPartBackWhenRunAgain(t *testing.T) {
 	for _, c := range []struct{ name, kill string }{
 		{"after the clear", "2 x"},
 		{"in the middle of the storage", "2 3"},
 		{"before the database", "3 x"},
-		// The staged database half written: the one in place is the old
-		// one, whole.
-		{"in the middle of the database", "3 0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRestoreScenario(t, shippedCompose(t), nil, nil)
@@ -449,9 +447,6 @@ func TestARestoreWhoseHelperIsKilledPutsEveryPartBackWhenRunAgain(t *testing.T) 
 			r.barred()
 			if !slices.Contains(r.shortLog(), "rm --force NAME") {
 				t.Errorf("the killed helper's container was not removed:\n%s", strings.Join(r.shortLog(), "\n"))
-			}
-			if got := read(t, filepath.Join(r.project, "data", "cyfr.db")); got != migratedDatabase && got != sqliteBytes {
-				t.Errorf("the killed restore left the database %q, neither the old one nor the new one", got)
 			}
 			for _, name := range []string{"write.kill", "write.count"} {
 				os.Remove(filepath.Join(r.fake, name))
@@ -743,5 +738,235 @@ func TestAWriteThatTakesItsInputIsNotStalled(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(r.project, "data", "slow")); got != strings.Repeat("x", 30) {
 		t.Errorf("wrote %q", got)
+	}
+}
+
+// A database that does not answer for its live slots under the bar of
+// another snapshot's restore refuses: that restore was cut short, and
+// only it puts back what it left.
+func TestADatabaseThatDoesNotAnswerRefusesUnderAnotherSnapshotsBar(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	other := filepath.Join(filepath.Dir(r.dir), "another-snapshot")
+	env, err := withBarrier(r.live, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.edit(".env", string(env))
+	r.edit("data/cyfr.db", "not a database")
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "and the bar in .env is that of a restore of ") || !strings.Contains(err.Error(), "' again first, which puts every part of that snapshot back") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
+	r.configAsBefore(before, string(env))
+	if got := read(t, filepath.Join(r.project, "data", "cyfr.db")); got != "not a database" {
+		t.Errorf("the database was written: %q", got)
+	}
+}
+
+// The names the database's write stages its files at are the database's
+// files wherever they are named: the backup's read leaves them out, a
+// snapshot whose storage holds one is refused, and the clear removes one
+// a restore cut short left.
+func TestTheStagedNamesAreTheDatabasesFiles(t *testing.T) {
+	t.Run("the backup leaves them out", func(t *testing.T) {
+		r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
+			s.edit("data/.cyfr.db.restore", "staged")
+			s.edit("data/.cyfr.db-wal.restore", "staged log")
+		})
+		for _, name := range []string{".cyfr.db.restore", ".cyfr.db-wal.restore"} {
+			if got := read(t, filepath.Join(r.dir, "storage", name)); got != "<absent>" {
+				t.Errorf("the snapshot's storage holds %s: %q", name, got)
+			}
+		}
+	})
+	t.Run("a snapshot holding one is refused", func(t *testing.T) {
+		r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+		if err := os.WriteFile(filepath.Join(r.dir, "storage", ".cyfr.db-wal.restore"), []byte("edited in"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+		out, err := r.restore(true)
+		if err == nil || !strings.Contains(err.Error(), "The snapshot's storage holds .cyfr.db-wal.restore, where cyfr restore stages the database's files") {
+			t.Fatalf("restore answered %v\n%s", err, out)
+		}
+		r.stoppedUndeclared()
+		r.configAsBefore(before, string(r.live))
+	})
+	t.Run("the clear removes one left", func(t *testing.T) {
+		r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+		r.edit("data/.cyfr.db.restore", "left by a restore cut short")
+		if out, err := r.restore(true); err != nil {
+			t.Fatalf("restore: %v\n%s", err, out)
+		}
+		if list := read(t, filepath.Join(r.fake, "clear.list")); !strings.Contains(list, "/app/data/.cyfr.db.restore\x00") {
+			t.Errorf("the clear did not list the leftover: %q", list)
+		}
+		r.storageIs(nil)
+	})
+}
+
+// A bind the database's files are on that holds the snapshot, or lies in
+// it, is refused before anything is written, as one of the storage's is.
+func TestRestoreRefusesADatabaseBindOnTheSnapshot(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_STORAGE": "s3"}, nil)
+	victim := filepath.Join(r.dir, "database-wal")
+	if err := os.WriteFile(victim, []byte(migratedDatabase), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.addVolume(map[string]any{"type": "bind", "source": victim, "target": "/app/data/cyfr.db"})
+	r.answer("eval.db", victim)
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "the SQLite database's files are on the host ") || !strings.Contains(err.Error(), "database-wal, which holds the snapshot or lies inside it") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if got := read(t, victim); got != migratedDatabase {
+		t.Errorf("the snapshot's part was written: %q", got)
+	}
+}
+
+// The database's place is read before the storage's layout is checked,
+// as the backup's read reads it, so a backup cyfr made of a database
+// reached through a link to a file bind under the storage root restores.
+func TestRestoreReadsTheDatabasesPlaceBeforeTheStoragesLayout(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "actual.db")
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE_PATH": "/db-link/latest.db"}, func(s *updateScenario) {
+		if err := os.WriteFile(db, []byte(sqliteBytes), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Its mount point in data/, as the stack's start made it.
+		s.edit("data/live.db", "")
+		s.edit("linked/placeholder", "")
+		if err := os.Symlink("/app/data/live.db", filepath.Join(s.project, "linked", "latest.db")); err != nil {
+			t.Fatal(err)
+		}
+		s.addVolume(map[string]any{"type": "bind", "source": db, "target": "/app/data/live.db"})
+		s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, "linked"), "target": "/db-link"})
+	})
+	if got := read(t, filepath.Join(r.dir, "storage", "live.db")); got != "<absent>" {
+		t.Fatalf("the snapshot's storage holds the database: %q", got)
+	}
+	r.answer("eval.db", db)
+	if err := os.WriteFile(db, []byte(migratedDatabase), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	if got := read(t, db); got != sqliteBytes {
+		t.Errorf("the database holds %q", got)
+	}
+}
+
+// A refusal leaves nothing behind: a missing source of a bind the
+// put-back writes, made before the snapshot is checked against the place
+// the stack shows, is taken away again when the restore refuses.
+func TestARefusedRestoreTakesAwayTheSourcesItMade(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "made", "db")
+	r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
+		if err := os.MkdirAll(filepath.Dir(db), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(filepath.Join(s.project, "data", "cyfr.db"), db); err != nil {
+			t.Fatal(err)
+		}
+		// Its mount point in data/, as the stack's start made it.
+		s.edit("data/cyfr.db", "")
+		s.addVolume(map[string]any{"type": "bind", "source": db, "target": "/app/data/cyfr.db"})
+	})
+	if err := os.RemoveAll(filepath.Dir(db)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dir, "storage", "cyfr.db"), []byte("edited in"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "where the database's files or the access engine's state lie") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if _, err := os.Lstat(filepath.Dir(db)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the refused restore left %s behind (%v)", filepath.Dir(db), err)
+	}
+}
+
+// A database whose place is a link to nothing is refused before anything
+// is written.
+func TestRestoreRefusesADatabaseThatIsALinkToNothing(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	db := filepath.Join(r.project, "data", "cyfr.db")
+	if err := os.Remove(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("absent.db", db); err != nil {
+		t.Fatal(err)
+	}
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "the SQLite database /app/data/cyfr.db is a link to nothing") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
+	r.configAsBefore(before, string(r.live))
+}
+
+// A write of one file mounts that file's bind alone writable: with the
+// database and its log each on a file bind, each one's dd writes its own.
+func TestAWriteOfOneFileWritesThatFilesBindAlone(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE_PATH": "/db/main.db", "CYFR_STORAGE": "s3"}, func(s *updateScenario) {
+		for _, suffix := range []string{"", "-wal"} {
+			s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, "data", "cyfr.db"+suffix), "target": "/db/main.db" + suffix})
+		}
+	})
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	seen := map[string]bool{}
+	for _, line := range r.stackWrites() {
+		for _, p := range []string{"/db/main.db", "/db/main.db-wal"} {
+			if strings.Contains(line, " of="+p+" ") {
+				seen[p] = true
+				if got := writableIn(line); !slices.Equal(got, []string{p}) {
+					t.Errorf("the write of %s mounts %v writable", p, got)
+				}
+			}
+		}
+	}
+	if len(seen) != 2 {
+		t.Errorf("wrote in place only %v:\n%s", seen, strings.Join(r.shortLog(), "\n"))
+	}
+}
+
+// A write whose standard input stops coming, its producer stalled, is
+// ended as stalled within its bound: ending the run closes the pipe the
+// docker call is blocked reading.
+func TestAWriteWhoseProducerStopsIsEnded(t *testing.T) {
+	saved := stackReadStall
+	stackReadStall = 300 * time.Millisecond
+	t.Cleanup(func() { stackReadStall = saved })
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	e, err := openEngine(r.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	u := &updater{ctx: context.Background(), command: "restore", out: &out, errOut: &out, engine: e, config: &stackConfig{
+		image: stackImage, mounts: []composeMount{{Type: "bind", Source: filepath.Join(r.project, "data"), Target: "/app/data"}},
+	}}
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- u.runStack(context.Background(), stackCall{stdin: pr, writable: []string{"/app/data"}}, "dd", "of=/app/data/slow", "bs=1M", "conv=fsync", "status=none")
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "made no progress for 300ms, so it was ended") {
+			t.Errorf("the stalled write answered %v\n%s", err, out.String())
+		}
+	case <-time.After(10 * time.Second):
+		pr.Close()
+		<-done
+		t.Fatal("the write whose producer stopped was not ended")
 	}
 }

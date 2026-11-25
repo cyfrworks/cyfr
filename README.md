@@ -1082,7 +1082,9 @@ reach a read-only mount's submounts. `.env`, `docker-compose.yml`, the
 scaffold files and `.cyfr/` are written as you, and a project folder you
 cannot write is refused before anything stops. A restore cut short anywhere leaves the
 bar up; `cyfr restore <backup>` run again puts every part back and
-declares it. A backup put back by hand, with no bar in `.env`, is declared
+declares it. While that bar is up, the restore of another backup refuses a
+database that does not answer, which the one cut short may have left half
+written, and names that restore to run again first. A backup put back by hand, with no bar in `.env`, is declared
 by the same command, with the whole cluster stopped, before its first start.
 The next boot retires what the backup's authority
 could still do before it admits anything: every session ends; API keys

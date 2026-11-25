@@ -39,11 +39,11 @@ import (
 // container paths of the mounts it writes, the entries the storage's
 // clear removes, and the places it must not write over.
 type restoreWrite struct {
-	// storageWritable are the targets of the binds the storage's writes
-	// write, the one the storage root lies on and each under it;
-	// databaseWritable those the database's write writes, the ones the
-	// database, its log and its index lie on (writableMounts).
-	storageWritable, databaseWritable []string
+	// storageWritable are the targets of the binds the storage's clear and
+	// archive write, the one the storage root lies on and each under it
+	// (writableMounts); every other write writes the binds of the files it
+	// writes alone (holding).
+	storageWritable []string
 	// clear are the entries under the storage root the put-back removes,
 	// the topmost of each tree.
 	clear []string
@@ -58,6 +58,11 @@ type restoreWrite struct {
 	// engine's state.
 	walls map[string]bool
 	kept  []string
+	// staged are the places the database's write stages its files at
+	// (stagedNames), by the database's path and, where one is there, as
+	// the storage's listing spells it: the clear removes one left there,
+	// and the snapshot's storage may hold nothing at or under one.
+	staged []string
 	// trio are the database's files there now, by path.
 	trio map[string]stackEntry
 }
@@ -198,7 +203,9 @@ func (r *restorer) makeSources() error {
 				file = true
 			}
 		}
-		if err := makeAbsent(m.Source, file); err != nil {
+		made, err := makeAbsent(m.Source, file)
+		r.made = append(r.made, made...)
+		if err != nil {
 			return fmt.Errorf("cyfr restore could not make %s, the cyfr service's mount at %s, which is not there (%v)", m.Source, target, err)
 		}
 	}
@@ -213,7 +220,9 @@ func (r *restorer) makeSources() error {
 		if err != nil {
 			continue
 		}
-		if err := makeAbsent(point, !info.IsDir()); err != nil && !errors.Is(err, fs.ErrPermission) {
+		made, err := makeAbsent(point, !info.IsDir())
+		r.made = append(r.made, made...)
+		if err != nil && !errors.Is(err, fs.ErrPermission) {
 			return fmt.Errorf("cyfr restore could not make %s, where the cyfr service's mount at %s lies (%v)", point, target, err)
 		}
 	}
@@ -221,23 +230,31 @@ func (r *restorer) makeSources() error {
 }
 
 // makeAbsent makes p, an empty file 0600 when file or else a directory
-// 0700, its directories first, when nothing is there; nothing is changed
-// where something is, or where this person may not look.
-func makeAbsent(p string, file bool) error {
-	if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
-		return nil
+// 0700, its directories first, when nothing is there, and answers what it
+// may have made, the topmost first; nothing is changed where something
+// is, or where this person may not look.
+func makeAbsent(p string, file bool) ([]string, error) {
+	var made []string
+	for q := p; ; q = filepath.Dir(q) {
+		if _, err := os.Lstat(q); !errors.Is(err, fs.ErrNotExist) || filepath.Dir(q) == q {
+			break
+		}
+		made = append([]string{q}, made...)
+	}
+	if len(made) == 0 {
+		return nil, nil
 	}
 	if !file {
-		return os.MkdirAll(p, 0700)
+		return made, os.MkdirAll(p, 0700)
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-		return err
+		return made, err
 	}
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return err
+		return made, err
 	}
-	return f.Close()
+	return made, f.Close()
 }
 
 // planWrite reads, as the last step before the put-back, what it writes
@@ -255,8 +272,8 @@ func (r *restorer) planWrite() error {
 	if err != nil {
 		return err
 	}
-	storage, database := c.writableMounts()
-	w := &restoreWrite{trio: trio, targets: map[string]byte{}, walls: map[string]bool{}, storageWritable: targets(storage), databaseWritable: targets(database)}
+	storage, _ := c.writableMounts()
+	w := &restoreWrite{trio: trio, targets: map[string]byte{}, walls: map[string]bool{}, storageWritable: targets(storage)}
 	if c.storage == "local" {
 		kinds := map[string]byte{}
 		for _, e := range listing {
@@ -277,8 +294,20 @@ func (r *restorer) planWrite() error {
 			wall(c.dbReal)
 			w.kept = append(w.kept, c.dbReal, c.dbReal+"-wal", c.dbReal+"-shm")
 		}
+		staged := map[string]bool{}
+		if c.adapter == "sqlite" {
+			w.staged = stagedNames(c.dbReal)
+			for _, p := range w.staged {
+				if e, there := trio[p]; there {
+					staged[e.id] = true
+				}
+			}
+		}
 		for _, e := range listing {
-			if left[e.id] {
+			switch {
+			case staged[e.id]:
+				w.staged = append(w.staged, e.path)
+			case left[e.id]:
 				w.kept = append(w.kept, e.path)
 				wall(e.path)
 			}
@@ -354,6 +383,9 @@ func (w *restoreWrite) walkStorage(root *os.Root, dataPath string, visit func(re
 		if slices.ContainsFunc(w.kept, func(k string) bool { return underPath(p, k) }) {
 			return refuse("where the database's files or the access engine's state lie")
 		}
+		if slices.ContainsFunc(w.staged, func(k string) bool { return underPath(p, k) }) {
+			return refuse("where cyfr restore stages the database's files")
+		}
 		kind, target := w.targets[p]
 		switch {
 		case w.walls[p] && !d.IsDir():
@@ -400,7 +432,7 @@ func (r *restorer) writeStorage() error {
 		return err
 	}
 	for _, rel := range inPlace {
-		if err := r.writeInPlace(free, path.Join(c.dataPath, rel), w.storageWritable, func() (io.ReadCloser, error) { return root.Open(rel) }); err != nil {
+		if err := r.writeInPlace(free, path.Join(c.dataPath, rel), func() (io.ReadCloser, error) { return root.Open(rel) }); err != nil {
 			return err
 		}
 	}
@@ -471,9 +503,9 @@ func (w *restoreWrite) storageArchive(out io.Writer, root *os.Root, dataPath str
 
 // writeInPlace writes the bytes open answers over the container path p,
 // a mount that is one file, in place (a mount point cannot be renamed
-// over), and syncs it, with writable the mounts the write writes; nil
-// open empties it.
-func (r *restorer) writeInPlace(base context.Context, p string, writable []string, open func() (io.ReadCloser, error)) error {
+// over), and syncs it, with that mount alone writable; nil open empties
+// it.
+func (r *restorer) writeInPlace(base context.Context, p string, open func() (io.ReadCloser, error)) error {
 	var in io.Reader = bytes.NewReader(nil)
 	if open != nil {
 		f, err := open()
@@ -483,32 +515,53 @@ func (r *restorer) writeInPlace(base context.Context, p string, writable []strin
 		defer f.Close()
 		in = f
 	}
-	return r.runStack(base, stackCall{stdin: in, writable: writable}, "dd", "of="+p, "bs=1M", "conv=fsync", "status=none")
+	return r.runStack(base, stackCall{stdin: in, writable: r.config.holding(p)}, "dd", "of="+p, "bs=1M", "conv=fsync", "status=none")
+}
+
+// holding are the targets of the mounts the container paths ps lie on,
+// each once: what a write of those paths alone writes.
+func (c *stackConfig) holding(ps ...string) []string {
+	out := []string{}
+	for _, p := range ps {
+		if m, _, ok := holdingMount(c.mounts, p); ok && !slices.Contains(out, path.Clean(m.Target)) {
+			out = append(out, path.Clean(m.Target))
+		}
+	}
+	return out
 }
 
 // stagedName is the name of the restore's own beside the container path p
 // that a file is written at, synced, before it is renamed over p, so p is
-// always the old file or the new one whole. A restore cut short leaves it,
-// and the next one writes it again.
+// never a file half written. A restore cut short leaves it, and the next
+// one writes it again.
 func stagedName(p string) string { return path.Join(path.Dir(p), "."+path.Base(p)+".restore") }
 
+// stagedNames are the names the database db and its write-ahead log are
+// staged at, which are the database's files wherever they are named.
+func stagedNames(db string) []string { return []string{stagedName(db), stagedName(db + "-wal")} }
+
 // writeDatabase puts the SQLite file back, and its write-ahead log as the
-// snapshot holds it, through the stack, so the database is the old one or
-// the new one and never a part of one where its place can be renamed
-// over: each is extracted at its staged name (a fresh file 0600) at the
-// mount it lies on and synced; then the old log and shared-memory index
-// go, each removed, or emptied in place where a mount is that file,
-// which SQLite reads as no log, so the restored file is never read with
-// another file's log; then the file and after it its log are renamed into
-// place, or written in place and synced where a mount is that file, and
-// the directory is synced. A file written in place and cut short is half
-// written: the restore run again finds the bar this one left and puts it
-// back whole (refuseLiveMembers).
+// snapshot holds it, through the stack: each is extracted at its staged
+// name (a fresh file 0600) at the mount it lies on and synced; then the
+// old log and shared-memory index go, each removed, or emptied in place
+// where a mount is that file, which SQLite reads as no log, so the
+// restored file is never read with another file's log; then the file and
+// after it its log are renamed into place, or written in place and synced
+// where a mount is that file, and the directory is synced. Where each
+// place can be renamed over, each file is whole at every step, but the
+// database is not one state throughout: from the old log's removal to the
+// last rename it is a whole SQLite file without what a log held (the old
+// file without its log, then the snapshot's without its own). That is
+// only under the restore's bar, where nothing reads it but the same
+// restore run again, which puts every part back. A file written in place
+// and cut short is half written: the restore run again finds the bar this
+// one left and puts it back whole (refuseLiveMembers).
 func (r *restorer) writeDatabase() error {
 	c, w := r.config, r.write
 	free := context.WithoutCancel(r.ctx)
-	run := func(stdin io.Reader, program string, args ...string) error {
-		return r.runStack(free, stackCall{stdin: stdin, writable: w.databaseWritable}, program, args...)
+	// Each run writes the binds of the files it writes alone.
+	run := func(writes []string, stdin io.Reader, program string, args ...string) error {
+		return r.runStack(free, stackCall{stdin: stdin, writable: c.holding(writes...)}, program, args...)
 	}
 	isTarget := func(p string) bool {
 		return slices.ContainsFunc(c.mounts, func(m composeMount) bool { return path.Clean(m.Target) == p })
@@ -539,10 +592,10 @@ func (r *restorer) writeDatabase() error {
 		}
 		pr, pw := io.Pipe()
 		go func() { pw.CloseWithError(filesArchive(pw, rels, opens)) }()
-		err := run(pr, "tar", "-x", "-f", "-", "-C", path.Clean(m.Target), "--no-same-owner", "--no-overwrite-dir")
+		err := run(names, pr, "tar", "-x", "-f", "-", "-C", path.Clean(m.Target), "--no-same-owner", "--no-overwrite-dir")
 		pr.CloseWithError(errors.New("the write ended"))
 		if err == nil {
-			err = run(nil, "sync", append([]string{"--"}, names...)...)
+			err = run(names, nil, "sync", append([]string{"--"}, names...)...)
 		}
 		if err != nil {
 			return err
@@ -555,7 +608,7 @@ func (r *restorer) writeDatabase() error {
 			continue
 		}
 		if isTarget(p) {
-			if err := r.writeInPlace(free, p, w.databaseWritable, nil); err != nil {
+			if err := r.writeInPlace(free, p, nil); err != nil {
 				return err
 			}
 			continue
@@ -563,23 +616,23 @@ func (r *restorer) writeDatabase() error {
 		remove = append(remove, p)
 	}
 	if len(remove) > 0 {
-		if err := run(nil, "rm", append([]string{"-f", "--"}, remove...)...); err != nil {
+		if err := run(remove, nil, "rm", append([]string{"-f", "--"}, remove...)...); err != nil {
 			return err
 		}
 	}
 	for _, f := range files {
 		var err error
 		if isTarget(f.p) {
-			err = r.writeInPlace(free, f.p, w.databaseWritable, open(f))
+			err = r.writeInPlace(free, f.p, open(f))
 		} else {
-			err = run(nil, "mv", "-f", "-T", "--", stagedName(f.p), f.p)
+			err = run([]string{stagedName(f.p), f.p}, nil, "mv", "-f", "-T", "--", stagedName(f.p), f.p)
 		}
 		if err != nil {
 			return err
 		}
 	}
 	if len(staged) > 0 {
-		return run(nil, "sync", "--", path.Dir(c.dbReal))
+		return run([]string{stagedName(c.dbReal)}, nil, "sync", "--", path.Dir(c.dbReal))
 	}
 	return nil
 }
