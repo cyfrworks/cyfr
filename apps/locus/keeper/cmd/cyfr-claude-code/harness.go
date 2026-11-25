@@ -88,11 +88,17 @@ var accessChoices = []brainwire.Access[[]string]{
 }
 
 // harnessArgv is the harness's command line: its own command, then the
-// base, the session, the start's model and effort, its access's arguments
-// and the harness's own tools.
-func harnessArgv(command []string, session string, resume bool, config brainwire.Config, access []string) []string {
+// base, a `--plugin-dir` for each of the athanor's packs in its space
+// (`brainwire.Packs`), which Claude Code loads as plugins for this
+// process alone, each named by its `.claude-plugin/plugin.json` or else
+// by its folder, beside the person's own; then the session, the start's
+// model and effort, its access's arguments and the harness's own tools.
+func harnessArgv(command, packs []string, session string, resume bool, config brainwire.Config, access []string) []string {
 	argv := append([]string{}, command...)
 	argv = append(argv, baseArgv...)
+	for _, pack := range packs {
+		argv = append(argv, "--plugin-dir", pack)
+	}
 	if resume {
 		argv = append(argv, "--resume", session)
 	} else {

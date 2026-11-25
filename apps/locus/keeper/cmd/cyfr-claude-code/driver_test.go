@@ -34,6 +34,8 @@ func TestMain(m *testing.M) {
 	case os.Getenv(driverMainEnv) != "":
 		os.Exit(run(os.Args[1:]))
 	}
+	// No test sees the host's packs: a test that plants some sets its own.
+	brainwire.PacksRoot = "/nonexistent/cyfr/scrolls"
 	os.Exit(m.Run())
 }
 
