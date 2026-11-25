@@ -30,6 +30,10 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
            "Switching the pack off takes it out of your programs at their next start, and " <>
            "undoes nothing it already did. Bring in only packs you trust."
 
+  @doc "The sheet's sentence on what a pack's scripts reach, which a proposed script's card says too."
+  @spec trust() :: String.t()
+  def trust, do: @trust
+
   @impl true
   def mount(socket) do
     {:ok,

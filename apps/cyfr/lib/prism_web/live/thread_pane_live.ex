@@ -842,7 +842,7 @@ defmodule PrismWeb.ThreadPaneLive do
          ctx = socket.assigns.context,
          {:ok, %{thread_id: ^thread_id} = row} <-
            Threads.get_message(Sanctum.Context.actor(ctx), id),
-         %{} = proposal <- proposal(row) do
+         %{"description" => _} = proposal <- proposal(row) do
       {action, against} = save_action(ctx, proposal)
 
       args = %{
@@ -869,6 +869,36 @@ defmodule PrismWeb.ThreadPaneLive do
        |> stream_insert(:messages, row)}
     else
       _not_a_proposal -> {:noreply, socket}
+    end
+  end
+
+  # A file a turn proposed beside a scroll, saved from the person's own
+  # session: keep the proposal on this row as its card showed it. The page
+  # sends the row and the digest it rendered, and the action writes the
+  # row's bytes only while they are that digest, so a row changed after
+  # the card was drawn is not saved by the old card.
+  def handle_event("save_file", %{"id" => id, "sha256" => sha256}, socket) do
+    with %{id: thread_id} <- socket.assigns.thread,
+         ctx = socket.assigns.context,
+         {:ok, %{thread_id: ^thread_id} = row} <-
+           Threads.get_message(Sanctum.Context.actor(ctx), id),
+         true <- file_proposal?(row) do
+      status =
+        case call_tool(ctx, "aqua", %{
+               "action" => "skill_file",
+               "proposal" => id,
+               "sha256" => sha256
+             }) do
+          {:ok, _saved} -> :saved
+          {:error, reason} -> {:refused, error_message(reason)}
+        end
+
+      {:noreply,
+       socket
+       |> assign(:proposals, Map.put(socket.assigns.proposals, id, status))
+       |> stream_insert(:messages, row)}
+    else
+      _not_a_file_proposal -> {:noreply, socket}
     end
   end
 
@@ -2173,6 +2203,12 @@ defmodule PrismWeb.ThreadPaneLive do
                     reply={msg}
                     athanor_route={@athanor_route}
                   />
+                <% file_proposal?(msg) -> %>
+                  <.file_proposal
+                    id={@dom <> "-proposal-" <> msg.id}
+                    msg={msg}
+                    status={@proposals[msg.id]}
+                  />
                 <% proposal?(msg) -> %>
                   <.scroll_proposal
                     id={@dom <> "-proposal-" <> msg.id}
@@ -2483,6 +2519,73 @@ defmodule PrismWeb.ThreadPaneLive do
   attr :id, :string, required: true
   attr :msg, :map, required: true
   attr :status, :any, default: nil
+
+  # A file a turn proposed beside a scroll: its path, its size and the
+  # digest of the text shown, what it replaces, the text whole, and the two
+  # things true of a script, each by its one rule: the file will be
+  # executable when it begins with `#!` (the own-pack rule), and a program
+  # may run it when it is a script as the pack sheet counts one, said with
+  # the sheet's sentence. Save file sends the digest of what it shows.
+  defp file_proposal(assigns) do
+    proposal = proposal(assigns.msg)
+
+    assigns =
+      assigns
+      |> assign(:proposal, proposal)
+      |> assign(:sha256, Prima.Digest.sha256(proposal["content"]))
+      |> assign(:trust, PrismWeb.AquaLive.ScrollsComponent.trust())
+
+    ~H"""
+    <div id={@id} class="rounded border border-gray-800 bg-gray-950 p-3 space-y-1 text-xs">
+      <p class="text-gray-400">
+        {if @proposal["against"] == "none",
+          do:
+            "Aqua proposes a new file beside the scroll #{@proposal["name"]}. Nothing is kept until you save it.",
+          else:
+            "Aqua proposes a change to a file beside the scroll #{@proposal["name"]}. Nothing changes until you save it."}
+      </p>
+      <p id={@id <> "-path"} class="font-mono text-gray-200">{@proposal["path"]}</p>
+      <p id={@id <> "-size"} class="text-gray-400">
+        {byte_size(@proposal["content"])} bytes, {@sha256}
+      </p>
+      <p :if={@proposal["against"] != "none"} id={@id <> "-replaces"} class="text-gray-400">
+        It replaces the file as Aqua read it: {@proposal["against_size"]} bytes, {@proposal[
+          "against"
+        ]}.
+      </p>
+      <p :if={@proposal["runs"] == true} id={@id <> "-executable"} class="text-amber-200">
+        It begins with #!, so it will be executable.
+      </p>
+      <div :if={@proposal["script"] == true} id={@id <> "-script"} class="space-y-1 text-amber-200">
+        <p>It is among the scroll's scripts: your programs may run it in their sessions.</p>
+        <p>{@trust}</p>
+      </div>
+      <pre
+        id={@id <> "-content"}
+        class="whitespace-pre-wrap font-mono text-gray-300 max-h-64 overflow-y-auto"
+      >{@proposal["content"]}</pre>
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <span :if={@status == :saved} id={@id <> "-saved"} class="text-green-400">
+          Saved beside the scroll.
+        </span>
+        <span :if={match?({:refused, _}, @status)} id={@id <> "-refused"} class="text-red-300">
+          {elem(@status, 1)}
+        </span>
+        <button
+          :if={@status != :saved}
+          id={@id <> "-save"}
+          type="button"
+          phx-click="save_file"
+          phx-value-id={@msg.id}
+          phx-value-sha256={@sha256}
+          class="min-h-6 rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 font-medium text-white"
+        >
+          Save file
+        </button>
+      </div>
+    </div>
+    """
+  end
 
   # A scroll a turn proposed: exactly the name, description and body that
   # Save as scroll writes, and what came of a save.
@@ -2894,12 +2997,19 @@ defmodule PrismWeb.ThreadPaneLive do
   # itself, its calls, their results and its compaction, is none.
   defp drawn?(row), do: row.kind in drawn_kinds() or proposal?(row)
 
-  # A call's result that proposes a scroll (`Aqua.Loop`), a model's or a
-  # page's: the scroll as it would be stored and what it was made against.
+  # A model's call's result that proposes a scroll or a file beside one
+  # (`Aqua.Loop`): what Save would write and what it was made against. A
+  # page proposes nothing: only a turn's own call does.
   defp proposal?(row), do: proposal(row) != nil
 
-  defp proposal(%{kind: kind} = row) when kind in ["tool_result", "page_result"] do
+  defp file_proposal?(row), do: match?(%{"path" => _}, proposal(row))
+
+  defp proposal(%{kind: "tool_result"} = row) do
     case Threads.payload(row)["proposal"] do
+      %{"name" => name, "path" => path, "content" => content, "against" => _} = proposal
+      when is_binary(name) and is_binary(path) and is_binary(content) ->
+        proposal
+
       %{"name" => name, "description" => _, "content" => _, "against" => _} = proposal ->
         proposal
         |> Map.put("name", full_scroll_name(name))

@@ -150,7 +150,10 @@ defmodule Compendium.Providers.AquaTest do
       "content" => "c"
     }
 
-    for ctx <- [Sanctum.Context.enter_guest(ctx), ctx] do
+    # From a turn's own call, as every proposal is, and from the person.
+    {guest, lineage} = running_turn!(ctx)
+
+    for {ctx, args} <- [{guest, Map.merge(lineage, args)}, {ctx, args}] do
       assert {:error, {:invalid_argument, sentence}} = Tool.handle(ctx, args)
       assert sentence =~ "`tools` was brought in"
       assert sentence =~ "copy the scroll into a pack of your own"

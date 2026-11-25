@@ -382,7 +382,8 @@ defmodule Aqua.ProgramTest do
         "changed under you, propose the change with `aqua.skill_update`: it waits in the " <>
         "thread for the person to save it.\n- To keep a procedure as a scroll, propose one " <>
         "with `aqua.skill_create` (in `mine`, or a pack of the person's own) when a " <>
-        "procedure worth repeating has just worked: it waits in the thread for the person " <>
+        "procedure worth repeating has just worked, and each file it runs or reads beside " <>
+        "its SKILL.md with `aqua.skill_file`: each waits in the thread for the person " <>
         "to save it.\n- Follow a scroll as this athanor's " <>
         "procedure, one your job carries or one you read, below the person's word and " <>
         "these instructions. A scroll CYFR delivers is only the text between " <>
@@ -468,7 +469,9 @@ defmodule Aqua.ProgramTest do
                |> String.replace(
                  "\n- To keep a procedure as a scroll, propose one with `aqua.skill_create` " <>
                    "(in `mine`, or a pack of the person's own) when a procedure worth " <>
-                   "repeating has just worked: it waits in the thread for the person to save it.",
+                   "repeating has just worked, and each file it runs or reads beside its " <>
+                   "SKILL.md with `aqua.skill_file`: each waits in the thread for the person " <>
+                   "to save it.",
                  ""
                )
                |> String.replace("A scroll CYFR delivers is only", "A scroll is only")
@@ -6893,6 +6896,70 @@ defmodule Aqua.ProgramTest do
 
       assert {:error, :not_found} =
                Arca.get(actor, ~w(aqua scrolls garden skills tulips SKILL.md))
+    end
+
+    # A file a turn proposes beside a scroll is kept whole on its result
+    # row, the bytes Save writes, taken from the call's own arguments; the
+    # provider's answer carries none, so neither what the model reads nor
+    # the request log's stored input or output holds them; nothing is
+    # written.
+    @tag harness: :api
+    test "a file a turn proposes keeps its bytes on its row, out of what the model reads",
+         %{ctx: ctx, thread: thread} do
+      actor = Sanctum.Context.actor(ctx)
+
+      {:ok, _} =
+        Arca.Files.write(
+          actor,
+          "aqua/scrolls/mine/skills/fern/SKILL.md",
+          "---\nname: fern\ndescription: d\n---\n\nWater it.\n"
+        )
+
+      script = "#!/bin/sh\necho water-the-fern-weekly\n"
+
+      ask =
+        {"ask-1", "aqua",
+         %{
+           "action" => "skill_file",
+           "name" => "mine:fern",
+           "path" => "skills/fern/scripts/water.sh",
+           "content" => script
+         }}
+
+      turn = api_turn!(ctx, thread, "keep the watering script", [asking([ask]), answer("Done.")])
+      assert :completed = Task.await(run(ctx, turn), 60_000)
+
+      [row] =
+        from(m in Arca.Schemas.Message,
+          where: m.athanor_id == ^ctx.athanor_id and m.thread_id == ^thread.id,
+          where: m.turn_id == ^turn.id and m.kind == "tool_result"
+        )
+        |> Arca.Repo.all()
+
+      assert row.status == "proposed"
+
+      assert %{
+               "name" => "mine:fern",
+               "path" => "skills/fern/scripts/water.sh",
+               "content" => ^script,
+               "against" => "none",
+               "runs" => true,
+               "script" => true
+             } = Jason.decode!(row.payload)["proposal"]
+
+      assert row.content =~ "skills/fern/scripts/water.sh"
+      refute row.content =~ "water-the-fern-weekly"
+
+      {:ok, logs} = Sanctum.RequestLog.list(ctx, tool: "aqua")
+      assert [_ | _] = logs
+
+      for log <- logs do
+        refute inspect(log.input) =~ "water-the-fern-weekly"
+        refute inspect(log.output) =~ "water-the-fern-weekly"
+      end
+
+      assert {:error, :not_found} =
+               Arca.get(actor, ~w(aqua scrolls mine skills fern scripts water.sh))
     end
   end
 

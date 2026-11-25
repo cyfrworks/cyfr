@@ -2005,6 +2005,36 @@ defmodule Aqua.Loop do
     end
   end
 
+  # A file a chain's `aqua.skill_file` proposed beside a scroll, kept on
+  # its result row whole: what the answer says of it, and the bytes Save
+  # writes and the card shows, taken from the call's own arguments and held
+  # to the answer's digest, so the provider's answer, and the request log
+  # that keeps it, carry none.
+  defp proposed(
+         %Call{kind: :catalog, tool: "aqua", action: "skill_file", args: %{"content" => bytes}},
+         {:ok, %{} = answer},
+         payload
+       )
+       when is_binary(bytes) do
+    case answer |> Jason.encode!() |> Jason.decode!() do
+      %{"proposed" => name, "path" => path, "sha256" => sha256, "against" => against} = kept
+      when is_binary(name) and is_binary(path) and is_binary(against) ->
+        if Prima.Digest.sha256(bytes) == sha256,
+          do:
+            Map.put(
+              payload,
+              "proposal",
+              kept
+              |> Map.take(~w(path size sha256 against against_size runs script))
+              |> Map.merge(%{"name" => name, "content" => bytes})
+            ),
+          else: payload
+
+      _written ->
+        payload
+    end
+  end
+
   defp proposed(_call, _result, payload), do: payload
 
   defp page_value(%Call{kind: :hand}, {:ok, %{output: output}}),

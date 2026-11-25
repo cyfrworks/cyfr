@@ -212,12 +212,13 @@ defmodule Aqua.Prompt do
 
   @search_briefing "\n- You have native search: use it when a job needs the web searched."
 
-  # How a turn proposes a new scroll: said in the scroll index, and to a
-  # program that loads the packs itself, which has no index, beside the
-  # sentence on proposing a change.
+  # How a turn proposes a new scroll and the files beside it: said in the
+  # scroll index, and to a program that loads the packs itself, which has
+  # no index, beside the sentence on proposing a change.
   @propose_scroll "propose one with `aqua.skill_create` (in `mine`, or a pack of the " <>
-                    "person's own) when a procedure worth repeating has just worked: it waits " <>
-                    "in the thread for the person to save it."
+                    "person's own) when a procedure worth repeating has just worked, and each " <>
+                    "file it runs or reads beside its SKILL.md with `aqua.skill_file`: each " <>
+                    "waits in the thread for the person to save it."
   @loader_propose "\n- To keep a procedure as a scroll, " <> @propose_scroll
 
   # What a crew member is told before CYFR's part, in place of the prompt

@@ -238,8 +238,9 @@ defmodule Aqua.PromptTest do
 
     @loader_propose "\n- To keep a procedure as a scroll, propose one with " <>
                       "`aqua.skill_create` (in `mine`, or a pack of the person's own) when a " <>
-                      "procedure worth repeating has just worked: it waits in the thread for " <>
-                      "the person to save it."
+                      "procedure worth repeating has just worked, and each file it runs or " <>
+                      "reads beside its SKILL.md with `aqua.skill_file`: each waits in the " <>
+                      "thread for the person to save it."
 
     @context "\n\n---\n\n## Runtime Context\n\n"
 

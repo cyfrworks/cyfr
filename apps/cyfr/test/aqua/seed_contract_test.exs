@@ -31,7 +31,7 @@ defmodule Aqua.SeedContractTest do
   # The soul's list as it ships. A tool added or dropped is a change to
   # what every member is offered, made here and in `aqua.md` together.
   @shipped_tools ~w(
-    aqua.get aqua.list aqua.skill_create aqua.skill_get aqua.skill_list aqua.skill_update aqua.wait
+    aqua.get aqua.list aqua.skill_create aqua.skill_file aqua.skill_get aqua.skill_list aqua.skill_update aqua.wait
     browser.click browser.close browser.key browser.open browser.page browser.read
     browser.screenshot browser.status browser.turn_off browser.type
     build.compile build.toolchains
@@ -69,7 +69,7 @@ defmodule Aqua.SeedContractTest do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(soul_file()))
 
     assert soul.tools == @shipped_tools
-    assert length(soul.tools) == 97
+    assert length(soul.tools) == 98
     # The browser's switch is the person's alone: no member is offered it.
     refute "browser.turn_on" in soul.tools
   end

@@ -721,6 +721,14 @@ defmodule Prima.Refusal do
       {:forbidden,
        "Only Aqua or one of its members waits, in a turn of its own; a component or a page cannot"}
 
+  # A scroll or a file a chain proposes for the person's packs is a
+  # turn's own call: a component's, a page's or a call of no open turn of
+  # the person's proposes nothing (`Compendium.Providers.Aqua`).
+  defp row(:propose_not_a_turn),
+    do:
+      {:forbidden,
+       "Only Aqua or one of its members proposes a scroll or a file for your packs, in a turn of its own; a component or a page cannot"}
+
   # A turn's schedule write that names a turn no longer open.
   defp row(:schedule_turn_ended),
     do:

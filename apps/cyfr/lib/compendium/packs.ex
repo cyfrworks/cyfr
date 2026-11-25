@@ -79,6 +79,8 @@ defmodule Compendium.Packs do
 
   @cyfr "cyfr"
   @mine "mine"
+  # What a proposal of a file not there yet is made against.
+  @against_none "none"
   # The first entry of a view's `archive`, named as the keeper reads it
   # (its `internal/packview`).
   @archive_manifest ".cyfr-packs.json"
@@ -562,7 +564,7 @@ defmodule Compendium.Packs do
     with {:ok, binary} <- Arca.get(actor, AquaPath.scroll_manifest(pack, folder)),
          {:ok, meta, body} <- AquaAgent.parse_frontmatter(binary) do
       fm_name = string(meta["name"])
-      scroll = if AquaPath.valid_name?(fm_name), do: fm_name, else: folder
+      scroll = own_name(fm_name, folder)
       name = full_name(pack, scroll)
       description = string(meta["description"])
       prefix = AquaPath.skills_dirname() <> "/" <> folder <> "/"
@@ -597,6 +599,10 @@ defmodule Compendium.Packs do
   defp string(value) when is_binary(value), do: value
   defp string(_value), do: ""
 
+  # A scroll's own name: its front matter's `name` where that is of the
+  # grammar, else its folder's.
+  defp own_name(fm_name, folder), do: if(AquaPath.valid_name?(fm_name), do: fm_name, else: folder)
+
   # What a harness may carry of a pack beyond its scrolls, read from its
   # paths and its manifests: agents, commands, hooks and MCP servers.
   defp parts(actor, dir, files) do
@@ -621,13 +627,14 @@ defmodule Compendium.Packs do
   # not JSON) is named by its key in `unread`, so the sheet says so and is
   # never silent.
   @unlisted_keys ~w(lspServers outputStyles workflows experimental monitors themes channels)
+  @claude_manifest ".claude-plugin/plugin.json"
 
   defp parts_of(files, read) do
     {manifest, unread} =
-      if ".claude-plugin/plugin.json" in files do
-        case Jason.decode(read.(".claude-plugin/plugin.json") || "") do
+      if @claude_manifest in files do
+        case Jason.decode(read.(@claude_manifest) || "") do
           {:ok, %{} = manifest} -> {manifest, []}
-          _unreadable -> {%{}, [".claude-plugin/plugin.json"]}
+          _unreadable -> {%{}, [@claude_manifest]}
         end
       else
         {%{}, []}
@@ -653,9 +660,30 @@ defmodule Compendium.Packs do
       hooks: hooks,
       servers: servers,
       skills: skills,
+      paths: declared_paths(manifest),
       unread: Enum.uniq(unread ++ u1 ++ u2 ++ u3 ++ u4 ++ u5 ++ unlisted)
     }
   end
+
+  # Every path the manifest declares for a part, read as the readers below
+  # read each key: the agents' files, the commands' files, folders and
+  # sources, the hooks' and the servers' files, and the folders `skills`
+  # adds, every one `./`-relative inside the pack. The default `skills/`
+  # declares nothing beyond the scrolls' own folder, and the pack's root
+  # is no part.
+  defp declared_paths(manifest) do
+    for key <- ~w(agents commands hooks mcpServers skills),
+        entry <- declared_entries(manifest[key]),
+        {:ok, rel} <- [manifest_path(entry, key == "skills")],
+        rel not in ["", AquaPath.skills_dirname()],
+        uniq: true,
+        do: rel
+  end
+
+  defp declared_entries(value) when is_map(value),
+    do: for({_name, %{"source" => source}} <- value, is_binary(source), do: source)
+
+  defp declared_entries(value), do: for(entry <- entries(value), is_binary(entry), do: entry)
 
   # A manifest's path, `./`-relative to the pack's root (`.` for the root
   # itself where the key allows it): the path inside the pack, or `:error`
@@ -1103,7 +1131,7 @@ defmodule Compendium.Packs do
   defp file_answer(scroll, rel, bytes) do
     base = %{name: scroll.name, path: rel, size: byte_size(bytes)}
 
-    if String.valid?(bytes) and not String.contains?(bytes, <<0>>) do
+    if text?(bytes) do
       cut = byte_size(bytes) > @max_bytes
 
       Map.merge(base, %{
@@ -1115,6 +1143,9 @@ defmodule Compendium.Packs do
       Map.merge(base, %{format: "binary", type: MIME.from_path(rel)})
     end
   end
+
+  # A file read as text: valid UTF-8 with no NUL; any other is a binary.
+  defp text?(bytes), do: String.valid?(bytes) and not String.contains?(bytes, <<0>>)
 
   defp valid_prefix(bytes, n) do
     prefix = binary_part(bytes, 0, n)
@@ -1926,6 +1957,286 @@ defmodule Compendium.Packs do
          do:
            {:ok,
             for({rel, bytes} <- pairs, do: {[AquaPath.skills_dirname(), folder | rel], bytes})}
+  end
+
+  # ---------------------------------------------------------------------------
+  # A scroll's file a turn proposes, and the person's Save of it
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  What a turn's proposal of one text file beside a scroll is made against,
+  or why it cannot be proposed. `name` is the scroll, `<pack>:<scroll>`, in
+  a pack of the person's own or one its scroll's Save would make (never
+  `cyfr` or a brought pack). `path` is the file's path inside the pack,
+  under the scroll's folder (`skills/<folder>/…`), so no manifest, hook or
+  record at the pack's root can be named; it is no file named `SKILL.md`,
+  which only a scroll's own writes make, and no path the pack's manifest
+  declares for a part its programs load (`parts_of/2`'s `paths`). The
+  bytes are text, UTF-8 with no NUL, since the card shows what Save
+  writes, and hold at most `max_bytes/0`, the most a proposal's row
+  carries; with them the pack and the packs switched on stay within their
+  bounds, the early notice of what the Save asks again under the lock.
+
+  Answers `against`, the file's SHA-256 as it is now or `none`, with
+  `against_size`, its size or `nil`; `runs`, whether the file will be
+  executable (`executable?/3`, by the pack's own record); and `script`,
+  whether a program may run it, as the pack sheet counts a script.
+  """
+  @spec file_proposal(Context.t(), String.t(), String.t(), binary()) ::
+          {:ok,
+           %{
+             against: String.t(),
+             against_size: non_neg_integer() | nil,
+             runs: boolean(),
+             script: boolean()
+           }}
+          | {:error, term()}
+  def file_proposal(%Context{} = ctx, name, path, bytes)
+      when is_binary(path) and is_binary(bytes) do
+    actor = Context.actor(ctx)
+
+    with {:ok, pack, scroll} <- scroll_named(actor, name),
+         {:ok, record, current} <- own_pairs(actor, pack),
+         {:ok, rel} <- file_admitted(pack, scroll, current, path, bytes, :proposal),
+         next = List.keystore(current, rel, 0, {rel, bytes}),
+         :ok <- bounded(pack, next),
+         :ok <- set_bounded(actor, pack, record, next) do
+      runs = executable?(record, path, bytes)
+
+      {:ok,
+       %{
+         against: file_against(current, rel),
+         against_size: file_size(current, rel),
+         runs: runs,
+         script: script?(%{path: path, executable: runs})
+       }}
+    end
+  end
+
+  @doc """
+  The person's Save of a file a turn proposed: one revision of the pack,
+  written as every write into it is (`Arca.Overlay.edit_unit/4`, under
+  `admit_edit/4`), and only while, under the pack's draft, the scroll's
+  `SKILL.md` is stored and the file is as the proposal read it
+  (`against`: its SHA-256, or `none` for one not there), so two
+  proposals for one path saved in turn never let the second replace the
+  first unseen. Every rule `file_proposal/4` holds is asked again over the
+  pack as it is at the write.
+  """
+  @spec put_file(Context.t(), String.t(), String.t(), binary(), String.t()) ::
+          :ok | {:error, term()}
+  def put_file(%Context{} = ctx, name, path, bytes, against)
+      when is_binary(path) and is_binary(bytes) and is_binary(against) do
+    actor = Context.actor(ctx)
+
+    with {:ok, pack, scroll} <- scroll_named(actor, name) do
+      unit = AquaPath.pack_dir(pack)
+
+      Arca.Overlay.edit_unit(actor, unit, fn
+        nil when pack == @cyfr ->
+          {:error, sealed(pack, "cyfr")}
+
+        nil ->
+          refuse(scroll_first(name))
+
+        current ->
+          with {:ok, _record} <- own_record_of(pack, current),
+               {:ok, rel} <- file_admitted(pack, scroll, current, path, bytes, :save),
+               :ok <- file_unchanged(current, rel, against, path),
+               do: admit_edit(actor, unit, current, List.keystore(current, rel, 0, {rel, bytes}))
+      end)
+    end
+  end
+
+  defp scroll_named(actor, name) do
+    case split_name(name) do
+      {:ok, pack, scroll} -> {:ok, pack, scroll}
+      {:bare, bare} -> bare_refusal(actor, bare)
+      :error -> refuse("A scroll is named by its pack and its name, like `#{@mine}:research`")
+    end
+  end
+
+  # The pack's record and its files as stored, from a pack of the person's
+  # own; for a pack not here yet, which its scroll's Save would make, the
+  # record it would be made with and no file, but never under `cyfr`'s
+  # name.
+  defp own_pairs(actor, pack) do
+    case Arca.read_subtree(actor, AquaPath.pack_dir(pack)) do
+      {:ok, [_ | _] = pairs} ->
+        with {:ok, record} <- own_record_of(pack, pairs), do: {:ok, record, pairs}
+
+      {:ok, []} ->
+        absent_pack(pack)
+
+      {:error, :not_found} ->
+        absent_pack(pack)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp absent_pack(@cyfr), do: {:error, sealed(@cyfr, "cyfr")}
+  defp absent_pack(_pack), do: {:ok, own_record(), []}
+
+  defp own_record_of(pack, pairs) do
+    case record_of(pairs) do
+      {:ok, %{origin: "own"} = record} -> {:ok, record}
+      {:ok, %{origin: origin}} -> {:error, sealed(pack, origin)}
+      {:error, _} -> refuse("The pack `#{pack}` has a record that cannot be read")
+    end
+  end
+
+  # The rules a proposed file meets, at the proposal and again at its
+  # Save, each refusal a sentence: the proposal's bound, text alone, the
+  # store's path rule, the scroll stored (at the Save; at the proposal a
+  # scroll not stored yet is named by its folder, as CYFR's own writes
+  # keep it), the scroll's folder alone, no `SKILL.md`, and no path the
+  # pack's manifest declares.
+  defp file_admitted(pack, scroll, pairs, path, bytes, stage) do
+    name = full_name(pack, scroll)
+
+    with :ok <- proposable(path, bytes),
+         :ok <- pack_path(path),
+         {:ok, folder} <- folder_at(pairs, scroll, name, stage),
+         {:ok, rel} <- beside(path, folder, name),
+         :ok <- undeclared(pack, pairs, path),
+         do: {:ok, rel}
+  end
+
+  defp proposable(path, bytes) do
+    cond do
+      byte_size(bytes) > @max_bytes ->
+        refuse(
+          "A file Aqua proposes holds at most #{@max_bytes} bytes and `#{path}` holds " <>
+            "#{byte_size(bytes)}: put it in through Files"
+        )
+
+      not text?(bytes) ->
+        refuse(
+          "A file Aqua proposes is text, which its card shows whole, and `#{path}` is not: " <>
+            "put it in through Files"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp folder_at(pairs, scroll, name, :save) do
+    case scroll_folder(pairs, scroll) do
+      nil -> refuse(scroll_first(name))
+      folder -> {:ok, folder}
+    end
+  end
+
+  defp folder_at(pairs, scroll, _name, :proposal),
+    do: {:ok, scroll_folder(pairs, scroll) || scroll}
+
+  defp beside(path, folder, name) do
+    skills = AquaPath.skills_dirname()
+
+    case String.split(path, "/") do
+      [^skills, ^folder, _ | _] = segments ->
+        if List.last(segments) == AquaPath.skill_manifest_name(),
+          do:
+            refuse(
+              "A scroll's #{AquaPath.skill_manifest_name()} is written with " <>
+                "`aqua.skill_create` or `aqua.skill_update`, never as a file"
+            ),
+          else: {:ok, segments}
+
+      _outside ->
+        refuse(
+          "`#{path}` is outside the folder of the scroll `#{name}`, `#{skills}/#{folder}/`: " <>
+            "a file Aqua proposes stays beside its scroll"
+        )
+    end
+  end
+
+  # A path the pack's manifest declares for a part its programs load, as
+  # the pack reader reads it (`parts_of/2`), or under one; a manifest the
+  # reader cannot read refuses every proposal, since what it declares is
+  # not known.
+  defp undeclared(pack, pairs, path) do
+    record = [AquaPath.record_name()]
+    files = for {rel, _bytes} <- pairs, rel != record, do: Enum.join(rel, "/")
+
+    read = fn rel ->
+      case List.keyfind(pairs, String.split(rel, "/"), 0) do
+        {_rel, bytes} -> bytes
+        nil -> nil
+      end
+    end
+
+    %{paths: paths, unread: unread} = parts_of(files, read)
+
+    cond do
+      @claude_manifest in unread ->
+        refuse(
+          "The pack `#{pack}`'s `#{@claude_manifest}` cannot be read, so what it declares " <>
+            "is not known: mend it through Files"
+        )
+
+      Enum.any?(paths, &(path == &1 or String.starts_with?(path, &1 <> "/"))) ->
+        refuse(
+          "`#{path}` is declared by the pack's `#{@claude_manifest}` as part of what its " <>
+            "programs load: change it through Files"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  # The folder of the pack's scroll of that name as `scrolls_of/4` names
+  # it, the first by path, or `nil` when the pack holds none.
+  defp scroll_folder(pairs, scroll) do
+    pairs
+    |> Enum.flat_map(fn
+      {[skills, folder, manifest], bytes} ->
+        if skills == AquaPath.skills_dirname() and manifest == AquaPath.skill_manifest_name() and
+             AquaPath.valid_name?(folder),
+           do: [{folder, bytes}],
+           else: []
+
+      _other ->
+        []
+    end)
+    |> Enum.sort()
+    |> Enum.find_value(fn {folder, bytes} ->
+      case AquaAgent.parse_frontmatter(bytes) do
+        {:ok, meta, _body} -> if own_name(string(meta["name"]), folder) == scroll, do: folder
+        _unread -> nil
+      end
+    end)
+  end
+
+  defp scroll_first(name),
+    do: "Save the scroll `#{name}` first: this file belongs to it"
+
+  defp file_against(pairs, rel) do
+    case List.keyfind(pairs, rel, 0) do
+      {^rel, bytes} -> Prima.Digest.sha256(bytes)
+      nil -> @against_none
+    end
+  end
+
+  defp file_size(pairs, rel) do
+    case List.keyfind(pairs, rel, 0) do
+      {^rel, bytes} -> byte_size(bytes)
+      nil -> nil
+    end
+  end
+
+  defp file_unchanged(pairs, rel, against, path) do
+    if file_against(pairs, rel) == against,
+      do: :ok,
+      else:
+        {:error,
+         {:conflict,
+          "The file `#{path}` changed since Aqua proposed this, so nothing was saved: " <>
+            "open it in Files to see it as it is now"}}
   end
 
   # ---------------------------------------------------------------------------
