@@ -10,17 +10,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/cyfr/locus/keeper/internal/stage"
 )
 
-// PacksRoot is where a session's space holds the athanor's packs the
-// person switched on, read only, as the same tree as the store's root
-// `scrolls/<pack>/`: one folder for each pack, named by CYFR's name for
-// it, holding the pack's files as published. The keeper
-// binds it there for a program whose driver loads packs, and the program
-// loads each pack its own way; a space with no pack on has none. A
-// driver lists the folders and nothing else: it opens no pack's file and
-// writes nowhere, and CYFR tells the model nothing of what was loaded.
-var PacksRoot = "/run/cyfr/scrolls"
+// PacksRoot is where a session's space holds the packs the person
+// switched on, read only (stage.ScrollsPath): one folder for each pack,
+// named by CYFR's name for it, holding the pack's files as published. The
+// keeper binds it there for a program whose driver loads packs, and the
+// program loads each pack its own way; a space with no pack on has none.
+// A driver lists the folders and nothing else: it opens no pack's file
+// and writes nowhere, and CYFR tells the model nothing of what was loaded.
+// The drivers' tests point it elsewhere.
+var PacksRoot = stage.ScrollsPath
 
 // Packs answers the absolute path of each pack folder under PacksRoot,
 // in name order: its directories, never a link or a file, and no name

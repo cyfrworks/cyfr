@@ -35,8 +35,14 @@
 //   it holds, for `THEIR_SERVER`, asked as that server's, and replies naming
 //   the MCP tools its init listed and what each call answered; `modes` asks for its own `Write` and `Bash`
 //   and replies with its whole command line and the driver's two whole
-//   answers, as JSON. Each reply streams as `stream_event` text deltas, then
-//   the whole `assistant` message, then `result` with usage.
+//   answers, as JSON; `skills` replies naming every skill of the plugins
+//   it was given; `use <skill>` replies with that skill's instructions.
+//   Each reply streams as `stream_event` text deltas, then the whole
+//   `assistant` message, then `result` with usage.
+// - Each `--plugin-dir` is a plugin of this process alone, named by its
+//   `.claude-plugin/plugin.json`, else by its folder, and each skill of its
+//   `skills/` is `<plugin>:<skill>`, the skill named by its SKILL.md's
+//   `name`, else by its folder, as Claude Code names a plugin's (P10.1).
 // - What a turn writes names the user line it answers by that line's
 //   `uuid` (`user_message_uuids` on its init, its messages and its
 //   result), as 2.1.318 names a line written with one.
@@ -102,6 +108,32 @@ const MODELS = [
   { value: 'fake-opus', resolvedModel: 'claude-fake-opus-1', displayName: 'Fake Opus', description: 'fake', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
   { value: 'fake-haiku', displayName: 'Fake Haiku', description: 'fake' },
 ];
+
+// The plugins' skills, by name: each one's instructions, its SKILL.md
+// after its front matter.
+const frontMatter = (text) => (text.startsWith('---\n') ? text.slice(4, text.indexOf('\n---', 4) + 1) : '');
+const nameIn = (text) => frontMatter(text).match(/^name:\s*(\S+)\s*$/m)?.[1];
+const skills = new Map();
+for (const dir of args.flatMap((a, i) => (a === '--plugin-dir' ? [args[i + 1]] : []))) {
+  let plugin = path.basename(dir);
+  try {
+    plugin = JSON.parse(fs.readFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name || plugin;
+  } catch {}
+  let folders = [];
+  try {
+    folders = fs.readdirSync(path.join(dir, 'skills')).sort();
+  } catch {}
+  for (const folder of folders) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(dir, 'skills', folder, 'SKILL.md'), 'utf8');
+    } catch {
+      continue;
+    }
+    const matter = frontMatter(text);
+    skills.set(`${plugin}:${nameIn(text) || folder}`, text.slice(matter ? matter.length + 8 : 0).trim());
+  }
+}
 
 // The user line the turn under way answers, which its lines name.
 let answering = null;
@@ -244,7 +276,12 @@ async function turn(message) {
   fs.appendFileSync(path.join(projects, `${sessionId}.jsonl`), JSON.stringify({ type: 'user', uuid: message.uuid, sessionId }) + '\n');
   out({ type: 'system', subtype: 'init', session_id: sessionId, model, tools: [...OWN_TOOLS, ...mcpTools()], mcp_servers: [...servers.keys()].map((name) => ({ name, status: 'connected' })), permissionMode: flag('--permission-mode') || 'default' });
 
-  if (words.includes('hello')) {
+  if (words === 'skills') {
+    reply(`Skills: ${[...skills.keys()].join(', ') || 'none'}.`);
+  } else if (words.startsWith('use ')) {
+    const name = words.slice(4).trim();
+    reply(skills.has(name) ? `Using ${name}: ${skills.get(name)}` : `No skill ${name}.`);
+  } else if (words.includes('hello')) {
     const { decision } = await ask('Bash', { command: 'cat canary.txt' });
     const ran = decision.behavior === 'allow' ? 'allowed' : 'refused';
     reply(`Hello from the fake harness: session ${sessionId}, model ${model}, effort ${flag('--effort') || 'unset'}, tools ${flag('--tools') ?? 'all'}, Bash ${ran}, prompt "${appended}".`);

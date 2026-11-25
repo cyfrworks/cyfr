@@ -101,6 +101,18 @@ def run_in(client, script):
     return json.loads(result["content"][0]["text"])
 
 
+def held(c, owner, program, key, home_id, files):
+    """The person's packs of `files` held for a new lifetime of `key`, put when missing, as Opus holds them
+    before an open: (lifetime, digest), for the open to name."""
+    lifetime, digest = new_lifetime(c.boot), digest_of(files)
+    status, answer = c.packs_hold(owner, program, lifetime, digest, key=key, home_id=home_id)
+    expect(status == 200, f"a hold of {owner['athanor']}'s packs is answered", answer)
+    if answer["state"] == "missing":
+        puts = c.packs_put(owner, program, lifetime, digest, stream_of(files), key=key, home_id=home_id)
+        expect(puts[-1][0] == 200 and puts[-1][1]["state"] == "held", "the put of the packs is held", puts)
+    return lifetime, digest
+
+
 def started(c, owner, key, home_id, digest, program="probe", files=FILES):
     """A start as Opus makes one: a lifetime of its own held, put on `missing`, then the one open naming it.
 
