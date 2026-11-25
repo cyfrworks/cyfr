@@ -160,11 +160,11 @@ func TestTheRootRefusalWritesNothingWithTheRealLock(t *testing.T) {
 			} else {
 				out, err = s.backup()
 			}
-			if err == nil || !strings.Contains(err.Error(), "run it as root in this folder: sudo /home/person/.local/bin/cyfr "+command) {
-				t.Fatalf("cyfr %s answered %v:\n%s", command, err, out)
-			}
 			if after := tree(t); !maps.Equal(after, before) {
-				t.Errorf("the folder changed:\nbefore %v\nafter  %v", before, after)
+				t.Errorf("the folder changed:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
+			}
+			if err == nil || !strings.Contains(err.Error(), "run it as root in this folder: sudo /home/person/.local/bin/cyfr "+command) {
+				t.Errorf("cyfr %s answered %v:\n%s", command, err, out)
 			}
 		})
 	}
