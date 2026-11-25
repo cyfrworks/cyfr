@@ -16,9 +16,11 @@ defmodule Arca.Test.Sandbox do
   wrote, and the settings cache (`Arca.PlatformSettings`) is one per node:
   a value read inside the test's transaction, by the test or by work still
   ending before the owner goes, stays cached for the cache's lifetime. So
-  once the owner is gone, when the store's revision moved inside the
-  transaction, every cached value is aged and the next read asks the store
-  as it stands.
+  when the store's revision the transaction reads at its end is not the
+  one the store holds once the owner is gone, every cached value is aged
+  and the next read asks the store as it stands. Both are read at the end,
+  so the transaction reads nothing it did not read before: on SQLite a
+  transaction that has read answers busy where one that has not waits.
 
   This is the owner protocol and nothing else. `Cyfr.Test.Sandbox` builds
   on it: the umbrella's suite also has to lend the connection to the
@@ -44,33 +46,38 @@ defmodule Arca.Test.Sandbox do
       tags |> Map.take([:ownership_timeout]) |> Map.to_list() |> Keyword.put(:shared, shared?)
 
     owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, opts)
-    unless shared?, do: Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self())
-    revision = settings_revision(owner)
-
     # Registered first of the test's, so it runs last: after the work the
     # test left has stopped, which may read a setting as it ends.
     ExUnit.Callbacks.on_exit(fn ->
-      moved? = settings_revision(owner) != revision
+      # Read through the owner by a process of its own, so this one, which
+      # reads the store once the owner is gone, holds no allowance of it.
+      read =
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self())
+          settings_revision()
+        end)
+
+      inside = Task.await(read, :infinity)
+
       Ecto.Adapters.SQL.Sandbox.stop_owner(owner)
-      if moved?, do: Arca.PlatformSettings.invalidate(:all)
+      after_rollback = Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &settings_revision/0)
+      if inside != after_rollback, do: Arca.PlatformSettings.invalidate(:all)
     end)
 
+    unless shared?, do: Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self())
     owner
   end
 
-  # The settings store's revision as the owner's transaction reads it, or
-  # :unread where it cannot be read (a test that broke the store). Read in
-  # a savepoint, so a read that fails leaves the test's transaction as it
-  # was on PostgreSQL, where a failed statement ends it.
-  defp settings_revision(owner) do
-    Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self())
+  # The settings store's revision, or :unread where it cannot be read (a
+  # test that broke the store).
+  defp settings_revision do
     key = Arca.PlatformSettings.revision_key()
     # arca:unscoped-ok the platform's settings are no athanor's: one store revision.
-    query = from(r in "platform_settings", where: r.key == ^key, select: r.revision)
-    {:ok, revision} = Arca.Repo.transaction(fn -> Arca.Repo.one(query) end)
-    revision
+    Arca.Repo.one(from(r in "platform_settings", where: r.key == ^key, select: r.revision))
   rescue
     _unread -> :unread
+  catch
+    :exit, _unread -> :unread
   end
 
   # A sync test runs alone, but not on a quiet store: `stop_owner/1`
