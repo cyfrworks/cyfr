@@ -177,8 +177,10 @@ defmodule Aqua.Prompt do
               "`program.list` names them, `program.start` runs one with the words after its " <>
               "command and answers what it printed, `program.wait` waits for more and " <>
               "`program.read` reads it again from the `next` an answer gave, `program.send` " <>
-              "types on it, and `program.stop` stops it once you have what you need: a run " <>
-              "ends with your turn anyway.\n" <>
+              "types on it, and `program.stop` stops it once you have what you need. A run " <>
+              "ends with your turn, so wait on it with `program.wait` as long as it takes, " <>
+              "and answer when it has ended. To wait for a time, call `aqua.wait` with " <>
+              "`until`. A message that arrives ends a wait early.\n" <>
               "- To be woken later, make a schedule with `schedule.create` that says when and " <>
               "for what: a line for Aqua (`reference` `agent:local.aqua`, `input` " <>
               "`{\"line\": text}`) at one time (`at`) or by `cron_expression`. It fires in this " <>

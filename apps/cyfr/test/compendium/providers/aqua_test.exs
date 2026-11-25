@@ -7,7 +7,8 @@ defmodule Compendium.Providers.AquaTest do
   by its full name, or one file of its pack by its path; a bare name is
   refused with the full names that match it; a write into a brought pack
   is refused, naming it; and a pack switched off is neither listed nor
-  read.
+  read. `wait` answers at the time it names, at once for one past, and
+  refuses one that is not a time.
   """
 
   use ExUnit.Case, async: false
@@ -209,5 +210,37 @@ defmodule Compendium.Providers.AquaTest do
              Tool.handle(ctx, %{args | "name" => "cyfr:roses"})
 
     assert cyfr =~ "CYFR's own pack"
+  end
+
+  describe "wait" do
+    test "answers at its time, and at once for a time already past", %{ctx: ctx} do
+      due = DateTime.add(DateTime.utc_now(), 300, :millisecond)
+
+      assert {:ok, %{until: until, now: now}} =
+               Tool.handle(ctx, %{"action" => "wait", "until" => DateTime.to_iso8601(due)})
+
+      assert until == DateTime.to_iso8601(due)
+      {:ok, answered, _offset} = DateTime.from_iso8601(now)
+      assert DateTime.compare(answered, due) != :lt
+
+      past = DateTime.add(DateTime.utc_now(), -3_600, :second)
+      started = System.monotonic_time(:millisecond)
+
+      assert {:ok, _now} =
+               Tool.handle(ctx, %{
+                 "action" => "wait",
+                 "until" => DateTime.to_iso8601(past, :extended, 3600)
+               })
+
+      assert System.monotonic_time(:millisecond) - started < 1_000
+    end
+
+    test "refuses what is not a time with its offset", %{ctx: ctx} do
+      for until <- ["tomorrow", "2026-11-26T09:00:00", ""] do
+        assert {:error, {:invalid_argument, "aqua.wait: until must be" <> _}} =
+                 Tool.handle(ctx, %{"action" => "wait", "until" => until}),
+               until
+      end
+    end
   end
 end

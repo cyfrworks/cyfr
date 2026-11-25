@@ -62,6 +62,14 @@ defmodule Sanctum.Dispatch do
   one member carries no skew, so the handler has ended before the row can
   be reclaimed.
 
+  A call of an action declared `waits: true` (`Sanctum.Catalog.waits?/2`,
+  read from the operation's one definition) waits as long as it takes: its
+  handler has no timeout and its charge no window, so the row has no
+  `holder_deadline` and is reclaimed when its attempt ends
+  (`Arca.BudgetReservations.sweep/1`). It is decided, admitted and
+  charged as every call is; it ends at its answer, a cancel, or its
+  caller's end.
+
   ## A handler that does not answer
 
   A handler that raises, exits, times out or is cancelled once it may
@@ -640,7 +648,11 @@ defmodule Sanctum.Dispatch do
       raw_input: args
     }
 
-    opts = opts |> Keyword.put(:action, action) |> Keyword.put(:audit, audit)
+    opts =
+      opts
+      |> Keyword.put(:action, action)
+      |> Keyword.put(:audit, audit)
+      |> Keyword.put(:waits, Catalog.waits?(name, action))
 
     # A member that lost its cell slot dispatches nothing, catalogued or
     # proxied, and takes no budget: the endpoint's plug refuses new
@@ -845,7 +857,7 @@ defmodule Sanctum.Dispatch do
     # The window starts before the charge is taken, so the cell's deadline,
     # set inside the charge's transaction, is after the handler's.
     started = System.monotonic_time(:millisecond)
-    window_ms = Keyword.get(opts, :holder_window_ms, @tool_timeout_ms)
+    window_ms = window(opts)
 
     case charge_row(guest_fn, ctx, authority, opts, window_ms) do
       :ok ->
@@ -854,7 +866,7 @@ defmodule Sanctum.Dispatch do
         dispatch_opts =
           opts
           |> Keyword.put(:hold, hold_of(authority, Keyword.get(opts, :charge)))
-          |> held_until(guest_fn, started + window_ms - @give_back_margin_ms)
+          |> held_until(guest_fn, window_ms && started + window_ms - @give_back_margin_ms)
           |> Keyword.drop([:guest_fn, :charge, :authority, :holder_window_ms])
 
         try do
@@ -880,8 +892,19 @@ defmodule Sanctum.Dispatch do
     end
   end
 
+  # A call's window: none for a call that waits (`Sanctum.Catalog.waits?/2`),
+  # else the one given or the default timeout.
+  defp window(opts) do
+    if Keyword.get(opts, :waits, false),
+      do: nil,
+      else: Keyword.get(opts, :holder_window_ms, @tool_timeout_ms)
+  end
+
   # A call holding a charge row runs until its window's deadline, on this
-  # member's monotonic clock; any other runs for the default timeout.
+  # member's monotonic clock; any other runs for the default timeout, and
+  # one that waits has neither.
+  defp held_until(opts, _guest_fn, nil), do: opts
+
   defp held_until(opts, :spawn, deadline) do
     case Keyword.get(opts, :charge) do
       %{id: _} -> Keyword.put(opts, :deadline, deadline)
@@ -985,7 +1008,7 @@ defmodule Sanctum.Dispatch do
     timeout_ms = handler_timeout(opts)
 
     cond do
-      timeout_ms <= 0 ->
+      is_integer(timeout_ms) and timeout_ms <= 0 ->
         {:error, {:timeout, "Tool #{name} ran out of its time before it started"}}
 
       Keyword.get(opts, :runner, :inline) == :inline ->
@@ -997,11 +1020,12 @@ defmodule Sanctum.Dispatch do
   end
 
   # What is left of a charged call's window (`held_until/3`), else the
-  # default timeout.
+  # default timeout; none for a call that waits.
   defp handler_timeout(opts) do
-    case Keyword.get(opts, :deadline) do
-      nil -> @tool_timeout_ms
-      deadline -> deadline - System.monotonic_time(:millisecond)
+    case {Keyword.get(opts, :deadline), Keyword.get(opts, :waits, false)} do
+      {nil, true} -> :infinity
+      {nil, false} -> @tool_timeout_ms
+      {deadline, _waits} -> deadline - System.monotonic_time(:millisecond)
     end
   end
 

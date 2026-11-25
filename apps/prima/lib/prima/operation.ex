@@ -55,6 +55,17 @@ defmodule Prima.Operation do
   its own initiative. Only a read may be unrecorded; a refusal of any
   action is recorded whatever it declares. It is metadata for the gate,
   absent from the annotation view and from discovery.
+
+  `waits: true` marks a call that waits on something outside itself, a
+  run's end or a time, as long as that takes. The gate gives it no
+  handler timeout and no holder window, so its charge has no
+  `holder_deadline` and its attempt's end reclaims it
+  (`Sanctum.Dispatch`), and a turn's loop answers it early when a post
+  arrives (`Aqua.Loop`). Everything else that bounds a call bounds it
+  too: authorization, the grant, the charge and the attempt's end. Only a
+  replay-safe read may wait, since the early answer cancels it and a
+  restart dispatches it again. It is metadata for the gate and the loop,
+  absent from the annotation view and from discovery.
   """
 
   alias Prima.Arg
@@ -78,7 +89,8 @@ defmodule Prima.Operation do
     resource_schemes: [],
     reduces_authority: false,
     follows_setting: false,
-    recorded: true
+    recorded: true,
+    waits: false
   ]
 
   @type t :: %__MODULE__{
@@ -99,6 +111,7 @@ defmodule Prima.Operation do
           reduces_authority: boolean(),
           follows_setting: boolean(),
           recorded: boolean(),
+          waits: boolean(),
           threads: {module(), atom()} | nil
         }
 
@@ -138,6 +151,7 @@ defmodule Prima.Operation do
           :reduces_authority,
           :follows_setting,
           :recorded,
+          :waits,
           :threads | @annotation_fields
         ]
 
@@ -166,7 +180,7 @@ defmodule Prima.Operation do
              op.consent in [nil, :interactive, :staging] and
              op.scope in [nil, :platform] and op.recovery in [nil, :replay_safe] and
              is_boolean(op.reduces_authority) and is_boolean(op.follows_setting) and
-             is_boolean(op.recorded) and
+             is_boolean(op.recorded) and is_boolean(op.waits) and
              (is_nil(op.permission) or is_atom(op.permission)),
            do: raise(ArgumentError, "invalid operation annotation")
 
@@ -178,6 +192,9 @@ defmodule Prima.Operation do
 
     if not op.recorded and op.kind != :read,
       do: raise(ArgumentError, "only a read may go unrecorded")
+
+    if op.waits and op.recovery != :replay_safe,
+      do: raise(ArgumentError, "only a replay-safe read may wait")
 
     if op.follows_setting and (op.tool != "browser" or op.planes != [:in_chain]),
       do: raise(ArgumentError, "only the browser tool's in-chain actions follow the setting")

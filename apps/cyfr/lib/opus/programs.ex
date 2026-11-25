@@ -101,8 +101,6 @@ defmodule Opus.Programs do
   @start_ms 60_000
   # The most sessions one turn holds at once.
   @turn_sessions 4
-  # How long a wait holds at most.
-  @max_wait_ms 30_000
   @local "local"
   @browser_row {:invalid_argument,
                 "This program is Aqua's browser, which runs only for Aqua; turn it on or off on the Aqua page."}
@@ -667,21 +665,40 @@ defmodule Opus.Programs do
 
   @doc """
   `read/3`, once the session has printed past `offset` and then printed
-  nothing for half a second (`Opus.Programs.Terminal`), or its program has ended, or `ms` (at most
-  #{div(@max_wait_ms, 1000)} s) has passed, whichever comes first.
+  nothing for half a second (`Opus.Programs.Terminal`), or its program
+  has ended, or `ms` has passed, whichever comes first: with `:infinity`,
+  as long as that takes. A session of the caller's own whose process is
+  gone, its run lost with the holder at a restart of CYFR, answers
+  `{:error, :ended}`, read from what its id names (`Opus.Programs.Box`,
+  "A terminal's id"); any other `{:error, :not_found}`.
   """
-  @spec wait(caller(), String.t(), non_neg_integer(), non_neg_integer()) ::
+  @spec wait(caller(), String.t(), non_neg_integer(), non_neg_integer() | :infinity) ::
           {:ok, transcript()} | {:error, term()}
   def wait(caller, session_id, offset, ms)
-      when is_integer(offset) and offset >= 0 and is_integer(ms) and ms >= 0 do
-    ms = min(ms, @max_wait_ms)
+      when is_integer(offset) and offset >= 0 and
+             ((is_integer(ms) and ms >= 0) or ms == :infinity) do
+    timeout = if ms == :infinity, do: :infinity, else: ms + @answer_margin_ms + 5_000
 
-    terminal_call(
-      caller,
-      session_id,
-      &{:wait, &1, offset, ms},
-      ms + @answer_margin_ms + 5_000
-    )
+    case terminal_call(caller, session_id, &{:wait, &1, offset, ms}, timeout) do
+      {:error, :not_found} -> lost(caller, session_id)
+      answer -> answer
+    end
+  end
+
+  # A session with no process to answer: ended, when its id names one of
+  # the caller's own; otherwise not found, as a stranger's id reads.
+  defp lost(caller, session_id) do
+    with {:ok, principal} <- who(caller) do
+      case call(@local, {:terminal_named, session_id, principal}, Box.control_timeout_ms()) do
+        {:ok, whose, _lifetime} ->
+          if reaches?(principal, whose, :owner),
+            do: {:error, :ended},
+            else: {:error, :not_found}
+
+        _none_or_unread ->
+          {:error, :not_found}
+      end
+    end
   end
 
   @doc """

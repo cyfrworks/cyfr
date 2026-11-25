@@ -70,6 +70,14 @@ defmodule Aqua.Ops do
   end
 
   @doc """
+  Whether a call of `tool`/`action` waits as long as it takes
+  (`waits: true`, `Sanctum.Catalog.waits?/2`); false for an unknown tool
+  or any other action.
+  """
+  @spec waits?(String.t(), String.t()) :: boolean()
+  def waits?(tool, action), do: Sanctum.Catalog.waits?(tool, action)
+
+  @doc """
   One sentence for a refusal: the gate's renderer (`Sanctum.Refusals.render/1`),
   the same sentence everywhere — this text persists as a thread message
   every member reads, so an internal term is never spelled into it.

@@ -283,6 +283,49 @@ defmodule Prima.OperationTest do
       end
     end
 
+    test "only a replay-safe read may wait, and no action waits unless it says so" do
+      read = Operation.new("probe", "peek", "Peek", [], kind: :read, planes: [:in_chain])
+      refute read.waits
+
+      assert %Operation{waits: true} =
+               Operation.new("probe", "hold", "Hold", [],
+                 kind: :read,
+                 planes: [:in_chain],
+                 recovery: :replay_safe,
+                 waits: true
+               )
+
+      for opts <- [[kind: :read], [kind: :write], [kind: :execute]] do
+        assert_raise ArgumentError, "only a replay-safe read may wait", fn ->
+          Operation.new("probe", "act", "Act", [], opts ++ [planes: [:in_chain], waits: true])
+        end
+      end
+
+      assert_raise ArgumentError, "invalid operation annotation", fn ->
+        Operation.new("probe", "hold", "Hold", [],
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          waits: nil
+        )
+      end
+
+      # Metadata for the gate and the loop: no annotation or discovery
+      # view carries it.
+      tool =
+        Operation.tool([
+          Operation.new("probe", "hold", "Hold", [],
+            kind: :read,
+            planes: [:in_chain],
+            recovery: :replay_safe,
+            waits: true
+          )
+        ])
+
+      refute Map.has_key?(tool.annotations.actions["hold"], :waits)
+      refute inspect(tool.input_schema) =~ "waits"
+    end
+
     test "a resource read is an external, consent-free, replay-safe read of one required uri" do
       for opts <- [
             [kind: :write, recovery: nil],

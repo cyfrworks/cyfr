@@ -391,10 +391,29 @@ defmodule Compendium.Providers.Aqua do
           planes: [:external],
           consent: :interactive,
           permission: :component_manage
+        ),
+        # A turn's wait for a time, held as long as it takes
+        # (`Prima.Operation`'s `waits`): no effect, so a post answers it
+        # early and a restart waits out what is left.
+        Operation.new(
+          "aqua",
+          "wait",
+          "Wait until a time",
+          [
+            Arg.new("until", :string,
+              required: true,
+              description:
+                "wait: the time to wait until, ISO 8601 with its offset, e.g. '2026-11-26T09:00:00+01:00'; a time already past answers at once"
+            )
+          ],
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          waits: true
         )
       ],
       description:
-        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_delete' to remove one there, or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
+        "The athanor's Aqua: one soul (the assistant, reserved name 'aqua', which runs on the brain of the crew member its member names), the crew it hands jobs to through crew.ask (each a brain with what it is good at and what to avoid, offered the soul's tools), the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, crew and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage crew members ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills kept in packs under aqua/scrolls/<pack>/, each named '<pack>:<scroll>'), 'skill_create'/'skill_update' to write one in a pack of the person's own, 'skill_delete' to remove one there, 'wait' to wait in a turn until a time (a message from the person ends the wait early), or 'reset' to restore edited copies of shipped files (one agent with name, else every one; crew members the athanor made are kept unless all=true; packs are not reset).",
       title: "Aqua Agent System"
     )
   end
@@ -944,7 +963,42 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
+  # --- wait ---
+
+  # Held in the gate's handler process until the time, which the gate
+  # bounds by nothing but the call's end (`waits: true`): the turn's end,
+  # a Stop, a lost lease or a post (`Aqua.Loop`) stop it.
+  def handle(_ctx, %{"action" => "wait", "until" => until}) when is_binary(until) do
+    case DateTime.from_iso8601(until) do
+      {:ok, due, _offset} ->
+        :ok = wait_until(due)
+        {:ok, %{until: DateTime.to_iso8601(due), now: DateTime.to_iso8601(DateTime.utc_now())}}
+
+      {:error, _unparsed} ->
+        {:error,
+         {:invalid_argument,
+          "aqua.wait: until must be an ISO 8601 time with its offset, like 2026-11-26T09:00:00+01:00"}}
+    end
+  end
+
   # --- helpers ---
+
+  # The longest one `receive ... after` holds; a longer wait is held in
+  # steps, each measured again from the clock.
+  @wait_step_ms 3_600_000
+
+  defp wait_until(due) do
+    case DateTime.diff(due, DateTime.utc_now(), :microsecond) do
+      left when left > 0 ->
+        receive do
+        after
+          min(div(left + 999, 1000), @wait_step_ms) -> wait_until(due)
+        end
+
+      _due ->
+        :ok
+    end
+  end
 
   # A refusal the `with` head already typed is the caller's answer; anything
   # else reaching an else arm is a storage term — logged, never reflected.

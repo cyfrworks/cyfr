@@ -311,7 +311,7 @@ defmodule Opus.Programs.Terminal do
 
       true ->
         ref = make_ref()
-        timer = Process.send_after(self(), {:waited, ref}, ms)
+        timer = if ms != :infinity, do: Process.send_after(self(), {:waited, ref}, ms)
         waiter = %{from: from, offset: offset, timer: timer, monitor: Process.monitor(pid)}
         {:noreply, settling(%{state | waiters: Map.put(state.waiters, ref, waiter)})}
     end
@@ -446,7 +446,7 @@ defmodule Opus.Programs.Terminal do
 
       waiter = Enum.find(state.waiters, fn {_key, w} -> w.monitor == ref end) ->
         {key, %{timer: timer}} = waiter
-        Process.cancel_timer(timer)
+        if timer, do: Process.cancel_timer(timer)
         {:noreply, %{state | waiters: Map.delete(state.waiters, key)}}
 
       true ->
@@ -666,7 +666,7 @@ defmodule Opus.Programs.Terminal do
   end
 
   defp answer(state, waiter) do
-    Process.cancel_timer(waiter.timer)
+    if waiter.timer, do: Process.cancel_timer(waiter.timer)
     Process.demonitor(waiter.monitor, [:flush])
     GenServer.reply(waiter.from, {:ok, transcript(state, waiter.offset)})
   end

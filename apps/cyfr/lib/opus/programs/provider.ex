@@ -11,8 +11,10 @@ defmodule Opus.Programs.Provider do
   hosts or folder. `start` runs one, its pinned command followed by the words the
   turn gives, as a session the turn owns (`Opus.Programs.start/3`), and
   answers what it printed once it exited, paused or the call's own time
-  passed; `send` types on it; `read` and `wait` answer what it printed
-  past an offset; `stop` ends it.
+  passed; `send` types on it; `read` answers what it printed past an
+  offset, and `wait` does once it printed more and paused, or its program
+  ended, as long as that takes (`waits: true`, `Prima.Operation`), or
+  within the `ms` it names; `stop` ends it.
 
   ## Who the caller is
 
@@ -57,7 +59,8 @@ defmodule Opus.Programs.Provider do
   @cols 200
   @max_words 32
   @max_word_chars 256
-  @max_wait_ms 30_000
+  # How long a start waits for what it prints, at most and by default.
+  @start_max_ms 30_000
   @start_wait_ms 10_000
 
   @impl true
@@ -113,7 +116,7 @@ defmodule Opus.Programs.Provider do
             ),
             Arg.new("wait_ms", :integer,
               min: 0,
-              max: @max_wait_ms,
+              max: @start_max_ms,
               description:
                 "start: how long to wait for what it prints before answering (default #{@start_wait_ms})"
             )
@@ -154,16 +157,16 @@ defmodule Opus.Programs.Provider do
             session,
             after_arg,
             Arg.new("ms", :integer,
-              required: true,
               min: 0,
-              max: @max_wait_ms,
-              description: "wait: how long to wait at most, in milliseconds"
+              description:
+                "wait: how long to wait at most, in milliseconds; leave it out to wait as long as it takes"
             )
           ],
           kind: :read,
           planes: [:in_chain],
           consent: :interactive,
-          recovery: :replay_safe
+          recovery: :replay_safe,
+          waits: true
         ),
         Operation.new("program", "stop", "Stop a program", [session],
           kind: :write,
@@ -173,7 +176,7 @@ defmodule Opus.Programs.Provider do
         )
       ],
       description:
-        "Run one of this athanor's programs on a terminal of its own and read what it prints. list names them; start runs one with the words to follow its command; send types on it; read and wait answer what it printed past an offset; stop ends it. A run ends with this turn.",
+        "Run one of this athanor's programs on a terminal of its own and read what it prints. list names them; start runs one with the words to follow its command; send types on it; read answers what it printed past an offset, and wait does once it prints more and pauses or ends, as long as that takes; stop ends it. A run ends with this turn.",
       title: "Programs"
     )
   end
@@ -209,9 +212,8 @@ defmodule Opus.Programs.Provider do
   defp dispatch("read", caller, %{"session" => session} = args) when is_binary(session),
     do: shown(session, Programs.read(caller, session, Map.get(args, "after") || 0))
 
-  defp dispatch("wait", caller, %{"session" => session, "ms" => ms} = args)
-       when is_binary(session) and is_integer(ms),
-       do: answer(caller, session, Map.get(args, "after") || 0, ms)
+  defp dispatch("wait", caller, %{"session" => session} = args) when is_binary(session),
+    do: answer(caller, session, Map.get(args, "after") || 0, Map.get(args, "ms") || :infinity)
 
   defp dispatch("stop", caller, %{"session" => session}) when is_binary(session) do
     case Programs.close(caller, session) do

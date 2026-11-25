@@ -67,6 +67,9 @@ defmodule Aqua.ProgramTest do
   @root :crypto.strong_rand_bytes(32)
   @session "4b0c3b1e-2f43-4c5e-9d8a-1f6e2a7c9b30"
   @title "Aqua"
+  # What a wait answers when a post ends it (`Aqua.Loop`).
+  @early_answer "A message arrived, so this wait ended early. What it waited for goes on: " <>
+                  "answer the message, and wait again if you still need to."
   @post_gone "Aqua could not be given this message: a thread it came from has since been deleted."
   @stale "What Aqua and its crew members may use changed since you granted it. Your message " <>
            "was not answered: grant it again here when it is asked, or on your Aqua page, then " <>
@@ -367,7 +370,7 @@ defmodule Aqua.ProgramTest do
         "publish anything on a site, accept terms or change an account without the " <>
         "person's word for that one act: nothing but this instruction stops you. Read " <>
         "the `cyfr:browser` scroll before you use the browser.\n" <>
-        "- A program on the Programs page, such as `gh`, is a command CYFR runs for you: `program.list` names them, `program.start` runs one with the words after its command and answers what it printed, `program.wait` waits for more and `program.read` reads it again from the `next` an answer gave, `program.send` types on it, and `program.stop` stops it once you have what you need: a run ends with your turn anyway.\n" <>
+        "- A program on the Programs page, such as `gh`, is a command CYFR runs for you: `program.list` names them, `program.start` runs one with the words after its command and answers what it printed, `program.wait` waits for more and `program.read` reads it again from the `next` an answer gave, `program.send` types on it, and `program.stop` stops it once you have what you need. A run ends with your turn, so wait on it with `program.wait` as long as it takes, and answer when it has ended. To wait for a time, call `aqua.wait` with `until`. A message that arrives ends a wait early.\n" <>
         "- To be woken later, make a schedule with `schedule.create` that says when and for what: a line for Aqua (`reference` `agent:local.aqua`, `input` `{\"line\": text}`) at one time (`at`) or by `cron_expression`. It fires in this room as Aqua's turn, which hands the job back to whoever set it. In a daily thread a wake due another day fires in that day's thread, so its line carries what the job needs.\n" <>
         "- A call that fails: read " <>
         "why, adjust and try once more, never the same failing call twice. " <>
@@ -5807,6 +5810,42 @@ defmodule Aqua.ProgramTest do
     end
 
     @tag harness: :api
+    test "a post during a wait, on the model's harness", %{ctx: ctx, thread: thread} do
+      script = [asking([{"ask-1", "aqua", waiting()}]), answer("Read it.")]
+      turn = api_turn!(ctx, thread, "wait for it", script)
+      loop = run(ctx, turn)
+      waiting!(ctx, turn)
+      _steer = steer!(ctx, thread, turn, "stop waiting")
+      send(loop.pid, {:moved, turn.id})
+      assert :completed = Task.await(loop, 60_000)
+      assert outcome(ctx, thread, turn) == expected(:early, ctx)
+      assert model_rounds(ctx, turn) == 2
+    end
+
+    @tag harness: :program
+    test "a post during a wait, on a program", %{ctx: ctx, thread: thread, row: row, fake: fake} do
+      turn = accept!(ctx, thread, row, "wait for it")
+      loop = run(ctx, turn)
+      started!(fake, row)
+      _post = sent()
+      [input] = inputs(ctx, turn)
+      say(fake, row, accepted(input))
+      say(fake, row, ask(turn, "ask-1", "aqua", waiting()))
+      waiting!(ctx, turn)
+      _steer = steer!(ctx, thread, turn, "stop waiting")
+      # The wait's answer first, then the post, each taken in turn.
+      assert %{"t" => "answer", "ask" => "ask-1"} = accept_next!(fake, row)
+      steered = accept_next!(fake, row)
+      say(fake, row, said(turn, "msg_1", "Read it."))
+      say(fake, row, usage(turn, "result-1"))
+      say(fake, row, usage(turn, "result-2"))
+      say(fake, row, idle(turn, [input.id, steered["id"]]))
+      assert :completed = Task.await(loop, 30_000)
+      assert outcome(ctx, thread, turn) == expected(:early, ctx)
+      assert admitted_once!(ctx, turn) == delivered(:early)
+    end
+
+    @tag harness: :api
     test "a launch, on the model's harness", %{ctx: ctx, thread: thread} do
       app = quiet_app!(ctx)
       launch = %{"action" => "run", "reference" => app <> ":1.0.0", "input" => %{}}
@@ -8734,6 +8773,19 @@ defmodule Aqua.ProgramTest do
       usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
     }
 
+  # A wait an hour off, which only the post ends.
+  defp expected(:early, _ctx),
+    do: %{
+      shown: [
+        {"text", "person", "wait for it"},
+        {"text", "person", "stop waiting"},
+        {"text", "aqua", "Read it."}
+      ],
+      asks: [{"aqua", "wait", true, "closed", "ok", nil, @early_answer}],
+      ended: {"completed", nil},
+      usage: %{input: 20, output: 8, models: ["m"], accounting: :complete}
+    }
+
   defp expected(:launch, _ctx),
     do: %{
       shown: [{"text", "person", "run the app"}, {"text", "aqua", "Ran it."}],
@@ -8871,6 +8923,13 @@ defmodule Aqua.ProgramTest do
   defp delivered(:steer),
     do: [{"post", "ok", "text", "first"}, {"post", "ok", "text", "and this"}]
 
+  defp delivered(:early),
+    do: [
+      {"post", "ok", "text", "wait for it"},
+      {"answer", "ok", "tool_result", @early_answer},
+      {"post", "ok", "text", "stop waiting"}
+    ]
+
   defp delivered(:stop), do: [{"post", "ok", "text", "work on it"}]
   defp delivered(:lost), do: [{"post", "ok", "text", "work on it"}]
   defp delivered(:refusal), do: [{"post", "ok", "text", "try it"}]
@@ -8883,6 +8942,28 @@ defmodule Aqua.ProgramTest do
     [{"post", "ok", "text", post}] ++
       for {_tool, _action, _started?, _closed, _outcome, _error, result} <- asks,
           do: {"answer", "ok", "tool_result", result}
+  end
+
+  # An `aqua.wait` an hour off.
+  defp waiting,
+    do: %{
+      "action" => "wait",
+      "until" => DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_iso8601()
+    }
+
+  # The turn's wait has been dispatched, so it runs.
+  defp waiting!(ctx, turn) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        {:ok, steps} = Tape.steps(ctx, turn)
+
+        Enum.any?(
+          steps,
+          &(&1.tool == "aqua" and &1.action == "wait" and &1.dispatch_state == "dispatched")
+        )
+      end,
+      10_000
+    )
   end
 
   defp model_rounds(ctx, turn) do
