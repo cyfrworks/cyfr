@@ -558,7 +558,10 @@ defmodule Sanctum.ProvisioningTest do
       stays_unminted_removed!(ctx)
     end
 
-    test "stays revoked once its person revoked a default, though a newer default was " <>
+    # The person revoking again the grant they already revoked ends no
+    # grant: the grant that ended last is still the removal's, so it is
+    # told as not granted, and the person's old no still keeps it unminted.
+    test "stays unminted once its person revoked a default, though a newer default was " <>
            "granted and removed, and the person revoked the older one again",
          %{bundle_dir: bundle_dir} do
       ctx = provisioned!(bundle_dir, "regranted")
@@ -569,7 +572,7 @@ defmodule Sanctum.ProvisioningTest do
 
       assert {:ok, _} = Filler.install_shipped(ctx, @foo)
 
-      stays_revoked!(ctx)
+      stays_unminted_removed!(ctx)
     end
 
     # The person's no stands over every removal and install that follow:

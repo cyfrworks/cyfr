@@ -1341,6 +1341,17 @@ defmodule Arca.ConsentStorage do
   whether CYFR may grant it again, is `revoked_by_person?/2`'s. A row
   whose kind, status or cause is outside its closed vocabulary refuses
   the read, never reads as a cause.
+
+  The stamps are the writers' (`Arca.ProfileStorage`): each revocation
+  stamps when it writes, inside its own transaction, and a revocation of a
+  row already revoked writes no new stamp. On SQLite those transactions
+  take the one write lock at their start, so the stamps follow the order
+  of the writes. Its limit is PostgreSQL's: two revocations of different
+  grants of one source lock only their own rows, so their transactions
+  can overlap, and the one that stamped later can commit first; then the
+  grant read as ending last is the one whose revocation stamped last, not
+  the one whose revocation committed last. It tells a person a sentence
+  and decides nothing, so the stamps stand as the order.
   """
   @spec absence_cause(Prima.Actor.t(), String.t()) ::
           {:ok, :standing | :person | :removal | :never} | {:error, term()}
