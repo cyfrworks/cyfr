@@ -218,15 +218,28 @@ defmodule Sanctum.Consent do
   (`Arca.ConsentStorage.revoked_by_person?/2`), since once a person has
   said no to a component's default grant only that person's own consent
   grants it again; `:no_grant` when nobody has granted it or its default
-  profiles were revoked only by removals. A store that could not answer is
-  `{:error, :unavailable}`, never a cause.
+  profiles were revoked only by removals. Narrowed to `{:profile, id}`, a
+  grant a run pinned, it is that profile's cause alone: `:revoked` only when
+  its person revoked that very profile, `:no_grant` when a removal took it
+  or it stands. A store that could not answer is `{:error, :unavailable}`,
+  never a cause.
   """
-  @spec ungranted(Sanctum.Context.t(), String.t()) ::
+  @spec ungranted(Sanctum.Context.t(), String.t() | {:profile, String.t()}) ::
           {:ok, :no_grant | :revoked} | {:error, :unavailable | :no_athanor}
   def ungranted(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
     case Arca.ConsentStorage.revoked_by_person?(Sanctum.Context.actor(ctx), source_ref) do
       {:ok, true} -> {:ok, :revoked}
       {:ok, false} -> {:ok, :no_grant}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  def ungranted(%Sanctum.Context{} = ctx, {:profile, profile_id}) when is_binary(profile_id) do
+    case Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id) do
+      {:ok, %{status: "revoked", revoked_by: "person"}} -> {:ok, :revoked}
+      {:ok, _standing_or_removed} -> {:ok, :no_grant}
+      {:error, :not_found} -> {:ok, :no_grant}
       {:error, :no_athanor} -> {:error, :no_athanor}
       {:error, _unanswered} -> {:error, :unavailable}
     end
