@@ -60,7 +60,7 @@ func (macRoad) fetch(ctx context.Context, out io.Writer, _, target string) (*sta
 // elevate takes nothing, and refuses where this account may not replace
 // the app: apps and every folder of the installed app must be its to
 // write, or the old app could not be swapped and removed whole.
-func (r macRoad) elevate(_ io.Writer, again string) (func(), error) {
+func (r macRoad) elevate(_ io.Writer, again string, _ bool) (func(), error) {
 	bundle := filepath.Join(r.apps, "CYFR.app")
 	unwritable := ""
 	if unix.Access(r.apps, unix.W_OK) != nil {

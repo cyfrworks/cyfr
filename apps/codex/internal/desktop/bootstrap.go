@@ -12,14 +12,13 @@ import (
 
 // The chooser's one page, style and script, the style and the script each
 // allowed by its hash alone.
-// The script keeps the run token from the first address's fragment in
-// sessionStorage, private to this origin, and puts it back with each
-// answer, since main may clear that storage while a Connect waits; it
-// takes everything off the address, and sends the token with each
-// request; it writes answers as text, never markup.
+// The script holds no credential: main adds the run token to its
+// requests (RunHeader). It takes everything off the address and writes
+// answers as text, never markup.
 // What main says, the road and the notices, is read from an address that
-// carries a run token alone, which main's own loads do and no page's can
-// (a wrong one is refused above anything it says). It is kept in this
+// names its road, which main's own loads do and no page's can reach
+// (desktop/src/policy.js chooserPath refuses every navigation to the
+// chooser's addresses, a frame's and a redirect's among them). It is kept in this
 // entry of the history, where no page of another origin writes: a reload
 // of main's load still shows it, and coming back to the entry by history
 // (main refuses a page that move, and is not asked for the engine's own)

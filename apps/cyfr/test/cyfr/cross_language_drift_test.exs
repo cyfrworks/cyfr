@@ -407,7 +407,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-backends-image/brain_antigravity.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_claude_code.py", ~w(version events refuse)},
       {"tests/locus-backends-image/brain_openai_codex.py", ~w(version events refuse)},
-      {"tests/locus-backends-image/brain_opencode.py", ~w(version events)}
+      {"tests/locus-backends-image/brain_opencode.py", ~w(version events)},
+      {"tests/locus-backends-image/brain_cursor.py", ~w(version events)}
     ],
     "browser_frames.json" => [
       {"apps/cyfr/test/opus/browser/frame_test.exs",
@@ -448,11 +449,13 @@ defmodule Cyfr.CrossLanguageDriftTest do
     "desktop-process.json" => [
       {"apps/codex/cmd/setup_project_test.go", ~w(external_pages)},
       {"apps/codex/desktop/test/policy.test.mjs", ~w(account_services)},
-      {"apps/codex/desktop/test/process.test.mjs", ~w(version go_to_main main_to_go refused)},
+      {"apps/codex/desktop/test/process.test.mjs",
+       ~w(version run_header go_to_main main_to_go refused)},
       {"apps/codex/desktop/test/states.test.mjs", ~w(endings external_pages)},
       {"apps/codex/cmd/screen_app_test.go", ~w(endings)},
       {"apps/codex/internal/account/discover_test.go", ~w(account_services)},
-      {"apps/codex/internal/desktop/process_test.go", ~w(version go_to_main main_to_go refused)}
+      {"apps/codex/internal/desktop/process_test.go",
+       ~w(version run_header go_to_main main_to_go refused)}
     ],
     "device.json" => [
       {"apps/codex/internal/shell/device_test.go", ~w(keys messages refusals)},

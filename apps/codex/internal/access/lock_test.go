@@ -426,3 +426,28 @@ func TestTakerRetriesALockADeadHolderStillHolds(t *testing.T) {
 		t.Fatalf("the next taker answered %v after %v with the lock still held", err, time.Since(started))
 	}
 }
+
+// Locked says whether a command holds the stack's lock, taking nothing
+// and making nothing: held while an engine holds it, free once it lets
+// go, and free with no lock file, which it does not create.
+func TestLockedSaysWhetherACommandHoldsTheLock(t *testing.T) {
+	none := t.TempDir()
+	if Locked(none) {
+		t.Fatal("a stack that never ran is locked")
+	}
+	if _, err := os.Stat(filepath.Join(none, stateDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("asking made %s (%v)", stateDir, err)
+	}
+	h := newHome(t)
+	if !Locked(h.dir) {
+		t.Fatal("the lock an engine holds is not seen")
+	}
+	h.unlock()
+	if Locked(h.dir) {
+		t.Fatal("a lock let go is seen as held")
+	}
+	h.open()
+	if !Locked(h.dir) {
+		t.Fatal("asking took the lock from its next holder")
+	}
+}

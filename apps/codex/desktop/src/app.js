@@ -27,10 +27,10 @@ import path from "node:path"
 
 import {BaseWindow, BrowserWindow, Menu, WebContentsView, app, dialog, session, shell} from "electron"
 
-import {lines, readFromCyfr, toCyfr} from "./process.js"
-import {LOCALHOST_IS_IPV4, accountLoad, accountPartition, documentHeaders, grants, homePartition, printed, readHop, relyingParty,
+import {RUN_HEADER, lines, readFromCyfr, toCyfr} from "./process.js"
+import {LOCALHOST_IS_IPV4, LOOPBACK, accountLoad, accountPartition, documentHeaders, grants, homePartition, printed, readHop, relyingParty,
   screenProject, setupProject, unlistedSwitch} from "./policy.js"
-import {ABORTED, DEPARTURE_MS, initial, kept, step} from "./states.js"
+import {ABORTED, DEPARTURE_MS, UNROUTED, atChooser, initial, kept, step} from "./states.js"
 
 const READY_WITHIN_MS = 20_000
 /** How long a killed cyfr has to exit before a fresh one starts all the same. */
@@ -158,13 +158,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     return
   }
 
-  const route = {
-    proxy: app.commandLine.getSwitchValue("proxy-server"),
-    resolver: app.commandLine.getSwitchValue("host-resolver-rules")
-  }
-  // Not a route of a CYFR's, so not part of the one main was started on.
-  if (!route.resolver) app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
-  let state = initial(accountRoad, route, screen)
+  app.commandLine.appendSwitch("host-resolver-rules", LOCALHOST_IS_IPV4)
+  let state = initial(accountRoad, screen, app.commandLine.hasSwitch("updated"))
   let child = null
   let frame = null // the app's one window, holding the rail and the content
   let rail = null // the rail's view
@@ -173,6 +168,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   let contentKept = false // whether contentSession is a CYFR's kept one
   const children = new Set() // the content's confirmation windows
   let accountWindow = null
+  let updateWindow = null // Update CYFR's window, over the content
   let hop = null // {kind, request, from, timer}
   let generation = 0
   // Every page closed and not yet gone, and the sessions it used, which a
@@ -211,20 +207,13 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     }
     if (effect.erase) erase(effect.erase)
     if (effect.rail) openRail(effect.rail.url)
+    if (effect.update) openUpdate(effect.update.url)
+    if (effect.unupdate) closeUpdate()
     if (effect.menu) rowMenu(effect.menu.home)
     if (effect.root) openHome(effect.root.home, effect.root.path, effect.root.setup)
-    if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession())
-    if (effect.back) back(chooserAddress(effect.back))
-    if (effect.relaunch) {
-      say("starting again with the CYFR's route")
-      const args = process.argv.slice(1).filter((a) => !/^--(proxy-server|host-resolver-rules)=/.test(a))
-      if (effect.relaunch.proxy) args.push(`--proxy-server=${effect.relaunch.proxy}`, `--host-resolver-rules=${effect.relaunch.resolver}`)
-      ending(() => {
-        if (child && child.exitCode === null) child.kill()
-        app.relaunch({args})
-        app.exit(0)
-      })
-    }
+    if (effect.chooser) openContent(chooserAddress(effect.chooser, effect), freshSession(), false, effect.proxy)
+    if (effect.back) back(chooserAddress(effect.back, effect))
+    if (effect.prepare) prepare(effect.prepare)
     if (effect.end) {
       say(`cyfr ended: ${effect.end}`)
       if (child && child.exitCode === null) child.kill()
@@ -265,7 +254,8 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     if (effect.deliver && content) {
       const {url} = effect.deliver
       // The engine settles the call after its landing when it succeeds;
-      // it may reject before one, with no did-fail-load.
+      // it may reject before one, with no did-fail-load. The content's
+      // store carries its CYFR's route since it was opened for it.
       const ended = () => on({type: "load-ended", url})
       content.webContents.loadURL(url).then(ended, ended)
       // That load's navigation has started by now, and been heard.
@@ -328,9 +318,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   // The chooser's address: cyfr's own, with the road this app offers,
   // which is main's alone to say, what main has to tell, and where it goes
   // on: connecting to a CYFR the rail selected, or setting up.
-  const chooserAddress = (notices, {connect = "", way = ""} = {}) => screen ? state.readyURL
-    : state.readyURL + (accountRoad ? "&road=passkey" : "") + (notices.length ? `&notice=${notices.join(",")}` : "") +
-      (connect ? `&connect=${encodeURIComponent(connect)}` : "") + (way ? `&way=${way}` : "")
+  // The chooser's address, as main alone loads it (no page reaches it,
+  // policy.js chooserPath): cyfr's own, with the road this app offers,
+  // what main has to tell, and where it goes on. The run token in ready's
+  // address is main's to keep (runToken), and none of the chooser's.
+  const chooserAddress = (notices, {connect = "", way = "", retry = ""} = {}) => screen ? state.readyURL
+    : `${LOOPBACK}/bootstrap/#road=${accountRoad ? "passkey" : "words"}` + (notices.length ? `&notice=${notices.join(",")}` : "") +
+      (connect ? `&connect=${encodeURIComponent(connect)}` : "") + (way ? `&way=${way}` : "") +
+      (retry ? `&retry=${encodeURIComponent(retry)}` : "")
+  const runToken = () => new URLSearchParams(state.readyURL.split("#")[1] ?? "").get("token") ?? ""
 
   const discard = (ses) => Promise.resolve(ses?.clearStorageData()).then(() => true, () => true)
 
@@ -390,6 +386,47 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     ses.setDisplayMediaRequestHandler((_request, callback) => callback({}))
   }
 
+  // A CYFR's route, its proxy ("" for none), set on a store from the
+  // selection that store is opened for, at that opening, before it loads
+  // anything of that CYFR: its pages load only through that proxy, which
+  // is asked for every name. The stores that load a CYFR's pages are its
+  // kept one (openHome), its account window's (openAccount), the
+  // content's store showing when cyfr proposes it on the six-word road
+  // and the box's screen (prepare), and a chooser's opened while main
+  // keeps to it (states.js settle): each goes on to the device's pages
+  // and then that CYFR's. The rail's store and any other chooser's load
+  // no CYFR's pages, and are never given a route; a store that had one
+  // has it taken off before it shows the chooser again (back). A store
+  // given none keeps the system's settings, as a browser does. A route
+  // that cannot be set loads nothing (failed), and leaves the store's
+  // unknown: the next opening sets it afresh, a route or none.
+  const routes = new WeakMap() // a store: the proxy set on it, null unknown
+  function routedThen(ses, proxy, load, failed) {
+    if ((routes.has(ses) ? routes.get(ses) : "") === proxy) return load()
+    routes.set(ses, null)
+    ses.setProxy(proxy ? {mode: "fixed_servers", proxyRules: proxy} : {mode: "system"})
+      .then(() => {
+        routes.set(ses, proxy)
+        load()
+      }, (err) => {
+        say(`not loaded: the CYFR's route could not be set (${err?.message ?? err})`)
+        failed()
+      })
+  }
+
+  // cyfr proposed home: on the six-word road and the box's screen, its
+  // route set on the content's store showing, which goes on to that
+  // CYFR's pages, then home-ready, under the cyfr run that proposed it; a
+  // route that cannot be set answers no home-ready and fails the
+  // proposal (unrouted). On the passkey road that store loads nothing of
+  // the CYFR, which opens in its own kept store once cyfr commits it.
+  function prepare({home, attempt, proxy}) {
+    const answer = ofThisRun()
+    const ready = answer(() => send("home-ready", {home, attempt}))
+    if (state.accountRoad || !contentSession) return ready()
+    routedThen(contentSession, proxy, ready, answer(() => on({type: "unrouted", home, attempt})))
+  }
+
   // A kept storage, given its rules before anything loads in it, once.
   // The engine writes cookies within half a minute, which an app that is
   // killed does not have.
@@ -410,8 +447,41 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function freshSession() {
     const ses = session.fromPartition(`cyfr-${process.pid}-${++generation}`)
     guard(ses, "content")
+    runHeader(ses)
     return ses
   }
+
+  // The run token goes, as RUN_HEADER, on a request of ses only when it is
+  // a POST to the chooser's addresses made by the chooser's own top
+  // document in the content's view, and is no redirect's: a frame's,
+  // another view's or window's, one to another address and a redirect's
+  // target go without it, and one a page named itself loses it.
+  function runHeader(ses) {
+    const redirected = new Set()
+    ses.webRequest.onBeforeRedirect((details) => redirected.add(details.id))
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const headers = Object.fromEntries(Object.entries(details.requestHeaders ?? {})
+        .filter(([name]) => name.toLowerCase() !== RUN_HEADER.toLowerCase()))
+      if (!redirected.has(details.id) && chooserRequest(details)) headers[RUN_HEADER] = runToken()
+      callback({requestHeaders: headers})
+    })
+  }
+  function chooserRequest({method, url, webContents, frame}) {
+    const top = webContents?.mainFrame
+    const at = (address, path) => {
+      try {
+        const u = new URL(address)
+        return u.origin === LOOPBACK && path(u.pathname)
+      } catch {
+        return false
+      }
+    }
+    return method === "POST" && !!content && webContents === content.webContents && !!frame && !!top &&
+      frame.processId === top.processId && frame.routingId === top.routingId && choosers.has(webContents) &&
+      at(url, (p) => p.startsWith("/bootstrap/"))
+  }
+  // The content's views whose document is the chooser's (openContent).
+  const choosers = new WeakSet()
 
   // The app's one window, made once: the rail at its left (none on the
   // box's screen, in this part) and the content beside it, both laid out
@@ -435,6 +505,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function closeFrame() {
     const f = frame
     frame = null
+    closeUpdate()
     if (rail && !rail.webContents.isDestroyed()) rail.webContents.close()
     rail = null
     if (f && !f.isDestroyed()) {
@@ -531,15 +602,24 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     contents.setWindowOpenHandler(() => ({action: "deny"}))
   }
 
-  // The rail's view, in the app's own memory session, which holds nothing
-  // but the rail: loaded again at each ready, whose read token is new.
+  // The app's own memory session, which holds nothing but its own pages:
+  // the rail and Update CYFR.
+  let appStore = null
+  function appSession() {
+    if (!appStore) {
+      appStore = session.fromPartition(`cyfr-app-${process.pid}`)
+      guard(appStore, "content")
+    }
+    return appStore
+  }
+
+  // The rail's view, in the app's own session: loaded again at each
+  // ready, whose read token is new.
   function openRail(url) {
     if (screen) return
     ensureFrame()
     if (!rail) {
-      const ses = session.fromPartition(`cyfr-app-${process.pid}`)
-      guard(ses, "content")
-      rail = new WebContentsView({webPreferences: {...SECURE, session: ses}})
+      rail = new WebContentsView({webPreferences: {...SECURE, session: appSession()}})
       confine(rail.webContents, "rail")
       // A lost rail is shown again; one that failed to load is tried again
       // at the next ready.
@@ -550,9 +630,41 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     rail.webContents.loadURL(url).catch(() => {})
   }
 
+  // Update CYFR's window over the content, in the app's own session,
+  // whose every navigation is an act or nothing (states.js, window
+  // "update"): shown, or brought forward where it is. A page that failed
+  // to load closes it, and one lost is loaded again; its close, the
+  // person's or main's, is told to cyfr.
+  function openUpdate(url) {
+    if (screen) return
+    ensureFrame()
+    if (updateWindow && !updateWindow.isDestroyed()) {
+      updateWindow.focus()
+      return
+    }
+    const w = window(appSession(), {...overContent(560, 640), parent: frame, title: "Update CYFR"}, (w) => ({
+      failed: closingLoad(() => { if (!w.isDestroyed()) w.destroy() }),
+      lost: () => { if (!w.isDestroyed()) w.webContents.reload() }
+    }))
+    updateWindow = w
+    confine(w.webContents, "update")
+    w.on("closed", () => {
+      if (updateWindow === w) updateWindow = null
+      on({type: "update-closed"})
+    })
+    w.loadURL(url).catch(() => {})
+  }
+
+  // Update CYFR's window closed, by main: by its Close, with the app's
+  // window, or as the cyfr that served it ends, whose read token and offer
+  // end with it, so no press of it reaches the next.
+  function closeUpdate() {
+    if (updateWindow && !updateWindow.isDestroyed()) updateWindow.destroy()
+  }
+
   // The content's view, at `address` in session `ses`: what showed before
   // is closed already (close), or is closed now.
-  function openContent(address, ses, kept = false) {
+  function openContent(address, ses, kept = false, proxy = "") {
     ensureFrame()
     if (content) dropContent()
     contentSession = ses
@@ -589,34 +701,61 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     contents.on("did-start-navigation", (details) => {
       if (details.isMainFrame) heard({type: "started", url: details.url, sameDocument: details.isSameDocument})
     })
-    contents.on("did-navigate", () => heard({type: "committed"}))
+    // The chooser's document is the one a commit at the chooser's address
+    // made, which only main's own load of it can begin (policy.js
+    // chooserPath); a change of address within a document makes no
+    // document the chooser's, and another document's commit ends it.
+    contents.on("did-navigate", (_event, url) => {
+      if (atChooser(url)) choosers.add(contents)
+      else choosers.delete(contents)
+      heard({type: "committed"})
+    })
     contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
       if (isMainFrame) heard({type: "landed", url})
     })
     frame.contentView.addChildView(v)
     layout()
-    contents.loadURL(address).catch(() => {})
+    // Its route's answer belongs to this view: one that comes once the
+    // view has gone or been replaced does nothing.
+    routedThen(ses, proxy, () => {
+      if (content === v) contents.loadURL(address).catch(() => {})
+    }, () => heard({type: "load-failed", code: UNROUTED, url: address}))
   }
 
   // The CYFR at `home`, opened at `path` in its own kept storage, which
   // is made only now that cyfr committed it, or with `setup` at its setup
   // page, the token in the fragment alone.
   function openHome(home, path, setup = "") {
-    openContent(setup ? `${home}/setup#${setup}` : home + path, kept_(homePartition(home)), true)
+    openContent(setup ? `${home}/setup#${setup}` : home + path, kept_(homePartition(home)), true, kept(state).proxy)
   }
 
-  // The chooser shown in place of a CYFR's page that did not load: in the
-  // content as it stands where that is memory's, and otherwise in a view
-  // of its own, so no kept storage holds the chooser. Either only while
-  // that content still stands: a lock or a departure in between closed it.
+  // The chooser shown in place of a CYFR's page that did not load, or of
+  // a proposal whose route could not be set, as a document of main's own
+  // load. Where the content's store is memory's, in the content's view
+  // as it stands, whose tab holds the device's unlocking (its page's
+  // sessionStorage), with any route taken off the store before the
+  // chooser loads (where that cannot be done, in a fresh store and view);
+  // otherwise in a view of its own, so no kept storage holds the chooser.
+  // Each step only while that content still stands: a lock or a departure
+  // in between closed it.
   function back(address) {
     const v = content
-    const memory = !contentKept
-    setImmediate(() => {
-      if (!v || content !== v) return
-      if (memory) v.webContents.loadURL(address).catch(() => {})
-      else openContent(address, freshSession())
-    })
+    const ses = contentKept ? null : contentSession
+    const standing = (then) => () => {
+      if (v && content === v) then()
+    }
+    setImmediate(standing(() => {
+      if (!ses) return openContent(address, freshSession())
+      routedThen(ses, "", standing(() => {
+        // Into a chooser already showing, a load that changes only its
+        // fragment makes no new document, and the page would not read
+        // main's words: that load is then reloaded, which makes one.
+        const inPage = atChooser(v.webContents.getURL())
+        v.webContents.loadURL(address).then(standing(() => {
+          if (inPage) v.webContents.reload()
+        })).catch(() => {})
+      }), standing(() => openContent(address, freshSession())))
+    }))
   }
 
   function openAccount(address) {
@@ -659,7 +798,18 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
         endHop()
       }
     })
-    w.loadURL(address)
+    // A route that cannot be set ends the hop and loads nothing of the
+    // account service: the window stays, at main's own page saying why,
+    // and its close shows the CYFR's page beneath. Its answer belongs to
+    // this window's hop: one that comes after it ended does nothing.
+    routedThen(ses, kept(state).proxy, () => {
+      if (accountWindow === w) w.loadURL(address)
+    }, () => {
+      if (accountWindow !== w) return
+      accountWindow = null
+      endHop()
+      w.loadURL(sentence(`The app could not reach the CYFR at ${home} through this computer's tailnet, so it loaded nothing of the sign-in. Close this window to go back to the CYFR.`))
+    })
   }
 
   function message(text) {
@@ -673,10 +823,15 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     w.webContents.on("will-redirect", block)
     w.webContents.setWindowOpenHandler(() => ({action: "deny"}))
     w.on("closed", () => on({type: "quit"}))
+    w.loadURL(sentence(text))
+  }
+
+  // Main's own page, saying `text` alone: no script, nothing it can load.
+  function sentence(text) {
     const page = "<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src 'none'; style-src 'unsafe-inline'\">" +
       "<title>CYFR</title><style>body{background:#0b1418;color:#e8f1f2;font:1.1rem system-ui,sans-serif;margin:2rem}</style>" +
       `<h1>CYFR</h1><p>${text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p>`
-    w.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(page))
+    return "data:text/html;charset=utf-8," + encodeURIComponent(page)
   }
 
   // A page closed, and the session it used, for the next departure to
@@ -808,6 +963,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
   function restartCyfr() {
     const old = child
     child = null
+    closeUpdate()
     clearTimeout(readiness)
     if (!old || old.exitCode !== null || old.signalCode !== null) return startCyfr()
     let started = false
@@ -872,6 +1028,7 @@ export function startApp({cyfr, accountRoad = process.platform === "darwin" || p
     })
     mine.on("error", (e) => heard({type: "gone", why: `it could not start (${e.message})`}))
     mine.on("exit", (code, signal) => {
+      if (child === mine) closeUpdate()
       if (!quitting) heard({type: "gone", why: last.replace(/^Error: /, "") || `it exited (${signal ?? code})`})
     })
   }

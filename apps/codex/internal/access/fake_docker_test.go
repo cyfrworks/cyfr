@@ -569,6 +569,7 @@ type fakeConfig struct {
 	Name     string                    `yaml:"name"`
 	Services map[string]*fakeService   `yaml:"services"`
 	Volumes  map[string]map[string]any `yaml:"volumes,omitempty"`
+	Networks map[string]any            `yaml:"networks,omitempty"`
 }
 
 type fakeService struct {
@@ -621,11 +622,18 @@ func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, 
 		var doc struct {
 			Include  []string                  `yaml:"include"`
 			Services map[string]map[string]any `yaml:"services"`
+			Networks map[string]any            `yaml:"networks"`
 		}
 		if err := yaml.Unmarshal(data, &doc); err != nil {
 			return nil, err
 		}
 		files = append(files, doc.Include...)
+		for name, n := range doc.Networks {
+			if cfg.Networks == nil {
+				cfg.Networks = map[string]any{}
+			}
+			cfg.Networks[name] = n
+		}
 		for svcName, raw := range doc.Services {
 			svc := cfg.Services[svcName]
 			if svc == nil {

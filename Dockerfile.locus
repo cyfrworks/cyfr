@@ -342,14 +342,15 @@ COPY --from=keeper /out/cyfr-claude-code /opt/cyfr/bin/cyfr-claude-code
 COPY --from=keeper /out/cyfr-codex /opt/cyfr/bin/cyfr-codex
 # The one driver of programs that speak the Agent Client Protocol, linked
 # under one name a program, the name it runs under picking its program
-# (cyfr-antigravity, cyfr-opencode). Its harness reaches CYFR's tools
-# through the stub in socket mode, on a socket inside the session's own
-# space.
+# (cyfr-antigravity, cyfr-opencode, cyfr-cursor). Its harness reaches
+# CYFR's tools through the stub in socket mode, on a socket inside the
+# session's own space.
 COPY --from=keeper /out/cyfr-acp /opt/cyfr/bin/cyfr-acp
-RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity && ln -s cyfr-acp /opt/cyfr/bin/cyfr-opencode
+RUN ln -s cyfr-acp /opt/cyfr/bin/cyfr-antigravity && ln -s cyfr-acp /opt/cyfr/bin/cyfr-opencode \
+    && ln -s cyfr-acp /opt/cyfr/bin/cyfr-cursor
 # The pinned, checksummed fetch of a program that is not on npm into the
-# row's own folder, before it runs it (Antigravity's and OpenCode's rows):
-# the image carries no program.
+# row's own folder, before it runs it (Antigravity's, OpenCode's and
+# Cursor's rows): the image carries no program.
 COPY --from=keeper /out/cyfr-fetch /opt/cyfr/bin/cyfr-fetch
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The name of the AppArmor profile this release runs under, which the

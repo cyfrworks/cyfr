@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -45,6 +47,15 @@ func init() {
 	// hands over to checks it is (updateProgram).
 	updateCmd.Flags().String("continue-as", "", "")
 	_ = updateCmd.Flags().MarkHidden("continue-as")
+	// The CYFR app's Update CYFR page (cmd/app_window.go): --offer prints
+	// the change to the CYFR in the directory as JSON and makes none;
+	// --confirmed makes the change only where what it reads is still what
+	// the offer read (confirmation), in place of --yes. Each touches this
+	// CYFR alone, at --version, this program's release.
+	updateCmd.Flags().Bool("offer", false, "")
+	_ = updateCmd.Flags().MarkHidden("offer")
+	updateCmd.Flags().String("confirmed", "", "")
+	_ = updateCmd.Flags().MarkHidden("confirmed")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -55,14 +66,14 @@ var updateCmd = &cobra.Command{
 
 The program: when the newest release is newer than this one, cyfr update installs it. The newest is the newest published release that is not a pre-release and, while none is published, the newest pre-release. A Homebrew cask install is updated through brew. Where the CYFR app is installed, whichever cyfr runs this, the app is updated by its own installer: its installer for this machine is downloaded and verified against the release's checksums.txt signed by the release workflow for that tag, then the elevation it needs is asked for, then the running app is closed (on the box's own screen, the screen's service is stopped), then the system's installer replaces it (apt for the DEB, the whole signed app for macOS, Windows Installer for the MSI), then the release its own cyfr answers is checked, and the app is opened again as it was. A cyfr installed any other way replaces its own file, once the release's archive for this platform verifies the same way; both downloads verify before anything changes. A refusal at any step leaves the app working at its release and the CYFR in the directory untouched. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory that holds no compose file the update stops here.
 
-The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before the question and before the stack's lock, so the refusal changes nothing (step 2): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
+The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none; answered no, it changes nothing and exits 0). A CYFR whose docker-compose.yml names this release already is not switched again, with no stop and no snapshot: its stack is started as 'cyfr up' starts it and waited for whole, as step 6 waits, so an update run again after one whose services did not come up waits again; and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. A CYFR whose database another schema built is refused before the question and before the stack's lock, so the refusal changes nothing (step 2): a release runs only on a database its own schema built, the schema fingerprint its manifest carries, and there is no upgrade path between schemas. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, one without a schema fingerprint (any release's before the fingerprint was carried), or no network access to it, refuses.
-2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported. Then read the schema fingerprint of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse one other than the manifest's or an answer that does not read.
-3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses. Then, on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the AppArmor profile built into this cyfr, by its name, which carries its content, offer it as 'cyfr init' does, before anything is changed: declined, the stack runs on as it was.
+2. Read docker-compose.yml, which the release's own replaces at the switch (step 6). It must hold the bundled stack: a service named cyfr and a service, under any name, whose image is ghcr.io/cyfrworks/cyfr-locus; one without either refuses, naming 'cyfr init --force'. The offer names each image line that changes, and each image line that names no managed image (ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale), which the release's file does not keep. Then read the schema fingerprint and the release of the cyfr that runs this CYFR, through the running cyfr or, when cyfr is stopped, offline in a one-off container of its image that mounts nothing, skips its entrypoint, has no network and never pulls, and refuse a fingerprint other than the manifest's, a release newer than this one or an answer that does not read. Then compare docker-compose.yml with the one that release shipped, read from its verified scaffold, the image lines aside: a file you changed is said before anything stops, its differing lines (at most 12, no value of an environment line), that going on writes the release's file and the snapshot keeps yours, and, in a sentence of its own, each managed service whose volumes differ, since the stack would start without the data the folders you mount there hold. The update then asks 'Replace docker-compose.yml with release <version>'s and update this CYFR?', the answer defaulting to no; --yes does not answer it, and with no terminal to ask on the update refuses with the same words. Nothing of your file is merged into the release's.
+3. While the stack still runs: read its configuration, naming the storage root it snapshots, fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped Aqua prompts, its .env.example and its docker-compose.yml) without writing them, pull every image the release's docker-compose.yml manages by the manifest's digest, then read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays). A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses. Then, on Ubuntu 26.04 with AppArmor on, where the kernel has not loaded the AppArmor profile built into this cyfr, by its name, which carries its content, offer it as 'cyfr init' does, before anything is changed: declined, the stack runs on as it was.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files, remove from .env each setting the release this CYFR ran shipped in its .env.example that this release's .env.example no longer declares (read from both releases' verified scaffolds, the names said; a setting the old .env.example never shipped is yours and stays), and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
+6. Write the release's scaffold files and change .env by the .env.example the release this CYFR ran shipped and this release's, both read from the releases' verified scaffolds (the install's own .env.example is the one 'cyfr init' laid down, which no update replaces): remove each setting the old one shipped that the new one no longer declares, the names said (a setting the old .env.example never shipped is yours and stays); set each line that holds the old one's shipped value, where the new one ships another, to the new value, the names and values said; and name, leaving them as you set them, the lines that name as a host a service of the old release's docker-compose.yml that this release's does not run, in any form (a URL, a host and port, a list of them or of id=URL items), by key, line and the service named, never the value, with this release's shipped value for the name or the advice to name a service it runs. A setting assigned more than once is yours: none of its lines changes, and it is named with its lines. No other value you set changes, and a CYFR on no release version changes none. Then write the release's docker-compose.yml in place of the project's, its managed image lines pinned to <image>:<version>@<digest> (Caddy and Tailscale keep their tags), and say once that the file it replaced, with any edits of yours, is the snapshot's compose part; a failure of any puts the scaffold files and .env back from the snapshot and starts the old stack again under its own file. Then name the release's AppArmor profile in .env (CYFR_LOCUS_APPARMOR), which the snapshot holds as it stood, and start the stack as every cyfr start runs, waiting for cyfr's health, then, under the head that start read, for every service of the stack it started, within one deadline 150 s on: healthy where it has a health check, running where it has none. A failure from here leaves the stack stopped and prints the services that did not come up with 'docker compose logs <service>', the refusal a service's boot logged, its '[Name] FATAL:' line, the snapshot and the restore command; old code never starts over migrated data. Once the stack is up, the profile .env named before is taken off the machine, through the sudo login the offer asked for, or its removal command is printed.
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would; an update killed in that time leaves the start of the old stack to the next cyfr command that takes the lock, which says so. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -72,6 +83,8 @@ The update holds the stack's lock from before its first docker call to its end, 
 		o.version, _ = cmd.Flags().GetString("version")
 		o.yes, _ = cmd.Flags().GetBool("yes")
 		o.continueAs, _ = cmd.Flags().GetString("continue-as")
+		o.offer, _ = cmd.Flags().GetBool("offer")
+		o.confirmed, _ = cmd.Flags().GetString("confirmed")
 		o.noInteractive = flagNoInteractive
 		return runUpdate(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), o)
 	},
@@ -92,6 +105,14 @@ var (
 	// attempts after the first.
 	liveSlotsWindow = 20 * time.Second
 	liveSlotsPoll   = time.Second
+	// stackHealthWindow bounds the wait for every service of the started
+	// stack, measured from cyfr's health: the shipped compose file's
+	// slowest health check to call a service unhealthy, start_period and
+	// retries × (interval + timeout), is tailscale's 20 s + 3 × 35 s, and
+	// 25 s of slack (TestStackHealthWindowCoversTheShippedHealthChecks).
+	// stackHealthPoll spaces the reads.
+	stackHealthWindow = 150 * time.Second
+	stackHealthPoll   = time.Second
 )
 
 const (
@@ -105,9 +126,10 @@ const (
 	liveSlotsExpr = `IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))`
 	// schemaExpr reads the schema fingerprint of the cyfr code that runs
 	// this CYFR's database, through the running node or offline in a
-	// container of its image; a cyfr boots only on a database its own
-	// fingerprint built, so the code's answer is the database's.
-	schemaExpr = `IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current())`
+	// container of its image, and that code's release; a cyfr boots only on
+	// a database its own fingerprint built, so the code's answer is the
+	// database's.
+	schemaExpr = `IO.puts("CYFR_SCHEMA=" <> Arca.SchemaFingerprint.current()); IO.puts("CYFR_RELEASE=" <> Prima.Version.current())`
 
 	// pgProbeMajor is the major of the client image the server's major is
 	// read with (pgClientImages); the dump and the restore then run in the
@@ -141,14 +163,10 @@ func fetchVerifiedScaffold(version string) (scaffoldRelease, error) {
 	return r, nil
 }
 
-// bundledServices are the services of the bundled stack besides cyfr, whose
-// fields ensureComposeFields keeps; caddy and tailscale are the public
-// and tailnet profiles' proxies, optional to a project that never runs one.
-var bundledServices = []string{"locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
-
 // stopOrder is the order the stop step stops services in: the proxies
 // first, then cyfr, then each Locus service before the guard whose network
-// namespace it shares.
+// namespace it shares. A running service it does not name is stopped with
+// the rest after them, so a stack of other names stops whole.
 var stopOrder = []string{"caddy", "tailscale", "cyfr", "locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
 
 // managedRepositories are the repositories the release's manifest carries a
@@ -194,30 +212,25 @@ func pgClientImage(major int) (string, error) {
 	return "", errPostgresMajorUnpinned{major}
 }
 
-// missingStackServices returns the bundled services the compose file at
-// path lacks, in bundledServices' order; nil when it has them all or cannot
-// be read as a compose file. `cyfr update` reads the file itself first and
-// refuses one it cannot parse.
-func missingStackServices(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+// stackLacks names what of the bundled stack a compose file's services
+// lack: a service named cyfr, and a service, under any name, whose image is
+// the managed Locus repository as written; none when it has both. Other
+// names are the release's own file's to choose.
+func stackLacks(services *yaml.Node) []string {
+	var lacks []string
+	if mapValue(services, "cyfr") == nil {
+		lacks = append(lacks, "a service named cyfr")
 	}
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
-		return nil
-	}
-	services := mapValue(root.Content[0], "services")
-	if services == nil {
-		return nil
-	}
-	var missing []string
-	for _, name := range bundledServices {
-		if mapValue(services, name) == nil {
-			missing = append(missing, name)
+	for i := 1; i < len(services.Content); i += 2 {
+		node := serviceImage(services.Content[i], 0)
+		if node == nil || node.Kind != yaml.ScalarNode {
+			continue
+		}
+		if repository, _, _ := splitImageReference(node.Value); repository != "" && normalizeRepository(repository) == release.RepoCyfrLocus {
+			return lacks
 		}
 	}
-	return missing
+	return append(lacks, "a service running "+release.RepoCyfrLocus)
 }
 
 // errUpdateInterrupted is the refusal of an update a signal ended before
@@ -238,6 +251,22 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		ctx = context.Background()
 	}
 	switch {
+	case o.offer || o.confirmed != "":
+		// The CYFR app's second yes, and its offer, are the stack's alone,
+		// at this program's release: the program and the app are never
+		// touched. The confirmed change holds cyfr update's lock to its
+		// end, so the app reads that an update runs from that lock alone
+		// (windowUpdateRuns).
+		if o.version != version.Version {
+			return fmt.Errorf("This cyfr is release %s, not release %s, which the CYFR app's Update CYFR named; nothing was changed. Open Update CYFR in the app again", version.Version, o.version)
+		}
+		if o.confirmed != "" {
+			unlock, err := lockUpdate()
+			if err != nil {
+				return err
+			}
+			defer unlock()
+		}
 	case o.continueAs == "":
 		finished, err := updateProgram(ctx, out, o)
 		if finished || err != nil {
@@ -247,11 +276,18 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		self, _ := selfExecutable()
 		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; your CYFR was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
 	}
+	// The CYFR app's first yes updates the app alone, wherever it runs:
+	// its run is the one whose output is the update's record
+	// (beginWindowUpdate), and its second yes, the stack's, is confirmed.
+	if o.confirmed == "" && !o.offer && writesTheRecord(out) {
+		fmt.Fprintf(out, "The CYFR app is release %s; Update CYFR offers your CYFR's own update, where this computer has one, now that the app has opened again.\n", version.Version)
+		return nil
+	}
 	if !access.HasComposeFile(".") {
 		fmt.Fprintf(out, "There is no CYFR in this directory, so the update ends with the program: it holds no compose file (%s). To update a CYFR, run 'cyfr update' in its directory, the one that holds its docker-compose.yml.\n", strings.Join(access.ComposeMainFiles, ", "))
 		return nil
 	}
-	return runHomeUpdate(ctx, out, errOut, o.yes)
+	return runHomeUpdate(ctx, out, errOut, o)
 }
 
 // runHomeUpdate is `cyfr update`'s home step in the working directory: the
@@ -264,7 +300,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 // step's failure would. The switch and the start are one step that is
 // never cut short: an interrupt during it is reported once the start has
 // answered.
-func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
+func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) error {
 	v := version.Version
 	if !release.IsVersion(v) {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
@@ -281,7 +317,13 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("cyfr update needs docker on PATH to update the stack; nothing was changed")
 	}
-	if done, err := u.offer(yes); done || err != nil {
+	if o.offer {
+		return u.showChange()
+	}
+	if plan.onRelease() {
+		return u.upOnRelease()
+	}
+	if done, err := u.offer(o.yes, o.confirmed); done || err != nil {
 		return err
 	}
 
@@ -309,6 +351,39 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	}
 	u.engine, u.head = e, head
 	return u.run()
+}
+
+// upOnRelease is the update of a home whose compose file names this
+// release's digests already: nothing to switch, no stop and no snapshot,
+// but its stack is started as 'cyfr up' starts it and waited for whole
+// (up), so an update run again after one whose services did not come up
+// waits again.
+func (u *updater) upOnRelease() error {
+	fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to switch; cyfr update starts it and waits for every service of its stack.\n", u.version)
+	if err := refuseUndeclaredRestore(); err != nil {
+		return err
+	}
+	if err := ensureAppArmor(u.ctx, u.out, "cyfr update"); err != nil {
+		return err
+	}
+	e, unlock, receipts, err := openLocked(u.ctx, "update", u.out)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := refuseUnfinished(receipts); err != nil {
+		return err
+	}
+	head, err := e.Head()
+	if err != nil {
+		return engineFailure(err)
+	}
+	u.engine, u.head = e, head
+	if err := u.up(); err != nil {
+		return fmt.Errorf("Release %s did not come up (%v); the stack is left as it started. 'cyfr restore backups/<timestamp>' puts back a snapshot an earlier update took", u.version, err)
+	}
+	fmt.Fprintf(u.out, "Release %s is up.\n", u.version)
+	return u.servedLocally
 }
 
 // scaffoldRelease is a release's scaffold fetched and verified, nothing of
@@ -346,15 +421,28 @@ type updater struct {
 	stopTimes []serviceStop
 	// oldRelease is the old stack's version, as its image answers it.
 	oldRelease string
-	snapshot   string
+	// leaving is the release the schema read's cyfr answers before the
+	// offer, and left its verified scaffold, whose docker-compose.yml tells
+	// a person's changes apart (composeEdits) and whose .env.example planEnv
+	// reads when the stopped image answers the same release.
+	leaving  string
+	left     scaffoldRelease
+	snapshot string
 	// scaffold is the release's scaffold, written only after the snapshot
 	// holds every file of it that it manages.
 	scaffold scaffoldRelease
-	// retired are the settings .env loses at the switch (planEnv), and
-	// envChanged whether the switch changed .env, removing them or naming
-	// the release's AppArmor profile, so a revert puts .env back from the
+	// retired are the settings .env loses at the switch, defaults the
+	// lines that held the old release's shipped value and take the new
+	// one's, stale the lines the person set that name a service the
+	// release no longer runs and twice the names assigned more than once
+	// that either would have changed, both reported and left (planEnv);
+	// envChanged is
+	// whether the switch changed .env, so a revert puts .env back from the
 	// snapshot.
 	retired    []string
+	defaults   map[string]string
+	stale      []staleLine
+	twice      []twiceLine
 	envChanged bool
 	// oldAppArmor is the AppArmor profile .env named before the switch,
 	// which the machine loses once the release runs (retireAppArmor).
@@ -362,10 +450,6 @@ type updater struct {
 	// offlineEnv are the settings each offline eval sets in its one-off
 	// container: a restore's lifts its own bar (restoreBarrier).
 	offlineEnv []string
-	// boundTargets are the container paths compose resolves a mount of the
-	// cyfr service at, through every form compose reads (merge keys,
-	// extends, override files), so the switch adds no default mount at one.
-	boundTargets map[string]bool
 	// servedLocally is the new release's start that left the home on this
 	// machine alone (startedLocally), reported once the update is.
 	servedLocally error
@@ -382,7 +466,7 @@ func (u *updater) run() error {
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
 	// the compose file and the scaffold files as they were.
-	steps := []func() error{u.readConfig, u.probePostgres, u.pull, u.readRoster, u.fetchScaffold}
+	steps := []func() error{u.readConfig, u.probePostgres, u.fetchScaffold, u.pull, u.readRoster}
 	for _, step := range steps {
 		if err := step(); err != nil {
 			if u.ctx.Err() != nil {
@@ -462,10 +546,7 @@ func (u *updater) run() error {
 	if err := u.writeScaffold(); err != nil {
 		return u.revertScaffold(err)
 	}
-	if err := u.switchImages(); err != nil {
-		if errors.Is(err, errComposeLeftSwitched) {
-			return fmt.Errorf("%v.\nThe stack is left stopped; restore the snapshot of release %s with:\n  cyfr restore %s", u.redactor().Text(err.Error()), u.oldRelease, u.snapshot)
-		}
+	if err := u.switchCompose(); err != nil {
 		return u.revertScaffold(err)
 	}
 	if err := u.up(); err != nil {
@@ -503,54 +584,148 @@ func (u *updater) fetchManifest() error {
 	return nil
 }
 
-// offer shows what the update changes and asks to make it, answering done
-// when the update ends here: a home whose compose file names this
-// release's digests on every managed line already is left alone, with no
-// stop and no snapshot; a home on a newer release than this cyfr is
-// refused, since the update would start older code over a database the
-// newer release migrated; and a change not confirmed is not made. yes
-// makes the change without asking; with no terminal to ask on and no yes,
-// the change is shown and not made.
-func (u *updater) offer(yes bool) (bool, error) {
+// change is what the update changes, as offer shows it, read-only: none
+// is the sentence for a home whose compose file names this release's
+// digests on every managed line already; a home on a newer release than
+// this cyfr is refused, since the update would start older code over a
+// database the newer release migrated, and so are an .env every start
+// refuses and a database another schema built. edits is what is said of
+// a compose file the person changed (composeEdits), apart from text,
+// since the update asks of it apart.
+func (u *updater) change() (text, edits, none string, err error) {
 	plan := u.compose
 	if plan.onRelease() {
-		fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.\n", u.version)
-		return true, nil
+		// Only --offer reads this: the run itself starts and waits on such
+		// a home before it offers (upOnRelease).
+		return "", "", fmt.Sprintf("This CYFR is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.", u.version), nil
 	}
 	from := plan.homeRelease()
 	if err := u.refuseNewer(from, "is on"); err != nil {
-		return true, fmt.Errorf("%w. Nothing was changed", err)
+		return "", "", "", fmt.Errorf("%w. Nothing was changed", err)
 	}
 	// .env is refused as every start refuses it before its first docker
 	// call, the schema read's included.
 	if fileExists(".env") {
 		if err := access.CheckEnvFile(".env"); err != nil {
-			return true, engineFailure(err)
+			return "", "", "", engineFailure(err)
 		}
 	}
 	if err := u.readSchema(); err != nil {
-		return true, err
+		return "", "", "", err
+	}
+	if err := u.refuseNewer(u.leaving, "runs"); err != nil {
+		return "", "", "", fmt.Errorf("%w. Nothing was changed", err)
+	}
+	if edits, err = u.composeEdits(); err != nil {
+		return "", "", "", err
 	}
 
+	var b strings.Builder
 	if from != "" {
-		fmt.Fprintf(u.out, "\nThis CYFR is on release %s; this cyfr is release %s.\n", from, u.version)
+		fmt.Fprintf(&b, "\nThis CYFR is on release %s; this cyfr is release %s.\n", from, u.version)
 	} else {
-		fmt.Fprintf(u.out, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
+		fmt.Fprintf(&b, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
 	}
-	fmt.Fprintf(u.out, "Updating it stops the stack, snapshots it into backups/, switches these images to release %s and starts it:\n", u.version)
+	fmt.Fprintf(&b, "Updating it stops the stack, snapshots it into backups/, replaces docker-compose.yml with release %s's own, the snapshot keeping this one with any edits you made to it, and starts it. Its images change:\n", u.version)
 	for _, line := range plan.managed {
 		if line.value != line.replacement {
-			fmt.Fprintf(u.out, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
+			fmt.Fprintf(&b, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
 		}
 	}
 	if len(plan.overrides) > 0 {
-		fmt.Fprintln(u.out, "Image lines left as written (not managed by cyfr update):")
+		fmt.Fprintf(&b, "Image lines cyfr update does not manage, which release %s's docker-compose.yml does not keep:\n", u.version)
 		for _, line := range plan.overrides {
-			fmt.Fprintf(u.out, "  %s: %s\n", line.service, line.value)
+			fmt.Fprintf(&b, "  %s: %s\n", line.service, line.value)
 		}
 	}
-	fmt.Fprintf(u.out, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
-	if yes {
+	fmt.Fprintf(&b, "Before it stops anything it checks that this CYFR's database was built from release %s's schema, since there is no upgrade path between schemas; once it has started the release, only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", u.version, releasesPage, u.version)
+	return b.String(), edits, "", nil
+}
+
+// confirmation is what --confirmed names: the digest of the folder, the
+// exact release and the compose file's bytes, as this update read them
+// for the change it shows. A run confirmed with it makes the change only
+// where it reads the same three itself, so the change made is worked out
+// from what the person was shown, a changed compose file's differences
+// among it.
+func (u *updater) confirmation() (string, error) {
+	folder, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cyfr update could not tell which folder it runs in (%v); nothing was changed", err)
+	}
+	h := sha256.New()
+	for _, part := range [][]byte{[]byte(folder), []byte(u.version), u.compose.original} {
+		fmt.Fprintf(h, "%d\n", len(part))
+		h.Write(part)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// shownChange is --offer's answer, its output's last line, in JSON: the
+// change and its confirmation, or the sentence for a home with nothing to
+// update.
+type shownChange struct {
+	Change       string `json:"change,omitempty"`
+	Confirmation string `json:"confirmation,omitempty"`
+	Current      string `json:"current,omitempty"`
+}
+
+// showChange prints the change as --offer answers it, making none, a
+// changed compose file's differences in it; a refusal is its error, as
+// the update's own would be.
+func (u *updater) showChange() error {
+	text, edits, none, err := u.change()
+	if err != nil {
+		return err
+	}
+	shown := shownChange{Change: text + edits, Current: none}
+	if none == "" {
+		if shown.Confirmation, err = u.confirmation(); err != nil {
+			return err
+		}
+	}
+	return json.NewEncoder(u.out).Encode(shown)
+}
+
+// offer shows what the update changes and asks to make it, answering done
+// when the update ends here (change): a change not confirmed is not made.
+// yes makes the change without asking, but for a compose file the person
+// changed (composeEdits), which is asked at a terminal or refused;
+// confirmed, the confirmation the CYFR app's page showed the change with,
+// its compose differences among it, makes it only where this update read
+// what that offer read, so the change made is the one the person saw and
+// answered there; with no terminal to ask on and neither, the change is
+// shown and not made.
+func (u *updater) offer(yes bool, confirmed string) (bool, error) {
+	text, edits, none, err := u.change()
+	if none != "" {
+		fmt.Fprintln(u.out, none)
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	fmt.Fprint(u.out, text)
+	if confirmed != "" {
+		read, err := u.confirmation()
+		if err != nil {
+			return true, err
+		}
+		if read != confirmed {
+			return true, errors.New("What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now")
+		}
+		return false, nil
+	}
+	question := "Update this CYFR? (yes/no)"
+	if edits != "" {
+		// --yes answers the update, never the loss of a person's own
+		// compose file: that is asked at a terminal or refused.
+		fmt.Fprint(u.out, edits)
+		if !askTerminal() {
+			return true, fmt.Errorf("Nothing changed: docker-compose.yml is not the file release %s shipped, and there is no terminal to ask on whether to replace it; --yes does not answer this question. Run 'cyfr update' at a terminal", u.leaving)
+		}
+		question = fmt.Sprintf("Replace docker-compose.yml with release %s's and update this CYFR? (yes/no)", u.version)
+	} else if yes {
 		return false, nil
 	}
 	if !askTerminal() {
@@ -558,7 +733,7 @@ func (u *updater) offer(yes bool) (bool, error) {
 	}
 	// The question ends with an interrupt as the steps before the stop do,
 	// and exits as an interrupted question does.
-	a, err := ask(u.ctx, bufio.NewReader(askInput), u.out, "Update this CYFR? (yes/no)", "no")
+	a, err := ask(u.ctx, bufio.NewReader(askInput), u.out, question, "no")
 	if err != nil {
 		return true, interruption{errUpdateInterrupted}
 	}
@@ -567,6 +742,176 @@ func (u *updater) offer(yes bool) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// composeEditsShown bounds the differing lines composeEdits shows.
+const composeEditsShown = 12
+
+// composeEdits answers what the update says before it asks of a compose
+// file that is not the one the release being left (u.leaving) shipped,
+// its image lines aside: the lines that differ, bounded and with no
+// environment value, that going on writes the release's file and the
+// snapshot keeps the person's, and a sentence of its own when a managed
+// service's volumes differ, since the release's file mounts only its own.
+// "" when the file is the release's own. The release's file is its
+// verified scaffold's, fetched and kept (u.left), which changes nothing.
+func (u *updater) composeEdits() (string, error) {
+	going := fmt.Sprintf("Going on writes release %s's docker-compose.yml in its place; the snapshot keeps yours, with your changes, for you to carry over by hand.\n", u.version)
+	if !release.IsVersion(u.leaving) {
+		return fmt.Sprintf("cyfr update cannot tell whether docker-compose.yml is the file a release shipped: the cyfr that runs this CYFR answers %q, which is no release.\n", u.leaving) + going, nil
+	}
+	left, err := fetchScaffold(u.leaving)
+	if err != nil {
+		return "", fmt.Errorf("cyfr update could not fetch the scaffold files of release %s, whose docker-compose.yml tells your changes to it apart (%v); nothing was stopped or changed", u.leaving, err)
+	}
+	shipped, ok := left.File("docker-compose.yml")
+	if !ok {
+		return "", fmt.Errorf("Release %s's scaffold carries no docker-compose.yml to tell your changes to it apart; nothing was stopped or changed", u.leaving)
+	}
+	u.left = left
+	differ := composeDifference(shipped, u.compose.original)
+	if len(differ) == 0 {
+		return "", nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "docker-compose.yml is not the file release %s shipped: these lines differ, image lines aside (- the release's, + yours):\n", u.leaving)
+	for i, line := range differ {
+		if i == composeEditsShown {
+			fmt.Fprintf(&b, "  … and %d more\n", len(differ)-i)
+			break
+		}
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	b.WriteString(going)
+	if services := volumesDiffer(shipped, u.compose.original); len(services) > 0 {
+		fmt.Fprintf(&b, "The differences change the volumes of %s: release %s's file mounts only its own, so the stack would start without the data the folders you mount there hold.\n", strings.Join(services, ", "), u.version)
+	}
+	return b.String(), nil
+}
+
+// composeImage is a compose file's image line, whose value composeDifference
+// sets aside.
+var composeImage = regexp.MustCompile(`^(\s*(?:-\s+)?image:).*$`)
+
+// composeDifference answers the lines that differ between the release's
+// compose file and the person's, image values aside, in order, the
+// release's prefixed "- " and the person's "+ ", each environment value
+// masked (maskEnvironment).
+func composeDifference(shipped, mine []byte) []string {
+	a, b := strings.Split(string(shipped), "\n"), strings.Split(string(mine), "\n")
+	// Each line's key is read once: the table below compares every line of
+	// one file with every line of the other.
+	keys := func(lines []string) []string {
+		out := make([]string, len(lines))
+		for i, line := range lines {
+			out[i] = composeImage.ReplaceAllString(line, "$1")
+		}
+		return out
+	}
+	ka, kb := keys(a), keys(b)
+	if slices.Equal(ka, kb) {
+		return nil
+	}
+	ma, mb := maskEnvironment(a), maskEnvironment(b)
+	// The longest common subsequence of the lines, from the ends.
+	lcs := make([][]int32, len(a)+1)
+	for i := range lcs {
+		lcs[i] = make([]int32, len(b)+1)
+	}
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			if ka[i] == kb[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	var out []string
+	i, j := 0, 0
+	for i < len(a) || j < len(b) {
+		switch {
+		case i < len(a) && j < len(b) && ka[i] == kb[j]:
+			i, j = i+1, j+1
+		case j < len(b) && (i == len(a) || lcs[i][j+1] >= lcs[i+1][j]):
+			out = append(out, "+ "+mb[j])
+			j++
+		default:
+			out = append(out, "- "+ma[i])
+			i++
+		}
+	}
+	return out
+}
+
+// envEntry is an environment line's name and the separator before its
+// value: `- NAME=`, `NAME:`, `NAME=`.
+var envEntry = regexp.MustCompile(`^(\s*(?:-\s+)?["']?[A-Za-z_][A-Za-z0-9_.-]*["']?\s*[=:])`)
+
+// maskEnvironment answers lines with every value of an environment
+// setting replaced by "…": each line of an `environment:` block, by its
+// indentation, and an inline `environment:` mapping or list whole.
+func maskEnvironment(lines []string) []string {
+	out := slices.Clone(lines)
+	block := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if block >= 0 {
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if indent > block {
+				if m := envEntry.FindString(line); m != "" {
+					out[i] = m + "…"
+				} else {
+					out[i] = line[:indent] + "…"
+				}
+				continue
+			}
+			block = -1
+		}
+		if rest, ok := strings.CutPrefix(trimmed, "environment:"); ok {
+			if strings.TrimSpace(rest) == "" {
+				block = indent
+			} else {
+				out[i] = line[:indent] + "environment: …"
+			}
+		}
+	}
+	return out
+}
+
+// volumesDiffer answers the services of the person's compose file whose
+// volumes, merge keys resolved, are not the release's: each a service the
+// release's file ships or one whose image is managed.
+func volumesDiffer(shipped, mine []byte) []string {
+	services := func(data []byte) map[string]any {
+		var doc struct {
+			Services map[string]any `yaml:"services"`
+		}
+		_ = yaml.Unmarshal(data, &doc)
+		return doc.Services
+	}
+	release, own := services(shipped), services(mine)
+	field := func(svc any, key string) any {
+		m, _ := svc.(map[string]any)
+		return m[key]
+	}
+	var differ []string
+	for name, svc := range own {
+		image, _ := field(svc, "image").(string)
+		repository, _, _ := splitImageReference(image)
+		_, shipsIt := release[name]
+		if !shipsIt && !slices.Contains(managedRepositories, normalizeRepository(repository)) {
+			continue
+		}
+		if !reflect.DeepEqual(field(svc, "volumes"), field(release[name], "volumes")) {
+			differ = append(differ, name)
+		}
+	}
+	slices.Sort(differ)
+	return differ
 }
 
 // refuseNewer refuses a home on release home, newer than this cyfr's:
@@ -605,21 +950,26 @@ type imageLine struct {
 	replacement string
 }
 
-// composePlan is the compose file as read, and the file the switch writes.
+// composePlan is the person's compose file as read, which the offer reads
+// and the snapshot holds, and the release's own file the switch writes in
+// its place.
 type composePlan struct {
-	path      string
-	original  []byte
-	rewritten []byte
+	path     string
+	original []byte
+	// managed are the person's managed image lines, each with the value the
+	// release pins it to, and overrides the person's other image lines,
+	// which the release's file does not keep.
 	managed   []imageLine
 	overrides []imageLine
-	// pulls are the managed images, each repository as written once, by the
-	// manifest's digest.
-	pulls []string
+	// release is the release's docker-compose.yml with its managed image
+	// lines pinned to the manifest's digests, and pulls those images, each
+	// repository as written once (pinRelease).
+	release []byte
+	pulls   []string
 }
 
-// planCompose reads the compose file, refuses one lacking a bundled
-// service, and computes the switch's file: every managed image line
-// rewritten in place to the manifest's digest, every other byte kept.
+// planCompose reads the person's compose file and refuses one that lacks
+// the bundled stack (stackLacks) before any docker call.
 func planCompose(path string, m *release.Manifest, ver string) (*composePlan, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -636,18 +986,20 @@ func planCompose(path string, m *release.Manifest, ver string) (*composePlan, er
 	if services.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("%s's services are not a mapping; nothing was changed", path)
 	}
-	if missing := missingStackServices(path); len(missing) > 0 {
-		return nil, fmt.Errorf("docker-compose.yml lacks the bundled stack's %s, so this project predates the stack; nothing was changed.\nRun 'cyfr init --force' to regenerate docker-compose.yml (.env is kept), then 'cyfr update' again.", strings.Join(missing, ", "))
+	if lacks := stackLacks(services); len(lacks) > 0 {
+		return nil, fmt.Errorf("docker-compose.yml lacks the bundled stack's %s, so this project predates the stack; nothing was changed.\nRun 'cyfr init --force' to regenerate docker-compose.yml (.env is kept), then 'cyfr update' again.", strings.Join(lacks, " and "))
 	}
-
 	plan := &composePlan{path: path, original: data}
-	rewritten := map[*yaml.Node]bool{}
-	type edit struct {
-		start, end int
-		text       string
-	}
-	var edits []edit
-	lines := lineStarts(data)
+	plan.managed, plan.overrides, _ = imageLines(services, m, ver)
+	return plan, nil
+}
+
+// imageLines reads a compose file's image lines: managed, each with the
+// value the release pins it to, cyfr and cyfr-locus at the version and the
+// manifest's digest, the bundled Caddy and Tailscale at their own tags and
+// the digest; every other line an override; and the managed images to
+// pull, each repository as written once, by the manifest's digest.
+func imageLines(services *yaml.Node, m *release.Manifest, ver string) (managed, overrides []imageLine, pulls []string) {
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		name, svc := services.Content[i].Value, services.Content[i+1]
 		node := serviceImage(svc, 0)
@@ -656,13 +1008,13 @@ func planCompose(path string, m *release.Manifest, ver string) (*composePlan, er
 		}
 		line := imageLine{service: name, value: node.Value, node: node}
 		if node.Kind != yaml.ScalarNode || strings.Contains(node.Value, "$") {
-			plan.overrides = append(plan.overrides, line)
+			overrides = append(overrides, line)
 			continue
 		}
 		line.repository, line.tag, _ = splitImageReference(node.Value)
 		repo := normalizeRepository(line.repository)
 		if line.repository == "" || !slices.Contains(managedRepositories, repo) {
-			plan.overrides = append(plan.overrides, line)
+			overrides = append(overrides, line)
 			continue
 		}
 		want, _ := m.Digest(repo)
@@ -676,30 +1028,57 @@ func planCompose(path string, m *release.Manifest, ver string) (*composePlan, er
 		default:
 			line.replacement = line.repository + ":" + ver + "@" + want
 		}
-		plan.managed = append(plan.managed, line)
-		if pull := line.repository + "@" + want; !slices.Contains(plan.pulls, pull) {
-			plan.pulls = append(plan.pulls, pull)
+		managed = append(managed, line)
+		if pull := line.repository + "@" + want; !slices.Contains(pulls, pull) {
+			pulls = append(pulls, pull)
 		}
-		if rewritten[node] {
+	}
+	return managed, overrides, pulls
+}
+
+// pinRelease answers the release's docker-compose.yml with every managed
+// image line rewritten in place to the value imageLines pins it to, every
+// other byte as the release ships it, and the images to pull.
+func pinRelease(data []byte, m *release.Manifest, ver string) ([]byte, []string, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, nil, err
+	}
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return nil, nil, errors.New("it is empty")
+	}
+	services := mapValue(root.Content[0], "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return nil, nil, errors.New("it has no services")
+	}
+	managed, _, pulls := imageLines(services, m, ver)
+	type edit struct {
+		start, end int
+		text       string
+	}
+	var edits []edit
+	rewritten := map[*yaml.Node]bool{}
+	lines := lineStarts(data)
+	for _, line := range managed {
+		if rewritten[line.node] {
 			continue
 		}
-		rewritten[node] = true
-		start, end, err := scalarSpan(data, lines, node)
+		rewritten[line.node] = true
+		start, end, err := scalarSpan(data, lines, line.node)
 		if err != nil {
-			return nil, fmt.Errorf("cyfr update cannot rewrite %s's image on line %d of %s in place (%v); nothing was changed. Write it as a plain or quoted scalar on one line", name, node.Line, path, err)
+			return nil, nil, fmt.Errorf("%s's image on line %d: %v", line.service, line.node.Line, err)
 		}
-		edits = append(edits, edit{start, end, renderScalar(line.replacement, node.Style)})
+		edits = append(edits, edit{start, end, renderScalar(line.replacement, line.node.Style)})
 	}
 	slices.SortFunc(edits, func(a, b edit) int { return b.start - a.start })
 	out := slices.Clone(data)
 	for _, e := range edits {
 		out = slices.Concat(out[:e.start], []byte(e.text), out[e.end:])
 	}
-	if err := checkRewrite(out, plan.managed); err != nil {
-		return nil, fmt.Errorf("cyfr update could not rewrite %s's image lines in place (%v); nothing was changed", path, err)
+	if err := checkRewrite(out, managed); err != nil {
+		return nil, nil, err
 	}
-	plan.rewritten = out
-	return plan, nil
+	return out, pulls, nil
 }
 
 // onRelease reports whether every managed image line names the release's
@@ -1167,10 +1546,6 @@ func (u *updater) readConfig() error {
 	if err != nil {
 		return err
 	}
-	u.boundTargets = map[string]bool{}
-	for _, m := range mounts {
-		u.boundTargets[path.Clean(m.Target)] = true
-	}
 	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
 	if snapshot := env(restoreBarrier); snapshot != "" {
 		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore %s' again before cyfr %s; nothing was changed", snapshot, restoreBarrier, snapshot, u.command)
@@ -1260,9 +1635,6 @@ func (u *updater) readConfig() error {
 			return err
 		}
 		c.storageMounts = append([]storageMount{{host: resolved, dir: true}}, nested...)
-		// The root the snapshot copies is the one compose resolves, which
-		// the switch keeps: ensureComposeFields adds no mount at a
-		// target already bound.
 		fmt.Fprintf(u.out, "Storage root %s is %s on the host.\n", dataPath, resolved)
 		for _, n := range nested {
 			fmt.Fprintf(u.out, "  %s is %s on the host.\n", path.Join(dataPath, n.rel), n.host)
@@ -1459,7 +1831,9 @@ func (u *updater) pull() error {
 // scaffold fetch verifies itself, and refuses a folder it writes in that is
 // a link it does not follow (scaffold.ErrLinkNotFollowed) and a
 // managed path that is there as something other than a regular file, which
-// the snapshot cannot hold; both before the stack stops.
+// the snapshot cannot hold; both before the stack stops. It pins the
+// release's docker-compose.yml, whose images the pull fetches and which
+// the switch writes (pinRelease).
 func (u *updater) fetchScaffold() error {
 	r, err := fetchScaffold(u.version)
 	if err != nil {
@@ -1473,7 +1847,15 @@ func (u *updater) fetchScaffold() error {
 			return fmt.Errorf("%s, a scaffold file cyfr update replaces, is not a regular file, so the snapshot cannot hold it; nothing was changed", name)
 		}
 	}
-	u.scaffold = r
+	compose, ok := r.File("docker-compose.yml")
+	if !ok {
+		return fmt.Errorf("Release %s's scaffold carries no docker-compose.yml; the running stack was not touched, and %s", u.version, u.composeAsRead())
+	}
+	pinned, pulls, err := pinRelease(compose, u.manifest, u.version)
+	if err != nil {
+		return fmt.Errorf("Release %s's docker-compose.yml could not be pinned to its manifest (%v); the running stack was not touched, and %s", u.version, err, u.composeAsRead())
+	}
+	u.scaffold, u.compose.release, u.compose.pulls = r, pinned, pulls
 	return nil
 }
 
@@ -1496,15 +1878,49 @@ func (u *updater) writeScaffold() error {
 			return fmt.Errorf("Naming release %s's AppArmor profile in .env failed (%v)", u.version, err)
 		}
 	}
-	if len(u.retired) == 0 {
-		return nil
+	if len(u.retired) > 0 || len(u.defaults) > 0 {
+		u.envChanged = true
+		if err := access.EditEnvFile(".env", u.defaults, u.retired); err != nil {
+			return fmt.Errorf("Changing the settings release %s ships in .env failed (%v)", u.version, err)
+		}
 	}
-	u.envChanged = true
-	if err := access.EditEnvFile(".env", nil, u.retired); err != nil {
-		return fmt.Errorf("Removing the settings release %s no longer reads from .env failed (%v)", u.version, err)
+	if len(u.retired) > 0 {
+		fmt.Fprintf(u.out, "Removed from .env the settings release %s shipped and release %s no longer reads: %s.\n",
+			u.oldRelease, u.version, strings.Join(u.retired, ", "))
 	}
-	fmt.Fprintf(u.out, "Removed from .env the settings release %s shipped and release %s no longer reads: %s.\n",
-		u.oldRelease, u.version, strings.Join(u.retired, ", "))
+	if len(u.defaults) > 0 {
+		var set []string
+		for _, name := range slices.Sorted(maps.Keys(u.defaults)) {
+			set = append(set, name+"="+u.defaults[name])
+		}
+		fmt.Fprintf(u.out, "Set in .env to release %s's shipped values the settings that held release %s's: %s.\n",
+			u.version, u.oldRelease, strings.Join(set, ", "))
+	}
+	if len(u.stale) > 0 {
+		fmt.Fprintf(u.out, "These .env settings name a service release %s's docker-compose.yml no longer runs, and cyfr update left them as you set them:\n", u.version)
+		for _, line := range u.stale {
+			if line.write != "" {
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: write %s there, release %s's shipped value\n", line.name, line.line, line.host, line.write, u.version)
+			} else {
+				fmt.Fprintf(u.out, "  %s, line %d, names %s: name a service release %s's docker-compose.yml runs there\n", line.name, line.line, line.host, u.version)
+			}
+		}
+	}
+	if len(u.twice) > 0 {
+		fmt.Fprintln(u.out, "These .env settings are assigned more than once, so they are yours and cyfr update changed none of their lines:")
+		for _, line := range u.twice {
+			numbers := make([]string, len(line.lines))
+			for i, n := range line.lines {
+				numbers[i] = strconv.Itoa(n)
+			}
+			at := strings.Join(numbers[:len(numbers)-1], ", ") + " and " + numbers[len(numbers)-1]
+			if line.retired {
+				fmt.Fprintf(u.out, "  %s, lines %s: release %s no longer reads it, so remove every line of it\n", line.name, at, u.version)
+			} else {
+				fmt.Fprintf(u.out, "  %s, lines %s: release %s ships %s=%s\n", line.name, at, u.version, line.name, line.write)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1520,40 +1936,191 @@ func envNames(example []byte) map[string]bool {
 	return names
 }
 
-// planEnv names the settings .env loses at the switch: each one the
-// release this CYFR runs shipped in its .env.example that the new
-// release's .env.example no longer declares, set or commented, since the
-// new server refuses to boot on a name it does not read. A name the old
-// .env.example never shipped is the person's, kept whatever its value. Both
-// .env.example files are read from the releases' scaffolds, which their
-// signed checksums verify; a CYFR on no release version, or on this one,
-// loses nothing.
+// planEnv plans .env's change at the switch from the .env.example the
+// release this CYFR runs shipped and the new release's, both read from the
+// releases' scaffolds, which their signed checksums verify. The install's
+// own .env.example is no witness: `cyfr init` laid it down and no update
+// replaces it (scaffold.IsManaged), so after one update it is not the
+// release being left's. A CYFR on no release version, or on this one,
+// gets no change.
+//
+//   - A setting the old .env.example declared, set or commented, that the
+//     new one no longer declares is removed, since the new server refuses
+//     to boot on a name it does not read; a name the old .env.example never
+//     shipped is the person's, kept whatever its value.
+//   - A line holding exactly the value the old .env.example shipped, where
+//     the new one ships another, is the release's and takes the new value;
+//     a commented line ships no value.
+//   - Any other line that names, as a host, a service of the old
+//     release's docker-compose.yml that the new one does not run is the
+//     person's: it is left, and reported with what to write there.
+//   - A name assigned more than once is the person's: none of its lines
+//     changes, and one the rules above would change is reported.
 func (u *updater) planEnv() error {
 	if !release.IsVersion(u.oldRelease) || u.oldRelease == u.version {
 		return nil
 	}
-	shipped, err := fetchScaffold(u.oldRelease)
-	if err != nil {
-		return fmt.Errorf("cyfr update could not fetch the scaffold files of release %s, which name the settings it shipped in .env.example (%v)", u.oldRelease, err)
+	shipped := u.left
+	if u.oldRelease != u.leaving || shipped == nil {
+		var err error
+		if shipped, err = fetchScaffold(u.oldRelease); err != nil {
+			return fmt.Errorf("cyfr update could not fetch the scaffold files of release %s, which name the settings it shipped in .env.example (%v)", u.oldRelease, err)
+		}
 	}
 	old, oldOK := shipped.File(".env.example")
 	now, nowOK := u.scaffold.File(".env.example")
 	if !oldOK || !nowOK {
 		return nil
 	}
-	held, err := access.ReadEnvValues(".env")
+	text, err := os.ReadFile(".env")
 	if err != nil {
 		return fmt.Errorf("cyfr update could not read .env (%v)", err)
 	}
+	held, err := access.EnvValues(text)
+	if err != nil {
+		return fmt.Errorf("cyfr update could not read .env (%v)", err)
+	}
+	lines, err := access.EnvLines(text)
+	if err != nil {
+		return fmt.Errorf("cyfr update could not read .env (%v)", err)
+	}
+	oldValues, err := access.EnvValues(old)
+	if err != nil {
+		return fmt.Errorf("release %s's .env.example did not read (%v)", u.oldRelease, err)
+	}
+	newValues, err := access.EnvValues(now)
+	if err != nil {
+		return fmt.Errorf("release %s's .env.example did not read (%v)", u.version, err)
+	}
 	declared := envNames(now)
-	for name := range envNames(old) {
-		if _, set := held[name]; set && !declared[name] {
+	oldCompose, _ := shipped.File("docker-compose.yml")
+	newCompose, _ := u.scaffold.File("docker-compose.yml")
+	gone := retiredServices(oldCompose, newCompose)
+	shippedOld := envNames(old)
+	for _, name := range slices.Sorted(maps.Keys(held)) {
+		value, at := held[name], lines[name]
+		retired := shippedOld[name] && !declared[name]
+		next, ships := newValues[name]
+		shippedValue, shippedOK := oldValues[name]
+		defaulted := shippedOK && value == shippedValue && ships && next != value
+		if len(at) > 1 {
+			// A name assigned more than once is the person's: the edit
+			// would remove every line but its last.
+			if retired || defaulted {
+				u.twice = append(u.twice, twiceLine{name: name, lines: at, retired: retired, write: next})
+			}
+			continue
+		}
+		switch {
+		case retired:
 			u.retired = append(u.retired, name)
+			continue
+		case defaulted:
+			if u.defaults == nil {
+				u.defaults = map[string]string{}
+			}
+			u.defaults[name] = next
+			continue
+		case shippedOK && value == shippedValue:
+			continue
+		}
+		for _, host := range hostsIn(value) {
+			if gone[host] {
+				u.stale = append(u.stale, staleLine{name: name, line: at[len(at)-1], host: host, write: newValues[name]})
+				break
+			}
 		}
 	}
-	slices.Sort(u.retired)
 	return nil
 }
+
+// staleLine is a .env line the person set that names a service the
+// release no longer runs: its name, its line, the service it names, and
+// the new release's shipped value for the name, "" when it ships none.
+// Its value is never said: a line that names a host may carry a
+// credential.
+type staleLine struct {
+	name  string
+	line  int
+	host  string
+	write string
+}
+
+// twiceLine is a name .env assigns more than once, which the update would
+// otherwise have removed (retired) or set to the new release's shipped
+// value (write), and leaves as the person wrote it.
+type twiceLine struct {
+	name    string
+	lines   []int
+	retired bool
+	write   string
+}
+
+// retiredServices answers the services of the old release's compose file
+// the new release's does not have, by name; none when either does not read.
+func retiredServices(old, now []byte) map[string]bool {
+	names := func(data []byte) map[string]bool {
+		var root yaml.Node
+		if yaml.Unmarshal(data, &root) != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+			return nil
+		}
+		services := mapValue(root.Content[0], "services")
+		if services == nil || services.Kind != yaml.MappingNode {
+			return nil
+		}
+		out := map[string]bool{}
+		for i := 0; i < len(services.Content); i += 2 {
+			out[services.Content[i].Value] = true
+		}
+		return out
+	}
+	before, after := names(old), names(now)
+	if before == nil || after == nil {
+		return nil
+	}
+	gone := map[string]bool{}
+	for name := range before {
+		if !after[name] {
+			gone[name] = true
+		}
+	}
+	return gone
+}
+
+// hostsIn answers the hosts a setting's value names in any form it takes:
+// each of its comma- or space-separated items, an `id=` before it set
+// aside (a list of named URLs), read as [scheme://][userinfo@]host[:port]
+// and whatever path, query or fragment follows.
+func hostsIn(value string) []string {
+	var hosts []string
+	for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+		if id, rest, ok := strings.Cut(item, "="); ok && envID.MatchString(id) {
+			item = rest
+		}
+		if _, rest, ok := strings.Cut(item, "://"); ok {
+			item = rest
+		}
+		if i := strings.IndexAny(item, "/?#"); i >= 0 {
+			item = item[:i]
+		}
+		if i := strings.LastIndexByte(item, '@'); i >= 0 {
+			item = item[i+1:]
+		}
+		host := item
+		if strings.HasPrefix(host, "[") {
+			host, _, _ = strings.Cut(host[1:], "]")
+		} else {
+			host, _, _ = strings.Cut(host, ":")
+		}
+		if host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+// envID is the id of an `id=URL` item.
+var envID = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // revertScaffold puts the scaffold files back from the snapshot after a
 // failure before the start, then starts the old stack as restartOld does;
@@ -1599,20 +2166,35 @@ func (u *updater) revertScaffold(reason error) error {
 func (u *updater) readSchema() error {
 	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
 	defer cancel()
-	schema, err := readRunningSchema(ctx, u.compose.serviceImage("cyfr"))
+	output, err := readRunningSchema(ctx, u.compose.serviceImage("cyfr"))
+	var schema string
+	if err == nil {
+		schema, err = markedLine(output, "CYFR_SCHEMA=")
+	}
 	if err == nil && !schemaFingerprint.MatchString(schema) {
 		err = fmt.Errorf("the answer %q is not a schema fingerprint", schema)
 	}
 	if err != nil {
+		// What docker says passes the engine's redaction, .env's values
+		// blanked, before it is said: a diagnostic can quote them. The
+		// engine opens under the lock, after this read.
+		redaction := access.NewRedactor(".")
+		if u.engine != nil {
+			redaction = u.engine.Redactor()
+		}
+		err = redaction.Err(err)
 		return fmt.Errorf("cyfr update could not read which schema this CYFR's database was built from (%v), and release %s runs only on a database built from its own schema; nothing was stopped or changed. Fix the cause and run 'cyfr update' again", err, u.version)
 	}
 	if schema != u.manifest.SchemaFingerprint {
 		return fmt.Errorf("This CYFR's database was built from schema %s, and release %s runs only on a database built from schema %s: there is no upgrade path between them, so nothing was stopped or changed.\nTo start over on release %s, keeping nothing of this CYFR: run 'cyfr uninstall' here, then delete this directory by hand (with sudo: CYFR's container owns data/) and remove the volumes it names, then install release %s with: %s | CYFR_VERSION=%s sh", shortFingerprint(schema), u.version, shortFingerprint(u.manifest.SchemaFingerprint), u.version, u.version, installScript, u.version)
 	}
+	if u.leaving, err = markedLine(output, "CYFR_RELEASE="); err != nil {
+		return fmt.Errorf("cyfr update could not read which release runs this CYFR (%v); nothing was stopped or changed. Fix the cause and run 'cyfr update' again", err)
+	}
 	return nil
 }
 
-// readRunningSchema answers the schema fingerprint of this directory's
+// readRunningSchema answers schemaExpr's output from this directory's
 // cyfr: through its running container, found by the compose project's
 // labels, or, with none running, offline from image, the image its compose
 // file names.
@@ -1649,10 +2231,7 @@ func readRunningSchema(ctx context.Context, image string) (string, error) {
 			"--entrypoint", "/usr/bin/timeout", "-e", "CYFR_ACCESS=local", "-e", "CYFR_SECRET_KEY_BASE",
 			image, schemaReadLife, "/app/bin/cyfr", "eval", schemaExpr)
 	}
-	if err != nil {
-		return "", err
-	}
-	return markedLine(output, "CYFR_SCHEMA=")
+	return output, err
 }
 
 // schemaReadLife bounds the offline read's container from inside, in
@@ -2055,10 +2634,12 @@ func copyTree(root, dst string, exclude map[string]bool, out io.Writer) error {
 
 // ---- the switch -----------------------------------------------------------------
 
-// switchImages writes the planned compose file over one that is still the
-// file the plan read, then lets ensureComposeFields add any field cyfr
-// requires.
-func (u *updater) switchImages() error {
+// switchCompose writes the release's docker-compose.yml, its images pinned
+// (pinRelease), over the person's file, which must still be the bytes the
+// plan read and the snapshot holds, keeping its mode. It says once where
+// that file is now, and which of its image lines the release's file does
+// not keep.
+func (u *updater) switchCompose() error {
 	current, err := os.ReadFile(u.compose.path)
 	if err != nil || !bytes.Equal(current, u.compose.original) {
 		return fmt.Errorf("%s changed while cyfr update ran; the snapshot is %s", u.compose.path, u.snapshot)
@@ -2067,47 +2648,158 @@ func (u *updater) switchImages() error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(u.compose.path, u.compose.rewritten, info.Mode().Perm()); err != nil {
+	if err := writeFileAtomic(u.compose.path, u.compose.release, info.Mode().Perm()); err != nil {
 		return err
 	}
-	added, err := ensureComposeFields(u.compose.path, u.boundTargets)
-	if err != nil {
-		// The old stack starts again under the file it was created from.
-		if perr := replaceCompose(u.compose.path, u.compose.original, info.Mode().Perm()); perr != nil {
-			return fmt.Errorf("%w: %s could not gain the fields cyfr requires (%v), and the file the update read could not be put back (%v)", errComposeLeftSwitched, u.compose.path, err, perr)
+	said := fmt.Sprintf("docker-compose.yml is now release %s's own file; the one it replaced, with any edits you made to it, is %s, to copy back from what you still need.", u.version, filepath.Join(u.snapshot, "compose"))
+	if len(u.compose.overrides) > 0 {
+		var lines []string
+		for _, line := range u.compose.overrides {
+			lines = append(lines, line.service+": "+line.value)
 		}
-		return fmt.Errorf("%s could not gain the fields cyfr requires (%v); it was put back as the update read it", u.compose.path, err)
+		said += " Its image lines cyfr update does not manage are not in the new file: " + strings.Join(lines, ", ") + "."
 	}
-	if len(added) > 0 {
-		fmt.Fprintf(u.out, "Added missing fields to docker-compose.yml: %v\n", added)
-	}
+	fmt.Fprintln(u.out, said)
 	return nil
 }
-
-// errComposeLeftSwitched is a switch that failed with the switched compose
-// file still in place, so the old stack must not start under it.
-var errComposeLeftSwitched = errors.New("the compose file is left switched")
 
 // up starts the switched stack through the one start path every cyfr
 // start takes (access.Engine.Start): the stack checked, a tailnet node
 // validated before Serve opens, and cyfr's health awaited, the image's
-// health check being its readiness.
+// health check being its readiness. The update is done only when every
+// service of the stack it started is up as well (waitStack).
 func (u *updater) up() error {
 	fmt.Fprintf(u.out, "Starting release %s...\n", u.version)
 	err := u.start("update")
 	if local := (startedLocally{}); errors.As(err, &local) {
 		u.servedLocally = err
-		return nil
+	} else if err != nil {
+		return err
 	}
-	return err
+	return u.waitStack()
+}
+
+// stackContainer is a container as `docker compose ps --format json`
+// writes it.
+type stackContainer struct {
+	Service, State, Health string
+}
+
+// waitStack waits, within the one deadline stackHealthWindow from now, for
+// every service of the stack the start selected (`docker compose config
+// --services` under the head it started) to be up: each of its running
+// containers running, and healthy where it has a health check. A service
+// whose health check failed ends the wait at once; at the deadline, a
+// docker call it cut short included, every service not seen up is named,
+// each with what was last seen of it, with the command that shows why.
+func (u *updater) waitStack() error {
+	wait, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), stackHealthWindow)
+	defer cancel()
+	call, cancelCall := context.WithTimeout(wait, composeRunTimeout)
+	listed, err := u.composeOutput(call, "config", "--services")
+	cancelCall()
+	services := strings.Fields(listed)
+	slices.Sort(services)
+	seen := map[string]string{}
+	for _, svc := range services {
+		seen[svc] = "not read"
+	}
+	late := func() error {
+		names := slices.Sorted(maps.Keys(seen))
+		var states []string
+		for _, svc := range names {
+			states = append(states, fmt.Sprintf("%s (%s)", svc, seen[svc]))
+		}
+		return fmt.Errorf("%s did not come up within %s; see why with 'docker compose logs %s'", strings.Join(states, ", "), stackHealthWindow, strings.Join(names, " "))
+	}
+	switch {
+	case err != nil && wait.Err() != nil:
+		return fmt.Errorf("the started stack's services did not read within %s (%v)", stackHealthWindow, err)
+	case err != nil:
+		return fmt.Errorf("docker compose could not list the started stack's services (%v)", err)
+	}
+	for {
+		// Each read ends by the wait's own deadline, within the bound of
+		// every docker call.
+		call, cancelCall := context.WithTimeout(wait, composeRunTimeout)
+		raw, err := u.composeOutput(call, "ps", "--format", "json")
+		cancelCall()
+		if err != nil {
+			if wait.Err() != nil {
+				return late()
+			}
+			return fmt.Errorf("docker compose could not list the started stack's containers (%v)", err)
+		}
+		containers, err := readContainers(raw)
+		if err != nil {
+			return fmt.Errorf("docker compose ps answered what is not its JSON (%v)", err)
+		}
+		failed := false
+		for _, svc := range services {
+			seen[svc] = "not running"
+			for _, c := range containers {
+				if c.Service != svc {
+					continue
+				}
+				switch {
+				case c.State != "running":
+					seen[svc] = c.State
+				case c.Health == "unhealthy":
+					seen[svc], failed = c.Health, true
+				case c.Health != "" && c.Health != "healthy":
+					seen[svc] = c.Health
+				default:
+					delete(seen, svc)
+					continue
+				}
+				break
+			}
+		}
+		if len(seen) == 0 {
+			return nil
+		}
+		deadline, _ := wait.Deadline()
+		if failed || !time.Now().Add(stackHealthPoll).Before(deadline) {
+			return late()
+		}
+		time.Sleep(stackHealthPoll)
+	}
+}
+
+// readContainers reads `docker compose ps --format json`: one object a
+// line, or one array, as Compose before 2.21 writes it.
+func readContainers(raw string) ([]stackContainer, error) {
+	raw = strings.TrimSpace(raw)
+	var containers []stackContainer
+	if strings.HasPrefix(raw, "[") {
+		err := json.Unmarshal([]byte(raw), &containers)
+		return containers, err
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		var c stackContainer
+		if err := json.Unmarshal([]byte(line), &c); err != nil {
+			return nil, err
+		}
+		containers = append(containers, c)
+	}
+	return containers, nil
 }
 
 // start starts the stack as .env and the compose file hold it, through the
 // one start path (access.Engine.StartWithin), cause naming the command,
-// waiting startHealth for cyfr's health. A start that leaves the home on
-// this machine alone answers startedLocally.
+// waiting startHealth for cyfr's health. The head the start read is the
+// update's from then on, so what is waited for and what a failure stops is
+// what it started. A start that leaves the home on this machine alone
+// answers startedLocally.
 func (u *updater) start(cause string) error {
-	return answerFailure(u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth))
+	rc, err := u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth)
+	if rc.FinalHead != nil {
+		u.head = *rc.FinalHead
+	}
+	return answerFailure(rc, err)
 }
 
 // restartOld starts the old stack again after a failure before the switch,
@@ -2202,160 +2894,7 @@ func (u *updater) report() {
 		fmt.Fprintf(u.out, "  stopped %s in %.1fs\n", s.service, s.took.Seconds())
 	}
 	fmt.Fprintf(u.out, "Snapshot of release %s: %s\n", u.oldRelease, u.snapshot)
-	if len(u.compose.overrides) > 0 {
-		fmt.Fprintln(u.out, "Image lines left as written (not managed by cyfr update):")
-		for _, line := range u.compose.overrides {
-			fmt.Fprintf(u.out, "  %s: %s\n", line.service, line.value)
-		}
-	}
 }
-
-// requiredVolumes are the cyfr service's default mounts, each added only when
-// no volume of the service, in short or long syntax, already targets its
-// container path: a customized source keeps its own.
-var requiredVolumes = []string{
-	"./data:/app/data",
-	"./aqua:/app/seed/aqua",
-}
-
-// requiredPorts must appear in the cyfr service's ports list, each spelled as
-// the shipped docker-compose.yml spells it. Bound to the loopback interface:
-// the Codex CLI and the browser talk to http://127.0.0.1:${CYFR_PORT:-4000},
-// but the un-TLS'd endpoint is never published to the internet (Caddy fronts
-// :80/:443 and reaches cyfr over the compose network).
-var requiredPorts = []string{
-	"127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}",
-}
-
-// requiredEnvFiles must appear in the cyfr service's env_file list.
-var requiredEnvFiles = []string{
-	".env",
-}
-
-// ensureComposeFields adds the cyfr service's required fields while
-// preserving custom settings. bound names the mount targets compose resolves,
-// so no default mount shadows one supplied by an override or another source.
-// It returns descriptions of the additions, or an error when the file cannot
-// be read, parsed or written, or contains no cyfr service.
-func ensureComposeFields(path string, bound map[string]bool) ([]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("docker-compose.yml not found")
-	}
-
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("docker-compose.yml is not valid YAML: %w", err)
-	}
-	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
-		return nil, fmt.Errorf("docker-compose.yml is empty")
-	}
-
-	doc := root.Content[0]
-	if doc.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("docker-compose.yml top level is not a mapping")
-	}
-
-	servicesNode := mapValue(doc, "services")
-	if servicesNode == nil || servicesNode.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("docker-compose.yml has no `services:` section")
-	}
-
-	// Find the cyfr service. We look for a service literally named `cyfr`
-	// first; if not present, fall back to the first service whose
-	// `container_name` is `cyfr` (some users rename the service key).
-	cyfrNode := mapValue(servicesNode, "cyfr")
-	if cyfrNode == nil {
-		for i := 0; i < len(servicesNode.Content); i += 2 {
-			if i+1 >= len(servicesNode.Content) {
-				break
-			}
-			svc := servicesNode.Content[i+1]
-			if svc.Kind != yaml.MappingNode {
-				continue
-			}
-			if cn := mapValue(svc, "container_name"); cn != nil && cn.Value == "cyfr" {
-				cyfrNode = svc
-				break
-			}
-		}
-	}
-	if cyfrNode == nil || cyfrNode.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("docker-compose.yml has no `cyfr` service (looked for `services.cyfr` and `container_name: cyfr`)")
-	}
-
-	var added []string
-
-	// container_name: cyfr — stable name for `docker compose` / `docker logs cyfr`.
-	if cn := mapValue(cyfrNode, "container_name"); cn == nil {
-		setMapValue(cyfrNode, "container_name", &yaml.Node{
-			Kind:  yaml.ScalarNode,
-			Tag:   "!!str",
-			Value: "cyfr",
-		})
-		added = append(added, "container_name: cyfr")
-	}
-
-	// volumes — ensure each required mount's target is bound, matched by
-	// the container path as compose reads it, its variables taken from the
-	// environment and the project's .env, so a customized source is never
-	// shadowed by a second mount at its target.
-	lookup := composeEnv(filepath.Join(filepath.Dir(path), ".env"))
-	for _, mount := range requiredVolumes {
-		if ensureVolumeTarget(cyfrNode, mount, lookup, bound) {
-			added = append(added, "volumes: "+mount)
-		}
-	}
-
-	// ports — ensure the cyfr listener's port is published. We match by
-	// container port and protocol as compose reads them, its variables taken
-	// from the environment and the project's .env (any host-binding form
-	// counts), so an existing "4000:4000" isn't duplicated; only a project
-	// publishing no tcp mapping of that port, a udp-only one included, gets
-	// the loopback-bound entry added (existing 0.0.0.0 publishes are left
-	// alone).
-	for _, port := range requiredPorts {
-		if ensurePublishedPort(cyfrNode, port, lookup) {
-			added = append(added, "ports: "+port)
-		}
-	}
-
-	// env_file — ensure .env is referenced.
-	for _, ef := range requiredEnvFiles {
-		if ensureSequenceItem(cyfrNode, "env_file", ef) {
-			added = append(added, "env_file: "+ef)
-		}
-	}
-
-	if len(added) == 0 {
-		return nil, nil
-	}
-
-	// Re-serialize with 2-space indentation to match the cyfr init template
-	// (yaml.v3 defaults to 4 spaces, which would surprise users on update).
-	var buf strings.Builder
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&root); err != nil {
-		return nil, fmt.Errorf("failed to re-serialize docker-compose.yml: %w", err)
-	}
-	if err := enc.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close encoder: %w", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)
-	}
-	if err := replaceCompose(path, []byte(buf.String()), info.Mode().Perm()); err != nil {
-		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)
-	}
-	return added, nil
-}
-
-// replaceCompose replaces the compose file whole with the mode given, so a
-// write that fails or dies leaves the file as it was: the fields' rewrite
-// and the switch's put-back. A variable so a test can fail it.
-var replaceCompose = writeFileAtomic
 
 // mapValue returns the value node for the given key in a mapping node, or
 // nil if the key is absent or the node isn't a mapping.
@@ -2373,407 +2912,4 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
-}
-
-// setMapValue sets a key in a mapping node, replacing it if present or
-// appending it if absent.
-func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return
-	}
-	for i := 0; i < len(m.Content); i += 2 {
-		if i+1 >= len(m.Content) {
-			break
-		}
-		if m.Content[i].Value == key {
-			m.Content[i+1] = value
-			return
-		}
-	}
-	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		value,
-	)
-}
-
-// composeEnv returns the lookup compose expands docker-compose.yml's
-// variables with: the process environment, then the dotenv file at envPath.
-func composeEnv(envPath string) func(string) (string, bool) {
-	dotenv, err := access.ReadEnvValues(envPath)
-	if err != nil {
-		dotenv = map[string]string{}
-	}
-	return func(name string) (string, bool) {
-		if value, ok := os.LookupEnv(name); ok {
-			return value, true
-		}
-		value, ok := dotenv[name]
-		return value, ok
-	}
-}
-
-// interpolate expands s's variables as compose does, each value taken from
-// lookup: `$$` is a literal `$`; `$VAR` and `${VAR}` are VAR's value, empty
-// when unset; `${VAR:-word}` is word when VAR is unset or empty and
-// `${VAR-word}` when it is unset; `${VAR:+word}` is word when VAR is set and
-// non-empty and `${VAR+word}` when it is set, else empty; `${VAR:?err}` and
-// `${VAR?err}` refuse where `:-` and `-` would take the word. A word may hold
-// variables itself. ok is false where compose refuses the text.
-func interpolate(s string, lookup func(string) (string, bool)) (string, bool) {
-	var out strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] != '$' || i+1 == len(s) {
-			out.WriteByte(s[i])
-			continue
-		}
-		switch next := s[i+1]; {
-		case next == '$':
-			out.WriteByte('$')
-			i++
-		case next == '{':
-			end := closingBrace(s, i+1)
-			if end < 0 {
-				return "", false
-			}
-			value, ok := substitute(s[i+2:end], lookup)
-			if !ok {
-				return "", false
-			}
-			out.WriteString(value)
-			i = end
-		case isNameByte(next, true):
-			end := i + 2
-			for end < len(s) && isNameByte(s[end], false) {
-				end++
-			}
-			value, _ := lookup(s[i+1 : end])
-			out.WriteString(value)
-			i = end - 1
-		default:
-			out.WriteByte('$')
-		}
-	}
-	return out.String(), true
-}
-
-// substitute expands the body of one `${…}`.
-func substitute(body string, lookup func(string) (string, bool)) (string, bool) {
-	n := 0
-	for n < len(body) && isNameByte(body[n], n == 0) {
-		n++
-	}
-	if n == 0 {
-		return "", false
-	}
-	value, set := lookup(body[:n])
-	op := body[n:]
-	if op == "" {
-		return value, true
-	}
-	colon := op[0] == ':'
-	if colon {
-		op = op[1:]
-	}
-	if op == "" {
-		return "", false
-	}
-	word := op[1:]
-	present := set && (!colon || value != "")
-	switch op[0] {
-	case '-':
-		if present {
-			return value, true
-		}
-		return interpolate(word, lookup)
-	case '+':
-		if present {
-			return interpolate(word, lookup)
-		}
-		return "", true
-	case '?':
-		return value, present
-	}
-	return "", false
-}
-
-// closingBrace returns the index of the brace closing the one at open,
-// counting the braces between; -1 when it is unclosed.
-func closingBrace(s string, open int) int {
-	depth := 0
-	for i := open; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			if depth--; depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// isNameByte reports whether b may stand in a variable's name, first when it
-// would begin it.
-func isNameByte(b byte, first bool) bool {
-	return b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || !first && '0' <= b && b <= '9'
-}
-
-// portSpec is the container side of a compose `ports` entry: the ports first
-// through last, and the protocol.
-type portSpec struct {
-	first, last uint64
-	protocol    string
-}
-
-// publishes reports whether p publishes want's first port under its protocol.
-func (p portSpec) publishes(want portSpec) bool {
-	return p.protocol == want.protocol && p.first <= want.first && want.first <= p.last
-}
-
-// publishedPort reads the container side of a compose `ports` entry as
-// compose does, after expanding its variables with lookup: the short syntax
-// `[[host_ip:]host_port:]container_port[/protocol]`, either port a single
-// port or a range and an IPv6 host_ip holding colons of its own, or the long
-// syntax's mapping, its `target` and `protocol`. An alias entry reads as the
-// entry it names. The protocol defaults to tcp. ok is false when the entry's
-// container port does not read as one.
-func publishedPort(entry *yaml.Node, lookup func(string) (string, bool)) (portSpec, bool) {
-	if entry.Kind == yaml.AliasNode {
-		entry = entry.Alias
-	}
-	var target, protocol string
-	switch entry.Kind {
-	case yaml.ScalarNode:
-		mapping, ok := interpolate(entry.Value, lookup)
-		if !ok {
-			return portSpec{}, false
-		}
-		target, protocol, _ = strings.Cut(mapping[strings.LastIndexByte(mapping, ':')+1:], "/")
-	case yaml.MappingNode:
-		node := mapValue(entry, "target")
-		if node == nil || node.Kind != yaml.ScalarNode {
-			return portSpec{}, false
-		}
-		var ok bool
-		if target, ok = interpolate(node.Value, lookup); !ok {
-			return portSpec{}, false
-		}
-		if node := mapValue(entry, "protocol"); node != nil {
-			if node.Kind != yaml.ScalarNode {
-				return portSpec{}, false
-			}
-			if protocol, ok = interpolate(node.Value, lookup); !ok {
-				return portSpec{}, false
-			}
-		}
-	default:
-		return portSpec{}, false
-	}
-	low, high, isRange := strings.Cut(target, "-")
-	first, err := strconv.ParseUint(low, 10, 16)
-	if err != nil {
-		return portSpec{}, false
-	}
-	last := first
-	if isRange {
-		if last, err = strconv.ParseUint(high, 10, 16); err != nil || last < first {
-			return portSpec{}, false
-		}
-	}
-	if protocol = strings.ToLower(protocol); protocol == "" {
-		protocol = "tcp"
-	}
-	return portSpec{first, last, protocol}, true
-}
-
-// ensurePublishedPort makes sure the service publishes want's container port
-// under want's protocol in some form, every entry and want read with lookup.
-// If no existing `ports` entry publishes it, want is appended. An entry whose
-// container port does not read leaves the list as it is, since it may be the
-// port itself, and so does a want that does not read. Returns true if want
-// was added.
-func ensurePublishedPort(svc *yaml.Node, want string, lookup func(string) (string, bool)) bool {
-	wantSpec, ok := publishedPort(&yaml.Node{Kind: yaml.ScalarNode, Value: want}, lookup)
-	if !ok {
-		return false
-	}
-	if seq := mapValue(svc, "ports"); seq != nil && seq.Kind == yaml.SequenceNode {
-		for _, child := range seq.Content {
-			if spec, ok := publishedPort(child, lookup); !ok || spec.publishes(wantSpec) {
-				return false
-			}
-		}
-	}
-	return ensureSequenceItem(svc, "ports", want)
-}
-
-// volumeTarget answers the container path a volumes entry mounts at, as
-// compose reads it: a long-syntax mapping's target, or a short-syntax
-// [SOURCE:]TARGET[:MODE] string's TARGET, its variables interpolated with
-// lookup. ok is false for an entry whose target does not read.
-func volumeTarget(entry *yaml.Node, lookup func(string) (string, bool)) (string, bool) {
-	if entry.Kind == yaml.AliasNode && entry.Alias != nil {
-		entry = entry.Alias
-	}
-	var target string
-	switch entry.Kind {
-	case yaml.MappingNode:
-		t := mapValue(entry, "target")
-		if t == nil || t.Kind != yaml.ScalarNode {
-			return "", false
-		}
-		target = t.Value
-	case yaml.ScalarNode:
-		spec, ok := interpolate(entry.Value, lookup)
-		if !ok {
-			return "", false
-		}
-		parts := strings.Split(spec, ":")
-		// A Windows drive letter (C:\...) splits off a one-letter field.
-		if len(parts) > 2 && len(parts[0]) == 1 && strings.HasPrefix(parts[1], `\`) {
-			parts = append([]string{parts[0] + ":" + parts[1]}, parts[2:]...)
-		}
-		switch len(parts) {
-		case 1:
-			target = parts[0]
-		default:
-			target = parts[1]
-		}
-		return path.Clean(target), target != ""
-	default:
-		return "", false
-	}
-	target, ok := interpolate(target, lookup)
-	return path.Clean(target), ok && target != ""
-}
-
-// ensureVolumeTarget adds mount ("SOURCE:TARGET") to svc's volumes unless
-// TARGET is bound, and reports whether it did. TARGET is bound when bound
-// names it (compose's own resolution), or when an entry of the volumes svc
-// has or inherits through YAML merge keys targets it; an entry whose target
-// does not read counts as binding it, and so does any target of a service
-// that extends another when bound is nil, since its volumes are not in
-// this file. A list svc inherits, or reaches through an alias another
-// service may share, is copied into its own volumes with the mount, never
-// replaced by a list of the mount alone nor appended to in place; an
-// anchored list of its own, which other services may alias, is left as it
-// is and nothing is added.
-func ensureVolumeTarget(svc *yaml.Node, mount string, lookup func(string) (string, bool), bound map[string]bool) bool {
-	_, want, _ := strings.Cut(mount, ":")
-	want = path.Clean(want)
-	if bound[want] || bound == nil && mapValue(svc, "extends") != nil {
-		return false
-	}
-	seq, own := serviceVolumes(svc, 0)
-	if seq == nil {
-		return ensureSequenceItem(svc, "volumes", mount)
-	}
-	if seq.Kind != yaml.SequenceNode {
-		return false
-	}
-	for _, entry := range seq.Content {
-		target, ok := volumeTarget(entry, lookup)
-		if !ok || target == want {
-			return false
-		}
-	}
-	item := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: mount}
-	direct := mapValue(svc, "volumes")
-	if own && direct != nil && direct.Kind != yaml.AliasNode {
-		if seq.Anchor != "" {
-			return false
-		}
-		seq.Content = append(seq.Content, item)
-		return true
-	}
-	inherited := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, entry := range seq.Content {
-		inherited.Content = append(inherited.Content, copyNode(entry))
-	}
-	inherited.Content = append(inherited.Content, item)
-	setMapValue(svc, "volumes", inherited)
-	return true
-}
-
-// serviceVolumes answers the volumes sequence of the service mapping svc,
-// its own key or, as serviceImage reads the image, the one it inherits
-// through YAML merge keys; own reports whether it is svc's own.
-func serviceVolumes(svc *yaml.Node, depth int) (seq *yaml.Node, own bool) {
-	if svc != nil && svc.Kind == yaml.AliasNode {
-		svc = svc.Alias
-	}
-	if svc == nil || svc.Kind != yaml.MappingNode || depth > 16 {
-		return nil, false
-	}
-	if node := mapValue(svc, "volumes"); node != nil {
-		if node.Kind == yaml.AliasNode {
-			node = node.Alias
-		}
-		return node, depth == 0
-	}
-	merge := mapValue(svc, "<<")
-	if merge == nil {
-		return nil, false
-	}
-	sources := []*yaml.Node{merge}
-	if merge.Kind == yaml.SequenceNode {
-		sources = merge.Content
-	}
-	for _, source := range sources {
-		if node, _ := serviceVolumes(source, depth+1); node != nil {
-			return node, false
-		}
-	}
-	return nil, false
-}
-
-// copyNode answers a deep copy of node without its anchors, so the copy
-// adds no second anchor of one name to the file; an alias stays the alias
-// it is.
-func copyNode(node *yaml.Node) *yaml.Node {
-	if node.Kind == yaml.AliasNode {
-		return node
-	}
-	c := *node
-	c.Anchor = ""
-	c.Content = nil
-	for _, child := range node.Content {
-		c.Content = append(c.Content, copyNode(child))
-	}
-	return &c
-}
-
-// ensureSequenceItem makes sure that the sequence at parent[key] contains
-// the given scalar item. If the sequence doesn't exist, it's created. If the
-// item is already present (by string equality), nothing changes. Returns
-// true if the item was added.
-func ensureSequenceItem(parent *yaml.Node, key, item string) bool {
-	seq := mapValue(parent, key)
-	if seq == nil {
-		// Create the sequence with the item as its only element.
-		setMapValue(parent, key, &yaml.Node{
-			Kind: yaml.SequenceNode,
-			Content: []*yaml.Node{
-				{Kind: yaml.ScalarNode, Tag: "!!str", Value: item},
-			},
-		})
-		return true
-	}
-	// An anchored list may be aliased by another service, which an append
-	// would change too.
-	if seq.Kind != yaml.SequenceNode || seq.Anchor != "" {
-		return false
-	}
-	for _, child := range seq.Content {
-		if child.Value == item {
-			return false
-		}
-	}
-	seq.Content = append(seq.Content, &yaml.Node{
-		Kind:  yaml.ScalarNode,
-		Tag:   "!!str",
-		Value: item,
-	})
-	return true
 }

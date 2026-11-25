@@ -5,12 +5,13 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import {test} from "node:test"
 
-import {MAX_LINE, Refused, VERSION, absolute, lines, readFromCyfr, toCyfr} from "../src/process.js"
+import {MAX_LINE, RUN_HEADER, Refused, VERSION, absolute, lines, readFromCyfr, toCyfr} from "../src/process.js"
 
 const vectors = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/desktop-process.json", import.meta.url)))
 
 test("main speaks the vectors' version", () => {
   assert.equal(vectors["version"], VERSION)
+  assert.equal(vectors["run_header"], RUN_HEADER, "the header main adds the run token as")
 })
 
 test("main reads each message cyfr sends as pinned", () => {
