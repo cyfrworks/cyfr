@@ -16,7 +16,12 @@ func tree(t *testing.T, name, target string) string {
 	if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "file"), []byte("contents"), 0o644); err != nil {
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Its mode set whatever the umask, so a change of it is one.
+	if err := os.Chmod(file, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
