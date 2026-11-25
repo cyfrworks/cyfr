@@ -19,7 +19,7 @@ import (
 
 // pairWait bounds how long an attach connection waits for its other half:
 // the host's for a spawn's relay, or a spawn relay's for the host's.
-const pairWait = 30 * time.Second
+var pairWait = 30 * time.Second
 
 // relayMain is the guest keeper's client, on its channel at file
 // descriptor 3. It listens before anything can be spawned: on the attach
