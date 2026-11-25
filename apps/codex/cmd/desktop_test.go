@@ -178,7 +178,7 @@ func connectHeld(t *testing.T, listener, token string) <-chan string {
 		close(reached)
 		<-done
 	}()
-	body, err := json.Marshal(map[string]string{"token": token, "address": "https://" + silent.Addr().String()})
+	body, err := json.Marshal(map[string]string{"address": "https://" + silent.Addr().String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,7 @@ func connectHeld(t *testing.T, listener, token string) <-chan string {
 		req.Host = shell.Listen
 		req.Header.Set("Origin", shell.Origin)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(desktop.RunHeader, token)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			answered <- err.Error()

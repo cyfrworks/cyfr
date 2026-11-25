@@ -25,6 +25,9 @@ const signIn = JSON.parse(readFileSync(new URL("../../../../tests/fixtures/sign_
 const HOME = signIn["home"]
 const ACCOUNT = "https://accounts.example.com"
 const READY = "http://127.0.0.1:7340/bootstrap/#token=dG9rZW4"
+const RUN_TOKEN = "dG9rZW4"
+// The chooser's address as main loads it: its words, and no run token.
+const CHOOSER_AT = "http://127.0.0.1:7340/bootstrap/#"
 const RAIL = "http://127.0.0.1:7340/rail/#read=cmFpbHRva2Vu"
 // The rail's width, at the window's left.
 const RAIL_WIDTH = 72
@@ -60,6 +63,9 @@ function reset({relaunch = false} = {}) {
   world.heldPages = []
   world.connections = []
   world.closingConnections = () => Promise.resolve()
+  // Each store's route as set, in order: [partition, its config].
+  world.proxies = []
+  world.settingProxy = () => Promise.resolve()
   world.popups = []
   world.boxes = []
   world.messageBox = async () => ({response: 0})
@@ -257,7 +263,8 @@ function fromPartition(partition) {
     const ses = new EventEmitter()
     Object.assign(ses, {
       partition,
-      webRequest: {onHeadersReceived(handler) { ses.received = handler }},
+      webRequest: {onHeadersReceived(handler) { ses.received = handler },
+        onBeforeSendHeaders(handler) { ses.sending = handler }, onBeforeRedirect(handler) { ses.redirecting = handler }},
       setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDevicePermissionHandler() {},
       setDisplayMediaRequestHandler() {},
       jar: [...(world.disk.get(partition) ?? [])],
@@ -273,6 +280,11 @@ function fromPartition(partition) {
         }
       }),
       async clearCache() { world.step("cache cleared") },
+      // Its route, once the test lets it be set (settingProxy).
+      setProxy(config) {
+        world.proxies.push([partition, config])
+        return world.settingProxy(partition, config)
+      },
       // Its connections closed, once the test lets them (closingConnections).
       closeAllConnections() {
         world.connections.push(partition)
@@ -489,7 +501,7 @@ async function departsFor(home) {
   await settled()
   child.say({type: "left", id: leaves().at(-1).id})
   await turns()
-  assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(home))
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(home))
 }
 
 test("an interrupted Connect, through main: a proposal a lock ended gives way to the next, a committed one to none", async () => {
@@ -513,10 +525,10 @@ test("an interrupted Connect, through main: a proposal a lock ended gives way to
 test("the road is main's word, in the chooser's address, and cyfr is started with no flag", async () => {
   await started(true)
   assert.deepEqual(world.spawned, [["desktop-serve"]])
-  assert.equal(content().webContents.url, READY + "&road=passkey")
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey")
   await started(false)
   assert.deepEqual(world.spawned, [["desktop-serve"]])
-  assert.equal(content().webContents.url, READY)
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=words")
 })
 
 test("the computer's lock and sleep leave everything as it was", async () => {
@@ -803,7 +815,7 @@ test("a press on the rail at the chooser shows the chooser at once: connecting t
     const before = content()
     assert.ok(press(url).prevented, url)
     assert.ok(before.destroyed, `${url}: its view replaced`)
-    assert.equal(content().webContents.url, READY + "&road=passkey" + then, url)
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey" + then, url)
     assert.doesNotMatch(content().webContents.session.partition, /^persist:/, url)
   }
   at("http://127.0.0.1:7340/rail/select?cyfr=" + encodeURIComponent(PORT_B), "&connect=" + encodeURIComponent(PORT_B))
@@ -862,7 +874,7 @@ test("a departure closes every page of the CYFR at once, then has cyfr leave, an
       child.say({type: "left", id: 1})
       await turns()
     }
-    assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B), last)
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(PORT_B), last)
     assert.doesNotMatch(content().webContents.session.partition, /^persist:/, last)
     assert.deepEqual(world.cleared, [], `${last}: nothing of the CYFR left is forgotten`)
     assert.ok(!child.killed, last)
@@ -881,7 +893,7 @@ test("a left of another id, a locked, and a second left change nothing of a depa
   child.say({type: "left", id: 1})
   await turns()
   const chooser = content()
-  assert.equal(chooser.webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B))
+  assert.equal(chooser.webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(PORT_B))
   const views = world.windows.length
   child.say({type: "left", id: 1})
   await turns()
@@ -920,7 +932,7 @@ test("a departure cyfr does not answer in time ends that cyfr and starts a fresh
     assert.deepEqual(child.heard, [], "nothing answered to them")
     child.say({type: "ready", url: READY, rail: RAIL_2})
     await turns()
-    assert.equal(content().webContents.url, READY + "&road=passkey&notice=unleft", "no connect: it resumes none")
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&notice=unleft", "no connect: it resumes none")
     assert.equal(rail().webContents.url, RAIL_2, "the rail of the fresh one")
     assert.equal(world.frames.length, 1, "in the same window")
     assert.deepEqual(world.cleared, [])
@@ -1014,7 +1026,7 @@ test("Forget of the CYFR open leaves it first: forget is sent only once cyfr lef
   child.say({type: "left", id: 1})
   await turns()
   assert.deepEqual(forgets(), [{version: VERSION, type: "forget", home: HOME}])
-  assert.equal(content().webContents.url, READY + "&road=passkey")
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey")
   assert.deepEqual(world.cleared, [])
 })
 
@@ -1056,7 +1068,7 @@ test("a teardown begun under a cyfr that has ended releases nothing of the fresh
     assert.equal(content(), undefined, "the old run's teardown released nothing")
     held.slice(before).forEach((end) => end())
     await turns(6)
-    assert.equal(content().webContents.url, READY + "&road=passkey&connect=" + encodeURIComponent(PORT_B), "the fresh run's own teardown does")
+    assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey&connect=" + encodeURIComponent(PORT_B), "the fresh run's own teardown does")
   } finally {
     mock.timers.reset()
   }
@@ -1273,10 +1285,7 @@ test("the app's end never waits without end on a clear or a flush", async () => 
       child.say({type: "locked", home: PORT_A, account: ACCOUNT})
     }]]) {
     for (const [how, end, ended] of [
-      ["quit", () => world.app.emit("before-quit", {preventDefault() {}}), () => world.quit],
-      ["relaunch", () => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
-        () => !!world.relaunched]]) {
-      if (how === "relaunch" && name === "a lock's clear") continue // no proposal is taken while locking
+      ["quit", () => world.app.emit("before-quit", {preventDefault() {}}), () => world.quit]]) {
       await started(true)
       hang()
       await act()
@@ -1420,7 +1429,7 @@ test("a CYFR's page that did not load gives way to the chooser: in its own view 
     assert.equal(world.windows.length, windows, "nothing opened from inside it either")
     await settled()
     const chooser = content()
-    assert.equal(chooser.webContents.url, READY + (road ? "&road=passkey" : "") + "&notice=unanswered")
+    assert.equal(chooser.webContents.url, CHOOSER_AT + (road ? "road=passkey" : "road=words") + "&notice=unanswered")
     if (road) {
       assert.ok(page.destroyed && chooser !== page, "no kept store holds the chooser: a view of its own")
       assert.doesNotMatch(chooser.webContents.session.partition, /^persist:/)
@@ -1630,18 +1639,320 @@ test("a frame asking the top frame to go to the sign-in route is refused and ope
   assert.equal(live().length, 1, "no account window")
 })
 
-test("a CYFR rerouted is a relaunch only after the content closed, and signs nobody out", async () => {
+// A CYFR reached by its proxy (a folder's, over its tailnet) has it set on
+// each store from the selection that store is opened for, before the
+// store loads anything of that CYFR: on the passkey road its own kept
+// store, as cyfr commits it, while home-ready goes at once; on the
+// six-word road the content's store showing, which goes on to its pages,
+// before home-ready. A chooser opened afresh, after it was left, and the
+// rail's store never get one; nothing closes or starts again for it.
+test("a CYFR's route is set on its own stores before anything of it loads, and on no other", async () => {
+  const ROUTE = {mode: "fixed_servers", proxyRules: "socks5://127.0.0.1:1055"}
   await started(true)
-  child.proposes(HOME)
+  let release
+  world.settingProxy = () => new Promise((resolve) => { release = resolve })
+  const attempt = child.proposes(HOME, {proxy: ROUTE.proxyRules})
   await settled()
-  world.cleared = []
+  assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === HOME && m.attempt === attempt), "home-ready at once")
+  assert.deepEqual(world.proxies, [], "the chooser's store, which loads nothing of it on this road, gets none")
+  child.say({type: "opened", home: HOME, attempt})
+  await settled()
+  await settled()
+  assert.deepEqual(world.proxies, [[contentStore(HOME), ROUTE]])
+  assert.deepEqual(world.loads.filter((l) => l.url.startsWith(HOME)), [], "nothing of the CYFR loaded before its store's route")
+  release()
+  await settled()
+  await settled()
+  assert.ok(world.loads.some((l) => l.url.startsWith(HOME)), "its page loads once its store carries the route")
+  await departsFor(PORT_B)
+  assert.deepEqual(world.proxies, [[contentStore(HOME), ROUTE]], "the chooser opened after it was left gets none")
+  assert.ok(!world.proxies.some(([partition]) => partition === RAIL_SESSION), "the rail's store keeps the system's settings")
+
+  await started(false)
+  world.settingProxy = () => new Promise((resolve) => { release = resolve })
+  const shown = content().webContents.session.partition
+  const next = child.proposes(HOME, {proxy: ROUTE.proxyRules})
+  await settled()
+  await settled()
+  assert.deepEqual(world.proxies, [[shown, ROUTE]], "on the six-word road the store showing, which goes on to its pages")
+  assert.ok(!child.heard.some((m) => m.type === "home-ready"), "no home-ready before the route is set")
+  release()
+  await settled()
+  await settled()
+  assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === HOME && m.attempt === next))
+  assert.equal(world.relaunched, null)
+  assert.equal(world.exited, undefined)
+})
+
+// A route that cannot be set is a failed open: nothing of that CYFR loads,
+// the chooser says why and offers it again, and the next try sets the
+// route afresh. Committed, on the passkey road, the chooser shows in a
+// view of its own with Try again; proposed, on the six-word road, no
+// home-ready goes and the chooser offers that CYFR again.
+test("a route that cannot be set loads nothing of its CYFR, says why, and is set afresh on the next try", async () => {
+  const ROUTE = "socks5://127.0.0.1:1055"
+  await started(true)
+  let refuse = true
+  world.settingProxy = () => refuse ? Promise.reject(new Error("proxy refused")) : Promise.resolve()
+  const attempt = child.proposes(HOME, {proxy: ROUTE})
+  await settled()
+  child.say({type: "opened", home: HOME, attempt})
+  await settled()
+  await settled()
+  const chooser = content()
+  assert.equal(chooser.webContents.url, CHOOSER_AT + "road=passkey&notice=unrouted")
+  assert.doesNotMatch(chooser.webContents.session.partition, /^persist:/)
+  assert.deepEqual(world.loads.filter((l) => l.url.startsWith(HOME)), [], "nothing of the CYFR loaded")
+  refuse = false
+  assert.ok(navigate(chooser, "http://127.0.0.1:7340/bootstrap/again").prevented)
+  await settled()
+  await settled()
+  assert.deepEqual(world.proxies.filter(([partition]) => partition === contentStore(HOME)).length, 2, "set afresh")
+  assert.equal(content().webContents.url, HOME + "/")
+  assert.deepEqual(world.loads.at(-1), {url: HOME + "/", cookies: []})
+
+  await started(false)
+  refuse = true
+  world.settingProxy = () => refuse ? Promise.reject(new Error("proxy refused")) : Promise.resolve()
+  child.proposes(HOME, {proxy: ROUTE})
+  await settled()
+  await settled()
+  assert.ok(!child.heard.some((m) => m.type === "home-ready"), "no home-ready for a route that was not set")
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=words&notice=unrouted&retry=" + encodeURIComponent(HOME))
+  refuse = false
+  const second = child.proposes(HOME, {proxy: ROUTE})
+  await settled()
+  await settled()
+  assert.ok(child.heard.some((m) => m.type === "home-ready" && m.attempt === second), "the next try sets it afresh")
+})
+
+// The chooser shown while main keeps to a CYFR on a route (after a lock
+// on the passkey road) goes on to that CYFR's pages by Try with words, the
+// device's pages, in its own store: that store carries the route before
+// the chooser loads, and that CYFR's pages load through it.
+test("a chooser shown while main keeps to a CYFR on a route has that route before it loads, so Try with words reaches that CYFR through it", async () => {
+  const ROUTE = {mode: "fixed_servers", proxyRules: "socks5://127.0.0.1:1055"}
+  await started(true)
+  const attempt = child.proposes(HOME, {proxy: ROUTE.proxyRules})
+  await settled()
+  child.say({type: "opened", home: HOME, attempt})
+  await turns()
+  assert.equal(content().webContents.url, HOME + "/")
+  let release
+  world.settingProxy = () => new Promise((resolve) => { release = resolve })
+  await saysLocked()
+  const [store, config] = world.proxies.at(-1)
+  assert.deepEqual(config, ROUTE)
+  assert.doesNotMatch(store, /^persist:/, "the chooser's own store of memory")
+  assert.equal(content(), undefined, "the chooser loads only once its store carries the route")
+  release()
+  await turns()
+  const chooser = content()
+  assert.equal(chooser.webContents.url, CHOOSER_AT + "road=passkey")
+  assert.equal(chooser.webContents.session.partition, store)
+  const device = "http://127.0.0.1:7340/unlock"
+  assert.equal(navigate(chooser, device).prevented, false)
+  await chooser.webContents.loadURL(device)
+  assert.equal(navigate(chooser, HOME + "/").prevented, false)
+  await chooser.webContents.loadURL(HOME + "/")
+  assert.deepEqual(world.proxies.filter(([partition]) => partition === store), [[store, ROUTE]], "set once, before its first load")
+  assert.equal(world.loads.at(-1).url, HOME + "/")
+})
+
+// A store of memory that loaded a routed CYFR's pages, on the six-word
+// road, shows the chooser again, in the same view, with the route taken
+// off first: the chooser and what it goes on to next are not that CYFR's.
+test("on the six-word road a CYFR's page that did not load gives way to the chooser only once its store's route is off", async () => {
+  const ROUTE = {mode: "fixed_servers", proxyRules: "socks5://127.0.0.1:1055"}
+  await started(false)
+  const attempt = child.proposes(HOME, {proxy: ROUTE.proxyRules})
+  await turns()
+  child.say({type: "opened", home: HOME, attempt})
+  await turns()
+  await give(content())
   const page = content()
-  child.proposes("https://bob.example", {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"})
+  const store = page.webContents.session.partition
+  assert.deepEqual(world.proxies, [[store, ROUTE]])
+  let release
+  world.settingProxy = () => new Promise((resolve) => { release = resolve })
+  fails(page, HOME + "/threads")
+  await turns()
+  assert.deepEqual(world.proxies.at(-1), [store, {mode: "system"}], "the route taken off")
+  assert.ok(!live().some((w) => w.webContents.url.includes("notice=")), "no chooser before it is off")
+  release()
+  await turns()
+  const chooser = content()
+  assert.equal(chooser.webContents.url, CHOOSER_AT + "road=words&notice=unanswered")
+  assert.ok(chooser === page && !page.destroyed, "the same view, whose tab holds the device's unlocking")
+})
+
+// main's words reach the chooser by main's own load of a document: a load
+// into the chooser already showing that changes its fragment alone leaves
+// its page as it was (Electron 45.4.1: no new document, and the chooser's
+// script reads its address once), so main reloads it, in the same view.
+test("on the six-word road a proposal whose route cannot be set is said in a chooser document of main's load", async () => {
+  await started(false)
+  const before = content()
+  // The chooser takes its fragment off its address as it starts.
+  before.webContents.url = CHOOSER_AT.slice(0, -1)
+  world.settingProxy = (_partition, config) => config.mode === "system" ? Promise.resolve() : Promise.reject(new Error("proxy refused"))
+  child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
+  await turns()
+  const chooser = content()
+  assert.ok(chooser === before && !before.destroyed, "the same view, whose tab holds the device's unlocking")
+  const notice = CHOOSER_AT + "road=words&notice=unrouted&retry=" + encodeURIComponent(HOME)
+  assert.equal(chooser.webContents.url, notice)
+  assert.deepEqual(chooser.webContents.reloaded, [notice], "a document of its own, by main's reload")
+  let headers
+  chooser.webContents.session.sending({id: 1, method: "POST", url: "http://127.0.0.1:7340/bootstrap/state", webContents: chooser.webContents,
+    frame: chooser.webContents.mainFrame, requestHeaders: {}}, (answer) => { headers = answer.requestHeaders })
+  assert.ok(Object.hasOwn(headers, "Cyfr-Run"), "main's own load: the chooser's document")
+})
+
+// The account window whose route cannot be set loads nothing of the
+// account service and ends the sign-in: it stays, at main's own page
+// saying why, and its close leaves the CYFR's page as it was.
+test("an account window whose route cannot be set says why in main's own page, and its close leaves the CYFR's page", async () => {
+  await started(true)
+  world.settingProxy = (partition) => partition === accountStore(HOME, ACCOUNT) ? Promise.reject(new Error("proxy refused")) : Promise.resolve()
+  const attempt = child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
   await settled()
+  child.say({type: "opened", home: HOME, attempt})
+  await turns()
+  const page = content()
+  page.webContents.url = HOME + "/login"
+  const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  assert.ok(navigate(page, `${ACCOUNT}/account/sign#${fragment(request)}`).prevented)
+  await turns()
+  const account = live().find((w) => w.webContents.session.partition === accountStore(HOME, ACCOUNT))
+  assert.ok(account, "the window stays")
+  const shown = decodeURIComponent(account.webContents.url)
+  assert.ok(shown.startsWith("data:text/html"), "main's own page")
+  assert.ok(shown.includes(`The app could not reach the CYFR at ${HOME} through this computer&#39;s tailnet, so it loaded nothing of the sign-in.`), shown)
+  assert.ok(!world.loads.some(({url}) => new URL(url).origin === ACCOUNT), "nothing of the account service")
+  account.destroy()
+  await turns()
+  assert.equal(content(), page)
+  assert.ok(!page.destroyed)
+  assert.equal(page.webContents.url, HOME + "/login")
+  assert.ok(!child.heard.some((m) => m.type === "lock"))
+})
+
+// A route's answer belongs to the opening that asked: once its view has
+// gone, a late one loads nothing.
+test("a route set after its CYFR was left loads nothing into the view the departure closed", async () => {
+  await started(true)
+  let routed
+  world.settingProxy = (partition) => partition === contentStore(HOME) ? new Promise((resolve) => { routed = resolve }) : Promise.resolve()
+  const attempt = child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
+  await turns()
+  child.say({type: "opened", home: HOME, attempt})
+  await turns()
+  const old = live().find((v) => v.webContents.session.partition === contentStore(HOME))
+  assert.ok(old && routed)
+  await departsFor(PORT_B)
+  assert.ok(old.destroyed)
+  let late = 0
+  old.webContents.loadURL = () => { late++; return Promise.resolve() }
+  routed()
+  await turns()
+  assert.equal(late, 0)
+  assert.ok(!world.loads.some(({url}) => url.startsWith(HOME)))
+
+  // So for an account window: once a lock ended its sign-in, a late route
+  // loads nothing of the account service.
+  await started(true)
+  let accountRouted
+  world.settingProxy = (partition) => partition === accountStore(HOME, ACCOUNT) ? new Promise((resolve) => { accountRouted = resolve }) : Promise.resolve()
+  const second = child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055"})
   await settled()
-  assert.ok(page.destroyed)
-  signedNobodyOut()
-  assert.ok(world.relaunched?.args.includes("--proxy-server=socks5://127.0.0.1:1055"))
+  child.say({type: "opened", home: HOME, attempt: second})
+  await turns()
+  const page = content()
+  page.webContents.url = HOME + "/login"
+  const request = {...signIn["requests"]["another_sign_in"]["request"], return: HOME + "/login", expires_at: Date.now() + 60_000}
+  assert.ok(navigate(page, `${ACCOUNT}/account/sign#${fragment(request)}`).prevented)
+  await turns()
+  const account = live().find((w) => w.webContents.session.partition === accountStore(HOME, ACCOUNT))
+  assert.ok(account && accountRouted)
+  assert.ok(navigate(page, HOME + "/company-login").prevented, "a lock")
+  assert.ok(account.destroyed)
+  let lateAccount = 0
+  account.webContents.loadURL = () => { lateAccount++; return Promise.resolve() }
+  accountRouted()
+  await turns()
+  assert.equal(lateAccount, 0)
+  assert.ok(!world.loads.some(({url}) => new URL(url).origin === ACCOUNT))
+})
+
+// A route that could not be set leaves its store's unknown: what that
+// store shows next has its route set afresh, none included.
+test("a store whose route could not be set has it set afresh for the chooser it shows next", async () => {
+  const ROUTE = "socks5://127.0.0.1:1055"
+  const OTHER_ROUTE = "socks5://127.0.0.1:1056"
+  await started(false)
+  const store = content().webContents.session.partition
+  world.settingProxy = (_partition, config) => config.proxyRules === OTHER_ROUTE ? Promise.reject(new Error("proxy refused")) : Promise.resolve()
+  child.proposes(HOME, {proxy: ROUTE})
+  await turns()
+  child.proposes(PORT_B, {proxy: OTHER_ROUTE})
+  await turns()
+  assert.deepEqual(world.proxies, [
+    [store, {mode: "fixed_servers", proxyRules: ROUTE}],
+    [store, {mode: "fixed_servers", proxyRules: OTHER_ROUTE}],
+    [store, {mode: "system"}]
+  ])
+  assert.equal(content().webContents.url, CHOOSER_AT + "road=words&notice=unrouted&retry=" + encodeURIComponent(PORT_B))
+  assert.equal(content().webContents.session.partition, store)
+})
+
+// The run token is main's, taken from ready's address: the chooser is
+// loaded without it, and it goes, as its header, on a POST to the chooser's
+// addresses that the chooser's own top document in the content's view
+// makes, and on no other request; one a page named itself loses it.
+test("main adds the run token to the chooser's own requests alone", async () => {
+  await started(true)
+  const chooser = content()
+  assert.doesNotMatch(chooser.webContents.url, /token/, "the chooser's address holds none")
+  const ses = chooser.webContents.session
+  const top = chooser.webContents.mainFrame
+  const bare = {"Content-Type": "application/json"}
+  let id = 0
+  const sent = (over = {}) => {
+    let headers
+    ses.sending({id: ++id, method: "POST", url: "http://127.0.0.1:7340/bootstrap/connect", webContents: chooser.webContents,
+      frame: top, requestHeaders: bare, ...over}, (r) => { headers = r.requestHeaders })
+    return headers
+  }
+  assert.deepEqual(sent(), {...bare, "Cyfr-Run": RUN_TOKEN}, "the chooser's own")
+  ses.redirecting({id: id + 1})
+  const other = {processId: top.processId, routingId: top.routingId + 100, url: top.url}
+  for (const [why, over] of [
+    ["a redirect's target", {}],
+    ["a frame's", {frame: other}],
+    ["another view's", {webContents: rail().webContents}],
+    ["a window's of the same store", {webContents: {mainFrame: top}}],
+    ["to another address", {url: HOME + "/bootstrap/connect"}],
+    ["to the device's pages", {url: "http://127.0.0.1:7340/devices/approve"}],
+    ["a GET", {method: "GET"}],
+    ["a frame's that named the header itself", {frame: other, requestHeaders: {...bare, "cyfr-run": RUN_TOKEN}}]
+  ]) {
+    assert.deepEqual(sent(over), bare, why)
+  }
+  // The chooser's document is the one main's load of it committed: another
+  // document of cyfr's in the view is not, nor is it once it changes its
+  // address to the chooser's within itself; main's load of the chooser
+  // makes the chooser's document again.
+  await chooser.webContents.loadURL("http://127.0.0.1:7340/")
+  assert.deepEqual(sent(), bare, "another document of cyfr's")
+  chooser.webContents.url = "http://127.0.0.1:7340/bootstrap/"
+  chooser.webContents.emit("did-navigate-in-page", {}, chooser.webContents.url, true)
+  assert.deepEqual(sent(), bare, "a document that changed its address to the chooser's within itself")
+  await chooser.webContents.loadURL("http://127.0.0.1:7340/bootstrap/#road=passkey")
+  assert.deepEqual(sent(), bare, "main's load of the chooser's address into that document, which stays that document")
+  await chooser.webContents.loadURL("http://127.0.0.1:7340/")
+  await chooser.webContents.loadURL("http://127.0.0.1:7340/bootstrap/#road=passkey")
+  assert.deepEqual(sent(), {...bare, "Cyfr-Run": RUN_TOKEN}, "the chooser main loaded again")
 })
 
 test("cyfr's own locked naming a CYFR main never kept to leaves it keeping to none", async () => {
@@ -1881,7 +2192,7 @@ test("a lock over a chooser that is keeping a notice leaves the notice there, un
   assert.doesNotMatch(content().webContents.url, /notice=/, "told once the person went on")
 })
 
-test("with no route localhost is 127.0.0.1 alone, and that is no route a CYFR is restarted for", async () => {
+test("localhost is 127.0.0.1 alone, the app's whole run", async () => {
   await started(false)
   assert.deepEqual(world.switches, [["host-resolver-rules", "MAP localhost 127.0.0.1"]])
   world.relaunched = null
@@ -1890,17 +2201,6 @@ test("with no route localhost is 127.0.0.1 alone, and that is no route a CYFR is
   await settled()
   assert.equal(world.relaunched, null)
   assert.ok(child.heard.some((m) => m.type === "home-ready" && m.home === "http://localhost:4000" && m.attempt === 1))
-})
-
-test("started on a route main keeps that route's rules alone", async () => {
-  const bare = world.app.commandLine.getSwitchValue
-  world.app.commandLine.getSwitchValue = (name) => (name === "host-resolver-rules" ? "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" : "")
-  try {
-    await started(false)
-    assert.deepEqual(world.switches, [])
-  } finally {
-    world.app.commandLine.getSwitchValue = bare
-  }
 })
 
 // ---- the folder CYFR is set up in on this computer ----
@@ -1994,7 +2294,7 @@ test("on macOS and Windows a CYFR no one is set up at opens at its setup page, t
       await settled()
       child.say({type: "ready", url: READY, rail: RAIL})
       await settled()
-      assert.equal(content().webContents.url, READY + "&road=passkey", system)
+      assert.equal(content().webContents.url, CHOOSER_AT + "road=passkey", system)
       const attempt = child.proposes(HOME, {setup: TOKEN})
       await settled()
       await settled()
@@ -2271,8 +2571,6 @@ test("on the screen every end of the app is its one end, and none is the engine'
     "the shell's ending": [() => child.say({type: "ending"}), "cyfr ended: the screen shell is ending"],
     "the system's quit": [() => world.app.quit(), null],
     "the window closed": [() => frame().emit("closed"), null],
-    "a route the app was not started on": [() => child.proposes(HOME, {proxy: "socks5://127.0.0.1:1055", resolver: "MAP * ~NOTFOUND"}),
-      "cyfr ended: it named a route the app was not started on, which the screen's launcher starts it on"],
     "a CYFR this app does not open": [() => child.say({type: "home", home: "not an address", account: ACCOUNT, attempt: 9}),
       "cyfr ended: it named a CYFR this app does not open"],
     "a CYFR it was not keeping to opened": [() => child.say({type: "opened", home: "https://other.example", attempt: 1}),

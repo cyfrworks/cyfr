@@ -20,8 +20,9 @@ import (
 )
 
 type processVectors struct {
-	Version  int `json:"version"`
-	GoToMain []struct {
+	Version   int    `json:"version"`
+	RunHeader string `json:"run_header"`
+	GoToMain  []struct {
 		Name    string         `json:"name"`
 		Message map[string]any `json:"message"`
 	} `json:"go_to_main"`
@@ -50,6 +51,9 @@ func readProcessVectors(t *testing.T) processVectors {
 	if v.Version != Version {
 		t.Fatalf("the vectors are version %d; cyfr speaks %d", v.Version, Version)
 	}
+	if v.RunHeader != RunHeader {
+		t.Fatalf("the vectors name the run header %q; cyfr reads %q", v.RunHeader, RunHeader)
+	}
 	return v
 }
 
@@ -63,7 +67,7 @@ func TestCyfrWritesEachMessageAsPinned(t *testing.T) {
 			attempt, _ := o["attempt"].(float64)
 			id, _ := o["id"].(float64)
 			m := Message{Type: str(o, "type"), Attempt: uint64(attempt), ID: uint64(id), URL: str(o, "url"), Home: str(o, "home"), Account: str(o, "account"),
-				Rail: str(o, "rail"), Proxy: str(o, "proxy"), Resolver: str(o, "resolver"), Setup: str(o, "setup")}
+				Rail: str(o, "rail"), Proxy: str(o, "proxy"), Setup: str(o, "setup")}
 			read, write := io.Pipe()
 			t.Cleanup(func() { read.Close() })
 			if err := NewWriter(write, nil).Queue(m); err != nil {

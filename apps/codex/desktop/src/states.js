@@ -27,8 +27,7 @@
 //              it. Its deadline (DEPARTURE_MS) passed first, main does not
 //              trust that cyfr to have let go: it ends it and starts a
 //              fresh one, which opens nothing by itself (`unleft`)
-//   ended      cyfr is gone, the app quits or starts again on another
-//              route; nothing opens again
+//   ended      cyfr is gone and the app quits; nothing opens again
 //
 // A lock is the device's, never the computer's: the app does not lock
 // when the computer locks or sleeps, when a page is lost (it is shown
@@ -75,7 +74,11 @@
 //
 // A CYFR's page whose load failed, as the engine reports it, is no lock:
 // the content window shows the chooser saying so (`unanswered`), and
-// nothing is closed or forgotten. That notice is that chooser's alone: a
+// nothing is closed or forgotten. A CYFR whose route could not be set on
+// the store that would load it loads nothing there, and the chooser says
+// that (`unrouted`): once it was committed as that page's load failing,
+// before (on the six-word road and the box's screen, where the route is
+// set as cyfr proposes it) as the proposal failing, offered again. That notice is that chooser's alone: a
 // lock's own load can fail just before the lock is heard, and the lock's
 // chooser has nothing of it to tell.
 //
@@ -134,13 +137,22 @@
 //                            storage, or with setup its setup page, the
 //                            token in the fragment alone
 //   send {type, fields}      a message to cyfr
+//   prepare {home, attempt, proxy}  answer home-ready: on the six-word
+//                            road and the box's screen once that CYFR's
+//                            route (its proxy, none when empty) is set
+//                            on the content's store showing, at once on
+//                            the passkey road
 //   chooser {notices}        open the content at the chooser; with
 //                            connect, connecting to that CYFR; with way
-//                            "setup", at setting up on this computer
-//   back {notices}           show the chooser in the content window as it
-//                            stands, its session as it is
-//   relaunch {proxy, resolver}  once forgotten, or the wait for it is up
-//                            (never on the box's screen)
+//                            "setup", at setting up on this computer;
+//                            with proxy, the route of the CYFR main
+//                            keeps to set on its store first, which goes
+//                            on to that CYFR's pages by the device's
+//                            (Try with words)
+//   back {notices, retry}    show the chooser, a document of main's load,
+//                            in the content window as it stands where its
+//                            store is memory's, the route taken off it
+//                            first; with retry, offering that CYFR again
 //   end {why}                kill cyfr and tell the person (never on the
 //                            box's screen)
 //   quit                     once forgotten, or the wait for it is up,
@@ -166,15 +178,15 @@ import {absolute} from "./process.js"
 export const DEPARTURE_MS = 20_000
 
 /** The state main starts in. */
-export function initial(accountRoad, route = {proxy: "", resolver: ""}, screen = "") {
-  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", route, returning: null,
+export function initial(accountRoad, screen = "") {
+  return {name: "starting", accountRoad: accountRoad && !screen, screen, readyURL: "", home: "", account: "", proxy: "", returning: null,
     notices: [], picks: 0, picking: 0, pickFor: null, leaves: 0, seen: 0}
 }
 
 /** What main keeps to in state `s`, as the policies read it. */
 export const kept = (s) => s.name === "open"
-  ? {home: s.home, account: s.account, accountRoad: s.accountRoad}
-  : {home: "", account: "", accountRoad: s.accountRoad}
+  ? {home: s.home, account: s.account, proxy: s.proxy ?? "", accountRoad: s.accountRoad}
+  : {home: "", account: "", proxy: "", accountRoad: s.accountRoad}
 
 // The pick outstanding, if any, answered with none: the state without it
 // and the answer.
@@ -198,7 +210,7 @@ const same = (s, effects = []) => ({state: s, do: effects})
 const askedToQuit = (s, e) => e.type === "second-instance" && e.quit === true && !s.screen
 const withdrawn = (s, effects = []) => same(s.returning ? {...s, returning: null} : s, effects)
 const adding = (notices, notice) => !notice || notices.includes(notice) ? notices : [...notices, notice]
-const atChooser = (url) => {
+export const atChooser = (url) => {
   const u = parse(url)
   return !!u && u.origin === LOOPBACK && u.pathname === "/bootstrap/"
 }
@@ -235,6 +247,9 @@ function pickAsked(url) {
 export const EXTERNAL = ["https://www.docker.com/products/docker-desktop/", "https://docs.docker.com/engine/install/"]
 // The engine's code for a load given up: replaced, stopped or refused.
 export const ABORTED = -3
+// A load main did not begin because the route of the CYFR it is for could
+// not be set on its store (app.js routedThen).
+export const UNROUTED = "unrouted"
 
 /**
  * Every decision main takes from a navigation as the person pressing
@@ -315,10 +330,6 @@ function sentToSignIn(s, e) {
   return signIn(to) && !signIn(from) && (!!e.redirect || from?.origin === kept(s).home)
 }
 
-// A home naming a CYFR on another route than main's: main must start
-// again with it before it keeps to it.
-const rerouted = (s, m) => (m.proxy ?? "") !== s.route.proxy || (m.resolver ?? "") !== s.route.resolver
-
 // A lock from state s: the content closes at once. cyfr is told, unless
 // it said locked itself (`heard`, its message): that is then the barrier
 // passed and the device's session ended, which is forgotten.
@@ -348,7 +359,7 @@ function away(s, then) {
 
 // What follows a way away from the content, in chooser state `s`.
 function beyond(s, then, effects = []) {
-  const next = {...s, name: "chooser", home: "", account: "", notices: []}
+  const next = {...s, name: "chooser", home: "", account: "", proxy: "", notices: []}
   if (then.forget) return {state: next, do: [...effects, {send: {type: "forget", fields: {home: then.forget}}}, {chooser: []}]}
   return {state: next, do: [...effects, {chooser: [], ...then}]}
 }
@@ -363,16 +374,17 @@ function settle(s) {
   const m = s.keep
   const again = !!m.home && m.home === s.before.home && m.account === s.before.account
   const next = {name: again ? "open" : "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL,
-    railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", route: s.route, returning: null, notices: s.notices,
+    railURL: s.railURL, home: again ? m.home : "", account: again ? m.account : "", proxy: again ? s.before.proxy : "", returning: null, notices: s.notices,
     picks: s.picks, picking: 0, pickFor: null, leaves: s.leaves, seen: s.seen}
-  if (!s.wanted) return {state: next, do: [{chooser: s.notices}]}
+  const shown = {chooser: s.notices, ...(next.proxy ? {proxy: next.proxy} : {})}
+  if (!s.wanted) return {state: next, do: [shown]}
   const taken = step(next, {type: "home", message: s.wanted})
-  return {state: taken.state, do: [{chooser: s.notices}, ...taken.do]}
+  return {state: taken.state, do: [shown, ...taken.do]}
 }
 
 // The chooser's state after a departure: main keeps to none.
 const chooserOf = (s) => ({name: "chooser", accountRoad: s.accountRoad, screen: s.screen, readyURL: s.readyURL, railURL: s.railURL,
-  home: "", account: "", route: s.route, returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
+  home: "", account: "", proxy: "", returning: null, notices: s.notices, picks: s.picks, picking: 0, pickFor: null,
   leaves: s.leaves, seen: s.seen})
 
 /**
@@ -417,14 +429,9 @@ function advance(s, e) {
       if (!["chooser", "proposed"].includes(s.name) || !homeMessage(m)) {
         return stopped(s, "it named a CYFR this app does not open")
       }
-      if (rerouted(s, m)) {
-        // The screen's app is started on its CYFR's route by its launcher
-        // (cmd/screen.go, cyfr screen app), never by itself.
-        return s.screen ? stopped(s, "it named a route the app was not started on, which the screen's launcher starts it on")
-          : ending(s, {relaunch: {proxy: m.proxy ?? "", resolver: m.resolver ?? ""}})
-      }
-      return {state: {...s, name: "proposed", home: m.home, account: m.account, attempt: m.attempt, seen, setup: m.setup ?? "", returning: null},
-        do: [{say: `home: ${m.home}`}, {send: {type: "home-ready", fields: {home: m.home, attempt: m.attempt}}}]}
+      return {state: {...s, name: "proposed", home: m.home, account: m.account, proxy: m.proxy ?? "", attempt: m.attempt, seen, setup: m.setup ?? "",
+        returning: null},
+        do: [{say: `home: ${m.home}`}, {prepare: {home: m.home, attempt: m.attempt, proxy: m.proxy ?? ""}}]}
     }
     case "opened":
       if (s.name === "locking") return same(s) // from before the lock
@@ -458,7 +465,7 @@ function advance(s, e) {
     // itself: the chooser it shows says why (unleft), so it resumes none.
     case "late":
       if (s.name !== "locking" || !s.departing || e.id !== s.departing) return same(s)
-      return {state: {...initial(s.accountRoad, s.route, s.screen), notices: adding(s.notices, "unleft")},
+      return {state: {...initial(s.accountRoad, s.screen), notices: adding(s.notices, "unleft")},
         do: [{say: "cyfr did not let go of the CYFR left in time: starting it again"}, {restart: true}]}
     // cyfr asks for a store of a CYFR it forgets to be erased; never the
     // open one's, which cyfr does not forget.
@@ -511,11 +518,19 @@ function advance(s, e) {
       const [t, answer] = unpicked(s)
       return withdrawn(t, answer)
     }
+    // The proposal's route could not be set on the store that would load
+    // it (app.js prepare): no home-ready went, nothing of it loaded, and
+    // the chooser says why, offering it again.
+    case "unrouted":
+      if (s.name !== "proposed" || e.home !== s.home || e.attempt !== s.attempt) return same(s)
+      return same({...s, name: "chooser", home: "", account: "", proxy: "", setup: ""},
+        [{say: `unrouted: the route of ${e.home} could not be set`}, {back: adding(s.notices, "unrouted"), retry: e.home}])
     case "load-failed":
       if (s.screen && e.code !== ABORTED && parse(e.url)?.origin === LOOPBACK && !["starting", "locking"].includes(s.name)) {
         return lock(s, `the device's own page did not load (${e.code})`, "")
       }
       if (e.code === ABORTED || s.name !== "open" || parse(e.url)?.origin !== s.home) return withdrawn(s)
+      if (e.code === UNROUTED) return withdrawn(s, [{say: "unrouted: the CYFR's route could not be set"}, {back: adding(s.notices, "unrouted")}])
       return withdrawn(s, [{say: `unanswered: the CYFR's page did not load (${e.code})`}, {back: adding(s.notices, "unanswered")}])
     case "load-ended":
       return e.url === s.returning?.url ? withdrawn(s) : same(s)

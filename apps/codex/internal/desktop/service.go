@@ -32,9 +32,9 @@ type Local struct {
 	// there: its address, the client that reaches it, the account service
 	// it names, its data directory and its setup capability.
 	Shell shell.Config
-	// Proxy and Resolver are the engine's route to its pages, empty on
-	// this computer's own.
-	Proxy, Resolver string
+	// Proxy is the engine's route to its pages, set on that CYFR's own
+	// stores alone, empty on this computer's own.
+	Proxy string
 	// Answers is nil when that CYFR itself answers now, and otherwise why
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
@@ -93,7 +93,8 @@ func (l *Local) take() *Local {
 // chooser alike. Main opens a CYFR committed at its root, and lets go of
 // one by leave.
 type Service struct {
-	// Token is the run token the chooser's requests carry.
+	// Token is the run token: main alone holds it, and adds it to the
+	// chooser's own requests as their RunHeader.
 	Token string
 	// ReadToken is the rail's: it reads the list of CYFRs (rail.go) and
 	// authorizes nothing else.
@@ -198,8 +199,16 @@ func NewToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// ReadyURL is the chooser's address main opens first, the token in its
-// fragment, which no request carries.
+// RunHeader is the header that carries the run token on the chooser's
+// requests, which main adds to those of the chooser's own top document
+// alone (desktop/src/app.js): the page holds the token nowhere, and a
+// request that names it in its body is refused as one with an unknown
+// field.
+const RunHeader = "Cyfr-Run"
+
+// ReadyURL is ready's address of the chooser, the run token in its
+// fragment, which no request carries: main takes the token from it and
+// opens the chooser without it.
 func (s *Service) ReadyURL() string { return shell.Origin + "/bootstrap/#token=" + s.Token }
 
 // ServeHTTP serves the chooser under /bootstrap/ and, once a CYFR is
@@ -283,7 +292,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "JSON is expected", http.StatusBadRequest)
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(RunHeader)), []byte(s.Token)) != 1 {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
@@ -435,13 +444,12 @@ func (s *Service) finish() {
 	}
 }
 
-// request is a chooser's request: the token, and the address typed, the
+// request is a chooser's request: the address typed, the
 // directory approved, or the picks it has seen answered. Epoch is the time
 // since a lock the page was shown in, Picks the pick its folder is, and Run
 // the setup it shows (none 0): a request that acts says what the page
 // showed, and is refused where that is no longer so.
 type request struct {
-	Token   string `json:"token"`
 	Epoch   uint64 `json:"epoch,omitempty"`
 	Run     uint64 `json:"run,omitempty"`
 	Address string `json:"address,omitempty"`
@@ -463,8 +471,8 @@ type request struct {
 // directory for a CYFR, or go to the device's pages.
 //
 // Once a CYFR is open, Next is the device's pages. Resume, before any
-// Connect of this run, is the remembered CYFR elsewhere, which a chooser
-// on the passkey road connects by itself; a folder's is never Resume.
+// Connect of this run, is the CYFR selected last, elsewhere or a folder's,
+// which the chooser presses by itself once.
 // Folder is where CYFR would be set up on this computer, after
 // Picks of main's answers to a pick, Found whether a CYFR is set up there
 // already, and Docker whether Docker answers there.
@@ -525,7 +533,6 @@ func (s *Service) shown() answer {
 	if err != nil {
 		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
 	}
-	c := list.Homes[list.Last]
 	s.mu.Lock()
 	open, began, home := s.pages != nil, s.began, s.committed.Home
 	folder, picks := s.folderNow()
@@ -534,23 +541,11 @@ func (s *Service) shown() answer {
 	if open {
 		return s.opened(home)
 	}
-	a := answer{Folder: folder, Picks: picks, Setup: setting}
-	if c.Project == "" {
-		a.Home = list.Last
-	}
-	if !began && c.Project == "" {
+	// The last selected, a folder's too, is pressed by the chooser once in
+	// a run; the list's read asks no folder, network or Docker anything.
+	a := answer{Folder: folder, Picks: picks, Setup: setting, Home: list.Last}
+	if !began {
 		a.Resume = list.Last
-	}
-	if c.Project != "" && s.Local != nil {
-		// A folder's CYFR fills the field and is never Resume: one press
-		// opens it.
-		l, err := s.Local(c.Project)
-		defer l.end()
-		if err != nil {
-			a.Error = fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)
-		} else {
-			a.Home = l.Shell.Address
-		}
 	}
 	return a
 }
@@ -581,25 +576,28 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	if a, open := s.again(run, epoch); open {
 		return a
 	}
+	// One reading of the list decides what a press opens: a row's own,
+	// which refuses one the list no longer keeps before any server is
+	// asked, or, for an address typed, the list's as it is read here.
 	from := shell.Typed
+	var rec shell.ClientRecord
 	if req.Kept {
-		row, a, unkept := s.row(home)
+		row, kept, a, unkept := s.row(home)
 		if unkept {
 			return a
 		}
-		from = row
+		from, rec = row, kept
+	} else {
+		list, err := s.Homes.Load()
+		if err != nil {
+			return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
+		}
+		rec = list.Homes[home]
 	}
-	project, l, remembered := s.remembered()
-	defer l.end()
-	if remembered && l.Shell.Address == home {
-		return s.openLocal(run, epoch, project, &l, from)
+	if rec.Project != "" {
+		return s.folderRow(run, epoch, home, rec.Project, from)
 	}
 	if !ok {
-		if remembered && home != "" {
-			// The folder's address changed since the chooser showed it, or
-			// another of this computer's was typed.
-			return answer{Error: fmt.Sprintf("The CYFR in %s is at %s. Connect to that address.", project, l.Shell.Address)}
-		}
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
 	}
 	discover := s.Discover
@@ -684,15 +682,15 @@ func (s *Service) again(run context.Context, epoch uint64) (answer, bool) {
 // from (shell.Row), or its answer when the list holds it no more, or holds
 // it being forgotten: a row the rail showed before its Forget ended,
 // pressed after, adds nothing. Connect is the one way to add a CYFR.
-func (s *Service) row(home string) (shell.Row, answer, bool) {
-	row, err := s.Homes.Row(home)
+func (s *Service) row(home string) (shell.Row, shell.ClientRecord, answer, bool) {
+	row, rec, err := s.Homes.Row(home)
 	switch {
 	case shell.IsUnkept(err):
-		return row, answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
+		return row, rec, answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
 	case err != nil:
-		return row, answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}, true
+		return row, rec, answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}, true
 	}
-	return row, answer{}, false
+	return row, rec, answer{}, false
 }
 
 // live is whether no lock came since epoch.
@@ -702,16 +700,27 @@ func (s *Service) live(epoch uint64) bool {
 	return s.epoch == epoch
 }
 
-// remembered is the folder of the CYFR selected last and the CYFR there,
-// when it is a folder's the app can read.
-func (s *Service) remembered() (string, Local, bool) {
-	list, err := s.Homes.Load()
-	c := list.Homes[list.Last]
-	if err != nil || c.Project == "" || s.Local == nil {
-		return "", Local{}, false
+// folderRow opens the CYFR of the folder project, which the press's one
+// reading of the list keeps at home (connect), whatever press, retry or
+// start asked: that folder alone is read, and opened only while its
+// reading still names home. A folder that cannot be read, or names another
+// address now, is said; nothing starts Docker, and nothing connects to
+// home as a CYFR elsewhere.
+func (s *Service) folderRow(run context.Context, epoch uint64, home, project string, from shell.Row) answer {
+	if s.Local == nil {
+		return answer{Error: "This app reads no folder on this computer, so it cannot open the CYFR in " + project + "."}
 	}
-	l, err := s.Local(c.Project)
-	return c.Project, l, err == nil
+	l, err := s.Local(project)
+	// This holds the reading until the service takes it as it opens.
+	defer l.end()
+	switch {
+	case err != nil:
+		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", project, err)}
+	case l.Shell.Address != home:
+		return answer{Error: fmt.Sprintf("The CYFR in %s is at %s now, not %s. Connect to %s to add it.",
+			project, l.Shell.Address, home, l.Shell.Address)}
+	}
+	return s.openLocal(run, epoch, project, &l, from)
 }
 
 // openLocal selects the CYFR l, set up in project on this computer, with
@@ -743,7 +752,7 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		setup, _ = l.Shell.SetupToken(run)
 	}
 	return s.selectHome(run, epoch, sel, l.Shell, l,
-		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver, Setup: setup})
+		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Setup: setup})
 }
 
 // selectRemote selects the CYFR elsewhere at home, with the account
