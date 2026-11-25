@@ -9,7 +9,7 @@
 # real sg), sets CYFR up in a folder seeded as a release's download would
 # leave it, with the loaded app image, and opens it. app/proof.js drives
 # the app from inside its main process; this script does what the host
-# does between its steps. Three launches:
+# does between its steps. Five launches:
 #
 #   first   missing_to_ready  with no Docker socket the setup screen says
 #                             Docker does not answer and shows the commands;
@@ -59,6 +59,18 @@
 #                             that CYFR's socket, which is what it is for:
 #                             a message to another origin is the policy's
 #                             to refuse (its tests), not this row's to read
+#   stopped stopped_reopen    the passkey launch's folder, its CYFR stopped by
+#                             cyfr down there, is the one selected last: as
+#                             the app starts its CYFR does not open; the
+#                             chooser says why, naming the folder, and offers
+#                             Try again, the rail lists it, and nothing of
+#                             its stack starts
+#           try_again         after cyfr up in its folder, Try again opens
+#                             it, signed in as the passkey launch left it,
+#                             from its own store kept on disk
+#   pressed stopped_press     stopped by cyfr down again, its row pressed on
+#                             the rail says why, naming the folder, and
+#                             nothing of its stack starts
 #
 # No lock is a row: on a desktop nothing locks while no CYFR is open, so a
 # lock during a setup is held by the app's Go and JS tests, and the chooser
@@ -168,32 +180,10 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 failed() { echo "FAIL $1"; exit 1; }
 
-# seed DIR PORT: the folder as a release's download leaves it, but for the
-# loaded image and no Locus (the candidate is a dev build, which downloads
-# nothing), for a CYFR at PORT serving its own accounts.
-free_port() { python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
-seed() {
-local D=$1 PORT=$2 ADDR="http://localhost:$2"
-cp "$ROOT/docker-compose.yml" "$ROOT/Caddyfile" "$D/"
-cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$D/keeper.seccomp.json"
-cat >"$D/docker-compose.override.yml" <<Y
-services:
-  cyfr:
-    image: $IMAGE
-    pull_policy: never
-    container_name: !reset null
-  locus-runtime:
-    profiles: ["proof-never"]
-  locus-backends:
-    profiles: ["proof-never"]
-  locus-backends-guard:
-    profiles: ["proof-never"]
-Y
-sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$PORT|" -e 's|^CYFR_LOCUS_BUILDS_URL=.*|CYFR_LOCUS_BUILDS_URL=|' \
-  -e '/^CYFR_DIRECTORY_SERVE=/d;/^CYFR_DIRECTORY_URL=/d;/^CYFR_REGISTRY_URL=/d;/^CYFR_PRIVATE_EGRESS_TARGETS=/d' "$ROOT/.env.example" >"$D/.env.example"
-printf '%s\n' "" CYFR_AUTO_MIGRATE=on CYFR_DIRECTORY_SERVE=writer "CYFR_DIRECTORY_URL=$ADDR" "CYFR_REGISTRY_URL=localhost:$PORT" \
-  CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1 >>"$D/.env.example"
-}
+# The folder as a release's download leaves it, for a CYFR serving its
+# own accounts (folder.sh, seed).
+# shellcheck source=folder.sh
+source "$ROOT/tests/setup-proof/folder.sh"
 # The proof's inputs for a launch: the CYFR at ADDR in folder DIR.
 inputs() { printf '{"home": "%s", "directory": "%s", "fronts": {}, "folder": "%s", "docker_gid": %s}\n' "$1" "$1" "$2" "$GID" >"$W/fixture/inputs.json"; }
 PORT=$(free_port); ADDR="http://localhost:$PORT"
@@ -259,12 +249,22 @@ PG=$(docker exec "$CLIENT_ID" id -g proof)
 echo "client: $(docker exec "$CLIENT_ID" sh -c '. /etc/os-release; echo $PRETTY_NAME'), the app's account in the docker group ($GID), its process launched without it"
 
 mkfifo "$W/fixture/app-output"
-# The proof's asks, answered as the host: the socket given.
+# cyfr in the folder DIR, as the app's account runs it at a terminal
+# (its docker group among its groups), its docker calls logged as the app's.
+person() { timeout 300 docker exec -u proof -w "$1" -e HOME=/home/proof -e PATH=/opt/wrap:/usr/bin:/bin "$CLIENT_ID" cyfr "${@:2}"; }
+# The proof's asks, answered as the host: the socket given; cyfr up in the
+# launch's folder, answered with its exit status.
 answer() {
+  local folder
   while :; do
     if [ -e "$W/fixture/asked-give-docker" ] && [ ! -e "$W/fixture/done-give-docker" ]; then
       docker exec "$CLIENT_ID" ln -sf /hostrun/docker.sock /var/run/docker.sock
       : >"$W/fixture/done-give-docker"
+    fi
+    if [ -e "$W/fixture/asked-up" ] && [ ! -e "$W/fixture/done-up" ]; then
+      folder=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["folder"])' "$W/fixture/inputs.json")
+      person "$folder" up >"$KEPT/cyfr-up.log" 2>&1; echo $? >"$W/fixture/up-status"
+      mv "$W/fixture/up-status" "$W/fixture/done-up"
     fi
     sleep 0.2 # sleep-ok: polls the proof's asks
   done
@@ -389,3 +389,13 @@ if python3 -I -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok
 else
   failed "first_passkey: $part; requests sent carrying the token $requests (of them, $recorded the setup page's own), times the one scrub met a withheld secret in all the run kept $MET, files of the app's account or /tmp: ${files:-none} (its profile holds $profile entries)"
 fi
+# The one folder a person has on this computer: the passkey launch's,
+# its CYFR selected last. The person stops it with cyfr down in its folder
+# and starts it with cyfr up there, which the proof asks for mid-launch
+# (stopped); stopped again, its row is pressed (pressed).
+person "$D2" down >"$KEPT/cyfr-down-1.log" 2>&1 || failed "stopped_reopen: cyfr down in the folder failed (its output is kept)"
+answer & ANSWERER=$!
+launch stopped "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"
+kill "$ANSWERER" 2>/dev/null || true
+person "$D2" down >"$KEPT/cyfr-down-2.log" 2>&1 || failed "stopped_press: cyfr down in the folder failed (its output is kept)"
+launch pressed "$(grep -cE "^(PASS|FAIL)" "$W/fixture/out/setup.txt")"

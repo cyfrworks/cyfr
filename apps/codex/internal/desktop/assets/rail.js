@@ -63,7 +63,30 @@ function initials(c) {
   const words = names(c)[0].split(/[^\p{L}\p{N}]+/u).filter(Boolean)
   return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)).toUpperCase()
 }
-function row(c, name) {
+// This box, the box's own CYFR, first on a box's screen: pressed, it opens
+// whatever its folder names now (the chooser asks cyfr), or shows it where
+// it is the one open. It has no menu: it is never forgotten.
+function boxRow(c) {
+  const li = document.createElement("li")
+  const a = document.createElement("a")
+  a.className = "way box"
+  a.href = c.open && c.cyfr ? "/rail/select?cyfr=" + encodeURIComponent(c.cyfr) : "/rail/box"
+  a.title = c.cyfr ? "This box, " + c.cyfr : "This box"
+  a.setAttribute("aria-label", a.title)
+  if (c.open) a.setAttribute("aria-current", "page")
+  const tile = document.createElement("span")
+  tile.className = "tile"
+  tile.setAttribute("aria-hidden", "true")
+  tile.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22"><rect x="4" y="6" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 21h8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>'
+  const label = document.createElement("span")
+  label.className = "name"
+  label.textContent = "This box"
+  a.append(tile, label)
+  a.addEventListener("contextmenu", (e) => e.preventDefault())
+  li.append(a)
+  return li
+}
+function row(c, name, quiet) {
   const li = document.createElement("li")
   const a = document.createElement("a")
   a.className = "cyfr" + (c.forgetting ? " gone" : "") + (c.failed ? " failed" : "")
@@ -83,13 +106,16 @@ function row(c, name) {
   a.append(tile, label)
   // Its menu, which main draws: the context key, Shift+F10 or Delete,
   // a press held on a touch screen, or the pointer's other button.
-  const menu = (e) => { e.preventDefault(); go("/rail/menu", c.cyfr) }
+  // On a box it offers none while the box is locked, nor for the CYFR open
+  // (quiet): cyfr forgets neither then. The CYFR open is forgotten from
+  // This box.
+  const menu = (e) => { e.preventDefault(); if (!quiet) go("/rail/menu", c.cyfr) }
   a.addEventListener("contextmenu", menu)
   a.addEventListener("keydown", (e) => {
     if (e.key === "ContextMenu" || e.key === "Delete" || (e.key === "F10" && e.shiftKey)) menu(e)
   })
   let held = 0
-  a.addEventListener("touchstart", () => { held = setTimeout(() => { held = -1; go("/rail/menu", c.cyfr) }, 550) }, {passive: true})
+  a.addEventListener("touchstart", () => { held = setTimeout(() => { held = -1; if (!quiet) go("/rail/menu", c.cyfr) }, 550) }, {passive: true})
   const release = (e) => { if (held === -1) e.preventDefault(); clearTimeout(held); held = 0 }
   a.addEventListener("touchend", release)
   a.addEventListener("touchmove", () => { clearTimeout(held); held = 0 }, {passive: true})
@@ -98,8 +124,15 @@ function row(c, name) {
   return li
 }
 function show(answer) {
-  const shown = labels(answer.cyfrs)
-  list.replaceChildren(...answer.cyfrs.map((c, i) => row(c, shown[i])))
+  const box = answer.cyfrs.filter((c) => c.box)
+  // An entry This box's folder made at an address it no longer names is
+  // called by that address: the folder's name is This box's.
+  const cyfrs = answer.cyfrs.filter((c) => !c.box).map((c) => box.some((b) => b.folder && b.folder === c.folder) ? {...c, folder: ""} : c)
+  const shown = labels(cyfrs)
+  list.replaceChildren(...box.map(boxRow), ...cyfrs.map((c, i) => row(c, shown[i], box.length > 0 && (!!answer.locked || !!c.open))))
+  // A box sets nothing up, its screen showing its own CYFR, and updates
+  // by cyfr update alone.
+  for (const way of ["setup", "update"]) document.getElementById(way).parentElement.hidden = box.length > 0
   said.textContent = answer.error || ""
 }
 async function watch() {

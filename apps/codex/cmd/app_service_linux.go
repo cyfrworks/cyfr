@@ -431,11 +431,42 @@ func relay(conn net.Conn, out io.Writer, s *staged) (what, said string, err erro
 	}
 }
 
-func (r *serviceRoad) elevate(out io.Writer, again string) (func(), error) {
-	if r.sudo {
-		return debRoad{}.elevate(out, again)
+// elevate asks nothing of a run the service takes, and is the sudo road's
+// where it took that road. Not asking, before any fetch, as Update CYFR's
+// offer asks it (windowOffer), it is whether the service would take the
+// update, read from its socket alone and never by connecting, which
+// would start a request: where it would, it says so and what happens
+// when the service then cannot be used; where not, why, and then the sudo
+// road's check.
+func (r *serviceRoad) elevate(out io.Writer, again string, ask bool) (func(), error) {
+	switch {
+	case ask && !r.sudo:
+		return func() {}, nil
+	case ask:
+		return debRoad{}.elevate(out, again, true)
 	}
-	return func() {}, nil
+	why := serviceAnswers()
+	if why == "" {
+		fmt.Fprintln(out, "CYFR's update service installs it, with no password; where the service cannot, the update says why and goes through sudo, which needs a terminal to ask for your password.")
+		return func() {}, nil
+	}
+	fmt.Fprintf(out, "CYFR's update service %s, so the update goes through sudo.\n", why)
+	return debRoad{}.elevate(out, again, false)
+}
+
+// serviceAnswers is why the update service's socket would not take a
+// request of this account, "" where it would: it is there only while
+// systemd listens on it (RemoveOnStop), and only root and the sudo group
+// may write it. A variable so tests stand in for the machine.
+var serviceAnswers = func() string {
+	info, err := os.Stat(appUpdateSocket)
+	switch {
+	case err != nil || info.Mode()&os.ModeSocket == 0:
+		return "is not on this machine"
+	case syscall.Access(appUpdateSocket, 2) != nil:
+		return "serves the sudo group's accounts alone"
+	}
+	return ""
 }
 
 func (r *serviceRoad) replace(out io.Writer, s *staged, older bool) error {

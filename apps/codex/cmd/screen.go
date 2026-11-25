@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/desktop"
 	"github.com/cyfr/codex/internal/holder"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/shell"
@@ -120,23 +122,14 @@ var screenAppCmd = &cobra.Command{
 }
 
 // screenAppArgs is the CYFR app's command line as this machine's screen
-// for the project in dir, which becomes the app's process (screenExec):
-// --screen-project, and the engine's route to the folder's CYFR where it
-// takes one (localRoute), read at each start, since the engine takes a
-// route only as it starts: the app never starts itself again on the route
-// its shell names (desktop/src/states.js), its launcher does, through
-// this. A folder that cannot be read starts the app on none; its shell,
-// reading the same folder, fails before it shows anything, so the screen
-// stays dark: the reason goes to the app's error stream (the journal),
-// the app ends itself once, and the launcher tries again a second later.
+// for the project in dir, which becomes the app's process (screenExec).
+// The route to the folder's CYFR comes with its proposal, as on a
+// desktop, and the app sets it on that CYFR's own stores. The folder is
+// read as This box is pressed, by the chooser or the person: one that
+// cannot be read is said there, beside the list, and pressing This box
+// again reads it again.
 func screenAppArgs(dir string) []string {
-	args := []string{appProgram, "--screen-project=" + dir}
-	if read, err := readFolder(dir); err == nil {
-		if proxy, resolver := localRoute(read.Mode); proxy != "" {
-			args = append(args, "--proxy-server="+proxy, "--host-resolver-rules="+resolver)
-		}
-	}
-	return args
+	return []string{appProgram, "--screen-project=" + dir}
 }
 
 func init() {
@@ -462,87 +455,77 @@ const (
 )
 
 // runScreenShell is the screen's session inside labwc, which the CYFR app
-// started in the project's folder (desktop/src/app.js): the shell's pages
-// on loopback (listen takes their address), the on-screen keyboard, the
-// watches that lock it (screenWatches), and the app as the browser on
-// those pages (screenApp), reading its main process's messages from in
-// and writing its own to out, told the pages once the keyboard and the
-// watches are up (screenWatches.watch). While the keyboard or those
-// watches are not known to work it runs on locked, its page saying why.
-// main's end, which ends its pipe, locks and ends the shell; this
-// process's own end (SIGTERM, SIGINT, SIGHUP) locks before it exits. Any
-// lock hides what is on the screen first (the app's hide), then ends the
-// sessions at the home, so no page of the unlocked session outlives it.
+// started in the project's folder (desktop/src/app.js): what desktop-serve
+// serves the app on a desktop (desktop.Service) on loopback (listen takes
+// its address), the list of CYFRs, the rail, the chooser and the device's
+// pages at the CYFR selected, with this folder's CYFR its This box; the
+// on-screen keyboard and the watches that lock it (screenWatches); and
+// the app as the browser on those pages (screenApp), reading its main
+// process's messages from in and writing its own to out, told ready once
+// the keyboard and the watches are up (screenWatches.watch). While the
+// keyboard or those watches are not known to work no device's page there
+// unlocks, saying why. main's end, which ends its pipe, locks and ends the
+// shell; this process's own end (SIGTERM, SIGINT, SIGHUP) locks before it
+// exits. Every lock, a CYFR open or none, hides what is on the screen
+// first (the app's hide), then ends the sessions at that CYFR, so no page
+// of an unlocked session outlives it. A CYFR elsewhere gets nothing of
+// this folder: no work begun for it, no setup token and no reading of its
+// data's disk; and only This box makes the machine's key.
 func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in io.Reader, out io.Writer) error {
 	_ = holder.HardenProcess()
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	// Everything the screen begins for its CYFR ends as it returns, and as
-	// its pages stop (shell.Server.ServeOn).
-	work := shell.NewWork(ctx)
-	defer work.End()
-	local, err := readLocal(work, dir, "screen")
-	if err != nil {
-		return fmt.Errorf("The screen cannot read how CYFR is reached here (%v)", err)
-	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()
 	// The compositor's own list of windows confirms each hide (screenApp).
 	windows := wayland.ListWindows(ctx)
 	defer windows.Close()
-	hiding := func() func() error {
-		return windows.Mark(screenHideWithin).Closed
-	}
-	var ln net.Listener
-	browser, err := newScreenApp(in, out, local, hiding, func(why error) { endScreenApp(appProgram, ln, why) })
-	if err != nil {
-		return err
-	}
 	// A keyboard and a suspend watch a killed shell left, the watch
 	// aimed at that shell's pid.
 	_ = exec.Command("pkill", "-x", "wvkbd-mobintl").Run()
 	_ = exec.Command("pkill", "-f", "--", "^swayidle -d -w -C /dev/null before-sleep kill -USR1 ").Run()
-	host, _ := os.Hostname()
-	ln, device, entry, err := screenClaim(listen, dir, local.Shell.Address)
+	// The list of CYFRs is shared with the CYFR app: only the process
+	// holding the listener writes it, so it is taken first.
+	ln, err := listen()
 	if err != nil {
-		return err
+		return fmt.Errorf("The screen cannot take %s, which another program holds (%v)", shell.Listen, err)
 	}
+	device, err := shell.DeviceDir()
+	if err != nil {
+		ln.Close()
+		return fmt.Errorf("The screen cannot show the CYFR here: %v", err)
+	}
+	gone := make(chan struct{})
+	app := &screenApp{to: desktop.NewWriter(out, func() { close(gone) }),
+		hiding: func() func() error { return windows.Mark(screenHideWithin).Closed },
+		endApp: func(why error) { endScreenApp(appProgram, ln, why) }}
 	// A watch lost locks, and the lock hides the page shown then, which
 	// gives way to the one that says why (shell.Shell.Lock).
 	watches := newScreenWatches(screenIdle, nil)
-	cfg := local.Shell
-	cfg.DisplayName, cfg.Restart = host, browser.hide
-	// Read as each page is drawn: a `cyfr update` of the folder at the same
-	// address leaves this shell running, and its next lock page says so.
-	cfg.Warning = func() string { return releaseApart(dir, version.Version) }
-	cfg.Record = filepath.Join(device, "holder.json")
-	cfg.Clients = entry
-	cfg.Unwatched = watches.Unwatched
-	sh, err := shell.New(cfg)
-	if err != nil {
-		ln.Close()
-		return err
+	svc := newDesktopService(ctx, device, dir, app.say)
+	svc.Docker, svc.Setup = nil, nil
+	svc.Box, svc.Hide = dir, app.hide
+	svc.Shell = func(c *shell.Config) {
+		c.Unwatched = watches.Unwatched
+		// Read as each page is drawn: a `cyfr update` of the folder at the
+		// same address leaves this shell running, and its next lock page
+		// says so.
+		c.Warning = func() string { return releaseApart(dir, version.Version) }
 	}
-	// A folder naming another CYFR than the one this shell opened ends it:
-	// the launcher starts it again on the reading made then.
-	moved := make(chan error, 1)
-	srv := &shell.Server{Shell: sh, Work: work, Reachable: func(ctx context.Context) error {
-		err := local.Answers(ctx)
-		var unbound *shell.Unbound
-		if errors.As(err, &unbound) && unbound.Moved {
-			select {
-			case moved <- err:
-			default:
-			}
-		}
-		return err
-	}}
+	hs := &http.Server{Handler: svc, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
-	go func() { served <- srv.ServeOn(ctx, ln) }()
+	go func() { served <- hs.Serve(ln) }()
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(sctx)
+		// Shutdown closes only a listener Serve has begun with.
+		_ = ln.Close()
+	}()
 
-	watches.lock = func(why string) { sh.Lock(why) }
+	watches.lock = svc.Lock
 	watching, stopWatching := context.WithCancel(ctx)
 	kept := make(chan struct{})
 	go func() {
@@ -553,26 +536,32 @@ func runScreenShell(ctx context.Context, listen func() (net.Listener, error), in
 		stopWatching()
 		<-kept
 	}()
-	// The first page is the one the watches give: the lock page, or why not.
+	// ready waits for the watches' first word, worked or failed.
 	select {
 	case <-watches.Settled():
 	case <-ctx.Done():
 	}
-
-	shown := make(chan error, 1)
-	go func() { shown <- browser.show(sh.Lock) }()
+	ran := make(chan error, 1)
+	if ctx.Err() == nil {
+		app.show(desktop.Message{Type: desktop.TypeReady, URL: svc.ReadyURL(), Rail: svc.RailURL()})
+		go func() { ran <- svc.Run(in) }()
+	}
 
 	var ended error
 	select {
 	case <-ctx.Done():
+	case ended = <-ran:
 	case ended = <-served:
-	case ended = <-shown:
-	case err := <-moved:
-		ended = fmt.Errorf("The screen starts again on this folder's settings (%v)", err)
+		if errors.Is(ended, http.ErrServerClosed) {
+			ended = nil
+		}
+	case <-gone:
+		ended = errors.New("the CYFR app has gone: a message to it could not be written")
 	}
-	// The last lock hides as the screen's end, after which nothing shows,
-	// and is confirmed or carried out before this returns.
-	browser.finish(sh.Lock)
+	// The last lock hides as the screen's end, saying ending, after which
+	// nothing shows, and is confirmed or carried out before this returns.
+	svc.End()
+	app.finish()
 	return ended
 }
 
@@ -634,30 +623,6 @@ func folderRelease(dir string) string {
 		})
 	}
 	return ""
-}
-
-// screenClaim takes the shell's listener, then selects the CYFR in dir, at
-// home, in this account's list of CYFRs, which keeps the device's standing
-// there: the list is shared with the CYFR app, so only the one process
-// holding the listener writes it.
-func screenClaim(listen func() (net.Listener, error), dir, home string) (net.Listener, string, *shell.Selection, error) {
-	ln, err := listen()
-	if err != nil {
-		return nil, "", nil, fmt.Errorf("The screen cannot take %s, which another program holds (%v)", shell.Listen, err)
-	}
-	device, err := shell.DeviceDir()
-	var entry *shell.Selection
-	if err == nil {
-		entry, err = shell.Homes(filepath.Join(device, "homes.json")).SelectLocal(home, dir, shell.Typed)
-	}
-	if err == nil {
-		err = entry.Commit("")
-	}
-	if err != nil {
-		ln.Close()
-		return nil, "", nil, fmt.Errorf("The screen cannot show the CYFR here: %v", err)
-	}
-	return ln, device, entry, nil
 }
 
 // sigUSR1 is Linux's SIGUSR1, named by number so this file builds where

@@ -6,7 +6,7 @@ name: Codex CI (cyfr CLI)
 # Vet, test, and build the Go CLI on every change. security.yml only runs
 # govulncheck; this gives the CLI a real green-build + test signal at PR time.
 # desktop-native builds, installs and smokes the CYFR app around it.
-# release-rehearsal runs the release's GoReleaser on its six installers.
+# release-rehearsal runs the release's GoReleaser on its five installers.
 # screen-idle holds the device screen's idle lock against the app's engine.
 
 on:
@@ -125,7 +125,7 @@ jobs:
       # tests that call requireCompose (TestComposeTestsAreTheOnesCIRequires).
       - name: go test (the Docker Compose tests ran and passed)
         env:
-          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestSetupsStartRunsInTheFolderItEnteredThroughTheRealEngine TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestANewCYFRSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole TestUpdateRefusesBeforeTheLockAndAnyRecovery
+          COMPOSE_TESTS: TestSetupsStartRunsInTheFolderItEnteredThroughTheRealEngine TestANewCYFRSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole TestUpdateRefusesBeforeTheLockAndAnyRecovery
         run: |
           set -euo pipefail
           docker compose version
@@ -320,7 +320,7 @@ jobs:
         run: bash tests/desktop-proof/screen/idle.sh
 
   release-rehearsal:
-    # GoReleaser's release on .goreleaser.yml with stand-ins for the six
+    # GoReleaser's release on .goreleaser.yml with stand-ins for the five
     # installers, the scaffold and the manifest, publishing nothing
     # (tests/ci-release-rehearsal.sh): the installers are summed by their
     # digests, and a missing one fails before any upload. The GoReleaser
@@ -374,7 +374,6 @@ jobs:
           - {name: Linux amd64, os: ubuntu-26.04, arch: amd64, exe: ''}
           - {name: Linux arm64, os: ubuntu-26.04-arm, arch: arm64, exe: ''}
           - {name: macOS arm64, os: macos-latest, arch: arm64, exe: ''}
-          - {name: macOS amd64, os: macos-15-intel, arch: amd64, exe: ''}
           - {name: Windows amd64, os: windows-latest, arch: amd64, exe: .exe}
           - {name: Windows arm64, os: windows-11-arm, arch: arm64, exe: .exe}
     defaults:
@@ -439,7 +438,7 @@ jobs:
 
       - name: The Homebrew cask (macOS)
         if: runner.os == 'macOS'
-        run: bash tests/desktop-proof/native/brew-tap.sh ${{ matrix.arch }} 0.0.0-ci apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_${{ matrix.arch }}.dmg 0.0.1-ci apps/codex/desktop/dist/cyfr-desktop_0.0.1-ci_darwin_${{ matrix.arch }}.dmg
+        run: bash tests/desktop-proof/native/brew-tap.sh 0.0.0-ci apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_darwin_arm64.dmg 0.0.1-ci apps/codex/desktop/dist/cyfr-desktop_0.0.1-ci_darwin_arm64.dmg
 
       # The scripts release.yml and desktop-mac.yml run on the packages
       # they publish.
@@ -478,17 +477,19 @@ jobs:
       # request's run.
       - name: Rehearse the Mac distribution
         if: runner.os == 'macOS'
-        run: bash tests/desktop-proof/native/mac-rehearsal.sh "$RUNNER_TEMP/cyfr/cyfr" ${{ matrix.arch }}
+        run: bash tests/desktop-proof/native/mac-rehearsal.sh "$RUNNER_TEMP/cyfr/cyfr"
 
       # The installed app updated from release A to B by its own cyfr, as a
-      # person runs cyfr update (tests/desktop-proof/native/update.sh); last,
-      # as it leaves B installed (on Linux, removed after the update
+      # person runs cyfr update, then by Update CYFR in its window, which
+      # xdotool presses on Linux (tests/desktop-proof/native/update.sh);
+      # last, as it leaves B installed (on Linux, removed after the update
       # service's checks). On Linux the releases lie where the service's
       # unit, which sees no /home and a /tmp of its own, reads them as root.
       - name: The app's update from one release to the next
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get install -y --no-install-recommends xdotool >/dev/null
             sudo install -d -o "$(id -un)" /srv/update-proof
             bash tests/desktop-proof/native/update.sh build /srv/update-proof ${{ matrix.arch }}
             dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/update.sh run /srv/update-proof

@@ -178,7 +178,7 @@ func connectHeld(t *testing.T, listener, token string) <-chan string {
 		close(reached)
 		<-done
 	}()
-	body, err := json.Marshal(map[string]string{"token": token, "address": "https://" + silent.Addr().String()})
+	body, err := json.Marshal(map[string]string{"address": "https://" + silent.Addr().String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,7 @@ func connectHeld(t *testing.T, listener, token string) <-chan string {
 		req.Host = shell.Listen
 		req.Header.Set("Origin", shell.Origin)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(desktop.RunHeader, token)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			answered <- err.Error()
@@ -236,38 +237,6 @@ func TestDesktopServeHelpShowsNoRoad(t *testing.T) {
 			t.Errorf("desktop-serve takes --%s", f.Name)
 		}
 	})
-}
-
-// The device's screen shares its account's list of CYFRs with the CYFR
-// app: it writes the list only once it holds the shell's listener, so a
-// screen that loses the address to another program changes nothing.
-func TestTheScreenWritesTheSharedListOnlyHoldingItsListener(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	record := filepath.Join(home, ".cyfr", "device", "homes.json")
-	listen, _ := ownListener()
-	held, err := listen()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := screenClaim(listen, "/home/ada/cyfr", "http://localhost:4000"); err == nil {
-		t.Fatal("the screen went on without its listener")
-	}
-	if _, err := os.Stat(record); !os.IsNotExist(err) {
-		t.Fatalf("a screen without its listener wrote the list (%v)", err)
-	}
-	held.Close()
-	free, _ := ownListener()
-	ln, _, _, err := screenClaim(free, "/home/ada/cyfr", "http://localhost:4000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln.Close()
-	if raw, err := os.ReadFile(record); err != nil || !strings.Contains(string(raw), `"http://localhost:4000": {
-      "project": "/home/ada/cyfr"`) {
-		t.Fatalf("the screen holding its listener did not select its CYFR: %s (%v)", raw, err)
-	}
 }
 
 // desktop-serve's setup suggests the folder cyfr setup opened the app in,

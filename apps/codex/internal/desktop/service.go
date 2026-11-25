@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cyfr/codex/internal/account"
@@ -32,13 +34,18 @@ type Local struct {
 	// there: its address, the client that reaches it, the account service
 	// it names, its data directory and its setup capability.
 	Shell shell.Config
-	// Proxy and Resolver are the engine's route to its pages, empty on
-	// this computer's own.
-	Proxy, Resolver string
+	// Proxy is the engine's route to its pages, set on that CYFR's own
+	// stores alone, empty on this computer's own.
+	Proxy string
 	// Answers is nil when that CYFR itself answers now, and otherwise why
 	// it is not opened, in a sentence for the person. Asking starts
 	// nothing.
 	Answers func(context.Context) error
+	// waits is whether the device's pages at that CYFR wait for it to
+	// answer (shell.Server.Reachable), This box's on a box's screen
+	// (Service.Box), rather than its open being refused while it does not:
+	// the box's own CYFR starts as the box does.
+	waits bool
 	// Work is everything begun for that CYFR here. It has one holder from
 	// the moment it is made until it is ended, with no gap: the one
 	// holding a reading ends it on every way out, panics too, by a
@@ -93,7 +100,8 @@ func (l *Local) take() *Local {
 // chooser alike. Main opens a CYFR committed at its root, and lets go of
 // one by leave.
 type Service struct {
-	// Token is the run token the chooser's requests carry.
+	// Token is the run token: main alone holds it, and adds it to the
+	// chooser's own requests as their RunHeader.
 	Token string
 	// ReadToken is the rail's: it reads the list of CYFRs (rail.go) and
 	// authorizes nothing else.
@@ -130,6 +138,33 @@ type Service struct {
 	// begins; its error is the sentence for the person. nil sets up
 	// nothing.
 	Setup func(ctx context.Context, folder string, step func(string)) error
+	// Box is the absolute folder of the CYFR a box's own screen shows,
+	// This box, on that screen alone; "" on a desktop. This box is no row
+	// of the list: its press (/bootstrap/box) reads that folder at the
+	// press and opens the CYFR it names now, adding an entry at an address
+	// the list does not hold, and the rail shows the entry it last made as
+	// This box, which is never forgotten. Only This box's shell makes the
+	// machine's key (shell.Config.KeyElsewhere).
+	Box string
+	// Hide, on a box's screen, hides what the screen shows as every lock
+	// begins, with a CYFR open or none, and only then tells main, through
+	// tell: the lock's locked, or, at the service's end, ending, the run's
+	// last message. nil (a desktop) tells at once, and nothing at the end.
+	Hide func(tell func())
+	// Offer works out what Update CYFR offers (update.go), with project
+	// this computer's own CYFR's folder where it is the one open, "" for a
+	// CYFR elsewhere or none; BeginUpdate starts an offer's run, the app's
+	// own cyfr, detached from this one, with record as its output, and
+	// answers what waits for its end. nil offers nothing.
+	Offer       func(ctx context.Context, project string) UpdatePlan
+	BeginUpdate func(plan UpdatePlan, record *os.File) (wait func() error, err error)
+	// UpdateRecord is where an update Update CYFR starts writes what it
+	// says, one record, made anew by each and kept until the next;
+	// UpdateRuns says whether an update runs on this computer, by the
+	// locks it holds, and with project, whether the CYFR in that folder is
+	// held by its own lock.
+	UpdateRecord string
+	UpdateRuns   func(project string) bool
 
 	mu sync.Mutex
 	// epoch counts locks. A chooser request belongs to the epoch it
@@ -182,6 +217,15 @@ type Service struct {
 	erases   map[uint64]erasing
 	eraseID  uint64
 	unerased map[string]bool
+	// over is whether ending was said (Hide): nothing is said after it.
+	over bool
+	// leaving is the shell a departure detached and is retiring, whose
+	// lock is still a lock of this service's (lockStep), and departed is
+	// closed once that retirement has ended: End waits for it.
+	leaving  *shell.Shell
+	departed chan struct{}
+	// update is Update CYFR's offer and run (update.go).
+	update updating
 }
 
 type selection struct {
@@ -198,8 +242,16 @@ func NewToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// ReadyURL is the chooser's address main opens first, the token in its
-// fragment, which no request carries.
+// RunHeader is the header that carries the run token on the chooser's
+// requests, which main adds to those of the chooser's own top document
+// alone (desktop/src/app.js): the page holds the token nowhere, and a
+// request that names it in its body is refused as one with an unknown
+// field.
+const RunHeader = "Cyfr-Run"
+
+// ReadyURL is ready's address of the chooser, the run token in its
+// fragment, which no request carries: main takes the token from it and
+// opens the chooser without it.
 func (s *Service) ReadyURL() string { return shell.Origin + "/bootstrap/#token=" + s.Token }
 
 // ServeHTTP serves the chooser under /bootstrap/ and, once a CYFR is
@@ -220,6 +272,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/rail/") {
 		s.rail(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/update/") {
+		s.updatePage(w, r)
 		return
 	}
 	s.mu.Lock()
@@ -283,7 +339,7 @@ func (s *Service) bootstrap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "JSON is expected", http.StatusBadRequest)
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(RunHeader)), []byte(s.Token)) != 1 {
 		http.Error(w, "not this app's page", http.StatusForbidden)
 		return
 	}
@@ -343,6 +399,7 @@ var chooserRoutes = map[string]struct {
 	"/bootstrap/start":   {(*Service).start, carriesEpoch | carriesPicks | carriesRun},
 	"/bootstrap/setup":   {(*Service).awaitSetup, 0},
 	"/bootstrap/open":    {(*Service).openFolder, carriesEpoch | carriesPicks | carriesRun},
+	"/bootstrap/box":     {(*Service).box, carriesEpoch},
 }
 
 // mainCarries is what each message of main's that answers something
@@ -435,13 +492,12 @@ func (s *Service) finish() {
 	}
 }
 
-// request is a chooser's request: the token, and the address typed, the
+// request is a chooser's request: the address typed, the
 // directory approved, or the picks it has seen answered. Epoch is the time
 // since a lock the page was shown in, Picks the pick its folder is, and Run
 // the setup it shows (none 0): a request that acts says what the page
 // showed, and is refused where that is no longer so.
 type request struct {
-	Token   string `json:"token"`
 	Epoch   uint64 `json:"epoch,omitempty"`
 	Run     uint64 `json:"run,omitempty"`
 	Address string `json:"address,omitempty"`
@@ -463,8 +519,8 @@ type request struct {
 // directory for a CYFR, or go to the device's pages.
 //
 // Once a CYFR is open, Next is the device's pages. Resume, before any
-// Connect of this run, is the remembered CYFR elsewhere, which a chooser
-// on the passkey road connects by itself; a folder's is never Resume.
+// Connect of this run, is the CYFR selected last, elsewhere or a folder's,
+// which the chooser presses by itself once.
 // Folder is where CYFR would be set up on this computer, after
 // Picks of main's answers to a pick, Found whether a CYFR is set up there
 // already, and Docker whether Docker answers there.
@@ -479,7 +535,10 @@ type answer struct {
 	Confirm string        `json:"confirm,omitempty"`
 	Next    string        `json:"next,omitempty"`
 	Resume  string        `json:"resume,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	// ResumeBox, on a box's screen with no CYFR selected last, is This
+	// box, which the chooser presses by itself once in its place.
+	ResumeBox bool   `json:"resume_box,omitempty"`
+	Error     string `json:"error,omitempty"`
 	// ended is the service's end, met by a wait: answered 503.
 	ended bool
 }
@@ -525,7 +584,6 @@ func (s *Service) shown() answer {
 	if err != nil {
 		return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
 	}
-	c := list.Homes[list.Last]
 	s.mu.Lock()
 	open, began, home := s.pages != nil, s.began, s.committed.Home
 	folder, picks := s.folderNow()
@@ -534,23 +592,12 @@ func (s *Service) shown() answer {
 	if open {
 		return s.opened(home)
 	}
-	a := answer{Folder: folder, Picks: picks, Setup: setting}
-	if c.Project == "" {
-		a.Home = list.Last
-	}
-	if !began && c.Project == "" {
+	// The last selected, a folder's too, is pressed by the chooser once in
+	// a run; the list's read asks no folder, network or Docker anything.
+	a := answer{Folder: folder, Picks: picks, Setup: setting, Home: list.Last}
+	if !began {
 		a.Resume = list.Last
-	}
-	if c.Project != "" && s.Local != nil {
-		// A folder's CYFR fills the field and is never Resume: one press
-		// opens it.
-		l, err := s.Local(c.Project)
-		defer l.end()
-		if err != nil {
-			a.Error = fmt.Sprintf("The app cannot read the CYFR in %s (%v).", c.Project, err)
-		} else {
-			a.Home = l.Shell.Address
-		}
+		a.ResumeBox = list.Last == "" && s.Box != ""
 	}
 	return a
 }
@@ -581,25 +628,38 @@ func (s *Service) connect(ctx context.Context, epoch uint64, req request) answer
 	if a, open := s.again(run, epoch); open {
 		return a
 	}
-	from := shell.Typed
+	// On a box's screen a press of the address This box's folder names now
+	// is a press of This box (box): the folder read anew, never a row of
+	// the list, which holds none yet when This box's first opening failed
+	// and the chooser offers it again.
 	if req.Kept {
-		row, a, unkept := s.row(home)
+		if l, ok := s.thisBox(home); ok {
+			defer l.end()
+			return s.openLocal(run, epoch, s.Box, &l, shell.Typed)
+		}
+	}
+	// One reading of the list decides what a press opens: a row's own,
+	// which refuses one the list no longer keeps before any server is
+	// asked, or, for an address typed, the list's as it is read here.
+	from := shell.Typed
+	var rec shell.ClientRecord
+	if req.Kept {
+		row, kept, a, unkept := s.row(home)
 		if unkept {
 			return a
 		}
-		from = row
+		from, rec = row, kept
+	} else {
+		list, err := s.Homes.Load()
+		if err != nil {
+			return answer{Error: "This computer's list of CYFRs could not be read (" + err.Error() + ")."}
+		}
+		rec = list.Homes[home]
 	}
-	project, l, remembered := s.remembered()
-	defer l.end()
-	if remembered && l.Shell.Address == home {
-		return s.openLocal(run, epoch, project, &l, from)
+	if rec.Project != "" {
+		return s.folderRow(run, epoch, home, rec.Project, from)
 	}
 	if !ok {
-		if remembered && home != "" {
-			// The folder's address changed since the chooser showed it, or
-			// another of this computer's was typed.
-			return answer{Error: fmt.Sprintf("The CYFR in %s is at %s. Connect to that address.", project, l.Shell.Address)}
-		}
 		return answer{Error: "Type the CYFR's address, such as https://cyfr.example.com."}
 	}
 	discover := s.Discover
@@ -684,15 +744,15 @@ func (s *Service) again(run context.Context, epoch uint64) (answer, bool) {
 // from (shell.Row), or its answer when the list holds it no more, or holds
 // it being forgotten: a row the rail showed before its Forget ended,
 // pressed after, adds nothing. Connect is the one way to add a CYFR.
-func (s *Service) row(home string) (shell.Row, answer, bool) {
-	row, err := s.Homes.Row(home)
+func (s *Service) row(home string) (shell.Row, shell.ClientRecord, answer, bool) {
+	row, rec, err := s.Homes.Row(home)
 	switch {
 	case shell.IsUnkept(err):
-		return row, answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
+		return row, rec, answer{Error: fmt.Sprintf("This computer no longer keeps %s. Choose a CYFR on the left, or connect to it to add it again.", home)}, true
 	case err != nil:
-		return row, answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}, true
+		return row, rec, answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}, true
 	}
-	return row, answer{}, false
+	return row, rec, answer{}, false
 }
 
 // live is whether no lock came since epoch.
@@ -702,16 +762,27 @@ func (s *Service) live(epoch uint64) bool {
 	return s.epoch == epoch
 }
 
-// remembered is the folder of the CYFR selected last and the CYFR there,
-// when it is a folder's the app can read.
-func (s *Service) remembered() (string, Local, bool) {
-	list, err := s.Homes.Load()
-	c := list.Homes[list.Last]
-	if err != nil || c.Project == "" || s.Local == nil {
-		return "", Local{}, false
+// folderRow opens the CYFR of the folder project, which the press's one
+// reading of the list keeps at home (connect), whatever press, retry or
+// start asked: that folder alone is read, and opened only while its
+// reading still names home. A folder that cannot be read, or names another
+// address now, is said; nothing starts Docker, and nothing connects to
+// home as a CYFR elsewhere.
+func (s *Service) folderRow(run context.Context, epoch uint64, home, project string, from shell.Row) answer {
+	if s.Local == nil {
+		return answer{Error: "This app reads no folder on this computer, so it cannot open the CYFR in " + project + "."}
 	}
-	l, err := s.Local(c.Project)
-	return c.Project, l, err == nil
+	l, err := s.Local(project)
+	// This holds the reading until the service takes it as it opens.
+	defer l.end()
+	switch {
+	case err != nil:
+		return answer{Error: fmt.Sprintf("The app cannot read the CYFR in %s (%v).", project, err)}
+	case l.Shell.Address != home:
+		return answer{Error: fmt.Sprintf("The CYFR in %s is at %s now, not %s. Connect to %s to add it.",
+			project, l.Shell.Address, home, l.Shell.Address)}
+	}
+	return s.openLocal(run, epoch, project, &l, from)
 }
 
 // openLocal selects the CYFR l, set up in project on this computer, with
@@ -728,22 +799,31 @@ func (s *Service) openLocal(run context.Context, epoch uint64, project string, l
 		return answer{Error: fmt.Sprintf("The CYFR in %s names %s as its account service. The app takes an https address, "+
 			"or a plain http one only at a CYFR's own address on this computer.", project, l.Shell.Directory)}
 	}
-	if err := l.Answers(run); err != nil {
-		if !s.live(epoch) {
-			return answer{Error: lockedSentence}
+	// This box is not asked at the press: its pages ask, apart, and wait.
+	l.waits = s.Box != "" && project == s.Box
+	if !l.waits {
+		if err := l.Answers(run); err != nil {
+			if !s.live(epoch) {
+				return answer{Error: lockedSentence}
+			}
+			return answer{Error: err.Error()}
 		}
-		return answer{Error: err.Error()}
 	}
 	sel, err := s.Homes.SelectLocal(home, project, from)
 	if err != nil {
 		return answer{Error: "This computer cannot open the CYFR in " + project + ": " + err.Error() + "."}
 	}
+	// This box's first person is made at the device's pages, which read
+	// the token themselves at their first hello: its proposal carries none,
+	// and its press asks nothing of the CYFR or Docker.
 	setup := ""
-	if l.Shell.SetupToken != nil {
+	if l.Shell.SetupToken != nil && !l.waits {
 		setup, _ = l.Shell.SetupToken(run)
 	}
-	return s.selectHome(run, epoch, sel, l.Shell, l,
-		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Resolver: l.Resolver, Setup: setup})
+	cfg := l.Shell
+	cfg.KeyElsewhere = s.keyElsewhere(project)
+	return s.selectHome(run, epoch, sel, cfg, l,
+		Message{Type: TypeHome, Home: home, Account: found.Origin, Proxy: l.Proxy, Setup: setup})
 }
 
 // selectRemote selects the CYFR elsewhere at home, with the account
@@ -753,7 +833,8 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 	if err != nil {
 		return answer{Error: "This computer cannot open " + home + ": " + err.Error() + "."}
 	}
-	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks}, nil,
+	return s.selectHome(run, epoch, sel, shell.Config{Address: home, Client: s.Client, Directory: found.Directory, Detect: remoteDisks,
+		KeyElsewhere: s.keyElsewhere("")}, nil,
 		Message{Type: TypeHome, Home: home, Account: found.Origin})
 }
 
@@ -770,7 +851,18 @@ func (s *Service) selectRemote(run context.Context, epoch uint64, home string, f
 // under s.mu.
 func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selection, cfg shell.Config, l *Local, proposal Message) answer {
 	home := proposal.Home
-	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, s.sayLocked
+	// Every lock of this shell, the service's own or the shell's (its
+	// Lock page, its channel ending), reaches the one lock step.
+	var mine atomic.Pointer[shell.Shell]
+	cfg.DisplayName, cfg.Record, cfg.Clients, cfg.Restart = s.DisplayName, s.Record, sel, func() { s.lockStep(mine.Load()) }
+	if s.Box != "" {
+		// The rail offers Forget only while the box is unlocked (railNow).
+		cfg.Opened = func() {
+			s.mu.Lock()
+			s.changed()
+			s.mu.Unlock()
+		}
+	}
 	if s.Shell != nil {
 		s.Shell(&cfg)
 	}
@@ -778,6 +870,7 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 	if err != nil {
 		return answer{Error: err.Error()}
 	}
+	mine.Store(sh)
 	ready := make(chan struct{}, 1)
 	s.mu.Lock()
 	if s.epoch != epoch {
@@ -817,10 +910,79 @@ func (s *Service) selectHome(run context.Context, epoch uint64, sel *shell.Selec
 		work = s.here.Work
 	}
 	s.sh, s.pages = sh, &shell.Server{Shell: sh, Work: work}
+	// Its readings run under the CYFR's Work, which its end ends.
+	if work != nil && s.here.waits {
+		s.pages.Reachable = s.here.Answers
+	}
 	s.Tell(Message{Type: TypeOpened, Home: home, Attempt: proposal.Attempt})
 	s.committed = proposal
 	s.changed()
+	s.voidOffer()
 	return s.opened(home)
+}
+
+// keyElsewhere is the sentence a shell at a CYFR other than This box's,
+// the CYFR in project ("" for one elsewhere), shows where the machine has
+// no key yet, on a box's screen: the key is made at This box alone. ""
+// lets the shell make it, This box's and every one on a desktop.
+func (s *Service) keyElsewhere(project string) string {
+	if s.Box == "" || project == s.Box {
+		return ""
+	}
+	return "This box makes its key at its own CYFR first: choose This box on the left, make the key there, then come back here and unlock with it."
+}
+
+// box opens This box (Box): the CYFR its folder names now, read at the
+// press, whatever the list holds, on a first start with no entry too. An
+// address the list does not hold yet is added as an entry of its own, with
+// an admission and storage of its own; an entry an earlier reading made is
+// left as it is, opened by nothing here, and forgotten apart.
+func (s *Service) box(ctx context.Context, epoch uint64, req request) answer {
+	run, refused := s.begin(ctx, req, "")
+	if refused != nil {
+		return *refused
+	}
+	defer s.finish()
+	if s.Box == "" || s.Local == nil {
+		return answer{Error: "This app shows no box's own CYFR."}
+	}
+	l, err := s.Local(s.Box)
+	// This holds the reading until the service takes it as it opens.
+	defer l.end()
+	if err != nil {
+		return answer{Error: fmt.Sprintf("This box cannot read the CYFR in %s (%v).", s.Box, err)}
+	}
+	return s.openLocal(run, epoch, s.Box, &l, shell.Typed)
+}
+
+// boxAt is the address This box's folder (Box) names now, read from its
+// files alone (Local: no Docker, nothing started), and whether it could be
+// read; "", false on a desktop. Which entry of the list is This box is
+// never guessed from the list: it is what the folder names at the reading.
+func (s *Service) boxAt() (string, bool) {
+	if s.Box == "" || s.Local == nil {
+		return "", false
+	}
+	l, err := s.Local(s.Box)
+	defer l.end()
+	if err != nil {
+		return "", false
+	}
+	return l.Shell.Address, true
+}
+
+// thisBox is This box's folder read now, held for its opening, when it
+// names home; any other reading is ended.
+func (s *Service) thisBox(home string) (Local, bool) {
+	if s.Box == "" || s.Local == nil {
+		return Local{}, false
+	}
+	l, err := s.Local(s.Box)
+	if err != nil || l.Shell.Address != home {
+		l.end()
+		return Local{}, false
+	}
+	return l, true
 }
 
 // remoteDisks is what a device of a remote CYFR reports: its own system
@@ -1090,6 +1252,16 @@ func (s *Service) End() {
 	s.wake()
 	s.mu.Unlock()
 	s.lock("", false)
+	// A departure in flight is retiring the shell it left (Leave): the end
+	// waits for that retirement, which its own bounds end (the shell's
+	// lock: its sessions told within 5 s, its channel closed), and adds
+	// none of its own.
+	s.mu.Lock()
+	departed := s.departed
+	s.mu.Unlock()
+	if departed != nil {
+		<-departed
+	}
 }
 
 // Leave is main's leave numbered id: the device locks and lets go of the
@@ -1106,24 +1278,32 @@ func (s *Service) Leave(id uint64) {
 }
 
 // lock is Lock, which lets go of the CYFR open as well when leave says to
-// (main's leave): the list stays as it is.
+// (main's leave): the list stays as it is. Its one step (lockStep) is
+// reached through the open shell's lock, which hides first, or at once
+// where none is open.
 func (s *Service) lock(why string, leave bool) {
 	s.mu.Lock()
 	sh, here, letGo := s.sh, s.here, leave || s.ended
+	var departed chan struct{}
 	if leave {
 		s.sh, s.pages, s.here, s.committed = nil, nil, nil, Message{}
 		s.changed()
+		if sh != nil {
+			departed = make(chan struct{})
+			s.leaving, s.departed = sh, departed
+		}
 	}
-	s.epoch++
-	if s.stop != nil {
-		s.stop()
-	}
-	s.pending = nil
-	if s.pages == nil {
-		s.ready, s.selecting, s.current = nil, "", 0
-	}
-	s.wake()
 	s.mu.Unlock()
+	if departed != nil {
+		defer func() {
+			s.mu.Lock()
+			if s.departed == departed {
+				s.leaving, s.departed = nil, nil
+			}
+			s.mu.Unlock()
+			close(departed)
+		}()
+	}
 	// Everything begun for the CYFR here ends as the app lets go of it,
 	// once the lock's one entry has run (locked, hidden, the CYFR told),
 	// and on a panic in it too: the lock holds it from here.
@@ -1131,24 +1311,56 @@ func (s *Service) lock(why string, leave bool) {
 		defer here.end()
 	}
 	if sh != nil {
-		// The shell says locked as it hides the screen (sayLocked), which
-		// every lock does.
+		// The shell's lock hides the screen (Restart, lockStep) before it
+		// tells its CYFR, which every lock does.
 		sh.Lock(why)
 	} else {
-		s.sayLocked()
+		s.lockStep(nil)
 	}
 }
 
-// sayLocked tells main the device locked, naming the CYFR committed.
-func (s *Service) sayLocked() {
+// lockStep is every lock's one step in the service, reached by the
+// service's own locks and by its shell's (Config.Restart): in one hold of
+// s.mu the time since the last lock ends, so every chooser request begun
+// in it, in discovery, awaiting approval or awaiting main's home-ready,
+// publishes nothing more, and main is told locked, naming the CYFR
+// committed, through the screen's hide where there is one (Hide), which
+// marks what it shows first and waits on nothing; at the service's end,
+// ending in its place, once, and nothing after it. Nothing of a later
+// selection can be told before it. A lock of a shell the service holds
+// no more, neither open nor being left, is no lock of the service's.
+func (s *Service) lockStep(from *shell.Shell) {
 	s.mu.Lock()
-	m, ended := s.committed, s.ended
-	s.mu.Unlock()
-	if ended {
+	defer s.mu.Unlock()
+	if from != nil && from != s.sh && from != s.leaving {
 		return
 	}
+	s.epoch++
+	if s.stop != nil {
+		s.stop()
+	}
+	s.pending = nil
+	// An offer is the CYFR's selected at a time, which a lock ends.
+	s.voidOffer()
+	if s.pages == nil {
+		s.ready, s.selecting, s.current = nil, "", 0
+	}
+	s.wake()
+	if s.Box != "" {
+		s.changed()
+	}
+	m := s.committed
 	m.Type = TypeLocked
-	s.Tell(m)
+	switch {
+	case s.ended && (s.Hide == nil || s.over):
+	case s.ended:
+		s.over = true
+		s.Hide(func() { s.Tell(Message{Type: TypeEnding}) })
+	case s.Hide != nil:
+		s.Hide(func() { s.Tell(m) })
+	default:
+		s.Tell(m)
+	}
 }
 
 // Run reads main's messages from in until shutdown or the end of in,
@@ -1180,6 +1392,10 @@ func (s *Service) Run(in io.Reader) error {
 			s.Forget(m.Home)
 		case TypeErased:
 			s.Erased(m.ID, m.OK)
+		case TypeUpdate:
+			s.StartUpdate(m.Offer)
+		case TypeUpdateClosed:
+			s.UpdateClosed()
 		}
 	}
 	s.End()

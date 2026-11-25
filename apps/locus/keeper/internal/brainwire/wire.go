@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package brainwire is the brain wire, version 5, a driver's side, for
+// Package brainwire is the brain wire, version 6, a driver's side, for
 // every brain driver (cmd/cyfr-claude-code, cmd/cyfr-codex, cmd/cyfr-acp):
 // tests/fixtures/brain_wire.json defines it (its "comment") and binds this
 // package and the holder (Opus.Brain.Wire) to the same lines. Commands come
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	Version      = 5
+	Version      = 6
 	MaxLineBytes = 1 << 20
 	MaxIDBytes   = 256
 	MaxList      = 1000
@@ -86,6 +86,7 @@ const (
 	tAccount
 	tSignedIn
 	tSignedOut
+	tWhy
 )
 
 // Spec is one message: the members it always carries, those it may, and
@@ -158,6 +159,7 @@ var Events = map[string]Spec{
 	"models": {[]string{"t", "id", "models", "access"}, []string{"account"},
 		map[string]fieldType{"id": tID, "models": tModels, "access": tChoices, "account": tSignedIn}},
 	"forgot": {[]string{"t", "id", "session"}, nil, map[string]fieldType{"id": tID, "session": tID}},
+	"ending": {[]string{"t", "why"}, nil, map[string]fieldType{"why": tWhy}},
 }
 
 // ReadLine reads one line as a message of `messages`: its members raw,
@@ -314,6 +316,8 @@ func ofType(ft fieldType, raw json.RawMessage) bool {
 		return OneOf(raw, []string{SignedIn})
 	case tSignedOut:
 		return OneOf(raw, []string{SignedOut})
+	case tWhy:
+		return OneOf(raw, whyCodes())
 	}
 	return false
 }

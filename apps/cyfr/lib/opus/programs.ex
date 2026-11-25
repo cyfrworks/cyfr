@@ -303,7 +303,8 @@ defmodule Opus.Programs do
   # ============================================================================
 
   @typedoc "Why a terminal session ended (`Opus.Programs.Terminal`)."
-  @type ended :: :exited | :closed | :unanswered | :idle | :row_changed | :standing
+  @type ended ::
+          :exited | :restarted | :closed | :unanswered | :idle | :row_changed | :standing
 
   @typedoc """
   Who calls: a person at a screen, as a `Sanctum.Context` the gate reads as

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -76,6 +77,24 @@ func TestTheRailsReadTokenChangesNothing(t *testing.T) {
 	}
 	if w := a.readRail(context.Background(), "", 0); w.Code != http.StatusForbidden {
 		t.Fatalf("the rail's read took no token: %d", w.Code)
+	}
+}
+
+// The rail's page as it is served, before any script of it runs, offers
+// Set up and Update on a desktop, and on a box's screen offers neither:
+// its first paint, before the list answers, shows nothing the box never
+// offers.
+func TestABoxsRailOffersNoSetUpBeforeItsListAnswers(t *testing.T) {
+	desktop := newApp(t, t.TempDir(), offline()).get("/rail/").Body.String()
+	box := newOnBox(t).get("/rail/").Body.String()
+	for _, way := range []string{"setup", "update"} {
+		shown := regexp.MustCompile(`<li( hidden)?><a class="way" id="` + way + `"`)
+		if got := shown.FindStringSubmatch(desktop); got == nil || got[1] != "" {
+			t.Errorf("a desktop's rail offers no %s: %q", way, got)
+		}
+		if got := shown.FindStringSubmatch(box); got == nil || got[1] != " hidden" {
+			t.Errorf("a box's rail offers %s before its list answers: %q", way, got)
+		}
 	}
 }
 
@@ -378,4 +397,51 @@ func TestAFolderPressForgottenDuringItsCheckAddsNothing(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the kept press neither proposed nor answered")
 	}
+}
+
+// A press of a folder's row is answered from the one reading of the list
+// that began it: a folder Forget removed after that reading is opened from
+// what the reading held, and its commit refused, never taken for a CYFR
+// elsewhere at the saved address; one removed before it is refused at
+// once. Neither asks any server.
+func TestAForgottenFolderPressAsksNoServer(t *testing.T) {
+	const home = "https://folder.example.test"
+	answering := func(string) (Local, error) {
+		return Local{Shell: shell.Config{Address: home, Client: offline(), Directory: account.DefaultDirectory},
+			Answers: func(context.Context) error { return nil }}, nil
+	}
+	forget := func(a *app) {
+		a.Forget(home)
+		for _, id := range a.erases(t, 1) {
+			a.Erased(id, true)
+		}
+		if _, ok := held(t, a.Homes, home); ok {
+			t.Fatal("Forget did not remove the row")
+		}
+	}
+
+	a := newApp(t, t.TempDir(), offline())
+	seed(t, a.Homes, home, shell.ClientRecord{Project: localFolder})
+	a.Local = answering
+	pressed, rec, err := a.Homes.Row(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forget(a)
+	if got := a.folderRow(t.Context(), 0, home, rec.Project, pressed); got.Error == "" {
+		t.Fatalf("the forgotten folder's press answered %+v", got)
+	}
+	if _, ok := held(t, a.Homes, home); ok || a.discovered.Load() != 0 {
+		t.Fatalf("the press put the row back (%v) or asked %d servers", ok, a.discovered.Load())
+	}
+
+	b := newApp(t, t.TempDir(), offline())
+	seed(t, b.Homes, home, shell.ClientRecord{Project: localFolder})
+	b.Local = answering
+	forget(b)
+	if got := b.post(t, "/bootstrap/connect", map[string]string{"address": home, "kept": "true"}); got.Error == "" || b.discovered.Load() != 0 {
+		t.Fatalf("a press of the row Forget removed answered %+v and asked %d servers", got, b.discovered.Load())
+	}
+	a.quiet(t)
+	b.quiet(t)
 }

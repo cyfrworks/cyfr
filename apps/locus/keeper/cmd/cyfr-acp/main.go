@@ -7,7 +7,7 @@
 // (ACP, version 1) as a brain of CYFR's. It is built once and installed
 // under one name for each program, the name it runs under picking the
 // program's profile (profile.go): `cyfr-antigravity` for Antigravity's CLI,
-// `cyfr-opencode` for OpenCode's.
+// `cyfr-opencode` for OpenCode's, `cyfr-cursor` for Cursor's agent.
 // It is the start of a `driven` program row's command, before the
 // program's own:
 //
@@ -30,12 +30,15 @@
 // call as an `ask`, holds it, and its `answer` is the call's result, so
 // every call of CYFR's tools passes CYFR's gate whatever the program's own
 // permission mode. A start answers `started` only once the stub has listed
-// the tools. The program's permission questions are each answered allow;
+// the tools, or, for a program whose servers list at a session's first
+// prompt, at once, the native turn that ends with no listing ending with an
+// error saying CYFR's tools did not reach it. The program's permission questions are each answered allow;
 // none stands in for an ask.
 //
 // A `start` makes a new session (`session/new`), or goes on with the one it
 // names (`session/resume`, and `session/load` where the program says the
-// resume found nothing); only the load's own not-found answer is `gone`.
+// resume found nothing, or at once for a program that offers no resume);
+// only the load's own not-found answer is `gone`.
 // The start's model and effort are the session's config options, and its
 // instructions go where the program takes instructions for one process, or
 // else lead the session's first prompt (instructions.go). A `post` is a
@@ -52,9 +55,11 @@
 // prompts carried. A load's replay is never passed on, so `held` names none.
 //
 // A `forget` removes the session's files the profile names and proves them
-// absent, or, for a program that keeps its sessions in a store of its own
-// with its sign-in, asks the program to delete it and to load it after,
-// forgotten only on the load's not-found answer. What a program keeps of every session in one index of its own
+// absent, then, where the profile says so, asks the program to load it,
+// forgotten only on the load's not-found answer; or, for a program that
+// keeps its sessions in a store of its own with its sign-in, asks the
+// program to delete it and to load it after, forgotten only on the load's
+// not-found answer. What a program keeps of every session in one index of its own
 // stays (Antigravity: each session's title and summary, in its index under
 // antigravity-cli, antigravity_words.go), since CYFR never writes a
 // program's database.
@@ -90,9 +95,8 @@ func run(name string, command []string) int {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		fmt.Fprintf(os.Stderr, "usage: %s HARNESS [ARG]...: cyfr-acp runs under a program's name, one of %s\n",
-			strings.Join(names, " | "), strings.Join(names, ", "))
-		return 2
+		return brainwire.Usage(name, fmt.Sprintf("usage: %s HARNESS [ARG]...: cyfr-acp runs under a program's name, one of %s",
+			strings.Join(names, " | "), strings.Join(names, ", ")))
 	}
 	return brainwire.Main(p.name, command, func(command []string, c *brainwire.Conn, home string) brainwire.Driver {
 		return newDriver(p, command, c, home)

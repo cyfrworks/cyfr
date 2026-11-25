@@ -417,7 +417,7 @@ func TestTheServiceRoadTakesTheSudoRoadSayingWhy(t *testing.T) {
 		if !strings.Contains(out.String(), c.says) || !r.sudo || err == nil {
 			t.Errorf("%s: said %q (%v), took the sudo road %v", c.name, out.String(), err, r.sudo)
 		}
-		if _, err := r.elevate(&out, "cyfr update"); err != nil || m.authenticated != 1 {
+		if _, err := r.elevate(&out, "cyfr update", true); err != nil || m.authenticated != 1 {
 			t.Errorf("%s: the sudo road's elevation answered %v, asked %d times", c.name, err, m.authenticated)
 		}
 	}
@@ -480,7 +480,7 @@ func TestAnUpdateThroughTheServiceAsksNoPassword(t *testing.T) {
 			return "", errors.New("the sudo road is not taken in this test")
 		}
 		quitApp = func() (bool, error) { steps = append(steps, "quit"); return true, nil }
-		reopenApp = func() error { steps = append(steps, "reopen"); return nil }
+		reopenApp = func(bool) error { steps = append(steps, "reopen"); return nil }
 		machine.screenService = func() (bool, bool, error) { return box, box, nil }
 		var out bytes.Buffer
 		err := updateApp(context.Background(), &out, &serviceRoad{}, "1.0.0", "1.1.0", "cyfr update")

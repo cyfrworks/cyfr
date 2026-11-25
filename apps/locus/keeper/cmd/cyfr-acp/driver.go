@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -136,7 +137,13 @@ type driver struct {
 	ending   *ending
 	message  string
 	text     strings.Builder
-	own      map[string]*ownCall
+	// output counts what the native turn said or called, and held is its
+	// first message chunk while it may be the program's report of a failed
+	// turn (profile's failure), with its message id: shown once anything
+	// else comes, read as an error if the turn ends with it alone.
+	output            int
+	held, heldMessage string
+	own               map[string]*ownCall
 	// unclaimed are the arguments of the turn's socket calls no tool_call
 	// update was matched to yet (own.go).
 	unclaimed []any
@@ -148,6 +155,15 @@ func newDriver(p *profile, command []string, c *brainwire.Conn, home string) *dr
 }
 
 func (d *driver) Process() *brainwire.Process { return d.h }
+
+// folderRefused is why the folder the program keeps its sessions in is not
+// one CYFR walks (profile's checkFolder), or nil.
+func (d *driver) folderRefused() error {
+	if d.p.checkFolder == nil {
+		return nil
+	}
+	return d.p.checkFolder(d.home)
+}
 
 func (d *driver) Inbox() <-chan func() error { return d.inbox }
 
@@ -168,9 +184,9 @@ func (d *driver) Expired() error {
 		return nil
 	}
 	if s.stage == stageListing {
-		return &brainwire.Fatal{Status: 1, Reason: fmt.Sprintf("CYFR's tools did not reach %s: its server for them listed none within %s", d.p.title, d.listWait)}
+		return brainwire.Fail(1, brainwire.WhyUnanswered, fmt.Sprintf("CYFR's tools did not reach %s: its server for them listed none within %s", d.p.title, d.listWait))
 	}
-	return &brainwire.Fatal{Status: 1, Reason: fmt.Sprintf("%s did not answer its start in time (%s)", d.p.title, d.answerWait)}
+	return brainwire.Fail(1, brainwire.WhyUnanswered, fmt.Sprintf("%s did not answer its start in time (%s)", d.p.title, d.answerWait))
 }
 
 func (d *driver) running() bool { return d.h != nil && d.starting == nil && d.session != "" }
@@ -214,7 +230,7 @@ func (d *driver) Command(t string, members map[string]json.RawMessage) error {
 	case "forget":
 		return d.forget(str("id"), str("session"))
 	}
-	return &brainwire.Fatal{Status: 2, Reason: "a command of no kind"}
+	return brainwire.Fail(2, brainwire.WhyBroken, "a command of no kind")
 }
 
 // unlistedAccess ends the driver on a start naming an access it does not
@@ -229,7 +245,7 @@ func (d *driver) unlistedAccess() string {
 // for, and a model or effort the session does not offer.
 func (d *driver) start(members map[string]json.RawMessage, str func(string) string) error {
 	if d.h != nil {
-		return &brainwire.Fatal{Status: 2, Reason: "a start while the harness runs"}
+		return brainwire.Fail(2, brainwire.WhyBroken, "a start while the harness runs")
 	}
 	var config brainwire.Config
 	var tools []brainwire.Tool
@@ -240,10 +256,10 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	access, listed := brainwire.Choose(d.p.access, config.Access)
 	if !listed {
-		return &brainwire.Fatal{Status: 2, Reason: d.unlistedAccess()}
+		return brainwire.Fail(2, brainwire.WhyUnfit, d.unlistedAccess())
 	}
 	if config.HarnessTools != nil {
-		return &brainwire.Fatal{Status: 2, Reason: "a start names the harness's own tools, which " + d.p.title + " has no switch for"}
+		return brainwire.Fail(2, brainwire.WhyBroken, "a start names the harness's own tools, which "+d.p.title+" has no switch for")
 	}
 	session := str("session")
 	resume := session != ""
@@ -253,21 +269,35 @@ func (d *driver) start(members map[string]json.RawMessage, str func(string) stri
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return &brainwire.Fatal{Status: 1, Reason: "the driver has no working folder: " + err.Error()}
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, "the driver has no working folder: "+err.Error())
 	}
-	servers, err := d.personsServers()
-	if err != nil {
-		return &brainwire.Fatal{Status: 1, Reason: d.p.title + " did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own: " + err.Error()}
+	if err := d.folderRefused(); err != nil {
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, capital(err.Error())+".")
 	}
-	d.server = serverFor(servers)
+	d.server = ""
+	if resume && d.p.namesOnce {
+		d.server = keptServer(d.home, session)
+	}
+	if d.server == "" {
+		servers, err := d.personsServers()
+		if errors.Is(err, brainwire.ErrNotStarted) {
+			// The listing is the program's first run: Spawn has said why on
+			// the driver's standard error, and its command is what to check.
+			return brainwire.Fail(1, brainwire.WhyUnrunnable, "")
+		}
+		if err != nil {
+			return brainwire.Fail(1, brainwire.WhyServersUnlisted, d.p.title+" did not list its MCP servers, so no name for CYFR's could be chosen beside the person's own: "+err.Error())
+		}
+		d.server = serverFor(servers)
+	}
 	if err := d.listen(); err != nil {
-		return &brainwire.Fatal{Status: 1, Reason: "CYFR's tool socket could not be bound: " + err.Error()}
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, "CYFR's tool socket could not be bound: "+err.Error())
 	}
 	h, err := d.c.Spawn(append(append([]string{}, d.harnessCommand...), d.p.args...))
 	if err != nil {
 		// Spawn has said why on the driver's standard error.
 		d.closeSocket()
-		return &brainwire.Fatal{Status: 1}
+		return brainwire.Fail(1, brainwire.WhyUnrunnable, "")
 	}
 	d.h, d.config, d.access, d.tools, d.cwd = h, config, access.Native, tools, cwd
 	d.starting = &starting{resume: resume, session: session, system: str("system")}
@@ -385,6 +415,9 @@ func (d *driver) models(id string) error {
 	if d.h != nil && !d.running() {
 		return d.c.Refuse(id, "The harness is starting: its models are listed once it has started.")
 	}
+	if err := d.folderRefused(); err != nil {
+		return d.c.Refuse(id, capital(err.Error())+".")
+	}
 	// A program whose efforts are read by selecting each model lists them
 	// in a listing session of the driver's own even while one runs, whose
 	// model the listing must not change.
@@ -415,7 +448,7 @@ func (d *driver) models(id string) error {
 
 func (d *driver) Line(line []byte) error {
 	if line == nil {
-		return &brainwire.Fatal{Status: 1, Reason: "a line of the harness's past its bound"}
+		return brainwire.Fail(1, brainwire.WhyUnreadable, "a line of the harness's past its bound")
 	}
 	var m rpc
 	if json.Unmarshal(line, &m) != nil {
@@ -455,17 +488,23 @@ func (d *driver) startStep(s *starting, m rpc) error {
 	switch s.stage {
 	case stageInitialize:
 		var init initialized
-		if m.Error != nil || json.Unmarshal(m.Result, &init) != nil {
-			return &brainwire.Fatal{Status: 1, Reason: d.p.title + " refused to start its ACP server"}
+		if m.Error != nil {
+			return brainwire.Fail(1, brainwire.WhyRefused, d.p.title+" refused to start its ACP server")
+		}
+		if json.Unmarshal(m.Result, &init) != nil {
+			return brainwire.Fail(1, brainwire.WhyUnreadable, d.p.title+" answered its initialize in a way the driver cannot read")
 		}
 		d.caps = agentCapabilities{}
 		_ = json.Unmarshal(init.Capabilities, &d.caps)
-		if why := qualify(d.p, init, d.caps); why != "" {
-			return &brainwire.Fatal{Status: 1, Reason: why}
+		if code, why := qualify(d.p, init, d.caps); why != "" {
+			return brainwire.Fail(1, code, why)
 		}
 		d.meta = nil
 		if s.system != "" && d.p.appends != nil && d.p.appends(init.Capabilities) {
 			d.meta = d.p.instructionsMeta(s.system)
+		}
+		if s.resume && d.p.resumeNotFound == nil {
+			return d.ask(s, stageLoad, "session/load", d.sessionParams(s.session))
 		}
 		if s.resume {
 			return d.ask(s, stageSession, "session/resume", d.sessionParams(s.session))
@@ -476,7 +515,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 			switch {
 			case m.Error.Code == d.p.signedOut:
 				return d.startedSignedOut(s)
-			case s.stage == stageSession && s.resume && d.p.resumeNotFound(m.Error, s.session):
+			case s.stage == stageSession && s.resume && d.p.resumeNotFound != nil && d.p.resumeNotFound(m.Error, s.session):
 				return d.ask(s, stageLoad, "session/load", d.sessionParams(s.session))
 			case s.stage == stageLoad && d.p.loadNotFound(m.Error, s.session):
 				// The folder holds no such session: nothing ran.
@@ -484,19 +523,22 @@ func (d *driver) startStep(s *starting, m rpc) error {
 				d.Close()
 				return d.c.Emit(brainwire.NewEvent("gone"))
 			}
-			return &brainwire.Fatal{Status: 1, Reason: d.p.title + " refused to start the session"}
+			return brainwire.Fail(1, brainwire.WhyRefused, d.p.title+" refused to start the session")
 		}
 		var answer sessionAnswer
 		_ = json.Unmarshal(m.Result, &answer)
 		switch {
 		case !s.resume && !d.p.sessionID(answer.SessionID):
-			return &brainwire.Fatal{Status: 1, Reason: d.p.title + " started no session the driver can name"}
+			return brainwire.Fail(1, brainwire.WhyUnreadable, d.p.title+" started no session the driver can name")
 		case s.resume && answer.SessionID != "" && answer.SessionID != s.session:
-			return &brainwire.Fatal{Status: 1, Reason: d.p.title + " went on with another session than the one named"}
+			return brainwire.Fail(1, brainwire.WhyUnreadable, d.p.title+" went on with another session than the one named")
 		}
 		d.session = s.session
 		if !s.resume {
 			d.session = answer.SessionID
+		}
+		if d.p.namesOnce {
+			recordServer(d.home, d.session, d.server)
 		}
 		d.taken(answer)
 		if d.meta == nil && s.system != "" && (!s.resume || !wasHanded(d.home, d.session, s.system)) {
@@ -515,7 +557,7 @@ func (d *driver) startStep(s *starting, m rpc) error {
 		return d.configure(s)
 	case stageConfig:
 		if m.Error != nil {
-			return &brainwire.Fatal{Status: 1, Reason: fmt.Sprintf("%s refused the crew member's %s", d.p.title, s.what)}
+			return brainwire.Fail(1, brainwire.WhyUnfit, fmt.Sprintf("%s refused the crew member's %s", d.p.title, s.what))
 		}
 		var answer sessionAnswer
 		if json.Unmarshal(m.Result, &answer) == nil && answer.Options != nil {
@@ -551,13 +593,14 @@ func (d *driver) configure(s *starting) error {
 			}
 		}
 		if o == nil || !o.offers(step.value) {
-			return &brainwire.Fatal{Status: 2, Reason: fmt.Sprintf("The crew member's %s is not one %s offers, so nothing ran.", step.words, d.p.title)}
+			return brainwire.Fail(2, brainwire.WhyUnfit, fmt.Sprintf("The crew member's %s is not one %s offers, so nothing ran.", step.words, d.p.title))
 		}
 		s.what = step.words
 		return d.ask(s, stageConfig, "session/set_config_option", map[string]any{"sessionId": d.session, "configId": o.ID, "value": step.value})
 	}
 	s.stage, s.request, s.due = stageListing, "", time.Now().Add(d.listWait)
-	if d.listed {
+	// A program whose servers list at the first prompt is checked there.
+	if d.listed || d.p.listsAtPrompt {
 		return d.started(s)
 	}
 	return nil
@@ -618,31 +661,76 @@ func (d *driver) update(params json.RawMessage) error {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
+		// Every chunk is something the turn said, one that is no text, or
+		// empty text, among them: only a turn's one chunk can be the
+		// program's report of its failure.
 		if json.Unmarshal(u.Content, &block) != nil || block.Type != "text" || block.Text == "" {
-			return nil
+			d.output++
+			return d.release()
 		}
-		id := u.Message
-		if !brainwire.IsID(id) {
-			id = d.message
-			if id == "" && len(d.turn.open) > 0 {
-				id = fmt.Sprintf("%s-%d", d.c.Boot, d.turn.open[len(d.turn.open)-1].id)
-			}
-			if id == "" {
-				id = d.c.Boot
+		if d.p.failure != nil && d.output == 0 {
+			if kind, _ := d.p.failure(block.Text); kind != "" {
+				d.output++
+				d.held, d.heldMessage = block.Text, d.messageID(u.Message)
+				return nil
 			}
 		}
-		if d.message != "" && id != d.message {
-			if err := d.said(); err != nil {
-				return err
-			}
+		d.output++
+		if err := d.release(); err != nil {
+			return err
 		}
-		d.message = id
-		d.text.WriteString(block.Text)
-		return d.c.EmitText(d.event("text").Set("message", id), "delta", block.Text)
+		return d.chunk(d.messageID(u.Message), block.Text)
+	case "agent_thought_chunk":
+		d.output++
+		return d.release()
 	case "tool_call", "tool_call_update":
+		d.output++
+		if err := d.release(); err != nil {
+			return err
+		}
 		return d.ownUpdate(u.CallID, u.Status, u.ToolKind, u.Name, u.RawInput)
 	}
 	return nil
+}
+
+// release shows a held chunk as the text it is, once the turn said or
+// called anything after it.
+func (d *driver) release() error {
+	if d.held == "" {
+		return nil
+	}
+	text, id := d.held, d.heldMessage
+	d.held, d.heldMessage = "", ""
+	return d.chunk(id, text)
+}
+
+// messageID is the id a message chunk is said under: the program's where
+// it gives one, else the message under way's, else the turn's prompt's.
+func (d *driver) messageID(given string) string {
+	if brainwire.IsID(given) {
+		return given
+	}
+	id := d.message
+	if id == "" && len(d.turn.open) > 0 {
+		id = fmt.Sprintf("%s-%d", d.c.Boot, d.turn.open[len(d.turn.open)-1].id)
+	}
+	if id == "" {
+		id = d.c.Boot
+	}
+	return id
+}
+
+// chunk is one message chunk's text, said under the message id: a new id
+// says the message under way whole first.
+func (d *driver) chunk(id, text string) error {
+	if d.message != "" && id != d.message {
+		if err := d.said(); err != nil {
+			return err
+		}
+	}
+	d.message = id
+	d.text.WriteString(text)
+	return d.c.EmitText(d.event("text").Set("message", id), "delta", text)
 }
 
 // event is an event of the native turn under way.
@@ -778,6 +866,15 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 	if !last {
 		return nil
 	}
+	// A turn whose whole output is the program's report of its failure.
+	failed, failedWords := "", ""
+	if d.held != "" && d.output == 1 && m.Error == nil && result.StopReason == "end_turn" {
+		failed, failedWords = d.p.failure(d.held)
+		d.held, d.heldMessage = "", ""
+	}
+	if err := d.release(); err != nil {
+		return err
+	}
 	if err := d.flushOwn(); err != nil {
 		return err
 	}
@@ -801,6 +898,14 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 		kind = "provider_error"
 		words = strayStopSentence(d.p)
 	}
+	switch {
+	case kind != "":
+	case failed != "":
+		kind, words = failed, failedWords
+	case d.p.listsAtPrompt && !d.listed:
+		kind = "provider_error"
+		words = fmt.Sprintf("CYFR's tools did not reach %s: its server for them listed none in the turn.", d.p.title)
+	}
 	if kind != "" {
 		stop = stopError
 		if err := d.c.Emit(d.event("error").Set("type", kind).Set("message", words)); err != nil {
@@ -809,6 +914,7 @@ func (d *driver) ended(t *nativeTurn, p *prompt, m rpc) error {
 	}
 	idle := d.event("idle").Set("answered", t.posts).Set("stop", stop)
 	d.turn = nil
+	d.output = 0
 	d.own = map[string]*ownCall{}
 	d.unclaimed = nil
 	return d.c.Emit(idle)
@@ -820,7 +926,7 @@ func (d *driver) Ended() error {
 	if status == 0 {
 		status = 1
 	}
-	return &brainwire.Fatal{Status: status, Reason: "the harness ended"}
+	return brainwire.Fail(status, brainwire.WhyEnded, "the harness ended")
 }
 
 // Close closes the program, if one runs: the session is the program's to
@@ -858,6 +964,8 @@ func (d *driver) Close() {
 	d.ending = nil
 	d.message = ""
 	d.text.Reset()
+	d.output = 0
+	d.held, d.heldMessage = "", ""
 	d.own = map[string]*ownCall{}
 	d.unclaimed = nil
 }

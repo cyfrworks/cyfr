@@ -23,12 +23,26 @@ import (
 // program's own session/delete, in a process of the driver's own, proved
 // by the program's load answering it does not have the session: only then
 // is it forgotten, and a delete the program refuses or does not answer is
-// a forget that failed. Its record of instructions is removed either way.
+// a forget that failed. Where its sessions are its files and its load can
+// witness one absent too (Cursor), the files are removed and proved
+// absent, and the program's load, in a process of the driver's own, must
+// answer that it lacks the session or that it is signed out, which leaves
+// the proof standing; a load that finds the session, or fails another way,
+// is a forget that failed. Its record of instructions is removed either
+// way, and a profile that keeps its server's name removes that record once
+// the session is gone.
 
 // sessionFiles are every file of the session the forget removes, each a
-// way down internal/homepath walks following no link.
-func (d *driver) sessionFiles(session string) []homepath.Path {
-	return append(d.p.sessionFiles(d.home, session), instructionsPath(d.home, session))
+// way down internal/homepath walks following no link: the profile's, and
+// the driver's record of the instructions handed. The record of a profile
+// that keeps its server's name is the profile's own, removed after the
+// session (removeSession).
+func (d *driver) sessionFiles(session string) ([]homepath.Path, error) {
+	files, err := d.p.sessionFiles(d.home, session)
+	if err != nil {
+		return nil, err
+	}
+	return append(files, instructionsPath(d.home, session)), nil
 }
 
 var (
@@ -64,7 +78,26 @@ func (d *driver) removeSession(session string) error {
 			return err
 		}
 	}
-	return d.removeFiles(session)
+	if err := d.removeFiles(session); err != nil {
+		return err
+	}
+	if d.p.forgetLoads {
+		o, err := d.openOneOff()
+		if err != nil {
+			return errors.New(d.p.title + " did not start to show the session gone: " + err.Error())
+		}
+		err = d.loadsNone(o, session, true)
+		o.close()
+		if err != nil {
+			return err
+		}
+	}
+	if d.p.namesOnce {
+		// The session is gone; its server's name is no reason to say it is
+		// not, and one left is never read for another session.
+		_ = homepath.Remove(serverPath(d.home, session))
+	}
+	return nil
 }
 
 // deleteIn asks the program o runs to delete the session, then to load it:
@@ -77,22 +110,40 @@ func (d *driver) deleteIn(o *oneOff, session string) error {
 	case answer.Error != nil:
 		return errors.New(d.p.title + " refused to delete the session, so it is still there")
 	}
+	if d.loadsNone(o, session, false) != nil {
+		return errors.New(d.p.title + " did not show the session gone after deleting it, so it may still be there")
+	}
+	return nil
+}
+
+// loadsNone asks the program o runs to load the session: its not-found
+// answer shows the session gone, and, where the session's files were proved
+// absent already (filesProved), so does its signed-out answer, which says
+// nothing of the session; any other answer is a forget that failed.
+func (d *driver) loadsNone(o *oneOff, session string, filesProved bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = d.home
 	}
-	answer, err = o.call("session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}})
-	if err != nil || answer.Error == nil || !d.p.loadNotFound(answer.Error, session) {
-		return errors.New(d.p.title + " did not show the session gone after deleting it, so it may still be there")
+	answer, err := o.call("session/load", map[string]any{"sessionId": session, "cwd": cwd, "mcpServers": []any{}})
+	switch {
+	case err != nil || answer.Error == nil:
+	case d.p.loadNotFound(answer.Error, session):
+		return nil
+	case filesProved && answer.Error.Code == d.p.signedOut:
+		return nil
 	}
-	return nil
+	return errors.New(d.p.title + " did not show the session gone after its files were removed, so it may still be there")
 }
 
 // removeFiles removes each of the session's files, once every one was
 // looked at and none is reached through a link, and looks at each again:
 // it answers why one may remain, or nil once every one is absent.
 func (d *driver) removeFiles(session string) error {
-	files := d.sessionFiles(session)
+	files, err := d.sessionFiles(session)
+	if err != nil {
+		return err
+	}
 	var there []homepath.Path
 	for _, f := range files {
 		ok, err := present(f)
@@ -133,6 +184,9 @@ func (d *driver) forget(id, session string) error {
 	}
 	if d.h != nil && (d.session == session || (d.starting != nil && d.starting.session == session)) {
 		return d.c.Refuse(id, "That session runs now; it is closed before it is forgotten.")
+	}
+	if err := d.folderRefused(); err != nil {
+		return d.c.Refuse(id, capital(err.Error())+".")
 	}
 	if err := d.removeSession(session); err != nil {
 		return d.c.Refuse(id, capital(err.Error())+".")

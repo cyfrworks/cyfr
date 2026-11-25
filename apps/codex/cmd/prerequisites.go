@@ -289,7 +289,7 @@ func unlockSudo(out io.Writer, again string) error {
 		return nil
 	}
 	if !machine.terminal() {
-		return fmt.Errorf("sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `%s` at a terminal", again)
+		return sudoNeedsATerminal(again)
 	}
 	if machine.supported() {
 		fmt.Fprintln(out, "Ubuntu will now ask for your password: the one you log in to this machine with. Nothing shows while you type.")
@@ -300,6 +300,12 @@ func unlockSudo(out io.Writer, again string) error {
 		return passwordRefused{again}
 	}
 	return nil
+}
+
+// sudoNeedsATerminal is the refusal where sudo would ask for a password
+// and there is no terminal for it to ask at.
+func sudoNeedsATerminal(again string) error {
+	return fmt.Errorf("sudo needs your password and there is no terminal for it to ask at, so nothing was changed. Run `%s` at a terminal", again)
 }
 
 // dockerProgram is askDocker as an access.Docker.

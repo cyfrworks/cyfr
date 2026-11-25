@@ -458,7 +458,46 @@ defmodule Prima.RefusalTest do
      "Aqua stopped: its record of this thread was removed while it worked. Send a message to " <>
        "start over."},
     {{:harness, "Aqua", {:provider, "rate_limited", "Ask again later."}}, :unavailable,
-     "Aqua could not answer: Ask again later."}
+     "Aqua could not answer: Ask again later."},
+    # A failed start, by what its driver, the start clock or the service
+    # said, each with what starts the member again where it is read.
+    {{:harness, "Aqua", {:start_failed, :unanswered, :message}}, :unavailable,
+     "Aqua could not start: its program did not answer in time. Send a message to try again."},
+    {{:harness, "Scout", {:start_failed, :unanswered, :ask}}, :unavailable,
+     "Scout could not start: its program did not answer in time. Ask Scout for it again."},
+    {{:harness, "Aqua", {:start_failed, :unanswered, :none}}, :unavailable,
+     "Aqua could not start: its program did not answer in time."},
+    {{:harness, "Aqua", {:start_failed, :servers_unlisted, :message}}, :unavailable,
+     "Aqua could not start: its program did not list its MCP servers. Open its terminal on " <>
+       "the Programs page to check them."},
+    {{:harness, "Aqua", {:start_failed, :refused, :ask}}, :unavailable,
+     "Aqua could not start: its program refused to start a session. Open its terminal on the " <>
+       "Programs page to see why."},
+    {{:harness, "Aqua", {:start_failed, :outdated, :message}}, :unavailable,
+     "Aqua could not start: its program is older than CYFR can drive. Change the version in " <>
+       "its command on the Programs page."},
+    {{:harness, "Aqua", {:start_failed, :unsupported, :none}}, :unavailable,
+     "Aqua could not start: this version of its program is not one CYFR can drive. Change the " <>
+       "version in its command on the Programs page."},
+    {{:harness, "Aqua", {:start_failed, :ended, :message}}, :unavailable,
+     "Aqua could not start: its program ended while starting. Send a message to try again."},
+    {{:harness, "Aqua", {:start_failed, :unrunnable, :message}}, :unavailable,
+     "Aqua could not start: its program could not be run. Check its command on the Programs " <>
+       "page."},
+    {{:harness, "Aqua", {:start_failed, :unreadable, :message}}, :unavailable,
+     "Aqua could not start: its program answered in a way CYFR could not read."},
+    {{:harness, "Scout", {:start_failed, :unfit, :ask}}, :unavailable,
+     "Scout could not start: its program does not take the model, effort or access chosen " <>
+       "for it. Check them on Scout's card on the Aqua page."},
+    {{:harness, "Aqua", {:start_failed, :broken, :message}}, :unavailable,
+     "Aqua could not start: CYFR and its program's driver did not understand each other."},
+    {{:harness, "Aqua", {:start_failed, :restarted, :message}}, :unavailable,
+     "Aqua could not start because CYFR restarted the part that runs programs. Send a " <>
+       "message to try again."},
+    {{:harness, "Aqua", {:start_failed, {:within, 5}, :message}}, :unavailable,
+     "Aqua did not start within 5 minutes. Send a message to try again."},
+    {{:harness, "Aqua", {:start_failed, {:within, 1}, :none}}, :unavailable,
+     "Aqua did not start within a minute."}
   ]
 
   # The access, setup and program rows are rostered with their classes too.

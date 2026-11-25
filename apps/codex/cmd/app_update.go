@@ -66,8 +66,10 @@ type appRoad interface {
 	// elevate takes, before the app closes, what replace needs to run as
 	// someone else, and refuses where it cannot, answering what lets it go
 	// once the update is done; again is the command to run once a refusal
-	// is mended.
-	elevate(out io.Writer, again string) (release func(), err error)
+	// is mended. ask is whether a password may be asked for at this
+	// program's terminal: false answers, asking nothing, as a run with no
+	// terminal would.
+	elevate(out io.Writer, again string, ask bool) (release func(), err error)
 	// replace installs what fetch verified over the installed app, older
 	// when that is a release before the installed one, and runs to its
 	// end within its bound, whatever this cyfr is asked meanwhile. A
@@ -191,7 +193,7 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 	if ctx.Err() != nil {
 		return errors.New("cyfr update was interrupted before the CYFR app was closed; nothing was changed and CYFR runs as it did")
 	}
-	let, err := road.elevate(out, again)
+	let, err := road.elevate(out, again, true)
 	if err != nil {
 		return err
 	}
@@ -252,7 +254,7 @@ func updateApp(ctx context.Context, out io.Writer, road appRoad, before, target,
 			reopen = fmt.Sprintf("the screen could not be started again (%v): start it with 'sudo systemctl start cyfr-screen'", err)
 		}
 	} else if ran {
-		switch err := reopenApp(); {
+		switch err := reopenApp(writesTheRecord(out)); {
 		case errors.Is(err, errNoDisplayToReopen):
 			reopen = "the CYFR app was closed and cannot be opened from a session with no display: open CYFR on this computer's desktop"
 		case err != nil:
@@ -377,9 +379,10 @@ func askAppToQuit() (bool, error) {
 var errNoDisplayToReopen = errors.New("this session has no display")
 
 // startInstalledApp opens the installed app, not waiting for it, as
-// cyfr setup opens it; in a session with no display it opens nothing
-// (errNoDisplayToReopen).
-func startInstalledApp() error {
+// cyfr setup opens it, with --updated for an update Update CYFR started,
+// whose window the app opens on its record; in a session with no display
+// it opens nothing (errNoDisplayToReopen).
+func startInstalledApp(updated bool) error {
 	if !hasDisplay() {
 		return errNoDisplayToReopen
 	}
@@ -388,6 +391,9 @@ func startInstalledApp() error {
 		return err
 	}
 	c := exec.Command(app)
+	if updated {
+		c.Args = append(c.Args, "--updated")
+	}
 	if err := c.Start(); err != nil {
 		return err
 	}

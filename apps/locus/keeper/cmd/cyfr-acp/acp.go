@@ -62,8 +62,9 @@ func initializeParams() map[string]any {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
 // rpc is one line of the program's, as far as the driver reads it: an
@@ -110,31 +111,44 @@ type agentCapabilities struct {
 var versionForm = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
 // qualify is why the program's initialize answer does not qualify it under
-// p, or "": protocol 1, at least the profile's version, and both a load and
-// a resume of a session. The words are the driver's, for its standard
-// error.
-func qualify(p *profile, answer initialized, caps agentCapabilities) string {
+// p, with what the person reads of it, or "": protocol 1, at least the
+// profile's version where it names one, and a load of a session, with a
+// resume where the profile goes on by one. The words are the driver's, for
+// its standard error; they name the program's own version, so only the
+// code reaches the wire.
+func qualify(p *profile, answer initialized, caps agentCapabilities) (brainwire.Why, string) {
 	if string(answer.ProtocolVersion) != strconv.Itoa(protocolVersion) {
-		return fmt.Sprintf("%s answered ACP protocol version %s, not %d, the one CYFR speaks", p.title, answer.ProtocolVersion, protocolVersion)
+		return brainwire.WhyUnsupported, fmt.Sprintf("%s answered ACP protocol version %s, not %d, the one CYFR speaks", p.title, answer.ProtocolVersion, protocolVersion)
 	}
-	minimum := fmt.Sprintf("%d.%d.%d", p.minVersion[0], p.minVersion[1], p.minVersion[2])
-	parts := versionForm.FindStringSubmatch(answer.Info.Version)
-	if parts == nil {
-		return fmt.Sprintf("%s named no version CYFR reads; CYFR drives %s or later", p.title, minimum)
-	}
-	for i := 0; i < 3; i++ {
-		n, _ := strconv.Atoi(parts[i+1])
-		if n != p.minVersion[i] {
-			if n < p.minVersion[i] {
-				return fmt.Sprintf("%s %s is older than %s, the first CYFR drives; update it", p.title, parts[0], minimum)
+	if p.minVersion != [3]int{} {
+		minimum := fmt.Sprintf("%d.%d.%d", p.minVersion[0], p.minVersion[1], p.minVersion[2])
+		parts := versionForm.FindStringSubmatch(answer.Info.Version)
+		if parts == nil {
+			return brainwire.WhyUnsupported, fmt.Sprintf("%s named no version CYFR reads; CYFR drives %s or later", p.title, minimum)
+		}
+		for i := 0; i < 3; i++ {
+			n, _ := strconv.Atoi(parts[i+1])
+			if n != p.minVersion[i] {
+				if n < p.minVersion[i] {
+					return brainwire.WhyOutdated, fmt.Sprintf("%s %s is older than %s, the first CYFR drives; update it", p.title, parts[0], minimum)
+				}
+				break
 			}
-			break
 		}
 	}
-	if !caps.LoadSession || len(caps.Session.Resume) == 0 || string(caps.Session.Resume) == "null" {
-		return fmt.Sprintf("%s does not offer both to resume and to load a session, which CYFR needs to go on with one", p.title)
+	resumes := len(caps.Session.Resume) != 0 && string(caps.Session.Resume) != "null"
+	switch {
+	case p.resumeNotFound == nil && !caps.LoadSession:
+		return brainwire.WhyUnsupported, fmt.Sprintf("%s does not offer to load a session, which CYFR needs to go on with one", p.title)
+	case p.resumeNotFound != nil && (!caps.LoadSession || !resumes):
+		return brainwire.WhyUnsupported, fmt.Sprintf("%s does not offer both to resume and to load a session, which CYFR needs to go on with one", p.title)
 	}
-	return ""
+	return brainwire.Why{}, ""
+}
+
+func unqualified(p *profile, answer initialized, caps agentCapabilities) bool {
+	_, why := qualify(p, answer, caps)
+	return why != ""
 }
 
 // configOption is one of a session's config options, its choices flat.

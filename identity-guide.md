@@ -41,7 +41,7 @@ The account service is trusted to keep each log in one order and to answer hones
 
 ### Updating a CYFR
 
-`cyfr update` removes from `.env` each setting the release the CYFR leaves shipped in its `.env.example` that the new release's `.env.example` does not declare, and names them. A `CYFR_` setting added to `.env` by hand that the new release does not read refuses the boot, which names it: remove it.
+`cyfr update` removes from `.env` each setting the release the CYFR leaves shipped in its `.env.example` that the new release's `.env.example` does not declare, and names them; a setting still holding the old `.env.example`'s value takes the new one's where it changed, and is named with it. A `CYFR_` setting added to `.env` by hand that the new release does not read refuses the boot, which names it: remove it.
 
 ---
 

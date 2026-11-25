@@ -147,6 +147,9 @@ type restoreScenario struct {
 // snapshot taken and every docker call of the update forgotten.
 func newRestoreScenario(t *testing.T, compose []byte, env map[string]string, prepare func(*updateScenario)) *restoreScenario {
 	s := newUpdateScenario(t, compose, env)
+	// Both releases ship the scenario's compose file, so the update leaves
+	// it switched as the restore's cases hold it.
+	s.composes = map[string]string{"0.8.0": string(compose), testVersion: string(compose)}
 	for name, data := range map[string]string{"data/cyfr.db": sqliteBytes, "data/cyfr.db-wal": "sqlite-wal"} {
 		if err := os.WriteFile(filepath.Join(s.project, name), []byte(data), 0644); err != nil {
 			t.Fatal(err)
@@ -1252,7 +1255,8 @@ func TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred(t *testing.T) {
 	// The old deployment can supply its settings explicitly rather than
 	// loading the whole .env into the container; that is valid Compose.
 	compose = strings.Replace(compose, "    environment:\n", "    environment:\n      - CYFR_SECRET_KEY_BASE="+keyBase+"\n      - 'CYFR_CRYPTO_KEYRING="+keyring+"'\n", 1)
-	r := newRestoreScenario(t, []byte(compose), nil, nil)
+	// The new release ships the repository's compose file, which loads .env.
+	r := newRestoreScenario(t, []byte(compose), nil, func(s *updateScenario) { s.composes = map[string]string{"0.8.0": compose} })
 	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 	if before == compose {
 		t.Fatal("update did not install its new compose configuration")
