@@ -323,12 +323,18 @@ func HoldsManaged(dir string) bool {
 	return false
 }
 
-// SeccompProfiles are the seccomp profiles docker-compose.yml names beside
-// it: the keeper's, which the locus service runs under, and the stack's
-// container profile, which every other service runs under. They follow the
-// images they let start, so `cyfr update`, which pulls the images,
-// refreshes them too.
-var SeccompProfiles = []string{"keeper.seccomp.json", "container.seccomp.json"}
+// The seccomp profiles docker-compose.yml names beside it: the keeper's,
+// which the locus service runs under, and the stack's container profile,
+// which every other service runs under, and the tailnet join's container
+// too. They follow the images they let start, so `cyfr update`, which
+// pulls the images, refreshes them too.
+const (
+	KeeperProfile    = "keeper.seccomp.json"
+	ContainerProfile = "container.seccomp.json"
+)
+
+// SeccompProfiles are both, as one managed set.
+var SeccompProfiles = []string{KeeperProfile, ContainerProfile}
 
 // Guides are the guides the scaffold tarball ships at a project's root
 // (scripts/scaffold-tarball.sh's items), each managed, so `cyfr update`

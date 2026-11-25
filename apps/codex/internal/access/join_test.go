@@ -66,7 +66,7 @@ func TestJoinWithAKeyEnrolsTheMachine(t *testing.T) {
 	}
 	args := strings.Join(calls[run].Args, " ")
 	for _, want := range []string{
-		"-d -i --rm", "--label com.cyfr.access.project=home", "--label com.cyfr.access.join-id=" + rec.JoinID,
+		"-d -i --rm --name home-tailnet-join-" + rec.JoinID[:12] + " --security-opt seccomp=" + filepath.Join(h.dir, "container.seccomp.json") + " ", "--label com.cyfr.access.project=home", "--label com.cyfr.access.join-id=" + rec.JoinID,
 		"--label com.cyfr.access.join-deadline=2026-10-19T12:", "--network home_tailnet-join", "-v home_tailscale_state:/var/lib/tailscale",
 		"-e TS_USERSPACE=true -e TS_STATE_DIR=/var/lib/tailscale -e TS_AUTH_ONCE=true -e TS_ACCEPT_DNS=false -e TS_SOCKET=/var/run/tailscale/tailscaled.sock -e TS_HOSTNAME=cyfr",
 		"tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d timeout -s TERM 600 sh -c IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec containerboot",
@@ -89,6 +89,28 @@ func TestJoinWithAKeyEnrolsTheMachine(t *testing.T) {
 		t.Error("the join container still runs")
 	}
 	assertNoKey(t, h, testKey)
+}
+
+// A home without the container profile runs no join container: the join
+// ends with a reason that names the file and what lays it down, never with
+// tailscaled under Docker's default profile.
+func TestAJoinWithoutTheContainerProfileRunsNoContainer(t *testing.T) {
+	h := newHome(t)
+	if err := os.Remove(filepath.Join(h.dir, "container.seccomp.json")); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := h.e.Join(bg, JoinRequest{ID: id(1), AuthKey: strings.NewReader(testKey + "\n")})
+	reason := rc.Payload["reason"]
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Errorf("the join answered the error %v beside the reason %q", err, reason)
+	}
+	if rc.Code != "access_outcome_unknown" || !strings.Contains(reason, filepath.Join(h.dir, "container.seccomp.json")) ||
+		!strings.Contains(reason, "'cyfr update' or 'cyfr init --force' lays it down") {
+		t.Errorf("the join answered %+v", rc)
+	}
+	if slices.ContainsFunc(h.fake.calls(), func(c fakeCall) bool { return c.Args[0] == "run" }) {
+		t.Error("a join container ran without the container profile")
+	}
 }
 
 // assertNoKey checks the raw key is nowhere but on a call's standard

@@ -11,10 +11,14 @@ import (
 	"io"
 	"maps"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cyfr/codex/internal/scaffold"
 )
 
 // JoinDeadline is how long a join waits for its approval. The join
@@ -350,8 +354,16 @@ func (e *Engine) prepareJoin(ctx context.Context, a *joinAttempt) string {
 
 // startJoinContainer runs the one-off join container: the tailscale
 // service's image on its own network with the state volume, labelled
-// with its join id and deadline, ending by itself at the deadline.
+// with its join id and deadline, ending by itself at the deadline. It runs
+// tailscaled as the tailscale service does, under the project's container
+// seccomp profile, which docker reads from the project: a project without
+// that file runs no join container, and the reason says what lays it down,
+// never Docker's default profile in its place.
 func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string, string) {
+	profile := filepath.Join(e.dir, scaffold.ContainerProfile)
+	if _, err := os.Stat(profile); err != nil {
+		return "", fmt.Sprintf("the tailnet join's container runs under the seccomp profile %s, which cannot be read (%v); 'cyfr update' or 'cyfr init --force' lays it down beside docker-compose.yml", profile, err)
+	}
 	seconds := int(math.Ceil(a.Deadline.Sub(e.now()).Seconds()))
 	if seconds < 1 {
 		seconds = 1
@@ -361,7 +373,7 @@ func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string
 	if a.Key {
 		args = append(args, "-i")
 	}
-	args = append(args, "--rm", "--name", name,
+	args = append(args, "--rm", "--name", name, "--security-opt", "seccomp="+profile,
 		"--label", labelJoinProject+"="+e.project,
 		"--label", labelJoinID+"="+a.JoinID,
 		"--label", labelJoinDeadline+"="+a.Deadline.UTC().Format(time.RFC3339),
