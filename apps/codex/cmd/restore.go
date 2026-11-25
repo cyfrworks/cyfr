@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"github.com/cyfr/codex/internal/apparmor"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -48,6 +49,8 @@ var restoreCmd = &cobra.Command{
 6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
 8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own tailnet machine, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
+
+A restored .env names the AppArmor profile of the snapshot's release, which an update since may have taken off the machine; where this machine enforces AppArmor and has not loaded it, the restore says so before it starts the stack, with the command that loads it through that release's own cyfr ('cyfr apparmor-profile | sudo sh -c ...' run by the cyfr of the restored release, which the install script installs with CYFR_VERSION=<release>).
 
 Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. Run through sudo, the restore gives .env, docker-compose.yml, the scaffold files and .cyfr/ back to the account that ran sudo (SUDO_UID and SUDO_GID); the storage root and the database are left to the image's user, which the next start hands them to. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
@@ -444,6 +447,7 @@ func (r *restorer) run() error {
 	if err := ensureAppArmor(r.ctx, r.out, "cyfr up"); err != nil {
 		return fmt.Errorf("%s\nEvery part is back and the restore %s is declared, and the stack is left stopped", strings.TrimSuffix(err.Error(), "."), r.restoreID)
 	}
+	restoredAppArmor(r.out, m.Version)
 	fmt.Fprintf(r.out, "Starting release %s...\n", m.Version)
 	err = r.updater.start("restore")
 	if local := (startedLocally{}); errors.As(err, &local) {
@@ -1416,4 +1420,20 @@ func (r *restorer) declare() error {
 	}
 	r.restoreID = id
 	return nil
+}
+
+// restoredAppArmor says, on a machine that enforces AppArmor, when the
+// restored .env names a profile the machine has not loaded: an update's
+// start takes the profile it replaced off the machine, and only the
+// restored release's own cyfr carries that profile to load again.
+func restoredAppArmor(out io.Writer, version string) {
+	values, err := access.ReadEnvValues(".env")
+	name := values[appArmorEnv]
+	if err != nil || name == "" || name == apparmor.ProfileName || machine.system() != "linux" || !machine.appArmor() {
+		return
+	}
+	if loaded, visible := machine.appArmorLoaded(name); loaded || !visible {
+		return
+	}
+	fmt.Fprintf(out, "The restored .env names the AppArmor profile %s, which this machine has not loaded: an update since the snapshot may have taken it off, and release %s's Locus services start only under it. Load it with release %s's cyfr (%s | CYFR_VERSION=%s sh installs it):\n  %s\n", name, version, version, installScript, version, fmt.Sprintf(loadAppArmorFormat, name))
 }

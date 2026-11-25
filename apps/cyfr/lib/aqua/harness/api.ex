@@ -302,9 +302,10 @@ defmodule Aqua.Harness.Api do
         no_key(state, step, error["message"])
 
       # The brain's grant the turn pinned moved since (its key bound
-      # again): admission refuses the call, and the turn moved on.
+      # again): admission refuses the call, and the turn stops saying so.
       {:error, {:setup_required, %{reason: "consent_moved"}}} ->
-        then_refused(state, closed(state, step, "consent_moved"), :consent_moved)
+        moved = {:consent_moved, state.work.title, Aqua.Loop.Turn.again(state.turn)}
+        then_refused(state, closed(state, step, "consent_moved"), moved)
 
       {:error, {:setup_required, _detail}} ->
         no_key(state, step, "setup_required")

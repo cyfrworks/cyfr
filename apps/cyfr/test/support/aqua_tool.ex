@@ -17,6 +17,19 @@ defmodule Cyfr.Test.AquaTool do
     end
   end
 
+  @doc """
+  Switch `key` of Aqua's list as the Aqua page's switch does, on when it
+  is off and off when it is on, granting nothing: what Aqua and its crew
+  members may use moves past Aqua's grant.
+  """
+  @spec switch!(Sanctum.Context.t(), String.t()) :: :ok
+  def switch!(ctx, key) do
+    {:ok, %{agent: %{tools: tools}}} = Compendium.agent_snapshot(ctx, Prima.AgentRef.soul_name())
+    edit = if key in tools, do: "tools_remove", else: "tools_add"
+    {:ok, _} = call(ctx, %{"action" => "update", "name" => "aqua", edit => [key]})
+    :ok
+  end
+
   defp stringify(map) when is_map(map) and not is_struct(map),
     do: Map.new(map, fn {k, v} -> {to_string(k), stringify(v)} end)
 

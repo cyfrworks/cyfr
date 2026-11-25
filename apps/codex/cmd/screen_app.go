@@ -4,52 +4,32 @@
 package cmd
 
 import (
-	"bufio"
-	"bytes"
-	"errors"
-	"fmt"
-	"io"
 	"sync"
 
-	"github.com/cyfr/codex/internal/account"
 	"github.com/cyfr/codex/internal/desktop"
-	"github.com/cyfr/codex/internal/shell"
 )
 
-// screenApp is the CYFR app as the screen's browser: its main process
-// started `cyfr screen shell` in the screen's folder and talks to it
-// over its stdin and stdout, in the messages of internal/desktop. The
-// shell's first message, on every start, is ready with its own pages'
-// address, once the watches have first worked or failed; then it proposes
-// home, the CYFR in the folder and the route to it, as attempt 1; main
-// answers home-ready for it, and the shell says opened. Nothing is said
-// before ready: what the shell has to say by then (a lock, a missing
-// keyboard, a watch not yet known to work) is said by the page ready
-// names, which the shell draws locked and saying why. A lock after ready
-// says locked, naming no CYFR, on which main hides the content and shows
-// a fresh shell's page, and proposes home again as the next attempt:
-// whatever main had of the last one, it takes the CYFR anew.
-// Only the current attempt is answered: a home-ready for another, or one
-// already answered, changes nothing. main's
-// lock and leave, its shutdown and the end of its pipe are a lock of the
-// shell; the last two end it as well. Every message goes through the
-// writer's queue (desktop.Writer.Queue), so nothing the shell does waits
-// on main reading it. The shell's last lock, at its end (end), says
-// ending in place of locked and proposes nothing, and the shell says
-// nothing after it: main closes at once and ends, opening no window for
-// a shell that is going.
+// screenApp is the CYFR app as the box's screen, the browser of the
+// screen's cyfr (runScreenShell), which serves it what desktop-serve
+// serves the app on a desktop (desktop.Service, the screen's folder its
+// This box) and says to it what that says, through say: the one way the
+// shell talks to main, every message queued behind those before it
+// (desktop.Writer.Queue), so nothing the shell does waits on main reading
+// it. Nothing is said before ready (show): what the shell has to say by
+// then (a lock, a missing keyboard, a watch not yet known to work) is
+// said by the pages ready names once a CYFR opens. ending is the last
+// message of a run: nothing is said after it.
 //
-// A hide is never taken on main's word: main's thread can be stuck (a
-// toolkit call that never returns), and with it what it would say. It is
-// confirmed by the compositor's own list of the windows it shows
-// (wayland.Windows): every window shown as the hide began has closed
-// there within screenHideWithin. One not confirmed, or a list that cannot
-// say, is carried out from outside: the app is ended (end), and its
-// launcher starts it again, locked.
+// Every lock hides what the screen shows (hide, the service's Hide)
+// before main is told, and a hide is never taken on main's word: main's
+// thread can be stuck (a toolkit call that never returns), and with it
+// what it would say. It is confirmed by the compositor's own list of the
+// windows it shows (wayland.Windows): every window shown as the hide began
+// has closed there within screenHideWithin. One not confirmed, or a list
+// that cannot say, is carried out from outside: the app is ended (endApp),
+// and its launcher starts it again, locked.
 type screenApp struct {
-	in   io.Reader
-	to   *desktop.Writer
-	home desktop.Message
+	to *desktop.Writer
 
 	// hiding marks what the screen shows as a hide begins and returns the
 	// wait for it to be gone: nil once it is, why not otherwise.
@@ -59,42 +39,24 @@ type screenApp struct {
 	// it is.
 	endApp func(why error)
 	ended  sync.Once
-	// awaited counts the hides whose confirmation is awaited (last).
+	// awaited counts the hides whose confirmation is awaited (finish).
 	awaited sync.WaitGroup
 
-	// gone is closed at the first message to main that could not be
-	// written: the app has gone, and show ends.
-	gone chan struct{}
-
 	mu sync.Mutex
-	// ready is whether ready was said; attempt is the current proposal's,
-	// and answered whether main's home-ready for it was answered opened.
-	ready    bool
-	attempt  uint64
-	answered bool
-	// last is whether the shell is ending (end), and over whether it said
-	// so: after that it says nothing.
-	last, over bool
+	// shown is whether ready was said, over whether ending was.
+	shown, over bool
 }
 
-// newScreenApp is the app as the browser of the CYFR l, set up in the
-// screen's folder, reading main's messages from in and writing its own to
-// out, which nothing else writes to.
-func newScreenApp(in io.Reader, out io.Writer, l desktop.Local, hiding func() func() error, endApp func(error)) (*screenApp, error) {
-	found, ok := account.ServiceOf(l.Shell.Address, l.Shell.Directory)
-	if !ok {
-		return nil, fmt.Errorf("The CYFR here names %s as its account service. The app takes an https address, "+
-			"or a plain http one only at a CYFR's own address on this computer", l.Shell.Directory)
-	}
-	gone := make(chan struct{})
-	return &screenApp{in: in, to: desktop.NewWriter(out, func() { close(gone) }), gone: gone, hiding: hiding, endApp: endApp,
-		home: desktop.Message{Type: desktop.TypeHome, Home: l.Shell.Address, Account: found.Origin, Proxy: l.Proxy}}, nil
-}
-
-// say gives main m after every message given before it, under a.mu: the
-// one way the shell talks to main, which takes nothing once ending was
-// given, the last message of the shell's run.
+// say gives main m after every message given before it, nothing once
+// ending was given.
 func (a *screenApp) say(m desktop.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sayHeld(m)
+}
+
+// sayHeld is say, the caller holding a.mu.
+func (a *screenApp) sayHeld(m desktop.Message) {
 	if a.over {
 		return
 	}
@@ -102,26 +64,25 @@ func (a *screenApp) say(m desktop.Message) {
 	a.over = m.Type == desktop.TypeEnding
 }
 
-// propose proposes home as the next attempt; the caller holds a.mu.
-func (a *screenApp) propose() {
-	a.attempt++
-	a.answered = false
-	home := a.home
-	home.Attempt = a.attempt
-	a.say(home)
-}
-
-// hide hides what is on the screen and shows a fresh lock page
-// (shell.Config.Restart): it tells main locked, then proposes home again,
-// and returns at once, waiting on nothing; the hide's confirmation is
-// awaited apart, and a hide not confirmed ends the app (screenApp).
-// Before ready main shows nothing of the shell's yet, and the page ready
-// names is the lock page. Once the shell is ending it tells main ending
-// instead, once, and nothing more.
-func (a *screenApp) hide() {
+// show says ready, the first message main hears, after which locks hide
+// and are told.
+func (a *screenApp) show(ready desktop.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.ready || a.over {
+	a.sayHeld(ready)
+	a.shown = true
+}
+
+// hide hides what is on the screen as a lock begins (desktop.Service.Hide):
+// it marks what the compositor shows, then tells main through tell, and
+// returns at once, waiting on nothing; the hide's confirmation is awaited
+// apart, and a hide not confirmed ends the app. Before ready main shows
+// nothing of the shell's yet, and after ending nothing more: either way
+// nothing is marked or told.
+func (a *screenApp) hide(tell func()) {
+	a.mu.Lock()
+	if !a.shown || a.over {
+		a.mu.Unlock()
 		return
 	}
 	// What is shown is marked before main is told, so a window main opens
@@ -134,95 +95,11 @@ func (a *screenApp) hide() {
 			a.ended.Do(func() { a.endApp(err) })
 		}
 	}()
-	if a.last {
-		a.say(desktop.Message{Type: desktop.TypeEnding})
-		return
-	}
-	a.say(desktop.Message{Type: desktop.TypeLocked})
-	a.propose()
-}
-
-// finish is the shell's last lock, through lock (shell.Shell.Lock), whose
-// hide says ending: it returns once every hide begun has been confirmed or
-// carried out, so the process that returns from it leaves none undone.
-func (a *screenApp) finish(lock func(why string)) {
-	a.end()
-	lock("")
-	a.awaited.Wait()
-}
-
-// end makes the next hide the shell's last.
-func (a *screenApp) end() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.last = true
-}
-
-// show tells main the shell's pages and proposes the CYFR, then reads
-// main's messages until main shuts the shell down, its pipe ends or a
-// message to it could not be written, locking the shell through lock
-// (shell.Shell.Lock) where main asks it to: an error where main could not
-// keep to the CYFR, has gone, or said what is not a message.
-func (a *screenApp) show(lock func(why string)) error {
-	a.mu.Lock()
-	if a.last {
-		// Ending before it showed anything: there is nothing to tell.
-		a.mu.Unlock()
-		return nil
-	}
-	a.say(desktop.Message{Type: desktop.TypeReady, URL: shell.Origin + "/"})
-	a.ready = true
-	a.propose()
 	a.mu.Unlock()
-	lines, read, stop := make(chan []byte), make(chan error, 1), make(chan struct{})
-	defer close(stop)
-	go func() {
-		s := bufio.NewScanner(a.in)
-		s.Buffer(make([]byte, 0, 4096), desktop.MaxLine+1)
-		for s.Scan() {
-			select {
-			case lines <- bytes.Clone(s.Bytes()):
-			case <-stop:
-				return
-			}
-		}
-		read <- s.Err()
-	}()
-	for {
-		var line []byte
-		select {
-		case <-a.gone:
-			return errors.New("the CYFR app has gone: a message to it could not be written")
-		case err := <-read:
-			return err
-		case line = <-lines:
-		}
-		m, err := desktop.ReadFromMain(line)
-		if err != nil {
-			return err
-		}
-		switch m.Type {
-		case desktop.TypeHomeReady:
-			a.mu.Lock()
-			if m.Home == a.home.Home && m.Attempt == a.attempt && !a.answered && !a.over {
-				a.answered = true
-				a.say(desktop.Message{Type: desktop.TypeOpened, Home: a.home.Home, Attempt: a.attempt})
-			}
-			a.mu.Unlock()
-		case desktop.TypeLock:
-			// main waits for locked, which the lock's hide says.
-			lock("Locked.")
-		case desktop.TypeLeave:
-			// The screen keeps to its one CYFR: a leave is a lock, answered
-			// once the lock ended the device's sessions there.
-			// A lock that was the shell's last said ending, after which
-			// nothing is said: that leave is answered by the end alone.
-			lock("Locked.")
-			a.mu.Lock()
-			a.say(desktop.Message{Type: desktop.TypeLeft, ID: m.ID})
-			a.mu.Unlock()
-		case desktop.TypeShutdown:
-			return nil
-		}
-	}
+	tell()
 }
+
+// finish returns once every hide begun has been confirmed or carried out,
+// so the process that returns from it, after the service's end, leaves
+// none undone.
+func (a *screenApp) finish() { a.awaited.Wait() }

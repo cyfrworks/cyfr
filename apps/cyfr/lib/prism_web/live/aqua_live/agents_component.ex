@@ -1903,11 +1903,9 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   connect.
   """
   @spec grant_sentence(atom()) :: String.t() | nil
-  def grant_sentence(:consent_absent),
-    do: "You have not granted yet what Aqua and its crew members may use."
+  def grant_sentence(:consent_absent), do: Prima.Refusal.message(:ungranted)
 
-  def grant_sentence(:consent_stale),
-    do: "What Aqua and its crew members may use changed since you granted it."
+  def grant_sentence(:consent_stale), do: Prima.Refusal.message(:agent_changed)
 
   def grant_sentence(:consent_damaged),
     do:

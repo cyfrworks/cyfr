@@ -84,6 +84,10 @@ type Config struct {
 	// Restart hides what is on the screen and shows a fresh lock page, as
 	// every lock begins: it returns at once, waiting on nothing.
 	Restart func()
+	// Opened is told each time the channel opens, the device unlocked
+	// (Unlocked is then true), the shell held: it returns at once, waiting
+	// on nothing. nil tells nothing.
+	Opened func()
 	// Unwatched is set for a device that locks itself (a box's screen): why
 	// it may not be unlocked now, or "" while what would lock it is known
 	// to work. While it says why, nothing unlocks and the pages show that.
@@ -93,6 +97,12 @@ type Config struct {
 	// knows may keep it from working as it should (cmd's screen: the app's
 	// release beside the CYFR's). Nil is none.
 	Warning func() string
+	// KeyElsewhere, where it is not "", is the sentence a device with no
+	// key shows where this shell may not make the key, and the refusal of
+	// every try to make one here: a box's screen makes its one key at its
+	// own CYFR alone, so no one at the box makes it at another CYFR first.
+	// "" makes it here.
+	KeyElsewhere string
 	// DisplayName is the name the CYFR lists this device by.
 	DisplayName string
 	// Detect reads the disks; disk.Detect unless a test replaces it.
@@ -415,6 +425,9 @@ func New(cfg Config) (*Shell, error) {
 	if cfg.Restart == nil {
 		cfg.Restart = func() {}
 	}
+	if cfg.Opened == nil {
+		cfg.Opened = func() {}
+	}
 	if cfg.Unwatched == nil {
 		cfg.Unwatched = func() string { return "" }
 	}
@@ -500,6 +513,17 @@ func (s *Shell) refresh() {
 			s.unfinished = a
 		}
 	}
+}
+
+// keyElsewhere refuses making the key in a shell that may not
+// (Config.KeyElsewhere), saying where it is made, before anything is asked
+// of the chip, the account service or the PIN. The caller holds the shell.
+func (s *Shell) keyElsewhere() bool {
+	if s.cfg.KeyElsewhere == "" {
+		return false
+	}
+	s.say("%s", s.cfg.KeyElsewhere)
+	return true
 }
 
 // madeElsewhere says this shell uses the key another first use made.
@@ -649,7 +673,7 @@ func (s *Shell) View() View {
 		return s.shownView()
 	}
 	defer give()
-	if s.rec == nil && !s.cfg.Chip() {
+	if s.rec == nil && !s.cfg.Chip() && s.cfg.KeyElsewhere == "" {
 		s.newPassphrase()
 	}
 	return s.view()
@@ -731,7 +755,7 @@ func (s *Shell) drawPassphrase(ctx context.Context) string {
 	}
 	defer give()
 	s.refresh()
-	if s.rec != nil || (s.cfg.Chip() && s.passphrase == "") {
+	if s.rec != nil || (s.cfg.Chip() && s.passphrase == "") || s.keyElsewhere() {
 		return ""
 	}
 	if !s.current() {
@@ -974,6 +998,9 @@ func (s *Shell) makeKey(ctx context.Context, secret, again []byte) (drawn string
 		s.madeElsewhere()
 		return
 	}
+	if s.keyElsewhere() {
+		return
+	}
 	_, _ = s.newRecord(secret, again)
 	return
 }
@@ -1048,6 +1075,9 @@ func (s *Shell) setup(ctx context.Context, name, accepted string, secret, again 
 	s.refresh()
 	if s.rec != nil {
 		s.madeElsewhere()
+		return
+	}
+	if s.keyElsewhere() {
 		return
 	}
 	// The PIN or passphrase is checked before the account service is
@@ -1712,6 +1742,7 @@ func (s *Shell) connect(ctx context.Context, key *holder.Key) error {
 	}
 	s.key, s.ch = key, ch
 	s.open.Store(true)
+	s.cfg.Opened()
 	s.scheduleRenewal(began)
 	go s.watch(ch, began)
 	return nil

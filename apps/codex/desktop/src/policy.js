@@ -50,17 +50,18 @@ export const accountPartition = (home, account) => `persist:cyfr-account-v2-${di
 /**
  * What a press on the rail asks of main, from the address the rail's page
  * navigates to, which main answers and never loads: select or menu (the
- * row's menu) of a CYFR, named by its origin, or connect, setup or update
+ * row's menu) of a CYFR, named by its origin, or connect, setup, box
+ * (This box, the box's own CYFR, whatever its folder names now) or update
  * (Update CYFR). Any other address is none (null).
  */
 export function railPress(address) {
   const u = parse(address)
   if (!u || u.origin !== LOOPBACK || u.hash || u.username || u.password) return null
   const act = {"/rail/select": "select", "/rail/menu": "menu", "/rail/connect": "connect", "/rail/setup": "setup",
-    "/rail/update": "update"}[u.pathname]
+    "/rail/box": "box", "/rail/update": "update"}[u.pathname]
   if (!act) return null
   const keys = [...u.searchParams.keys()]
-  if (["connect", "setup", "update"].includes(act)) return u.search === "" ? {act} : null
+  if (["connect", "setup", "box", "update"].includes(act)) return u.search === "" ? {act} : null
   const home = u.searchParams.get("cyfr")
   return keys.length === 1 && keys[0] === "cyfr" && isHome(home) ? {act, home} : null
 }

@@ -376,10 +376,8 @@ defmodule Prima.RefusalTest do
     {:catalyst_pinned, :conflict},
     {:not_proposed, :conflict},
     {:not_dispatched, :conflict},
-    {:consent_moved, :conflict},
-    {:agent_changed, :conflict},
+    {:agent_moved, :conflict},
     {:no_pin, :conflict},
-    {:turn_superseded, :conflict},
     {{:no_claim, "thr_1"}, :conflict},
     {:fence_required, :internal},
     {:seq_conflict, :internal},
@@ -500,10 +498,65 @@ defmodule Prima.RefusalTest do
      "Aqua did not start within a minute."}
   ]
 
-  # The access, setup and program rows are rostered with their classes too.
+  @stale "What Aqua and its crew members may use changed since you granted it."
+  @ungranted "You have not granted yet what Aqua and its crew members may use."
+  @revoked "You revoked your grant of what Aqua and its crew members may use."
+  @revoked_while "stopped because you revoked your grant of what Aqua and its crew members " <>
+                   "may use while it worked. Grant it again on your Aqua page"
+  @regranted "stopped because a grant it was working under, Aqua's or its model's key, " <>
+               "changed while it worked."
+
+  # A turn refused for a grant that moved past it: what moved, then what
+  # the person does where it is read.
+  @grant_rows [
+    {:agent_changed, :consent_required, @stale},
+    {{:agent_changed, "Aqua", :message}, :consent_required,
+     @stale <>
+       " Your message was not answered: grant it again here when it is asked, or on your " <>
+       "Aqua page, then send your message again."},
+    {{:agent_changed, "Scout", :ask}, :consent_required,
+     @stale <>
+       " Scout did not do this job: grant it again on your Aqua page, then ask Scout for it " <>
+       "again."},
+    {{:agent_changed, "Aqua", :none}, :consent_required,
+     @stale <> " Grant it again on your Aqua page."},
+    {:ungranted, :consent_required, @ungranted},
+    {{:ungranted, "Aqua", :message}, :consent_required,
+     @ungranted <>
+       " Your message was not answered: grant it here when it is asked, or on your Aqua " <>
+       "page, then send your message again."},
+    {{:ungranted, "Scout", :ask}, :consent_required,
+     @ungranted <>
+       " Scout did not do this job: grant it on your Aqua page, then ask Scout for it again."},
+    {{:ungranted, "Aqua", :none}, :consent_required,
+     @ungranted <> " Grant it on your Aqua page."},
+    {{:consent_moved, "Aqua", :message}, :conflict,
+     "Aqua " <> @regranted <> " Send a message to go on."},
+    {{:consent_moved, "Scout", :ask}, :conflict,
+     "Scout " <> @regranted <> " Ask Scout for it again."},
+    {{:consent_moved, "Aqua", :none}, :conflict, "Aqua " <> @regranted},
+    {{:grant_revoked, "Aqua", :message}, :consent_required,
+     @revoked <>
+       " Your message was not answered: grant it again here when it is asked, or on your " <>
+       "Aqua page, then send your message again."},
+    {{:grant_revoked, "Scout", :ask}, :consent_required,
+     @revoked <>
+       " Scout did not do this job: grant it again on your Aqua page, then ask Scout for it " <>
+       "again."},
+    {{:grant_revoked, "Aqua", :none}, :consent_required,
+     @revoked <> " Grant it again on your Aqua page."},
+    {{:consent_revoked, "Aqua", :message}, :consent_required,
+     "Aqua " <> @revoked_while <> ", then send a message to go on."},
+    {{:consent_revoked, "Scout", :ask}, :consent_required,
+     "Scout " <> @revoked_while <> ", then ask Scout for it again."},
+    {{:consent_revoked, "Aqua", :none}, :consent_required, "Aqua " <> @revoked_while <> "."}
+  ]
+
+  # The access, setup, program and grant rows are rostered with their
+  # classes too.
   @rostered @rostered ++
               for(
-                {reason, class, _sentence} <- @access_rows ++ @program_rows,
+                {reason, class, _sentence} <- @access_rows ++ @program_rows ++ @grant_rows,
                 do: {reason, class}
               )
 
@@ -593,6 +646,24 @@ defmodule Prima.RefusalTest do
       for {reason, class, sentence} <- @access_rows do
         assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
                "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
+      end
+    end
+
+    test "a turn refused for a grant that moved reads as what moved and what to do there" do
+      for {reason, class, sentence} <- @grant_rows do
+        assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
+               "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
+      end
+
+      # What the Aqua page link says is what a refusal with nothing else
+      # to offer ends with.
+      for {state, ends} <- [
+            agent_changed: "Grant it again on your Aqua page.",
+            ungranted: "Grant it on your Aqua page.",
+            grant_revoked: "Grant it again on your Aqua page."
+          ] do
+        assert Refusal.grant_action(state) == ends
+        assert String.ends_with?(Refusal.message({state, "Aqua", :none}), " " <> ends)
       end
     end
 

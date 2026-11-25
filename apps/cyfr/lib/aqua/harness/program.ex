@@ -504,13 +504,7 @@ defmodule Aqua.Harness.Program do
   defp start_failed(work, :restarted), do: {:start_failed, :restarted, again(work)}
   defp start_failed(_work, _unsaid), do: :start_failed
 
-  # What starts the member again where its failed start is read
-  # (`Prima.Refusal`): a message in its thread, asking a crew member for
-  # its job again, or nothing the reader can give a schedule's or another
-  # source's turn again from there.
-  defp again(%{turn: %{request_id: request}}) when is_binary(request), do: :ask
-  defp again(%{turn: %{origin: "interactive"}}), do: :message
-  defp again(_work), do: :none
+  defp again(work), do: Aqua.Loop.Turn.again(work.turn)
   defp lost(work, kind), do: {:lost, {:harness, work.title, kind}}
   defp signed_out(work), do: {:refused, {:crew_unready, work.title, :signed_out}}
 

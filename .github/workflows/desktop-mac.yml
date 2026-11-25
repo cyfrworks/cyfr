@@ -3,20 +3,20 @@
 
 name: Mac distribution
 
-# The CYFR app's Mac packages as a person downloads them, for Apple silicon
-# and for Intel, each built on a runner of its architecture with the
-# repository's Apple inputs: signed with the Developer ID identity, the
+# The CYFR app's Mac package as a person downloads it, for Apple silicon
+# (CYFR builds nothing for Intel Macs), built on an Apple silicon runner
+# with the repository's Apple inputs: signed with the Developer ID identity, the
 # provisioning profile that authorises its WebAuthn group embedded,
 # notarised under the team's account and stapled, then checked
 # (apps/codex/desktop/scripts/mac-sign.mjs), installed on the runner and
 # smoked (tests/desktop-proof/native/mac.sh), so a profile that does not
 # authorise the app's entitlements is seen at its launch, and its app and
-# cyfr read as built for the architecture (installed-machine.sh). The cyfr inside
+# cyfr read as built for arm64 (installed-machine.sh). The cyfr inside
 # is built as the release builds the archives' (GoReleaser, its ldflags and
 # its binary check). Release calls it with the tag's version: the
-# installed cyfr must then be the tag's, and each DMG is uploaded for the
+# installed cyfr must then be the tag's, and the DMG is uploaded for the
 # release to sum, sign and attach. A dispatch by hand builds at a snapshot
-# version and keeps the DMGs for a day only when asked. It never runs on a
+# version and keeps the DMG for a day only when asked. It never runs on a
 # push and publishes nothing itself. A pull request's run rehearses the
 # same signing with no Apple input (codex-ci.yml's desktop-native).
 
@@ -48,13 +48,8 @@ permissions:
 
 jobs:
   mac:
-    name: CYFR app (macOS ${{ matrix.arch }}, signed)
-    strategy:
-      matrix:
-        include:
-          - {arch: arm64, runner: macos-latest}
-          - {arch: amd64, runner: macos-15-intel}
-    runs-on: ${{ matrix.runner }}
+    name: CYFR app (macOS arm64, signed)
+    runs-on: macos-latest
     # Electron's download, the build and Apple's notary, which answers in
     # minutes and sometimes in more: the build bounds the app's packing,
     # signing and notarising at 50 minutes and the DMG's notarising at 27,
@@ -64,9 +59,9 @@ jobs:
       run:
         shell: bash
     env:
-      ARCH: ${{ matrix.arch }}
+      ARCH: arm64
       VERSION: ${{ inputs.version || '0.0.0-candidate' }}
-      DMG: apps/codex/desktop/dist/cyfr-desktop_${{ inputs.version || '0.0.0-candidate' }}_darwin_${{ matrix.arch }}.dmg
+      DMG: apps/codex/desktop/dist/cyfr-desktop_${{ inputs.version || '0.0.0-candidate' }}_darwin_arm64.dmg
     # No cache, read or written: a published package is built from its
     # sources and their pins.
     steps:
@@ -120,7 +115,7 @@ jobs:
       - name: Install and smoke the app
         run: bash tests/desktop-proof/native/mac.sh "$DMG"
 
-      # Read from each file's header: an Intel app passes a smoke on Apple
+      # Read from each file's header: an x64 app passes a smoke on Apple
       # silicon under Rosetta.
       - name: The installed app is built for its architecture
         run: bash tests/desktop-proof/native/installed-machine.sh "$ARCH" /Applications/CYFR.app/Contents/MacOS/CYFR /Applications/CYFR.app/Contents/Resources/cyfr
@@ -134,7 +129,7 @@ jobs:
         if: inputs.version != '' || inputs.upload == true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: cyfr-desktop-darwin-${{ matrix.arch }}
+          name: cyfr-desktop-darwin-arm64
           path: ${{ env.DMG }}
           if-no-files-found: error
           retention-days: 1

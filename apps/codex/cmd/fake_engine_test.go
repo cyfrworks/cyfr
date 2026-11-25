@@ -509,13 +509,19 @@ func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.
 	if s.startErr != nil {
 		return access.Receipt{}, s.startErr
 	}
+	rc := s.startReceipt
 	if h, err := e.Head(); err == nil && os.Getenv("FAKE_DOCKER_DIR") != "" {
 		res, err := fakeRunner{}.Run(ctx, access.Call{Args: append(composePrefixArgs(e.name(), h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
 		if err := callFailure(e.Redactor(), res, err); err != nil {
-			return access.Receipt{Op: "start", State: "completed", Outcome: "failed"}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
+			return access.Receipt{Op: "start", State: "completed", Outcome: "failed", FinalHead: &h}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
+		}
+		// The receipt names the head the start brought up, as the
+		// engine's does.
+		if rc.FinalHead == nil {
+			rc.FinalHead = &h
 		}
 	}
-	return answered(s.startReceipt)
+	return answered(rc)
 }
 
 func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (access.Receipt, error) {

@@ -12,6 +12,7 @@ defmodule Aqua.FacadeTest do
 
   @roster [
     action_title: 2,
+    again_text: 2,
     at_work: 2,
     attachment_blob_path: 3,
     attachment_limits: 0,
