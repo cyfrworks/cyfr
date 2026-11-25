@@ -16,10 +16,11 @@ defmodule Cyfr.Test.Settings do
 
   A row lives in the calling test's sandbox transaction and is gone when
   that test's connection is checked in, but the accessor's cache is one
-  per node: `put/2` drops the key's cached value again when the test
-  exits, and only a synchronous test, which runs alone, may call it. A
-  caller that reaches no connection checks one out, owned by the test
-  process.
+  per node: the sandbox owner ages it once the transaction is rolled back
+  (`Arca.Test.Sandbox`), and `put/2` drops the key's cached value again
+  when the test exits, for a connection the test process holds itself.
+  Only a synchronous test, which runs alone, may call it. A caller that
+  reaches no connection checks one out, owned by the test process.
   """
 
   import ExUnit.Assertions, only: [flunk: 1]
