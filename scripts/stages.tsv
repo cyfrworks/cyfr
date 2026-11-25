@@ -71,7 +71,8 @@ handoff	registry-stand-in-test	-	600	-	tests/registry-stand-in/**	python3 -I tes
 handoff	install-screen-stored-test	-	600	-	tests/install-screen-proof/box.py,tests/install-screen-proof/box_test.py	python3 -I tests/install-screen-proof/box_test.py
 handoff	runtime-image-checks	-	600	-	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
 handoff	backends-image-check	-	600	-	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
-handoff	compose-proof-tests	-	900	-	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
+handoff	compose-proof-tests	-	900	-	tests/compose-proof/**,tests/lib/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
+handoff	update-proof-test	-	600	-	tests/update-proof/**	bash tests/update-proof/choose-test.sh && bash tests/update-proof/lib-test.sh
 handoff	tailnet-guard-tests	-	600	-	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
 handoff	dev-stack-test	1	600	dev	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,apps/cyfr/lib/mix/tasks/cyfr.locus.dev_stack.ex,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
 handoff	prebuilt-binaries-test	1	600	-	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
@@ -101,6 +102,9 @@ nightly	janitor	1	1800	-	always	scripts/janitor.sh
 # install proof's row prepares its images first, in its own row, so a
 # night whose preparation fails reads not run or failed, never passed; the
 # handle proof reads its cyfr.run checkout from CYFR_RUN_DIR, which the
-# timer's unit sets (CONTRIBUTING.md).
+# timer's unit sets (CONTRIBUTING.md); the update proof updates an install
+# of the newest published release on main's schema, or of that schema's
+# base, to main's head (tests/update-proof/run.sh).
 nightly	install-screen-proof	1	3600	-	always	tests/install-screen-proof/prepare.sh && scripts/image.sh --undated app && tests/install-screen-proof/run.sh
 nightly	handle-proof	1	3600	-	always	tests/handle-proof/run.sh
+nightly	update-proof	1	3600	-	always	tests/update-proof/run.sh

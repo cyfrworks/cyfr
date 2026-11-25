@@ -130,10 +130,16 @@ defmodule Cyfr.StackShapeTest do
       )
   end
 
-  # The kept homes at their root, and the guard's control, read-only.
+  # The kept homes at their root, the guard's control, read-only, and the
+  # machines' folder.
   defp locus_volumes(roles) do
     for(%{kept_root: root, kept_volume: volume} <- roles, root != nil, do: "#{volume}:#{root}") ++
-      ["#{@control_volume}:#{@guard_control_dir}:ro"]
+      ["#{@control_volume}:#{@guard_control_dir}:ro"] ++
+      for(
+        %{guest_root: root, guest_volume: volume} <- roles,
+        root != nil,
+        do: "#{volume}:#{root}"
+      )
   end
 
   # The keys compose hands Locus and each role's bounds: every role's key,

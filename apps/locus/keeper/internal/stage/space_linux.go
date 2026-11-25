@@ -81,6 +81,10 @@ var keptOut = map[string]bool{"proc": true, "sys": true, "dev": true, "tmp": tru
 // devices are the nodes bound from the container's /dev into a space's.
 var devices = []string{"null", "zero", "full", "random", "urandom", "tty"}
 
+// machineDevice is the node a machine's space is given beside devices,
+// for its VMM alone (Spec.Machine).
+const machineDevice = "kvm"
+
 // enter is the stage's last part: it clones the space's first process,
 // which runs the command, drops every capability of its own, installs the
 // space's filter and executes itself as the space's waiter (Wait). It
@@ -312,7 +316,7 @@ func First(probe bool) int {
 	if err != nil {
 		return fail("the stage's binary: %v", err)
 	}
-	if err := buildFiles(spec.Home); err != nil {
+	if err := buildFiles(spec.Home, spec.Machine); err != nil {
 		return fail("the space's files: %v", err)
 	}
 	if spec.Terminal {
@@ -406,8 +410,10 @@ func bind(source string, writable bool) error {
 // and, read-only, the cgroup tree whose root is the space's own group; its
 // own /dev with the container's few device nodes, its own terminals and
 // /dev/shm; its own /tmp, /var/tmp and /run; and its home, writable, at its
-// path, the only home it sees. The root itself is read-only once pivoted.
-func buildFiles(home string) error {
+// path, the only home it sees; a machine's space also its device, read
+// only at its path, and /dev/kvm. The root itself is read-only once
+// pivoted.
+func buildFiles(home, machine string) error {
 	steps := []func() error{
 		func() error { return mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, "") },
 		func() error { return mount("space", Root, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755,size=4m") },
@@ -446,12 +452,18 @@ func buildFiles(home string) error {
 			}
 			return nil
 		},
-		buildDev,
+		func() error { return buildDev(machine != "") },
 		func() error {
 			if home == "" {
 				return nil
 			}
 			return bind(home, true)
+		},
+		func() error {
+			if machine == "" {
+				return nil
+			}
+			return bindFile(machine)
 		},
 		func() error {
 			if err := unix.PivotRoot(Root, Root+"/.old"); err != nil {
@@ -510,11 +522,34 @@ func bindContainerRoot() error {
 	return nil
 }
 
+// bindFile binds the file source at the same path under Root, read only,
+// without setuid or devices.
+func bindFile(source string) error {
+	target := filepath.Join(Root, source)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_ = f.Close()
+	if err := mount(source, target, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return err
+	}
+	return setAttr(target, unix.MOUNT_ATTR_RDONLY|unix.MOUNT_ATTR_NOSUID|unix.MOUNT_ATTR_NODEV, false)
+}
+
 // buildDev fills the space's /dev: the container's null, zero, full,
-// random, urandom and tty nodes, a terminal instance of its own with its
-// ptmx, its own /dev/shm, and the usual links into /proc.
-func buildDev() error {
-	for _, node := range devices {
+// random, urandom and tty nodes, and a machine's kvm, a terminal instance
+// of its own with its ptmx, its own /dev/shm, and the usual links into
+// /proc.
+func buildDev(machine bool) error {
+	nodes := devices
+	if machine {
+		nodes = append(append([]string{}, devices...), machineDevice)
+	}
+	for _, node := range nodes {
 		target := Root + "/dev/" + node
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o666)
 		if err != nil {

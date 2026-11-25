@@ -29,9 +29,9 @@ defmodule Prima.LocusRolesTest do
                    edge_subnet edge_tailscale_address endpoint_address endpoint_ip_range
                    endpoint_network endpoint_subnet guard guard_container home_root
                    host_api_address ip_range memory network run_dir run_size service subnet)
-  @role_keys ~w(first_uid home_root home_size kept_first_uid kept_gid kept_group kept_last_uid
-                kept_root kept_volume key last_uid memory name pool port private reach run_dir
-                run_size uid user user_prefix)
+  @role_keys ~w(first_uid guest_root guest_volume home_root home_size kept_first_uid kept_gid
+                kept_group kept_last_uid kept_root kept_volume key last_uid memory name pool port
+                private reach run_dir run_size uid user user_prefix)
   @release_memory_keys ~w(byte_cost keeper_read_bytes keeper_read_copies relay_queue_bytes
                           socket_queue_bytes)
   @role_memory_keys ~w(answering fetch_head_bytes fetch_read_ahead_bytes fetch_read_bytes freed_segments_bytes unread)
@@ -127,6 +127,8 @@ defmodule Prima.LocusRolesTest do
     for role <- LocusRoles.roles() do
       kept = [role.kept_root, role.kept_volume, role.kept_uids, role.kept_group, role.kept_gid]
       assert Enum.all?(kept, &(&1 == nil)) == (role.name != :backends), "#{role.name}'s kept"
+      guest = [role.guest_root, role.guest_volume]
+      assert Enum.all?(guest, &(&1 == nil)) == (role.name != :backends), "#{role.name}'s guest"
     end
   end
 

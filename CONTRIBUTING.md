@@ -256,8 +256,10 @@ same worktree refuses, naming the run that holds it.
     the pull request's run, with that run's id,
     `scripts/stage.sh handoff --reproduce RUN tests-postgres,dialyzer
     [-- <test paths>]`, and the receipt records both;
-  - `nightly`: `scripts/janitor.sh`, then the install proof and the handle
-    proof, which no workflow runs, each on one quarter. The host's
+  - `nightly`: `scripts/janitor.sh`, then the install proof, the handle
+    proof and the update proof (an install of the newest published release
+    on main's schema, or of that schema's base, updated to main's head by
+    `cyfr update`, its header says how), which no workflow runs, each on one quarter. The host's
     timer runs it once a day on main's head through `scripts/nightly.sh`, which
     reports the night to GitHub (the nightly, below).
 

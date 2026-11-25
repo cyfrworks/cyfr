@@ -1653,12 +1653,13 @@ rm -r "$isle/_tools"
 rc=0; (cd "$isle" && TMPDIR="$S/island-tmp" scripts/locus-island.sh) >"$S/island-missing.err" 2>&1 || rc=$?
 [ "$rc" = 69 ] && grep -qF '_tools is missing' "$S/island-missing.err" || fail "a missing _tools gave $rc: $(cat "$S/island-missing.err")"
 
-begin "the real table's nightly runs the janitor, then the install and handle proofs, each on one quarter, one after another"
+begin "the real table's nightly runs the janitor, then the install, handle and update proofs, each on one quarter, one after another"
 status=0; (cd "$ROOT" && scripts/stage.sh -n nightly) >"$S/nightly-real.out" 2>"$S/nightly-real.err" || status=$?
 [ "$status" = 0 ] || fail "the nightly stage was refused: $(cat "$S/nightly-real.err")"
 grep -qxF 'would run janitor (1 quarter): scripts/janitor.sh' "$S/nightly-real.out" &&
   grep -qx 'would run install-screen-proof (1 quarter): .* && tests/install-screen-proof/run.sh' "$S/nightly-real.out" &&
-  grep -qxF 'would run handle-proof (1 quarter): tests/handle-proof/run.sh' "$S/nightly-real.out" ||
+  grep -qxF 'would run handle-proof (1 quarter): tests/handle-proof/run.sh' "$S/nightly-real.out" &&
+  grep -qxF 'would run update-proof (1 quarter): tests/update-proof/run.sh' "$S/nightly-real.out" ||
   fail "the nightly would run: $(cat "$S/nightly-real.out")"
 # The report's grammar holds no skipped row: every nightly row runs always.
 selected=$(awk -F'\t' '!/^#/ && $1 == "nightly" && $6 != "always" { print $2 }' "$ROOT/scripts/stages.tsv")
@@ -1666,8 +1667,8 @@ selected=$(awk -F'\t' '!/^#/ && $1 == "nightly" && $6 != "always" { print $2 }' 
 # The nightly runs its rows one after another in the table's order, as
 # every stage but save and handoff does, the janitor before the proofs: a
 # stand-in queue records each row's start and end and runs nothing.
-[ "$(awk -F'\t' '!/^#/ && $1 == "nightly" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')" = 'janitor install-screen-proof handle-proof ' ] ||
-  fail 'the nightly does not hold the janitor, then the install-screen and handle proofs'
+[ "$(awk -F'\t' '!/^#/ && $1 == "nightly" { print $2 }' "$ROOT/scripts/stages.tsv" | tr '\n' ' ')" = 'janitor install-screen-proof handle-proof update-proof ' ] ||
+  fail 'the nightly does not hold the janitor, then the install-screen, handle and update proofs'
 night="$S/night-repo"
 git init -q -b main "$night"
 mkdir -p "$night/scripts"

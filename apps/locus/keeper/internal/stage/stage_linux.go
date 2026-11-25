@@ -118,6 +118,9 @@ func Main() int {
 	// the credentials of the thread that calls it: the drop, the check and
 	// the exec all happen on this one.
 	runtime.LockOSThread()
+	// The keeper that started the stage, before anything can have changed
+	// it: become arms the parent-death signal again against this parent.
+	parent := os.Getppid()
 	// A space's first process and its init keep their descriptors where
 	// the stage placed them.
 	if len(os.Args) > 2 {
@@ -147,7 +150,7 @@ func Main() int {
 	if len(os.Args) > 2 {
 		switch os.Args[2] {
 		case ProbeArg:
-			if err := probe(status); err != nil {
+			if err := probe(status, parent); err != nil {
 				return fail("%v", err)
 			}
 			return 0
@@ -169,7 +172,7 @@ func Main() int {
 	if err := ownNamespace(spec.UID, spec.GID); err != nil {
 		return fail("namespace: %v", err)
 	}
-	if err := become(spec.UID, spec.GID); err != nil {
+	if err := become(spec.UID, spec.GID, parent); err != nil {
 		return fail("credentials: %v", err)
 	}
 	if spec.Reach == pool.ReachRouted {
@@ -216,7 +219,7 @@ func decodeSpec(data []byte) (Spec, error) {
 // the check a spawn's stage makes before it executes the command, installs
 // the space's filter and ends as the first process ended. It returns only
 // when a step fails.
-func probe(status *os.File) error {
+func probe(status *os.File, parent int) error {
 	specFile := os.NewFile(SpecFD, "spec")
 	data, err := io.ReadAll(io.LimitReader(specFile, 4096))
 	_ = specFile.Close()
@@ -232,7 +235,7 @@ func probe(status *os.File) error {
 	if err := ownNamespace(p.UID, p.GID); err != nil {
 		return fmt.Errorf("namespace: %w", err)
 	}
-	if err := become(p.UID, p.GID); err != nil {
+	if err := become(p.UID, p.GID, parent); err != nil {
 		return fmt.Errorf("credentials: %w", err)
 	}
 	switch {
@@ -291,13 +294,28 @@ func identityOnly(idMap []byte, id int) bool {
 // become sets every uid and gid of the process to the spawn's, as the stage
 // does for itself inside its namespace, where it holds SETUID and SETGID.
 // Its supplementary groups are the keeper's, which the keeper cleared before
-// it served, since setgroups is denied here.
-func become(uid, gid int) error {
+// it served, since setgroups is denied here. The kernel clears the
+// parent-death signal at the credential change (commit_creds), so the stage
+// arms it again and then checks that its parent is still parent, the keeper
+// that started it: a keeper that died in between left no signal to come.
+func become(uid, gid, parent int) error {
 	if err := syscall.Setresgid(gid, gid, gid); err != nil {
 		return fmt.Errorf("setresgid %d: %w", gid, err)
 	}
 	if err := syscall.Setresuid(uid, uid, uid); err != nil {
 		return fmt.Errorf("setresuid %d: %w", uid, err)
+	}
+	return armParentDeath(parent)
+}
+
+// armParentDeath has this process killed when the thread that started it
+// ends, and refuses to go on when its parent is no longer parent.
+func armParentDeath(parent int) error {
+	if err := unix.Prctl(unix.PR_SET_PDEATHSIG, uintptr(unix.SIGKILL), 0, 0, 0); err != nil {
+		return fmt.Errorf("the parent-death signal: %w", err)
+	}
+	if now := os.Getppid(); now != parent {
+		return fmt.Errorf("the keeper that started the stage, %d, has ended (its parent is now %d)", parent, now)
 	}
 	return nil
 }
