@@ -5820,8 +5820,6 @@ defmodule Aqua.ProgramTest do
 
       loop = run(ctx, turn)
       waiting!(ctx, turn)
-      # Its handler admitted and holding, so no write of its worker's is cut.
-      handler_waiting!()
       quiet!(loop.pid)
       Task.shutdown(loop, :brutal_kill)
       assert {:ok, [{:adopt, _}]} = Aqua.Runner.RecoveryTable.plan_turn(ctx, thread.id, turn.id)
@@ -9252,8 +9250,15 @@ defmodule Aqua.ProgramTest do
     )
   end
 
-  # The turn's wait has been dispatched, so it runs.
+  # The turn's wait has been dispatched and its handler holds, past the
+  # gate's admission, so nothing a test does next cuts a write of its
+  # worker's.
   defp waiting!(ctx, turn) do
+    dispatched!(ctx, turn)
+    handler_waiting!()
+  end
+
+  defp dispatched!(ctx, turn) do
     Prima.Test.Wait.wait_until(
       fn ->
         {:ok, steps} = Tape.steps(ctx, turn)
