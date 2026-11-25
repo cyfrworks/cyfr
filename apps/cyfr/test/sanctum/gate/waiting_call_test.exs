@@ -193,6 +193,19 @@ defmodule Sanctum.Gate.WaitingCallTest do
 
   defp actor, do: Prima.Actor.in_athanor(@athanor)
 
+  # `pid` has read every message sent it and waits for another.
+  defp took!(pid) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        Process.info(pid, [:message_queue_len, :status]) == [
+          message_queue_len: 0,
+          status: :waiting
+        ]
+      end,
+      5_000
+    )
+  end
+
   # The window has passed on this member's clock since `since`.
   defp window_passed(since) do
     Prima.Test.Wait.wait_until(
@@ -261,6 +274,8 @@ defmodule Sanctum.Gate.WaitingCallTest do
     task = call(setup, "check")
     assert_receive {:holding, "check", handler}, 10_000
     :ok = Sanctum.RunningTasks.wake(task.pid)
+    # The claimer has taken the wake before the handler's check answers.
+    took!(task.pid)
     send(handler, :refuse)
 
     assert {:error, reason} = Task.await(task, 10_000)
