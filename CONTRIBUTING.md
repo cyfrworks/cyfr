@@ -121,7 +121,7 @@ is done:
 into it what a `mix` boot needs and nothing sets: `CYFR_SETUP_TOKEN`, the
 runtime root and the backends key, minted as `cyfr init` mints them. Later
 runs keep every value. The builds key, which a `mix` boot refuses without
-the builds URL only the stack sets, is minted for each run unless `.env`
+the backends' URL only the stack sets, is minted for each run unless `.env`
 sets one. It then builds the tree's Locus image with `scripts/image.sh`
 when the host does not hold it already (every worktree at the same inputs
 shares one), starts the containers, and runs `mix phx.server` in the

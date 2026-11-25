@@ -1287,6 +1287,40 @@ func TestUpdateWritesTheReleasesComposeFile(t *testing.T) {
 // list the person set naming locus-runtime is left and reported by its key
 // and its line in .env as the update leaves it, with what to write there,
 // never its value.
+// cyfrBackendsURL is the CYFR_LOCUS_BACKENDS_URL the cyfr service of the
+// compose file at composePath starts with under the .env at envPath, its
+// `${NAME:-default}` read as compose reads it: .env's value unless empty,
+// else the default.
+func cyfrBackendsURL(t *testing.T, composePath, envPath string) string {
+	t.Helper()
+	var doc struct {
+		Services map[string]struct {
+			Environment []string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, composePath)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	held, err := access.ReadEnvValues(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range doc.Services["cyfr"].Environment {
+		value, ok := strings.CutPrefix(entry, "CYFR_LOCUS_BACKENDS_URL=")
+		if !ok {
+			continue
+		}
+		if inner, ok := strings.CutPrefix(value, "${CYFR_LOCUS_BACKENDS_URL:-"); ok && strings.HasSuffix(inner, "}") {
+			if set := held["CYFR_LOCUS_BACKENDS_URL"]; set != "" {
+				return set
+			}
+			return strings.TrimSuffix(inner, "}")
+		}
+		return value
+	}
+	return held["CYFR_LOCUS_BACKENDS_URL"]
+}
+
 func TestUpdateFromThreeContainers(t *testing.T) {
 	old := lastReleaseCompose(t)
 	s := newUpdateScenario(t, []byte(old), nil)
@@ -1315,6 +1349,12 @@ func TestUpdateFromThreeContainers(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); got != string(switched(shippedCompose(t))) {
 		t.Errorf("the switched docker-compose.yml is not the release's, pinned:\n%s", got)
+	}
+	// The first start after the update: the release's cyfr holds the
+	// backends' URL beside the builds key it kept, so its boot never
+	// refuses the key alone.
+	if url := cyfrBackendsURL(t, filepath.Join(s.project, "docker-compose.yml"), filepath.Join(s.project, ".env")); url == "" {
+		t.Error("the updated stack's cyfr would start with the builds key and no CYFR_LOCUS_BACKENDS_URL")
 	}
 	log := s.log()
 	for _, call := range []string{profiles + "stop caddy", profiles + "stop cyfr", profiles + "stop"} {
