@@ -524,9 +524,9 @@ func caskOffer() (version, sum string, err error) {
 }
 
 // replaceExecutable writes binary beside self, synced and with self's
-// mode, and renames it over self, so self is the old binary or the new one
-// whole; renaming over a running binary is allowed where writing into it is
-// not. Windows cannot rename over a running executable, so there the old
+// mode and owner (keepOwner), and renames it over self, so self is the old
+// binary or the new one whole; renaming over a running binary is allowed
+// where writing into it is not. Windows cannot rename over a running executable, so there the old
 // one is renamed aside first and back again if the new one does not land;
 // the one set aside is removed by the next install.
 func replaceExecutable(self string, binary []byte) error {
@@ -540,7 +540,7 @@ func replaceExecutable(self string, binary []byte) error {
 	}
 	defer os.Remove(tmp.Name())
 	_, err = tmp.Write(binary)
-	if err = errors.Join(err, tmp.Chmod(mode), tmp.Sync(), tmp.Close()); err != nil {
+	if err = errors.Join(err, tmp.Chmod(mode), tmp.Sync(), tmp.Close(), keepOwner(tmp.Name(), self)); err != nil {
 		return err
 	}
 	if runtime.GOOS != "windows" {

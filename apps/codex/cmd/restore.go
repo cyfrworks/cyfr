@@ -333,7 +333,7 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	// Run as root through sudo, what the restore writes of the project goes
 	// back to the person who ran sudo, after the lock is released, on every
 	// way out.
-	defer returnToSudoAccount(snap, errOut)
+	defer returnToSudoAccount("restore", append(slices.Clone(snap.manifest.Scaffold), ".cyfr"), errOut)
 	// The lock an up, an update and an access change hold too, held from
 	// before the first docker call to the restore's end; a change recovery
 	// could not finish leaves the stack in no known state, and the restore

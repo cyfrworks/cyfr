@@ -62,6 +62,13 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("cyfr backup needs docker on PATH to read the stack; nothing was done")
 	}
+	u := &updater{ctx: ctx, command: "backup", out: out, errOut: errOut,
+		compose: &composePlan{path: "docker-compose.yml", original: original}}
+	var managed []string
+	// Run as root through sudo, what the backup writes of the project goes
+	// back to the person who ran sudo, after the lock is released, on
+	// every way out.
+	defer func() { returnToSudoAccount("backup", append(slices.Clone(managed), u.stateWritten()...), errOut) }()
 	e, unlock, receipts, err := openLocked(ctx, "backup", out)
 	if err != nil {
 		return err
@@ -70,12 +77,10 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	if err := refuseUnfinished(receipts); err != nil {
 		return err
 	}
-	head, err := e.Head()
-	if err != nil {
+	if u.head, err = e.Head(); err != nil {
 		return engineFailure(err)
 	}
-	u := &updater{ctx: ctx, command: "backup", out: out, errOut: errOut, engine: e, head: head,
-		compose: &composePlan{path: "docker-compose.yml", original: original}}
+	u.engine = e
 	listRunning := func() error {
 		ctx, cancel := context.WithTimeout(ctx, composeRunTimeout)
 		defer cancel()
@@ -92,7 +97,7 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 			return errBackupInterrupted
 		}
 	}
-	managed, err := managedPresent()
+	managed, err = managedPresent()
 	if err != nil {
 		return err
 	}
@@ -364,6 +369,24 @@ func (u *updater) takeSnapshot(release string, managed []string) error {
 		d.Close()
 	}
 	return nil
+}
+
+// stateWritten names, as project paths, what an update or a backup writes
+// of the project besides scaffold files, which a run through sudo gives
+// back (returnToSudoAccount): the engine's state under .cyfr/, which the
+// stack's lock writes, backups/.gitignore with backups/, and the snapshot
+// directory takeSnapshot made.
+func (u *updater) stateWritten() []string {
+	written := []string{".cyfr", filepath.Join("backups", ".gitignore")}
+	if u.snapshot == "" {
+		return written
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(wd, u.snapshot); err == nil && filepath.IsLocal(rel) {
+			written = append(written, rel)
+		}
+	}
+	return written
 }
 
 // backupsIgnore is backups/.gitignore: nothing under backups/ is tracked.

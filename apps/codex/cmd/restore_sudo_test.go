@@ -131,7 +131,7 @@ func TestRestoreGivesNothingBackThroughALink(t *testing.T) {
 	}
 	changed := chownStandIn(t, "4242", "4343", "")
 	var out bytes.Buffer
-	returnToSudoAccount(&snapshotFiles{manifest: snapshotManifest{Scaffold: []string{"wit/cyfr/added.wit"}}}, &out)
+	returnToSudoAccount("restore", []string{"wit/cyfr/added.wit"}, &out)
 	if want := map[string][2]int{"wit": {4242, 4343}}; !maps.Equal(changed, want) {
 		t.Errorf("the restore gave back %v, want %v", changed, want)
 	}
@@ -153,7 +153,7 @@ func TestRestoreRefusesASudoAccountNotInSudosForm(t *testing.T) {
 			}
 			changed := chownStandIn(t, ids[0], ids[1], "")
 			var out bytes.Buffer
-			returnToSudoAccount(&snapshotFiles{}, &out)
+			returnToSudoAccount("restore", nil, &out)
 			want := "Warning: SUDO_UID and SUDO_GID must each be a plain decimal number, and they are \"" + ids[0] + "\" and \"" + ids[1] + "\", so nothing the restore wrote was given back to the account that ran sudo.\n"
 			if out.String() != want || len(changed) != 0 {
 				t.Errorf("the restore said %q and gave back %v; want %q and nothing", out.String(), changed, want)

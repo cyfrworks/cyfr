@@ -306,6 +306,16 @@ func runHomeUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) 
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
 	u := &updater{ctx: ctx, command: "update", version: v, out: out, errOut: errOut}
+	// Run as root through sudo, what the update writes of the project goes
+	// back to the person who ran sudo, after the lock is released, on
+	// every way out.
+	defer func() {
+		var written []string
+		if u.scaffold != nil {
+			written = u.scaffold.Managed()
+		}
+		returnToSudoAccount("update", append(written, u.stateWritten()...), errOut)
+	}()
 	if err := u.fetchManifest(); err != nil {
 		return err
 	}
@@ -1561,9 +1571,12 @@ func (u *updater) readConfig() error {
 			if v.Type != "bind" || v.Source == "" {
 				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr %s cannot snapshot; nothing was changed", root, v.Type, target, u.command)
 			}
-			resolved, err := filepath.EvalSymlinks(v.Source)
-			info, statErr := os.Stat(resolved)
-			if err != nil || statErr != nil || !(info.IsDir() || info.Mode().IsRegular()) {
+			what := fmt.Sprintf("the mount %s under the storage root (on the host %s)", target, v.Source)
+			resolved, info, err := u.readable(v.Source, what, func(info os.FileInfo) bool { return info.IsDir() || info.Mode().IsRegular() })
+			if err != nil {
+				return nil, err
+			}
+			if info == nil {
 				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr %s cannot snapshot it; nothing was changed", target, v.Source, u.command)
 			}
 			nested = append(nested, storageMount{rel: n.rel, host: resolved, dir: info.IsDir()})
@@ -1595,8 +1608,12 @@ func (u *updater) readConfig() error {
 		if !ok {
 			return fmt.Errorf("The SQLite database %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dbPath, u.command)
 		}
-		resolved, err := filepath.EvalSymlinks(host)
-		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.Mode().IsRegular() {
+		what := fmt.Sprintf("the SQLite database %s (on the host %s)", dbPath, host)
+		resolved, info, err := u.readable(host, what, func(info os.FileInfo) bool { return info.Mode().IsRegular() })
+		if err != nil {
+			return err
+		}
+		if info == nil {
 			return fmt.Errorf("The SQLite database %s (on the host %s) is not a readable file, so cyfr %s cannot snapshot it; nothing was changed", dbPath, host, u.command)
 		}
 		c.sqliteFile = resolved
@@ -1626,8 +1643,12 @@ func (u *updater) readConfig() error {
 		}
 		// Resolved, so a root reached through a link is copied, not linked,
 		// and the SQLite file under it is recognized.
-		resolved, err := filepath.EvalSymlinks(host)
-		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.IsDir() {
+		what := fmt.Sprintf("the storage root %s (on the host %s)", dataPath, host)
+		resolved, info, err := u.readable(host, what, func(info os.FileInfo) bool { return info.IsDir() })
+		if err != nil {
+			return err
+		}
+		if info == nil {
 			return fmt.Errorf("The storage root %s (on the host %s) is not a readable directory, so cyfr %s cannot snapshot it; nothing was changed", dataPath, host, u.command)
 		}
 		nested, err := nestedMounts(dataPath)
@@ -1680,6 +1701,43 @@ var keyringSettings = []string{"CYFR_CRYPTO_KEYRING", "CYFR_SECRET_KEY_BASE"}
 // s3OutsideSnapshot is the stated limit of a snapshot of a cell whose store
 // is S3.
 const s3OutsideSnapshot = "The object store (S3) is outside the snapshot; it relies on the bucket's own versioning."
+
+// readable resolves the host path p, which the snapshot copies, and
+// answers it with its information where accept takes it and this account
+// may read it (canRead); no information, with no error, where it is not
+// there or accept refuses it. One this account is refused, which root
+// reads, is the refusal that names sudo (asRoot): what names it.
+func (u *updater) readable(p, what string, accept func(os.FileInfo) bool) (string, os.FileInfo, error) {
+	resolved, err := filepath.EvalSymlinks(p)
+	var info os.FileInfo
+	if err == nil {
+		info, err = os.Stat(resolved)
+	}
+	if err == nil && !accept(info) {
+		return "", nil, nil
+	}
+	if err == nil {
+		err = canRead(resolved, info.IsDir())
+	}
+	switch {
+	case closedToYou(err):
+		return "", nil, u.asRoot(what)
+	case err != nil:
+		return "", nil, nil
+	}
+	return resolved, info, nil
+}
+
+// asRoot is the refusal of storage this account may not read, said
+// before anything stops: the command this program would run as root,
+// by its own path, since sudo's PATH may not hold the folder it is in.
+func (u *updater) asRoot(what string) error {
+	self, err := selfExecutable()
+	if err != nil {
+		self = "cyfr"
+	}
+	return fmt.Errorf("cyfr %s cannot read %s as you: the server's container owns CYFR's storage once the stack has run, so run 'sudo %s %s' in this folder; nothing was changed", u.command, what, self, u.command)
+}
 
 // serviceSetting answers a service's environment setting, trimmed; empty
 // when unset.

@@ -25,6 +25,36 @@ import (
 // entries in the directory dir and enter it, as the put-back does.
 func canReplaceIn(dir string) error { return unix.Access(dir, unix.W_OK|unix.X_OK) }
 
+// canRead reports whether this process may read the file p, or list and
+// enter it when it is a directory, as a snapshot copies it.
+func canRead(p string, dir bool) error {
+	mode := uint32(unix.R_OK)
+	if dir {
+		mode |= unix.X_OK
+	}
+	return unix.Access(p, mode)
+}
+
+// closedToYou reports whether err is this account being refused a path
+// root would read: once the stack has run, the server's container owns
+// CYFR's storage, and sudo reads it.
+func closedToYou(err error) bool { return errors.Is(err, fs.ErrPermission) && restoreEuid() != 0 }
+
+// keepOwner gives tmp, the file that replaces self, self's owner when this
+// process is root, before tmp is renamed over self: a cyfr update run
+// through sudo leaves the person's program the person's, and root's
+// root's. A self that does not exist has no owner to keep.
+func keepOwner(tmp, self string) error {
+	if restoreEuid() != 0 {
+		return nil
+	}
+	var st unix.Stat_t
+	if err := unix.Stat(self, &st); err != nil {
+		return nil
+	}
+	return restoreChownAt(unix.AT_FDCWD, tmp, tmp, int(st.Uid), int(st.Gid))
+}
+
 // What returnToSudoAccount reads of this process and the files, and how it
 // changes an owner; tests stand in for them. Both file calls act on the
 // entry name in the directory dirfd, never following a link; path is the
@@ -71,37 +101,39 @@ func sudoAccount() (uid, gid int, ok bool, err error) {
 	return uid, gid, uid != 0, nil
 }
 
-// returnToSudoAccount gives the project files a restore run through sudo
+// returnToSudoAccount gives the project files a command run through sudo
 // wrote back to the account that ran sudo, so the person's own commands
-// read them afterwards: .env, docker-compose.yml, the scaffold files with
-// the directories made for them, and the engine's state under .cyfr/, each
-// entry root owns. The storage root and the database stay as the put-back
-// left them: the image's entrypoint hands them to the image's user at the
-// next start. Nothing is given back through a link, at any level of its
-// path, so no entry outside the project changes owner. What is not given
-// back is said, and the restore's outcome stands.
-func returnToSudoAccount(snap *snapshotFiles, errOut io.Writer) {
+// read them afterwards: .env, docker-compose.yml, and each of written, a
+// project path, with the directories it lies in and, for a directory,
+// every entry under it (a restore's scaffold files and the engine's state
+// under .cyfr/; an update's and a backup's besides, backups/ and the
+// snapshot), each entry root owns. The storage root and the database stay
+// as the command left them: the image's entrypoint hands them to the
+// image's user at the next start. Nothing is given back through a link, at
+// any level of its path, so no entry outside the project changes owner.
+// What is not given back is said, and the command's outcome stands.
+func returnToSudoAccount(command string, written []string, errOut io.Writer) {
 	uid, gid, ok, err := sudoAccount()
 	if err != nil {
-		fmt.Fprintf(errOut, "Warning: %v, so nothing the restore wrote was given back to the account that ran sudo.\n", err)
+		fmt.Fprintf(errOut, "Warning: %v, so nothing the %s wrote was given back to the account that ran sudo.\n", err, command)
 		return
 	}
 	if !ok {
 		return
 	}
 	paths := []string{".env", "docker-compose.yml"}
-	for _, name := range snap.manifest.Scaffold {
+	for _, name := range written {
 		for p := name; p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
 			paths = append(paths, p)
 		}
+		// WalkDir lists a link without entering it.
+		_ = filepath.WalkDir(name, func(p string, _ fs.DirEntry, err error) error {
+			if err == nil {
+				paths = append(paths, p)
+			}
+			return nil
+		})
 	}
-	// WalkDir lists a link without entering it.
-	_ = filepath.WalkDir(".cyfr", func(p string, _ fs.DirEntry, err error) error {
-		if err == nil {
-			paths = append(paths, p)
-		}
-		return nil
-	})
 	seen := map[string]bool{}
 	for _, p := range paths {
 		if seen[p] {
