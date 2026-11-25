@@ -43,8 +43,8 @@
 #     a service the new file does not declare and no network it does not
 #     use, and cyfr runs the new release's image, which the compose file
 #     names by its digest;
-#   - the person comes in again by the same door as the same person and
-#     their message is served; the program, started again, finds its file
+#   - the person is still signed in by the session from before the update
+#     and their message is served; the program, started again, finds its file
 #     in its kept home under the uid it had; a build runs;
 #   - the update's snapshot says it is complete, every file of it is the
 #     person's, and its database copy passes PRAGMA integrity_check and
@@ -518,25 +518,6 @@ build_runs() {
   ok "$1 built $BUILD_REF through the builds role ($id)"
 }
 
-# The fixture's device records (its devices' keys, in the server's /tmp)
-# kept across the update, as a person's device keeps its key while the
-# server's container is replaced.
-devices_out() {
-  local name
-  rm -rf "$PROOF/devices" && mkdir -m 700 "$PROOF/devices"
-  for name in $(docker exec "$cyfr_id" sh -c 'cd /tmp && ls device-*.json 2>/dev/null' || true); do
-    docker cp "$cyfr_id:/tmp/$name" "$PROOF/devices/$name" >/dev/null || fail "the device record $name could not be kept"
-  done
-  [ -n "$(ls -A "$PROOF/devices")" ] || fail "the server holds no device record of the fixture's"
-}
-devices_in() {
-  local file
-  for file in "$PROOF/devices"/*; do
-    docker cp "$file" "$cyfr_id:/tmp/${file##*/}" >/dev/null || fail "the device record ${file##*/} could not be put back"
-  done
-  docker exec -u 0 "$cyfr_id" sh -c 'chown app /tmp/device-*.json && chmod 600 /tmp/device-*.json' || fail "the device records could not be given to the server's user"
-}
-
 # ---------------------------------------------------------------------------
 # The readings after the update
 # ---------------------------------------------------------------------------
@@ -620,13 +601,16 @@ print("\n".join(sorted({n for s in project["services"].values() for n in (s.get(
   done
   ok "the update's sentences hold: it updated to $NEW_VERSION, and what it says it removed is gone"
 
-  devices_in
-  signed_in="$(fixture "$ROOT" person update-proof)"
-  [ "$(jget "$signed_in" user_id)" = "$PERSON" ] || fail "after the update the same door admits someone else: '$signed_in'"
+  # The session the person signed in with before the update: a person
+  # stays signed in across it, and every call below is made under it.
+  signed_in="$(docker exec -u app "$cyfr_id" /app/bin/cyfr rpc "case Sanctum.Caller.establish({:session, \"$TOKEN\"}) do
+      {:ok, ctx} -> IO.puts(\"PERSON=#{ctx.user_id}\")
+      other -> IO.puts(\"PERSON=#{inspect(other)}\")
+    end" | sed -n 's/^PERSON=//p')"
+  [ "$signed_in" = "$PERSON" ] || fail "after the update the person's session opens as '$signed_in', not $PERSON"
   thread_answer="$(fixture "$ROOT" thread_read "$PERSON" "$THREAD")"
   grep -qF "$MARK" <<<"$(jget "$thread_answer" contents)" || fail "release $NEW_VERSION does not serve the person's message $MARK: '$thread_answer'"
-  TOKEN="$(jget "$signed_in" token)"
-  ok "the person $PERSON comes in again by the same door, and their message $MARK is served"
+  ok "the person $PERSON is still signed in by the session from before the update, and their message $MARK is served"
 }
 
 # The update's snapshot: complete, every file the person's, and its
@@ -777,7 +761,6 @@ THREAD="$(jget "$written" thread_id)"
 ok "release $OLD_VERSION runs $before_services; the person $PERSON wrote $MARK"
 program_make
 build_runs "release $OLD_VERSION" "$OLD_TREE"
-devices_out
 
 step "cyfr update to $NEW_VERSION, as the person"
 update_status=0
