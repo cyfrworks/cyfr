@@ -370,7 +370,8 @@ stack_healthy() {
 fixture() {
   local tree="$1" args="" arg
   shift
-  docker cp "$tree/tests/release-boot/fixture.exs" "$cyfr_id:/tmp/fixture.exs" >/dev/null
+  # Written as the server's user, whatever mode the tree's copy has.
+  docker exec -i -u app "$cyfr_id" sh -c 'cat >/tmp/fixture.exs' <"$tree/tests/release-boot/fixture.exs" || return 0
   for arg in "$@"; do
     args="$args\"$(printf '%s' "$arg" | sed 's/[\\"#]/\\&/g')\","
   done
@@ -381,7 +382,7 @@ fixture() {
 # The value at path `$2...` of the JSON `$1`: a string as itself, anything
 # else as JSON, null for a step that is not there.
 jget() {
-  printf '%s' "$1" | python3 -I -c '
+  printf '%s' "${1:-null}" | python3 -I -c '
 import json, sys
 value = json.load(sys.stdin)
 for step in sys.argv[1:]:
