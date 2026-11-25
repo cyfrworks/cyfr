@@ -632,7 +632,7 @@ defmodule Opus.Schedules.ProviderTest do
       assert recurring.cron_expression == "0 * * * *"
     end
 
-    test "a paused one whose time passed keeps that time when resumed, so it fires at once",
+    test "a paused one whose time passed is due now when resumed, so it fires at once",
          %{ctx: ctx} do
       {:ok, created} = once!(ctx, DateTime.to_iso8601(ahead(7200)))
 
@@ -648,13 +648,32 @@ defmodule Opus.Schedules.ProviderTest do
         Ecto.Query.from(s in Arca.Schemas.CronSchedule, where: s.id == ^created.schedule_id)
         |> Arca.Repo.update_all(set: [next_run_at: passed])
 
+      before = DateTime.utc_now()
+
       assert {:ok, %{status: "active"}} =
                Provider.handle("schedule", ctx, %{
                  "action" => "resume",
                  "schedule_id" => created.schedule_id
                })
 
-      assert DateTime.compare(row!(created.schedule_id).next_run_at, passed) == :eq
+      # Due now, a time no earlier fire of it holds; a time still ahead
+      # stays where it was.
+      resumed = row!(created.schedule_id).next_run_at
+      assert DateTime.compare(resumed, before) != :lt
+      assert DateTime.compare(resumed, DateTime.utc_now()) != :gt
+
+      {:ok, ahead} = once!(ctx, DateTime.to_iso8601(ahead(7200)))
+      at = row!(ahead.schedule_id).next_run_at
+
+      for action <- ~w(pause resume) do
+        assert {:ok, _} =
+                 Provider.handle("schedule", ctx, %{
+                   "action" => action,
+                   "schedule_id" => ahead.schedule_id
+                 })
+      end
+
+      assert row!(ahead.schedule_id).next_run_at == at
     end
 
     test "a maker or a thread in the arguments is never read", %{ctx: ctx} do
