@@ -551,3 +551,21 @@ func TestABindOfTheRootsOwnFilesystemStaysOutOfTheDevice(t *testing.T) {
 		t.Fatalf("the device holds %q, want %q", got, want)
 	}
 }
+
+// A machine's VMM reads the device under a uid of its own, in no group of
+// the keeper's: the device is readable by every uid and written by none.
+func TestTheDeviceIsReadableByAnyUIDAndWritableByNone(t *testing.T) {
+	mk, _ := testMaker(t)
+	dev, made, err := mk.Device()
+	if err != nil || !made {
+		t.Fatalf("made %v: %v", made, err)
+	}
+	defer dev.Close()
+	info, err := os.Stat(dev.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("the device's mode is %s, not -rw-r--r--", info.Mode().Perm())
+	}
+}

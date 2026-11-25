@@ -297,8 +297,10 @@ func (mk Maker) make(path string) error {
 		_ = f.Close()
 	}
 	if err == nil {
-		// The VMM reads it as the keeper's group (Config.UID).
-		err = os.Chmod(tmp, 0o640)
+		// Every machine's VMM reads it under a uid of its own, and only the
+		// keeper writes it: it holds the image's programs, which every space
+		// reads already.
+		err = os.Chmod(tmp, 0o644)
 	}
 	if err == nil {
 		err = os.Rename(tmp, path)
