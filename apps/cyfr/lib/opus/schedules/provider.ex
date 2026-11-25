@@ -56,9 +56,11 @@ defmodule Opus.Schedules.Provider do
 
   `create`, `update`, `pause`, `resume` and `delete` take the in-chain
   plane as well; `re_resolve` stays external. A chain's call is a turn's
-  own or nothing (`:not_in_a_turn`): the open turn the gate's lineage
-  names, in the caller's athanor, asked for by its person, whose root made
-  the call, so no component a turn started writes a schedule. Such a turn
+  own or nothing: the open turn the gate's lineage names, in the caller's
+  athanor, asked for by its person, whose root made the call. A
+  component's call, one whose parent is not its root or that names no
+  turn, is refused `:schedule_by_component`, and one naming a turn no
+  longer open `:not_in_a_turn`. Such a turn
   is the person's for a line for Aqua when it runs under a sign-in with no
   key and no frame and started from the person or from a schedule's fire.
   A schedule a turn makes records the turn's agent as its `maker` and,
@@ -1038,7 +1040,9 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  defp own_turn(_ctx, _args), do: {:error, :not_in_a_turn}
+  # A chain's call that is not a turn's own: a component's, whether a
+  # turn started it or a key's run did.
+  defp own_turn(_ctx, _args), do: {:error, :schedule_by_component}
 
   # The room a turn works in: a workspace thread is its own, a member's
   # thread works under its parent, and a daily thread is none, which a

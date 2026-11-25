@@ -1429,11 +1429,76 @@ defmodule Aqua.ScheduleTurnsTest do
 
       # No open turn of that thread has that root.
       assert create(chain, Map.merge(args, lineage)) == {:error, :not_in_a_turn}
-      # A chain's call whose parent is not its root is a component's.
-      assert create(chain, Map.merge(args, %{lineage | "parent_execution_id" => "exec_child"})) ==
-               {:error, :not_in_a_turn}
+
+      # A chain's call whose parent is not its root is a component's, and
+      # so is one that names no turn: a key's run of a component. Each is
+      # told in words of its own.
+      for component <- [
+            Map.merge(args, %{lineage | "parent_execution_id" => "exec_child"}),
+            args
+          ] do
+        assert {:error, :schedule_by_component} = refused = create(chain, component)
+
+        assert Aqua.Ops.render_refusal(elem(refused, 1)) ==
+                 "A component cannot make or change a schedule; Aqua or one of its members does, in its own turn"
+      end
 
       assert {:ok, []} = CronSchedule.list(actor(ctx), kind: "schedule")
+    end
+  end
+
+  describe "an athanor made before a turn could schedule" do
+    @writes ~w(schedule.create schedule.delete schedule.get schedule.pause schedule.resume schedule.update)
+
+    # Whether Aqua's grant covers its list as a turn's start holds it to.
+    defp covered(ctx) do
+      {:ok, authority} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+      {:ok, %{agent: agent}} = Compendium.agent_snapshot(ctx, Prima.AgentRef.soul_name())
+      {agent.tools, Aqua.Loop.Turn.consented(ctx, authority, agent.tools, [])}
+    end
+
+    test "keeps its soul and grant until the person restores the shipped soul; its grant then reads changed, naming the six schedule actions added",
+         %{ctx: ctx} do
+      soul = Prima.AgentRef.soul_name()
+
+      # As it stood before this release: the soul's list without the six,
+      # and Aqua's grant given for that list.
+      {:ok, _} =
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "update",
+          "name" => soul,
+          "tools_remove" => @writes
+        })
+
+      :ok = Cyfr.Test.AquaTool.grant!(ctx)
+      {before, :ok} = covered(ctx)
+      assert @writes -- before == @writes
+
+      # The person restores the soul to what ships, from the Aqua page:
+      # Aqua's grant no longer covers it, and what is asked again names the
+      # six, added, and nothing else.
+      {:ok, _} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "reset", "name" => soul})
+      {:ok, %{agent: %{tools: now}}} = Compendium.agent_snapshot(ctx, soul)
+      assert @writes -- now == []
+
+      assert {:error,
+              {:consent_required,
+               %{
+                 cause: :shape_moved,
+                 ref: "agent:local.aqua",
+                 shape_diff: [%{capability: "tools", change: :widened, added: moved, removed: []}]
+               }}} = Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+      assert Enum.sort(moved) == @writes
+
+      # The grant sheet's plan names the same, under what changed.
+      {:ok, plan} =
+        Sanctum.Consent.Plan.plan(ctx, %{ref: Prima.AgentRef.soul_ref(), label: "default"})
+
+      assert [%{change: :widened, added: added, removed: []}] =
+               Enum.filter(plan.shape_diff, &(&1.capability == "tools"))
+
+      assert Enum.sort(added) == @writes
     end
   end
 

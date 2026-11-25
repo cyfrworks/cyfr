@@ -700,6 +700,14 @@ defmodule Prima.Refusal do
       {:forbidden,
        "Only you, signed in or through Aqua's turn, can give a schedule a line for Aqua or change it"}
 
+  # A schedule is made or changed from a chain only by a turn's own call
+  # (`Opus.Schedules.Provider`): a component a turn or a key started is
+  # not Aqua or a crew member.
+  defp row(:schedule_by_component),
+    do:
+      {:forbidden,
+       "A component cannot make or change a schedule; Aqua or one of its members does, in its own turn"}
+
   # A schedule's update made against a definition the schedule no longer
   # has (`Arca.CronSchedule.update/4`'s `definition:`).
   defp row(:schedule_changed),
