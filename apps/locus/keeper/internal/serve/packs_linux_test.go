@@ -288,3 +288,132 @@ func TestASpaceSeesItsPersonsPacksReadOnly(t *testing.T) {
 	k.release(t, spawned["spawn_id"].(string))
 	k.releasedPair(t, spawned["spawn_id"].(string))
 }
+
+// Whose packs a spawn binds is decided at its claim of its place, under
+// the one lock: a spawn naming another athanor's packs than its place's
+// is refused and its place freed, and from a claim naming packs no assign
+// gives the place another athanor, so the athanor checked is the athanor
+// bound. None needs root.
+func TestAClaimedPlaceKeepsItsPacksAthanor(t *testing.T) {
+	me := os.Getuid()
+	kept := &home.Kept{Root: t.TempDir(), First: me, Last: me}
+	s, c, replies := channelServer(t, kept)
+	s.packs = packview.New(filepath.Join(kept.Root, packview.DirName))
+	handle := func(line string) map[string]any {
+		t.Helper()
+		s.handle(c, parsed(t, line))
+		got, _, err := replies.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		_ = json.Unmarshal(got, &m)
+		return m
+	}
+	packs := &protocol.SpawnPacks{Athanor: testAthanor, Digest: setDigest("claim")}
+	if r := handle(`{"v":6,"type":"place","id":"p1","kind":"program","athanor":"` + testAthanor + `"}`); r["type"] != protocol.TypePlaced {
+		t.Fatalf("place: %v", r)
+	}
+	if got := s.claimPlace(c, &protocol.Request{Place: "p1", Packs: packs}); got != claimed {
+		t.Fatalf("a claim naming its place's athanor's packs: %v", got)
+	}
+	if r := handle(`{"v":6,"type":"assign","id":"a1","place":"p1","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypeError || r["code"] != protocol.CodeBadRequest {
+		t.Fatalf("an assign of another athanor to a place whose spawn binds packs: %v", r)
+	}
+	s.mu.Lock()
+	whose := c.places["p1"].whose.Athanor
+	s.mu.Unlock()
+	if whose != testAthanor {
+		t.Fatalf("the place is %s's", whose)
+	}
+	if r := handle(`{"v":6,"type":"assign","id":"a2","place":"p1","kind":"program","athanor":"` + testAthanor + `","subject":"prg_2"}`); r["type"] != protocol.TypeAssigned {
+		t.Fatalf("an assign keeping the athanor: %v", r)
+	}
+
+	if r := handle(`{"v":6,"type":"place","id":"p2","kind":"program","athanor":"ath_other"}`); r["type"] != protocol.TypePlaced {
+		t.Fatalf("place: %v", r)
+	}
+	if got := s.claimPlace(c, &protocol.Request{Place: "p2", Packs: packs}); got != claimOthersPacks {
+		t.Fatalf("a claim naming another athanor's packs: %v", got)
+	}
+	s.mu.Lock()
+	_, held := c.places["p2"]
+	s.mu.Unlock()
+	if held {
+		t.Fatal("a place whose claim named another athanor's packs stays")
+	}
+}
+
+// A generation goes with its place's final release: while processes of a
+// spawn outlive its group's removal, which is retried, its place and its
+// generation stay through another start's hold, and the retry that removes
+// the group lets it go.
+func TestAGenerationGoesWithItsPlacesFinalRelease(t *testing.T) {
+	k := keptKeeper(t)
+	store := packview.New(filepath.Join(k.s.cfg.Kept.Root, packview.DirName))
+	k.s.packs = store
+	uid := testKeptFirst
+	path := filepath.Join(k.s.cfg.Kept.Root, "vlt_final")
+	if made := k.homeRequest(t, protocol.TypeHomeMake, "m1", path, uid); made["type"] != protocol.TypeHomeMade {
+		t.Fatalf("home_make: %v", made)
+	}
+	// The generation is on disk and held by no hold: only the spawn holds it.
+	digest := setDigest("final")
+	gen := store.Path(testAthanor, digest)
+	if err := os.MkdirAll(filepath.Join(gen, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gen, "p", "a"), []byte("a\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{store.Dir(), filepath.Dir(gen)} {
+		_ = os.Chmod(d, 0o711)
+	}
+	k.s.handle(k.c, parsed(t, `{"v":6,"type":"place","id":"k1","kind":"program","athanor":"`+testAthanor+`"}`))
+	if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("place: %v", placed)
+	}
+	req := keptRequest(t, k.attach, "k1", `cat /run/cyfr/scrolls/p/a; echo ready; sleep 60`, path, nil)
+	req.Packs = &protocol.SpawnPacks{Athanor: testAthanor, Digest: digest}
+	k.s.handleSpawn(k.c, req)
+	spawned := k.reply(t)
+	if spawned["type"] != protocol.TypeSpawned {
+		t.Fatalf("spawn: %v", spawned)
+	}
+	spawnID := spawned["spawn_id"].(string)
+	rc := k.accept(t)
+	rc.readUntil(t, func() bool { return strings.Contains(string(rc.got[frame.StreamStdout]), "ready\n") })
+	k.s.mu.Lock()
+	sp := k.s.spawns[spawnID]
+	k.s.mu.Unlock()
+
+	allow := removalRefused(t)
+	k.release(t, spawnID)
+	awaitRetired(t, sp)
+	if told := k.toldSoFar(t); len(told) != 1 || told[0]["type"] != protocol.TypeExited {
+		t.Fatalf("a spawn whose group stays was told %v; want its exit and no release", told)
+	}
+	hold := func(lifetime, d string) map[string]any {
+		t.Helper()
+		k.s.handle(k.c, packsLine(t, map[string]any{"type": protocol.TypePacksHold, "id": "h", "athanor": testAthanor, "lifetime": lifetime, "digest": d}))
+		return k.reply(t)
+	}
+	if r := hold("lt_2", setDigest("other")); r["state"] != protocol.PacksMissing {
+		t.Fatalf("another start's hold: %v", r)
+	}
+	if _, err := os.Stat(filepath.Join(gen, "p", "a")); err != nil {
+		t.Fatalf("the generation of a spawn whose group stays went at another start's hold: %v", err)
+	}
+
+	allow()
+	k.s.retryRemovals()()
+	if r := k.reply(t); r["type"] != protocol.TypeReleased || r["spawn_id"] != spawnID {
+		t.Fatalf("the retry that removed the group told %v", r)
+	}
+	if r := hold("lt_3", setDigest("other")); r["state"] != protocol.PacksMissing {
+		t.Fatalf("the next hold: %v", r)
+	}
+	if _, err := os.Stat(gen); !os.IsNotExist(err) {
+		t.Fatalf("the generation outlived its place's final release: %v", err)
+	}
+}

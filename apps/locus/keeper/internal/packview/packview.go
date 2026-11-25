@@ -24,8 +24,10 @@
 // lands and from each file as it lands: a first entry that is not the
 // manifest, a manifest that does not read or names a path twice, a set
 // past MaxSetFiles or MaxSetBytes, a pack past MaxPackFiles or
-// MaxPackBytes, a path past MaxPathBytes or with an empty, "." or ".."
-// segment, a pack's record (RecordName at a pack's root), an entry that is
+// MaxPackBytes (each size checked before it is added: a negative one, or
+// one that would carry a sum past its bound, is refused), a path inside its
+// pack past MaxPathBytes, as the store counts it, or with an empty, "." or
+// ".." segment, a pack's record (RecordName at a pack's root), an entry that is
 // not a regular file (a link, a folder, a device), a mode beyond the
 // executable bit, a file the manifest does not name or names otherwise
 // (size, SHA-256, executable bit), and a file named twice. At the last part
@@ -41,9 +43,11 @@
 // generation for HoldFor; a live spawn that names a generation holds it
 // from its Acquire to its release. At each hold the keeper removes every
 // generation of that athanor but the one named that no hold and no live
-// spawn holds, and every put folder of it no put in progress writes. A
-// put idle for IdleFor, or whose owner ended, is dropped with its folder;
-// the keeper's start removes every put folder left by an earlier keeper.
+// spawn holds. At most one put of an athanor is in progress, and MaxPuts
+// in all; a put is dropped with its folder IdleFor after its last part,
+// HoldFor after its first, or at its owner's end. A put's folder is made
+// with its registration in one step, so the keeper's start removes every
+// one an earlier keeper left by its name alone (Sweep).
 //
 // The store's folder is made by the first put, not at the keeper's start:
 // a kept root that cannot take it leaves the keeper serving every program
@@ -68,6 +72,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -82,6 +87,7 @@ const (
 	MaxSetBytes  = 128 << 20
 	MaxPackFiles = 2048
 	MaxPackBytes = 32 << 20
+	// MaxPathBytes bounds a path inside its pack, as the store counts it.
 	MaxPathBytes = 255
 	// MaxManifestBytes bounds the manifest: a set of MaxSetFiles lines of
 	// the longest paths fits.
@@ -121,6 +127,11 @@ var ErrRefused = errors.New("packs refused")
 // folder of the keeper's own.
 var ErrNoStore = errors.New("the packs' folder cannot be made")
 
+// ErrBusy refuses a put's first part while one of its athanor is under
+// way, or MaxPuts are: no person's put waits behind another's past the
+// bound of the one in progress.
+var ErrBusy = errors.New("a put is under way")
+
 // ErrAbsent refuses an Acquire of a generation that is not complete.
 var ErrAbsent = errors.New("no such generation")
 
@@ -142,6 +153,10 @@ type Manifest struct {
 	Files []Line `json:"files"`
 }
 
+// Owner is whose puts are whose: a role's connection. Its End drops every
+// put it has and refuses every put it begins after; Store.mu guards it.
+type Owner struct{ ended bool }
+
 type hold struct {
 	digest string
 	until  time.Time
@@ -149,25 +164,38 @@ type hold struct {
 
 type putKey struct{ athanor, digest, lifetime string }
 
+// put is one put in progress. Its folder is made and it is registered in
+// one step under Store.mu, and it leaves the register in one step under
+// Store.mu too (claim), by whichever comes first of its commit and its
+// drop: so every put folder is a registered put's, or one its claimant is
+// removing, or an earlier keeper's (Sweep). settled closes once its folder
+// is gone or is the generation.
 type put struct {
-	mu    sync.Mutex
-	key   putKey
-	owner any
-	dir   string
-	next  uint64
-	pipe  *io.PipeWriter
-	done  chan error
-	timer *time.Timer
-	// touched is when its last part ended; the idle timer drops it only
-	// IdleFor after that.
-	touched time.Time
-	gone    bool
+	// mu serializes its parts.
+	mu      sync.Mutex
+	key     putKey
+	owner   *Owner
+	dir     string
+	next    uint64
+	pipe    *io.PipeWriter
+	result  chan error
+	exited  chan struct{}
+	settled chan struct{}
+	// idle drops it IdleFor after its last part, until drops it HoldFor
+	// after its first whether or not parts keep arriving.
+	idle    *time.Timer
+	until   *time.Timer
+	touched atomic.Int64
+	// gone says it has left the register; Store.mu guards it.
+	gone bool
 }
 
 // Store is the keeper's packs.
 type Store struct {
 	dir string
 	now func() time.Time
+	// putFor is how long a put may run from its first part: HoldFor.
+	putFor time.Duration
 
 	mu    sync.Mutex
 	holds map[string]map[string]hold // <a> -> lifetime -> hold
@@ -180,7 +208,7 @@ type Store struct {
 // take it boots and serves every program that loads no packs, and only a
 // put is refused.
 func New(dir string) *Store {
-	return &Store{dir: dir, now: time.Now, holds: map[string]map[string]hold{}, live: map[string]map[string]int{}, puts: map[putKey]*put{}}
+	return &Store{dir: dir, now: time.Now, putFor: HoldFor, holds: map[string]map[string]hold{}, live: map[string]map[string]int{}, puts: map[putKey]*put{}}
 }
 
 // Sweep removes every put folder an earlier keeper left, at the keeper's
@@ -328,8 +356,8 @@ func (s *Store) expire() {
 }
 
 // clean removes every generation of the person a but named that no hold
-// and no live spawn holds, and every put folder of a no put in progress
-// writes; s.mu is held.
+// and no live spawn holds; s.mu is held. A put folder is never its: each
+// is a registered put's or its claimant's to remove (put).
 func (s *Store) clean(a, named string) error {
 	entries, err := os.ReadDir(filepath.Join(s.dir, a))
 	if absent(err) {
@@ -347,22 +375,11 @@ func (s *Store) clean(a, named string) error {
 			kept[d] = true
 		}
 	}
-	writing := map[string]bool{}
-	for _, p := range s.puts {
-		if Person(p.key.athanor) == a {
-			writing[filepath.Base(p.dir)] = true
-		}
-	}
 	for _, e := range entries {
-		name := e.Name()
-		switch {
-		case hexDigest.MatchString(name) && !kept[name]:
-		case partName.MatchString(name) && !writing[name]:
-		default:
-			continue
-		}
-		if err := removeTree(filepath.Join(s.dir, a, name)); err != nil {
-			return err
+		if name := e.Name(); hexDigest.MatchString(name) && !kept[name] {
+			if err := removeTree(filepath.Join(s.dir, a, name)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -415,10 +432,12 @@ func (s *Store) Acquire(athanor, digest string) (path string, empty bool, releas
 }
 
 // Put applies one part of the put of athanor's digest for lifetime, made
-// by owner: seq 0 begins it (and drops one of the same key in progress),
-// every later seq must follow the last, and the last ends it. It answers
-// Taken, or Held once the generation is complete and held for lifetime.
-func (s *Store) Put(owner any, athanor, lifetime, digest string, seq uint64, last bool, part []byte) (string, error) {
+// by owner: seq 0 begins it, every later seq must follow the last, and the
+// last ends it. A seq 0 of a key in progress begins it again, its first
+// put dropped; one of an athanor with another put under way, or with
+// MaxPuts under way, is refused ErrBusy. It answers Taken, or Held once
+// the generation is complete and held for lifetime.
+func (s *Store) Put(owner *Owner, athanor, lifetime, digest string, seq uint64, last bool, part []byte) (string, error) {
 	d, ok := digestHex(digest)
 	if !ok {
 		return "", ErrRefused
@@ -440,11 +459,14 @@ func (s *Store) Put(owner any, athanor, lifetime, digest string, seq uint64, las
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.gone || p.next != seq {
+	s.mu.Lock()
+	gone := p.gone
+	s.mu.Unlock()
+	if gone || p.next != seq {
 		s.drop(p, ErrRefused)
 		return "", ErrRefused
 	}
-	defer func() { p.touched = s.now() }()
+	defer func() { p.touched.Store(s.now().UnixNano()) }()
 	if len(part) > 0 {
 		if _, err := p.pipe.Write(part); err != nil {
 			s.drop(p, err)
@@ -456,41 +478,46 @@ func (s *Store) Put(owner any, athanor, lifetime, digest string, seq uint64, las
 		return Taken, nil
 	}
 	_ = p.pipe.Close()
-	if err := <-p.done; err != nil {
+	if err := <-p.result; err != nil {
 		s.drop(p, err)
 		return "", ErrRefused
 	}
 	if err := s.commit(p, d); err != nil {
-		s.drop(p, err)
 		return "", ErrRefused
 	}
 	return Held, nil
 }
 
-// begin starts a put of key; a put of the same key in progress is dropped.
-func (s *Store) begin(owner any, key putKey, d string) (*put, error) {
+// begin registers a put of key and makes its folder, in one step under
+// s.mu; a put of the same key in progress leaves the register in that
+// step, and begin returns once its folder is gone.
+func (s *Store) begin(owner *Owner, key putKey, d string) (*put, error) {
 	a := Person(key.athanor)
-	s.mu.Lock()
-	old := s.puts[key]
-	s.mu.Unlock()
-	if old != nil {
-		old.mu.Lock()
-		s.drop(old, ErrRefused)
-		old.mu.Unlock()
-	}
 	var suffix [8]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return nil, err
 	}
 	person := filepath.Join(s.dir, a)
-	dir := filepath.Join(person, "."+d+"."+hex.EncodeToString(suffix[:])+".part")
 	r, w := io.Pipe()
-	p := &put{key: key, owner: owner, dir: dir, pipe: w, done: make(chan error, 1), touched: s.now()}
-	p.timer = time.AfterFunc(IdleFor, func() { s.idle(p) })
+	p := &put{
+		key: key, owner: owner, pipe: w,
+		dir:    filepath.Join(person, "."+d+"."+hex.EncodeToString(suffix[:])+".part"),
+		result: make(chan error, 1), exited: make(chan struct{}), settled: make(chan struct{}),
+	}
+	p.touched.Store(s.now().UnixNano())
 	s.mu.Lock()
+	old := s.puts[key]
 	err := func() error {
-		if len(s.puts) >= MaxPuts {
+		if owner.ended {
 			return ErrRefused
+		}
+		for k := range s.puts {
+			if k != key && Person(k.athanor) == a {
+				return fmt.Errorf("%w: a put of its athanor", ErrBusy)
+			}
+		}
+		if old == nil && len(s.puts) >= MaxPuts {
+			return fmt.Errorf("%w: %d puts", ErrBusy, MaxPuts)
 		}
 		if err := s.ensure(); err != nil {
 			return err
@@ -503,17 +530,23 @@ func (s *Store) begin(owner any, key putKey, d string) (*put, error) {
 		if err := os.Chmod(person, 0o711); err != nil {
 			return err
 		}
-		return os.Mkdir(dir, 0o700)
+		return os.Mkdir(p.dir, 0o700)
 	}()
+	replaced := err == nil && old != nil && s.claim(old)
+	if err == nil {
+		s.puts[key] = p
+		p.idle = time.AfterFunc(IdleFor, func() { s.idled(p) })
+		p.until = time.AfterFunc(s.putFor, func() { s.drop(p, errors.New("past its bound")) })
+	}
+	s.mu.Unlock()
+	if replaced {
+		s.settle(old, errors.New("begun again"))
+	}
 	if err != nil {
-		s.mu.Unlock()
-		p.timer.Stop()
 		return nil, err
 	}
-	s.puts[key] = p
-	s.mu.Unlock()
 	go func() {
-		err := Extract(r, dir)
+		err := Extract(r, p.dir)
 		if err == nil {
 			// What follows the archive's end is read as nothing, so the
 			// writer is never left waiting; a refusal ends the writer's
@@ -521,66 +554,84 @@ func (s *Store) begin(owner any, key putKey, d string) (*put, error) {
 			_, err = io.Copy(io.Discard, r)
 		}
 		_ = r.CloseWithError(err)
-		p.done <- err
+		p.result <- err
+		close(p.exited)
 	}()
 	return p, nil
 }
 
-// idle drops p once IdleFor has passed since its last part.
-func (s *Store) idle(p *put) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.gone {
-		return
-	}
-	if left := IdleFor - s.now().Sub(p.touched); left > 0 {
-		p.timer.Reset(left)
+// idled drops p once IdleFor has passed since its last part.
+func (s *Store) idled(p *put) {
+	if left := IdleFor - s.now().Sub(time.Unix(0, p.touched.Load())); left > 0 {
+		p.idle.Reset(left)
 		return
 	}
 	s.drop(p, errors.New("idle"))
 }
 
-// drop ends p and removes its folder; p.mu is held.
-func (s *Store) drop(p *put, why error) {
+// claim takes p out of the register, once, and answers whether this call
+// did; s.mu is held.
+func (s *Store) claim(p *put) bool {
 	if p.gone {
-		return
+		return false
 	}
 	p.gone = true
-	p.timer.Stop()
-	_ = p.pipe.CloseWithError(why)
-	s.mu.Lock()
 	if s.puts[p.key] == p {
 		delete(s.puts, p.key)
 	}
-	s.mu.Unlock()
-	_ = removeTree(p.dir)
+	return true
 }
 
-// commit makes p's files read only, syncs, and renames its folder to the
-// generation, which it then holds for p's lifetime; a generation another
-// put made first is kept and p's folder removed. p.mu is held.
+// drop ends p and removes its folder, and returns once that is done,
+// whoever ended it; it needs neither lock held.
+func (s *Store) drop(p *put, why error) {
+	s.mu.Lock()
+	mine := s.claim(p)
+	s.mu.Unlock()
+	if mine {
+		s.settle(p, why)
+	}
+	<-p.settled
+}
+
+// settle ends what p claimed has running: its timers, its writer and,
+// once its extraction has returned, its folder.
+func (s *Store) settle(p *put, why error) {
+	p.idle.Stop()
+	p.until.Stop()
+	_ = p.pipe.CloseWithError(why)
+	<-p.exited
+	_ = removeTree(p.dir)
+	close(p.settled)
+}
+
+// commit claims p, makes its files read only, syncs, and renames its
+// folder to the generation, which it then holds for p's lifetime; a
+// generation another put made first is kept and p's folder removed. Its
+// extraction has returned. p.mu is held.
 func (s *Store) commit(p *put, d string) error {
-	if err := readOnly(p.dir); err != nil {
-		return err
+	s.mu.Lock()
+	mine := s.claim(p)
+	s.mu.Unlock()
+	if !mine {
+		<-p.settled
+		return ErrRefused
 	}
-	f, err := os.Open(p.dir)
-	if err != nil {
-		return err
+	defer close(p.settled)
+	p.idle.Stop()
+	p.until.Stop()
+	err := readOnly(p.dir)
+	if err == nil {
+		err = syncDir(p.dir)
 	}
-	err = unix.Syncfs(int(f.Fd()))
-	_ = f.Close()
 	if err != nil {
+		_ = removeTree(p.dir)
 		return err
 	}
 	a := Person(p.key.athanor)
 	target := filepath.Join(s.dir, a, d)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p.gone = true
-	p.timer.Stop()
-	if s.puts[p.key] == p {
-		delete(s.puts, p.key)
-	}
 	if err := os.Rename(p.dir, target); err != nil {
 		if !errors.Is(err, fs.ErrExist) && !errors.Is(err, unix.ENOTEMPTY) {
 			_ = removeTree(p.dir)
@@ -594,9 +645,22 @@ func (s *Store) commit(p *put, d string) error {
 	return nil
 }
 
-// End drops every put owner made: its role's process ended.
-func (s *Store) End(owner any) {
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = unix.Syncfs(int(f.Fd()))
+	_ = f.Close()
+	return err
+}
+
+// End drops every put owner made and refuses every put it begins from
+// now: its role's process ended. It returns once no put of owner is in
+// the register and none of their folders is left.
+func (s *Store) End(owner *Owner) {
 	s.mu.Lock()
+	owner.ended = true
 	var mine []*put
 	for _, p := range s.puts {
 		if p.owner == owner {
@@ -605,9 +669,7 @@ func (s *Store) End(owner any) {
 	}
 	s.mu.Unlock()
 	for _, p := range mine {
-		p.mu.Lock()
 		s.drop(p, errors.New("its role ended"))
-		p.mu.Unlock()
 	}
 }
 
@@ -684,34 +746,43 @@ func readManifest(r io.Reader, size int64) (map[string]Line, error) {
 		if _, dup := lines[l.Path]; dup {
 			return nil, fmt.Errorf("the manifest names %q twice", l.Path)
 		}
-		if l.Size < 0 || !strings.HasPrefix(l.SHA256, "sha256:") || !hexDigest.MatchString(l.SHA256[7:]) {
+		if !strings.HasPrefix(l.SHA256, "sha256:") || !hexDigest.MatchString(l.SHA256[7:]) {
 			return nil, fmt.Errorf("the manifest's line of %q does not read", l.Path)
+		}
+		// Each size is checked against what its sums have left before it
+		// is added, so no sum passes its bound or wraps.
+		switch {
+		case l.Size < 0:
+			return nil, fmt.Errorf("the manifest's line of %q has a negative size", l.Path)
+		case packFiles[pack] >= MaxPackFiles:
+			return nil, fmt.Errorf("pack %q holds more than %d files", pack, MaxPackFiles)
+		case l.Size > MaxPackBytes-packBytes[pack]:
+			return nil, fmt.Errorf("pack %q holds more than %d bytes", pack, MaxPackBytes)
+		case l.Size > MaxSetBytes-setBytes:
+			return nil, fmt.Errorf("the set holds more than %d bytes", MaxSetBytes)
 		}
 		lines[l.Path] = l
 		packFiles[pack]++
 		packBytes[pack] += l.Size
 		setBytes += l.Size
-		switch {
-		case packFiles[pack] > MaxPackFiles:
-			return nil, fmt.Errorf("pack %q holds more than %d files", pack, MaxPackFiles)
-		case packBytes[pack] > MaxPackBytes:
-			return nil, fmt.Errorf("pack %q holds more than %d bytes", pack, MaxPackBytes)
-		case setBytes > MaxSetBytes:
-			return nil, fmt.Errorf("the set holds more than %d bytes", MaxSetBytes)
-		}
 	}
 	return lines, nil
 }
 
 // checkPath checks a manifest path, <pack>/<path inside the pack>, and
-// answers its pack.
+// answers its pack. The bound is the store's, on the path inside the pack
+// (Compendium.Packs.pack_path/1); the pack's name is one segment, which the
+// manifest's own bound holds.
 func checkPath(path string) (string, error) {
-	if len(path) > MaxPathBytes || !utf8.ValidString(path) || strings.ContainsRune(path, 0) {
-		return "", fmt.Errorf("the path %q is past %d bytes or does not read", path, MaxPathBytes)
+	if !utf8.ValidString(path) || strings.ContainsRune(path, 0) {
+		return "", fmt.Errorf("the path %q does not read", path)
 	}
 	segments := strings.Split(path, "/")
 	if len(segments) < 2 {
 		return "", fmt.Errorf("the path %q names no file of a pack", path)
+	}
+	if inside := len(path) - len(segments[0]) - 1; inside > MaxPathBytes {
+		return "", fmt.Errorf("the path %q is past %d bytes inside its pack", path, MaxPathBytes)
 	}
 	for _, seg := range segments {
 		if seg == "" || seg == "." || seg == ".." {

@@ -495,7 +495,6 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 		s.mu.Unlock()
 		go func() {
 			defer close(sp.retired)
-			defer sp.releasePacks()
 			if sp.group != nil && !s.endInOrder(sp.id, uid, sp.group, sp.leader, deadline) {
 				s.log.Warn("spawn %s: processes of kept uid %d outlived their group's kill", sp.id, uid)
 			}

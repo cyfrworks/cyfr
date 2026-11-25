@@ -603,7 +603,9 @@ defmodule Locus.Keeper do
   @doc """
   Give the place `place` `whose`'s kind, and its athanor and subject where
   it names them: `:ok` once cyfr-locus has applied it, `{:error,
-  {:refused, "bad_request"}}` where it holds no such place ("Places"),
+  {:refused, "bad_request"}}` where it holds no such place, or where a
+  spawn naming packs claimed it and `whose` names another athanor
+  ("Places"),
   `{:error, {:launcher_unavailable, :timeout}}` where it has not answered
   by `until` (monotonic milliseconds), and `{:error, :unencodable}`,
   nothing sent, for one the codec refuses.
@@ -676,7 +678,9 @@ defmodule Locus.Keeper do
   `digest`, for the start of `lifetime`: `{:ok, :taken}`, or `{:ok, :held}`
   for the `last`, the generation then complete and held for that
   lifetime; `{:refused, "packs_refused"}` for a stream cyfr-locus does
-  not take, which leaves nothing of it.
+  not take, which leaves nothing of it, and `{:refused, "unavailable"}`
+  for a first part while another put of `athanor`, or the most at once,
+  are under way.
   """
   @impl Locus.Launcher
   def packs_put(server, athanor, lifetime, digest, seq, last, data),

@@ -68,7 +68,8 @@ defmodule Prima.KeeperProtocol do
   gives that place another kind, athanor and subject, as a runner given
   work or back at rest; it is answered under that `id` alone, `assigned`
   once the keeper applied it, or refused `bad_request` where the keeper
-  holds no such place. Every `spawn` names its `place`, which
+  holds no such place, or where a spawn naming `packs` claimed it and the
+  assign names another athanor. Every `spawn` names its `place`, which
   no other spawn may name: a spawn naming a place the keeper does not hold,
   or one another spawn named, is refused `bad_request`, and a place a spawn
   named is free at that spawn's `released`, which is the keeper's word
@@ -115,9 +116,11 @@ defmodule Prima.KeeperProtocol do
   by one up to `max_pack_seq`, `last` and `data`, one part of the
   generation's stream of at most `max_pack_part_bytes` (`request_bounds/0`),
   which `encode/1` writes in base64; each part is answered `:taken`, the
-  last `:held`, or refused `packs_refused`. A spawn's optional `packs`,
+  last `:held`, or refused `packs_refused`; a first part while another put
+  of the athanor, or the most at once, are under way is refused
+  `unavailable`. A spawn's optional `packs`,
   `%{athanor: athanor, digest: digest}`, names the generation its space
-  binds read only at `/run/cyfr/scrolls`. A keeper or a role that keeps no
+  binds read only at `/run/cyfr/scrolls`, of its place's athanor. A keeper or a role that keeps no
   homes refuses every packs request `unavailable`.
 
   ## Homes

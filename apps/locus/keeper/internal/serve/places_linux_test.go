@@ -91,7 +91,7 @@ func (k *keeper) expect(t *testing.T, want ...any) {
 // that claimed it is made in it and held once it starts.
 func (k *keeper) spawnedIn(t *testing.T, id string, sp *spawn) {
 	t.Helper()
-	if k.s.claimPlace(k.c, id) == nil {
+	if k.s.claimPlace(k.c, &protocol.Request{Place: id}) != claimed {
 		t.Fatalf("place %s cannot be claimed", id)
 	}
 	sp.client = k.c

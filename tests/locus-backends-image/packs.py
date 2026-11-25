@@ -20,7 +20,9 @@ AppArmor profile, and driven only by requests signed as CYFR signs them
   write, a new folder and a rename there fail; its mount is read only.
 - Another person: their hold of the same digest is `missing`, an open
   naming it without a put of their own is refused, and their session sees
-  no /run/cyfr/scrolls; a row that loads no packs is refused a hold and
+  no /run/cyfr/scrolls; with a generation of their own their session
+  binds theirs alone, and this person's digest is still missing to them
+  and refused; a row that loads no packs is refused a hold and
   its session sees none.
 - A kept root that cannot take the packs' folder (a file in its place)
   leaves the keeper starting and serving a program that loads no packs: a
@@ -54,6 +56,10 @@ FILES = {
     "pstack/skills/poteto-mode/SKILL.md": (b"---\nname: poteto-mode\n---\n# poteto\n", False),
     "pstack/skills/poteto-mode/scripts/hello": (b"#!/bin/sh\necho hello from a pack\n", True),
     "taste/skills/taste/SKILL.md": (b"# taste\n" + b"x" * (700 * 1024), False),
+}
+# The other person's own packs: the same paths, other bytes.
+OTHER_FILES = {
+    "pstack/skills/poteto-mode/SKILL.md": (b"---\nname: poteto-mode\n---\n# the other person's\n", False),
 }
 PROGRAMS = [probe(home="kept", packs=True), probe("plain", home="kept")]
 
@@ -92,7 +98,7 @@ def run_in(client, script):
     return json.loads(result["content"][0]["text"])
 
 
-def started(c, owner, key, home_id, digest, program="probe"):
+def started(c, owner, key, home_id, digest, program="probe", files=FILES):
     """A start as Opus makes one: a lifetime of its own held, put on `missing`, then the one open naming it.
 
     Answers the hold's state, every put's answer, and the session's client.
@@ -102,7 +108,7 @@ def started(c, owner, key, home_id, digest, program="probe"):
     expect(status == 200, f"a hold of {owner['athanor']} is answered", held)
     puts = []
     if held["state"] == "missing":
-        puts = c.packs_put(owner, program, lifetime, digest, stream_of(FILES), key=key, home_id=home_id)
+        puts = c.packs_put(owner, program, lifetime, digest, stream_of(files), key=key, home_id=home_id)
     client = c.mcp(owner, program, key=key, home_id=home_id)
     client.opening = {"lifetime": lifetime, "packs": digest}
     return held["state"], puts, client
@@ -203,6 +209,24 @@ def main():
         seen = run_in(theirs, "ls /run/cyfr/scrolls 2>&1; ls " + KEPT_ROOT + " 2>&1; echo done")
         expect("pstack" not in seen["stdout"] and "No such file or directory" in seen["stdout"],
                "another person's session sees no packs and no kept root", seen)
+        # With a generation of their own, the other person binds theirs and
+        # never this person's: not by this person's digest, which they hold
+        # none of, nor beside their own.
+        other_digest = digest_of(OTHER_FILES)
+        state, _puts, own = started(c, OTHER, "c", OTHER_HOME, other_digest, files=OTHER_FILES)
+        expect(state == "missing", "the other person's first start puts their own packs")
+        seen = run_in(own, "cat /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md; ls /run/cyfr/scrolls")
+        expect(seen["stdout"] == OTHER_FILES["pstack/skills/poteto-mode/SKILL.md"][0].decode() + "pstack\n",
+               "the other person's session holds their own packs alone", seen)
+        lifetime = new_lifetime(c.boot)
+        status, held = c.packs_hold(OTHER, "probe", lifetime, digest, key="d", home_id=OTHER_HOME)
+        expect((status, held.get("state")) == (200, "missing"),
+               "holding a generation of their own, the other person finds nothing of this person's digest", held)
+        status, answer = c.open(OTHER, "probe", key="d", home_id=OTHER_HOME, lifetime=lifetime, packs=digest)
+        expect(status != 200, "the other person's open naming this person's digest is refused", answer)
+        mine = run_in(second, "cat /run/cyfr/scrolls/pstack/skills/poteto-mode/SKILL.md")
+        expect(mine["stdout"] == FILES["pstack/skills/poteto-mode/SKILL.md"][0].decode(),
+               "this person's session still reads their own packs", mine)
 
         lifetime = new_lifetime(c.boot)
         status, answer = c.packs_hold(OWNER, "plain", lifetime, digest, key="p", home_id=PLAIN_HOME)

@@ -632,12 +632,11 @@ type spawn struct {
 	retired    chan struct{}
 	retireOnce sync.Once
 	// packs is the generation its space binds (packview.Store.Acquire),
-	// whose release its retirement's end calls; nil for none.
+	// whose release its final release calls (forget); nil for none.
 	packs func()
 }
 
-// releasePacks lets go of the generation the spawn's space binds, at the
-// end of its retirement.
+// releasePacks lets go of the generation the spawn's space binds.
 func (sp *spawn) releasePacks() {
 	if sp.packs != nil {
 		sp.packs()
@@ -684,6 +683,8 @@ type client struct {
 	// starts counts its spawn starts in flight, each counted before its end
 	// began or not at all (beginStart); its end waits for them (endClient).
 	starts sync.WaitGroup
+	// packs owns its puts at the packs' store (packview), ended with it.
+	packs packview.Owner
 }
 
 type server struct {
@@ -1185,19 +1186,13 @@ func (s *server) handleSpawn(c *client, req *protocol.Request) {
 		return
 	}
 	defer c.starts.Done()
-	pl := s.claimPlace(c, req.Place)
-	if pl == nil {
+	switch s.claimPlace(c, req) {
+	case claimNone:
 		s.log.Warn("spawn %s refused: the keeper holds no place %s of role %s, or another spawn named it", req.ID, req.Place, c.role.spec.Name)
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
-	}
-	// A space binds only its own person's packs: the generation's athanor
-	// is its place's, of the kept role, whose keeper keeps them.
-	if req.Packs != nil && (req.Packs.Athanor != pl.whose.Athanor || s.packs == nil || !c.role.spec.Kept) {
+	case claimOthersPacks:
 		s.log.Warn("spawn %s refused: its packs are not its place's athanor's, or role %s keeps none", req.ID, c.role.spec.Name)
-		s.mu.Lock()
-		delete(c.places, req.Place)
-		s.mu.Unlock()
 		s.send(c, protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
@@ -1766,7 +1761,6 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 	sp.retireOnce.Do(func() {
 		go func() {
 			defer close(sp.retired)
-			defer sp.releasePacks()
 			uid := sp.account.UID
 			var paths []string
 			if sp.home != "" {
@@ -1845,9 +1839,18 @@ func (s *server) leave(sp *spawn, removed bool, left removal) {
 		s.unremoved[sp] = &left
 		return
 	}
+	s.forget(sp)
+}
+
+// forget is a spawn's final release, with s.mu held: it leaves spawns, its
+// place and its routing go, and the generation of packs its space binds is
+// let go only now, its group gone, so no start can remove files a process
+// of it may still read.
+func (s *server) forget(sp *spawn) {
 	delete(s.spawns, sp.id)
 	delete(sp.client.places, sp.place)
 	delete(s.routing, sp.id)
+	sp.releasePacks()
 }
 
 // scrub retires a uid until nothing of it remains: `cyfr-locus retire` ends

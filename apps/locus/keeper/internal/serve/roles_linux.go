@@ -263,7 +263,7 @@ func (s *server) endClient(c *client) {
 	}
 	s.withdrawRoute(c.id, &c.route)
 	if s.packs != nil {
-		s.packs.End(c)
+		s.packs.End(&c.packs)
 	}
 	for _, sp := range held {
 		s.retire(sp, lostGrace, false)

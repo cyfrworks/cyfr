@@ -61,7 +61,8 @@
 // own beside the `place` it names and gives that place another kind,
 // athanor and subject, as a runner given work or back at rest; it is
 // answered under that id alone, `assigned` once applied, or refused as
-// CodeBadRequest where the keeper holds no such place. A `spawn` names its
+// CodeBadRequest where the keeper holds no such place, or where a spawn
+// naming packs claimed it and the assign names another athanor. A `spawn` names its
 // place, which no other spawn may name: one naming a place the keeper does
 // not hold, or one another spawn named, is refused as CodeBadRequest. Only
 // the keeper frees a place a spawn named: a spawn refused before the keeper
@@ -232,10 +233,13 @@
 // MaxPackPartBytes bytes in base64 as its `data`, `seq` from 0 by one,
 // `last` on the final part; each part is answered "taken", the last
 // "held". A put refused (its stream, a bound, a manifest the files do not
-// match, a seq out of order, a put idle past its bound) is refused as
-// CodePacksRefused and leaves nothing behind. A spawn's `packs` names a
-// generation by its athanor and digest: the athanor must be its place's,
-// and the generation complete; the stage binds it read only at
+// match, a seq out of order, a put idle or running past its bound) is
+// refused as CodePacksRefused and leaves nothing behind; a put's first part
+// while another put of its athanor, or the most puts at once, are under way
+// is refused as CodeUnavailable. A spawn's `packs` names a generation by
+// its athanor and digest: the athanor must be its place's when the spawn
+// claims it, which no assign changes from then, and the generation
+// complete; the stage binds it read only at
 // /run/cyfr/scrolls in the space, and binds nothing for a generation that
 // holds no pack. A keeper given no --kept-homes, and a role whose spawns
 // keep no home, refuse every packs request as CodeUnavailable.

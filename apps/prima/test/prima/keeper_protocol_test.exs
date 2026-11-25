@@ -30,7 +30,7 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies home_requests home_replies packs_requests packs_replies pack_bounds)
+  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies home_requests home_replies packs_requests packs_replies pack_bounds pack_paths)
 
   @request_types %{
     "place" => :place,

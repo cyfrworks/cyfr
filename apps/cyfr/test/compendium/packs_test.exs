@@ -981,6 +981,23 @@ defmodule Compendium.PacksTest do
       assert "#{first}" == manifest
     end
 
+    test "a path's bound is on the path inside its pack, the keeper's too, at the shared vectors' edge" do
+      %{"held" => held, "refused" => refused} =
+        Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("pack_paths")
+
+      for path <- held, do: assert(:ok = Packs.pack_path(path), "#{byte_size(path)} bytes")
+
+      for path <- refused,
+          do:
+            assert(
+              {:error, {:invalid_argument, _}} = Packs.pack_path(path),
+              "#{byte_size(path)} bytes"
+            )
+    end
+
     test "pack_file/4 answers for no file of a pack switched off, by any path", %{
       ctx: ctx,
       actor: actor

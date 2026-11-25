@@ -14,11 +14,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -106,7 +108,7 @@ func parts(b []byte) [][]byte {
 
 // putAll sends every part of b and answers the last answer, or the first
 // refusal with the seq it came at.
-func putAll(s *Store, owner any, athanor, lifetime, digest string, b []byte) (string, int, error) {
+func putAll(s *Store, owner *Owner, athanor, lifetime, digest string, b []byte) (string, int, error) {
 	ps := parts(b)
 	for i, p := range ps {
 		state, err := s.Put(owner, athanor, lifetime, digest, uint64(i), i == len(ps)-1, p)
@@ -182,6 +184,7 @@ func entries(t *testing.T, dir string) []string {
 }
 
 func TestAPutWritesEveryFileReadOnly(t *testing.T) {
+	role := &Owner{}
 	s := newStore(t)
 	files := []file{
 		{path: "pstack/skills/poteto-mode/SKILL.md", data: []byte("# poteto\n")},
@@ -189,7 +192,7 @@ func TestAPutWritesEveryFileReadOnly(t *testing.T) {
 		{path: "taste/README.md", data: bytes.Repeat([]byte("x"), 3*partBytes+17)},
 	}
 	d := digestOf("one")
-	state, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, files))
+	state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, files))
 	if err != nil || state != Held {
 		t.Fatalf("put: %q %v", state, err)
 	}
@@ -232,10 +235,11 @@ func TestAPutWritesEveryFileReadOnly(t *testing.T) {
 // (-1: the last, as for a manifest refused once it is read whole) and
 // leaves no folder of the person.
 func refused(t *testing.T, name string, b []byte, atPart int) {
+	role := &Owner{}
 	t.Helper()
 	s := newStore(t)
 	d := digestOf(name)
-	state, at, err := putAll(s, "role", "ath_1", "lt_1", d, b)
+	state, at, err := putAll(s, role, "ath_1", "lt_1", d, b)
 	if !errors.Is(err, ErrRefused) {
 		t.Fatalf("%s: answered %q %v, want refused", name, state, err)
 	}
@@ -254,6 +258,7 @@ func refused(t *testing.T, name string, b []byte, atPart int) {
 }
 
 func TestARefusedPutLeavesNothing(t *testing.T) {
+	role := &Owner{}
 	big := bytes.Repeat([]byte("b"), 4*partBytes)
 	reg := func(name string, data []byte) (*tar.Header, []byte) {
 		return &tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg}, data
@@ -274,8 +279,8 @@ func TestARefusedPutLeavesNothing(t *testing.T) {
 		f := file{path: "p/../../x", data: []byte("x")}
 		refused(t, "dotdot", streamOf(t, []file{f}), 0)
 	})
-	t.Run("a long path", func(t *testing.T) {
-		f := file{path: "p/" + strings.Repeat("a", MaxPathBytes-1), data: []byte("x")}
+	t.Run("a path past its bound inside its pack", func(t *testing.T) {
+		f := file{path: "p/" + strings.Repeat("ab/", 84) + "ends", data: []byte("x")}
 		refused(t, "long", streamOf(t, []file{f}), 0)
 	})
 	t.Run("a pack's record", func(t *testing.T) {
@@ -361,13 +366,13 @@ func TestARefusedPutLeavesNothing(t *testing.T) {
 		d := digestOf("order")
 		b := streamOf(t, []file{{path: "p/a", data: big}})
 		ps := parts(b)
-		if _, err := s.Put("role", "ath_1", "lt_1", d, 0, false, ps[0]); err != nil {
+		if _, err := s.Put(role, "ath_1", "lt_1", d, 0, false, ps[0]); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Put("role", "ath_1", "lt_1", d, 2, false, ps[2]); !errors.Is(err, ErrRefused) {
+		if _, err := s.Put(role, "ath_1", "lt_1", d, 2, false, ps[2]); !errors.Is(err, ErrRefused) {
 			t.Fatalf("a skipped part: %v", err)
 		}
-		if _, err := s.Put("role", "ath_1", "lt_1", d, 1, false, ps[1]); !errors.Is(err, ErrRefused) {
+		if _, err := s.Put(role, "ath_1", "lt_1", d, 1, false, ps[1]); !errors.Is(err, ErrRefused) {
 			t.Fatalf("a part after the refusal: %v", err)
 		}
 		if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 {
@@ -377,6 +382,7 @@ func TestARefusedPutLeavesNothing(t *testing.T) {
 }
 
 func TestTheLegalWorstCasesGoThroughWhole(t *testing.T) {
+	role := &Owner{}
 	if testing.Short() {
 		t.Skip("writes 256 MiB")
 	}
@@ -389,7 +395,7 @@ func TestTheLegalWorstCasesGoThroughWhole(t *testing.T) {
 			}
 		}
 		d := digestOf("bytes")
-		if state, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, files)); err != nil || state != Held {
+		if state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, files)); err != nil || state != Held {
 			t.Fatalf("%q %v", state, err)
 		}
 		for _, f := range files {
@@ -409,7 +415,7 @@ func TestTheLegalWorstCasesGoThroughWhole(t *testing.T) {
 			}
 		}
 		d := digestOf("files")
-		if state, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, files)); err != nil || state != Held {
+		if state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, files)); err != nil || state != Held {
 			t.Fatalf("%q %v", state, err)
 		}
 		n := 0
@@ -426,15 +432,16 @@ func TestTheLegalWorstCasesGoThroughWhole(t *testing.T) {
 }
 
 func TestASecondPutOfOneDigestChangesNothing(t *testing.T) {
+	role := &Owner{}
 	s := newStore(t)
 	d := digestOf("again")
 	files := []file{{path: "p/a", data: []byte("one")}}
-	if _, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, files)); err != nil {
+	if _, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, files)); err != nil {
 		t.Fatal(err)
 	}
 	before := tree(t, s.Path("ath_1", d))
 	info, _ := os.Stat(filepath.Join(s.Path("ath_1", d), "p/a"))
-	if state, _, err := putAll(s, "role", "ath_1", "lt_2", d, streamOf(t, files)); err != nil || state != Held {
+	if state, _, err := putAll(s, role, "ath_1", "lt_2", d, streamOf(t, files)); err != nil || state != Held {
 		t.Fatalf("the second put: %q %v", state, err)
 	}
 	after := tree(t, s.Path("ath_1", d))
@@ -447,33 +454,166 @@ func TestASecondPutOfOneDigestChangesNothing(t *testing.T) {
 	}
 }
 
+// One athanor has one put in progress: another start of it is refused
+// until that put ends, and then finds the generation held.
 func TestTwoStartsOfOnePersonAtOnce(t *testing.T) {
+	role := &Owner{}
 	s := newStore(t)
 	d := digestOf("both")
-	b := streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("z"), 5*partBytes)}})
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			state, _, err := putAll(s, "role", "ath_1", fmt.Sprintf("lt_%d", i), d, b)
-			if err == nil && state != Held {
-				err = fmt.Errorf("answered %s", state)
-			}
-			errs[i] = err
-		}(i)
+	ps := parts(streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("z"), 5*partBytes)}}))
+	if _, err := s.Put(role, "ath_1", "lt_0", d, 0, false, ps[0]); err != nil {
+		t.Fatal(err)
 	}
-	wg.Wait()
-	if errs[0] != nil || errs[1] != nil {
-		t.Fatalf("%v", errs)
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 0, false, ps[0]); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), "athanor") {
+		t.Fatalf("a second start's put: %v", err)
+	}
+	for i := 1; i < len(ps); i++ {
+		if _, err := s.Put(role, "ath_1", "lt_0", d, uint64(i), i == len(ps)-1, ps[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if held, err := s.Hold("ath_1", "lt_1", d); !held || err != nil {
+		t.Fatalf("the second start's hold: %v %v", held, err)
 	}
 	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); fmt.Sprint(es) != fmt.Sprint([]string{d[7:]}) {
 		t.Fatalf("left %v", es)
 	}
 }
 
+// No person holds another's start: one athanor asking for seventeen puts
+// gets one, and MaxPuts athanors fill the store whatever one of them asks.
+func TestOneAthanorAskingForSeventeen(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	t.Cleanup(func() { s.End(role) })
+	d := digestOf("many")
+	for i := 0; i <= MaxPuts; i++ {
+		_, err := s.Put(role, "ath_1", fmt.Sprintf("lt_%d", i), d, 0, false, []byte{})
+		if want := i > 0; want != errors.Is(err, ErrBusy) {
+			t.Fatalf("ath_1's put %d: %v", i, err)
+		}
+	}
+	for i := 2; i <= MaxPuts; i++ {
+		if _, err := s.Put(role, fmt.Sprintf("ath_%d", i), "lt_1", d, 0, false, []byte{}); err != nil {
+			t.Fatalf("athanor %d's put: %v", i, err)
+		}
+	}
+	if _, err := s.Put(role, "ath_17", "lt_1", d, 0, false, []byte{}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("a put past %d: %v", MaxPuts, err)
+	}
+	if len(s.puts) != MaxPuts {
+		t.Fatalf("%d puts in progress", len(s.puts))
+	}
+}
+
+// A put ends within its bound from its first part, however steadily its
+// parts arrive, and leaves nothing.
+func TestAPutFedSlowlyEndsAtItsBound(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	s.putFor = 300 * time.Millisecond
+	d := digestOf("slow")
+	ps := parts(streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("s"), 40*partBytes)}}))
+	began := time.Now()
+	var err error
+	i := 0
+	for ; i < len(ps) && err == nil; i++ {
+		_, err = s.Put(role, "ath_1", "lt_1", d, uint64(i), i == len(ps)-1, ps[i])
+		time.Sleep(25 * time.Millisecond) // sleep-ok: the parts arrive slowly, well inside IdleFor
+	}
+	if !errors.Is(err, ErrRefused) || i == len(ps) {
+		t.Fatalf("part %d of %d: %v", i, len(ps), err)
+	}
+	if took := time.Since(began); took > s.putFor+time.Second {
+		t.Fatalf("refused after %v", took)
+	}
+	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 || len(s.puts) != 0 {
+		t.Fatalf("left %v, %d puts", es, len(s.puts))
+	}
+}
+
+// Two starts of one key are one transfer: one put registered, one folder.
+func TestTwoStartsOfOneKeyAreOneTransfer(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	t.Cleanup(func() { s.End(role) })
+	reached, proceed := make(chan struct{}, 2), make(chan struct{})
+	var calls atomic.Int32
+	s.now = func() time.Time {
+		if calls.Add(1) <= 2 {
+			reached <- struct{}{}
+			<-proceed
+		}
+		return time.Now()
+	}
+	d := digestOf("twice")
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := s.Put(role, "ath_1", "lt_1", d, 0, false, []byte{})
+			errs <- err
+		}()
+	}
+	<-reached
+	<-reached
+	close(proceed)
+	<-errs
+	<-errs
+	s.mu.Lock()
+	n := len(s.puts)
+	s.mu.Unlock()
+	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); n != 1 || len(es) != 1 {
+		t.Fatalf("%d registered, folders %v", n, es)
+	}
+}
+
+// A role that ends while its put registers leaves nothing pending once
+// End returns, and no folder.
+func TestARoleEndingDuringARegistration(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	reached, proceed := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.now = func() time.Time {
+		once.Do(func() { close(reached); <-proceed })
+		return time.Now()
+	}
+	errs := make(chan error, 1)
+	go func() {
+		_, err := s.Put(role, "ath_1", "lt_1", digestOf("ending"), 0, false, []byte{})
+		errs <- err
+	}()
+	<-reached
+	s.End(role)
+	close(proceed)
+	if err := <-errs; !errors.Is(err, ErrRefused) {
+		t.Fatalf("a put begun after its role's end: %v", err)
+	}
+	if es, _ := os.ReadDir(filepath.Join(s.Dir(), Person("ath_1"))); len(s.puts) != 0 || len(es) != 0 {
+		t.Fatalf("%d pending, folders %v", len(s.puts), es)
+	}
+}
+
+// A role's end mid-stream returns once its put's folder is gone.
+func TestARoleEndingMidStream(t *testing.T) {
+	role := &Owner{}
+	s := newStore(t)
+	d := digestOf("mid")
+	ps := parts(streamOf(t, []file{{path: "p/a", data: bytes.Repeat([]byte("m"), 3*partBytes)}}))
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 0, false, ps[0]); err != nil {
+		t.Fatal(err)
+	}
+	s.End(role)
+	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(s.puts) != 0 || len(es) != 0 {
+		t.Fatalf("%d pending, folders %v", len(s.puts), es)
+	}
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 1, false, ps[1]); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a part after its role's end: %v", err)
+	}
+}
+
 func TestTheCleanupRule(t *testing.T) {
+	role := &Owner{}
 	s := newStore(t)
 	clock := time.Unix(1_000_000, 0)
 	var mu sync.Mutex
@@ -481,7 +621,7 @@ func TestTheCleanupRule(t *testing.T) {
 	advance := func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() }
 	write := func(name, lifetime string) string {
 		d := digestOf(name)
-		if _, _, err := putAll(s, "role", "ath_1", lifetime, d, streamOf(t, []file{{path: "p/" + name, data: []byte(name)}})); err != nil {
+		if _, _, err := putAll(s, role, "ath_1", lifetime, d, streamOf(t, []file{{path: "p/" + name, data: []byte(name)}})); err != nil {
 			t.Fatal(err)
 		}
 		return d
@@ -527,13 +667,10 @@ func TestTheCleanupRule(t *testing.T) {
 	}
 	advance(HoldFor)
 	has(d)
-	// A put folder of a put in progress stays; a stale one goes.
+	// A hold removes no put folder: one in progress is its put's, and its
+	// owner's end removes it.
 	e := digestOf("e")
-	if _, err := s.Put("role", "ath_1", "lt_e", e, 0, false, []byte{}); err != nil {
-		t.Fatal(err)
-	}
-	stale := filepath.Join(person, "."+strings.Repeat("0", 64)+".0123456789abcdef.part")
-	if err := os.Mkdir(stale, 0o555); err != nil {
+	if _, err := s.Put(role, "ath_1", "lt_e", e, 0, false, []byte{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Hold("ath_1", "lt_f", d); err != nil {
@@ -543,32 +680,33 @@ func TestTheCleanupRule(t *testing.T) {
 	if len(got) != 2 || got[1] != d[7:] || !strings.HasPrefix(got[0], "."+e[7:]+".") {
 		t.Fatalf("the person holds %v", got)
 	}
-	s.End("role")
+	s.End(role)
 	has(d)
 }
 
 func TestAnIdlePutIsDropped(t *testing.T) {
+	role := &Owner{}
 	s := newStore(t)
 	clock := time.Unix(1_000_000, 0)
 	var mu sync.Mutex
 	s.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
 	d := digestOf("idle")
-	if _, err := s.Put("role", "ath_1", "lt_1", d, 0, false, []byte{}); err != nil {
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 0, false, []byte{}); err != nil {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
 	p := s.puts[putKey{"ath_1", d, "lt_1"}]
 	s.mu.Unlock()
 	// Before its time the timer re-arms; after it, the put goes.
-	s.idle(p)
-	if _, err := s.Put("role", "ath_1", "lt_1", d, 1, false, []byte{}); err != nil {
+	s.idled(p)
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 1, false, []byte{}); err != nil {
 		t.Fatalf("a part before the idle bound: %v", err)
 	}
 	mu.Lock()
 	clock = clock.Add(IdleFor)
 	mu.Unlock()
-	s.idle(p)
-	if _, err := s.Put("role", "ath_1", "lt_1", d, 2, true, []byte{}); !errors.Is(err, ErrRefused) {
+	s.idled(p)
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 2, true, []byte{}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a part after the idle bound: %v", err)
 	}
 	if es := entries(t, filepath.Join(s.Dir(), Person("ath_1"))); len(es) != 0 {
@@ -577,22 +715,24 @@ func TestAnIdlePutIsDropped(t *testing.T) {
 }
 
 func TestAPutOfAnotherOwnerIsRefused(t *testing.T) {
+	role, other := &Owner{}, &Owner{}
 	s := newStore(t)
 	d := digestOf("owner")
-	if _, err := s.Put("role", "ath_1", "lt_1", d, 0, false, []byte{}); err != nil {
+	if _, err := s.Put(role, "ath_1", "lt_1", d, 0, false, []byte{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Put("other", "ath_1", "lt_1", d, 1, true, []byte{}); !errors.Is(err, ErrRefused) {
+	if _, err := s.Put(other, "ath_1", "lt_1", d, 1, true, []byte{}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("%v", err)
 	}
 }
 
 func TestAKeeperStartRemovesEveryPutFolder(t *testing.T) {
+	role := &Owner{}
 	dir := filepath.Join(t.TempDir(), ".packs")
 	s := New(dir)
 	t.Cleanup(func() { _ = removeTree(dir) })
 	d := digestOf("kept")
-	if _, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}})); err != nil {
+	if _, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}})); err != nil {
 		t.Fatal(err)
 	}
 	// A keeper that died mid-put left its folder, half written.
@@ -618,6 +758,7 @@ func TestAKeeperStartRemovesEveryPutFolder(t *testing.T) {
 // take, has nothing to sweep and holds nothing; its first put makes the
 // folder, and a put that cannot is refused saying so. None needs root.
 func TestTheStoresFolderIsMadeByItsFirstPut(t *testing.T) {
+	role := &Owner{}
 	root := t.TempDir()
 	dir := filepath.Join(root, ".packs")
 	s := New(dir)
@@ -631,7 +772,7 @@ func TestTheStoresFolderIsMadeByItsFirstPut(t *testing.T) {
 	if held, err := s.Hold("ath_1", "lt_1", d); held || err != nil {
 		t.Fatalf("a hold of a store not made: %v %v", held, err)
 	}
-	if state, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}})); err != nil || state != Held {
+	if state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, []file{{path: "p/a", data: []byte("a")}})); err != nil || state != Held {
 		t.Fatalf("the first put: %q %v", state, err)
 	}
 	t.Cleanup(func() { _ = removeTree(dir) })
@@ -655,15 +796,16 @@ func TestTheStoresFolderIsMadeByItsFirstPut(t *testing.T) {
 	if _, _, _, err := b.Acquire("ath_1", d); !errors.Is(err, ErrAbsent) {
 		t.Fatalf("an acquire where no folder can be: %v", err)
 	}
-	if _, err := b.Put("role", "ath_1", "lt_1", d, 0, true, []byte{}); !errors.Is(err, ErrNoStore) || !strings.Contains(err.Error(), "not a folder") {
+	if _, err := b.Put(role, "ath_1", "lt_1", d, 0, true, []byte{}); !errors.Is(err, ErrNoStore) || !strings.Contains(err.Error(), "not a folder") {
 		t.Fatalf("a put where no folder can be: %v", err)
 	}
 }
 
 func TestAnEmptySetIsAGenerationThatHoldsNoPack(t *testing.T) {
+	role := &Owner{}
 	s := newStore(t)
 	d := digestOf("none")
-	if state, _, err := putAll(s, "role", "ath_1", "lt_1", d, streamOf(t, nil)); err != nil || state != Held {
+	if state, _, err := putAll(s, role, "ath_1", "lt_1", d, streamOf(t, nil)); err != nil || state != Held {
 		t.Fatalf("%q %v", state, err)
 	}
 	_, empty, release, err := s.Acquire("ath_1", d)
@@ -695,5 +837,71 @@ func TestTheBoundsAreTheSharedOnes(t *testing.T) {
 	}
 	if fmt.Sprint(v.Bounds) != fmt.Sprint(want) {
 		t.Fatalf("the vectors pin %v, the keeper has %v", v.Bounds, want)
+	}
+}
+
+// A declared size is checked before it is added: negative, past a file's
+// bound (its pack's), or carrying a sum past its budget, with no sum that
+// can wrap.
+func TestAManifestsSizesAreCheckedBeforeTheyAreAdded(t *testing.T) {
+	small := lineOf(file{path: "mine/a", data: []byte("a")})
+	at := func(path string, size int64) Line {
+		l := lineOf(file{path: path})
+		l.Size = size
+		return l
+	}
+	for name, lines := range map[string][]Line{
+		"the reviewer's manifest": {small, at("mine/b", math.MaxInt64)},
+		"a negative size":         {small, at("mine/b", -1)},
+		"a file past its bound":   {at("mine/b", MaxPackBytes+1)},
+		"a pack's sum past it":    {at("mine/b", MaxPackBytes), at("mine/c", 1)},
+		"a set's sum past it":     {at("p0/a", MaxPackBytes), at("p1/a", MaxPackBytes), at("p2/a", MaxPackBytes), at("p3/a", MaxPackBytes), at("p4/a", 1)},
+		"two that wrap together":  {at("p0/a", math.MaxInt64/2+1), at("p1/a", math.MaxInt64/2+1)},
+	} {
+		body, err := json.Marshal(Manifest{Files: lines})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readManifest(bytes.NewReader(body), int64(len(body))); err == nil {
+			t.Errorf("%s was taken", name)
+		}
+	}
+	full := []Line{at("p0/a", MaxPackBytes), at("p1/a", MaxPackBytes), at("p2/a", MaxPackBytes), at("p3/a", MaxPackBytes)}
+	body, _ := json.Marshal(Manifest{Files: full})
+	if _, err := readManifest(bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Errorf("a set at its budget: %v", err)
+	}
+}
+
+// A path's bound is the store's, on the path inside its pack, read from
+// the shared vectors' edge.
+func TestAPathsBoundIsTheStores(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Paths struct {
+			Pack    string   `json:"pack"`
+			Held    []string `json:"held"`
+			Refused []string `json:"refused"`
+		} `json:"pack_paths"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil || v.Paths.Pack == "" || len(v.Paths.Held) == 0 || len(v.Paths.Refused) == 0 {
+		t.Fatalf("the vectors' pack_paths: %+v %v", v.Paths, err)
+	}
+	for _, p := range v.Paths.Held {
+		if _, err := checkPath(v.Paths.Pack + "/" + p); err != nil {
+			t.Errorf("%d bytes inside the pack: %v", len(p), err)
+		}
+		b := streamOf(t, []file{{path: v.Paths.Pack + "/" + p, data: []byte("x")}})
+		if err := Extract(bytes.NewReader(b), t.TempDir()); err != nil {
+			t.Errorf("%d bytes inside the pack, extracted: %v", len(p), err)
+		}
+	}
+	for _, p := range v.Paths.Refused {
+		if _, err := checkPath(v.Paths.Pack + "/" + p); err == nil {
+			t.Errorf("%d bytes inside the pack was taken", len(p))
+		}
 	}
 }
