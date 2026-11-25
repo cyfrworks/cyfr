@@ -23,7 +23,7 @@ import (
 // and everything docker started. The child starts suspended and runs only
 // once it is in the job, so nothing it starts escapes. The deadline, a
 // cancelled ctx and the call's end each terminate the whole job.
-func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadline time.Duration, streams func(*exec.Cmd)) (int, error) {
+func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadline time.Duration, _ string, streams func(*exec.Cmd)) (int, error) {
 	job, err := newKillOnCloseJob()
 	if err != nil {
 		return -1, err
