@@ -55,7 +55,7 @@ func (msiRoad) fetch(ctx context.Context, out io.Writer, before, target string) 
 }
 
 // elevate takes nothing: the MSI installs for this account alone.
-func (msiRoad) elevate(io.Writer, string) (func(), error) { return func() {}, nil }
+func (msiRoad) elevate(io.Writer, string, bool) (func(), error) { return func() {}, nil }
 
 func (msiRoad) replace(out io.Writer, s *staged, _ bool) error {
 	carried, err := appCyfr()

@@ -33,8 +33,9 @@ const MaxLine = 64 << 10
 // The messages cyfr sends the app's main process.
 const (
 	// Ready names the first page: the chooser, its run token in the
-	// fragment; and, for the CYFR app, the rail's page, its read token in
-	// the fragment, which reads the list of CYFRs and changes nothing.
+	// fragment; and, for the CYFR app, the rail's page and Update CYFR's,
+	// the read token in each fragment, which reads the list of CYFRs and
+	// the update's offer and changes nothing.
 	TypeReady = "ready"
 	// Home names the CYFR selected, the account service approved for it and
 	// how to reach it, as a numbered attempt; main answers the attempt it
@@ -85,12 +86,19 @@ const (
 	TypeForget = "forget"
 	// Erased answers erase of the same id: ok once that store is empty.
 	TypeErased = "erased"
+	// Update is the person's yes on Update CYFR to the offer it showed,
+	// by its number: main sends it from that window's own page alone, and
+	// cyfr starts only the offer it holds under that number, once.
+	TypeUpdate = "update"
+	// UpdateClosed says the Update CYFR window closed: the offer it showed
+	// is dropped.
+	TypeUpdateClosed = "update-closed"
 )
 
 // fields is each message's fields beyond version and type, those that may
 // be absent marked optional.
 var fields = map[string]struct{ required, optional []string }{
-	TypeReady:        {required: []string{"url"}, optional: []string{"rail"}},
+	TypeReady:        {required: []string{"url"}, optional: []string{"rail", "update"}},
 	TypeHome:         {required: []string{"home", "account", "attempt"}, optional: []string{"proxy", "setup"}},
 	TypeOpened:       {required: []string{"home", "attempt"}},
 	TypeLocked:       {optional: []string{"home", "account", "proxy"}},
@@ -104,9 +112,12 @@ var fields = map[string]struct{ required, optional []string }{
 	TypeFolderPicked: {required: []string{"path", "epoch", "pick"}},
 	TypeForget:       {required: []string{"home"}},
 	TypeErased:       {required: []string{"id", "ok"}},
+	TypeUpdate:       {required: []string{"offer"}},
+	TypeUpdateClosed: {},
 }
 
-var fromMain = []string{TypeHomeReady, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked, TypeForget, TypeErased}
+var fromMain = []string{TypeHomeReady, TypeLock, TypeLeave, TypeShutdown, TypeFolderPicked, TypeForget, TypeErased, TypeUpdate,
+	TypeUpdateClosed}
 
 // Message is one message in either direction. Path is a folder-picked
 // answer's folder, nil when none was picked. Attempt is a proposal's
@@ -118,10 +129,13 @@ type Message struct {
 	Account string
 	Attempt uint64
 	ID      uint64
-	// Rail is ready's address of the rail's page; OK is erased's answer.
-	Rail  string
-	OK    bool
-	Proxy string
+	// Rail and Update are ready's addresses of the rail's page and of
+	// Update CYFR's; OK is erased's answer and Offer update's number.
+	Rail   string
+	Update string
+	OK     bool
+	Offer  uint64
+	Proxy  string
 	// Setup is the setup token of a CYFR on this computer that no one is
 	// set up at yet: on the passkey road main opens its setup page with
 	// it, in the address's fragment alone, where the first person is made.
@@ -190,10 +204,13 @@ func ReadFromMain(line []byte) (Message, error) {
 		if f == "path" && string(raw) == "null" {
 			continue
 		}
-		if f == "attempt" || f == "id" {
+		if f == "attempt" || f == "id" || f == "offer" {
 			n := &msg.Attempt
-			if f == "id" {
+			switch f {
+			case "id":
 				n = &msg.ID
+			case "offer":
+				n = &msg.Offer
 			}
 			if string(raw) == "null" || json.Unmarshal(raw, n) != nil || *n == 0 || *n > maxWhole {
 				return Message{}, refuse("fields")
@@ -244,7 +261,7 @@ func (m Message) object() (map[string]any, error) {
 	if !ok || slices.Contains(fromMain, m.Type) {
 		return nil, fmt.Errorf("cyfr does not send %q", m.Type)
 	}
-	values := map[string]string{"url": m.URL, "rail": m.Rail, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
+	values := map[string]string{"url": m.URL, "rail": m.Rail, "update": m.Update, "home": m.Home, "account": m.Account, "proxy": m.Proxy,
 		"setup": m.Setup}
 	o := map[string]any{"version": Version, "type": m.Type}
 	for _, f := range want.required {

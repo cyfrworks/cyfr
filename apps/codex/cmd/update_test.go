@@ -627,7 +627,7 @@ func (s *updateScenario) answer(name, content string) {
 
 // homeStep is `cyfr update`'s home step, the change confirmed.
 func homeStep(ctx context.Context, out, errOut io.Writer) error {
-	return runHomeUpdate(ctx, out, errOut, true)
+	return runHomeUpdate(ctx, out, errOut, updateOptions{yes: true})
 }
 
 // run runs `cyfr update` and answers its error and its output; the lock is
@@ -2782,7 +2782,7 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 			s := newUpdateScenario(t, []byte(compose), nil)
 			askWith(t, c.terminal, strings.NewReader(c.answer))
 			var out bytes.Buffer
-			err := runHomeUpdate(context.Background(), &out, &out, false)
+			err := runHomeUpdate(context.Background(), &out, &out, updateOptions{})
 			switch {
 			case c.says == "" && (err != nil || !strings.HasSuffix(out.String(), "Update this CYFR? (yes/no) [no]: Nothing changed. Run cyfr update again when you want this release.\n")):
 				t.Fatalf("a declined update answered %v:\n%s", err, out.String())
@@ -2810,11 +2810,108 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 	s := newUpdateScenario(t, []byte(compose), nil)
 	askWith(t, true, strings.NewReader("yes\n"))
 	var out bytes.Buffer
-	if err := runHomeUpdate(context.Background(), &out, &out, false); err != nil || !strings.Contains(out.String(), "Updated to release 0.9.0.") {
+	if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{}); err != nil || !strings.Contains(out.String(), "Updated to release 0.9.0.") {
 		t.Fatalf("a confirmed update answered %v:\n%s", err, out.String())
 	}
 	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); got != string(switched([]byte(compose))) {
 		t.Errorf("the confirmed update left docker-compose.yml as:\n%s", got)
+	}
+}
+
+// The CYFR app's Update CYFR page shows the change --offer answers, which
+// makes none, with its confirmation: the folder, the exact release and
+// the compose file's bytes as the offer read them. A run confirmed with
+// it makes the change with no terminal and no --yes where it reads the
+// same three itself; a compose file rewritten since, even where the change
+// it words is the same, and the same file in another folder are refused
+// before anything stops. A home on its release already is answered as
+// current.
+func TestTheAppsConfirmedChangeIsMadeOnlyAsItWasRead(t *testing.T) {
+	compose := strings.Replace(string(shippedCompose(t)), "image: ghcr.io/cyfrworks/cyfr:latest", "image: ghcr.io/cyfrworks/cyfr:0.8.0@"+digestOld, 1)
+	askWith(t, false, strings.NewReader(""))
+	var out bytes.Buffer
+	lastLine := func() []byte {
+		return []byte(out.String()[strings.LastIndex(strings.TrimSuffix(out.String(), "\n"), "\n")+1:])
+	}
+	offer := func() shownChange {
+		t.Helper()
+		out.Reset()
+		if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil {
+			t.Fatalf("the offer answered %v:\n%s", err, out.String())
+		}
+		var shown shownChange
+		if err := json.Unmarshal(lastLine(), &shown); err != nil || shown.Current != "" || shown.Confirmation == "" ||
+			!strings.Contains(shown.Change, "This CYFR is on release 0.8.0; this cyfr is release 0.9.0.\n") {
+			t.Fatalf("the offer is %q (%v)", out.String(), err)
+		}
+		return shown
+	}
+	refused := func(confirmation string) {
+		t.Helper()
+		out.Reset()
+		err := runHomeUpdate(context.Background(), &out, &out, updateOptions{confirmed: confirmation})
+		if err == nil || err.Error() != "What updating this CYFR changes is not the change the CYFR app showed, so nothing was changed. Open Update CYFR in the app again to see the change as it is now" {
+			t.Fatalf("a change other than the one read answered %v:\n%s", err, out.String())
+		}
+	}
+
+	s := newUpdateScenario(t, []byte(compose), nil)
+	shown := offer()
+	s.onlyReadTheSchema()
+	s.composeUnchanged()
+	// The same change in words, from a file that is not the one read.
+	if err := os.WriteFile("docker-compose.yml", []byte(compose+"# edited after the offer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refused(shown.Confirmation)
+	if err := os.WriteFile("docker-compose.yml", []byte(compose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{confirmed: shown.Confirmation}); err != nil ||
+		!strings.Contains(out.String(), "Updated to release 0.9.0.") || strings.Contains(out.String(), "Update this CYFR?") {
+		t.Fatalf("the change read, confirmed, answered %v:\n%s", err, out.String())
+	}
+	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); got != string(switched([]byte(compose))) {
+		t.Errorf("the confirmed change left docker-compose.yml as:\n%s", got)
+	}
+
+	// The same file in another folder.
+	s = newUpdateScenario(t, []byte(compose), nil)
+	refused(shown.Confirmation)
+	s.onlyReadTheSchema()
+	s.composeUnchanged()
+
+	s = newUpdateScenario(t, switched(shippedCompose(t)), nil)
+	out.Reset()
+	shown = shownChange{}
+	if err := runHomeUpdate(context.Background(), &out, &out, updateOptions{offer: true}); err != nil ||
+		json.Unmarshal(lastLine(), &shown) != nil || shown.Change != "" || shown.Confirmation != "" || !strings.HasPrefix(shown.Current, "This CYFR is on release 0.9.0 already") {
+		t.Fatalf("a home on its release is offered %q (%v)", out.String(), err)
+	}
+	s.composeUnchanged()
+}
+
+// The schema read's refusal is said with .env's values blanked, as the
+// engine redacts what docker says: a diagnostic of docker's can quote
+// them.
+func TestTheSchemaReadsRefusalSaysNoValueOfEnv(t *testing.T) {
+	newUpdateScenario(t, shippedCompose(t), nil)
+	if err := os.WriteFile(".env", []byte(scenarioEnv+"CYFR_SECRET_KEY_BASE="+keyBase+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	saved := schemaDocker
+	t.Cleanup(func() { schemaDocker = saved })
+	schemaDocker = func(context.Context, []string, ...string) (string, error) {
+		return "", fmt.Errorf("Error response from daemon: invalid env %s", keyBase)
+	}
+	var out bytes.Buffer
+	err := runHomeUpdate(context.Background(), &out, &out, updateOptions{yes: true})
+	if err == nil || !strings.HasPrefix(err.Error(), "cyfr update could not read which schema") {
+		t.Fatalf("the update answered %v", err)
+	}
+	if strings.Contains(err.Error(), keyBase) || strings.Contains(out.String(), keyBase) {
+		t.Fatalf("the refusal says .env's value: %v\n%s", err, out.String())
 	}
 }
 
@@ -2860,7 +2957,7 @@ func TestUpdateRefusesAComposeChangedAfterTheOffer(t *testing.T) {
 		return copy(p, "yes\n"), io.EOF
 	}))
 	var out bytes.Buffer
-	err := runHomeUpdate(context.Background(), &out, &out, false)
+	err := runHomeUpdate(context.Background(), &out, &out, updateOptions{})
 	if err == nil || err.Error() != "docker-compose.yml changed after cyfr update showed what it changes; nothing was changed. Run 'cyfr update' again" {
 		t.Fatalf("the update answered %v:\n%s", err, out.String())
 	}
@@ -2961,7 +3058,7 @@ func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	done := make(chan error, 1)
-	go func() { done <- runHomeUpdate(ctx, &out, &out, false) }()
+	go func() { done <- runHomeUpdate(ctx, &out, &out, updateOptions{}) }()
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
@@ -3133,7 +3230,7 @@ func TestUpdateRefusesBeforeTheLockAndAnyRecovery(t *testing.T) {
 	before := treeOf(t, dir)
 
 	var out bytes.Buffer
-	err := runHomeUpdate(context.Background(), &out, &out, true)
+	err := runHomeUpdate(context.Background(), &out, &out, updateOptions{yes: true})
 	if err == nil || !strings.HasPrefix(err.Error(), "This CYFR's database was built from schema a0a0a0a0a0a0…") {
 		t.Fatalf("the update answered %v\n%s", err, out.String())
 	}

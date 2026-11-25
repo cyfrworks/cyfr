@@ -4,8 +4,9 @@
 // The private messages between this main process and the cyfr it starts
 // (tests/fixtures/desktop-process.json): one JSON object a line, each with
 // version 2, its type and exactly its type's fields: text, but for attempt,
-// the proposal's number, and id, a departure's or an erase's, whole ones
-// from 1, erased's ok, true or false, erase's home and account, each an
+// the proposal's number, id, a departure's or an erase's, and offer, an
+// update's, whole ones from 1, erased's ok, true or false, erase's home
+// and account, each an
 // origin in its one spelling,
 // folder-picked's path, a
 // folder spelled from a root (absolute) or null, and its epoch and pick,
@@ -21,7 +22,7 @@ export const MAX_LINE = 64 * 1024
 export const RUN_HEADER = "Cyfr-Run"
 
 const FIELDS = {
-  ready: {required: ["url"], optional: ["rail"]},
+  ready: {required: ["url"], optional: ["rail", "update"]},
   home: {required: ["home", "account", "attempt"], optional: ["proxy", "setup"]},
   opened: {required: ["home", "attempt"]},
   locked: {required: [], optional: ["home", "account", "proxy"], together: ["home", "account"]},
@@ -34,11 +35,13 @@ const FIELDS = {
   shutdown: {required: []},
   "folder-picked": {required: ["path", "epoch", "pick"]},
   forget: {required: ["home"]},
-  erased: {required: ["id", "ok"]}
+  erased: {required: ["id", "ok"]},
+  update: {required: ["offer"]},
+  "update-closed": {required: []}
 }
 
 const FROM_CYFR = ["ready", "home", "opened", "locked", "ending", "left", "erase"]
-const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked", "forget", "erased"]
+const FROM_MAIN = ["home-ready", "lock", "leave", "shutdown", "folder-picked", "forget", "erased", "update", "update-closed"]
 
 /**
  * Whether `path` is a folder spelled from a root on any system the app
@@ -66,7 +69,7 @@ export function isOrigin(v) {
   }
 }
 // The fields that are a number, a whole one from 1.
-const whole = (key) => key === "attempt" || key === "id"
+const whole = (key) => key === "attempt" || key === "id" || key === "offer"
 
 /** Read one line cyfr sent, or throw `Refused` with its reason. */
 export function readFromCyfr(line) {
