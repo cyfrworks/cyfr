@@ -299,7 +299,7 @@ func TestRenderScrollList(t *testing.T) {
 
 func TestRenderScrollList_Empty(t *testing.T) {
 	out := captureStdout(t, func() { renderScrollList(map[string]any{"skills": []any{}, "count": float64(0)}) })
-	if !strings.Contains(out, "No scrolls yet") {
+	if !strings.Contains(out, "No scrolls in the packs switched on") {
 		t.Errorf("expected empty-state message, got:\n%s", out)
 	}
 }

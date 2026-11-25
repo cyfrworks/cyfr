@@ -25,13 +25,19 @@ const (
 
 // Call is one docker command: its arguments after `docker`, the deadline
 // the watchdog holds it to, and its standard streams. A nil Stdout or
-// Stderr is captured into the Result.
+// Stderr is captured into the Result. RemoveOnEnd names a container the
+// call runs that must not outlive it: when the call does not end with
+// status 0 (killed at its deadline, cancelled, or its client gone with the
+// cyfr reading it), the container is ended and removed, by the watchdog
+// when the call has one, so also after cyfr's death. No other container is
+// ever removed for a call: a detached run's is meant to outlive it.
 type Call struct {
-	Args     []string
-	Deadline time.Duration
-	Stdin    io.Reader
-	Stdout   io.Writer
-	Stderr   io.Writer
+	Args        []string
+	Deadline    time.Duration
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Stderr      io.Writer
+	RemoveOnEnd string
 }
 
 // Result is a finished call: its exit status and whatever it wrote to a
@@ -450,8 +456,9 @@ func (e *Engine) leaving(before *redactor, rc Receipt, err error) (Receipt, erro
 
 // WatchdogMain is `cyfr internal docker-run`: it runs the docker command
 // its arguments name, holding the lock descriptor it inherited, and kills
-// it at the deadline its arguments name. It answers the process's exit
-// status.
+// it at the deadline its arguments name, removing the container its
+// arguments ask for (Call.RemoveOnEnd) when the call does not end with
+// status 0. It answers the process's exit status.
 func WatchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return watchdogMain(args, stdin, stdout, stderr)
 }

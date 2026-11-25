@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"iter"
 	"maps"
 	"net/url"
@@ -473,7 +472,7 @@ func (u *updater) run() error {
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
 	// the compose file and the scaffold files as they were.
-	steps := []func() error{u.readConfig, u.probePostgres, u.fetchScaffold, u.pull, u.readRoster}
+	steps := []func() error{u.readConfig, u.placeDatabase, u.probePostgres, u.fetchScaffold, u.pull, u.readRoster}
 	for _, step := range steps {
 		if err := step(); err != nil {
 			if u.ctx.Err() != nil {
@@ -1359,6 +1358,12 @@ func (u *updater) composeArgs(ctx context.Context, args ...string) ([]string, er
 // (cyfr's own when nil) and its stderr into cyfr's, what reaches cyfr's
 // own streams redacted a line at a time.
 func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer, args ...string) error {
+	return u.dockerRemoving(ctx, "", stdin, stdout, args...)
+}
+
+// dockerRemoving is docker for a call whose container, named remove, must
+// not outlive it (access.Call.RemoveOnEnd); "" for none.
+func (u *updater) dockerRemoving(ctx context.Context, remove string, stdin io.Reader, stdout io.Writer, args ...string) error {
 	errOut := u.redactor().Writer(u.errOut)
 	defer errOut.Flush()
 	switch {
@@ -1371,7 +1376,7 @@ func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer,
 		defer out.Flush()
 		stdout = out
 	}
-	res, err := u.engine.Docker().Run(ctx, access.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut})
+	res, err := u.engine.Docker().Run(ctx, access.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut, RemoveOnEnd: remove})
 	return callFailure(u.redactor(), res, err)
 }
 
@@ -1469,8 +1474,20 @@ func (u *updater) detached(timeout time.Duration) (context.Context, context.Canc
 // stackConfig is what the snapshot needs from cyfr's effective environment.
 type stackConfig struct {
 	adapter string // sqlite | postgres
-	// sqliteFile is the SQLite database's host path.
+	// sqliteFile is the SQLite database's host path, which a restore puts
+	// back.
 	sqliteFile string
+	// image is the image the cyfr service runs and mounts every mount of
+	// the service as resolved, through which a snapshot reads the storage
+	// as the server sees it (readThroughStack): dbPath is the SQLite
+	// database's container path, dbReal that path with its links
+	// resolved (placeDatabase), dataPath the storage root's; state are
+	// the container paths at which the mounts show the access engine's
+	// state, which no snapshot holds.
+	image                    string
+	mounts                   []composeMount
+	dbPath, dbReal, dataPath string
+	state                    []string
 	// pgURL is CYFR_DATABASE_URL; pgMajor the server's major version.
 	pgURL   string
 	pgMajor int
@@ -1496,6 +1513,55 @@ type storageMount struct {
 // update reads.
 type composeConfig struct {
 	Services map[string]composeService `json:"services"`
+	// Volumes, Secrets and Configs are the top-level declarations a
+	// service's mounts name: a volume's name in the engine, and a secret's
+	// or a config's file.
+	Volumes map[string]struct {
+		Name string `json:"name"`
+	} `json:"volumes"`
+	Secrets map[string]composeSource `json:"secrets"`
+	Configs map[string]composeSource `json:"configs"`
+}
+
+// composeSource is a top-level secret or config: the file it is.
+type composeSource struct {
+	File string `json:"file"`
+}
+
+// resolve answers mounts as docker mounts them: a named volume by its
+// name in the engine, an anonymous one as an empty tmpfs over its place,
+// a secret or a config from a file as a bind of that file. A secret or a config compose makes from no file is left out: no
+// snapshot reads it, since no SQLite database or storage root lies on
+// anything but a bind (readConfig).
+func (config composeConfig) resolve(mounts []composeMount) []composeMount {
+	var out []composeMount
+	for _, m := range mounts {
+		switch m.Type {
+		case "volume":
+			if m.Source == "" {
+				// An anonymous volume is the service's own, which docker
+				// mounts read only for no one else: an empty read-only
+				// tmpfs covers its place as it does.
+				m = composeMount{Type: "tmpfs", Target: m.Target}
+				break
+			}
+			if v, ok := config.Volumes[m.Source]; ok && v.Name != "" {
+				m.Source = v.Name
+			}
+		case "secret", "config":
+			declared := config.Secrets
+			if m.Type == "config" {
+				declared = config.Configs
+			}
+			file := declared[m.Source].File
+			if file == "" {
+				continue
+			}
+			m = composeMount{Type: "bind", Source: file, Target: m.Target}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // composeService is a service as `docker compose config --format json`
@@ -1503,6 +1569,7 @@ type composeConfig struct {
 // something into its filesystem.
 type composeService struct {
 	Profiles    []string           `json:"profiles"`
+	Image       string             `json:"image"`
 	Environment map[string]*string `json:"environment"`
 	Volumes     []composeMount     `json:"volumes"`
 	// Tmpfs is a path or a list of them, each with its options after `:`.
@@ -1591,6 +1658,7 @@ func (u *updater) readConfig() error {
 		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore %s' again before cyfr %s; nothing was changed", snapshot, restoreBarrier, snapshot, u.command)
 	}
 	containerToHost := func(p string) (string, bool) { return mountedHost(mounts, p) }
+	c := &stackConfig{image: cyfr.Image, mounts: config.resolve(mounts)}
 	// nestedMounts answers every mount whose target lies strictly under the
 	// container path root, shallower first, refusing one that is not a bind:
 	// its bytes are no host directory the snapshot can copy.
@@ -1601,12 +1669,7 @@ func (u *updater) readConfig() error {
 			if v.Type != "bind" || v.Source == "" {
 				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr %s cannot snapshot; nothing was changed", root, v.Type, target, u.command)
 			}
-			resolved, err := filepath.EvalSymlinks(v.Source)
-			info, statErr := os.Stat(resolved)
-			if err != nil || statErr != nil || !(info.IsDir() || info.Mode().IsRegular()) {
-				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr %s cannot snapshot it; nothing was changed", target, v.Source, u.command)
-			}
-			nested = append(nested, storageMount{rel: n.rel, host: resolved, dir: info.IsDir()})
+			nested = append(nested, storageMount{rel: n.rel, host: resolvedOr(v.Source)})
 		}
 		sortByDepth(nested)
 		return nested, nil
@@ -1619,7 +1682,6 @@ func (u *updater) readConfig() error {
 		return value, nil
 	}
 
-	c := &stackConfig{}
 	dataPath, err := settingPath("CYFR_DATA_PATH", "data")
 	if err != nil {
 		return err
@@ -1631,15 +1693,10 @@ func (u *updater) readConfig() error {
 		if err != nil {
 			return err
 		}
-		host, ok := containerToHost(dbPath)
-		if !ok {
+		if _, ok := containerToHost(dbPath); !ok {
 			return fmt.Errorf("The SQLite database %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dbPath, u.command)
 		}
-		resolved, err := filepath.EvalSymlinks(host)
-		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("The SQLite database %s (on the host %s) is not a readable file, so cyfr %s cannot snapshot it; nothing was changed", dbPath, host, u.command)
-		}
-		c.sqliteFile = resolved
+		c.dbPath = dbPath
 	case "postgres":
 		c.adapter = "postgres"
 		if c.pgURL = env("CYFR_DATABASE_URL"); c.pgURL == "" {
@@ -1664,18 +1721,12 @@ func (u *updater) readConfig() error {
 		if !ok {
 			return fmt.Errorf("The storage root %s is on no bind mount of the cyfr service, so cyfr %s cannot snapshot it; nothing was changed", dataPath, u.command)
 		}
-		// Resolved, so a root reached through a link is copied, not linked,
-		// and the SQLite file under it is recognized.
-		resolved, err := filepath.EvalSymlinks(host)
-		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.IsDir() {
-			return fmt.Errorf("The storage root %s (on the host %s) is not a readable directory, so cyfr %s cannot snapshot it; nothing was changed", dataPath, host, u.command)
-		}
+		c.dataPath = dataPath
 		nested, err := nestedMounts(dataPath)
 		if err != nil {
 			return err
 		}
-		c.storageMounts = append([]storageMount{{host: resolved, dir: true}}, nested...)
-		fmt.Fprintf(u.out, "Storage root %s is %s on the host.\n", dataPath, resolved)
+		fmt.Fprintf(u.out, "Storage root %s is %s on the host.\n", dataPath, resolvedOr(host))
 		for _, n := range nested {
 			fmt.Fprintf(u.out, "  %s is %s on the host.\n", path.Join(dataPath, n.rel), n.host)
 		}
@@ -1708,6 +1759,12 @@ func (u *updater) readConfig() error {
 		return fmt.Errorf("cyfr %s cannot read .env (%v), which the snapshot copies; nothing was changed", u.command, err)
 	} else {
 		f.Close()
+	}
+	if c.image == "" && (c.adapter == "sqlite" || c.storage == "local") {
+		return fmt.Errorf("the cyfr service names no image, through which cyfr %s reads its storage; nothing was changed", u.command)
+	}
+	if project, err := os.Getwd(); err == nil {
+		c.state = stateIn(c.mounts, resolvedOr(filepath.Join(project, ".cyfr")))
 	}
 	u.config = c
 	return nil
@@ -2830,79 +2887,6 @@ func copyTo(in io.Reader, dst string) error {
 	}
 	_, err = io.Copy(out, in)
 	return errors.Join(err, out.Sync(), out.Close())
-}
-
-// copyStorage copies the storage root as cyfr sees it into dst: each mount
-// in order, shallower first, into its place under dst, leaving out of each
-// the host paths a deeper mount covers in the container, so every byte
-// copied is one cyfr reads and none it reads is missing.
-func copyStorage(mounts []storageMount, dst string, exclude map[string]bool, out io.Writer) error {
-	for i, m := range mounts {
-		skip := maps.Clone(exclude)
-		for _, deeper := range mounts[i+1:] {
-			if m.rel == "" {
-				skip[filepath.Join(m.host, filepath.FromSlash(deeper.rel))] = true
-			} else if rest, ok := strings.CutPrefix(deeper.rel, m.rel+"/"); ok {
-				skip[filepath.Join(m.host, filepath.FromSlash(rest))] = true
-			}
-		}
-		target := filepath.Join(dst, filepath.FromSlash(m.rel))
-		if m.rel != "" {
-			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-				return err
-			}
-		}
-		if !m.dir {
-			if err := copyFile(m.host, target); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := copyTree(m.host, target, skip, out); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// copyTree copies the directory root to the new directory dst: directories
-// 0700, regular files 0600, a symlink as the link it is, never followed;
-// the host paths in exclude, and everything under an excluded directory,
-// are left out, and any other kind of entry is skipped and named.
-func copyTree(root, dst string, exclude map[string]bool, out io.Writer) error {
-	return filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if exclude[filepath.Clean(p)] {
-			// An excluded directory is a deeper mount's place: nothing under
-			// it is the root's.
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		switch mode := entry.Type(); {
-		case entry.IsDir():
-			return os.Mkdir(target, 0700)
-		case mode&fs.ModeSymlink != 0:
-			link, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		case mode.IsRegular():
-			return copyFile(p, target)
-		default:
-			fmt.Fprintf(out, "Skipped %s, neither a file, a directory nor a link.\n", p)
-			return nil
-		}
-	})
 }
 
 // ---- the switch -----------------------------------------------------------------

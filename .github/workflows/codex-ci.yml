@@ -363,7 +363,11 @@ jobs:
     name: CYFR app (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     # Electron's download and the packages' builds, three of them with the
-    # update's two releases, take most of it.
+    # update's two releases, take most of it. The steps that have run to this
+    # limit on Windows and left no log (the smoke, the uninstall, the
+    # update's two) each have a limit of their own, far above what they take
+    # (under half a minute, and seven minutes for the update), so one that
+    # stalls ends as a failed step with its log and its name.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -453,6 +457,7 @@ jobs:
 
       - name: Smoke the installed app (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         run: bash tests/desktop-proof/native/smoke.sh "$APP"
 
       # Read from each file's header, the way release.yml reads the
@@ -469,6 +474,7 @@ jobs:
 
       - name: Uninstall the app (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         shell: pwsh
         run: pwsh -NoProfile -File tests/desktop-proof/native/windows.ps1 remove apps/codex/desktop/dist/cyfr-desktop_0.0.0-ci_windows_${{ matrix.arch }}.msi
 
@@ -485,15 +491,26 @@ jobs:
       # last, as it leaves B installed (on Linux, removed after the update
       # service's checks). On Linux the releases lie where the service's
       # unit, which sees no /home and a /tmp of its own, reads them as root.
-      - name: The app's update from one release to the next
+      # In two steps, each with its own limit: the releases built, then the
+      # update run, so a stall names which of the two it was in.
+      - name: Build the update proof's releases
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = Linux ]; then
             sudo apt-get install -y --no-install-recommends xdotool >/dev/null
             sudo install -d -o "$(id -un)" /srv/update-proof
             bash tests/desktop-proof/native/update.sh build /srv/update-proof ${{ matrix.arch }}
-            dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/update.sh run /srv/update-proof
           else
             bash tests/desktop-proof/native/update.sh build "$RUNNER_TEMP/update-proof" ${{ matrix.arch }}
+          fi
+
+      - name: The app's update from one release to the next
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            dbus-run-session -- xvfb-run -a bash tests/desktop-proof/native/update.sh run /srv/update-proof
+          else
             bash tests/desktop-proof/native/update.sh run "$RUNNER_TEMP/update-proof"
           fi

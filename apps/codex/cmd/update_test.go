@@ -175,6 +175,10 @@ var (
 // cyfr.example.com, builds on.
 const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_PORT=4000\n"
 
+// stackImage is the image the scenarios' cyfr service runs, through which
+// a snapshot reads the storage.
+const stackImage = "ghcr.io/cyfrworks/cyfr:0.8.0"
+
 // updateScenario is one update's project directory, fake docker and fake
 // engine.
 type updateScenario struct {
@@ -324,6 +328,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 		environment[k] = v
 	}
 	config, _ := json.Marshal(map[string]any{"services": map[string]any{"cyfr": map[string]any{
+		"image":       stackImage,
 		"environment": environment,
 		"volumes": []map[string]any{
 			{"type": "bind", "source": filepath.Join(s.project, "data"), "target": "/app/data", "bind": map[string]any{}},
@@ -610,7 +615,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	want := append(s.offerReads(),
 		"ENGINE lock update",
 		"ENGINE resume",
-		profiles+"config --format json",
+		profiles+"config --format json")
+	want = append(append(want, s.placeReads()...),
 		"SCAFFOLD FETCH "+testVersion,
 		"pull ghcr.io/cyfrworks/cyfr@"+digestCyfr,
 		"pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus,
@@ -628,7 +634,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"stop locus-guard",
 		profiles+"stop",
 		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
-		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive,
+		profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive)
+	want = append(append(want, s.snapshotReads()...),
 		networkList(access.ProjectName(s.project)),
 		"ENGINE release",
 		"SCAFFOLD WRITE",
@@ -637,8 +644,9 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles+"config --services",
 		profiles+"ps --format json",
 	)
-	if got := s.log(); !slices.Equal(got, want) {
-		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	logged := s.namedLog()
+	if !slices.Equal(logged, want) {
+		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(logged, "\n"), strings.Join(want, "\n"))
 	}
 
 	// Before the switch every call saw the old compose file, and every one
@@ -1128,6 +1136,8 @@ func TestEveryDockerCallCarriesItsDeadline(t *testing.T) {
 			return pullTimeout
 		case strings.Contains(line, "pg_dump") || strings.Contains(line, "pg_restore"):
 			return dumpTimeout
+		case stackReadCall(c.Args):
+			return stackReadBackstop
 		case slices.Contains(c.Args, "stop") || c.Args[0] == "network":
 			return stopTimeout
 		}
@@ -1165,8 +1175,9 @@ func TestUpdateRefusesAFailedPull(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "docker pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus+" failed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	want := append(s.offerReads(), "ENGINE lock update", "ENGINE resume", profiles+"config --format json", "SCAFFOLD FETCH "+testVersion, "pull ghcr.io/cyfrworks/cyfr@"+digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus)
-	if got := s.log(); !slices.Equal(got, want) {
+	want := append(append(s.offerReads(), "ENGINE lock update", "ENGINE resume", profiles+"config --format json"), s.placeReads()...)
+	want = append(want, "SCAFFOLD FETCH "+testVersion, "pull ghcr.io/cyfrworks/cyfr@"+digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus)
+	if got := s.namedLog(); !slices.Equal(got, want) {
 		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
 	}
 	s.composeUnchanged()

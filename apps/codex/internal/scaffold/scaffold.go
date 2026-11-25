@@ -293,54 +293,32 @@ func replaceFile(root *os.Root, name string, data []byte, mode os.FileMode) erro
 }
 
 // The Aqua files the scaffold ships and owns, so `cyfr update` refreshes
-// them with each release: the soul at aqua/aqua.md, and every file under a
-// shipped scroll's directory aqua/skills/<name>/. The scrolls are an
-// explicit roster of the names the seed tree ships, so a member's own
-// aqua/skills/mine/SKILL.md matches none and is preserved on update. No
-// crew member ships: every aqua/crew/<name>.md is the athanor's own.
-// TestBundledPromptsMatchSeed binds the roster to the seed tree the tarball
+// them with each release: the soul at aqua/aqua.md, and every file of
+// CYFR's own pack of scrolls, aqua/scrolls/cyfr/. Every other pack under
+// aqua/scrolls/ is a member's own, brought in or made, and is preserved on
+// update; so is every crew member, aqua/crew/<name>.md, since none ships.
+// TestBundledPromptsMatchSeed binds the set to the seed tree the tarball
 // is packed from.
 const aquaSoul = "aqua/aqua.md"
 
-var shippedScrolls = map[string]bool{
-	"artisan":                true,
-	"browser":                true,
-	"builder":                true,
-	"canvas":                 true,
-	"capability-acquisition": true,
-	"planner":                true,
-	"research":               true,
-	"web":                    true,
-}
-
-// scrollsDir holds the shipped scrolls.
-const scrollsDir = "aqua/skills"
+// cyfrPack is CYFR's own pack of scrolls, which ships whole.
+const cyfrPack = "aqua/scrolls/cyfr"
 
 // isManagedAqua reports whether path is one of the Aqua files the scaffold
-// ships: the soul, or a file inside a shipped scroll.
+// ships: the soul, or a file inside CYFR's own pack.
 func isManagedAqua(path string) bool {
-	if path == aquaSoul {
-		return true
-	}
-	if rest, ok := strings.CutPrefix(path, scrollsDir+"/"); ok {
-		name, _, inside := strings.Cut(rest, "/")
-		return inside && shippedScrolls[name]
-	}
-	return false
+	return path == aquaSoul || strings.HasPrefix(path, cyfrPack+"/")
 }
 
 // HoldsManaged reports whether dir is a directory above managed files
-// (IsManaged) that is no managed name itself: wit/, aqua/, its scrolls
-// directory, and each shipped scroll's directory. Under wit/ and inside a
-// shipped scroll every name is managed. One that is there as a link or a
-// file holds managed files a walk that follows no link does not reach.
+// (IsManaged) that is no managed name itself: wit/, aqua/, aqua/scrolls/
+// and CYFR's own pack. Under wit/ and inside CYFR's own pack every name is
+// managed. One that is there as a link or a file holds managed files a
+// walk that follows no link does not reach.
 func HoldsManaged(dir string) bool {
 	switch dir {
-	case "wit", path.Dir(aquaSoul), scrollsDir:
+	case "wit", path.Dir(aquaSoul), path.Dir(cyfrPack), cyfrPack:
 		return true
-	}
-	if name, ok := strings.CutPrefix(dir, scrollsDir+"/"); ok {
-		return shippedScrolls[name]
 	}
 	return false
 }

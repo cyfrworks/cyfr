@@ -1714,7 +1714,7 @@ defmodule Cyfr.DocsDriftTest do
     ]
 
     for file <- [
-          "seed/aqua/skills/canvas/SKILL.md",
+          "seed/aqua/scrolls/cyfr/skills/canvas/SKILL.md",
           "tincture-guide.md",
           "integration-guide.md",
           "apps/cyfr/assets/js/sdk/client.js"
@@ -1961,7 +1961,7 @@ defmodule Cyfr.DocsDriftTest do
   # reaches the guide and the scroll before any reader meets a stale one.
   # ==========================================================================
 
-  @tincture_list_files ["tincture-guide.md", "seed/aqua/skills/artisan/SKILL.md"]
+  @tincture_list_files ["tincture-guide.md", "seed/aqua/scrolls/cyfr/skills/artisan/SKILL.md"]
   @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk canvas)
 
   # The SDK's call for each request kind and for the stream connection,

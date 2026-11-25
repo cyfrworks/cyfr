@@ -301,10 +301,10 @@ defmodule Arca.Storage do
     `data/system/`
   - `shared` — a shared thread's attachments under `data/shared/{thread_id}/`
 
-  The Aqua soul, crew and scrolls (`aqua/aqua.md`, `aqua/crew/*.md`,
-  `aqua/skills/*/SKILL.md`) are the athanor's own — an ordinary tenant
-  path, served through the seed overlay like `components/`: the shipped
-  template shows through until a file is edited.
+  The Aqua soul, crew and packs of scrolls (`aqua/aqua.md`,
+  `aqua/crew/*.md`, `aqua/scrolls/<pack>/`) are the athanor's own — an
+  ordinary tenant path, served through the seed overlay like
+  `components/`.
   """
   @global_prefixes for {root, :global, _guest, _seed, _tier} <- @layout, do: root
 

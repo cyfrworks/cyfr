@@ -33,7 +33,7 @@ var aquaCmd = &cobra.Command{
 
   the soul      aqua.md — who Aqua is (name "aqua"); edited, never created or deleted
   the crew      who Aqua hands jobs to, each on a brain of its own — aqua/crew/<name>.md
-  the scrolls   how a job is done, for Aqua and its crew — aqua/skills/<name>/SKILL.md
+  the scrolls   how a job is done, for Aqua and its crew — kept in packs, aqua/scrolls/<pack>/
   the guides    the read-only documentation guides
 
 "list" shows all of it; "get" reads the soul, a crew member or a guide; "skills" reads
@@ -108,7 +108,7 @@ var aquaStatusCmd = &cobra.Command{
 
   bundled   as shipped with the server
   edited    a shipped file the athanor changed
-  yours     a crew member or scroll the athanor made
+  yours     a crew member the athanor made
 
 Aqua's page in CYFR restores the shipped set.`,
 	Example: `  cyfr aqua status
@@ -131,10 +131,10 @@ Aqua's page in CYFR restores the shipped set.`,
 var aquaSkillsCmd = &cobra.Command{
 	Use:   "skills",
 	Short: "The scrolls Aqua has learned",
-	Long: "Read the scrolls — the procedures the athanor's Aqua has learned, one aqua/skills/<name>/SKILL.md each. " +
+	Long: "Read the scrolls — the procedures the athanor's Aqua keeps in packs, each named by its pack and its name (mine:release-notes). " +
 		"Run bare (or with list) for the index, get for one scroll's body.",
 	Example: `  cyfr aqua skills
-  cyfr aqua skills get release-notes`,
+  cyfr aqua skills get mine:release-notes`,
 	Args: cobra.NoArgs,
 	RunE: runAquaSkillsList,
 }
@@ -164,9 +164,9 @@ func runAquaSkillsList(cmd *cobra.Command, args []string) error {
 var aquaSkillsGetCmd = &cobra.Command{
 	Use:   "get [name]",
 	Short: "Display a scroll",
-	Long:  "Retrieve and display one scroll by name — its description, then its body. Run without arguments for interactive selection.",
-	Example: `  cyfr aqua skills get release-notes
-  cyfr aqua skills get release-notes --json`,
+	Long:  "Retrieve and display one scroll by its full name, its pack and its name — its description, then its body. Run without arguments for interactive selection.",
+	Example: `  cyfr aqua skills get mine:release-notes
+  cyfr aqua skills get mine:release-notes --json`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := pickTarget(cmd.Context(), args, selector{
@@ -327,7 +327,7 @@ func renderAquaStatus(result map[string]any) {
 func renderScrollList(result map[string]any) {
 	scrolls := mapsOf(result["skills"])
 	if len(scrolls) == 0 {
-		fmt.Println("No scrolls yet — Aqua learns one at aqua/skills/<name>/SKILL.md.")
+		fmt.Println("No scrolls in the packs switched on — keep packs on the Aqua page's Scrolls.")
 		return
 	}
 	rows := make([]map[string]string, 0, len(scrolls))

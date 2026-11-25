@@ -1881,7 +1881,8 @@ defmodule Aqua.Loop do
 
   # The frame a model's result reads in, by what the answer is
   # (`Aqua.Loop.Policy.answer_of/1`) and who wrote it: a scroll read, as
-  # its body and its files' names, in a scroll's frame; an outside answer,
+  # its body and its files' names, in a scroll's frame; another file of
+  # its pack read by its path, and an outside answer,
   # and an outside source's own words for why it failed
   # (`Prima.Refusal.outside?/1`), in the outside frame. CYFR's own answers,
   # and every refusal, skip and unknown outcome CYFR wrote, are unframed.
@@ -1889,6 +1890,14 @@ defmodule Aqua.Loop do
 
   defp frame(%Call{} = call, outcome, result) do
     case {Policy.answer_of(call), outcome, result} do
+      # One file of a scroll's pack, read by its path: only a scroll's
+      # `SKILL.md` is instructions, so any other file is outside material.
+      {:scroll, "ok", {:ok, %{path: path}}} when is_binary(path) ->
+        {nil, %{"kind" => "outside", "name" => call.model_name}}
+
+      {:scroll, "ok", {:ok, %{"path" => path}}} when is_binary(path) ->
+        {nil, %{"kind" => "outside", "name" => call.model_name}}
+
       {:scroll, "ok", {:ok, %{} = answer}} ->
         %{name: name, body: body, files: files} = scroll_of(answer)
         {body, %{"kind" => "scroll", "name" => name, "files" => files}}
@@ -1922,14 +1931,15 @@ defmodule Aqua.Loop do
   defp proposed(%Call{kind: :catalog, tool: "aqua", action: action}, {:ok, %{} = answer}, payload)
        when action in ["skill_create", "skill_update"] do
     case answer |> Jason.encode!() |> Jason.decode!() do
-      %{"proposed" => name, "description" => d, "content" => c, "against" => against}
+      %{"proposed" => name, "description" => d, "content" => c, "against" => against} = kept
       when is_binary(name) and is_binary(d) and is_binary(c) and is_binary(against) ->
-        Map.put(payload, "proposal", %{
-          "name" => name,
-          "description" => d,
-          "content" => c,
-          "against" => against
-        })
+        proposal = %{"name" => name, "description" => d, "content" => c, "against" => against}
+
+        Map.put(
+          payload,
+          "proposal",
+          if(kept["new_pack"] == true, do: Map.put(proposal, "new_pack", true), else: proposal)
+        )
 
       _written ->
         payload

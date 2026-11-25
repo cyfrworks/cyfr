@@ -7,13 +7,20 @@ defmodule Compendium.AquaPath do
   scope's one spelling, as `Compendium.ComponentPath` is for `components/`
   and `Arca.ThreadStorage.blob_root/1` for `threads/`.
 
-  The tree holds one soul, the crew, and the scrolls (`locate/1` is the
-  grammar the overlay consults, via `Arca.Storage.UnitLocator`):
+  The tree holds one soul, the crew, and the packs of scrolls (`locate/1`
+  is the grammar the overlay consults, via `Arca.Storage.UnitLocator`):
 
       aqua/
-      ├── aqua.md                 # the soul — the one assistant an athanor has
-      ├── crew/<name>.md          # one frontmatter-markdown file per crew member
-      └── skills/<name>/SKILL.md  # one Agent Skills package per scroll
+      ├── aqua.md                    # the soul — the one assistant an athanor has
+      ├── crew/<name>.md             # one frontmatter-markdown file per crew member
+      └── scrolls/<pack>/            # one pack, as its author published it
+          ├── .cyfr-pack.json        # CYFR's record of the pack (`Compendium.Packs`)
+          └── skills/<folder>/SKILL.md   # one Agent Skills package per scroll
+
+  A pack is one directory unit committed whole (`commits_whole?/1`): every
+  write inside it is a new revision of the pack, and its record, the
+  unit's sentinel, is written by `Compendium.Packs` alone, which also
+  answers what an ordinary write may make of a pack (`admit_edit/4`).
 
   The soul's name is reserved: `aqua` is the file at the root and never a
   crew member, so `agent_file/1` is the one router from a name to its
@@ -31,9 +38,11 @@ defmodule Compendium.AquaPath do
   @soul Prima.AgentRef.soul_name()
   @soul_file @soul <> ".md"
   @crew "crew"
+  @scrolls "scrolls"
   @skills "skills"
   @skill_manifest "SKILL.md"
-  # The one grammar for crew and scroll names — the tool boundary
+  @record ".cyfr-pack.json"
+  # The one grammar for crew, pack and scroll names — the tool boundary
   # (`Compendium.Providers.Aqua.validate_name`) and the unit locator both
   # speak it, so a name the tools refuse can never mint a unit.
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
@@ -152,52 +161,73 @@ defmodule Compendium.AquaPath do
   def agent_file(name) when is_binary(name), do: crew_file(name)
 
   @doc """
-  The skills directory — the scrolls.
+  The packs' directory.
 
   ## Examples
 
-      iex> Compendium.AquaPath.skills_root()
-      ["aqua", "skills"]
+      iex> Compendium.AquaPath.scrolls_root()
+      ["aqua", "scrolls"]
 
   """
-  @spec skills_root() :: [String.t()]
-  def skills_root, do: @root ++ [@skills]
+  @spec scrolls_root() :: [String.t()]
+  def scrolls_root, do: @root ++ [@scrolls]
 
   @doc """
-  One skill's directory — a shadow unit of its own.
+  One pack's directory — a unit of its own, committed whole.
 
   ## Examples
 
-      iex> Compendium.AquaPath.skill_dir("pdf-forms")
-      ["aqua", "skills", "pdf-forms"]
+      iex> Compendium.AquaPath.pack_dir("mine")
+      ["aqua", "scrolls", "mine"]
 
   """
-  @spec skill_dir(String.t()) :: [String.t()]
-  def skill_dir(name) when is_binary(name), do: @root ++ [@skills, name]
+  @spec pack_dir(String.t()) :: [String.t()]
+  def pack_dir(pack) when is_binary(pack), do: @root ++ [@scrolls, pack]
 
-  @doc "The skill manifest's filename — the overlay sentinel for `aqua/`."
+  @doc "The pack record's reserved name, the unit's sentinel, at a pack's root."
+  @spec record_name() :: String.t()
+  def record_name, do: @record
+
+  @doc "The folder inside a pack that holds its scrolls, as Agent Skills lays them out."
+  @spec skills_dirname() :: String.t()
+  def skills_dirname, do: @skills
+
+  @doc "A scroll's manifest filename."
   @spec skill_manifest_name() :: String.t()
   def skill_manifest_name, do: @skill_manifest
 
   @doc """
-  One skill's manifest.
+  One scroll's folder inside its pack.
 
   ## Examples
 
-      iex> Compendium.AquaPath.skill_manifest("pdf-forms")
-      ["aqua", "skills", "pdf-forms", "SKILL.md"]
+      iex> Compendium.AquaPath.scroll_dir("mine", "research")
+      ["aqua", "scrolls", "mine", "skills", "research"]
 
   """
-  @spec skill_manifest(String.t()) :: [String.t()]
-  def skill_manifest(name) when is_binary(name), do: skill_dir(name) ++ [@skill_manifest]
+  @spec scroll_dir(String.t(), String.t()) :: [String.t()]
+  def scroll_dir(pack, folder) when is_binary(pack) and is_binary(folder),
+    do: pack_dir(pack) ++ [@skills, folder]
+
+  @doc """
+  One scroll's manifest.
+
+  ## Examples
+
+      iex> Compendium.AquaPath.scroll_manifest("mine", "research")
+      ["aqua", "scrolls", "mine", "skills", "research", "SKILL.md"]
+
+  """
+  @spec scroll_manifest(String.t(), String.t()) :: [String.t()]
+  def scroll_manifest(pack, folder), do: scroll_dir(pack, folder) ++ [@skill_manifest]
 
   @doc """
   The overlay's unit grammar for `aqua/` (`Arca.Storage.UnitLocator`):
   the soul and each crew member are file-shaped units (a valid-named
-  `.md` file), a skill a valid-named directory unit sentinel'd by
-  `SKILL.md`. A unit is a claim the storage layer acts on — the shipped
+  `.md` file), a pack a valid-named directory unit sentinel'd by its
+  record. A unit is a claim the storage layer acts on — the shipped
   copy, the lock, status — so only the grammar mints one: a stray
-  `crew/notes.txt` or a junk-named skill dir stays plain storage, outside
+  `crew/notes.txt` or a junk-named pack folder stays plain storage, outside
   the roster and the reset bookkeeping.
 
   ## Examples
@@ -208,8 +238,8 @@ defmodule Compendium.AquaPath do
       iex> Compendium.AquaPath.locate(["aqua", "crew", "explorer.md"])
       {:file, ["aqua", "crew", "explorer.md"]}
 
-      iex> Compendium.AquaPath.locate(["aqua", "skills", "pdf-forms", "helpers", "fill.md"])
-      {:dir, ["aqua", "skills", "pdf-forms"], "SKILL.md"}
+      iex> Compendium.AquaPath.locate(["aqua", "scrolls", "mine", "skills", "pdf", "SKILL.md"])
+      {:dir, ["aqua", "scrolls", "mine"], ".cyfr-pack.json"}
 
       iex> Compendium.AquaPath.locate(["aqua", "crew"])
       :above_unit
@@ -229,9 +259,9 @@ defmodule Compendium.AquaPath do
     end
   end
 
-  def locate([@root_name, @skills, name | _rest]) do
-    if valid_name?(name) do
-      {:dir, @root ++ [@skills, name], @skill_manifest}
+  def locate([@root_name, @scrolls, pack | _rest]) do
+    if valid_name?(pack) do
+      {:dir, pack_dir(pack), @record}
     else
       :above_unit
     end
@@ -239,8 +269,20 @@ defmodule Compendium.AquaPath do
 
   def locate(_path), do: :above_unit
 
-  # A crew member, the soul or a scroll is created by writing its own file: the
-  # write of the unit's one file, or of a scroll's SKILL.md, is its commit.
+  # A crew member or the soul is created by writing its own file: the write
+  # of the unit's one file is its commit. A pack is made by the write of
+  # any file under its folder, through `admit_edit/4`.
   @impl Arca.Storage.UnitLocator
   def creates_by_write?(_unit), do: true
+
+  # A pack is committed whole by every write; the soul and a crew member
+  # are one file each.
+  @impl Arca.Storage.UnitLocator
+  def commits_whole?([@root_name, @scrolls, _pack]), do: true
+  def commits_whole?(_unit), do: false
+
+  # What an ordinary write may make of a pack is the pack's own rule.
+  @impl Arca.Storage.UnitLocator
+  def admit_edit(actor, unit, current, next),
+    do: Compendium.Packs.admit_edit(actor, unit, current, next)
 end

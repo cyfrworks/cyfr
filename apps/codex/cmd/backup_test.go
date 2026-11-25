@@ -411,10 +411,10 @@ func TestBackupRefusesALinkWhereAManagedFileIs(t *testing.T) {
 			func(s *updateScenario) { s.relink("wit") }},
 		{"a directory inside wit/", "wit/cyfr, a scaffold file cyfr backup holds, is not a regular file, so the snapshot cannot hold it; nothing was changed",
 			func(s *updateScenario) { s.relink("wit/cyfr") }},
-		{"a shipped scroll's directory", "aqua/skills/builder, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
+		{"CYFR's own pack's directory", "aqua/scrolls/cyfr, which holds scaffold files cyfr backup holds, is not a directory, so the snapshot cannot hold them; nothing was changed",
 			func(s *updateScenario) {
-				s.edit("aqua/skills/builder/SKILL.md", "# the shipped builder\n")
-				s.relink("aqua/skills/builder")
+				s.edit("aqua/scrolls/cyfr/skills/builder/SKILL.md", "# the shipped builder\n")
+				s.relink("aqua/scrolls/cyfr")
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
