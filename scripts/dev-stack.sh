@@ -3,10 +3,10 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The source development stack (CONTRIBUTING.md, "Running from source"):
-# CYFR run from this checkout with `mix phx.server`, beside the runtime,
-# backends and builds services of docker-compose.yml, run from this tree's
-# Locus image (docker-compose.dev.yml), and a local cyfr.run as its
-# registry and account service.
+# CYFR run from this checkout with `mix phx.server`, beside the Locus of
+# docker-compose.yml and its guard, run from this tree's Locus image
+# (docker-compose.dev.yml), and a local cyfr.run as its registry and
+# account service.
 #
 #   scripts/dev-stack.sh          provision .env on its first run, start the
 #                                 local cyfr.run when it is not running,
@@ -28,15 +28,14 @@
 # (scripts/lib/run-names.sh), whatever the caller's COMPOSE_* say. Its
 # ports and subnets are its slot's: slot K, from 0 to 19, puts Prism on
 # 4000 + 10K and its proxy on 4001 + 10K, the runtime on 127.0.0.1:4700 +
-# 10K, the host API on 4701 + 10K at the runtime network's gateway, and
-# the runtime, backends and builds networks on 172.16.(100 + 3K), (101 +
-# 3K) and (102 + 3K).0/24. A loop takes the slot data/dev-stack.slot
-# remembers while it is free, else the first free one from 0, so a lone
-# loop keeps localhost:4000, and it remembers the slot it takes. A slot is
-# free when no other loop holds its claim (a lock under XDG_RUNTIME_DIR,
-# else TMPDIR, held for the loop's life), nothing listens on its ports and
-# no Docker network overlaps its subnets; when none is, the loop refuses
-# naming each slot's holder.
+# 10K, the host API on 4701 + 10K at the locus network's gateway, and the
+# locus network on 172.16.(100 + K).0/24. A loop takes the slot
+# data/dev-stack.slot remembers while it is free, else the first free one
+# from 0, so a lone loop keeps localhost:4000, and it remembers the slot it
+# takes. A slot is free when no other loop holds its claim (a lock under
+# XDG_RUNTIME_DIR, else TMPDIR, held for the loop's life), nothing listens
+# on its ports and no Docker network overlaps its subnet; when none is, the
+# loop refuses naming each slot's holder.
 #
 # The local cyfr.run is one per machine, shared by every worktree's loop:
 # cyfr.run's own local stack (Caddy, the cyfrrun server, Zot and its
@@ -172,8 +171,7 @@ slot_env() {
   printf '%s\n' "DEV_STACK_SLOT=$k" \
     "DEV_STACK_PRISM_PORT=$((4000 + 10 * k))" "DEV_STACK_PROXY_PORT=$((4001 + 10 * k))" \
     "DEV_STACK_RUNTIME_PORT=$((4700 + 10 * k))" "DEV_STACK_HOST_API_PORT=$((4701 + 10 * k))" \
-    "DEV_STACK_RUNTIME_NET=172.16.$((100 + 3 * k))" "DEV_STACK_BACKENDS_NET=172.16.$((101 + 3 * k))" \
-    "DEV_STACK_BUILDS_NET=172.16.$((102 + 3 * k))"
+    "DEV_STACK_LOCUS_NET=172.16.$((100 + k))"
 }
 # slot_value NAME: the slot in use's NAME.
 slot_value() { printf '%s\n' "${SLOT_ENV[@]}" | sed -n "s/^$1=//p"; }
@@ -188,13 +186,12 @@ remembered() {
   if slot_ok "$k"; then echo "$k"; else echo 0; fi
 }
 
-# Every service of the stack, builds included, with nothing interpolated
-# from .env: what the services need from it arrives from the task in the
-# environment, and the project, the image and the slot's values from this
-# script alone.
+# The stack, with nothing interpolated from .env: what Locus needs from it
+# arrives from the task in the environment, and the project, the image and
+# the slot's values from this script alone.
 compose() {
   env "${SLOT_ENV[@]}" DEV_STACK_PROJECT="$PROJECT" DEV_STACK_IMAGE="$IMAGE" CYFR_LOCUS_APPARMOR="$APPARMOR_NAME" \
-    docker compose --env-file /dev/null -p "$PROJECT" --profile locus-builds \
+    docker compose --env-file /dev/null -p "$PROJECT" \
     -f docker-compose.yml -f docker-compose.dev.yml "$@"
 }
 
@@ -253,7 +250,7 @@ overlaps() {
   printf '%s\n' "$1" | python3 -I -c '
 import ipaddress, sys
 k = int(sys.argv[1])
-mine = [ipaddress.ip_network("172.16.%d.0/24" % (100 + 3 * k + i)) for i in range(3)]
+mine = [ipaddress.ip_network("172.16.%d.0/24" % (100 + k))]
 for line in sys.stdin:
     name, _, subnet = line.strip().partition(" ")
     try:
@@ -442,7 +439,7 @@ env_file() {
 # values, into the private directory.
 declarations() {
   env_file
-  compose config --format json locus-runtime locus-backends locus-builds >"$PRIVATE/stack.json" ||
+  compose config --format json locus locus-guard >"$PRIVATE/stack.json" ||
     die "docker compose could not resolve docker-compose.dev.yml over docker-compose.yml."
 }
 
@@ -742,13 +739,13 @@ run() {
   # lacks it, so an unchanged tree starts without a build.
   image --for "$$"
   STARTED=1
-  if ! (export "${keys[@]}" && compose up --detach --no-build --wait locus-runtime locus-backends locus-builds); then
+  if ! (export "${keys[@]}" && compose up --detach --no-build --wait locus locus-guard); then
     compose logs --tail 30 >&2 || true
     die "the containers did not start; their logs end above."
   fi
 
   printf '\n%s\n%s\n%s\n' \
-    "dev-stack: the runtime, backends and builds services run from this tree." \
+    "dev-stack: Locus's runtime, backends and builds roles run from this tree." \
     "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change." \
     "dev-stack: its registry is $registry, its OCI registry $oci and its account service $directory: the local cyfr.run."
   [ -z "$setup" ] || echo "dev-stack: set up its first person, who administers it, at $setup"

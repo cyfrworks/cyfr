@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The backends image runs an MCP program end to end, as docker-compose.yml's locus-backends service.
+"""The backends image runs an MCP program end to end, as docker-compose.yml's locus service serving its backends role.
 
 First driven only by requests signed as CYFR signs them (harness.py), the
 MCP client speaking JSON-RPC over a session's lines as CYFR's does:
@@ -23,7 +23,7 @@ MCP client speaking JSON-RPC over a session's lines as CYFR's does:
 
 Then driven by `cyfr` itself: docker-compose.yml's cyfr service, from the
 app image (CYFR_IMAGE, `cyfr:push` as the workflow builds it), beside the
-same locus-backends service, both with every setting compose gives them.
+same locus service, both with every setting compose gives them.
 A person signed in on the server (tests/release-boot/fixture.exs) has a
 canary credential, a random token, in the vault under a name this suite
 owns, seeded by the release's fixture (`vault`), defines an mcp program
@@ -200,7 +200,7 @@ def scripted_controller(image):
 
 # ————— cyfr as the controller —————
 
-# Layered over docker-compose.yml and compose.locus-backends.yml: the cyfr
+# Layered over docker-compose.yml and compose.backends.yml: the cyfr
 # service keeps every setting compose gives it but its image, a loopback
 # port of the system's choosing, a volume of this run's own for its data
 # (so nothing lands in the checkout) and the backends lease this suite
@@ -224,7 +224,7 @@ volumes:
 
 
 class CyfrStack(Stack):
-    """locus-backends as the Stack runs it, and cyfr beside it as its controller."""
+    """Locus serving its backends role as the Stack runs it, and cyfr beside it as its controller."""
 
     def __init__(self, image, cyfr_image):
         super().__init__("locus-backends-cyfr", image)
@@ -234,7 +234,7 @@ class CyfrStack(Stack):
             handle.write(CYFR_OVERRIDE)
         # The deployment file `cyfr init` writes, minted for this run: cyfr
         # reads it (env_file), and compose hands the backends key to
-        # locus-backends from it as well as from the Stack's environment.
+        # Locus from it as well as from the Stack's environment.
         # A registry, its OCI host and a directory at an address this
         # deployment's egress refuses (loopback, which no private egress
         # target lists), so nothing of the run reaches cyfr.run: the
@@ -246,7 +246,6 @@ class CyfrStack(Stack):
                 f"CYFR_SECRET_KEY_BASE={secrets.token_urlsafe(48)}",
                 f"CYFR_LOCUS_BACKENDS_KEY={self.key.hex()}",
                 f"CYFR_LOCUS_RUNTIME_ROOT={secrets.token_hex(32)}",
-                "CYFR_LOCUS_BUILDS_URL=",
                 "CYFR_LOCUS_BUILDS_KEY=",
                 "CYFR_CORS_ALLOWED_ORIGINS=",
                 "CYFR_AUTO_MIGRATE=on",
@@ -262,7 +261,7 @@ class CyfrStack(Stack):
         return super().env(CYFR_IMAGE=self.cyfr_image, **extra)
 
     def compose(self, *args, check=True, env=None):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.locus-backends.yml"),
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.backends.yml"),
                  self.override]
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
@@ -443,7 +442,7 @@ def cyfr_controller(image):
         expect(counts.get("mcp_logs", 0) > 0 and counts.get("decision_logs", 0) > 0,
                "the round trip wrote request-log and decision rows", counts)
         expect(canary not in rows, "the canary is in no request-log row and no decision row", counts)
-        expect(canary not in stack.logs(), "the canary is not in locus-backends' log")
+        expect(canary not in stack.logs(), "the canary is not in Locus's log")
         expect(canary not in stack.cyfr_logs(), "the canary is not in cyfr's log")
 
         # The owner as the service holds it, read before the controller dies.
@@ -503,7 +502,7 @@ def cyfr_controller(image):
         status, answer = served()
         expect(status != 200 and "session" not in (answer or {}),
                "nor a lease later", answer)
-        expect(canary not in stack.logs(), "the canary is not in locus-backends' log after the release")
+        expect(canary not in stack.logs(), "the canary is not in Locus's log after the release")
     finally:
         stack.down()
 

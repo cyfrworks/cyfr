@@ -8,7 +8,7 @@ bound (LOCUS_BACKENDS_MEMORY_BYTES) set low, and driven only by requests
 signed as CYFR signs them (harness.py):
 
 - Every session's process runs in a cgroup of its own whose memory.max is
-  the bound, inside the container's own limit; a program whose row names
+  the bound, inside the backends role's own bound; a program whose row names
   its own `memory_bytes` is bounded at that instead.
 - A process that holds less than its bound answers.
 - A process that reaches past its bound is ended there by the kernel: its
@@ -40,7 +40,7 @@ And the service's own memory has a bound, in a service started afresh:
   session taking as it comes, once with the session slow, masking every
   line against many credentials. In a service started afresh each time,
   the stop is answered, nothing of the program outlives it, the kernel
-  kills nothing, and the keeper group's peak stays within its idle peak and
+  kills nothing, and the service leaf's peak stays within its idle peak and
   the allowance of one session, printed beside it.
 
 Prerequisites: harness.py's. Usage: tests/locus-backends-image/memory.py IMAGE
@@ -108,9 +108,16 @@ def cgroup_limit(stack, pid):
     return path, limit
 
 
+# The backends role's group, which the keeper bounds at the role's
+# LOCUS_BACKENDS_MEMORY_LIMIT: every backend's group inside it, beside its
+# leaf `service`, the role's process and its relays.
+ROLE_GROUP = f"role-{ROLE['name']}"
+
+
 def container_limit(stack):
-    """The container's own memory.max, which every backend's bound must sit inside."""
-    return imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.max"), "the container's memory.max").strip()
+    """The backends role's memory.max, which every backend's bound must sit inside."""
+    return imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup/{ROLE_GROUP}/memory.max"),
+                                  "the backends role's memory.max").strip()
 
 
 def bounds_each_program(stack):
@@ -131,7 +138,7 @@ def bounds_each_program(stack):
         expect(path not in ("", "/") and limit == str(BOUND),
                f"the {name} backend runs in a cgroup of its own bounded at {BOUND} bytes", [path, limit])
     expect(container.isdigit() and int(container) > BOUND,
-           "the bound sits inside the container's own limit", container)
+           "the bound sits inside the backends role's own bound", container)
 
     held = c.tool(HOG, "probe__hog", {"bytes": BOUND // 4})
     expect(held == {"held": BOUND // 4}, "a backend below its bound answers", held)
@@ -170,7 +177,7 @@ def bounds_each_program(stack):
     expect(c.renew([{**HOG}, {**SIBLING}, {**OWN}])[0] == 200, "the service answers throughout")
 
 
-def group_memory(stack, group="keeper"):
+def group_memory(stack, group=f"{ROLE_GROUP}/service"):
     """A cgroup's memory.current, memory.peak and the oom and oom_kill counts of its memory.events, each read or failed."""
     def value(name):
         text = imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup/{group}/{name}"), f"{group}/{name}").strip()
@@ -296,7 +303,7 @@ def bounds_the_service(stack):
         beam = [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
         idle = group_memory(stack)
         allowed = allowance(len(floods) + 1)
-        print(f"idle with {len(floods) + 1} silent sessions: the keeper group holds {idle['current'] // MIB} MiB, "
+        print(f"idle with {len(floods) + 1} silent sessions: the service leaf holds {idle['current'] // MIB} MiB, "
               f"its peak {idle['peak'] // MIB} MiB; the bound is that peak and {allowed // MIB} MiB "
               f"({allowed} bytes)")
 
@@ -337,11 +344,11 @@ def bounds_the_service(stack):
         answering.join()
 
     after_flood = group_memory(stack)
-    container = imagesuite.read_counters(stack.exec("cat /sys/fs/cgroup/memory.events"), ("oom", "oom_kill"),
-                                         "the container's memory.events")
+    container = imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{ROLE_GROUP}/memory.events"), ("oom", "oom_kill"),
+                                         "the backends role's memory.events")
     unread = sum(k for _d, k in reads) * LINE_CHARGE
     print(f"{len(floods)} unread sessions of {FLOOD_LINES * LINE_CHARGE // MIB} MiB: they keep {unread // MIB} MiB "
-          f"together, {sum(d for d, _k in reads)} lines dropped; the keeper group holds "
+          f"together, {sum(d for d, _k in reads)} lines dropped; the service leaf holds "
           f"{after_flood['current'] // MIB} MiB, its peak {after_flood['peak'] // MIB} MiB "
           f"({(after_flood['peak'] - idle['peak']) // MIB} MiB past idle, {after_flood['peak'] - idle['peak']} bytes, "
           f"of the {allowed} allowed: {SHARED['byte_cost']} x ({UNREAD_BOUND} unread + {ANSWERING_BOUND} answering + "
@@ -352,7 +359,7 @@ def bounds_the_service(stack):
     expect(rounds >= 8, f"the session read as it comes answered every line of its {rounds + 1} rounds, in order")
     expect(all(dropped > 0 for dropped, _kept in reads), "every unread session dropped its oldest", reads)
     expect(after_flood["peak"] <= idle["peak"] + allowed,
-           f"the keeper group's peak stays within its idle peak and {allowed // MIB} MiB",
+           f"the service leaf's peak stays within its idle peak and {allowed // MIB} MiB",
            {"idle_peak": idle["peak"], "peak": after_flood["peak"], "allowance": allowed})
     expect(imagesuite.no_kills(after_flood["events"]) and imagesuite.no_kills(container),
            "the kernel killed nothing in the container", {"keeper": after_flood["events"], "container": container})
@@ -396,13 +403,13 @@ def stops_a_flood(stack, label, env):
     eventually(lambda: not stack.pool_processes(), "nothing of the program to outlive its stop")
 
     after = group_memory(stack)
-    container = imagesuite.read_counters(stack.exec("cat /sys/fs/cgroup/memory.events"), ("oom", "oom_kill"),
-                                         "the container's memory.events")
+    container = imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{ROLE_GROUP}/memory.events"), ("oom", "oom_kill"),
+                                         "the backends role's memory.events")
     rise = after["peak"] - idle["peak"]
-    print(f"a stop while the program floods, its session {label}: the keeper group's idle peak "
+    print(f"a stop while the program floods, its session {label}: the service leaf's idle peak "
           f"{idle['peak'] // MIB} MiB, its peak {after['peak'] // MIB} MiB ({rise // MIB} MiB past idle, {rise} bytes, "
           f"of the {allowed} allowed for one session); keeper events {after['events']}, container events {container}")
-    expect(rise <= allowed, f"the keeper group's peak stays within its idle peak and {allowed // MIB} MiB",
+    expect(rise <= allowed, f"the service leaf's peak stays within its idle peak and {allowed // MIB} MiB",
            {"idle_peak": idle["peak"], "peak": after["peak"], "allowance": allowed})
     expect(imagesuite.no_kills(after["events"]) and imagesuite.no_kills(container),
            "the kernel killed nothing in the container", {"keeper": after["events"], "container": container})

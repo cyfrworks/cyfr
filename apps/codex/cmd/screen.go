@@ -614,7 +614,7 @@ func folderRelease(dir string) string {
 			continue
 		}
 		return sharedRelease(func(yield func(string, string) bool) {
-			for _, image := range imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet}) {
+			for _, image := range imagesFromCompose(path, []string{access.ModePublic, access.ModeTailnet}) {
 				repository, tag, _ := splitImageReference(image)
 				if !yield(repository, tag) {
 					return

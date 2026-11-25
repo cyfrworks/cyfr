@@ -46,7 +46,6 @@ CYFR_ACCESS=local
 CYFR_HOST=localhost
 CYFR_PORT=4399
 CYFR_CORS_ALLOWED_ORIGINS=
-CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100
 CYFR_LOCUS_BUILDS_KEY=builds-key
 CYFR_BIND_ADDRESS=127.0.0.1
 ENV
@@ -100,8 +99,8 @@ for d, v in zip(dirs, refused):
         want, got = process.get(key), merged.get(key)
         if (want is None and not blank(got)) or (want is not None and got != want):
             failures.append(f"{name}: {key} merges to {got!r}, where the vector's process holds {want!r}")
-    if blank(process.get("CYFR_LOCUS_BUILDS_URL")) and not blank(given["env"].get("CYFR_LOCUS_BUILDS_KEY")):
-        failures.append(f"{name}: a builds key without a builds URL")
+    if not blank(given["env"].get("CYFR_LOCUS_BUILDS_KEY")):
+        failures.append(f"{name}: a builds key the boot would refuse without the backends' URL")
 for f in failures:
     print(f"FAIL: {f}")
 if failures:

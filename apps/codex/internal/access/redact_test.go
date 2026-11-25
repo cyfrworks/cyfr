@@ -31,7 +31,7 @@ func TestRedactorRedactsEveryValueButTheHeads(t *testing.T) {
 		"MULTI='first-line-secret-4",
 		"second-line-secret-5'",
 		"INTERPOLATED=${ACCESS_REDACT_FROM_ENV}",
-		"SERVICE=locus-backends",
+		"SERVICE=locus-guard",
 		"PORTLIKE=4000",
 		"HOSTLIKE=host",
 		"SHORT=abc",
@@ -39,7 +39,7 @@ func TestRedactorRedactsEveryValueButTheHeads(t *testing.T) {
 		"BROKEN! malformed-secret-7 =x",
 		`UNCLOSED="unclosed-secret-8`,
 	}, "\n") + "\n"
-	r := redactorFor([]byte(env), []string{"locus-backends"})
+	r := redactorFor([]byte(env), []string{"locus-guard"})
 	for in, want := range map[string]string{
 		"plain-secret-1":                    "<redacted>",
 		"it's quoted-secret-2":              "<redacted>",
@@ -49,7 +49,7 @@ func TestRedactorRedactsEveryValueButTheHeads(t *testing.T) {
 		"x second-line-secret-5 y":          "x <redacted> y",
 		"interpolated-from-the-environment": "<redacted>",
 		"${ACCESS_REDACT_FROM_ENV}":         "<redacted>",
-		"home-locus-backends-1":             "home-locus-backends-1",
+		"home-locus-guard-1":                "home-locus-guard-1",
 		"http://localhost:4000":             "http://localhost:4000",
 		"a host and abc":                    "a <redacted> and abc",
 		"localhost-and-more-6 at localhost": "<redacted> at localhost",

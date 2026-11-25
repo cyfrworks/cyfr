@@ -173,7 +173,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HOST",
      "CYFR's hostname, which `cyfr access` writes with the mode: `localhost` with local access, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with tailnet access, and the domain Caddy's certificate names with public access. The boot refuses a host the mode does not allow."},
     {"CYFR_HOST_API_BIND",
-     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare server; compose binds the server's own address on the locus-runtime network, so the host API is reachable from that network alone)."},
+     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare server; compose binds the server's own address on the locus network, so the host API is reachable from that network alone)."},
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
     {"CYFR_HOST_API_URL",
      "The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it."},
@@ -182,13 +182,11 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_LOCAL_INGRESS_ASSERTED",
      "The compose file's assertion that the loopback listener's own address on the stack's `default` network is reached from this machine's loopback alone, which lets `CYFR_BIND_ADDRESS` name it: `true`, its one value, set by `docker-compose.yml` in the cyfr service's environment. It counts only from the process environment, `.env` may not set it, and a bare release must not set it."},
     {"CYFR_LOCUS_BACKENDS_KEY",
-     "The backends service's key, 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), which `cyfr init` mints and compose hands the service as `LOCUS_BACKENDS_KEY`; without it, or without `CYFR_LOCUS_BACKENDS_URL`, stdio MCP servers are refused."},
+     "The backends role's key, 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), which `cyfr init` mints and compose hands Locus as `LOCUS_BACKENDS_KEY`; without it, or without `CYFR_LOCUS_BACKENDS_URL`, stdio MCP servers are refused."},
     {"CYFR_LOCUS_BACKENDS_URL",
-     "The backends service's base URL; compose sets `http://locus-backends:4101`. Set it for a service elsewhere, and name its host in `CYFR_PRIVATE_EGRESS_TARGETS`."},
+     "The base URL of Locus's backends role; compose sets `http://locus:4101`. Builds run in the same Locus, at this URL's host on the builds role's port. Set it for a Locus elsewhere, and name its host in `CYFR_PRIVATE_EGRESS_TARGETS`."},
     {"CYFR_LOCUS_BUILDS_KEY",
-     "The key every build request is signed with, 64 hexadecimal digits, which `cyfr init` mints and compose hands the builder as `LOCUS_BUILDS_KEY`; set with `CYFR_LOCUS_BUILDS_URL` or not at all."},
-    {"CYFR_LOCUS_BUILDS_URL",
-     "The builds service's base URL. `http://locus-builds:4100`, which `cyfr init` writes, names the compose service, which `cyfr up` then starts; a URL naming another host starts no local builder. With it and `CYFR_LOCUS_BUILDS_KEY` both empty builds are off and every build is refused; one without the other refuses the boot."},
+     "The key every build request is signed with, 64 hexadecimal digits, which `cyfr init` mints and compose hands Locus as `LOCUS_BUILDS_KEY`, which starts its builds role. Set, builds run in the Locus `CYFR_LOCUS_BACKENDS_URL` names, at its host on port 4100, and the boot refuses it without that URL; empty, builds are off and every build is refused."},
     {"CYFR_LOG_FORMAT", "`json` for structured logs; unset, plain text."},
     {"CYFR_MCP_ALLOWED_ORIGINS",
      "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside CYFR's own: `https://<CYFR_HOST>` with tailnet or public access, and the localhost origins on `CYFR_PORT`."},
@@ -205,13 +203,13 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_LOCUS_RUNTIME_ROOT",
      "The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every server of a cluster holds the same one, and without it no component runs."},
     {"CYFR_LOCUS_RUNTIME_WORKERS",
-     "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine."},
+     "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus:4200`, and outside compose the default is a worker on this machine."},
     {"CYFR_OTEL_ENABLED",
      "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). Each span is scrubbed of tincture credentials before export, and the boot refuses an `OTEL_TRACES_EXPORTER` that would replace the scrubbing exporter."},
     {"CYFR_PORT",
      "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone; CYFR's address with local access is `http://localhost:<CYFR_PORT>`."},
     {"CYFR_PRIVATE_EGRESS_TARGETS",
-     "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds reach public hosts and the hosts named here, and a program the hosts its row names or, with none, public hosts, and the hosts named here, and nothing else: each island's egress guard (the `locus-builds-guard` and `locus-backends-guard` services) refuses every link-local and metadata address, the control plane, every other private address, and one spawn's reach into another's listener on the island's shared loopback."},
+     "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds reach public hosts and the hosts named here, and a program the hosts its row names or, with none, public hosts, and the hosts named here, and nothing else: Locus's egress guard (the `locus-guard` service) refuses every link-local and metadata address, the control plane, every other private address, and one space's reach into another's."},
     {"CYFR_PROMETHEUS_METRICS",
      "Prometheus metrics at `/metrics` on the API port (default off)."},
     {"CYFR_PROXY_BIND_ADDRESS",
@@ -269,21 +267,24 @@ defmodule Cyfr.Platform.Settings.Roster do
   ]
 
   # The `${…}` names docker-compose.yml interpolates that no release reads:
-  # each container's CPU and memory limit and the Locus services' AppArmor
-  # profile, each with the sentence `configuration-guide.md` gives it.
+  # cyfr's CPU limit, each Locus role's bounds, which cyfr-locus writes into
+  # the role's group, and Locus's AppArmor profile, each with the sentence
+  # `configuration-guide.md` gives it.
   @compose_only [
     {"CYFR_CPU_LIMIT",
-     "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in locus-runtime under `LOCUS_RUNTIME_CPU_LIMIT`."},
+     "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in Locus's runtime role under `LOCUS_RUNTIME_CPU_LIMIT`."},
     {"CYFR_LOCUS_APPARMOR",
-     "The AppArmor profile every Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
+     "The AppArmor profile the Locus container runs under on a host with AppArmor, by its name, `cyfr-locus-` and 12 hex digits of its content's hash: `cyfr init` and `cyfr update` write the profile built into `cyfr` here and load it, and a host without AppArmor ignores it."},
     {"LOCUS_BACKENDS_MEMORY_LIMIT",
-     "The locus-backends container's memory limit (default 2G): `LOCUS_BACKENDS_MEMORY_BUDGET` (1792 MiB by default, three program sessions at their default 512 MiB bound), the memory the programs' sessions may hold, plus 256 MiB for the service beside them."},
-    {"LOCUS_BUILDS_CPU_LIMIT", "The locus-builds container's CPU limit (default 2)."},
+     "The memory bound of Locus's backends role, its process and every program session of it together, with swap the same (default 2G): `LOCUS_BACKENDS_MEMORY_BUDGET` (1792 MiB by default, three program sessions at their default 512 MiB bound), the memory the programs' sessions may hold, plus 256 MiB for the role beside them. The role has no processor bound."},
+    {"LOCUS_BUILDS_CPU_LIMIT",
+     "The processor bound of Locus's builds role, its process and every build together (default 2)."},
     {"LOCUS_BUILDS_MEMORY_LIMIT",
-     "The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit."},
-    {"LOCUS_RUNTIME_CPU_LIMIT", "The locus-runtime container's CPU limit (default 4)."},
+     "The memory bound of Locus's builds role, its process and every build together, with swap the same (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the role reaches this one."},
+    {"LOCUS_RUNTIME_CPU_LIMIT",
+     "The processor bound of Locus's runtime role, its process and every runner together (default 4)."},
     {"LOCUS_RUNTIME_MEMORY_LIMIT",
-     "The locus-runtime container's memory limit (default 4G), at least 8 runner uids x `LOCUS_RUNTIME_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the container reaches its limit."}
+     "The memory bound of Locus's runtime role, its process and every runner together, with swap the same (default 4G), at least 8 runner uids x `LOCUS_RUNTIME_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the role reaches this one."}
   ]
 
   # Names under the prefix that other programs own. A trailing `*` is a

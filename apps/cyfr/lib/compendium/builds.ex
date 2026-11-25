@@ -211,7 +211,7 @@ defmodule Compendium.Builds do
   end
 
   @disabled "builds are disabled on this server: no builds service is configured " <>
-              "(CYFR_LOCUS_BUILDS_URL and CYFR_LOCUS_BUILDS_KEY)"
+              "(CYFR_LOCUS_BUILDS_KEY)"
 
   # Refused in the one place every surface reaches — wire, console and
   # in-chain — and before anything else, so a server without a builds
@@ -576,8 +576,8 @@ defmodule Compendium.Builds do
 
   defp refusal(:unreachable) do
     Logger.warning(
-      "[Compendium.Builds] the builds service is unreachable — check CYFR_LOCUS_BUILDS_URL " <>
-        "and the locus-builds service"
+      "[Compendium.Builds] the builds service is unreachable — check CYFR_LOCUS_BACKENDS_URL " <>
+        "and the locus service"
     )
 
     {:unavailable, "The builder service"}

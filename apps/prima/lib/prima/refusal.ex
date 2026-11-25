@@ -276,9 +276,7 @@ defmodule Prima.Refusal do
     "CYFR_PROXY_BIND_ADDRESS" => "an IPv4 or IPv6 address",
     "CYFR_LOCAL_INGRESS_ASSERTED" => "true, the one value the compose file asserts",
     "CYFR_TRUSTED_PROXY_HOPS" => "a whole number of proxy hops from 0 to 16",
-    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs",
-    "CYFR_LOCUS_BUILDS_URL" =>
-      "an http or https URL with a host, an optional port and no path, query or credentials"
+    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs"
   }
 
   # What a `cyfr access` input was meant to be.
@@ -1586,7 +1584,7 @@ defmodule Prima.Refusal do
       {:invalid_argument,
        "`.env` sets `#{key}`, which Docker Compose would read to choose this stack's files, " <>
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
-         "them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."}
+         "them from CYFR_ACCESS."}
 
   # A .env line Docker Compose does not read: cyfr neither reads nor
   # writes a file it cannot read as compose does, and names the line,

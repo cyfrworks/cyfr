@@ -633,7 +633,7 @@ ACCOUNT_SERVICE=http://localhost:4000
 # name it does not read, so they are removed here by hand.
 account_settings() {
   printf '%s\n' "CYFR_DIRECTORY_SERVE=writer" "CYFR_DIRECTORY_URL=$ACCOUNT_SERVICE" "CYFR_REGISTRY_URL=${ACCOUNT_SERVICE#http://}" \
-    "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,127.0.0.1" |
+    "CYFR_PRIVATE_EGRESS_TARGETS=locus,127.0.0.1" |
     guest_ssh_in 'cd ~/cyfr && sed -i -E "/^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS|CYFR_GITHUB_CLIENT_ID|CYFR_GOOGLE_CLIENT_ID)=/d" .env &&
     { [ -z "$(tail -c 1 .env)" ] || echo; cat; } >>.env' || fail ".env was not made the box's own account service"
   guest_ssh "grep -E '^(CYFR_DIRECTORY_SERVE|CYFR_REGISTRY_URL|CYFR_DIRECTORY_URL|CYFR_PRIVATE_EGRESS_TARGETS)=' ~/cyfr/.env" >"$GUEST_DIR/env-account.txt" 2>&1

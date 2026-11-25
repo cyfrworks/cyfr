@@ -51,14 +51,13 @@ ITEMS=(
   identity-guide.md devices-guide.md
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/
-  # Package deployment files for cyfr init: the app, the runtime, the
-  # backends service, TLS proxy and optional builds profile. Every image is
-  # pulled as published.
+  # Package deployment files for cyfr init: the app, the one Locus behind
+  # its guard, and the TLS proxy. Every image is pulled as published.
   docker-compose.yml Caddyfile .env.example
   # One example per env file docker-compose.yml names beside .env.
   .env.locus.example
 )
-# The keeper's seccomp profile, which docker-compose.yml's locus-runtime service
+# The keeper's seccomp profile, which docker-compose.yml's locus service
 # names as ./keeper.seccomp.json, ships beside it under that name.
 PROFILE=apps/locus/keeper/seccomp/keeper.json
 PROFILE_NAME=keeper.seccomp.json

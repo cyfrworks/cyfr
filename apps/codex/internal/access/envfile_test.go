@@ -75,7 +75,6 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 		"CADDY_ACME_EMAIL=a@example.com",
 		"CADDY_ACME_EMAIL=b@example.com",
 		"CYFR_TAILNET_NODE_ID",
-		"CYFR_LOCUS_BUILDS_URL=",
 		"",
 	}, "\n")
 	want := strings.Join([]string{
@@ -87,7 +86,6 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 		"CYFR_PUBLIC_URL=https://cyfr.tail1234.ts.net",
 		"OTHER=x # trailing",
 		"CYFR_TAILNET_NODE_ID=nAbc123CNTRL",
-		"CYFR_LOCUS_BUILDS_URL=",
 		"",
 	}, "\n")
 	d, err := Derive(Target{Mode: ModeTailnet}, Current{Port: 4000}, &Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAbc123CNTRL"})
@@ -197,7 +195,7 @@ func TestCheckEnvFile(t *testing.T) {
 		name, extra, code, sentence string
 	}{
 		{"coherent", "", "", ""},
-		{"colon form", "COMPOSE_PROFILES: public\n", "compose_env_refused", "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."},
+		{"colon form", "COMPOSE_PROFILES: public\n", "compose_env_refused", "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_ACCESS."},
 		{"export form", "export COMPOSE_FILE=x.yml\nCYFR_ACCESS=sideways\n", "compose_env_refused", ""},
 		{"later assignment", "CYFR_ACCESS=sideways\n", "access_unknown_mode", "CYFR_ACCESS is `sideways`; it must be `local`, `tailnet` or `public`. Run `cyfr access <mode>` to set it with the address it implies."},
 		{"later assignment restores", "CYFR_ACCESS=sideways\nCYFR_ACCESS=local\n", "", ""},

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/access"
+	"gopkg.in/yaml.v3"
 )
 
 // fakeStack is what the package's tests stand in for the access engine
@@ -279,6 +281,44 @@ func (e *fakeEngine) ComposeArgs(ctx context.Context, h access.Head, args ...str
 	return append(composePrefixArgs(e.name(), h), args...), nil
 }
 
+// DeclaredProfiles answers the profiles the project's docker-compose.yml
+// declares, read from the file as compose reads it, none when there is no
+// such file; as Head, it is a read the log does not record. As the
+// engine's, it needs the lock held.
+func (e *fakeEngine) DeclaredProfiles(ctx context.Context) ([]string, error) {
+	e.s.mu.Lock()
+	locked := e.locked
+	e.s.mu.Unlock()
+	if !locked {
+		return nil, errors.New("access: DeclaredProfiles without the lock")
+	}
+	data, err := os.ReadFile(filepath.Join(e.dir, "docker-compose.yml"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var c struct {
+		Services map[string]struct {
+			Profiles []string `yaml:"profiles"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		return nil, err
+	}
+	var profiles []string
+	for _, svc := range c.Services {
+		for _, p := range svc.Profiles {
+			if !slices.Contains(profiles, p) {
+				profiles = append(profiles, p)
+			}
+		}
+	}
+	slices.Sort(profiles)
+	return profiles, nil
+}
+
 // name is compose's project of the engine.
 func (e *fakeEngine) name() string {
 	if e.project != "" {
@@ -365,7 +405,7 @@ func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string
 
 func (e *fakeEngine) derive(t access.Target, joinID string) (access.Derivation, error) {
 	env := envAssignments(filepath.Join(e.dir, ".env"))
-	cur := access.Current{Port: 4000, BuildsURL: env[buildsURLVar]}
+	cur := access.Current{Port: 4000}
 	if text := env["CYFR_PORT"]; text != "" {
 		cur.Port, _ = strconv.Atoi(text)
 	}

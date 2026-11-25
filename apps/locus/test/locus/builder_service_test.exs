@@ -951,6 +951,36 @@ defmodule Locus.BuilderServiceTest do
       wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
     end
 
+    test "a build whose connection's process is killed holds its slot until cyfr-locus " <>
+           "reports its spawn released",
+         %{port: port} do
+      fake = keeper!(:normal)
+      :ok = FakeKeeper.hold_releases(fake, self())
+      {script, file} = lingering()
+      body = Wire.body(Wire.request(script))
+
+      conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
+      assert {200, conn} = Wire.status(conn)
+      conn = await_line(conn, {:progress, :output, "running"})
+      os_pids = pids_in(file)
+
+      # The connection's process holds the slot; its kill takes the build's
+      # process with it, and the keeper's client asks cyfr-locus to end the
+      # spawn of an owner gone, which it does not yet.
+      assert %{holders: [%{pid: "#PID" <> holder}]} = Slots.status(@slots)
+      holder = :erlang.list_to_pid(String.to_charlist(holder))
+      Process.exit(holder, :kill)
+      assert_receive {:release_held, _spawn_id}, 10_000
+      Wire.close(conn)
+
+      assert %{active: 1} = Slots.status(@slots)
+      assert Enum.all?(os_pids, &alive?/1)
+
+      :ok = FakeKeeper.carry_releases(fake)
+      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
+    end
+
     test "a build past its deadline whose client left frees its only slot on cyfr-locus's release, " <>
            "its last line waiting for no one",
          %{port: port} do

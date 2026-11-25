@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The source development stack: the Locus services of docker-compose.yml,
-# built from this checkout, beside CYFR run from the checkout with
+# The source development stack: the Locus of docker-compose.yml and its
+# guard, built from this checkout, beside CYFR run from the checkout with
 # `mix phx.server` (CONTRIBUTING.md, "Running from source").
 # scripts/dev-stack.sh layers this file last and starts both.
 #
 # Every resource the stack holds is declared here: the compose project,
-# the image, the container names, the networks' subnets and gateways, the
-# islands' addresses and the ports on the host's loopback. The values
+# the image, the container names, the locus network's subnet and gateway,
+# the guard's address and the port on the host's loopback. The values
 # come from scripts/dev-stack.sh in the DEV_STACK_* variables, which
 # compose interpolates and which nothing else sets: the project is
 # cyfr-dev-<the worktree's seed> (scripts/lib/run-names.sh), the image the
@@ -22,8 +22,8 @@
 #
 # Never shipped: scripts/scaffold-tarball.sh names its items, and this file
 # is none of them. Every setting not named here stays the shipped
-# service's: the keeper, its capabilities, the read-only root, the tmpfs
-# mounts, the limits and each island's egress guard.
+# service's: the keeper, its roles, their bounds and keys, its
+# capabilities, the read-only root, the tmpfs mounts and the egress guard.
 
 # A project of the worktree's own, whatever its directory is called, so
 # the dev stack never touches a shipped stack's containers or networks, or
@@ -37,30 +37,26 @@ x-prism: 127.0.0.1:${DEV_STACK_PRISM_PORT:?scripts/dev-stack.sh sets it}
 x-prism-proxy: ${DEV_STACK_PROXY_PORT:?scripts/dev-stack.sh sets it}
 
 services:
-  locus-runtime:
+  locus:
     # This tree's image under its local tag, shared by every worktree at
     # the same inputs (scripts/image.sh), built before the start and never
     # pulled or built here.
     image: ${DEV_STACK_IMAGE:?scripts/dev-stack.sh sets it}
     pull_policy: never
-    container_name: ${DEV_STACK_PROJECT}-locus-runtime
+    container_name: ${DEV_STACK_PROJECT}-locus
     # The id CYFR dispatches to by default, so the key derived for it from
     # CYFR_LOCUS_RUNTIME_ROOT is the one CYFR holds.
     environment:
       - LOCUS_RUNTIME_SERVICE_ID=wrk_local
-      # CYFR's host API on the host, at the locus-runtime network's gateway
+      # CYFR's host API on the host, at the locus network's gateway
       # (below), which the mix boot binds: an address that exists only on
       # this network's bridge, so no other interface of the host serves
       # it. Loopback is unreachable from a bridge network, and 0.0.0.0
       # would serve the host API on every interface the host has.
-      - LOCUS_RUNTIME_HOST_API_URL=http://${DEV_STACK_RUNTIME_NET:?scripts/dev-stack.sh sets it}.1:${DEV_STACK_HOST_API_PORT:?scripts/dev-stack.sh sets it}
-    # The runtime's listener on the host's loopback alone, where the mix
-    # boot dispatches to.
-    ports:
-      - "127.0.0.1:${DEV_STACK_RUNTIME_PORT:?scripts/dev-stack.sh sets it}:4200"
+      - LOCUS_RUNTIME_HOST_API_URL=http://${DEV_STACK_LOCUS_NET:?scripts/dev-stack.sh sets it}.1:${DEV_STACK_HOST_API_PORT:?scripts/dev-stack.sh sets it}
     # The shipped list with the keeper's profile at its tracked path: the
     # scaffold ships it beside docker-compose.yml as keeper.seccomp.json,
-    # which a checkout does not hold. Every Locus service takes it.
+    # which a checkout does not hold.
     security_opt: !override
       - no-new-privileges:true
       - writable-cgroups=true
@@ -68,78 +64,38 @@ services:
       - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
       - systempaths=unconfined
 
-  locus-backends:
+  # The mix boot reaches the backends and builds roles at the guard's fixed
+  # address on the locus network, as the shipped cyfr service reaches them
+  # on that network by name, and names that one address its private egress
+  # target. A port published on the host's loopback would need the whole
+  # loopback named a private egress target, which every outbound call CYFR
+  # makes for an athanor would then reach. The runtime's listener alone is
+  # published, on the host's loopback, where the mix boot dispatches to: a
+  # service under `network_mode: service:` publishes nothing, so the guard,
+  # the namespace's owner, publishes it. The guard refuses every space the
+  # control plane, the host at the network's gateway, but for the runtime's
+  # role, which reaches the host API there and nothing else of the host.
+  locus-guard:
     image: ${DEV_STACK_IMAGE}
     pull_policy: never
-    container_name: ${DEV_STACK_PROJECT}-locus-backends
-    security_opt: !override
-      - no-new-privileges:true
-      - writable-cgroups=true
-      - seccomp=./apps/locus/keeper/seccomp/keeper.json
-      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
-      - systempaths=unconfined
-
-  # The mix boot reaches the backends service at the guard's fixed address
-  # on the island's network, as the shipped cyfr service reaches it on that
-  # network by name, and names that one address its private egress target.
-  # A port published on the host's loopback would need the whole loopback
-  # named a private egress target, which every outbound call CYFR makes for
-  # an athanor would then reach. The guard refuses the island's spawns the
-  # control plane: the host, at the network's gateway.
-  locus-backends-guard:
-    image: ${DEV_STACK_IMAGE}
-    pull_policy: never
-    container_name: ${DEV_STACK_PROJECT}-locus-backends-guard
+    container_name: ${DEV_STACK_PROJECT}-locus-guard
+    ports:
+      - "127.0.0.1:${DEV_STACK_RUNTIME_PORT:?scripts/dev-stack.sh sets it}:4200"
     environment:
-      - CYFR_GUARD_CONTROL_PLANE=${DEV_STACK_BACKENDS_NET:?scripts/dev-stack.sh sets it}.1
+      - CYFR_GUARD_CONTROL_PLANE=${DEV_STACK_LOCUS_NET}.1
+      - CYFR_GUARD_HOST_API=${DEV_STACK_LOCUS_NET}.1:${DEV_STACK_HOST_API_PORT}
     networks:
-      locus-backends:
-        ipv4_address: ${DEV_STACK_BACKENDS_NET}.2
+      locus:
+        ipv4_address: ${DEV_STACK_LOCUS_NET}.2
 
-  locus-builds:
-    image: ${DEV_STACK_IMAGE}
-    pull_policy: never
-    container_name: ${DEV_STACK_PROJECT}-locus-builds
-    security_opt: !override
-      - no-new-privileges:true
-      - writable-cgroups=true
-      - seccomp=./apps/locus/keeper/seccomp/keeper.json
-      - apparmor=${CYFR_LOCUS_APPARMOR:-cyfr-locus-unset}
-      - systempaths=unconfined
-
-  # The builds island as the backends island: the mix boot reaches the
-  # builder at its guard's fixed address, and the guard refuses the
-  # island's spawns the host.
-  locus-builds-guard:
-    image: ${DEV_STACK_IMAGE}
-    pull_policy: never
-    container_name: ${DEV_STACK_PROJECT}-locus-builds-guard
-    environment:
-      - CYFR_GUARD_CONTROL_PLANE=${DEV_STACK_BUILDS_NET:?scripts/dev-stack.sh sets it}.1
-    networks:
-      locus-builds:
-        ipv4_address: ${DEV_STACK_BUILDS_NET}.2
-
-# Each network on its slot's subnet, outside the shipped ones and Docker's
+# The network on its slot's subnet, outside the shipped ones and Docker's
 # pools, its gateway named: the host's address on it. Containers started
-# on it take addresses from its ip_range alone, so the fixed addresses
-# above stay free.
+# on it take addresses from its ip_range alone, so the guard's fixed
+# address stays free.
 networks:
-  locus-runtime:
+  locus:
     ipam:
       config: !override
-        - subnet: ${DEV_STACK_RUNTIME_NET}.0/24
-          ip_range: ${DEV_STACK_RUNTIME_NET}.128/25
-          gateway: ${DEV_STACK_RUNTIME_NET}.1
-  locus-backends:
-    ipam:
-      config:
-        - subnet: ${DEV_STACK_BACKENDS_NET}.0/24
-          ip_range: ${DEV_STACK_BACKENDS_NET}.128/25
-          gateway: ${DEV_STACK_BACKENDS_NET}.1
-  locus-builds:
-    ipam:
-      config:
-        - subnet: ${DEV_STACK_BUILDS_NET}.0/24
-          ip_range: ${DEV_STACK_BUILDS_NET}.128/25
-          gateway: ${DEV_STACK_BUILDS_NET}.1
+        - subnet: ${DEV_STACK_LOCUS_NET}.0/24
+          ip_range: ${DEV_STACK_LOCUS_NET}.128/25
+          gateway: ${DEV_STACK_LOCUS_NET}.1

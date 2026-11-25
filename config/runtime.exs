@@ -235,7 +235,7 @@ if config_env() != :test do
 
   # The Locus backends service that runs stdio MCP servers
   # (`Opus.Programs`): CYFR_LOCUS_BACKENDS_URL, the base URL
-  # of its listener (compose: http://locus-backends:4101), and
+  # of its listener (compose: http://locus:4101), and
   # CYFR_LOCUS_BACKENDS_KEY, the service key as 64 hexadecimal digits, the
   # value the service holds as LOCUS_BACKENDS_KEY (`cyfr init` generates
   # it). With either unset, no program can be created or started; a
@@ -290,14 +290,14 @@ if config_env() != :test do
   # CYFR_NO_UPDATE_CHECK holds any value, as the terminal's check is.
   config :cyfr, :release_channel_enabled, Cyfr.RuntimeConfig.release_check?(getenv)
 
-  # The Locus builds service every build is sent to
-  # (`Compendium.Builds.Client`): CYFR_LOCUS_BUILDS_URL, the base URL of
-  # its listener (compose: http://locus-builds:4100), and
-  # CYFR_LOCUS_BUILDS_KEY, the builds key as 64 hexadecimal digits, the
-  # value the service holds as LOCUS_BUILDS_KEY. Both set, this server
-  # builds there; neither, it builds nothing and runs no toolchain of its
-  # own. One without the other, or a malformed value, refuses the boot
-  # naming the variable and never the key.
+  # Locus's builds role, every build is sent to
+  # (`Compendium.Builds.Client`): CYFR_LOCUS_BUILDS_KEY, the builds key as
+  # 64 hexadecimal digits, the value Locus holds as LOCUS_BUILDS_KEY. Set,
+  # this server builds in the Locus CYFR_LOCUS_BACKENDS_URL names, on the
+  # builds role's port (compose: http://locus:4100); unset, it builds
+  # nothing and runs no toolchain of its own. The key without that URL, or
+  # a malformed value, refuses the boot naming the variable and never the
+  # key.
   locus_builds =
     case Cyfr.RuntimeConfig.resolve_locus_builds(getenv) do
       {:ok, locus_builds} -> locus_builds

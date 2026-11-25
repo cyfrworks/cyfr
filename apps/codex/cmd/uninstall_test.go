@@ -313,7 +313,7 @@ func exists(path string) bool {
 func (s *uninstallScenario) images() []string {
 	path := filepath.Join(s.t.TempDir(), "docker-compose.yml")
 	s.write(path, string(s.compose))
-	return imagesFromCompose(path, []string{buildsProfile, access.ModePublic, access.ModeTailnet})
+	return imagesFromCompose(path, []string{access.ModePublic, access.ModeTailnet})
 }
 
 // ownCalls are the docker calls the uninstall makes after the stop: its

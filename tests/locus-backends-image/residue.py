@@ -36,9 +36,10 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, KEPT_ROOT, POOL_FIRST, PROBE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
-    expect, owner_of, probe, require_docker, run,
+    HOME_ROOT, KEPT_FIRST, KEPT_LAST, KEPT_ROOT, POOL_FIRST, PROBE, RELEASE, RELEASE_BIN, ROLE,
+    RUN_DIR, Stack, build_canary, eventually, expect, owner_of, probe, require_docker, run,
 )
+import imagesuite  # noqa: E402
 from imagesuite import read_listing, read_output, run_name  # noqa: E402
 
 UID = POOL_FIRST
@@ -175,11 +176,11 @@ def main():
 
         settings = ["--rm", "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
                     "--security-opt", "no-new-privileges:true", "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}",
-                    "--tmpfs", f"{HOME_ROOT}:mode=1733",
-                    "--tmpfs", f"{RUN_DIR}:uid={RELEASE_UID},gid={RELEASE_UID},mode=0700",
+                    *imagesuite.role_mounts(RELEASE, ROLE),
                     "--entrypoint", "cyfr-locus"]
-        command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}:{ROLE['reach']}", "--home-root", HOME_ROOT,
-                   "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", RELEASE_USER, "--", RELEASE_BIN, "start"]
+        command = ["serve", "--role", imagesuite.role_spec(ROLE), "--pool", f"{ROLE['pool']}:{UID}-{UID}:{ROLE['reach']}",
+                   "--home-root", RELEASE["home_root"], "--kept-homes", f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
+                   "--guard", imagesuite.Guard.CONTROL, "--", RELEASE_BIN, "start"]
         for n, (flags, refusal) in enumerate([
             (["--ipc", "none"], r"the root filesystem is writable"),
             (["--read-only", "--ipc", "none", "--tmpfs", "/tmp:mode=1777"], r"mount /tmp .* is writable by pooled uids"),

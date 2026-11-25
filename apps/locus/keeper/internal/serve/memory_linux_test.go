@@ -41,7 +41,13 @@ func (k *keeper) withMemory(t *testing.T) *keeper {
 	if err != nil {
 		t.Skipf("no memory bound can be enforced here: %v", err)
 	}
-	k.s.memory = memory
+	// The role's group is the test's own; newKeeperOf's cleanup removes it
+	// once every spawn in it is retired.
+	r := k.c.role
+	r.spec.Name = "t" + randomHex(6)
+	if r.groups, r.leaf, err = memory.Role(r.spec.Name, cgroup.Limits{}); err != nil {
+		t.Fatal(err)
+	}
 	return k
 }
 
@@ -66,8 +72,8 @@ func (k *keeper) replies(t *testing.T, spawnIDs ...string) map[string]map[string
 	return exited
 }
 
-func groupExists(uid int) bool {
-	_, err := os.Stat(filepath.Join(cgroup.Root, cgroup.Name(uid)))
+func (k *keeper) groupExists(uid int) bool {
+	_, err := os.Stat(filepath.Join(k.c.role.groups.Dir(), cgroup.Name(uid)))
 	return err == nil
 }
 
@@ -83,15 +89,15 @@ func TestASpawnAskingForABoundIsRefusedWhereNoneCanBeEnforced(t *testing.T) {
 	defer theirs.Close()
 	spec := pool.Spec{Name: "runner", First: testPoolFirst, Last: testPoolLast}
 	s := &server{
-		log:     logx.NewWriter(os.Stderr, "cyfr-locus", false),
-		pools:   map[string]*pool.Pool{spec.Name: pool.New(spec)},
-		spawns:  map[string]*spawn{},
-		places:  map[string]*place{"41": {whose: protocol.Whose{Kind: protocol.KindRun}}},
-		channel: os.NewFile(uintptr(fds[0]), "channel"),
+		log:    logx.NewWriter(os.Stderr, "cyfr-locus", false),
+		pools:  map[string]*pool.Pool{spec.Name: pool.New(spec)},
+		spawns: map[string]*spawn{},
 	}
-	defer s.channel.Close()
+	c := testClient(os.NewFile(uintptr(fds[0]), "channel"), spec, Account{UID: 65534, GID: 65534, Name: "nobody"})
+	c.places["41"] = &place{whose: protocol.Whose{Kind: protocol.KindRun}}
+	defer c.channel.Close()
 
-	s.handleSpawn(spawnRequest(t, "/run/a.sock", "41", "true", map[string]string{}, false, 64<<20))
+	s.handleSpawn(c, spawnRequest(t, "/run/a.sock", "41", "true", map[string]string{}, false, 64<<20))
 
 	k := &keeper{s: s, channel: protocol.NewLineReader(theirs)}
 	refused := k.reply(t)
@@ -129,7 +135,7 @@ cat /proc/self/cgroup`
 		t.Fatalf("exit: %v", exited)
 	}
 	assertRetired(t, k, uid)
-	if groupExists(uid) {
+	if k.groupExists(uid) {
 		t.Fatalf("the group of uid %d outlived its spawn", uid)
 	}
 }
@@ -163,7 +169,7 @@ wait`, k.helper)
 		t.Fatalf("all %d holders fit under a bound half their size", held)
 	}
 	for _, uid := range []int{hostileUID, siblingUID} {
-		if groupExists(uid) {
+		if k.groupExists(uid) {
 			t.Fatalf("the group of uid %d outlived its spawn", uid)
 		}
 	}
@@ -203,7 +209,7 @@ func TestAnExitForAnotherReasonIsNotAMemoryEnd(t *testing.T) {
 func (k *keeper) measure(t *testing.T, place string) map[string]any {
 	t.Helper()
 	id := "measure-" + place
-	k.s.handle(parsed(t, `{"v":4,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
+	k.s.handle(k.c, parsed(t, `{"v":5,"type":"measure","id":"`+id+`","place":"`+place+`"}`))
 	m := k.reply(t)
 	if _, named := m["spawn_id"]; named || m["id"] != id {
 		t.Fatalf("measuring %s answered %v", place, m)
@@ -324,7 +330,7 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 	t.Cleanup(func() { _ = os.Remove(written.Name()) })
 
 	measured := func(id string, uid int, script, counter string, atLeast int) float64 {
-		group, err := k.s.memory.Create(cgroup.Name(uid), 256*mib, protocol.CPUPeriod)
+		group, err := k.c.role.groups.Create(cgroup.Name(uid), 256*mib, protocol.CPUPeriod)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -641,7 +647,7 @@ func awaitRetired(t *testing.T, sp *spawn) {
 // toldSoFar is every line the keeper sent before the call.
 func (k *keeper) toldSoFar(t *testing.T) []map[string]any {
 	t.Helper()
-	k.s.send(protocol.NewPoolReply("after", "runner", 0, 0, 0))
+	k.s.send(k.c, protocol.NewPoolReply("after", "runner", 0, 0, 0))
 	var told []map[string]any
 	for {
 		m := k.reply(t)
@@ -682,7 +688,8 @@ func endedSpawn(t *testing.T, kept bool, script string) (*keeper, *spawn, string
 		sp.pool = k.s.pools["runner"]
 		sp.account = k.s.accounts[uid]
 	}
-	group, err := k.s.memory.Create(name, 32<<20, protocol.CPUPeriod)
+	sp.client = k.c
+	group, err := k.c.role.groups.Create(name, 32<<20, protocol.CPUPeriod)
 	if err != nil {
 		t.Fatal(err)
 	}

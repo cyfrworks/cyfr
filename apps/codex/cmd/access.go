@@ -33,6 +33,7 @@ type stackEngine interface {
 	Docker() access.Docker
 	Redactor() *access.Redactor
 	ComposeArgs(ctx context.Context, h access.Head, args ...string) ([]string, error)
+	DeclaredProfiles(ctx context.Context) ([]string, error)
 	Head() (access.Head, error)
 	CheckStack(ctx context.Context) error
 	Status(ctx context.Context) (access.Status, error)
@@ -150,8 +151,10 @@ func openLocked(ctx context.Context, command string, out io.Writer) (stackEngine
 }
 
 // lockedEngine takes e's lock for command and runs recovery, printing each
-// receipt recovery wrote. It answers the engine, the function that
-// releases the lock, and those receipts.
+// receipt recovery wrote and, after a hold's receipt, whose start starts
+// .env's head alone whether it ran or failed, the sentence naming the
+// services of the stack's own that start leaves stopped (unselectedLine). It answers the
+// engine, the function that releases the lock, and those receipts.
 func lockedEngine(ctx context.Context, e stackEngine, command string, out io.Writer) (stackEngine, func(), []access.Receipt, error) {
 	unlock, err := e.Lock(command)
 	if err != nil {
@@ -160,6 +163,15 @@ func lockedEngine(ctx context.Context, e stackEngine, command string, out io.Wri
 	receipts, err := e.Resume(ctx)
 	for _, r := range receipts {
 		fmt.Fprintln(out, "Recovered: "+describeReceipt(r))
+		if r.Op != "hold" || r.State != "completed" {
+			continue
+		}
+		if head, err := e.Head(); err == nil {
+			u := updater{ctx: ctx, out: out, errOut: io.Discard, engine: e, head: head}
+			if line := u.unselectedLine(); line != "" {
+				fmt.Fprintln(out, line)
+			}
+		}
 	}
 	if err != nil {
 		unlock()
@@ -585,15 +597,9 @@ func reachedBy(h access.Head) string {
 // and its address, which reachedBy says, each as before → after and only
 // when it changes: the certificate email, the ports opened on this machine
 // unless reachedBy names them, the port of cyfr's listener on this
-// computer, the builds service, and a tailnet machine replaced by a new
-// one, which the address shows only when its name changes too.
+// computer, and a tailnet machine replaced by a new one, which the address
+// shows only when its name changes too.
 func changedRows(p access.Preview) []string {
-	builds := func(h access.Head) string {
-		if h.BuildsURL == "" {
-			return "off"
-		}
-		return h.BuildsURL
-	}
 	old, next := p.Old, p.New
 	if p.OldWords == (access.Words{}) {
 		// .env held no head to compare with.
@@ -611,9 +617,6 @@ func changedRows(p access.Preview) []string {
 	}
 	if old.Port != next.Port {
 		lines = append(lines, fmt.Sprintf("Port on this computer: %d → %d", old.Port, next.Port))
-	}
-	if old.BuildsURL != next.BuildsURL {
-		lines = append(lines, "Builds service: "+builds(old)+" → "+builds(next))
 	}
 	return lines
 }

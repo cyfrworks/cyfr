@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the builder image tests
+# (tests/builder-image/stack.py): the locus service keeps every setting
+# compose gives it, its security options among them (compose appends a
+# `security_opt` list and refuses an entry named twice, so none is named
+# here), and the namespace of its guard. The suite sets the builds key
+# alone (CYFR_LOCUS_BUILDS_KEY, which the shipped service reads as
+# LOCUS_BUILDS_KEY), so the keeper starts the builds role and no other.
+# This adds only the image under test, the residue canary
+# (tests/fixtures/residue-canary.go) and the two settings a test chooses:
+# the build pool's uid range and the build deadline (empty for the
+# default). On the guard it adds the image under test, a loopback port for
+# the builds role's listener, which the guard forwards into the role's
+# space, and a tools directory first on its PATH, empty in every case but
+# the one that starts the guard with an ip6tables that fails. It adds a
+# stand-in for cyfr, the image under test answering on port 4000 at cyfr's
+# fixed endpoint address and, under cyfr's name, at cyfr's fixed address on
+# the locus network, where it stands in for core's host API, which the
+# guard is given (CYFR_GUARD_HOST_API, the suite's CYFR_HOST_API_PORT) and
+# the suite proves a private role alone reaches; and it enables IPv6 on the
+# locus network, so the guard's IPv6 rules meet routed packets. The
+# containers take the names compose gives them from the project, so a run
+# does not meet a deployed stack on the same host.
+services:
+  locus:
+    image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
+    container_name: !reset null
+    pull_policy: never
+    volumes:
+      - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
+    entrypoint: ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}:routed", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]
+    environment:
+      - LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}
+  locus-guard:
+    image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
+    container_name: !reset null
+    pull_policy: never
+    ports:
+      - "127.0.0.1::4100"
+    volumes:
+      - ${GUARD_TOOLS_DIR:?set GUARD_TOOLS_DIR}:/opt/cyfr-guard-tools:ro
+    environment:
+      - PATH=/opt/cyfr-guard-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  cyfr-stand-in:
+    image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
+    pull_policy: never
+    entrypoint: ["node", "-e", "require('http').createServer((q, s) => s.end('stand-in')).listen(4000, '::')"]
+    cap_drop:
+      - ALL
+    read_only: true
+    networks:
+      default:
+        ipv4_address: ${ENDPOINT_ADDRESS:?set ENDPOINT_ADDRESS}
+      locus:
+        ipv4_address: ${HOST_API_ADDRESS:?set HOST_API_ADDRESS}
+        aliases:
+          - cyfr
+networks:
+  locus:
+    enable_ipv6: true

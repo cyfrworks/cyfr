@@ -1,39 +1,46 @@
 # syntax=docker/dockerfile:1.7-labs
 # The Locus container: the untrusted things CYFR runs, and nothing else.
-# One release serves three roles, each by its key and each in a container
-# of its own: holding LOCUS_RUNTIME_KEY it is the runtime, the WASM engine
-# and its worker service, reached by CYFR on its own listener and reaching
-# CYFR's host API over HTTP (Prima.WorkerAPI, Prima.HostAPI); holding
-# LOCUS_BUILDS_KEY it compiles components and tinctures over the build
-# wire (Prima.BuilderProtocol), sources in a signed request and artifacts
-# in its answer; holding LOCUS_BACKENDS_KEY it runs the stdio MCP servers
-# CYFR registers over the backends wire (Prima.LocusBackends). A node that
-# holds the runtime's key holds no other: its runners have no network, and
-# it shares no node, key or network with a role that has open egress. The
-# app image (Dockerfile) carries no compilers, engine or backend; this one
-# carries no endpoint of the product's, no database and no tenant state,
-# and the release holds only the shared contracts and Locus (`mix release
-# locus`). Compose runs it three times, as locus-runtime, locus-builds and
-# locus-backends, each with its own key, pool and network, and twice more
-# as the egress guards of the builds and backends islands (cyfr-guard,
-# apps/locus/keeper/guard/cyfr-guard.sh): a guard holds NET_ADMIN alone,
-# installs the island's egress rules in a network namespace of its own,
-# which the island's service then shares, and runs no release.
+# One release serves three roles, each by its key and each as a process of
+# its own that cyfr-locus starts: holding LOCUS_RUNTIME_KEY it is the
+# runtime, the WASM engine and its worker service, reached by CYFR on its
+# own listener and reaching CYFR's host API over HTTP (Prima.WorkerAPI,
+# Prima.HostAPI); holding LOCUS_BUILDS_KEY it compiles components and
+# tinctures over the build wire (Prima.BuilderProtocol), sources in a
+# signed request and artifacts in its answer; holding LOCUS_BACKENDS_KEY it
+# runs the stdio MCP servers CYFR registers over the backends wire
+# (Prima.LocusBackends). A role process that holds the runtime's key holds
+# no other, and no role sees another's key, variables, processes, files,
+# port or spawns. The app image (Dockerfile) carries no compilers, engine
+# or backend; this one carries no endpoint of the product's, no database
+# and no tenant state, and the release holds only the shared contracts and
+# Locus (`mix release locus`). Compose runs it once as locus, behind its
+# egress guard, and once more as that guard (cyfr-guard,
+# apps/locus/keeper/guard/cyfr-guard.sh): the guard holds NET_ADMIN alone,
+# installs the egress rules in a network namespace of its own, which locus
+# then shares, makes each role process's and each spawn's one route, and
+# runs no release.
 #
 # Process model: cyfr-locus runs as root holding only SETUID, SETGID and
-# KILL (it refuses to start with any other capability), starts the locus
-# release as locus, and runs every runner, build or backend under a pooled
-# uid of its own — runners as locus-runner01…locus-runner08 (30101-30108),
-# builds as locus-build01…locus-build16 (30001-30016), backends as
+# KILL (it refuses to start with any other capability) and starts, for each
+# role whose key it holds, the locus release as that role's user in a space
+# of its own: locus-runtime (10011), locus-builds (10012) and
+# locus-backends (10013), each with a run folder of its own under
+# /run/locus and an environment holding its own variables alone. It runs
+# every runner, build or backend under a pooled uid of its own — runners
+# as locus-runner01…locus-runner08 (30101-30108), builds as
+# locus-build01…locus-build16 (30001-30016), backends as
 # locus-backend01…locus-backend32 (20001-20032) — with a 0700 home under
-# /var/lib/locus/homes, or a program's kept home under /var/lib/locus/kept
-# owned by a uid of its own (40001-49999, no user entry), inside a memory
-# bound of its own
+# its role's folder of /var/lib/locus/homes, or a program's kept home
+# under /var/lib/locus/kept owned by a uid of its own (40001-49999, no
+# user entry), inside a memory bound of its own
 # (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB, LOCUS_BUILDS_MEMORY_BYTES, 1 GiB,
-# and LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, unless set). When a runner, a
-# build or a backend ends every process of its uid is killed and
-# everything the uid left is removed before another gets it; the locus
-# release refuses to serve any role without cyfr-locus. A runner runs one
+# and LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, unless set), and inside its
+# role's group, whose memory, swap and processors are the role's bounds
+# (LOCUS_<ROLE>_MEMORY_LIMIT and _CPU_LIMIT). When a runner, a build or a
+# backend ends every process of its uid is killed and everything the uid
+# left is removed before another gets it; when a role process ends, every
+# spawn of its own is retired and it starts again alone. The locus release
+# refuses to serve any role without cyfr-locus. A runner runs one
 # execution subtree at a time (`Locus.Runtime.Runner`) with its control
 # channel on file descriptor 3, holds no key, and the runtime's service
 # loads no component.
@@ -41,10 +48,8 @@
 # The memory bound is a cgroup v2 group cyfr-locus makes for each spawn, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
-# It adds no capability. Without it cyfr-locus cannot bound a spawn and
-# refuses every one: the builds and backends services answer each
-# `unavailable`, and the runtime starts no runner and logs, both naming the
-# option; none runs unbounded.
+# It adds no capability. Without it cyfr-locus can make no role's group
+# and refuses to start; nothing runs unbounded.
 #
 # Every spawn runs in a space of its own: cyfr-locus clones it into a user,
 # network and IPC namespace mapping only its pooled uid and gid, so it
@@ -57,21 +62,22 @@
 # the runtime's runners are relay spaces (`runner:…:relay`), whose loopback
 # stays down and whose relay is their one way to anything; builds and
 # backends are routed spaces (`:routed`), each with its own loopback and
-# the one route its island's guard makes for it (`--guard`). The space
+# the one route the guard makes for it (`--guard`), and so is each role
+# process, its port forwarded in from CYFR's network alone. The space
 # takes no capability of the container's, but three things of the host and
 # the engine: the host allows unprivileged user namespaces
 # (user.max_user_namespaces above 0); the container runs under the seccomp
 # profile /etc/cyfr/keeper.json carries, Docker's default with clone
 # allowed to make the space's namespaces and the space's mounts allowed and
-# unshare and setns denied (docker-compose.yml's x-locus-role
+# unshare and setns denied (docker-compose.yml's locus service's
 # `security_opt: seccomp=./keeper.seccomp.json`,
 # apps/locus/keeper/seccomp/keeper.json shipped beside it); and on a host
 # with AppArmor, under this release's profile by its name
 # (apps/codex/internal/apparmor, which `cyfr init` and `cyfr update` load
 # and .env's CYFR_LOCUS_APPARMOR names), with its system paths unmasked
 # (`systempaths=unconfined`). Without any of them, cyfr-locus refuses to
-# start, naming what to check. A runtime container's read-only root
-# carries the build toolchain's files too; its runners still hold no
+# start, naming what to check. The read-only root the runtime's runners
+# see carries the build toolchain's files too; they still hold no
 # capability, no route and no descriptor but their channel and relay.
 
 # ---- The process helper, cyfr-locus, cyfr-stub, cyfr-browser, cyfr-fetch
@@ -238,7 +244,7 @@ RUN ARCH=$(dpkg --print-architecture) \
     && mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
 # Node.js LTS for tincture builds (npm + Vite) and for the stdio MCP
-# servers the backends service runs (`npx -y <package>`). Direct binary
+# servers the backends role runs (`npx -y <package>`). Direct binary
 # install, checksum-pinned against nodejs.org's SHASUMS256.txt for this
 # version.
 ARG NODE_VERSION=24.22.1
@@ -262,19 +268,28 @@ RUN ARCH=$(dpkg --print-architecture) \
 # commands are linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
-# The locus release's user, the runner pool, the build pool and the
-# backend pool: each user is alone in its own group and belongs to no
-# other. /run/locus holds the release's temporary files and the attach
-# socket spawns' relays connect to; the home root holds each spawn's 0700
-# home, on a tmpfs mounted with mode=1733. /var/lib/locus/kept is the kept
-# homes' root, the backends service's `homes` volume, which takes this
-# directory's owner and mode when it is first made: root's and the locus
-# group's, 1773, so the release lists it and a kept home's uid, which has
-# no user entry, makes its own 0700 folder there. /var/lib/locus/space is
-# where a space's first process builds the space's files, in a mount
-# namespace of its own: here it stays empty.
+# The three role users, the runner pool, the build pool and the backend
+# pool: each user is alone in its own group and belongs to no other. The
+# locus group, which has no member, shares the kept homes' root. /run/locus
+# is root's, 0711, holding a 0700 folder of each role's own: the release's
+# temporary files and the socket its spawns' relays connect to. The home
+# root holds a folder of each role's, where each spawn of the role makes
+# its 0700 home; compose mounts a tmpfs of mode 1733 over each.
+# /var/lib/locus/kept is the kept homes' root, the `homes` volume, which
+# takes this directory's owner and mode when it is first made: root's and
+# the locus group's, 1773, as the keeper's start checks; the keeper alone
+# lists it, and a kept home's uid, which has no user entry, makes its own
+# 0700 folder there. /var/lib/locus/space is where a space's first
+# process builds the space's files, in a mount namespace of its own: here
+# it stays empty.
 RUN groupadd -r -g 10001 locus \
-    && useradd -r -u 10001 -g locus -d /nonexistent -M -s /usr/sbin/nologin locus \
+    && for role in runtime:10011 builds:10012 backends:10013; do \
+         name="locus-${role%%:*}"; uid="${role##*:}"; \
+         groupadd -r -g "$uid" "$name" \
+         && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" \
+         && install -d -m 0700 -o "$name" -g "$name" "/run/locus/${role%%:*}" \
+         && install -d -m 1733 -o root -g root "/var/lib/locus/homes/${role%%:*}" || exit 1; \
+       done \
     && for i in $(seq 1 8); do \
          name="$(printf 'locus-runner%02d' "$i")"; uid=$((30100 + i)); \
          groupadd -r -g "$uid" "$name" \
@@ -290,9 +305,9 @@ RUN groupadd -r -g 10001 locus \
          groupadd -r -g "$uid" "$name" \
          && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
        done \
-    && install -d -m 1733 -o root -g root /var/lib/locus/homes \
+    && chmod 0711 /run/locus \
+    && chmod 0755 /var/lib/locus/homes \
     && install -d -m 1773 -o root -g locus /var/lib/locus/kept \
-    && install -d -m 0700 -o locus -g locus /run/locus \
     && install -d -m 0755 -o root -g root /var/lib/locus/space
 
 ENV LANG=en_US.UTF-8
@@ -306,13 +321,13 @@ COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 # CYFR's drivers and the stub, in /opt/cyfr/bin alone, which is first on a
 # kept program's PATH (apps/locus/keeper/internal/stage/spec.go), so a
 # command of the same name a person installs is never found in their place.
-# The MCP stdio server a harness the backends service runs reaches CYFR's
+# The MCP stdio server a harness the backends role runs reaches CYFR's
 # tools through (Claude Code, which its brain driver cyfr-claude-code sets
 # it up for): it answers each call from the answer CYFR puts in the call's
 # input, and holds nothing.
 COPY --from=keeper /out/cyfr-stub /opt/cyfr/bin/cyfr-stub
 # Aqua's browser: the command of a person's browser row, which the backends
-# service runs on a terminal in the row's kept home. It starts the image's
+# role runs on a terminal in the row's kept home. It starts the image's
 # Chromium headless shell with its profile there and drives it over its
 # debugging pipe, which stays inside the box: no debugging port is opened.
 COPY --from=keeper /out/cyfr-browser /opt/cyfr/bin/cyfr-browser
@@ -341,10 +356,11 @@ COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 # The name of the AppArmor profile this release runs under, which the
 # keeper proves at its boot (its stage.ProfileNameFile).
 COPY apps/codex/internal/apparmor/name /etc/cyfr/apparmor-profile
-# The egress guard the builds and backends islands run (docker-compose.yml's
-# locus-builds-guard and locus-backends-guard); iptables, installed above,
-# is its one tool.
+# Locus's egress guard (docker-compose.yml's locus-guard); iptables,
+# installed above, is its one tool.
 COPY --chmod=0755 apps/locus/keeper/guard/cyfr-guard.sh /usr/local/bin/cyfr-guard
+# The container's health probe, each role whose key it holds (HEALTHCHECK).
+COPY --chmod=0755 apps/locus/health.sh /usr/local/bin/locus-health
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
 COPY --from=relbuilder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
 COPY LICENSE FAIR_SOURCE.md /app/
@@ -372,33 +388,25 @@ RUN LOCUS_BUILDS_KEY="$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')"
 
 # The release starts no Erlang distribution: a listener any guest, build
 # or backend could reach, authenticated by a cookie any of them could read.
-# Its temporary files go where only its own user can reach them; a
-# runner's go under the home the keeper gives it
-# (`Locus.Runtime.Release.runner_command/0`).
-ENV RELEASE_DISTRIBUTION=none \
-    RELEASE_TMP=/run/locus
+# Each role process's temporary files go in its own run folder, which the
+# keeper names as its RELEASE_TMP; a runner's go under the home the keeper
+# gives it (`Locus.Runtime.Release.runner_command/0`).
+ENV RELEASE_DISTRIBUTION=none
 
-ARG LOCUS_RUNTIME_PORT=4200
-ARG LOCUS_BUILDS_PORT=4100
-ARG LOCUS_BACKENDS_PORT=4101
-EXPOSE ${LOCUS_RUNTIME_PORT} ${LOCUS_BUILDS_PORT} ${LOCUS_BACKENDS_PORT}
-
-# The builds wire's health operation: a POST of the versioned body,
-# answered without a key (Prima.BuilderProtocol). A container serving the
-# backends service or the runtime probes its own (Prima.LocusBackends, and
-# the worker listener's 401 to an unsigned status request), as
-# docker-compose.yml's locus-backends and locus-runtime services do.
+# Every role whose key the container holds answers at its port, each at
+# its wire's version (apps/locus/health.sh); none held, it is unhealthy.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":2}' \
-        "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
+    CMD ["locus-health"]
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
 # `security_opt: [no-new-privileges, writable-cgroups=true,
 # seccomp=keeper.json]`, a read-only root, `ipc: none`, the homes and
-# /run/locus tmpfs mounts, and the builds guard's control mounted read-only
-# at /run/cyfr-guard-control, behind that guard (docker-compose.yml's
-# locus-builds service). The backends service runs the same image with the
-# backends pool in its place (docker-compose.yml's locus-backends service),
-# and the runtime with the runner pool and no guard (docker-compose.yml's
-# locus-runtime service).
-ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016:routed", "--home-root", "/var/lib/locus/homes", "--guard", "/run/cyfr-guard-control/guard.sock", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+# /run/locus tmpfs mounts, the kept homes' volume, and the guard's control
+# mounted read-only at /run/cyfr-guard-control, behind that guard
+# (docker-compose.yml's locus service). cyfr-locus starts a role process
+# for each `--role <name>:<uid>:<port>:<pool>[:private][:kept]` whose key
+# (LOCUS_<NAME>_KEY) is set: the runtime's, private, reaching core's host
+# API; the builds'; and the backends', whose programs keep their homes
+# under --kept-homes, each uid of 40001-49999 held by one home for its life
+# and given to no pool or other home.
+ENTRYPOINT ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:30001-30016:routed", "--pool", "backends:20001-20032:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "/var/lib/locus/kept:40001-49999", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]

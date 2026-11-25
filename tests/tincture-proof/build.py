@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 """Builds the proof game in the Locus builds image, as a tincture build runs.
 
-The builds service is docker-compose.yml's locus-builds service under
-tests/builder-image/stack.py, and the request is the build wire's
+The builds service is docker-compose.yml's locus service serving its
+builds role under tests/builder-image/stack.py, and the request is the build wire's
 (`Prima.BuilderProtocol`): the game's source files, the lockfile among them,
 as a JavaScript tincture. The service runs `npm ci` and `npm run build` under
 a pooled uid and answers dist/'s files; this writes the version the proof
@@ -44,7 +44,7 @@ def main(image, out_dir):
     files = sources()
     expect("package-lock.json" in files, "the game ships its lockfile beside package.json", sorted(files))
     canary = build_canary()
-    stack = Stack("locus-builds-tincture-proof", image, canary)
+    stack = Stack("builds-tincture-proof", image, canary)
     try:
         stack.up()
         status, answer = stack.build(files, "javascript", "tincture")

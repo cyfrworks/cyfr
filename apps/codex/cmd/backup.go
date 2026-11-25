@@ -138,11 +138,14 @@ func runBackup(ctx context.Context, out, errOut io.Writer) error {
 	}
 	fmt.Fprintln(out, "Starting the stack again...")
 	if err := u.start("backup"); err != nil {
+		if beside := (besideFailed{}); errors.As(err, &beside) {
+			return fmt.Errorf("The snapshot is whole and the stack runs again, but %v", err)
+		}
 		if local := (startedLocally{}); errors.As(err, &local) {
 			fmt.Fprintf(out, "The stack runs again, on this machine alone: %v\n", err)
 			return nil
 		}
-		return fmt.Errorf("The snapshot is whole, but the stack did not start again (%v); 'cyfr up' starts it", err)
+		return fmt.Errorf("The snapshot is whole, but the stack did not start again (%v); 'cyfr up' starts it.%s", err, u.besideLine())
 	}
 	fmt.Fprintln(out, "The stack runs again.")
 	return nil
@@ -157,11 +160,14 @@ func (u *updater) startAgain(reason error) error {
 	}
 	fmt.Fprintln(u.out, "Starting the stack again...")
 	err := u.start("backup")
+	if beside := (besideFailed{}); errors.As(err, &beside) {
+		return fmt.Errorf("%s.\nThe stack was started again, but %v", text, err)
+	}
 	if local := (startedLocally{}); errors.As(err, &local) {
 		return fmt.Errorf("%s.\nThe stack was started again, on this machine alone. %v", text, err)
 	}
 	if err != nil {
-		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it", text, err)
+		return fmt.Errorf("%s.\nThe stack did not start again (%v); 'cyfr up' starts it.%s", text, err, u.besideLine())
 	}
 	return fmt.Errorf("%s.\nThe stack was started again", text)
 }

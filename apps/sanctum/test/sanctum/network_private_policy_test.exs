@@ -86,12 +86,12 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
 
   test "a listed hostname, address or CIDR admits the target" do
     Application.put_env(:sanctum, :private_egress_targets, [
-      "Locus-Backends",
+      "Locus",
       "10.0.0.0/8",
       "192.168.1.5"
     ])
 
-    assert allowed?("locus-backends", {172, 18, 0, 3})
+    assert allowed?("locus", {172, 18, 0, 3})
     assert allowed?("db.internal", {10, 3, 4, 5})
     assert allowed?("lights.local", {192, 168, 1, 5})
     refute allowed?("other.internal", {192, 168, 1, 6})

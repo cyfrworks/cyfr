@@ -55,7 +55,10 @@ defmodule Locus.Keeper do
   unread. A spawn cyfr-locus refuses after it made it never ran, and
   `run/2` answers its refusal at that report too, asking for none; a
   report not come within 60 s is logged and still waited for, so the
-  build's slot is held until cyfr-locus has freed its place.
+  build's slot is held until cyfr-locus has freed its place. A run may
+  name an heir (`Locus.Executor`'s `:heir`), told as a long-lived spawn's
+  heir is, at that report whoever still reads the run; a run naming a
+  fenced tag is refused, as a spawn is.
 
   ## A long-lived spawn
 
@@ -145,28 +148,27 @@ defmodule Locus.Keeper do
 
   ## Kept homes
 
-  cyfr-locus given `--kept-homes <root>:<first>-<last>` names that root
-  and uid range in this node's `KEEPER_KEPT_HOMES`, read at start. A kept
-  home is `<root>/<id>`, 0700, owned by a uid of the range that is its own
-  for its life: the uid is the folder's owner, read with a stat, and no
-  index of it is kept. `home_ensure/2` answers a made home's uid, or draws
-  the lowest uid of the range that no folder under the root owns and no
-  home request in flight is making (this node's group lists the root),
-  and asks cyfr-locus to make the home under it; `home_measure/2`,
-  `home_reset/2` (a retirement, then a make under the same uid) and
-  `home_retire/2` ask cyfr-locus, which acts as the home's uid. A reset or
-  a retirement of a home that a request in flight will still make (a make,
-  or a reset) is refused `conflict`, whether its caller still waits or
-  not, never taken for absent: it is asked again once that has landed. A spec
-  naming a made kept `home` spawns there under the home's uid, with its
-  `home_max_bytes`; one naming a home not made is refused `home_absent`
-  before cyfr-locus is asked. A spec's `pty` size goes with its spawn, and
+  cyfr-locus given `--kept-homes` alone knows the kept homes, their
+  folders and their uids: this client names a home by its id
+  (`Prima.KeeperProtocol.home_id?/1`) and learns a home's uid only from
+  cyfr-locus's answer. `home_ensure/2` asks cyfr-locus for the home, which
+  answers a made home's uid, or draws one for a new home and makes the home
+  under it; `home_measure/2`, `home_reset/2` and `home_retire/2` ask
+  cyfr-locus, which acts as the home's uid, and `home_list/1` collects
+  every page of cyfr-locus's list. cyfr-locus runs one request of a home at
+  a time but serves each apart, so two sent together may be applied in
+  either order: a reset or a retirement of a home that a request in flight
+  will still make (a make, or a reset) is refused `conflict`, whether its
+  caller still waits or not, never sent beside it: it is asked again once
+  that has landed. A spec naming a kept `home` spawns there under the
+  home's uid, with its `home_max_bytes`; cyfr-locus refuses one naming a
+  home not made `home_absent`. A spec's `pty` size goes with its spawn, and
   `resize/3` asks cyfr-locus to set it again. A spec's `hosts` goes with its
   spawn (`Prima.KeeperProtocol`): cyfr-locus resolves them and has the
   island's guard hold the spawn's uid to their addresses, refusing the
-  spawn `hosts_unresolved` or `guard_unavailable`. Without a kept-homes root,
-  every home call and every spec naming a home is refused `unavailable`;
-  a range every uid of which a home owns, `capacity`.
+  spawn `hosts_unresolved` or `guard_unavailable`. A cyfr-locus that keeps
+  no homes refuses every home call and every spec naming a home
+  `unavailable`; a new home with every uid of its range taken, `capacity`.
 
   ## A spawn with a control channel
 
@@ -258,9 +260,7 @@ defmodule Locus.Keeper do
 
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
-  @kept_homes_env "KEEPER_KEPT_HOMES"
-  # A kept home's id: its program row's, a plain file name.
-  @home_id ~r/\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z/
+  @run_dir_env "KEEPER_RUN_DIR"
   # A home request runs a helper as the home's uid; a retirement ends every
   # process of the uid with a grace and scrubs it, which takes passes.
   @home_timeout_ms 120_000
@@ -308,44 +308,30 @@ defmodule Locus.Keeper do
   @doc """
   Starts the client. Options: `:channel`, a connected `:socket` to use in
   place of fd 3; `:attach_dir`, a directory only this node's user can
-  enter (default `#{@attach_dir}`); `:kept_homes`, the kept-homes root and
-  uid range as `KEEPER_KEPT_HOMES` names them (default that variable, which
-  cyfr-locus sets for a keeper given `--kept-homes`); `:proc_root`, where
-  the processes whose uids a new home's draw skips are read (`/proc`);
-  `:name`.
+  enter (default `default_attach_dir/1`'s); `:name`.
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "The environment variable cyfr-locus names the inherited channel in."
-  @spec channel_env() :: String.t()
-  def channel_env, do: @channel_env
-
-  @doc "The environment variable cyfr-locus names its kept-homes root and uid range in."
-  @spec kept_homes_env() :: String.t()
-  def kept_homes_env, do: @kept_homes_env
-
   @doc """
-  The kept-homes root and uid range `<root>:<first>-<last>` names, or
-  `:error` for any other text.
+  The directory a client listens in for its spawns' relays unless told
+  another, over `getenv`, which reads a variable as `System.get_env/1`
+  does: the role's run folder cyfr-locus names in `KEEPER_RUN_DIR`, which
+  is at the same path inside the role's space and outside it, where the
+  relays run; `#{@attach_dir}` where it names none.
   """
-  @spec parse_kept_homes(term()) ::
-          {:ok, %{root: String.t(), first: pos_integer(), last: pos_integer()}} | :error
-  def parse_kept_homes(text) when is_binary(text) do
-    with [root, range] <- String.split(text, ":", parts: 2),
-         true <- Path.type(root) == :absolute and Path.expand(root) == root and root != "/",
-         [first, last] <- String.split(range, "-", parts: 2),
-         {first, ""} <- Integer.parse(first),
-         {last, ""} <- Integer.parse(last),
-         true <- first >= 1 and first <= last and last < 2_147_483_648 do
-      {:ok, %{root: root, first: first, last: last}}
-    else
-      _ -> :error
+  @spec default_attach_dir((String.t() -> String.t() | nil)) :: Path.t()
+  def default_attach_dir(getenv \\ &System.get_env/1) when is_function(getenv, 1) do
+    case getenv.(@run_dir_env) do
+      dir when is_binary(dir) and dir != "" -> dir
+      _ -> @attach_dir
     end
   end
 
-  def parse_kept_homes(_text), do: :error
+  @doc "The environment variable cyfr-locus names the inherited channel in."
+  @spec channel_env() :: String.t()
+  def channel_env, do: @channel_env
 
   @doc "Whether fd 3 is the channel cyfr-locus handed this node."
   @spec channel_inherited?() :: boolean()
@@ -384,6 +370,9 @@ defmodule Locus.Keeper do
   @impl Locus.Executor
   def drop(place), do: drop(__MODULE__, place)
 
+  @impl Locus.Executor
+  def fence(tag), do: fence(__MODULE__, tag)
+
   @doc """
   `run/2` through the client `server`. Beside the executor's options,
   `:place` names the spawn's place, which the caller made (`place/3`), and
@@ -407,7 +396,11 @@ defmodule Locus.Keeper do
     }
 
     try do
-      case GenServer.call(server, {:spawn, argv, env, bounds}, @start_timeout_ms) do
+      case GenServer.call(
+             server,
+             {:spawn, argv, env, bounds, Keyword.get(opts, :heir)},
+             @start_timeout_ms
+           ) do
         {:ok, ref} ->
           await(%{
             phase: :running,
@@ -628,15 +621,12 @@ defmodule Locus.Keeper do
   end
 
   @doc """
-  Make the kept home `id` if it is absent and answer its uid. A home's uid
-  is its folder's owner, read with a stat; a new home draws the lowest uid
-  of the range that no home under the root owns, no home request in
-  flight is making and no live process holds (read from `/proc` as the
-  keeper's pool reads it), which cyfr-locus's helper, running as that
-  uid, then makes it under: a home whose folder vanished while a process
-  of its uid still runs keeps that uid from every other home. `{:refused, "unavailable"}`
-  without a kept-homes root, `{:refused, "capacity"}` with every uid of the
-  range taken.
+  Make the kept home `id` if it is absent and answer its uid, as
+  cyfr-locus answers it: a made home's, or the lowest uid of the range
+  that cyfr-locus finds no home owning, no process holding and nothing of
+  its own holding, which its helper, running as that uid, makes the home
+  under. `{:refused, "unavailable"}` from a cyfr-locus that keeps no homes,
+  `{:refused, "capacity"}` with every uid of the range taken.
   """
   @impl Locus.Launcher
   def home_ensure(server, id) when is_binary(id), do: home_call(server, {:home_ensure, id})
@@ -653,7 +643,7 @@ defmodule Locus.Keeper do
   @impl Locus.Launcher
   def home_retire(server, id) when is_binary(id), do: home_call(server, {:home_retire, id})
 
-  @doc "The id of every kept home under the root: each folder of a home id owned by a uid of the range."
+  @doc "The id of every kept home cyfr-locus keeps, sorted: every page of its list."
   @impl Locus.Launcher
   def home_list(server), do: home_call(server, :home_list)
 
@@ -950,7 +940,8 @@ defmodule Locus.Keeper do
     Process.flag(:trap_exit, true)
 
     with {:ok, channel} <- open_channel(opts),
-         {:ok, listener, path} <- listen(Keyword.get(opts, :attach_dir, @attach_dir)) do
+         {:ok, listener, path} <-
+           listen(Keyword.get_lazy(opts, :attach_dir, &default_attach_dir/0)) do
       server = self()
 
       {:ok,
@@ -980,30 +971,10 @@ defmodule Locus.Keeper do
          places: %{},
          # The heir tags fenced while no spawn of them was held: a spawn
          # naming one is refused, so none starts after the fence's answer.
-         fences: %{},
-         kept: kept_homes(opts),
-         proc_root: Keyword.get(opts, :proc_root, "/proc")
+         fences: %{}
        }}
     else
       {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
-    end
-  end
-
-  # The kept-homes root and range cyfr-locus named, or nil for a keeper that
-  # keeps none, or a name that does not read.
-  defp kept_homes(opts) do
-    text = Keyword.get_lazy(opts, :kept_homes, fn -> System.get_env(@kept_homes_env) end)
-
-    case text && parse_kept_homes(text) do
-      {:ok, kept} ->
-        kept
-
-      :error ->
-        Logger.error("[Locus.Keeper] #{@kept_homes_env} does not read; no home is kept")
-        nil
-
-      nil ->
-        nil
     end
   end
 
@@ -1095,11 +1066,17 @@ defmodule Locus.Keeper do
     :exit, _ -> :gen_tcp.close(conn)
   end
 
+  # A fence stands: every run naming its tag is refused, as every spawn is.
   @impl GenServer
-  def handle_call({:spawn, argv, env, bounds}, {owner, _tag}, state) do
+  def handle_call({:spawn, _argv, _env, _bounds, {_pid, tag}}, _from, state)
+      when is_map_key(state.fences, tag) do
+    {:reply, {:error, {:spawn_failed, :fenced}}, state}
+  end
+
+  def handle_call({:spawn, argv, env, bounds, heir}, {owner, _tag}, state) do
     request = Map.merge(%{pool: @pool, argv: argv, env: env}, bounds)
 
-    case start_spawn(state, request, %{kind: :run, owner: owner, from: nil}) do
+    case start_spawn(state, request, %{kind: :run, owner: owner, from: nil, heir: heir}) do
       {:ok, ref, state} ->
         {:reply, {:ok, ref}, state}
 
@@ -1128,73 +1105,22 @@ defmodule Locus.Keeper do
         {:reply, {:error, {:launcher_unavailable, :timeout}}, state}
     after
       0 ->
-        case kept_spawn(state, opts) do
+        case kept_spawn(opts) do
           {:ok, home} -> spawn_handle(ref, argv, env, opts, home, from, owner, state)
           {:error, code} -> {:reply, {:error, {:refused, code}}, state}
         end
     end
   end
 
-  def handle_call({:home_ensure, id}, from, state) do
-    with {:ok, kept, path} <- home_path(state, id) do
-      case home_uid(kept, path) do
-        {:ok, uid} ->
-          {:reply, {:ok, uid}, state}
+  def handle_call({:home_ensure, id}, from, state),
+    do: home_request(state, %{type: :home_make, home: id}, {:ensure, from})
 
-        :absent ->
-          draw_home(state, kept, path, from, [])
-
-        :error ->
-          {:reply, {:error, {:refused, "bad_request"}}, state}
-      end
-    else
-      {:error, code} -> {:reply, {:error, {:refused, code}}, state}
-    end
-  end
-
-  def handle_call(:home_list, _from, %{kept: nil} = state),
-    do: {:reply, {:error, {:refused, "unavailable"}}, state}
-
-  def handle_call(:home_list, _from, %{kept: kept} = state) do
-    case File.ls(kept.root) do
-      {:ok, names} ->
-        ids =
-          for name <- names,
-              Regex.match?(@home_id, name),
-              {:ok, _uid} <- [home_uid(kept, Path.join(kept.root, name))],
-              do: name
-
-        {:reply, {:ok, Enum.sort(ids)}, state}
-
-      {:error, reason} ->
-        Logger.error("[Locus.Keeper] listing the kept-homes root: #{inspect(reason)}")
-        {:reply, {:error, {:refused, "unavailable"}}, state}
-    end
-  end
+  def handle_call(:home_list, from, state),
+    do: home_request(state, %{type: :home_list}, {:list, from, []})
 
   def handle_call({op, id}, from, state) when op in [:home_measure, :home_reset, :home_retire] do
-    with {:ok, kept, path} <- home_path(state, id),
-         :ok <- unmade(state, op, path) do
-      case {op, home_uid(kept, path)} do
-        {:home_measure, :absent} ->
-          {:reply, :absent, state}
-
-        {_op, :absent} ->
-          {:reply, :ok, state}
-
-        {_op, :error} ->
-          {:reply, {:error, {:refused, "bad_request"}}, state}
-
-        {:home_measure, {:ok, uid}} ->
-          home_request(state, :home_measure, path, uid, {:measure, from})
-
-        {:home_reset, {:ok, uid}} ->
-          home_request(state, :home_retire, path, uid, {:reset, from, uid})
-
-        {:home_retire, {:ok, uid}} ->
-          home_request(state, :home_retire, path, uid, {:retire, from})
-      end
-    else
+    case unmade(state, op, id) do
+      :ok -> home_request(state, %{type: op, home: id}, {op, from})
       {:error, code} -> {:reply, {:error, {:refused, code}}, state}
     end
   end
@@ -1729,168 +1655,38 @@ defmodule Locus.Keeper do
 
   # ————— kept homes —————
 
-  # A spec naming a kept home spawns in that made home under its uid; one
-  # naming none spawns as it always has.
-  defp kept_spawn(_state, %{home: nil}), do: {:ok, %{}}
+  # A spec naming a kept home spawns in that home, cyfr-locus's word on
+  # whether it is made; one naming none spawns as it always has.
+  defp kept_spawn(%{home: nil}), do: {:ok, %{}}
 
-  defp kept_spawn(state, %{home: id} = opts) do
-    with {:ok, kept, path} <- home_path(state, id) do
-      case home_uid(kept, path) do
-        {:ok, uid} ->
-          {:ok,
-           put_given(
-             %{home_mode: "kept", home_path: path, home_uid: uid},
-             :home_max_bytes,
-             opts.home_max_bytes
-           )}
-
-        _absent_or_not_a_home ->
-          {:error, "home_absent"}
-      end
-    end
-  end
-
-  defp home_path(%{kept: nil}, _id), do: {:error, "unavailable"}
-
-  defp home_path(%{kept: kept}, id) do
-    if is_binary(id) and Regex.match?(@home_id, id),
-      do: {:ok, kept, Path.join(kept.root, id)},
+  defp kept_spawn(%{home: id} = opts) do
+    if KeeperProtocol.home_id?(id),
+      do: {:ok, put_given(%{home_mode: "kept", home: id}, :home_max_bytes, opts.home_max_bytes)},
       else: {:error, "bad_request"}
-  end
-
-  # A home's uid is its folder's owner, read without following a link: a
-  # folder of a uid outside the range, or anything else there, is no home.
-  defp home_uid(kept, path) do
-    case File.lstat(path) do
-      {:ok, %File.Stat{type: :directory, uid: uid}} when uid >= kept.first and uid <= kept.last ->
-        {:ok, uid}
-
-      {:ok, _other} ->
-        :error
-
-      {:error, :enoent} ->
-        :absent
-
-      {:error, _reason} ->
-        :error
-    end
-  end
-
-  # Makes the home at `path` under a uid drawn for it. cyfr-locus is the
-  # authority on a uid's state: one it refuses `uid_busy` (retiring,
-  # quarantined, or live under another home) is set aside and the next free
-  # uid drawn, so a home never waits on another's retirement.
-  defp draw_home(state, kept, path, from, busy) do
-    case free_uid(state, kept, busy) do
-      {:ok, uid} -> home_request(state, :home_make, path, uid, {:ensure, from, uid, busy})
-      :error -> {:reply, {:error, {:refused, "capacity"}}, state}
-      :unreadable -> {:reply, {:error, {:refused, "unavailable"}}, state}
-    end
-  end
-
-  # The lowest uid of the range no home under the root owns, no home
-  # request in flight is making, no live process holds and cyfr-locus has
-  # not refused as busy: the client lists the root, which its group may,
-  # and reads each entry's owner, then every process's uids. A root or a
-  # /proc that cannot be read draws none.
-  defp free_uid(state, kept, busy) do
-    with {:ok, names} <- listed(File.ls(kept.root), "the kept-homes root"),
-         {:ok, live} <- live_uids(state.proc_root, kept) do
-      owned =
-        for name <- names,
-            {:ok, %File.Stat{uid: uid}} <- [File.lstat(Path.join(kept.root, name))],
-            into: MapSet.new(),
-            do: uid
-
-      making = for {_id, %{uid: uid}} <- state.homes, into: MapSet.new(), do: uid
-
-      taken =
-        owned |> MapSet.union(making) |> MapSet.union(live) |> MapSet.union(MapSet.new(busy))
-
-      case Enum.find(kept.first..kept.last, &(not MapSet.member?(taken, &1))) do
-        nil -> :error
-        uid -> {:ok, uid}
-      end
-    end
-  end
-
-  defp listed({:ok, names}, _what), do: {:ok, names}
-
-  defp listed({:error, reason}, what) do
-    Logger.error("[Locus.Keeper] listing #{what}: #{inspect(reason)}")
-    :unreadable
-  end
-
-  # The uids of the range any live process holds as its real, effective,
-  # saved or filesystem uid, from each process's status. A status that
-  # cannot be read is a holder of an unknown uid, so nothing is drawn; only
-  # a process gone with its whole /proc entry holds none.
-  defp live_uids(proc_root, kept) do
-    with {:ok, entries} <- listed(File.ls(proc_root), proc_root) do
-      entries
-      |> Enum.filter(&Regex.match?(~r/\A[0-9]+\z/, &1))
-      |> Enum.reduce_while({:ok, MapSet.new()}, fn entry, {:ok, uids} ->
-        case process_uids(Path.join(proc_root, entry)) do
-          {:ok, held} ->
-            in_range = Enum.filter(held, &(&1 >= kept.first and &1 <= kept.last))
-            {:cont, {:ok, MapSet.union(uids, MapSet.new(in_range))}}
-
-          :unreadable ->
-            Logger.error("[Locus.Keeper] a process's status under #{proc_root} could not be read")
-            {:halt, :unreadable}
-        end
-      end)
-    end
-  end
-
-  # A process's uids from its status; none for one gone with its /proc entry.
-  defp process_uids(dir) do
-    case File.read(Path.join(dir, "status")) do
-      {:ok, status} ->
-        case status_uids(status) do
-          [] -> :unreadable
-          uids -> {:ok, uids}
-        end
-
-      {:error, _reason} ->
-        case File.lstat(dir) do
-          {:error, :enoent} -> {:ok, []}
-          _present -> :unreadable
-        end
-    end
-  end
-
-  defp status_uids(status) do
-    case Regex.run(~r/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m, status,
-           capture: :all_but_first
-         ) do
-      nil -> []
-      uids -> Enum.map(uids, &String.to_integer/1)
-    end
   end
 
   # A request that will still make the home leaves nothing to call absent,
   # and no change of it to run beside: cyfr-locus serves each request apart,
   # so one sent now could pass it.
-  defp unmade(_state, :home_measure, _path), do: :ok
+  defp unmade(_state, :home_measure, _id), do: :ok
 
-  defp unmade(state, _change, path) do
+  defp unmade(state, _change, id) do
     making? =
       Enum.any?(state.homes, fn {_id, entry} ->
-        entry.path == path and elem(entry.pending, 0) in [:ensure, :reset, :made]
+        entry.home == id and elem(entry.pending, 0) in [:ensure, :home_reset]
       end)
 
     if making?, do: {:error, "conflict"}, else: :ok
   end
 
-  # Asks cyfr-locus for `type` on the home at `path` of `uid`, answered when
-  # its reply arrives (on_reply/2) by what `pending` says.
-  defp home_request(state, type, path, uid, pending) do
+  # Sends a home request, answered when its reply arrives (on_reply/2) by
+  # what `pending` says.
+  defp home_request(state, request, pending) do
     id = "home-" <> Integer.to_string(state.next_id + 1)
 
-    with {:ok, line} <- encode(%{type: type, id: id, path: path, uid: uid}),
+    with {:ok, line} <- encode(Map.put(request, :id, id)),
          :ok <- send_line(state, line) do
-      entry = %{pending: pending, path: path, uid: uid}
+      entry = %{pending: pending, home: Map.get(request, :home)}
       {:noreply, %{state | next_id: state.next_id + 1, homes: Map.put(state.homes, id, entry)}}
     else
       {:error, :unencodable} ->
@@ -1902,31 +1698,11 @@ defmodule Locus.Keeper do
     end
   end
 
-  # A reset retires the home and makes it again under the same uid; every
-  # other request is answered at its one reply.
-  defp home_done(state, %{pending: {:reset, from, uid}, path: path}, :retired) do
-    case home_request(state, :home_make, path, uid, {:made, from}) do
-      {:noreply, state} ->
-        state
-
-      {:reply, answer, state} ->
-        GenServer.reply(from, answer)
-        state
-
-      {:stop, _reason, answer, state} ->
-        GenServer.reply(from, answer)
-        state
-    end
-  end
-
-  # A uid cyfr-locus will not give this home now is set aside and another
-  # drawn.
-  defp home_done(
-         state,
-         %{pending: {:ensure, from, uid, busy}, path: path},
-         {:refused, "uid_busy"}
-       ) do
-    case draw_home(state, state.kept, path, from, [uid | busy]) do
+  # A list's page with more after it asks for the next, gathering the ids;
+  # every other request is answered at its one reply.
+  defp home_done(state, %{pending: {:list, from, ids}}, {:homes, page, next})
+       when is_binary(next) do
+    case home_request(state, %{type: :home_list, after: next}, {:list, from, ids ++ page}) do
       {:noreply, state} ->
         state
 
@@ -1945,10 +1721,13 @@ defmodule Locus.Keeper do
     state
   end
 
-  defp home_answer({:ensure, _from, uid, _busy}, :made), do: {:ok, uid}
-  defp home_answer({:made, _from}, :made), do: :ok
-  defp home_answer({:measure, _from}, {:measured, bytes}), do: {:ok, bytes}
-  defp home_answer({:retire, _from}, :retired), do: :ok
+  defp home_answer({:ensure, _from}, {:made, uid}), do: {:ok, uid}
+  defp home_answer({:home_reset, _from}, {:made, _uid}), do: :ok
+  defp home_answer({:home_reset, _from}, :retired), do: :ok
+  defp home_answer({:home_retire, _from}, :retired), do: :ok
+  defp home_answer({:home_measure, _from}, {:measured, bytes}), do: {:ok, bytes}
+  defp home_answer({:home_measure, _from}, {:refused, "home_absent"}), do: :absent
+  defp home_answer({:list, _from, ids}, {:homes, page, nil}), do: {:ok, Enum.sort(ids ++ page)}
   defp home_answer(_pending, {:refused, code}), do: {:error, {:refused, code}}
   defp home_answer(_pending, _outcome), do: {:error, {:refused, "internal"}}
 
@@ -2144,9 +1923,12 @@ defmodule Locus.Keeper do
     end
   end
 
-  defp on_reply({:home_made, id}, state), do: home_reply(state, id, :made)
+  defp on_reply({:home_made, id, uid}, state), do: home_reply(state, id, {:made, uid})
   defp on_reply({:home_measured, id, bytes}, state), do: home_reply(state, id, {:measured, bytes})
   defp on_reply({:home_retired, id}, state), do: home_reply(state, id, :retired)
+
+  defp on_reply({:homes, id, ids, next}, state),
+    do: home_reply(state, id, {:homes, ids, next})
 
   # An `error` for a spawn this client does not follow is ignored, as is a
   # refused resize: a spawn's size changes nothing of whom it belongs to.

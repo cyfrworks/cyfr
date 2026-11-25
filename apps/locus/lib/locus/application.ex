@@ -137,7 +137,7 @@ defmodule Locus.Application do
   The roles a service node serves, from which keys it holds, raising when
   it holds the runtime key and either other key: the refusal names
   `LOCUS_RUNTIME_KEY` and each other key variable held, and every role's
-  compose service (`Prima.LocusRoles`).
+  `--role` of cyfr-locus (`Prima.LocusRoles`).
   """
   @spec roles!(roles()) :: roles()
   def roles!(%{runtime: runtime?, builds: builds?, backends: backends?} = roles)
@@ -151,16 +151,18 @@ defmodule Locus.Application do
             "[Locus] FATAL: a server holding LOCUS_RUNTIME_KEY serves the runtime alone, and " <>
               "this one also holds #{Enum.join(held, " and ")}: the runtime's runners have " <>
               "no network, so it shares no server, key or network with a role that has open " <>
-              "egress. Give each role a container of its own (docker-compose.yml's " <>
-              "#{services()})."
+              "egress. Give each role a process of its own (cyfr-locus serve's " <>
+              "#{roles()})."
     end
 
     roles
   end
 
-  # Every role's compose service, in the table's order: `a, b and c`.
-  defp services do
-    {last, others} = Prima.LocusRoles.roles() |> Enum.map(& &1.service) |> List.pop_at(-1)
+  # Every role's `--role` of cyfr-locus, in the table's order: `a, b and c`.
+  defp roles do
+    {last, others} =
+      Prima.LocusRoles.roles() |> Enum.map(&"--role #{&1.name}:…") |> List.pop_at(-1)
+
     Enum.join(others, ", ") <> " and " <> last
   end
 
@@ -220,15 +222,18 @@ defmodule Locus.Application do
       if(backends?, do: Locus.Backends.children(), else: [])
   end
 
-  # The `--pool` argument of each role served under the launcher, its pool
-  # named as the role table names it.
+  # The `--role` and `--pool` arguments of each role served under the
+  # launcher, each named as the role table names it.
   defp pools(%{builds: builds?, backends: backends?}) do
-    [if(builds?, do: pool(:builds)), if(backends?, do: pool(:backends))]
+    [if(builds?, do: :builds), if(backends?, do: :backends)]
     |> Enum.reject(&is_nil/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &pool/1)
   end
 
-  defp pool(role), do: "--pool #{Prima.LocusRoles.role!(role).pool}:…"
+  defp pool(name) do
+    role = Prima.LocusRoles.role!(name)
+    "--role #{role.name}:… --pool #{role.pool}:…"
+  end
 
   @doc """
   The build slots, `Locus.BuildSlots`: one `Prima.Slots` instance whose caps
@@ -236,8 +241,9 @@ defmodule Locus.Application do
   `Locus.Config.max_concurrent_per_tenant/0` for one athanor, keyed by a
   request's `athanor_id`. A build past either cap is refused, never queued:
   a backlog of multi-minute builds behind a waiting caller helps nobody.
-  The connection serving a build holds its slot, so a connection that dies
-  gives the slot back by its monitor.
+  The connection serving a build holds its slot and names the slots the
+  heir of the build's run, so a connection that dies gives the slot back
+  once the executor holds nothing of the run (`Locus.Executor.fence/1`).
   """
   @spec build_slots() :: {Prima.Slots, [Prima.Slots.option()]}
   def build_slots do
@@ -246,7 +252,8 @@ defmodule Locus.Application do
      max: Locus.Config.max_concurrent(),
      key_max: Locus.Config.max_concurrent_per_tenant(),
      child_reserve: 0,
-     policy: :reject}
+     policy: :reject,
+     fence: {Locus.Executor, :fence, []}}
   end
 
   @doc """

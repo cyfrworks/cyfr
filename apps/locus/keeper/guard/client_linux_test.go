@@ -138,6 +138,8 @@ func TestTheKeeperSendsTheVectors(t *testing.T) {
 			_, err := c.Admit(testSpawn, ReachHosts, []netip.Addr{netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("2606:4700::1111")}, netns, udp, tcp)
 			return err
 		},
+		func() error { _, err := c.AdmitRole(testSpawn, 4200, true, netns, udp, tcp); return err },
+		func() error { _, err := c.AdmitRole(testSpawn, 4101, false, netns, udp, tcp); return err },
 		func() error { return c.Clear(testSpawn, Route{Conn: 1}) },
 	}
 	done := make(chan error, 1)

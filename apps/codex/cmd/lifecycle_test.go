@@ -144,9 +144,8 @@ func readShippedTemplate(t *testing.T) string {
 
 // The shipped template documents every setting init writes: the local
 // head's keys assigned once each, no key of another mode's head
-// assigned. Each key stackKeys writes is
-// assigned there once, empty, or with the value init completes (the
-// builds URL), so the editor writes every one on its own line.
+// assigned. Each key stackKeys writes is assigned there once, empty, so
+// the editor writes every one on its own line.
 func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	text := readShippedTemplate(t)
 	f := parseEnvFile(text)
@@ -165,11 +164,8 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 			t.Errorf("the shipped template does not assign %s empty on one line (%q, assigned: %v)", key, v, assigned)
 		}
 	}
-	if v, _ := f.value(buildsURLVar); v != defaultBuildsURL || len(f.assignments(buildsURLVar)) != 1 {
-		t.Errorf("the shipped template's %s is %q, want %s on one line", buildsURLVar, v, defaultBuildsURL)
-	}
 	if _, assigned := f.value(serviceIDVar); assigned {
-		t.Errorf("the shipped template assigns %s; compose's default names the locus-runtime service", serviceIDVar)
+		t.Errorf("the shipped template assigns %s; compose's default names the runtime role", serviceIDVar)
 	}
 }
 
@@ -204,7 +200,7 @@ func (f *envFile) value(key string) (value string, assigned bool) {
 // withStackKeys is text with the stack keys it lacks (stackKeys) written
 // through the engine's editor, as init writes an existing .env.
 func withStackKeys(text string) (string, []envChange, error) {
-	add, changes, err := stackKeys(envValuesOf(text))
+	add, changes, err := stackKeys(envValuesOf(text), false)
 	if err != nil {
 		return "", nil, err
 	}
@@ -277,11 +273,14 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	for _, c := range changes {
 		added = append(added, c.key)
 	}
-	// The template carries the builds URL; init mints the key beside it.
+	// A fresh .env gets the builds key too, so a new home builds.
 	if want := []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, appArmorEnv, buildsKeyVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
+	if v, _ := parseEnvFile(got).value(buildsKeyVar); !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(v) {
+		t.Errorf("a fresh .env's %s is %q, not a minted key", buildsKeyVar, v)
+	}
 
 	// The template assigns the empty allowlist itself, so `cp .env.example
 	// .env` boots a release too; init has nothing to add and leaves it.
@@ -295,10 +294,10 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the .env init writes does not boot: %v", engineFailure(err))
 	}
-	if boot.Head.Mode != access.ModeLocal || boot.Origin != "http://localhost:4000" || !slices.Equal(boot.Head.Profiles, []string{buildsProfile}) {
-		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000 with builds on", boot.Head, boot.Origin)
+	if boot.Head.Mode != access.ModeLocal || boot.Origin != "http://localhost:4000" || len(boot.Head.Profiles) != 0 {
+		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000", boot.Head, boot.Origin)
 	}
-	if _, again, err := stackKeys(envValuesOf(got)); err != nil || len(again) != 0 {
+	if _, again, err := stackKeys(envValuesOf(got), false); err != nil || len(again) != 0 {
 		t.Errorf("a second init changes %v (%v)", again, err)
 	}
 }
@@ -341,7 +340,7 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 	t.Helper()
 	f := parseEnvFile(text)
 	hexKey := regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
-	for _, key := range []string{backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar} {
+	for _, key := range []string{backendsKeyVar, workerRootVar, serviceKeyVar} {
 		if v, _ := f.value(key); !hexKey.MatchString(v) {
 			t.Errorf("%s is %q, not 64 hexadecimal digits", key, v)
 		}
@@ -353,9 +352,6 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 	serviceKey, _ := f.value(serviceKeyVar)
 	if root, ok := decodeHexKey(rootText); !ok || serviceKey != hex.EncodeToString(workerKey(root, serviceID)) {
 		t.Errorf("%s does not derive from %s for %s", serviceKeyVar, workerRootVar, serviceID)
-	}
-	if url, _ := f.value(buildsURLVar); url != defaultBuildsURL {
-		t.Errorf("%s is %q", buildsURLVar, url)
 	}
 	// Unassigned, the application's configured list stands, which a
 	// deployment's own configuration may set; a wildcard here would open the
@@ -381,8 +377,8 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
 	const setupToken = "5e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75"
 	base := "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\nCYFR_SETUP_TOKEN=" + setupToken + "\nCYFR_LOCUS_APPARMOR=" + apparmor.ProfileName + "\n"
-	// builds is .env.example's builds URL, which builds are on with.
-	const builds = "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"
+	// builds is a builds key, which builds are on with.
+	const builds = "CYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n"
 
 	cases := []struct {
 		name    string
@@ -393,36 +389,37 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		refusal string // a fragment of the refusal, when init refuses
 	}{
 		{
-			name:    "no root and no service key: both are minted, and the builds key beside the URL",
+			name:    "no root and no service key: both are minted, and the builds key is kept",
 			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=\nLOCUS_RUNTIME_KEY=\n",
-			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar, buildsKeyVar},
+			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar},
+			kept:    map[string]string{buildsKeyVar: buildsKey},
 			service: "wrk_locus",
 		},
 		{
 			name:    "a root and no service key: the key is derived from that root",
 			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n# LOCUS_RUNTIME_KEY=\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar},
 			kept:    map[string]string{workerRootVar: root},
 			service: "wrk_locus",
 		},
 		{
 			name:    "a root spelled in capitals derives the same key",
 			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=\"" + strings.ToUpper(root) + "\"\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar},
 			kept:    map[string]string{workerRootVar: strings.ToUpper(root)},
 			service: "wrk_locus",
 		},
 		{
 			name:    "a service id .env names is the one the key derives for",
 			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_SERVICE_ID=wrk_other\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar},
 			kept:    map[string]string{serviceKeyVar: otherKey},
 			service: "wrk_other",
 		},
 		{
 			name:    "a consistent pair is kept as it is",
 			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
-			added:   []string{corsOriginsVar, buildsKeyVar},
+			added:   []string{corsOriginsVar},
 			kept:    map[string]string{workerRootVar: root, serviceKeyVar: runtimeKey},
 			service: "wrk_locus",
 		},
@@ -460,7 +457,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			// The last assignment is the one compose and cyfr read.
 			name:    "a root assigned twice is its last assignment",
 			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=\nexport CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar},
 			kept:    map[string]string{workerRootVar: root},
 			service: "wrk_locus",
 		},
@@ -469,59 +466,37 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			// `export NAME=` and `NAME: value` is the pair, kept.
 			name:    "a consistent pair in the export and colon forms is kept",
 			body:    base + builds + "export CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY: " + runtimeKey + "\n",
-			added:   []string{corsOriginsVar, buildsKeyVar},
+			added:   []string{corsOriginsVar},
 			kept:    map[string]string{workerRootVar: root, serviceKeyVar: runtimeKey},
 			service: "wrk_locus",
 		},
 		{
-			name:    "a builds key without a URL gets the URL",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
-			added:   []string{corsOriginsVar, buildsURLVar},
-			kept:    map[string]string{buildsKeyVar: buildsKey},
-			service: "wrk_locus",
-		},
-		{
-			name:    "a builds URL without a key gets a minted key",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_LOCUS_BUILDS_KEY=\n",
-			added:   []string{corsOriginsVar, buildsKeyVar},
-			service: "wrk_locus",
-		},
-		{
-			name:  "a builds URL set empty with no key is builds turned off, and left so",
-			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\n",
+			name:  "a builds key set empty is builds turned off, and left so",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\n",
 			added: []string{corsOriginsVar},
-			kept:  map[string]string{buildsURLVar: "", buildsKeyVar: ""},
 		},
 		{
 			name:  "an allowlist .env assigns is kept, empty or not",
-			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
 			added: nil,
 			kept:  map[string]string{corsOriginsVar: "https://app.example.com"},
 		},
 		{
 			name:  "a setup token .env holds is kept as it is",
-			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
 			added: nil,
 			kept:  map[string]string{setupTokenVar: setupToken},
 		},
 		{
 			name:  "a setup token assigned empty is minted",
-			body:  strings.Replace(base, setupToken, "", 1) + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
+			body:  strings.Replace(base, setupToken, "", 1) + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
 			added: []string{setupTokenVar},
 		},
 		{
-			name:  "no line for any key: each is appended, and no builds URL is builds off",
+			name:  "no line for any key: each is appended, and no builds key is builds off",
 			body:  "CYFR_HOST=localhost",
 			added: []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, corsOriginsVar, appArmorEnv},
 			kept:  map[string]string{"CYFR_HOST": "localhost"},
-		},
-		{
-			// A switch removes the access setting a head omits, the empty builds
-			// URL among them; builds stay off.
-			name:  "a builds URL a switch removed, with no key, is builds off and left so",
-			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
-			added: nil,
-			kept:  map[string]string{buildsKeyVar: ""},
 		},
 	}
 
@@ -561,8 +536,8 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			if tc.service != "" {
 				assertStackPairs(t, got, tc.service)
 			}
-			if url, _ := f.value(buildsURLVar); tc.service == "" && url != "" {
-				t.Errorf("builds turned on (%s=%s)", buildsURLVar, url)
+			if key, _ := f.value(buildsKeyVar); !strings.Contains(tc.body, builds) && key != "" {
+				t.Errorf("builds turned on (%s set)", buildsKeyVar)
 			}
 			// Every line of the input that init had no key to write on is
 			// still there, unchanged.
@@ -592,7 +567,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 		t.Errorf("a refused .env was written:\n%s", got)
 	}
 
-	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_LOCUS_RUNTIME_ROOT=\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"
+	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_LOCUS_RUNTIME_ROOT=\n"
 	if err := os.WriteFile(path, []byte(partial), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -663,10 +638,9 @@ func TestImagesFromCompose(t *testing.T) {
   caddy:
     image: caddy:2-alpine
     profiles: ["public"]
-  locus-builds:
+  locus:
     image: ghcr.io/cyfrworks/cyfr-locus:latest
-    profiles: ["locus-builds"]
-  locus-backends:
+  locus-guard:
     image: ghcr.io/cyfrworks/cyfr-locus:latest
   source-built:
     build:
@@ -680,8 +654,7 @@ func TestImagesFromCompose(t *testing.T) {
 		want     []string
 	}{
 		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
-		{[]string{"locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
-		{[]string{"locus-builds", "public"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
+		{[]string{"public"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 	} {
 		got := imagesFromCompose(path, tc.profiles)
@@ -695,43 +668,19 @@ func TestImagesFromCompose(t *testing.T) {
 	}
 }
 
-// The shipped compose file and .env.example: the cyfr-locus image is pulled
-// for locus-backends, which always starts; a project that points builds at
-// the locus-builds service selects its profile with the value .env.example
-// offers, and the one image is pulled once for both services.
+// The shipped compose file: the cyfr-locus image is pulled once, for
+// locus and locus-guard, which always start.
 func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 	const image = "ghcr.io/cyfrworks/cyfr-locus:latest"
 	compose := filepath.Join("..", "..", "..", "docker-compose.yml")
-	count := func(images []string) int {
-		n := 0
-		for _, img := range images {
-			if img == image {
-				n++
-			}
-		}
-		return n
-	}
-	if got := imagesFromCompose(compose, nil); count(got) != 1 {
-		t.Errorf("without the builds profile the Locus image is not pulled once for locus-backends: %v", got)
-	}
-
-	var offered string
-	for _, line := range strings.Split(readShippedTemplate(t), "\n") {
-		if strings.HasPrefix(line, buildsURLVar+"=") {
-			offered = line
+	n := 0
+	for _, img := range imagesFromCompose(compose, nil) {
+		if img == image {
+			n++
 		}
 	}
-	if offered == "" {
-		t.Fatal(".env.example offers no CYFR_LOCUS_BUILDS_URL")
-	}
-
-	builds, _ := parseEnvFile(offered).value(buildsURLVar)
-	profiles := access.Profiles(access.ModeLocal, builds)
-	if !slices.Contains(profiles, buildsProfile) {
-		t.Errorf("a project using the builds service (%s) does not select its profile: %v", offered, profiles)
-	}
-	if got := imagesFromCompose(compose, profiles); count(got) != 1 {
-		t.Errorf("a project using the builds service (%s) does not pull the Locus image once: %v", offered, got)
+	if n != 1 {
+		t.Errorf("the Locus image is pulled %d times, want once for locus and locus-guard", n)
 	}
 }
 
