@@ -462,9 +462,23 @@ defmodule Sanctum.ProvisioningTest do
       )
     end
 
+    # The person's no stands: nothing mints a default of foo again
+    # (`Arca.ConsentStorage.revoked_by_person?/2`, the walk's question).
+    defp stays_unminted!(ctx), do: assert({:ok, []} = Sanctum.Consent.profiles(ctx, @foo))
+
+    # And the person is told it was revoked: the grant that ended last was
+    # theirs to revoke (`Sanctum.Consent.ungranted/2`).
     defp stays_revoked!(ctx) do
-      assert {:ok, []} = Sanctum.Consent.profiles(ctx, @foo)
+      stays_unminted!(ctx)
       assert {:ok, :revoked} = Sanctum.Consent.ungranted(ctx, @foo)
+    end
+
+    # Unminted all the same, but the grant that ended last was the
+    # removal's: the person is told it is not granted, never that they
+    # revoked it.
+    defp stays_unminted_removed!(ctx) do
+      stays_unminted!(ctx)
+      assert {:ok, :no_grant} = Sanctum.Consent.ungranted(ctx, @foo)
     end
 
     test "is not minted again by an update", %{bundle_dir: bundle_dir} do
@@ -531,8 +545,8 @@ defmodule Sanctum.ProvisioningTest do
       stays_revoked!(ctx)
     end
 
-    test "stays revoked when another label's grant stood and the component is removed and " <>
-           "installed again",
+    test "stays unminted when another label's grant stood and the component is removed and " <>
+           "installed again, told as the removal's",
          %{bundle_dir: bundle_dir} do
       ctx = provisioned!(bundle_dir, "revoked-work")
       person_grants!(ctx, "work")
@@ -541,10 +555,13 @@ defmodule Sanctum.ProvisioningTest do
 
       assert {:ok, _} = Filler.install_shipped(ctx, @foo)
 
-      stays_revoked!(ctx)
+      stays_unminted_removed!(ctx)
     end
 
-    test "stays revoked once its person revoked a default, though a newer default was " <>
+    # The person revoking again the grant they already revoked ends no
+    # grant: the grant that ended last is still the removal's, so it is
+    # told as not granted, and the person's old no still keeps it unminted.
+    test "stays unminted once its person revoked a default, though a newer default was " <>
            "granted and removed, and the person revoked the older one again",
          %{bundle_dir: bundle_dir} do
       ctx = provisioned!(bundle_dir, "regranted")
@@ -555,13 +572,15 @@ defmodule Sanctum.ProvisioningTest do
 
       assert {:ok, _} = Filler.install_shipped(ctx, @foo)
 
-      stays_revoked!(ctx)
+      stays_unminted_removed!(ctx)
     end
 
     # The person's no stands over every removal and install that follow:
-    # the component waits, says its grant was revoked, and is granted by
-    # the person's own consent on the same path as before.
-    test "stays revoked after its person consented again and the component was removed and " <>
+    # nothing mints it again, and it is granted by the person's own consent
+    # on the same path as before. What the component says is the present
+    # absence's cause: the grant that ended last was the removal's, so it
+    # waits as one not granted, never as one the person revoked.
+    test "stays unminted after its person consented again and the component was removed and " <>
            "installed again, until the person consents again",
          %{bundle_dir: bundle_dir} do
       ctx = provisioned!(bundle_dir, "consented-again")
@@ -572,9 +591,9 @@ defmodule Sanctum.ProvisioningTest do
 
       assert {:ok, _} = Filler.install_shipped(ctx, @foo)
 
-      stays_revoked!(ctx)
+      stays_unminted_removed!(ctx)
 
-      assert {:ok, %{consent: %{head_state: "revoked"}}} =
+      assert {:ok, %{consent: %{head_state: "missing"}}} =
                Compendium.Component.setup_plan(ctx, @foo)
 
       person_grants!(ctx, "default")

@@ -127,10 +127,15 @@ defmodule Arca.ProfileStorage do
   end
 
   @doc """
-  Revoke a profile as its person does (`profile.revoke`): from any status,
-  recording the person as the cause, in one conditional write. A row
-  already revoked, by a removal or by the person, is the person's
-  revocation after it. A row the athanor does not hold is
+  Revoke a profile as its person does (`profile.revoke`), naming the
+  person as the cause, stamped when it writes (`stamped/1`). A standing
+  row, active or waiting for consent, is revoked. A row a removal already
+  revoked keeps its stamp, since its grant ended when the removal ended
+  it, and names the person as its cause: their no is never lost to a
+  removal that landed first (`Arca.ConsentStorage.revoked_by_person?/2`).
+  A row its person already revoked is left as it is, stamp and cause, and
+  answers `:ok` as its first revocation did: ending a grant that has
+  ended ends nothing. A row the athanor does not hold is
   `{:error, :not_found}`.
   """
   @spec revoke_by_person(Prima.Actor.t(), String.t()) ::
@@ -138,30 +143,53 @@ defmodule Arca.ProfileStorage do
   def revoke_by_person(%Prima.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     {:ok, from} = Arca.StatusTransitions.from(:profiles, "revoked")
+    standing = from -- ["revoked"]
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_by_person", fn ->
-      case Arca.Repo.update_all(
-             from(p in Profile, where: p.id == ^id and p.status in ^from)
-             |> Arca.QueryHelpers.where_athanor(athanor_id),
-             set: [status: "revoked", revoked_by: "person", updated_at: DateTime.utc_now()]
-           ) do
-        {1, _} -> :ok
-        {0, _} -> {:error, :not_found}
-      end
+      stamped(fn now ->
+        ended =
+          from(p in Profile, where: p.id == ^id and p.status in ^standing)
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.Repo.update_all(set: [status: "revoked", revoked_by: "person", updated_at: now])
+
+        case ended do
+          {1, _} -> :ok
+          {0, _} -> revoked_before(athanor_id, id)
+        end
+      end)
     end)
   end
 
   def revoke_by_person(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
+  # A person's revocation of a row already revoked: a removal's names the
+  # person, its stamp kept; the person's own is left as it is.
+  defp revoked_before(athanor_id, id) do
+    named =
+      from(p in Profile,
+        where: p.id == ^id and p.status == "revoked" and p.revoked_by == "removal"
+      )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+      |> Arca.Repo.update_all(set: [revoked_by: "person"])
+
+    held? =
+      from(p in Profile, where: p.id == ^id)
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+      |> Arca.Repo.exists?()
+
+    if match?({1, _}, named) or held?, do: :ok, else: {:error, :not_found}
+  end
+
   @doc """
   Revoke every profile of a name-level source ref that is not already
-  revoked, within the actor's athanor, in one conditional write, recording
-  the removal of the component's last version as the cause: this is what
-  that removal does, and nothing else calls it. Only a row not revoked at
-  the write is revoked, so a profile already revoked keeps its cause, a
-  person's revocation committed while the removal runs among them, and a
-  grant its person revoked stays theirs through a removal. Answers the ids
-  it revoked. Consent revisions and vault entries are untouched: a revoked
+  revoked, within the actor's athanor, in one conditional write stamped
+  when it writes (`stamped/1`), recording the removal of the component's
+  last version as the cause: this is what that removal does, and nothing
+  else calls it. Only a row not revoked at the write is revoked, so a
+  profile already revoked keeps its cause and its stamp, a person's
+  revocation committed while the removal runs among them, and a grant its
+  person revoked stays theirs through a removal. Answers the ids it
+  revoked. Consent revisions and vault entries are untouched: a revoked
   profile keeps its history.
   """
   @spec revoke_for_source(Prima.Actor.t(), String.t()) ::
@@ -169,22 +197,37 @@ defmodule Arca.ProfileStorage do
   def revoke_for_source(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_for_source", fn ->
-      {_count, ids} =
-        from(p in Profile,
-          where: p.source_ref == ^source_ref and p.status != "revoked",
-          select: p.id
-        )
-        |> Arca.QueryHelpers.where_athanor(athanor_id)
-        |> Arca.Repo.update_all(
-          set: [status: "revoked", revoked_by: "removal", updated_at: DateTime.utc_now()]
-        )
+      stamped(fn now ->
+        {_count, ids} =
+          from(p in Profile,
+            where: p.source_ref == ^source_ref and p.status != "revoked",
+            select: p.id
+          )
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.Repo.update_all(
+            set: [status: "revoked", revoked_by: "removal", updated_at: now]
+          )
 
-      {:ok, Enum.sort(ids)}
+        {:ok, Enum.sort(ids)}
+      end)
     end)
     |> Arca.Data.project()
   end
 
   def revoke_for_source(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
+
+  # A revocation's writes, stamped with the time they write: taken inside
+  # their own locking transaction, once it holds its connection and, on
+  # SQLite, the one write lock (`Arca.Repo.locking_transaction/2`), never
+  # before, so the stamps of grants ended one after another follow the
+  # order of their writes, as `Arca.ConsentStorage.absence_cause/2` reads
+  # them.
+  defp stamped(write) do
+    case Arca.Repo.locking_transaction(fn -> write.(DateTime.utc_now()) end) do
+      {:ok, answer} -> answer
+      {:error, _} = refused -> refused
+    end
+  end
 
   @doc """
   Compare-and-swap the head consent pointer. The update counts as applied

@@ -863,6 +863,53 @@ defmodule Aqua.RunnerTest do
     assert ScriptedWorker.calls() == ran
   end
 
+  # A fresh message is told why no grant stands now, never an older
+  # revocation: a grant its person revoked, given again and then taken by
+  # a removal, is one not granted; two grants standing under two labels
+  # are an ambiguity the claim refuses, never said as revoked. No model is
+  # asked.
+  test "a message after a revoked grant was given again and then removed, or given under " <>
+         "two labels, is never told the grant was revoked",
+       %{ctx: ctx, thread: thread} do
+    script!([reply("Never.")])
+
+    not_granted =
+      "You have not granted yet what Aqua and its crew members may use. Your message was " <>
+        "not answered: grant it here when it is asked, or on your Aqua page, then send your " <>
+        "message again."
+
+    :ok = Cyfr.Test.AquaTool.revoked_then_removed!(ctx)
+    removed = accepted!(ctx, thread, "after the removal")
+
+    assert {:failed, {:ungranted, "Aqua", :message}} =
+             Aqua.Loop.run(ctx: ctx, turn_id: removed.id)
+
+    assert {:ok, %{status: "failed", error: ^not_granted}} = Tape.turn(ctx, removed.id)
+
+    :ok = Cyfr.Test.AquaTool.grant!(ctx)
+    :ok = Cyfr.Test.AquaTool.grant!(ctx, "work")
+    ambiguous = accepted!(ctx, thread, "under two grants")
+    assert {:failed, reason} = Aqua.Loop.run(ctx: ctx, turn_id: ambiguous.id)
+    refute match?({:grant_revoked, _member, _then}, reason)
+    assert {:ok, %{status: "failed", error: error}} = Tape.turn(ctx, ambiguous.id)
+    refute error =~ "You revoked"
+
+    lines = system_lines(ctx, thread)
+    assert hd(lines) == not_granted
+    refute Enum.any?(lines, &(&1 =~ "You revoked"))
+    assert ScriptedWorker.calls() == []
+  end
+
+  defp accepted!(ctx, thread, text) do
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, sent_by: "person", content: text},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    turn
+  end
+
   @stale "What Aqua and its crew members may use changed since you granted it."
 
   # Aqua's list changed past the crew's grant, as a switch on the Aqua
