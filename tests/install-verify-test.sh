@@ -411,6 +411,26 @@ for dest in mine to-mine absent; do
          refuse_installers_cyfr '$dests/bin/$dest'"
 done
 
+# A Mac is Apple silicon, asked of the processor (a shell under Rosetta
+# reads x86_64 from uname there); an Intel Mac is refused in one sentence.
+run_case "an Apple silicon Mac is arm64" ok \
+    "sysctl() { [ \"\$1 \$2\" = '-in hw.optional.arm64' ] && echo 1; }
+     [ \"\$(detect_mac_arch)\" = arm64 ]"
+run_case "an Intel Mac is refused" fail \
+    "sysctl() { echo 0; }
+     detect_mac_arch" \
+    "Error: CYFR runs on Apple silicon Macs, and this Mac has an Intel processor; nothing was installed."
+run_case "the install on an Intel Mac stops before it asks for any release" fail \
+    "uname() { case \"\$1\" in -s) echo Darwin ;; -m) echo x86_64 ;; esac; }
+     sysctl() { echo 0; }
+     resolve_version() { echo 'asked for a release' >&2; exit 0; }
+     main" \
+    "Error: CYFR runs on Apple silicon Macs, and this Mac has an Intel processor; nothing was installed."
+run_case "a Mac that does not answer is refused as an Intel Mac" fail \
+    "sysctl() { return 1; }
+     detect_mac_arch" \
+    "CYFR runs on Apple silicon Macs"
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures" >&2
     exit 1

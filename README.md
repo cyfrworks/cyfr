@@ -50,9 +50,9 @@ There are two ways to use CYFR; pick the one that fits.
 
 ### Install the CYFR app
 
-Each release carries the CYFR app for macOS, Windows and Linux, on Intel and AMD (amd64) and on Arm (arm64), with its own `cyfr` inside. Every file is listed in the release's signed `checksums.txt` ([Verifying Releases](#verifying-releases)).
+Each release carries the CYFR app for Apple silicon Macs, and for Windows and Linux on Intel and AMD (amd64) and on Arm (arm64), with its own `cyfr` inside. CYFR does not run on Intel Macs: the install script and Homebrew refuse one. Every file is listed in the release's signed `checksums.txt` ([Verifying Releases](#verifying-releases)).
 
-- **macOS** (Apple silicon or Intel): `brew install --cask cyfrworks/cyfr/cyfr` installs CYFR in Applications and puts its `cyfr` on your `PATH`; `brew upgrade --cask cyfr` takes the next release, and `brew uninstall --cask cyfr` removes both. Or download `cyfr-desktop_<version>_darwin_arm64.dmg` (Apple silicon) or `cyfr-desktop_<version>_darwin_amd64.dmg` (Intel) from the [release](https://github.com/cyfrworks/cyfr/releases), open it and drag CYFR to Applications. It is signed by CYFR Works Inc. and notarised by Apple, so the first time you open it, whether Homebrew or your browser downloaded it, macOS asks once whether to open an app downloaded from the internet: choose **Open**. Dragging the app puts no `cyfr` on your `PATH`; for that, run once in Terminal:
+- **macOS** (Apple silicon): `brew install --cask cyfrworks/cyfr/cyfr` installs CYFR in Applications and puts its `cyfr` on your `PATH`; `brew upgrade --cask cyfr` takes the next release, and `brew uninstall --cask cyfr` removes both. Or download `cyfr-desktop_<version>_darwin_arm64.dmg` from the [release](https://github.com/cyfrworks/cyfr/releases), open it and drag CYFR to Applications. It is signed by CYFR Works Inc. and notarised by Apple, so the first time you open it, whether Homebrew or your browser downloaded it, macOS asks once whether to open an app downloaded from the internet: choose **Open**. Dragging the app puts no `cyfr` on your `PATH`; for that, run once in Terminal:
 
   ```bash
   sudo mkdir -p /usr/local/bin && sudo ln -s /Applications/CYFR.app/Contents/Resources/cyfr /usr/local/bin/cyfr
@@ -1308,7 +1308,7 @@ PATH it refuses. Two knobs adjust the policy:
   recommended; for airgapped/bootstrap edge cases).
 
 A release signs and attests its `checksums.txt`, which holds the SHA-256 of
-each download, the CYFR app's six installers among them. To verify manually,
+each download, the CYFR app's five installers among them. To verify manually,
 verify `checksums.txt`, by its attestation or its signature, and then the
 download against it (on a Mac `shasum -a 256 --check --strict` in place of
 `sha256sum --check --strict`; on Windows compare `Get-FileHash <file>` with

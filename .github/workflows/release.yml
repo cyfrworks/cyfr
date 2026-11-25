@@ -3,12 +3,13 @@
 
 # The one workflow a release tag starts. It verifies the tagged commit once,
 # with every check a change to main runs, and publishes nothing unless all
-# six pass: the CLI release and its provenance, the CYFR app's six
-# installers beside it (a DEB for Linux, a signed and notarised DMG for
-# macOS and an MSI for Windows, each for amd64 and arm64, each built,
-# installed and smoked on a runner of its own system and architecture),
-# the Homebrew cask written from the DMGs, and the cyfr and cyfr-locus
-# images. The installers job checks the six and the cask together, and
+# six pass: the CLI release and its provenance, the CYFR app's five
+# installers beside it (a DEB for Linux and an MSI for Windows, each for
+# amd64 and arm64, and a signed and notarised DMG for Apple silicon Macs,
+# each built, installed and smoked on a runner of its own system and
+# architecture), the Homebrew cask written from the DMG, and the cyfr and
+# cyfr-locus images. The installers job checks the five and the cask
+# together, and
 # every job that publishes needs it: the images' tags, the release and
 # the tap move only after it.
 name: Release
@@ -324,9 +325,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The CYFR app's Mac packages, Apple silicon's and Intel's, signed,
-  # notarised, stapled, checked, installed and smoked on each
-  # architecture's runner, with the installed cyfr the tag's
+  # The CYFR app's Mac package, Apple silicon's, signed, notarised,
+  # stapled, checked, installed and smoked on an Apple silicon runner,
+  # with the installed cyfr the tag's
   # (desktop-mac.yml). The repository's Apple inputs reach this job alone,
   # each by its name, and in it the one step that signs.
   mac-package:
@@ -476,11 +477,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The one check before anything is published: the six installers, each
+  # The one check before anything is published: the five installers, each
   # by exact name from its package job, in one folder, the Homebrew cask
-  # written from the DMGs' own bytes, and the folder holding exactly the
-  # six at the tag's version, each its own bytes, and the cask exactly the
-  # text this release must publish for those DMGs (tests/ci-release-graph.py
+  # written from the DMG's own bytes, and the folder holding exactly the
+  # five at the tag's version, each its own bytes, and the cask exactly the
+  # text this release must publish for that DMG (tests/ci-release-graph.py
   # --installers). The merge of the images and the CLI release both need
   # it, and what they publish is the folder it checked, handed on as one
   # artifact, never fetched from the package jobs again.
@@ -508,12 +509,6 @@ jobs:
           name: cyfr-desktop-linux-arm64
           path: ${{ runner.temp }}/checked/packages
 
-      - name: Download the amd64 Mac package
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: cyfr-desktop-darwin-amd64
-          path: ${{ runner.temp }}/checked/packages
-
       - name: Download the arm64 Mac package
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -532,15 +527,15 @@ jobs:
           name: cyfr-desktop-windows-arm64
           path: ${{ runner.temp }}/checked/packages
 
-      # The cask installs CYFR.app from the DMG for the Mac's architecture
-      # and links its cyfr, each DMG named by the sha256 of its own bytes.
+      # The cask installs CYFR.app from the DMG on an Apple silicon Mac and
+      # links its cyfr, the DMG named by the sha256 of its own bytes.
       - name: Write the Homebrew cask
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/checked/cask"
           bash scripts/ci/homebrew-cask.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/checked/packages" 'https://github.com/cyfrworks/cyfr/releases/download/#{version}' > "$RUNNER_TEMP/checked/cask/cyfr.rb"
 
-      - name: The installers are the six and the cask names the DMGs
+      - name: The installers are the five and the cask names the DMG
         run: python3 -I tests/ci-release-graph.py --installers "$RUNNER_TEMP/checked/packages" --version "$GITHUB_REF_NAME" --cask "$RUNNER_TEMP/checked/cask/cyfr.rb"
 
       - name: Hand on what was checked
@@ -633,7 +628,7 @@ jobs:
   release:
     needs: [version, merge, installers, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
-    # It downloads the six installers, near a gigabyte, and GoReleaser
+    # It downloads the five installers, near a gigabyte, and GoReleaser
     # uploads them with the archives.
     timeout-minutes: 25
     permissions:
@@ -672,7 +667,7 @@ jobs:
           path: ${{ runner.temp }}/merged/cyfr-locus
 
       # The installers and the cask the installers job checked, as it
-      # handed them on: GoReleaser sums and attaches that folder's six, and
+      # handed them on: GoReleaser sums and attaches that folder's five, and
       # the tap's step pushes that cask.
       - name: Download what was checked
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -744,7 +739,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Where .goreleaser.yml's release finds release.json and its bundle.
           RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release
-          # Where it finds the CYFR app's six installers, to sum and attach.
+          # Where it finds the CYFR app's five installers, to sum and attach.
           RELEASE_PACKAGES_DIR: ${{ runner.temp }}/checked/packages
 
       - name: Attest build provenance
