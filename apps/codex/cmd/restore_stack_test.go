@@ -6,6 +6,7 @@ package cmd
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -56,13 +57,31 @@ func (r *restoreScenario) stackWrites() []string {
 	return writes
 }
 
+// writableIn answers the targets a run through the stack mounts
+// writable.
+func writableIn(line string) []string {
+	var out []string
+	for _, field := range strings.Split(line, " --mount ")[1:] {
+		spec, _, _ := strings.Cut(field, " ")
+		if strings.HasSuffix(spec, ",readonly") {
+			continue
+		}
+		_, target, _ := strings.Cut(spec, ",target=")
+		out = append(out, target)
+	}
+	return out
+}
+
 // The put-back writes the storage and the database through one-off
 // containers of the restored service's image, as the read does but for
-// what it writes: the binds the put-back replaces (the storage root's, one
-// under it and the database's, here the root's) writable and every other
-// mount of the service read only, one outside the storage among them,
-// holding no capability but writing past permissions, never pulling, with
-// no network or log; each asks that its container not outlive it.
+// what it writes, holding no capability but writing past permissions,
+// never pulling, with no network or log, every mount of the service read
+// only but those that write writes: the clear and the storage's archive
+// the storage root's bind and one under it, the database's writes (its
+// staged file and log, their sync, the old log's and index's removal, the
+// renames, the folder's sync) the bind the database lies on; one outside
+// the storage stays read only throughout. Each asks that its container
+// not outlive it.
 func TestTheRestoreWritesThroughTheStack(t *testing.T) {
 	nested, extra := t.TempDir(), t.TempDir()
 	r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
@@ -73,17 +92,23 @@ func TestTheRestoreWritesThroughTheStack(t *testing.T) {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
 	head := "run --rm --name NAME --pull never --network none --log-driver none --user 0:0 --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges --read-only"
-	mounts := " --mount type=bind,source=" + filepath.Join(r.project, "data") + ",target=/app/data" +
-		" --mount type=bind,source=" + filepath.Join(r.project, "aqua") + ",target=/app/seed/aqua,readonly" +
-		" --mount type=bind,source=" + nested + ",target=/app/data/components" +
-		" --mount type=bind,source=" + extra + ",target=/app/extra,readonly " + stackImage
+	mounts := func(storage bool) string {
+		ro := map[bool]string{true: "", false: ",readonly"}
+		return " --mount type=bind,source=" + filepath.Join(r.project, "data") + ",target=/app/data" +
+			" --mount type=bind,source=" + filepath.Join(r.project, "aqua") + ",target=/app/seed/aqua,readonly" +
+			" --mount type=bind,source=" + nested + ",target=/app/data/components" + ro[storage] +
+			" --mount type=bind,source=" + extra + ",target=/app/extra,readonly " + stackImage
+	}
 	tarArgs := " -x -f - -C /app/data --no-same-owner --no-overwrite-dir"
 	want := []string{
-		head + " -i --entrypoint xargs" + mounts + " -0 -r rm -rf --",
-		head + " -i --entrypoint tar" + mounts + tarArgs,
-		head + " --entrypoint rm" + mounts + " -f -- /app/data/cyfr.db-shm /app/data/cyfr.db-wal",
-		head + " -i --entrypoint tar" + mounts + tarArgs,
-		head + " -i --entrypoint tar" + mounts + tarArgs,
+		head + " -i --entrypoint xargs" + mounts(true) + " -0 -r rm -rf --",
+		head + " -i --entrypoint tar" + mounts(true) + tarArgs,
+		head + " -i --entrypoint tar" + mounts(false) + tarArgs,
+		head + " --entrypoint sync" + mounts(false) + " -- /app/data/.cyfr.db.restore /app/data/.cyfr.db-wal.restore",
+		head + " --entrypoint rm" + mounts(false) + " -f -- /app/data/cyfr.db-shm /app/data/cyfr.db-wal",
+		head + " --entrypoint mv" + mounts(false) + " -f -T -- /app/data/.cyfr.db.restore /app/data/cyfr.db",
+		head + " --entrypoint mv" + mounts(false) + " -f -T -- /app/data/.cyfr.db-wal.restore /app/data/cyfr.db-wal",
+		head + " --entrypoint sync" + mounts(false) + " -- /app/data",
 	}
 	if got := r.stackWrites(); !slices.Equal(got, want) {
 		t.Errorf("the put-back wrote with\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -96,6 +121,39 @@ func TestTheRestoreWritesThroughTheStack(t *testing.T) {
 		if c.RemoveOnEnd != name {
 			t.Errorf("docker %s asks to remove %q, want %q", strings.Join(c.Args, " "), c.RemoveOnEnd, name)
 		}
+	}
+}
+
+// With the database on a bind of its own beside the storage, the clear
+// and the storage's archive write the storage alone, and the database's
+// writes the database's bind alone.
+func TestEachWriteThroughTheStackWritesOnlyItsOwnPlace(t *testing.T) {
+	dbdir := t.TempDir()
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE_PATH": "/db/cyfr.db"}, func(s *updateScenario) {
+		s.addVolume(map[string]any{"type": "bind", "source": dbdir, "target": "/db"})
+		if err := os.WriteFile(filepath.Join(dbdir, "cyfr.db"), []byte(sqliteBytes), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	r.answer("eval.db", filepath.Join(dbdir, "cyfr.db"))
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	writes := r.stackWrites()
+	if len(writes) == 0 {
+		t.Fatal("nothing was written through the stack")
+	}
+	for _, line := range writes {
+		want := []string{"/db"}
+		if strings.Contains(line, "--entrypoint xargs") || strings.Contains(line, "-C /app/data ") {
+			want = []string{"/app/data"}
+		}
+		if got := writableIn(line); !slices.Equal(got, want) {
+			t.Errorf("%s\nmounts %v writable, want %v", line, got, want)
+		}
+	}
+	if got := read(t, filepath.Join(dbdir, "cyfr.db")); got != sqliteBytes {
+		t.Errorf("the database holds %q", got)
 	}
 }
 
@@ -370,15 +428,18 @@ func mapsEqual(a, b map[string]string) bool {
 // whole.
 func TestARestoreWhoseHelperIsKilledPutsEveryPartBackWhenRunAgain(t *testing.T) {
 	for _, c := range []struct{ name, kill string }{
-		{"after the clear", "2 0"},
+		{"after the clear", "2 x"},
 		{"in the middle of the storage", "2 3"},
-		{"before the database", "3 0"},
+		{"before the database", "3 x"},
+		// The staged database half written: the one in place is the old
+		// one, whole.
+		{"in the middle of the database", "3 0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRestoreScenario(t, shippedCompose(t), nil, nil)
 			r.edit("data/blobs/x", "rewritten")
 			r.edit("data/blobs/new", "written after the snapshot")
-			r.edit("data/cyfr.db", "migrated database")
+			r.edit("data/cyfr.db", migratedDatabase)
 			r.edit("data/cyfr.db-shm", "migrated shm")
 			r.answer("write.kill", c.kill)
 			out, err := r.restore(true)
@@ -388,6 +449,9 @@ func TestARestoreWhoseHelperIsKilledPutsEveryPartBackWhenRunAgain(t *testing.T) 
 			r.barred()
 			if !slices.Contains(r.shortLog(), "rm --force NAME") {
 				t.Errorf("the killed helper's container was not removed:\n%s", strings.Join(r.shortLog(), "\n"))
+			}
+			if got := read(t, filepath.Join(r.project, "data", "cyfr.db")); got != migratedDatabase && got != sqliteBytes {
+				t.Errorf("the killed restore left the database %q, neither the old one nor the new one", got)
 			}
 			for _, name := range []string{"write.kill", "write.count"} {
 				os.Remove(filepath.Join(r.fake, name))
@@ -499,7 +563,7 @@ func TestRestoreKeepsTheDatabaseAndTheStateWhereverTheyAreMounted(t *testing.T) 
 		r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE_PATH": "/db/cyfr.db"}, func(s *updateScenario) {
 			s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, "data"), "target": "/db"})
 		})
-		r.edit("data/cyfr.db", "migrated database")
+		r.edit("data/cyfr.db", migratedDatabase)
 		if out, err := r.restore(true); err != nil {
 			t.Fatalf("restore: %v\n%s", err, out)
 		}
@@ -513,4 +577,171 @@ func TestRestoreKeepsTheDatabaseAndTheStateWhereverTheyAreMounted(t *testing.T) 
 		}
 		r.storageIs(nil)
 	})
+	t.Run("the state", func(t *testing.T) {
+		r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
+			s.edit(".cyfr/sub/state", "at the snapshot")
+			// Its mount point in data/, as the stack's start made it.
+			if err := os.Mkdir(filepath.Join(s.project, "data", "sub"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, ".cyfr", "sub"), "target": "/app/data/sub"})
+		})
+		if _, err := os.Lstat(filepath.Join(r.dir, "storage", "sub")); err == nil {
+			t.Errorf("the snapshot holds the engine's state bound at /app/data/sub")
+		}
+		r.edit(".cyfr/sub/state", "written since")
+		if out, err := r.restore(true); err != nil {
+			t.Fatalf("restore: %v\n%s", err, out)
+		}
+		if got := read(t, filepath.Join(r.project, ".cyfr", "sub", "state")); got != "written since" {
+			t.Errorf("the engine's state under .cyfr/sub holds %q", got)
+		}
+		if list := read(t, filepath.Join(r.fake, "clear.list")); strings.Contains(list, "/app/data/sub") {
+			t.Errorf("the clear listed the engine's state: %q", list)
+		}
+	})
+}
+
+// A database on a file bind of its own is written in place, its mount
+// point not being a thing to rename over; a restore killed half way
+// through it leaves it half written, and the same restore run again finds
+// the bar it left, says the database does not answer for its live slots,
+// and puts it back whole.
+func TestARestoreKilledInADatabaseWrittenInPlacePutsItBackWhenRunAgain(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE_PATH": "/db/main.db", "CYFR_STORAGE": "s3"}, func(s *updateScenario) {
+		for _, suffix := range []string{"", "-wal"} {
+			s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, "data", "cyfr.db"+suffix), "target": "/db/main.db" + suffix})
+		}
+	})
+	r.edit("data/cyfr.db", migratedDatabase)
+	r.answer("write.kill", "@of=/db/main.db bs 0")
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "Putting the snapshot back failed") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.barred()
+	if got := read(t, filepath.Join(r.project, "data", "cyfr.db")); got != sqliteBytes[:len(sqliteBytes)/2] {
+		t.Fatalf("the killed write left the database %q, not half written:\n%s\n%s", got, out, strings.Join(r.shortLog(), "\n"))
+	}
+	out, err = r.restore(true)
+	if err != nil {
+		t.Fatalf("the restore run again: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "The SQLite database at /db/main.db does not answer for its live slots") {
+		t.Errorf("the restore run again did not say why it went on:\n%s", out)
+	}
+	if got := read(t, filepath.Join(r.project, "data", "cyfr.db")); got != sqliteBytes {
+		t.Errorf("the restore run again left the database %q", got)
+	}
+}
+
+// A database that does not answer for its live slots still refuses a
+// restore that did not find the bar up: only a restore cut short may have
+// left it so.
+func TestADatabaseThatDoesNotAnswerRefusesARestoreNotCutShort(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	r.edit("data/cyfr.db", "not a database")
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "The offline roster read") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
+	r.configAsBefore(before, string(r.live))
+}
+
+// An empty file is no database: a restore onto a new machine whose
+// database's file bind has no source yet makes it, as the person, and
+// says no database is there yet instead of reading live slots out of it;
+// for a database on a bind of its own, and for one on a file bind under
+// the storage root, whose mount point is made the same way.
+func TestARestoreOntoANewMachineReadsNoDatabaseOutOfAnEmptyFile(t *testing.T) {
+	t.Run("on a bind of its own", func(t *testing.T) {
+		r := newRestoreScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE_PATH": "/db/main.db", "CYFR_STORAGE": "s3"}, func(s *updateScenario) {
+			for _, suffix := range []string{"", "-wal"} {
+				s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, "data", "cyfr.db"+suffix), "target": "/db/main.db" + suffix})
+			}
+		})
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			os.Remove(filepath.Join(r.project, "data", "cyfr.db"+suffix))
+		}
+		out, err := r.restore(true)
+		if err != nil {
+			t.Fatalf("restore: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "No database is at /db/main.db yet") {
+			t.Errorf("the restore read live slots from the empty file it made itself:\n%s", out)
+		}
+		if got := read(t, filepath.Join(r.project, "data", "cyfr.db")); got != sqliteBytes {
+			t.Errorf("the database holds %q", got)
+		}
+	})
+	t.Run("on a file bind under the storage root", func(t *testing.T) {
+		db := filepath.Join(t.TempDir(), "cyfr.db")
+		r := newRestoreScenario(t, shippedCompose(t), nil, func(s *updateScenario) {
+			if err := os.Rename(filepath.Join(s.project, "data", "cyfr.db"), db); err != nil {
+				t.Fatal(err)
+			}
+			// Its mount point in data/, as the stack's start made it.
+			s.edit("data/cyfr.db", "")
+			s.addVolume(map[string]any{"type": "bind", "source": db, "target": "/app/data/cyfr.db"})
+		})
+		r.answer("eval.db", db)
+		for _, p := range []string{filepath.Join(r.project, "data"), db} {
+			if err := os.RemoveAll(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := r.restore(true)
+		if err != nil {
+			t.Fatalf("restore: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "No database is at /app/data/cyfr.db yet") {
+			t.Errorf("the restore read live slots from the empty file it made itself:\n%s", out)
+		}
+		if got := read(t, db); got != sqliteBytes {
+			t.Errorf("the database holds %q", got)
+		}
+	})
+}
+
+// trickle gives n bytes, one every d.
+type trickle struct {
+	n int
+	d time.Duration
+}
+
+func (t *trickle) Read(b []byte) (int, error) {
+	if t.n == 0 {
+		return 0, io.EOF
+	}
+	time.Sleep(t.d) // sleep-ok: a standard input that comes slowly is what the test is of
+	t.n--
+	b[0] = 'x'
+	return 1, nil
+}
+
+// A write that keeps taking its standard input but gives nothing back, as
+// tar writing the storage does, is not ended as stalled: the bytes it
+// takes are its progress.
+func TestAWriteThatTakesItsInputIsNotStalled(t *testing.T) {
+	saved := stackReadStall
+	stackReadStall = 300 * time.Millisecond
+	t.Cleanup(func() { stackReadStall = saved })
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	e, err := openEngine(r.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	u := &updater{ctx: context.Background(), command: "restore", out: &out, errOut: &out, engine: e, config: &stackConfig{
+		image: stackImage, mounts: []composeMount{{Type: "bind", Source: filepath.Join(r.project, "data"), Target: "/app/data"}},
+	}}
+	err = u.runStack(context.Background(), stackCall{stdin: &trickle{n: 30, d: 50 * time.Millisecond}, writable: []string{"/app/data"}}, "dd", "of=/app/data/slow", "bs=1M", "conv=fsync", "status=none")
+	if err != nil {
+		t.Fatalf("the slow write: %v\n%s", err, out.String())
+	}
+	if got := read(t, filepath.Join(r.project, "data", "slow")); got != strings.Repeat("x", 30) {
+		t.Errorf("wrote %q", got)
+	}
 }

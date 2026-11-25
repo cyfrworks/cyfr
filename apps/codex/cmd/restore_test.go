@@ -28,7 +28,9 @@ import (
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
-// the declaration answers from mark.*, the live read as fakeDocker's eval;
+// the declaration answers from mark.*, the live read as fakeDocker's eval
+// once it has opened the database (eval.db names its host path, else
+// data/cyfr.db): one that is there and is not a SQLite file fails it;
 // pg_restore keeps its stdin in pgrestore.stdin and answers from
 // pgrestore.*; an image's inspection answers from image.*; <key>.kill kills the calling process with SIGKILL, as a
 // crash would. A network's read and removal answer as fakeDocker's do. A
@@ -89,6 +91,13 @@ if [ "$1" = compose ]; then
       answer config ;;
     run)
       case "$*" in *mark_restore*) answer mark ;; esac
+      # The live read opens the database, as the release does: a file that
+      # is not one, an empty one among them, does not answer.
+      db="$(cat "$d/eval.db" 2>/dev/null || echo data/cyfr.db)"
+      if [ -f "$db" ] && [ "$(head -c 15 "$db" 2>/dev/null)" != "SQLite format 3" ]; then
+        echo "** (Exqlite.Error) file is not a database: $db"
+        exit 1
+      fi
       n="$(cat "$d/eval.live" 2>/dev/null || echo 0)"
       if [ "$n" -gt 0 ]; then
         echo $((n - 1)) > "$d/eval.live"
@@ -135,6 +144,9 @@ const (
 	testMark     = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
 	testRestored = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
 	sqliteBytes  = "SQLite format 3\x00main"
+	// migratedDatabase is the database as the home holds it after the
+	// snapshot.
+	migratedDatabase = "SQLite format 3\x00migrated"
 	// editedEnv is .env as the home holds it after the snapshot: another
 	// line beside the same access settings.
 	editedEnv = scenarioEnv + "CYFR_CPU_LIMIT=2\n"
@@ -286,7 +298,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 	// The cell moves on after the snapshot: the switch rewrote the image
 	// lines, .env and every part change, and a migration left a -shm.
 	r.edit(".env", editedEnv)
-	r.edit("data/cyfr.db", "migrated database")
+	r.edit("data/cyfr.db", migratedDatabase)
 	r.edit("data/cyfr.db-wal", "migrated wal")
 	r.edit("data/cyfr.db-shm", "migrated shm")
 	r.edit("data/blobs/x", "rewritten")
@@ -326,9 +338,12 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		`STACK read find /app/data -printf %D %i %y %s %p\0`,
 		"STACK write xargs -0 -r rm -rf --",
 		"STACK write tar -x -f - -C /app/data --no-same-owner --no-overwrite-dir",
+		"STACK write tar -x -f - -C /app/data --no-same-owner --no-overwrite-dir",
+		"STACK write sync -- /app/data/.cyfr.db.restore /app/data/.cyfr.db-wal.restore",
 		"STACK write rm -f -- /app/data/cyfr.db-shm /app/data/cyfr.db-wal",
-		"STACK write tar -x -f - -C /app/data --no-same-owner --no-overwrite-dir",
-		"STACK write tar -x -f - -C /app/data --no-same-owner --no-overwrite-dir",
+		"STACK write mv -f -T -- /app/data/.cyfr.db.restore /app/data/cyfr.db",
+		"STACK write mv -f -T -- /app/data/.cyfr.db-wal.restore /app/data/cyfr.db-wal",
+		"STACK write sync -- /app/data",
 		profiles + testOffline + testMark,
 		"ENGINE forget-join",
 		"ENGINE start restore",
@@ -667,10 +682,10 @@ func TestRestoreRefusesAScaffoldDirectoryItCannotWrite(t *testing.T) {
 	}
 }
 
-// A PostgreSQL restore with S3 storage writes nothing under ./data, so a
-// ./data this person cannot write refuses nothing: the check at the start
-// asks only the places this restore writes.
-func TestRestoreAsksOnlyThePlacesItWrites(t *testing.T) {
+// A PostgreSQL restore with S3 storage writes nothing under ./data: it
+// runs nothing through the stack, and a ./data this person cannot write
+// refuses nothing.
+func TestARestoreOfPostgreSQLAndS3RunsNothingThroughTheStack(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("every directory is writable to root, and Windows has no such mode")
 	}
@@ -683,11 +698,17 @@ func TestRestoreAsksOnlyThePlacesItWrites(t *testing.T) {
 	if out, err := r.restore(true); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
+	for _, line := range r.shortLog() {
+		if strings.HasPrefix(line, "STACK ") || strings.HasPrefix(line, "image inspect") {
+			t.Errorf("the restore ran %s", line)
+		}
+	}
 }
 
 // A PostgreSQL restore whose local storage is bound to another directory
-// asks nothing of an unused ./data this person cannot write.
-func TestRestoreDoesNotInspectAnUnusedDefaultMount(t *testing.T) {
+// puts the storage back there, what was written there since gone, and
+// leaves an unused ./data this person cannot write as it is.
+func TestRestorePutsTheStorageBackAtTheBindTheServiceUses(t *testing.T) {
 	store := t.TempDir()
 	if err := os.WriteFile(filepath.Join(store, "kept"), []byte("snapshot data"), 0o600); err != nil {
 		t.Fatal(err)
@@ -705,12 +726,28 @@ func TestRestoreDoesNotInspectAnUnusedDefaultMount(t *testing.T) {
 		}
 		s.answer("config.out", strings.Replace(raw, old, store, 1))
 	})
+	if err := os.WriteFile(filepath.Join(store, "since"), []byte("written since"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "kept"), []byte("rewritten"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unused := read(t, filepath.Join(r.project, "data", "blobs", "x"))
 	if err := os.Chmod("data", 0o500); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chmod("data", 0o755)
 	if out, err := r.restore(true); err != nil {
 		t.Fatalf("restore with external local-storage bind rejected by unused ./data: %v\n%s", err, out)
+	}
+	if got := read(t, filepath.Join(store, "kept")); got != "snapshot data" {
+		t.Errorf("the store's kept holds %q", got)
+	}
+	if got := read(t, filepath.Join(store, "since")); got != "<absent>" {
+		t.Errorf("the store's since holds %q", got)
+	}
+	if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != unused {
+		t.Errorf("the unused ./data changed: blobs/x holds %q", got)
 	}
 }
 
@@ -722,9 +759,17 @@ func TestRestoreRefusesAScaffoldPathThroughALink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a link needs a privilege on Windows")
 	}
+	// wit, one level above every scaffold name under it, and wit/cyfr,
+	// the folder of the scaffold files itself.
+	for _, link := range []string{"wit", filepath.Join("wit", "cyfr")} {
+		t.Run(link, func(t *testing.T) { scaffoldLinkRefused(t, link) })
+	}
+}
+
+func scaffoldLinkRefused(t *testing.T, link string) {
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
 	outside := t.TempDir()
-	wit := filepath.Join(r.project, "wit")
+	wit := filepath.Join(r.project, link)
 	if err := os.Rename(wit, filepath.Join(outside, "wit")); err != nil {
 		t.Fatal(err)
 	}

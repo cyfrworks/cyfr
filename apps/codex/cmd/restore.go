@@ -388,6 +388,10 @@ type restorer struct {
 	restoreID  string
 	// write is what the put-back writes through the stack (planWrite).
 	write *restoreWrite
+	// cutShort reports whether .env bore the restore's bar when this
+	// restore began: a restore cut short left it, and may have left the
+	// SQLite file it wrote in place half written.
+	cutShort bool
 }
 
 // restoreFiles are the configuration files the restore replaces with the
@@ -511,6 +515,7 @@ func (r *restorer) refuseStopped(reason error) error {
 // holdConfigFiles reads the project's docker-compose.yml and .env, for a
 // refusal to put back.
 func (r *restorer) holdConfigFiles() error {
+	_, r.cutShort = restoreBarred(".env")
 	r.held = map[string][]byte{}
 	for _, f := range restoreFiles {
 		data, err := os.ReadFile(f.file)
@@ -800,9 +805,13 @@ func (r *restorer) readRestoredConfig() error {
 	if c.storage != r.snap.manifest.StorageAdapter {
 		return refuse("its storage is %s, but the snapshot was taken of %s storage", c.storage, r.snap.manifest.StorageAdapter)
 	}
+	c.image, c.mounts = cyfr.Image, config.resolve(mounts)
+	if project, err := os.Getwd(); err == nil {
+		c.state = stateIn(c.mounts, resolvedOr(filepath.Join(project, ".cyfr")))
+	}
 	if c.storage == "local" {
 		c.dataPath = dataPath
-		if c.storageMounts, err = storageMountsAt(mounts, dataPath, r.snap); err != nil {
+		if c.storageMounts, err = storageMountsAt(mounts, dataPath, r.snap, c.notStorage); err != nil {
 			return refuse("%v", err)
 		}
 		// A mount's bytes are replaced whole, so none may hold the project
@@ -839,12 +848,8 @@ func (r *restorer) readRestoredConfig() error {
 			return refuse("its %s is not the one the snapshot's keyring file (%s) holds; set it as that file holds it, so the restored data can be read", name, r.snap.path("keyring"))
 		}
 	}
-	c.image, c.mounts = cyfr.Image, config.resolve(mounts)
 	if c.image == "" && (c.adapter == "sqlite" || c.storage == "local") {
 		return refuse("the cyfr service names no image, through which cyfr restore writes its storage")
-	}
-	if project, err := os.Getwd(); err == nil {
-		c.state = stateIn(c.mounts, resolvedOr(filepath.Join(project, ".cyfr")))
 	}
 	r.config = c
 	return nil
@@ -922,7 +927,7 @@ func refuseUnwritableProject(snap *snapshotFiles) error {
 	}
 	defer root.Close()
 	for _, name := range snap.manifest.Scaffold {
-		if _, err := root.Lstat(filepath.Dir(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if _, err := root.Stat(filepath.Dir(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("%s cannot be restored: the directory of its scaffold file %s does not lie in this project (%v); nothing was changed", snap.dir, name, err)
 		}
 	}
@@ -932,12 +937,14 @@ func refuseUnwritableProject(snap *snapshotFiles) error {
 	return nil
 }
 
-// storageMountsAt are the storage root's mounts, shallower first, for the
+// storageMountsAt are the storage root's mounts for the
 // cyfr service's mounts and its storage root dataPath, a container path:
 // the bind the root is on, then each mount under it at the place the
-// snapshot holds for it. A layout the snapshot cannot be put back into is
-// refused.
-func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles) ([]storageMount, error) {
+// snapshot holds for it, but those that are no part of the storage
+// (notStorage: the database's files or the engine's state, which no
+// snapshot's storage holds). A layout the snapshot cannot be put back
+// into is refused.
+func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles, notStorage func(target string) bool) ([]storageMount, error) {
 	host, ok := mountedHost(mounts, dataPath)
 	if !ok {
 		return nil, fmt.Errorf("the storage root %s is on no bind mount of the cyfr service", dataPath)
@@ -949,6 +956,9 @@ func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles
 	var nested []storageMount
 	for _, n := range mountsUnder(mounts, dataPath) {
 		v, target := n.mount, path.Clean(n.mount.Target)
+		if notStorage(target) {
+			continue
+		}
 		if v.Type != "bind" || v.Source == "" {
 			return nil, fmt.Errorf("the storage root %s has a %s mount at %s, whose bytes no host path holds", dataPath, v.Type, target)
 		}
@@ -960,10 +970,9 @@ func storageMountsAt(mounts []composeMount, dataPath string, snap *snapshotFiles
 		if err != nil {
 			return nil, fmt.Errorf("the mount at %s (on the host %s): %v", target, v.Source, err)
 		}
-		nested = append(nested, storageMount{rel: n.rel, host: host, dir: placed.IsDir()})
+		nested = append(nested, storageMount{rel: n.rel, host: host})
 	}
-	sortByDepth(nested)
-	return append([]storageMount{{host: root, dir: true}}, nested...), nil
+	return append([]storageMount{{host: root}}, nested...), nil
 }
 
 // putBackPlaces are the directories the put-back writes or removes in as
@@ -1003,14 +1012,22 @@ func firstUnwritable(dirs []string) error {
 // refuseLiveMembers reads the live slots of the database the restore writes,
 // offline in the snapshot's image, until none is live or the window closes.
 // Any live slot refuses, whatever its release: the restore replaces bytes
-// every member of the cell shares. A SQLite database that does not exist
-// holds no slot.
+// every member of the cell shares. A SQLite database that does not exist,
+// or is an empty file, holds no slot; one that does not answer when this
+// restore found the bar up is one a restore cut short may have left half
+// written, which the bar has kept every server off, and is put back.
 func (r *restorer) refuseLiveMembers() error {
 	if r.config.adapter == "sqlite" && !r.sqliteLive {
 		fmt.Fprintf(r.out, "No database is at %s yet, so no server of the cluster holds a slot in it.\n", r.config.dbPath)
 		return nil
 	}
 	_, live, err := r.waitLiveSlots(func(rosterSlot) bool { return false })
+	if err != nil && r.cutShort && r.config.adapter == "sqlite" {
+		// A restore cut short may have left the file it wrote in place half
+		// written, and its bar has kept every server off it since.
+		fmt.Fprintf(r.out, "The SQLite database at %s does not answer for its live slots (%v), and the bar a restore cut short left in .env has kept every server off it since; it is put back whole.\n", r.config.dbPath, err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

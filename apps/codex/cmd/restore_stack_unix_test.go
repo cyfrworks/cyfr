@@ -31,7 +31,7 @@ func TestRestoreOfStorageTheAccountCannotRead(t *testing.T) {
 	r.edit(".env", editedEnv)
 	r.edit("data/blobs/x", "rewritten")
 	r.edit("data/blobs/new", "written after the snapshot")
-	r.edit("data/cyfr.db", "migrated database")
+	r.edit("data/cyfr.db", migratedDatabase)
 	closeStorage(t, r.updateScenario)
 	out, err := r.restore(true)
 	if err != nil {
@@ -173,7 +173,7 @@ func TestRestoreWritesASingleFileMountInPlace(t *testing.T) {
 		if got := read(t, single); got != "snapshot bytes" || inode(t, single) != before {
 			t.Errorf("the file mount holds %q (inode %d, was %d)", got, inode(t, single), before)
 		}
-		if !slices.Contains(r.shortLog(), "STACK write dd of=/app/data/single bs=1M status=none") {
+		if !slices.Contains(r.shortLog(), "STACK write dd of=/app/data/single bs=1M conv=fsync status=none") {
 			t.Errorf("the file mount was not written in place:\n%s", strings.Join(r.shortLog(), "\n"))
 		}
 	})

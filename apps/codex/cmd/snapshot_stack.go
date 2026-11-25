@@ -154,6 +154,9 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 // context before the stop, which an interrupt ends, and one free of the
 // interrupt from the stop on, as every step's there is.
 func (u *updater) runStack(base context.Context, call stackCall, program string, args ...string) error {
+	// The bounds are read once, here: the watcher below outlives the run
+	// by up to a tick.
+	stall := stackReadStall
 	ctx, cancel := context.WithTimeout(base, stackReadBackstop)
 	defer cancel()
 	write := call.writable != nil
@@ -183,14 +186,14 @@ func (u *updater) runStack(base context.Context, call stackCall, program string,
 	watched := &progressReader{r: pr, p: clock}
 	stalled := make(chan struct{})
 	go func() {
-		tick := time.NewTicker(stackReadStall / 10)
+		tick := time.NewTicker(stall / 10)
 		defer tick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				if clock.idle() >= stackReadStall {
+				if clock.idle() >= stall {
 					close(stalled)
 					cancel()
 					return
@@ -213,7 +216,7 @@ func (u *updater) runStack(base context.Context, call stackCall, program string,
 	cancel()
 	select {
 	case <-stalled:
-		return fmt.Errorf("the stack's %s made no progress for %s, so it was ended", what, stackReadStall)
+		return fmt.Errorf("the stack's %s made no progress for %s, so it was ended", what, stall)
 	default:
 	}
 	if in != nil && in.failed() != nil {
@@ -341,30 +344,60 @@ func parseStackEntry(record string) (stackEntry, bool) {
 
 // placeDatabase reads, before anything stops, where the SQLite database
 // the service opens is, its links resolved as the server resolves them
-// (realpath), and refuses one that is not there or not a regular file.
+// (placeThroughStack), and refuses one that is not there or not a regular
+// file.
 func (u *updater) placeDatabase() error {
 	c := u.config
 	if c.adapter != "sqlite" {
 		return nil
 	}
-	var out strings.Builder
-	err := u.runThroughStack(u.ctx, nil, func(r io.Reader) error {
-		_, err := io.Copy(&out, io.LimitReader(r, 64<<10))
-		return err
-	}, "realpath", "-e", "--", c.dbPath)
-	real := strings.TrimSuffix(out.String(), "\n")
-	if err != nil || !path.IsAbs(real) || strings.Contains(real, "\n") {
+	real, there, entry, err := u.placeThroughStack(u.ctx, c.dbPath)
+	switch {
+	case err != nil || !there:
 		return fmt.Errorf("The SQLite database %s is not there as the cyfr service sees it, so cyfr %s cannot snapshot it; nothing was changed", c.dbPath, u.command)
-	}
-	entries, err := u.listThroughStack(u.ctx, path.Dir(real), true)
-	if err != nil {
-		return fmt.Errorf("cyfr %s could not read the SQLite database %s through the stack (%v); nothing was changed", u.command, c.dbPath, err)
-	}
-	if i := slices.IndexFunc(entries, func(e stackEntry) bool { return e.path == real }); i < 0 || entries[i].kind != 'f' {
+	case entry == nil || entry.kind != 'f':
 		return fmt.Errorf("The SQLite database %s (%s as the cyfr service sees it) is not a regular file, so cyfr %s cannot snapshot it; nothing was changed", c.dbPath, real, u.command)
 	}
 	c.dbReal = real
 	return nil
+}
+
+// placeThroughStack reads where the container path p is as the cyfr
+// service sees it: real, its links resolved as the server resolves them
+// (realpath -e), and there, whether it resolves; where it does not,
+// real is its directory resolved with p's name in it. entry is what the
+// stack lists at real (nil for nothing): the file, or the link to nothing
+// that did not resolve.
+func (u *updater) placeThroughStack(base context.Context, p string) (real string, there bool, entry *stackEntry, err error) {
+	resolve := func(p string) (string, error) {
+		var out strings.Builder
+		err := u.runThroughStack(base, nil, func(r io.Reader) error {
+			_, err := io.Copy(&out, io.LimitReader(r, 64<<10))
+			return err
+		}, "realpath", "-e", "--", p)
+		real := strings.TrimSuffix(out.String(), "\n")
+		if err == nil && (!path.IsAbs(real) || strings.Contains(real, "\n")) {
+			err = fmt.Errorf("realpath answered %q", real)
+		}
+		return real, err
+	}
+	real, err = resolve(p)
+	there = err == nil
+	if !there {
+		dir, err := resolve(path.Dir(p))
+		if err != nil {
+			return "", false, nil, fmt.Errorf("its directory %s is not there as the cyfr service sees it (%v)", path.Dir(p), err)
+		}
+		real = path.Join(dir, path.Base(p))
+	}
+	entries, err := u.listThroughStack(base, path.Dir(real), true)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if i := slices.IndexFunc(entries, func(e stackEntry) bool { return e.path == real }); i >= 0 {
+		entry = &entries[i]
+	}
+	return real, there, entry, nil
 }
 
 // storageEntries lists, with the stack stopped, what a snapshot reads
@@ -626,19 +659,26 @@ func cmpString(s, fallback string) string {
 
 // stateIn answers the container paths at which the service's binds show
 // the project's access state, .cyfr/ (state, a host path with its links
-// resolved), each bind's source taken as written and resolved.
+// resolved): where a bind holds it, its place under the bind's target,
+// and where a bind is part of it (a folder or a file of .cyfr/ bound on
+// its own), the bind's target whole; each bind's source taken as written
+// and resolved.
 func stateIn(mounts []composeMount, state string) []string {
 	var paths []string
+	add := func(p string) {
+		if !slices.Contains(paths, p) {
+			paths = append(paths, p)
+		}
+	}
 	for _, b := range mounts {
 		if b.Type != "bind" || b.Source == "" {
 			continue
 		}
 		for _, source := range []string{b.Source, resolvedOr(b.Source)} {
 			if rel, err := filepath.Rel(source, state); err == nil && filepath.IsLocal(rel) {
-				p := path.Join(b.Target, filepath.ToSlash(rel))
-				if !slices.Contains(paths, p) {
-					paths = append(paths, p)
-				}
+				add(path.Join(b.Target, filepath.ToSlash(rel)))
+			} else if rel, err := filepath.Rel(state, source); err == nil && filepath.IsLocal(rel) {
+				add(path.Clean(b.Target))
 			}
 		}
 	}

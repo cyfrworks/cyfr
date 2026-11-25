@@ -1493,20 +1493,19 @@ type stackConfig struct {
 	pgMajor int
 	storage string // local | s3
 	// storageMounts are the mounts that make up the local storage root as cyfr
-	// sees it: the root's own bind first, then every bind mounted under it,
-	// shallower before deeper.
+	// sees it, the root's own bind first, then every bind mounted under it,
+	// which a restore holds the project and the snapshot apart from.
 	storageMounts []storageMount
 	// keyring is the snapshot's keyring file, dotenv lines.
 	keyring string
 }
 
 // storageMount is one bind making up the storage root: rel is where it
-// sits under the root (empty for the root itself), host its resolved host
-// path, and dir whether that path is a directory.
+// sits under the root (empty for the root itself), and host its resolved
+// host path.
 type storageMount struct {
 	rel  string
 	host string
-	dir  bool
 }
 
 // composeConfig is the part of `docker compose config --format json` the

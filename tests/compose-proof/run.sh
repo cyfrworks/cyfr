@@ -131,7 +131,8 @@
 #          stack has run and the entrypoint has handed the storage root to
 #          the image's user, and the storage has changed since the
 #          snapshot: it puts the snapshot back through the stack, says no
-#          sudo, and starts the home; what was written since is gone, the
+#          sudo, and starts the home; what the snapshot held is back,
+#          what was written since is gone, the
 #          storage root is the image's user's again, and .env and
 #          docker-compose.yml are the person's.
 #
@@ -2220,6 +2221,11 @@ restore_person_case() {
 
   step "restore-person: cyfr backup of the running home, which runs again after it"
   cli_ok up-first up
+  # In the storage before the snapshot, as the server writes, the image's
+  # user's.
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-write-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network none --user 0 \
+    -v "$WORK/data:/d" --entrypoint sh "$IMAGE" -c 'mkdir -p /d/proof && printf kept > /d/proof/in-snapshot && chown -R 999:999 /d/proof && chmod -R go-rwx /d/proof' ||
+    fail "the storage could not be written before the snapshot"
   backup_take backup-person
   snapshot="$SNAPSHOT"
   [ "$RESTORE" = "cyfr restore $snapshot" ] || fail "cyfr backup names the restore as '$RESTORE'"
@@ -2240,8 +2246,8 @@ restore_person_case() {
   ! grep -q sudo "$WORK/restore-person.log" || fail "the restore spoke of sudo: $(grep sudo "$WORK/restore-person.log")"
   grep -q "^Declared restore " "$WORK/restore-person.log" || fail "the restore was not declared: $(tail -n 20 "$WORK/restore-person.log")"
   expect_head local localhost
-  owners="$(docker run --rm --network none --user 0 -v "$WORK/data:/d:ro" --entrypoint sh "$IMAGE" -c '[ ! -e /d/written-since ] && find /d -printf "%U\n" | sort -u')" ||
-    fail "the file written since the snapshot is still there"
+  owners="$(docker run --rm --network none --user 0 -v "$WORK/data:/d:ro" --entrypoint sh "$IMAGE" -c '[ ! -e /d/written-since ] && [ "$(cat /d/proof/in-snapshot)" = kept ] && find /d -printf "%U\n" | sort -u')" ||
+    fail "the file written since the snapshot is still there, or the snapshot's proof/in-snapshot did not come back"
   [ "$owners" = 999 ] || fail "after the restore data/ is owned by $(echo "$owners" | tr '\n' ' '), not the image's user alone"
   for f in .env docker-compose.yml; do
     [ "$(stat -c %u "$WORK/$f")" = "$(id -u)" ] || fail "$f is not the person's after the restore"

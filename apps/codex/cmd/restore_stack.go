@@ -39,10 +39,11 @@ import (
 // container paths of the mounts it writes, the entries the storage's
 // clear removes, and the places it must not write over.
 type restoreWrite struct {
-	// writable are the targets of the binds the put-back writes: the one
-	// the storage root lies on, each under it, and the one the database
-	// lies on.
-	writable []string
+	// storageWritable are the targets of the binds the storage's writes
+	// write, the one the storage root lies on and each under it;
+	// databaseWritable those the database's write writes, the ones the
+	// database, its log and its index lie on (writableMounts).
+	storageWritable, databaseWritable []string
 	// clear are the entries under the storage root the put-back removes,
 	// the topmost of each tree.
 	clear []string
@@ -82,48 +83,23 @@ func (r *restorer) placeRestoredDatabase() error {
 	if c.adapter != "sqlite" {
 		return nil
 	}
-	free := context.WithoutCancel(r.ctx)
-	real, err := r.realpath(free, c.dbPath)
-	exists := err == nil
-	if !exists {
-		dir, derr := r.realpath(free, path.Dir(c.dbPath))
-		if derr != nil {
-			return fmt.Errorf("the SQLite database's directory %s is not there as the cyfr service sees it", path.Dir(c.dbPath))
-		}
-		real = path.Join(dir, path.Base(c.dbPath))
-	}
-	entries, err := r.listThroughStack(free, path.Dir(real), true)
-	if err != nil {
-		return fmt.Errorf("cyfr restore could not read the SQLite database %s through the stack (%v)", c.dbPath, err)
-	}
-	i := slices.IndexFunc(entries, func(e stackEntry) bool { return e.path == real })
+	real, there, entry, err := r.placeThroughStack(context.WithoutCancel(r.ctx), c.dbPath)
 	switch {
-	case !exists && i >= 0:
+	case err != nil:
+		return fmt.Errorf("cyfr restore could not read the SQLite database %s through the stack: %v", c.dbPath, err)
+	case !there && entry != nil:
 		return fmt.Errorf("the SQLite database %s is a link to nothing", c.dbPath)
-	case exists && (i < 0 || entries[i].kind != 'f'):
+	case there && (entry == nil || entry.kind != 'f'):
 		return fmt.Errorf("the SQLite database %s (%s as the cyfr service sees it) is not a regular file", c.dbPath, real)
 	}
 	if _, _, ok := holdingMount(c.mounts, real); !ok {
 		return fmt.Errorf("the SQLite database %s (%s as the cyfr service sees it) is on no bind mount of the cyfr service", c.dbPath, real)
 	}
 	c.dbReal = real
-	r.sqliteLive = exists
+	// An empty file is no database: SQLite reads it as one with no table,
+	// and a missing file bind's source is made as one (makeSources).
+	r.sqliteLive = there && entry.size > 0
 	return nil
-}
-
-// realpath answers the container path p with its links resolved through
-// the stack, as realpath -e; an error when it is not there.
-func (r *restorer) realpath(base context.Context, p string) (string, error) {
-	var out strings.Builder
-	err := r.runThroughStack(base, nil, func(rd io.Reader) error {
-		_, err := io.Copy(&out, io.LimitReader(rd, 64<<10))
-		return err
-	}, "realpath", "-e", "--", p)
-	real := strings.TrimSuffix(out.String(), "\n")
-	if err == nil && (!path.IsAbs(real) || strings.Contains(real, "\n")) {
-		err = fmt.Errorf("realpath answered %q", real)
-	}
-	return real, err
 }
 
 // haveImage makes sure the image the restored cyfr service runs is on this
@@ -145,33 +121,61 @@ func (r *restorer) haveImage() error {
 	return nil
 }
 
-// writableMounts are the binds the put-back writes: the one the storage
-// root lies on and each under it, for local storage, and those the
-// database, its write-ahead log and its shared-memory index lie on, for
-// SQLite (the database's unresolved path before it is placed).
-func (c *stackConfig) writableMounts() []composeMount {
-	var mounts []composeMount
-	add := func(m composeMount) {
-		if !slices.ContainsFunc(mounts, func(o composeMount) bool { return path.Clean(o.Target) == path.Clean(m.Target) }) {
-			mounts = append(mounts, m)
+// writableMounts are the binds the put-back writes: storage, the one the
+// storage root lies on and each under it, for local storage; database,
+// those the database, its write-ahead log and its shared-memory index lie
+// on, for SQLite (the database's unresolved path before it is placed).
+// Each write through the stack is given only its own as writable.
+func (c *stackConfig) writableMounts() (storage, database []composeMount) {
+	add := func(mounts []composeMount, m composeMount) []composeMount {
+		if slices.ContainsFunc(mounts, func(o composeMount) bool { return path.Clean(o.Target) == path.Clean(m.Target) }) {
+			return mounts
 		}
+		return append(mounts, m)
 	}
 	if c.storage == "local" {
 		if m, _, ok := holdingMount(c.mounts, c.dataPath); ok {
-			add(m)
+			storage = add(storage, m)
 		}
 		for _, n := range mountsUnder(c.mounts, c.dataPath) {
-			add(n.mount)
+			if !c.notStorage(path.Clean(n.mount.Target)) {
+				storage = add(storage, n.mount)
+			}
 		}
 	}
 	if c.adapter == "sqlite" {
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			if m, _, ok := holdingMount(c.mounts, cmpString(c.dbReal, c.dbPath)+suffix); ok {
-				add(m)
+				database = add(database, m)
 			}
 		}
 	}
-	return mounts
+	return storage, database
+}
+
+// notStorage reports whether the container path target, a mount's under
+// the storage root, is no part of the storage: one of the database's
+// files, at the path the service opens it or the one it resolves to, or
+// the engine's state or a part of it (stateIn), which no snapshot's
+// storage holds and the storage's writes never write.
+func (c *stackConfig) notStorage(target string) bool {
+	if c.adapter == "sqlite" {
+		for _, db := range []string{c.dbPath, c.dbReal} {
+			if db != "" && (target == db || target == db+"-wal" || target == db+"-shm") {
+				return true
+			}
+		}
+	}
+	return slices.ContainsFunc(c.state, func(s string) bool { return underPath(target, s) })
+}
+
+// targets are the mounts' container targets.
+func targets(mounts []composeMount) []string {
+	var out []string
+	for _, m := range mounts {
+		out = append(out, path.Clean(m.Target))
+	}
+	return out
 }
 
 // makeSources makes each missing source of a bind the put-back writes, as
@@ -184,7 +188,8 @@ func (c *stackConfig) writableMounts() []composeMount {
 // left as it is, a stack that ran having made it.
 func (r *restorer) makeSources() error {
 	c := r.config
-	writable := c.writableMounts()
+	storage, database := c.writableMounts()
+	writable := append(storage, database...)
 	for _, m := range writable {
 		target := path.Clean(m.Target)
 		file := c.adapter == "sqlite" && slices.ContainsFunc([]string{"", "-wal", "-shm"}, func(suffix string) bool { return target == path.Clean(c.dbPath)+suffix })
@@ -250,10 +255,8 @@ func (r *restorer) planWrite() error {
 	if err != nil {
 		return err
 	}
-	w := &restoreWrite{trio: trio, targets: map[string]byte{}, walls: map[string]bool{}}
-	for _, m := range c.writableMounts() {
-		w.writable = append(w.writable, path.Clean(m.Target))
-	}
+	storage, database := c.writableMounts()
+	w := &restoreWrite{trio: trio, targets: map[string]byte{}, walls: map[string]bool{}, storageWritable: targets(storage), databaseWritable: targets(database)}
 	if c.storage == "local" {
 		kinds := map[string]byte{}
 		for _, e := range listing {
@@ -377,7 +380,7 @@ func (r *restorer) writeStorage() error {
 			list.WriteString(p)
 			list.WriteByte(0)
 		}
-		if err := r.runStack(free, stackCall{stdin: &list, writable: w.writable}, "xargs", "-0", "-r", "rm", "-rf", "--"); err != nil {
+		if err := r.runStack(free, stackCall{stdin: &list, writable: w.storageWritable}, "xargs", "-0", "-r", "rm", "-rf", "--"); err != nil {
 			return err
 		}
 	}
@@ -391,13 +394,13 @@ func (r *restorer) writeStorage() error {
 	go func() {
 		pw.CloseWithError(w.storageArchive(pw, root, c.dataPath, r.out, &inPlace))
 	}()
-	err = r.runStack(free, stackCall{stdin: pr, writable: w.writable}, "tar", "-x", "-f", "-", "-C", c.dataPath, "--no-same-owner", "--no-overwrite-dir")
+	err = r.runStack(free, stackCall{stdin: pr, writable: w.storageWritable}, "tar", "-x", "-f", "-", "-C", c.dataPath, "--no-same-owner", "--no-overwrite-dir")
 	pr.CloseWithError(errors.New("the write ended"))
 	if err != nil {
 		return err
 	}
 	for _, rel := range inPlace {
-		if err := r.writeInPlace(free, path.Join(c.dataPath, rel), func() (io.ReadCloser, error) { return root.Open(rel) }); err != nil {
+		if err := r.writeInPlace(free, path.Join(c.dataPath, rel), w.storageWritable, func() (io.ReadCloser, error) { return root.Open(rel) }); err != nil {
 			return err
 		}
 	}
@@ -468,8 +471,9 @@ func (w *restoreWrite) storageArchive(out io.Writer, root *os.Root, dataPath str
 
 // writeInPlace writes the bytes open answers over the container path p,
 // a mount that is one file, in place (a mount point cannot be renamed
-// over); nil open empties it.
-func (r *restorer) writeInPlace(base context.Context, p string, open func() (io.ReadCloser, error)) error {
+// over), and syncs it, with writable the mounts the write writes; nil
+// open empties it.
+func (r *restorer) writeInPlace(base context.Context, p string, writable []string, open func() (io.ReadCloser, error)) error {
 	var in io.Reader = bytes.NewReader(nil)
 	if open != nil {
 		f, err := open()
@@ -479,21 +483,70 @@ func (r *restorer) writeInPlace(base context.Context, p string, open func() (io.
 		defer f.Close()
 		in = f
 	}
-	return r.runStack(base, stackCall{stdin: in, writable: r.write.writable}, "dd", "of="+p, "bs=1M", "status=none")
+	return r.runStack(base, stackCall{stdin: in, writable: writable}, "dd", "of="+p, "bs=1M", "conv=fsync", "status=none")
 }
 
+// stagedName is the name of the restore's own beside the container path p
+// that a file is written at, synced, before it is renamed over p, so p is
+// always the old file or the new one whole. A restore cut short leaves it,
+// and the next one writes it again.
+func stagedName(p string) string { return path.Join(path.Dir(p), "."+path.Base(p)+".restore") }
+
 // writeDatabase puts the SQLite file back, and its write-ahead log as the
-// snapshot holds it, through the stack. The old log and shared-memory
-// index go first, so the restored file is never read with another file's
-// log: each removed, or emptied in place where a mount is that file,
-// which SQLite reads as no log. The file and then its log are each
-// extracted at the mount it lies on, a fresh file 0600, or written in
-// place where a mount is that file.
+// snapshot holds it, through the stack, so the database is the old one or
+// the new one and never a part of one where its place can be renamed
+// over: each is extracted at its staged name (a fresh file 0600) at the
+// mount it lies on and synced; then the old log and shared-memory index
+// go, each removed, or emptied in place where a mount is that file,
+// which SQLite reads as no log, so the restored file is never read with
+// another file's log; then the file and after it its log are renamed into
+// place, or written in place and synced where a mount is that file, and
+// the directory is synced. A file written in place and cut short is half
+// written: the restore run again finds the bar this one left and puts it
+// back whole (refuseLiveMembers).
 func (r *restorer) writeDatabase() error {
 	c, w := r.config, r.write
 	free := context.WithoutCancel(r.ctx)
+	run := func(stdin io.Reader, program string, args ...string) error {
+		return r.runStack(free, stackCall{stdin: stdin, writable: w.databaseWritable}, program, args...)
+	}
 	isTarget := func(p string) bool {
 		return slices.ContainsFunc(c.mounts, func(m composeMount) bool { return path.Clean(m.Target) == p })
+	}
+	type file struct{ part, p string }
+	files := []file{{"database", c.dbReal}}
+	if r.snap.parts["database-wal"] {
+		files = append(files, file{"database-wal", c.dbReal + "-wal"})
+	}
+	open := func(f file) func() (io.ReadCloser, error) {
+		return func() (io.ReadCloser, error) { return os.Open(r.snap.path(f.part)) }
+	}
+	var staged []file
+	for _, f := range files {
+		if !isTarget(f.p) {
+			staged = append(staged, f)
+		}
+	}
+	if len(staged) > 0 {
+		// The staged files lie in the database's folder, on the bind that
+		// holds that folder (not the database's own where it is a file bind).
+		m, _, _ := holdingMount(c.mounts, stagedName(staged[0].p))
+		var rels, names []string
+		var opens []func() (io.ReadCloser, error)
+		for _, f := range staged {
+			_, rel, _ := holdingMount(c.mounts, stagedName(f.p))
+			rels, names, opens = append(rels, strings.TrimPrefix(rel, "/")), append(names, stagedName(f.p)), append(opens, open(f))
+		}
+		pr, pw := io.Pipe()
+		go func() { pw.CloseWithError(filesArchive(pw, rels, opens)) }()
+		err := run(pr, "tar", "-x", "-f", "-", "-C", path.Clean(m.Target), "--no-same-owner", "--no-overwrite-dir")
+		pr.CloseWithError(errors.New("the write ended"))
+		if err == nil {
+			err = run(nil, "sync", append([]string{"--"}, names...)...)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	var remove []string
 	for _, suffix := range []string{"-shm", "-wal"} {
@@ -502,7 +555,7 @@ func (r *restorer) writeDatabase() error {
 			continue
 		}
 		if isTarget(p) {
-			if err := r.writeInPlace(free, p, nil); err != nil {
+			if err := r.writeInPlace(free, p, w.databaseWritable, nil); err != nil {
 				return err
 			}
 			continue
@@ -510,41 +563,52 @@ func (r *restorer) writeDatabase() error {
 		remove = append(remove, p)
 	}
 	if len(remove) > 0 {
-		if err := r.runStack(free, stackCall{writable: w.writable}, "rm", append([]string{"-f", "--"}, remove...)...); err != nil {
+		if err := run(nil, "rm", append([]string{"-f", "--"}, remove...)...); err != nil {
 			return err
 		}
 	}
-	files := []struct{ part, p string }{{"database", c.dbReal}}
-	if r.snap.parts["database-wal"] {
-		files = append(files, struct{ part, p string }{"database-wal", c.dbReal + "-wal"})
-	}
 	for _, f := range files {
-		open := func() (io.ReadCloser, error) { return os.Open(r.snap.path(f.part)) }
+		var err error
 		if isTarget(f.p) {
-			if err := r.writeInPlace(free, f.p, open); err != nil {
-				return err
-			}
-			continue
+			err = r.writeInPlace(free, f.p, w.databaseWritable, open(f))
+		} else {
+			err = run(nil, "mv", "-f", "-T", "--", stagedName(f.p), f.p)
 		}
-		m, rel, _ := holdingMount(c.mounts, f.p)
-		target := path.Clean(m.Target)
-		rel = strings.TrimPrefix(rel, "/")
-		pr, pw := io.Pipe()
-		go func() { pw.CloseWithError(fileArchive(pw, rel, open)) }()
-		err := r.runStack(free, stackCall{stdin: pr, writable: w.writable}, "tar", "-x", "-f", "-", "-C", target, "--no-same-owner", "--no-overwrite-dir")
-		pr.CloseWithError(errors.New("the write ended"))
 		if err != nil {
 			return err
 		}
 	}
+	if len(staged) > 0 {
+		return run(nil, "sync", "--", path.Dir(c.dbReal))
+	}
 	return nil
 }
 
-// fileArchive writes into out the archive of one file at rel, a clean
-// relative path, its directories before it (0700, kept as they are where
-// they are there), the file 0600 with the bytes open answers, owned by
-// root.
-func fileArchive(out io.Writer, rel string, open func() (io.ReadCloser, error)) error {
+// filesArchive writes into out the archive of files at rels, clean
+// relative paths in one directory, that directory's own directories
+// before them (0700, kept as they are where they are there), each file
+// 0600 with the bytes its open answers, owned by root.
+func filesArchive(out io.Writer, rels []string, opens []func() (io.ReadCloser, error)) error {
+	tw := tar.NewWriter(out)
+	var dirs []string
+	for d := path.Dir(rels[0]); d != "."; d = path.Dir(d) {
+		dirs = append([]string{d}, dirs...)
+	}
+	for _, d := range dirs {
+		if err := tw.WriteHeader(&tar.Header{Name: d + "/", Typeflag: tar.TypeDir, Mode: 0o700, Format: tar.FormatPAX}); err != nil {
+			return err
+		}
+	}
+	for i, rel := range rels {
+		if err := archiveFile(tw, rel, opens[i]); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
+}
+
+// archiveFile writes the file open answers into tw at rel, 0600.
+func archiveFile(tw *tar.Writer, rel string, open func() (io.ReadCloser, error)) error {
 	f, err := open()
 	if err != nil {
 		return err
@@ -554,25 +618,9 @@ func fileArchive(out io.Writer, rel string, open func() (io.ReadCloser, error)) 
 	if err != nil {
 		return err
 	}
-	tw := tar.NewWriter(out)
-	var dirs []string
-	for d := path.Dir(rel); d != "."; d = path.Dir(d) {
-		dirs = append([]string{d}, dirs...)
-	}
-	for _, d := range dirs {
-		if err := tw.WriteHeader(&tar.Header{Name: d + "/", Typeflag: tar.TypeDir, Mode: 0o700, ModTime: info.ModTime(), Format: tar.FormatPAX}); err != nil {
-			return err
-		}
-	}
 	if err := tw.WriteHeader(&tar.Header{Name: rel, Typeflag: tar.TypeReg, Mode: 0o600, Size: info.Size(), ModTime: info.ModTime(), Format: tar.FormatPAX}); err != nil {
 		return err
 	}
-	n, err := io.Copy(tw, f)
-	if err == nil && n != info.Size() {
-		err = fmt.Errorf("the snapshot's %s changed while it was read", rel)
-	}
-	if err != nil {
-		return err
-	}
-	return tw.Close()
+	_, err = io.Copy(tw, f)
+	return err
 }
