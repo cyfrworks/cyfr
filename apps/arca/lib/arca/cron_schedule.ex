@@ -160,10 +160,12 @@ defmodule Arca.CronSchedule do
   has that definition: a change made since the caller read it is never
   overwritten by one made against what it replaced.
 
-  With `fits:`, a function of the row as the write leaves it, answering
-  `:ok` or `{:error, reason}`, the write is refused with that reason
-  unless the row it would leave fits: asked under the lock, so two writes
-  that each fit the row they read cannot together leave one that does not.
+  With `verify:`, the higher owner's check of the row as the write leaves
+  it (`ARCHITECTURE.md` §4.4), answering `:ok` or `{:error, reason}`, the
+  write is refused with that reason unless the row it would leave passes:
+  asked under the lock, so two writes that each pass on the row they read
+  cannot together leave one that does not. It reads only the row it is
+  handed.
 
   A write that pauses the row ends every occurrence of it claimed and not
   yet started, in the same transaction, and records why (`last_error`,
@@ -186,7 +188,7 @@ defmodule Arca.CronSchedule do
   def update(%Prima.Actor{} = actor, id, attrs, opts \\ []) do
     by_person = Keyword.get(opts, :by_person, false) == true
     read = Keyword.get(opts, :definition)
-    fits = Keyword.get(opts, :fits, fn _row -> :ok end)
+    verify = Keyword.get(opts, :verify, fn _row -> :ok end)
 
     Errors.with_db_rescue("CronSchedule.update", fn ->
       guarded(actor, id, :live, fn schedule ->
@@ -195,7 +197,7 @@ defmodule Arca.CronSchedule do
 
         with :ok <- as_read(schedule, read),
              :ok <- aqua_target(schedule, attrs, by_person),
-             :ok <- fitting(changeset, fits),
+             :ok <- verified(changeset, verify),
              {:ok, updated} <- changeset |> Arca.Repo.update() |> mapped_validation() do
           {:ok, stopped(schedule.status, updated)}
         end
@@ -204,16 +206,16 @@ defmodule Arca.CronSchedule do
     |> Arca.Data.project()
   end
 
-  # The row a valid write leaves, as the caller's bound reads it; an
+  # The row a valid write leaves, as the caller's check reads it; an
   # invalid one is refused by its own validation.
-  defp fitting(%Ecto.Changeset{valid?: true} = changeset, fits) do
-    case fits.(Ecto.Changeset.apply_changes(changeset)) do
+  defp verified(%Ecto.Changeset{valid?: true} = changeset, verify) do
+    case verify.(Ecto.Changeset.apply_changes(changeset)) do
       :ok -> :ok
       {:error, _reason} = refused -> refused
     end
   end
 
-  defp fitting(%Ecto.Changeset{}, _fits), do: :ok
+  defp verified(%Ecto.Changeset{}, _verify), do: :ok
 
   # A row the write just paused or deleted: every occurrence of it claimed
   # and not started ends here, in the write's transaction, saying why on

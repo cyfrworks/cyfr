@@ -482,7 +482,7 @@ defmodule Opus.Schedules.Provider do
         case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs,
                by_person: writer.person?,
                definition: args["definition"],
-               fits: &fire_fits/1
+               verify: &fire_fits/1
              ) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.update(updated.id)

@@ -1787,7 +1787,7 @@ defmodule Aqua.ScheduleTurnsTest do
           set: [input: big]
         )
 
-      assert CronSchedule.update(actor(ctx), id, %{name: "Renamed"}, fits: fits) ==
+      assert CronSchedule.update(actor(ctx), id, %{name: "Renamed"}, verify: fits) ==
                {:error, {:invalid_argument, "too long"}}
 
       assert_received {:asked, "Renamed", ^big}

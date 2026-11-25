@@ -1225,11 +1225,12 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
       end
 
       # The old member's late callback names its own claim and the
-      # execution it minted for the run.
+      # execution it minted for the run. It waits on its first lock, its
+      # schedule's row, which an end takes before the occurrence's.
       answer =
         stale_write(
           slot,
-          lock_occurrence(occurrence.id),
+          lock_schedule(schedule.id),
           fn -> late(unquote(writer), actor, occurrence.id, slot.owner, "exec_old") end,
           recovered_and_started
         )
@@ -1284,14 +1285,6 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
   defp lock_schedule(id) do
     fn ->
       from(s in ScheduleRow, where: s.id == ^id)
-      |> Arca.QueryHelpers.for_update()
-      |> Arca.Repo.one()
-    end
-  end
-
-  defp lock_occurrence(id) do
-    fn ->
-      from(o in ScheduleOccurrence, where: o.id == ^id)
       |> Arca.QueryHelpers.for_update()
       |> Arca.Repo.one()
     end
