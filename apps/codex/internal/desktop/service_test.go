@@ -2415,6 +2415,7 @@ func TestEveryRequestAndMessageThatActsIsRefusedWhenStale(t *testing.T) {
 		"/bootstrap/approve": carriesEpoch,
 		"/bootstrap/start":   carriesEpoch | carriesPicks | carriesRun,
 		"/bootstrap/open":    carriesEpoch | carriesPicks | carriesRun,
+		"/bootstrap/box":     carriesEpoch,
 	}
 	for path, route := range chooserRoutes {
 		if route.carries != routes[path] {

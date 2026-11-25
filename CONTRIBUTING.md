@@ -297,7 +297,9 @@ same worktree refuses, naming the run that holds it.
   package: the app as the box's screen (`--screen-project`) under Ubuntu
   26.04's labwc in a container, beside the screen's keyboard and watches,
   with no CYFR: its page painted in one frameless window that covers the
-  output, a watch lost hiding it, `cyfr` or the app killed and started
+  output, the list of CYFRs at its left, a switch on that list closing
+  the window as a lock does, a watch lost hiding it, `cyfr` or the app
+  killed and started
   again locked, a project not named explicitly refused. It needs Docker
   and binds no port of the machine.
 
@@ -315,7 +317,10 @@ same worktree refuses, naming the run that holds it.
   names (its own or another account service, or one requiring a company
   sign-in) from the run's app image of the same architecture. Run here, it needs
   127.0.0.1:7340 free on this machine for its whole run, so not beside
-  another such proof or the native smoke, which binds that port on purpose.
+  another such proof or the native smoke, which binds that port on purpose. Its
+  last step, the box's screen with two CYFRs (`tests/desktop-proof/box/box.sh`),
+  is given the machine's Docker socket and runs on GitHub's disposable
+  runners alone.
   The Go tests do not: each gives the commands that serve it a port of its
   own.
 
