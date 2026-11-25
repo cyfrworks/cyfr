@@ -83,7 +83,13 @@ func (s *systemDocker) Run(ctx context.Context, c Call) (Result, error) {
 			cmd.Stderr = &stderr
 		}
 	}
-	code, err := s.run(ctx, bin, c.Args, deadline, streams)
+	code, err := s.run(ctx, bin, c.Args, deadline, c.RemoveOnEnd, streams)
+	if c.RemoveOnEnd != "" && (err != nil || code != 0) {
+		// The watchdog has removed it already where the call ran under
+		// one; where none ran it (no lock, or Windows), this is the
+		// removal, and twice is no harm.
+		removeContainer(bin, c.RemoveOnEnd)
+	}
 	return Result{ExitCode: code, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
 }
 

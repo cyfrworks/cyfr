@@ -94,6 +94,17 @@ func TestTheSnapshotReadsTheStorageThroughTheStack(t *testing.T) {
 	if placed, stopped := slices.IndexFunc(log, func(l string) bool { return strings.Contains(l, "--entrypoint realpath") }), at(log, profiles+"stop"); placed < 0 || stopped < placed {
 		t.Errorf("the database was not placed before the stop:\n%s", strings.Join(log, "\n"))
 	}
+	// Each read asks that its container not outlive it, by the name it
+	// runs under; no other call of the backup asks it.
+	for _, c := range s.engine.calls {
+		name := ""
+		if i := slices.Index(c.Args, "--name"); i >= 0 && stackReadCall(c.Args) {
+			name = c.Args[i+1]
+		}
+		if c.RemoveOnEnd != name {
+			t.Errorf("docker %s asks to remove %q, want %q", strings.Join(c.Args, " "), c.RemoveOnEnd, name)
+		}
+	}
 }
 
 // archive is a tar stream of entries, each written as given.

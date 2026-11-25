@@ -1319,6 +1319,12 @@ func (u *updater) composeArgs(ctx context.Context, args ...string) ([]string, er
 // (cyfr's own when nil) and its stderr into cyfr's, what reaches cyfr's
 // own streams redacted a line at a time.
 func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer, args ...string) error {
+	return u.dockerRemoving(ctx, "", stdin, stdout, args...)
+}
+
+// dockerRemoving is docker for a call whose container, named remove, must
+// not outlive it (access.Call.RemoveOnEnd); "" for none.
+func (u *updater) dockerRemoving(ctx context.Context, remove string, stdin io.Reader, stdout io.Writer, args ...string) error {
 	errOut := u.redactor().Writer(u.errOut)
 	defer errOut.Flush()
 	switch {
@@ -1331,7 +1337,7 @@ func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer,
 		defer out.Flush()
 		stdout = out
 	}
-	res, err := u.engine.Docker().Run(ctx, access.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut})
+	res, err := u.engine.Docker().Run(ctx, access.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut, RemoveOnEnd: remove})
 	return callFailure(u.redactor(), res, err)
 }
 

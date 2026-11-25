@@ -100,8 +100,8 @@ func mountField(key, value string) string {
 	return field
 }
 
-// stackRunName names one read through the stack, so it can be ended and
-// removed whatever ends the read.
+// stackRunName names one read through the stack, so its container can be
+// ended and removed whatever ends the read early.
 func stackRunName() string {
 	var b [6]byte
 	rand.Read(b[:])
@@ -112,7 +112,8 @@ func stackRunName() string {
 // input, streaming its standard output into consume as it arrives. The run
 // ends when consume is done, when the stream makes no progress for
 // stackReadStall, or at stackReadBackstop; whatever ends it early, its
-// container is ended and removed before this returns. base is the
+// container is ended and removed (access.Call.RemoveOnEnd), by the
+// engine's watchdog also when cyfr itself is gone. base is the
 // command's context before the stop, which an interrupt ends, and one
 // free of the interrupt from the stop on, as every step's there is.
 func (u *updater) runThroughStack(base context.Context, stdin []byte, consume func(io.Reader) error, program string, args ...string) error {
@@ -126,7 +127,7 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 	pr, pw := io.Pipe()
 	ran := make(chan error, 1)
 	go func() {
-		err := u.docker(ctx, in, pw, stackRunArgs(name, u.config, stdin != nil, program, args...)...)
+		err := u.dockerRemoving(ctx, name, in, pw, stackRunArgs(name, u.config, stdin != nil, program, args...)...)
 		if err != nil {
 			pw.CloseWithError(runFailed{err})
 		} else {
@@ -161,9 +162,6 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 	pr.Close()
 	runErr := <-ran
 	cancel()
-	if err != nil || runErr != nil {
-		u.endStackRun(name)
-	}
 	select {
 	case <-stalled:
 		return fmt.Errorf("the stack's read of its storage made no progress for %s, so it was ended", stackReadStall)
@@ -176,15 +174,6 @@ func (u *updater) runThroughStack(base context.Context, stdin []byte, consume fu
 		return fmt.Errorf("the stack's read of its storage through its image %s failed (%v); a stack that never ran may lack the image: run 'cyfr up' or 'docker compose pull cyfr' first", u.config.image, runErr)
 	}
 	return nil
-}
-
-// endStackRun ends and removes the container of the read name, which a
-// read that did not finish may leave; one that is gone already is no
-// failure.
-func (u *updater) endStackRun(name string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), composeRunTimeout)
-	defer cancel()
-	_ = u.docker(ctx, nil, io.Discard, "rm", "--force", name)
 }
 
 // progressReader is r, noting when it last gave bytes.
