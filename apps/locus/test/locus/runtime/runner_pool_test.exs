@@ -824,6 +824,9 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, a, a_id} = RunnerPool.take(pool, "ath_b", "exec_1")
     {:ok, b, b_id} = RunnerPool.take(pool, "ath_c", "exec_2")
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+    # Each released through its keeper: a runner taken while it still waits
+    # for its place has its handle ended instead, and no release is asked.
+    wait_until(fn -> Enum.all?(Map.values(:sys.get_state(pool).runners), & &1.placed) end)
 
     assert :ok = Runners.retire_busy(pool)
 
