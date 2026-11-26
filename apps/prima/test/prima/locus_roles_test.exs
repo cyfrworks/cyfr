@@ -122,7 +122,9 @@ defmodule Prima.LocusRolesTest do
   test "the runtime alone is private, relays and keeps the floor, the others route, and the backends alone keep homes" do
     assert Enum.map(LocusRoles.roles(), &{&1.name, &1.reach, &1.private, &1.floor}) ==
              [runtime: "relay", builds: "routed", backends: "routed"]
-             |> Enum.map(fn {name, reach} -> {name, reach, name == :runtime, name == :runtime} end)
+             |> Enum.map(fn {name, reach} ->
+               {name, reach, name == :runtime, name == :runtime}
+             end)
 
     for role <- LocusRoles.roles() do
       kept = [role.kept_root, role.kept_volume, role.kept_uids, role.kept_group, role.kept_gid]
