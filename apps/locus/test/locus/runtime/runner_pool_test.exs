@@ -901,7 +901,13 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {idle, idle_id} = idle!(pool, keeper, "ath_a", "exec_1")
     {:ok, busy, busy_id} = RunnerPool.take(pool, "ath_b", "exec_2")
     assert {:ok, _token} = assign(busy, "ath_b")
-    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
+    # The floor's runner attached: the status counts one still spawning as
+    # fresh.
+    wait_until(fn ->
+      counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} and
+        Enum.any?(Runners.runners(pool), &(&1.state == :fresh))
+    end)
+
     %{pid: fresh} = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
 
     :ok = ScriptedKeeper.give_way(keeper, busy_id)
@@ -1348,7 +1354,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = ScriptedKeeper.placing(keeper, :held)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
+    wait_until(fn -> match?([^id | _], ScriptedKeeper.held_places(keeper)) end)
 
     capture_log(fn ->
       Process.exit(pid, :kill)
@@ -1367,7 +1373,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = ScriptedKeeper.placing(keeper, :held)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
+    wait_until(fn -> match?([^id | _], ScriptedKeeper.held_places(keeper)) end)
 
     log =
       capture_log(fn ->
