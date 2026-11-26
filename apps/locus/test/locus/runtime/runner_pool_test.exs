@@ -663,6 +663,87 @@ defmodule Locus.Runtime.RunnerPoolTest do
         e.waiter != nil and e.waiter.execution_id == execution_id
       end)
 
+  # A take whose answer, or the exit of its call when none comes by its
+  # deadline and the call's own room, is the task's value.
+  defp take_async(pool, athanor, execution_id, deadline) do
+    Task.async(fn ->
+      try do
+        RunnerPool.take(pool, athanor, execution_id, deadline)
+      catch
+        :exit, reason -> {:no_answer, reason}
+      end
+    end)
+  end
+
+  defp queue_len(pid), do: elem(Process.info(pid, :message_queue_len), 1)
+
+  test "a start waiting for the uid of a runner whose spawn the keeper then refuses is answered",
+       %{keeper: keeper} do
+    :ok = ScriptedKeeper.placing(keeper, :held)
+    pool = start_pool!(keeper, uids: 2)
+    serve!(pool)
+
+    # Both uids held by runners taken while their places wait.
+    {:ok, x, x_id} = RunnerPool.take(pool, "ath_x", "exec_x", soon())
+    wait_until(fn -> length(ScriptedKeeper.held_places(keeper)) == 2 end)
+    {:ok, _y, _y_id} = RunnerPool.take(pool, "ath_y", "exec_y", soon())
+    assert counts(pool) == %{fresh: 0, idle: 0, busy: 2, tainted: 0}
+
+    # x's process is held between its place and the keeper's answer to its
+    # spawn, which is a refusal queued behind.
+    suspender = Task.async(fn -> :sys.suspend(x) end)
+    wait_until(fn -> queue_len(x) == 1 end)
+    :ok = ScriptedKeeper.refuse(keeper, :capacity)
+    :ok = ScriptedKeeper.answer_place(keeper, x_id, :ok)
+    :ok = Task.await(suspender)
+    wait_until(fn -> :sys.get_state(pool).runners[x].placed end)
+
+    # Its start is killed: x is being ended and holds its uid, and another
+    # athanor's start waits for it.
+    :ok = RunnerPool.taint(pool, x, 0, "exec_x")
+    z = take_async(pool, "ath_z", "exec_z", System.monotonic_time(:millisecond) + 1_000)
+    wait_until(fn -> waiting?(pool, "exec_z") end)
+
+    capture_log(fn ->
+      :ok = :sys.resume(x)
+      assert_receive {RunnerPool, ^x, {:gone, {:refused, %{reason: "capacity"}}}}, 5_000
+      refute match?({:no_answer, _}, Task.await(z, 5_000))
+    end)
+  end
+
+  test "a start waiting for the uid of a runner whose refusal for room crosses its kill is answered",
+       %{keeper: keeper} do
+    :ok = ScriptedKeeper.placing(keeper, :held)
+    pool = start_pool!(keeper, uids: 2)
+    serve!(pool)
+    {:ok, x, x_id} = RunnerPool.take(pool, "ath_x", "exec_x", soon())
+    wait_until(fn -> length(ScriptedKeeper.held_places(keeper)) == 2 end)
+    {:ok, _y, _y_id} = RunnerPool.take(pool, "ath_y", "exec_y", soon())
+
+    # x's kill, then another athanor's start, reach the pool before the
+    # refusal of x's place for room that x sent before it was killed.
+    :ok = :sys.suspend(pool)
+    killing = Task.async(fn -> RunnerPool.taint(pool, x, 0, "exec_x") end)
+    wait_until(fn -> queue_len(pool) == 1 end)
+    z = take_async(pool, "ath_z", "exec_z", System.monotonic_time(:millisecond) + 1_000)
+    wait_until(fn -> queue_len(pool) == 2 end)
+
+    :ok =
+      ScriptedKeeper.answer_place(
+        keeper,
+        x_id,
+        {:error, {:no_memory, %{need: 1, free: 0, mine: [], others_bytes: 0}}}
+      )
+
+    wait_until(fn -> queue_len(pool) == 3 end)
+
+    capture_log(fn ->
+      :ok = :sys.resume(pool)
+      assert :ok = Task.await(killing)
+      refute match?({:no_answer, _}, Task.await(z, 5_000))
+    end)
+  end
+
   test "with every uid held by runners at work, no runner gives way: the start spawns and the keeper's refusal for want of a uid answers it",
        %{keeper: keeper} do
     pool = start_pool!(keeper, uids: 2)

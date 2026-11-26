@@ -606,10 +606,17 @@ defmodule Locus.Runtime.RunnerPool do
     state = told(state, pid, entry, {:gone, {:refused, refusal}})
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
     taken? = entry.execution_id != nil or entry.waiter != nil
+    # A runner already being ended may have a start waiting for its uid,
+    # which is taken again now that the uid is free, as at any release.
+    going = state.runners[pid]
+    state = forget(state, pid)
 
-    if refusal.reason == "no_memory" and taken?,
-      do: refill_later(forget(state, pid)),
-      else: refused(forget(state, pid), reason)
+    state =
+      if refusal.reason == "no_memory" and taken?,
+        do: refill_later(state),
+        else: refused(state, reason)
+
+    resume(state, going)
   end
 
   defp on_event({:refused, reason, :release_follows}, pid, entry, state) do
