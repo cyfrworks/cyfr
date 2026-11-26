@@ -284,6 +284,12 @@ def test_bounds(stack, pids):
                f"cpu {want[2]}", [group, chain])
 
 
+def answering(stack, victim):
+    """Waits, bounded, until the image's probe (apps/locus/health.sh) says every role answers on its port."""
+    eventually(lambda: stack.exec("locus-health").returncode == 0,
+               f"every role to answer once the {victim} role started again", timeout_s=60)
+
+
 def test_restart_alone(stack, c, victim):
     before = stack.role_pids()
     session = c.mcp(OWNER, "scratch", key="steady")
@@ -297,8 +303,11 @@ def test_restart_alone(stack, c, victim):
             expect(after[name] == before[name], f"killing the {victim} role leaves the {name} role's process", [before, after])
     stack.healthy()
     # The container's health is read every ten seconds: the backends' own
-    # answer says the role started again listens.
+    # answer says the role started again listens, and the image's probe that
+    # every role answers again, the one started again among them, before
+    # anything asks it more.
     wait_healthy(stack.base)
+    answering(stack, victim)
     if victim != "backends":
         again = c.mcp(OWNER, "scratch", key="steady").call("whoami", {})
         expect(again[0] == 200 and json.loads(again[1]["result"]["content"][0]["text"])["pid"]

@@ -332,12 +332,18 @@ defmodule Prima.LocusPool do
     envelope = envelope(service)
 
     with {:ok, fields, mac} <- Prima.MacEnvelope.parse(envelope, header),
-         true <- abs(fields.ts - now) <= window_ms() || {:error, :outside_window},
-         true <-
-           Prima.MacEnvelope.verify_header(envelope, pool_key, fields, mac) || {:error, :bad_mac} do
+         :ok <- within_window(fields.ts, now),
+         :ok <- authentic(Prima.MacEnvelope.verify_header(envelope, pool_key, fields, mac)) do
       {:ok, fields.body_hash}
     end
   end
+
+  defp within_window(ts, now) do
+    if abs(ts - now) <= window_ms(), do: :ok, else: {:error, :outside_window}
+  end
+
+  defp authentic(true), do: :ok
+  defp authentic(false), do: {:error, :bad_mac}
 
   @doc "Whether `body` is the one a verified header hashed."
   @spec verify_body(String.t(), binary()) :: :ok | {:error, :bad_mac}
