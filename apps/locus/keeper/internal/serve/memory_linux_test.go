@@ -427,7 +427,8 @@ func TestAKillForALimitAboveTheSpawnsIsTheMachines(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
-				_ = os.Remove(filepath.Join(above, "keeper"))
+				_ = os.Remove(filepath.Join(above, "service", "keeper"))
+				_ = os.Remove(filepath.Join(above, "service"))
 				if err := os.Remove(above); err != nil {
 					t.Error(err)
 				}

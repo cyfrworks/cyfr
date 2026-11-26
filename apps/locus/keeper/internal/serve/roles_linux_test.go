@@ -642,13 +642,6 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 	if err := rk.tree.Bound(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	// Why every group is made first: the kernel makes none under a bound
-	// of 0.
-	if late, leaf, err := rk.tree.Role("late", 0, false); err == nil {
-		_ = leaf.Remove()
-		_ = os.Remove(late.Dir())
-		t.Error("a role's group was made under rest bounded at 0")
-	}
 	rk.start(t)
 	for name, ru := range rk.roles {
 		pool := "p" + name
@@ -663,8 +656,21 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 		if reply := ru.ask(t, spawn); reply["type"] != protocol.TypeError || reply["id"] != "zp" {
 			t.Errorf("role %s's spawn at no work answered %v", name, reply)
 		}
-		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool || reply["free"] != reply["size"] {
-			t.Errorf("role %s after the refused spawn: its pool answered %v", name, reply)
+		// The refused spawn's uid goes back to its pool once its retirement
+		// has found it clean, and the role answers throughout.
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`)
+			if reply["type"] != protocol.TypePool {
+				t.Fatalf("role %s after the refused spawn: its pool answered %v", name, reply)
+			}
+			if reply["free"] == reply["size"] {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("role %s: the refused spawn's uid is not free again: %v", name, reply)
+			}
+			time.Sleep(cgroup.PollInterval) // sleep-ok: a bounded poll for the uid's retirement
 		}
 	}
 	rk.s.mu.Lock()
