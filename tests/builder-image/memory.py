@@ -10,8 +10,9 @@ process tree, the tmpfs pages of its home and the kernel memory charged to
 it pass the bound, kills every process of the spawn when they cannot stay
 under it, and cyfr-locus reports that end as `memory` `cap`. It can do
 so only where the service mounts the container's cgroup writable
-(`security_opt: writable-cgroups=true`); anywhere else it refuses every
-spawn.
+(`security_opt: writable-cgroups=true`); anywhere else it can make no
+role's group and refuses its own boot, so no build runs at all
+(tests/builder-image/isolation.py proves that refusal).
 
 `keeper` drives a second cyfr-locus inside the running service, over its
 own uids, with a client that speaks the keeper's protocol
@@ -40,9 +41,9 @@ sends it:
 - no group's peak, as the kernel accounts it, passed its bound; no process
   of their uids, no home and no group is left; the release and the
   container were not touched;
-- where the service gives cyfr-locus no writable cgroup, every spawn is
-  refused as `memory_unavailable`, and this suite fails, naming the option
-  the service lacks.
+- where the service gives cyfr-locus no writable cgroup, cyfr-locus
+  refuses its boot, the builds service never answers, and this suite fails
+  with the service's log, which says what could not be made.
 
 The build cases run the same hostile work through the builder's own build
 path, each beside a sibling build: `javascript` (a build script allocating
