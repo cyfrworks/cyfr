@@ -50,8 +50,8 @@ defmodule Prima.BuilderProtocol do
   `{version, athanor_id, language, target_type, resolve, deadline,
   sources}`. `athanor_id` is the tenant the build is for, of the grammar
   every Locus wire gives an athanor's id
-  (`Prima.RunnerControl.athanor_id_pattern/0`), which the builder keys its
-  per-athanor slot and the build's place on and keeps nothing else about.
+  (`Prima.RunnerControl.athanor_id_pattern/0`), which the builder keys the
+  build's slot and place on and keeps nothing else about.
   `language` is `rust` or `javascript` and `target_type` a component type,
   paired as `language_for/1` says. `resolve` asks a Rust build to resolve its crate
   graph afresh. `deadline` is the absolute instant, in Unix milliseconds,
