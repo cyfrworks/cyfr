@@ -911,11 +911,11 @@ defmodule Cyfr.DocsDriftTest do
 
     # Guards against the scans quietly matching nothing.
     assert "LOCUS_RUNTIME_KEY" in variables and "LOCUS_RUNTIME_BIND" in variables
-    assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_MEMORY_BYTES" in variables
-    assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BYTES" in variables
+    assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_TIMEOUT_MS" in variables
+    assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BUDGET" in variables
     # S1 removed the backends' in-flight and timeout settings, which only
     # their MCP handshake read.
-    assert length(variables) >= 24, "the scan found only #{inspect(variables)}"
+    assert length(variables) >= 20, "the scan found only #{inspect(variables)}"
     assert "LOCUS_LOG_LEVEL" in variables
     locus = services[Prima.LocusRoles.release().service]
     assert locus.env_files == [".env.locus"]
@@ -1015,10 +1015,10 @@ defmodule Cyfr.DocsDriftTest do
       Map.update!(
         homes,
         ".env.locus.example",
-        &String.replace(&1, "# LOCUS_RUNTIME_POOL_SIZE=", "#")
+        &String.replace(&1, "# LOCUS_RUNTIME_IDLE_TTL_MS=", "#")
       )
 
-    assert {"LOCUS_RUNTIME_POOL_SIZE", []} in misplaced(variables, unplanted)
+    assert {"LOCUS_RUNTIME_IDLE_TTL_MS", []} in misplaced(variables, unplanted)
 
     # A guide section that loses its table documents nothing.
     renamed =

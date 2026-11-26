@@ -353,7 +353,6 @@
 0.0	apps/cyfr/test/cyfr/runtime_config_test.exs
 4.4	apps/cyfr/test/cyfr/runtime_config_wiring_test.exs
 3.4	apps/cyfr/test/cyfr/runtime_env_reading_test.exs
-0.0	apps/cyfr/test/cyfr/runtime_pool_size_test.exs
 2.6	apps/cyfr/test/cyfr/scripted_worker_test.exs
 1.1	apps/cyfr/test/cyfr/seed_bundle_test.exs
 1.7	apps/cyfr/test/cyfr/seed_offer_test.exs

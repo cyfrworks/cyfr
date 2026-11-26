@@ -310,8 +310,16 @@ defmodule Locus.Runtime.WorkerService do
     {:noreply, assign_done(state, ref, outcome)}
   end
 
-  defp info({:DOWN, ref, :process, _pid, reason}, state) when is_map_key(state.assigning, ref),
-    do: {:noreply, assign_done(state, ref, {:error, {:assign_down, reason}})}
+  # The assign's task ended before it answered: its reason is logged here,
+  # and the start answers as any assign that failed.
+  defp info({:DOWN, ref, :process, _pid, reason}, state) when is_map_key(state.assigning, ref) do
+    Logger.error(
+      "[Locus.Runtime.WorkerService] a start's assign ended before it answered: " <>
+        Prima.LogFilter.inspect_reason(reason)
+    )
+
+    {:noreply, assign_done(state, ref, {:error, :assign_down})}
+  end
 
   # What the pool tells of a runner whose assign is in flight waits for the
   # assign's outcome.
