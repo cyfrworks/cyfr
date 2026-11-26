@@ -639,6 +639,34 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert length(spawns(keeper)) == 5
   end
 
+  test "a refill releases only the uids it is short: one kept runner already going counts, " <>
+         "and a third stays kept when the second is taken by its own athanor",
+       %{keeper: keeper} do
+    clock = scripted_clock(0)
+    pool = start_pool!(keeper, uids: 4, clock: read_clock(clock))
+    serve!(pool)
+    [{a, a_id}, {b, _b_id}, {c, _c_id}] = kept!(pool, keeper, clock, ["ath_a", "ath_b", "ath_c"])
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 3, busy: 0, tainted: 0} end)
+
+    never_retired(spawn_of(keeper, a), fn ->
+      # Another athanor takes the floor's runner: every uid held, the oldest
+      # kept runner, ath_a's, goes for the refill.
+      {:ok, _d, _d_id} = RunnerPool.take(pool, "ath_d", "exec_d")
+      wait_until(fn -> ScriptedKeeper.releases(keeper) == [{a_id, 0}] end)
+
+      # Before ath_a's is gone, ath_b takes its own: the refill is still
+      # short one uid, which ath_a's going covers, so ath_c's stays kept.
+      assert {:ok, ^b, _} = RunnerPool.take(pool, "ath_b", "exec_b2")
+
+      assert {state_of(pool, a), state_of(pool, c), ScriptedKeeper.releases(keeper)} ==
+               {:retiring, :idle, [{a_id, 0}]}
+    end)
+
+    left!(pool, a)
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+    assert {state_of(pool, c), ScriptedKeeper.releases(keeper)} == {:idle, [{a_id, 0}]}
+  end
+
   test "a start withdrawn or past its deadline while it waits for a uid leaves nothing of it, " <>
          "and the runner released for it stays released",
        %{keeper: keeper} do
