@@ -99,23 +99,18 @@ func TestTheMsiRoadStepsAsideForTheInstaller(t *testing.T) {
 }
 
 // The update installs only once no process runs the app's executable:
-// one still ending is waited for, one still running at the bound refuses
-// the update, and a program of the same name elsewhere (the app's own
-// cyfr.exe runs the update) is not the app.
+// one still ending is waited for, and the installer then replaces it; one
+// still running at the bound refuses the update before the installer runs
+// or the app's cyfr steps aside; and a program of the same name elsewhere
+// (the app's own cyfr.exe runs the update) is not the app. The app is
+// PING's program, which runs about a second for each of its echoes; the
+// stand-in installer copies over it, which fails while it runs.
 func TestTheMsiRoadWaitsForTheAppToEnd(t *testing.T) {
-	ping := filepath.Join(os.Getenv("SystemRoot"), "System32", "PING.EXE")
-	dir := t.TempDir()
-	app := filepath.Join(dir, "app", "CYFR.exe")
-	other := filepath.Join(dir, "resources", "cyfr.exe")
-	for _, p := range []string{app, other} {
-		data, err := os.ReadFile(ping)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, p, string(data))
+	ping, err := os.ReadFile(filepath.Join(os.Getenv("SystemRoot"), "System32", "PING.EXE"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// start runs exe for about n seconds (ping waits a second between
-	// two of its n echoes), answering whether it has ended.
+	// start runs exe for about n seconds, answering whether it has ended.
 	start := func(exe string, n int) (ended func() bool) {
 		c := exec.Command(exe, "-n", strconv.Itoa(n), "127.0.0.1")
 		if err := c.Start(); err != nil {
@@ -128,21 +123,50 @@ func TestTheMsiRoadWaitsForTheAppToEnd(t *testing.T) {
 		t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait(); _ = windows.CloseHandle(h) })
 		return func() bool { e, _ := windows.WaitForSingleObject(h, 0); return e == windows.WAIT_OBJECT_0 }
 	}
+	savedProgram, savedSelf, savedCyfr, savedWithin := msiexecProgram, selfExecutable, appCyfr, appQuitWithin
+	t.Cleanup(func() {
+		msiexecProgram, selfExecutable, appCyfr, appQuitWithin = savedProgram, savedSelf, savedCyfr, savedWithin
+	})
+	// bundle lays out an installed app whose CYFR.exe is PING's program, run
+	// for about n seconds, with the stand-in installer, which marks that it
+	// ran; its cyfr is the one running the update.
+	bundle := func(n int) (app, carried, ran string, ended func() bool) {
+		dir := t.TempDir()
+		b, carried := appBundleLayout(t, filepath.Join(dir, "app"))
+		app = filepath.Join(b, "CYFR.exe")
+		writeFile(t, app, string(ping))
+		bin := filepath.Join(dir, "bin")
+		ran = filepath.Join(bin, "ran")
+		writeFile(t, filepath.Join(bin, "new"), "new")
+		writeFile(t, filepath.Join(bin, "msiexec.cmd"), "@echo off\r\ncopy /y \"%~dp0new\" \"%CYFR_TEST_APP%\" >nul || exit /b 1603\r\necho ran>\"%~dp0ran\"\r\nexit /b 0\r\n")
+		t.Setenv("CYFR_TEST_APP", app)
+		msiexecProgram = filepath.Join(bin, "msiexec.cmd")
+		selfExecutable = func() (string, error) { return carried, nil }
+		appCyfr = func() (string, error) { return carried, nil }
+		return app, carried, ran, start(app, n)
+	}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 
-	ended := start(other, 30)
+	app, carried, ran, ended := bundle(3)
+	appQuitWithin = 20 * time.Second
+	err = (msiRoad{}).replace(&bytes.Buffer{}, &staged{target: "1.1.0", dir: t.TempDir()}, false)
+	if err != nil || !ended() || read(t, app) != "new" || !exists(ran) {
+		t.Errorf("an app ending: the road answered %v, the app ended: %v, the installer ran: %v and replaced it: %v", err, ended(), exists(ran), read(t, app) == "new")
+	}
+
+	_, carried, ran, ended = bundle(30)
+	appQuitWithin = 300 * time.Millisecond
+	err = (msiRoad{}).replace(&bytes.Buffer{}, &staged{target: "1.1.0", dir: t.TempDir()}, false)
+	asides, _ := filepath.Glob(carried + msiAside + "*")
+	if want := "the CYFR app was still running 300ms after it was closed; nothing was replaced"; err == nil || err.Error() != want || ended() || exists(ran) || read(t, carried) != "the app's cyfr" || len(asides) != 0 {
+		t.Errorf("an app running past the bound: the road answered %v (want %q), the app ended: %v, the installer ran: %v, the cyfr stepped aside: %v", err, want, ended(), exists(ran), asides)
+	}
+
+	other := filepath.Join(t.TempDir(), "resources", "cyfr.exe")
+	writeFile(t, other, string(ping))
+	ended = start(other, 30)
 	began := time.Now()
 	if err := appGone(app, 10*time.Second); err != nil || time.Since(began) > 5*time.Second || ended() {
 		t.Errorf("with only another cyfr.exe running the wait answered %v after %v", err, time.Since(began))
-	}
-
-	ended = start(app, 3)
-	if err := appGone(app, 20*time.Second); err != nil || !ended() {
-		t.Errorf("an app ending answered %v, ended: %v", err, ended())
-	}
-
-	ended = start(app, 30)
-	err := appGone(app, 300*time.Millisecond)
-	if want := "the CYFR app was still running 300ms after it was closed; nothing was replaced"; err == nil || err.Error() != want || ended() {
-		t.Errorf("an app running past the bound answered %v, ended: %v, want %q", err, ended(), want)
 	}
 }
