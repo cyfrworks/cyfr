@@ -1243,18 +1243,23 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert :ok = Runners.retire_busy(pool)
 
     # The bound's timers of runners retired in time change nothing. A
-    # runner killed after them with a grace well past the bound is
-    # retired by the keeper after that grace, so once it is gone their
-    # timers have fired.
-    {late_id, log} =
-      with_log(fn ->
-        {:ok, late, late_id} = RunnerPool.take(pool, "ath_d", "exec_3")
-        assert :ok = RunnerPool.taint(pool, late, 400, "exec_3")
-        wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == late)) end)
-        late_id
+    # witness released after them with a grace, and held by its keeper,
+    # is told its own bound is spent at a deadline later than theirs, so
+    # the pool has handled their timers by then.
+    {:ok, witness, witness_id} = RunnerPool.take(pool, "ath_d", "exec_3")
+    witness_spawn = spawn_of(keeper, witness)
+
+    log =
+      never_retired(witness_spawn, fn ->
+        capture_log(fn ->
+          assert :ok = RunnerPool.taint(pool, witness, 50, "exec_3")
+          assert_receive {RunnerPool, ^witness, {:gone, :retire_bound}}, 5_000
+        end)
       end)
 
-    for id <- [a_id, b_id, late_id], do: refute(log =~ "runner #{id} #{@unretired}")
+    for id <- [a_id, b_id], do: refute(log =~ "runner #{id} #{@unretired}")
+    assert log =~ "runner #{witness_id} #{@unretired}"
+    left!(pool, witness, 5_000)
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0} end)
     assert Enum.count(ScriptedKeeper.releases(keeper), &match?({_, 0}, &1)) == 2
   end
