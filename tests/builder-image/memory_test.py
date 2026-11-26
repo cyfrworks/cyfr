@@ -4,8 +4,11 @@
 
 That no keeper cgroup is left is answered only by the word `absent` from a
 command that exits 0. A failed exec, and output that answers neither word, are
-no answer. The client places each spawn before it sends it. A closed relay's
-output is read in full before the client reports. The measured build is read
+no answer. The client places each spawn before it sends it and names no bound
+on it; a spawn it sends with a member the keeper does not know is refused
+without its id, matched to its spawn in the order sent, and its place dropped.
+A closed relay's output is read in full before the client reports. The
+measured build is read
 until a reading taken after it holds its memory, released with a measure, and
 measured after `released`; the verdict refuses a reading under another owner,
 one taken before the build held its memory, one answered only after
@@ -203,8 +206,8 @@ class ClientOutput(unittest.TestCase):
             with open(client_path, "w") as out:
                 out.write(memory.CLIENT.replace("stdout: stdout.slice(-400)", "stdout"))
             with open(scenario_path, "w") as out:
-                json.dump({"pool": "probe", "timeout_ms": 5000, "spawns": [
-                    {"name": "short", "argv": ["sh", "-c", "echo ran"], "memory_bytes": memory.MIN_BOUND},
+                json.dump({"v": memory.V, "pool": "probe", "timeout_ms": 5000, "spawns": [
+                    {"name": "short", "argv": ["sh", "-c", "echo ran"]},
                 ]}, out)
 
             for trial in range(32):
@@ -220,10 +223,12 @@ class ClientOutput(unittest.TestCase):
                         parent.settimeout(5)
                         with parent.makefile("rb") as lines:
                             place = json.loads(lines.readline())
-                            parent.sendall(json.dumps({"v": 6, "type": "placed", "id": place["id"]}).encode() + b"\n")
+                            parent.sendall(json.dumps({"v": 7, "type": "placed", "id": place["id"],
+                                                       "memory_bytes": memory.BOUND}).encode() + b"\n")
                             request = json.loads(lines.readline())
-                        self.assertEqual(place, {"v": 6, "type": "place", "id": "p1", "kind": "build"})
-                        self.assertEqual((request["v"], request["type"], request["place"]), (6, "spawn", "p1"))
+                        self.assertEqual(place, {"v": 7, "type": "place", "id": "p1", "kind": "build"})
+                        self.assertEqual((request["v"], request["type"], request["place"]), (7, "spawn", "p1"))
+                        self.assertFalse({"memory_bytes", "cpu_quota"} & request.keys(), request)
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)
                         self.assertTrue(os.WIFSTOPPED(status))
@@ -238,9 +243,9 @@ class ClientOutput(unittest.TestCase):
                             relay.sendall(packet + frame(1, b"") + frame(2, b""))
                         spawn_id = "a" * 32
                         for reply in (
-                            {"v": 6, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
-                            {"v": 6, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
-                            {"v": 6, "type": "released", "spawn_id": spawn_id},
+                            {"v": 7, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 7, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
+                            {"v": 7, "type": "released", "spawn_id": spawn_id},
                         ):
                             parent.sendall(json.dumps(reply).encode() + b"\n")
                         os.kill(process.pid, signal.SIGCONT)
@@ -261,7 +266,8 @@ SPAWN_ID = "b" * 32
 
 
 def keeper(sock, requests):
-    """A keeper on the client's channel, answering as cyfr-locus does: a place `placed`; a spawn `spawned`, its relay
+    """A keeper on the client's channel, answering as cyfr-locus does: a place `placed` with a build's bound; a spawn
+    with a member the protocol does not know refused without its id; any other spawn `spawned`, its relay
     attached and the build's stdout sent, ending in the line it prints once it holds its memory; a measure `unmeasured`
     until the place's first reading, which the first measure finds missing, then the reading, just taken, under the
     place's owner; a measure sent with a release is answered before `exited` and `released`, and one after is
@@ -276,9 +282,11 @@ def keeper(sock, requests):
         requests.append(request)
         if request["type"] == "place":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 6, "type": "placed", "id": request["id"]})
+            send({"v": 7, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
+        elif request["type"] == "spawn" and request.keys() & {"memory_bytes", "cpu_quota"}:
+            send({"v": 7, "type": "error", "code": "bad_request"})
         elif request["type"] == "spawn":
-            send({"v": 6, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            send({"v": 7, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
             relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             relay.connect(request["attach"]["path"])
             relay.sendall(frame(3, request["attach"]["token"].encode())
@@ -288,15 +296,15 @@ def keeper(sock, requests):
         elif request["type"] == "measure":
             measures += 1
             if free or measures == 1:
-                send({"v": 6, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": 7, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 6, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
+                send({"v": 7, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
                       "age_ms": 0})
             if releasing:
-                send({"v": 6, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+                send({"v": 7, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
                 relay.sendall(frame(1, b"") + frame(2, b""))
                 relay.close()
-                send({"v": 6, "type": "released", "spawn_id": SPAWN_ID})
+                send({"v": 7, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
 
 
@@ -312,7 +320,7 @@ class MeasuredBuild(unittest.TestCase):
         with open(client_path, "w") as out:
             out.write(memory.CLIENT)
         with open(scenario_path, "w") as out:
-            json.dump({"pool": "probe", "timeout_ms": 10_000, "measure": memory.MEASURE,
+            json.dump({"v": memory.V, "pool": "probe", "timeout_ms": 10_000, "measure": memory.MEASURE,
                        "spawns": [spawn for spawn in memory.scenario() if spawn.get("measure")]}, out)
         parent, child = socket.socketpair()
         cls.addClassCleanup(parent.close)
@@ -353,12 +361,13 @@ class MeasuredBuild(unittest.TestCase):
         self.assertEqual(types[:2], ["place", "spawn"])
         self.assertEqual(types[-3:], ["release", "measure", "measure"])
         self.assertEqual(set(types[2:-3]), {"measure"})
-        self.assertEqual(self.requests[0], {"v": 6, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
-        self.assertEqual({key: self.requests[1][key] for key in ("v", "id", "place", "pool", "memory_bytes")},
-                         {"v": 6, "id": "1", "place": "p1", "pool": "probe", "memory_bytes": memory.BOUND})
-        self.assertEqual(self.requests[-3], {"v": 6, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
+        self.assertEqual(self.requests[0], {"v": 7, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
+        self.assertEqual({key: self.requests[1][key] for key in ("v", "id", "place", "pool")},
+                         {"v": 7, "id": "1", "place": "p1", "pool": "probe"})
+        self.assertFalse({"memory_bytes", "cpu_quota"} & self.requests[1].keys(), self.requests[1])
+        self.assertEqual(self.requests[-3], {"v": 7, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
         measures = [request for request in self.requests if request["type"] == "measure"]
-        self.assertEqual(measures, [{"v": 6, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
+        self.assertEqual(measures, [{"v": 7, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
 
     def test_a_build_read_under_its_owner_and_free_only_after_released_passes(self):
         memory.judge_build(self.spawn())
@@ -382,6 +391,56 @@ class MeasuredBuild(unittest.TestCase):
         def edit(spawn):
             spawn["measures"][-1]["reply"] = {**spawn["measures"][-2]["reply"], "id": spawn["measures"][-1]["id"]}
         self.fails(self.spawn(edit), "the build's place is free")
+
+    def test_a_place_answered_without_a_builds_bound_fails(self):
+        def edit(spawn):
+            spawn["replies"][0]["memory_bytes"] = memory.BOUND // 4
+        self.fails(self.spawn(edit), "placed with a build's bound")
+
+
+class RefusedSpawns(unittest.TestCase):
+    """The scenario's spawns that name a bound of their own, against a keeper that refuses each without its id, as
+    cyfr-locus refuses a member it does not know: each refusal is the spawn's sent in that order, and its place is
+    dropped."""
+
+    def test_each_refusal_is_its_spawns_in_the_order_sent_and_its_place_is_dropped(self):
+        directory = tempfile.mkdtemp(prefix="memory-refused-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        client_path = os.path.join(directory, "client.mjs")
+        scenario_path = os.path.join(directory, "scenario.json")
+        refused = [spawn for spawn in memory.scenario() if spawn["name"] in memory.REFUSED]
+        with open(client_path, "w") as out:
+            out.write(memory.CLIENT)
+        with open(scenario_path, "w") as out:
+            json.dump({"v": memory.V, "pool": "probe", "timeout_ms": 10_000, "spawns": refused}, out)
+        parent, child = socket.socketpair()
+        self.addCleanup(parent.close)
+        process = subprocess.Popen(["/bin/sh", "-c", 'exec 3<&"$1"; exec node "$2" "$3"', "client", str(child.fileno()),
+                                    client_path, scenario_path],
+                                   pass_fds=(child.fileno(),), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env={**os.environ, "RELEASE_TMP": directory})
+        child.close()
+        requests = []
+        serving = threading.Thread(target=keeper, args=(parent, requests), daemon=True)
+        serving.start()
+        try:
+            stdout, stderr = process.communicate(timeout=20)
+        finally:
+            process.kill()
+            process.communicate()
+        serving.join(5)
+        self.assertEqual(process.returncode, 0, stderr.decode())
+        report = json.loads(stdout.split(b"<<<", 1)[1].split(b">>>", 1)[0])
+        self.assertFalse(report["timed_out"])
+        self.assertEqual([(r["type"], r.get("id") or r.get("place")) for r in requests],
+                         [("place", "p1"), ("place", "p2"), ("spawn", "1"), ("spawn", "2"), ("drop", "p1"), ("drop", "p2")])
+        self.assertEqual([{key: requests[n][key] for key in ("memory_bytes", "cpu_quota") if key in requests[n]} for n in (2, 3)],
+                         [spawn["extra"] for spawn in refused])
+        self.assertEqual(requests[4], {"v": 7, "type": "drop", "place": "p1"})
+        self.assertEqual([[{k: v for k, v in r.items() if k not in ("at_ms", "seq")} for r in spawn["replies"]]
+                          for spawn in report["spawns"]],
+                         [[{"v": 7, "type": "placed", "id": f"p{n}", "memory_bytes": memory.BOUND},
+                           {"v": 7, "type": "error", "code": "bad_request", "id": str(n)}] for n in (1, 2)])
 
 
 class Brief(unittest.TestCase):

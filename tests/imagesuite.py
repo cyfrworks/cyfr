@@ -8,7 +8,9 @@ guard under docker compose, holding the key of its role alone. They share
 the command runner (`run`), the teardown on a signal (`stop_on_signals`),
 the temporary directories removed at exit (`temporary_directory`), the
 default bridge's gateway (`bridge_gateway`), the reading of a guard's
-failure from its inspect record (`guard_failed`), and the part of a
+failure from its inspect record (`guard_failed`), the bound the keeper
+sets on each kind of spawn (`cap_bytes`) and the settings that size the
+pool's work on this machine (`work_settings`), and the part of a
 compose stack that does not depend on the service (`Stack`: its project
 name, its project directory holding the seccomp profiles docker-compose.yml
 names, and `down`). What differs between them (compose files, services,
@@ -50,6 +52,26 @@ SECCOMP_PROFILES = {
     "keeper.seccomp.json": os.path.join(_ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json"),
     "container.seccomp.json": os.path.join(_ROOT, "apps", "locus", "keeper", "seccomp", "container.json"),
 }
+
+
+# The pool's fixed numbers (Prima.LocusPool), from their vector file: each
+# place's kind and its class, a build's memory bound, a runner's and a
+# session's least bound, and how many fresh runners the warm floor keeps.
+# The keeper sets every spawn's bound by its kind, and no client names one.
+with open(os.path.join(_ROOT, "tests", "fixtures", "locus_pool.json")) as _pool:
+    _POOL = json.load(_pool)
+KINDS = _POOL["kinds"]
+BUILD_CAP_BYTES = _POOL["cap_bytes"]["build"]
+LEAST_CAP_BYTES = _POOL["least_cap_bytes"]
+FLOOR_RUNNERS = _POOL["floor_runners"]
+
+
+def cap_bytes(kind, work):
+    """The memory bound the keeper sets on a spawn of `kind` in a pool of `work` bytes (admission.LimitsOf): a build's
+    fixed, a runner's and a session's half of the work, never under its least."""
+    if KINDS[kind] == "build":
+        return BUILD_CAP_BYTES
+    return max(work // 2, LEAST_CAP_BYTES[KINDS[kind]])
 
 
 def seccomp_profile_named(inline):
@@ -157,6 +179,27 @@ def bridge_gateway():
     if not gateway:
         sys.exit("FAIL: docker network inspect bridge names no gateway")
     return gateway
+
+
+def mem_total(image):
+    """The machine's memory in bytes, MemTotal as /proc/meminfo reads it in a throwaway container of `image`, as the
+    keeper reads it in its own."""
+    out = read_output(run("docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}meminfo-{os.getpid()}-{time.monotonic_ns()}"),
+                          "--network", "none", "--entrypoint", "awk", image, '$1 == "MemTotal:" {print $2}', "/proc/meminfo",
+                          check=False), "the machine's MemTotal").strip()
+    if not out.isdigit():
+        sys.exit(f"FAIL: /proc/meminfo names no MemTotal: {out!r}")
+    return int(out) * 1024
+
+
+def work_settings(image, work):
+    """The pool settings, as compose interpolates them, that make the pool's work `work` bytes on this machine: the
+    reserve its whole memory (`mem_total`) less `work`, and no share. A container with no limit of its own, as the
+    shipped service runs, then holds every spawn of every role within exactly that."""
+    total = mem_total(image)
+    if total <= work:
+        sys.exit(f"FAIL: this machine's {total} bytes do not hold a pool of {work} bytes")
+    return {"LOCUS_CORE_RESERVE_BYTES": str(total - work), "LOCUS_SERVICE_BYTES": "0"}
 
 
 def guard_failed(inspected):

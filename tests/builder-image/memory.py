@@ -3,14 +3,15 @@
 # Copyright 2026 CYFR Works Inc.
 """A build cannot take more memory than its bound, run as docker-compose.yml's builder service.
 
-cyfr-locus bounds a spawn that asks for `memory_bytes` with a cgroup of its
-own (apps/locus/keeper/internal/cgroup): the kernel never lets the spawn's whole
+cyfr-locus bounds every spawn by its place's kind, a build at a build's
+bound (Prima.LocusPool's, 1 GiB), with a cgroup of its own
+(apps/locus/keeper/internal/cgroup): the kernel never lets the spawn's whole
 process tree, the tmpfs pages of its home and the kernel memory charged to
 it pass the bound, kills every process of the spawn when they cannot stay
 under it, and cyfr-locus reports that end as `memory` `cap`. It can do
 so only where the service mounts the container's cgroup writable
-(`security_opt: writable-cgroups=true`); anywhere else it refuses a spawn
-that asks for a bound.
+(`security_opt: writable-cgroups=true`); anywhere else it refuses every
+spawn.
 
 `keeper` drives a second cyfr-locus inside the running service, over its
 own uids, with a client that speaks the keeper's protocol
@@ -25,20 +26,23 @@ sends it:
   the build holds its memory counts it; after its `release`, a measure sent
   with it is still answered with a reading before `released`, and one after
   `released` is `unmeasured`;
-- a spawn naming no bound, or a bound that is zero, not a number or above
-  the maximum, is refused as a bad request and nothing is spawned, and a
-  command runs under the least bound the protocol allows;
+- a spawn naming its own memory bound or CPU quota, which the keeper sets
+  by its kind, is refused as a bad request and nothing is spawned; the
+  client drops its place;
+- every other place is answered `placed` with a build's bound, and its
+  spawn's group is bounded at exactly that;
 - beside a sibling spawn that holds 64 MiB under its bound and completes,
   three hostile spawns end at theirs, reported `memory` `cap` with
   SIGKILL: one process allocating without end, with a daemon in a session
-  of its own that ignores SIGTERM; 48 processes of 16 MiB, none of them
-  large; and one filling its home, which no process holds;
+  of its own that ignores SIGTERM; processes of 16 MiB, none of them
+  large, twice the bound together; and one filling its home, which no
+  process holds;
 - no group's peak, as the kernel accounts it, passed its bound; no process
   of their uids, no home and no group is left; the release and the
   container were not touched;
-- where the service gives cyfr-locus no writable cgroup, every spawn,
-  each of which asks for a bound, is refused as `memory_unavailable`, and
-  this suite fails, naming the option the service lacks.
+- where the service gives cyfr-locus no writable cgroup, every spawn is
+  refused as `memory_unavailable`, and this suite fails, naming the option
+  the service lacks.
 
 The build cases run the same hostile work through the builder's own build
 path, each beside a sibling build: `javascript` (a build script allocating
@@ -46,9 +50,9 @@ without end), `rust` (a build.rs doing so), `tree` (100 processes of
 64 MiB) and `home` (files until the home is full). Each must be answered
 with the build wire's `memory` class (`Prima.BuilderProtocol`), leave no
 process of its uid and no home, and leave its sibling, the release and the
-container as they were. The builder asks cyfr-locus for a bound for every
-build (`Locus.Keeper`, LOCUS_BUILDS_MEMORY_BYTES); a build ended by the
-container's own limit or the deadline instead fails its case here.
+container as they were. cyfr-locus bounds every build the builder places
+at a build's bound; a build ended by the container's own limit or the
+deadline instead fails its case here.
 
 Every case prints what it measured: the peak of the hostile tree (the
 resident sets of its uid's processes, sampled from /proc about ten times a
@@ -56,7 +60,7 @@ second, and its group's memory.peak where it has one), what ended it and
 when, what it left, the sibling's end, and the container's memory before,
 at its peak and after, its OOM counters and whether the release or the
 container was started again. `--measure` prints without judging a build's
-end, to see what a build without a bound does. The hostile work is bounded
+end, to see what a build does at its bound. The hostile work is bounded
 by the container's own memory limit, which the suite reads from the
 container and refuses to run without.
 
@@ -86,15 +90,19 @@ DEADLINE_MS = 60_000
 # The second cyfr-locus's uids, one for each spawn of its scenario that
 # runs: the last of the image's pool, which the service's own keeper is
 # started without, as a pool of their own the builds role names.
-PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
+PROBE_FIRST, PROBE_LAST = POOL_LAST - 4, POOL_LAST
 PROBE_POOL = "probe"
 # The builds role's group in the pool's work, which holds every build's
 # group, and the group above it, rest, whose memory.max bounds the hostile
 # work beside every other role's but the floor's.
 ROLE_GROUP = imagesuite.work_group(ROLE)
 BOUND_GROUP = imagesuite.bound_group(ROLE)
-# The bound the keeper cases ask for.
-BOUND = 256 * MIB
+# The bound the keeper sets on every build (Prima.LocusPool), which the
+# keeper cases' hostile spawns pass.
+BOUND = imagesuite.BUILD_CAP_BYTES
+# The tree case's processes, each holding 16 MiB: twice the bound together.
+TREE_EACH = 16 * MIB
+TREE_PROCESSES = 2 * BOUND // TREE_EACH
 # The measured build: a tincture's `npm run build`, the image's npm running
 # node, which builds dist/index.html from HELD bytes it touches once and keeps
 # until it is released, so its use is steady rather than a compiler's phases
@@ -125,10 +133,10 @@ EOF
 exec npm run build
 """ % (HELD, HOLDING)
 MEASURE = {"holding": HOLDING, "poll_ms": 200, "margin_ms": 100, "grace_ms": 0}
-# The least and the most the keeper's protocol lets a bound be.
-MIN_BOUND, MAX_BOUND = 16 * MIB, 1 << 40
+# The keeper's protocol: every line carries its version.
+V = 7
 
-# One line per sample: `uid:rss_kb:processes,...|memory.current|shmem|uid:memory.peak,...`.
+# One line per sample: `uid:rss_kb:processes,...|memory.current|shmem|uid:memory.peak:memory.max,...`.
 SAMPLER = r"""
 while :; do
   cat /proc/[0-9]*/status 2>/dev/null | awk -v first=%d -v last=%d '
@@ -138,7 +146,8 @@ while :; do
     END { for (u in n) printf "%%s:%%d:%%d,", u, rss[u], n[u] }'
   groups=""
   for d in %s/keeper-*; do
-    peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
+    peak="$(cat "$d/bound/memory.peak" 2>/dev/null)" && max="$(cat "$d/bound/memory.max" 2>/dev/null)" \
+      && groups="$groups${d##*keeper-}:$peak:$max,"
   done
   printf '|%%s|%%s|%%s\n' "$(cat %s/memory.current)" "$(awk '$1 == "shmem" {print $2}' %s/memory.stat)" "$groups"
   sleep 0.1
@@ -200,10 +209,13 @@ impl Guest for Hostile {
 # The keeper cases' client: cyfr-locus starts it as the release's user with
 # the channel on fd 3. It places every spawn of the scenario and sends each
 # spawn once its place is answered, attaches their relays, and prints what
-# the keeper answered for each. The spawn marked `measure` is measured until
-# a reading the keeper took after the build said it holds its memory, then
-# released with a measure in the same write, and measured once more after
-# its `released`.
+# the keeper answered for each. A spawn with `extra` members, which the
+# protocol does not know, is refused before the keeper reads its id: such
+# refusals are taken in the order those spawns were sent, and each one's
+# place is dropped. The spawn marked `measure` is measured until a reading
+# the keeper took after the build said it holds its memory, then released
+# with a measure in the same write, and measured once more after its
+# `released`.
 CLIENT = r"""
 import fs from "node:fs";
 import net from "node:net";
@@ -211,6 +223,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const scenario = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const v = scenario.v;
 const dir = fs.mkdtempSync(path.join(process.env.RELEASE_TMP, "memory-"));
 const attach = path.join(dir, "attach.sock");
 const spawns = scenario.spawns.map((s, i) => ({
@@ -219,6 +232,8 @@ const spawns = scenario.spawns.map((s, i) => ({
 }));
 // Each measure's spawn and its entry in that spawn's `measures`, by the measure's id.
 const measures = new Map();
+// The spawns sent with members the protocol does not know, in the order sent, until each is refused.
+const refusable = [];
 const started = Date.now();
 // The number of the keeper's last line, so the report says in what order every reply came.
 let seq = 0;
@@ -242,7 +257,7 @@ function measure(spawn, phase, before = "") {
   const entry = { phase, id, sent_ms: Date.now() - started };
   measures.set(id, { spawn, entry });
   spawn.measures.push(entry);
-  channel.write(before + JSON.stringify({ v: 6, type: "measure", id, place: spawn.place }) + "\n");
+  channel.write(before + JSON.stringify({ v, type: "measure", id, place: spawn.place }) + "\n");
 }
 
 function measured(spawn, entry, reply) {
@@ -254,7 +269,7 @@ function measured(spawn, entry, reply) {
   if (entry.phase !== "running" || spawn.replies.some((r) => r.type === "released")) return;
   const readAt = reply.type === "measured" ? entry.at_ms - reply.age_ms : -Infinity;
   if (spawn.holding_ms !== undefined && readAt > spawn.holding_ms + scenario.measure.margin_ms) {
-    const release = { v: 6, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
+    const release = { v, type: "release", spawn_id: spawn.spawn_id, grace_ms: scenario.measure.grace_ms };
     measure(spawn, "release", JSON.stringify(release) + "\n");
   } else {
     setTimeout(() => measure(spawn, "running"), scenario.measure.poll_ms);
@@ -265,10 +280,10 @@ function settle(spawn, reply) {
   spawn.replies.push({ ...reply, at_ms: Date.now() - started, seq });
   if (reply.type === "placed") {
     const request = {
-      v: 6, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {}, cpu_quota: 100000,
-      attach: { path: attach, token: spawn.token },
+      v, type: "spawn", id: spawn.id, place: spawn.place, pool: scenario.pool, argv: spawn.argv, env: {},
+      attach: { path: attach, token: spawn.token }, ...(spawn.extra || {}),
     };
-    if ("memory_bytes" in spawn) request.memory_bytes = spawn.memory_bytes;
+    if (spawn.extra) refusable.push(spawn);
     channel.write(JSON.stringify(request) + "\n");
   }
   if (reply.type === "spawned") {
@@ -319,17 +334,19 @@ server.listen(attach, () => {
         measured(asked.spawn, asked.entry, reply);
         continue;
       }
-      // A request whose fields do not decode is refused without its id: the
-      // scenario holds one such request, the bound that is not a number.
+      // A request with a member the protocol does not know is refused
+      // without its id, in the order the keeper read it, and frees nothing:
+      // its place is dropped.
       const unnamed = reply.type === "error" && !reply.id && !reply.spawn_id;
       const spawn = unnamed
-        ? spawns.find((s) => !s.done && "memory_bytes" in s && typeof s.memory_bytes !== "number")
+        ? refusable.shift()
         : spawns.find((s) => s.id === reply.id || s.place === reply.id || (reply.spawn_id && s.spawn_id === reply.spawn_id));
+      if (spawn && unnamed) channel.write(JSON.stringify({ v, type: "drop", place: spawn.place }) + "\n");
       if (spawn) settle(spawn, unnamed ? { ...reply, id: spawn.id } : reply);
     }
   });
   for (const s of spawns) {
-    const place = { v: 6, type: "place", id: s.place, kind: "build" };
+    const place = { v, type: "place", id: s.place, kind: "build" };
     if (s.athanor) place.athanor = s.athanor;
     channel.write(JSON.stringify(place) + "\n");
   }
@@ -343,20 +360,24 @@ def shell(script):
     return ["/bin/sh", "-c", script]
 
 
+# The spawns that name a bound of their own, which the keeper refuses: it sets every bound by the place's kind.
+REFUSED = ("a spawn naming its memory bound", "a spawn naming its CPU quota")
+# The spawns the keeper bounds at a build's bound.
+BOUNDED = ("sibling", "process", "tree", "home", "build")
+
+
 def scenario():
-    holders = "for i in $(seq 1 48); do perl -e '$held = \"x\" x (16 << 20); sleep 120' & done\nwait\n"
+    holders = (f"for i in $(seq 1 {TREE_PROCESSES}); do perl -e '$held = \"x\" x {TREE_EACH}; sleep 120' & done\n"
+               "wait\n")
     sibling = "const held = Buffer.alloc(64 << 20, 1); setTimeout(() => console.log('held ' + held[5]), 8000);"
     return [
-        {"name": "a bound of zero", "argv": ["true"], "memory_bytes": 0},
-        {"name": "a bound that is not a number", "argv": ["true"], "memory_bytes": "1G"},
-        {"name": "a bound above the maximum", "argv": ["true"], "memory_bytes": MAX_BOUND + 1},
-        {"name": "a spawn with no bound", "argv": ["true"]},
-        {"name": "the least bound", "argv": shell("echo ran"), "memory_bytes": MIN_BOUND},
-        {"name": "sibling", "argv": ["node", "-e", sibling], "memory_bytes": BOUND},
-        {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'"), "memory_bytes": BOUND},
-        {"name": "tree", "argv": shell(holders), "memory_bytes": BOUND},
-        {"name": "home", "argv": shell(FILL_HOME), "memory_bytes": BOUND},
-        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["measured-build"], "memory_bytes": BOUND},
+        {"name": REFUSED[0], "argv": ["true"], "extra": {"memory_bytes": BOUND}},
+        {"name": REFUSED[1], "argv": ["true"], "extra": {"cpu_quota": 100_000}},
+        {"name": "sibling", "argv": ["node", "-e", sibling]},
+        {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'")},
+        {"name": "tree", "argv": shell(holders)},
+        {"name": "home", "argv": shell(FILL_HOME)},
+        {"name": "build", "athanor": ATHANOR, "measure": True, "argv": shell(MEASURED_BUILD) + ["measured-build"]},
     ]
 
 
@@ -365,14 +386,14 @@ def reading(entry, athanor):
     reply = entry.get("reply")
     if not isinstance(reply, dict):
         return False
-    owner = {"v": 6, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
+    owner = {"v": V, "type": "measured", "id": entry["id"], "kind": "build", "athanor": athanor}
     return ({key: value for key, value in reply.items() if key not in ("bytes", "lesser", "age_ms")} == owner
             and type(reply.get("bytes")) is int and reply["bytes"] > 0 and type(reply.get("lesser")) is bool
             and type(reply.get("age_ms")) is int and reply["age_ms"] >= 0)
 
 
 def unmeasured(entry):
-    return entry.get("reply") == {"v": 6, "type": "error", "id": entry["id"], "code": "unmeasured"}
+    return entry.get("reply") == {"v": V, "type": "error", "id": entry["id"], "code": "unmeasured"}
 
 
 def judge_build(spawn):
@@ -380,8 +401,9 @@ def judge_build(spawn):
     replies = spawn["replies"]
     types = [reply["type"] for reply in replies]
     expect(types[:2] == ["placed", "spawned"] and types[-1:] == ["released"] and set(types[2:-1]) <= {"exited"}
-           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")} == {"v": 6, "type": "placed", "id": spawn["place"]},
-           "the build's place is placed before its spawn names it, and the build is released", spawn)
+           and {key: value for key, value in replies[0].items() if key not in ("at_ms", "seq")}
+           == {"v": V, "type": "placed", "id": spawn["place"], "memory_bytes": BOUND},
+           "the build's place is placed with a build's bound before its spawn names it, and the build is released", spawn)
     released = replies[-1]["seq"]
     phases = {phase: [entry for entry in spawn["measures"] if entry["phase"] == phase] for phase in ("running", "release", "after")}
     running = phases["running"]
@@ -427,6 +449,8 @@ class Sampler(threading.Thread):
             ["docker", "exec", container, "sh", "-c", SAMPLER], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         self.samples = []
         self.group_peaks = {}
+        # Each group's memory.max, every value it was read at.
+        self.group_bounds = {}
 
     def run(self):
         for line in self.process.stdout:
@@ -437,8 +461,9 @@ class Sampler(threading.Thread):
                     uid, rss_kb, count = entry.split(":")
                     tree[int(uid)] = (int(rss_kb) * 1024, int(count))
                 for entry in filter(None, groups.split(",")):
-                    uid, peak = entry.split(":")
+                    uid, peak, bound = entry.split(":")
                     self.group_peaks[int(uid)] = max(self.group_peaks.get(int(uid), 0), int(peak))
+                    self.group_bounds.setdefault(int(uid), set()).add(bound)
                 self.samples.append((time.monotonic(), tree, int(current), int(shmem or 0)))
             except ValueError:
                 continue
@@ -554,7 +579,8 @@ def test_keeper(stack, limit, canary):
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)
     with open(os.path.join(canary, "memory-scenario.json"), "w") as out:
-        json.dump({"pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario(), "stay": True}, out)
+        json.dump({"v": V, "pool": PROBE_POOL, "timeout_ms": 90_000, "measure": MEASURE, "spawns": scenario(), "stay": True},
+                  out)
     # The container's user reads them, whatever the caller's umask.
     os.chmod(os.path.join(canary, "memory-client.mjs"), 0o644)
     os.chmod(os.path.join(canary, "memory-scenario.json"), 0o644)
@@ -633,19 +659,19 @@ def test_keeper(stack, limit, canary):
             print("  keeper: " + line.split("] ", 1)[-1][:300])
 
     expect(not report["timed_out"], "every spawn of the scenario was answered and released", report)
-    for name in (
-        "a spawn with no bound",
-        "a bound of zero",
-        "a bound that is not a number",
-        "a bound above the maximum",
-    ):
+    for name in REFUSED:
         expect(reply(name, "error") and reply(name, "error")["code"] == "bad_request" and not reply(name, "spawned"),
-               f"{name} is refused as a bad request", spawns[name])
+               f"{name}, which the keeper sets by its kind, is refused as a bad request", spawns[name])
 
-    bounded = ("the least bound", "sibling", "process", "tree", "home", "build")
-    least = reply("the least bound", "exited")
-    expect(least and least["code"] == 0 and least["memory"] is None and "ran" in spawns["the least bound"]["stdout"],
-           f"a command runs under the least bound the protocol allows, {mib(MIN_BOUND)}", spawns["the least bound"])
+    placed = {name: reply(name, "placed") for name in BOUNDED}
+    expect(all(answer and answer.get("memory_bytes") == BOUND for answer in placed.values()),
+           f"every build's place is answered placed with a build's bound, {mib(BOUND)}", placed)
+    # A hostile group may live for less than one of the sampler's reads; the
+    # sibling's and the build's live for seconds.
+    bounds = {name: sampler.group_bounds.get(spawns[name]["uid"]) for name in BOUNDED}
+    expect(bounds["sibling"] and bounds["build"] and all(bound in (None, {str(BOUND)}) for bound in bounds.values()),
+           f"every build's group is bounded at exactly {BOUND} bytes whenever it was read, the sibling's and the "
+           "measured build's among them", bounds)
     sibling = reply("sibling", "exited")
     expect(sibling and sibling["code"] == 0 and sibling["memory"] is None and "held 1" in spawns["sibling"]["stdout"],
            "a sibling spawn holding 64 MiB under its bound completes", spawns["sibling"])
@@ -658,10 +684,9 @@ def test_keeper(stack, limit, canary):
     # A hostile group lives for less than a second, so the sampler may miss
     # its last pages; that it reached its bound is the kernel's own count,
     # which `memory` `cap` reports. What was sampled never passed it.
-    asked = {spawn["name"]: spawn.get("memory_bytes") for spawn in scenario()}
-    seen = {name: sampler.group_peaks.get(spawns[name]["uid"]) for name in bounded}
-    expect(seen["sibling"] and all(peak is None or peak <= asked[name] for name, peak in seen.items()),
-           "no group's peak, as the kernel accounts it, passed the bound its spawn asked for", {"asked": asked, "seen": seen})
+    seen = {name: sampler.group_peaks.get(spawns[name]["uid"]) for name in BOUNDED}
+    expect(seen["sibling"] and all(peak is None or peak <= BOUND for peak in seen.values()),
+           "no group's peak, as the kernel accounts it, passed its bound", {"bound": BOUND, "seen": seen})
 
     expect(left == [], "no process of any spawn's uid is left, the daemon included", left)
     expect(homes == [], "no home is left", homes)
