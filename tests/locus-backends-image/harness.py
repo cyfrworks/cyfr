@@ -1008,7 +1008,9 @@ class Stack(imagesuite.Stack):
         self.container = None
         self.guard = None
         self.pool = f"{POOL_FIRST}-{POOL_LAST}"
-        self.memory_bytes = None
+        # The pool settings that size the pool's work (`up`'s `work_bytes`), as compose interpolates them; none
+        # keeps the shipped reserve and share.
+        self.pool_settings = {}
 
     def env(self, **extra):
         return {
@@ -1023,11 +1025,11 @@ class Stack(imagesuite.Stack):
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
             "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
-            "LOCUS_BACKENDS_MEMORY_BYTES": str(self.memory_bytes or ""),
-            # Room for every session a suite holds at once at the shipped
-            # 512 MiB bound: the suites prove other properties than the
-            # memory admission, which the service's own tests hold.
+            # Room for every session a suite holds at once, each reserving a
+            # session's allowance in it: the suites prove other properties
+            # than the service's own admission, which its tests hold.
             "LOCUS_BACKENDS_MEMORY_BUDGET": str(SUITE_MEMORY_BUDGET),
+            **self.pool_settings,
             **extra,
         }
 
@@ -1041,13 +1043,16 @@ class Stack(imagesuite.Stack):
             env=env or self.env(), check=check,
         )
 
-    def up(self, pool=None, memory_bytes=None, stand_in=False):
-        """(Re)creates the service with this pool and memory bound, behind its guard, and waits for the wire's health answer.
+    def up(self, pool=None, work_bytes=None, stand_in=False):
+        """(Re)creates the service with this pool of uids, behind its guard, and waits for the wire's health answer.
 
-        `stand_in` starts the stand-in for cyfr beside it.
+        `work_bytes` makes the pool's work, which every session's bound is half
+        of, exactly that on this machine (`imagesuite.work_settings`); none
+        keeps the shipped reserve and share. `stand_in` starts the stand-in for
+        cyfr beside it.
         """
         self.pool = pool or f"{POOL_FIRST}-{POOL_LAST}"
-        self.memory_bytes = memory_bytes
+        self.pool_settings = imagesuite.work_settings(self.image, work_bytes) if work_bytes else {}
         self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []),
                      *(["name-listener"] if self.names else []))
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
@@ -1058,7 +1063,7 @@ class Stack(imagesuite.Stack):
     def up_refused(self):
         """Starts the service as `up` does and answers compose's refusal: the result of an `up` that must not succeed."""
         self.pool = f"{POOL_FIRST}-{POOL_LAST}"
-        self.memory_bytes = None
+        self.pool_settings = {}
         return self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, check=False)
 
     def published(self):
