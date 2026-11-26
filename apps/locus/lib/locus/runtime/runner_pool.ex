@@ -176,7 +176,9 @@ defmodule Locus.Runtime.RunnerPool do
   @doc """
   Take a runner for a subtree of `athanor` running `execution_id` by
   `deadline` (monotonic milliseconds): its handle and its id, spawning one
-  when none is fresh or idle for it. While the pool remembers a refusal,
+  when none is fresh or idle for it, once a uid is free for it ("Uids"
+  above: with every uid held it waits for one, by `deadline`). While the
+  pool remembers a refusal,
   a take that spawns its runner is answered only once that spawn is: the
   runner once attached, `{:error, {:refused, refusal}}` with the keeper's
   account of why it refused that spawn, or `{:error, :past_deadline}`.
