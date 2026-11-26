@@ -22,6 +22,10 @@ signed as CYFR signs them:
   work, and is held to its service's bounds, read from its own group up: no
   memory bound and no swap, and half a processor of the runtime's and the
   builds' (the backends' have no processor bound).
+- At the shipped settings work is bounded at the machine's memory less
+  compose's reserve and share, and rest at that less the floor's memory
+  (tests/fixtures/locus_pool.json), the container having no limit of its
+  own.
 - On a machine with no memory for work (the reserve the whole machine's),
   work and rest are bounded at 0 and the container still turns healthy, its
   three roles running and answering, and stays so.
@@ -50,6 +54,7 @@ Prerequisites: harness.py's. Usage: tests/locus-backends-image/roles.py IMAGE
 import importlib.util
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -302,6 +307,32 @@ def mem_total(stack):
     return int(out) * 1024
 
 
+def compose_default(name):
+    """The default docker-compose.yml gives the locus service's variable name, `${name:-<default>}`."""
+    with open(os.path.join(ROOT, "docker-compose.yml")) as compose:
+        found = re.findall(r"- " + name + r"=\$\{" + name + r":-([0-9]+)\}", compose.read())
+    expect(len(found) == 1, f"docker-compose.yml gives {name} one default", found)
+    return int(found[0])
+
+
+def test_pool_bounds(stack):
+    """At the shipped settings work is the machine's memory less the reserve and the share, the container having no
+    limit of its own, and rest is work less the floor's memory, which the runtime role keeps."""
+    with open(os.path.join(ROOT, "tests", "fixtures", "locus_pool.json")) as pool:
+        floor = json.load(pool)["floor_bytes"]
+    total = mem_total(stack)
+    reserve, share = compose_default("LOCUS_CORE_RESERVE_BYTES"), compose_default("LOCUS_SERVICE_BYTES")
+    container, work, rest = imagesuite.read_output(stack.exec(
+        f"cat {imagesuite.CGROUP}/memory.max {imagesuite.CGROUP}/work/memory.max {imagesuite.CGROUP}/work/rest/memory.max"),
+        "the pool's memory.max files").split()
+    expect(container == "max", "the Locus container has no memory limit of its own", container)
+    want = max(0, total - reserve - share)
+    expect(work == str(want), f"work is the machine's {total} bytes less the reserve, {reserve}, and the share, {share}",
+           {"work": work, "want": want})
+    expect(rest == str(max(0, want - floor)), f"rest is work less the floor's {floor} bytes",
+           {"rest": rest, "want": max(0, want - floor)})
+
+
 def test_no_work(stack):
     """With the whole machine its reserve the pool holds no memory for work: every group is made before work's and
     rest's bounds of 0 are written, so the keeper boots, every role starts outside work, and the container turns
@@ -333,6 +364,7 @@ def main():
         expect(ran["stdout"] == "answered\n", "a program of the backends role answers", ran)
         pids = stack.role_pids()
         expect(sorted(pids) == sorted(ROLES), "one process runs for each role", pids)
+        test_pool_bounds(stack)
         test_apart(stack, pids)
         test_run(stack, plane)
         test_reach(stack, c)
