@@ -2569,7 +2569,12 @@ defmodule Opus.BrainTest do
           assert answer == {:error, :lost}
           # A crash report is logged before its process is gone: once no
           # holder is left, every line it would log has been logged.
-          eventually(fn -> Registry.count(Opus.Brain.Registry) == 0 end, "the holder to end")
+          wait_until(
+            fn -> Registry.count(Opus.Brain.Registry) == 0 end,
+            5_000,
+            "the holder to end"
+          )
+
           Logger.flush()
         end)
 
