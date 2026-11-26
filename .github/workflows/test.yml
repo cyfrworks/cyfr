@@ -1410,8 +1410,8 @@ jobs:
       # build's tree; a daemon a build.rs starts is gone, with the home, when
       # the response arrives; with a pool of one uid nothing a build leaves
       # outside its home (tests/fixtures/residue-canary.go) reaches the next;
-      # and without writable-cgroups=true every build is answered
-      # `unavailable`, naming the option, and no build's uid ever runs.
+      # and without writable-cgroups=true cyfr-locus refuses its boot, since
+      # no role's group can be made, and no build runs.
       - name: Build isolation, uid reuse, and the refusal without the option
         run: python3 tests/builder-image/isolation.py cyfr-locus:smoke
 
@@ -1425,7 +1425,10 @@ jobs:
       # hostile JavaScript, Rust build.rs, process-tree and home-filling
       # build each ended at its 1 GiB bound as the wire's `memory` class
       # with no process or home of its uid left, a sibling build completing,
-      # and the release untouched.
+      # and the release untouched; and, at a pool's work that holds one
+      # build, a start beside a build that holds the room refused
+      # `no_memory` after the room's wait with what holds it, and placed
+      # once the holder is released.
       - name: Every build's memory bound
         run: python3 tests/builder-image/memory.py cyfr-locus:smoke
 
