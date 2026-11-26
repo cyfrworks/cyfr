@@ -171,6 +171,8 @@ type rolesKeeper struct {
 	outsideTCP, outsideAbstract string
 	// running closes once every role's keepRole has returned.
 	running chan struct{}
+	// tree is the pool's groups the roles' groups were made in.
+	tree *cgroup.Tree
 }
 
 func newRolesKeeper(t *testing.T, cpus map[string]uint64) *rolesKeeper {
@@ -224,6 +226,7 @@ func newRolesKeeper(t *testing.T, cpus map[string]uint64) *rolesKeeper {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rk.tree = tree
 	for i, name := range []string{"alpha", "beta"} {
 		first := 39011 + 2*i
 		spec := pool.Spec{Name: "p" + name, First: first, Last: first + 1, Reach: pool.ReachRelay}
@@ -622,6 +625,46 @@ func TestEachRolesGroupReadsItsLimits(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A machine of no work boots: every group is made before work's bound is
+// written, so with work and rest at 0 each role starts outside them and
+// answers on its channel, and a spawn, whose group no bound of 0 holds, is
+// refused while its role runs on.
+func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
+	rk := newRolesKeeper(t, nil)
+	t.Cleanup(func() {
+		if err := rk.tree.Bound(1<<62, 1<<62); err != nil {
+			t.Errorf("lifting the pool's bounds: %v", err)
+		}
+	})
+	if err := rk.tree.Bound(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	rk.start(t)
+	for name, ru := range rk.roles {
+		pool := "p" + name
+		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z1","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool {
+			t.Fatalf("role %s at no work: its pool answered %v", name, reply)
+		}
+		if placed := ru.ask(t, `{"v":6,"type":"place","id":"zp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+			t.Fatalf("role %s's place: %v", name, placed)
+		}
+		spawn := fmt.Sprintf(`{"v":6,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
+			pool, 64<<20, protocol.CPUPeriod, testToken)
+		if reply := ru.ask(t, spawn); reply["type"] != protocol.TypeError || reply["id"] != "zp" {
+			t.Errorf("role %s's spawn at no work answered %v", name, reply)
+		}
+		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool || reply["free"] != reply["size"] {
+			t.Errorf("role %s after the refused spawn: its pool answered %v", name, reply)
+		}
+	}
+	rk.s.mu.Lock()
+	held := len(rk.s.spawns)
+	rk.s.mu.Unlock()
+	if held != 0 {
+		t.Errorf("%d spawns are held at no work", held)
 	}
 }
 

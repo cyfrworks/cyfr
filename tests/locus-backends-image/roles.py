@@ -18,10 +18,13 @@ signed as CYFR signs them:
 - From a build and from a program, another role's key, processes, IPC
   objects, port, homes and run folder are each out of reach; a runner has no
   network at all (tests/locus-runtime-image/runners.py).
-- Each role's live process runs in its role's group and is held to the
-  bounds of its container of before, read from its own group up: runtime
-  4G of memory and as much swap, 4 processors; builds 4G and 2; backends 2G
-  and no processor bound.
+- Each role's live process runs in its role's leaf, outside the pool's
+  work, and is held to its service's bounds, read from its own group up: no
+  memory bound and no swap, and half a processor of the runtime's and the
+  builds' (the backends' have no processor bound).
+- On a machine with no memory for work (the reserve the whole machine's),
+  work and rest are bounded at 0 and the container still turns healthy, its
+  three roles running and answering, and stays so.
 - A role killed starts again alone: the other two keep their processes and
   a program's session keeps running; the container started again serves
   all three.
@@ -49,13 +52,15 @@ import json
 import os
 import secrets
 import sys
+import time
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from harness import (  # noqa: E402
-    GUARD, KEPT_ROOT, RELEASE, ROOT, Stack, eventually, expect, owner_of, probe, require_docker, run, wait_healthy,
+    GUARD, KEPT_ROOT, RELEASE, ROOT, SERVICE, Stack, eventually, expect, owner_of, probe, require_docker, run,
+    wait_healthy,
 )
 import imagesuite  # noqa: E402
 from kept_home import sh  # noqa: E402
@@ -290,6 +295,32 @@ def serving(stack):
     return c
 
 
+def mem_total(stack):
+    """The machine's memory, in bytes, as the container's /proc/meminfo reads it."""
+    out = imagesuite.read_output(stack.exec("awk '$1 == \"MemTotal:\" {print $2}' /proc/meminfo"), "MemTotal").strip()
+    expect(out.isdigit(), "/proc/meminfo names the machine's memory", out)
+    return int(out) * 1024
+
+
+def test_no_work(stack):
+    """With the whole machine its reserve the pool holds no memory for work: every group is made before work's and
+    rest's bounds of 0 are written, so the keeper boots, every role starts outside work, and the container turns
+    healthy and stays so."""
+    env = stack.env(LOCUS_CORE_RESERVE_BYTES=str(mem_total(stack)))
+    stack.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, env=env)
+    stack.container = stack.compose("ps", "--quiet", SERVICE, env=env).stdout.strip()
+    stack.healthy()
+    bounds = imagesuite.read_output(
+        stack.exec(f"cat {imagesuite.CGROUP}/work/memory.max {imagesuite.CGROUP}/work/rest/memory.max"),
+        "work's and rest's memory.max").split()
+    expect(bounds == ["0", "0"], "with no memory for work, work and rest are bounded at 0", bounds)
+    expect(sorted(stack.role_pids()) == sorted(ROLES), "every role runs at no work", stack.role_pids())
+    for _ in range(30):
+        state = run("docker", "inspect", "--format", "{{.State.Health.Status}}", stack.container, check=False)
+        expect(state.stdout.strip() == "healthy", "the container stays healthy at no work", state.stdout)
+        time.sleep(1)  # sleep-ok: the health probe's own interval is what this watches across
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: roles.py IMAGE")
@@ -313,6 +344,7 @@ def main():
         stack.healthy()
         expect(sorted(stack.role_pids()) == sorted(ROLES), "the container started again runs every role",
                stack.role_pids())
+        test_no_work(stack)
     finally:
         stack.down()
         plane.stop()
