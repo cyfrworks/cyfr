@@ -10,8 +10,10 @@ defmodule Locus.KeeperVectorsTest do
   with the vectors' frames.
 
   Every spawn names the vectors' place, made before it with their `place`
-  request, byte for byte, and answered with their `placed`; a place the
-  keeper refuses is its caller's refusal. An assign is the vectors'
+  request, byte for byte, and answered with their `placed`, the bound its
+  spawn will have; a place the keeper refuses is its caller's refusal,
+  one refused for room with what held the pool; and a `give_way` reaches
+  the owner of the place it names. An assign is the vectors'
   request naming its place under an id of its own, answered with their
   `assigned` or the keeper's refusal, and one the keeper leaves unanswered
   is answered so at its caller's instant and forgotten, its late answer
@@ -21,8 +23,8 @@ defmodule Locus.KeeperVectorsTest do
   caller's or one that stopped waiting, and the release of the place's
   spawn settles none.
 
-  A build's run: the spawn this client writes is the vectors' bounded
-  build spawn, byte for byte but for its own id and attach target; every
+  A build's run: the spawn this client writes is the vectors' build
+  spawn, which names no bound, byte for byte but for its own id and attach target; every
   reply category the vectors hold is understood as they say, an
   unsolicited `pool` reply ignored; a reply of the wrong shape is ignored;
   every stream a relay never sends a run (stdin, the attach stream past
@@ -32,8 +34,8 @@ defmodule Locus.KeeperVectorsTest do
   control or relay frame releases it; and an attach frame of the wrong
   shape is closed.
 
-  A runner's spawn, with a control channel: it is the vectors' bounded
-  runner spawn with a control channel, byte for byte but for its
+  A runner's spawn, with a control channel: it is the vectors' runner
+  spawn with a control channel, which names no bound, byte for byte but for its
   own id and attach target; every reply the vectors hold reaches its owner
   as the event it means, and the runtime's reading of it
   (`Locus.Runtime.Keeper.event/1`); a reply of the wrong shape, a wrong
@@ -70,6 +72,7 @@ defmodule Locus.KeeperVectorsTest do
     {"spawned", nil},
     {"error", "capacity"},
     {"error", "memory_unavailable"},
+    {"error", "no_memory"},
     {"error", "hosts_unresolved"},
     {"error", "guard_unavailable"},
     {"error", "unknown_spawn"},
@@ -82,7 +85,8 @@ defmodule Locus.KeeperVectorsTest do
     {"error", "unmeasured"},
     {"measured", nil},
     {"released", nil},
-    {"pool", nil}
+    {"pool", nil},
+    {"give_way", nil}
   ]
 
   setup do
@@ -137,8 +141,9 @@ defmodule Locus.KeeperVectorsTest do
     owner = self()
     task = Task.async(fn -> Keeper.place(name, vector["id"], whose, owner) end)
     assert next_line(peer) == Jason.encode!(vector) <> "\n"
-    send_reply(peer, reply(@vectors, "placed"))
-    assert :ok = Task.await(task, 5_000)
+    placed = reply(@vectors, "placed")
+    send_reply(peer, placed)
+    assert Task.await(task, 5_000) == {:ok, placed["memory_bytes"]}
   end
 
   test "every reply category the vectors hold is one this module hears" do
@@ -160,12 +165,15 @@ defmodule Locus.KeeperVectorsTest do
     assert categories == Enum.sort(@reply_categories)
   end
 
-  test "the spawn is the vectors' bounded build spawn, byte for byte", %{peer: peer, name: name} do
+  test "the spawn is the vectors' build spawn, which names no bound, byte for byte", %{
+    peer: peer,
+    name: name
+  } do
     vector =
       Enum.find(
         @vectors["valid_requests"],
-        &(&1["pool"] == "build" and &1["memory_bytes"] == Locus.Config.memory_bytes())
-      ) || flunk("no build spawn at the builder's bound among the vectors")
+        &(&1["type"] == "spawn" and &1["pool"] == "build" and not Map.has_key?(&1, "rlimits"))
+      ) || flunk("no build spawn without limits among the vectors")
 
     refute Map.has_key?(vector, "control")
     place!(peer, name)
@@ -176,7 +184,7 @@ defmodule Locus.KeeperVectorsTest do
     assert line ==
              Jason.encode!(%{vector | "id" => sent["id"], "attach" => sent["attach"]}) <> "\n"
 
-    send_reply(peer, %{v: 6, type: "error", id: sent["id"], code: "capacity"})
+    send_reply(peer, %{v: 7, type: "error", id: sent["id"], code: "capacity"})
     assert {{:error, :capacity}, []} = Task.await(task, 10_000)
   end
 
@@ -247,8 +255,7 @@ defmodule Locus.KeeperVectorsTest do
     place!(peer, name)
     task = Task.async(fn -> run(name) end)
     request = next_request(peer)
-    assert request["memory_bytes"] == Locus.Config.memory_bytes()
-    assert request["cpu_quota"] == Locus.Config.cpu_quota()
+    refute Map.has_key?(request, "memory_bytes") or Map.has_key?(request, "cpu_quota")
     send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
     conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
     :ok = :gen_tcp.close(conn)
@@ -259,7 +266,7 @@ defmodule Locus.KeeperVectorsTest do
     send_reply(peer, reply(v, "released"))
 
     assert {{:error, {:memory, limit}}, []} = Task.await(task, 10_000)
-    assert limit == request["memory_bytes"]
+    assert limit == Prima.LocusPool.build_cap_bytes()
   end
 
   test "the refusal of a bound that cannot be enforced answers the run as the wire's unavailable",
@@ -399,9 +406,7 @@ defmodule Locus.KeeperVectorsTest do
                  argv: ["/bin/true"],
                  env: %{},
                  place: "pl-1",
-                 pool: "backends",
-                 memory_bytes: 268_435_456,
-                 cpu_quota: 100_000
+                 pool: "backends"
                })
 
       {request, spawned} = Task.await(keeper, 10_000)
@@ -599,9 +604,7 @@ defmodule Locus.KeeperVectorsTest do
                argv: ["/bin/true"],
                env: %{},
                place: "pl-1",
-               pool: "backends",
-               memory_bytes: 268_435_456,
-               cpu_quota: 100_000
+               pool: "backends"
              })
 
     Task.await(keeper, 10_000)
@@ -617,7 +620,7 @@ defmodule Locus.KeeperVectorsTest do
 
   @runner_spawn Enum.find(
                   @vectors["valid_requests"],
-                  &(&1["pool"] == "runner" and &1["control"] == true and &1["memory_bytes"])
+                  &(&1["type"] == "spawn" and &1["pool"] == "runner" and &1["control"] == true)
                 )
 
   # Asks for a runner as the runtime's adapter does; the test process owns
@@ -631,8 +634,6 @@ defmodule Locus.KeeperVectorsTest do
                env: %{"RUNTIME_ROLE" => "runner"},
                place: "pl-1",
                pool: "runner",
-               memory_bytes: @runner_spawn["memory_bytes"],
-               cpu_quota: @runner_spawn["cpu_quota"],
                control: true
              })
 
@@ -679,9 +680,10 @@ defmodule Locus.KeeperVectorsTest do
     {peer, client}
   end
 
-  test "a runner's spawn is the vectors' bounded runner spawn with a control channel, byte for byte",
+  test "a runner's spawn is the vectors' runner spawn with a control channel and no bound, byte for byte",
        %{peer: peer, name: name} do
-    assert %{"control" => true, "memory_bytes" => _bound} = @runner_spawn
+    assert %{"control" => true} = @runner_spawn
+    refute Map.has_key?(@runner_spawn, "memory_bytes") or Map.has_key?(@runner_spawn, "cpu_quota")
     refute Map.has_key?(@runner_spawn, "isolation")
 
     place!(peer, name)
@@ -693,8 +695,6 @@ defmodule Locus.KeeperVectorsTest do
                env: @runner_spawn["env"],
                place: @runner_spawn["place"],
                pool: @runner_spawn["pool"],
-               memory_bytes: @runner_spawn["memory_bytes"],
-               cpu_quota: @runner_spawn["cpu_quota"],
                control: true
              })
 
@@ -718,6 +718,40 @@ defmodule Locus.KeeperVectorsTest do
         # runner's owner: `placed` is `place!/2`'s, and a refusal its code.
         %{"type" => "placed"} ->
           place!(peer, name)
+
+        # A place refused for room reaches its caller with what held the
+        # pool, as the protocol reads it.
+        %{"type" => "error", "id" => place, "code" => "no_memory", "held" => held} ->
+          task = Task.async(fn -> Keeper.place(name, place, %{kind: "build"}, self()) end)
+          assert %{"type" => "place", "id" => ^place} = next_request(peer)
+          send_reply(peer, vector)
+
+          mine =
+            for holding <- held["mine"],
+                do: %{kind: holding["kind"], subject: holding["subject"], bytes: holding["bytes"]}
+
+          assert Task.await(task, 5_000) ==
+                   {:error,
+                    {:no_memory,
+                     %{
+                       need: held["need"],
+                       free: held["free"],
+                       mine: mine,
+                       others_bytes: held["others_bytes"]
+                     }}}
+
+        # The keeper's ask to give way reaches the owner of the place it
+        # names, here one no spawn has named yet, as the runtime's
+        # `:give_way`.
+        %{"type" => "give_way", "place" => place} ->
+          owner = self()
+          task = Task.async(fn -> Keeper.place(name, place, %{kind: "warm"}, owner) end)
+          assert %{"type" => "place", "id" => ^place} = next_request(peer)
+          send_reply(peer, %{reply(v, "placed") | "id" => place})
+          assert {:ok, _bytes} = Task.await(task, 5_000)
+          send_reply(peer, vector)
+          assert_receive {Keeper, {:place, ^place}, {:give_way, ^place} = event}, 5_000
+          assert Locus.Runtime.Keeper.event(event) == :give_way
 
         %{"type" => "error", "id" => "pl-1", "code" => code} ->
           task = Task.async(fn -> Keeper.place(name, "pl-1", %{kind: "warm"}, self()) end)

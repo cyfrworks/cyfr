@@ -677,7 +677,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         "CYFR_BROWSER_MEMORY_BYTES",
         1_073_741_824,
         byte_count(
-          Prima.KeeperProtocol.min_memory_bytes()..Prima.KeeperProtocol.max_memory_bytes()
+          Prima.LocusBackends.min_memory_bytes()..Prima.LocusBackends.max_memory_bytes()
         ),
         :backends
       ),

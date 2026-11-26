@@ -23,7 +23,10 @@ defmodule Locus.Runtime.RunnerProcess do
   the runner ever ran and nothing is left to release,
   `{:refused, reason, :release_follows}` when it refused it after making
   something of it, which it frees by itself, unasked, its `:released`
-  following, and `{:error, reason}` for a later failure of the keeper's.
+  following, `{:error, reason}` for a later failure of the keeper's,
+  `{:placed, memory_bytes}` once the keeper placed the runner, with the
+  bound it will run under, and `:give_way` for each time the keeper asks,
+  unasked, that the runner be released if it is idle.
   A message the service sends (`send_message/2`) is written at once, or
   held until the channel attaches. `release/2` asks the keeper to end the
   runner; when this process itself is stopped, the runner is released
@@ -41,10 +44,13 @@ defmodule Locus.Runtime.RunnerProcess do
   runner's own end.
 
   Before its spawn this process makes the runner's place, named by the
-  runner's id, `warm` and no athanor's (`c:Locus.Runtime.Keeper.place/3`):
+  runner's id, `warm` and no athanor's (`c:Locus.Runtime.Keeper.place/3`),
+  which waits for the keeper's room (`Locus.Launcher.place_wait_ms/0`):
   this process is the place's owner, so a runner that never spawned leaves
   none behind it, and one the keeper refused to place is `{:refused,
-  reason}`, nothing of it having run. This process assigns the place
+  reason}`, nothing of it having run; an `assign/6` made while the place
+  waited is then answered `{:error, {:unsent, {:refused, refusal}}}`, the
+  keeper's account of the refusal (`c:Locus.Runtime.Keeper.refusal/1`). This process assigns the place
   itself (`c:Locus.Runtime.Keeper.assign/4`), so every assign of a runner
   is made in the order of its work, each waiting for the keeper's answer
   three seconds at most: `assign/6` makes it `run` of the work's
@@ -102,11 +108,15 @@ defmodule Locus.Runtime.RunnerProcess do
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Send `message`, a `cancel_child`, to the runner; an `assign` is `assign/6`'s."
-  @spec send_message(pid(), RunnerControl.message()) :: :ok | {:error, term()}
+  @doc """
+  Send `message`, a `cancel_child`, to the runner, without waiting on the
+  handle, which may itself be waiting for the keeper's room for its
+  runner; an `assign` is `assign/6`'s.
+  """
+  @spec send_message(pid(), RunnerControl.message()) :: :ok
   def send_message(pid, %{type: :cancel_child} = message) do
     line = message |> RunnerControl.encode() |> IO.iodata_to_binary()
-    GenServer.call(pid, {:send, line})
+    GenServer.cast(pid, {:send, line})
   end
 
   @doc """
@@ -172,6 +182,9 @@ defmodule Locus.Runtime.RunnerProcess do
        athanor: nil,
        os_pid: nil,
        attached: false,
+       # Why the keeper refused the runner's place, which no runner of it
+       # then ran.
+       unplaced: nil,
        pending: [],
        buffer: "",
        closed: false,
@@ -182,22 +195,29 @@ defmodule Locus.Runtime.RunnerProcess do
 
   @impl true
   def handle_continue(:spawn, state) do
-    with :ok <- state.keeper.place(state.spec.runner, %{kind: "warm"}, state.keeper_opts),
-         {:ok, channel, events} <- state.keeper.spawn(state.spec) do
-      {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
-    else
+    case state.keeper.place(state.spec.runner, %{kind: "warm"}, state.keeper_opts) do
+      {:ok, memory_bytes} ->
+        notify(state, {:placed, memory_bytes})
+
+        case state.keeper.spawn(state.spec) do
+          {:ok, channel, events} ->
+            {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
+
+          {:error, reason} ->
+            notify(state, {:refused, reason})
+            {:noreply, state}
+        end
+
       {:error, reason} ->
         notify(state, {:refused, reason})
-        {:noreply, state}
+        {:noreply, %{state | unplaced: reason}}
     end
   end
 
   @impl true
-  def handle_call({:send, line}, _from, %{attached: true} = state),
-    do: {:reply, state.keeper.send(state.channel, line), state}
-
-  def handle_call({:send, line}, _from, state),
-    do: {:reply, :ok, %{state | pending: [state.pending, line]}}
+  def handle_call({:assign, _line, _binding, _deadline}, _from, %{unplaced: reason} = state)
+      when reason != nil,
+      do: {:reply, {:error, {:unsent, {:refused, state.keeper.refusal(reason)}}}, state}
 
   def handle_call(
         {:assign, _line, _binding, _deadline},
@@ -228,6 +248,14 @@ defmodule Locus.Runtime.RunnerProcess do
   def handle_call(:info, _from, state), do: {:reply, %{id: state.id, os_pid: state.os_pid}, state}
 
   @impl true
+  def handle_cast({:send, line}, %{attached: true} = state) do
+    _ = state.keeper.send(state.channel, line)
+    {:noreply, state}
+  end
+
+  def handle_cast({:send, line}, state),
+    do: {:noreply, %{state | pending: [state.pending, line]}}
+
   def handle_cast({:release, grace_ms}, state), do: {:noreply, release_runner(state, grace_ms)}
 
   # The relay stopped. One that closed the channel, or failed, retires a
@@ -389,6 +417,11 @@ defmodule Locus.Runtime.RunnerProcess do
 
   defp on_event({:error, reason}, state) do
     notify(state, {:error, reason})
+    state
+  end
+
+  defp on_event(:give_way, state) do
+    notify(state, :give_way)
     state
   end
 

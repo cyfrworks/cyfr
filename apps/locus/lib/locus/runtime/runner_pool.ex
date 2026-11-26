@@ -7,7 +7,8 @@ defmodule Locus.Runtime.RunnerPool do
   over `Locus.Runtime.Keeper`), in the four states `Prima.WorkerAPI` counts:
 
     * `fresh` — spawned ahead, or spawning, and never assigned: it
-      belongs to no athanor. The pool keeps `:pool_size` of them.
+      belongs to no athanor. The pool keeps the warm floor's
+      (`Prima.LocusPool.floor_runners/0`) of them.
     * `idle` — completed a subtree cleanly for one athanor, and kept for
       `:idle_ttl_ms` for that athanor's next subtree only.
     * `busy` — running a subtree.
@@ -28,8 +29,10 @@ defmodule Locus.Runtime.RunnerPool do
   The pool moves the runner itself: a clean completion to idle, anything
   else to tainted, released through the keeper at once, a clean
   completion whose place its keeper did not make warm again among them,
-  in the same move as its completion is heard; `taint/3` does
-  the same for a kill, with the grace the runner is given to report.
+  in the same move as its completion is heard; `taint/4` does
+  the same for a kill, with the grace the runner is given to report, of a
+  runner that still runs the execution it names: one that has completed
+  it, or been taken for another since, is left alone.
   `cancel_child/3` sends one busy runner a `cancel_child`, and
   `cancel_child/2` every busy runner; one that does not run the child
   ignores it.
@@ -40,7 +43,13 @@ defmodule Locus.Runtime.RunnerPool do
   is fresh, `run` for the work's athanor once the keeper has answered the
   assign the work then follows, and `warm`, still that athanor's, from its
   clean completion, before the pool hears it. The pool never waits on the
-  keeper for a place.
+  keeper for a place: the runner's process does, for the keeper's room,
+  and tells the pool the memory bound the keeper placed it with, which
+  `status/1` reports. The keeper may ask, unasked, that an idle runner give
+  way to a start that waits for room: the pool releases the runner it
+  names, as an idle runner's time running out releases it, only while it
+  is still idle for its athanor or fresh with no take on it, and leaves a
+  busy, taken or ending one alone.
 
   A tainted runner leaves the pool only once the keeper reports it
   retired, its handle stopped then: what a runner holds, its uid and its
@@ -101,10 +110,11 @@ defmodule Locus.Runtime.RunnerPool do
   alias Locus.Runtime.RunnerProcess
 
   @refill_backoff_ms 1_000
-  # A take's deadline when its caller names none, and the room past it for
-  # the pool's answer.
-  @take_wait_ms 5_000
+  # The room past a take's deadline for the pool's answer; a take whose
+  # caller names no deadline waits for a spawn's place, its room's wait
+  # included (`Locus.Launcher.place_wait_ms/0`), and this much more.
   @take_answer_ms 500
+  @spawn_wait_ms 5_000
   @retire_bound_ms 10_000
   @max_backoff_ms 30_000
 
@@ -144,7 +154,7 @@ defmodule Locus.Runtime.RunnerPool do
              | :past_deadline
              | :not_serving
              | {:spawn_failed, term()}}
-  def take(pool, athanor, execution_id, deadline \\ now() + @take_wait_ms)
+  def take(pool, athanor, execution_id, deadline \\ now() + take_wait_ms())
       when is_binary(athanor) and is_binary(execution_id) and is_integer(deadline),
       do:
         GenServer.call(
@@ -153,10 +163,37 @@ defmodule Locus.Runtime.RunnerPool do
           max(deadline - now(), 0) + @take_answer_ms
         )
 
-  @doc "Taint the runner `pid` and end it, with `grace_ms` to report what it holds."
-  @spec taint(GenServer.server(), pid(), non_neg_integer()) :: :ok
-  def taint(pool, pid, grace_ms) when is_pid(pid) and is_integer(grace_ms) and grace_ms >= 0,
-    do: GenServer.call(pool, {:taint, pid, grace_ms})
+  @doc """
+  `take/4` asked without waiting for its answer: the request joins
+  `requests` (`:gen_server.reqids_new/0`'s) under `label`, and its answer,
+  as `take/4` answers, reaches the caller as a message
+  `:gen_server.check_response/3` reads. The pool sends it after every
+  event it told its assignee before it, so an assignee that asks reads
+  every event of the runner's last work before the runner is its again.
+  """
+  @spec request_take(
+          GenServer.server(),
+          String.t(),
+          String.t(),
+          integer(),
+          term(),
+          :gen_server.request_id_collection()
+        ) :: :gen_server.request_id_collection()
+  def request_take(pool, athanor, execution_id, deadline, label, requests)
+      when is_binary(athanor) and is_binary(execution_id) and is_integer(deadline),
+      do:
+        :gen_server.send_request(pool, {:take, athanor, execution_id, deadline}, label, requests)
+
+  @doc """
+  Taint the runner `pid` and end it, with `grace_ms` to report what it
+  holds, while it runs the subtree of `execution_id`: a runner that has
+  completed it, or been taken for another since, is left alone, so an ask
+  read after the runner was handed out again never ends the new subtree.
+  """
+  @spec taint(GenServer.server(), pid(), non_neg_integer(), String.t()) :: :ok
+  def taint(pool, pid, grace_ms, execution_id)
+      when is_pid(pid) and is_integer(grace_ms) and grace_ms >= 0 and is_binary(execution_id),
+      do: GenServer.call(pool, {:taint, pid, grace_ms, execution_id})
 
   @doc "Send every busy runner a `cancel_child` for `execution_id`."
   @spec cancel_child(GenServer.server(), String.t()) :: :ok
@@ -170,8 +207,9 @@ defmodule Locus.Runtime.RunnerPool do
 
   @doc """
   The pool's part of `t:Prima.WorkerAPI.status/0`: its runners counted by
-  state, the memory bound its keeper holds every runner to, and the
-  keeper's refusal while it refuses runners.
+  state, the memory bound the keeper last placed a runner with (nil
+  before any, and from a keeper that applies none), and the keeper's
+  refusal while it refuses runners.
   """
   @spec status(GenServer.server()) :: %{
           runners: %{
@@ -189,15 +227,12 @@ defmodule Locus.Runtime.RunnerPool do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    keeper = Keyword.fetch!(opts, :keeper)
-    keeper_opts = Keyword.get(opts, :keeper_opts, [])
-
     {:ok,
      %{
        settings: Keyword.fetch!(opts, :settings),
-       keeper: keeper,
-       keeper_opts: keeper_opts,
-       memory_bytes: keeper.memory_bytes(keeper_opts),
+       keeper: Keyword.fetch!(opts, :keeper),
+       keeper_opts: Keyword.get(opts, :keeper_opts, []),
+       memory_bytes: nil,
        supervisor: Keyword.fetch!(opts, :supervisor),
        command: Keyword.get_lazy(opts, :command, &Locus.Runtime.Release.runner_command/0),
        retire_bound_ms: Keyword.get(opts, :retire_bound_ms, @retire_bound_ms),
@@ -260,10 +295,13 @@ defmodule Locus.Runtime.RunnerPool do
     end
   end
 
-  def handle_call({:taint, pid, grace_ms}, _from, state) do
+  def handle_call({:taint, pid, grace_ms, execution_id}, _from, state) do
     case state.runners[pid] do
-      nil -> {:reply, :ok, state}
-      entry -> {:reply, :ok, taint(state, pid, entry, grace_ms)}
+      %{execution_id: ^execution_id} = entry ->
+        {:reply, :ok, taint_runner(state, pid, entry, grace_ms)}
+
+      _done_or_another ->
+        {:reply, :ok, state}
     end
   end
 
@@ -308,6 +346,25 @@ defmodule Locus.Runtime.RunnerPool do
   end
 
   @impl true
+  def handle_info({RunnerProcess, pid, {:placed, memory_bytes}}, state) do
+    if Map.has_key?(state.runners, pid),
+      do: {:noreply, %{state | memory_bytes: memory_bytes}},
+      else: {:noreply, state}
+  end
+
+  # The keeper's ask that a runner give way to a start waiting for room:
+  # one still idle, or fresh with no take on it, is released as an idle
+  # runner whose time ran out is; a busy, taken or ending one is left alone.
+  def handle_info({RunnerProcess, pid, :give_way}, state) do
+    case state.runners[pid] do
+      %{state: resting} = entry when resting in [:idle, :fresh] ->
+        {:noreply, refill(retire_resting(state, pid, entry))}
+
+      _taken_or_ending ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({RunnerProcess, pid, event}, state) do
     case state.runners[pid] do
       nil -> {:noreply, state}
@@ -332,16 +389,7 @@ defmodule Locus.Runtime.RunnerPool do
   def handle_info({:idle_expired, pid, timer}, state) do
     case state.runners[pid] do
       %{state: :idle, idle_timer: ^timer} = entry ->
-        RunnerProcess.release(pid, 0)
-
-        entry = %{
-          entry
-          | state: :retiring,
-            idle_timer: nil,
-            retire_timer: retire_due(state, pid, 0)
-        }
-
-        {:noreply, refill(put_runner(state, pid, entry))}
+        {:noreply, refill(retire_resting(state, pid, entry))}
 
       _ ->
         {:noreply, state}
@@ -511,7 +559,7 @@ defmodule Locus.Runtime.RunnerPool do
         put_runner(state, pid, %{entry | state: :idle, idle_timer: timer})
 
       true ->
-        taint(state, pid, entry, 0)
+        taint_runner(state, pid, entry, 0)
     end
   end
 
@@ -534,7 +582,7 @@ defmodule Locus.Runtime.RunnerPool do
 
   defp on_event({:message, %{type: :exit} = message}, pid, entry, state) do
     state = told(state, pid, entry, {:exit, message.runner, message.open})
-    taint(state, pid, state.runners[pid], 0)
+    taint_runner(state, pid, state.runners[pid], 0)
   end
 
   defp on_event({:message, message}, pid, entry, state) do
@@ -600,7 +648,7 @@ defmodule Locus.Runtime.RunnerPool do
 
     case entry.state do
       ending when ending in [:retiring, :tainted, :refused] -> state
-      _ -> taint(state, pid, entry, 0)
+      _ -> taint_runner(state, pid, entry, 0)
     end
   end
 
@@ -632,16 +680,29 @@ defmodule Locus.Runtime.RunnerPool do
   # armed: its handle releases it once, so a later taint asks the keeper
   # for nothing and must not put its deadline off. One refused after it was
   # made is the keeper's to free, and waits for that with no deadline.
-  defp taint(state, _pid, %{state: ending}, _grace_ms) when ending in [:tainted, :refused],
+  defp taint_runner(state, _pid, %{state: ending}, _grace_ms) when ending in [:tainted, :refused],
     do: state
 
-  defp taint(state, pid, entry, grace_ms) do
+  defp taint_runner(state, pid, entry, grace_ms) do
     RunnerProcess.release(pid, grace_ms)
     timer = entry.retire_timer || retire_due(state, pid, grace_ms)
 
     refill_later(
       put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil, retire_timer: timer})
     )
+  end
+
+  # A runner at rest, which holds no work, released at once and held until
+  # the keeper retires it.
+  defp retire_resting(state, pid, entry) do
+    RunnerProcess.release(pid, 0)
+
+    put_runner(state, pid, %{
+      entry
+      | state: :retiring,
+        idle_timer: nil,
+        retire_timer: retire_due(state, pid, 0)
+    })
   end
 
   # The deadline of a release: its grace, then the bound for the keeper to
@@ -771,7 +832,7 @@ defmodule Locus.Runtime.RunnerPool do
     end)
   end
 
-  defp target(%{refusal: nil, settings: settings}), do: settings.pool_size
+  defp target(%{refusal: nil}), do: Prima.LocusPool.floor_runners()
   defp target(_refusing), do: 1
 
   defp refill_later(state, delay_ms \\ @refill_backoff_ms)
@@ -805,6 +866,8 @@ defmodule Locus.Runtime.RunnerPool do
   end
 
   defp put_runner(state, pid, entry), do: %{state | runners: Map.put(state.runners, pid, entry)}
+
+  defp take_wait_ms, do: Locus.Launcher.place_wait_ms() + @spawn_wait_ms
 
   defp now, do: System.monotonic_time(:millisecond)
 end

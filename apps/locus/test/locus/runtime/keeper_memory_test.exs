@@ -3,12 +3,11 @@
 
 defmodule Locus.Runtime.KeeperMemoryTest do
   @moduledoc """
-  The runtime's adapter to `cyfr-locus` holds every runner to a memory
-  bound, against a scripted keeper on a socket the test holds the
-  keeper's end of, through the node's one client (`Locus.Keeper`): every
-  spawn carries the pool's `:runner_memory_bytes` (or the bound the
-  adapter was started with) and no spawn can ask for none; a malformed
-  bound stops the adapter before any runner is started; a runner the
+  The runtime's adapter to `cyfr-locus`, whose keeper holds every runner
+  to a memory bound, against a scripted keeper on a socket the test holds
+  the keeper's end of, through the node's one client (`Locus.Keeper`): no
+  spawn names a bound, the keeper's answer to the runner's place carrying
+  the one it will have, and its handle tells its pool so; a runner the
   keeper reports ended at its bound reaches its handle as the signal that
   ended it, is logged as ended at its bound, and is tainted, released and
   never handed out again by the pool; and a spawn the keeper cannot bound
@@ -18,8 +17,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   them, carries a key or an environment value.
   """
 
-  # The application environment's `:runner_memory_bytes` is set by one
-  # test, and the pool test registers the client under its own name.
+  # The pool test registers the client under its own name.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
@@ -32,7 +30,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   @stream_attach 3
 
   @spec_env %{"RUNTIME_ROLE" => "runner", "RUNTIME_RUNNER_ID" => "runner_1"}
-  @default 402_653_184
+  @bound 402_653_184
 
   # The keeper's vectors, the one file the keeper and every client of its
   # wire read. Read as this module compiles, so a checkout without the file
@@ -80,9 +78,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
     adapter =
       start_supervised!(
         Supervisor.child_spec(
-          {Channel,
-           [client: client, name: Keyword.get(opts, :name)] ++
-             Keyword.take(opts, [:memory_bytes])},
+          {Channel, client: client, name: Keyword.get(opts, :name)},
           id: {Channel, id},
           restart: :temporary
         )
@@ -129,10 +125,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   defp next_request(keeper), do: keeper |> request() |> elem(0)
 
   # The place the client asks for next, a runner's at rest, answered as
-  # cyfr-locus answers it: its id.
+  # cyfr-locus answers it: its id, and the bound its runner will have.
   defp placed!(keeper) do
     assert %{"type" => "place", "id" => id, "kind" => "warm"} = next_request(keeper)
-    reply(keeper, %{v: 6, type: "placed", id: id})
+    reply(keeper, %{v: 7, type: "placed", id: id, memory_bytes: @bound})
     id
   end
 
@@ -158,55 +154,31 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
   defp spawn_id(n), do: n |> Integer.to_string(16) |> String.pad_leading(32, "0")
 
-  describe "the bound every spawn carries" do
-    test "is the pool's setting, its default unset, and the client's own when started with one",
+  describe "the bound of a runner" do
+    test "is the keeper's answer to its place, which its handle tells, and no spawn names one",
          ctx do
       {name, keeper} = start_client!(ctx)
-      _handle = start_handle!(keeper, name)
-
-      assert %{"type" => "spawn", "pool" => "runner", "memory_bytes" => @default} =
-               next_request(keeper)
-
-      previous = Locus.Runtime.Test.Env.put(:runner_memory_bytes, 268_435_456)
-
-      try do
-        {configured, keeper} = start_client!(%{ctx | unique: ctx.unique + 1})
-        _handle = start_handle!(keeper, configured, "runner_2")
-        assert %{"memory_bytes" => 268_435_456} = next_request(keeper)
-      after
-        Locus.Runtime.Test.Env.restore(previous, [:runner_memory_bytes])
-      end
-
-      {own, keeper} = start_client!(%{ctx | unique: ctx.unique + 2}, memory_bytes: 16_777_216)
-      _handle = start_handle!(keeper, own, "runner_3")
-      assert %{"memory_bytes" => 16_777_216} = next_request(keeper)
-    end
-
-    test "a malformed bound, or none, stops the adapter before a runner is asked for" do
-      Process.flag(:trap_exit, true)
-
-      for bound <- [nil, 0, 16_777_215, 1_099_511_627_777, -1, 1.0e9, "1G", :unbounded] do
-        assert {:error, {:keeper_unavailable, {:malformed, :runner_memory_bytes}}} =
-                 Channel.start_link(
-                   client: Locus.Keeper,
-                   memory_bytes: bound,
-                   name: nil
-                 )
-      end
+      handle = start_handle!(keeper, name)
+      assert_receive {RunnerProcess, ^handle, {:placed, @bound}}, 5_000
+      assert %{"type" => "spawn", "pool" => "runner"} = sent = next_request(keeper)
+      refute Map.has_key?(sent, "memory_bytes") or Map.has_key?(sent, "cpu_quota")
     end
 
     test "has the shape of the keeper's own runner spawn vector", ctx do
       vector =
-        Enum.find(@vectors["valid_requests"], &(&1["pool"] == "runner" and &1["memory_bytes"]))
+        Enum.find(
+          @vectors["valid_requests"],
+          &(&1["type"] == "spawn" and &1["pool"] == "runner" and &1["control"] == true)
+        )
 
-      {name, keeper} = start_client!(ctx, memory_bytes: vector["memory_bytes"])
+      {name, keeper} = start_client!(ctx)
       _handle = start_handle!(keeper, name)
       sent = next_request(keeper)
 
       assert Enum.sort(Map.keys(sent)) == Enum.sort(Map.keys(vector))
 
-      assert Map.take(sent, ~w(v type pool memory_bytes control)) ==
-               Map.take(vector, ~w(v type pool memory_bytes control))
+      assert Map.take(sent, ~w(v type pool control)) ==
+               Map.take(vector, ~w(v type pool control))
     end
   end
 
@@ -215,11 +187,11 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       at_bound =
         Enum.find(@vectors["replies"], &(&1["type"] == "exited" and &1["memory"] == "cap"))
 
-      {name, keeper} = start_client!(ctx, memory_bytes: 536_870_912)
+      {name, keeper} = start_client!(ctx)
       handle = start_handle!(keeper, name)
       %{"id" => id, "attach" => %{"token" => token}} = next_request(keeper)
       spawn_id = at_bound["spawn_id"]
-      reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+      reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
       relay = attach!(ctx.dir, token)
       assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
@@ -233,10 +205,10 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
         end)
 
-      assert log =~ "runner runner_1 was ended at its memory bound of 536870912 bytes"
+      assert log =~ "runner runner_1 was ended at its memory bound"
       assert log =~ "spawn #{spawn_id}, signal SIGKILL"
 
-      reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
+      reply(keeper, %{v: 7, type: "released", spawn_id: spawn_id})
       assert_receive {RunnerProcess, ^handle, :released}, 5_000
     end
 
@@ -248,12 +220,12 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         %{"id" => id} = next_request(keeper)
         spawn_id = spawn_id(7)
 
-        reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+        reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
         log =
           capture_log(fn ->
             reply(keeper, %{
-              v: 6,
+              v: 7,
               type: "exited",
               spawn_id: spawn_id,
               code: nil,
@@ -271,7 +243,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
     # The pool spawns through the client registered under the keeper's own
     # name, as the service tree starts it.
     test "is tainted, released and never handed out again by the pool", ctx do
-      {_name, keeper} = start_client!(ctx, name: Channel, memory_bytes: 268_435_456)
+      {_name, keeper} = start_client!(ctx, name: Channel)
       supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
 
@@ -279,7 +251,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         start_supervised!(
           {RunnerPool,
            name: nil,
-           settings: %{defaults | pool_size: 1},
+           settings: defaults,
            keeper: Channel,
            supervisor: supervisor,
            command: %{argv: ["/app/bin/locus", "start"], env: %{}}}
@@ -294,25 +266,25 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       placed!(keeper)
       {first, rest} = request(keeper)
-      assert %{"memory_bytes" => 268_435_456, "id" => id, "attach" => %{"token" => token}} = first
+      assert %{"id" => id, "attach" => %{"token" => token}} = first
       assert rest == ""
       spawn_id = spawn_id(1)
-      reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+      reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
       relay = attach!(ctx.dir, token)
       wait_until(fn -> RunnerPool.status(pool).runners.fresh == 1 end)
 
       {:ok, pid, runner} = RunnerPool.take(pool, "ath_memory", "exec_memory")
 
       # The pool refills behind the take: a second runner, in a place it
-      # makes, under the same bound. The taken runner's place is its
-      # athanor's only once it is assigned work, and none is here.
+      # makes. The taken runner's place is its athanor's only once it is
+      # assigned work, and none is here.
       _refill_place = placed!(keeper)
-      assert %{"memory_bytes" => 268_435_456, "id" => refill_id} = next_request(keeper)
+      assert %{"type" => "spawn", "id" => refill_id} = next_request(keeper)
       assert RunnerPool.status(pool).runners.busy == 1
 
       capture_log(fn ->
         reply(keeper, %{
-          v: 6,
+          v: 7,
           type: "exited",
           spawn_id: spawn_id,
           code: nil,
@@ -331,13 +303,13 @@ defmodule Locus.Runtime.KeeperMemoryTest do
                next_request(keeper)
 
       assert RunnerPool.status(pool).runners.tainted == 1
-      reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
+      reply(keeper, %{v: 7, type: "released", spawn_id: spawn_id})
       wait_until(fn -> RunnerPool.status(pool).runners.tainted == 0 end)
       refute Enum.any?(Runners.runners(pool), &(&1.id == runner))
 
       # The athanor's next subtree gets another runner, never this one.
       reply(keeper, %{
-        v: 6,
+        v: 7,
         type: "spawned",
         id: refill_id,
         spawn_id: spawn_id(2),
@@ -382,7 +354,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         )
       end
 
-      {_name, keeper} = start_client!(ctx, name: Channel, memory_bytes: 268_435_456)
+      {_name, keeper} = start_client!(ctx, name: Channel)
       client = :sys.get_state(Channel).client
       supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
@@ -391,7 +363,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         start_supervised!(
           {RunnerPool,
            name: nil,
-           settings: %{defaults | pool_size: 1},
+           settings: defaults,
            keeper: Channel,
            supervisor: supervisor,
            command: %{argv: ["/app/bin/locus", "start"], env: %{"RUNTIME_PLANT" => secret}}}
@@ -411,7 +383,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           assert env["RUNTIME_PLANT"] == secret
 
           reply(keeper, %{
-            v: 6,
+            v: 7,
             type: "spawned",
             id: id,
             spawn_id: spawn_id(9),
@@ -439,7 +411,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           {one, rest} = request(keeper)
           {two, ""} = request(keeper, rest)
           [%{"id" => assign_id}] = Enum.filter([one, two], &(&1["type"] == "assign"))
-          reply(keeper, %{v: 6, type: "assigned", id: assign_id})
+          reply(keeper, %{v: 7, type: "assigned", id: assign_id})
           :ok = Task.await(assigning)
 
           # The runner attaches while its handle is suspended, and the
@@ -477,12 +449,12 @@ defmodule Locus.Runtime.KeeperMemoryTest do
         capture_log(fn ->
           first = start_handle!(keeper, name, "runner_1")
           %{"id" => id} = next_request(keeper)
-          reply(keeper, %{v: 6, type: "error", id: id, code: "memory_unavailable"})
+          reply(keeper, %{v: 7, type: "error", id: id, code: "memory_unavailable"})
           assert_receive {RunnerProcess, ^first, {:refused, :memory_unavailable}}, 5_000
 
           second = start_handle!(keeper, name, "runner_2")
-          %{"id" => id, "memory_bytes" => @default} = next_request(keeper)
-          reply(keeper, %{v: 6, type: "error", id: id, code: "memory_unavailable"})
+          %{"id" => id} = next_request(keeper)
+          reply(keeper, %{v: 7, type: "error", id: id, code: "memory_unavailable"})
           assert_receive {RunnerProcess, ^second, {:refused, :memory_unavailable}}, 5_000
         end)
 
@@ -495,14 +467,14 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       # Another refusal is logged again once a runner was spawned since.
       third = start_handle!(keeper, name, "runner_3")
       %{"id" => id} = next_request(keeper)
-      reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id(3), uid: 30_101, pid: 1})
+      reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id(3), uid: 30_101, pid: 1})
       wait_until(fn -> RunnerProcess.info(third).os_pid == 1 end)
 
       log =
         capture_log(fn ->
           fourth = start_handle!(keeper, name, "runner_4")
           %{"id" => id} = next_request(keeper)
-          reply(keeper, %{v: 6, type: "error", id: id, code: "memory_unavailable"})
+          reply(keeper, %{v: 7, type: "error", id: id, code: "memory_unavailable"})
           assert_receive {RunnerProcess, ^fourth, {:refused, :memory_unavailable}}, 5_000
         end)
 
@@ -516,7 +488,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       log =
         capture_log(fn ->
-          reply(keeper, %{v: 6, type: "error", id: id, code: "capacity"})
+          reply(keeper, %{v: 7, type: "error", id: id, code: "capacity"})
           assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
         end)
 

@@ -16,9 +16,8 @@ defmodule Locus.Runtime.Settings do
   ## The pool
 
   The service role reads its pool from `config :locus, :runtime`
-  (`pool/2`): how many fresh runners to keep spawned ahead (`:pool_size`,
-  4), how long an idle runner is kept for its athanor (`:idle_ttl_ms`,
-  30 000), how far past its assignment's deadline a runner may live
+  (`pool/2`): how long an idle runner is kept for its athanor
+  (`:idle_ttl_ms`, 30 000), how far past its assignment's deadline a runner may live
   before it halts itself (`:watchdog_grace_ms`, 5 000), how long a
   released runner is given to report its open attempts before its
   process group is killed (`:release_grace_ms`, 2 000), which keeper
@@ -26,11 +25,11 @@ defmodule Locus.Runtime.Settings do
   image inherits; the test build alone also knows `:direct`,
   `Locus.Runtime.Keeper.direct_keeper/0`), where the keeper's relays
   attach (`:attach_dir`, the role's run folder as
-  `Locus.Keeper.default_attach_dir/1` reads it), the memory bound of every
-  runner `cyfr-locus` starts (`:runner_memory_bytes`, 384 MiB) and its
-  CPU quota (`:runner_cpu_quota`, 100000 microseconds of every 100000,
-  one CPU: `Locus.Config.cpu_quota_range/0`); each
-  default has one definition (`default/1`). Unset, the keeper is
+  `Locus.Keeper.default_attach_dir/1` reads it); each default has one
+  definition (`default/1`). How many fresh runners the pool keeps ahead,
+  and the memory and processor of each runner, are no setting: the warm
+  floor's one runner (`Prima.LocusPool.floor_runners/0`), and the bounds
+  `cyfr-locus` sets by a runner's kind (`Prima.LocusPool`). Unset, the keeper is
   `:channel`, whatever the environment says: the service refuses to boot
   when no channel was inherited (`Locus.Runtime.Keeper.check!/3`), and
   never falls back to anything else. A value that is not a positive
@@ -38,24 +37,6 @@ defmodule Locus.Runtime.Settings do
   the boot with the key named, and so does a `LOCUS_RUNTIME_*` name in
   the environment the pool is read under that `Locus.Config` does not
   declare (`pool!/0`, the only such check on a test boot).
-
-  `:runner_memory_bytes` is what `Locus.Runtime.Keeper.Channel` asks
-  `cyfr-locus` to hold each runner to (`runner_memory_bytes/1`): a cgroup
-  of the runner's own at that many bytes for its VM, every guest's linear
-  memory, the pages of its home and the kernel memory charged to it,
-  together. A runner that reaches it is killed whole by the kernel and
-  never reused. Its range is the keeper's own for a spawn's
-  `memory_bytes`, 16 MiB to 1 TiB (`Locus.Config.memory_range/0`), so a
-  value accepted here is never refused there; a value outside it, or not
-  an integer, refuses the boot. There is no value that asks for no bound.
-  The test build's `:direct` keeper applies none: it has no cgroup to
-  give a runner. The default is roughly twice the largest peak of a
-  runner under the seed components, as
-  `tests/locus-runtime-image/memory.py --measure` records it. The
-  runner's own VM is most of that peak, so the default
-  leaves a subtree's guests room for two or three at the default 64 MiB
-  of linear memory at once, not for one at the platform ceiling's
-  256 MiB: a deployment that consents to more raises this bound with it.
 
   ## A runner
 
@@ -68,24 +49,18 @@ defmodule Locus.Runtime.Settings do
   """
 
   @pool_defaults %{
-    pool_size: 4,
     idle_ttl_ms: 30_000,
     watchdog_grace_ms: 5_000,
-    release_grace_ms: 2_000,
-    runner_memory_bytes: 402_653_184,
-    runner_cpu_quota: 100_000
+    release_grace_ms: 2_000
   }
 
   @typedoc "The service role's pool settings."
   @type pool :: %{
-          pool_size: pos_integer(),
           idle_ttl_ms: pos_integer(),
           watchdog_grace_ms: pos_integer(),
           release_grace_ms: pos_integer(),
           keeper: :channel | :direct,
-          attach_dir: String.t(),
-          runner_memory_bytes: pos_integer(),
-          runner_cpu_quota: pos_integer()
+          attach_dir: String.t()
         }
 
   @typedoc "The runner role's settings, as its environment spells them (`Locus.Config.runner/1`)."
@@ -118,14 +93,7 @@ defmodule Locus.Runtime.Settings do
   unset, and the watchdog grace a runner takes when its environment
   names none (`Locus.Config.runner/1`): the one definition of each.
   """
-  @spec default(
-          :pool_size
-          | :idle_ttl_ms
-          | :watchdog_grace_ms
-          | :release_grace_ms
-          | :runner_memory_bytes
-          | :runner_cpu_quota
-        ) :: pos_integer() | String.t()
+  @spec default(:idle_ttl_ms | :watchdog_grace_ms | :release_grace_ms) :: pos_integer()
   def default(key), do: Map.fetch!(@pool_defaults, key)
 
   @doc "The pool settings `config :locus, :runtime` spells, or the first key that refuses."
@@ -145,58 +113,20 @@ defmodule Locus.Runtime.Settings do
   end
 
   defp pool_of(env, system) do
-    with {:ok, size} <- positive(env, :pool_size),
-         {:ok, idle} <- positive(env, :idle_ttl_ms),
+    with {:ok, idle} <- positive(env, :idle_ttl_ms),
          {:ok, watchdog} <- positive(env, :watchdog_grace_ms),
          {:ok, release} <- positive(env, :release_grace_ms),
          {:ok, keeper} <- keeper(Keyword.get(env, :keeper)),
-         {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir), system),
-         {:ok, memory_bytes} <- runner_memory_bytes(env),
-         {:ok, cpu_quota} <- runner_cpu_quota(env) do
+         {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir), system) do
       {:ok,
        %{
-         pool_size: size,
          idle_ttl_ms: idle,
          watchdog_grace_ms: watchdog,
          release_grace_ms: release,
          keeper: keeper,
-         attach_dir: attach_dir,
-         runner_memory_bytes: memory_bytes,
-         runner_cpu_quota: cpu_quota
+         attach_dir: attach_dir
        }}
     end
-  end
-
-  @doc """
-  The memory bound `env` (the `:runtime` keyword of the `:locus`
-  application environment) gives every runner `cyfr-locus` starts: its
-  `:runner_memory_bytes`, or the default when unset. A value that is not
-  an integer in `Locus.Config.memory_range/0`, 16 MiB to 1 TiB, refuses.
-  """
-  @spec runner_memory_bytes(keyword()) ::
-          {:ok, pos_integer()} | {:error, {:malformed, :runner_memory_bytes}}
-  def runner_memory_bytes(env) when is_list(env) do
-    bytes = Keyword.get(env, :runner_memory_bytes, default(:runner_memory_bytes))
-
-    if is_integer(bytes) and bytes in Locus.Config.memory_range(),
-      do: {:ok, bytes},
-      else: {:error, {:malformed, :runner_memory_bytes}}
-  end
-
-  @doc """
-  The CPU quota `env` gives every runner `cyfr-locus` starts, in
-  microseconds of every 100000: its `:runner_cpu_quota`, or the default
-  when unset. A value that is not an integer in
-  `Locus.Config.cpu_quota_range/0` refuses.
-  """
-  @spec runner_cpu_quota(keyword()) ::
-          {:ok, pos_integer()} | {:error, {:malformed, :runner_cpu_quota}}
-  def runner_cpu_quota(env) when is_list(env) do
-    quota = Keyword.get(env, :runner_cpu_quota, default(:runner_cpu_quota))
-
-    if is_integer(quota) and quota in Locus.Config.cpu_quota_range(),
-      do: {:ok, quota},
-      else: {:error, {:malformed, :runner_cpu_quota}}
   end
 
   @doc "`pool/0`, raising on a value that refuses so the boot stops there."
@@ -278,19 +208,9 @@ defmodule Locus.Runtime.Settings do
 
   @doc "What a well-formed value of the pool setting `key` is, for the message that refuses one."
   @spec expected(atom()) :: String.t()
-  def expected(key) when key in [:pool_size, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms],
+  def expected(key) when key in [:idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms],
     do: "a positive integer"
 
   def expected(:keeper), do: "one of #{Enum.map_join(keepers(), ", ", &inspect/1)}"
   def expected(:attach_dir), do: "a clean absolute directory path"
-
-  def expected(:runner_cpu_quota) do
-    first..last//1 = Locus.Config.cpu_quota_range()
-    "a whole number of microseconds from #{first} to #{last}"
-  end
-
-  def expected(:runner_memory_bytes) do
-    first..last//1 = Locus.Config.memory_range()
-    "a whole number of bytes from #{first} (16 MiB) to #{last} (1 TiB)"
-  end
 end

@@ -25,13 +25,12 @@ defmodule Locus.Keeper do
 
   ## A run
 
-  `run/2` asks for a spawn in the pool `build`, and every spawn it asks for
-  carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`),
-  and `cpu_quota`, the builder's CPU (`Locus.Config.cpu_quota/0`): a build
-  is never run without them. cyfr-locus runs the command under a
-  pooled uid with a 0700 home, `TMPDIR` inside it, an environment built
-  from nothing but the command's `env`, resource limits, and a cgroup of
-  its own holding the bound. The spawn's relay, running as this node's
+  `run/2` asks for a spawn in the pool `build`, which names no bound:
+  cyfr-locus runs the command under a pooled uid with a 0700 home,
+  `TMPDIR` inside it, an environment built from nothing but the command's
+  `env`, resource limits, and a cgroup of its own holding the memory and
+  the processor of a build (`Prima.LocusPool`), so a build is never run
+  without them. The spawn's relay, running as this node's
   user, connects to the attach socket, presents the spawn's token and then
   carries stdin, stdout and stderr as frames: a stream byte (0 stdin, 1
   stdout, 2 stderr, 3 attach), a 4-byte big-endian length and the payload,
@@ -63,8 +62,7 @@ defmodule Locus.Keeper do
   ## A long-lived spawn
 
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
-  under the spec's `memory_bytes` and `cpu_quota`, which every spec names,
-  and answers its
+  under the bounds cyfr-locus sets by its place's kind, and answers its
   handle once cyfr-locus reports it spawned, or the refusal. A spawn
   refused under its id alone was never made, and is gone. One refused
   under the spawn id cyfr-locus gave it, after it made it, is answered
@@ -126,8 +124,13 @@ defmodule Locus.Keeper do
 
   Every spawn names a place (`Prima.KeeperProtocol`, "Places"), made with
   `place/4` before the work is prepared, under an id its caller minted:
-  this server sends the keeper its kind, athanor and subject, and answers
-  once the keeper has placed it. The place is its owner's, the process named for
+  this server sends the keeper its kind, athanor and subject, and a
+  session's athanor ceiling where it names one, and answers `{:ok,
+  memory_bytes}`, the bound its spawn will have, once the keeper has
+  placed it, which may be only once there is room for it, or `{:error,
+  {:no_memory, held}}` where the keeper found none
+  (`Prima.KeeperProtocol`); its caller waits for either
+  (`Locus.Launcher.place_wait_ms/0`). The place is its owner's, the process named for
   it: one that dies before a spawn names the place has the place dropped
   here. So does the process that asked for it where that is not its
   owner, as a preparation asks for its owner's, when it ends for any
@@ -140,7 +143,12 @@ defmodule Locus.Keeper do
   its late answer ignored, and one whose instant has passed is not sent.
   A spawn
   naming a place takes it from its owner: the keeper frees it when that
-  spawn is released.
+  spawn is released. A `give_way` the keeper sends of a place reaches the
+  process that follows it, as `notify` tells every event: the owner of
+  the spawn that named it, as `{Locus.Keeper, ref, {:give_way, place}}`,
+  for as long as that spawn lives, or the place's owner while no spawn
+  has named it, as `{Locus.Keeper, {:place, place}, {:give_way, place}}`;
+  one of a place this server does not follow is logged and dropped.
   `measure/2` answers a place's last reading as the keeper read it, whose
   it is and how old the reading is, and never waits for a read: a reading
   not made is an error, never a zero. cyfr-locus applies a place, a drop
@@ -383,25 +391,13 @@ defmodule Locus.Keeper do
 
   @doc """
   `run/2` through the client `server`. Beside the executor's options,
-  `:place` names the spawn's place, which the caller made (`place/3`), and
-  `:memory_bytes` names the spawn's bound in place of the builder's
-  setting; there is no way to ask for none.
+  `:place` names the spawn's place, which the caller made (`place/3`).
   """
-  @spec run(
-          GenServer.server(),
-          Locus.Executor.command(),
-          [{:memory_bytes, pos_integer()} | {atom(), term()}]
-        ) ::
+  @spec run(GenServer.server(), Locus.Executor.command(), keyword()) ::
           {:ok, Locus.Executor.outcome()} | {:error, Locus.Executor.error()}
   def run(server, %{argv: argv, env: env, stdin: stdin}, opts) do
-    memory_bytes = memory_bytes!(opts)
     monitor = Process.monitor(server)
-
-    bounds = %{
-      place: Keyword.fetch!(opts, :place),
-      memory_bytes: memory_bytes,
-      cpu_quota: Locus.Config.cpu_quota()
-    }
+    bounds = %{place: Keyword.fetch!(opts, :place)}
 
     try do
       case GenServer.call(
@@ -421,7 +417,8 @@ defmodule Locus.Keeper do
             on_output: Keyword.get(opts, :on_output, fn _line -> :ok end),
             taker: Keyword.get(opts, :on_stdout, {nil, fn _piece, acc -> {:ok, acc} end}),
             max_stdout: Keyword.fetch!(opts, :max_stdout_bytes),
-            memory_bytes: memory_bytes,
+            # A build's bound, which cyfr-locus sets by its kind.
+            memory_bytes: Prima.LocusPool.build_cap_bytes(),
             memory: nil,
             stdin: stdin,
             conn: nil,
@@ -444,42 +441,15 @@ defmodule Locus.Keeper do
     end
   end
 
-  # The bound is the builder's setting; a caller may name another, never
-  # none, so no spawn leaves here without one.
-  defp memory_bytes!(opts) do
-    case Keyword.get_lazy(opts, :memory_bytes, &Locus.Config.memory_bytes/0) do
-      bytes when is_integer(bytes) and bytes > 0 ->
-        bytes
-
-      other ->
-        raise ArgumentError,
-              "a build's memory bound is a count of bytes, got: #{Prima.LoggerContext.shape(other)}"
-    end
-  end
-
   # ————— a long-lived spawn —————
 
   @impl Locus.Launcher
-  def spawn(
-        server,
-        %{
-          argv: argv,
-          env: env,
-          place: place,
-          pool: pool,
-          memory_bytes: memory_bytes,
-          cpu_quota: cpu_quota
-        } = spec
-      )
-      when is_integer(memory_bytes) and memory_bytes > 0 and is_integer(cpu_quota) and
-             cpu_quota > 0 do
+  def spawn(server, %{argv: argv, env: env, place: place, pool: pool} = spec) do
     ref = make_ref()
 
     opts = %{
       place: place,
       pool: pool,
-      memory_bytes: memory_bytes,
-      cpu_quota: cpu_quota,
       control: Map.get(spec, :control, false) == true,
       home: Map.get(spec, :home),
       home_max_bytes: Map.get(spec, :home_max_bytes),
@@ -583,12 +553,14 @@ defmodule Locus.Keeper do
   end
 
   @doc """
-  A new place `id` of `whose`'s kind, and its athanor and subject where it
-  names them, for `owner`: `:ok` once cyfr-locus has placed it ("Places").
+  A new place `id` of `whose`'s kind, and its athanor, subject and athanor
+  ceiling where it names them, for `owner`: `{:ok, memory_bytes}` once
+  cyfr-locus has placed it, or `{:error, {:no_memory, held}}` where it
+  found no room for it ("Places").
   """
   @impl Locus.Launcher
   def place(server, id, whose, owner) when is_binary(id) and is_map(whose) and is_pid(owner) do
-    GenServer.call(server, {:place, id, whose, owner}, @pool_timeout_ms)
+    GenServer.call(server, {:place, id, whose, owner}, Locus.Launcher.place_wait_ms())
   catch
     :exit, reason ->
       # A place this server may yet make is not left to an owner that
@@ -1021,6 +993,9 @@ defmodule Locus.Keeper do
          # owner's monitor, the monitor of a caller that is not its owner,
          # and its caller until cyfr-locus placed it.
          places: %{},
+         # The place each spawn named, to the spawn's ref, for as long as
+         # the spawn is followed: a `give_way` of it reaches its owner.
+         named: %{},
          # The heir tags fenced while no spawn of them was held: a spawn
          # naming one is refused, so none starts after the fence's answer.
          fences: %{}
@@ -1276,7 +1251,10 @@ defmodule Locus.Keeper do
     do: {:reply, {:error, {:refused, "bad_request"}}, state}
 
   def handle_call({:place, id, whose, owner}, {caller, _tag} = from, state) do
-    request = whose |> Map.take([:kind, :athanor, :subject]) |> Map.merge(%{type: :place, id: id})
+    request =
+      whose
+      |> Map.take([:kind, :athanor, :subject, :athanor_max_bytes])
+      |> Map.merge(%{type: :place, id: id})
 
     case send_request(state, request) do
       :ok ->
@@ -1633,8 +1611,8 @@ defmodule Locus.Keeper do
 
   defp redact_message({:attach, _token}), do: {:attach, :redacted}
 
-  defp redact_message({:spawn, _argv, _env, bounds}),
-    do: {:spawn, :redacted, :redacted, bounds}
+  defp redact_message({:spawn, _argv, _env, bounds, heir}),
+    do: {:spawn, :redacted, :redacted, bounds, heir}
 
   defp redact_message({:spawn_handle, ref, _argv, _env, opts}),
     do: {:spawn_handle, ref, :redacted, :redacted, opts}
@@ -1671,9 +1649,7 @@ defmodule Locus.Keeper do
         place: opts.place,
         pool: opts.pool,
         argv: argv,
-        env: env,
-        memory_bytes: opts.memory_bytes,
-        cpu_quota: opts.cpu_quota
+        env: env
       }
       |> put_given(:control, opts.control || nil)
       |> Map.merge(home)
@@ -1819,6 +1795,7 @@ defmodule Locus.Keeper do
 
       entry = %{
         kind: extra.kind,
+        place: request.place,
         owner: extra.owner,
         from: extra.from,
         heir: Map.get(extra, :heir),
@@ -1850,13 +1827,15 @@ defmodule Locus.Keeper do
          | next_id: state.next_id + 1,
            requests: Map.put(state.requests, ref, entry),
            ids: Map.put(state.ids, id, ref),
-           tokens: Map.put(state.tokens, token, ref)
+           tokens: Map.put(state.tokens, token, ref),
+           named: Map.put(state.named, request.place, ref)
        }}
     end
   end
 
   # A place a spawn named is that spawn's now: cyfr-locus frees it at the
-  # spawn's release, whoever owned it.
+  # spawn's release, whoever owned it, and a `give_way` of it reaches the
+  # spawn's owner (`state.named`).
   defp named(state, place) do
     case Map.pop(state.places, place) do
       {nil, _places} ->
@@ -1913,13 +1892,43 @@ defmodule Locus.Keeper do
 
   defp on_reply({:assigned, id}, state), do: assigned(state, id, :ok)
 
-  defp on_reply({:placed, id}, state) do
+  defp on_reply({:placed, id, memory_bytes}, state) do
     case state.places[id] do
       %{from: from} = entry when from != nil ->
-        GenServer.reply(from, :ok)
+        GenServer.reply(from, {:ok, memory_bytes})
         %{state | places: Map.put(state.places, id, %{entry | from: nil})}
 
       _dropped_or_named ->
+        state
+    end
+  end
+
+  # A place refused for room is no place, as any refused one: its caller
+  # hears what held the pool.
+  defp on_reply({:no_memory, id, held}, state) when is_map_key(state.places, id) do
+    {entry, places} = Map.pop(state.places, id)
+    unfollow(entry)
+    if entry.from, do: GenServer.reply(entry.from, {:error, {:no_memory, held}})
+    %{state | places: places}
+  end
+
+  # The keeper's ask, unasked for, that the idle runner of a place be
+  # released, reaches the process that follows the place: the owner of the
+  # spawn that named it, else the place's owner.
+  defp on_reply({:give_way, place}, state) do
+    case {state.named[place], state.places[place]} do
+      {ref, _place} when is_reference(ref) ->
+        with_request(state, ref, fn ref, entry ->
+          notify(entry, ref, {:give_way, place})
+          state
+        end)
+
+      {nil, %{owner: owner}} ->
+        Kernel.send(owner, {__MODULE__, {:place, place}, {:give_way, place}})
+        state
+
+      {nil, nil} ->
+        Logger.warning("[Locus.Keeper] the keeper asked a place it does not follow to give way")
         state
     end
   end
@@ -2658,6 +2667,7 @@ defmodule Locus.Keeper do
     %{
       state
       | requests: requests,
+        named: Map.delete(state.named, entry.place),
         ids: Map.delete(state.ids, entry.id),
         spawns:
           if(entry.spawn_id, do: Map.delete(state.spawns, entry.spawn_id), else: state.spawns),

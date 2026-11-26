@@ -10,8 +10,8 @@ defmodule Locus.Executor do
   The executor supplies `HOME` (a directory of the build's own), `TMPDIR`
   inside it, `USER`, `LOGNAME` and `PATH`; `env` is everything else the
   command sees. `Locus.Keeper` runs the command through cyfr-locus: under
-  a pooled uid, inside the memory bound the builder runs every build under
-  (`Locus.Config.memory_bytes/0`), and it is the one executor of every
+  a pooled uid, inside the memory bound and the processor the keeper gives
+  every build (`Prima.LocusPool`), and it is the one executor of every
   build. The suites run a real toolchain on a machine
   without cyfr-locus through a launcher of their own, compiled from the
   test support alone and named by the test build's application
@@ -100,8 +100,12 @@ defmodule Locus.Executor do
 
   @callback run(command(), opts()) :: {:ok, outcome()} | {:error, error()}
 
-  @doc "A new place `id` of `whose` for the calling process."
-  @callback place(String.t(), Locus.Launcher.whose()) :: :ok | {:error, term()}
+  @doc """
+  A new place `id` of `whose` for the calling process, answered as
+  `c:Locus.Launcher.place/4` answers it.
+  """
+  @callback place(String.t(), Locus.Launcher.whose()) ::
+              {:ok, pos_integer() | nil} | {:error, term()}
 
   @doc "Free the place, unless a run named it."
   @callback drop(String.t()) :: :ok

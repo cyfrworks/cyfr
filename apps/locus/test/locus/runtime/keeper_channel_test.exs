@@ -106,8 +106,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
   # The place `id` the client asks for, a runner's at rest, answered as
   # cyfr-locus answers it.
   defp placed!(keeper, id) do
-    assert %{"v" => 6, "type" => "place", "id" => ^id, "kind" => "warm"} = request(keeper)
-    reply(keeper, %{v: 6, type: "placed", id: id})
+    assert %{"v" => 7, "type" => "place", "id" => ^id, "kind" => "warm"} = request(keeper)
+    reply(keeper, %{v: 7, type: "placed", id: id, memory_bytes: 402_653_184})
   end
 
   # The next line the client sent the keeper.
@@ -130,14 +130,14 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert %{"type" => "assign", "id" => id} = asked = request(keeper)
 
     assert Map.delete(asked, "id") == %{
-             "v" => 6,
+             "v" => 7,
              "type" => "assign",
              "place" => place,
              "kind" => kind,
              "athanor" => athanor
            }
 
-    reply(keeper, %{v: 6, type: "assigned", id: id})
+    reply(keeper, %{v: 7, type: "assigned", id: id})
   end
 
   defp attach!(dir, token) do
@@ -169,22 +169,19 @@ defmodule Locus.Runtime.KeeperChannelTest do
   test "a handle spawns a runner with a control channel and its explicit environment, in the runner pool",
        %{keeper: keeper, name: name, dir: dir} do
     handle = start_handle!(keeper, name)
-    {:ok, bound} = Locus.Runtime.Settings.runner_memory_bytes([])
-    {:ok, quota} = Locus.Runtime.Settings.runner_cpu_quota([])
 
     # The whole request but its own id and attach target: a field dropped
-    # or added fails here: no isolation, whose reach is the pool's.
+    # or added fails here: no isolation, whose reach is the pool's, and no
+    # bound, which the keeper sets by the place's kind.
     assert %{"id" => id, "attach" => %{"path" => attach_path, "token" => token}} =
              spawned = request(keeper)
 
     assert Map.drop(spawned, ["id", "attach"]) == %{
-             "v" => 6,
+             "v" => 7,
              "type" => "spawn",
              "place" => "runner_1",
              "pool" => "runner",
              "control" => true,
-             "memory_bytes" => bound,
-             "cpu_quota" => quota,
              "argv" => ["/app/bin/locus", "start"],
              "env" => @spec_env
            }
@@ -194,7 +191,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert String.match?(token, ~r/\A[0-9a-f]{64}\z/)
 
     spawn_id = String.duplicate("ab", 16)
-    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+    reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
     # The assign is held until the relay attaches, then flushed as frames,
     # its attempt bound on the runner's relay first, once the keeper has
@@ -269,7 +266,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
 
     reply(keeper, %{
-      v: 6,
+      v: 7,
       type: "exited",
       spawn_id: spawn_id,
       code: 0,
@@ -280,7 +277,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     # Its end is heard once its connection has carried its last frame.
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
-    reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 7, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
   end
 
@@ -298,7 +295,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     %{"id" => id} = request(keeper)
 
     reply(keeper, %{
-      v: 6,
+      v: 7,
       type: "spawned",
       id: id,
       spawn_id: String.duplicate("aa", 16),
@@ -326,7 +323,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     test = self()
     placing = Task.async(fn -> Locus.Keeper.place(client, "runner_2", %{kind: "warm"}, test) end)
     placed!(keeper, "runner_2")
-    assert :ok = Task.await(placing)
+    assert {:ok, 402_653_184} = Task.await(placing)
     spec = %{runner: "runner_2", argv: ["/app/bin/locus", "start"], env: @spec_env, server: name}
     {:ok, channel, []} = Channel.spawn(spec)
     _ = request(keeper)
@@ -355,17 +352,17 @@ defmodule Locus.Runtime.KeeperChannelTest do
     handle = start_handle!(keeper, name)
     %{"id" => id, "attach" => %{"token" => token}} = request(keeper)
     spawn_id = String.duplicate("cd", 16)
-    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
+    reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
     RunnerProcess.release(handle, 750)
 
-    assert %{"v" => 6, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
+    assert %{"v" => 7, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
              request(keeper)
 
     reply(keeper, %{
-      v: 6,
+      v: 7,
       type: "exited",
       spawn_id: spawn_id,
       code: nil,
@@ -392,7 +389,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
           server: name
         }
 
-        :ok = Channel.place("runner_2", %{kind: "warm"}, server: name)
+        {:ok, _bytes} = Channel.place("runner_2", %{kind: "warm"}, server: name)
         {:ok, channel, []} = Channel.spawn(spec)
         send(test, {:channel, channel})
         Process.sleep(:infinity)
@@ -402,7 +399,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {:channel, channel}, 5_000
     %{"id" => id} = request(keeper)
     spawn_id = String.duplicate("12", 16)
-    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
+    reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
     :ok = Channel.release(channel, 500)
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 500} = request(keeper)
 
@@ -414,7 +411,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert map_size(:sys.get_state(client).requests) == 1
 
     # Its retirement reported, the runner is forgotten.
-    reply(keeper, %{v: 6, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 7, type: "released", spawn_id: spawn_id})
 
     Prima.Test.Wait.wait_until(
       fn -> :sys.get_state(client).requests == %{} end,
@@ -431,7 +428,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     %{"id" => id} = request(keeper)
     RunnerProcess.release(handle, 0)
     spawn_id = String.duplicate("ef", 16)
-    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(keeper)
   end
 
@@ -441,7 +438,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
   } do
     handle = start_handle!(keeper, name)
     %{"id" => id} = request(keeper)
-    reply(keeper, %{v: 6, type: "error", id: id, code: "capacity"})
+    reply(keeper, %{v: 7, type: "error", id: id, code: "capacity"})
     assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
@@ -474,19 +471,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
              Base.decode16!(end_frame["encoded_hex"], case: :lower)
   end
 
-  # This client asks for the pool's memory bound on every spawn: the report
-  # every `exited` carries is understood, and the runner's end reaches its
-  # handle as its signal.
-  test "the keeper's memory vectors: a runner spawn may carry a bound, and an exit reported at one is understood",
+  # The keeper bounds every runner: the report every `exited` carries is
+  # understood, and the runner's end reaches its handle as its signal.
+  test "the keeper's memory vectors: an exit reported at a runner's bound is understood",
        %{keeper: keeper, name: name, dir: dir} do
-    assert %{"memory_bytes" => bound, "control" => true, "argv" => ["/app/bin/locus", "start"]} =
-             Enum.find(
-               @vectors["valid_requests"],
-               &(&1["pool"] == "runner" and &1["memory_bytes"])
-             )
-
-    assert is_integer(bound) and bound >= 16_777_216
-
     assert Enum.all?(
              @vectors["replies"],
              &(&1["type"] != "exited" or &1["memory"] in [nil, "cap", "machine", "either"])
@@ -496,9 +484,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert %{"code" => nil, "signal" => "SIGKILL", "spawn_id" => spawn_id} = exited
 
     handle = start_handle!(keeper, name)
-    %{"id" => id, "attach" => %{"token" => token}} = sent = request(keeper)
-    assert {:ok, sent["memory_bytes"]} == Locus.Runtime.Settings.runner_memory_bytes([])
-    reply(keeper, %{v: 6, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    %{"id" => id, "attach" => %{"token" => token}} = request(keeper)
+    reply(keeper, %{v: 7, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
@@ -506,6 +493,49 @@ defmodule Locus.Runtime.KeeperChannelTest do
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
     assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+  end
+
+  # The keeper asks of its own accord that an idle runner give way: the ask
+  # reaches the runner's handle as `:give_way`, which tells its owner,
+  # whether a spawn had named the runner's place yet or not.
+  test "the keeper's give_way of a runner's place reaches its handle's owner, before its spawn is named or after",
+       %{keeper: keeper, name: name} do
+    handle = start_handle!(keeper, name)
+    assert_receive {RunnerProcess, ^handle, {:placed, 402_653_184}}, 5_000
+    %{"id" => id} = request(keeper)
+
+    reply(keeper, %{
+      v: 7,
+      type: "spawned",
+      id: id,
+      spawn_id: String.duplicate("cd", 16),
+      uid: 1,
+      pid: 1
+    })
+
+    reply(keeper, %{v: 7, type: "give_way", place: "runner_1"})
+    assert_receive {RunnerProcess, ^handle, :give_way}, 5_000
+
+    channel = %{runner: "runner_1", ref: make_ref()}
+
+    assert Channel.handle_message(
+             channel,
+             {Locus.Keeper, {:place, "runner_1"}, {:give_way, "runner_1"}}
+           ) ==
+             {:events, [:give_way], channel}
+
+    assert Channel.handle_message(
+             channel,
+             {Locus.Keeper, {:place, "runner_2"}, {:give_way, "runner_2"}}
+           ) ==
+             :unknown
+  end
+
+  test "a runner's place refused for room is the keeper's no_memory refusal" do
+    held = %{need: 402_653_184, free: 0, mine: [], others_bytes: 0}
+
+    assert Channel.refusal({:no_memory, held}) ==
+             %{reason: "no_memory", message: "cyfr-locus refused to start a runner (no_memory)"}
   end
 
   test "the adapter runs only where the channel was inherited, and the direct launcher only where it was not" do

@@ -37,8 +37,7 @@ end
 # asks which port it was given.
 #
 # The service runs its runners as OS processes of their own (the direct
-# launcher's runner face), a pool of one kept ahead, since every test that
-# points the service at its host restarts it and refills the pool. Runner
+# launcher's runner face), the warm floor's one kept ahead. Runner
 # code a test runs in this VM (the runtime, the handlers,
 # `Locus.Runtime.Runner`) runs on the engine the suite starts here
 # (`Locus.Runtime.Test.Engine`).
@@ -52,14 +51,13 @@ replaced =
     host_url: "http://127.0.0.1:9",
     bind: "127.0.0.1",
     port: 0,
-    keeper: :direct,
-    pool_size: 1
+    keeper: :direct
   )
 
 # These settings are this suite's, not the VM's: once Locus's suite ends,
 # the runtime role's keyword goes back to the value they replaced, so a
 # later suite in this VM (cyfr's, which wires the service itself) does not
-# inherit a pool of one. `after_suite` callbacks accumulate across the
+# inherit this suite's host or keeper. `after_suite` callbacks accumulate across the
 # apps of one VM, so the restore runs once, after this suite.
 restore_key = {:locus_test_helper, :runtime_restored}
 :persistent_term.erase(restore_key)

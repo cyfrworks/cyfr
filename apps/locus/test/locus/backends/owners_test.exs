@@ -47,7 +47,7 @@ defmodule Locus.Backends.OwnersTest do
     # It starts nothing, so it holds nothing to fence or adopt.
     def fence(_server, _tag), do: :none
     def adopt(_server, _ledger, _heir), do: {:ok, []}
-    def place(_server, _id, _whose, _owner), do: :ok
+    def place(_server, _id, _whose, _owner), do: {:ok, nil}
     def drop(_server, _id), do: :ok
   end
 
@@ -72,7 +72,7 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def adopt(_server, _ledger, _heir), do: {:ok, []}
-    def place(_server, _id, _whose, _owner), do: :ok
+    def place(_server, _id, _whose, _owner), do: {:ok, nil}
     def drop(_server, _id), do: :ok
   end
 
@@ -91,7 +91,7 @@ defmodule Locus.Backends.OwnersTest do
             ledger: ledger,
             session: {make_ref(), "ss_adopted"},
             athanor: "ath_owners",
-            memory_bytes: 268_435_456,
+            memory_bytes: 402_653_184,
             home_id: nil
           }
 
@@ -104,7 +104,7 @@ defmodule Locus.Backends.OwnersTest do
     end
 
     def fence(_server, _tag), do: :none
-    def place(_server, _id, _whose, _owner), do: :ok
+    def place(_server, _id, _whose, _owner), do: {:ok, nil}
     def drop(_server, _id), do: :ok
   end
 
@@ -196,7 +196,7 @@ defmodule Locus.Backends.OwnersTest do
       ledger: nil,
       session: {:before, "ss_before"},
       athanor: "ath_owners",
-      memory_bytes: 268_435_456,
+      memory_bytes: 402_653_184,
       home_id: nil
     }
 
@@ -216,12 +216,27 @@ defmodule Locus.Backends.OwnersTest do
     @moduledoc false
     # The direct launcher, telling the test each place made and dropped and
     # the place each spawn names; a place is refused while the test's
-    # server says so.
+    # server says so, and held, as a keeper with no room holds one, until
+    # the test answers it while its server says `hold_place`.
     import Kernel, except: [send: 2]
 
     def place(server, id, whose, owner) do
       Kernel.send(server[:test], {:placed, id, whose, owner})
-      if server[:refuse_place], do: {:error, {:refused, "bad_request"}}, else: :ok
+
+      cond do
+        server[:refuse_place] ->
+          {:error, {:refused, "bad_request"}}
+
+        server[:hold_place] ->
+          Kernel.send(server[:test], {:place_held, self()})
+
+          receive do
+            {:place_answer, answer} -> answer
+          end
+
+        true ->
+          Locus.DirectLauncher.place(server, id, whose, owner)
+      end
     end
 
     def drop(server, id) do
@@ -249,7 +264,7 @@ defmodule Locus.Backends.OwnersTest do
     # and tells the test whether the keeper would take it.
     def adopt(_test, _ledger, _owner), do: {:ok, []}
     def pool_stats(_test, "backends"), do: {:ok, %{size: 4, free: 4, quarantined: 0}}
-    def place(_test, _id, _whose, _owner), do: :ok
+    def place(_test, _id, _whose, _owner), do: {:ok, nil}
     def drop(_test, _id), do: :ok
 
     def spawn(test, spec) do
@@ -302,8 +317,10 @@ defmodule Locus.Backends.OwnersTest do
          supervisor: supervisor,
          clock: fn -> Agent.get(clock, & &1) end,
          stop_grace_ms: 200,
+         # A place here is answered at once, so a preparation held at its
+         # pool read ends at its bound soon after.
+         place_wait_ms: 500,
          pool_timeout_ms: 500,
-         memory_bytes: 268_435_456,
          # Room for every session a test opens, but for the tests of
          # admission by memory, which name their own budget.
          memory_budget: 1_099_511_627_776,
@@ -598,11 +615,11 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{boot: "bb_owners", pool: %{size: 2, free: 2}, memory: memory}} =
                control(owners, 1, %{type: :hello, g: 1, cyfr_boot: "boot_test"})
 
-      # Two sessions run, each at the table's 256 MiB bound.
+      # Two sessions run, each holding a session's allowance, 384 MiB.
       assert memory == %{
                budget_bytes: 1_099_511_627_776,
                admission_limit_bytes: 1_099_511_627_776,
-               held_bytes: 2 * 268_435_456
+               held_bytes: 2 * 402_653_184
              }
     end
 
@@ -961,7 +978,7 @@ defmodule Locus.Backends.OwnersTest do
 
     test "opens being prepared hold their bounds: past the budget the next one is capacity at once",
          ctx do
-      owners = start_owners(ctx, memory_budget: 512 * @mib)
+      owners = start_owners(ctx, memory_budget: 768 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       set_pool(ctx, :hang)
 
@@ -970,7 +987,7 @@ defmodule Locus.Backends.OwnersTest do
             do: Task.async(fn -> open(owners, "a", {1, 1}, "b1", key: key) end)
 
       wait_until(fn -> map_size(:sys.get_state(owners).pending) == 2 end, 5_000)
-      assert held_bytes(owners) == 512 * @mib
+      assert held_bytes(owners) == 768 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "three")
 
       # A preparation that ends refused releases what it held.
@@ -978,66 +995,18 @@ defmodule Locus.Backends.OwnersTest do
       assert held_bytes(owners) == 0
       set_pool(ctx, pool(4))
       assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "b1", key: "three")
-      assert held_bytes(owners) == 256 * @mib
-    end
-
-    test "each session holds its own program's bound, or the table's", ctx do
-      owners = start_owners(ctx, memory_budget: 512 * @mib)
-
-      programs = [
-        program("big", @idle, memory_bytes: 384 * @mib),
-        program("small", @idle, memory_bytes: 128 * @mib),
-        program("plain", @idle)
-      ]
-
-      assert {:ok, _} = sync(owners, "a", {1, 1}, programs)
-      assert {:ok, _} = open(owners, "a", {1, 1}, "big", key: "one")
-      assert {:error, :capacity} = open(owners, "a", {1, 1}, "big", key: "two")
-      assert {:error, :capacity} = open(owners, "a", {1, 1}, "plain")
-      # 384 + 128 MiB is the budget exactly, which admits.
-      assert {:ok, _} = open(owners, "a", {1, 1}, "small", key: "one")
-      assert {:error, :capacity} = open(owners, "a", {1, 1}, "small", key: "two")
-
-      assert memory(owners) == %{
-               budget_bytes: 512 * @mib,
-               admission_limit_bytes: 512 * @mib,
-               held_bytes: 512 * @mib
-             }
-    end
-
-    test "a program whose bound alone is past the limit is failed on its sync and named in its status; its opens are capacity",
-         ctx do
-      owners = start_owners(ctx, memory_budget: 512 * @mib)
-      programs = [program("huge", @idle, memory_bytes: 768 * @mib), program("fits", @idle)]
-
-      assert {:ok,
-              %{programs: [%{name: "huge", status: :failed}, %{name: "fits", status: :idle}]}} =
-               sync(owners, "a", {1, 1}, programs)
-
-      assert {:error, :capacity} = open(owners, "a", {1, 1}, "huge")
-      assert {:ok, _} = open(owners, "a", {1, 1}, "fits")
-
-      assert [%{name: "huge", status: :failed, error: error}, %{name: "fits", error: nil}] =
-               status(owners, "a").programs
-
-      assert error ==
-               "Its memory bound, 768 MiB, is above the 512 MiB this box admits: it cannot " <>
-                 "start here until its bound is lowered or the box's budget raised."
-
-      # The same sync again is held, and answers the same.
-      assert {:ok, %{programs: [%{status: :failed}, %{status: :idle}]}} =
-               sync(owners, "a", {1, 1}, programs)
+      assert held_bytes(owners) == 384 * @mib
     end
 
     test "the overcommit factor admits past the budget, rounded down", ctx do
-      owners = start_owners(ctx, memory_budget: 512 * @mib + 1, overcommit: {15, 10})
+      owners = start_owners(ctx, memory_budget: 768 * @mib + 1, overcommit: {15, 10})
 
       # An athanor's ceiling, unset, is the budget itself; this one names
       # its own past it.
       assert {:ok, _} =
-               sync(owners, "a", {1, 1}, idle_programs(1), athanor_memory_bytes: 1024 * @mib)
+               sync(owners, "a", {1, 1}, idle_programs(1), athanor_memory_bytes: 1536 * @mib)
 
-      assert memory(owners).admission_limit_bytes == 768 * @mib + 1
+      assert memory(owners).admission_limit_bytes == 1152 * @mib + 1
 
       for key <- ~w(one two three),
           do: assert({:ok, _} = open(owners, "a", {1, 1}, "b1", key: key))
@@ -1047,8 +1016,8 @@ defmodule Locus.Backends.OwnersTest do
 
     test "an athanor's sessions on every owner of it stay within its ceiling; another athanor's do not count",
          ctx do
-      owners = start_owners(ctx, memory_budget: 1024 * @mib)
-      ceiling = [athanor: "ath_x", athanor_memory_bytes: 512 * @mib]
+      owners = start_owners(ctx, memory_budget: 1536 * @mib)
+      ceiling = [athanor: "ath_x", athanor_memory_bytes: 768 * @mib]
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1), ceiling)
       assert {:ok, _} = sync(owners, "b", {1, 1}, idle_programs(1), ceiling)
       assert {:ok, _} = sync(owners, "c", {1, 1}, idle_programs(1), athanor: "ath_y")
@@ -1068,29 +1037,29 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, _} =
                sync(owners, "a", {1, 1}, idle_programs(1),
                  athanor: "ath_x",
-                 athanor_memory_bytes: 256 * @mib
+                 athanor_memory_bytes: 384 * @mib
                )
 
       assert held(owners)
              |> Map.values()
              |> Enum.find(&(&1.server == "a"))
              |> Map.fetch!(:athanor_memory_bytes) ==
-               256 * @mib
+               384 * @mib
     end
 
     test "a resumed session is held once, and resumes with the budget full", ctx do
-      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      owners = start_owners(ctx, memory_budget: 384 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       one = [lifetime: lifetime()]
       assert {:ok, %{session: id, resumed: false}} = open(owners, "a", {1, 1}, "b1", one)
       assert {:ok, %{session: ^id, resumed: true}} = open(owners, "a", {1, 1}, "b1", one)
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
     end
 
     test "two opens of one lifetime prepared at once start one session and hold its bound once",
          ctx do
-      owners = start_owners(ctx, memory_budget: 512 * @mib)
+      owners = start_owners(ctx, memory_budget: 768 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       set_pool(ctx, :hang)
       one = [lifetime: lifetime()]
@@ -1107,7 +1076,7 @@ defmodule Locus.Backends.OwnersTest do
         5_000
       )
 
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       Task.await_many([first, second])
       set_pool(ctx, pool(4))
 
@@ -1116,18 +1085,18 @@ defmodule Locus.Backends.OwnersTest do
       first = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
       second = Task.async(fn -> open(owners, "a", {1, 1}, "b1", one) end)
       assert [{:ok, %{session: id}}, {:ok, %{session: id}}] = Task.await_many([first, second])
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
     end
 
     test "a caller that gives up leaves its open held until its preparation answers", ctx do
-      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      owners = start_owners(ctx, memory_budget: 384 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       set_pool(ctx, :hang)
 
       caller = Task.async(fn -> open(owners, "a", {1, 1}, "b1") end)
       wait_until(fn -> map_size(:sys.get_state(owners).pending) == 1 end, 5_000)
       Task.shutdown(caller, :brutal_kill)
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
 
       wait_until(fn -> held_bytes(owners) == 0 end, 5_000)
@@ -1137,14 +1106,14 @@ defmodule Locus.Backends.OwnersTest do
 
     test "an owner retired while its open is prepared drops the reservation; its sessions hold theirs until gone",
          ctx do
-      owners = start_owners(ctx, memory_budget: 512 * @mib)
+      owners = start_owners(ctx, memory_budget: 768 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, _} = open(owners, "a", {1, 1}, "b1", key: "running")
 
       set_pool(ctx, :hang)
       pending = Task.async(fn -> open(owners, "a", {1, 1}, "b1", key: "prepared") end)
       wait_until(fn -> map_size(:sys.get_state(owners).pending) == 1 end, 5_000)
-      assert held_bytes(owners) == 512 * @mib
+      assert held_bytes(owners) == 768 * @mib
 
       release = %{type: :release, owners: [%{athanor: @athanor, server: "a", e: 1}]}
       assert {:ok, %{released: [_]}} = control(owners, 1, release)
@@ -1158,7 +1127,7 @@ defmodule Locus.Backends.OwnersTest do
 
     test "a dead session process keeps its bound held until its launcher says its OS process is gone",
          ctx do
-      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      owners = start_owners(ctx, memory_budget: 384 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
       backend = session_pid(owners, "a", {1, 1}, id)
@@ -1182,7 +1151,7 @@ defmodule Locus.Backends.OwnersTest do
       wait_until(fn -> hd(Map.values(held(owners))).sessions[id].pid == nil end, 5_000)
       assert File.exists?("/proc/#{os_pid}"), "the session's OS process still runs"
 
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "next")
 
       # Once it has, as the spawn's heir hears, the bound is free again.
@@ -1194,7 +1163,7 @@ defmodule Locus.Backends.OwnersTest do
     test "a session that dies before it asks for its process is cleared by its fence", ctx do
       owners =
         start_owners(ctx,
-          memory_budget: 256 * @mib,
+          memory_budget: 384 * @mib,
           bounds: [restart_backoff_ms: [10_000], crash_window_ms: 60_000, max_crashes: 3]
         )
 
@@ -1216,7 +1185,7 @@ defmodule Locus.Backends.OwnersTest do
       wait_until(fn -> delayed.() != nil end, 5_000)
       waiting = delayed.()
 
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       Process.exit(waiting, :kill)
       assert {:error, :internal} = Task.await(opening)
 
@@ -1247,7 +1216,7 @@ defmodule Locus.Backends.OwnersTest do
 
     test "a second ask of a lifetime being prepared shares the first's preparation and its refusal",
          ctx do
-      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      owners = start_owners(ctx, memory_budget: 384 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       set_pool(ctx, {:held, self(), pool(0)})
       one = [lifetime: lifetime()]
@@ -1268,7 +1237,7 @@ defmodule Locus.Backends.OwnersTest do
          ctx do
       owners =
         start_owners(ctx,
-          memory_budget: 256 * @mib,
+          memory_budget: 384 * @mib,
           session_opts: [
             launcher: BeforeSpawn,
             launcher_server: {self(), ctx.clock, Agent.get(ctx.clock, & &1)}
@@ -1286,7 +1255,7 @@ defmodule Locus.Backends.OwnersTest do
         5_000
       )
 
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       advance(ctx, 86_400_000)
 
       # A fence that read the clock before it moved answers unavailable,
@@ -1309,7 +1278,7 @@ defmodule Locus.Backends.OwnersTest do
     test "a release timeout ends the wait, never the hold, while the process runs", ctx do
       owners =
         start_owners(ctx,
-          memory_budget: 256 * @mib,
+          memory_budget: 384 * @mib,
           stop_grace_ms: 0,
           session_opts: [
             launcher: Locus.DirectLauncher,
@@ -1339,7 +1308,7 @@ defmodule Locus.Backends.OwnersTest do
       Backend.recv(backend, 0, 0)
       assert File.exists?("/proc/#{handle.pid}")
       {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
-      assert memory.held_bytes == 256 * @mib
+      assert memory.held_bytes == 384 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "next")
 
       # The launcher's word frees it.
@@ -1380,8 +1349,7 @@ defmodule Locus.Backends.OwnersTest do
            launcher_server: ctx.stub,
            supervisor: sessions_name,
            clock: fn -> Agent.get(ctx.clock, & &1) end,
-           memory_bytes: 256 * @mib,
-           memory_budget: 256 * @mib,
+           memory_budget: 384 * @mib,
            overcommit: {1, 1},
            session_opts: [launcher: Locus.DirectLauncher, launcher_server: [kept_root: ctx.root]]
          ]},
@@ -1437,7 +1405,7 @@ defmodule Locus.Backends.OwnersTest do
 
       owners =
         start_owners(ctx,
-          memory_budget: 268_435_456,
+          memory_budget: 402_653_184,
           session_opts: [launcher: AdoptionRace, launcher_server: {self(), counter}]
         )
 
@@ -1476,7 +1444,7 @@ defmodule Locus.Backends.OwnersTest do
 
       owners =
         start_owners(ctx,
-          memory_budget: 268_435_456,
+          memory_budget: 402_653_184,
           session_opts: [launcher: Locus.Keeper, launcher_server: client]
         )
 
@@ -1505,7 +1473,7 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{memory: memory}} = control(owners, 1, %{type: :status, owners: []})
       :sys.resume(fake)
       wait_until(fn -> :sys.get_state(client).requests == %{} end, 10_000)
-      assert memory.held_bytes == 268_435_456
+      assert memory.held_bytes == 402_653_184
 
       # The keeper's word, to the spawn's heir, frees it.
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
@@ -1518,7 +1486,7 @@ defmodule Locus.Backends.OwnersTest do
 
       owners =
         start_owners(ctx,
-          memory_budget: 268_435_456,
+          memory_budget: 402_653_184,
           session_opts: [launcher: Locus.Keeper, launcher_server: client]
         )
 
@@ -1528,7 +1496,7 @@ defmodule Locus.Backends.OwnersTest do
       # The refusal answers the open; what the keeper made is still its own.
       assert {:error, :unavailable} = open(owners, "a", {1, 1}, "b1")
       assert_receive {:exec_failed, spawn_id}, 5_000
-      assert held_bytes(owners) == 268_435_456
+      assert held_bytes(owners) == 402_653_184
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "b1", key: "two")
 
       :ok = Locus.Test.FakeKeeper.mode(fake, :normal)
@@ -1544,13 +1512,13 @@ defmodule Locus.Backends.OwnersTest do
 
       owners =
         start_owners(ctx,
-          memory_budget: 268_435_456,
+          memory_budget: 402_653_184,
           session_opts: [launcher: Locus.Keeper, launcher_server: client]
         )
 
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, _} = open(owners, "a", {1, 1}, "b1")
-      assert held_bytes(owners) == 268_435_456
+      assert held_bytes(owners) == 402_653_184
       [session] = Map.keys(:sys.get_state(owners).pids)
       client_down = Process.monitor(client)
 
@@ -1560,13 +1528,13 @@ defmodule Locus.Backends.OwnersTest do
       # What the client told before it stopped has reached the session, and
       # what the session told has reached the table.
       _ = :sys.get_state(session)
-      assert held_bytes(owners) == 268_435_456
+      assert held_bytes(owners) == 402_653_184
     end
 
     test "a session's bound is released once its process is confirmed gone, not when it is asked to end",
          ctx do
       # A grace long enough that the checks below run inside it.
-      owners = start_owners(ctx, memory_budget: 256 * @mib, stop_grace_ms: 3_000)
+      owners = start_owners(ctx, memory_budget: 384 * @mib, stop_grace_ms: 3_000)
       assert {:ok, _} = sync(owners, "a", {1, 1}, [program("cat", ~s(trap '' TERM; exec cat))])
       assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "cat")
       pid = session_pid(owners, "a", {1, 1}, id)
@@ -1575,7 +1543,7 @@ defmodule Locus.Backends.OwnersTest do
       # its grace to go: its bound stays held until then.
       :ok = Backend.close(pid)
       assert %{running: false} = Backend.recv(pid, 0, 0)
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert {:error, :capacity} = open(owners, "a", {1, 1}, "cat", key: "two")
 
       wait_until(fn -> held_bytes(owners) == 0 end, 10_000)
@@ -1791,6 +1759,60 @@ defmodule Locus.Backends.OwnersTest do
 
       assert_receive {:dropped, ^id}, 5_000
       refute_received {:spawned_in, _place}
+    end
+
+    test "a session's place the keeper answers past 5 s opens it, and one refused for room is unavailable",
+         ctx do
+      owners =
+        start_owners(ctx,
+          place_wait_ms: Locus.Launcher.place_wait_ms(),
+          session_opts: placing(ctx, hold_place: true)
+        )
+
+      assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
+      opening = Task.async(fn -> open(owners, "a", {1, 1}, "b1", key: "one") end)
+      assert_receive {:place_held, placer}, 2_000
+      assert Task.yield(opening, 6_000) == nil
+      send(placer, {:place_answer, {:ok, 402_653_184}})
+      assert {:ok, %{resumed: false}} = Task.await(opening, 5_000)
+
+      refusing = Task.async(fn -> open(owners, "a", {1, 1}, "b1", key: "two") end)
+      assert_receive {:place_held, placer}, 2_000
+      assert Task.yield(refusing, 6_000) == nil
+      held = %{need: 402_653_184, free: 0, mine: [], others_bytes: 0}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(placer, {:place_answer, {:error, {:no_memory, held}}})
+          assert Task.await(refusing, 5_000) == {:error, :unavailable}
+        end)
+
+      assert log =~ "no_memory"
+      assert held_bytes(owners) == 384 * @mib
+    end
+
+    test "each session reserves a session's allowance whatever its row names, and its place names its athanor's ceiling",
+         ctx do
+      owners = start_owners(ctx, memory_budget: 768 * @mib, session_opts: placing(ctx))
+      max = Prima.KeeperProtocol.request_bounds().max_athanor_bytes
+
+      programs = [
+        program("big", @idle, memory_bytes: 1024 * @mib),
+        program("small", @idle, memory_bytes: 16 * @mib)
+      ]
+
+      assert {:ok, %{programs: [%{status: :idle}, %{status: :idle}]}} =
+               sync(owners, "a", {1, 1}, programs, athanor_memory_bytes: 2048 * @mib)
+
+      assert {:ok, _} = sync(owners, "b", {1, 1}, programs, athanor_memory_bytes: max + 1)
+      assert {:ok, _} = open(owners, "a", {1, 1}, "big")
+      assert_received {:placed, _id, %{athanor_max_bytes: a_ceiling}, ^owners}
+      assert {:ok, _} = open(owners, "b", {1, 1}, "small")
+      assert_received {:placed, _id, %{athanor_max_bytes: b_ceiling}, ^owners}
+      assert {:error, :capacity} = open(owners, "a", {1, 1}, "small")
+
+      assert %{held: memory(owners).held_bytes, a: a_ceiling, b: b_ceiling} ==
+               %{held: 768 * @mib, a: 2048 * @mib, b: max}
     end
 
     test "a session whose place is refused starts nothing and holds nothing", ctx do
@@ -2309,7 +2331,7 @@ defmodule Locus.Backends.OwnersTest do
       # process holds a bound.
       send(second_read, :answer)
       wait_until(fn -> holding(owners) == 1 end, 2_000)
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert sessions_of(owners, "a") == [id]
       assert File.exists?("/proc/#{handle.pid}")
 
@@ -2327,7 +2349,7 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       {id, second, second_read} = prepared_pair(ctx, owners)
       :ok = Backend.close(session_pid(owners, "a", {1, 1}, id))
-      wait_until(fn -> held_bytes(owners) == 256 * @mib end, 10_000)
+      wait_until(fn -> held_bytes(owners) == 384 * @mib end, 10_000)
 
       send(second_read, :answer)
       assert {:ok, %{session: next, resumed: false}} = Task.await(second, 10_000)
@@ -2338,7 +2360,7 @@ defmodule Locus.Backends.OwnersTest do
 
     test "a close refuses its lifetime's open still being prepared, waits for that work and starts nothing",
          ctx do
-      owners = start_owners(ctx, memory_budget: 256 * @mib)
+      owners = start_owners(ctx, memory_budget: 384 * @mib)
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       set_pool(ctx, {:held, self(), pool(4)})
       lifetime = lifetime()
@@ -2348,7 +2370,7 @@ defmodule Locus.Backends.OwnersTest do
       named = %{program: "b1", home_id: nil, key: "k", mode: :run, lifetime: lifetime}
       closing = Task.async(fn -> Owners.close(owners, invoke("a", {1, 1}), named) end)
       assert Task.yield(closing, 250) == nil
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
 
       send(reading, :answer)
       assert {:error, :lifetime_over} = Task.await(opening, 10_000)
@@ -2401,7 +2423,7 @@ defmodule Locus.Backends.OwnersTest do
       owners = start_owners(ctx)
 
       assert {:ok, _} =
-               sync(owners, "a", {1, 1}, idle_programs(1), athanor_memory_bytes: 256 * @mib)
+               sync(owners, "a", {1, 1}, idle_programs(1), athanor_memory_bytes: 384 * @mib)
 
       assert {:ok, %{session: id}} = open(owners, "a", {1, 1}, "b1")
       {backend, handle} = hold_release(owners, "a", {1, 1}, id)
@@ -2507,7 +2529,7 @@ defmodule Locus.Backends.OwnersTest do
          ctx do
       owners = start_owners(ctx)
       programs = idle_programs(1)
-      assert {:ok, _} = sync(owners, "a", {1, 1}, programs, athanor_memory_bytes: 512 * @mib)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, programs, athanor_memory_bytes: 768 * @mib)
       assert {:ok, %{session: k}} = open(owners, "a", {1, 1}, "b1", key: "k")
       {backend, handle} = hold_release(owners, "a", {1, 1}, k)
       :ok = Backend.close(backend)
@@ -2517,14 +2539,14 @@ defmodule Locus.Backends.OwnersTest do
 
       # The held open reserves no bound: the athanor's room left beside the
       # ending process is another key's.
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "b1", key: "m")
-      assert held_bytes(owners) == 512 * @mib
+      assert held_bytes(owners) == 768 * @mib
 
-      assert {:ok, _} = sync(owners, "a", {1, 1}, programs, athanor_memory_bytes: 256 * @mib)
+      assert {:ok, _} = sync(owners, "a", {1, 1}, programs, athanor_memory_bytes: 384 * @mib)
       :sys.resume(handle.server)
       assert Task.await(task, 10_000) == {:error, :capacity}
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
     end
 
     test "a held open whose caller exits is withdrawn: nothing starts for it", ctx do
@@ -2577,10 +2599,10 @@ defmodule Locus.Backends.OwnersTest do
           ]
         )
 
-      assert held_bytes(owners) == 256 * @mib
+      assert held_bytes(owners) == 384 * @mib
       assert {:ok, _} = sync(owners, "a", {1, 1}, idle_programs(1))
       assert {:ok, %{resumed: false}} = open(owners, "a", {1, 1}, "b1")
-      assert held_bytes(owners) == 512 * @mib
+      assert held_bytes(owners) == 768 * @mib
       assert Process.alive?(owners)
     end
   end

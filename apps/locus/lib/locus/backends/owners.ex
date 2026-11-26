@@ -107,9 +107,16 @@ defmodule Locus.Backends.Owners do
 
   Every session runs in a place (`Locus.Launcher`, "Places") named by its
   session id: a `program`'s, or a `terminal`'s for a terminal session, of
-  the owner's athanor and row. The table makes it as the first step of
-  the open's preparation, before the home is made or the pool read, and
-  for itself, and the session's spawn names it. A preparation that fails,
+  the owner's athanor and row, naming the athanor's ceiling `A` where its
+  last sync named one (at most the keeper's `max_athanor_bytes`). The
+  table makes it as the first step of the open's preparation, before the
+  home is made or the pool read, and for itself, and the session's spawn
+  names it. The keeper answers it once it has room for the session, with
+  the memory bound the session's process will have, which may be after
+  its room's wait: the preparation's bound outlasts it
+  (`Locus.Launcher.place_wait_ms/0`). A place the keeper refused for room
+  (`no_memory`) is logged and the open `unavailable`, as any place not
+  made. A preparation that fails,
   is held back or is answered while the table no longer follows it, and a
   session that never spawns, leave nothing of the place: whenever a
   session's reservation is released, the table drops its place, which
@@ -122,8 +129,10 @@ defmodule Locus.Backends.Owners do
 
   ## Admission by memory
 
-  Every session reserves its memory bound (the program's `memory_bytes`,
-  or `:memory_bytes` for one that names none) from the moment its open is
+  Every session reserves a session's allowance
+  (`Prima.LocusPool.allowance_bytes/1`, 384 MiB), whatever its program's
+  row names as its `memory_bytes`, which is read and ignored, from the
+  moment its open is
   admitted, before its home is made or its pool read, until its launcher
   says nothing of its process is left: an open being prepared, a session
   running and one ended whose process has not yet gone all hold theirs. An open is admitted while
@@ -135,11 +144,7 @@ defmodule Locus.Backends.Owners do
   `backends_memory_overcommit/0`), and while the same sum over the
   sessions of the owner's athanor, every owner of it on this box, stays
   within that athanor's ceiling `A`, the `athanor_memory_bytes` its last
-  sync named (`B` when it named none); past either it is `capacity`. A
-  program whose bound alone is past the box's admission limit can never
-  be admitted: a sync and a status report it `failed`, and a status names
-  its bound and the limit as its `error`, while each of its opens is still
-  `capacity`. An
+  sync named (`B` when it named none); past either it is `capacity`. An
   open of a lifetime being prepared, starting or running reserves nothing
   more: it waits for that preparation and that launch and is answered
   what they came to, `resumed: true` only of a launch that succeeded.
@@ -229,7 +234,7 @@ defmodule Locus.Backends.Owners do
   require Logger
 
   alias Locus.Backends.{Backend, Reservations}
-  alias Prima.LocusBackends
+  alias Prima.{KeeperProtocol, LocusBackends, LocusPool}
 
   @pool "backends"
 
@@ -257,13 +262,13 @@ defmodule Locus.Backends.Owners do
   default); `:launcher` and `:launcher_server` (`Locus.Executor.executor/0`'s
   by default); `:supervisor`, the `DynamicSupervisor` sessions start
   under; `:clock`, the milliseconds leases, crashes and idle periods are
-  read on (monotonic by default); `:memory_bytes` (`Locus.Config`'s by
-  default), the bound of a program that names none; `:memory_budget` and
+  read on (monotonic by default); `:memory_budget` and
   `:overcommit` (`Locus.Config`'s by default), the box's `B` and `F`;
-  `:cpu_quota` (`Locus.Config.backends_cpu_quota/0` by default), every
-  session's CPU; `:ledger`, the name its sessions' heir tags carry, which
+  `:ledger`, the name its sessions' heir tags carry, which
   a restarted table adopts back (its `:name`, else its own); `:stop_grace_ms`;
-  `:pool_timeout_ms`; `:status_timeout_ms`; `:measure_interval_ms`;
+  `:place_wait_ms`, how long a preparation waits for its place
+  (`Locus.Launcher.place_wait_ms/0` by default); `:pool_timeout_ms`;
+  `:status_timeout_ms`; `:measure_interval_ms`;
   `:bounds`, overriding `Prima.LocusBackends`' `restart_backoff_ms`,
   `crash_window_ms` and `max_crashes`; and `:session_opts`, more options
   for every session.
@@ -374,11 +379,9 @@ defmodule Locus.Backends.Owners do
         launcher_server: Keyword.get(opts, :launcher_server, launcher),
         supervisor: Keyword.get(opts, :supervisor, Locus.Backends.BackendSupervisor),
         clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
-        memory_bytes:
-          Keyword.get_lazy(opts, :memory_bytes, &Locus.Config.backends_memory_bytes/0),
         memory: memory(opts),
-        cpu_quota: Keyword.get_lazy(opts, :cpu_quota, &Locus.Config.backends_cpu_quota/0),
         stop_grace_ms: Keyword.get(opts, :stop_grace_ms, @stop_grace_ms),
+        place_wait_ms: Keyword.get_lazy(opts, :place_wait_ms, &Locus.Launcher.place_wait_ms/0),
         pool_timeout_ms: Keyword.get(opts, :pool_timeout_ms, @pool_timeout_ms),
         status_timeout_ms: Keyword.get(opts, :status_timeout_ms, @status_timeout_ms),
         measure_interval_ms: Keyword.get(opts, :measure_interval_ms, @measure_interval_ms),
@@ -789,7 +792,7 @@ defmodule Locus.Backends.Owners do
             athanor_memory_bytes: Map.get(message, :athanor_memory_bytes)
         }
 
-        {:reply, {:ok, sync_answer(state, owner)}, put_owner(state, owner)}
+        {:reply, {:ok, sync_answer(owner)}, put_owner(state, owner)}
 
       _new ->
         admit_sync(state, message, version, definition, existing, open_env)
@@ -874,7 +877,7 @@ defmodule Locus.Backends.Owners do
           routes: Map.put(state.routes, {owner.athanor, owner.server}, owner.id)
       }
 
-      {:reply, {:ok, sync_answer(state, owner)}, state}
+      {:reply, {:ok, sync_answer(owner)}, state}
     else
       :error -> {:reply, {:error, :bad_request}, state}
     end
@@ -1192,7 +1195,8 @@ defmodule Locus.Backends.Owners do
       argv: message.argv,
       packs: Map.get(message, :packs),
       size: if(message.mode == :terminal, do: %{rows: message.rows, cols: message.cols}),
-      memory_bytes: program.memory_bytes || state.memory_bytes,
+      # What it reserves, whatever its row names (`Prima.LocusPool`).
+      memory_bytes: LocusPool.allowance_bytes(:session),
       # What it is opened again from, should it be held once prepared.
       invoke: invoke,
       message: message
@@ -1220,16 +1224,18 @@ defmodule Locus.Backends.Owners do
           state = put_home(state, message.home_id, &%{&1 | athanor: admitted.athanor, cap: cap})
 
           {_ref, state} =
-            run(state, {:open, [from], ask}, @home_timeout_ms * 2, fn ->
-              with :ok <- place.(), do: kept_ready(launcher, server, message.home_id, cap)
+            run(state, {:open, [from], ask}, state.place_wait_ms + @home_timeout_ms * 2, fn ->
+              with {:placed, bytes} <- place.(),
+                   do: {:placed, bytes, kept_ready(launcher, server, message.home_id, cap)}
             end)
 
           {:noreply, state}
 
         :scratch ->
           {_ref, state} =
-            run(state, {:open, [from], ask}, state.pool_timeout_ms, fn ->
-              with :ok <- place.(), do: launcher.pool_stats(server, @pool)
+            run(state, {:open, [from], ask}, state.place_wait_ms + state.pool_timeout_ms, fn ->
+              with {:placed, bytes} <- place.(),
+                   do: {:placed, bytes, launcher.pool_stats(server, @pool)}
             end)
 
           {:noreply, state}
@@ -1258,17 +1264,25 @@ defmodule Locus.Backends.Owners do
   end
 
   # The session's place, made before anything of its preparation under the
-  # session's id, for this table: a program's or a terminal's of the row.
-  # Its reservation's release drops it (`reservation/3`).
+  # session's id, for this table: a program's or a terminal's of the row,
+  # within the athanor's ceiling where its sync named one. Its
+  # reservation's release drops it (`reservation/3`).
   defp place_of(state, owner, ask) do
     {launcher, server} = session_launcher(state)
     table = self()
     kind = if ask.mode == :terminal, do: "terminal", else: "program"
-    whose = %{kind: kind, athanor: owner.athanor, subject: owner.server}
+
+    whose =
+      put_given(
+        %{kind: kind, athanor: owner.athanor, subject: owner.server},
+        :athanor_max_bytes,
+        owner.athanor_memory_bytes &&
+          min(owner.athanor_memory_bytes, KeeperProtocol.request_bounds().max_athanor_bytes)
+      )
 
     fn ->
       case launcher.place(server, ask.session, whose, table) do
-        :ok -> :ok
+        {:ok, memory_bytes} -> {:placed, memory_bytes}
         {:error, reason} -> {:unplaced, reason}
       end
     end
@@ -1427,13 +1441,15 @@ defmodule Locus.Backends.Owners do
   # key is asked again as its process is about to start: a process of the
   # key that began ending while it was prepared holds it as one found at
   # admission does, its reservation given back first.
-  defp opened(state, froms, ask, result) do
+  defp opened(state, froms, ask, prepared) do
+    {memory_bytes, result} = placed(prepared)
+
     with {:ok, owner} <- still_open(state, ask),
          :ok <- admissible(state, ask.named),
          program = Enum.find(owner.definition, &(&1.name == ask.program)),
          :ok <- claimed(state, program, ask, result),
          :ok <- gone_before(state, owner, ask.key) do
-      start_session(state, owner, program, ask, froms)
+      start_session(state, owner, program, ask, memory_bytes, froms)
     else
       :behind ->
         state = reservation(state, {ask.owner, ask.session}, :abandoned)
@@ -1459,9 +1475,23 @@ defmodule Locus.Backends.Owners do
     end
   end
 
+  # The bound the keeper placed the session with, and what its preparation
+  # came to after the place.
+  defp placed({:placed, memory_bytes, result}), do: {memory_bytes, result}
+  defp placed(result), do: {nil, result}
+
   # A scratch session's uid of the pool, claimed in this step; a kept
   # session's home ready under its bound. A session whose place was not
   # made starts nothing.
+  defp claimed(_state, _program, ask, {:unplaced, {:no_memory, held}}) do
+    Logger.warning(
+      "[Locus.Backends.Owners] #{ask.athanor} #{ask.program}: cyfr-locus found no room for a " <>
+        "session (no_memory: #{held.need} bytes needed, #{held.free} free)"
+    )
+
+    {:error, :unavailable}
+  end
+
   defp claimed(_state, _program, _ask, {:unplaced, _reason}), do: {:error, :unavailable}
 
   defp claimed(state, %{home: :scratch}, _ask, result) do
@@ -1493,7 +1523,7 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  defp start_session(state, owner, program, ask, froms) do
+  defp start_session(state, owner, program, ask, memory_bytes, froms) do
     session_id = ask.session
     record = owner.programs[program.name]
 
@@ -1529,7 +1559,8 @@ defmodule Locus.Backends.Owners do
           packs: ask.packs,
           running: true,
           started: false,
-          memory_bytes: ask.memory_bytes,
+          # The bound the keeper placed it with.
+          memory_bytes: memory_bytes,
           opened: System.unique_integer([:monotonic]),
           waiting: froms
         }
@@ -1574,8 +1605,6 @@ defmodule Locus.Backends.Owners do
       argv: ["/bin/sh", "-c", program.command <> " \"$@\"", "sh" | ask.argv],
       env: if(ask.size, do: Map.put_new(env, "TERM", LocusBackends.terminal_type()), else: env),
       pool: @pool,
-      memory_bytes: ask.memory_bytes,
-      cpu_quota: state.cpu_quota,
       heir: {self(), heir_tag(state, owner, session_id, ask)}
     }
     |> put_given(:home, ask.home_id)
@@ -1731,18 +1760,16 @@ defmodule Locus.Backends.Owners do
         homes = Enum.map(record.homes, &Map.get(state.homes, &1, new_home()))
         last = record.last && owner.sessions[record.last]
 
-        unadmittable = unadmittable(state, program)
-
         %{
           name: program.name,
           status:
             cond do
-              MapSet.size(record.failed_keys) > 0 or unadmittable != nil -> :failed
+              MapSet.size(record.failed_keys) > 0 -> :failed
               sessions != [] -> :running
               true -> :idle
             end,
           restarts: record.restarts,
-          error: unadmittable || record.error,
+          error: record.error,
           home: program.home,
           home_bytes: home_bytes(program.home, homes),
           over_cap: Enum.any?(homes, & &1.over_cap),
@@ -1872,36 +1899,16 @@ defmodule Locus.Backends.Owners do
         do: value
   end
 
-  defp sync_answer(state, owner) do
+  defp sync_answer(owner) do
     %{
       status: owner.state,
       programs:
-        Enum.map(owner.definition, fn %{name: name} = program ->
-          failed? =
-            MapSet.size(owner.programs[name].failed_keys) > 0 or
-              unadmittable(state, program) != nil
-
+        Enum.map(owner.definition, fn %{name: name} ->
+          failed? = MapSet.size(owner.programs[name].failed_keys) > 0
           %{name: name, status: if(failed?, do: :failed, else: :idle)}
         end)
     }
   end
-
-  # Why a program can never be admitted on this box, or nil: its bound
-  # alone is past the admission limit, so every open of it is `capacity`.
-  # Its owner is told once, as the program's status and this sentence,
-  # rather than reading busy on every retry.
-  defp unadmittable(state, program) do
-    bound = program.memory_bytes || state.memory_bytes
-    limit = state.memory.admission_limit_bytes
-
-    if bound > limit,
-      do:
-        "Its memory bound, #{size(bound)}, is above the #{size(limit)} this box admits: " <>
-          "it cannot start here until its bound is lowered or the box's budget raised."
-  end
-
-  defp size(bytes) when rem(bytes, 1_048_576) == 0, do: "#{div(bytes, 1_048_576)} MiB"
-  defp size(bytes), do: "#{bytes} bytes"
 
   defp version(owner), do: %{athanor: owner.athanor, server: owner.server, g: owner.g, e: owner.e}
 

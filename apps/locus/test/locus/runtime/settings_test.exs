@@ -5,8 +5,8 @@ defmodule Locus.Runtime.SettingsTest do
   @moduledoc """
   The service's pool settings come from `config :locus, :runtime` with
   defaults in code, each validated, the keeper the cyfr-locus channel when
-  unset, a runner's memory bound in the keeper's own range and never none,
-  and no `LOCUS_RUNTIME_*` name in the environment that `Locus.Config`
+  unset, no setting for how many runners are kept ahead or what bounds
+  one, and no `LOCUS_RUNTIME_*` name in the environment that `Locus.Config`
   does not declare; the environment a runner is handed is its declared
   `RUNTIME_*` names alone; and the module reads no variable by name.
   `Locus.Config`'s suite holds how the environment is read.
@@ -18,27 +18,22 @@ defmodule Locus.Runtime.SettingsTest do
   alias Locus.Runtime.Settings
 
   describe "pool/2" do
-    test "defaults: four fresh runners, a 30 s idle TTL, a 5 s watchdog grace, a 2 s release grace, a 384 MiB runner bound" do
-      assert {:ok,
-              %{
-                pool_size: 4,
-                idle_ttl_ms: 30_000,
-                watchdog_grace_ms: 5_000,
-                release_grace_ms: 2_000,
-                keeper: :channel,
-                attach_dir: "/run/locus",
-                runner_memory_bytes: 402_653_184
-              }} = Settings.pool([], %{})
-
-      assert {:ok, 402_653_184} = Settings.runner_memory_bytes([])
+    test "defaults: a 30 s idle TTL, a 5 s watchdog grace, a 2 s release grace, and nothing else" do
+      assert Settings.pool([], %{}) ==
+               {:ok,
+                %{
+                  idle_ttl_ms: 30_000,
+                  watchdog_grace_ms: 5_000,
+                  release_grace_ms: 2_000,
+                  keeper: :channel,
+                  attach_dir: "/run/locus"
+                }}
 
       # Each default has one definition, which a runner's grace takes too.
       for {key, value} <- [
-            pool_size: 4,
             idle_ttl_ms: 30_000,
             watchdog_grace_ms: 5_000,
-            release_grace_ms: 2_000,
-            runner_memory_bytes: 402_653_184
+            release_grace_ms: 2_000
           ] do
         assert Settings.default(key) == value
       end
@@ -135,50 +130,13 @@ defmodule Locus.Runtime.SettingsTest do
     end
 
     test "a bound that is not a positive integer refuses, naming its key" do
-      for key <- [:pool_size, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms],
+      for key <- [:idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms],
           value <- [0, -1, "4", 4.0, nil] do
         assert {:error, {:malformed, ^key}} = Settings.pool([{key, value}], %{})
       end
 
-      assert {:ok, %{pool_size: 2, idle_ttl_ms: 1, watchdog_grace_ms: 7, release_grace_ms: 9}} =
-               Settings.pool(
-                 [pool_size: 2, idle_ttl_ms: 1, watchdog_grace_ms: 7, release_grace_ms: 9],
-                 %{}
-               )
-    end
-
-    test "a runner's memory bound is a whole number of bytes in the keeper's range, never none" do
-      assert Locus.Config.memory_range() == 16_777_216..1_099_511_627_776
-
-      for bytes <- [16_777_216, 536_870_912, 1_099_511_627_776] do
-        assert {:ok, %{runner_memory_bytes: ^bytes}} =
-                 Settings.pool([runner_memory_bytes: bytes], %{})
-
-        assert {:ok, ^bytes} = Settings.runner_memory_bytes(runner_memory_bytes: bytes)
-      end
-
-      for bytes <- [nil, 0, -1, 16_777_215, 1_099_511_627_777, 5.0e8, "512M", :none] do
-        assert {:error, {:malformed, :runner_memory_bytes}} =
-                 Settings.pool([runner_memory_bytes: bytes], %{})
-
-        assert {:error, {:malformed, :runner_memory_bytes}} =
-                 Settings.runner_memory_bytes(runner_memory_bytes: bytes)
-      end
-
-      assert Settings.expected(:runner_memory_bytes) ==
-               "a whole number of bytes from 16777216 (16 MiB) to 1099511627776 (1 TiB)"
-    end
-
-    test "pool!/0 refuses the boot on a malformed memory bound, naming it" do
-      previous = Locus.Runtime.Test.Env.put(:runner_memory_bytes, 1_099_511_627_777)
-
-      try do
-        assert_raise ArgumentError, ~r/:runner_memory_bytes is malformed: a whole number/, fn ->
-          Settings.pool!()
-        end
-      after
-        Locus.Runtime.Test.Env.restore(previous, [:runner_memory_bytes])
-      end
+      assert {:ok, %{idle_ttl_ms: 1, watchdog_grace_ms: 7, release_grace_ms: 9}} =
+               Settings.pool([idle_ttl_ms: 1, watchdog_grace_ms: 7, release_grace_ms: 9], %{})
     end
 
     test "unset, the attach directory is the run folder cyfr-locus names, and a clean absolute path" do
@@ -205,16 +163,16 @@ defmodule Locus.Runtime.SettingsTest do
     end
 
     test "pool!/0 refuses the boot with the key named" do
-      previous = Locus.Runtime.Test.Env.put(:pool_size, 0)
+      previous = Locus.Runtime.Test.Env.put(:idle_ttl_ms, 0)
 
       try do
         assert_raise ArgumentError,
-                     ~r/config :locus, :runtime, :pool_size is malformed: a positive integer/,
+                     ~r/config :locus, :runtime, :idle_ttl_ms is malformed: a positive integer/,
                      fn ->
                        Settings.pool!()
                      end
       after
-        Locus.Runtime.Test.Env.restore(previous, [:pool_size])
+        Locus.Runtime.Test.Env.restore(previous, [:idle_ttl_ms])
       end
     end
   end

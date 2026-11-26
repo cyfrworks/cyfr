@@ -25,15 +25,21 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   `{:made, reason}`, refuse each after making it, as `cyfr-locus` refuses
   one whose command it could not run: its place stays the spawn's and its
   owner hears its release only once `release_made/1` frees it. `refused/1`
-  counts the spawns it refused. It holds a runner to the `:memory_bytes`
-  of the pool's keeper options, or to none. As the keeper's client does, it
+  counts the spawns it refused. It places a runner with the `:memory_bytes`
+  of the pool's keeper options, or with none. As the keeper's client does, it
   releases a runner whose owner dies with no grace, and tells a spec's
   `heir`, `{pid, tag}`, `{Locus.Runtime.Test.ScriptedKeeper, {:heir, tag},
   :released}` once the runner is released, whoever owns it then.
   `fence/2` answers `:pending` while it holds a runner of an heir's tag,
   its release still to come, and `:none` otherwise, refusing every later
   spawn of that tag. `placing/2` holds every place from then on,
-  unanswered (`held_places/1`), and `spawning/2` makes every spawn from
+  unanswered (`held_places/1`), as a keeper with no room for it holds one,
+  until `answer_places/2` places every one held or refuses each with a
+  reason, `{:no_memory, held}` as cyfr-locus refuses one for room; a
+  place's caller waits for it as the keeper's client's caller does
+  (`Locus.Launcher.place_wait_ms/0`). `give_way/2` asks a spawned runner
+  to give way, as cyfr-locus asks the floor's role: its owner hears
+  `:give_way`. `spawning/2` makes every spawn from
   then on and leaves it unanswered, as a keeper's client that wrote a
   spawn whose answer did not come in time: its caller gives up after
   #{2_000} ms, as the client's caller does, and the runner is released
@@ -96,10 +102,16 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
 
   @impl Locus.Runtime.Keeper
   def place(id, %{kind: _kind} = whose, opts) do
-    case Keyword.fetch(opts, :name) do
-      {:ok, keeper} -> GenServer.call(keeper, {:place, id, whose})
-      :error -> :ok
-    end
+    placed =
+      case Keyword.fetch(opts, :name) do
+        {:ok, keeper} ->
+          GenServer.call(keeper, {:place, id, whose}, Locus.Launcher.place_wait_ms())
+
+        :error ->
+          :ok
+      end
+
+    with :ok <- placed, do: {:ok, Keyword.get(opts, :memory_bytes)}
   end
 
   @impl Locus.Runtime.Keeper
@@ -144,6 +156,17 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   @doc "The ids of every place `keeper` holds unanswered, oldest first."
   @spec held_places(atom()) :: [String.t()]
   def held_places(keeper), do: GenServer.call(keeper, :held_places)
+
+  @doc """
+  Answer every place `keeper` holds, and every later one at once: `:ok`
+  places each, `{:error, reason}` refuses each with `reason`.
+  """
+  @spec answer_places(atom(), :ok | {:error, term()}) :: :ok
+  def answer_places(keeper, answer), do: GenServer.call(keeper, {:answer_places, answer})
+
+  @doc "Ask the spawned runner `runner_id` to give way, as cyfr-locus asks: its owner hears `:give_way`."
+  @spec give_way(atom(), String.t()) :: :ok
+  def give_way(keeper, runner_id), do: GenServer.call(keeper, {:give_way, runner_id})
 
   @doc "How `keeper` answers every spawn from now on: `:held`, making it and answering none, or `:answered`."
   @spec spawning(atom(), :held | :answered) :: :ok
@@ -197,11 +220,11 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   end
 
   @impl Locus.Runtime.Keeper
-  def memory_bytes(opts), do: Keyword.get(opts, :memory_bytes)
-
-  @impl Locus.Runtime.Keeper
   def refusal(reason) when is_atom(reason),
     do: %{reason: to_string(reason), message: "the scripted keeper refuses (#{reason})"}
+
+  # A place refused for room is worded as the channel keeper words it.
+  def refusal({:no_memory, _held} = reason), do: Locus.Runtime.Keeper.Channel.refusal(reason)
 
   def refusal(_reason),
     do: %{reason: "unavailable", message: "the scripted keeper did not answer"}
@@ -437,6 +460,29 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def handle_call({:place, id, whose}, {owner, _tag}, state) do
     place = %{whose: whose, spawned: false, owner: Process.monitor(owner)}
     {:reply, :ok, %{state | places: Map.put(state.places, id, place)}}
+  end
+
+  def handle_call({:answer_places, answer}, _from, state) do
+    state =
+      Enum.reduce(state.held_places, %{state | held_places: [], placing: :answered}, fn
+        {from, _id, place}, state when answer == :ok ->
+          {:reply, reply, state} = handle_call(place, from, state)
+          GenServer.reply(from, reply)
+          state
+
+        {from, _id, _place}, state ->
+          GenServer.reply(from, answer)
+          state
+      end)
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:give_way, runner_id}, _from, state) do
+    for %{spec: %{runner: ^runner_id}, owner: owner, ref: ref} <- state.spawns,
+        do: Kernel.send(owner, {__MODULE__, ref, :give_way})
+
+    {:reply, :ok, state}
   end
 
   def handle_call(:places, _from, state), do: {:reply, state.places, state}

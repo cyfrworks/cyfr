@@ -60,12 +60,24 @@ defmodule Locus.Runtime.WorkerService do
   and the service logs each runner whose report it ended. A `start` none
   of which reached the runner it was given ran nothing, and is sent once
   more, to another runner (`Locus.Runtime.RunnerProcess.assign/6`). A
-  `start` has one deadline, five seconds from its call, read once as the
-  call is made: every wait inside it, each assign and the one more, ends
-  by then, and once it has passed no runner is taken and nothing of its
-  work is sent, and it answers `{:error, :unavailable}`. Its caller waits
-  past the deadline for that answer, so nothing is sent after the caller
-  was answered. A runner whose assign went unanswered, or was answered
+  `start` has one deadline, its assignment's `claim_by`
+  (`Prima.Assignment`), read once as the call is read and never further
+  off than the claim window: every wait inside it, each take, each
+  assign and the one more, ends by then, a runner's wait for the keeper's
+  room among them (`Locus.Launcher.place_wait_ms/0`), and once it has
+  passed no runner is taken and nothing of its work is sent, and it
+  answers `{:error, :unavailable}`. Its caller waits past the deadline for
+  that answer, so nothing is sent after the caller was answered. A start
+  waits outside the service's own turn: its take is asked of the pool
+  without waiting (`Locus.Runtime.RunnerPool.request_take/6`), whose
+  answer reaches the service after every event of the pool's before it,
+  and its assign runs in a task of the service's own, linked to it, so
+  the service serves kills, its status and every runner's report while a
+  start waits. What a runner reports while its assign is in flight is
+  read once the assign is answered, in the order it came, as if the
+  assign had answered first. One whose runner's place the keeper refused
+  for room answers `{:error, {:unavailable, sentence}}` with the keeper's
+  account of it, `no_memory`, and is sent to no other runner. A runner whose assign went unanswered, or was answered
   past the deadline, is retired, since whose its place is cannot be
   known. A `start` no runner can be found for answers `{:error,
   :unavailable}`, and one whose runner's spawn the keeper refused while
@@ -144,10 +156,9 @@ defmodule Locus.Runtime.WorkerService do
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @remembered 10_000
   @max_report_attempts Prima.WorkerWire.max_report_attempts()
-  # The bound of a start, and the room past it for the service's answer:
-  # a runner's handle answers an assign by the deadline, or half a second
-  # past it is failed (`Locus.Runtime.RunnerProcess`).
-  @start_ms 5_000
+  # The room past a start's deadline, at most its claim window, for the
+  # service's answer: a runner's handle answers an assign by the deadline,
+  # or half a second past it is failed (`Locus.Runtime.RunnerProcess`).
   @answer_ms 1_000
 
   @doc false
@@ -156,12 +167,10 @@ defmodule Locus.Runtime.WorkerService do
   @impl Prima.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
-    deadline = System.monotonic_time(:millisecond) + @start_ms
-
     GenServer.call(
       __MODULE__,
-      {:start, token, input, sealed_keys, Subtree.caller(), deadline},
-      @start_ms + @answer_ms
+      {:start, token, input, sealed_keys, Subtree.caller()},
+      Assignment.claim_window_ms() + @answer_ms
     )
   end
 
@@ -204,12 +213,16 @@ defmodule Locus.Runtime.WorkerService do
        ended: %{ids: %{}, order: :queue.new()},
        offered: %{ids: %{}, order: :queue.new()},
        reports: %{},
+       # The takes asked of the pool, each labelled with its start, and the
+       # assigns in flight, by their task's ref (`taken/3`).
+       takes: :gen_server.reqids_new(),
+       assigning: %{},
        seq: 0
      }}
   end
 
   @impl true
-  def handle_call({:start, token, input, sealed_keys, caller, deadline}, _from, state) do
+  def handle_call({:start, token, input, sealed_keys, caller}, from, state) do
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.service == state.service and assignment.boot == state.boot,
          true <- Prima.Digest.sha256(input) == assignment.input_digest,
@@ -218,8 +231,20 @@ defmodule Locus.Runtime.WorkerService do
          true <-
            attempt ==
              assignment |> Map.take(@attempt_fields) |> Map.put(:service, state.service),
-         {:ok, %{} = _decoded} <- Jason.decode(input) do
-      start_pooled(state, token, assignment, input, keys, caller, deadline)
+         {:ok, %{} = _decoded} <- Jason.decode(input),
+         false <- held_or_starting?(state, assignment.execution_id) do
+      start = %{
+        from: from,
+        token: token,
+        assignment: assignment,
+        input: input,
+        keys: keys,
+        caller: caller,
+        deadline: deadline(assignment),
+        resend?: true
+      }
+
+      {:noreply, take(state, start)}
     else
       _refused -> {:reply, {:error, :malformed}, state}
     end
@@ -228,7 +253,7 @@ defmodule Locus.Runtime.WorkerService do
   def handle_call({:kill, execution_id}, _from, state) do
     cond do
       pid = Map.get(state.executions, execution_id) ->
-        :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms)
+        :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms, execution_id)
         {:reply, :ok, state}
 
       pid = holder(state, execution_id) ->
@@ -264,8 +289,45 @@ defmodule Locus.Runtime.WorkerService do
     {:reply, {:ok, status}, state}
   end
 
+  # A take's answer, a pool's event or an assign's outcome may each be the
+  # one a start waits on; every other message is read as it always is.
   @impl true
-  def handle_info({:EXIT, pid, reason}, state) when is_map_key(state.reports, pid) do
+  def handle_info(message, state) do
+    case :gen_server.check_response(message, state.takes, true) do
+      {{:reply, answer}, start, takes} ->
+        {:noreply, taken(%{state | takes: takes}, start, answer)}
+
+      {{:error, {reason, _pool}}, start, takes} ->
+        {:noreply, taken(%{state | takes: takes}, start, {:error, {:pool_down, reason}})}
+
+      no_take when no_take in [:no_request, :no_reply] ->
+        info(message, state)
+    end
+  end
+
+  defp info({ref, outcome}, state) when is_map_key(state.assigning, ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, assign_done(state, ref, outcome)}
+  end
+
+  defp info({:DOWN, ref, :process, _pid, reason}, state) when is_map_key(state.assigning, ref),
+    do: {:noreply, assign_done(state, ref, {:error, {:assign_down, reason}})}
+
+  # What the pool tells of a runner whose assign is in flight waits for the
+  # assign's outcome.
+  defp info({RunnerPool, pid, _event} = message, state) do
+    case Enum.find(state.assigning, fn {_ref, a} -> a.pid == pid end) do
+      {ref, a} ->
+        {:noreply, put_in(state.assigning[ref], %{a | buffered: [message | a.buffered]})}
+
+      nil ->
+        pooled(message, state)
+    end
+  end
+
+  defp info(message, state), do: other(message, state)
+
+  defp other({:EXIT, pid, reason}, state) when is_map_key(state.reports, pid) do
     {runner, reports} = Map.pop(state.reports, pid)
 
     if reason != :normal do
@@ -278,13 +340,24 @@ defmodule Locus.Runtime.WorkerService do
     {:noreply, %{state | reports: reports}}
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, state),
+  # Every other process linked to the service is an assign's task, whose
+  # end follows its answer or its DOWN, read above.
+  defp other({:EXIT, _task, _reason}, state), do: {:noreply, state}
+
+  defp other({:DOWN, _ref, :process, pid, reason}, state),
     do: {:noreply, gone(state, pid, {:handle_down, reason})}
+
+  defp other(message, state), do: unexpected(message, state)
+
+  defp unexpected(message, state) do
+    Prima.LoggerContext.unexpected(__MODULE__, message)
+    {:noreply, state}
+  end
 
   # An unclean completion after a cancel of one of the runner's children
   # ends the runner with that child's attempt still open at CYFR: it is
   # reported, as an exit is.
-  def handle_info({RunnerPool, pid, {:complete, execution_id, clean}}, state) do
+  defp pooled({RunnerPool, pid, {:complete, execution_id, clean}}, state) do
     case Map.get(state.assigned, pid) do
       %{execution_id: ^execution_id} = assignment ->
         state =
@@ -299,7 +372,7 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  def handle_info({RunnerPool, pid, {:exit, _named, open}}, state) do
+  defp pooled({RunnerPool, pid, {:exit, _named, open}}, state) do
     case Map.get(state.assigned, pid) do
       nil ->
         {:noreply, state}
@@ -310,31 +383,34 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  def handle_info({RunnerPool, pid, {:child, execution_id, attempt}}, state) do
+  defp pooled({RunnerPool, pid, {:child, execution_id, attempt}}, state) do
     case Map.get(state.assigned, pid) do
       nil -> {:noreply, state}
       assignment -> {:noreply, child(state, pid, assignment, execution_id, attempt)}
     end
   end
 
-  def handle_info({RunnerPool, pid, {:gone, reason}}, state),
+  defp pooled({RunnerPool, pid, {:gone, reason}}, state),
     do: {:noreply, gone(state, pid, reason)}
 
-  def handle_info(msg, state) do
-    Prima.LoggerContext.unexpected(__MODULE__, msg)
-    {:noreply, state}
-  end
+  defp pooled(message, state), do: unexpected(message, state)
 
   # The credentials hold this service's keys, and a `:start` call carries
-  # an assignment's token, its input and its sealed keys: no status or
-  # crash report shows any of them.
+  # an assignment's token, its input and its sealed keys, as every start in
+  # flight holds them with its opened keys: no status or crash report shows
+  # any of them, nor more of the starts in flight than how many there are.
   @impl true
   def format_status(status) do
     status
-    |> Map.update(:state, nil, &Map.delete(&1, :credentials))
+    |> Map.update(:state, nil, fn state ->
+      state
+      |> Map.delete(:credentials)
+      |> Map.replace_lazy(:takes, &:gen_server.reqids_size/1)
+      |> Map.replace_lazy(:assigning, &map_size/1)
+    end)
     |> Map.replace_lazy(:message, fn
-      {:start, _token, _input, _sealed_keys, caller, deadline} ->
-        {:start, :redacted, :redacted, :redacted, caller, deadline}
+      {:start, _token, _input, _sealed_keys, caller} ->
+        {:start, :redacted, :redacted, :redacted, caller}
 
       message ->
         message
@@ -363,82 +439,152 @@ defmodule Locus.Runtime.WorkerService do
   # Starting
   # ---------------------------------------------------------------------------
 
-  defp start_pooled(state, token, assignment, input, keys, caller, deadline, resend? \\ true) do
-    execution_id = assignment.execution_id
+  # A start's deadline: its assignment's `claim_by` on this node's
+  # monotonic clock, never further off than the claim window.
+  defp deadline(assignment) do
+    left = assignment.claim_by - System.os_time(:millisecond)
+    now() + min(max(left, 0), Assignment.claim_window_ms())
+  end
 
-    if Map.has_key?(state.executions, execution_id) do
-      {:reply, {:error, :malformed}, state}
+  # An execution a runner of this boot holds, or one a start is under way
+  # for, is not started again.
+  defp held_or_starting?(state, execution_id) do
+    Map.has_key?(state.executions, execution_id) or
+      Enum.any?(:gen_server.reqids_to_list(state.takes), fn {_request, start} ->
+        start.assignment.execution_id == execution_id
+      end) or
+      Enum.any?(state.assigning, fn {_ref, a} ->
+        a.start.assignment.execution_id == execution_id
+      end)
+  end
+
+  # A runner for the start, asked of the pool while its deadline has not
+  # passed; the answer reaches the service as a message (`handle_info/2`).
+  defp take(state, %{assignment: assignment, deadline: deadline} = start) do
+    if now() < deadline do
+      takes =
+        RunnerPool.request_take(
+          RunnerPool,
+          assignment.athanor_id,
+          assignment.execution_id,
+          deadline,
+          start,
+          state.takes
+        )
+
+      %{state | takes: takes}
     else
-      case take(assignment, deadline) do
-        {:ok, pid, runner} ->
-          state = completed_unread(state, pid, runner, execution_id)
-
-          case assign(state, pid, token, input, keys, deadline) do
-            :ok ->
-              Process.monitor(pid)
-              {started, state} = next_seq(state)
-
-              assigned = %{
-                runner: runner,
-                execution_id: execution_id,
-                attempt: assignment.attempt,
-                athanor: assignment.athanor_id,
-                at: HostClient.at(assignment, state.credentials.host_url),
-                started: started,
-                children: %{},
-                cancelled: MapSet.new(),
-                over_bound: false,
-                callers: caller.callers,
-                logger: caller.logger
-              }
-
-              {:reply, :ok,
-               %{
-                 state
-                 | assigned: Map.put(state.assigned, pid, assigned),
-                   executions: Map.put(state.executions, execution_id, pid)
-               }}
-
-            {:error, :malformed} ->
-              :ok = RunnerPool.taint(RunnerPool, pid, 0)
-              {:reply, {:error, :malformed}, state}
-
-            {:error, {:unsent, reason}} when resend? ->
-              Logger.warning(
-                "[Locus.Runtime.WorkerService] the assign of #{execution_id} reached nothing of " <>
-                  "runner #{runner} (#{inspect(reason)}) and is sent to another"
-              )
-
-              :ok = RunnerPool.taint(RunnerPool, pid, 0)
-              start_pooled(state, token, assignment, input, keys, caller, deadline, false)
-
-            {:error, reason} ->
-              Logger.error(
-                "[Locus.Runtime.WorkerService] the assign of #{execution_id} was not sent: #{inspect(reason)}"
-              )
-
-              :ok = RunnerPool.taint(RunnerPool, pid, 0)
-              {:reply, {:error, :unavailable}, state}
-          end
-
-        {:error, {:refused, refusal}} ->
-          {:reply, {:error, {:unavailable, refusal.message}}, state}
-
-        {:error, reason} ->
-          Logger.error(
-            "[Locus.Runtime.WorkerService] no runner for #{execution_id}: #{inspect(reason)}"
-          )
-
-          {:reply, {:error, :unavailable}, state}
-      end
+      taken(state, start, {:error, :past_deadline})
     end
   end
 
-  # A runner for the start while its deadline has not passed.
-  defp take(assignment, deadline) do
-    if System.monotonic_time(:millisecond) < deadline,
-      do: RunnerPool.take(RunnerPool, assignment.athanor_id, assignment.execution_id, deadline),
-      else: {:error, :past_deadline}
+  # The pool's answer to a start's take: the runner is assigned in a task,
+  # or the start is answered.
+  defp taken(state, start, {:ok, pid, runner}) do
+    execution_id = start.assignment.execution_id
+    state = completed_unread(state, pid, runner, execution_id)
+    host_url = state.credentials.host_url
+
+    task =
+      Task.async(fn ->
+        assign(host_url, pid, start.token, start.input, start.keys, start.deadline)
+      end)
+
+    a = %{start: start, pid: pid, runner: runner, task: task, buffered: []}
+    %{state | assigning: Map.put(state.assigning, task.ref, a)}
+  end
+
+  defp taken(state, start, {:error, {:refused, refusal}}),
+    do: answer(state, start, {:error, {:unavailable, refusal.message}})
+
+  defp taken(state, start, {:error, reason}) do
+    Logger.error(
+      "[Locus.Runtime.WorkerService] no runner for #{start.assignment.execution_id}: " <>
+        inspect(reason)
+    )
+
+    answer(state, start, {:error, :unavailable})
+  end
+
+  # The assign's outcome, then what the pool told of its runner meanwhile,
+  # in the order it came.
+  defp assign_done(state, ref, outcome) do
+    {a, assigning} = Map.pop(state.assigning, ref)
+    state = assigned(%{state | assigning: assigning}, a, outcome)
+
+    a.buffered
+    |> Enum.reverse()
+    |> Enum.reduce(state, fn message, state ->
+      {:noreply, state} = info(message, state)
+      state
+    end)
+  end
+
+  defp assigned(state, %{start: start, pid: pid, runner: runner}, :ok) do
+    %{assignment: assignment, caller: caller} = start
+    execution_id = assignment.execution_id
+    Process.monitor(pid)
+    {started, state} = next_seq(state)
+
+    assigned = %{
+      runner: runner,
+      execution_id: execution_id,
+      attempt: assignment.attempt,
+      athanor: assignment.athanor_id,
+      at: HostClient.at(assignment, state.credentials.host_url),
+      started: started,
+      children: %{},
+      cancelled: MapSet.new(),
+      over_bound: false,
+      callers: caller.callers,
+      logger: caller.logger
+    }
+
+    state = %{
+      state
+      | assigned: Map.put(state.assigned, pid, assigned),
+        executions: Map.put(state.executions, execution_id, pid)
+    }
+
+    answer(state, start, :ok)
+  end
+
+  defp assigned(state, %{start: start, pid: pid}, {:error, :malformed}) do
+    :ok = RunnerPool.taint(RunnerPool, pid, 0, start.assignment.execution_id)
+    answer(state, start, {:error, :malformed})
+  end
+
+  # The runner's place was refused, for room or another reason: no runner
+  # of it ran, and another would wait as it did.
+  defp assigned(state, %{start: start}, {:error, {:unsent, {:refused, refusal}}}),
+    do: answer(state, start, {:error, {:unavailable, refusal.message}})
+
+  defp assigned(state, %{start: %{resend?: true} = start, pid: pid, runner: runner}, {
+         :error,
+         {:unsent, reason}
+       }) do
+    Logger.warning(
+      "[Locus.Runtime.WorkerService] the assign of #{start.assignment.execution_id} reached " <>
+        "nothing of runner #{runner} (#{inspect(reason)}) and is sent to another"
+    )
+
+    :ok = RunnerPool.taint(RunnerPool, pid, 0, start.assignment.execution_id)
+    take(state, %{start | resend?: false})
+  end
+
+  defp assigned(state, %{start: start, pid: pid}, {:error, reason}) do
+    Logger.error(
+      "[Locus.Runtime.WorkerService] the assign of #{start.assignment.execution_id} was not " <>
+        "sent: #{inspect(reason)}"
+    )
+
+    :ok = RunnerPool.taint(RunnerPool, pid, 0, start.assignment.execution_id)
+    answer(state, start, {:error, :unavailable})
+  end
+
+  defp answer(state, start, reply) do
+    GenServer.reply(start.from, reply)
+    state
   end
 
   # A runner the service still holds an assignment on has completed it
@@ -506,13 +652,15 @@ defmodule Locus.Runtime.WorkerService do
   defp next_seq(%{seq: seq} = state), do: {seq, %{state | seq: seq + 1}}
 
   # The assign as the protocol spells it, the runner's relay bound to its
-  # attempt first; a value the protocol refuses (the input past its bound)
-  # is the caller's, and refuses the start.
-  defp assign(state, pid, token, input, keys, deadline) do
-    RunnerProcess.assign(pid, token, input, keys, state.credentials.host_url, deadline)
+  # attempt first, run in the start's task; a value the protocol refuses
+  # (the input past its bound) is the caller's, and refuses the start.
+  defp assign(host_url, pid, token, input, keys, deadline) do
+    RunnerProcess.assign(pid, token, input, keys, host_url, deadline)
   rescue
     ArgumentError -> {:error, :malformed}
   end
+
+  defp now, do: System.monotonic_time(:millisecond)
 
   # ---------------------------------------------------------------------------
   # Runners' ends
@@ -558,7 +706,13 @@ defmodule Locus.Runtime.WorkerService do
         refused_child(state, execution_id)
 
       true ->
-        :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms)
+        :ok =
+          RunnerPool.taint(
+            RunnerPool,
+            pid,
+            state.settings.release_grace_ms,
+            assignment.execution_id
+          )
 
         log(
           :warning,

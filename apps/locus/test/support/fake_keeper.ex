@@ -65,6 +65,10 @@ defmodule Locus.Test.FakeKeeper do
   - `{:home_make_held, test}`: a `home_make` is told to `test` as
     `{:home_make_held, request}` and answered only once released
     (`release_make/2`), having made nothing until then
+  - `{:place_held, test}`: a `place` waits for room, as cyfr-locus holds
+    one it has no room for: it is told to `test` as `{:place_held, id}`
+    and answered only by `answer_place/3`, a `drop` of it freeing it
+    unanswered
 
   `hold_releases/2` holds every `release` from then on, in any mode: each
   is told to the test as `{:release_held, spawn_id}` and carried out only
@@ -77,14 +81,17 @@ defmodule Locus.Test.FakeKeeper do
   signal and the kill once the grace passes. A `pool` request is answered
   with a pool of four uids, three free and none quarantined. It keeps
   places as cyfr-locus does (`Prima.KeeperProtocol`, "Places"; `places/1`
-  lists them): a `place` of a new id is `placed` and of a held one
+  lists them): a `place` of a new id is `placed`, with the memory bound
+  cyfr-locus would give its kind on a pool of work of 4 GiB
+  (`Prima.LocusPool.cap_bytes/2`), and of a held one
   refused `bad_request`, a `drop` frees one no spawn named, an `assign`
   changes whose one is and is `assigned`, or refused `bad_request` for a
   place it does not hold, a spawn naming no held place or one another spawn
   named is refused `bad_request`, a spawn refused under its id alone frees
   its place and one refused under its spawn id keeps it, and a
   `released` frees its spawn's. A `measure` is refused `unmeasured`
-  outside its mode, since nothing here has a group.
+  outside its mode, since nothing here has a group. `give_way/2` sends
+  the client a `give_way` of a place, as cyfr-locus asks the floor's role.
 
   Started with `kept_root: dir` (`start_client!/1`), it keeps homes as
   cyfr-locus does, one folder per id under `dir`, as the test's own user,
@@ -191,6 +198,20 @@ defmodule Locus.Test.FakeKeeper do
   @doc "Carries out the `home_make` held in `{:home_make_held, test}`, and holds no later one."
   def release_make(fake, request), do: GenServer.call(fake, {:release_make, request})
 
+  @doc """
+  Answers the place `id` held in `{:place_held, test}`: `:placed`, or
+  `{:no_memory, held}` (`held` as the wire spells it), as cyfr-locus
+  refuses one it found no room for.
+  """
+  def answer_place(fake, id, answer), do: GenServer.call(fake, {:answer_place, id, answer})
+
+  @doc "Sends the client a `give_way` of `place`, as cyfr-locus asks the floor's role."
+  def give_way(fake, place),
+    do: GenServer.call(fake, {:send, %{type: "give_way", place: place}})
+
+  # The pool of work the fake's places are bounded on.
+  @work_bytes 4096 * 1024 * 1024
+
   @doc "Every request received so far, decoded, oldest first."
   def requests(fake), do: GenServer.call(fake, :requests)
 
@@ -242,6 +263,8 @@ defmodule Locus.Test.FakeKeeper do
        command_dirs: [],
        spawns: %{},
        places: %{},
+       # The places held waiting for room, by id: their request.
+       waiting: %{},
        # Who is told of a held release, and the releases held, oldest last.
        release_held: nil,
        held_releases: [],
@@ -285,6 +308,24 @@ defmodule Locus.Test.FakeKeeper do
 
   def handle_call({:release_make, request}, _from, state),
     do: {:reply, :ok, handle_request(request, %{state | mode: :normal})}
+
+  def handle_call({:answer_place, id, answer}, _from, state) do
+    case Map.pop(state.waiting, id) do
+      {nil, _waiting} ->
+        {:reply, {:error, :not_waiting}, state}
+
+      {request, waiting} ->
+        state = %{state | waiting: waiting}
+
+        case answer do
+          :placed ->
+            {:reply, :ok, placed(request, state)}
+
+          {:no_memory, held} ->
+            {:reply, :ok, write(state, %{type: "error", id: id, code: "no_memory", held: held})}
+        end
+    end
+  end
 
   def handle_call(:exits, _from, state), do: {:reply, Enum.reverse(state.exits), state}
   def handle_call(:sent, _from, state), do: {:reply, Enum.reverse(state.sent), state}
@@ -369,15 +410,20 @@ defmodule Locus.Test.FakeKeeper do
     state
   end
 
-  defp handle_request(%{"type" => "place", "id" => id} = request, state) do
-    send(self(), {:send, %{type: "placed", id: id}})
-    %{state | places: Map.put(state.places, id, %{whose: whose(request), spawn: nil})}
+  defp handle_request(
+         %{"type" => "place", "id" => id} = request,
+         %{mode: {:place_held, test}} = state
+       ) do
+    send(test, {:place_held, id})
+    %{state | waiting: Map.put(state.waiting, id, request)}
   end
+
+  defp handle_request(%{"type" => "place"} = request, state), do: placed(request, state)
 
   defp handle_request(%{"type" => "drop", "place" => id}, state) do
     case state.places do
       %{^id => %{spawn: nil}} -> %{state | places: Map.delete(state.places, id)}
-      _named_or_gone -> state
+      _named_or_gone -> %{state | waiting: Map.delete(state.waiting, id)}
     end
   end
 
@@ -618,6 +664,13 @@ defmodule Locus.Test.FakeKeeper do
 
   # Whose a place or an assign says the place is, as a measured reply names it.
   defp whose(request), do: Map.take(request, ["kind", "athanor", "subject"])
+
+  # A place given room: answered with its kind's bound, and held.
+  defp placed(%{"id" => id, "kind" => kind} = request, state) do
+    bytes = Prima.LocusPool.cap_bytes(Map.fetch!(Prima.LocusPool.kinds(), kind), @work_bytes)
+    send(self(), {:send, %{type: "placed", id: id, memory_bytes: bytes}})
+    %{state | places: Map.put(state.places, id, %{whose: whose(request), spawn: nil})}
+  end
 
   # Why a spawn's kept home refuses it, or nil for a spawn it starts.
   defp kept_refusal(%{"home_mode" => "kept"}, %{kept_root: nil}), do: "unavailable"
