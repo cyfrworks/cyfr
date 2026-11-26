@@ -68,7 +68,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
     end)
 
     keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
-    {:ok, settings} = Locus.Runtime.Settings.pool([keeper: :direct, pool_size: 1], %{})
+    {:ok, settings} = Locus.Runtime.Settings.pool([keeper: :direct], %{})
 
     start_supervised!(
       {DynamicSupervisor, name: Locus.Runtime.RunnerPool.Runners, strategy: :one_for_one}

@@ -47,7 +47,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
     # The scripted keeper keeps the runners' places under its name.
     keeper_opts = Keyword.put_new(keeper_opts, :name, keeper)
-    {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms])
+    {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms, :uids, :clock])
     settings = Map.merge(defaults, Map.new(overrides))
     supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
@@ -455,9 +455,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert_receive {RunnerPool, ^dying, {:gone, _reason}}, 5_000
     :ok = :sys.resume(keeper)
 
-    # The runner the pool spawned behind it starts; the next one the keeper
-    # refuses.
-    wait_until(fn -> counts(pool).fresh == 1 and length(spawns(keeper)) == 1 end)
+    # The runner the pool spawned behind it starts, the pool having heard it
+    # attach: a runner that attaches ends a refusal the pool remembers, so
+    # one heard after the refusal below would have the pool try again. The
+    # next one the keeper refuses.
+    wait_until(fn ->
+      length(spawns(keeper)) == 1 and Enum.any?(Runners.runners(pool), &(&1.state == :fresh))
+    end)
+
     [%{spec: %{runner: started}}] = spawns(keeper)
     :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
     {:ok, _started, ^started} = RunnerPool.take(pool, "ath_a", "exec_2")
@@ -496,6 +501,394 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {pid, id}
   end
 
+  # A clock the test sets, in monotonic milliseconds, for the pool to read
+  # an idle runner's time on.
+  defp scripted_clock(at) do
+    clock = :atomics.new(1, signed: true)
+    :atomics.put(clock, 1, at)
+    clock
+  end
+
+  defp set_clock(clock, at), do: :atomics.put(clock, 1, at)
+  defp read_clock(clock), do: fn -> :atomics.get(clock, 1) end
+
+  # The pool reads `pid`'s idle time now, as its timer does when it fires.
+  defp idle_due(pool, pid) do
+    send(pool, {:idle_expired, pid})
+    _status = RunnerPool.status(pool)
+    :ok
+  end
+
+  # How many runners the keeper has spawned, read once every runner the
+  # pool holds is one the keeper spawned: a take is answered, and a refill
+  # decides, before the runner's own process has placed and spawned it.
+  defp spawned!(pool, keeper) do
+    wait_until(fn ->
+      ids = MapSet.new(spawns(keeper), & &1.spec.runner)
+      Enum.all?(Runners.runners(pool), &MapSet.member?(ids, &1.id))
+    end)
+
+    length(spawns(keeper))
+  end
+
+  defp state_of(pool, pid),
+    do: Enum.find_value(Runners.runners(pool), &(&1.pid == pid && &1.state))
+
+  test "a kept runner outlives 30 seconds, serves its athanor warm, and is released at the long limit",
+       %{keeper: keeper} do
+    clock = scripted_clock(0)
+    # The default: 15 minutes.
+    pool = start_pool!(keeper, clock: read_clock(clock))
+    assert :sys.get_state(pool).settings.idle_ttl_ms == 900_000
+    serve!(pool)
+    {pid, id} = idle!(pool, keeper, "ath_a", "exec_1")
+
+    # 30 seconds and more past its keeping it is still its athanor's, and
+    # its athanor's next start is served by it, warm.
+    set_clock(clock, 30_001)
+    :ok = idle_due(pool, pid)
+    assert state_of(pool, pid) == :idle
+    assert {:ok, ^pid, ^id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    complete(spawn_of(keeper, pid), "exec_2", true)
+    assert_receive {RunnerPool, ^pid, {:complete, "exec_2", true}}, 5_000
+    wait_until(fn -> state_of(pool, pid) == :idle end)
+
+    # Kept again at 30 001: the time of its first keeping ends nothing, and
+    # a millisecond short of 15 minutes since the second it stays.
+    set_clock(clock, 900_000)
+    :ok = idle_due(pool, pid)
+    set_clock(clock, 930_000)
+    :ok = idle_due(pool, pid)
+    assert {state_of(pool, pid), ScriptedKeeper.releases(keeper)} == {:idle, []}
+
+    # At 15 minutes it goes, and the floor stays.
+    set_clock(clock, 930_001)
+    :ok = idle_due(pool, pid)
+    left!(pool, pid)
+    assert ScriptedKeeper.releases(keeper) == [{id, 0}]
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0} end)
+  end
+
+  test "a kept runner's one timer ends it at its limit though the pool reads its clock late at the keeping",
+       %{keeper: keeper} do
+    readings = :atomics.new(1, [])
+
+    # The real clock, read 5 ms late at the keeping alone, as a pool
+    # descheduled there reads it.
+    clock = fn ->
+      if :atomics.add_get(readings, 1, 1) == 1 do
+        # sleep-ok: stands for the pool's process descheduled for 5 ms at the keeping.
+        Process.sleep(5)
+      end
+
+      System.monotonic_time(:millisecond)
+    end
+
+    pool = start_pool!(keeper, idle_ttl_ms: 200, clock: clock)
+    serve!(pool)
+    {pid, id} = idle!(pool, keeper, "ath_a", "exec_1")
+    left!(pool, pid)
+    assert ScriptedKeeper.releases(keeper) == [{id, 0}]
+  end
+
+  test "the pool counts the uids of its role's pool as the keeper's --pool names them", %{
+    keeper: keeper
+  } do
+    pool = start_pool!(keeper, [])
+    assert :sys.get_state(pool).uids == Enum.count(Prima.LocusRoles.role!(:runtime).uids)
+  end
+
+  # Runners `athanors` kept idle in that order, on the scripted clock, the
+  # floor's fresh runner beside them.
+  defp kept!(pool, keeper, clock, athanors) do
+    for {athanor, n} <- Enum.with_index(athanors, 1) do
+      set_clock(clock, n)
+      idle!(pool, keeper, athanor, "exec_#{athanor}")
+    end
+  end
+
+  test "with every uid held, the oldest kept runner gives way to another athanor's start, " <>
+         "which waits for its release and is served before the floor is refilled",
+       %{keeper: keeper} do
+    clock = scripted_clock(0)
+    pool = start_pool!(keeper, uids: 3, clock: read_clock(clock))
+    serve!(pool)
+    [{a, a_id}, {b, b_id}] = kept!(pool, keeper, clock, ["ath_a", "ath_b"])
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 2, busy: 0, tainted: 0} end)
+    assert spawned!(pool, keeper) == 3
+
+    {starts, c} =
+      never_retired(spawn_of(keeper, a), fn ->
+        # The floor's runner is taken: the refill finds every uid held, and
+        # the oldest kept runner, ath_a's, gives way for it.
+        {:ok, c, _c_id} = RunnerPool.take(pool, "ath_c", "exec_c")
+        wait_until(fn -> ScriptedKeeper.releases(keeper) == [{a_id, 0}] end)
+
+        # ath_d's start, while ath_a's runner is still being ended, waits
+        # for its uid, which goes to it ahead of the refill.
+        starts = Task.async(fn -> RunnerPool.take(pool, "ath_d", "exec_d", soon()) end)
+
+        wait_until(fn ->
+          Enum.any?(:sys.get_state(pool).runners, fn {pid, e} ->
+            pid == a and e.waiter != nil and e.waiter.execution_id == "exec_d"
+          end)
+        end)
+
+        assert {Task.yield(starts, 0), spawned!(pool, keeper), state_of(pool, b)} ==
+                 {nil, 3, :idle}
+
+        {starts, c}
+      end)
+
+    # At ath_a's release the start is served a runner of its own; the
+    # refill finds every uid held again, and ath_b's goes for the floor.
+    assert {:ok, d, _d_id} = Task.await(starts)
+    assert d not in [a, b, c]
+    left!(pool, a)
+    left!(pool, b)
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 2, tainted: 0} end)
+    assert ScriptedKeeper.releases(keeper) == [{a_id, 0}, {b_id, 0}]
+    assert spawned!(pool, keeper) == 5
+  end
+
+  test "a refill releases only the uids it is short: one kept runner already going counts, " <>
+         "and a third stays kept when the second is taken by its own athanor",
+       %{keeper: keeper} do
+    clock = scripted_clock(0)
+    pool = start_pool!(keeper, uids: 4, clock: read_clock(clock))
+    serve!(pool)
+    [{a, a_id}, {b, _b_id}, {c, _c_id}] = kept!(pool, keeper, clock, ["ath_a", "ath_b", "ath_c"])
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 3, busy: 0, tainted: 0} end)
+
+    never_retired(spawn_of(keeper, a), fn ->
+      # Another athanor takes the floor's runner: every uid held, the oldest
+      # kept runner, ath_a's, goes for the refill.
+      {:ok, _d, _d_id} = RunnerPool.take(pool, "ath_d", "exec_d")
+      wait_until(fn -> ScriptedKeeper.releases(keeper) == [{a_id, 0}] end)
+
+      # Before ath_a's is gone, ath_b takes its own: the refill is still
+      # short one uid, which ath_a's going covers, so ath_c's stays kept.
+      assert {:ok, ^b, _} = RunnerPool.take(pool, "ath_b", "exec_b2")
+
+      assert {state_of(pool, a), state_of(pool, c), ScriptedKeeper.releases(keeper)} ==
+               {:retiring, :idle, [{a_id, 0}]}
+    end)
+
+    left!(pool, a)
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+    assert {state_of(pool, c), ScriptedKeeper.releases(keeper)} == {:idle, [{a_id, 0}]}
+  end
+
+  test "the floor comes before a kept runner: with every uid at work, a runner kept at its clean end " <>
+         "gives way for a fresh one",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, [])
+    serve!(pool)
+
+    # Every uid of the role at work, and none fresh.
+    uids = Enum.count(Prima.LocusRoles.role!(:runtime).uids)
+
+    [{first, first_id} | _] =
+      for n <- 1..uids do
+        {:ok, pid, id} = RunnerPool.take(pool, "ath_#{n}", "exec_#{n}")
+        {pid, id}
+      end
+
+    assert counts(pool) == %{fresh: 0, idle: 0, busy: uids, tainted: 0}
+
+    # One ends cleanly: kept, it is the only runner that can give way, and
+    # a fresh one stands again with no other start.
+    complete(spawn_of(keeper, first), "exec_1", true)
+    assert_receive {RunnerPool, ^first, {:complete, "exec_1", true}}, 5_000
+    left!(pool, first)
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: uids - 1, tainted: 0} end)
+    assert ScriptedKeeper.releases(keeper) == [{first_id, 0}]
+  end
+
+  test "the floor comes before a kept runner: an older kept runner gives way, and the one just kept stays",
+       %{keeper: keeper} do
+    clock = scripted_clock(0)
+    pool = start_pool!(keeper, uids: 4, clock: read_clock(clock))
+    serve!(pool)
+    [{x, x_id}, {y, y_id}] = kept!(pool, keeper, clock, ["ath_x", "ath_y"])
+    {:ok, b, _b_id} = RunnerPool.take(pool, "ath_b", "exec_b")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 2, busy: 1, tainted: 0} end)
+
+    {waiting, b_kept} =
+      never_retired(spawn_of(keeper, x), fn ->
+        # The floor's runner taken, the oldest kept runner goes for it, and
+        # another athanor's start waits for its uid: the floor is empty.
+        {:ok, _d, _d_id} = RunnerPool.take(pool, "ath_d", "exec_d")
+        wait_until(fn -> ScriptedKeeper.releases(keeper) == [{x_id, 0}] end)
+        waiting = Task.async(fn -> RunnerPool.take(pool, "ath_e", "exec_e", soon()) end)
+        wait_until(fn -> waiting?(pool, "exec_e") end)
+
+        # ath_b's runner ends cleanly and is kept: the floor comes first, and
+        # ath_y's, the older, gives way for it.
+        set_clock(clock, 3)
+        complete(spawn_of(keeper, b), "exec_b", true)
+        assert_receive {RunnerPool, ^b, {:complete, "exec_b", true}}, 5_000
+        wait_until(fn -> ScriptedKeeper.releases(keeper) == [{x_id, 0}, {y_id, 0}] end)
+        {waiting, state_of(pool, b)}
+      end)
+
+    assert b_kept == :idle
+    assert {:ok, _e, _e_id} = Task.await(waiting)
+    left!(pool, y)
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+    assert state_of(pool, b) == :idle
+  end
+
+  test "a start withdrawn or past its deadline while it waits for a uid leaves nothing of it, " <>
+         "and the runner released for it stays released",
+       %{keeper: keeper} do
+    clock = scripted_clock(0)
+    pool = start_pool!(keeper, uids: 3, clock: read_clock(clock))
+    serve!(pool)
+    [{a, a_id}, {b, _b_id}] = kept!(pool, keeper, clock, ["ath_a", "ath_b"])
+
+    never_retired(spawn_of(keeper, a), fn ->
+      # The floor's runner taken, ath_a's gives way for the refill.
+      {:ok, _c, _c_id} = RunnerPool.take(pool, "ath_c", "exec_c")
+      wait_until(fn -> ScriptedKeeper.releases(keeper) == [{a_id, 0}] end)
+
+      # Ahead of the refill, ath_d's start waits on ath_a's runner, and is
+      # withdrawn: answered as killed, and ath_a's runner goes on going.
+      killed = Task.async(fn -> RunnerPool.take(pool, "ath_d", "exec_d", soon()) end)
+      wait_until(fn -> waiting?(pool, "exec_d") end)
+      :ok = RunnerPool.withdraw(pool, "exec_d")
+      assert Task.await(killed) == {:error, :killed}
+
+      # The next waits on it too, its deadline passing first: answered so.
+      due = System.monotonic_time(:millisecond) + 200
+      assert RunnerPool.take(pool, "ath_e", "exec_e", due) == {:error, :past_deadline}
+
+      refute waiting?(pool, "exec_d") or waiting?(pool, "exec_e")
+
+      assert {state_of(pool, a), state_of(pool, b), spawned!(pool, keeper)} ==
+               {:retiring, :idle, 3}
+    end)
+
+    # Its release goes to the refill alone: no start was left waiting, and
+    # no runner was spawned or kept runner released for either.
+    left!(pool, a)
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
+    assert ScriptedKeeper.releases(keeper) == [{a_id, 0}]
+    assert state_of(pool, b) == :idle
+    assert spawned!(pool, keeper) == 4
+    refute Enum.any?(Runners.runners(pool), &(&1.execution_id in ["exec_d", "exec_e"]))
+  end
+
+  defp waiting?(pool, execution_id),
+    do:
+      Enum.any?(:sys.get_state(pool).runners, fn {_pid, e} ->
+        e.waiter != nil and e.waiter.execution_id == execution_id
+      end)
+
+  # A take whose answer, or the exit of its call when none comes by its
+  # deadline and the call's own room, is the task's value.
+  defp take_async(pool, athanor, execution_id, deadline) do
+    Task.async(fn ->
+      try do
+        RunnerPool.take(pool, athanor, execution_id, deadline)
+      catch
+        :exit, reason -> {:no_answer, reason}
+      end
+    end)
+  end
+
+  defp queue_len(pid), do: elem(Process.info(pid, :message_queue_len), 1)
+
+  test "a start waiting for the uid of a runner whose spawn the keeper then refuses is answered",
+       %{keeper: keeper} do
+    :ok = ScriptedKeeper.placing(keeper, :held)
+    pool = start_pool!(keeper, uids: 2)
+    serve!(pool)
+
+    # Both uids held by runners taken while their places wait.
+    {:ok, x, x_id} = RunnerPool.take(pool, "ath_x", "exec_x", soon())
+    wait_until(fn -> length(ScriptedKeeper.held_places(keeper)) == 2 end)
+    {:ok, _y, _y_id} = RunnerPool.take(pool, "ath_y", "exec_y", soon())
+    assert counts(pool) == %{fresh: 0, idle: 0, busy: 2, tainted: 0}
+
+    # x's process is held between its place and the keeper's answer to its
+    # spawn, which is a refusal queued behind.
+    suspender = Task.async(fn -> :sys.suspend(x) end)
+    wait_until(fn -> queue_len(x) == 1 end)
+    :ok = ScriptedKeeper.refuse(keeper, :capacity)
+    :ok = ScriptedKeeper.answer_place(keeper, x_id, :ok)
+    :ok = Task.await(suspender)
+    wait_until(fn -> :sys.get_state(pool).runners[x].placed end)
+
+    # Its start is killed: x is being ended and holds its uid, and another
+    # athanor's start waits for it.
+    :ok = RunnerPool.taint(pool, x, 0, "exec_x")
+    z = take_async(pool, "ath_z", "exec_z", System.monotonic_time(:millisecond) + 1_000)
+    wait_until(fn -> waiting?(pool, "exec_z") end)
+
+    capture_log(fn ->
+      :ok = :sys.resume(x)
+      assert_receive {RunnerPool, ^x, {:gone, {:refused, %{reason: "capacity"}}}}, 5_000
+      refute match?({:no_answer, _}, Task.await(z, 5_000))
+    end)
+  end
+
+  test "a start waiting for the uid of a runner whose refusal for room crosses its kill is answered",
+       %{keeper: keeper} do
+    :ok = ScriptedKeeper.placing(keeper, :held)
+    pool = start_pool!(keeper, uids: 2)
+    serve!(pool)
+    {:ok, x, x_id} = RunnerPool.take(pool, "ath_x", "exec_x", soon())
+    wait_until(fn -> length(ScriptedKeeper.held_places(keeper)) == 2 end)
+    {:ok, _y, _y_id} = RunnerPool.take(pool, "ath_y", "exec_y", soon())
+
+    # x's kill, then another athanor's start, reach the pool before the
+    # refusal of x's place for room that x sent before it was killed.
+    :ok = :sys.suspend(pool)
+    killing = Task.async(fn -> RunnerPool.taint(pool, x, 0, "exec_x") end)
+    wait_until(fn -> queue_len(pool) == 1 end)
+    z = take_async(pool, "ath_z", "exec_z", System.monotonic_time(:millisecond) + 1_000)
+    wait_until(fn -> queue_len(pool) == 2 end)
+
+    :ok =
+      ScriptedKeeper.answer_place(
+        keeper,
+        x_id,
+        {:error, {:no_memory, %{need: 1, free: 0, mine: [], others_bytes: 0}}}
+      )
+
+    wait_until(fn -> queue_len(pool) == 3 end)
+
+    capture_log(fn ->
+      :ok = :sys.resume(pool)
+      assert :ok = Task.await(killing)
+      refute match?({:no_answer, _}, Task.await(z, 5_000))
+    end)
+  end
+
+  test "with every uid held by runners at work, no runner gives way: the start spawns and the keeper's refusal for want of a uid answers it",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, uids: 2)
+    serve!(pool)
+    {:ok, a, _a_id} = RunnerPool.take(pool, "ath_a", "exec_a")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
+    {:ok, b, _b_id} = RunnerPool.take(pool, "ath_b", "exec_b")
+    # The refill finds no uid and no kept runner: it spawns nothing. Both
+    # runners spawned before the keeper refuses, so neither is refused.
+    assert counts(pool) == %{fresh: 0, idle: 0, busy: 2, tainted: 0}
+    assert spawned!(pool, keeper) == 2
+
+    :ok = ScriptedKeeper.refuse(keeper, :capacity)
+    {:ok, c, _c_id} = RunnerPool.take(pool, "ath_c", "exec_c")
+    assert_receive {RunnerPool, ^c, {:gone, {:refused, %{reason: "capacity"}}}}, 5_000
+
+    assert %{
+             releases: ScriptedKeeper.releases(keeper),
+             busy: Enum.map([a, b], &state_of(pool, &1))
+           } ==
+             %{releases: [], busy: [:busy, :busy]}
+  end
+
   defp queued?(pid, pattern_fun) do
     {:messages, messages} = Process.info(pid, :messages)
     Enum.any?(messages, pattern_fun)
@@ -508,7 +901,13 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {idle, idle_id} = idle!(pool, keeper, "ath_a", "exec_1")
     {:ok, busy, busy_id} = RunnerPool.take(pool, "ath_b", "exec_2")
     assert {:ok, _token} = assign(busy, "ath_b")
-    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} end)
+    # The floor's runner attached: the status counts one still spawning as
+    # fresh.
+    wait_until(fn ->
+      counts(pool) == %{fresh: 1, idle: 1, busy: 1, tainted: 0} and
+        Enum.any?(Runners.runners(pool), &(&1.state == :fresh))
+    end)
+
     %{pid: fresh} = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
 
     :ok = ScriptedKeeper.give_way(keeper, busy_id)
@@ -672,10 +1071,13 @@ defmodule Locus.Runtime.RunnerPoolTest do
     pool = start_pool!(keeper, [])
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    # Spawned, so placed: its runner tells the pool so before it spawns, and
+    # a runner tainted while it still waits for its place never spawns.
+    spawn = spawn_of(keeper, pid)
     assert :ok = RunnerPool.taint(pool, pid, 1_000, "exec_1")
 
     ScriptedKeeper.write(
-      spawn_of(keeper, pid),
+      spawn,
       RunnerControl.encode(%{type: :exit, runner: id, open: ["att_1", "att_child"]})
     )
 
@@ -952,7 +1354,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = ScriptedKeeper.placing(keeper, :held)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
+    wait_until(fn -> match?([^id | _], ScriptedKeeper.held_places(keeper)) end)
 
     capture_log(fn ->
       Process.exit(pid, :kill)
@@ -971,7 +1373,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     :ok = ScriptedKeeper.placing(keeper, :held)
     serve!(pool)
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    wait_until(fn -> hd(ScriptedKeeper.held_places(keeper)) == id end)
+    wait_until(fn -> match?([^id | _], ScriptedKeeper.held_places(keeper)) end)
 
     log =
       capture_log(fn ->

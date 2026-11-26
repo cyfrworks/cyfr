@@ -38,7 +38,7 @@ defmodule Locus.Config do
   | `LOCUS_RUNTIME_HOST_API_URL` | `:runtime`, `:host_url` | an http or https URL with a host and no path | none |
   | `LOCUS_RUNTIME_BIND` | `:runtime`, `:bind` | an IPv4 or IPv6 address | `127.0.0.1` |
   | `LOCUS_RUNTIME_PORT` | `:runtime`, `:port` | 0..65535 | 4200 |
-  | `LOCUS_RUNTIME_IDLE_TTL_MS` | `:runtime`, `:idle_ttl_ms` | 1..86400000 | 30000 |
+  | `LOCUS_RUNTIME_IDLE_TTL_MS` | `:runtime`, `:idle_ttl_ms` | 1..86400000 | 900000 |
   | `LOCUS_RUNTIME_WATCHDOG_GRACE_MS` | `:runtime`, `:watchdog_grace_ms` | 1..600000 | 5000 |
   | `LOCUS_RUNTIME_RELEASE_GRACE_MS` | `:runtime`, `:release_grace_ms` | 1..600000 | 2000 |
   | `LOCUS_RUNTIME_ATTACH_DIR` | `:runtime`, `:attach_dir` | a clean absolute directory path | the role's run folder (`KEEPER_RUN_DIR`) |
