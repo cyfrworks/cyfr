@@ -146,7 +146,7 @@ TOKEN = "0123456789abcdef" * 4
 # The place every spawn of the keeper steps but `measure` names.
 PLACE = "p1"
 # The keeper's protocol: every line carries its version.
-V = 7
+V = 8
 BOOT_S = 90
 NO_CAPS = "0000000000000000"
 

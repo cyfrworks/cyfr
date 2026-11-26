@@ -72,6 +72,12 @@ container as they were. cyfr-locus bounds every build the builder places
 at a build's bound; a build ended by the container's own limit or the
 deadline instead fails its case here.
 
+`pool` asks the service for the builds role's report on the pool wire
+(Prima.LocusPool) after a build of an athanor of its own: every counter is
+a build's, each once, the build's counted under its athanor with no
+subject, its bytes back to 0 once it ended; a request signed with the
+runtime's or the backends' pool key, derived from the same key, is refused.
+
 Every case prints what it measured: the peak of the hostile tree (the
 resident sets of its uid's processes, sampled from /proc about ten times a
 second, and its group's memory.peak where it has one), what ended it and
@@ -82,7 +88,7 @@ end, to see what a build does at its bound. The hostile work is bounded
 by the container's own memory limit, which the suite reads from the
 container and refuses to run without.
 
-Usage: tests/builder-image/memory.py IMAGE [--measure] [keeper|room|javascript|rust|tree|home]...
+Usage: tests/builder-image/memory.py IMAGE [--measure] [keeper|room|pool|javascript|rust|tree|home]...
 """
 
 import copy
@@ -152,7 +158,7 @@ exec npm run build
 """ % (HELD, HOLDING)
 MEASURE = {"holding": HOLDING, "poll_ms": 200, "margin_ms": 100, "grace_ms": 0}
 # The keeper's protocol: every line carries its version.
-V = 7
+V = 8
 
 # The room case. A build's allowance (Prima.LocusPool), the room it needs
 # and its least charge until ten seconds after its spawn; the pool's work,
@@ -1048,6 +1054,30 @@ def test_build(stack, case, limit, measure):
            f"{case}: the release and the container were not touched", {"before": before, "after": after})
 
 
+def test_pool_report(stack):
+    """The builds role's report holds a build's counters alone, the build's under its athanor, and the route refuses
+    the other services' pool keys."""
+    # The key the builds service was given (imagesuite.pool_key takes its request key first).
+    key = bytes.fromhex(stack.key)
+    athanor = "ath_pool-report"
+    status, answer = stack.build(SIBLING, "javascript", "tincture", athanor_id=athanor)
+    expect(status == 200, "the build the report counts succeeds", brief(answer))
+    deadline = time.monotonic() + 30
+    while True:
+        _boot, counters = imagesuite.pool_reports(stack.base, "builds", key)
+        mine = [c for c in counters if c.get("athanor") == athanor]
+        if (mine and all(c["bytes"] == 0 for c in mine)) or time.monotonic() > deadline:
+            break
+        # sleep-ok: the keeper counts a place at its readings, once a second
+        time.sleep(0.5)
+    expect(len(mine) == 1 and mine[0]["kind"] == "build" and "subject" not in mine[0] and mine[0]["bytes"] == 0
+           and mine[0]["peak_bytes"] >= 64 * MIB and mine[0]["measured_ms"] > 0 and mine[0]["mib_ms"] > 0,
+           "the build is counted once under its athanor, with no subject, its 64 MiB at its peak and its time measured, "
+           "its bytes 0 once it ended", mine)
+    imagesuite.pool_refuses_others(stack.base, "builds", key)
+    print("ok: the builds service reports its builds alone, each once, under its own pool key alone", flush=True)
+
+
 def container_limit(stack):
     """Rest's memory.max, the pool's bound over the builds, which bounds the hostile work: the container carries no
     limit of its own."""
@@ -1077,6 +1107,8 @@ def main(image, measure, cases):
             expect(limit.isdigit() and int(limit) > 0, "rest has a memory bound, which bounds the hostile work", limit)
             if case == "keeper":
                 test_keeper(stack, int(limit), canary)
+            elif case == "pool":
+                test_pool_report(stack)
             else:
                 test_build(stack, case, int(limit), measure)
     finally:
@@ -1088,4 +1120,5 @@ if __name__ == "__main__":
     arguments = [argument for argument in sys.argv[1:] if argument != "--measure"]
     if not arguments:
         sys.exit(__doc__)
-    main(arguments[0], "--measure" in sys.argv, arguments[1:] or ["keeper", "room", "javascript", "rust", "tree", "home"])
+    main(arguments[0], "--measure" in sys.argv,
+         arguments[1:] or ["keeper", "room", "pool", "javascript", "rust", "tree", "home"])

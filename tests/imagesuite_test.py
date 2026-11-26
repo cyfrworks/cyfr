@@ -22,6 +22,8 @@ Usage: python3 -I tests/imagesuite_test.py
 
 import ast
 import glob
+import hashlib
+import hmac
 import http.server
 import json
 import os
@@ -785,6 +787,58 @@ class PoolBounds(unittest.TestCase):
                 self.meminfo(status, stdout)
                 with self.assertRaises(SystemExit):
                     imagesuite.work_settings("image", work)
+
+
+class PoolWire(unittest.TestCase):
+    """The pool wire's signer is Prima.LocusPool's: each service's pool key and header, from one key, are the vector's,
+    and a service's route is asked in its own route, header and body."""
+
+    def test_each_services_key_and_header_are_the_vectors(self):
+        wire = imagesuite.POOL_WIRE
+        key = bytes.fromhex(wire["key_hex"])
+        self.assertEqual(sorted(wire["services"]), sorted(imagesuite.ROLE_KINDS))
+        for service, vector in wire["services"].items():
+            pool_key = imagesuite.pool_key(service, key)
+            self.assertEqual(pool_key.hex(), vector["pool_key_hex"])
+            if service == "builds":
+                held = hmac.new(key, b"cyfr-locus/v1/builds", hashlib.sha256).digest()
+                self.assertEqual(held.hex(), vector["request_key_hex"])
+            self.assertEqual(imagesuite.pool_header(service, pool_key, wire["ts"], wire["body"].encode()), vector["header"])
+        self.assertEqual(json.dumps({"v": wire["version"], "after": 512}, separators=(",", ":")), wire["body"])
+
+    def test_a_report_is_asked_on_the_route_under_the_signers_key(self):
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["content-length"]))
+                seen.append((self.path, self.headers[imagesuite.POOL_WIRE["auth_header"]], body))
+                answer = json.dumps({"v": 1, "report": {"boot": "0" * 32, "budget": 0, "work": 0, "floor": 0, "used": 0,
+                                                        "counters": []}}).encode()
+                self.send_response(200)
+                self.send_header("content-length", str(len(answer)))
+                self.end_headers()
+                self.wfile.write(answer)
+
+            def log_message(self, *_args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            key = bytes(range(32))
+            base = f"http://127.0.0.1:{server.server_port}"
+            self.assertEqual(imagesuite.pool_reports(base, "builds", key), ("0" * 32, []))
+            imagesuite.pool_ask(base, "builds", key, after=7, signer="backends")
+        finally:
+            server.shutdown()
+            server.server_close()
+        (path, header, body), (_, other, _) = seen
+        self.assertEqual(path, imagesuite.POOL_WIRE["route"])
+        self.assertEqual(body, b'{"v":1,"after":0}')
+        ts = int(header.split("ts=")[1].split()[0])
+        self.assertEqual(header, imagesuite.pool_header("builds", imagesuite.pool_key("builds", key), ts, body))
+        self.assertNotEqual(header.split("mac=")[1], other.split("mac=")[1])
 
 
 if __name__ == "__main__":

@@ -223,11 +223,11 @@ class ClientOutput(unittest.TestCase):
                         parent.settimeout(5)
                         with parent.makefile("rb") as lines:
                             place = json.loads(lines.readline())
-                            parent.sendall(json.dumps({"v": 7, "type": "placed", "id": place["id"],
+                            parent.sendall(json.dumps({"v": 8, "type": "placed", "id": place["id"],
                                                        "memory_bytes": memory.BOUND}).encode() + b"\n")
                             request = json.loads(lines.readline())
-                        self.assertEqual(place, {"v": 7, "type": "place", "id": "p1", "kind": "build"})
-                        self.assertEqual((request["v"], request["type"], request["place"]), (7, "spawn", "p1"))
+                        self.assertEqual(place, {"v": 8, "type": "place", "id": "p1", "kind": "build"})
+                        self.assertEqual((request["v"], request["type"], request["place"]), (8, "spawn", "p1"))
                         self.assertFalse({"memory_bytes", "cpu_quota"} & request.keys(), request)
                         os.kill(process.pid, signal.SIGSTOP)
                         _, status = os.waitpid(process.pid, os.WUNTRACED)
@@ -243,9 +243,9 @@ class ClientOutput(unittest.TestCase):
                             relay.sendall(packet + frame(1, b"") + frame(2, b""))
                         spawn_id = "a" * 32
                         for reply in (
-                            {"v": 7, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
-                            {"v": 7, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
-                            {"v": 7, "type": "released", "spawn_id": spawn_id},
+                            {"v": 8, "type": "spawned", "id": request["id"], "spawn_id": spawn_id, "uid": stack.POOL_FIRST, "pid": 1},
+                            {"v": 8, "type": "exited", "spawn_id": spawn_id, "code": 0, "signal": None, "memory": None},
+                            {"v": 8, "type": "released", "spawn_id": spawn_id},
                         ):
                             parent.sendall(json.dumps(reply).encode() + b"\n")
                         os.kill(process.pid, signal.SIGCONT)
@@ -282,11 +282,11 @@ def keeper(sock, requests):
         requests.append(request)
         if request["type"] == "place":
             owner = {key: request[key] for key in ("kind", "athanor") if key in request}
-            send({"v": 7, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
+            send({"v": 8, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
         elif request["type"] == "spawn" and request.keys() & {"memory_bytes", "cpu_quota"}:
-            send({"v": 7, "type": "error", "code": "bad_request"})
+            send({"v": 8, "type": "error", "code": "bad_request"})
         elif request["type"] == "spawn":
-            send({"v": 7, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            send({"v": 8, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
             relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             relay.connect(request["attach"]["path"])
             relay.sendall(frame(3, request["attach"]["token"].encode())
@@ -296,15 +296,15 @@ def keeper(sock, requests):
         elif request["type"] == "measure":
             measures += 1
             if free or measures == 1:
-                send({"v": 7, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": 8, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 7, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
+                send({"v": 8, "type": "measured", "id": request["id"], **owner, "bytes": memory.HELD + (90 << 20), "lesser": False,
                       "age_ms": 0})
             if releasing:
-                send({"v": 7, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+                send({"v": 8, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
                 relay.sendall(frame(1, b"") + frame(2, b""))
                 relay.close()
-                send({"v": 7, "type": "released", "spawn_id": SPAWN_ID})
+                send({"v": 8, "type": "released", "spawn_id": SPAWN_ID})
                 releasing, free = False, True
 
 
@@ -361,13 +361,13 @@ class MeasuredBuild(unittest.TestCase):
         self.assertEqual(types[:2], ["place", "spawn"])
         self.assertEqual(types[-3:], ["release", "measure", "measure"])
         self.assertEqual(set(types[2:-3]), {"measure"})
-        self.assertEqual(self.requests[0], {"v": 7, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
+        self.assertEqual(self.requests[0], {"v": 8, "type": "place", "id": "p1", "kind": "build", "athanor": memory.ATHANOR})
         self.assertEqual({key: self.requests[1][key] for key in ("v", "id", "place", "pool")},
-                         {"v": 7, "id": "1", "place": "p1", "pool": "probe"})
+                         {"v": 8, "id": "1", "place": "p1", "pool": "probe"})
         self.assertFalse({"memory_bytes", "cpu_quota"} & self.requests[1].keys(), self.requests[1])
-        self.assertEqual(self.requests[-3], {"v": 7, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
+        self.assertEqual(self.requests[-3], {"v": 8, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0})
         measures = [request for request in self.requests if request["type"] == "measure"]
-        self.assertEqual(measures, [{"v": 7, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
+        self.assertEqual(measures, [{"v": 8, "type": "measure", "id": f"m{n}", "place": "p1"} for n in range(1, len(measures) + 1)])
 
     def test_a_build_read_under_its_owner_and_free_only_after_released_passes(self):
         memory.judge_build(self.spawn())
@@ -436,11 +436,11 @@ class RefusedSpawns(unittest.TestCase):
                          [("place", "p1"), ("place", "p2"), ("spawn", "1"), ("spawn", "2"), ("drop", "p1"), ("drop", "p2")])
         self.assertEqual([{key: requests[n][key] for key in ("memory_bytes", "cpu_quota") if key in requests[n]} for n in (2, 3)],
                          [spawn["extra"] for spawn in refused])
-        self.assertEqual(requests[4], {"v": 7, "type": "drop", "place": "p1"})
+        self.assertEqual(requests[4], {"v": 8, "type": "drop", "place": "p1"})
         self.assertEqual([[{k: v for k, v in r.items() if k not in ("at_ms", "seq")} for r in spawn["replies"]]
                           for spawn in report["spawns"]],
-                         [[{"v": 7, "type": "placed", "id": f"p{n}", "memory_bytes": memory.BOUND},
-                           {"v": 7, "type": "error", "code": "bad_request", "id": str(n)}] for n in (1, 2)])
+                         [[{"v": 8, "type": "placed", "id": f"p{n}", "memory_bytes": memory.BOUND},
+                           {"v": 8, "type": "error", "code": "bad_request", "id": str(n)}] for n in (1, 2)])
 
 
 HOLDER_BYTES = memory.ROOM_HELD + (40 << 20)
@@ -463,31 +463,31 @@ def room_keeper(sock, requests):
         kind = request["type"]
         if kind == "place" and request["id"] == memory.ROOM_HOLDER["place"]:
             holder = request
-            send({"v": 7, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
+            send({"v": 8, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
         elif kind == "spawn":
-            send({"v": 7, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            send({"v": 8, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
             relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             relay.connect(request["attach"]["path"])
             relay.sendall(frame(3, request["attach"]["token"].encode()))
         elif kind == "measure":
             measures += 1
             if measures == 1:
-                send({"v": 7, "type": "error", "id": request["id"], "code": "unmeasured"})
+                send({"v": 8, "type": "error", "id": request["id"], "code": "unmeasured"})
             else:
-                send({"v": 7, "type": "measured", "id": request["id"], "kind": "build", "athanor": holder["athanor"],
+                send({"v": 8, "type": "measured", "id": request["id"], "kind": "build", "athanor": holder["athanor"],
                       "subject": holder["subject"], "bytes": HOLDER_BYTES, "lesser": False, "age_ms": 0})
         elif kind == "place" and released:
-            send({"v": 7, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
+            send({"v": 8, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
         elif kind == "place":
             mine = request["athanor"] == holder["athanor"]
-            send({"v": 7, "type": "error", "id": request["id"], "code": "no_memory", "held": {
+            send({"v": 8, "type": "error", "id": request["id"], "code": "no_memory", "held": {
                 "need": memory.BUILD_ALLOWANCE, "free": memory.ROOM_WORK - HOLDER_BYTES,
                 "mine": [{"kind": "build", "subject": holder["subject"], "bytes": HOLDER_BYTES}] if mine else [],
                 "others_bytes": 0 if mine else HOLDER_BYTES}})
         elif kind == "release":
-            send({"v": 7, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+            send({"v": 8, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
             relay.close()
-            send({"v": 7, "type": "released", "spawn_id": SPAWN_ID})
+            send({"v": 8, "type": "released", "spawn_id": SPAWN_ID})
             released = True
 
 
@@ -546,19 +546,19 @@ class Room(unittest.TestCase):
         holder, (mine, other) = memory.ROOM_HOLDER, memory.ROOM_ASKERS
         spawn = self.requests[1]
         self.assertEqual({key: spawn[key] for key in ("v", "type", "id", "place", "pool", "argv", "env")},
-                         {"v": 7, "type": "spawn", "id": "holder-spawn", "place": holder["place"], "pool": "probe",
+                         {"v": 8, "type": "spawn", "id": "holder-spawn", "place": holder["place"], "pool": "probe",
                           "argv": memory.room_scenario()["holder"]["argv"], "env": {}})
         self.assertFalse({"memory_bytes", "cpu_quota"} & spawn.keys(), spawn)
         self.assertEqual([request for n, request in enumerate(self.requests) if n != 1], [
-            {"v": 7, "type": "place", "id": holder["place"], "kind": "build", "athanor": holder["athanor"],
+            {"v": 8, "type": "place", "id": holder["place"], "kind": "build", "athanor": holder["athanor"],
              "subject": holder["subject"]},
-            {"v": 7, "type": "measure", "id": "m1", "place": holder["place"]},
-            {"v": 7, "type": "measure", "id": "m2", "place": holder["place"]},
-            {"v": 7, "type": "place", "id": mine["place"], "kind": "build", "athanor": mine["athanor"]},
-            {"v": 7, "type": "place", "id": other["place"], "kind": "build", "athanor": other["athanor"]},
-            {"v": 7, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0},
-            {"v": 7, "type": "place", "id": mine["place"], "kind": "build", "athanor": mine["athanor"]},
-            {"v": 7, "type": "drop", "place": mine["place"]},
+            {"v": 8, "type": "measure", "id": "m1", "place": holder["place"]},
+            {"v": 8, "type": "measure", "id": "m2", "place": holder["place"]},
+            {"v": 8, "type": "place", "id": mine["place"], "kind": "build", "athanor": mine["athanor"]},
+            {"v": 8, "type": "place", "id": other["place"], "kind": "build", "athanor": other["athanor"]},
+            {"v": 8, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0},
+            {"v": 8, "type": "place", "id": mine["place"], "kind": "build", "athanor": mine["athanor"]},
+            {"v": 8, "type": "drop", "place": mine["place"]},
         ])
 
     def test_refusals_after_the_wait_with_held_whole_and_a_place_after_the_release_pass(self):

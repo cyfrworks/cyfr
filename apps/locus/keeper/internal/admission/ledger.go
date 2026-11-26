@@ -39,6 +39,10 @@ type Entry struct {
 	// one is never charged under; frozen is an ending's charge.
 	last   uint64
 	frozen uint64
+	// counted is the counter its latest reading is in, and countedBytes the
+	// bytes it put there; nil before its first reading, or uncounted.
+	counted      *counter
+	countedBytes uint64
 }
 
 // Admitted says the place was given room.
@@ -93,17 +97,19 @@ func (ev *Events) merge(o Events) {
 
 // Ledger is the one admission of a machine's Locus work (plan 2.9): every
 // role's places, charged against W, with F kept apart where a role keeps
-// the floor. It keeps no clock of its own: every step is given its now.
+// the floor, and what it counts of who used what (counters). It keeps no
+// clock of its own: every step is given its now.
 type Ledger struct {
 	work      uint64
 	floorKept bool
 	admitted  []*Entry
 	waiting   []*Entry
+	counters  counters
 }
 
 // New is the ledger of a pool of work W, F kept apart where floorKept.
 func New(work uint64, floorKept bool) *Ledger {
-	return &Ledger{work: work, floorKept: floorKept}
+	return &Ledger{work: work, floorKept: floorKept, counters: newCounters()}
 }
 
 // Work is W.
@@ -237,27 +243,38 @@ func (l *Ledger) admit(e *Entry) {
 	l.admitted = append(l.admitted, e)
 }
 
-// Drop takes e out, waiting or admitted, at its drop or its release, and
-// admits what then fits.
+// Drop takes e out, waiting or admitted, at its drop or its release, its
+// bytes out of their counter with it, and admits what then fits.
 func (l *Ledger) Drop(e *Entry, now time.Time) Events {
 	l.waiting = slices.DeleteFunc(l.waiting, func(o *Entry) bool { return o == e })
 	l.admitted = slices.DeleteFunc(l.admitted, func(o *Entry) bool { return o == e })
+	l.counters.withdraw(e, now)
 	return l.step(now, false)
 }
 
 // Spawned starts e's allowance's time.
 func (l *Ledger) Spawned(e *Entry, now time.Time) { e.spawnedAt = now }
 
-// Read stores e's reading.
+// Read stores e's reading and counts it: the time since its last reading
+// is measured where it is within ReadingGap, and a first reading measures
+// none.
 func (l *Ledger) Read(e *Entry, bytes uint64, lesser bool, now time.Time) {
+	var gap time.Duration
+	if !e.readAt.IsZero() {
+		if since := now.Sub(e.readAt); since > 0 && since <= ReadingGap {
+			gap = since
+		}
+	}
+	l.counters.read(e, bytes, gap, now)
 	e.reading, e.lesser, e.readAt = bytes, lesser, now
 	e.last = l.charge(e, now)
 }
 
 // Assign gives e another kind of its class, athanor and subject: a runner
 // given work leaves the floor and is charged by itself, and one at rest
-// again may be asked to give way again. An assign to another class, which
-// would dodge the room and the ceiling its place was admitted by, changes
+// again may be asked to give way again, and its bytes go at once to the
+// counter of whose it now is. An assign to another class, which would
+// dodge the room and the ceiling its place was admitted by, changes
 // nothing and answers false.
 func (l *Ledger) Assign(e *Entry, kind, athanor, subject string, now time.Time) bool {
 	if c, ok := Kinds[kind]; !ok || c != e.class() {
@@ -265,8 +282,28 @@ func (l *Ledger) Assign(e *Entry, kind, athanor, subject string, now time.Time) 
 	}
 	e.Kind, e.Athanor, e.Subject = kind, athanor, subject
 	e.assignedAt, e.asked = now, false
+	l.counters.move(e, now)
 	return true
 }
+
+// Killed counts a kill for memory at e's release at now, its cause an
+// `exited`'s `memory` (KillCap, KillMachine or KillEither), in the counter
+// of e's key on that day, made for it where e was never read.
+func (l *Ledger) Killed(e *Entry, cause string, now time.Time) {
+	l.counters.killed(e, cause, now)
+}
+
+// Report is the role's counters whose rev is past after, by rev, at most
+// ReportCounters, beside the machine's numbers at now. Another role's
+// counters are never in it.
+func (l *Ledger) Report(role string, after uint64, now time.Time) Report {
+	page, next := l.counters.report(role, after)
+	return Report{Work: l.work, Floor: l.floor(), Used: l.used(l.inFloor(), now), Counters: page, Next: next}
+}
+
+// Uncounted is how many uses went uncounted since the ledger was made,
+// every counter held and none free to go.
+func (l *Ledger) Uncounted() uint64 { return l.counters.uncounted }
 
 // Ending freezes e's charge until it is free.
 func (l *Ledger) Ending(e *Entry, now time.Time) {
@@ -278,8 +315,17 @@ func (l *Ledger) Ending(e *Entry, now time.Time) {
 
 // Tick is the ledger's second: starts admitted as room came, those that
 // waited RoomWait refused, and idle runners asked for what is still short,
-// a pool with less than a program's allowance free among it.
-func (l *Ledger) Tick(now time.Time) Events { return l.step(now, true) }
+// a pool with less than a program's allowance free among it. At a day's
+// end each admitted place's bytes go to its counter of the new day, so a
+// counter holding bytes changes at least daily, and only then are the
+// counters past CounterKeep let go.
+func (l *Ledger) Tick(now time.Time) Events {
+	for _, e := range l.admitted {
+		l.counters.move(e, now)
+	}
+	l.counters.sweep(now)
+	return l.step(now, true)
+}
 
 func (l *Ledger) step(now time.Time, second bool) Events {
 	var ev Events
