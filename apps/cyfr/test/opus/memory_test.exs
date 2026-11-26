@@ -219,16 +219,12 @@ defmodule Opus.MemoryTest do
     end
 
     test "a member that holds no slot stores nothing", %{alice: alice, claim: claim} do
-      previous = Application.get_env(:arca, :control_plane_claim_enabled)
-      Application.put_env(:arca, :control_plane_claim_enabled, true)
       page = once(report([counter(1, alice.actor.athanor_id, kind: "run", bytes: 10)]))
 
-      try do
+      Prima.Test.Env.with_app_env(:arca, :control_plane_claim_enabled, true, fn ->
         assert %{"wrk_local" => {:lost, :not_owner}} =
                  Opus.Memory.poll([endpoint("wrk_local", :runtime, page)], claim, :none)
-      after
-        Application.put_env(:arca, :control_plane_claim_enabled, previous)
-      end
+      end)
 
       assert {:ok, %{machines: [], days: []}} = Opus.Memory.read(alice.ctx, :mine)
     end

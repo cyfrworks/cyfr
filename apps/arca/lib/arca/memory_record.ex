@@ -24,10 +24,10 @@ defmodule Arca.MemoryRecord do
   ## Storing a page
 
   `store/6` writes one page of one endpoint's report in one locking
-  transaction, under the poller's claim and its member's slot: the claim
-  held (`Arca.JobClaims.hold/1`), the slot verified live
-  (`Arca.ControlPlane.verify_held/1`), the claim judged again on the
-  clock read after that wait. A lost claim or slot stores and advances
+  transaction, under the poller's member's slot and its claim: the slot
+  verified live as every holder-only write is (`Arca.Repo.owned/3`), then
+  the claim held (`Arca.JobClaims.hold/1`) and judged on the clock read
+  after its lock was won. A lost claim or slot stores and advances
   nothing. Then the endpoint's row, locked:
 
     * A page asked after the row's own `after`, of the row's own boot, is
@@ -145,25 +145,21 @@ defmodule Arca.MemoryRecord do
   def store(%{} = claim, slot, endpoint, after_rev, %{boot: boot} = report, names)
       when is_binary(endpoint) and endpoint != "" and is_integer(after_rev) and after_rev >= 0 and
              is_binary(boot) and is_map(names) do
-    Errors.with_db_rescue("Arca.MemoryRecord.store", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        store!(claim, slot, endpoint, after_rev, report, names)
-      end)
-      |> case do
-        {:ok, stored} -> {:ok, stored}
-        {:error, lost} when lost in [:taken, :lapsed] -> lost
-        {:error, reason} when reason in [:not_owner, :moved] -> {:error, reason}
-      end
-    end)
+    # The member's slot first, as every holder-only write is fenced
+    # (`Arca.Repo.owned/3`), then the claim, judged on the clock read after
+    # its row's lock was won.
+    "Arca.MemoryRecord.store"
+    |> Arca.Repo.owned(slot, fn -> store!(claim, endpoint, after_rev, report, names) end)
+    |> case do
+      {:ok, stored} -> {:ok, stored}
+      {:error, lost} when lost in [:taken, :lapsed] -> lost
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # arca:db-raise-ok a step inside the store's own transaction; a refusal rolls it back.
-  defp store!(claim, slot, endpoint, after_rev, report, names) do
-    # The claim is asked again after the slot's lock is won, as every
-    # writer under a claim does (`Arca.ConsumerReceipts.record!/4`).
-    with {:ok, _held} <- Arca.JobClaims.hold(claim),
-         :ok <- Arca.ControlPlane.verify_held(slot),
-         {:ok, _still} <- Arca.JobClaims.hold(claim) do
+  defp store!(claim, endpoint, after_rev, report, names) do
+    with {:ok, _held} <- Arca.JobClaims.hold(claim) do
       now = Arca.ServerMetaStorage.now!()
 
       case cursor(locked_endpoint(endpoint), report.boot, after_rev) do
@@ -171,18 +167,17 @@ defmodule Arca.MemoryRecord do
           {stored, dropped} = put_counters!(endpoint, report, names)
           next = report.counters |> Enum.map(& &1.rev) |> Enum.max(fn -> after_rev end)
           put_endpoint!(endpoint, report, next, now)
-          %{after: next, stored: stored, dropped: dropped}
+          {:ok, %{after: next, stored: stored, dropped: dropped}}
 
         :new_boot ->
           put_endpoint!(endpoint, report, 0, now)
-          %{after: 0, boot: :new}
+          {:ok, %{after: 0, boot: :new}}
 
         :moved ->
-          Arca.Repo.rollback(:moved)
+          {:error, :moved}
       end
     else
-      lost when lost in [:taken, :lapsed] -> Arca.Repo.rollback(lost)
-      :lost -> Arca.Repo.rollback(:not_owner)
+      lost when lost in [:taken, :lapsed] -> {:error, lost}
     end
   end
 

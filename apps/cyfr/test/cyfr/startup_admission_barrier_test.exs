@@ -100,6 +100,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        Opus.HostListener,
        {Opus.Programs,
         [Opus.Programs.Registry, Opus.Programs.Relays, {Opus.Programs.Box, "local"}]},
+       Opus.Memory,
        {Opus.Browser.Tree, [Opus.Browser.Registry, Opus.Browser.Holders]},
        {Opus.Brain.Tree, [Opus.Brain.Registry, Opus.Brain.Holders]},
        Opus.Brain.Cleanup
@@ -193,6 +194,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Opus.Brain.Registry,
     Opus.Browser.Holders,
     Opus.Browser.Registry,
+    Opus.Memory,
     {Opus.Programs.Box, "local"},
     Opus.Programs.Relays,
     Opus.Programs.Registry,
@@ -233,6 +235,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.Cell,
     Cyfr.RetentionScheduler,
     Opus.WorkerWatch,
+    Opus.Memory,
     {Opus.Programs.Box, "local"}
   ]
 

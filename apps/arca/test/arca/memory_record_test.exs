@@ -171,14 +171,9 @@ defmodule Arca.MemoryRecordTest do
     end
 
     test "a member that holds no slot stores and advances nothing", %{claim: claim} do
-      previous = Application.get_env(:arca, :control_plane_claim_enabled)
-      Application.put_env(:arca, :control_plane_claim_enabled, true)
-
-      try do
+      Prima.Test.Env.with_app_env(:arca, :control_plane_claim_enabled, true, fn ->
         assert {:error, :not_owner} = store(claim, 0, report([counter(1, "ath_a")]))
-      after
-        Application.put_env(:arca, :control_plane_claim_enabled, previous)
-      end
+      end)
 
       assert all() == []
       assert endpoint() == nil
