@@ -557,6 +557,28 @@ defmodule Locus.Runtime.RunnerPoolTest do
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0} end)
   end
 
+  test "a kept runner's one timer ends it at its limit though the pool reads its clock late at the keeping",
+       %{keeper: keeper} do
+    readings = :atomics.new(1, [])
+
+    # The real clock, read 5 ms late at the keeping alone, as a pool
+    # descheduled there reads it.
+    clock = fn ->
+      if :atomics.add_get(readings, 1, 1) == 1 do
+        # sleep-ok: stands for the pool's process descheduled for 5 ms at the keeping.
+        Process.sleep(5)
+      end
+
+      System.monotonic_time(:millisecond)
+    end
+
+    pool = start_pool!(keeper, idle_ttl_ms: 200, clock: clock)
+    serve!(pool)
+    {pid, id} = idle!(pool, keeper, "ath_a", "exec_1")
+    left!(pool, pid)
+    assert ScriptedKeeper.releases(keeper) == [{id, 0}]
+  end
+
   test "the pool counts the uids of its role's pool as the keeper's --pool names them", %{
     keeper: keeper
   } do

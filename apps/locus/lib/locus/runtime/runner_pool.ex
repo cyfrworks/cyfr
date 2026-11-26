@@ -634,9 +634,12 @@ defmodule Locus.Runtime.RunnerPool do
       entry.state != :busy ->
         state
 
+      # The clock is read before the timer is armed, so the timer never
+      # fires before the runner is due by it.
       message.clean ->
+        kept_at = state.clock.()
         Process.send_after(self(), {:idle_expired, pid}, state.settings.idle_ttl_ms)
-        put_runner(state, pid, %{entry | state: :idle, kept_at: state.clock.()})
+        put_runner(state, pid, %{entry | state: :idle, kept_at: kept_at})
 
       true ->
         taint_runner(state, pid, entry, 0)
