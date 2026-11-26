@@ -455,7 +455,7 @@ def refuses_for_room(stack):
     expect(c.hello()[0] == 200, "a fresh service is greeted")
     a1, a2, b1, b2 = room_owner("a", 1), room_owner("a", 2), room_owner("b", 1), room_owner("b", 2)
     for owner in [a1, a2, b1, b2]:
-        status, answer, _ = c.sync(owner, [probe()], lease_ms=120_000)
+        status, answer, _ = c.sync(owner, [probe()], lease_ms=60_000)
         expect(status == 200, f"{owner['server']} is synced", answer)
 
     for holder in [a1, b1]:
@@ -464,6 +464,7 @@ def refuses_for_room(stack):
     # Past the allowance's time each holder is charged its reading.
     # sleep-ok: the keeper charges a reading only once the allowance's time has passed
     time.sleep(imagesuite.ALLOWANCE_MS / 1000 + 2)
+    expect(c.renew([a1, a2, b1, b2], lease_ms=60_000)[0] == 200, "the owners are renewed")
 
     for asking, own, other in [(a2, a1, b1), (b2, b1, a1)]:
         started = time.monotonic()
@@ -483,7 +484,7 @@ def refuses_for_room(stack):
         expect(held["others_bytes"] >= ROOM_HOLD and other["server"] not in str(answer)
                and other["athanor"] not in str(answer),
                "the other athanor's holder is only a sum, its row and athanor never named", held)
-        expect(c.renew([a1, a2, b1, b2], lease_ms=120_000)[0] == 200, "the owners are renewed")
+        expect(c.renew([a1, a2, b1, b2], lease_ms=60_000)[0] == 200, "the owners are renewed")
 
     expect(c.release([a1])[0] == 200, f"{a1['server']} is released")
     status, answer = c.open(a2, "probe", key="after", timeout=60)

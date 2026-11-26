@@ -97,8 +97,8 @@ defmodule Opus.Programs.Box do
   for the idle period (the `locus_backends_idle_ms` platform setting), and
   names the ceiling of the owner's athanor on the memory its sessions on
   the box may hold (`athanor_memory_bytes`, the `athanor_program_memory_bytes`
-  platform setting; unset, the sync names none and the service holds the
-  athanor to the box's own budget). The lease and idle periods and the
+  platform setting; unset, the sync names none and the athanor has no
+  ceiling but the machine's memory). The lease and idle periods and the
   ceiling are read at every tick. Each owner keeps the ceiling the service
   last confirmed on its sync; while it differs from the one read, the
   owner is synced again at every tick this member holds its slot, and a
