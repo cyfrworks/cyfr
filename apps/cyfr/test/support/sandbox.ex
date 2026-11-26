@@ -204,7 +204,9 @@ defmodule Cyfr.Test.Sandbox do
   as the test's last step, from the test process. Each view is stopped
   between two of its messages, so none holds the shared connection as it
   goes; what the views started beside themselves (a load, a component
-  call whose answer no view now waits for) is awaited to its own end.
+  call whose answer no view now waits for) is awaited to its own end, and
+  so is what that work starts in turn, found again once what was found
+  has ended.
   Left to the test's end, the views are shut down with the test
   supervisor, before any `on_exit` runs, at whatever point they have
   reached, and their work is stopped by the sweep, at whatever point it
@@ -259,8 +261,13 @@ defmodule Cyfr.Test.Sandbox do
     # its caller's callers behind its own, so the work of any view, at any
     # depth, names it too. The test supervisor names the test as well, and
     # it and what it supervises stay until the test ends.
-    test = self()
+    await_work(self(), supervisor, deadline, deadline_ms)
+  end
 
+  # Work awaited may start more as it ends (a write it does not wait for),
+  # which names the test too and was not there to be found before: the
+  # work is found again once what was found has ended, until none is left.
+  defp await_work(test, supervisor, deadline, deadline_ms) do
     work =
       for pid <- Process.list(),
           pid != test and pid != supervisor,
@@ -269,7 +276,12 @@ defmodule Cyfr.Test.Sandbox do
           supervisor not in Keyword.get(dictionary, :"$ancestors", []),
           do: {Process.monitor(pid), pid}
 
-    await_down(work, deadline, deadline_ms)
+    if work != [] do
+      await_down(work, deadline, deadline_ms)
+      await_work(test, supervisor, deadline, deadline_ms)
+    end
+
+    :ok
   end
 
   @doc "How long `end_views/0` waits for the views and their work, in milliseconds."
