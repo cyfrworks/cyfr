@@ -115,7 +115,12 @@ defmodule Locus.Runtime.WorkerListener do
   end
 
   defp refuse_pool(conn, {:unauthorized, reason}), do: refuse(conn, 401, reason)
-  defp refuse_pool(conn, :too_large), do: refuse(conn, 413, :malformed)
+  defp refuse_pool(conn, {:too_large, :declared}), do: refuse(conn, 413, :malformed)
+
+  defp refuse_pool(conn, {:too_large, :read}),
+    do:
+      conn |> refuse(413, :malformed) |> Locus.Listener.drain(Prima.LocusPool.max_request_bytes())
+
   defp refuse_pool(conn, {:bad_body, :version}), do: refuse(conn, 400, :unknown_version)
   defp refuse_pool(conn, {:bad_body, :malformed}), do: refuse(conn, 400, :malformed)
   defp refuse_pool(conn, :unavailable), do: refuse(conn, 503, :unavailable)

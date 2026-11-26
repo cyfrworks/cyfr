@@ -83,9 +83,12 @@ POOL_WIRE = _POOL["wire"]
 ROLE_KINDS = {"runtime": {"warm", "run"}, "builds": {"build"}, "backends": {"program", "terminal"}}
 
 
-def pool_key(service, own_key):
-    """The pool key of `service` (runtime, builds or backends): its own key's HMAC-SHA256 over its pool label."""
-    return hmac.new(own_key, f"cyfr-locus/v1/{service}/pool".encode(), hashlib.sha256).digest()
+def pool_key(service, given):
+    """The pool key of `service` (runtime, builds or backends) from the key it is given, as Prima.LocusPool.pool_key/2
+    derives it: the HMAC-SHA256 over its pool label of the key the service holds, which for the builds service is the
+    request key of the key it was given (the label `cyfr-locus/v1/builds` first)."""
+    held = hmac.new(given, b"cyfr-locus/v1/builds", hashlib.sha256).digest() if service == "builds" else given
+    return hmac.new(held, f"cyfr-locus/v1/{service}/pool".encode(), hashlib.sha256).digest()
 
 
 def pool_header(service, key, ts, body):
@@ -98,7 +101,8 @@ def pool_header(service, key, ts, body):
 
 def pool_ask(base, service, own_key, after=0, signer=None):
     """Asks `service` at `base` for its role's report after the rev `after`, signed with `signer`'s pool key derived
-    from `own_key` (the service's own by default): (HTTP status, the decoded answer)."""
+    from `own_key`, the key the service was given (`pool_key`), the service's own by default: (HTTP status, the
+    decoded answer)."""
     body = json.dumps({"v": POOL_WIRE["version"], "after": after}, separators=(",", ":")).encode()
     header = pool_header(signer or service, pool_key(signer or service, own_key), int(time.time() * 1000), body)
     request = urllib.request.Request(base + POOL_WIRE["route"], data=body, method="POST",

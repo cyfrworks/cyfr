@@ -12,13 +12,16 @@ defmodule Locus.PoolRoute do
   A request, in order:
 
   1. **The header, before any of the body**, verified under the service's
-     pool key (`Prima.LocusPool.pool_key/2`, derived here from the key the
-     listener holds), within the header window, no nonce kept since the
+     pool key (`Prima.LocusPool.held_pool_key/2`, derived here from the
+     key the listener holds), within the header window, no nonce kept since the
      call reads only: `{:unauthorized, reason}`, `reason` the first of
      `:unknown_version`, `:malformed`, `:outside_window` and `:bad_mac`. A
      service holding no key verifies nothing (`:bad_mac`).
   2. **The body**, read within `Prima.LocusPool.max_request_bytes/0`
-     (`:too_large`, on a connection that closes), must be the one the
+     (`{:too_large, :declared}` for a declared length past it, unread;
+     `{:too_large, :read}` for one that ran past it as it was read, which
+     the listener drains as its other routes do; each on a connection that
+     closes), must be the one the
      header hashed (`{:unauthorized, :bad_mac}`).
   3. **The request**, read strictly: `{:bad_body, :version}` for another
      version, `{:bad_body, :malformed}` for anything else.
@@ -38,7 +41,7 @@ defmodule Locus.PoolRoute do
   @typedoc "Why a pool request was refused, for the listener to answer in its own words."
   @type refusal ::
           {:unauthorized, :unknown_version | :malformed | :outside_window | :bad_mac}
-          | :too_large
+          | {:too_large, :declared | :read}
           | {:bad_body, :version | :malformed}
           | :unavailable
 
@@ -68,7 +71,7 @@ defmodule Locus.PoolRoute do
   end
 
   defp pool_key(_conn, service, key) when byte_size(key) == 32,
-    do: {:ok, LocusPool.pool_key(service, key)}
+    do: {:ok, LocusPool.held_pool_key(service, key)}
 
   defp pool_key(conn, _service, _key), do: {:refused, closing(conn), {:unauthorized, :bad_mac}}
 
@@ -84,9 +87,17 @@ defmodule Locus.PoolRoute do
 
   defp body(conn) do
     case Locus.Listener.read_bounded(conn, LocusPool.max_request_bytes(), true) do
-      {:ok, body, conn} -> {:ok, body, conn}
-      {:too_large, conn, _past} -> {:refused, closing(conn), :too_large}
-      {:unread, conn} -> {:refused, closing(conn), {:bad_body, :malformed}}
+      {:ok, body, conn} ->
+        {:ok, body, conn}
+
+      {:too_large, conn, {:declared, _bytes}} ->
+        {:refused, closing(conn), {:too_large, :declared}}
+
+      {:too_large, conn, :read} ->
+        {:refused, closing(conn), {:too_large, :read}}
+
+      {:unread, conn} ->
+        {:refused, closing(conn), {:bad_body, :malformed}}
     end
   end
 

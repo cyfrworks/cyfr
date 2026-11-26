@@ -145,7 +145,10 @@ defmodule Locus.PoolRouteTest do
   defp listener(:backends), do: Service
 
   defp opts(:backends, keeper), do: [keeper: keeper, owners: @owners, key: @key]
-  defp opts(:builds, keeper), do: [keeper: keeper, request_key: @key]
+  # The builds service holds the request key of the key it was given.
+  defp opts(:builds, keeper),
+    do: [keeper: keeper, request_key: Prima.BuilderProtocol.request_key(@key)]
+
   defp opts(:runtime, keeper), do: [keeper: keeper]
 
   # What each listener answers for a refused header, in its own words.
@@ -189,30 +192,55 @@ defmodule Locus.PoolRouteTest do
   test "a header is refused outside its window, absent, or over another body, before the keeper is asked",
        %{keepers: keepers} do
     body = LocusPool.request_body(0)
-    late = System.system_time(:millisecond) - LocusPool.window_ms() - 1_000
+    now = System.system_time(:millisecond)
+    late = now - LocusPool.window_ms() - 1_000
     other = LocusPool.request_body(1)
 
     for {service, keeper} <- keepers do
-      for opts <- [
-            [ts: late],
-            [header: nil],
-            [
-              header:
-                LocusPool.header(
-                  service,
-                  LocusPool.pool_key(service, @key),
-                  late + 1_000_000,
-                  other
-                )
-            ]
+      # A header within its window, signed over another body: only the
+      # body's check against the header's hash refuses it.
+      over_other = LocusPool.header(service, LocusPool.pool_key(service, @key), now, other)
+
+      for {opts, reason} <- [
+            {[ts: late], "outside_window"},
+            {[header: nil], "malformed"},
+            {[header: over_other], "bad_mac"}
           ] do
         {status, answer} = post(service, keeper, body, opts)
-        assert unauthorized?(service, status, answer), "#{service} #{inspect(opts)}: #{status}"
+
+        assert refused_for?(service, status, answer, reason),
+               "#{service} #{reason}: #{status} #{answer}"
       end
 
       assert Keeper.asked(keeper) == []
     end
   end
+
+  test "a bad header is refused for its header before a body of another version is read",
+       %{keepers: keepers} do
+    body = ~s({"v":2,"after":0})
+
+    for {service, keeper} <- keepers, signer <- [nil | LocusPool.services() -- [service]] do
+      opts = if signer, do: [signer: signer], else: [header: nil]
+      {status, answer} = post(service, keeper, body, opts)
+
+      assert unauthorized?(service, status, answer),
+             "#{service}, #{inspect(signer)}: #{status} #{answer}"
+
+      assert Keeper.asked(keeper) == []
+    end
+  end
+
+  # A refused header, naming its reason where the listener's convention
+  # names one: the runtime's error and the builds' reason.
+  defp refused_for?(:runtime, 401, body, reason), do: Jason.decode!(body)["error"] == reason
+
+  defp refused_for?(:builds, 401, body, reason) do
+    refusal = body |> String.trim() |> Jason.decode!()
+    refusal["class"] == "unauthorized" and refusal["reason"] == reason
+  end
+
+  defp refused_for?(service, status, body, _reason), do: unauthorized?(service, status, body)
 
   test "a body that does not read, or runs past its bound, is refused in each listener's words",
        %{keepers: keepers} do
@@ -286,7 +314,11 @@ defmodule Locus.PoolRouteTest do
 
     secrets =
       for service <- LocusPool.services(),
-          key <- [@key, LocusPool.pool_key(service, @key)],
+          key <- [
+            @key,
+            Prima.BuilderProtocol.request_key(@key),
+            LocusPool.pool_key(service, @key)
+          ],
           spelled <- [
             Base.encode16(key, case: :lower),
             Base.encode16(key, case: :upper),

@@ -103,7 +103,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import (  # noqa: E402
-    POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, Stack, expect, request_key, run, tincture,
+    POOL_FIRST, POOL_LAST, RELEASE, ROLE, ROOT, Stack, expect, run, tincture,
 )
 # stack puts tests/, which holds the shared plumbing, on the path.
 import imagesuite  # noqa: E402
@@ -1057,8 +1057,8 @@ def test_build(stack, case, limit, measure):
 def test_pool_report(stack):
     """The builds role's report holds a build's counters alone, the build's under its athanor, and the route refuses
     the other services' pool keys."""
-    # The key the builds service holds: the request key of its service key.
-    key = request_key(stack.key)
+    # The key the builds service was given (imagesuite.pool_key takes its request key first).
+    key = bytes.fromhex(stack.key)
     athanor = "ath_pool-report"
     status, answer = stack.build(SIBLING, "javascript", "tincture", athanor_id=athanor)
     expect(status == 200, "the build the report counts succeeds", brief(answer))

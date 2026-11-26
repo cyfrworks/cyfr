@@ -621,6 +621,41 @@ func TestARetirementLeavesTheCauseOfAKillToBeRead(t *testing.T) {
 	}
 }
 
+// A retirement that reports no exit, as at its role's death, reads what
+// the kernel killed the spawn for while the group's counters stand, and the
+// release counts that kill once, though no exit and no watcher said it.
+func TestARetirementWithoutAnExitCountsItsKillAtTheRelease(t *testing.T) {
+	for _, kept := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kept %t", kept), func(t *testing.T) {
+			k, sp, _ := killedAtItsCap(t, kept)
+			k.s.handle(k.c, parsed(t, fmt.Sprintf(`{"v":8,"type":"place","id":"pk","kind":%q,"athanor":"ath_k"}`, k.kind())))
+			if placed := k.reply(t); placed["type"] != protocol.TypePlaced {
+				t.Fatalf("the place: %v", placed)
+			}
+			k.s.mu.Lock()
+			p := k.c.places["pk"]
+			p.named, p.spawn, sp.place = true, sp, "pk"
+			k.s.mu.Unlock()
+
+			k.s.retire(sp, 0, false)
+			awaitRetired(t, sp)
+			if told := k.toldSoFar(t); len(told) != 0 {
+				t.Fatalf("a retirement without notice told %v", told)
+			}
+			k.s.handle(k.c, parsed(t, `{"v":8,"type":"report","id":"rp","after":0}`))
+			report, _ := k.reply(t)["report"].(map[string]any)
+			counters, _ := report["counters"].([]any)
+			if len(counters) != 1 {
+				t.Fatalf("the report after the kill: %v", report)
+			}
+			if counter, _ := counters[0].(map[string]any); counter["cap"] != 1.0 || counter["machine"] != 0.0 ||
+				counter["either"] != 0.0 || counter["athanor"] != "ath_k" || counter["kind"] != k.kind() {
+				t.Fatalf("the kill's counter %v; want one kill at its cap", counter)
+			}
+		})
+	}
+}
+
 // A release is the last word on its spawn: a leader that outlived the
 // cleanup's wait for it and was killed for no memory is released with no
 // exit, and its watcher, let go afterwards, sends none. Nothing is left to

@@ -543,6 +543,8 @@ func (s *server) retireKept(sp *spawn, grace time.Duration, notify bool) {
 
 			if notify {
 				s.reportExit(sp)
+			} else {
+				s.readKill(sp)
 			}
 			removed := s.removeSpawnGroup(sp)
 			s.mu.Lock()

@@ -90,11 +90,16 @@ defmodule Prima.LocusPool do
   `cyfr-locus/v1/<service>/pool`, the kind `pool`, the field `ts` and the
   body's hash, within `window_ms/0` of the listener's clock
   (`header/4`, `verify_header/4`, `verify_body/2`). No nonce is kept: the
-  call reads only. The key is the **pool key** (`pool_key/2`), derived
-  from the key that service holds, over the same label: the builds
-  service's request key (`Prima.BuilderProtocol.request_key/1` of
-  `LOCUS_BUILDS_KEY`), the backends service's `LOCUS_BACKENDS_KEY`, a
-  worker service's `LOCUS_RUNTIME_KEY` (`Prima.WorkerAuth.worker_key/2`).
+  call reads only. The key is the **pool key**, derived over the same
+  label from the key the service is given (`pool_key/2`): the builds
+  service's `LOCUS_BUILDS_KEY`, through its request key
+  (`Prima.BuilderProtocol.request_key/1`), which is all the builds service
+  holds of it; the backends service's `LOCUS_BACKENDS_KEY`; a worker
+  service's `LOCUS_RUNTIME_KEY` (`Prima.WorkerAuth.worker_key/2` of CYFR's
+  root). CYFR and every test derive it from the given key with
+  `pool_key/2`; each listener derives it from the key it holds with
+  `held_pool_key/2`, the one definition `pool_key/2` takes its last step
+  through.
   It signs and verifies this route at that one service and nothing else:
   no other verifier takes a key derived over a `/pool` label, and the key
   gives neither the service's own nor any other key derived from it. The
@@ -282,14 +287,26 @@ defmodule Prima.LocusPool do
   def label(service) when service in @services, do: Prima.MacEnvelope.label(service) <> "/pool"
 
   @doc """
-  The pool key of `service`, derived from the key that service holds: the
-  builds service's request key (`Prima.BuilderProtocol.request_key/1`),
-  the backends service key, or a worker service's key
+  The pool key of `service`, from the key the service is given: the
+  builds service key (`LOCUS_BUILDS_KEY`, whose request key is taken
+  first), the backends service key, or a worker service's key
   (`Prima.WorkerAuth.worker_key/2`).
   """
   @spec pool_key(service(), binary()) :: binary()
-  def pool_key(service, own) when service in @services and byte_size(own) == 32,
-    do: Prima.MacEnvelope.derive(own, label(service))
+  def pool_key(:builds, given) when byte_size(given) == 32,
+    do: held_pool_key(:builds, Prima.BuilderProtocol.request_key(given))
+
+  def pool_key(service, given) when service in @services and byte_size(given) == 32,
+    do: held_pool_key(service, given)
+
+  @doc """
+  The pool key of `service`, from the key that service holds: the builds
+  service's request key (`Prima.BuilderProtocol.request_key/1`), the
+  backends service key, or a worker service's key.
+  """
+  @spec held_pool_key(service(), binary()) :: binary()
+  def held_pool_key(service, held) when service in @services and byte_size(held) == 32,
+    do: Prima.MacEnvelope.derive(held, label(service))
 
   defp envelope(service),
     do: %Prima.MacEnvelope{prefix: label(service), kind: "pool", fields: [ts: :integer]}

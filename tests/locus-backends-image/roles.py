@@ -308,8 +308,8 @@ def serving(stack):
 
 
 def own_keys(stack):
-    """The key each role's service holds, its pool key's root: the builds service holds its request key."""
-    return {"runtime": stack.plane.worker_key, "builds": builder.request_key(stack.builds_key), "backends": stack.key}
+    """The key each role's service was given, which imagesuite.pool_key derives its pool key from."""
+    return {"runtime": stack.plane.worker_key, "builds": bytes.fromhex(stack.builds_key), "backends": stack.key}
 
 
 def reports(stack):

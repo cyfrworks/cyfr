@@ -22,6 +22,8 @@ Usage: python3 -I tests/imagesuite_test.py
 
 import ast
 import glob
+import hashlib
+import hmac
 import http.server
 import json
 import os
@@ -798,6 +800,9 @@ class PoolWire(unittest.TestCase):
         for service, vector in wire["services"].items():
             pool_key = imagesuite.pool_key(service, key)
             self.assertEqual(pool_key.hex(), vector["pool_key_hex"])
+            if service == "builds":
+                held = hmac.new(key, b"cyfr-locus/v1/builds", hashlib.sha256).digest()
+                self.assertEqual(held.hex(), vector["request_key_hex"])
             self.assertEqual(imagesuite.pool_header(service, pool_key, wire["ts"], wire["body"].encode()), vector["header"])
         self.assertEqual(json.dumps({"v": wire["version"], "after": 512}, separators=(",", ":")), wire["body"])
 

@@ -114,6 +114,15 @@ defmodule Prima.LocusPoolTest do
         assert vector["label"] == "cyfr-locus/v1/#{service}/pool"
         assert vector["label"] == LocusPool.label(service)
         assert vector["pool_key_hex"] == Base.encode16(pool_key, case: :lower)
+
+        # What the service holds of its key, and its pool key's one definition from it.
+        held = if service == :builds, do: Prima.BuilderProtocol.request_key(@key), else: @key
+
+        assert Map.get(vector, "request_key_hex", Base.encode16(@key, case: :lower)) ==
+                 Base.encode16(held, case: :lower)
+
+        assert LocusPool.held_pool_key(service, held) == pool_key
+        assert pool_key == Prima.MacEnvelope.derive(held, vector["label"])
         assert vector["header"] == LocusPool.header(service, pool_key, @wire["ts"], @wire["body"])
       end
 

@@ -181,15 +181,23 @@ defmodule Locus.BuilderService do
   defp pool(conn) do
     report = &Locus.Keeper.report(keeper(conn), &1)
 
-    case Locus.PoolRoute.serve(conn, :builds, pool_root(conn), report, Locus.Listener.now(conn)) do
-      {:ok, conn} -> conn
-      {:refused, conn, refusal} -> refuse(conn, pool_refusal(refusal))
+    case Locus.PoolRoute.serve(conn, :builds, held_key(conn), report, Locus.Listener.now(conn)) do
+      {:ok, conn} ->
+        conn
+
+      {:refused, conn, {:too_large, :read} = refusal} ->
+        conn
+        |> refuse(pool_refusal(refusal))
+        |> Locus.Listener.drain(Prima.LocusPool.max_request_bytes())
+
+      {:refused, conn, refusal} ->
+        refuse(conn, pool_refusal(refusal))
     end
   end
 
   defp pool_refusal({:unauthorized, reason}), do: {:unauthorized, reason}
 
-  defp pool_refusal(:too_large),
+  defp pool_refusal({:too_large, _how}),
     do: {:malformed, "the request runs past #{Prima.LocusPool.max_request_bytes()} bytes"}
 
   defp pool_refusal({:bad_body, :version}),
@@ -201,8 +209,10 @@ defmodule Locus.BuilderService do
   defp keeper(%Plug.Conn{assigns: %{service_opts: opts}}),
     do: Keyword.get(opts, :keeper, Locus.Keeper)
 
-  # The key the pool key derives from: the request key this service holds.
-  defp pool_root(%Plug.Conn{assigns: %{service_opts: opts}}),
+  # The one key this service holds, its request key, which every route
+  # reads here: the node's (`Locus.Config.request_key/0`), or a test's
+  # `:request_key`, which no production listener is given.
+  defp held_key(%Plug.Conn{assigns: %{service_opts: opts}}),
     do: Keyword.get_lazy(opts, :request_key, &Locus.Config.request_key/0)
 
   # ————— health —————
@@ -269,7 +279,7 @@ defmodule Locus.BuilderService do
   end
 
   defp request_key(conn) do
-    case Locus.Config.request_key() do
+    case held_key(conn) do
       key when is_binary(key) -> {:ok, key}
       nil -> {:refused, conn, {:unauthorized, :bad_mac}}
     end

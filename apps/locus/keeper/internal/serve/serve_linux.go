@@ -1865,6 +1865,19 @@ func (s *server) reportExit(sp *spawn) {
 	})
 }
 
+// readKill reads, for a retirement that reports no exit (its role's
+// death), what the kernel killed processes of the spawn for, while its
+// group's counters stand, so its release counts the kill as an exit's
+// would. Its processes are gone by then, so the counters are final, and the
+// kill is counted once, at the release (forget).
+func (s *server) readKill(sp *spawn) {
+	if memory := s.memoryEnd(sp); memory != nil {
+		s.mu.Lock()
+		sp.killedFor = *memory
+		s.mu.Unlock()
+	}
+}
+
 // memoryEnd says what the kernel killed processes of the spawn for, as its
 // group's counters say (cgroup.KilledFor): its own bound (MemoryCap), a
 // limit above it (MemoryMachine), or one of the two that they cannot tell
@@ -1931,6 +1944,8 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 			}
 			if notify {
 				s.reportExit(sp)
+			} else {
+				s.readKill(sp)
 			}
 			// A group is removable once it holds no process, which a clean
 			// scrub has established. A clean uid whose group stays goes back

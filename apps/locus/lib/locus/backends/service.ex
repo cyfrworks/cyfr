@@ -230,7 +230,7 @@ defmodule Locus.Backends.Service do
   end
 
   defp pool_refusal({:unauthorized, _reason}), do: :unauthorized
-  defp pool_refusal(:too_large), do: :too_large
+  defp pool_refusal({:too_large, _how}), do: :too_large
   defp pool_refusal({:bad_body, _reason}), do: :bad_request
   defp pool_refusal(:unavailable), do: :unavailable
 
