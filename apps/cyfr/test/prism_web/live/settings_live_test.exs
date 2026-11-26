@@ -1065,4 +1065,126 @@ defmodule PrismWeb.SettingsLiveTest do
       "directory" => directory
     })
   end
+
+  describe "memory use" do
+    @mib 1_048_576
+    @boot String.duplicate("f", 32)
+
+    defp record!(counters, names) do
+      {:ok, claim} =
+        Arca.JobClaims.claim("memory", Arca.JobClaims.cell_key(), "boot_page", 60_000)
+
+      report = %{
+        boot: @boot,
+        budget: 8_000 * @mib,
+        work: 4_800 * @mib,
+        floor: 164 * @mib,
+        used: 1_000 * @mib,
+        counters: counters,
+        next: nil
+      }
+
+      {:ok, _stored} = Arca.MemoryRecord.store(claim, :none, "wrk_page", 0, report, names)
+      :ok
+    end
+
+    defp used(rev, athanor_id, opts) do
+      %{
+        rev: rev,
+        day: Keyword.get(opts, :day, Date.utc_today()),
+        athanor: athanor_id,
+        kind: Keyword.get(opts, :kind, "program"),
+        subject: Keyword.get(opts, :subject),
+        bytes: Keyword.get(opts, :mib, 0) * @mib,
+        mib_ms: Keyword.get(opts, :mib_ms, 0),
+        measured_ms: Keyword.get(opts, :measured_ms, 0),
+        peak_bytes: Keyword.get(opts, :peak, 0) * @mib,
+        cap: Keyword.get(opts, :cap, 0),
+        machine: Keyword.get(opts, :machine, 0),
+        either: 0
+      }
+    end
+
+    defp own_athanor_id(person) do
+      _conn = log_in_user(build_conn(), person)
+      seated_athanor().id
+    end
+
+    test "the administrator reads who used what by person, kind and name, and nobody else does" do
+      terry = test_user()
+      alice = test_user()
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      t = own_athanor_id(terry)
+      a = own_athanor_id(alice)
+
+      record!(
+        [
+          used(1, t,
+            subject: "srv_t",
+            mib: 500,
+            mib_ms: 1_800_000_000,
+            measured_ms: 3_900_000,
+            peak: 700,
+            cap: 1
+          ),
+          used(2, a, kind: "run", mib: 164, measured_ms: 45_000, peak: 164, machine: 2)
+        ],
+        %{{t, "srv_t"} => %{name: "claude", shown: "program"}}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      section = view |> element("#memory-use") |> render()
+
+      assert section =~ "Memory use"
+
+      assert section =~
+               "In use: 1000.0 MB of 4.7 GB; 164.0 MB more is kept ready for the next run."
+
+      assert section =~ "claude"
+      assert section =~ "500.0 MB"
+      assert section =~ "Day (UTC)"
+      assert section =~ "500 MB-hours"
+      assert section =~ "1 h 5 min"
+      assert section =~ "45 s"
+      assert section =~ "1 × needed more than one piece of work may use"
+      assert section =~ "2 × CYFR ran out of memory"
+      assert section =~ "Counted a few seconds ago."
+      PrismWeb.Vocabulary.refute_vocabulary(section)
+
+      for person <- [terry, alice] do
+        {view, html} = build_conn() |> log_in_user(person) |> mount_athanor("/settings")
+        refute html =~ "Memory use"
+        refute has_element?(view, "#memory-use")
+      end
+    end
+
+    test "the days show seven at a time, the newest first" do
+      ops = test_user()
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+      o = own_athanor_id(ops)
+      today = Date.utc_today()
+
+      record!(
+        for(
+          n <- 0..8,
+          do: used(n + 1, o, kind: "build", day: Date.add(today, -n), measured_ms: 1_000)
+        ),
+        %{}
+      )
+
+      {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+      days = view |> element("#memory-days") |> render()
+
+      assert days =~ Date.to_iso8601(today)
+      assert days =~ Date.to_iso8601(Date.add(today, -6))
+      refute days =~ Date.to_iso8601(Date.add(today, -7))
+
+      view |> element(~s([data-test="memory-more"])) |> render_click()
+      days = view |> element("#memory-days") |> render()
+
+      assert days =~ Date.to_iso8601(Date.add(today, -8))
+      refute has_element?(view, ~s([data-test="memory-more"]))
+    end
+  end
 end

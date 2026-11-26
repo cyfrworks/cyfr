@@ -22,6 +22,13 @@ defmodule PrismWeb.ProgramsLive do
   expanded program row changes (`mcp_servers.update` with the row's config and the
   new list); none named, every public host.
 
+  **Memory in use now**, above the list, is what of the person's holds
+  memory on each machine (`Opus.memory/2`, `:mine`), read at mount and
+  again every poll (`Opus.memory_poll_ms/0`): each program by its name with
+  the Disable its row has and the Close of each of its sessions, a run and
+  a build by kind with no control, everyone else's use as one sum, and how
+  fresh the count is (`PrismWeb.MemoryWords`).
+
   Forms add an http server (its config as JSON) and a program, its mark
   chosen. **Edit** on an expanded program replaces its whole definition
   (`mcp_servers.update` at the epoch it was read at) in the program form;
@@ -90,7 +97,7 @@ defmodule PrismWeb.ProgramsLive do
   @behaviour PrismWeb.TerminalComponent
   on_mount PrismWeb.TerminalComponent
 
-  alias PrismWeb.{SystemLayer, TerminalComponent}
+  alias PrismWeb.{MemoryWords, SystemLayer, TerminalComponent}
 
   @mib 1_048_576
 
@@ -123,6 +130,7 @@ defmodule PrismWeb.ProgramsLive do
       actor = Sanctum.Context.actor(ctx)
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.mcp_servers(actor))
       Cyfr.Bus.subscribe(actor, Cyfr.Bus.programs(actor, ctx.user_id))
+      send(self(), :memory)
     end
 
     socket =
@@ -145,6 +153,8 @@ defmodule PrismWeb.ProgramsLive do
       |> assign(:editing, nil)
       # The person's running sessions (`Opus.Programs.running/1`).
       |> assign(:running, [])
+      # What of the person's holds memory now, by machine (`Opus.memory/2`).
+      |> assign(:memory, [])
       # Whether a terminal this page opens adds the way back to Aqua.
       |> assign(:from_aqua, false)
       # What the page is doing until a call's answer comes; nil when idle.
@@ -404,6 +414,16 @@ defmodule PrismWeb.ProgramsLive do
 
   # The person's running sessions moved, here or on another surface.
   def handle_info(%Cyfr.Bus.Program{}, socket), do: {:noreply, load_running(socket)}
+
+  # What holds memory is read again as often as CYFR asks for it.
+  def handle_info(:memory, socket) do
+    Process.send_after(self(), :memory, Opus.memory_poll_ms())
+
+    case Opus.memory(socket.assigns.context, :mine) do
+      {:ok, %{machines: machines}} -> {:noreply, assign(socket, :memory, machines)}
+      {:error, _unread} -> {:noreply, socket}
+    end
+  end
 
   # A row expanded here and disabled elsewhere has its details read again:
   # a disabled row's `get` starts nothing, so it is read in place.
@@ -1163,6 +1183,8 @@ defmodule PrismWeb.ProgramsLive do
         </form>
       </.card>
 
+      <.memory_panel memory={@memory} servers={@servers} running={@running} />
+
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @servers == []} class="py-8">
@@ -1524,6 +1546,83 @@ defmodule PrismWeb.ProgramsLive do
     </div>
     """
   end
+
+  attr :memory, :list, required: true
+  attr :servers, :list, required: true
+  attr :running, :list, required: true
+
+  # What of the person's holds memory now, on each machine, each named
+  # holder with the Disable its row has and the Close of each of its
+  # sessions; a run and a build have no control here. Everyone else's use
+  # is one sum.
+  defp memory_panel(assigns) do
+    ~H"""
+    <.card>
+      <section data-test="memory" class="space-y-3">
+        <h3 class="text-sm font-medium text-gray-400">Memory in use now</h3>
+        <p :if={Enum.all?(@memory, &(&1.holders == []))} class="text-sm text-gray-300">
+          Nothing of yours uses memory now.
+        </p>
+        <div :for={machine <- @memory} class="space-y-2" data-test="memory-machine">
+          <h4
+            :if={MemoryWords.heading(@memory, machine)}
+            class="text-xs text-gray-500 uppercase"
+          >
+            {MemoryWords.heading(@memory, machine)}
+          </h4>
+          <div
+            :for={line <- MemoryWords.holders(machine.holders)}
+            class="flex flex-wrap items-center gap-3 text-sm text-gray-300"
+            data-test="memory-holder"
+          >
+            <span>{line.text}</span>
+            <.button
+              :for={server <- disabling(@servers, line.name)}
+              variant="ghost"
+              phx-click="toggle_enabled"
+              phx-value-name={server[:name]}
+              phx-value-enabled="true"
+              data-test="memory-disable"
+            >
+              Disable
+            </.button>
+            <span
+              :for={session <- sessions(@running, line.name)}
+              class="flex items-center gap-2 text-xs text-gray-400"
+            >
+              Running since {Calendar.strftime(session.started_at, "%H:%M UTC")}
+              <button
+                type="button"
+                phx-click="terminal_close"
+                phx-value-session={session.session}
+                class="text-gray-300 hover:underline"
+                data-test="memory-close"
+              >
+                Close
+              </button>
+            </span>
+          </div>
+          <p :if={MemoryWords.others(machine)} class="text-sm text-gray-300">
+            {MemoryWords.others(machine)}
+          </p>
+          <p class="text-xs text-gray-500" data-test="memory-counted">
+            {MemoryWords.counted(machine)}
+          </p>
+        </div>
+      </section>
+    </.card>
+    """
+  end
+
+  # The row a named holder is, while it is enabled; a holder of no name,
+  # or of a row gone or disabled, has none.
+  defp disabling(_servers, nil), do: []
+
+  defp disabling(servers, name),
+    do: Enum.filter(servers, &(&1[:name] == name and &1[:enabled] == true))
+
+  defp sessions(_running, nil), do: []
+  defp sessions(running, name), do: Enum.filter(running, &(&1.name == name))
 
   attr :server, :map, required: true
 

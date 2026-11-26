@@ -52,8 +52,9 @@ defmodule Opus.Memory do
   worker service's id, else by the backends service's name, else
   `builds`; the latest boot's holders are what it holds now. A counter of
   no athanor (the warm floor's fresh runners) was never stored, so a
-  machine's holders need not add up to its `used`. A day is a UTC day,
-  counted at the keeper.
+  machine's holders need not add up to its `used`. A machine is `fresh`
+  while its last answer is within `fresh_ms/0`, three polls. A day is a
+  UTC day, counted at the keeper.
   """
 
   use GenServer
@@ -66,6 +67,7 @@ defmodule Opus.Memory do
   @poll_ms 5_000
   @kind "memory"
   @lease_ms 3 * @poll_ms
+  @fresh_ms 3 * @poll_ms
   @builds "builds"
   @kinds %{
     "run" => :run,
@@ -105,6 +107,7 @@ defmodule Opus.Memory do
           used: non_neg_integer(),
           others: non_neg_integer(),
           heard_at: DateTime.t(),
+          fresh: boolean(),
           holders: [holder()]
         }
 
@@ -122,6 +125,14 @@ defmodule Opus.Memory do
   @doc "How often the record is asked of every endpoint, and how often a page reading it reads again."
   @spec poll_ms() :: pos_integer()
   def poll_ms, do: @poll_ms
+
+  @doc """
+  How long after its last answer a machine's record is fresh: three
+  polls. A page says a record older than that may be out of date, and a
+  refusal names no holder from it.
+  """
+  @spec fresh_ms() :: pos_integer()
+  def fresh_ms, do: @fresh_ms
 
   @doc """
   The record as `ctx` may read it: `:mine`, the person's own with
@@ -201,6 +212,7 @@ defmodule Opus.Memory do
         used: latest.used,
         others: names |> Enum.map(&Map.get(others, &1, 0)) |> Enum.sum(),
         heard_at: latest.heard_at,
+        fresh: DateTime.diff(DateTime.utc_now(), latest.heard_at, :millisecond) <= @fresh_ms,
         holders: holders(counters, names, boot, people)
       }
     end)

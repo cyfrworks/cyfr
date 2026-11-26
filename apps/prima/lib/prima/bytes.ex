@@ -16,13 +16,16 @@ defmodule Prima.Bytes do
   @doc "`bytes` as a person reads it."
   @spec format(integer()) :: String.t()
   def format(bytes) when is_integer(bytes) and bytes >= @gib,
-    do: "#{Float.round(bytes / @gib, 1)} GB"
+    do: "#{one_place(bytes / @gib)} GB"
 
   def format(bytes) when is_integer(bytes) and bytes >= @mib,
-    do: "#{Float.round(bytes / @mib, 1)} MB"
+    do: "#{one_place(bytes / @mib)} MB"
 
   def format(bytes) when is_integer(bytes) and bytes >= @kib,
-    do: "#{Float.round(bytes / @kib, 1)} KB"
+    do: "#{one_place(bytes / @kib)} KB"
 
   def format(bytes) when is_integer(bytes), do: "#{bytes} B"
+
+  # One decimal place, never an exponent: "1000.0 MB", not "1.0e3 MB".
+  defp one_place(value), do: :erlang.float_to_binary(value, decimals: 1)
 end

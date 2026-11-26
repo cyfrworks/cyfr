@@ -40,6 +40,12 @@ defmodule PrismWeb.SettingsLive do
       offering an optional name: the link is shown once with a copy
       control, and with a sentence when it opens only on this computer
       (`local_only`).
+    * **Memory use** — for the platform administrator, who used what memory
+      (`Opus.memory/2`, `:everyone`): each machine's numbers and what holds
+      it now by person, kind and name, then each UTC day's use by person,
+      kind and name, the newest seven days first and seven more at a time,
+      never a thread or content. It is read again every poll
+      (`Opus.memory_poll_ms/0`).
     * **Administrators** — in the allowlist, for a platform administrator:
       the people carrying the mark, another person made an administrator
       (`door.mark_admin`) and a mark taken away (`door.clear_admin`), never
@@ -76,8 +82,11 @@ defmodule PrismWeb.SettingsLive do
   require Logger
 
   alias Phoenix.LiveView.JS
-  alias PrismWeb.{IdentityCard, SystemLayer}
+  alias PrismWeb.{IdentityCard, MemoryWords, SystemLayer}
   alias PrismWeb.SystemLayer.Share
+
+  # How many of the record's days the memory table shows at once, and adds each time.
+  @memory_days 7
 
   @impl true
   def mount(_params, _session, socket) do
@@ -89,6 +98,7 @@ defmodule PrismWeb.SettingsLive do
     if connected?(socket) and socket.assigns.context.platform_admin do
       Cyfr.Bus.subscribe_global(Cyfr.Bus.platform_notify())
       Cyfr.Bus.subscribe_global(Cyfr.Bus.settings_changed())
+      send(self(), :memory)
     end
 
     socket =
@@ -108,6 +118,11 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:platform_settings, [])
       |> assign(:host_decisions, [])
       |> assign(:host_decision, nil)
+      # Who used what memory (`Opus.memory/2`, `:everyone`), and how many
+      # of its days the table shows.
+      |> assign(:memory_machines, [])
+      |> assign(:memory_days, [])
+      |> assign(:memory_shown, @memory_days)
       |> assign(:settings_revision, nil)
       |> assign(:settings_members, [])
       |> assign(:settings_ttl_ms, nil)
@@ -219,6 +234,9 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("door_remove", %{"id" => id}, socket) do
     door_call(socket, "door/remove", %{"id" => id}, "Entry removed.")
   end
+
+  def handle_event("memory_more", _params, socket),
+    do: {:noreply, update(socket, :memory_shown, &(&1 + @memory_days))}
 
   def handle_event("admin_mark", %{"person" => person}, socket),
     do: marking(socket, "mark_admin", String.trim(person))
@@ -401,6 +419,20 @@ defmodule PrismWeb.SettingsLive do
 
   def handle_info(%Cyfr.Bus.SettingsChanged{kind: :observed}, socket), do: {:noreply, socket}
 
+  # Who used what is read again as often as CYFR asks for it. A person
+  # who no longer administers reads nothing, and the section empties.
+  def handle_info(:memory, socket) do
+    Process.send_after(self(), :memory, Opus.memory_poll_ms())
+
+    case Opus.memory(socket.assigns.context, :everyone) do
+      {:ok, %{machines: machines, days: days}} ->
+        {:noreply, socket |> assign(:memory_machines, machines) |> assign(:memory_days, days)}
+
+      {:error, _not_read} ->
+        {:noreply, socket |> assign(:memory_machines, []) |> assign(:memory_days, [])}
+    end
+  end
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -463,6 +495,30 @@ defmodule PrismWeb.SettingsLive do
          put_flash(socket, :error, "The administrators did not change: #{error_message(reason)}")}
     end
   end
+
+  # A machine's numbers: what is in use of what work may use, and what is
+  # kept ready for the next run beside it.
+  defp machine_use(%{used: used, work: work, floor: 0}),
+    do: "In use: #{MemoryWords.size(used)} of #{MemoryWords.size(work)}."
+
+  defp machine_use(%{used: used, work: work, floor: floor}),
+    do:
+      "In use: #{MemoryWords.size(used)} of #{MemoryWords.size(work)}; " <>
+        "#{MemoryWords.size(floor)} more is kept ready for the next run."
+
+  defp person_name(%{name: name}) when is_binary(name), do: "@" <> name
+  defp person_name(%{athanor: athanor}), do: athanor
+
+  # The newest `shown` days of the record, every row of each.
+  defp shown_days(days, shown) do
+    kept = days |> Enum.map(& &1.day) |> Enum.uniq() |> Enum.take(shown) |> MapSet.new()
+    Enum.filter(days, &MapSet.member?(kept, &1.day))
+  end
+
+  defp more_days?(days, shown), do: days |> Enum.map(& &1.day) |> Enum.uniq() |> length() > shown
+
+  defp blank_as_dash(""), do: "—"
+  defp blank_as_dash(text), do: text
 
   # How a person is named in the administrators' list.
   defp admin_name(%{name: name}), do: "@" <> name
@@ -1233,6 +1289,69 @@ defmodule PrismWeb.SettingsLive do
               </div>
               <.button type="submit" variant="ghost">Close the account</.button>
             </form>
+          </section>
+        </.card>
+
+        <%!-- Who used what memory (platform admins) --%>
+        <.card :if={@context.platform_admin}>
+          <section id="memory-use" data-test="memory-use">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Memory use</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              Who used memory on this CYFR: each person's runs, builds and programs, by
+              name and UTC day. No thread or content is kept.
+            </p>
+            <div :if={@memory_machines == []} class="py-2">
+              <.empty_state message="Nothing has reported its memory yet" />
+            </div>
+            <div
+              :for={machine <- @memory_machines}
+              class="space-y-2 mb-4"
+              data-test="memory-machine"
+            >
+              <h4
+                :if={MemoryWords.heading(@memory_machines, machine)}
+                class="text-xs text-gray-500 uppercase"
+              >
+                {MemoryWords.heading(@memory_machines, machine)}
+              </h4>
+              <p class="text-sm text-gray-300">{machine_use(machine)}</p>
+              <p :if={machine.holders == []} class="text-sm text-gray-300">
+                Nothing uses memory on it now.
+              </p>
+              <.table
+                :if={machine.holders != []}
+                id={"memory-holders-" <> machine.machine}
+                rows={machine.holders}
+              >
+                <:col :let={h} label="Person">{person_name(h.person)}</:col>
+                <:col :let={h} label="What">{MemoryWords.kind(h.kind)}</:col>
+                <:col :let={h} label="Name">{h.name || "—"}</:col>
+                <:col :let={h} label="Uses">{MemoryWords.size(h.bytes)}</:col>
+              </.table>
+              <p class="text-xs text-gray-500">{MemoryWords.counted(machine)}</p>
+            </div>
+            <div :if={@memory_days != []} id="memory-days">
+              <.table id="memory-day-rows" rows={shown_days(@memory_days, @memory_shown)}>
+                <:col :let={d} label="Day (UTC)">{Date.to_iso8601(d.day)}</:col>
+                <:col :let={d} label="Person">{person_name(d.person)}</:col>
+                <:col :let={d} label="What">{MemoryWords.kind(d.kind)}</:col>
+                <:col :let={d} label="Name">{d.name || "—"}</:col>
+                <:col :let={d} label="Memory over time">{MemoryWords.over_time(d.mib_ms)}</:col>
+                <:col :let={d} label="Time measured">{MemoryWords.measured(d.measured_ms)}</:col>
+                <:col :let={d} label="Most at once">{MemoryWords.size(d.peak_bytes)}</:col>
+                <:col :let={d} label="Ended for memory">
+                  {Enum.join(MemoryWords.ended(d.ended), "; ") |> blank_as_dash()}
+                </:col>
+              </.table>
+            </div>
+            <.button
+              :if={more_days?(@memory_days, @memory_shown)}
+              variant="ghost"
+              phx-click="memory_more"
+              data-test="memory-more"
+            >
+              Show 7 more days
+            </.button>
           </section>
         </.card>
 
