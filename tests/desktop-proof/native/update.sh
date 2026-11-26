@@ -21,7 +21,9 @@
 #                app's own cyfr answers A
 #   opened       the app at A opens: the chooser answers on 127.0.0.1:7340
 #   refused_open (Windows) with the app open, B's installer over it and
-#                A's removal each end 1603 saying CYFR is open, the same
+#                A's removal each end 1603 saying CYFR is open (the
+#                package's own OPEN_REFUSED, read from msi-project.mjs,
+#                whose node_modules the build installed), the same
 #                app runs on and answers, every file of the app is as it
 #                was and nothing more waits for a restart
 #   unverified   cyfr update --version U refuses, saying the app did not
@@ -491,13 +493,13 @@ logged() { [ "$(pwsh -NoProfile -NonInteractive -Command "Select-String -Literal
 # install over it or remove it, saying so, and changes nothing
 # (apps/codex/desktop/scripts/msi-project.mjs).
 refused_open() {
-  local dir=$1 arch=$2 pid=$3 files pending i x
+  local dir=$1 arch=$2 pid=$3 files pending said i x
+  said=$(cd "$ROOT/apps/codex/desktop" && node --input-type=module -e 'import {OPEN_REFUSED} from "./scripts/msi-project.mjs"; console.log(OPEN_REFUSED)')
   files=$(app_files) pending=$(pending_renames)
   i=$(msi_run /i "$dir/$B/cyfr-desktop_${B}_${OS}_$arch.$EXT" "$LOGS/open-i.log")
   x=$(msi_run /x "$dir/$A/cyfr-desktop_${A}_${OS}_$arch.$EXT" "$LOGS/open-x.log")
   if [ "$i" = 1603 ] && [ "$x" = 1603 ] &&
-    logged "$LOGS/open-i.log" "CYFR is open: close it, then try again." &&
-    logged "$LOGS/open-x.log" "CYFR is open: close it, then try again." &&
+    [ -n "$said" ] && logged "$LOGS/open-i.log" "$said" && logged "$LOGS/open-x.log" "$said" &&
     alive "$pid" && answers && [ "$(release_of)" = "$A" ] &&
     [ "$(app_files)" = "$files" ] && [ "$(pending_renames)" = "$pending" ]; then
     pass refused_open "B over the open app and A's removal each refused, saying CYFR is open; the app ($pid) runs on unchanged, nothing waits for a restart"

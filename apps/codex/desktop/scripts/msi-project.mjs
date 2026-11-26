@@ -21,9 +21,12 @@
 //   before anything changes, saying OPEN_REFUSED, and leaves nothing for a
 //   restart. The app is open while its single-instance lock is held
 //   (src/app.js), which keeps the file lockfile in its user-data folder
-//   open and deletes it when it closes, however the app ends; the
-//   package's search finds that file, and its launch condition, which
-//   Windows Installer reads on install, upgrade and removal alike, refuses.
+//   open and deletes it when it closes, however the app ends, though not
+//   when the machine itself stops (a lost power, a crash of Windows), which
+//   leaves it until the app next opens and closes, as OPEN_REFUSED tells a
+//   person; the package's search finds that file, and its launch
+//   condition, which Windows Installer reads on install, upgrade and
+//   removal alike, refuses.
 //   cyfr update closes the app before it installs (cmd/app_update.go); the
 //   bundled cyfr running it holds no such lock.
 //
@@ -37,7 +40,7 @@ const COMPONENT = /(<Component Directory="(d[^"]+)">\s*<File Name="cyfr\.exe" So
 const PRODUCT_END = /<\/Product>/g
 
 /** What Windows Installer says when the app is open. */
-export const OPEN_REFUSED = "CYFR is open: close it, then try again."
+export const OPEN_REFUSED = "CYFR is open: close it, then try again. If CYFR is not open, open it and close it once, then try again."
 
 /** The WiX project text `wxs` as CYFR ships it (above). */
 export function cyfrMsiProject(wxs) {

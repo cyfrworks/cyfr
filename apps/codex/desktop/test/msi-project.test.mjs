@@ -27,7 +27,7 @@ const productEnd = `  <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable"/>
         <FileSearch Id="cyfrLockfile" Name="lockfile"/>
       </DirectorySearch>
     </Property>
-    <Condition Message="CYFR is open: close it, then try again.">NOT CYFROPEN</Condition>
+    <Condition Message="${OPEN_REFUSED}">NOT CYFROPEN</Condition>
   </Product>`
 
 test("the bundled cyfr's folder goes on the account's PATH, and leaves it on uninstall", () => {
@@ -40,10 +40,10 @@ test("the bundled cyfr's folder goes on the account's PATH, and leaves it on uni
 
 // Restart Manager off in the package itself, and an open app's lockfile
 // (Electron's single-instance lock, in its user-data folder) refusing the
-// install, upgrade or removal with one sentence; nothing else changes.
+// install, upgrade or removal, saying OPEN_REFUSED; nothing else changes.
 test("the package has no Restart Manager and refuses while the app is open", () => {
   const patched = cyfrMsiProject(project(app, cyfr))
-  assert.equal(OPEN_REFUSED, "CYFR is open: close it, then try again.")
+  assert.equal(OPEN_REFUSED, "CYFR is open: close it, then try again. If CYFR is not open, open it and close it once, then try again.")
   assert.equal(patched.replace(/\n\s*<Environment [^>]*\/>/, ""), project(app, cyfr).replace("</Product>", productEnd))
 })
 
