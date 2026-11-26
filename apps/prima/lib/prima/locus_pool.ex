@@ -52,8 +52,8 @@ defmodule Prima.LocusPool do
   @allowance_bytes %{runner: @floor_bytes, build: 800 * @mib, session: 384 * @mib}
   @build_cap_bytes 1024 * @mib
   @least_cap_bytes %{
-    runner: @floor_bytes + Prima.Limits.Ceiling.lowered(%{}).max_memory_bytes,
-    session: 384 * @mib
+    runner: @allowance_bytes.runner + Prima.Limits.Ceiling.lowered(%{}).max_memory_bytes,
+    session: @allowance_bytes.session
   }
   @processors %{runner: 1, build: 1, session: 2}
 

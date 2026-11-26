@@ -161,6 +161,8 @@ defmodule Prima.KeeperProtocolTest do
     "a place whose athanor ceiling is zero" => "athanor_max_bytes",
     "a place whose athanor ceiling is above the maximum" => "athanor_max_bytes",
     "a place whose athanor ceiling is not a number" => "athanor_max_bytes",
+    "a place whose athanor ceiling is negative" => "athanor_max_bytes",
+    "a place whose athanor ceiling is fractional" => "athanor_max_bytes",
     "an athanor ceiling on a place that is not a session's" => "athanor_max_bytes",
     "an athanor ceiling on a place that names no athanor" => "athanor_max_bytes",
     "an athanor ceiling on an assign" => "athanor_max_bytes"
