@@ -308,9 +308,8 @@ defmodule Opus.Programs.Definition do
   `transport` is `program` (an `http` row has none); its `mark` is `mcp`
   or `driven`; `home` is `"scratch"` or `"kept"`, a kept home being the
   row's own folder; `home_max_bytes` is a kept home's alone, at least
-  1 MiB; `hosts`, the only hosts the
-  program reaches beside the resolver and the deployment's private hosts,
-  is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
+  1 MiB; `hosts`, the only hosts the program reaches beside the resolver
+  and the deployment's private hosts, is a list the keeper takes (`Prima.KeeperProtocol.valid_hosts?/1`: 1 to
   32 distinct exact hostnames, no wildcard, scheme, port or trailing dot),
   stored as its JSON text; absent, the program reaches public hosts.
   Answers the columns to store, every one named (nil when absent), or
