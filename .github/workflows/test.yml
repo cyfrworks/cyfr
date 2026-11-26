@@ -1288,7 +1288,7 @@ jobs:
       # which a host loads at install (cyfr init) and this runner here.
       - name: Load the Locus containers' AppArmor profile
         run: scripts/ci/apparmor-profile.sh
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
@@ -1830,7 +1830,7 @@ jobs:
       # The Compose proof drives the stack through the `cyfr` command line
       # it builds from apps/codex, and builds the Tailscale stand-in, a Go
       # module of its own.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
@@ -2049,7 +2049,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The Tailscale stand-in is a Go module of its own.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
@@ -2129,7 +2129,7 @@ jobs:
           cache-key-prefix: mix-release-boot-${{ matrix.db }}
       # Every cell's deployment file is the one `cyfr init`, built from
       # apps/codex, writes.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
@@ -2225,7 +2225,7 @@ jobs:
           cache-key-prefix: mix-browser
       # Every cell's deployment file is the one `cyfr init`, built from
       # apps/codex, writes, and the grant proof builds the command line too.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
@@ -2439,7 +2439,7 @@ jobs:
           fetch-depth: 0
       # The CI guard scripts' cases build the command line, as the release
       # binary check's own cases (tests/ci-guards-test.sh).
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
