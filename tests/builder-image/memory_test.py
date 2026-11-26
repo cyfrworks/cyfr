@@ -174,7 +174,7 @@ class ContainerState(unittest.TestCase):
 
 
 class ContainerLimit(unittest.TestCase):
-    """The builds role's memory.max is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
+    """Rest's memory.max, over the builds, is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
 
     def exec_answering(self, status, stdout):
         class Observer:
