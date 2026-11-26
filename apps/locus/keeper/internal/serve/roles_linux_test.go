@@ -157,6 +157,15 @@ type roleUnderTest struct {
 	report roleReport
 }
 
+// kind is a place's kind the role may name: a run's on the floor's role, a
+// program's on any other.
+func (ru *roleUnderTest) kind() string {
+	if ru.r.spec.Floor {
+		return protocol.KindRun
+	}
+	return protocol.KindProgram
+}
+
 // rolesKeeper is a bounded keeper whose roles are two of its own, alpha
 // and beta, each with a relay pool of its own, run as serve runs them: each
 // process started in its space by startRole and kept by keepRole, its
@@ -364,7 +373,7 @@ func (ru *roleUnderTest) ask(t *testing.T, request string) map[string]any {
 // attached in its run folder, and answers the spawn's id, uid and leader.
 func (ru *roleUnderTest) spawn(t *testing.T, id string) (string, int, *relayConn) {
 	t.Helper()
-	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"`+ru.kind()+`"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("role %s's place: %v", ru.r.spec.Name, placed)
 	}
 	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
@@ -516,7 +525,7 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	alpha, beta := rk.roles["alpha"], rk.roles["beta"]
 	betaSpawn, betaUID, _ := beta.spawn(t, "b1")
 	alphaSpawn, _, _ := alpha.spawn(t, "a1")
-	if placed := beta.ask(t, `{"v":7,"type":"place","id":"bp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := beta.ask(t, `{"v":7,"type":"place","id":"bp","kind":"program"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("beta's place: %v", placed)
 	}
 	refusals := map[string]string{
@@ -557,7 +566,7 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	if reply := beta.ask(t, `{"v":7,"type":"home_list","id":"y2"}`); reply["type"] != protocol.TypeHomes {
 		t.Errorf("beta's own home_list answered %v", reply)
 	}
-	if reply := beta.ask(t, `{"v":7,"type":"assign","id":"y3","place":"bp","kind":"warm"}`); reply["type"] != protocol.TypeAssigned {
+	if reply := beta.ask(t, `{"v":7,"type":"assign","id":"y3","place":"bp","kind":"terminal"}`); reply["type"] != protocol.TypeAssigned {
 		t.Errorf("beta's own assign answered %v", reply)
 	}
 	// Beta's spawn runs on under its uid.
@@ -648,7 +657,7 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 		if reply := ru.ask(t, `{"v":7,"type":"pool","id":"z1","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool {
 			t.Fatalf("role %s at no work: its pool answered %v", name, reply)
 		}
-		if placed := ru.ask(t, `{"v":7,"type":"place","id":"zp","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+		if placed := ru.ask(t, `{"v":7,"type":"place","id":"zp","kind":"`+ru.kind()+`"}`); placed["type"] != protocol.TypePlaced {
 			t.Fatalf("role %s's place: %v", name, placed)
 		}
 		spawn := fmt.Sprintf(`{"v":7,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
@@ -924,7 +933,7 @@ func (rk *rolesKeeper) routed(name string) {
 // group. The guard's admits stay held until release is closed.
 func (rk *rolesKeeper) heldSpawn(t *testing.T, ru *roleUnderTest, id string) (release func()) {
 	t.Helper()
-	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"`+ru.kind()+`"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("role %s's place: %v", ru.r.spec.Name, placed)
 	}
 	hold := make(chan struct{})

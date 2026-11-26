@@ -551,16 +551,21 @@ func (k *keeper) place(t *testing.T, id, kind string) map[string]any {
 	return k.reply(t)
 }
 
+// kind is a place's kind the keeper's client may name: a run's on the
+// floor's role, a program's on any other.
+func (k *keeper) kind() string {
+	if k.c.role.spec.Floor {
+		return protocol.KindRun
+	}
+	return protocol.KindProgram
+}
+
 // handleSpawn places the place req names, a run's on the floor's role and
 // a program's on any other, and then asks for the spawn, as a client does
 // once its preparation is done.
 func (k *keeper) handleSpawn(t *testing.T, req *protocol.Request) {
 	t.Helper()
-	kind := protocol.KindProgram
-	if k.c.role.spec.Floor {
-		kind = protocol.KindRun
-	}
-	if placed := k.place(t, req.Place, kind); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
+	if placed := k.place(t, req.Place, k.kind()); placed["type"] != protocol.TypePlaced || placed["id"] != req.Place {
 		t.Fatalf("place %s answered %v", req.Place, placed)
 	}
 	k.s.handleSpawn(k.c, req)

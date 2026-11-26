@@ -246,7 +246,7 @@ func (k *keeper) measuredAtLeast(t *testing.T, place string, least float64) map[
 // zero. It needs no root.
 func TestAPlaceWithoutAReadingIsUnmeasured(t *testing.T) {
 	k, _ := placesKeeper(t)
-	if placed := k.place(t, "unread", protocol.KindRun); placed["type"] != protocol.TypePlaced {
+	if placed := k.place(t, "unread", k.kind()); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("place: %v", placed)
 	}
 	k.spawnedIn(t, "unread", &spawn{id: strings.Repeat("a", 32), group: &cgroup.Group{}})
@@ -341,7 +341,7 @@ func TestAFileReaderIsNotChargedItsCacheAndATmpfsWriterIsChargedItsPages(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		if placed := k.place(t, id, protocol.KindProgram); placed["type"] != protocol.TypePlaced {
+		if placed := k.place(t, id, k.kind()); placed["type"] != protocol.TypePlaced {
 			t.Fatalf("place %s: %v", id, placed)
 		}
 		k.spawnedIn(t, id, &spawn{id: id, group: group})

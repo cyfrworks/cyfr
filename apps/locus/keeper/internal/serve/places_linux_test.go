@@ -510,7 +510,7 @@ func TestAReadOfARemovedGroupEndsWithAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stat.Close()
-	if placed := k.place(t, "p", protocol.KindRun); placed["type"] != protocol.TypePlaced {
+	if placed := k.place(t, "p", k.kind()); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("place answered %v", placed)
 	}
 	sp := &spawn{id: randomHex(16), group: group}
@@ -635,7 +635,7 @@ func TestASpawnWhoseGroupStaysKeepsItsPlaceUntilARetryRemovesIt(t *testing.T) {
 				t.Fatalf("a spawn whose group stays was told %v; want its exit and no release", told)
 			}
 			k.measuredAtLeast(t, "a", 4<<20)
-			if again := k.place(t, "a", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
+			if again := k.place(t, "a", k.kind()); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
 				t.Fatalf("a place of its id answered %v; want it refused, the place still held", again)
 			}
 			k.s.mu.Lock()
@@ -738,7 +738,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			early.Pool = "absent"
 			k.handleSpawn(t, early)
 			k.expect(t, protocol.NewError("e", "", protocol.CodeUnknownPool))
-			if again := k.place(t, "e", protocol.KindRun); again["type"] != protocol.TypePlaced {
+			if again := k.place(t, "e", k.kind()); again["type"] != protocol.TypePlaced {
 				t.Fatalf("a place of the early refusal's id answered %v; want it placed, the place freed at once", again)
 			}
 
@@ -746,7 +746,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			if told := k.toldSoFar(t); len(told) != 0 {
 				t.Fatalf("while the refused spawn's group stays the keeper told %v; want nothing", told)
 			}
-			if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
+			if again := k.place(t, "r", k.kind()); again["type"] != protocol.TypeError || again["code"] != protocol.CodeBadRequest {
 				t.Fatalf("a place of the refused spawn's id answered %v once its retirement left the group; want it refused, the place still held", again)
 			}
 
@@ -755,7 +755,7 @@ func TestARefusedLaunchIsReleasedOnceItsGroupIsRemoved(t *testing.T) {
 			if told := k.toldSoFar(t); !reflect.DeepEqual(told, []map[string]any{wire(t, protocol.NewReleased(spawnID))}) {
 				t.Fatalf("the retry that removed the refused spawn's group told %v; want its one release", told)
 			}
-			if again := k.place(t, "r", protocol.KindRun); again["type"] != protocol.TypePlaced {
+			if again := k.place(t, "r", k.kind()); again["type"] != protocol.TypePlaced {
 				t.Fatalf("a place of the refused spawn's id answered %v once it was released; want it placed", again)
 			}
 			if !kept {

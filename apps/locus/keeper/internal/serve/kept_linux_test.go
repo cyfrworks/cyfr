@@ -270,7 +270,7 @@ func TestAKeptSpawnOfNoHomeIsRefused(t *testing.T) {
 			t.Errorf("%s: %v", name, refused)
 		}
 		// The refusal freed the place the spawn named.
-		if placed := k.place(t, c.req.Place, protocol.KindProgram); placed["type"] != protocol.TypePlaced {
+		if placed := k.place(t, c.req.Place, k.kind()); placed["type"] != protocol.TypePlaced {
 			t.Errorf("%s: placing its place again answered %v", name, placed)
 		}
 	}
