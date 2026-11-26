@@ -236,7 +236,37 @@ defmodule Prima.LocusPoolTest do
                  others_bytes: 0
                })
              ) ==
-               "This CYFR has not enough memory for it: it needs 800.0 MB, and 444.0 MB is free."
+               "This CYFR has not enough memory for it: it needs 800.0 MB, and has 444.0 MB for all its work."
+    end
+
+    test "when nothing anyone stops makes room, says only that this CYFR has not enough memory for it" do
+      # A 4 GB machine at the default reserves: work's memory less the
+      # floor's is 623 MiB, less than a build needs, whoever's program holds
+      # 384 MiB of it.
+      program = %{kind: "program", subject: nil, bytes: 384 * @mib}
+
+      sentence =
+        "This CYFR has not enough memory for it: it needs 800.0 MB, and has 623.0 MB for all its work."
+
+      for held <- [
+            %{need: 800 * @mib, free: 239 * @mib, mine: [program], others_bytes: 0},
+            %{need: 800 * @mib, free: 239 * @mib, mine: [], others_bytes: 384 * @mib}
+          ] do
+        assert plain!(LocusPool.refusal_sentence(held)) == sentence, inspect(held)
+      end
+    end
+
+    test "when stopping work would make room, the advice stands" do
+      held = %{
+        need: 800 * @mib,
+        free: 239 * @mib,
+        mine: [%{kind: "program", subject: nil, bytes: 600 * @mib}],
+        others_bytes: 0
+      }
+
+      assert plain!(LocusPool.refusal_sentence(held)) ==
+               "This CYFR has not enough memory free. Of yours, a program uses 600.0 MB. " <>
+                 "Stop one on the Programs page, or wait."
     end
   end
 end

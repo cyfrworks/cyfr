@@ -236,24 +236,32 @@ defmodule Prima.LocusPool do
   "others": it says what is under way uses the memory. A runner's place is
   no athanor's until its work is assigned, so a refused run's `held` holds
   nothing of the person's own, and its sentence cannot tell the person
-  that the memory is their own programs'. With nothing held at all it says
-  only that this CYFR has no room for the start.
+  that the memory is their own programs'. When the start needs more than
+  everything held and free together, nothing anyone stops makes room: it
+  says only that this CYFR has not enough memory for it, what it needs and
+  what all its work can have, and gives no advice.
   """
   @spec refusal_sentence(held()) :: String.t()
-  def refusal_sentence(%{mine: [], others_bytes: 0, free: 0}),
-    do: "This CYFR has no memory free for it."
+  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held) do
+    case free + others + Enum.sum_by(mine, & &1.bytes) do
+      0 ->
+        "This CYFR has no memory free for it."
 
-  def refusal_sentence(%{mine: [], others_bytes: 0, need: need, free: free}),
-    do:
-      "This CYFR has not enough memory for it: it needs #{Prima.Bytes.format(need)}, " <>
-        "and #{Prima.Bytes.format(free)} is free."
+      all when need > all ->
+        "This CYFR has not enough memory for it: it needs #{Prima.Bytes.format(need)}, " <>
+          "and has #{Prima.Bytes.format(all)} for all its work."
 
-  def refusal_sentence(%{mine: [], others_bytes: others}),
+      _stopping_helps ->
+        room_held(held)
+    end
+  end
+
+  defp room_held(%{mine: [], others_bytes: others}),
     do:
       "This CYFR has not enough memory free. Work under way uses " <>
         "#{Prima.Bytes.format(others)}. Wait, or try again later."
 
-  def refusal_sentence(%{mine: mine, others_bytes: others}) do
+  defp room_held(%{mine: mine, others_bytes: others}) do
     others = if others > 0, do: [" Others use #{Prima.Bytes.format(others)}."], else: []
 
     ending =
