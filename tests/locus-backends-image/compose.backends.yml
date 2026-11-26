@@ -10,8 +10,8 @@
 # role and no other. This adds only the image under test, the probe
 # backend and the residue canary (tests/fixtures/residue-canary.go), and
 # the settings a test chooses: the backend pool's uid range, the kept
-# homes' root and range and the memory budget (empty for the default); a
-# test that sizes the pool's work sets the reserve and the share
+# homes' root and range; a test that sizes the pool's work sets the
+# reserve and the share
 # docker-compose.yml itself reads. On the guard it adds the image under test,
 # a loopback port for the backends role's listener, which the guard
 # forwards into the role's space, and a tools directory first on its PATH.
@@ -31,8 +31,6 @@ services:
       - ${PROBE_DIR:?set PROBE_DIR}:/probe:ro
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
     entrypoint: ["cyfr-locus", "serve", "--role", "runtime:10011:4200:runner:private:floor", "--role", "builds:10012:4100:build", "--role", "backends:10013:4101:backends:kept", "--pool", "runner:30101-30108:relay", "--pool", "build:30001-30016:routed", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}:routed", "--home-root", "/var/lib/locus/homes", "--kept-homes", "${KEPT_HOMES:?set KEPT_HOMES}", "--guard", "/run/cyfr-guard-control/guard.sock", "--", "/app/bin/locus", "start"]
-    environment:
-      - LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}
   locus-guard:
     image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}
     container_name: !reset null

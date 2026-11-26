@@ -1625,7 +1625,7 @@ defmodule Opus.Programs.Box do
 
   defp read_refusal(body) do
     case LocusBackends.read_refusal(body) do
-      {:ok, code} -> {:refused, code}
+      {:ok, refusal} -> {:refused, LocusBackends.code(refusal)}
       {:error, error} -> {:unreadable, error}
     end
   end

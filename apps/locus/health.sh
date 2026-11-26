@@ -72,7 +72,7 @@ fi
 
 if [ -n "${LOCUS_BACKENDS_KEY:-}" ]; then
   probed=1
-  curl -fsS -o /dev/null -X POST -H 'content-type: application/json' -d '{"version":5}' \
+  curl -fsS -o /dev/null -X POST -H 'content-type: application/json' -d '{"version":6}' \
     "http://$address:4101/locus/v1/backends/health" \
     || { echo "locus: backends does not answer at $address:4101" >&2; exit 1; }
 fi

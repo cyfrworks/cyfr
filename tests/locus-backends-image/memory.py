@@ -22,6 +22,14 @@ least, and no setting names a bound:
 - Its sibling, another owner's program, runs on untouched, and the service
   answers throughout.
 
+A session is refused for room by the pool alone, in a service started
+afresh at the same work: two athanors' sessions each hold most of half the
+work, read by the keeper past their allowance's time. A start of each
+athanor then waits the room's wait and is refused `capacity` with `held`:
+its own athanor's holder by its row, the other's only in `others_bytes`,
+no name of it anywhere in the answer. Once the first athanor's holder is
+released, its next start is served.
+
 And the service's own memory has a bound, in a service started afresh:
 
 - As many sessions as it admits, up to its pool's uids, open silent, and
@@ -58,8 +66,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    POOL_FIRST, POOL_LAST, RELEASE, ROLE, Stack, eventually, expect, health, owner_of, probe, require_docker,
-    wait_healthy,
+    POOL_FIRST, POOL_LAST, RELEASE, ROLE, VERSION, Stack, eventually, expect, health, owner_of, probe,
+    require_docker, wait_healthy,
 )
 import imagesuite  # noqa: E402
 
@@ -429,6 +437,59 @@ def stops_a_flood(stack, label, env):
     wait_healthy(stack.base)
 
 
+# The room case: what each holder holds, below a session's bound with its
+# program's own memory beside it, so two of them leave less than a session's
+# allowance of the work free; and the keeper's wait for room.
+ROOM_HOLD = 288 * MIB
+ROOM_WAIT_S = imagesuite.ROOM_WAIT_MS / 1000
+
+
+def room_owner(athanor, row):
+    return {"athanor": f"ath_room-{athanor}", "server": f"mcp_room-{athanor}{row}", "e": 1}
+
+
+def refuses_for_room(stack):
+    """A session refused by the pool alone, saying what holds it to its own athanor, served once a holder goes."""
+    stack.up(work_bytes=WORK)
+    c = stack.controller()
+    expect(c.hello()[0] == 200, "a fresh service is greeted")
+    a1, a2, b1, b2 = room_owner("a", 1), room_owner("a", 2), room_owner("b", 1), room_owner("b", 2)
+    for owner in [a1, a2, b1, b2]:
+        status, answer, _ = c.sync(owner, [probe()], lease_ms=120_000)
+        expect(status == 200, f"{owner['server']} is synced", answer)
+
+    for holder in [a1, b1]:
+        held = c.tool(holder, "probe__hog", {"bytes": ROOM_HOLD})
+        expect(held == {"held": ROOM_HOLD}, f"{holder['server']} holds {ROOM_HOLD} bytes", held)
+    # Past the allowance's time each holder is charged its reading.
+    # sleep-ok: the keeper charges a reading only once the allowance's time has passed
+    time.sleep(imagesuite.ALLOWANCE_MS / 1000 + 2)
+
+    for asking, own, other in [(a2, a1, b1), (b2, b1, a1)]:
+        started = time.monotonic()
+        status, answer = c.open(asking, "probe", timeout=60)
+        waited = time.monotonic() - started
+        expect(status == 409 and answer.get("version") == VERSION and answer.get("error") == "capacity"
+               and sorted(answer) == ["error", "held", "version"],
+               f"{asking['server']}'s start, with no room, is refused capacity carrying what holds the pool", answer)
+        held = answer["held"]
+        mine = held["mine"]
+        expect(waited >= ROOM_WAIT_S - 1, f"the refusal came after the room's wait ({waited:.1f} s)", waited)
+        expect(held["need"] == imagesuite.ALLOWANCE_BYTES["session"] and held["free"] < held["need"],
+               "held names a session's allowance as the need, more than was free", held)
+        expect([(h["kind"], h.get("subject")) for h in mine] == [("program", own["server"])]
+               and mine[0]["bytes"] >= ROOM_HOLD,
+               f"of {asking['athanor']}'s own, held names its holder by its row, {own['server']}", held)
+        expect(held["others_bytes"] >= ROOM_HOLD and other["server"] not in str(answer)
+               and other["athanor"] not in str(answer),
+               "the other athanor's holder is only a sum, its row and athanor never named", held)
+        expect(c.renew([a1, a2, b1, b2], lease_ms=120_000)[0] == 200, "the owners are renewed")
+
+    expect(c.release([a1])[0] == 200, f"{a1['server']} is released")
+    status, answer = c.open(a2, "probe", key="after", timeout=60)
+    expect(status == 200, f"once {a1['server']}'s holder is gone, {a2['server']}'s start is served", answer)
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: memory.py IMAGE")
@@ -436,6 +497,7 @@ def main():
     stack = Stack("locus-backends-memory", sys.argv[1])
     try:
         bounds_each_program(stack)
+        refuses_for_room(stack)
         bounds_the_service(stack)
         stops_a_flood(stack, "taking as it comes", {})
         stops_a_flood(stack, f"masking {CREDENTIALS} credentials in every line",

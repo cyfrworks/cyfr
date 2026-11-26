@@ -86,13 +86,12 @@ defmodule Locus.Output do
       from it, its owner's join): 196,623 bytes a spawn. Spawns at once:
       the runtime's and the builds role's are at most their pools' uids,
       8 and 16 (`Prima.LocusRoles`), 1,572,984 and 3,145,968 bytes; the
-      backends role's, scratch and kept alike, at most its admission
-      limit over what each session reserves,
-      floor(`LOCUS_BACKENDS_MEMORY_BUDGET` × `LOCUS_BACKENDS_MEMORY_OVERCOMMIT`
-      / 384 MiB) (`Locus.Backends.Owners`, "Admission by memory";
-      `Prima.LocusPool.allowance_bytes/1`), 4 at the defaults,
-      786,492 bytes, and more as the overcommit, which has no ceiling,
-      grows.
+      backends role's as many sessions as the pool's memory admits
+      (`Prima.LocusPool`), the scratch ones at most its pool's 32 uids and
+      the kept ones no count of their own: at the default 8 GiB machine,
+      4,832 MiB of work over a session's least of 384, 12 at once at their
+      start, 2,359,476 bytes, and more as sessions that use less than their
+      allowance free room for others.
     * **A held keeper connection's writes**, every role: its writer
       sends a call's frames one at a time, each send waiting while the
       socket driver's queue is past gen_tcp's high watermark (8,192
@@ -156,8 +155,7 @@ defmodule Locus.Output do
       once: 512 MiB.
     * **A backends session's unfinished line**: at most
       `Prima.LocusBackends.max_line_bytes/0`, 1 MiB, one a running
-      session; running sessions are the backends role's spawns, 4 at
-      the defaults.
+      session; running sessions are the backends role's spawns, above.
     * **A request body as a listener reads it**, every role: at most the
       route's bound (the runtime's 1 MiB, a backends session's 16 MiB),
       one a connection, as many as the next row's.

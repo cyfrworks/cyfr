@@ -123,8 +123,6 @@ with open(os.path.join(ROOT, "tests", "fixtures", "locus_backends.json"), encodi
     WIRE = json.load(_vectors)
 
 VERSION = WIRE["version"]
-# The memory budget every suite's service admits within (64 GiB).
-SUITE_MEMORY_BUDGET = 64 << 30
 LABEL = WIRE["label"]
 AUTH_HEADER = WIRE["auth_header"]
 BOOT_HEADER = WIRE["boot_header"]
@@ -409,7 +407,7 @@ def check_vectors():
     compare("owner_key", owner_key(key, owner["athanor"], owner["server"], owner["generation"],
                                    owner["epoch"]).hex(), WIRE["owner_key_hex"])
 
-    compare("version", VERSION, 5)
+    compare("version", VERSION, 6)
     compare("routes", sorted(ROUTES), ["close", "control", "health", "session"])
     for kind in ["hello", "reconcile", "sync", "renew", "release", "status", "home"]:
         vector = WIRE[kind]
@@ -1025,10 +1023,6 @@ class Stack(imagesuite.Stack):
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
             "KEPT_HOMES": f"{KEPT_ROOT}:{KEPT_FIRST}-{KEPT_LAST}",
-            # Room for every session a suite holds at once, each reserving a
-            # session's allowance in it: the suites prove other properties
-            # than the service's own admission, which its tests hold.
-            "LOCUS_BACKENDS_MEMORY_BUDGET": str(SUITE_MEMORY_BUDGET),
             **self.pool_settings,
             **extra,
         }

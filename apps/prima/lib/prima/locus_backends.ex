@@ -24,7 +24,7 @@ defmodule Prima.LocusBackends do
 
   | Operation | Route | Body | Answer |
   |---|---|---|---|
-  | `:health` | `/locus/v1/backends/health` | `{"version": 5}` | unauthenticated |
+  | `:health` | `/locus/v1/backends/health` | `{"version": 6}` | unauthenticated |
   | `:control` | `/locus/v1/backends/control` | a control message | its answer, or a refusal |
   | `:session` | `/locus/v1/backends/session` | a session message | its answer, or a refusal |
   | `:close` | `/locus/v1/backends/close` | a close | `status` `closed`, or a refusal |
@@ -43,12 +43,12 @@ defmodule Prima.LocusBackends do
 
   | Type | Members | Answer (`encode_answer/2`, `read_answer/2`) |
   |---|---|---|
-  | `hello` | `g`, `cyfr_boot` | `boot`, `pool{size, free}`, `memory{budget_bytes, admission_limit_bytes, held_bytes}` |
+  | `hello` | `g`, `cyfr_boot` | `boot`, `pool{size, free}` |
   | `reconcile` | `keep[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
   | `sync` | `owner{athanor, server}`, `athanor_memory_bytes?`, `e`, `lease_ms`, `idle_ms`, `programs[]`, `sealed` | `status`, `programs[{name, status}]` |
   | `renew` | `lease_ms`, `owners[{athanor, server, e}]` | `renewed[{athanor, server, e, state}]`, `unknown[{athanor, server, e}]` |
   | `release` | `owners[{athanor, server, e}]` | `released[{athanor, server, g, e}]` |
-  | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]`, `memory{budget_bytes, admission_limit_bytes, held_bytes}` |
+  | `status` | `owners[{athanor, server}]` | `owners[{athanor, server, g, e, state, lease_ms_left, programs[]}]` |
   | `home` | `op`, `athanor`, `home_id` | `home_id`, `state` |
   | `homes` | none | `homes[]` |
 
@@ -71,16 +71,15 @@ defmodule Prima.LocusBackends do
   them `guard_unavailable`; neither starts. `sealed` is the environment
   `seal/5` sealed to the owner and the service's lifetime.
 
-  A hello and a status answer report the box's memory: `budget_bytes`,
-  the memory its sessions may hold (`B`); `admission_limit_bytes`,
-  `floor(B * F)` for its overcommit factor `F`, the most the bounds of the
-  sessions it holds may add up to; and `held_bytes`, what they add up to
-  now, the opens being prepared and the sessions whose process is not yet
-  gone included (`Locus.Backends.Owners`). A sync's
-  `athanor_memory_bytes`, a positive count of bytes, is the ceiling of
-  the owner's athanor on that sum over every owner of the athanor on the
-  box (absent: the box's `budget_bytes`); an open past either is refused
-  `capacity`.
+  A session's memory is admitted by the machine's one pool alone
+  (`Prima.LocusPool`), and nothing here reports it. A sync's
+  `athanor_memory_bytes`, a positive count of bytes, is the ceiling of the
+  owner's athanor on what its work holds in that pool (absent: none but
+  the pool's). An open the pool finds no room for within its wait is
+  refused `capacity` with `held` (`Prima.LocusPool.encode_held/1`): what
+  the session needs, what was free, the charges of the owner's own
+  athanor and everyone else's as one sum. A `capacity` for the uids of
+  the box's pool carries no `held`.
 
   A status reports each program as `{name, status, restarts, error?,
   stderr_tail?, stderr_bytes?, home, home_bytes?, over_cap, sessions}`:
@@ -269,7 +268,8 @@ defmodule Prima.LocusBackends do
   ## Refusals
 
   A refusal is answered at its code's HTTP status (`status/1`) as
-  `{"version": 5, "error": <code>}` (`encode_refusal/1`).
+  `{"version": 6, "error": <code>}` (`encode_refusal/1`), and a session's
+  `capacity` for room with `held` beside them.
 
   ## Authentication
 
@@ -314,7 +314,7 @@ defmodule Prima.LocusBackends do
 
   alias Prima.{KeeperProtocol, MacEnvelope, VaultRef}
 
-  @version 5
+  @version 6
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
@@ -342,7 +342,7 @@ defmodule Prima.LocusBackends do
   @max_session_bytes 16_777_216
   @max_recv_wait_ms 30_000
   @close_wait_ms 17_000
-  # A program's `memory_bytes` and the box's budget lie in this range.
+  # A program's `memory_bytes` lies in this range.
   @min_memory_bytes 16 * 1024 * 1024
   @max_memory_bytes 1024 * 1024 * 1024 * 1024
   @max_status_owners 64
@@ -453,12 +453,12 @@ defmodule Prima.LocusBackends do
   }
   @control_optional %{sync: ~w(athanor_memory_bytes)}
   @answer_fields %{
-    hello: ~w(version boot pool memory),
+    hello: ~w(version boot pool),
     reconcile: ~w(version released),
     sync: ~w(version status programs),
     renew: ~w(version renewed unknown),
     release: ~w(version released),
-    status: ~w(version owners memory),
+    status: ~w(version owners),
     home: ~w(version home_id state),
     homes: ~w(version homes)
   }
@@ -648,19 +648,11 @@ defmodule Prima.LocusBackends do
           programs: [program_report()]
         }
 
-  @typedoc "A box's memory as a hello and a status answer report it."
-  @type memory_report :: %{
-          budget_bytes: pos_integer(),
-          admission_limit_bytes: pos_integer(),
-          held_bytes: non_neg_integer()
-        }
-
   @typedoc "A control answer, by the type of the message it answers."
   @type answer ::
           %{
             boot: String.t(),
-            pool: %{size: non_neg_integer(), free: non_neg_integer()},
-            memory: memory_report()
+            pool: %{size: non_neg_integer(), free: non_neg_integer()}
           }
           | %{released: [owner_version()]}
           | %{status: owner_state(), programs: [%{name: String.t(), status: program_status()}]}
@@ -670,7 +662,7 @@ defmodule Prima.LocusBackends do
               ],
               unknown: [owner_epoch()]
             }
-          | %{owners: [owner_report()], memory: memory_report()}
+          | %{owners: [owner_report()]}
           | %{home_id: String.t(), state: home_state()}
           | %{homes: [String.t()]}
 
@@ -812,11 +804,15 @@ defmodule Prima.LocusBackends do
           | :internal
 
   @typedoc """
-  A refusal: its code, or, for a body at another protocol version, the
+  A refusal: its code; for a body at another protocol version, the
   version this end speaks and the one presented (`nil` for none), answered
-  as `version`.
+  as `version`; or a session the pool found no room for, answered
+  `capacity` with what holds the pool.
   """
-  @type refusal :: code() | {:protocol_mismatch, pos_integer(), pos_integer() | nil}
+  @type refusal ::
+          code()
+          | {:protocol_mismatch, pos_integer(), pos_integer() | nil}
+          | {:capacity, Prima.LocusPool.held()}
 
   @typedoc """
   Why a body does not read: not a JSON object; another protocol version (or
@@ -907,6 +903,7 @@ defmodule Prima.LocusBackends do
   @doc "The code a refusal travels as."
   @spec code(refusal()) :: code()
   def code({:protocol_mismatch, _ours, _presented}), do: :version
+  def code({:capacity, _held}), do: :capacity
   def code(code) when is_map_key(@statuses, code), do: code
 
   @doc "Every refusal code, sorted."
@@ -973,13 +970,12 @@ defmodule Prima.LocusBackends do
   def close_wait_ms, do: @close_wait_ms
 
   @doc """
-  The least a program's `memory_bytes` and the box's budget
-  (`LOCUS_BACKENDS_MEMORY_BUDGET`) may be, 16 MiB.
+  The least a program's `memory_bytes` may be, 16 MiB.
   """
   @spec min_memory_bytes() :: pos_integer()
   def min_memory_bytes, do: @min_memory_bytes
 
-  @doc "The most a program's `memory_bytes` and the box's budget may be, 1 TiB."
+  @doc "The most a program's `memory_bytes` may be, 1 TiB."
   @spec max_memory_bytes() :: pos_integer()
   def max_memory_bytes, do: @max_memory_bytes
 
@@ -1601,9 +1597,8 @@ defmodule Prima.LocusBackends do
 
   defp read_answer_typed(:hello, wire) do
     with {:ok, boot} <- field_text(wire, "boot", ""),
-         {:ok, pool} <- pool(wire["pool"]),
-         {:ok, memory} <- memory(wire["memory"]) do
-      {:ok, %{boot: boot, pool: pool, memory: memory}}
+         {:ok, pool} <- pool(wire["pool"]) do
+      {:ok, %{boot: boot, pool: pool}}
     end
   end
 
@@ -1634,8 +1629,7 @@ defmodule Prima.LocusBackends do
              [:g, :e, :state, :lease_ms_left, :programs],
              @max_status_owners
            ),
-         {:ok, memory} <- memory(wire["memory"]),
-         do: {:ok, %{owners: owners, memory: memory}}
+         do: {:ok, %{owners: owners}}
   end
 
   defp read_answer_typed(:homes, wire) do
@@ -1672,17 +1666,6 @@ defmodule Prima.LocusBackends do
   end
 
   defp pool(_wire), do: {:error, {:invalid_field, "pool"}}
-
-  defp memory(%{} = wire) do
-    with :ok <- exact(wire, ~w(budget_bytes admission_limit_bytes held_bytes), "memory."),
-         {:ok, budget} <- positive(wire, "budget_bytes", "memory."),
-         {:ok, limit} <- positive(wire, "admission_limit_bytes", "memory."),
-         {:ok, held} <- count(wire, "held_bytes", "memory.") do
-      {:ok, %{budget_bytes: budget, admission_limit_bytes: limit, held_bytes: held}}
-    end
-  end
-
-  defp memory(_wire), do: {:error, {:invalid_field, "memory"}}
 
   defp program_summary(%{} = wire, at) do
     with :ok <- exact(wire, ~w(name status), at <> "."),
@@ -2264,21 +2247,48 @@ defmodule Prima.LocusBackends do
 
   # ————— refusals —————
 
-  @doc "The body a refusal is answered with: `{\"version\": #{@version}, \"error\": <code>}`."
+  @doc """
+  The body a refusal is answered with: `{"version": #{@version}, "error": <code>}`,
+  and for a session the pool found no room for, `held` beside them.
+  """
   @spec encode_refusal(refusal()) :: binary()
+  def encode_refusal({:capacity, held}) do
+    Jason.encode!(%{
+      "version" => @version,
+      "error" => "capacity",
+      "held" => Prima.LocusPool.encode_held(held)
+    })
+  end
+
   def encode_refusal(refusal),
     do: Jason.encode!(%{"version" => @version, "error" => Atom.to_string(code(refusal))})
 
-  @doc "A refusal's body, read strictly to its code."
-  @spec read_refusal(binary()) :: {:ok, code()} | {:error, read_error()}
+  @doc """
+  A refusal's body, read strictly: its code, or `{:capacity, held}` for a
+  `capacity` that carries `held`, which no other code carries.
+  """
+  @spec read_refusal(binary()) ::
+          {:ok, code() | {:capacity, Prima.LocusPool.held()}} | {:error, read_error()}
   def read_refusal(body) when is_binary(body) do
     with :ok <- admit(byte_size(body), :answer, @max_control_bytes),
          {:ok, wire} <- object(body),
          :ok <- current_version(wire),
-         :ok <- exact(wire, ~w(version error), "") do
-      roster(wire, "error", @classes, "")
+         :ok <- exact(wire, ~w(version error), ~w(held), ""),
+         {:ok, code} <- roster(wire, "error", @classes, "") do
+      refusal_held(code, wire)
     end
   end
+
+  defp refusal_held(code, wire) when not is_map_key(wire, "held"), do: {:ok, code}
+
+  defp refusal_held(:capacity, %{"held" => held}) do
+    case Prima.LocusPool.read_held(held) do
+      {:ok, held} -> {:ok, {:capacity, held}}
+      :error -> {:error, {:invalid_field, "held"}}
+    end
+  end
+
+  defp refusal_held(_code, _wire), do: {:error, {:unknown_field, "held"}}
 
   @doc """
   The refusal a body that does not read is answered with: `version` naming

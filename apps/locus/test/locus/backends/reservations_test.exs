@@ -4,7 +4,7 @@
 defmodule Locus.Backends.ReservationsTest do
   @moduledoc """
   A reservation's lifecycle, whole: every event against every state, with
-  the state, the held bytes, the pool's uids and the endings after it, and
+  the state, whether it is held, the pool's uids and the endings after it, and
   then every exit a session can meet, as the events the owner table hears
   for it, asserting the same after each. `Locus.Backends.OwnersTest`
   drives the same exits through the table and its launchers.
@@ -14,7 +14,6 @@ defmodule Locus.Backends.ReservationsTest do
 
   alias Locus.Backends.Reservations
 
-  @bytes 268_435_456
   @key {:owner, "ss_one"}
   @tag_ %{
     ledger: :ledger,
@@ -25,7 +24,6 @@ defmodule Locus.Backends.ReservationsTest do
     lifetime: "lt_00000000000000000000000000000000_" <> "00000000000000000000000000000001",
     server: "mcp_one",
     athanor: "ath_one",
-    memory_bytes: @bytes,
     home_id: nil
   }
 
@@ -183,12 +181,12 @@ defmodule Locus.Backends.ReservationsTest do
   defp event(:adopted), do: {:adopted, @tag_}
   defp event(event), do: event
 
-  # What a reservation in `state` holds: its bound in every state, a
+  # What a reservation in `state` holds: itself in every state, a
   # scratch session's uid in every state but `reserved`, and an ending
   # only as `ending`.
   defp holds(state) do
     %{
-      bytes: if(state in [:absent, :released], do: 0, else: @bytes),
+      held: if(state in [:absent, :released], do: 0, else: 1),
       uids: if(state in [:absent, :released, :reserved], do: 0, else: 1),
       endings: if(match?({:ending, _}, state), do: 1, else: 0)
     }
@@ -196,7 +194,7 @@ defmodule Locus.Backends.ReservationsTest do
 
   defp held(reservations) do
     %{
-      bytes: Reservations.held_bytes(reservations),
+      held: map_size(reservations),
       uids: Reservations.uids(reservations),
       endings: map_size(Reservations.endings(reservations))
     }

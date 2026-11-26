@@ -415,7 +415,10 @@ defmodule Opus.Programs.Session do
     do: {:refused, :backends_refused_signature, Opus.Programs.Box.boot_header(headers)}
 
   defp refusal(status, headers, body) do
-    with {:ok, code} <- LocusBackends.read_refusal(body),
+    # A capacity for room carries what holds the pool, which nothing here
+    # reads yet: the refusal is its code.
+    with {:ok, refusal} <- LocusBackends.read_refusal(body),
+         code = LocusBackends.code(refusal),
          true <- LocusBackends.status(code) == status do
       {:refused, Opus.Programs.Box.refusal_name(code), Opus.Programs.Box.boot_header(headers)}
     else
