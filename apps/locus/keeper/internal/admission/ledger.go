@@ -334,8 +334,10 @@ func (l *Ledger) step(now time.Time, second bool) Events {
 func (l *Ledger) giveWay(in map[*Entry]bool, now time.Time, second bool) []*Entry {
 	var need uint64
 	for _, e := range l.waiting {
-		// A start held by its athanor's ceiling alone needs no room of W.
-		if l.fitsWork(e, in, now) && !l.withinCeiling(e, now) {
+		// A start over its athanor's ceiling asks no one: no runner of
+		// another athanor goes for a start its own limit holds, whether W
+		// is short too or not.
+		if !l.withinCeiling(e, now) {
 			continue
 		}
 		need += l.need(e, in)

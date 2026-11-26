@@ -514,3 +514,27 @@ func TestAnAskLastsOneTick(t *testing.T) {
 	}
 	admitted(t, l.Drop(kept, at(21.5)), next)
 }
+
+// A start over its athanor's ceiling asks no runner to give way, W short
+// too or not: another athanor's kept runner stays. (A second with less
+// than a program's allowance free still asks, by 2.9's own rule.)
+func TestAStartOverItsCeilingAsksNoOneToGiveWay(t *testing.T) {
+	l := New(1100*mib, true)
+	floor := runner("runtime")
+	spawned(t, l, floor, 0, 100*mib)
+	a := session("ath_a", "p1")
+	a.AthanorMax = 400 * mib
+	spawned(t, l, a, 0, 384*mib)
+	k := runner("runtime")
+	spawned(t, l, k, 0, 300*mib)
+	l.Assign(k, "warm", "ath_k", "", at(1))
+	l.Read(a, 384*mib, false, at(20))
+	l.Read(k, 300*mib, false, at(20))
+	// 1,100 less F, 384 and 300: 252 free, short of 384, and ath_a's
+	// ceiling of 400 holds its second session too.
+	a2 := session("ath_a", "p2")
+	a2.AthanorMax = 400 * mib
+	if ev := l.Place(a2, at(20)); len(ev.GiveWay) != 0 || len(ev.Admitted) != 0 {
+		t.Fatalf("a start over its ceiling: %+v", ev)
+	}
+}
