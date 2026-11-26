@@ -23,8 +23,10 @@ defmodule Locus.Test.FakeKeeper do
     a reader that does not take; a write that fails tells `test`
     `{:fake_relay, :cut, sent}`, as a reader that closed its connection
     cuts a relay. The leader is reported exited 0 and released only once
-    the stream ended either way, as cyfr-locus reports `released` only
-    once the relay has ended.
+    the stream ended, as cyfr-locus reports `released` only once the
+    relay has ended, and after a cut only once the client has asked for
+    the spawn's release, as cyfr-locus ends a command at its leader's
+    exit or at a release, never at a cut.
   - `{:exit, exited}` — the command is never run: the relay writes one log
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory`), killed at its bound or the container's among
@@ -753,15 +755,7 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   defp relay(fake, spawn_id, %{"pool" => "build"} = request, {:dial_after_release, test}, _dir) do
-    Prima.Test.Wait.wait_until(
-      fn ->
-        fake
-        |> GenServer.call(:requests)
-        |> Enum.any?(&(&1["type"] == "release" and &1["spawn_id"] == spawn_id))
-      end,
-      5_000,
-      "the client to ask for the release"
-    )
+    release_asked(fake, spawn_id)
 
     conn = dial(fake, request)
     dialed = System.monotonic_time(:millisecond)
@@ -808,8 +802,9 @@ defmodule Locus.Test.FakeKeeper do
         exit_as(fake, spawn_id, conn, exited)
 
       {:stdout, bytes, test} ->
-        stream(conn, frames(@stream_stdout, bytes), 0, test)
+        ended = stream(conn, frames(@stream_stdout, bytes), 0, test)
         :gen_tcp.close(conn)
+        if ended == :cut, do: release_asked(fake, spawn_id)
 
         send(
           fake,
@@ -833,12 +828,16 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   # One frame a write, each told to the test before and after, until the
-  # stream's end or the reader's close.
+  # stream's end or the reader's close: answers `:ended` or `:cut`.
   defp stream(conn, [], sent, test) do
-    case :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")]) do
-      :ok -> send(test, {:fake_relay, :ended, sent})
-      {:error, _closed} -> send(test, {:fake_relay, :cut, sent})
-    end
+    ended =
+      case :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")]) do
+        :ok -> :ended
+        {:error, _closed} -> :cut
+      end
+
+    send(test, {:fake_relay, ended, sent})
+    ended
   end
 
   defp stream(conn, [frame | frames], sent, test) do
@@ -852,7 +851,20 @@ defmodule Locus.Test.FakeKeeper do
 
       {:error, _closed} ->
         send(test, {:fake_relay, :cut, sent})
+        :cut
     end
+  end
+
+  defp release_asked(fake, spawn_id) do
+    Prima.Test.Wait.wait_until(
+      fn ->
+        fake
+        |> GenServer.call(:requests)
+        |> Enum.any?(&(&1["type"] == "release" and &1["spawn_id"] == spawn_id))
+      end,
+      10_000,
+      "the client to ask for the spawn's release"
+    )
   end
 
   # The relay's last frames, then the end of both streams.
