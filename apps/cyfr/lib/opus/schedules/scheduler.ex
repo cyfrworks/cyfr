@@ -1982,21 +1982,28 @@ defmodule Opus.Schedules.Scheduler do
   # occurrence then failed (its result refused), with the caller's reason,
   # and one whose occurrence was recovered, as the last run; a run whose
   # end was never reported, which is not known and never called a failure:
-  # its row still open, gone or unreadable, or lapsed (`Opus.Lapse`), as a
-  # runner that died leaves it whether the lapse or this read comes first;
-  # and an occurrence that started no run, with the caller's reason.
+  # its row still open, gone or unreadable, or failed with its attempt
+  # lapsed (`Opus.Lapse`, or a declared restore), never closed, as a runner
+  # that died leaves it whether the lapse or this read comes first; and an
+  # occurrence that started no run, with the caller's reason.
   defp said(_actor, %{execution_id: nil}, reason), do: sentence("Last run did not start", reason)
 
   defp said(actor, %{execution_id: execution_id, state: state}, reason) do
-    lapsed = Opus.Lapse.message()
-
     case Arca.Execution.get_tenant(actor, execution_id) do
       %{status: "completed"} when state in ["completed", "uncertain"] -> :completed
       %{status: "completed"} -> sentence("Last run failed", reason)
-      %{status: "failed", error_message: ^lapsed} -> @unknown_end
-      %{status: "failed"} = row -> sentence("Last run failed", kept(row, reason))
+      %{status: "failed"} = row -> failed(actor, execution_id, row, reason)
       %{status: "cancelled"} = row -> sentence("Last run was cancelled", kept(row, reason))
       _open_gone_or_unread -> @unknown_end
+    end
+  end
+
+  # A failed row whose attempt lapsed was never closed by its run: only a
+  # lapse leaves the current attempt `lapsed`; a run's own failure closes it.
+  defp failed(actor, execution_id, row, reason) do
+    case Arca.ExecutionAttempts.current(actor, execution_id) do
+      %{state: "lapsed"} -> @unknown_end
+      _closed_or_unread -> sentence("Last run failed", kept(row, reason))
     end
   end
 

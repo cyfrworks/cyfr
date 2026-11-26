@@ -1863,6 +1863,29 @@ defmodule Opus.Schedules.SchedulerTest do
             }} = CronSchedule.get_for_daemon(schedule.id)
   end
 
+  # A lapse is told by its attempt, never by its words: a run that fails
+  # itself in the very words a lapse keeps closed its attempt, and failed.
+  test "a run that fails in a lapse's words still failed", %{ctx: ctx} do
+    words = "Execution terminated: runner stopped without cleanup"
+    script!([{:error, words}])
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+    scheduler!()
+
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert [%{state: "failed", execution_id: run}] = occurrences(ctx, schedule)
+
+    assert %{status: "failed", error_message: ^words, error_class: "internal"} =
+             Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), run)
+
+    said = "Last run failed: " <> Sanctum.Refusals.render(words)
+
+    assert {:ok, %{last_error: ^said, last_execution_id: ^run}} =
+             CronSchedule.get_for_daemon(schedule.id)
+  end
+
   # A run that crashes exits with its stacktrace, whose failing frame holds
   # the arguments `run/6` was called with: the schedule's context and input.
   test "a runner that crashes is logged by its frames' arity, never their arguments", %{
