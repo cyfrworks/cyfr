@@ -98,7 +98,7 @@ defmodule Opus.HostListener do
   the stream with an `error` frame.
 
   Every listener refusal is written by `Prima.WorkerWire.error/2`, so it
-  carries the wire's version, and is `{"v": 2, "error": "lost"}` but the
+  carries the wire's version, and is `{"v": 3, "error": "lost"}` but the
   unknown route's `not_found`, an unowned report's `unavailable`, a
   header or body at another version's `unknown_version` (a peer at
   another version of the wire is told so) and a body that is not the

@@ -32,7 +32,7 @@ defmodule Locus.Runtime.Keeper do
   caller's to split), relay bytes as the runner wrote them (frames are
   the caller's to split), the relay's end, the runner's log output, the
   channel closed, the
-  process exited, its uid or process group retired, the spawn refused
+  process exited and which memory limit, if any, ended it, its uid or process group retired, the spawn refused
   (no process of it ever ran, as when `c:spawn/1` refuses; where the
   keeper made something of it first, the refusal says its release
   follows, and the runner's place is freed only at that release), or a
@@ -92,6 +92,13 @@ defmodule Locus.Runtime.Keeper do
   @typedoc "How a runner's process ended."
   @type exit :: {:status, integer()} | {:signal, String.t()}
 
+  @typedoc """
+  Which memory limit the kernel ended a runner's process at, as the
+  keeper read its group's counts: its own bound (`:cap`), a limit above it
+  (`:machine`), one the counts cannot lay to either (`:either`), or none.
+  """
+  @type ended_for_memory :: Prima.KeeperProtocol.memory_end()
+
   @typedoc "What the keeper reports about a runner."
   @type event ::
           {:spawned, non_neg_integer() | nil}
@@ -101,7 +108,7 @@ defmodule Locus.Runtime.Keeper do
           | :relay_closed
           | {:log, binary()}
           | :control_closed
-          | {:exited, exit()}
+          | {:exited, exit(), ended_for_memory()}
           | :released
           | {:refused, term()}
           | {:refused, term(), :release_follows}
@@ -218,9 +225,9 @@ defmodule Locus.Runtime.Keeper do
   refusal at the memory bound as `:memory_unavailable` and any other as
   its code, one the keeper made something of first with
   `:release_follows` in place of its spawn id, stdout and stderr as the
-  runner's log, an exit without its memory report (the keeper logs an end
-  at the bound itself), the keeper's ask to give way as `:give_way`, and
-  every other event as it is.
+  runner's log, an exit with the memory limit that ended it, nil for
+  none, the keeper's ask to give way as `:give_way`, and every other event
+  as it is.
   """
   @spec event(Locus.Launcher.control_event()) :: event()
   def event({:spawned, _spawn_id, _uid, pid}), do: {:spawned, pid}
@@ -229,7 +236,7 @@ defmodule Locus.Runtime.Keeper do
   def event({:refused, code, _spawn_id}), do: {:refused, code, :release_follows}
   def event({:stdout, bytes}), do: {:log, bytes}
   def event({:stderr, bytes}), do: {:log, bytes}
-  def event({:exited, exit, _memory}), do: {:exited, exit}
+  def event({:exited, exit, memory}), do: {:exited, exit, memory}
   def event(:attached), do: :attached
   def event({:control, bytes}), do: {:control, bytes}
   def event(:control_closed), do: :control_closed

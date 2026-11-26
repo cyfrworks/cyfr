@@ -563,7 +563,7 @@ defmodule Locus.ListenerTest do
         Enum.reduce(
           [
             ~s({"op":"status","args":{}}),
-            ~s({"v":3,"op":"status","args":{}}),
+            ~s({"v":4,"op":"status","args":{}}),
             ~s({"v":"2","op":"status","args":{}})
           ],
           connect(ctx.port),
@@ -597,7 +597,7 @@ defmodule Locus.ListenerTest do
   defp kill_body,
     do: Jason.encode!(WorkerWire.request_body(:kill, %{"execution_id" => "exec_x"}))
 
-  defp wl(reason), do: ~s({"v":2,"error":"#{reason}"})
+  defp wl(reason), do: ~s({"v":3,"error":"#{reason}"})
 
   defp runtime_header(ctx, body, opts \\ []) do
     request = %{
@@ -620,7 +620,7 @@ defmodule Locus.ListenerTest do
 
     {answer, client} = answer(client)
     assert answer.status == 200
-    assert %{"v" => 2, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
+    assert %{"v" => 3, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
     client
   end
 

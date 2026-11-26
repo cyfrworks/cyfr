@@ -559,16 +559,19 @@ defmodule Opus.Attempt do
   Who holds an attempt: the worker service it was dispatched to (nil when
   the control plane holds it), that service's boot, and the runner that
   claimed it (nil to match any). `assigned?` is set by a report that is the
-  worker service's own word that it gave that runner the attempt, and
+  worker service's own word that it gave that runner the attempt,
   `refusal` by one whose keeper refused that runner after the start was
-  answered: the refusal's code (`Prima.WorkerAPI.runner_refusal/1`).
+  answered: the refusal's code (`Prima.WorkerAPI.runner_refusal/1`), and
+  `memory` by one whose runner the kernel ended for memory: the limit
+  that ended it.
   """
   @type holder :: %{
           required(:service_id) => String.t() | nil,
           required(:boot_id) => String.t(),
           required(:runner) => String.t() | nil,
           optional(:assigned?) => boolean(),
-          optional(:refusal) => String.t() | nil
+          optional(:refusal) => String.t() | nil,
+          optional(:memory) => Prima.HostAPI.memory_end()
         }
 
   @doc """
@@ -599,7 +602,9 @@ defmodule Opus.Attempt do
   exit (`Opus.Host.runner_exited/2`), so nothing of the run is
   running any more. Unless a caller ended the row first and is killing what
   ran it (`stop_ended/1`), such an attempt closes the run lost
-  (`Opus.Close.lost/1`) and tells its waiter the result, which
+  (`Opus.Close.lost/2`), saying that it ran out of memory where the
+  holder's `memory` names the limit that ended its runner
+  (`Opus.Lapse.ended_for_memory/1`), and tells its waiter the result, which
   answers the row as the waiter's own lost close would and spares the run a
   kill of a runner already ended and the athanor its count. A holder naming
   no runner is a lapse, whose runner may still be running, and a row a
@@ -834,7 +839,7 @@ defmodule Opus.Attempt do
         {:reply, :ok, state}
 
       runner_ended?(state, holder) ->
-        close_lost(state)
+        close_lost(state, Map.get(holder, :memory))
 
       true ->
         {:stop, :normal, :ok, release_holds(state)}
@@ -1136,8 +1141,12 @@ defmodule Opus.Attempt do
 
   # The run is closed as its waiter would close it, in this process, and
   # what the run held goes back before the waiter hears the result.
-  defp close_lost(state) do
-    result = Close.lost(state.close)
+  defp close_lost(state, memory \\ nil) do
+    result =
+      if memory,
+        do: Close.lost(state.close, Lapse.ended_for_memory(memory)),
+        else: Close.lost(state.close)
+
     state = release_holds(state)
     send(state.waiter, {__MODULE__, self(), result})
     {:stop, :normal, :ok, state}

@@ -9,7 +9,8 @@ defmodule Prima.WorkerAPITest do
   as a report, and its body reads as its callback at this version. Its
   answer and every refusal read as the answer they are; a `503` refusal
   of a start is one only when it names a sentence a status refusal may
-  carry.
+  carry. A run refused for want of room says, in a person's words, how
+  many runs this CYFR runs at once.
   """
 
   use ExUnit.Case, async: true
@@ -113,5 +114,17 @@ defmodule Prima.WorkerAPITest do
         end
       end
     end
+  end
+
+  # A runner holds one of the runtime's uids, so a refusal for want of one
+  # says, in a person's words, how many runs that is.
+  test "a run refused for want of room says how many runs this CYFR runs at once" do
+    runs = Enum.count(Prima.LocusRoles.role!(:runtime).uids)
+    sentence = WorkerAPI.runner_refusal("capacity")
+
+    assert sentence == "this CYFR already runs #{runs} runs at once, as many as it can"
+
+    for word <- ~w(pool ledger place runner warm uid),
+        do: refute(sentence =~ ~r/\b#{word}/i, word)
   end
 end

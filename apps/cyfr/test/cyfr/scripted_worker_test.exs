@@ -590,8 +590,8 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
                post(WorkerWire.worker_route(:kill), signed(dispatch_key(), kill), kill)
 
       # The body's version is read before its op.
-      for unversioned <- [~s({"op":"status","args":{}}), ~s({"v":3,"op":"status","args":{}})] do
-        assert {400, %{"v" => 2, "error" => "unknown_version"}} =
+      for unversioned <- [~s({"op":"status","args":{}}), ~s({"v":4,"op":"status","args":{}})] do
+        assert {400, %{"v" => 3, "error" => "unknown_version"}} =
                  post(
                    WorkerWire.worker_route(:status),
                    signed(dispatch_key(), unversioned),
@@ -638,22 +638,22 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
         "v2 kind=call athanor_id=ath_x execution_id=exec_x attempt=att_x fence=1 generation=1 " <>
           "service=wrk_scripted boot=b runner=r member=m ts=1 nonce=n body=00 mac=AA"
 
-      assert {401, %{"connection" => "close"}, %{"v" => 2, "error" => "unknown_version"}} =
+      assert {401, %{"connection" => "close"}, %{"v" => 3, "error" => "unknown_version"}} =
                unread_post(url, WorkerWire.host_route(:renew), header)
     end
 
     @tag :capture_log
     test "refuses a body at another version once it is opened", %{fixture: fixture, url: url} do
-      body = ~s({"v":3,"op":"renew","args":{"attempts":["#{fixture.attempt}"]}})
+      body = ~s({"v":4,"op":"renew","args":{"attempts":["#{fixture.attempt}"]}})
 
-      assert {400, %{"v" => 2, "error" => "unknown_version"}} =
+      assert {400, %{"v" => 3, "error" => "unknown_version"}} =
                host_call(url, fixture, :renew, body)
 
       assert %{state: "running", lease_until: lease} = attempt_row(fixture)
 
       # The same call at this version is answered.
       body = Jason.encode!(WorkerWire.request_body(:renew, %{"attempts" => [fixture.attempt]}))
-      assert {200, %{"v" => 2, "ok" => %{} = renewals}} = host_call(url, fixture, :renew, body)
+      assert {200, %{"v" => 3, "ok" => %{} = renewals}} = host_call(url, fixture, :renew, body)
       assert %{"lease_until" => _} = renewals[fixture.attempt]
       assert DateTime.compare(attempt_row(fixture).lease_until, lease) in [:gt, :eq]
     end
@@ -667,7 +667,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
       log =
         capture_log(fn ->
-          assert {401, %{"v" => 2, "error" => "lost"}} =
+          assert {401, %{"v" => 3, "error" => "lost"}} =
                    host_call(url, fixture, :renew, body, member: other)
         end)
 
@@ -681,12 +681,12 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     test "lapses nothing on an exit report naming another member", %{fixture: fixture, url: url} do
       other = "cyfr@elsewhere#boot_" <> Prima.UUID7.generate_id("peer")
 
-      assert {200, %{"v" => 2, "error" => "lost"}} = exit_report(url, fixture, other)
+      assert {200, %{"v" => 3, "error" => "lost"}} = exit_report(url, fixture, other)
       assert %{state: "running"} = attempt_row(fixture)
       assert Process.alive?(fixture.pid)
 
       # The report naming this member lapses the attempt its runner held.
-      assert {200, %{"v" => 2, "ok" => true}} = exit_report(url, fixture, fixture.member)
+      assert {200, %{"v" => 3, "ok" => true}} = exit_report(url, fixture, fixture.member)
 
       assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                AttemptWaiter.await(fixture.pid, fixture.close)

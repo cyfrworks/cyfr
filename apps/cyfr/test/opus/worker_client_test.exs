@@ -326,7 +326,7 @@ defmodule Opus.WorkerClientTest do
       for vector <- requests do
         callback = String.to_existing_atom(vector["callback"])
         route = WorkerWire.worker_route(callback)
-        %{"v" => 2, "op" => op, "args" => args} = Jason.decode!(vector["body"])
+        %{"v" => 3, "op" => op, "args" => args} = Jason.decode!(vector["body"])
         assert op == vector["callback"]
 
         answers =
@@ -361,12 +361,12 @@ defmodule Opus.WorkerClientTest do
 
       for answer <- [
             ~s({"ok":true}),
-            ~s({"v":3,"ok":true}),
+            ~s({"v":4,"ok":true}),
             ~s({"v":"2","ok":true}),
-            ~s({"v":2,"ok":true,"extra":1}),
+            ~s({"v":3,"ok":true,"extra":1}),
             ~s({"error":"not_found"}),
-            ~s({"v":3,"error":"not_found"}),
-            ~s({"v":2,"error":"unknown_version"})
+            ~s({"v":4,"error":"not_found"}),
+            ~s({"v":3,"error":"unknown_version"})
           ] do
         endpoint = serve!(routes({:raw, 200, answer}))
 
@@ -386,7 +386,7 @@ defmodule Opus.WorkerClientTest do
       # A start's refusal is one only at this version.
       for answer <- [
             Jason.encode!(%{"error" => "unavailable", "message" => sentence}),
-            Jason.encode!(%{"v" => 3, "error" => "unavailable", "message" => sentence})
+            Jason.encode!(%{"v" => 4, "error" => "unavailable", "message" => sentence})
           ] do
         endpoint = serve!(%{WorkerWire.worker_route(:start) => {:raw, 503, answer}})
         assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed"), answer

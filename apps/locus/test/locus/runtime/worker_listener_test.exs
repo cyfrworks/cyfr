@@ -203,7 +203,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   test "a signed status request is answered with the service's state", context do
-    assert {200, %{"v" => 2, "ok" => status} = answer} = post(context, :status, request(:status))
+    assert {200, %{"v" => 3, "ok" => status} = answer} = post(context, :status, request(:status))
     assert map_size(answer) == 2
 
     assert %{"service" => "wrk_local", "boot" => boot, "runners" => runners, "attempts" => []} =
@@ -226,7 +226,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
 
     response = partial(context, :status, huge, signed(context, huge, key: stranger))
     assert response.status == 401
-    assert response.body == ~s({"v":2,"error":"bad_mac"})
+    assert response.body == ~s({"v":3,"error":"bad_mac"})
     assert response.headers["connection"] == "close"
   end
 
@@ -237,7 +237,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
     response = partial(context, :status, huge, "v2 " <> rest)
 
     assert response.status == 401
-    assert response.body == ~s({"v":2,"error":"unknown_version"})
+    assert response.body == ~s({"v":3,"error":"unknown_version"})
     assert response.headers["connection"] == "close"
   end
 
@@ -245,16 +245,16 @@ defmodule Locus.Runtime.WorkerListenerTest do
        context do
     for body <- [
           ~s({"op":"status","args":{}}),
-          ~s({"v":3,"op":"status","args":{}}),
+          ~s({"v":4,"op":"status","args":{}}),
           ~s({"v":"2","op":"status","args":{}}),
-          ~s({"v":3,"op":"no such callback"})
+          ~s({"v":4,"op":"no such callback"})
         ] do
-      assert {400, %{"v" => 2, "error" => "unknown_version"}} = post(context, :status, body)
+      assert {400, %{"v" => 3, "error" => "unknown_version"}} = post(context, :status, body)
     end
 
     # At this version, the callback is read: a body naming another is malformed.
-    assert {400, %{"v" => 2, "error" => "malformed"}} =
-             post(context, :status, ~s({"v":2,"op":"kill","args":{}}))
+    assert {400, %{"v" => 3, "error" => "malformed"}} =
+             post(context, :status, ~s({"v":3,"op":"kill","args":{}}))
   end
 
   test "a missing, malformed or stale header is refused", context do
@@ -309,7 +309,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
     # read and dropped, and the connection closes when the body ends.
     {response, client} = refused_mid_body(context, :status, huge, max)
     assert response.status == 413
-    assert response.body == ~s({"v":2,"error":"malformed"})
+    assert response.body == ~s({"v":3,"error":"malformed"})
     assert response.headers["connection"] == "close"
     assert rest_dropped(client, huge, max) == {:sent, {:error, :closed}}
   end
@@ -322,7 +322,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
     # A byte past the bound is on the connection when the refusal is
     # made; a listener that closed then would reset it.
     {response, client} = refused_mid_body(context, :status, huge, max + 1)
-    assert {response.status, response.body} == {413, ~s({"v":2,"error":"malformed"})}
+    assert {response.status, response.body} == {413, ~s({"v":3,"error":"malformed"})}
     assert rest_dropped(client, huge, max + 1) == {:sent, {:error, :closed}}
   end
 
@@ -331,7 +331,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
              post(context, :status, request(:kill, %{"execution_id" => "exec_x"}))
 
     assert {400, %{"error" => "malformed"}} =
-             post(context, :status, ~s({"v": 2, "op": "attach", "args": {}}))
+             post(context, :status, ~s({"v": 3, "op": "attach", "args": {}}))
 
     assert {400, %{"error" => "malformed"}} = post(context, :status, "not json")
   end
@@ -339,7 +339,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
   test "a route that is no worker route is refused", context do
     response = response(context, :status, request(:status), path: "/worker/v1/attach")
     assert response.status == 404
-    assert response.body == ~s({"v":2,"error":"not_found"})
+    assert response.body == ~s({"v":3,"error":"not_found"})
     assert closed?(response)
 
     assert {404, %{"error" => "not_found"}} =
@@ -366,8 +366,8 @@ defmodule Locus.Runtime.WorkerListenerTest do
           # This service's own status, in the vector's shape.
           :status ->
             assert response.status == 200
-            %{"v" => 2, "ok" => wire} = Jason.decode!(response.body)
-            %{"v" => 2, "ok" => expected} = Jason.decode!(vector["answer"])
+            %{"v" => 3, "ok" => wire} = Jason.decode!(response.body)
+            %{"v" => 3, "ok" => expected} = Jason.decode!(vector["answer"])
             assert Enum.sort(Map.keys(wire)) == Enum.sort(Map.keys(expected))
             assert {:ok, _status} = WorkerAPI.read_status(wire)
 
@@ -404,7 +404,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
       for %{"wire" => wire} <- valid do
         assert {:ok, status} = WorkerAPI.read_status(wire)
         answer = status |> WorkerAPI.status_to_wire() |> WorkerWire.ok()
-        assert answer |> Jason.encode!() |> Jason.decode!() == %{"v" => 2, "ok" => wire}
+        assert answer |> Jason.encode!() |> Jason.decode!() == %{"v" => 3, "ok" => wire}
       end
 
       for %{"wire" => wire, "why" => why} <- invalid,

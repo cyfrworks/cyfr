@@ -11,8 +11,8 @@ plain report under the service's dispatch key) under the tests' own root,
 recorded with its time, and answered from a script.
 
 The wire is versioned (`Prima.WorkerWire`): every body and answer this
-plane writes carries `"v": 2` first; a header at another version is
-answered `401 {"v":2,"error":"unknown_version"}` before its body is read,
+plane writes carries `"v": 3` first; a header at another version is
+answered `401 {"v":3,"error":"unknown_version"}` before its body is read,
 on a connection closed with the body unread; and a body that opens without
 `v`, or at another version, is answered `400` `unknown_version` before its
 `op` is read. Every other header refusal is `401 lost`, as CYFR answers it.
@@ -49,7 +49,7 @@ assignment's digest, the vault fields its attach answers and the
 connections its attached requests may name — and `start`,
 `kill` and `status` post `Prima.WorkerAPI` requests to the service signed
 with its dispatch key. `script` sets what an operation answers for one
-execution or for all: a value the runner reads as `{"v": 2, "ok": value}`, a
+execution or for all: a value the runner reads as `{"v": 3, "ok": value}`, a
 refusal, `DROP` (a 500 with no body: an answer that never arrives, which
 the runner's client counts as lost), a `Raw` status and body written as
 given, unsealed, as a listener's refusal is, or a function of the request
@@ -547,7 +547,7 @@ class ControlPlane:
     def encode(answer):
         """An answer as the wire writes it, `v` first."""
         answer = answer if isinstance(answer, dict) else {"ok": answer}
-        return {"v": 2, **{k: v for k, v in answer.items() if k != "v"}}
+        return {"v": 3, **{k: v for k, v in answer.items() if k != "v"}}
 
     @staticmethod
     def answer_plain(handler, status, answer, close=False):

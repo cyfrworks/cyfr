@@ -443,7 +443,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert runner in ScriptedKeeper.held_places(context.keeper)
 
       assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
-               {200, %{"ok" => true, "v" => 2}}
+               {200, %{"ok" => true, "v" => 3}}
 
       # The place leaves the queue before the keeper finds room for anyone.
       wait_until(fn -> runner not in ScriptedKeeper.held_places(context.keeper) end)
@@ -480,7 +480,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert :gen_server.reqids_size(:sys.get_state(WorkerService).takes) == 1
 
       assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
-               {200, %{"ok" => true, "v" => 2}}
+               {200, %{"ok" => true, "v" => 3}}
 
       # The place leaves the queue before the keeper finds room for anyone.
       wait_until(fn -> runner not in ScriptedKeeper.held_places(context.keeper) end)
@@ -514,7 +514,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
         wait_until(fn -> String.contains?(ScriptedKeeper.read(runner), attempt.assignment) end)
 
         assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
-                 {200, %{"ok" => true, "v" => 2}}
+                 {200, %{"ok" => true, "v" => 3}}
 
         write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
         write(runner, %{type: :exit, runner: runner.spec.runner, open: [attempt.attempt]})
