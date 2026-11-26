@@ -9,10 +9,14 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // The MSI's version is its release's MAJOR.MINOR.PATCH, and Windows
@@ -39,7 +43,7 @@ func TestTheMsiRoadRefusesWhatWindowsInstallerRefuses(t *testing.T) {
 }
 
 // The app's cyfr running the update steps aside for Windows Installer,
-// which would otherwise end the terminal it runs in. Once the release is
+// which would otherwise leave it for the next restart to remove. Once the release is
 // confirmed it stays aside, removed by a later update; where the installer
 // failed, or the installed app's cyfr does not answer the release, it goes
 // back over whatever is at its place. The installer's status is said.
@@ -91,5 +95,54 @@ func TestTheMsiRoadStepsAsideForTheInstaller(t *testing.T) {
 				t.Error("an earlier update's cyfr renamed aside stays")
 			}
 		})
+	}
+}
+
+// The update installs only once no process runs the app's executable:
+// one still ending is waited for, one still running at the bound refuses
+// the update, and a program of the same name elsewhere (the app's own
+// cyfr.exe runs the update) is not the app.
+func TestTheMsiRoadWaitsForTheAppToEnd(t *testing.T) {
+	ping := filepath.Join(os.Getenv("SystemRoot"), "System32", "PING.EXE")
+	dir := t.TempDir()
+	app := filepath.Join(dir, "app", "CYFR.exe")
+	other := filepath.Join(dir, "resources", "cyfr.exe")
+	for _, p := range []string{app, other} {
+		data, err := os.ReadFile(ping)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, p, string(data))
+	}
+	// start runs exe for about n seconds (ping waits a second between
+	// two of its n echoes), answering whether it has ended.
+	start := func(exe string, n int) (ended func() bool) {
+		c := exec.Command(exe, "-n", strconv.Itoa(n), "127.0.0.1")
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(c.Process.Pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait(); _ = windows.CloseHandle(h) })
+		return func() bool { e, _ := windows.WaitForSingleObject(h, 0); return e == windows.WAIT_OBJECT_0 }
+	}
+
+	ended := start(other, 30)
+	began := time.Now()
+	if err := appGone(app, 10*time.Second); err != nil || time.Since(began) > 5*time.Second || ended() {
+		t.Errorf("with only another cyfr.exe running the wait answered %v after %v", err, time.Since(began))
+	}
+
+	ended = start(app, 3)
+	if err := appGone(app, 20*time.Second); err != nil || !ended() {
+		t.Errorf("an app ending answered %v, ended: %v", err, ended())
+	}
+
+	ended = start(app, 30)
+	err := appGone(app, 300*time.Millisecond)
+	if want := "the CYFR app was still running 300ms after it was closed; nothing was replaced"; err == nil || err.Error() != want || ended() {
+		t.Errorf("an app running past the bound answered %v, ended: %v, want %q", err, ended(), want)
 	}
 }
