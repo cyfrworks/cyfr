@@ -16,8 +16,9 @@ defmodule Opus.Memory do
   answers its own role's report over the pool wire (`Prima.LocusPool`),
   under a key of its own: `Opus.WorkerClient.pool/2`,
   `Compendium.builds_pool/1` and `Opus.Programs.Box.pool/3`. A failed ask
-  is asked again at the next poll and logged by its reason alone: no key,
-  header or answer reaches a log.
+  is asked again at the next poll; an endpoint that starts failing is
+  logged once, by its name and reason alone: no key, header or answer
+  reaches a log.
 
   ## The poller
 
@@ -300,7 +301,8 @@ defmodule Opus.Memory do
      %{
        endpoints: Keyword.get_lazy(opts, :endpoints, fn -> configured(opts) end),
        owner: Keyword.get(opts, :owner, Prima.Boot.id()),
-       claim: nil
+       claim: nil,
+       failing: %{}
      }}
   end
 
@@ -326,10 +328,26 @@ defmodule Opus.Memory do
          true <- Cyfr.Cell.mine?(@kind <> ":" <> JobClaims.cell_key()),
          {:ok, claim} <- claim(state.owner),
          {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      _outcomes = poll(state.endpoints, claim, slot)
-      %{state | claim: claim}
+      outcomes = poll(state.endpoints, claim, slot)
+      %{state | claim: claim, failing: failing(outcomes, state.failing)}
     else
       _not_this_member -> %{state | claim: nil}
+    end
+  end
+
+  # An endpoint that stops answering is logged once, by its name and the
+  # reason alone, and again only when the reason changes after it answered
+  # or failed otherwise: a service that is down is asked every poll.
+  defp failing(outcomes, before) do
+    for {name, {:unasked, reason}} <- outcomes, reason != :not_configured, into: %{} do
+      if Map.get(before, name) != reason do
+        Logger.warning(
+          "[Opus.Memory] #{name} did not report who used what: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+      end
+
+      {name, reason}
     end
   end
 
@@ -369,11 +387,6 @@ defmodule Opus.Memory do
         {:unasked, :not_configured}
 
       {:error, reason} ->
-        Logger.warning(
-          "[Opus.Memory] #{endpoint.name} did not report who used what: " <>
-            Prima.LoggerContext.shape(reason)
-        )
-
         {:unasked, reason}
     end
   end

@@ -319,8 +319,7 @@ defmodule Opus.MemoryTest do
   end
 
   describe "the pool request" do
-    test "is signed with the worker service's pool key, and neither key nor header reaches a log",
-         %{claim: claim} do
+    test "is signed with the worker service's pool key, and the poller logs its failure without key or header" do
       stub = Cyfr.Test.HTTPStub.open()
       test = self()
 
@@ -339,7 +338,17 @@ defmodule Opus.MemoryTest do
 
       log =
         capture_log(fn ->
-          assert %{"wrk_local" => {:unasked, :lost}} = Opus.Memory.poll(endpoints, claim, :none)
+          poller =
+            start_supervised!(
+              {Opus.Memory, endpoints: endpoints, owner: "boot_test", name: :memory_test}
+            )
+
+          eventually(
+            fn -> :sys.get_state(poller).failing != %{} end,
+            "the poller to fail its ask"
+          )
+
+          stop_supervised!(Opus.Memory)
         end)
 
       assert_received {:pool, header, body}
@@ -384,6 +393,19 @@ defmodule Opus.MemoryTest do
 
       assert {:ok, %{machines: [%{holders: [%{kind: :run, bytes: 12}]}]}} =
                Opus.Memory.read(alice.ctx, :mine)
+    end
+  end
+
+  defp eventually(check, what, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
+    if check.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) > deadline,
+        do: flunk("timed out waiting for #{what}")
+
+      # sleep-ok: poll interval of eventually's bounded wait (5 s)
+      Process.sleep(10)
+      eventually(check, what, deadline)
     end
   end
 
