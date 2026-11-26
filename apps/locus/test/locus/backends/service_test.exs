@@ -47,9 +47,6 @@ defmodule Locus.Backends.ServiceTest do
   @g @vectors["owner"]["generation"]
   @e @vectors["owner"]["epoch"]
   @instant @vectors["hello"]["ts"]
-  # The budget the vectors' hello names, room for every session a vector
-  # opens.
-  @roomy_budget Jason.decode!(@vectors["hello"]["answer"])["memory"]["budget_bytes"]
   @owners Module.concat(__MODULE__, Table)
   @moved "sha256:" <> String.duplicate("cd", 32)
   @missing "sha256:" <> String.duplicate("ef", 32)
@@ -101,7 +98,23 @@ defmodule Locus.Backends.ServiceTest do
     # an adoption, at a table's start, finds none held yet.
     def fence(_agent, _tag), do: :pending
     def adopt(_agent, _ledger, _heir), do: {:ok, []}
-    def place(_agent, _id, _whose, _owner), do: {:ok, nil}
+    # A pool with room for one session where the test names what holds it
+    # (`room`), refusing every later one for room with that; else room for
+    # every one.
+    def place(agent, _id, _whose, _owner) do
+      Agent.get_and_update(agent, fn
+        %{room: nil} = state ->
+          {{:ok, nil}, state}
+
+        %{room: _held, placed: 0} = state ->
+          {{:ok, nil}, %{state | placed: 1}}
+
+        %{room: held} = state ->
+          {:ok, held} = Prima.LocusPool.read_held(held)
+          {{:error, {:no_memory, held}}, state}
+      end)
+    end
+
     def drop(_agent, _id), do: :ok
     def home_ensure(_agent, _id), do: {:ok, 40_001}
     def home_measure(_agent, _id), do: {:ok, 0}
@@ -166,6 +179,8 @@ defmodule Locus.Backends.ServiceTest do
            %{
              pool: given["pool"] || %{"size" => 64, "free" => 64, "quarantined" => 0},
              stderr_bytes: given["stderr_bytes"] || 0,
+             room: given["room"],
+             placed: 0,
              packs: MapSet.new(),
              calls: [],
              spawned: []
@@ -200,11 +215,7 @@ defmodule Locus.Backends.ServiceTest do
         supervisor: supervisor,
         clock: fn -> Agent.get(clock, & &1) end,
         stop_grace_ms: 100,
-        session_opts: session_opts,
-        # Room for every session a vector opens, but where it names
-        # the budget it tests.
-        memory_budget: given["memory_budget"] || @roomy_budget,
-        overcommit: {1, 1}
+        session_opts: session_opts
       ] ++ launcher_opts
 
     start_supervised!({Owners, owners_opts})
@@ -511,12 +522,12 @@ defmodule Locus.Backends.ServiceTest do
       answer = post(ctx.port, route("health"), LB.health_body())
       assert answer.status == 200
       assert answer.headers["x-cyfr-boot"] == @boot
-      assert json(answer) == %{"version" => 5, "release" => Prima.Version.current()}
+      assert json(answer) == %{"version" => 6, "release" => Prima.Version.current()}
 
       assert_refused(post(ctx.port, route("health"), ~s({"version":1})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({"version":2})), "version")
       assert_refused(post(ctx.port, route("health"), ~s({})), "version")
-      assert_refused(post(ctx.port, route("health"), ~s({"version":5,"x":1})), "bad_request")
+      assert_refused(post(ctx.port, route("health"), ~s({"version":6,"x":1})), "bad_request")
       assert_refused(post(ctx.port, route("health"), "nope"), "bad_request")
 
       too_large = post(ctx.port, route("health"), String.duplicate(" ", 4097))
@@ -625,7 +636,7 @@ defmodule Locus.Backends.ServiceTest do
 
     test "a body past its bound is refused unread, one not the one signed is unauthorized", ctx do
       max = LB.max_control_bytes()
-      body = ~s({"version":5,"type":"status","owners":[]})
+      body = ~s({"version":6,"type":"status","owners":[]})
 
       fields = %{generation: @g, seq: seq(), cyfr_boot: @cyfr_boot, boot: @boot, ts: @instant}
       {:ok, header} = LB.control_header(LB.control_key(@key), fields, body)
@@ -691,13 +702,10 @@ defmodule Locus.Backends.ServiceTest do
 
       assert %{
                "boot" => @boot,
-               "pool" => %{"size" => 64, "free" => 64},
-               "memory" => %{
-                 "budget_bytes" => @roomy_budget,
-                 "admission_limit_bytes" => @roomy_budget,
-                 "held_bytes" => 0
-               }
+               "pool" => %{"size" => 64, "free" => 64}
              } = json(answer)
+
+      refute Map.has_key?(json(answer), "memory")
 
       # A hello whose members are not its header's is no hello.
       assert_refused(
@@ -761,7 +769,13 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     answer = answers[refused]
-    assert_refused(answer, code)
+
+    # A session the pool found no room for carries what holds it.
+    if given["room"] do
+      assert {answer.status, answer.body} == {409, @vectors["capacity_held"]["body"]}, name
+    else
+      assert_refused(answer, code)
+    end
 
     if refused["read_body"] == false,
       do: assert(answer.headers["connection"] == "close", name)
@@ -1284,8 +1298,7 @@ defmodule Locus.Backends.ServiceTest do
     end
 
     @tag launcher: :direct
-    @tag given: %{"memory_budget" => 536_870_912}
-    test "a close answers only once the release has given the place back, and an open then has room",
+    test "a close answers only once the release has given the place back, and an open then starts",
          ctx do
       fetch_sync(ctx)
       session = opened!(ctx, key: "first")
@@ -1303,8 +1316,7 @@ defmodule Locus.Backends.ServiceTest do
     for gone <- [:dead_session, :released_owner, :replaced_owner, :lapsed_owner, :adopted_ending] do
       @tag launcher: :direct
       @tag gone: gone
-      @tag given: %{"memory_budget" => 536_870_912}
-      test "a close of a #{gone} waits for the release, then an open has room", ctx do
+      test "a close of a #{gone} waits for the release, then an open starts", ctx do
         fetch_sync(ctx)
         session = opened!(ctx)
         {pid, handle} = held_release(ctx)
@@ -1382,7 +1394,6 @@ defmodule Locus.Backends.ServiceTest do
 
     @tag launcher: :direct
     @tag session_opts: [release_timeout_ms: 25]
-    @tag given: %{"memory_budget" => 536_870_912}
     test "past the bound a close is unavailable and the place stays held, until a retry finds it back",
          ctx do
       fetch_sync(ctx)
@@ -1390,7 +1401,7 @@ defmodule Locus.Backends.ServiceTest do
       {_pid, handle} = held_release(ctx)
 
       assert_refused(close(ctx, session), "unavailable")
-      assert_refused(invoke(ctx, open_message(key: "second")), "capacity")
+      assert map_size(:sys.get_state(ctx.owners).reservations) == 1
 
       resume(handle)
       assert_closed(close(ctx, session))

@@ -912,7 +912,7 @@ defmodule Cyfr.DocsDriftTest do
     # Guards against the scans quietly matching nothing.
     assert "LOCUS_RUNTIME_KEY" in variables and "LOCUS_RUNTIME_BIND" in variables
     assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_TIMEOUT_MS" in variables
-    assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BUDGET" in variables
+    assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_PORT" in variables
     # S1 removed the backends' in-flight and timeout settings, which only
     # their MCP handshake read.
     assert length(variables) >= 20, "the scan found only #{inspect(variables)}"

@@ -63,7 +63,7 @@ defmodule Locus.Backends.Owners do
   process a table no longer follows) is held, and holds nothing: no
   reservation, no uid and no place among the owner's sessions. The key is
   asked twice: as the open is admitted, so a held open never competes for
-  the memory and uid its key's last process is about to give back, and as
+  the place and uid its key's last process is about to give back, and as
   its process is about to start once its preparation ends, which finds a
   process that began meanwhile, its reservation given back before it is
   held. Once no process of its key may run, or its owner is retired, it is
@@ -96,7 +96,9 @@ defmodule Locus.Backends.Owners do
   fence where no session follows it; `Reservations.of_lifetime/2`, an
   adopted ending's included) and is held as an open is, under the same
   bound, until none of it is reserved: then `:ok`, the place back. A
-  preparation in flight keeps its reservation until its work answers,
+  preparation in flight has its place dropped at once: one still waiting
+  for room is answered at once and leaves the pool's queue, and one placed
+  gives its memory back. It keeps its reservation until its work answers,
   since until then it may still make the row's home, and then starts
   nothing: the home stays the row's, and only a preparation this table
   follows is waited for. The lifetime may be of an earlier boot, whose
@@ -114,9 +116,13 @@ defmodule Locus.Backends.Owners do
   names it. The keeper answers it once it has room for the session, with
   the memory bound the session's process will have, which may be after
   its room's wait: the preparation's bound outlasts it
-  (`Locus.Launcher.place_wait_ms/0`). A place the keeper refused for room
-  (`no_memory`) is logged and the open `unavailable`, as any place not
-  made. A preparation that fails,
+  (`Locus.Launcher.place_wait_ms/0`). The keeper's answer is the only
+  admission of a session's memory: an open whose place it refused for room
+  (`no_memory`) is refused `capacity` with what the keeper says holds the
+  pool (`held`, `Prima.LocusPool`): its need, what was free, the charges
+  of the owner's own athanor, and everyone else's as one sum, passed on as
+  the keeper gave it and logged by its need and free alone. Any other place
+  not made is `unavailable`. A preparation that fails,
   is held back or is answered while the table no longer follows it, and a
   session that never spawns, leave nothing of the place: whenever a
   session's reservation is released, the table drops its place, which
@@ -127,43 +133,28 @@ defmodule Locus.Backends.Owners do
   (`Locus.Launcher`, "Places"). A session whose place was not made is
   `unavailable` and starts nothing.
 
-  ## Admission by memory
+  ## Reservations
 
-  Every session reserves a session's allowance
-  (`Prima.LocusPool.allowance_bytes/1`, 384 MiB), whatever its program's
-  row names as its `memory_bytes`, which is read and ignored, from the
-  moment its open is
-  admitted, before its home is made or its pool read, until its launcher
-  says nothing of its process is left: an open being prepared, a session
-  running and one ended whose process has not yet gone all hold theirs. An open is admitted while
-
-      held + requested <= floor(B * F)
-
-  for the box, `B` being `:memory_budget` and `F` `:overcommit`
-  (`Locus.Config.backends_memory_budget/0` and
-  `backends_memory_overcommit/0`), and while the same sum over the
-  sessions of the owner's athanor, every owner of it on this box, stays
-  within that athanor's ceiling `A`, the `athanor_memory_bytes` its last
-  sync named (`B` when it named none); past either it is `capacity`. An
-  open of a lifetime being prepared, starting or running reserves nothing
-  more: it waits for that preparation and that launch and is answered
-  what they came to, `resumed: true` only of a launch that succeeded.
-  What a session holds, from its open's admission until
-  its launcher says nothing of its process is left, is its reservation, in
-  the one lifecycle `Locus.Backends.Reservations` writes, each state moved
-  by one authority: this table for an open it never started, the launcher
-  through the session (`:vacated`) or to the spawn's heir
-  (`t:Locus.Launcher.spec/0`), and the launcher's fence
+  What a session holds, from its open's admission until its launcher says
+  nothing of its process is left (an open being prepared, a session
+  running and one ended whose process has not yet gone), is its
+  reservation, in the one lifecycle `Locus.Backends.Reservations` writes,
+  each state moved by one authority: this table for an open it never
+  started, the launcher through the session (`:vacated`) or to the
+  spawn's heir (`t:Locus.Launcher.spec/0`), and the launcher's fence
   (`c:Locus.Launcher.fence/2`) for a process no session follows. A
-  reservation this table stops following, its session process dead, its
-  spawn's answer lost (`:unconfirmed`) or its owner retired, is an ending,
-  fenced at once and at every sweep until it is settled. A release timeout
-  settles nothing. On start the table adopts, as heir, every process the
-  launcher still holds for its ledger (`:ledger`, its name by default), each
-  an ending, so a table that restarts holds what its predecessor followed,
-  and admits nothing until the launcher has answered. A hello and a status
-  report the box's
-  `memory{budget_bytes, admission_limit_bytes, held_bytes}`.
+  reservation holds the session's place and, for a scratch session, its
+  uid; the memory is the pool's to count. An open of a lifetime being
+  prepared, starting or running reserves nothing more: it waits for that
+  preparation and that launch and is answered what they came to,
+  `resumed: true` only of a launch that succeeded. A reservation this
+  table stops following, its session process dead, its spawn's answer
+  lost (`:unconfirmed`) or its owner retired, is an ending, fenced at once
+  and at every sweep until it is settled. A release timeout settles
+  nothing. On start the table adopts, as heir, every process the launcher
+  still holds for its ledger (`:ledger`, its name by default), each an
+  ending, so a table that restarts holds what its predecessor followed,
+  and admits nothing until the launcher has answered.
 
   Before a scratch session's process starts it holds a uid of the pool
   `backends`: the claim is made after one read of the pool
@@ -234,7 +225,7 @@ defmodule Locus.Backends.Owners do
   require Logger
 
   alias Locus.Backends.{Backend, Reservations}
-  alias Prima.{KeeperProtocol, LocusBackends, LocusPool}
+  alias Prima.{KeeperProtocol, LocusBackends}
 
   @pool "backends"
 
@@ -262,8 +253,7 @@ defmodule Locus.Backends.Owners do
   default); `:launcher` and `:launcher_server` (`Locus.Executor.executor/0`'s
   by default); `:supervisor`, the `DynamicSupervisor` sessions start
   under; `:clock`, the milliseconds leases, crashes and idle periods are
-  read on (monotonic by default); `:memory_budget` and
-  `:overcommit` (`Locus.Config`'s by default), the box's `B` and `F`;
+  read on (monotonic by default);
   `:ledger`, the name its sessions' heir tags carry, which
   a restarted table adopts back (its `:name`, else its own); `:stop_grace_ms`;
   `:place_wait_ms`, how long a preparation waits for its place
@@ -312,7 +302,7 @@ defmodule Locus.Backends.Owners do
   @doc "Opens a session as `message` asks, for the owner `invoke` names."
   @spec open(GenServer.server(), map(), map()) ::
           {:ok, %{status: :running, session: String.t(), resumed: boolean()}}
-          | {:error, LocusBackends.code()}
+          | {:error, LocusBackends.refusal()}
   def open(server \\ __MODULE__, invoke, message) do
     GenServer.call(server, {:open, invoke, message}, @open_timeout_ms)
   catch
@@ -379,7 +369,6 @@ defmodule Locus.Backends.Owners do
         launcher_server: Keyword.get(opts, :launcher_server, launcher),
         supervisor: Keyword.get(opts, :supervisor, Locus.Backends.BackendSupervisor),
         clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
-        memory: memory(opts),
         stop_grace_ms: Keyword.get(opts, :stop_grace_ms, @stop_grace_ms),
         place_wait_ms: Keyword.get_lazy(opts, :place_wait_ms, &Locus.Launcher.place_wait_ms/0),
         pool_timeout_ms: Keyword.get(opts, :pool_timeout_ms, @pool_timeout_ms),
@@ -448,18 +437,6 @@ defmodule Locus.Backends.Owners do
   end
 
   defp mint_boot, do: "bb_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-  # The box's budget `B` and its admission limit, `floor(B * F)`.
-  defp memory(opts) do
-    budget = Keyword.get_lazy(opts, :memory_budget, &Locus.Config.backends_memory_budget/0)
-
-    overcommit = Keyword.get_lazy(opts, :overcommit, &Locus.Config.backends_memory_overcommit/0)
-
-    %{
-      budget_bytes: budget,
-      admission_limit_bytes: Locus.Config.admission_limit_bytes(budget, overcommit)
-    }
-  end
 
   @impl GenServer
   def handle_call(:boot, _from, state), do: {:reply, state.boot, state}
@@ -927,8 +904,7 @@ defmodule Locus.Backends.Owners do
           {:ok,
            %{
              boot: state.boot,
-             pool: %{size: pool.size, free: pool.free},
-             memory: memory_report(state)
+             pool: %{size: pool.size, free: pool.free}
            }}
 
         :error ->
@@ -940,7 +916,7 @@ defmodule Locus.Backends.Owners do
   end
 
   defp continue(state, {:status, from}, {:ok, owners}) do
-    GenServer.reply(from, {:ok, %{owners: owners, memory: memory_report(state)}})
+    GenServer.reply(from, {:ok, %{owners: owners}})
     control_done(state)
   end
 
@@ -1110,13 +1086,16 @@ defmodule Locus.Backends.Owners do
       else: {:hold, state}
   end
 
-  # A closed lifetime's reservation: one still being prepared is held until
-  # that work answers, which then starts nothing (`opened/4`), and any
-  # other has its process asked to end, its session answering no open as
-  # running any more.
+  # A closed lifetime's reservation: one still being prepared has its place
+  # dropped, so a place still waiting for room is answered at once and
+  # leaves the pool's queue, and is held until that work answers, which
+  # then starts nothing (`opened/4`); any other has its process asked to
+  # end, its session answering no open as running any more.
   defp end_reserved(state, {owner_id, session_id} = key) do
     case {state.reservations[key], state.owners} do
       {%{state: :reserved}, _owners} ->
+        {launcher, server} = session_launcher(state)
+        launcher.drop(server, session_id)
         state
 
       {_asked, %{^owner_id => %{sessions: %{^session_id => session}} = owner}} ->
@@ -1195,8 +1174,6 @@ defmodule Locus.Backends.Owners do
       argv: message.argv,
       packs: Map.get(message, :packs),
       size: if(message.mode == :terminal, do: %{rows: message.rows, cols: message.cols}),
-      # What it reserves, whatever its row names (`Prima.LocusPool`).
-      memory_bytes: LocusPool.allowance_bytes(:session),
       # What it is opened again from, should it be held once prepared.
       invoke: invoke,
       message: message
@@ -1210,7 +1187,7 @@ defmodule Locus.Backends.Owners do
          :error <- preparing(state, named),
          :ok <- gone_before(state, owner, ask.key),
          :ok <- home_open(state, message.home_id),
-         :ok <- memory_room(state, owner, ask.memory_bytes),
+         :ok <- adopted(state),
          {:ok, admitted} <- room(state, owner) do
       state = put_owner(state, admitted)
       tag = heir_tag(state, owner, ask.session, ask)
@@ -1389,25 +1366,10 @@ defmodule Locus.Backends.Owners do
     end
   end
 
-  # Room for `requested` more bytes: within the box's admission limit, and
-  # within the ceiling of the owner's athanor over every owner of it here.
   # Until the launcher has answered what it still holds for this ledger,
   # nothing is known to be free.
-  defp memory_room(%{adopted: false}, _owner, _requested), do: {:error, :unavailable}
-
-  defp memory_room(state, owner, requested) do
-    ceiling = owner.athanor_memory_bytes || state.memory.budget_bytes
-
-    held = state.reservations
-
-    if Reservations.held_bytes(held) + requested <= state.memory.admission_limit_bytes and
-         Reservations.held_bytes(held, &(&1 == owner.athanor)) + requested <= ceiling,
-       do: :ok,
-       else: {:error, :capacity}
-  end
-
-  defp memory_report(state),
-    do: Map.put(state.memory, :held_bytes, Reservations.held_bytes(state.reservations))
+  defp adopted(%{adopted: false}), do: {:error, :unavailable}
+  defp adopted(_state), do: :ok
 
   defp forget(state, pid) do
     DynamicSupervisor.terminate_child(state.supervisor, pid)
@@ -1480,7 +1442,7 @@ defmodule Locus.Backends.Owners do
         "session (no_memory: #{held.need} bytes needed, #{held.free} free)"
     )
 
-    {:error, :unavailable}
+    {:error, {:capacity, held}}
   end
 
   defp claimed(_state, _program, _ask, {:unplaced, _reason}), do: {:error, :unavailable}
@@ -1972,7 +1934,6 @@ defmodule Locus.Backends.Owners do
       e: owner.e,
       key: ask.key,
       lifetime: ask.lifetime,
-      memory_bytes: ask.memory_bytes,
       home_id: ask.home_id
     }
   end

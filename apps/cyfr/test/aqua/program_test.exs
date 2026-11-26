@@ -4253,18 +4253,25 @@ defmodule Aqua.ProgramTest do
       refute_received {:control, "home", _message, _fields}
     end
 
-    test "a start the backends refuse for want of room ends the turn saying there is no room " <>
-           "for another running program, not that the program is away",
-         %{ctx: ctx, thread: thread, row: row, fake: fake} do
-      Scripted.refuse_once(fake, "open", "capacity")
-      turn = accept!(ctx, thread, row, "hello")
+    for {refusal, why} <- [
+          {"capacity", "its uids"},
+          {{"capacity", %{need: 402_653_184, free: 0, mine: [], others_bytes: 1_073_741_824}},
+           "the pool's memory, carrying what holds it"}
+        ] do
+      @refusal refusal
+      test "a start the backends refuse for want of room (#{why}) ends the turn saying there is " <>
+             "no room for another running program, not that the program is away",
+           %{ctx: ctx, thread: thread, row: row, fake: fake} do
+        Scripted.refuse_once(fake, "open", @refusal)
+        turn = accept!(ctx, thread, row, "hello")
 
-      line =
-        "#{@title} could not start: this CYFR has no room for another running program. Stop " <>
-          "work in another thread or wait for it to end, then send your message again."
+        line =
+          "#{@title} could not start: this CYFR has no room for another running program. Stop " <>
+            "work in another thread or wait for it to end, then send your message again."
 
-      assert {:failed, ^line} = Task.await(run(ctx, turn), 30_000)
-      assert system_lines(ctx, thread, turn) == [line]
+        assert {:failed, ^line} = Task.await(run(ctx, turn), 30_000)
+        assert system_lines(ctx, thread, turn) == [line]
+      end
     end
 
     test "the program's own silence after it took a post ends its work, saying so",

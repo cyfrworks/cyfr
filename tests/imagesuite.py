@@ -68,6 +68,7 @@ LEAST_CAP_BYTES = _POOL["least_cap_bytes"]
 FLOOR_RUNNERS = _POOL["floor_runners"]
 ALLOWANCE_BYTES = _POOL["allowance_bytes"]
 ROOM_WAIT_MS = _POOL["room_wait_ms"]
+ALLOWANCE_MS = _POOL["allowance_ms"]
 
 
 def cap_bytes(kind, work):

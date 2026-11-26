@@ -3,13 +3,13 @@
 
 defmodule Locus.Backends.Reservations do
   @moduledoc """
-  The memory a box's sessions hold (`Locus.Backends.Owners`), one
-  reservation per session, each in one state and moved by one authority.
+  What a box's sessions hold (`Locus.Backends.Owners`), their places and
+  uids, one reservation per session, each in one state and moved by one authority.
   Data only: the owner table holds it and acts on what it answers.
 
   A reservation is a session's heir tag (`t:tag/0`: its ledger, its session,
   its athanor, its row, the generation and epoch that opened it, its session
-  key, its lifetime, its memory bound and its kept home) and its state:
+  key, its lifetime and its kept home) and its state:
 
   | State | Holds | Event | Next | Authority |
   |---|---|---|---|---|
@@ -33,7 +33,7 @@ defmodule Locus.Backends.Reservations do
   cost: a fence that answers `:none` stands for the life of the launcher's
   client, which keeps one entry for each such tag (`Locus.Keeper`).
 
-  Every state holds the session's memory bound; every state but `reserved`
+  Every state holds the session's place; every state but `reserved`
   holds a scratch session's uid of the pool, which only its process takes.
   Every state but `reserved` stands for a process the launcher may still
   run under its tag's row and key (`process?/4`). A tag that names no row
@@ -52,7 +52,6 @@ defmodule Locus.Backends.Reservations do
           e: pos_integer(),
           key: term(),
           lifetime: String.t(),
-          memory_bytes: pos_integer(),
           home_id: String.t() | nil
         }
 
@@ -165,14 +164,6 @@ defmodule Locus.Backends.Reservations do
     for {key, %{tag: tag}} <- reservations,
         Map.take(tag, [:athanor, :server, :g, :e, :key, :lifetime]) == named,
         do: key
-  end
-
-  @doc "The bytes the reservations of the athanors `athanor?` takes hold."
-  @spec held_bytes(t(), (String.t() -> boolean())) :: non_neg_integer()
-  def held_bytes(reservations, athanor? \\ fn _ -> true end) do
-    for {_key, %{tag: tag}} <- reservations, athanor?.(tag.athanor), reduce: 0 do
-      sum -> sum + tag.memory_bytes
-    end
   end
 
   @doc "The pool's uids held: every scratch session's whose process may run."
