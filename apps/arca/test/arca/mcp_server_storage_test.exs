@@ -143,22 +143,27 @@ defmodule Arca.McpServerStorageTest do
                  home: "kept"
                })
 
+      assert {:ok, bounded} =
+               McpServerStorage.update(
+                 actor,
+                 "gh",
+                 %{home: "kept", home_max_bytes: 1_073_741_824},
+                 %{id: gh, epoch: 1}
+               )
+
+      assert %{epoch: 2, home: "kept", home_max_bytes: 1_073_741_824} = bounded
+      assert {:ok, ^bounded} = McpServerStorage.get(actor, "gh")
+
+      # A setting named nil is cleared.
       assert {:ok, updated} =
                McpServerStorage.update(
                  actor,
                  "gh",
-                 %{
-                   home: "scratch",
-                   home_max_bytes: nil
-                 },
-                 %{id: gh, epoch: 1}
+                 %{home: "scratch", home_max_bytes: nil},
+                 %{id: gh, epoch: 2}
                )
 
-      assert %{
-               epoch: 2,
-               home: "scratch",
-               home_max_bytes: nil
-             } = updated
+      assert %{epoch: 3, home: "scratch", home_max_bytes: nil} = updated
 
       # A store-level constraint still holds: a program has no url.
       assert {:error, _} =
