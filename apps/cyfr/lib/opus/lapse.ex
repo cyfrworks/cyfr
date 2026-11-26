@@ -29,6 +29,10 @@ defmodule Opus.Lapse do
 
   @message "Execution terminated: runner stopped without cleanup"
 
+  @doc "The message a lapsed row keeps: its run's end was never reported."
+  @spec message() :: String.t()
+  def message, do: @message
+
   @doc """
   Lapse the execution of `record` — the row's map with its current
   attempt's `attempt` and `lease_until` beside it

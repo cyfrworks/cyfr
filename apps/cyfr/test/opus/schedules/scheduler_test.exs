@@ -1816,6 +1816,53 @@ defmodule Opus.Schedules.SchedulerTest do
             }} = CronSchedule.get_for_daemon(schedule.id)
   end
 
+  # The run's attempt hears its waiter die too, and lapses the row (status
+  # failed, class uncertain), most often after the scheduler has read it
+  # still open. Held until the lapse is written, the scheduler reads the
+  # lapsed row, and says the same.
+  test "a runner that dies and whose run lapsed first leaves the schedule's outcome unknown",
+       %{ctx: ctx} do
+    script!([:hang])
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+    pid = scheduler!()
+
+    wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
+    wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+    assert [%{state: "started", execution_id: run}] = occurrences(ctx, schedule)
+
+    [task_pid] =
+      for {_, p, _, _} <- Supervisor.which_children(Opus.Schedules.TaskSupervisor),
+          is_pid(p),
+          do: p
+
+    :ok = :sys.suspend(pid)
+    Process.exit(task_pid, :kill)
+
+    wait_until(fn ->
+      match?(
+        %{status: "failed", error_class: "uncertain"},
+        Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), run)
+      )
+    end)
+
+    :ok = :sys.resume(pid)
+
+    wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
+
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert {:ok,
+            %{
+              run_count: 0,
+              error_count: 1,
+              last_error:
+                "Last run did not report its end, so whether it had its effect is not known.",
+              last_execution_id: ^run
+            }} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
   # A run that crashes exits with its stacktrace, whose failing frame holds
   # the arguments `run/6` was called with: the schedule's context and input.
   test "a runner that crashes is logged by its frames' arity, never their arguments", %{
