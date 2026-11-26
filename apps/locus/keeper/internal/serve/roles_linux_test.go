@@ -653,24 +653,19 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 		}
 		spawn := fmt.Sprintf(`{"v":6,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
 			pool, 64<<20, protocol.CPUPeriod, testToken)
-		if reply := ru.ask(t, spawn); reply["type"] != protocol.TypeError || reply["id"] != "zp" {
-			t.Errorf("role %s's spawn at no work answered %v", name, reply)
+		refused := ru.ask(t, spawn)
+		if refused["type"] != protocol.TypeError || refused["id"] != "zp" {
+			t.Fatalf("role %s's spawn at no work answered %v", name, refused)
 		}
-		// The refused spawn's uid goes back to its pool once its retirement
-		// has found it clean, and the role answers throughout.
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`)
-			if reply["type"] != protocol.TypePool {
-				t.Fatalf("role %s after the refused spawn: its pool answered %v", name, reply)
+		// A spawn refused once made is released once its cleanup is done.
+		if id, made := refused["spawn_id"].(string); made {
+			var released map[string]any
+			if err := json.Unmarshal([]byte(ru.line(t)), &released); err != nil || released["type"] != protocol.TypeReleased || released["spawn_id"] != id {
+				t.Fatalf("role %s's refused spawn: %v, %v", name, released, err)
 			}
-			if reply["free"] == reply["size"] {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("role %s: the refused spawn's uid is not free again: %v", name, reply)
-			}
-			time.Sleep(cgroup.PollInterval) // sleep-ok: a bounded poll for the uid's retirement
+		}
+		if reply := ru.ask(t, `{"v":6,"type":"pool","id":"z2","pool":"`+pool+`"}`); reply["type"] != protocol.TypePool || reply["free"] != reply["size"] {
+			t.Errorf("role %s after the refused spawn: its pool answered %v", name, reply)
 		}
 	}
 	rk.s.mu.Lock()
