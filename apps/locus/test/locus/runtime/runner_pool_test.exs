@@ -455,9 +455,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert_receive {RunnerPool, ^dying, {:gone, _reason}}, 5_000
     :ok = :sys.resume(keeper)
 
-    # The runner the pool spawned behind it starts; the next one the keeper
-    # refuses.
-    wait_until(fn -> counts(pool).fresh == 1 and length(spawns(keeper)) == 1 end)
+    # The runner the pool spawned behind it starts, the pool having heard it
+    # attach: a runner that attaches ends a refusal the pool remembers, so
+    # one heard after the refusal below would have the pool try again. The
+    # next one the keeper refuses.
+    wait_until(fn ->
+      length(spawns(keeper)) == 1 and Enum.any?(Runners.runners(pool), &(&1.state == :fresh))
+    end)
+
     [%{spec: %{runner: started}}] = spawns(keeper)
     :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
     {:ok, _started, ^started} = RunnerPool.take(pool, "ath_a", "exec_2")
