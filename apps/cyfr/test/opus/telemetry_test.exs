@@ -7,7 +7,10 @@ defmodule Opus.TelemetryTest do
   alias Opus.Telemetry
   alias Opus.Record
 
-  setup do
+  setup tags do
+    # The bridge publishes each exception event from the emitting process,
+    # this test's, and reads the store to do so.
+    Cyfr.Test.Sandbox.setup!(tags)
     test_pid = self()
 
     # Attach telemetry handler for testing

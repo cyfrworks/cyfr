@@ -1000,6 +1000,69 @@ defmodule Opus.Schedules.SchedulerTest do
              CronSchedule.get_for_daemon(schedule.id)
   end
 
+  # A declared restore ends every open run failed with its attempt lapsed,
+  # never closed: the run never reported its end, and recovery says so.
+  test "a run open at a declared restore is recovered uncertain, its end not known",
+       %{ctx: ctx} do
+    script!([])
+    schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+    actor = Sanctum.Context.actor(ctx)
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_restored",
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -60, :second),
+      state: "claimed",
+      claimed_by: Prima.Boot.id(),
+      claimed_at: DateTime.utc_now()
+    })
+
+    {:ok, _admitted} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_restored",
+          reference: "reagent:local.test:1.0.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          schedule_id: schedule.id,
+          origin: :schedule
+        },
+        [occurrence_id: "occ_restored"] ++ Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
+
+    {:ok, _restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    assert {:ok, %{}} = Arca.SecurityTransitions.restore(slot: :none)
+
+    assert %{status: "failed", error_message: "Ended by a declared restore"} =
+             Arca.Execution.get_tenant(actor, "exec_restored")
+
+    assert %{state: "lapsed"} = Arca.ExecutionAttempts.current(actor, "exec_restored")
+
+    assert {:ok, %{state: "started", execution_id: "exec_restored"}} =
+             ScheduleOccurrences.get(actor, "occ_restored")
+
+    scheduler!()
+
+    wait_until(fn ->
+      match?({:ok, %{state: "uncertain"}}, ScheduleOccurrences.get(actor, "occ_restored"))
+    end)
+
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert {:ok,
+            %{
+              run_count: 0,
+              error_count: 1,
+              last_error:
+                "Last run did not report its end, so whether it had its effect is not known.",
+              last_execution_id: "exec_restored"
+            }} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
   describe "a recovered run on the schedule" do
     test "one its row stores as failed is a failure, with the reason its row keeps and its run",
          %{ctx: ctx} do
@@ -1814,6 +1877,76 @@ defmodule Opus.Schedules.SchedulerTest do
                 "Last run did not report its end, so whether it had its effect is not known.",
               last_execution_id: ^run
             }} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
+  # The run's attempt hears its waiter die too, and lapses the row (status
+  # failed, class uncertain), most often after the scheduler has read it
+  # still open. Held until the lapse is written, the scheduler reads the
+  # lapsed row, and says the same.
+  test "a runner that dies and whose run lapsed first leaves the schedule's outcome unknown",
+       %{ctx: ctx} do
+    script!([:hang])
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+    pid = scheduler!()
+
+    wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
+    wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+    assert [%{state: "started", execution_id: run}] = occurrences(ctx, schedule)
+
+    [task_pid] =
+      for {_, p, _, _} <- Supervisor.which_children(Opus.Schedules.TaskSupervisor),
+          is_pid(p),
+          do: p
+
+    :ok = :sys.suspend(pid)
+    Process.exit(task_pid, :kill)
+
+    wait_until(fn ->
+      match?(
+        %{status: "failed", error_class: "uncertain"},
+        Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), run)
+      )
+    end)
+
+    :ok = :sys.resume(pid)
+
+    wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
+
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert {:ok,
+            %{
+              run_count: 0,
+              error_count: 1,
+              last_error:
+                "Last run did not report its end, so whether it had its effect is not known.",
+              last_execution_id: ^run
+            }} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
+  # A lapse is told by its attempt, never by its words: a run that fails
+  # itself in the very words a lapse keeps closed its attempt, and failed.
+  test "a run that fails in a lapse's words still failed", %{ctx: ctx} do
+    words = "Execution terminated: runner stopped without cleanup"
+    script!([{:error, words}])
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+    scheduler!()
+
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert [%{state: "failed", execution_id: run}] = occurrences(ctx, schedule)
+
+    assert %{status: "failed", error_message: ^words, error_class: "internal"} =
+             Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), run)
+
+    said = "Last run failed: " <> Sanctum.Refusals.render(words)
+
+    assert {:ok, %{last_error: ^said, last_execution_id: ^run}} =
+             CronSchedule.get_for_daemon(schedule.id)
   end
 
   # A run that crashes exits with its stacktrace, whose failing frame holds
