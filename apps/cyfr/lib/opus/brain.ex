@@ -360,7 +360,10 @@ defmodule Opus.Brain do
   took the write); or `{:error, :uncertain}`, a write that may have
   reached the driver, its answer lost among them: the holder's reply that
   did not come, the holder's death while it wrote and a service that
-  answers the session ended, which can follow the writing.
+  answers the session ended, which can follow the writing; or
+  `{:error, {:ended_by, cause}}`, a write the service answered with the
+  session ended for memory (`:cap`, `:machine` or `:either`), which may
+  have reached the driver too.
   """
   @spec write(brain(), binding(), Wire.message()) :: :ok | {:error, term()}
   def write({pid, ref}, binding, %{} = command) when is_map(ref) do
@@ -1550,9 +1553,11 @@ defmodule Opus.Brain do
       {:ok, :ended} ->
         {:stop, :normal, {:error, :uncertain}, ended(state, :interrupted)}
 
-      # Memory ended the process, the write among what it may have taken.
+      # Memory ended the process, the write among what it may have taken:
+      # the writer is told the cause itself, since it hears this answer
+      # before the end its holder tells.
       {:ok, {:ended_by, _cause} = ended_by} ->
-        {:stop, :normal, {:error, :uncertain}, ended(state, ended_by)}
+        {:stop, :normal, {:error, ended_by}, ended(state, ended_by)}
 
       {:error, {:refused, :stale_boot, _boot}} ->
         {:stop, :normal, {:error, :ended}, ended(state, :restarted)}
