@@ -443,6 +443,181 @@ class RefusedSpawns(unittest.TestCase):
                            {"v": 7, "type": "error", "code": "bad_request", "id": str(n)}] for n in (1, 2)])
 
 
+HOLDER_BYTES = memory.ROOM_HELD + (40 << 20)
+
+
+def room_keeper(sock, requests):
+    """A keeper on the room client's channel, answering as cyfr-locus does at ROOM_WORK: the holder's place `placed`
+    with a build's bound and its spawn `spawned`, its relay attached; a measure `unmeasured` until the place's first
+    reading, then HOLDER_BYTES under the holder's owner; each asker refused `no_memory` with `held` (the keeper's
+    wait is not kept here); the release answered `exited` and `released`; and a place after it `placed`. Every
+    request is kept in `requests`."""
+
+    def send(reply):
+        sock.sendall(json.dumps(reply, separators=(",", ":")).encode() + b"\n")
+
+    holder, measures, relay, released = None, 0, None, False
+    for line in sock.makefile("rb"):
+        request = json.loads(line)
+        requests.append(request)
+        kind = request["type"]
+        if kind == "place" and request["id"] == memory.ROOM_HOLDER["place"]:
+            holder = request
+            send({"v": 7, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
+        elif kind == "spawn":
+            send({"v": 7, "type": "spawned", "id": request["id"], "spawn_id": SPAWN_ID, "uid": stack.POOL_FIRST, "pid": 4242})
+            relay = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            relay.connect(request["attach"]["path"])
+            relay.sendall(frame(3, request["attach"]["token"].encode()))
+        elif kind == "measure":
+            measures += 1
+            if measures == 1:
+                send({"v": 7, "type": "error", "id": request["id"], "code": "unmeasured"})
+            else:
+                send({"v": 7, "type": "measured", "id": request["id"], "kind": "build", "athanor": holder["athanor"],
+                      "subject": holder["subject"], "bytes": HOLDER_BYTES, "lesser": False, "age_ms": 0})
+        elif kind == "place" and released:
+            send({"v": 7, "type": "placed", "id": request["id"], "memory_bytes": memory.BOUND})
+        elif kind == "place":
+            mine = request["athanor"] == holder["athanor"]
+            send({"v": 7, "type": "error", "id": request["id"], "code": "no_memory", "held": {
+                "need": memory.BUILD_ALLOWANCE, "free": memory.ROOM_WORK - HOLDER_BYTES,
+                "mine": [{"kind": "build", "subject": holder["subject"], "bytes": HOLDER_BYTES}] if mine else [],
+                "others_bytes": 0 if mine else HOLDER_BYTES}})
+        elif kind == "release":
+            send({"v": 7, "type": "exited", "spawn_id": SPAWN_ID, "code": None, "signal": "SIGKILL", "memory": None})
+            relay.close()
+            send({"v": 7, "type": "released", "spawn_id": SPAWN_ID})
+            released = True
+
+
+class Room(unittest.TestCase):
+    """The room client against a keeper on its fd 3, and the verdict on what it reported: the verdict takes the
+    report with each refusal moved to the room's wait after its place, since the stand-in answers at once."""
+
+    @classmethod
+    def setUpClass(cls):
+        directory = tempfile.mkdtemp(prefix="memory-room-")
+        cls.addClassCleanup(shutil.rmtree, directory, True)
+        client_path = os.path.join(directory, "client.mjs")
+        scenario_path = os.path.join(directory, "scenario.json")
+        with open(client_path, "w") as out:
+            out.write(memory.ROOM_CLIENT)
+        with open(scenario_path, "w") as out:
+            json.dump({**memory.room_scenario(), "timeout_ms": 10_000, "stay": False}, out)
+        parent, child = socket.socketpair()
+        cls.addClassCleanup(parent.close)
+        process = subprocess.Popen(["/bin/sh", "-c", 'exec 3<&"$1"; exec node "$2" "$3"', "client", str(child.fileno()),
+                                    client_path, scenario_path],
+                                   pass_fds=(child.fileno(),), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env={**os.environ, "RELEASE_TMP": directory})
+        child.close()
+        cls.requests = []
+        serving = threading.Thread(target=room_keeper, args=(parent, cls.requests), daemon=True)
+        serving.start()
+        try:
+            stdout, cls.stderr = process.communicate(timeout=20)
+        finally:
+            process.kill()
+            process.communicate()
+        serving.join(5)
+        cls.returncode = process.returncode
+        cls.reported = json.loads(stdout.split(b"<<<", 1)[1].split(b">>>", 1)[0]) if b"<<<" in stdout else None
+
+    def report(self, edit=None, waited=memory.ROOM_WAIT_MS + 400):
+        """The client's report, each refusal `waited` ms after its place, a copy given by `edit` of it."""
+        report = json.loads(json.dumps(self.reported))
+        for asker in report["askers"]:
+            for reply in asker["replies"]:
+                reply["at_ms"] = asker["sent_ms"] + waited
+        if edit:
+            edit(report)
+        return report
+
+    def fails(self, report, check):
+        """The verdict on `report` fails at the check whose message holds `check`."""
+        with self.assertRaises(SystemExit) as failed:
+            memory.judge_room(report)
+        self.assertIn(check, str(failed.exception.code).splitlines()[0])
+
+    def test_the_client_holds_the_room_asks_twice_releases_and_asks_again(self):
+        self.assertEqual(self.returncode, 0, self.stderr.decode())
+        self.assertFalse(self.reported["timed_out"])
+        holder, (mine, other) = memory.ROOM_HOLDER, memory.ROOM_ASKERS
+        spawn = self.requests[1]
+        self.assertEqual({key: spawn[key] for key in ("v", "type", "id", "place", "pool", "argv", "env")},
+                         {"v": 7, "type": "spawn", "id": "holder-spawn", "place": holder["place"], "pool": "probe",
+                          "argv": memory.room_scenario()["holder"]["argv"], "env": {}})
+        self.assertFalse({"memory_bytes", "cpu_quota"} & spawn.keys(), spawn)
+        self.assertEqual([request for n, request in enumerate(self.requests) if n != 1], [
+            {"v": 7, "type": "place", "id": holder["place"], "kind": "build", "athanor": holder["athanor"],
+             "subject": holder["subject"]},
+            {"v": 7, "type": "measure", "id": "m1", "place": holder["place"]},
+            {"v": 7, "type": "measure", "id": "m2", "place": holder["place"]},
+            {"v": 7, "type": "place", "id": mine["place"], "kind": "build", "athanor": mine["athanor"]},
+            {"v": 7, "type": "place", "id": other["place"], "kind": "build", "athanor": other["athanor"]},
+            {"v": 7, "type": "release", "spawn_id": SPAWN_ID, "grace_ms": 0},
+            {"v": 7, "type": "place", "id": mine["place"], "kind": "build", "athanor": mine["athanor"]},
+            {"v": 7, "type": "drop", "place": mine["place"]},
+        ])
+
+    def test_refusals_after_the_wait_with_held_whole_and_a_place_after_the_release_pass(self):
+        memory.judge_room(self.report())
+
+    def test_a_refusal_before_the_wait_or_past_its_second_fails(self):
+        for waited in (memory.ROOM_WAIT_MS - 1, memory.ROOM_WAIT_MS + memory.ROOM_LATE_MS):
+            with self.subTest(waited=waited):
+                self.fails(self.report(waited=waited), "refused after the room's wait")
+
+    def test_an_asker_placed_while_the_holder_holds_the_room_fails(self):
+        def edit(report):
+            report["askers"][1]["replies"][0] = {**report["askers"][1]["replies"][0], "type": "placed",
+                                                 "memory_bytes": memory.BOUND}
+        self.fails(self.report(edit), "is not placed while the holder holds the room")
+
+    def test_a_holder_charged_its_allowance_and_not_its_reading_fails(self):
+        def edit(report):
+            for asker in report["askers"]:
+                held = asker["replies"][0]["held"]
+                held["free"] = memory.ROOM_WORK - memory.BUILD_ALLOWANCE
+                for holding in held["mine"]:
+                    holding["bytes"] = memory.BUILD_ALLOWANCE
+                if held["others_bytes"]:
+                    held["others_bytes"] = memory.BUILD_ALLOWANCE
+        self.fails(self.report(edit), "charges the holder its reading")
+
+    def test_a_held_missing_the_holder_among_its_athanors_places_fails(self):
+        def edit(report):
+            report["askers"][0]["replies"][0]["held"]["mine"] = []
+        self.fails(self.report(edit), "charges the holder its reading")
+
+    def test_a_held_whose_parts_do_not_hold_together_fails(self):
+        edits = {
+            "free not the work less the holder": lambda held: held.update(free=held["free"] - 1),
+            "need not a build's allowance": lambda held: held.update(need=memory.BOUND),
+            "the holder's subject left out": lambda held: [holding.pop("subject") for holding in held["mine"]],
+            "the holder counted twice": lambda held: held.update(others_bytes=HOLDER_BYTES),
+        }
+        for name, change in edits.items():
+            with self.subTest(name):
+                self.fails(self.report(lambda report: change(report["askers"][0]["replies"][0]["held"])), "held is whole")
+
+    def test_another_athanors_held_naming_the_holder_fails(self):
+        def edit(report):
+            report["askers"][1]["replies"][0]["held"]["mine"] = [
+                {"kind": "build", "subject": memory.ROOM_HOLDER["subject"], "bytes": HOLDER_BYTES}]
+        self.fails(self.report(edit), "held is whole")
+
+    def test_a_place_after_the_release_that_waits_or_is_refused_fails(self):
+        def late(report):
+            report["again"]["replies"][0]["at_ms"] = report["again"]["sent_ms"] + memory.ROOM_AT_ONCE_MS
+        def refused(report):
+            report["again"]["replies"][0] = {**report["askers"][0]["replies"][0], "seq": report["again"]["replies"][0]["seq"]}
+        for edit in (late, refused):
+            with self.subTest(edit.__name__):
+                self.fails(self.report(edit), "placed again is placed at once")
+
+
 class Brief(unittest.TestCase):
     def test_a_result_carrying_its_files_shows_each_by_its_size(self):
         _progress, answer = stack.read_answer([

@@ -56,14 +56,18 @@ SECCOMP_PROFILES = {
 
 # The pool's fixed numbers (Prima.LocusPool), from their vector file: each
 # place's kind and its class, a build's memory bound, a runner's and a
-# session's least bound, and how many fresh runners the warm floor keeps.
-# The keeper sets every spawn's bound by its kind, and no client names one.
+# session's least bound, how many fresh runners the warm floor keeps, each
+# class's allowance and how long a start waits for room before it is
+# refused. The keeper sets every spawn's bound by its kind, and no client
+# names one.
 with open(os.path.join(_ROOT, "tests", "fixtures", "locus_pool.json")) as _pool:
     _POOL = json.load(_pool)
 KINDS = _POOL["kinds"]
 BUILD_CAP_BYTES = _POOL["cap_bytes"]["build"]
 LEAST_CAP_BYTES = _POOL["least_cap_bytes"]
 FLOOR_RUNNERS = _POOL["floor_runners"]
+ALLOWANCE_BYTES = _POOL["allowance_bytes"]
+ROOM_WAIT_MS = _POOL["room_wait_ms"]
 
 
 def cap_bytes(kind, work):
