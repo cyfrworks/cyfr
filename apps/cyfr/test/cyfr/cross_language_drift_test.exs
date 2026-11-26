@@ -588,7 +588,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "locus_pool.json" => [
       {"apps/locus/keeper/internal/admission/size_test.go", ~w(floor_bytes)},
-      {"apps/prima/test/prima/locus_pool_test.exs", ~w(floor_bytes)}
+      {"apps/prima/test/prima/locus_pool_test.exs", ~w(floor_bytes)},
+      {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [
       {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},
