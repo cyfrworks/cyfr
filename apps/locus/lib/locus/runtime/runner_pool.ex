@@ -83,9 +83,12 @@ defmodule Locus.Runtime.RunnerPool do
   the pool at once, and its assignee, if it had one, hears
   `{:gone, {:refused, refusal}}`, the keeper's own code and sentence for
   it (`c:Locus.Runtime.Keeper.refusal/1`). A place the keeper refused for
-  room (`no_memory`) is that runner's alone, and the rest of this section
-  does not apply to it: the pool remembers no refusal, backs off nothing,
-  and fills again as after any runner's end. One the keeper refused after it made
+  room (`no_memory`) of a runner a take was given or waits on is that
+  take's alone, refused after its wait, and the rest of this section does
+  not apply to it: the pool remembers no refusal, backs off nothing, and
+  fills again as after any runner's end. One of a runner nobody took, a
+  fresh one the keeper refuses at once because no empty pool could hold
+  it, is the pool's refusal as any other. One the keeper refused after it made
   something of it (`{:refused, reason, :release_follows}`) is told of the
   same way but stays, `refused`, until the keeper reports it released:
   never handed out, counted `tainted` in `status/1` and asked no
@@ -557,15 +560,18 @@ defmodule Locus.Runtime.RunnerPool do
     refused(state, reason)
   end
 
-  # A place the keeper refused for room is that runner's alone: the keeper
-  # still starts runners, so the pool neither refuses nor backs off for
-  # it, and fills again at its usual pace.
+  # A place the keeper refused for room after a take's wait for it is that
+  # take's alone: the keeper still starts runners, so the pool neither
+  # refuses nor backs off for it, and fills again at its usual pace. One
+  # nobody took is the keeper refusing the floor itself (no empty pool
+  # could hold a runner), which the pool remembers and backs off.
   defp on_event({:refused, reason}, pid, entry, state) do
     refusal = state.keeper.refusal(reason)
     state = told(state, pid, entry, {:gone, {:refused, refusal}})
     _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
+    taken? = entry.execution_id != nil or entry.waiter != nil
 
-    if refusal.reason == "no_memory",
+    if refusal.reason == "no_memory" and taken?,
       do: refill_later(forget(state, pid)),
       else: refused(forget(state, pid), reason)
   end
