@@ -221,13 +221,13 @@ func TestKeyedNeedsTheRolesOwnKeyNotEmpty(t *testing.T) {
 // anything else refuses the boot by the variable's name.
 func TestRoleCPUReadsComposesSyntaxStrictly(t *testing.T) {
 	r := RoleSpec{Name: "runtime"}
-	for cpu, want := range map[string]uint64{"4": 400_000, "0.5": 50_000, "1.25": 125_000, "0.01": 1_000, "": 0} {
+	for cpu, want := range map[string]uint64{"4": 400_000, "0.5": 50_000, "1.25": 125_000, "0.02": 2_000, "0.025": 2_500, "": 0} {
 		environ := []string{"LOCUS_RUNTIME_CPU_LIMIT=" + cpu, "LOCUS_BUILDS_CPU_LIMIT=nonsense"}
 		if got, err := RoleCPU(environ, r); err != nil || got != want {
 			t.Errorf("cpu %q: %d, %v", cpu, got, err)
 		}
 	}
-	for _, bad := range []string{"0", "0.009", "0.000001", "-1", "1e2", "two", "2 ", ".5", "0x2"} {
+	for _, bad := range []string{"0", "0.01", "0.015", "0.019", "0.009", "0.000001", "-1", "1e2", "two", "2 ", ".5", "0x2"} {
 		if _, err := RoleCPU([]string{"LOCUS_RUNTIME_CPU_LIMIT=" + bad}, r); err == nil || !strings.Contains(err.Error(), "LOCUS_RUNTIME_CPU_LIMIT") {
 			t.Errorf("cpu %q: %v", bad, err)
 		}

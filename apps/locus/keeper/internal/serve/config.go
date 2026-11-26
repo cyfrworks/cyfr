@@ -510,8 +510,9 @@ var (
 
 // RoleCPU reads the role's processors from environ, as Compose reads a
 // container's: LOCUS_<NAME>_CPU_LIMIT, a number of processors such as 2 or
-// 0.5, at least a hundredth of one, answered in microseconds of every
-// cgroup.CPUPeriod. Absent or empty is no bound, zero; anything else is
+// 0.5, at least two hundredths of one, answered in microseconds of every
+// cgroup.CPUPeriod: the role's service and its work each take half of the
+// least, and the kernel takes no cpu.max quota under 1000 microseconds. Absent or empty is no bound, zero; anything else is
 // refused by its name, never its value.
 func RoleCPU(environ []string, r RoleSpec) (uint64, error) {
 	var quota uint64
@@ -527,10 +528,10 @@ func RoleCPU(environ []string, r RoleSpec) (uint64, error) {
 		q := new(big.Rat)
 		if ok {
 			q.Mul(cpus, new(big.Rat).SetInt64(cgroup.CPUPeriod))
-			ok = q.IsInt() && q.Num().IsUint64() && q.Num().Uint64() >= cgroup.CPUPeriod/100
+			ok = q.IsInt() && q.Num().IsUint64() && q.Num().Uint64() >= 2*cgroup.CPUPeriod/100
 		}
 		if !ok {
-			return 0, fmt.Errorf("%s is not a number of processors of at least 0.01 in hundred-thousandths, such as 2 or 0.5", name)
+			return 0, fmt.Errorf("%s is not a number of processors of at least 0.02 in hundred-thousandths, such as 2 or 0.5", name)
 		}
 		quota = q.Num().Uint64()
 	}

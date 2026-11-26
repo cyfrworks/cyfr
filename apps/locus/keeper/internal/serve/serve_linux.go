@@ -263,41 +263,21 @@ func Main(args []string) int {
 		log.Error("refusing to start: the pool's groups: %v", err)
 		return ExitConfig
 	}
-	floor := false
+	var roleCPUs []uint64
 	for _, i := range keyed {
 		spec, _ := poolOf(cfg.Pools, cfg.Roles[i].Pool)
-		r := &role{
+		s.roles = append(s.roles, &role{
 			spec:     cfg.Roles[i],
 			pool:     spec,
 			account:  roleAccounts[i],
 			runDir:   filepath.Join(s.runRoot, cfg.Roles[i].Name),
 			homeRoot: filepath.Join(cfg.HomeRoot, cfg.Roles[i].Name),
-		}
-		if r.groups, r.leaf, err = tree.Role(r.spec.Name, cpus[i], r.spec.Floor); err != nil {
-			log.Error("refusing to start: role %s's group: %v", r.spec.Name, err)
-			return ExitConfig
-		}
-		floor = floor || r.spec.Floor
-		service := cgroup.ServiceCPU(cpus[i])
-		log.Info("role %s: processors %s for its service and %s for its work, its spawns' groups in %s", r.spec.Name,
-			describeQuota(service), describeQuota(cpus[i]-service), r.groups.Path())
-		s.roles = append(s.roles, r)
+		})
+		roleCPUs = append(roleCPUs, cpus[i])
 	}
-	// Every group is made before any memory bound is written: the kernel
-	// makes no group under one already bounded to 0.
-	sizes, err := poolSizes(memory, reserve, share, floor)
-	if err != nil {
-		log.Error("refusing to start: the pool's memory: %v", err)
+	if _, err := makePool(log, tree, s.roles, roleCPUs, memory, "/proc/meminfo", reserve, share); err != nil {
+		log.Error("refusing to start: %v", err)
 		return ExitConfig
-	}
-	if err := tree.Bound(sizes.Work, sizes.Rest); err != nil {
-		log.Error("refusing to start: the pool's memory: %v", err)
-		return ExitConfig
-	}
-	log.Info("the pool: budget %s, work %s, rest %s; the services outside it", describeBytes(sizes.Budget),
-		describeBytes(sizes.Work), describeBytes(sizes.Rest))
-	if sizes.Work == 0 {
-		log.Warn("the pool holds no memory for work: no spawn starts on a machine of no more memory than the reserve, %s, and the services' %s", describeBytes(reserve), describeBytes(share))
 	}
 	if err := makeRunDirs(s.runRoot, s.roles); err != nil {
 		log.Error("refusing to start: %v", err)
@@ -549,19 +529,66 @@ func delegateMemory() (*cgroup.Manager, error) {
 	return cgroup.Delegate(cgroup.Root, self)
 }
 
-// poolSizes is the sizing rule on this machine: its MemTotal, the
-// container's own limit, the reserve and the share, and whether a role
-// keeps the warm floor.
-func poolSizes(memory *cgroup.Manager, reserve, share uint64, floor bool) (admission.Sizes, error) {
-	total, err := memTotal("/proc/meminfo")
-	if err != nil {
-		return admission.Sizes{}, err
+// poolTree is the pool's groups as makePool makes them: a *cgroup.Tree.
+type poolTree interface {
+	Role(name string, cpu uint64, floor bool) (*cgroup.Manager, *cgroup.Group, error)
+	Bound(work, rest uint64) error
+}
+
+// containerLimit is the container's own memory limit, false where it has
+// none: a *cgroup.Manager of the namespace root.
+type containerLimit interface {
+	Limit() (uint64, bool, error)
+}
+
+// makePool is the boot's making of the pool: each role's groups in tree,
+// at its processors cpus[i], and only once every group is made, since the
+// kernel makes no group under one already bounded to 0, work's and rest's
+// memory bounds by the sizing rule, from the meminfo file's MemTotal, the
+// container's own limit, the reserve and the share, F kept where a role
+// keeps the floor. It sets each role's groups and answers the sizes.
+func makePool(log *logx.Logger, tree poolTree, roles []*role, cpus []uint64, container containerLimit, meminfo string,
+	reserve, share uint64) (admission.Sizes, error) {
+	floor := false
+	for i, r := range roles {
+		var err error
+		if r.groups, r.leaf, err = tree.Role(r.spec.Name, cpus[i], r.spec.Floor); err != nil {
+			return admission.Sizes{}, fmt.Errorf("role %s's group: %w", r.spec.Name, err)
+		}
+		floor = floor || r.spec.Floor
+		service := cgroup.ServiceCPU(cpus[i])
+		log.Info("role %s: processors %s for its service and %s for its work, its spawns' groups in %s", r.spec.Name,
+			describeQuota(service), describeQuota(cpus[i]-service), r.groups.Path())
 	}
-	limit, limited, err := memory.Limit()
+	total, err := memTotal(meminfo)
 	if err != nil {
-		return admission.Sizes{}, err
+		return admission.Sizes{}, fmt.Errorf("the pool's memory: %w", err)
 	}
-	return admission.Size(total, limit, limited, reserve, share, floor), nil
+	limit, limited, err := container.Limit()
+	if err != nil {
+		return admission.Sizes{}, fmt.Errorf("the pool's memory: %w", err)
+	}
+	sizes := admission.Size(total, limit, limited, reserve, share, floor)
+	if err := tree.Bound(sizes.Work, sizes.Rest); err != nil {
+		return admission.Sizes{}, fmt.Errorf("the pool's memory: %w", err)
+	}
+	log.Info("the pool: budget %s, work %s, rest %s; the services outside it", describeBytes(sizes.Budget),
+		describeBytes(sizes.Work), describeBytes(sizes.Rest))
+	if sizes.Work == 0 {
+		cause := fmt.Sprintf("the machine's %s less the reserve, %s,", describeBytes(total), describeBytes(reserve))
+		if limited && limit < sub(total, reserve) {
+			cause = fmt.Sprintf("the container's own limit of %s", describeBytes(limit))
+		}
+		log.Warn("the pool holds no memory for work: %s leaves nothing beside the services' %s, so no spawn starts", cause, describeBytes(share))
+	}
+	return sizes, nil
+}
+
+func sub(a, b uint64) uint64 {
+	if a < b {
+		return 0
+	}
+	return a - b
 }
 
 // memTotal reads MemTotal of the meminfo file at path, in bytes.
