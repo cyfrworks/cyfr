@@ -32,9 +32,9 @@
 # locus-backend01…locus-backend32 (20001-20032) — with a 0700 home under
 # its role's folder of /var/lib/locus/homes, or a program's kept home
 # under /var/lib/locus/kept owned by a uid of its own (40001-49999, no
-# user entry), inside a memory bound of its own
-# (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB, LOCUS_BUILDS_MEMORY_BYTES, 1 GiB,
-# and LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, unless set), and inside the
+# user entry), inside a memory bound of its own that the keeper sets by
+# its kind (a build 1 GiB, a runner and a backend half of the pool's work,
+# never under 420 MiB and 384 MiB), and inside the
 # pool's work, one memory bound for all of Locus's work, at its role's
 # processors (LOCUS_CORE_RESERVE_BYTES, LOCUS_SERVICE_BYTES and
 # LOCUS_<ROLE>_CPU_LIMIT). When a runner, a build or a

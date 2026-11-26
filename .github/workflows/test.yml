@@ -1510,7 +1510,7 @@ jobs:
           docker tag cyfr-locus:ci cyfr-locus:runtime
       # docker-compose.yml's locus service serving its runtime role, with
       # its own settings (layered with tests/locus-runtime-image/compose.runtime.yml
-      # for the image, a loopback port and a pool of two), reaching a
+      # for the image and a loopback port), reaching a
       # scripted control plane on this
       # runner: a spinning guest killed at its deadline with its process
       # gone and CPU flat, a sibling that completes meanwhile, the service's
@@ -1519,10 +1519,11 @@ jobs:
       # admitted after its parent's kill that never runs, a stream the
       # control plane stops answering, a tainted runner never reassigned,
       # and the queue age of a fresh runner; and memory (memory.py's cases):
-      # every runner in a cgroup of its own at the service's bound, a
-      # formula's six children each holding the 64 MiB the engine lets it
-      # have, together past the bound in their runner, ended with it at
-      # exactly that bound while the container's limit is untouched, the
+      # every runner in a cgroup of its own at half of a pool's work the
+      # suite sizes, a formula's children each holding the 64 MiB the
+      # engine lets it have, together past the bound in their runner,
+      # ended with it at exactly that bound while the container's limit is
+      # untouched, the
       # exit reported with every child's attempt, the uid emptied and
       # scrubbed before its reuse and the sibling completing, and without
       # writable-cgroups=true no runner process ever starting. Each case is
@@ -1654,10 +1655,10 @@ jobs:
       - name: Residue across uid reuse
         run: python3 tests/locus-backends-image/residue.py cyfr-locus:backends
 
-      # A program past its row's memory bound, or LOCUS_BACKENDS_MEMORY_BYTES
-      # without one, is ended at its bound in a cgroup of its own, alone:
-      # its sibling and the service keep running, and its next open starts
-      # it again.
+      # A program past a session's bound, half of a pool's work the suite
+      # sizes, whatever its row names, is ended at its bound in a cgroup of
+      # its own, alone: its sibling and the service keep running, and its
+      # next open starts it again.
       - name: Every program's memory bound
         run: python3 tests/locus-backends-image/memory.py cyfr-locus:backends
 
