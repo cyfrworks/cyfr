@@ -1000,6 +1000,69 @@ defmodule Opus.Schedules.SchedulerTest do
              CronSchedule.get_for_daemon(schedule.id)
   end
 
+  # A declared restore ends every open run failed with its attempt lapsed,
+  # never closed: the run never reported its end, and recovery says so.
+  test "a run open at a declared restore is recovered uncertain, its end not known",
+       %{ctx: ctx} do
+    script!([])
+    schedule = create_schedule(ctx, %{cron_expression: hourly_away()})
+    actor = Sanctum.Context.actor(ctx)
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_restored",
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -60, :second),
+      state: "claimed",
+      claimed_by: Prima.Boot.id(),
+      claimed_at: DateTime.utc_now()
+    })
+
+    {:ok, _admitted} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_restored",
+          reference: "reagent:local.test:1.0.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          schedule_id: schedule.id,
+          origin: :schedule
+        },
+        [occurrence_id: "occ_restored"] ++ Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
+
+    {:ok, _restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    assert {:ok, %{}} = Arca.SecurityTransitions.restore(slot: :none)
+
+    assert %{status: "failed", error_message: "Ended by a declared restore"} =
+             Arca.Execution.get_tenant(actor, "exec_restored")
+
+    assert %{state: "lapsed"} = Arca.ExecutionAttempts.current(actor, "exec_restored")
+
+    assert {:ok, %{state: "started", execution_id: "exec_restored"}} =
+             ScheduleOccurrences.get(actor, "occ_restored")
+
+    scheduler!()
+
+    wait_until(fn ->
+      match?({:ok, %{state: "uncertain"}}, ScheduleOccurrences.get(actor, "occ_restored"))
+    end)
+
+    wait_until(fn ->
+      match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+    end)
+
+    assert {:ok,
+            %{
+              run_count: 0,
+              error_count: 1,
+              last_error:
+                "Last run did not report its end, so whether it had its effect is not known.",
+              last_execution_id: "exec_restored"
+            }} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
   describe "a recovered run on the schedule" do
     test "one its row stores as failed is a failure, with the reason its row keeps and its run",
          %{ctx: ctx} do
