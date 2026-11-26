@@ -43,7 +43,8 @@ defmodule Locus.Runtime.WorkerService do
   it held, is reported at once to the member that assigned its subtree —
   every attempt one runner holds was issued by one member, and no other
   lapses them — naming that member and the runner the service assigned,
-  never the one an `exit` names, and signed with the
+  never the one an `exit` names, with the memory limit that ended it for
+  a runner the kernel ended for memory, and signed with the
   service's dispatch key (`Locus.Runtime.HostClient.runner_exited/7`). The report
   names every attempt the service assigned that runner: the subtree's
   root, then every child the runner said it started, then what its `exit`

@@ -63,7 +63,7 @@ defmodule Prima.WorkerWireTest do
   test "a request body carries the version first, names its callback and reads back for its behaviour only" do
     body = WorkerWire.request_body(:admit_child, %{"reference" => "r"})
     assert Jason.encode!(body) == ~s({"v":3,"op":"admit_child","args":{"reference":"r"}})
-    assert WorkerWire.version() == 2
+    assert WorkerWire.version() == 3
 
     decoded = body |> Jason.encode!() |> Jason.decode!()
     assert decoded == %{"v" => 3, "op" => "admit_child", "args" => %{"reference" => "r"}}
