@@ -17,7 +17,8 @@
 // sandbox's AppArmor profile loaded, the app's update service's units in
 // /usr/lib/systemd/system), a DMG on macOS and an MSI on
 // Windows, for this machine's platform. The MSI installs for the person
-// alone and puts its bundled cyfr on their PATH (msi-path.mjs).
+// alone, puts its bundled cyfr on their PATH, uses no Restart Manager and
+// refuses to install or remove while the app is open (msi-project.mjs).
 //
 // A pull request's build signs nothing. On macOS --distribution makes the
 // package a person downloads: signed with the Developer ID identity, the
@@ -43,7 +44,7 @@ import {Refused, checkPackage, filesOf} from "./check-package.mjs"
 import {distribute} from "./mac-distribution.mjs"
 import {APP_ID, signer, writeEntitlements} from "./mac-sign.mjs"
 import {say} from "./run.mjs"
-import {addCyfrToPath} from "./msi-path.mjs"
+import {cyfrMsiProject} from "./msi-project.mjs"
 
 // Every file the package installs is root's alone to change.
 process.umask(0o022)
@@ -241,7 +242,7 @@ await build({
     dmg: {sign: signing !== null, writeUpdateInfo: false},
     win: {executableName: "CYFR"},
     msi: {oneClick: true, perMachine: false},
-    msiProjectCreated: (project) => writeFileSync(project, addCyfrToPath(readFileSync(project, "utf8")))
+    msiProjectCreated: (project) => writeFileSync(project, cyfrMsiProject(readFileSync(project, "utf8")))
   },
   publish: "never"
 })
