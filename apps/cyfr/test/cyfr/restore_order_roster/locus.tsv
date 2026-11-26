@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-apps/locus/test/locus/application_test.exs	5	pending
+apps/locus/test/locus/application_test.exs	4	pending
 apps/locus/test/locus/backends/auth_test.exs	1	pending
 apps/locus/test/locus/builder_env_test.exs	2	pending
 apps/locus/test/locus/builder_service_test.exs	2	pending
