@@ -29,6 +29,7 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 		Kinds          map[string]string `json:"kinds"`
 		AllowanceBytes map[string]uint64 `json:"allowance_bytes"`
 		CapBytes       map[string]uint64 `json:"cap_bytes"`
+		LeastCapBytes  map[string]uint64 `json:"least_cap_bytes"`
 		Processors     map[string]uint64 `json:"processors"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -59,8 +60,12 @@ func TestThePoolsNumbersArePrimasLocusPools(t *testing.T) {
 				v.AllowanceBytes[name], v.Processors[name], Allowance(class), Processors[class])
 		}
 	}
-	if len(v.CapBytes) != 2 || v.CapBytes["runner"] != RunnerCapBytes || v.CapBytes["build"] != BuildCapBytes {
-		t.Errorf("the vector's caps %v, the keeper's %d and %d", v.CapBytes, RunnerCapBytes, BuildCapBytes)
+	if len(v.CapBytes) != 1 || v.CapBytes["build"] != BuildCapBytes {
+		t.Errorf("the vector's caps %v, the keeper's build's %d", v.CapBytes, BuildCapBytes)
+	}
+	if len(v.LeastCapBytes) != 2 || v.LeastCapBytes["runner"] != LeastCapBytes[Runner] ||
+		v.LeastCapBytes["session"] != LeastCapBytes[Session] {
+		t.Errorf("the vector's least caps %v, the keeper's %v", v.LeastCapBytes, LeastCapBytes)
 	}
 }
 
@@ -93,5 +98,28 @@ func TestTheSizingRule(t *testing.T) {
 	}
 	if got := Size(2048*mib, 2016*mib, true, 0, 0, false); got != (Sizes{Budget: 2016 * mib, Work: 2016 * mib, Rest: 2016 * mib}) {
 		t.Errorf("no reserve and no share: %+v", got)
+	}
+}
+
+// A build's bound is fixed; a runner's and a session's is half of W, never
+// under its least: 420 MiB for a runner, which holds a component at the
+// hard ceiling beside the runner's own allowance, and 384 for a session.
+func TestTheBoundsByKind(t *testing.T) {
+	for _, c := range []struct {
+		kind   string
+		work   uint64
+		memory uint64
+		cpus   uint64
+	}{
+		{"build", 4832 * mib, 1024 * mib, 1},
+		{"build", 0, 1024 * mib, 1},
+		{"warm", 4832 * mib, 2416 * mib, 1},
+		{"run", 608 * mib, 420 * mib, 1},
+		{"program", 4832 * mib, 2416 * mib, 2},
+		{"terminal", 608 * mib, 384 * mib, 2},
+	} {
+		if got := LimitsOf(c.kind, c.work); got != (Limits{MemoryBytes: c.memory, Processors: c.cpus}) {
+			t.Errorf("a %s at W %d MiB: %+v", c.kind, c.work/mib, got)
+		}
 	}
 }

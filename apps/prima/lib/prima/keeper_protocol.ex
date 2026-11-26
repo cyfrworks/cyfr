@@ -13,30 +13,28 @@ defmodule Prima.KeeperProtocol do
   ## Lines
 
   A request or a reply is one JSON object on one line, ending in `\\n`,
-  carrying `"v": 6` and a `type`, at most `max_line_bytes/0` bytes before
+  carrying `"v": 7` and a `type`, at most `max_line_bytes/0` bytes before
   its newline. A client sends `place`, `drop`, `assign`, `spawn`,
   `signal`, `resize`, `release`, `measure`, `pool`, `home_make`,
   `home_measure`, `home_reset`, `home_retire`, `home_list`, `packs_hold`
   and `packs_put`; the keeper answers `placed`, `assigned`, `spawned`,
   `error`, `exited`, `released`, `measured`, `pool`, `home_made`,
-  `home_measured`, `home_retired`, `homes` and `packs`.
+  `home_measured`, `home_retired`, `homes` and `packs`, and sends
+  `give_way` of its own.
 
   `encode/1` writes a request's members in name order, `v` and `type`
   among them, and refuses by raising `ArgumentError` what the keeper
   refuses as `bad_request`: a member the type does not carry, a required
   one absent, and a value outside its bound, as the keeper's
-  `ParseRequest` reads them (a spawn's `memory_bytes` lies from
-  `min_memory_bytes/0` to `max_memory_bytes/0`, and its `cpu_quota`, the
-  microseconds of CPU time its group may use in every `cpu_period/0`, from
-  `min_cpu_quota/0` to `max_cpu_quota/0`; a kept home's members
-  follow the rules under Homes). A refusal names the
+  `ParseRequest` reads them (a kept home's members follow the rules under
+  Homes). A refusal names the
   member at fault by its path (`argv`, `attach.token`, `rlimits.nofile`)
   and never quotes a value, since an environment value may be a
   credential.
 
-  The keeper runs every spawn in a cgroup of its own holding both bounds:
-  `memory_bytes` as its `memory.max`, and `cpu_quota` as its `cpu.max`
-  over `cpu_period/0`. The reply code
+  A spawn names no bound of its own: the keeper runs every spawn in a
+  cgroup of its own holding the memory and processors of its place's kind
+  (`Prima.LocusPool`), the memory its `placed` named. The reply code
   `memory_unavailable` means that the keeper cannot enforce a spawn's
   bounds where it runs, whichever of them it lacks the means for; it
   refuses every spawn so, and none runs unbounded.
@@ -213,7 +211,7 @@ defmodule Prima.KeeperProtocol do
 
   alias Prima.RunnerControl
 
-  @version 6
+  @version 7
   # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
   # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
@@ -234,13 +232,8 @@ defmodule Prima.KeeperProtocol do
   @max_spec_bytes 256 * 1024
   @max_grace_ms 60_000
   @max_socket_path 107
-  @min_memory_bytes 16 * 1024 * 1024
-  @max_memory_bytes 1024 * 1024 * 1024 * 1024
-  # A spawn's CPU quota is microseconds of this period: 100000 is one CPU.
-  @cpu_period 100_000
-  @min_cpu_quota 1_000
-  @max_cpu_quota 1024 * @cpu_period
   @max_home_bytes 1024 * 1024 * 1024 * 1024 * 1024
+  @max_athanor_bytes 1024 * 1024 * 1024 * 1024 * 1024
   @max_hosts 32
   @max_pty_size 1000
   @max_pack_part_bytes 524_288
@@ -281,7 +274,15 @@ defmodule Prima.KeeperProtocol do
 
   # Every request type, its wire name and its members: required or not.
   @requests %{
-    place: {"place", [id: :required, kind: :required, athanor: :optional, subject: :optional]},
+    place:
+      {"place",
+       [
+         id: :required,
+         kind: :required,
+         athanor: :optional,
+         subject: :optional,
+         athanor_max_bytes: :optional
+       ]},
     drop: {"drop", [place: :required]},
     assign:
       {"assign",
@@ -295,8 +296,6 @@ defmodule Prima.KeeperProtocol do
          argv: :required,
          env: :optional,
          rlimits: :optional,
-         memory_bytes: :required,
-         cpu_quota: :required,
          control: :optional,
          attach: :required,
          home_mode: :optional,
@@ -335,10 +334,12 @@ defmodule Prima.KeeperProtocol do
 
   # Every reply type and its members in the order they are read.
   @replies %{
-    "placed" => {:placed, [id: :id]},
+    "placed" => {:placed, [id: :id, memory_bytes: :used_bytes]},
     "assigned" => {:assigned, [id: :id]},
     "spawned" => {:spawned, [id: :id, spawn_id: :spawn_id, uid: :count, pid: :count]},
-    "error" => {:error, [id: {:nullable, :id}, spawn_id: {:nullable, :spawn_id}, code: :code]},
+    "error" =>
+      {:error, [id: {:nullable, :id}, spawn_id: {:nullable, :spawn_id}, code: :code, held: :held]},
+    "give_way" => {:give_way, [place: :id]},
     "exited" =>
       {:exited,
        [
@@ -371,7 +372,7 @@ defmodule Prima.KeeperProtocol do
   # keeper could not read by neither; a place's athanor and subject are
   # carried where it has them.
   @optional_reply_members %{
-    error: [:id, :spawn_id],
+    error: [:id, :spawn_id, :held],
     measured: [:athanor, :subject],
     homes: [:next]
   }
@@ -385,9 +386,11 @@ defmodule Prima.KeeperProtocol do
   @typedoc """
   A request, as `encode/1` takes it: its `type` and its members, with atom
   keys but for `env`'s names. A `place` requires `id` and `kind` and may
-  carry `athanor` and `subject`; an `assign` the same and `place`; a
-  `drop` carries `place` alone. `spawn` requires `id`, `place`, `pool`, `argv`,
-  `memory_bytes`, `cpu_quota` and `attach` (`%{path: path, token: token}`); `env`
+  carry `athanor` and `subject`, and a session's (`program` or
+  `terminal`) that names its athanor `athanor_max_bytes`, the ceiling of
+  that athanor's sessions there; an `assign` the same but that ceiling,
+  and `place`; a `drop` carries `place` alone. `spawn` requires `id`,
+  `place`, `pool`, `argv` and `attach` (`%{path: path, token: token}`); `env`
   (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
   `control`, `home_mode` (`"scratch"` or
   `"kept"`), `home`, `home_max_bytes`, `pty` and `hosts` are optional,
@@ -401,7 +404,8 @@ defmodule Prima.KeeperProtocol do
             required(:id) => String.t(),
             required(:kind) => kind(),
             optional(:athanor) => String.t(),
-            optional(:subject) => String.t()
+            optional(:subject) => String.t(),
+            optional(:athanor_max_bytes) => pos_integer()
           }
           | %{
               required(:type) => :assign,
@@ -420,8 +424,6 @@ defmodule Prima.KeeperProtocol do
               required(:argv) => [String.t(), ...],
               optional(:env) => %{optional(String.t()) => String.t()},
               optional(:rlimits) => %{optional(atom()) => non_neg_integer()},
-              required(:memory_bytes) => pos_integer(),
-              required(:cpu_quota) => pos_integer(),
               optional(:control) => boolean(),
               required(:attach) => %{path: String.t(), token: String.t()},
               optional(:home_mode) => String.t(),
@@ -493,13 +495,31 @@ defmodule Prima.KeeperProtocol do
         }
 
   @typedoc """
+  What holds a pool that refused a place for room: what the place needs,
+  what was free, the charges of its own athanor's places (a `subject` only
+  where the place is the asking role's, else nil) and the sum of every
+  other's, all in bytes.
+  """
+  @type held :: %{
+          need: non_neg_integer(),
+          free: non_neg_integer(),
+          mine: [%{kind: kind(), subject: String.t() | nil, bytes: non_neg_integer()}],
+          others_bytes: non_neg_integer()
+        }
+
+  @typedoc """
   A reply. An `error` names the request it refuses by `id` (a place, an
   assign, a spawn, a pool, a home request or a measure) or `spawn_id` (a
   signal or a release), and by both a spawn the keeper refused after it
-  made it; a request the keeper could not read is named by neither.
+  made it; a request the keeper could not read is named by neither. A
+  place refused for room is `{:no_memory, id, held}`, never an `:error`.
+  A `placed` carries the memory bound its spawn will have; a `give_way`
+  asks the floor's role to release the idle runner of the place it names.
   """
   @type reply ::
-          {:placed, id :: String.t()}
+          {:placed, id :: String.t(), memory_bytes :: pos_integer()}
+          | {:no_memory, id :: String.t(), held()}
+          | {:give_way, place :: String.t()}
           | {:assigned, id :: String.t()}
           | {:spawned, id :: String.t(), spawn_id :: String.t(), uid :: non_neg_integer(),
              pid :: non_neg_integer()}
@@ -558,11 +578,9 @@ defmodule Prima.KeeperProtocol do
   @doc """
   A request's ceilings: the most argv and env entries, the most bytes of
   one value, of argv and env together and of an attach path, the longest
-  grace a release may ask for, the least and most of a spawn's
-  `memory_bytes`, the period of a spawn's `cpu_quota` and its least and
-  most, the most a kept home's `home_max_bytes` may be, the
-  most hosts a spawn may name and the most rows or columns a terminal may
-  have.
+  grace a release may ask for, the most a kept home's `home_max_bytes` and
+  a session's place's `athanor_max_bytes` may be, the most hosts a spawn
+  may name and the most rows or columns a terminal may have.
   """
   @spec request_bounds() :: %{atom() => non_neg_integer()}
   def request_bounds do
@@ -573,12 +591,8 @@ defmodule Prima.KeeperProtocol do
       max_spec_bytes: @max_spec_bytes,
       max_grace_ms: @max_grace_ms,
       max_socket_path_bytes: @max_socket_path,
-      min_memory_bytes: @min_memory_bytes,
-      max_memory_bytes: @max_memory_bytes,
-      cpu_period: @cpu_period,
-      min_cpu_quota: @min_cpu_quota,
-      max_cpu_quota: @max_cpu_quota,
       max_home_bytes: @max_home_bytes,
+      max_athanor_bytes: @max_athanor_bytes,
       max_hosts: @max_hosts,
       max_pty_size: @max_pty_size,
       max_pack_part_bytes: @max_pack_part_bytes,
@@ -623,36 +637,9 @@ defmodule Prima.KeeperProtocol do
   @spec reserved_env_prefixes() :: [String.t()]
   def reserved_env_prefixes, do: @reserved_env_prefixes
 
-  @doc """
-  The least a spawn's `memory_bytes` may be, 16 MiB: the low end of the
-  keeper's range, which every memory setting of a Locus node takes as its
-  own.
-  """
-  @spec min_memory_bytes() :: pos_integer()
-  def min_memory_bytes, do: @min_memory_bytes
-
   @doc "The most rows or columns a spawn's terminal may have."
   @spec max_pty_size() :: pos_integer()
   def max_pty_size, do: @max_pty_size
-
-  @doc "The most a spawn's `memory_bytes` may be, 1 TiB: the high end of the keeper's range."
-  @spec max_memory_bytes() :: pos_integer()
-  def max_memory_bytes, do: @max_memory_bytes
-
-  @doc """
-  The period a spawn's `cpu_quota` is a share of, in microseconds: 100000,
-  so a quota of 100000 is one CPU and 200000 two.
-  """
-  @spec cpu_period() :: pos_integer()
-  def cpu_period, do: @cpu_period
-
-  @doc "The least a spawn's `cpu_quota` may be, 1000 microseconds: the kernel's own least."
-  @spec min_cpu_quota() :: pos_integer()
-  def min_cpu_quota, do: @min_cpu_quota
-
-  @doc "The most a spawn's `cpu_quota` may be: 1024 CPUs."
-  @spec max_cpu_quota() :: pos_integer()
-  def max_cpu_quota, do: @max_cpu_quota
 
   # ============================================================================
   # Frames
@@ -774,6 +761,8 @@ defmodule Prima.KeeperProtocol do
       check_home(fields)
     end
 
+    if type == :place, do: check_ceiling(fields)
+
     line =
       [{"type", name}, {"v", @version} | written]
       |> Enum.sort_by(&elem(&1, 0))
@@ -825,6 +814,16 @@ defmodule Prima.KeeperProtocol do
     :ok
   end
 
+  # An athanor's ceiling is a session's place's, of the athanor it names.
+  defp check_ceiling(%{athanor_max_bytes: _} = fields) do
+    unless fields.kind in ~w(program terminal) and Map.has_key?(fields, :athanor),
+      do: raise(ArgumentError, "athanor_max_bytes is a session's place's, of its athanor")
+
+    :ok
+  end
+
+  defp check_ceiling(_fields), do: :ok
+
   defp member_names(members), do: Enum.map(members, fn {member, _} -> Atom.to_string(member) end)
 
   defp write(_type, {:id, id}), do: {"id", matching!(@id, "id", id)}
@@ -846,13 +845,8 @@ defmodule Prima.KeeperProtocol do
   defp write(:spawn, {:rlimits, rlimits}), do: {"rlimits", rlimits!(rlimits)}
   defp write(:spawn, {:attach, attach}), do: {"attach", attach!(attach)}
 
-  defp write(:spawn, {:memory_bytes, bytes})
-       when is_integer(bytes) and bytes >= @min_memory_bytes and bytes <= @max_memory_bytes,
-       do: {"memory_bytes", bytes}
-
-  defp write(:spawn, {:cpu_quota, quota})
-       when is_integer(quota) and quota >= @min_cpu_quota and quota <= @max_cpu_quota,
-       do: {"cpu_quota", quota}
+  defp write(:place, {:athanor_max_bytes, bytes}) when bytes in 1..@max_athanor_bytes//1,
+    do: {"athanor_max_bytes", bytes}
 
   defp write(:spawn, {:control, control}) when is_boolean(control), do: {"control", control}
 
@@ -1102,6 +1096,17 @@ defmodule Prima.KeeperProtocol do
 
   defp read(:boolean, _name, value) when is_boolean(value), do: {:ok, value}
 
+  defp read(:held, name, %{} = held) do
+    with true <- Enum.sort(Map.keys(held)) == ~w(free mine need others_bytes),
+         true <- Enum.all?(~w(free need others_bytes), &bytes?(held[&1])),
+         {:ok, mine} <- read_holdings(held["mine"]) do
+      {:ok,
+       %{need: held["need"], free: held["free"], mine: mine, others_bytes: held["others_bytes"]}}
+    else
+      _ -> {:error, {:invalid_field, name}}
+    end
+  end
+
   defp read(:packs_state, _name, value) when is_map_key(@packs_states, value),
     do: {:ok, Map.fetch!(@packs_states, value)}
 
@@ -1117,6 +1122,34 @@ defmodule Prima.KeeperProtocol do
   defp read(:memory_end, name, value) when is_binary(value), do: {:error, {:invalid_field, name}}
   defp read(_kind, name, _value), do: {:error, {:wrong_type, name}}
 
+  defp read_holdings(mine) when is_list(mine) do
+    Enum.reduce_while(mine, {:ok, []}, fn holding, {:ok, read} ->
+      case holding(holding) do
+        {:ok, h} -> {:cont, {:ok, [h | read]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, read} -> {:ok, Enum.reverse(read)}
+      :error -> :error
+    end
+  end
+
+  defp read_holdings(_mine), do: :error
+
+  defp holding(%{"kind" => kind, "bytes" => bytes} = h) when kind in @kinds do
+    subject = Map.get(h, "subject")
+
+    if Map.keys(h) -- ~w(kind bytes subject) == [] and bytes?(bytes) and
+         (subject == nil or (is_binary(subject) and Regex.match?(@id, subject))),
+       do: {:ok, %{kind: kind, subject: subject, bytes: bytes}},
+       else: :error
+  end
+
+  defp holding(_holding), do: :error
+
+  defp bytes?(value), do: is_integer(value) and value >= 0 and value <= @max_measured_bytes
+
   defp reading(regex, name, value) do
     if Regex.match?(regex, value), do: {:ok, value}, else: {:error, {:invalid_field, name}}
   end
@@ -1124,8 +1157,19 @@ defmodule Prima.KeeperProtocol do
   defp reply(:spawned, %{id: id, spawn_id: spawn_id, uid: uid, pid: pid}),
     do: {:ok, {:spawned, id, spawn_id, uid, pid}}
 
-  defp reply(:error, %{id: id, spawn_id: spawn_id, code: code}),
+  # A refusal for room, and only it, says what holds the pool.
+  defp reply(:error, %{id: id, spawn_id: nil, code: "no_memory", held: held})
+       when is_binary(id) and held != nil,
+       do: {:ok, {:no_memory, id, held}}
+
+  defp reply(:error, %{code: "no_memory"}), do: {:error, {:missing_field, "held"}}
+
+  defp reply(:error, %{id: id, spawn_id: spawn_id, code: code, held: nil}),
     do: {:ok, {:error, id, spawn_id, code}}
+
+  defp reply(:error, _read), do: {:error, {:unknown_field, "held"}}
+
+  defp reply(:give_way, %{place: place}), do: {:ok, {:give_way, place}}
 
   defp reply(:exited, %{spawn_id: spawn_id, code: code, signal: nil, memory: memory})
        when code != nil,
@@ -1139,7 +1183,7 @@ defmodule Prima.KeeperProtocol do
 
   defp reply(:released, %{spawn_id: spawn_id}), do: {:ok, {:released, spawn_id}}
 
-  defp reply(:placed, %{id: id}), do: {:ok, {:placed, id}}
+  defp reply(:placed, %{id: id, memory_bytes: bytes}), do: {:ok, {:placed, id, bytes}}
   defp reply(:assigned, %{id: id}), do: {:ok, {:assigned, id}}
 
   defp reply(:measured, %{id: id} = read),
