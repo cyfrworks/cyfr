@@ -36,9 +36,11 @@ signed as CYFR signs them:
   the pool key derived from its own key and refuses the other two's: the
   three reports name one keeper boot, each holds its role's kinds alone and
   each counter once, the run under its athanor and the program under its
-  owner's athanor and row. A role killed and started again keeps its
-  counters and its revs under the same boot; the container started again,
-  its keeper with it, reports under another boot.
+  owner's athanor and row. A role killed and started again reports under
+  the same boot every counter it had, with a rev and totals no smaller, and
+  a program opened after the backends' restart takes a rev past every one
+  before it; the container started again, its keeper with it, reports
+  under another boot.
 
 A request on a role's channel naming another role's pool, spawn, place or
 home is refused by the keeper itself, and a role's environment holds its
@@ -336,6 +338,22 @@ def last_rev(counters):
     return max((c["rev"] for c in counters), default=0)
 
 
+# What a counter only gains: its time, its use, its peak and its kills.
+GAINED = ("mib_ms", "measured_ms", "peak_bytes", "cap", "machine", "either")
+
+
+def kept_on(before, after, role):
+    """A role started again reports under the same boot every counter it had, with a rev and totals no smaller."""
+    (boot, old), (again, new) = before, after
+    expect(again == boot, f"the {role} role started again reports under the same boot", [boot, again])
+    by_key = {(c["day"], c.get("athanor"), c["kind"], c.get("subject")): c for c in new}
+    for counter in old:
+        now = by_key.get((counter["day"], counter.get("athanor"), counter["kind"], counter.get("subject")))
+        expect(now is not None and now["rev"] >= counter["rev"] and all(now[k] >= counter[k] for k in GAINED),
+               f"the {role} role started again still counts {counter['kind']} of {counter.get('athanor')}, "
+               "with a rev and totals no smaller", [counter, now])
+
+
 def mem_total(stack):
     """The machine's memory, in bytes, as the container's /proc/meminfo reads it."""
     out = imagesuite.read_output(stack.exec("awk '$1 == \"MemTotal:\" {print $2}' /proc/meminfo"), "MemTotal").strip()
@@ -403,16 +421,30 @@ def main():
         test_pool_bounds(stack)
         test_apart(stack, pids)
         test_run(stack, plane)
-        before = test_reports(stack)
+        test_reports(stack)
         test_reach(stack, c)
+        # Every role has counted by now: the build of test_reach, the run,
+        # the program and the floor's runner.
+        before = reports(stack)
+        expect(all(before[role][1] for role in ROLES), "every role has counters before its restart",
+               {role: len(counters) for role, (_, counters) in before.items()})
         test_bounds(stack, pids)
         for victim in ("builds", "runtime", "backends"):
             test_restart_alone(stack, c, victim)
         after = reports(stack)
         for role in ROLES:
-            expect(after[role][0] == before[role][0] and last_rev(after[role][1]) >= last_rev(before[role][1]),
-                   f"the {role} role started again reports under the same boot, its revs going on",
-                   [before[role][0], after[role][0], last_rev(before[role][1]), last_rev(after[role][1])])
+            kept_on(before[role], after[role], role)
+        # A program opened after the backends' restart is counted on, its
+        # rev past every rev before the restart.
+        c = stack.controller()
+        expect(c.hello()[0] == 200, "the backends role started again is greeted")
+        status, answer, _ = c.sync(OWNER, [probe("scratch"), probe(home="kept")])
+        expect(status == 200, "the owner is synced again", answer)
+        expect(c.mcp(OWNER, "scratch", key="after").call("whoami", {})[0] == 200,
+               "a program opens after the backends' restart")
+        old = last_rev(after["backends"][1])
+        eventually(lambda: [k for k in reports(stack)["backends"][1] if k["rev"] > old],
+                   "a change of the backends' counters past every rev before its restart", timeout_s=30)
         run("docker", "restart", stack.container)
         stack.published()
         stack.healthy()
