@@ -150,6 +150,7 @@ import hashlib
 import json
 import os
 import struct
+import subprocess
 import sys
 import time
 import zlib
@@ -1490,23 +1491,32 @@ def ended_before_ready(stack, c):
     """A driver asked to end before its hello, while its Chrome starts, ends as one asked later does: it says hello
     once Chrome answers, then closes Chrome and says bye, and exits 0. Its end is taken before it announces it is
     ready, so a TERM that comes then, or just after the hello, is never the default end. The TERM is sent from the
-    box, as the home's uid, the moment Chrome's first process runs: the driver then waits on Chrome's first answer,
-    which takes far longer, so the TERM lands before the hello."""
+    box the moment Chrome's first process runs: the driver then waits on Chrome's first answer, which takes far
+    longer, so the TERM lands before the hello.
+
+    The watcher that sends it is the observer's, never a process of the home's uid: a kept session's end retires
+    the uid, which kills every process of it, so a watcher or a read of the uid's would be killed with the session
+    it watches. It starts once nothing of the first session is left, so the Chrome it sees is this driver's."""
     made = Host(stack, c, TERM_HOME)
     expect("error" not in made.hello(), "a home for a driver asked to end early is made")
     made.close()
     uid = home_uid(stack, TERM_HOME)
-    home = f"{KEPT_ROOT}/{TERM_HOME}"
-    watcher = (f"until pgrep -u {uid} -f '^{CHROMIUM}' >/dev/null; do :; done\n"
-               f"kill -TERM $(pgrep -u {uid} -x cyfr-browser) && echo sent > {home}/term-sent\n")
-    as_home(stack, TERM_HOME, f"echo {base64.b64encode(watcher.encode()).decode()} | base64 -d > {home}/watch.sh",
-            "the watcher written")
-    stack.exec(f"timeout 60 sh {home}/watch.sh >/dev/null 2>&1 &", user=uid)
+    eventually(lambda: not stack.under_uid(uid), "the first session's processes to end")
+    watcher = subprocess.Popen(
+        ["docker", "exec", "--privileged", "-u", "0", stack.container, "timeout", "60", "sh", "-c",
+         f"until pgrep -u {uid} -f '^{CHROMIUM}' >/dev/null; do :; done; "
+         f"kill -TERM $(pgrep -u {uid} -x cyfr-browser) && echo sent"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     early = Host(stack, c, TERM_HOME)
     hello = early.hello()
     expect("error" not in hello, "a driver asked to end as Chrome starts still says hello once Chrome answers", hello)
-    expect(as_home(stack, TERM_HOME, f"cat {home}/term-sent", "the TERM sent").strip() == "sent",
-           "the TERM was sent to the driver as its Chrome started")
+    try:
+        sent = watcher.communicate(timeout=60)[0]
+    except subprocess.TimeoutExpired:
+        watcher.kill()
+        sent = watcher.communicate()[0]
+    expect(watcher.returncode == 0 and sent == "sent\n", "the TERM was sent to the driver as its Chrome started",
+           [watcher.returncode, sent])
     early.take(lambda m: m["t"] == "bye", "the bye of a driver asked to end before its hello")
     eventually(lambda: (early.read(1_000), not early.running)[1], "the driver to end")
     expect(early.exit_code == 0, "a driver asked to end before its hello exits 0", early.exit_code)
