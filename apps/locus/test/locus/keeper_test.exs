@@ -1236,44 +1236,21 @@ defmodule Locus.KeeperTest do
       {sending, frames * byte_size(payload)}
     end
 
-    # Takes each stdout piece `handle`'s owner is told until the relay's
-    # task has sent every frame and its socket has handed the kernel every
-    # byte, as a relay's writes have once it ends: the bytes it took. The
-    # task's last send can return, and the keeper read and tell its bytes,
-    # before the task's answer arrives, so the next event awaited is
-    # whichever comes first, a piece or that answer, never a piece alone.
-    defp take_while_sending(handle, sending, relay, bytes) do
+    # One frame of the most a frame carries, and the bytes it carries.
+    defp tail_frame do
+      payload = :binary.copy("z", KeeperProtocol.max_frame_bytes())
+      {KeeperProtocol.frames(:stdout, payload), byte_size(payload)}
+    end
+
+    # Takes each stdout piece `handle`'s owner is told, giving its word for
+    # each but the last, until it has taken `total` bytes: the keeper reads
+    # nothing after that last piece until the relay ends.
+    defp take_all(_handle, _ref, taken, total) when taken >= total, do: taken
+
+    defp take_all(%{ref: ref} = handle, ref, taken, total) do
       :ok = Keeper.taken(handle)
-      next_piece(handle, sending, relay, bytes)
-    end
-
-    defp next_piece(%{ref: ref} = handle, sending, relay, bytes) do
-      if sending == nil and :erlang.port_info(relay, :queue_size) == {:queue_size, 0} do
-        bytes
-      else
-        task = sending && sending.ref
-
-        receive do
-          {Keeper, ^ref, {:stdout, piece}} ->
-            take_while_sending(handle, sending, relay, bytes + byte_size(piece))
-
-          {^task, sent} when task != nil ->
-            Process.demonitor(task, [:flush])
-            assert Enum.all?(sent, &(&1 == :ok))
-            next_piece(handle, nil, relay, bytes)
-        after
-          5_000 -> flunk("neither a piece nor the relay's end came within 5 s")
-        end
-      end
-    end
-
-    # The piece the keeper tells on the owner's last word, which comes
-    # whenever anything is still to come: one read, and no word after it.
-    defp on_the_last_word(_ref, 0), do: 0
-
-    defp on_the_last_word(ref, _to_come) do
       assert_receive {Keeper, ^ref, {:stdout, piece}}, 5_000
-      byte_size(piece)
+      take_all(handle, ref, taken + byte_size(piece), total)
     end
 
     @tag timeout: 60_000
@@ -1292,11 +1269,23 @@ defmodule Locus.KeeperTest do
       assert Task.yield(sending, 0) == nil
 
       # Taking each piece it is told, the owner lets the relay write the
-      # rest; the relay ends and the keeper reports its end. Its last word
-      # lets the keeper read once more: what is still to come begins with
-      # that read's piece, told on the word, and it is taken with the rest.
-      taken = take_while_sending(handle, sending, relay, byte_size(first))
-      taken = taken + on_the_last_word(ref, total - taken)
+      # rest, and takes all of it.
+      taken = take_all(handle, ref, byte_size(first), total)
+      assert Enum.all?(Task.await(sending), &(&1 == :ok))
+
+      # Then the relay writes a tail the owner gives no word for, three
+      # frames, which its socket holds whole: the keeper reads none of it,
+      # and the relay ends with all of it on the connection.
+      {tail_frame, tail_bytes} = tail_frame()
+      for _ <- 1..3, do: :ok = :gen_tcp.send(relay, tail_frame)
+
+      wait_until(
+        fn -> :erlang.port_info(relay, :queue_size) == {:queue_size, 0} end,
+        5_000,
+        "the tail in the relay's socket"
+      )
+
+      refute_received {Keeper, ^ref, {:stdout, _piece}}
       :ok = :gen_tcp.close(relay)
 
       channel_reply(c, %{
@@ -1316,7 +1305,8 @@ defmodule Locus.KeeperTest do
       told = until_released(ref)
       left = IO.iodata_length(for {:stdout, piece} <- told, do: piece)
       memory = Prima.LocusRoles.release().memory
-      assert taken + left == total
+      assert taken == total
+      assert left == 3 * tail_bytes
       assert left <= memory.relay_queue_bytes + memory.keeper_read_bytes
       assert Enum.take(told, -2) == [{:exited, nil, "SIGKILL", nil}, :released]
     end
