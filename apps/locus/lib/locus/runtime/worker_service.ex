@@ -110,6 +110,9 @@ defmodule Locus.Runtime.WorkerService do
   is withdrawn at once, so a runner still waiting for the keeper's room
   gives up its place in the keeper's queue then
   (`Locus.Runtime.RunnerPool.taint/4`, `Locus.Runtime.RunnerPool.withdraw/2`).
+  An assign the kill did not stop reached the runner, which may have
+  started children before it ended: the service holds that assignment
+  as any other, so the runner's end is reported naming them.
   Either kill is `:ok`, and `:ok` again for an
   execution a runner of this boot already ended; the ids of the last ten
   thousand roots and children ended are remembered for it. A kill of an
@@ -589,15 +592,21 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   # The assign's outcome, then what the pool told of its runner meanwhile,
-  # in the order it came.
+  # in the order it came. An assign that reached its runner after a kill
+  # was read is held as any assignment is, before the start answers as
+  # killed: the runner, tainted with its grace, may have started children
+  # and reports them in its `exit` or ends without one, and either is
+  # reported, buffered here or heard later.
   defp assign_done(state, ref, outcome) do
     {a, assigning} = Map.pop(state.assigning, ref)
     state = %{state | assigning: assigning}
 
     state =
-      if killed?(state, a.start),
-        do: killed(state, a.start, a.pid),
-        else: assigned(state, a, outcome)
+      case {killed?(state, a.start), outcome} do
+        {true, :ok} -> state |> hold(a) |> killed(a.start, a.pid)
+        {true, _unassigned} -> killed(state, a.start, a.pid)
+        {false, outcome} -> assigned(state, a, outcome)
+      end
 
     a.buffered
     |> Enum.reverse()
@@ -607,34 +616,8 @@ defmodule Locus.Runtime.WorkerService do
     end)
   end
 
-  defp assigned(state, %{start: start, pid: pid, runner: runner}, :ok) do
-    %{assignment: assignment, caller: caller} = start
-    execution_id = assignment.execution_id
-    Process.monitor(pid)
-    {started, state} = next_seq(state)
-
-    assigned = %{
-      runner: runner,
-      execution_id: execution_id,
-      attempt: assignment.attempt,
-      athanor: assignment.athanor_id,
-      at: HostClient.at(assignment, state.credentials.host_url),
-      started: started,
-      children: %{},
-      cancelled: MapSet.new(),
-      over_bound: false,
-      callers: caller.callers,
-      logger: caller.logger
-    }
-
-    state = %{
-      state
-      | assigned: Map.put(state.assigned, pid, assigned),
-        executions: Map.put(state.executions, execution_id, pid)
-    }
-
-    answer(state, start, :ok)
-  end
+  defp assigned(state, %{start: start} = a, :ok),
+    do: state |> hold(a) |> answer(start, :ok)
 
   defp assigned(state, %{start: start, pid: pid}, {:error, :malformed}) do
     :ok = RunnerPool.taint(RunnerPool, pid, 0, start.assignment.execution_id)
@@ -667,6 +650,34 @@ defmodule Locus.Runtime.WorkerService do
 
     :ok = RunnerPool.taint(RunnerPool, pid, 0, start.assignment.execution_id)
     answer(state, start, {:error, :unavailable})
+  end
+
+  # The assignment the runner `pid` was sent, held until its runner's end.
+  defp hold(state, %{start: start, pid: pid, runner: runner}) do
+    %{assignment: assignment, caller: caller} = start
+    execution_id = assignment.execution_id
+    Process.monitor(pid)
+    {started, state} = next_seq(state)
+
+    assigned = %{
+      runner: runner,
+      execution_id: execution_id,
+      attempt: assignment.attempt,
+      athanor: assignment.athanor_id,
+      at: HostClient.at(assignment, state.credentials.host_url),
+      started: started,
+      children: %{},
+      cancelled: MapSet.new(),
+      over_bound: false,
+      callers: caller.callers,
+      logger: caller.logger
+    }
+
+    %{
+      state
+      | assigned: Map.put(state.assigned, pid, assigned),
+        executions: Map.put(state.executions, execution_id, pid)
+    }
   end
 
   defp answer(state, start, reply) do

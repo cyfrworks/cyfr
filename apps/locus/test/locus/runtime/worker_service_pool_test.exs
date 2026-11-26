@@ -36,7 +36,9 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   kill reached is `:ok` to the kill and unavailable, its runner's place
   gone from the keeper's queue at the kill, whether its runner's assign
   was in flight or its take waited inside a pool that remembers a
-  refusal.
+  refusal. An assign that reached its runner before the kill was read
+  is held all the same: the runner's exit is reported naming its root and
+  the children it started.
 
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
@@ -476,6 +478,44 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   end
 
   describe "a kill" do
+    # The assign has reached the runner and its outcome waits in its task,
+    # held there, when the kill is read; the runner, released with its
+    # grace, starts a child and exits naming it before the outcome is read.
+    @tag :capture_log
+    test "read after its start's assign reached the runner and before the outcome was read: the runner's exit is reported naming its root and its child",
+         context do
+      attempt = ScriptedHost.attempt!(context.host, boot: context.boot)
+      runner = waiting!(context)
+      :ok = ScriptedKeeper.assigning(context.keeper, :held)
+      started = Task.async(fn -> post(context, :start, start_args(attempt)) end)
+      wait_until(fn -> ScriptedKeeper.held_assigns(context.keeper) != [] end)
+
+      [%{task: %Task{pid: task}}] = Map.values(:sys.get_state(WorkerService).assigning)
+      true = :erlang.suspend_process(task)
+
+      try do
+        :ok = ScriptedKeeper.answer_assigns(context.keeper)
+        wait_until(fn -> String.contains?(ScriptedKeeper.read(runner), attempt.assignment) end)
+
+        assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
+                 {200, %{"ok" => true, "v" => 1}}
+
+        write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
+        write(runner, %{type: :exit, runner: runner.spec.runner, open: [attempt.attempt]})
+
+        wait_until(fn ->
+          [a] = Map.values(:sys.get_state(WorkerService).assigning)
+          length(a.buffered) == 2
+        end)
+      after
+        :erlang.resume_process(task)
+      end
+
+      assert {503, %{"error" => "unavailable"}} = Task.await(started, 15_000)
+      assert [%{args: %{"attempts" => held}}] = reports(context)
+      assert Enum.sort(held) == Enum.sort([attempt.attempt, "att_child"])
+    end
+
     test "reaches the runner holding a child alone, and finds nothing no runner holds", context do
       {root, runner} = started!(context)
       {_other, other_runner} = started!(context)
