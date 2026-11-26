@@ -40,12 +40,14 @@ defmodule Compendium.Builds.ToolchainsTest do
   test "a builder at another protocol names both ends' versions and the remedy" do
     health = Jason.decode!(ScriptedBuilder.fixture()["lines"]["health"]["body"])
 
+    other = BuilderProtocol.version() + 1
+
     {:ok, refusal} =
-      BuilderProtocol.encode_refusal({:protocol_mismatch, 3, BuilderProtocol.version()})
+      BuilderProtocol.encode_refusal({:protocol_mismatch, other, BuilderProtocol.version()})
 
     for {line, builder} <- [
-          {Jason.encode!(%{health | "version" => 3}), 3},
-          {refusal, 3}
+          {Jason.encode!(%{health | "version" => other}), other},
+          {refusal, other}
         ] do
       ScriptedBuilder.health({:line, line})
 

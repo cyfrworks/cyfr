@@ -41,6 +41,8 @@ defmodule Prima.LocusPool do
   the asking place's own athanor's places, each with its `subject` only
   where the place is the asking role's, and everyone else's as one sum,
   `others_bytes`. No other athanor's name, subject or holding is in it.
+  `refusal_sentence/1` is the one sentence a person reads of it, for a
+  run and a build alike, built from `held` alone.
 
   The keeper's Go reads this module's values from
   `tests/fixtures/locus_pool.json`, which `Prima.LocusPoolTest` holds to
@@ -213,4 +215,82 @@ defmodule Prima.LocusPool do
 
   defp bytes?(value),
     do: is_integer(value) and value >= 0 and value <= Prima.KeeperProtocol.max_measured_bytes()
+
+  # What a person calls each kind of place, in the order a sentence names
+  # them. A runner's two kinds are one word: a run.
+  @kind_words [
+    {"program", ["program"]},
+    {"terminal", ["terminal"]},
+    {"build", ["build"]},
+    {"run", ["run", "warm"]}
+  ]
+  @stoppable ~w(program terminal)
+
+  @doc """
+  The one sentence a person reads of a start refused for room, from what
+  holds the pool (`held`) alone. It says that this CYFR has not enough
+  memory free and what holds it: the person's own work by kind, with a
+  count and its size, and everyone else's as one sum, then what the person
+  can do. A subject is never named, so no program's or other person's name
+  is in it. With nothing of the person's own in `held` it never says
+  "others": it says what is under way uses the memory. A runner's place is
+  no athanor's until its work is assigned, so a refused run's `held` holds
+  nothing of the person's own, and its sentence cannot tell the person
+  that the memory is their own programs'. When the start needs more than
+  everything held and free together, nothing anyone stops makes room: it
+  says only that this CYFR has not enough memory for it, what it needs and
+  what all its work can have, and gives no advice.
+  """
+  @spec refusal_sentence(held()) :: String.t()
+  def refusal_sentence(%{need: need, free: free, mine: mine, others_bytes: others} = held) do
+    case free + others + Enum.sum_by(mine, & &1.bytes) do
+      0 ->
+        "This CYFR has no memory free for it."
+
+      all when need > all ->
+        "This CYFR has not enough memory for it: it needs #{Prima.Bytes.format(need)}, " <>
+          "and has #{Prima.Bytes.format(all)} for all its work."
+
+      _stopping_helps ->
+        room_held(held)
+    end
+  end
+
+  defp room_held(%{mine: [], others_bytes: others}),
+    do:
+      "This CYFR has not enough memory free. Work under way uses " <>
+        "#{Prima.Bytes.format(others)}. Wait, or try again later."
+
+  defp room_held(%{mine: mine, others_bytes: others}) do
+    others = if others > 0, do: [" Others use #{Prima.Bytes.format(others)}."], else: []
+
+    ending =
+      if Enum.any?(mine, &(&1.kind in @stoppable)),
+        do: " Stop one on the Programs page, or wait.",
+        else: " Wait, or try again later."
+
+    IO.iodata_to_binary([
+      "This CYFR has not enough memory free. Of yours, ",
+      mine |> yours() |> joined(),
+      ".",
+      others,
+      ending
+    ])
+  end
+
+  defp yours(mine) do
+    for {word, kinds} <- @kind_words,
+        held = Enum.filter(mine, &(&1.kind in kinds)),
+        held != [] do
+      bytes = Prima.Bytes.format(Enum.sum_by(held, & &1.bytes))
+
+      case length(held) do
+        1 -> "a #{word} uses #{bytes}"
+        n -> "#{n} #{word}s use #{bytes}"
+      end
+    end
+  end
+
+  defp joined([one]), do: one
+  defp joined(items), do: Enum.join(Enum.drop(items, -1), ", ") <> " and " <> List.last(items)
 end

@@ -29,8 +29,8 @@ defmodule Opus.WorkerClient do
   (`Prima.Boot.id/0`) as the incarnation presenting it, under a fresh nonce.
   An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0` and
   read at this wire's version (`Prima.WorkerWire.read_answer/1`):
-  `{"v": 1, "ok": value}` is the callback's success and
-  `{"v": 1, "error": name}` naming `malformed` or `not_found` its
+  `{"v": 2, "ok": value}` is the callback's success and
+  `{"v": 2, "error": name}` naming `malformed` or `not_found` its
   refusal; any other status, an answer without `v` or at another
   version, any other name, or anything else in an answer's place, is a
   lost answer. A lost answer is retried once, with a fresh nonce, when
@@ -38,8 +38,13 @@ defmodule Opus.WorkerClient do
   `start`: its assignment's claim window bounds the worker service, and
   dispatch reconciles against the attempt.
 
-  One listener refusal is an answer: a `start` refused `503`
-  `{"v": 1, "error": "unavailable", "message": sentence}`, the worker service's
+  Two listener refusals are answers. A `start` refused `503`
+  `{"v": 2, "error": "no_memory", "held": held}` is `{:error, {:no_memory,
+  held}}`: the keeper found no room for its runner, `held`
+  (`Prima.LocusPool.read_held/1`) says what holds the memory, and the
+  service started nothing; one whose `held` does not read stays lost. And
+  a `start` refused `503`
+  `{"v": 2, "error": "unavailable", "message": sentence}`, the worker service's
   account of why no runner can take it (its keeper refuses runners,
   `t:Prima.WorkerAPI.refusal/0`), is `{:error, {:unavailable, sentence}}`,
   since the service answers it only once it has decided to start nothing.
@@ -72,7 +77,12 @@ defmodule Opus.WorkerClient do
   """
   @spec start(WorkerAPI.endpoint(), Prima.Assignment.token(), binary(), String.t()) ::
           :ok
-          | {:error, :malformed | :not_found | {:unavailable, String.t()} | transport_refusal()}
+          | {:error,
+             :malformed
+             | :not_found
+             | {:unavailable, String.t()}
+             | {:no_memory, Prima.LocusPool.held()}
+             | transport_refusal()}
   def start(%{id: id, url: url} = endpoint, token, input, sealed_keys)
       when is_binary(id) and is_binary(url) and is_binary(token) and is_binary(input) and
              is_binary(sealed_keys) do
@@ -214,17 +224,32 @@ defmodule Opus.WorkerClient do
     end
   end
 
-  # The worker service's refusal of a start, with the sentence it names;
-  # any other 503 is no answer of the service's.
+  # The worker service's refusal of a start, with the sentence it names,
+  # or for room with what holds the memory; any other 503 is no answer of
+  # the service's.
   defp refused_start(resp, max_bytes) do
-    with {:ok, raw} <- Prima.BoundedBody.read(resp, max_bytes),
-         {:error, "unavailable", %{"message" => sentence}} <- read(raw),
-         true <- WorkerAPI.valid_refusal_message?(sentence) do
-      {:error, {:unavailable, sentence}}
+    with {:ok, raw} <- Prima.BoundedBody.read(resp, max_bytes) do
+      raw |> read() |> refused_start()
     else
       _ -> {:error, :lost}
     end
   end
+
+  defp refused_start({:error, "unavailable", %{"message" => sentence}}) do
+    if WorkerAPI.valid_refusal_message?(sentence),
+      do: {:error, {:unavailable, sentence}},
+      else: {:error, :lost}
+  end
+
+  defp refused_start({:error, "no_memory", %{"held" => wire} = fields})
+       when map_size(fields) == 1 do
+    case Prima.LocusPool.read_held(wire) do
+      {:ok, held} -> {:error, {:no_memory, held}}
+      :error -> {:error, :lost}
+    end
+  end
+
+  defp refused_start(_answer), do: {:error, :lost}
 
   defp dispatch_key(service) do
     case Keys.locus_runtime_key(service) do

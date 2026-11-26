@@ -563,8 +563,8 @@ defmodule Locus.ListenerTest do
         Enum.reduce(
           [
             ~s({"op":"status","args":{}}),
-            ~s({"v":2,"op":"status","args":{}}),
-            ~s({"v":"1","op":"status","args":{}})
+            ~s({"v":3,"op":"status","args":{}}),
+            ~s({"v":"2","op":"status","args":{}})
           ],
           connect(ctx.port),
           fn body, client ->
@@ -597,7 +597,7 @@ defmodule Locus.ListenerTest do
   defp kill_body,
     do: Jason.encode!(WorkerWire.request_body(:kill, %{"execution_id" => "exec_x"}))
 
-  defp wl(reason), do: ~s({"v":1,"error":"#{reason}"})
+  defp wl(reason), do: ~s({"v":2,"error":"#{reason}"})
 
   defp runtime_header(ctx, body, opts \\ []) do
     request = %{
@@ -620,7 +620,7 @@ defmodule Locus.ListenerTest do
 
     {answer, client} = answer(client)
     assert answer.status == 200
-    assert %{"v" => 1, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
+    assert %{"v" => 2, "ok" => %{"service" => "wrk_local"}} = Jason.decode!(answer.body)
     client
   end
 
@@ -822,9 +822,9 @@ defmodule Locus.ListenerTest do
 
       for {body, status, expected} <- [
             {Jason.encode!(%{wire | "version" => 1}), 409,
-             bs(:protocol_mismatch, %{"builder" => 2, "client" => 1})},
+             bs(:protocol_mismatch, %{"builder" => 3, "client" => 1})},
             {Jason.encode!(Map.delete(wire, "version")), 409,
-             bs(:protocol_mismatch, %{"builder" => 2, "client" => nil})},
+             bs(:protocol_mismatch, %{"builder" => 3, "client" => nil})},
             {"[]", 400, bs(:malformed, "the body is not a JSON object")}
           ] do
         client =
@@ -849,8 +849,8 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 400, bs(:malformed, sentence), :close, @unread_ms)
 
       for {body, status, expected} <- [
-            {~s({"version":1}), 409, bs(:protocol_mismatch, %{"builder" => 2, "client" => 1})},
-            {~s({"version":2,"verbose":true}), 400,
+            {~s({"version":1}), 409, bs(:protocol_mismatch, %{"builder" => 3, "client" => 1})},
+            {~s({"version":3,"verbose":true}), 400,
              bs(:malformed, "verbose is not a field of this message")}
           ] do
         client = ctx.port |> connect() |> send_request("POST", health_route(), [], body)
@@ -869,7 +869,7 @@ defmodule Locus.ListenerTest do
     reason = if is_atom(reason), do: Atom.to_string(reason), else: reason
 
     ~s({"class":"#{class}","reason":#{Jason.encode!(reason)},) <>
-      ~s("type":"refusal","version":2}\n)
+      ~s("type":"refusal","version":3}\n)
   end
 
   defp assert_health_answered(client) do

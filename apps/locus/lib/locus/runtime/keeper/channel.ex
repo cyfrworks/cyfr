@@ -196,12 +196,13 @@ defmodule Locus.Runtime.Keeper.Channel do
 
   # The keeper's refusals of a spawn: its code, and what an operator makes
   # of it. `memory_unavailable` names what the deployment lacks; a place
-  # refused for room is `no_memory`.
+  # refused for room is `no_memory`, and keeps the keeper's `held`, what
+  # holds the memory, for the start that waited on it.
   @impl Locus.Runtime.Keeper
   def refusal(:memory_unavailable),
     do: %{reason: "memory_unavailable", message: @memory_unavailable}
 
-  def refusal({:no_memory, _held}), do: refusal("no_memory")
+  def refusal({:no_memory, held}), do: Map.put(refusal("no_memory"), :held, held)
 
   def refusal(code) when is_binary(code) do
     reason = if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, code), do: code, else: "refused"

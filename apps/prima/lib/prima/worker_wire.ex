@@ -33,7 +33,7 @@ defmodule Prima.WorkerWire do
       assignment started over its lifetime, not concurrently.
     * Every request body and every answer carries the wire's version as
       its first member, `v` (`version/0`). A request body is the JSON
-      `{"v": 1, "op": <callback>, "args": {...}}` (`request_body/2`,
+      `{"v": 2, "op": <callback>, "args": {...}}` (`request_body/2`,
       `read_request_body/2`), sealed as `Prima.WorkerAuth.seal_call/5`
       seals a host call's body. A sealed body cannot be versioned before
       it is opened: the header's `v1` token is what a listener reads before
@@ -41,14 +41,15 @@ defmodule Prima.WorkerWire do
       binds the plaintext to it, read after the body is opened and before
       its `op`. The route and the body's `op` name the same callback; a
       listener refuses a body whose `op` is not its route's.
-    * An answer is the JSON `{"v": 1, "ok": value}` on success and
-      `{"v": 1, "error": <name>, ...}` on a refusal, where `name` is the
+    * An answer is the JSON `{"v": 2, "ok": value}` on success and
+      `{"v": 2, "error": <name>, ...}` on a refusal, where `name` is the
       refusal (`lost`, `unavailable`, `replayed`, `malformed`, `bad_mac`,
       `unknown_version`, `claim_expired`, `not_found`, and for
       `c:Prima.HostAPI.egress_pin/3` the refusals
       `Prima.PinnedTarget.refusals/0` names), `guest_error` with `type`,
       `message` and an optional `remediation`, `setup_required` with
-      `payload`, or `failed` with `message`. A host call's answer is sealed
+      `payload`, `failed` with `message`, or, for a start refused for room,
+      `no_memory` with `held` (`Prima.LocusPool.encode_held/1`). A host call's answer is sealed
       as `Prima.WorkerAuth.seal_call/5` seals an answer; a worker service's
       exit report is answered plain, and so is every WorkerAPI request.
       `ok/1` and `error/2` build answers and `read_answer/1` reads one; an
@@ -70,7 +71,7 @@ defmodule Prima.WorkerWire do
       URL name each other.
   """
 
-  @version 1
+  @version 2
   @auth_header Prima.MacEnvelope.auth_header()
   @host_prefix "/host/v1/"
   @worker_prefix "/worker/v1/"
@@ -248,8 +249,8 @@ defmodule Prima.WorkerWire do
 
   @doc """
   What a decoded answer says, or `:lost` when it is no answer at this
-  version: `{:ok, value}` for `{"v": 1, "ok": value}` and nothing else,
-  `{:error, name, fields}` for `{"v": 1, "error": name, ...}` with a
+  version: `{:ok, value}` for `{"v": 2, "ok": value}` and nothing else,
+  `{:error, name, fields}` for `{"v": 2, "error": name, ...}` with a
   string `name` and no `ok`, `fields` being its other members. An answer
   without `v`, at another version, or of any other shape is `:lost`, as a
   client counts an answer that never arrived: whether the call acted is

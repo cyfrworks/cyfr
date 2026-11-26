@@ -1311,6 +1311,10 @@ jobs:
           path: ${{ runner.temp }}/app-image
       - name: Load the app image
         run: zstd -dc "$RUNNER_TEMP/app-image/cyfr.tar.zst" | docker load
+      # The proofs' one client image, made once and through an archive
+      # answering wrongly (tests/desktop-proof/client-image-test.sh).
+      - name: The proofs' client image is made once
+        run: bash tests/desktop-proof/client-image-test.sh
       - name: The proofs against a real CYFR
         env:
           PROOF_OUT: ${{ runner.temp }}/desktop-proof

@@ -1,6 +1,6 @@
 {
   "comment": "The vectors pinning Prima.BuilderProtocol, the wire between CYFR's build client and the builder Locus serves: every consumer derives the request key from the service key over the label, reproduces the request's canonical string, MAC and header, reads every line and refusal here to its fields, reads every stream of lines under streams to its outputs and diagnostics or to the error named, reading nothing after its first terminal line (a stream that ends in a refusal keeps nothing), refuses every invalid body and line with the error named, and refuses every header under auth_rejected. No terminal line carries diagnostics: a stream's diagnostics are its progress lines, each `stage: message`. File contents under fields and outputs are base64 of the bytes. A synthesize entry names a body to build from the valid one: `files` files of `bytes` zero bytes each in place of its files, a progress message of `message_bytes`, an output line of a chunk of `chunk_bytes` zero bytes, a result naming `files` files (of `size` bytes each where it says), or under streams a stream of `files` files of one byte each or of `bytes` zero bytes in chunks of the most a line carries.",
-  "version": 2,
+  "version": 3,
   "domain": "cyfr-locus/v1",
   "service": "builds",
   "label": "cyfr-locus/v1/builds",
@@ -16,6 +16,7 @@
     "capacity": 429,
     "timeout": 504,
     "memory": 507,
+    "no_memory": 423,
     "unavailable": 503,
     "failed": 422,
     "protocol_mismatch": 409
@@ -82,30 +83,30 @@
         "src/lib.rs": "Ly8gdGhlIHZlY3RvciByZWFnZW50Cg=="
       }
     },
-    "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+    "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
     "ts": 1789305249602,
     "nonce": "n_5c3e9a1b",
-    "canonical": "cyfr-locus/v1/builds/request\n1789305249602\nn_5c3e9a1b\n127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d",
-    "mac": "1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
-    "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0"
+    "canonical": "cyfr-locus/v1/builds/request\n1789305249602\nn_5c3e9a1b\n8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539",
+    "mac": "9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
+    "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc"
   },
   "health_request": {
-    "body": "{\"version\":2}"
+    "body": "{\"version\":3}"
   },
   "lines": {
     "progress": {
       "stage": "compiling",
       "message": "Compiling reagent (rust)...",
-      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\",\"version\":2}"
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\",\"version\":3}"
     },
     "output": {
-      "body": "{\"bytes\":\"AGFzbQ0AAQA=\",\"path\":\"component.wasm\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"AGFzbQ0AAQA=\",\"path\":\"component.wasm\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "bytes": "AGFzbQ0AAQA=",
       "path": "component.wasm",
       "seq": 1
     },
     "component_result": {
-      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\",\"size\":8},{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\",\"size\":8},{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":3}",
       "language": "rust",
       "outputs": [
         {
@@ -122,7 +123,7 @@
       "target_type": "reagent"
     },
     "tincture_result": {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "language": "javascript",
       "outputs": [
         {
@@ -152,29 +153,29 @@
           "description": "Rust -> WASM Component Model (cargo-component)"
         }
       },
-      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":2}"
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":3}"
     },
     "refusals": [
       {
-        "body": "{\"class\":\"malformed\",\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"malformed\",\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":3}",
         "class": "malformed",
         "reason": "sources[1].base64 is not of the form this message takes",
         "sentence": "the builder could not read the request: sources[1].base64 is not of the form this message takes"
       },
       {
-        "body": "{\"class\":\"unauthorized\",\"reason\":\"bad_mac\",\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"unauthorized\",\"reason\":\"bad_mac\",\"type\":\"refusal\",\"version\":3}",
         "class": "unauthorized",
         "reason": "bad_mac",
         "sentence": "the builder refused this server's key (bad_mac); check the builds key on both ends"
       },
       {
-        "body": "{\"class\":\"unauthorized\",\"reason\":\"replayed\",\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"unauthorized\",\"reason\":\"replayed\",\"type\":\"refusal\",\"version\":3}",
         "class": "unauthorized",
         "reason": "replayed",
         "sentence": "the builder refused this server's key (replayed); check the builds key on both ends"
       },
       {
-        "body": "{\"class\":\"capacity\",\"reason\":{\"max\":2},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"capacity\",\"reason\":{\"max\":2},\"type\":\"refusal\",\"version\":3}",
         "class": "capacity",
         "reason": {
           "max": 2
@@ -182,7 +183,7 @@
         "sentence": "the builder is at capacity (2 concurrent builds)"
       },
       {
-        "body": "{\"class\":\"timeout\",\"reason\":{\"budget_ms\":270000},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"timeout\",\"reason\":{\"budget_ms\":270000},\"type\":\"refusal\",\"version\":3}",
         "class": "timeout",
         "reason": {
           "budget_ms": 270000
@@ -190,7 +191,7 @@
         "sentence": "the build passed its budget of 270000 ms"
       },
       {
-        "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":3}",
         "class": "memory",
         "reason": {
           "limit_bytes": 1073741824
@@ -198,7 +199,7 @@
         "sentence": "the build reached its memory bound of 1073741824 bytes and was ended there"
       },
       {
-        "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"machine\"},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"machine\"},\"type\":\"refusal\",\"version\":3}",
         "class": "memory",
         "reason": {
           "cause": "machine"
@@ -206,7 +207,7 @@
         "sentence": "CYFR ran out of memory for builds and the build was ended"
       },
       {
-        "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"either\"},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"either\"},\"type\":\"refusal\",\"version\":3}",
         "class": "memory",
         "reason": {
           "cause": "either"
@@ -214,13 +215,45 @@
         "sentence": "the build ran out of memory and was ended"
       },
       {
-        "body": "{\"class\":\"unavailable\",\"reason\":\"the rust toolchain is not installed in this image\",\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"no_memory\",\"reason\":{\"free\":134217728,\"mine\":[{\"bytes\":402653184,\"kind\":\"program\"},{\"bytes\":943718400,\"kind\":\"build\",\"subject\":\"bld_one\"}],\"need\":838860800,\"others_bytes\":1610612736},\"type\":\"refusal\",\"version\":3}",
+        "class": "no_memory",
+        "reason": {
+          "free": 134217728,
+          "mine": [
+            {
+              "bytes": 402653184,
+              "kind": "program"
+            },
+            {
+              "bytes": 943718400,
+              "kind": "build",
+              "subject": "bld_one"
+            }
+          ],
+          "need": 838860800,
+          "others_bytes": 1610612736
+        },
+        "sentence": "This CYFR has not enough memory free. Of yours, a program uses 384.0 MB and a build uses 900.0 MB. Others use 1.5 GB. Stop one on the Programs page, or wait."
+      },
+      {
+        "body": "{\"class\":\"no_memory\",\"reason\":{\"free\":0,\"mine\":[],\"need\":838860800,\"others_bytes\":0},\"type\":\"refusal\",\"version\":3}",
+        "class": "no_memory",
+        "reason": {
+          "free": 0,
+          "mine": [],
+          "need": 838860800,
+          "others_bytes": 0
+        },
+        "sentence": "This CYFR has no memory free for it."
+      },
+      {
+        "body": "{\"class\":\"unavailable\",\"reason\":\"the rust toolchain is not installed in this image\",\"type\":\"refusal\",\"version\":3}",
         "class": "unavailable",
         "reason": "the rust toolchain is not installed in this image",
         "sentence": "the builder cannot build this: the rust toolchain is not installed in this image"
       },
       {
-        "body": "{\"class\":\"failed\",\"reason\":{\"status\":101},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"failed\",\"reason\":{\"status\":101},\"type\":\"refusal\",\"version\":3}",
         "class": "failed",
         "reason": {
           "status": 101
@@ -228,7 +261,7 @@
         "sentence": "the build failed (exit 101)"
       },
       {
-        "body": "{\"class\":\"failed\",\"reason\":{\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"failed\",\"reason\":{\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":3}",
         "class": "failed",
         "reason": {
           "signal": "KILL"
@@ -236,7 +269,7 @@
         "sentence": "the build was killed (KILL)"
       },
       {
-        "body": "{\"class\":\"protocol_mismatch\",\"reason\":{\"builder\":1,\"client\":2},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"protocol_mismatch\",\"reason\":{\"builder\":1,\"client\":2},\"type\":\"refusal\",\"version\":3}",
         "class": "protocol_mismatch",
         "reason": {
           "builder": 1,
@@ -245,7 +278,7 @@
         "sentence": "the builder speaks builder protocol 1 and this server speaks builder protocol 2; run the builder image of the same release as this server"
       },
       {
-        "body": "{\"class\":\"protocol_mismatch\",\"reason\":{\"builder\":1,\"client\":null},\"type\":\"refusal\",\"version\":2}",
+        "body": "{\"class\":\"protocol_mismatch\",\"reason\":{\"builder\":1,\"client\":null},\"type\":\"refusal\",\"version\":3}",
         "class": "protocol_mismatch",
         "reason": {
           "builder": 1,
@@ -261,12 +294,12 @@
           "output: Finished `release` profile [optimized] target(s) in 4.20s"
         ],
         "lines": [
-          "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\",\"version\":2}",
-          "{\"bytes\":\"AGFzbQ0AAQA=\",\"path\":\"component.wasm\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZw==\",\"path\":\"Cargo.lock\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"message\":\"Finished `release` profile [optimized] target(s) in 4.20s\",\"stage\":\"output\",\"type\":\"progress\",\"version\":2}",
-          "{\"bytes\":\"ZW5lcmF0ZWQgYnkgQ2FyZ28uCnZlcnNpb24gPSA0Cg==\",\"path\":\"Cargo.lock\",\"seq\":3,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\",\"size\":8},{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":2}"
+          "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\",\"version\":3}",
+          "{\"bytes\":\"AGFzbQ0AAQA=\",\"path\":\"component.wasm\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZw==\",\"path\":\"Cargo.lock\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"message\":\"Finished `release` profile [optimized] target(s) in 4.20s\",\"stage\":\"output\",\"type\":\"progress\",\"version\":3}",
+          "{\"bytes\":\"ZW5lcmF0ZWQgYnkgQ2FyZ28uCnZlcnNpb24gPSA0Cg==\",\"path\":\"Cargo.lock\",\"seq\":3,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\",\"size\":8},{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "component",
         "outputs": {
@@ -277,9 +310,9 @@
       {
         "diagnostics": [],
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "tincture",
         "outputs": {
@@ -290,8 +323,8 @@
       {
         "diagnostics": [],
         "lines": [
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "empty_file",
         "outputs": {
@@ -302,9 +335,9 @@
       {
         "diagnostics": [],
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "entries_reversed",
         "outputs": {
@@ -315,10 +348,10 @@
       {
         "diagnostics": [],
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":3}"
         ],
         "name": "output_after_result",
         "outputs": {
@@ -329,94 +362,94 @@
       {
         "error": "empty_chunk",
         "lines": [
-          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "empty_chunk"
       },
       {
         "error": "empty_chunk",
         "lines": [
-          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":3,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"\",\"path\":\"empty.txt\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":3,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "empty_chunk_repeated"
       },
       {
         "error": "out_of_order",
         "lines": [
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":2}"
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":3}"
         ],
         "name": "seq_skipped"
       },
       {
         "error": "out_of_order",
         "lines": [
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}"
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}"
         ],
         "name": "seq_from_two"
       },
       {
         "error": "path_revisited",
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":3,\"type\":\"output\",\"version\":3}"
         ],
         "name": "path_revisited"
       },
       {
         "error": "unsent",
         "lines": [
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "result_names_unsent"
       },
       {
         "error": "digest_mismatch",
         "lines": [
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\",\"path\":\"empty.txt\",\"size\":0},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "result_names_unsent_empty_of_another_digest"
       },
       {
         "error": "unnamed",
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "result_leaves_unnamed"
       },
       {
         "error": "size_mismatch",
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":38}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":38}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "size_mismatch"
       },
       {
         "error": "digest_mismatch",
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}"
         ],
         "name": "digest_mismatch"
       },
       {
         "lines": [
-          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
-          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":2}",
-          "{\"class\":\"failed\",\"reason\":{\"status\":2},\"type\":\"refusal\",\"version\":2}"
+          "{\"bytes\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
+          "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":2,\"type\":\"output\",\"version\":3}",
+          "{\"class\":\"failed\",\"reason\":{\"status\":2},\"type\":\"refusal\",\"version\":3}"
         ],
         "name": "refusal_after_chunks",
         "refusal": {
@@ -459,72 +492,72 @@
       "name": "not_json"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"token\":\"abc\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"token\":\"abc\",\"version\":3}",
       "error": "unknown_field",
       "name": "unknown_field"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "missing_field",
       "name": "missing_field"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"go\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"go\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "unknown_language"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"javascript\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"javascript\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "unpaired",
       "name": "unpaired"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":\"yes\",\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":\"yes\",\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "resolve_not_boolean"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":\"soon\",\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":\"soon\",\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "deadline_not_integer"
     },
     {
-      "body": "{\"athanor_id\":\"\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "athanor_id_empty"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":{},\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":{},\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "sources_not_a_list"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[],\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "sources_empty"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"mode\":420,\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"mode\":420,\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "unknown_field",
       "name": "source_unknown_field"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"!!\",\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"!!\",\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "invalid_field",
       "name": "source_not_base64"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "duplicate_path",
       "name": "duplicate_path"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"../lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"../lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "unsafe_path",
       "name": "unsafe_path"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"/etc/passwd\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"/etc/passwd\"}],\"target_type\":\"reagent\",\"version\":3}",
       "error": "unsafe_path",
       "name": "absolute_path"
     },
@@ -567,237 +600,252 @@
       "name": "not_json"
     },
     {
-      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"version\":2}",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"version\":3}",
       "error": "missing_field",
       "name": "no_type"
     },
     {
-      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"warning\",\"version\":2}",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"warning\",\"version\":3}",
       "error": "invalid_field",
       "name": "unknown_type"
     },
     {
-      "body": "{\"message\":\"Compiling reagent (rust)...\",\"pct\":50,\"stage\":\"compiling\",\"type\":\"progress\",\"version\":2}",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"pct\":50,\"stage\":\"compiling\",\"type\":\"progress\",\"version\":3}",
       "error": "unknown_field",
       "name": "progress_unknown_field"
     },
     {
-      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"linking\",\"type\":\"progress\",\"version\":2}",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"linking\",\"type\":\"progress\",\"version\":3}",
       "error": "invalid_field",
       "name": "progress_unknown_stage"
     },
     {
-      "body": "{\"message\":7,\"stage\":\"compiling\",\"type\":\"progress\",\"version\":2}",
+      "body": "{\"message\":7,\"stage\":\"compiling\",\"type\":\"progress\",\"version\":3}",
       "error": "invalid_field",
       "name": "progress_message_not_text"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "error": "unknown_field",
       "name": "output_unknown_field"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"type\":\"output\",\"version\":3}",
       "error": "missing_field",
       "name": "output_missing_seq"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":0,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":0,\"type\":\"output\",\"version\":3}",
       "error": "invalid_field",
       "name": "output_seq_zero"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":\"1\",\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"index.html\",\"seq\":\"1\",\"type\":\"output\",\"version\":3}",
       "error": "invalid_field",
       "name": "output_seq_not_an_integer"
     },
     {
-      "body": "{\"bytes\":\"not base64!\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"not base64!\",\"path\":\"index.html\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "error": "invalid_field",
       "name": "output_bytes_not_base64"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"a/../b\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"a/../b\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "error": "unsafe_path",
       "name": "output_unsafe_path"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"/etc/passwd\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"/etc/passwd\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "error": "unsafe_path",
       "name": "output_absolute_path"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"assets///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"assets///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "error": "invalid_field",
       "name": "output_oversize_path"
     },
     {
-      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"assets/\\u0001app.js\",\"seq\":1,\"type\":\"output\",\"version\":2}",
+      "body": "{\"bytes\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"path\":\"assets/\\u0001app.js\",\"seq\":1,\"type\":\"output\",\"version\":3}",
       "error": "invalid_field",
       "name": "output_control_character_path"
     },
     {
-      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "unknown_field",
       "name": "result_with_diagnostics"
     },
     {
-      "body": "{\"language\":\"javascript\",\"log\":[],\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"log\":[],\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "unknown_field",
       "name": "result_unknown_field"
     },
     {
-      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "unpaired",
       "name": "result_unpaired"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_no_outputs"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "missing_field",
       "name": "result_output_without_digest"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "unknown_field",
       "name": "result_output_with_its_bytes"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"md5:abc\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"md5:abc\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_digest_not_sha256"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8CCC5C58C884830F5DD13EA08C1DE3885548832145AF86DD5D9CD2CCC260BB78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8CCC5C58C884830F5DD13EA08C1DE3885548832145AF86DD5D9CD2CCC260BB78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_digest_uppercase"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":-1}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":-1}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_size_negative"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":67108865}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":67108865}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_size_past_the_bound"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "duplicate_path",
       "name": "result_duplicate_path"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"a/../b\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"a/../b\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "unsafe_path",
       "name": "result_unsafe_path"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////app.js\",\"size\":23}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_oversize_path"
     },
     {
-      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/\\u0001app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/\\u0001app.js\",\"size\":23},{\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\",\"size\":37}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "result_control_character_path"
     },
     {
-      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "component_without_wasm"
     },
     {
-      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\",\"size\":8},{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":2}",
+      "body": "{\"language\":\"rust\",\"outputs\":[{\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\",\"size\":8},{\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\",\"size\":62},{\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\",\"size\":23}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":3}",
       "error": "invalid_field",
       "name": "component_with_extra_output"
     },
     {
-      "body": "{\"class\":\"malformed\",\"diagnostics\":[],\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"malformed\",\"diagnostics\":[],\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":3}",
       "error": "unknown_field",
       "name": "refusal_with_diagnostics"
     },
     {
-      "body": "{\"class\":\"busy\",\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"busy\",\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_unknown_class"
     },
     {
-      "body": "{\"class\":\"malformed\",\"reason\":{\"max\":2},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"malformed\",\"reason\":{\"max\":2},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_reason_shape"
     },
     {
-      "body": "{\"class\":\"capacity\",\"reason\":\"2\",\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"capacity\",\"reason\":\"2\",\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_capacity_reason_shape"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_reason_shape"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":0},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":0},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_limit_zero"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":\"1073741824\"},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":\"1073741824\"},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_limit_not_an_integer"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":1073741824,\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":1073741824,\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_reason_with_another_field"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":null},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"limit_bytes\":null},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_limit_null"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"cap\"},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"cap\"},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_cause_unknown"
     },
     {
-      "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"machine\",\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"memory\",\"reason\":{\"cause\":\"machine\",\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_memory_cause_with_a_limit"
     },
     {
-      "body": "{\"class\":\"failed\",\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"no_memory\",\"reason\":\"held\",\"type\":\"refusal\",\"version\":3}",
+      "error": "invalid_field",
+      "name": "refusal_no_memory_reason_not_held"
+    },
+    {
+      "body": "{\"class\":\"no_memory\",\"reason\":{\"free\":0,\"mine\":[],\"need\":838860800},\"type\":\"refusal\",\"version\":3}",
+      "error": "invalid_field",
+      "name": "refusal_no_memory_held_without_others"
+    },
+    {
+      "body": "{\"class\":\"no_memory\",\"reason\":{\"free\":0,\"mine\":[{\"athanor\":\"ath_two\",\"bytes\":1,\"kind\":\"program\"}],\"need\":838860800,\"others_bytes\":0},\"type\":\"refusal\",\"version\":3}",
+      "error": "invalid_field",
+      "name": "refusal_no_memory_holding_naming_an_athanor"
+    },
+    {
+      "body": "{\"class\":\"failed\",\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_failed_with_a_memory_reason"
     },
     {
-      "body": "{\"class\":\"unauthorized\",\"reason\":\"expired\",\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"unauthorized\",\"reason\":\"expired\",\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_unauthorized_reason_unknown"
     },
     {
-      "body": "{\"class\":\"protocol_mismatch\",\"reason\":{\"builder\":2,\"client\":0},\"type\":\"refusal\",\"version\":2}",
+      "body": "{\"class\":\"protocol_mismatch\",\"reason\":{\"builder\":2,\"client\":0},\"type\":\"refusal\",\"version\":3}",
       "error": "invalid_field",
       "name": "refusal_mismatch_client_zero"
     },
     {
-      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"uptime\":1,\"version\":2}",
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"uptime\":1,\"version\":3}",
       "error": "unknown_field",
       "name": "health_unknown_field"
     },
     {
-      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":2}",
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":3}",
       "error": "missing_field",
       "name": "health_missing_toolchain"
     },
     {
-      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":\"yes\",\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":2}",
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":\"yes\",\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":3}",
       "error": "invalid_field",
       "name": "health_toolchain_available_not_boolean"
     },
@@ -833,105 +881,105 @@
   ],
   "auth_rejected": [
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=zFWvuI_o0kOIbjjtu74KsIlWTMXI3EcI5uHxJl7Lk1U",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=yZgOYlTM3IMigoUVUs08bTFY1OkTxKUMDG8Y3kQtb1c",
       "name": "backends_label",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=f8j7OBGjipCZI3_NH2ng7jB3Ts4_JZfRWee5ynY7ORU",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=1KkdqiulIEdGRtqcK37Tn8eukCCj6its95vx0aKFLI8",
       "name": "backends_key",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=OXx7liHxd70cRUt4H_2iz3RMGtfC889QY-bCiLS37ZI",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=xreDegmW5Ziw2bvXehApdJJH8JiK09uJY6BFs5rpPPY",
       "name": "backends_key_builds_label",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=uzj15Eh8VtOHR5blNOZuQUkytgH-e5Epw9p8-_yetQI",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=jwOXuSYe8MPNi47-mQvjQ1XkiWUyhFJwfdZXdgRuWC0",
       "name": "underived_key",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=S5VDv9Z-My5QJzsOckt1D2aSAdGUXdoESSn7z_33FDU",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=VPPrvoja3ZThNNFRK2lU3a0BAn4MtTxGfamTwUjiyaw",
       "name": "wrong_domain",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2} ",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3} ",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
       "name": "tampered_body",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "name": "tampered_mac",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_other body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_other body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
       "name": "tampered_nonce",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=0000000000000000000000000000000000000000000000000000000000000000 mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=0000000000000000000000000000000000000000000000000000000000000000 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
       "name": "other_body_hash",
       "now": 1789305249602,
       "refusal": "bad_mac"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
       "name": "outside_window_late",
       "now": 1789305279603,
       "refusal": "outside_window"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
       "name": "outside_window_early",
       "now": 1789305219601,
       "refusal": "outside_window"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=report ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=0ds_8fVOXFSNi6slE9dIDlg9lfaefbr_xf-Lnw27RQc",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=report ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=_nkyEEz7i9SKUXKhzgVHf5Rjk-s42-nQWSgrCh3cX7w",
       "name": "wrong_kind",
       "now": 1789305249602,
       "refusal": "malformed"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc",
       "name": "no_body_hash",
       "now": 1789305249602,
       "refusal": "malformed"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
-      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=127318dd06669fec86538b5f6fcec9195860d3f51a60aaa9b77007f1ecb37e6d mac=1MXvc9XU9sWaoMTTVVgXFIBvC8Y9owBFqVsTYHrDUO0 nonce=n_again",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=8e58bbfb754d5582633703e7aa360625764f0dae61f065b3e535248b56480539 mac=9uLqNtv2FZFsxouvLPehGWo-UqIf4Jeq09VT0rAcZfc nonce=n_again",
       "name": "repeated_field",
       "now": 1789305249602,
       "refusal": "malformed"
     },
     {
-      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":3}",
       "header": "",
       "name": "empty_header",
       "now": 1789305249602,

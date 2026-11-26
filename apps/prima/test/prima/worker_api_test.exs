@@ -93,13 +93,23 @@ defmodule Prima.WorkerAPITest do
         assert status in [200, 401, 503], why
 
         # A 503 is the worker service's refusal of a start only with a
-        # sentence; without one it is a lost answer.
+        # sentence, or for room with what holds the memory; without either
+        # it is a lost answer.
         if status == 503 do
-          assert callback == "start" and name == "unavailable", why
+          assert callback == "start" and name in ["unavailable", "no_memory"], why
 
-          assert WorkerAPI.valid_refusal_message?(fields["message"]) ==
-                   Map.has_key?(fields, "message"),
-                 why
+          case name do
+            # held and nothing beside it is a refusal for room; any other
+            # member beside it makes the answer lost.
+            "no_memory" ->
+              assert {:ok, _held} = Prima.LocusPool.read_held(fields["held"]), why
+              assert Map.keys(fields) == ["held"] or why =~ "lost", why
+
+            "unavailable" ->
+              assert WorkerAPI.valid_refusal_message?(fields["message"]) ==
+                       Map.has_key?(fields, "message"),
+                     why
+          end
         end
       end
     end

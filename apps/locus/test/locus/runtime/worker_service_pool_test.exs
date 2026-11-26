@@ -31,8 +31,10 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   one's is left unanswered too is unavailable with its work written to
   neither runner, both retired. A start whose runner waits for the
   keeper's room is served once the keeper places it, past 5 s, while the
-  service answers its status and kills, or refused naming `no_memory`,
-  which the pool does not take for a keeper that refuses runners; one a
+  service answers its status and kills, or refused `no_memory` with what
+  holds the memory as the keeper said it, which the pool does not take for
+  a keeper that refuses runners, and the next start is served once the
+  keeper has room; one a
   kill reached is `:ok` to the kill and unavailable, its runner's place
   gone from the keeper's queue at the kill, whether its runner's assign
   was in flight or its take waited inside a pool that remembers a
@@ -387,13 +389,17 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
 
     @tag :capture_log
     @tag timeout: 60_000
-    test "is refused naming no_memory when the keeper finds no room, never at 5 s", context do
+    test "is refused no_memory with what holds the memory as the keeper said it, never at 5 s, " <>
+           "and the next start is served once there is room",
+         context do
       {attempt, started} = waiting_for_room!(context)
       wait_until(fn -> map_size(:sys.get_state(WorkerService).assigning) == 1 end)
       [%{runner: runner}] = Map.values(:sys.get_state(WorkerService).assigning)
       assert Task.yield(started, 6_000) == nil
 
-      held = %{need: 402_653_184, free: 0, mine: [], others_bytes: 0}
+      # Other work fills the room: a runner's place is nobody's until its
+      # work is assigned, so all of it is one sum.
+      held = %{need: 171_966_464, free: 0, mine: [], others_bytes: 2_147_483_648}
 
       # Only the taken runner's place is refused: the pool's own refill
       # behind it, refused for room, would be the pool's refusal.
@@ -401,11 +407,13 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
         capture_log(fn ->
           :ok = ScriptedKeeper.answer_place(context.keeper, runner, {:error, {:no_memory, held}})
 
-          assert {503,
-                  %{
-                    "error" => "unavailable",
-                    "message" => "cyfr-locus refused to start a runner (no_memory)"
-                  }} = Task.await(started, 15_000)
+          assert {503, answer} = Task.await(started, 15_000)
+
+          assert answer == %{
+                   "v" => WorkerWire.version(),
+                   "error" => "no_memory",
+                   "held" => Prima.LocusPool.encode_held(held)
+                 }
 
           # The refusal was that start's alone: the keeper still starts
           # runners, and the pool and the worker's status say none refused.
@@ -415,6 +423,14 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       refute log =~ "the keeper refuses runners"
       assert given(context, attempt) == []
       refute attempt.attempt in elem(WorkerService.status(), 1).attempts
+
+      # Room again: the next start's runner is placed and given its work.
+      next = ScriptedHost.attempt!(context.host, boot: context.boot)
+      again = Task.async(fn -> post(context, :start, start_args(next)) end)
+      wait_until(fn -> ScriptedKeeper.held_places(context.keeper) != [] end)
+      :ok = ScriptedKeeper.answer_places(context.keeper, :ok)
+      assert {200, %{"ok" => true}} = Task.await(again, 15_000)
+      assert [_spawn] = given(context, next)
     end
 
     @tag :capture_log
@@ -427,7 +443,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert runner in ScriptedKeeper.held_places(context.keeper)
 
       assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
-               {200, %{"ok" => true, "v" => 1}}
+               {200, %{"ok" => true, "v" => 2}}
 
       # The place leaves the queue before the keeper finds room for anyone.
       wait_until(fn -> runner not in ScriptedKeeper.held_places(context.keeper) end)
@@ -464,7 +480,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       assert :gen_server.reqids_size(:sys.get_state(WorkerService).takes) == 1
 
       assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
-               {200, %{"ok" => true, "v" => 1}}
+               {200, %{"ok" => true, "v" => 2}}
 
       # The place leaves the queue before the keeper finds room for anyone.
       wait_until(fn -> runner not in ScriptedKeeper.held_places(context.keeper) end)
@@ -498,7 +514,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
         wait_until(fn -> String.contains?(ScriptedKeeper.read(runner), attempt.assignment) end)
 
         assert post(context, :kill, %{"execution_id" => attempt.execution_id}) ==
-                 {200, %{"ok" => true, "v" => 1}}
+                 {200, %{"ok" => true, "v" => 2}}
 
         write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
         write(runner, %{type: :exit, runner: runner.spec.runner, open: [attempt.attempt]})
@@ -804,14 +820,14 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
        context do
     wait_until(fn -> match?({:ok, %{refusal: %{}}}, WorkerService.status()) end, 5_000)
 
-    assert {:ok,
-            %{
-              runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0},
-              refusal: %{
-                reason: "no_memory",
-                message: "cyfr-locus refused to start a runner (no_memory)"
-              }
-            }} = WorkerService.status()
+    # The status names why, never what holds the memory.
+    assert {:ok, %{runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}, refusal: refusal}} =
+             WorkerService.status()
+
+    assert refusal == %{
+             reason: "no_memory",
+             message: "cyfr-locus refused to start a runner (no_memory)"
+           }
 
     # The tries after the first wait one second, then two: never one a
     # second for ever.

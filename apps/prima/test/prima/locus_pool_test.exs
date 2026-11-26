@@ -140,4 +140,133 @@ defmodule Prima.LocusPoolTest do
           do: assert(LocusPool.read_held(bad) == :error, inspect(bad))
     end
   end
+
+  describe "the sentence of a refusal for room" do
+    @mib 1024 * 1024
+    @gib 1024 * @mib
+
+    # No word of the keeper's own reaches a person.
+    defp plain!(sentence) do
+      refute sentence =~ ~r/pool|ledger|place|runner|warm|held|keeper/i
+      sentence
+    end
+
+    test "names the person's own work by kind, with counts and sizes, and everyone else's as one sum" do
+      held = %{
+        need: 800 * @mib,
+        free: 100 * @mib,
+        mine: [
+          %{kind: "program", subject: "mcp_private", bytes: 384 * @mib},
+          %{kind: "run", subject: nil, bytes: 100 * @mib},
+          %{kind: "warm", subject: nil, bytes: 44 * @mib},
+          %{kind: "program", subject: nil, bytes: 384 * @mib},
+          %{kind: "build", subject: nil, bytes: 900 * @mib}
+        ],
+        others_bytes: 3 * div(@gib, 2)
+      }
+
+      sentence = plain!(LocusPool.refusal_sentence(held))
+
+      assert sentence ==
+               "This CYFR has not enough memory free. Of yours, 2 programs use 768.0 MB, " <>
+                 "a build uses 900.0 MB and 2 runs use 144.0 MB. Others use 1.5 GB. " <>
+                 "Stop one on the Programs page, or wait."
+
+      refute sentence =~ "mcp_private"
+    end
+
+    test "of two people, each reads only their own work and the other's as a sum" do
+      # The keeper's held for a refused build of each of two athanors, each
+      # holding a program: its own by kind, the other's within others_bytes.
+      ours = %{kind: "program", subject: nil, bytes: 384 * @mib}
+
+      for held <- [
+            %{need: 800 * @mib, free: 0, mine: [ours], others_bytes: 512 * @mib},
+            %{
+              need: 800 * @mib,
+              free: 0,
+              mine: [%{ours | bytes: 512 * @mib}],
+              others_bytes: 384 * @mib
+            }
+          ] do
+        [own] = held.mine
+
+        assert plain!(LocusPool.refusal_sentence(held)) ==
+                 "This CYFR has not enough memory free. Of yours, a program uses " <>
+                   "#{Prima.Bytes.format(own.bytes)}. Others use " <>
+                   "#{Prima.Bytes.format(held.others_bytes)}. Stop one on the Programs page, or wait."
+      end
+    end
+
+    test "with nothing of the person's own, says what is under way uses it and never others or yours" do
+      # A refused run's held: a runner's place is no athanor's yet.
+      held = %{need: 164 * @mib, free: 20 * @mib, mine: [], others_bytes: 2 * @gib}
+      sentence = plain!(LocusPool.refusal_sentence(held))
+
+      assert sentence ==
+               "This CYFR has not enough memory free. Work under way uses 2.0 GB. " <>
+                 "Wait, or try again later."
+
+      refute sentence =~ ~r/others|yours/i
+    end
+
+    test "with only builds or runs of the person's own, asks them to wait" do
+      held = %{
+        need: 800 * @mib,
+        free: 0,
+        mine: [%{kind: "build", subject: nil, bytes: 1 * @gib}],
+        others_bytes: 0
+      }
+
+      assert plain!(LocusPool.refusal_sentence(held)) ==
+               "This CYFR has not enough memory free. Of yours, a build uses 1.0 GB. " <>
+                 "Wait, or try again later."
+    end
+
+    test "with nothing held at all, says this CYFR has no room for it" do
+      assert plain!(
+               LocusPool.refusal_sentence(%{need: 800 * @mib, free: 0, mine: [], others_bytes: 0})
+             ) == "This CYFR has no memory free for it."
+
+      assert plain!(
+               LocusPool.refusal_sentence(%{
+                 need: 800 * @mib,
+                 free: 444 * @mib,
+                 mine: [],
+                 others_bytes: 0
+               })
+             ) ==
+               "This CYFR has not enough memory for it: it needs 800.0 MB, and has 444.0 MB for all its work."
+    end
+
+    test "when nothing anyone stops makes room, says only that this CYFR has not enough memory for it" do
+      # A 4 GB machine at the default reserves: work's memory less the
+      # floor's is 623 MiB, less than a build needs, whoever's program holds
+      # 384 MiB of it.
+      program = %{kind: "program", subject: nil, bytes: 384 * @mib}
+
+      sentence =
+        "This CYFR has not enough memory for it: it needs 800.0 MB, and has 623.0 MB for all its work."
+
+      for held <- [
+            %{need: 800 * @mib, free: 239 * @mib, mine: [program], others_bytes: 0},
+            %{need: 800 * @mib, free: 239 * @mib, mine: [], others_bytes: 384 * @mib}
+          ] do
+        assert plain!(LocusPool.refusal_sentence(held)) == sentence, inspect(held)
+      end
+    end
+
+    test "when stopping work would make room, the advice stands" do
+      held = %{
+        need: 800 * @mib,
+        free: 239 * @mib,
+        mine: [%{kind: "program", subject: nil, bytes: 600 * @mib}],
+        others_bytes: 0
+      }
+
+      assert plain!(LocusPool.refusal_sentence(held)) ==
+               "This CYFR has not enough memory free. Of yours, a program uses 600.0 MB. " <>
+                 "Stop one on the Programs page, or wait."
+    end
+  end
 end

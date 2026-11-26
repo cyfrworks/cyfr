@@ -575,7 +575,7 @@ defmodule Prima.HostAPITest do
       assert [egress] = Enum.filter(call["refusals"], &(&1["answer"] =~ "domain_blocked"))
 
       assert Jason.decode!(egress["answer"]) == %{
-               "v" => 1,
+               "v" => 2,
                "error" => "guest_error",
                "type" => "domain_blocked",
                "message" => "HTTP egress refused: api.example.com is not in the egress domains",

@@ -65,7 +65,7 @@ fi
 
 if [ -n "${LOCUS_BUILDS_KEY:-}" ]; then
   probed=1
-  curl -fsS -o /dev/null -X POST -H 'content-type: application/json' -d '{"version":2}' \
+  curl -fsS -o /dev/null -X POST -H 'content-type: application/json' -d '{"version":3}' \
     "http://$address:4100/locus/v1/builds/health" \
     || { echo "locus: builds does not answer at $address:4100" >&2; exit 1; }
 fi

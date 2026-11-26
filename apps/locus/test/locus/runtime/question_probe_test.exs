@@ -28,7 +28,7 @@ defmodule Locus.Runtime.QuestionProbeTest do
            )
          )
 
-  @pending ~s({"v":1,"ok":{"pending":true}})
+  @pending ~s({"v":2,"ok":{"pending":true}})
 
   defp run(attempt, statements, type \\ :catalyst) do
     Locus.Runtime.Engine.execute_component(
@@ -52,17 +52,17 @@ defmodule Locus.Runtime.QuestionProbeTest do
 
     ScriptedHost.script(host, "question_ask", fn args, _caller ->
       case args["ask_no"] do
-        1 -> {:answer, ~s({"v":1,"ok":{"answer":"allowed"}})}
-        2 -> {:answer, ~s({"v":1,"ok":{"answer":"denied"}})}
+        1 -> {:answer, ~s({"v":2,"ok":{"answer":"allowed"}})}
+        2 -> {:answer, ~s({"v":2,"ok":{"answer":"denied"}})}
         3 -> {:answer, @pending}
-        4 -> {:answer, ~s({"v":1,"ok":{"answer":{"none":"invalid"}}})}
+        4 -> {:answer, ~s({"v":2,"ok":{"answer":{"none":"invalid"}}})}
       end
     end)
 
     ScriptedHost.script(
       host,
       "question_wait",
-      {:answer, ~s({"v":1,"ok":{"answer":{"none":"unattended"}}})}
+      {:answer, ~s({"v":2,"ok":{"answer":{"none":"unattended"}}})}
     )
 
     statements = [

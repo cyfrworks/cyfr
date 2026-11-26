@@ -22,7 +22,7 @@ defmodule Prima.BuilderProtocol do
   | Operation | Route | Body | Answer |
   |---|---|---|---|
   | `:build` | `/locus/v1/builds/build` | a request | lines: progress and output, then one result or refusal |
-  | `:health` | `/locus/v1/builds/health` | `{"version": 2}` | one health line, or a refusal |
+  | `:health` | `/locus/v1/builds/health` | `{"version": 3}` | one health line, or a refusal |
 
   A build's answer is a stream of newline-delimited JSON lines
   (`encode_progress/2`, `encode_output/3`, `read_line/1`): progress lines
@@ -102,6 +102,7 @@ defmodule Prima.BuilderProtocol do
   | `capacity` | `{max}` | every slot of the cap is taken |
   | `timeout` | `{budget_ms}` | the build passed its budget |
   | `memory` | `{limit_bytes}` or `{cause}` | the build was ended for memory: at its bound, or by `cause` (`machine` or `either`) |
+  | `no_memory` | `held` (`Prima.LocusPool.read_held/1`) | the keeper found no room for the build within its wait, and says what holds the memory |
   | `unavailable` | a sentence naming what | a toolchain or the keeper is missing |
   | `failed` | `{status}` or `{signal}` | the build ran and did not produce its output |
   | `protocol_mismatch` | `{builder, client}` | the request's version is not `version/0` |
@@ -115,6 +116,11 @@ defmodule Prima.BuilderProtocol do
   where the kernel's counters do not say which. The builder answers the
   class only when its keeper read that end from those counters; a build
   killed for any other reason is `failed` with its signal.
+
+  `no_memory` is the keeper's refusal of the build's place for room, its
+  `held` as the keeper gave it: the charges of the build's own athanor by
+  kind and everyone else's as one sum, which `describe_refusal/1` says in
+  `Prima.LocusPool.refusal_sentence/1`'s one sentence. Nothing of it ran.
 
   ## Authentication
 
@@ -139,7 +145,7 @@ defmodule Prima.BuilderProtocol do
 
   alias Prima.{MacEnvelope, RunnerControl}
 
-  @version 2
+  @version 3
   @domain MacEnvelope.domain()
   @service MacEnvelope.service(:builds)
   @label MacEnvelope.label(:builds)
@@ -175,6 +181,7 @@ defmodule Prima.BuilderProtocol do
     :capacity,
     :timeout,
     :memory,
+    :no_memory,
     :unavailable,
     :failed,
     :protocol_mismatch
@@ -189,6 +196,7 @@ defmodule Prima.BuilderProtocol do
     failed: 422,
     capacity: 429,
     unavailable: 503,
+    no_memory: 423,
     timeout: 504,
     memory: 507
   }
@@ -323,6 +331,7 @@ defmodule Prima.BuilderProtocol do
           | {:capacity, pos_integer()}
           | {:timeout, non_neg_integer()}
           | {:memory, pos_integer() | :machine | :either}
+          | {:no_memory, Prima.LocusPool.held()}
           | {:unavailable, String.t()}
           | {:failed, {:status, integer()} | {:signal, String.t()}}
           | {:protocol_mismatch, pos_integer(), pos_integer() | nil}
@@ -986,6 +995,7 @@ defmodule Prima.BuilderProtocol do
     do: %{"cause" => Atom.to_string(cause)}
 
   defp reason_wire({:memory, limit_bytes}), do: %{"limit_bytes" => limit_bytes}
+  defp reason_wire({:no_memory, held}), do: Prima.LocusPool.encode_held(held)
   defp reason_wire({:unavailable, what}), do: what
   defp reason_wire({:failed, {:status, status}}), do: %{"status" => status}
   defp reason_wire({:failed, {:signal, signal}}), do: %{"signal" => signal}
@@ -1020,6 +1030,13 @@ defmodule Prima.BuilderProtocol do
 
   defp reason(:memory, %{"cause" => "either"} = wire) when map_size(wire) == 1,
     do: {:ok, {:memory, :either}}
+
+  defp reason(:no_memory, wire) do
+    case Prima.LocusPool.read_held(wire) do
+      {:ok, held} -> {:ok, {:no_memory, held}}
+      :error -> {:error, {:invalid_field, "reason"}}
+    end
+  end
 
   defp reason(:failed, %{"status" => status} = wire)
        when map_size(wire) == 1 and is_integer(status),
@@ -1118,6 +1135,7 @@ defmodule Prima.BuilderProtocol do
   def describe_refusal({:memory, limit_bytes}),
     do: "the build reached its memory bound of #{limit_bytes} bytes and was ended there"
 
+  def describe_refusal({:no_memory, held}), do: Prima.LocusPool.refusal_sentence(held)
   def describe_refusal({:unavailable, what}), do: "the builder cannot build this: #{what}"
   def describe_refusal({:failed, {:status, status}}), do: "the build failed (exit #{status})"
   def describe_refusal({:failed, {:signal, signal}}), do: "the build was killed (#{signal})"

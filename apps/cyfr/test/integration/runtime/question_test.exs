@@ -350,7 +350,7 @@ defmodule Locus.Runtime.QuestionTest do
     # The repeat finds the first's row: pending, nothing opened again.
     assert [first, again] = recorded!(:question_ask, id, 2)
     assert first.args == again.args
-    assert again.answer == %{"v" => 1, "ok" => %{"pending" => true}}
+    assert again.answer == %{"v" => 2, "ok" => %{"pending" => true}}
     refute_received {:question, :opened, _meta}
     assert spent(ctx, id) == 1
 
@@ -377,7 +377,7 @@ defmodule Locus.Runtime.QuestionTest do
     assert %{"ok" => %{"retry_after_ms" => ms}} = paced.answer
     assert ms in 1..1_000
     assert admitted.args == paced.args
-    assert admitted.answer == %{"v" => 1, "ok" => %{"pending" => true}}
+    assert admitted.answer == %{"v" => 2, "ok" => %{"pending" => true}}
     # The new window holds the one ask admitted.
     assert spent(ctx, id) == 1
 
@@ -417,7 +417,7 @@ defmodule Locus.Runtime.QuestionTest do
       end)
       |> Task.await_many(30_000)
 
-    assert answered == List.duplicate(%{"v" => 1, "ok" => %{"pending" => true}}, 2)
+    assert answered == List.duplicate(%{"v" => 2, "ok" => %{"pending" => true}}, 2)
     assert [_one, %{ask_no: 2}] = questions(id)
     assert spent(ctx, id) == 2
     assert_receive {:question, :opened, %{ref: second}}
