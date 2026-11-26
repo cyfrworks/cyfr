@@ -552,9 +552,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(control_frames relay_frames valid_requests replies)},
       {"apps/locus/test/locus/runtime/keeper_channel_test.exs", ~w(control_frames replies)},
       {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
-      {"apps/prima/test/prima/locus_pool_test.exs", ~w(replies)},
       {"apps/prima/test/prima/keeper_protocol_test.exs",
-       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)}
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits kept_unbounded_rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests home_requests replies home_replies packs_requests packs_replies)},
+      {"apps/prima/test/prima/locus_pool_test.exs", ~w(replies)}
     ],
     "layout.json" => [
       {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid unsupported)}
