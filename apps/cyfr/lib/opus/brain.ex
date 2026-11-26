@@ -799,6 +799,7 @@ defmodule Opus.Brain do
     case cut(state, fn -> Session.send(grant, session, [line], @write_ms) end) do
       {:ok, :running} -> :ok
       {:ok, :ended} -> {:error, :lost}
+      {:ok, {:ended_by, _cause}} -> {:error, :lost}
       {:error, :deadline} -> {:error, :lost}
       {:error, {:refused, code, _boot}} when code in @gone -> {:error, :lost}
       {:error, reason} -> if uncertain?(reason), do: {:error, :lost}, else: {:error, :not_written}
