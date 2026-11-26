@@ -252,11 +252,12 @@ public static class W {
 # that is not the app's is minimised, each said: whatever window a runner
 # shows (its consoles, wsl.exe's among them, whose input no other process
 # may join) then neither covers the app nor holds the keys. Two windows of
-# Windows itself a minimise does not put aside, measured: the first-run
-# privacy page of the Arm runner image, "Microsoft account", over the whole
-# screen above any topmost window, and Search, whose flyout keeps the keys
-# and takes the rail's click. Their processes are ended first, on this
-# disposable machine, each said.
+# Windows itself are ended first instead, on this disposable machine, each
+# said. The first-run privacy page of the Arm runner image, "Microsoft
+# account", over the whole screen above any topmost window, stays the
+# foreground window after a minimise. Search's ending stays because no run
+# that forced Search without it finished, so that a minimise alone puts
+# Search aside is not shown.
 aside() {
   pwsh -NoProfile -NonInteractive -Command '
     Add-Type @"
