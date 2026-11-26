@@ -568,8 +568,12 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	if reply := beta.ask(t, `{"v":7,"type":"home_list","id":"y2"}`); reply["type"] != protocol.TypeHomes {
 		t.Errorf("beta's own home_list answered %v", reply)
 	}
-	// Only the floor's role assigns: alpha its own place.
-	if reply := alpha.ask(t, `{"v":7,"type":"assign","id":"y3","place":"ap","kind":"warm"}`); reply["type"] != protocol.TypeAssigned {
+	// Only the floor's role assigns: alpha its own place (ap went with the
+	// spawn refused in it).
+	if placed := alpha.ask(t, `{"v":7,"type":"place","id":"aq","kind":"run"}`); placed["type"] != protocol.TypePlaced {
+		t.Fatalf("alpha's place: %v", placed)
+	}
+	if reply := alpha.ask(t, `{"v":7,"type":"assign","id":"y3","place":"aq","kind":"warm"}`); reply["type"] != protocol.TypeAssigned {
 		t.Errorf("alpha's own assign answered %v", reply)
 	}
 	// Beta's spawn runs on under its uid.
