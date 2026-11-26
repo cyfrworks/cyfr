@@ -187,6 +187,8 @@ type rolesKeeper struct {
 func newRolesKeeper(t *testing.T, cpus map[string]uint64) *rolesKeeper {
 	t.Helper()
 	k := newKeeper(t)
+	// Each role's spawns are bounded at 64 MiB, as their work needs.
+	boundAt(t, 64<<20)
 	restart := restartAfter
 	restartAfter = 200 * time.Millisecond
 	t.Cleanup(func() { restartAfter = restart })
@@ -376,8 +378,8 @@ func (ru *roleUnderTest) spawn(t *testing.T, id string) (string, int, *relayConn
 	if placed := ru.ask(t, `{"v":7,"type":"place","id":"`+id+`","kind":"`+ru.kind()+`"}`); placed["type"] != protocol.TypePlaced {
 		t.Fatalf("role %s's place: %v", ru.r.spec.Name, placed)
 	}
-	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
-		id, id, ru.r.pool.Name, 64<<20, cgroup.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
+	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"control":false,"attach":{"path":%q,"token":%q}}`,
+		id, id, ru.r.pool.Name, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
 	spawned := ru.ask(t, req)
 	if spawned["type"] != protocol.TypeSpawned {
 		t.Fatalf("role %s's spawn: %v", ru.r.spec.Name, spawned)
@@ -547,8 +549,8 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	// A spawn naming beta's place, which alpha does not hold, or beta's
 	// pool from a place of alpha's own.
 	spawnIn := func(place, poolName string) string {
-		return fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
-			place, place, poolName, 64<<20, cgroup.CPUPeriod, testToken)
+		return fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["true"],"env":{},"rlimits":{},"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
+			place, place, poolName, testToken)
 	}
 	if reply := alpha.ask(t, spawnIn("bp", "palpha")); reply["code"] != protocol.CodeBadRequest {
 		t.Errorf("alpha's spawn in beta's place answered %v", reply)
@@ -660,8 +662,8 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 		if placed := ru.ask(t, `{"v":7,"type":"place","id":"zp","kind":"`+ru.kind()+`"}`); placed["type"] != protocol.TypePlaced {
 			t.Fatalf("role %s's place: %v", name, placed)
 		}
-		spawn := fmt.Sprintf(`{"v":7,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
-			pool, 64<<20, cgroup.CPUPeriod, testToken)
+		spawn := fmt.Sprintf(`{"v":7,"type":"spawn","id":"zp","place":"zp","pool":%q,"argv":["true"],"env":{},"rlimits":{},"control":false,"attach":{"path":"/run/x.sock","token":%q}}`,
+			pool, testToken)
 		refused := ru.ask(t, spawn)
 		if refused["type"] != protocol.TypeError || refused["id"] != "zp" {
 			t.Fatalf("role %s's spawn at no work answered %v", name, refused)
@@ -943,8 +945,8 @@ func (rk *rolesKeeper) heldSpawn(t *testing.T, ru *roleUnderTest, id string) (re
 	var once sync.Once
 	release = func() { once.Do(func() { close(hold) }) }
 	t.Cleanup(release)
-	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"memory_bytes":%d,"cpu_quota":%d,"control":false,"attach":{"path":%q,"token":%q}}`,
-		id, id, ru.r.pool.Name, 64<<20, cgroup.CPUPeriod, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
+	req := fmt.Sprintf(`{"v":7,"type":"spawn","id":%q,"place":%q,"pool":%q,"argv":["/bin/sh","-c","exec sleep 600"],"env":{},"rlimits":{},"control":false,"attach":{"path":%q,"token":%q}}`,
+		id, id, ru.r.pool.Name, filepath.Join(ru.r.runDir, "attach.sock"), testToken)
 	if _, err := ru.conn.Write([]byte(req + "\n")); err != nil {
 		t.Fatal(err)
 	}
