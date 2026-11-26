@@ -3,22 +3,25 @@
 # Copyright 2026 CYFR Works Inc.
 """A runner cannot take more memory than its bound, run as docker-compose.yml's locus-runtime service.
 
-The service asks cyfr-locus for a memory bound on every runner it spawns
-(`Locus.Runtime.Keeper.Channel`, the pool's `:runner_memory_bytes`): cyfr-locus gives
-the runner a cgroup v2 group of its own at that bound, with no swap and the
-group killed whole, charged for the runner's VM, every guest's linear
-memory, the pages of its home and the kernel memory it causes, together. It
-can do so only where the service mounts the container's cgroup writable
-(`security_opt: writable-cgroups=true`); anywhere else it can make no
-role's group and refuses its boot, so no runner starts.
+cyfr-locus bounds every runner by its kind, at half of the pool's work and
+never under a runner's least bound (Prima.LocusPool), and the service names
+no bound: cyfr-locus gives the runner a cgroup v2 group of its own at that
+bound, with no swap and the group killed whole, charged for the runner's
+VM, every guest's linear memory, the pages of its home and the kernel
+memory it causes, together. It can do so only where the service mounts the
+container's cgroup writable (`security_opt: writable-cgroups=true`);
+anywhere else it can make no role's group and refuses its boot, so no
+runner starts.
 
-- `bound`: every runner runs in such a group. A formula whose children run
-  in its runner (the nested probe spawning six children and awaiting them
-  all) holds more than the bound although no run passes what the engine
-  lets it have: each child (hog.wasm, a catalyst) first proves the engine
-  refuses it more than its consented 64 MiB of linear memory, then touches
-  every page of the 64 MiB and keeps it, and six of them alone hold the
-  bound, so the runner's VM is the margin by which they pass it. The
+- `bound`: in a service whose pool's work is sized for the case (`WORK`,
+  through the reserve compose reads), every runner runs in such a group.
+  A formula whose children run in its runner (the nested probe spawning
+  its children and awaiting them all) holds more than the bound although
+  no run passes what the engine lets it have: each child (hog.wasm, a
+  catalyst) first proves the engine refuses it more than its consented
+  64 MiB of linear memory, then touches every page of the 64 MiB and keeps
+  it, and as many of them as hold the bound together are spawned, so the
+  runner's VM is the margin by which they pass it. The
   children take their memory one at a time, the group read after each, and
   the kernel ends the runner at the bound while a child's pages are
   charged: the keeper reports the end at the bound (the service logs it),
@@ -43,8 +46,9 @@ an image (its egress denied, as the scripted plane's authority grants none);
 the chat fixture's `chat` streaming a long answer; the http and files
 catalysts; the list-models formula spawning its five catalyst children in
 the same runner; and one runner of one athanor running all of them in turn.
-It prints the service's own group peak and the largest runner peak with
-the margin the default runner bound takes over it (MARGIN), roughly twice.
+It prints the service's own group peak and the largest runner peak beside
+a runner's least bound, which holds a component at the platform's ceiling
+beside its runner.
 
 Usage: tests/locus-runtime-image/memory.py IMAGE [--measure [ROUNDS]] [bound|unavailable]...
 """
@@ -87,11 +91,20 @@ HOG_DIGESTS = {
 # What one child holds once every page is touched: all the linear memory
 # the engine lets one run have under the zero authority it runs under.
 CHILD_BYTES = 64 * MIB
-# The children the formula spawns: six hold 384 MiB, the runner's bound,
-# before its VM holds a byte, so whatever else the runner holds (its VM
-# alone measured 143-208 MiB) is the margin by which they pass it, however
-# small a VM another architecture gives.
-CHILDREN = 6
+# The pool's work of the bound case. A runner's bound is half of it, never
+# under a runner's least: the other half holds the case's two other runners
+# beside the formula's, the sibling's and the warm floor's fresh one, each a
+# VM of at most RUNNER_VM (a VM alone measured 143-208 MiB), so the
+# kernel's bound over the pool is never what ends the formula's runner.
+RUNNER_VM = 256 * MIB
+WORK = 2 * max(imagesuite.LEAST_CAP_BYTES["runner"], 2 * RUNNER_VM)
+
+
+def children_for(bound):
+    """The children the formula spawns: as many as hold `bound` before their runner's VM holds a byte, so whatever
+    else the runner holds is the margin by which they pass it, however small a VM another architecture gives."""
+    return -(-bound // CHILD_BYTES)
+
 ECHO = os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "echo.wasm")
 ECHO_REF = "reagent:local.echo:0.1.0"
 SEED = os.path.join(ROOT, "seed", "components")
@@ -105,8 +118,6 @@ MODELS = {
     "grok": "grok-4",
     "openrouter": "anthropic/claude-sonnet-4.6",
 }
-# The margin the build bound takes over the largest seed build's peak.
-MARGIN = 1.8
 
 
 # The runtime role's group in the pool's work, which holds each runner's
@@ -406,10 +417,14 @@ def test_runner_bound(stack, plane):
            f"each of the {len(groups)} runners runs in a group of its own with one bound, no swap and the group killed whole",
            groups)
     bound = int(next(iter(groups.values()))["max"])
-    print(f"the runner bound is {bound} bytes ({mib(bound)}); the formula's {CHILDREN} children each hold {mib(CHILD_BYTES)} "
-          f"of linear memory, {mib(CHILDREN * CHILD_BYTES)} between them", flush=True)
-    expect(CHILDREN * CHILD_BYTES >= bound,
-           f"the children alone hold the bound ({CHILDREN} x {mib(CHILD_BYTES)} >= {mib(bound)}), so what else their runner "
+    expect(stack.work_bytes == WORK and bound == imagesuite.cap_bytes("warm", WORK),
+           f"every runner is bounded at half of the pool's work of {mib(WORK)}, never under a runner's least bound: "
+           f"{mib(imagesuite.cap_bytes('warm', WORK))}", {"work": stack.work_bytes, "bound": bound})
+    count = children_for(bound)
+    print(f"the runner bound is {bound} bytes ({mib(bound)}); the formula's {count} children each hold {mib(CHILD_BYTES)} "
+          f"of linear memory, {mib(count * CHILD_BYTES)} between them", flush=True)
+    expect(count * CHILD_BYTES >= bound,
+           f"the children alone hold the bound ({count} x {mib(CHILD_BYTES)} >= {mib(bound)}), so what else their runner "
            "holds is the margin by which they pass it")
 
     # A sibling in another runner, held at its attach while the formula's
@@ -422,25 +437,25 @@ def test_runner_bound(stack, plane):
     # The formula spawns its children, each admitted for its runner, and
     # each waits at its first emit until it is let take its memory.
     requests = [{"tool": "execution", "action": "run", "args": {"reference": HOG_REF.rsplit(":", 1)[0], "input": {"child": n}}}
-                for n in range(1, CHILDREN + 1)]
+                for n in range(1, count + 1)]
     formula = plane.mint(stack.boot, "formula", PROBE_REF, wasm(PROBE), {"op": "spawn_await_all", "requests": requests},
                          "ath_mem_formula", 120_000, intercepted=("execution.run", "execution.run_stream"),
-                         authority=bound_authority(PROBE_REF, CHILDREN))
+                         authority=bound_authority(PROBE_REF, count))
     children = HogChildren(plane, stack, formula)
     try:
-        bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, formula, children)
+        bound_case(stack, plane, bound, count, sibling, release_sibling, sibling_runner, formula, children)
     finally:
         children.finish()
         release_sibling.set()
 
 
-def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, formula, children):
+def bound_case(stack, plane, bound, count, sibling, release_sibling, sibling_runner, formula, children):
     # The formula's artifact is held until the pool has booted the runner
     # it spawns behind the formula's, so its children wait at their first
     # emit for seconds, not for a runner's boot.
     release_formula = held(plane, "fetch_artifact", formula["execution_id"])
     try:
-        expect(stack.start(formula)[1] == {"v": 1, "ok": True}, f"a formula that spawns {CHILDREN} children and awaits them all starts")
+        expect(stack.start(formula)[1] == {"v": 1, "ok": True}, f"a formula that spawns {count} children and awaits them all starts")
         runner = attached_runner(stack, plane, formula)
         plane.wait_seen("fetch_artifact", formula["execution_id"], 30)
         expect(runner["uid"] != sibling_runner["uid"], "the formula and the sibling run under different uids",
@@ -450,12 +465,12 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
                    interval=0.25)
     finally:
         release_formula.set()
-    kids = plane.wait_for(lambda: (lambda c: c if len(c) == CHILDREN and all(children.events(k, "hog.ready") for k in c) else None)(
-        children.children()), BOOT_S, f"the formula's {CHILDREN} children to wait at their first emit")
+    kids = plane.wait_for(lambda: (lambda c: c if len(c) == count and all(children.events(k, "hog.ready") for k in c) else None)(
+        children.children()), BOOT_S, f"the formula's {count} children to wait at their first emit")
     attempts = {formula["attempt"]} | {k["attempt"] for k in kids}
     wait_until(lambda: attempts <= set(stack.attempts()), 10, "the service to hold the formula's and every child's attempt")
     expect(all(r["runner"] == runner["runner"] for k in kids for r in plane.seen(None, k["execution_id"])),
-           f"the control plane admitted {CHILDREN} children for the formula's runner, each running in it: every host "
+           f"the control plane admitted {count} children for the formula's runner, each running in it: every host "
            f"call of theirs came from runner {runner['runner']}, and the service holds the formula's attempt and all of theirs",
            {"attempts": stack.attempts(), "children": [plane.seen(None, k["execution_id"]) for k in kids]})
     before = container_memory(stack)
@@ -485,7 +500,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
         holding.append((n, kid, group_))
         print(f"child {n} holds its {mib(CHILD_BYTES)}: the runner's group holds {mib(group_['current'])} of {mib(bound)}",
               flush=True)
-    expect(last is not None, f"the runner was ended before its {CHILDREN} children all held their memory",
+    expect(last is not None, f"the runner was ended before its {count} children all held their memory",
            [(n, g) for n, _, g in holding])
     n_last, ending, _seen = last
     gone = wait_until(lambda: stack.runner_left(runner) == [] and time.time(), 30,
@@ -500,7 +515,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
 
     # Detection: which layer ended it.
     print(f"formula's runner {runner['runner']} (uid {runner['uid']}): group at {mib(ready['current'])} with its "
-          f"{CHILDREN} children waiting; {len(holding)} held {mib(CHILD_BYTES)} each "
+          f"{count} children waiting; {len(holding)} held {mib(CHILD_BYTES)} each "
           f"({', '.join(mib(g['current']) for _, _, g in holding)} after each); child {n_last} was taking its memory "
           f"when its runner ended, its process gone {gone - ending['let_at']:.2f} s after the child was let; group peak "
           f"sampled {mib(sampler.group_peak())} ({sampler.group_peak()} bytes) of {bound} over {len(sampler.samples)} "
@@ -515,7 +530,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
            f"its memory and stayed under the bound until child {n_last} took its own", [ready] + [g for _, _, g in holding])
     expect(all(children.events(k, "hog.holding")[0]["at"] > k["let_at"] for _, k, _ in holding)
            and all(plane.seen("push_deltas", k["execution_id"]) == children.events(k, "hog.ready") for k in kids[n_last:]),
-           f"detection: each child took its memory only once it was let, and the {CHILDREN - n_last} after child {n_last} "
+           f"detection: each child took its memory only once it was let, and the {count - n_last} after child {n_last} "
            "never took any", {k["execution_id"]: plane.seen("push_deltas", k["execution_id"]) for k in kids})
     closes = [r for k in [formula] + kids for r in plane.seen(None, k["execution_id"]) if r["op"] in ("complete", "fail")]
     expect(closes == [],
@@ -545,7 +560,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
            and exits[0]["answered"] == "ok" and set(exits[0]["attempts"]) == attempts
            and len(exits[0]["attempts"]) == len(attempts),
            f"settlement: the service reported runner {runner['runner']}'s exit once, {exits[0]['at'] - ending['let_at']:.2f} s "
-           f"after child {n_last} was let, holding the formula's attempt and its {CHILDREN} children's",
+           f"after child {n_last} was let, holding the formula's attempt and its {count} children's",
            {"exits": exits, "attempts": sorted(attempts)})
     wait_until(lambda: stack.runners()["busy"] == 1 and stack.runners()["tainted"] == 0, 10,
                "the formula's runner to leave the pool, the sibling alone busy")
@@ -605,7 +620,8 @@ def fresh_runners_booted(stack, first_seen, settle_s=4.0, busy=0):
         first_seen.setdefault(runner, now)
     counts = stack.runners()
     booted = [r for r in live if now - first_seen[r] >= settle_s]
-    return counts["busy"] == busy and counts["fresh"] >= stack.pool_size and len(booted) >= stack.pool_size + busy
+    return (counts["busy"] == busy and counts["fresh"] >= imagesuite.FLOOR_RUNNERS
+            and len(booted) >= imagesuite.FLOOR_RUNNERS + busy)
 
 
 def reuse_uid(stack, plane, hostile, tries=12):
@@ -761,7 +777,7 @@ def measure(image, rounds):
     keeper_peaks = []
     for n in range(rounds):
         plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
-        stack = Stack("cyfr-locus-runtime-memory-measure", image, plane, pool_size=2, idle_ttl_ms=3_000)
+        stack = Stack("cyfr-locus-runtime-memory-measure", image, plane, idle_ttl_ms=3_000)
         try:
             stack.up()
             settled = {}
@@ -799,8 +815,9 @@ def measure(image, rounds):
     for label, peaks in results.items():
         print(f"{label}: {', '.join(mib(p) for p in peaks)} (max {max(peaks)} bytes)")
     largest = max(max(p) for p in results.values())
-    print(f"largest runner peak {largest} bytes ({mib(largest)}); x{MARGIN} = {int(largest * MARGIN)} bytes "
-          f"({mib(largest * MARGIN)}); the keeper group peaked at {', '.join(mib(p) for p in keeper_peaks)}")
+    least = imagesuite.LEAST_CAP_BYTES["runner"]
+    print(f"largest runner peak {largest} bytes ({mib(largest)}), beside a runner's least bound of {least} bytes "
+          f"({mib(least)}); the keeper group peaked at {', '.join(mib(p) for p in keeper_peaks)}")
 
 
 def main(image, cases, rounds):
@@ -814,7 +831,7 @@ def main(image, cases, rounds):
     try:
         for case in cases:
             if case == "bound":
-                stack = Stack("cyfr-locus-runtime-memory", image, plane, idle_ttl_ms=1_000)
+                stack = Stack("cyfr-locus-runtime-memory", image, plane, idle_ttl_ms=1_000, work_bytes=WORK)
                 try:
                     stack.up()
                     test_runner_bound(stack, plane)

@@ -9,20 +9,21 @@
 # read-only root, `ipc: none`, the homes and /run/locus tmpfs mounts, the
 # runtime's bounds, the restart policy and its entrypoint. The suite sets
 # the runtime's key alone, so the keeper starts the runtime role and no
-# other. This adds only the image under test and the pool settings a test
-# chooses, and on the guard the image under test and a loopback port for
-# the tests to call the runtime on, which the guard forwards into the
-# role's space; and it lets compose name the containers after the project,
-# so a run does not meet a deployed stack on the same host. The tests
-# supply the runtime's id, key and host URL through the environment
-# compose interpolates, as .env would.
+# other. This adds only the image under test and the runner settings a test
+# chooses (its idle time and its graces), and on the guard the image under
+# test and a loopback port for the tests to call the runtime on, which the
+# guard forwards into the role's space; and it lets compose name the
+# containers after the project, so a run does not meet a deployed stack on
+# the same host. The tests supply the runtime's id, key and host URL
+# through the environment compose interpolates, as .env would, and a test
+# that sizes the pool's work the reserve and the share docker-compose.yml
+# reads.
 services:
   locus:
     image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}
     container_name: !reset null
     pull_policy: never
     environment:
-      - LOCUS_RUNTIME_POOL_SIZE=${LOCUS_RUNTIME_POOL_SIZE:?set LOCUS_RUNTIME_POOL_SIZE}
       - LOCUS_RUNTIME_IDLE_TTL_MS=${LOCUS_RUNTIME_IDLE_TTL_MS:?set LOCUS_RUNTIME_IDLE_TTL_MS}
       - LOCUS_RUNTIME_WATCHDOG_GRACE_MS=${LOCUS_RUNTIME_WATCHDOG_GRACE_MS:?set LOCUS_RUNTIME_WATCHDOG_GRACE_MS}
       - LOCUS_RUNTIME_RELEASE_GRACE_MS=${LOCUS_RUNTIME_RELEASE_GRACE_MS:?set LOCUS_RUNTIME_RELEASE_GRACE_MS}

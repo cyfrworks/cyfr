@@ -6,8 +6,13 @@ A Stack runs docker-compose.yml's `locus` service behind its guard with the
 runtime's key alone, layered with compose.runtime.yml, which adds only the
 image under test, a loopback port on the guard,
 the host gateway the scripted control plane (control_plane.py, on this
-machine) is reached through and the pool settings a test chooses; its project directory holds the seccomp
-profiles the services name, as a scaffolded project does.
+machine) is reached through and the runner settings a test chooses; its project directory holds the seccomp
+profiles the services name, as a scaffolded project does. A Stack made
+with `work_bytes` sizes the pool's work, which every runner's bound is half
+of, to exactly that on this machine, through the reserve and share
+docker-compose.yml reads (`imagesuite.work_settings`). The pool keeps the
+warm floor's fresh runners ahead (`imagesuite.FLOOR_RUNNERS`); no setting
+sizes it.
 Everything else — cyfr-locus's capabilities, the security options, the
 read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
 policy — is the shipped service. A Stack made with
@@ -91,13 +96,15 @@ def wait_until(predicate, timeout, what, interval=0.05):
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, plane, pool_size=2, idle_ttl_ms=30_000, watchdog_grace_ms=1_000, release_grace_ms=1_500,
-                 writable_cgroups=True):
+    def __init__(self, project, image, plane, idle_ttl_ms=30_000, watchdog_grace_ms=1_000, release_grace_ms=1_500,
+                 writable_cgroups=True, work_bytes=None):
         super().__init__(project)
         self.writable_cgroups = writable_cgroups
         self.image = image
         self.plane = plane
-        self.pool_size = pool_size
+        # The pool's work `up` sizes, or None for the shipped reserve and share, and the settings it made for it.
+        self.work_bytes = work_bytes
+        self.pool_settings = {}
         self.idle_ttl_ms = idle_ttl_ms
         self.watchdog_grace_ms = watchdog_grace_ms
         self.release_grace_ms = release_grace_ms
@@ -113,10 +120,10 @@ class Stack(imagesuite.Stack):
             "LOCUS_RUNTIME_SERVICE_ID": SERVICE,
             "LOCUS_RUNTIME_KEY": self.plane.worker_key.hex(),
             "LOCUS_RUNTIME_HOST_API_URL": self.plane.container_url,
-            "LOCUS_RUNTIME_POOL_SIZE": str(self.pool_size),
             "LOCUS_RUNTIME_IDLE_TTL_MS": str(self.idle_ttl_ms),
             "LOCUS_RUNTIME_WATCHDOG_GRACE_MS": str(self.watchdog_grace_ms),
             "LOCUS_RUNTIME_RELEASE_GRACE_MS": str(self.release_grace_ms),
+            **self.pool_settings,
         }
 
     def compose(self, *args, check=True):
@@ -131,7 +138,9 @@ class Stack(imagesuite.Stack):
         )
 
     def up(self, wait_pool=True):
-        """(Re)creates the service, waits for its listener and, unless told not to, for its pool to fill."""
+        """(Re)creates the service, its pool's work sized as `work_bytes` says, waits for its listener and, unless told not
+        to, for its pool to fill."""
+        self.pool_settings = imagesuite.work_settings(self.image, self.work_bytes) if self.work_bytes else {}
         self.compose("up", "--detach", "--no-build", "--force-recreate", COMPOSE_SERVICE)
         self.container = self.compose("ps", "--quiet", COMPOSE_SERVICE).stdout.strip()
         self.wait_listener()
@@ -172,10 +181,10 @@ class Stack(imagesuite.Stack):
         sys.exit(f"FAIL: the {COMPOSE_SERVICE} service never answered its status\n" + self.logs())
 
     def wait_pool(self, timeout=90):
-        """Every fresh runner of the pool is up: a runner is a VM booting from nothing."""
+        """Every fresh runner of the warm floor is up: a runner is a VM booting from nothing."""
         return wait_until(
-            lambda: (lambda r: r if r and r["fresh"] >= self.pool_size else None)(self.runners()),
-            timeout, f"the pool to hold {self.pool_size} fresh runners", interval=0.25,
+            lambda: (lambda r: r if r and r["fresh"] >= imagesuite.FLOOR_RUNNERS else None)(self.runners()),
+            timeout, f"the pool to hold its floor of {imagesuite.FLOOR_RUNNERS} fresh runner(s)", interval=0.25,
         )
 
     def logs(self):
