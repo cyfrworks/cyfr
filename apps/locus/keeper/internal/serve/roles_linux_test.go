@@ -568,8 +568,9 @@ func TestARoleNamesOnlyItsOwn(t *testing.T) {
 	if reply := beta.ask(t, `{"v":7,"type":"home_list","id":"y2"}`); reply["type"] != protocol.TypeHomes {
 		t.Errorf("beta's own home_list answered %v", reply)
 	}
-	if reply := beta.ask(t, `{"v":7,"type":"assign","id":"y3","place":"bp","kind":"terminal"}`); reply["type"] != protocol.TypeAssigned {
-		t.Errorf("beta's own assign answered %v", reply)
+	// Only the floor's role assigns: alpha its own place.
+	if reply := alpha.ask(t, `{"v":7,"type":"assign","id":"y3","place":"ap","kind":"warm"}`); reply["type"] != protocol.TypeAssigned {
+		t.Errorf("alpha's own assign answered %v", reply)
 	}
 	// Beta's spawn runs on under its uid.
 	if c, err := procfs.ScanUID("/proc", betaUID, 0); err != nil || c.Total() == 0 {
