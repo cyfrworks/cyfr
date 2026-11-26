@@ -231,12 +231,12 @@ jobs:
           for t in $SETUP_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/setup-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
 
       # cyfr update and uninstall of the installed app on Windows: the MSI's
-      # road, the bundle's cyfr never rewritten alone, the app removed or
-      # named. Each must run and pass here.
+      # road, which waits for the app to end, the bundle's cyfr never
+      # rewritten alone, the app removed or named. Each must run and pass here.
       - name: go test (the app's update and uninstall on Windows ran and passed)
         shell: bash
         env:
-          APP_TESTS: TestTheMsiRoadRefusesWhatWindowsInstallerRefuses TestTheMsiRoadStepsAsideForTheInstaller TestUpdateNeverRewritesTheCyfrInsideAnAppsBundle TestUninstallNeverRemovesTheCyfrInsideAnAppsBundle TestUninstallRemovesOrNamesTheInstalledApp
+          APP_TESTS: TestTheMsiRoadRefusesWhatWindowsInstallerRefuses TestTheMsiRoadStepsAsideForTheInstaller TestTheMsiRoadWaitsForTheAppToEnd TestUpdateNeverRewritesTheCyfrInsideAnAppsBundle TestUninstallNeverRemovesTheCyfrInsideAnAppsBundle TestUninstallRemovesOrNamesTheInstalledApp
         run: |
           set -euo pipefail
           go test ./cmd/ -race -count=1 -v -run "^(${APP_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/app-tests.log"

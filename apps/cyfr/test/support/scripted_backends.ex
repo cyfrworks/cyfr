@@ -246,9 +246,17 @@ defmodule Cyfr.Test.ScriptedBackends do
   @doc """
   Refuse the next message of `what` — a control type, a session type, or a
   JSON-RPC method a `send` carries — with `code`, at its status unless
-  `status` names another.
+  `status` names another. `{"capacity", held}` refuses it as Locus refuses
+  a session its pool found no room for, carrying `held`
+  (`Prima.LocusPool.t:held/0`).
   """
-  def refuse_once(%{agent: agent}, what, code, status \\ nil) do
+  def refuse_once(fake, what, code, status \\ nil)
+
+  def refuse_once(%{agent: agent}, what, {"capacity", held}, nil) do
+    Agent.update(agent, &put_in(&1, [:refuse, what], {{:capacity, held}, 409}))
+  end
+
+  def refuse_once(%{agent: agent}, what, code, status) do
     status = status || LocusBackends.status(String.to_existing_atom(code))
     Agent.update(agent, &put_in(&1, [:refuse, what], {code, status}))
   end
@@ -534,8 +542,7 @@ defmodule Cyfr.Test.ScriptedBackends do
 
     control_answer(conn, st, %{
       "boot" => st.boot,
-      "pool" => %{"size" => st.pool, "free" => st.pool},
-      "memory" => memory()
+      "pool" => %{"size" => st.pool, "free" => st.pool}
     })
   end
 
@@ -664,7 +671,7 @@ defmodule Cyfr.Test.ScriptedBackends do
         })
       end
 
-    control_answer(conn, st, %{"owners" => owners, "memory" => memory()})
+    control_answer(conn, st, %{"owners" => owners})
   end
 
   # As Locus does, a reset or a retire ends every session of the home among
@@ -804,6 +811,9 @@ defmodule Cyfr.Test.ScriptedBackends do
           nil ->
             handle_session(conn, agent, fields, message)
 
+          {{:capacity, _held} = refusal, status} ->
+            answer(conn, Agent.get(agent, & &1), status, LocusBackends.encode_refusal(refusal))
+
           {code, status} ->
             answer(conn, Agent.get(agent, & &1), status, %{
               "version" => LocusBackends.version(),
@@ -851,6 +861,9 @@ defmodule Cyfr.Test.ScriptedBackends do
           nil ->
             if closed(agent, named), do: Process.exit(self(), :kill)
             session_answer(conn, Agent.get(agent, & &1), %{"status" => "closed"})
+
+          {{:capacity, _held} = refusal, status} ->
+            answer(conn, Agent.get(agent, & &1), status, LocusBackends.encode_refusal(refusal))
 
           {code, status} ->
             answer(conn, Agent.get(agent, & &1), status, %{
@@ -1441,15 +1454,6 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   defp refuse(conn, st, code),
     do: answer(conn, st, LocusBackends.status(code), LocusBackends.encode_refusal(code))
-
-  # The box's memory as a hello and a status report it: the shipped budget,
-  # nothing held.
-  defp memory,
-    do: %{
-      "budget_bytes" => 1_879_048_192,
-      "admission_limit_bytes" => 1_879_048_192,
-      "held_bytes" => 0
-    }
 
   defp control_answer(conn, st, body),
     do: answer(conn, st, 200, Map.put(body, "version", st.answer_version))

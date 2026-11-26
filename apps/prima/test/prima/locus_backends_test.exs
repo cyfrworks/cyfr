@@ -125,7 +125,7 @@ defmodule Prima.LocusBackendsTest do
       assert :ok = LocusBackends.read_health(LocusBackends.health_body())
       assert {:error, {:version, 1}} = LocusBackends.read_health(~s({"version":1}))
       assert {:error, {:version, nil}} = LocusBackends.read_health("{}")
-      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":5,"x":1}))
+      assert {:error, {:unknown_field, "x"}} = LocusBackends.read_health(~s({"version":6,"x":1}))
       assert {:error, :not_json} = LocusBackends.read_health("[]")
     end
 
@@ -539,7 +539,25 @@ defmodule Prima.LocusBackendsTest do
         code = Enum.find(LocusBackends.classes(), &(Atom.to_string(&1) == refusal))
         assert code, name
         assert LocusBackends.status(code) == refusals[refusal]["status"], name
-        assert LocusBackends.encode_refusal(code) == refusals[refusal]["body"], name
+        given = vector["given"] || %{}
+
+        # A session the pool found no room for is refused carrying what holds it.
+        expected =
+          case given do
+            %{"room" => held} ->
+              {:ok, held} = Prima.LocusPool.read_held(held)
+              {:capacity, held}
+
+            _ ->
+              code
+          end
+
+        assert LocusBackends.encode_refusal(expected) ==
+                 if(given["room"],
+                   do: @vectors["capacity_held"]["body"],
+                   else: refusals[refusal]["body"]
+                 ),
+               name
 
         messages = Enum.filter(sequence, &Map.has_key?(&1, "route"))
         refused = Enum.find(messages, & &1["hold"]) || List.last(messages)
@@ -596,6 +614,21 @@ defmodule Prima.LocusBackendsTest do
         assert LocusBackends.status(code) == status
         assert LocusBackends.encode_refusal(code) == body
         assert {:ok, ^code} = LocusBackends.read_refusal(body)
+      end
+    end
+
+    test "a capacity for room carries what holds the pool, read strictly, and no other code carries it" do
+      v = @vectors["capacity_held"]
+      {:ok, held} = Prima.LocusPool.read_held(v["held"])
+
+      assert LocusBackends.encode_refusal({:capacity, held}) == v["body"]
+      assert LocusBackends.read_refusal(v["body"]) == {:ok, {:capacity, held}}
+      assert LocusBackends.status({:capacity, held}) == 409
+      assert LocusBackends.code({:capacity, held}) == :capacity
+
+      for %{"body" => body, "error" => error} <- v["invalid"] do
+        assert {:error, {kind, "held"}} = LocusBackends.read_refusal(body), body
+        assert Atom.to_string(kind) == error, body
       end
 
       for code <- ~w(stale_boot stale_control stale_epoch epoch_ahead replay) do
@@ -747,18 +780,18 @@ defmodule Prima.LocusBackendsTest do
       owner = %{owner | programs: programs}
 
       assert {:error, {:too_large, :status_answer, _bytes, _max}} =
-               LocusBackends.encode_answer(:status, %{owners: [owner], memory: answer.memory})
+               LocusBackends.encode_answer(:status, %{owners: [owner]})
     end
 
     test "a body at another version is refused before its type is read, and maps to the version refusal" do
       assert {:error, {:version, 1}} = LocusBackends.read_control(~s({"version":1,"type":"nope"}))
       assert {:error, {:version, nil}} = LocusBackends.read_control(~s({"type":"hello"}))
       assert {:error, {:version, 1}} = LocusBackends.read_session(~s({"version":1,"type":"open"}))
-      assert {:protocol_mismatch, 5, 2} = LocusBackends.refusal_for({:version, 2})
-      assert {:protocol_mismatch, 5, nil} = LocusBackends.refusal_for({:version, "5"})
+      assert {:protocol_mismatch, 6, 2} = LocusBackends.refusal_for({:version, 2})
+      assert {:protocol_mismatch, 6, nil} = LocusBackends.refusal_for({:version, "6"})
 
-      assert LocusBackends.encode_refusal({:protocol_mismatch, 5, 2}) ==
-               ~s({"error":"version","version":5})
+      assert LocusBackends.encode_refusal({:protocol_mismatch, 6, 2}) ==
+               ~s({"error":"version","version":6})
 
       assert LocusBackends.status({:protocol_mismatch, 5, nil}) == 409
 
@@ -807,7 +840,7 @@ defmodule Prima.LocusBackendsTest do
       with_tail = %{owner | programs: [%{kept | stderr_tail: "a secret line"}]}
 
       assert {:error, {:unknown_field, "owners[0].programs[0].stderr_tail"}} =
-               LocusBackends.encode_answer(:status, %{owners: [with_tail], memory: answer.memory})
+               LocusBackends.encode_answer(:status, %{owners: [with_tail]})
 
       {:ok, %{owners: [%{programs: [scratch]} = scratch_owner]}} =
         LocusBackends.read_answer(:status, @vectors["status"]["answer"])
@@ -816,47 +849,28 @@ defmodule Prima.LocusBackendsTest do
       counted = %{scratch_owner | programs: [%{scratch | stderr_bytes: 3}]}
 
       assert {:error, {:unknown_field, "owners[0].programs[0].stderr_bytes"}} =
-               LocusBackends.encode_answer(:status, %{owners: [counted], memory: answer.memory})
+               LocusBackends.encode_answer(:status, %{owners: [counted]})
     end
 
-    test "a hello and a status report the box's memory, every member required" do
+    test "a hello and a status carry no memory: the pool alone admits a session" do
       for {type, body} <- [
             {:hello, @vectors["hello"]["answer"]},
             {:status, @vectors["status"]["answer"]}
           ] do
-        assert {:ok, %{memory: memory} = answer} = LocusBackends.read_answer(type, body)
+        assert {:ok, answer} = LocusBackends.read_answer(type, body)
+        refute Map.has_key?(answer, :memory)
 
-        assert %{budget_bytes: budget, admission_limit_bytes: limit, held_bytes: held} = memory
-        assert budget > 0 and limit >= budget and held >= 0
+        memory = %{"budget_bytes" => 1, "used_bytes" => 0}
 
-        wire = Jason.decode!(body)
+        assert {:error, {:unknown_field, "memory"}} =
+                 body
+                 |> Jason.decode!()
+                 |> Map.put("memory", memory)
+                 |> Jason.encode!()
+                 |> then(&LocusBackends.read_answer(type, &1))
 
-        for member <- ~w(budget_bytes admission_limit_bytes held_bytes) do
-          assert {:error, {:missing_field, "memory." <> ^member}} =
-                   wire
-                   |> update_in(["memory"], &Map.delete(&1, member))
-                   |> Jason.encode!()
-                   |> then(&LocusBackends.read_answer(type, &1))
-        end
-
-        for {member, value} <- [
-              {"budget_bytes", 0},
-              {"admission_limit_bytes", 0},
-              {"held_bytes", -1},
-              {"held_bytes", "0"}
-            ] do
-          assert {:error, {:invalid_field, "memory." <> ^member}} =
-                   wire
-                   |> put_in(["memory", member], value)
-                   |> Jason.encode!()
-                   |> then(&LocusBackends.read_answer(type, &1))
-        end
-
-        assert {:error, {:missing_field, "memory"}} =
-                 LocusBackends.encode_answer(type, Map.delete(answer, :memory))
-
-        assert {:error, {:unknown_field, "memory.extra"}} =
-                 LocusBackends.encode_answer(type, put_in(answer, [:memory, :extra], 1))
+        assert {:error, {:unknown_field, "memory"}} =
+                 LocusBackends.encode_answer(type, Map.put(answer, :memory, memory))
       end
     end
 

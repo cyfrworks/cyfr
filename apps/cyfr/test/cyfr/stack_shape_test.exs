@@ -609,10 +609,7 @@ defmodule Cyfr.StackShapeTest do
             "${PROBE_DIR:?set PROBE_DIR}:/probe:ro",
             "${CANARY_DIR:?set CANARY_DIR}:/canary:ro"
           ],
-          "entrypoint" => chosen_pool_argv(release, roles, backends, "BACKENDS_POOL"),
-          "environment" => [
-            "LOCUS_BACKENDS_MEMORY_BUDGET=${LOCUS_BACKENDS_MEMORY_BUDGET:-}"
-          ]
+          "entrypoint" => chosen_pool_argv(release, roles, backends, "BACKENDS_POOL")
         }),
       # The runtime's suites take the image's entrypoint: the overlay names
       # none.

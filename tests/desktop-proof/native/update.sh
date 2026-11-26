@@ -20,6 +20,12 @@
 #   installed    A's package installs as a person installs it, and the
 #                app's own cyfr answers A
 #   opened       the app at A opens: the chooser answers on 127.0.0.1:7340
+#   refused_open (Windows) with the app open, B's installer over it and
+#                A's removal each end 1603 saying CYFR is open (the
+#                package's own OPEN_REFUSED, read from msi-project.mjs,
+#                whose node_modules the build installed), the same
+#                app runs on and answers, every file of the app is as it
+#                was and nothing more waits for a restart
 #   unverified   cyfr update --version U refuses, saying the app did not
 #                verify, before anything closes: the same app still runs,
 #                and its cyfr answers A; on Linux the update service's
@@ -466,6 +472,42 @@ public static class K {
   esac
 }
 
+# msi_run FLAG MSI LOG: Windows Installer's FLAG (/i or /x) of MSI, as a
+# silent install runs it, logged to LOG, printing its status (wider than a
+# shell's exit status).
+msi_run() {
+  pwsh -NoProfile -NonInteractive -Command \
+    "(Start-Process msiexec.exe -ArgumentList '$1', '\"$(cygpath -w "$2")\"', '/qn', '/norestart', '/l*v', '\"$(cygpath -w "$3")\"' -Wait -PassThru).ExitCode" | tr -d '\r'
+}
+# What waits for Windows' next restart to be moved or removed.
+pending_renames() {
+  pwsh -NoProfile -NonInteractive -Command \
+    "(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations -join '|'"
+}
+# Every file of the installed app with its sum.
+app_files() { find "$(dirname "$APP")" -type f -exec sha256sum {} + | sort -k2; }
+# Whether Windows Installer's LOG holds TEXT, in whichever encoding.
+logged() { [ "$(pwsh -NoProfile -NonInteractive -Command "Select-String -LiteralPath '$(cygpath -w "$1")' -SimpleMatch -Quiet -Pattern '$2'")" = True ]; }
+
+# With the app open (its main process PID), its installer refuses to
+# install over it or remove it, saying so, and changes nothing
+# (apps/codex/desktop/scripts/msi-project.mjs).
+refused_open() {
+  local dir=$1 arch=$2 pid=$3 files pending said i x
+  said=$(cd "$ROOT/apps/codex/desktop" && node --input-type=module -e 'import {OPEN_REFUSED} from "./scripts/msi-project.mjs"; console.log(OPEN_REFUSED)')
+  files=$(app_files) pending=$(pending_renames)
+  i=$(msi_run /i "$dir/$B/cyfr-desktop_${B}_${OS}_$arch.$EXT" "$LOGS/open-i.log")
+  x=$(msi_run /x "$dir/$A/cyfr-desktop_${A}_${OS}_$arch.$EXT" "$LOGS/open-x.log")
+  if [ "$i" = 1603 ] && [ "$x" = 1603 ] &&
+    [ -n "$said" ] && logged "$LOGS/open-i.log" "$said" && logged "$LOGS/open-x.log" "$said" &&
+    alive "$pid" && answers && [ "$(release_of)" = "$A" ] &&
+    [ "$(app_files)" = "$files" ] && [ "$(pending_renames)" = "$pending" ]; then
+    pass refused_open "B over the open app and A's removal each refused, saying CYFR is open; the app ($pid) runs on unchanged, nothing waits for a restart"
+  else
+    fail refused_open "the install ended $i, the removal $x, the app $(alive "$pid" && echo runs || echo 'is gone'), its cyfr answers '$(release_of)', its files $([ "$(app_files)" = "$files" ] && echo 'as they were' || echo changed), waiting for a restart: '$(pending_renames)'; the install's log: $(pwsh -NoProfile -NonInteractive -Command "Select-String -LiteralPath '$(cygpath -w "$LOGS/open-i.log")' -Pattern 'LaunchConditions|CYFROPEN|AppSearch|CYFR is open' | ForEach-Object { \$_.Line }" | tr '\r\n' ';;')"
+  fi
+}
+
 # A release installed whichever is: B's own uninstall first on Windows,
 # whose installer refuses an older release over a newer one.
 reinstall() {
@@ -541,6 +583,7 @@ run() {
   else
     fail opened "the app at $A did not open within 60 s: $(tail -5 "$LOGS/app-a.log")"
   fi
+  [ "$OS" != windows ] || [ -z "$before" ] || refused_open "$dir" "$arch" "$before"
 
   # In a folder of its own that holds no CYFR, so the update stops after
   # the program.

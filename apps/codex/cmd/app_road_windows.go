@@ -17,6 +17,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/cyfr/codex/internal/release"
 )
@@ -26,14 +30,14 @@ import (
 // that fails.
 func systemAppRoad() appRoad { return msiRoad{} }
 
-// msiRoad updates the per-account MSI. Windows Installer ends the
-// processes of a terminal in which a file it replaces runs, whatever its
-// Restart Manager is told, so the cyfr inside the app that runs this
+// msiRoad updates the per-account MSI. It installs once no process of
+// the closed app is left, and the cyfr inside the app that runs this
 // update is renamed aside first (a running program may be renamed, never
-// replaced), which leaves the installer no file of its in use; the one
-// renamed aside is removed by a later update once nothing runs it, and is
-// renamed back where the installer put no cyfr in its place. The MSI's
-// version is its release's MAJOR.MINOR.PATCH, so consecutive
+// replaced), which leaves the installer no file of its in use: one in use
+// it would move aside itself and leave for the next restart to remove.
+// The one renamed aside is removed by a later update once nothing runs
+// it, and is renamed back where the installer put no cyfr in its place.
+// The MSI's version is its release's MAJOR.MINOR.PATCH, so consecutive
 // pre-releases of one release install over each other, and Windows
 // Installer refuses a release whose MAJOR.MINOR.PATCH is older than the
 // installed one's: that refusal is made before anything closes.
@@ -61,6 +65,15 @@ func (msiRoad) replace(out io.Writer, s *staged, _ bool) error {
 	carried, err := appCyfr()
 	if err != nil {
 		return fmt.Errorf("cyfr update could not tell where the app's cyfr is (%v); nothing was replaced", err)
+	}
+	// The closed app's processes may outlive its answer to the quit by
+	// tens of milliseconds, holding its files, which the installer, ending
+	// no program (desktop/scripts/msi-project.mjs), would leave for a
+	// restart.
+	if bundle := appBundleOf(carried); bundle != "" {
+		if err := appGone(filepath.Join(bundle, "CYFR.exe"), appQuitWithin); err != nil {
+			return err
+		}
 	}
 	removeAsides(carried)
 	if self, err := selfExecutable(); err == nil && samePath(self, carried) {
@@ -134,4 +147,67 @@ func removeAsides(carried string) {
 	for _, a := range asides {
 		_ = os.Remove(a)
 	}
+}
+
+// appGone waits until no process runs the executable app, at most within:
+// each one found is waited for by its handle, and the processes are read
+// again until none is left. One still running at the bound is a refusal
+// made before anything is replaced.
+func appGone(app string, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for {
+		running, err := processesOf(app)
+		if err != nil {
+			return fmt.Errorf("cyfr update could not tell whether the CYFR app has ended (%v); nothing was replaced", err)
+		}
+		if len(running) == 0 {
+			return nil
+		}
+		late := !time.Now().Before(deadline)
+		for _, h := range running {
+			if left := time.Until(deadline); left > 0 {
+				_, _ = windows.WaitForSingleObject(h, uint32(left.Milliseconds())+1)
+			}
+			_ = windows.CloseHandle(h)
+		}
+		if late {
+			return fmt.Errorf("the CYFR app was still running %v after it was closed; nothing was replaced", within)
+		}
+	}
+}
+
+// processesOf answers a handle, which its caller closes, to each process
+// whose executable is app; a process this account may not look into is
+// not one.
+func processesOf(app string) ([]windows.Handle, error) {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snap)
+	var found []windows.Handle
+	e := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		if !strings.EqualFold(windows.UTF16ToString(e.ExeFile[:]), filepath.Base(app)) {
+			continue
+		}
+		h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, e.ProcessID)
+		if err != nil {
+			continue
+		}
+		buf := make([]uint16, windows.MAX_LONG_PATH)
+		n := uint32(len(buf))
+		if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) == nil && strings.EqualFold(filepath.Clean(windows.UTF16ToString(buf[:n])), filepath.Clean(app)) {
+			found = append(found, h)
+			continue
+		}
+		_ = windows.CloseHandle(h)
+	}
+	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		for _, h := range found {
+			_ = windows.CloseHandle(h)
+		}
+		return nil, err
+	}
+	return found, nil
 }

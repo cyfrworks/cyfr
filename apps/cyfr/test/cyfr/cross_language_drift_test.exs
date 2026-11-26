@@ -566,10 +566,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/backends/auth_test.exs",
        ~w(auth_header routes key_hex builds_key_hex sync status open auth_rejected)},
       {"apps/locus/test/locus/backends/service_test.exs",
-       ~w(version routes key_hex owner hello sync release status open invalid_messages fence_rejected refusals)},
+       ~w(version routes key_hex owner hello sync release status open invalid_messages fence_rejected refusals capacity_held)},
       {"apps/locus/test/locus/listener_test.exs", ~w(version service key_hex owner hello sync)},
       {"apps/prima/test/prima/locus_backends_test.exs",
-       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv open_terminal input output resize open_packs packs_hold packs_put seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking masking_stream terminal_type)},
+       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status open recv open_terminal input output resize open_packs packs_hold packs_put seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals capacity_held masking masking_stream terminal_type)},
       {"tests/locus-backends-image/harness.py",
        ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status home seal refusals open_terminal input output resize open_packs packs_hold packs_put)}
     ],
@@ -590,7 +590,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(allowance_bytes allowance_ms cap_bytes floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
       {"apps/prima/test/prima/locus_pool_test.exs",
        ~w(allowance_bytes allowance_ms cap_bytes floor_bytes floor_runners kinds least_cap_bytes processors room_wait_ms stale_ms)},
-      {"tests/imagesuite.py", ~w(cap_bytes floor_runners kinds least_cap_bytes)},
+      {"tests/imagesuite.py", ~w(allowance_ms cap_bytes floor_runners kinds least_cap_bytes)},
       {"tests/locus-backends-image/roles.py", ~w(floor_bytes)}
     ],
     "locus_roles.json" => [

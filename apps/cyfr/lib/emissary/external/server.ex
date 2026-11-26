@@ -1516,7 +1516,7 @@ defmodule Emissary.External.Server do
 
   defp backends_reason(:deadline), do: "the backends service did not answer in time"
   defp backends_reason(:control_plane_lost), do: "this server does not own its control plane"
-  defp backends_reason(:capacity), do: "the backends service has no free program slots"
+  defp backends_reason(:capacity), do: "the backends service has no room for another program"
 
   defp backends_reason(:claimed_elsewhere),
     do: "another server of the cluster holds this server's program"

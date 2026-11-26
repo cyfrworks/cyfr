@@ -33,8 +33,6 @@ defmodule Locus.Config do
   | `LOCUS_BACKENDS_KEY` | `:backends_key` | 64 hexadecimal digits, the backends service key | none: the node serves no backends |
   | `LOCUS_BACKENDS_BIND` | `:backends_bind` | an IPv4 or IPv6 address | `0.0.0.0` |
   | `LOCUS_BACKENDS_PORT` | `:backends_port` | 1..65535 | 4101 |
-  | `LOCUS_BACKENDS_MEMORY_BUDGET` | `:backends_memory_budget` | 16777216..1099511627776 (16 MiB to 1 TiB) | 1879048192 (1792 MiB) |
-  | `LOCUS_BACKENDS_MEMORY_OVERCOMMIT` | `:backends_memory_overcommit` | a decimal of at least 1, such as `1` or `1.5` | 1 |
   | `LOCUS_RUNTIME_SERVICE_ID` | `:runtime`, `:service_id` | `wrk_` and 1 to 64 letters, digits, `_` or `-` | `wrk_local` |
   | `LOCUS_RUNTIME_KEY` | `:runtime`, `:service_key` | 64 hexadecimal digits, the key derived for the service's id | none: the node serves no runtime |
   | `LOCUS_RUNTIME_HOST_API_URL` | `:runtime`, `:host_url` | an http or https URL with a host and no path | none |
@@ -87,18 +85,10 @@ defmodule Locus.Config do
   backends keys are CYFR's, and a node that can see them was given more
   than it holds. And so does any `LOCUS_*` name the roster lacks.
 
-  No setting bounds a build, a backend session or a runner: cyfr-locus
-  sets the memory and processors of every spawn by its place's kind
-  (`Prima.LocusPool`), and no spawn names its own.
-
-  The backends service admits a session only while its box holds room for
-  it (`Locus.Backends.Owners`): `:backends_memory_budget` (`B`) is the
-  memory the box's sessions may hold, the container's memory limit (a
-  compose setting no release reads) less the service's own headroom, and `:backends_memory_overcommit` (`F`) how far
-  the bounds the sessions hold may add up past it, kept as the exact
-  fraction it was written as (`{numerator, denominator}`), so the
-  admission limit, `floor(B * F)` (`admission_limit_bytes/2`), is exact.
-  A factor below 1, or one that is not a plain decimal, refuses the boot.
+  No setting bounds a build, a backend session or a runner, or admits one:
+  cyfr-locus admits every spawn in its one pool and sets its memory and
+  processors by its place's kind (`Prima.LocusPool`), and no spawn names
+  its own.
 
   A node's logging is the release's one setting whichever role it serves:
   `:log_level` and `:log_format` become the logger's when a release node
@@ -130,9 +120,7 @@ defmodule Locus.Config do
     log_level: :info,
     log_format: :text,
     backends_bind: {0, 0, 0, 0},
-    backends_port: 4101,
-    backends_memory_budget: 1_879_048_192,
-    backends_memory_overcommit: {1, 1}
+    backends_port: 4101
   ]
 
   # What the runtime falls back to when neither its environment nor the
@@ -160,8 +148,6 @@ defmodule Locus.Config do
     {"LOCUS_BACKENDS_KEY", :backends, :backends_key},
     {"LOCUS_BACKENDS_BIND", :backends, :backends_bind},
     {"LOCUS_BACKENDS_PORT", :backends, :backends_port},
-    {"LOCUS_BACKENDS_MEMORY_BUDGET", :backends, :backends_memory_budget},
-    {"LOCUS_BACKENDS_MEMORY_OVERCOMMIT", :backends, :backends_memory_overcommit},
     {"LOCUS_RUNTIME_SERVICE_ID", :runtime, :service_id},
     {"LOCUS_RUNTIME_KEY", :runtime, :service_key},
     {"LOCUS_RUNTIME_HOST_API_URL", :runtime, :host_url},
@@ -227,8 +213,6 @@ defmodule Locus.Config do
           backends_key: binary() | nil,
           backends_bind: :inet.ip_address(),
           backends_port: :inet.port_number(),
-          backends_memory_budget: pos_integer(),
-          backends_memory_overcommit: {pos_integer(), pos_integer()},
           runtime: keyword()
         ]
 
@@ -299,42 +283,13 @@ defmodule Locus.Config do
   defp backends(getenv) do
     with {:ok, key} <- EnvValue.hex_key(getenv, variable(:backends, :backends_key)),
          {:ok, bind} <- EnvValue.bind(getenv, variable(:backends, :backends_bind)),
-         {:ok, port} <- EnvValue.port(getenv, variable(:backends, :backends_port)),
-         {:ok, budget} <-
-           EnvValue.bytes(getenv, variable(:backends, :backends_memory_budget), memory_range()),
-         {:ok, overcommit} <-
-           overcommit(getenv, variable(:backends, :backends_memory_overcommit)) do
+         {:ok, port} <- EnvValue.port(getenv, variable(:backends, :backends_port)) do
       {:ok,
        [
          backends_key: key,
          backends_bind: bind || @defaults[:backends_bind],
-         backends_port: port || @defaults[:backends_port],
-         backends_memory_budget: budget || @defaults[:backends_memory_budget],
-         backends_memory_overcommit: overcommit || @defaults[:backends_memory_overcommit]
+         backends_port: port || @defaults[:backends_port]
        ]}
-    end
-  end
-
-  # The overcommit factor, a plain decimal of at least 1, kept as the exact
-  # fraction it was written as: `1.25` is `{125, 100}`.
-  @decimal ~r/\A([0-9]+)(?:\.([0-9]+))?\z/
-
-  defp overcommit(getenv, variable) do
-    case EnvValue.text(getenv, variable) do
-      {:ok, nil} -> {:ok, nil}
-      {:ok, text} -> fraction(text, variable)
-    end
-  end
-
-  defp fraction(text, variable) do
-    with [_ | parts] <- Regex.run(@decimal, text),
-         [whole, fraction] = Enum.take(parts ++ [""], 2),
-         denominator = Integer.pow(10, byte_size(fraction)),
-         numerator = String.to_integer(whole <> fraction),
-         true <- numerator >= denominator do
-      {:ok, {numerator, denominator}}
-    else
-      _refused -> {:error, "#{variable} must be a decimal of at least 1, such as 1 or 1.5"}
     end
   end
 
@@ -613,14 +568,6 @@ defmodule Locus.Config do
   def refused_environment(getenv) when is_function(getenv, 1),
     do: Enum.filter(@control_plane_only, &(getenv.(&1) != nil))
 
-  @doc """
-  The least and the most the backends' memory budget may be, in bytes,
-  16 MiB to 1 TiB (`Prima.LocusBackends`).
-  """
-  @spec memory_range() :: Range.t()
-  def memory_range,
-    do: Prima.LocusBackends.min_memory_bytes()..Prima.LocusBackends.max_memory_bytes()//1
-
   defp log_level(getenv) do
     name_read = variable(:release, :log_level)
 
@@ -717,19 +664,6 @@ defmodule Locus.Config do
   @doc "The port the backends service listens on."
   @spec backends_port() :: :inet.port_number()
   def backends_port, do: get(:backends_port)
-
-  @doc "The memory the backends service's sessions may hold: `B`, in bytes."
-  @spec backends_memory_budget() :: pos_integer()
-  def backends_memory_budget, do: get(:backends_memory_budget)
-
-  @doc "The overcommit factor `F`, as the exact fraction `{numerator, denominator}`."
-  @spec backends_memory_overcommit() :: {pos_integer(), pos_integer()}
-  def backends_memory_overcommit, do: get(:backends_memory_overcommit)
-
-  @doc "`floor(budget * factor)`, exact, for a factor kept as `{numerator, denominator}`."
-  @spec admission_limit_bytes(pos_integer(), {pos_integer(), pos_integer()}) :: pos_integer()
-  def admission_limit_bytes(budget, {numerator, denominator}),
-    do: div(budget * numerator, denominator)
 
   defp get(key), do: Application.get_env(:locus, key, Keyword.fetch!(@defaults, key))
 end
