@@ -104,6 +104,13 @@ defmodule Locus.Runtime.WorkerServiceTest do
   defp attempts, do: elem(WorkerService.status(), 1).attempts
 
   describe "start/3" do
+    # A start's deadline is its claim window at most, and its runner's
+    # place may wait the whole of the place's wait before the keeper
+    # answers it.
+    test "lasts past the longest a runner's place waits for the keeper's room" do
+      assert Prima.Assignment.claim_window_ms() > Locus.Launcher.place_wait_ms()
+    end
+
     test "refuses an assignment addressed to another worker service, or another boot of this one",
          %{host: host, boot: boot} do
       other_service = ScriptedHost.attempt!(host, service: "wrk_other", boot: boot)
