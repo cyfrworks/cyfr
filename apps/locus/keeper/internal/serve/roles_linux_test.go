@@ -642,6 +642,13 @@ func TestAPoolOfNoWorkStartsItsRolesAndRefusesEachSpawn(t *testing.T) {
 	if err := rk.tree.Bound(0, 0); err != nil {
 		t.Fatal(err)
 	}
+	// Why every group is made first: the kernel makes none under a bound
+	// of 0.
+	if late, leaf, err := rk.tree.Role("late", 0, false); err == nil {
+		_ = leaf.Remove()
+		_ = os.Remove(late.Dir())
+		t.Error("a role's group was made under rest bounded at 0")
+	}
 	rk.start(t)
 	for name, ru := range rk.roles {
 		pool := "p" + name
